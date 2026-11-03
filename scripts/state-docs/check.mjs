@@ -1,12 +1,14 @@
 #!/usr/bin/env node
 // Developer composition only. Nessa Docs owns parsing, validation, TLC pins,
 // bounded execution and saved-result serialization; do not copy those rules here.
+import { modelCoverage } from "./coverage.mjs"
 import { dirname, join, resolve } from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 
-const usage = "node scripts/state-docs/check.mjs [--models [--install] [--write]]"
+const usage =
+  "node scripts/state-docs/check.mjs [--coverage] [--models [--install] [--write]]"
 const args = process.argv.slice(2)
-const allowed = new Set(["--models", "--install", "--write"])
+const allowed = new Set(["--coverage", "--models", "--install", "--write"])
 const models = args.includes("--models")
 const install = args.includes("--install")
 const write = args.includes("--write")
@@ -50,6 +52,13 @@ async function main() {
   if (!result.ok) {
     process.exitCode = 1
     return result
+  }
+  if (args.includes("--coverage")) {
+    result.coverage = modelCoverage(catalog.documents)
+    if (!result.coverage.ok) {
+      process.exitCode = 1
+      return { ...result, ok: false }
+    }
   }
   if (!models) return result
   const pages = [...catalog.documents.values()].filter((page) => page.summary.model)

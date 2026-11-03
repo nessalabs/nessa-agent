@@ -43,6 +43,7 @@ async function fixture(body) {
     await mkdir(join(project, "scripts/state-docs"), { recursive: true })
     await mkdir(join(project, "docs/state/tla"), { recursive: true })
     await cp(script, join(project, "scripts/state-docs/check.mjs"))
+    await cp(join(here, "coverage.mjs"), join(project, "scripts/state-docs/coverage.mjs"))
     const page = join(project, "docs/state/README.md")
     const markdown = `---\nid: fixture\ntitle: Test\nkind: system\nstatus: fixture\nsummary: Synthetic verification project.\nparent: null\nsources: []\ndiagramLinks: {}\n---\n\n# Test\n`
     await writeFile(page, markdown)
@@ -64,6 +65,7 @@ test(
   async () => {
     await fixture(async ({ page, markdown, check }) => {
       assert.equal(check().code, 0)
+      assert.equal(check(["--coverage"]).code, 0)
       assert.equal(check(["--models"]).result.error, "no-models")
       await writeFile(
         page,

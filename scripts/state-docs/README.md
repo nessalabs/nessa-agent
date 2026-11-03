@@ -13,9 +13,11 @@ path from this repository:
 ```sh
 export NESSA_DOCS_ROOT=/absolute/path/to/nessa-docs
 pnpm docs:state:check
+pnpm docs:state:coverage
 pnpm docs:state:test
 pnpm docs:state:models --install
 pnpm docs:state:models
+pnpm docs:state:probes
 pnpm docs:state:models --write
 ```
 
@@ -25,6 +27,16 @@ fails catalog errors. `docs:state:models` first does that check, discovers each
 page's linked model, and runs them sequentially through the canonical service.
 It does not execute the program described by a chart. Bare Node works too:
 `node scripts/state-docs/check.mjs --models`.
+
+`docs:state:coverage` also accounts for each accepted page. Direct model metadata
+comes from the catalog; a shared model must be linked in the page's `Model coverage`
+section. Stateful leaf pages and stateful parents without a direct/shared owner
+fail this check. System/service/feature indexes, pure contracts, guides and
+explicit external-source boundaries are reported separately and are not formal
+passes. Mentioning an external provider in an exclusion does not hide a local
+unmapped owner. Coverage status says the map is accounted for; run the models
+separately to check their rules. The [feature map](../../docs/state/feature-verification.md)
+is a reviewed snapshot of this report, not a second navigation manifest.
 
 `--install` explicitly permits the renderer's checksum-verified TLC/Java cache
 download. Without it, a missing cache is unavailable, never a pass. The cache
@@ -47,6 +59,19 @@ is set it also exercises the actual catalog against synthetic projects. Set
 broken-guard controls; it never downloads automatically. These checks are opt-in
 and are not added to the frontend or CI gates, which do not provision the renderer.
 
-The behavioral models and their exclusions are documented beside
-[resource tickets](../../docs/state/services/mcp/resource-tickets.md#bounded-rule-model)
-and [cleanup](../../docs/state/services/sdk/cleanup.md#bounded-rule-model).
+The [feature verification map](../../docs/state/feature-verification.md) links all
+model owners and their exclusions across app features. `coverage.test.mjs` also
+checks that unrelated links, stale evidence and lifecycle pages with children
+cannot be mistaken for a completed model map.
+
+
+`docs:state:probes` first requires each original model to pass, then checks the
+in-memory safety weakenings in `probes/`. Every direct model must have at least
+one probe; a missing owner, unknown owner, unchanged mutation, parse error,
+unexpected invariant, timeout or unchecked rule is a non-pass. The command
+never installs the checker and never writes intentionally broken models or
+results to the project. Its JSON names the baseline and expected violations;
+progress goes to stderr. Exit 0 means the originals passed and all controls
+broke their expected rules, 1 means an assertion failed, and 2 means setup or
+execution was unavailable. This is design-test evidence, not a product fault
+injection or a proof of the implementation.
