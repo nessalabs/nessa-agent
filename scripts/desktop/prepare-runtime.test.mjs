@@ -1,4 +1,5 @@
 import assert from "node:assert/strict"
+import { createHash } from "node:crypto"
 import {
   chmodSync,
   cpSync,
@@ -315,3 +316,94 @@ test(
     assert.throws(() => readFileSync(join(out, "manifest.json")), /ENOENT/)
   },
 )
+
+function assembleWithHostBuilds(t, environment, run) {
+  const { out, root, target } = fixture(t)
+  const calls = []
+  const commands = run ?? fakeCommands(target, calls)
+  const linux = join(target, "x86_64-unknown-linux-gnu/release/nessa")
+  mkdirSync(dirname(linux), { recursive: true })
+  writeFileSync(linux, "linux gateway", { mode: 0o755 })
+  assembleDesktopRuntime({
+    root,
+    out,
+    executables: runtimeExecutables("darwin"),
+    requestedTarget: "aarch64-apple-darwin",
+    hostBuilds: true,
+    environment,
+    run: commands,
+    prepareNode({ executable, out: runtime }) {
+      writeFileSync(join(runtime, executable), "node", { mode: 0o755 })
+      writeFileSync(join(runtime, "NODE-LICENSE"), "license")
+      return "26.8.1"
+    },
+    finalizeExecutables() {},
+  })
+  return { out, calls }
+}
+
+test("a local build carries the Linux nessa Boat VMs run, pinned into its gateway", (t) => {
+  const { out, calls } = assembleWithHostBuilds(t, { PATH: "/usr/bin" })
+  const zig = calls.filter(
+    ({ command, args }) => command === "cargo" && args[0] === "zigbuild",
+  )
+  assert.deepEqual(zig.at(-1).args, [
+    "zigbuild",
+    "--release",
+    "-p",
+    "nessa-server",
+    "--bin",
+    "nessa",
+    "--target",
+    "x86_64-unknown-linux-gnu.2.35",
+  ])
+  const build = calls.find(
+    ({ command, args }) => command === "cargo" && args[0] === "build",
+  )
+  const digest = createHash("sha256").update("linux gateway").digest("hex")
+  assert.equal(
+    build.options.env.NESSA_HOST_BUILDS,
+    `x86_64-unknown-linux-gnu=${digest}:13`,
+  )
+  assert.equal(build.options.env.NESSA_HOST_BUILDS_FROM, "bundled")
+  assert.equal(build.options.env.PATH, "/usr/bin")
+  assert.equal(
+    readFileSync(join(out, "host-builds/nessa-x86_64-unknown-linux-gnu"), "utf8"),
+    "linux gateway",
+  )
+  // The zig build comes before the gateway that pins it.
+  assert.ok(calls.indexOf(zig.at(-1)) < calls.indexOf(build))
+})
+
+test("a release's own pins, or an explicit opt-out, build no host copy", (t) => {
+  for (const environment of [
+    { NESSA_HOST_BUILDS: "x=y", NESSA_HOST_BUILDS_FROM: "https://example.test" },
+    { NESSA_SKIP_HOST_BUILDS: "1" },
+  ]) {
+    const { out, calls } = assembleWithHostBuilds(t, environment)
+    assert.ok(!calls.some(({ args }) => args[0] === "zigbuild"))
+    const build = calls.find(
+      ({ command, args }) => command === "cargo" && args[0] === "build",
+    )
+    assert.equal(build.options.env, undefined)
+    assert.throws(
+      () => readFileSync(join(out, "host-builds/nessa-x86_64-unknown-linux-gnu")),
+      /ENOENT/,
+    )
+  }
+})
+
+test("a missing cargo-zigbuild stops the build and says how to fix it", (t) => {
+  const { target } = fixture(t)
+  const calls = []
+  const fake = fakeCommands(target, calls)
+  assert.throws(
+    () =>
+      assembleWithHostBuilds(t, {}, (command, args, options) => {
+        if (command === "cargo" && args[0] === "zigbuild")
+          throw new Error("no such command")
+        return fake(command, args, options)
+      }),
+    /cargo install cargo-zigbuild[\s\S]*NESSA_SKIP_HOST_BUILDS=1/,
+  )
+})
