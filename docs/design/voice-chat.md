@@ -77,7 +77,7 @@ conversation ends the one running.
 | --- | --- | --- | --- |
 | V1 | idle | start | connecting; `voice.startCall` asked |
 | V2 | connecting | refused (`voice_key_missing`, `voice_key_rejected`, `voice_unreachable`, `vault_locked`, …) | failed with that refusal's sentence; nothing to end |
-| V3 | connecting | transport fails (no microphone, connection refused) | failed with its sentence; the transport is closed |
+| V3 | connecting | transport fails (microphone refused, or unanswered by macOS within 20 s; OpenAI unreachable; the call not accepted; the call not opened within 15 s) | failed with a sentence naming the step that failed; the transport is closed. Every step has a time limit, so a call never stays connecting |
 | V4 | connecting | transport open | listening; recent turns sent as context |
 | V5 | connecting | end | idle; the connect is aborted (microphone released), and a late answer or transport is closed when it arrives |
 | V6 | listening / working / speaking | words heard (partial) | the live line shows them |
@@ -92,6 +92,7 @@ conversation ends the one running.
 | V15 | any open | mute mic / speaker | the track or audio is off; the call stays |
 | V16 | any open | end, pane closed, conversation left | idle; the transport closed |
 | V17 | any open | transport closed or failed | ended, saying the call dropped |
+| V18 | listening | 12 s after it opened, the provider has not heard the person start speaking, and the microphone is on | the transport checks its own audio once (any event back from the provider, audio bytes going out, sound from the microphone); the first thing found wrong is shown in place of "Listening" until the person is heard |
 
 A turn is open while its reply is being written, while the chat is at
 work, or while its message is held waiting for an agent (`waiting` on the

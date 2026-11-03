@@ -19,7 +19,19 @@ export interface RealtimeConnection {
   levels(): { readonly input: number; readonly output: number }
   setMicrophone(on: boolean): void
   setSpeaker(on: boolean): void
+  /** Looks at the call's own audio, for a call that has heard nothing yet. */
+  check(): Promise<CallCheck>
   close(): void
+}
+
+/** What an open call can say about its audio, each from its own evidence. */
+export interface CallCheck {
+  /** The provider has sent at least one event since the call opened. */
+  readonly answered: boolean
+  /** The call's audio is going out to the provider now. */
+  readonly audioSent: boolean
+  /** Sound is coming from the microphone now; null when it cannot tell. */
+  readonly microphoneSound: boolean | null
 }
 
 /** Why a transport could not open a call, said to the person. */

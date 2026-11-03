@@ -4,13 +4,19 @@ import {
   TransportRefused,
   VoiceStartRefused,
   type AgentReply,
+  type CallCheck,
   type RealtimeConnection,
   type RealtimeEvent,
   type SendResult,
   type TurnState,
   type VoiceConversation,
 } from "./ports"
-import { TRANSCRIPT_WAIT_MS, VoiceController } from "./voice-controller"
+import {
+  HEARING_CHECK_MS,
+  hearingHint,
+  TRANSCRIPT_WAIT_MS,
+  VoiceController,
+} from "./voice-controller"
 
 const grant: VoiceCall = {
   transport: "scripted",
@@ -44,6 +50,12 @@ class FakeConnection implements RealtimeConnection {
   }
   setSpeaker(on: boolean) {
     this.speaker = on
+  }
+  found: CallCheck = { answered: true, audioSent: true, microphoneSound: true }
+  checks = 0
+  check() {
+    this.checks++
+    return Promise.resolve(this.found)
   }
   close() {
     this.closed = true
@@ -328,7 +340,8 @@ describe("VoiceController", () => {
     connection.emit({ type: "input_audio_buffer.committed", item_id: "i1" })
     calls(connection, "send_to_agent", "c1")
     await settle()
-    expect(clock.pending.size).toBe(1)
+    // The transcript wait, and the call's hearing check (V18).
+    expect(clock.pending.size).toBe(2)
     expect(TRANSCRIPT_WAIT_MS).toBe(5_000)
     clock.fire()
     await settle()
@@ -693,5 +706,46 @@ describe("VoiceController", () => {
     connection.emit({ type: "response.done", response: { status: "completed" } })
     expect(connection.responses()).toBe(before + 1)
     expect(controller.snapshot().phase).toBe("speaking")
+  })
+
+  it("V18: a call that hears nothing looks at its own audio and says what it found", async () => {
+    const { controller, connection, clock } = setup()
+    vi.spyOn(console, "warn").mockImplementation(() => {})
+    await controller.start("s-1")
+    expect(HEARING_CHECK_MS).toBe(12_000)
+    connection.found = { answered: true, audioSent: true, microphoneSound: false }
+    clock.fire()
+    await settle()
+    expect(connection.checks).toBe(1)
+    expect(controller.snapshot().hint).toBe(
+      "No sound is coming from the microphone. Check the input in System Settings › Sound.",
+    )
+    connection.emit({ type: "input_audio_buffer.speech_started" })
+    expect(controller.snapshot().hint).toBeNull()
+    vi.restoreAllMocks()
+  })
+
+  it("V18: a call that has heard the person does not look", async () => {
+    const { controller, connection, clock } = setup()
+    await controller.start("s-1")
+    connection.emit({ type: "input_audio_buffer.speech_started" })
+    clock.fire()
+    await settle()
+    expect(connection.checks).toBe(0)
+    expect(controller.snapshot().hint).toBeNull()
+  })
+
+  it("V18: the far end is blamed first, then the sending, then the microphone", () => {
+    const quiet = { answered: false, audioSent: false, microphoneSound: false }
+    expect(hearingHint(quiet)).toMatch(/^OpenAI isn’t answering/)
+    expect(hearingHint({ ...quiet, answered: true })).toMatch(
+      /^Your voice isn’t being sent/,
+    )
+    expect(hearingHint({ ...quiet, answered: true, audioSent: true })).toMatch(
+      /^No sound is coming from the microphone/,
+    )
+    expect(
+      hearingHint({ answered: true, audioSent: true, microphoneSound: null }),
+    ).toBeNull()
   })
 })
