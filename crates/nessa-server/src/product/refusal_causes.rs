@@ -122,6 +122,7 @@ fn conversation(out: &mut String, error: &ConversationError) {
         E::ModelChangeNotApplied => "model-change-not-applied",
         E::ModelChangeUncertain => "model-change-uncertain",
         E::Capacity => "capacity",
+        E::ThreadLimit => "thread-limit",
         E::Unavailable => "unavailable",
         E::Metadata => "metadata",
         E::CatalogueIdentityChanged => "catalogue-identity-changed",

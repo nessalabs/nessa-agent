@@ -2950,6 +2950,15 @@ impl ConversationRepository for GatedCreateRepository {
     fn load(&self, id: &ConversationId) -> ConversationFuture<'_, Option<Conversation>> {
         self.inner.load(id)
     }
+    fn load_admission_snapshot(
+        &self,
+        id: &ConversationId,
+    ) -> ConversationFuture<
+        '_,
+        Option<crate::conversation::application::ConversationAdmissionSnapshot>,
+    > {
+        self.inner.load_admission_snapshot(id)
+    }
     fn unfinished_deletions(&self) -> ConversationFuture<'_, UnfinishedDeletions> {
         self.inner.unfinished_deletions()
     }
@@ -4561,8 +4570,9 @@ async fn a_context_only_fingerprint_change_opens_fresh_and_keeps_the_conversatio
         current_configuration: None,
         id: session_id.clone(),
         provider: ProviderIdentity::new("gateway-test", "test", "previous-config").unwrap(),
-        provider_context: ProviderContext::Recorded(
+        provider_context: ProviderContext::recorded_after(
             ExecutionSessionId::new("retained-context").unwrap(),
+            0,
         ),
         queue_history: vec![],
         invocations: vec![],

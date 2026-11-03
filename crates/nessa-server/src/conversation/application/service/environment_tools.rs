@@ -79,6 +79,28 @@ pub struct EnvironmentListing {
     pub commands: bool,
     /// Whether this conversation's agent runs there.
     pub current: bool,
+    /// For a connected paired environment, how loaded it is and where it
+    /// stands for new `peer:any` work in this conversation's channel.
+    pub load: Option<EnvironmentLoad>,
+}
+
+/// How loaded a paired environment is, as its connection last said, and
+/// where the pool puts it for new work. Nothing is reached to answer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct EnvironmentLoad {
+    /// Processor use in whole percent; `None` before it has said.
+    pub cpu_percent: Option<u32>,
+    /// Memory use in whole percent; `None` before it has said.
+    pub memory_percent: Option<u32>,
+    /// Agents it runs now; `None` when its connection serves none.
+    pub agents: Option<usize>,
+    /// Its place for new `peer:any` work, 1 first; computers not put in
+    /// order share the place after the ordered ones. `None` when the pool
+    /// gives it none: left out, or not taking work.
+    pub pool_place: Option<usize>,
+    /// At or past a busy limit: the pool passes it over while another
+    /// computer is not.
+    pub busy: bool,
 }
 
 /// One `run` call.
@@ -168,7 +190,15 @@ impl ConversationService {
             reachable: Some(true),
             commands: false,
             current: current.is_none(),
+            load: None,
         }];
+        // A pool setting that cannot be read leaves load unknown, never
+        // refuses the listing.
+        let channel = self.channel_id_of(id).await.ok().flatten();
+        let standing = match environments.pool_settings(channel.as_ref()).await {
+            Ok(settings) => environments.pool_standing(&settings),
+            Err(_) => Default::default(),
+        };
         let hosts = environments
             .hosts()
             .iter()
@@ -200,6 +230,13 @@ impl ConversationService {
                 reachable: commands.and_then(|commands| commands.reachable()),
                 commands: commands.is_some() && usable,
                 current: is_current,
+                load: standing.get(&name).map(|standing| EnvironmentLoad {
+                    cpu_percent: standing.machine.map(|used| used.cpu_permille / 10),
+                    memory_percent: standing.machine.map(|used| used.memory_permille / 10),
+                    agents: standing.agents,
+                    pool_place: standing.rank.map(|rank| rank + 1),
+                    busy: standing.busy,
+                }),
                 name,
             });
         }

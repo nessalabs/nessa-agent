@@ -64,3 +64,28 @@ flowchart TB
 
 [Channel workspaces](channel-workspaces.md) describes independent Local/Boat
 placement, durable VM assignments, approved local access and main-chat replacement.
+
+## Model coverage
+
+This component index routes to the feature owners. Their finite models check only the safety slices stated on each owner page; no single aggregate application lifecycle is claimed. Source checkpoints do not inherit to child pages.
+
+
+## Additional gateway feature owners
+
+These operations have separate admission and resource lifetimes. Their bounded
+models link back to the source that owns those decisions.
+
+- [Export a consistent backup cut](backup-export.md)
+- [Verify, quarantine and accept a backup](backup-restore.md)
+- [Delegate to another agent thread](agent-thread-tools.md)
+- [Enroll, read and forget peer gateways](peer-gateways.md)
+- [Run harnesses through environment leases](environment-leases.md)
+- [Reach a gateway through a tunnel](tunnel-connectivity.md)
+- [Pair a device through current receiver holding](device-pairing.md)
+- [Stop captured parent and descendant turns](parent-stop.md)
+
+
+[Busy record discovery](record-read-discovery.md) owns the distinction between
+occupied cache checkout, validation progress and the active work budget. An
+occupied stream waits for its own release rather than ending a watch or waiting
+for every unrelated stream.

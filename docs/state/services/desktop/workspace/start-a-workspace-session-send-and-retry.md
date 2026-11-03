@@ -70,3 +70,11 @@ stateDiagram-v2
 ## Further reading
 
 [Source](../../../../../src/desktop/workspace/application/usecases/sessions.ts) · [Related source](../../../../../src/desktop/workspace/model/session-lifecycle.ts) · [Related tests](../../../../../src/desktop/workspace/application/usecases/sessions.test.ts)
+
+## Model coverage
+
+Disposition: shared owner model. Stable input retry and SDK admission are shared rules. [desktop-chat-recover-a-refused-or-unconfirmed-send](../chat/recover-a-refused-or-unconfirmed-send.md) [sdk-scheduling](../../sdk/scheduling.md)
+
+Excluded: The workspace outbox is a distinct implementation; its optimistic draft promotion and failure ordering are not proved by the panel recovery abstraction.
+
+Source review scope: owner entry points and relevant regression declarations were inventoried against frozen source `77a6b620af4d94b234294f6d273fd74b3dfb44c7`. Existing source checkpoints are retained where this was a partial review. A model result establishes bounded design safety only. Browser appearance and interaction were not checked.

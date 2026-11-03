@@ -6,11 +6,13 @@ import { BoatRuntimeControl } from "../../../settings/ui/boat-runtime-control"
 import { ItemRow, Segmented } from "../../../settings/ui/settings-controls"
 import { channelFailure, type ChannelPlacement } from "../../application/ports"
 import { gatewayChannelId } from "../../adapters/gateway/gateway-views"
+import { PoolOrder, useDevicesGateway } from "../../../devices"
 import { setChannelPlacement } from "../../adapters/store/commands"
 import { useWorkspaceDispatch, useWorkspaceSelector } from "../../adapters/store/hooks"
 import { selectChannel } from "../../adapters/store/selectors"
 
 type Place = "local" | "boat"
+type ThreadPlace = Place | "pool"
 
 /**
  * Where a made channel's agents run, changed after it was made. Each choice
@@ -35,6 +37,9 @@ export function ChannelPlacementControl({ channelId }: { channelId: string }) {
       disabled: !boatReady,
     },
   ]
+  // Only threads spread over computers: the main agent stays put.
+  const threadPlaces: readonly { id: ThreadPlace; label: string; disabled?: boolean }[] =
+    [...places, { id: "pool", label: "Any computer" }]
   const placement: ChannelPlacement = {
     coordinatorPlacement: channel.coordinatorPlacement ?? "local",
     threadPlacement: channel.threadPlacement ?? "local",
@@ -92,10 +97,10 @@ export function ChannelPlacementControl({ channelId }: { channelId: string }) {
         data-placement-row="threads"
         unavailable={saving}
         control={
-          <Segmented<Place>
+          <Segmented<ThreadPlace>
             label="New threads run on"
             value={placement.threadPlacement}
-            options={places}
+            options={threadPlaces}
             onChange={(next) => change({ threadPlacement: next })}
           />
         }
@@ -120,6 +125,7 @@ export function ChannelSettingsButton({
   const [open, setOpen] = useState(false)
   const trigger = useRef<HTMLButtonElement>(null)
   const gateway = useBoatGateway()
+  const devices = useDevicesGateway()
   const scope = gatewayChannelId(channelId)
   return (
     <>
@@ -153,6 +159,12 @@ export function ChannelSettingsButton({
             )}
             <BoatRuntimeControl channelId={scope} gateway={gateway} />
           </div>
+          {/* The default channel follows Devices' order, set there. */}
+          {scope !== undefined && devices ? (
+            <div className="settings-surface" data-channel-settings-pool="">
+              <PoolOrder gateway={devices} channelId={scope} />
+            </div>
+          ) : null}
         </Dialog>
       )}
     </>

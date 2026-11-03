@@ -224,8 +224,9 @@ impl RecordReadSource for GatedRead {
                         .0
                         .unwrap();
                     let before = snapshot.provider_context.clone();
-                    snapshot.provider_context = ProviderContext::Recorded(
+                    snapshot.provider_context = ProviderContext::recorded_after(
                         ExecutionSessionId::new("later-source-context").unwrap(),
+                        0,
                     );
                     let after = snapshot.provider_context.clone();
                     lease
@@ -583,8 +584,9 @@ async fn gateway_child() {
                     context: context.clone(),
                 }];
                 for index in 0..300 {
-                    let next = ProviderContext::Recorded(
+                    let next = ProviderContext::recorded_after(
                         ExecutionSessionId::new(format!("{index:05}{}", "x".repeat(240))).unwrap(),
+                        0,
                     );
                     changes.push(SessionChange::ProviderContext {
                         before: context,
@@ -672,8 +674,9 @@ async fn live_control(
                 let binding = loaded.binding().clone();
                 let mut snapshot = loaded.into_published(&conversation).unwrap().0.unwrap();
                 let before = snapshot.provider_context.clone();
-                snapshot.provider_context = ProviderContext::Recorded(
+                snapshot.provider_context = ProviderContext::recorded_after(
                     ExecutionSessionId::new(format!("live-commit-{commits}")).unwrap(),
+                    0,
                 );
                 let after = snapshot.provider_context.clone();
                 lease

@@ -570,6 +570,11 @@ export const keys = {
    * WKWebView on macOS, moves Tab through fields only unless ⌥ is held.
    */
   nextControl: { chromium: "Tab", webkit: "Alt+Tab" },
+  /**
+   * To the previous control, a button included. WebKit's backward chord is
+   * ⌥⇧Tab, the same platform rule as `nextControl`.
+   */
+  previousControl: { chromium: "Shift+Tab", webkit: "Alt+Shift+Tab" },
 }
 
 /**

@@ -218,7 +218,7 @@
         "methods": {
           "type": "array",
           "items": { "type": "string" },
-          "maxItems": 113,
+          "maxItems": 115,
           "description": "Registered product methods; permission is checked for every command."
         }
       },
@@ -6640,6 +6640,112 @@
       "required": [],
       "description": "Which page of the hub's workers to list."
     },
+    "PoolPreference": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Which paired computers new work goes to first, and which it never goes to. Every computer named in neither list is in the pool, after the ordered ones, the one with the fewest agents first. No computer is named twice, in one list or both.",
+      "required": ["order", "excluded"],
+      "properties": {
+        "order": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {
+            "type": "string",
+            "pattern": "^peer:[0-9a-f]{64}$",
+            "maxLength": 69
+          },
+          "description": "First choice first: a new thread goes to the first of these that serves, is not draining and is not busy."
+        },
+        "excluded": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {
+            "type": "string",
+            "pattern": "^peer:[0-9a-f]{64}$",
+            "maxLength": 69
+          },
+          "description": "Computers left out of the pool: no new work goes to them, and a thread bound to one moves off it when its agent next opens."
+        }
+      }
+    },
+    "DevicesPoolParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "channelId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "Stored channel identity; omitted reads the Nessa default. The synthetic default channel follows the default."
+        }
+      },
+      "required": [],
+      "description": "Read the pool's default preference and one channel's override from one configuration read."
+    },
+    "DevicesPoolSelection": {
+      "type": "string",
+      "enum": ["default", "custom"],
+      "description": "default: a channel inherits the Nessa default (its override is removed), or the Nessa default is emptied: every computer in, none first. custom: save preference."
+    },
+    "DevicesSetPoolParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "channelId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "Stored channel identity; omitted saves the Nessa default."
+        },
+        "mode": {
+          "$ref": "#/$defs/DevicesPoolSelection",
+          "description": "default forbids preference; custom requires it."
+        },
+        "preference": {
+          "$ref": "#/$defs/PoolPreference",
+          "description": "Present only in custom mode."
+        }
+      },
+      "required": ["mode"],
+      "description": "Save the pool's Nessa default or one channel's own preference in config.json. Applies to the next agent opened on the pool; a thread already running stays where it is. Read again after an uncertain response; calls are not replayed."
+    },
+    "DevicesPool": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["defaultPreference", "busyCpuPercent", "busyMemoryPercent"],
+      "properties": {
+        "channelId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "The stored channel read or saved; omitted for the Nessa default."
+        },
+        "defaultPreference": {
+          "$ref": "#/$defs/PoolPreference",
+          "description": "The Nessa default, which every channel without its own follows."
+        },
+        "channelOverride": {
+          "$ref": "#/$defs/PoolPreference",
+          "description": "The channel's own preference; omitted when it follows the default."
+        },
+        "busyCpuPercent": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100,
+          "description": "Processor use at which a computer is busy: passed over for new work while another is not (config.json pool.busyCpuPercent)."
+        },
+        "busyMemoryPercent": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100,
+          "description": "Memory use at which a computer is busy (config.json pool.busyMemoryPercent)."
+        }
+      },
+      "description": "The pool's preferences: the Nessa default, a channel's override, and when a computer is busy. With every computer busy a new pool thread runs in Boat when it is connected."
+    },
     "ServerReachResult": {
       "type": "object",
       "additionalProperties": false,
@@ -8310,8 +8416,8 @@
         },
         "threadPlacement": {
           "type": "string",
-          "enum": ["local", "boat"],
-          "description": "Where new worker-thread workspaces run. Boat allocates one VM per thread."
+          "enum": ["local", "boat", "pool"],
+          "description": "Where new worker-thread workspaces run. Boat allocates one VM per thread. Pool runs each thread on a paired computer, the first in the pool's order that is not busy, with Boat as overflow (devices.pool)."
         },
         "coordinatorConversationId": {
           "type": ["string", "null"],
@@ -8400,8 +8506,8 @@
         },
         "threadPlacement": {
           "type": "string",
-          "enum": ["local", "boat"],
-          "description": "Where new worker-thread workspaces run. Boat allocates one VM per thread."
+          "enum": ["local", "boat", "pool"],
+          "description": "Where new worker-thread workspaces run. Boat allocates one VM per thread. Pool runs each thread on a paired computer, the first in the pool's order that is not busy, with Boat as overflow (devices.pool)."
         }
       },
       "required": ["requestId", "name", "agent", "model"]
@@ -8439,8 +8545,8 @@
         },
         "threadPlacement": {
           "type": "string",
-          "enum": ["local", "boat"],
-          "description": "Where threads made in the channel from now on run."
+          "enum": ["local", "boat", "pool"],
+          "description": "Where threads made in the channel from now on run: pool runs each on a paired computer (devices.pool)."
         }
       },
       "required": ["requestId", "channelId", "coordinatorPlacement", "threadPlacement"]

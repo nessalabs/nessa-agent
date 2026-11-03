@@ -424,7 +424,8 @@ export interface ChannelSource {
 /** Where a channel's main agent and its new threads run. */
 export interface ChannelPlacement {
   readonly coordinatorPlacement: "local" | "boat"
-  readonly threadPlacement: "local" | "boat"
+  /** `pool`: each new thread on a paired computer, by Devices' order. */
+  readonly threadPlacement: "local" | "boat" | "pool"
 }
 
 /** Why a channel was not made, by kind (`model/channel-draft.ts`), never a sentence. */

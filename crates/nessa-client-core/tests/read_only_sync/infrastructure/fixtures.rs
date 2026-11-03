@@ -126,8 +126,9 @@ async fn record_fixture(root: &Path, separate_open: bool, count: usize) -> (Scop
     }
     // One valid atomic decision group spans several physical pieces.
     for index in 0..count {
-        let next = ProviderContext::Recorded(
+        let next = ProviderContext::recorded_after(
             ExecutionSessionId::new(format!("{index:04}{}", "x".repeat(240))).unwrap(),
+            0,
         );
         changes.push(SessionChange::ProviderContext {
             before: context,

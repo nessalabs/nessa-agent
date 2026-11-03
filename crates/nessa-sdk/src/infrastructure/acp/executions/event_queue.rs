@@ -1,6 +1,9 @@
 //! Bounds retained decoded events across every process generation of one attachment.
 //! A dequeue transfers ownership to the consumer and releases its queue charge.
 use crate::application::agent_execution::executions::ExecutionEvent;
+use crate::application::agent_execution::sessions::MessageCommitClock;
+#[cfg(test)]
+use crate::infrastructure::session_storage::RuntimeMessageCommitClock;
 use std::{future::Future, mem::size_of, sync::Arc};
 use tokio::sync::{mpsc, OwnedSemaphorePermit, Semaphore};
 
@@ -16,11 +19,21 @@ fn budget(bytes: usize) -> u32 {
 
 pub(in crate::infrastructure::acp) struct EventQueueBudget {
     permits: Arc<Semaphore>,
+    /// The session clock this open was given. A direct open uses the runtime
+    /// process timeline.
+    clock: Arc<dyn MessageCommitClock>,
 }
 impl EventQueueBudget {
+    /// A budget on the runtime process timeline, for tests that do not
+    /// substitute a clock.
+    #[cfg(test)]
     pub(crate) fn new() -> Self {
+        Self::with_clock(Arc::new(RuntimeMessageCommitClock::new()))
+    }
+    pub(crate) fn with_clock(clock: Arc<dyn MessageCommitClock>) -> Self {
         Self {
             permits: Arc::new(Semaphore::new(MAX_QUEUED_BYTES)),
+            clock,
         }
     }
     pub(crate) fn channel(&self, capacity: usize) -> (EventSender, EventReceiver) {
@@ -29,6 +42,7 @@ impl EventQueueBudget {
             EventSender {
                 sender,
                 permits: self.permits.clone(),
+                clock: self.clock.clone(),
             },
             EventReceiver { receiver },
         )
@@ -39,6 +53,7 @@ impl EventQueueBudget {
 pub(in crate::infrastructure::acp) struct EventSender {
     sender: mpsc::Sender<QueuedEvent>,
     permits: Arc<Semaphore>,
+    clock: Arc<dyn MessageCommitClock>,
 }
 pub(in crate::infrastructure::acp) struct EventReceiver {
     receiver: mpsc::Receiver<QueuedEvent>,
@@ -57,6 +72,10 @@ impl EventSender {
         if self.sender.is_closed() {
             return Err(QueueError::Closed);
         }
+        // Queue time on the open's clock, not the supervisor's later read. A
+        // slow consumer keeps this stamp; the session replaces a time the
+        // provider wrote.
+        let event = event.stamped_at_arrival(self.clock.unix_milliseconds());
         let bytes = u32::try_from(event_bytes(&event)).map_err(|_| QueueError::Full)?;
         let charge = self
             .permits

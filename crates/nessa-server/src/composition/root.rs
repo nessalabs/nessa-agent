@@ -47,7 +47,8 @@ fn print_limits() -> Result<(), RunError> {
         .agents
         .as_ref()
         .map_or(super::agent::REVIEW_WAIT, |agents| agents.review_wait());
-    let document = crate::limits::effective_json(&limits, &session, review_wait);
+    let live_threads = config.subagents.live_threads();
+    let document = crate::limits::effective_json(&limits, &session, review_wait, live_threads);
     let mut bytes = serde_json::to_vec(&document)
         .map_err(|error| RunError::RuntimeConfig(error.to_string()))?;
     bytes.push(b'\n');

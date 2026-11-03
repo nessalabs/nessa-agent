@@ -327,22 +327,32 @@ async fn erasing_a_coordinator_rotates_once_and_survives_reopen() {
 
 #[tokio::test]
 async fn older_channel_schemas_upgrade_without_relocating_existing_work() {
-    for version in [1, 2, 3] {
+    for version in [1, 2, 3, 4] {
         let directory = tempfile::tempdir().unwrap();
         let private = directory.path().join("conversations");
         nessa_local_storage::create_directory(&private).unwrap();
         let path = private.join("channels.sqlite3");
         // Start from the actual old schema, rather than a second handwritten one.
         let current = DEFINITION;
-        let old = current[..current.find("-- A replacement is recorded").unwrap()].to_owned();
-        let old = if version == 3 {
-            // Before a main agent could move: only an erasure retired one.
-            current[..current.find("PRAGMA user_version").unwrap()].replace(
+        let tables = current[..current.find("-- A replacement is recorded").unwrap()].to_owned();
+        // Before the pool (v4), a thread could not run on "any computer".
+        let tables = if version < 4 {
+            tables.replace(", 'pool')", ")")
+        } else {
+            tables
+        };
+        // Before a main agent could move (v5), only an erasure retired one.
+        let replacements = current[current.find("-- A replacement is recorded").unwrap()
+            ..current.find("PRAGMA user_version").unwrap()]
+            .replace(
                 "cause IN ('coordinator_conversation_erased', 'coordinator_moved')",
                 "cause = 'coordinator_conversation_erased'",
-            )
+            );
+        let old = if version >= 3 {
+            format!("{tables}{replacements}")
         } else if version == 1 {
-            old.lines()
+            tables
+                .lines()
                 .filter(|line| {
                     !line.trim_start().starts_with("coordinator_placement")
                         && !line.trim_start().starts_with("thread_placement")
@@ -350,7 +360,7 @@ async fn older_channel_schemas_upgrade_without_relocating_existing_work() {
                 .collect::<Vec<_>>()
                 .join("\n")
         } else {
-            old
+            tables
         };
         drop(
             nessa_local_storage::open(&path, nessa_local_storage::OpenMode::OpenOrCreate).unwrap(),
@@ -379,6 +389,34 @@ async fn older_channel_schemas_upgrade_without_relocating_existing_work() {
         assert_eq!(
             store.channel_of(&main).await.unwrap(),
             Some(kept.id().clone())
+        );
+        // Every older file takes threads on the pool once upgraded.
+        let pooled = LocalChannelStore::open(&path).unwrap();
+        drop(pooled);
+        let check = Connection::open(&path).unwrap();
+        check
+            .execute(
+                "UPDATE channels SET thread_placement = 'pool' WHERE channel = ?1",
+                params![kept.id().as_str()],
+            )
+            .unwrap();
+        let violations: i64 = check
+            .query_row("SELECT COUNT(*) FROM pragma_foreign_key_check", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(violations, 0, "version {version}");
+        drop(check);
+        let store = LocalChannelStore::open(&path).unwrap();
+        assert_eq!(
+            store
+                .get(kept.id())
+                .await
+                .unwrap()
+                .unwrap()
+                .execution()
+                .threads,
+            crate::conversation::domain::WorkspacePlacement::Pool
         );
         store.forget(&main).await.unwrap();
         assert_ne!(

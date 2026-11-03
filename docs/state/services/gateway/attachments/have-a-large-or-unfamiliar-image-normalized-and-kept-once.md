@@ -3,7 +3,8 @@ id: "gateway-attachments-have-a-large-or-unfamiliar-image-normalized-and-kept-on
 title: "Have a large or unfamiliar image normalized and kept once"
 kind: "operation"
 status: "mixed"
-summary: "The gateway checks an image's actual bytes, turns it upright and fits it to the agent's supported size and format."
+summary: "The gateway checks an image's actual bytes, turns it upright and fits
+  it to the agent's supported size and format."
 parent: "gateway-attachments"
 sources:
   - "crates/nessa-server/src/attachments/infrastructure/normalizer.rs"
@@ -22,8 +23,22 @@ sources:
   - "crates/nessa-server/tests/attachments/store.rs"
   - "crates/nessa-server/tests/attachments/service_over_store.rs"
 diagramLinks: {}
+model:
+  spec: tla/services/gateway/attachments/AttachmentHold.tla
+  config: tla/services/gateway/attachments/AttachmentHold.cfg
+modelCheck:
+  checker: tlc-1.7.4
+  date: 2026-11-03T03:28:06.228Z
+  config: tla/services/gateway/attachments/AttachmentHold.cfg
+  modelDigest: 478ecea34c084aab1cd633647af4934a8d7bf6ad2e61b6efb0ccdcdf06a39ed4
+  states: 9
+  held:
+    - AuditBeforeConfirm
+    - ConversationOwnsHold
+    - ReplacementSurvivesOldUndo
+  broke: []
+  unchecked: []
 ---
-
 # Have a large or unfamiliar image normalized and kept once
 
 The gateway checks an image's actual bytes, turns it upright and fits it to the agent's supported size and format. The panel keeps the original preview, so what you see can differ from the resized image delivered to the agent.
@@ -53,3 +68,7 @@ stateDiagram-v2
 ## Further reading
 
 [Source](../../../../../crates/nessa-server/src/attachments/infrastructure/normalizer.rs) · [Related source](../../../../../crates/nessa-server/src/composition/attachments.rs) · [Related tests](../../../../../crates/nessa-images/tests/normalize.rs)
+
+## Bounded rule model
+
+Owns pending hold audit-before-confirm, conversation liveness check and claim-specific rollback. A later claim cannot be retired by the earlier upload. Image byte normalization, format/budget decisions and byte deduplication are pure/external contracts outside this ownership model. This finite abstraction checks safety only. It does not execute or verify the implementation, promise eventual completion, or qualify external effects. Existing source checkpoints and historical test receipts retain their earlier scope. The scoped model review inspected `crates/nessa-server/src/attachments/application/service.rs`.

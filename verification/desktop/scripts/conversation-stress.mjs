@@ -371,6 +371,12 @@ import {
 import { phoneFilesVerifier, uploadedInputFiles } from "./lib/stress-input-files.mjs"
 import { observeGatewayRestarts } from "./lib/stress-restart.mjs"
 import {
+  contextAudit,
+  nativeContextEvents,
+  nativeContextExists,
+  newContextEvidence,
+} from "./lib/stress-native-context.mjs"
+import {
   observeReviewAnswers,
   observeAccessRefusals,
   reviewAnswerAcknowledged,
@@ -886,7 +892,11 @@ async function aroundTheLights(page, rail, failures) {
         near(now.at.pill.left + now.at.pill.width / 2, now.at.item) &&
         now.at.itemTop > now.at.pill.top &&
         // The corner row (the toggle and "nessa Studio") stands below it.
-        now.at.toggleTop >= now.at.pill.bottom
+        // Down to the corner: no more than the toggle's foot room below it.
+        now.at.windowBottom - now.at.pill.bottom <= 24 &&
+        now.at.toggleBottom < now.at.pill.bottom &&
+        // "nessa Studio" stands clear of the pill's edge.
+        now.at.words >= now.at.pill.left + now.at.pill.width + 8 - 0.5
       : near(now.at.workspace, 0)) &&
     // The toggle is nessa's mark: in the footer's mark slot, right before
     // "nessa Studio", wherever the footer is drawn; at the corner otherwise.
@@ -977,6 +987,7 @@ function railLayout(page) {
           toggle: box(toggle)?.left ?? NaN,
           toggleBottom: box(toggle)?.bottom ?? NaN,
           toggleTop: box(toggle)?.top ?? NaN,
+          words: box(".side-rail-studio .desktop-identity-words")?.left ?? NaN,
           toggleMiddle: box(toggle)
             ? [
                 box(toggle).left + box(toggle).width / 2,
@@ -1026,9 +1037,10 @@ function railLayout(page) {
 
 /**
  * Toggles the rail from the page and follows "nessa Studio" every frame: it
- * stands in the corner beside the toggle, 8px past the toggle's mark, and
- * neither moves, not even for a frame. Settled, the toggle (with the rail
- * closed) stands on Agents' icon column. Returns what it found wrong.
+ * stands in the corner beside the toggle, 8px past the toggle's mark with the
+ * rail closed and 20px with it open (clear of the pill), moving only
+ * between the two. Settled, the toggle (with the rail closed) stands on
+ * Agents' icon column. Returns what it found wrong.
  */
 function footerThroughToggle(page) {
   return page.evaluate(async (toggleSelector) => {
@@ -1053,10 +1065,16 @@ function footerThroughToggle(page) {
       }
       requestAnimationFrame(frame)
     })
-    const off = seen.find((gap) => Math.abs(gap - 8) > 0.5)
+    const off = seen.find((gap) => gap < 7.5 || gap > 20.5)
     if (off !== undefined)
       failures.push(
-        `"nessa Studio" stood ${off.toFixed(1)}px past the toggle's mark, not 8px`,
+        `"nessa Studio" stood ${off.toFixed(1)}px past the toggle's mark, not 8-20px`,
+      )
+    const want = toggle.getAttribute("aria-expanded") === "true" ? 20 : 8
+    const last = seen.at(-1)
+    if (last !== undefined && Math.abs(last - want) > 0.5)
+      failures.push(
+        `"nessa Studio" settled ${last.toFixed(1)}px past the toggle's mark, not ${want}px`,
       )
     const icon = document.querySelector(".agents-overview-entry svg")
     if (toggle.getAttribute("aria-expanded") === "false" && icon) {
@@ -1684,7 +1702,7 @@ function providerName(provider) {
 async function makeChannel(
   run,
   failures,
-  { name, folder, refusedFolder, notes, resource, dropped },
+  { name, folder, refusedFolder, notes, resource, dropped, model },
 ) {
   const { page } = run
   const pick = (kind, value) =>
@@ -1770,7 +1788,10 @@ async function makeChannel(
   await page.keyboard.press(keys.enter)
   if (!(await asking("model"))) return null
   await photograph(`${name}-3-model`)
-  await page.keyboard.press(keys.enter)
+  if (model) {
+    await pickModel(page, flow.locator(css.modelChip), model)
+    await flow.getByRole("button", { name: "Use this model", exact: true }).click()
+  } else await page.keyboard.press(keys.enter)
   if (!(await asking("notes"))) return null
   await saidWhole(page, `${css.newChannelField}[data-step="notes"]`, "notes", failures)
   if (notes) await page.locator(`${css.newChannelField}[data-step="notes"]`).fill(notes)
@@ -2052,6 +2073,14 @@ async function focusedChatPanel(run, conversationId, step, failures) {
     failures.push("the talk board did not open a panel tab")
     return
   }
+  // The front tab is the only panel frame. Opening the pin replaces it, and
+  // a sandbox document still loading is aborted (proxy.html, net::ERR_ABORTED).
+  if (!(await panelAppReady(page, 'body[data-talk-state="live"]'))) {
+    failures.push(
+      "the talk board's panel frame was still loading when the next tab opened",
+    )
+    return
+  }
   await pin.waitForSelector('body[data-pin-state="live"]', { timeout: 20_000 })
   await pin.evaluate(() => document.querySelector('[data-pin="panel"]').click())
   if (!(await waitFor(async () => (await tabs().count()) === 2, 10_000))) {
@@ -2081,8 +2110,16 @@ async function focusedChatPanel(run, conversationId, step, failures) {
   )
   if (!opened) return
   const openPanel = opened.windows[0].panel
+  if (!(await panelAppReady(page, 'body[data-pin-state="live"]'))) {
+    failures.push("the pin's panel frame was still loading when its tab left the front")
+    return
+  }
   const other = page.locator(`${css.chatPanelTabs} [role="tab"][aria-selected="false"]`)
   await other.click()
+  if (!(await panelAppReady(page, 'body[data-talk-state="live"]'))) {
+    failures.push("the talk board's panel frame was still loading when the chat changed")
+    return
+  }
   const front = await windowRead(
     run,
     conversationId,
@@ -2169,6 +2206,12 @@ async function focusedChatPanel(run, conversationId, step, failures) {
     failures.push("clicking the first chat did not bring it back to the front")
     return
   }
+  // Coming back draws the front tab again. Leave only after its document
+  // has loaded, so a later chat does not abort that sandbox request.
+  if (!(await panelAppReady(page, 'body[data-talk-state="live"]'))) {
+    failures.push("the talk board's panel frame was still loading when the step left it")
+    return
+  }
   await windowRead(run, conversationId, step, " panel back", failures, (said) => {
     const panel = said.windows?.[0]?.panel
     return (
@@ -2206,6 +2249,21 @@ function samePanelTabs(left, right) {
   return a.length === b.length && a.every((each, index) => each === b[index])
 }
 
+/**
+ * The front panel tab's app document has `selector`. That tab is the only
+ * panel frame: the next tab, or another chat, drops it, and a sandbox
+ * document still on the wire is reported `net::ERR_ABORTED`.
+ */
+async function panelAppReady(page, selector) {
+  try {
+    const { app } = await appFrame(page, "panel", 20_000)
+    await app.waitForSelector(selector, { timeout: 20_000 })
+    return true
+  } catch {
+    return false
+  }
+}
+
 /** The inline app whose document has `selector`, or null once `timeout` passes. */
 async function inlineApp(page, selector, timeout = 20_000) {
   const until = Date.now() + timeout
@@ -2219,6 +2277,341 @@ async function inlineApp(page, selector, timeout = 20_000) {
     await sleep(100)
   }
   return null
+}
+
+/** C13: a new native context with old SDK history is closed before its first input. */
+async function unusedNativeContext(run, step, failures) {
+  const native = run.stack.nativeContext
+  if (!native) throw new Error("drift requires its focused native context fixture")
+  await run.exclusive(async () => {
+    let created = false
+    if (!native.channel) {
+      const model = catalog.models.find((each) => each.modelId === MODELS.claude)
+      if (!model) throw new CannotRun("the catalog has no focused Claude model")
+      native.channel = await makeChannel(run, failures, {
+        name: `native-context-s${run.knobs.seed}`,
+        folder: native.workspace,
+        model,
+      })
+      if (!native.channel || failures.length) return
+      if (native.channel.folder !== native.workspace)
+        throw new Error("focused native channel did not retain its canonical workspace")
+      created = true
+    } else {
+      await run.page
+        .locator(`${css.sidebar} nav`)
+        .getByText(native.channel.name, { exact: true })
+        .first()
+        .click({ timeout: 10_000 })
+      await openStressConversation(
+        run.page,
+        native.channel.coordinatorConversationId,
+        await titleOf(run, native.channel.coordinatorConversationId),
+      )
+    }
+    const id = native.channel.coordinatorConversationId
+    const oldText = prompt(run, STRESS.reply, step, ` native old ${run.engine}`)
+    const home = run.page.locator(`${css.focusedPane} ${css.paneHome}`)
+    // Creating the channel reserves its coordinator ID. The first UI send
+    // materializes that conversation, so there is no snapshot to read yet.
+    const previous = created
+      ? new Set()
+      : new Set(
+          (await run.client.conversation.read(id)).messages.map(
+            (each) => each.executionId,
+          ),
+        )
+    if (created) {
+      await home.locator(css.field).waitFor({ timeout: 15_000 })
+      await home.locator(css.field).fill(oldText)
+      await home.getByRole(...composerControls.send).click({ timeout: 10_000 })
+      const selected = await waitFor(
+        () => selectedStressConversation(run.page, oldText),
+        30_000,
+      )
+      if (selected !== id)
+        throw new Error("native context step did not send to its channel coordinator")
+      run.sent.set(id, (run.sent.get(id) ?? 0) + 1)
+    } else await send(run, id, oldText, failures, previous)
+    if (!run.checked.includes(id)) run.checked.push(id)
+    const { view: before } = await settled(
+      run,
+      id,
+      previous,
+      oldText,
+      "completed",
+      failures,
+    )
+    if (failures.length || !before) return
+    if (before.model !== MODELS.claude)
+      throw new Error("native context step did not select Claude")
+    const { conversations } = await run.client.conversation.list({})
+    if (
+      conversations.filter((each) => each.channelId === native.channel.channelId)
+        .length !== 1
+    )
+      throw new Error(
+        "focused native workspace has more than its coordinator conversation",
+      )
+    const title = await titleOf(run, id)
+    const reopen = async () => {
+      await run.page
+        .locator(`${css.sidebar} nav`)
+        .getByText(native.channel.name, { exact: true })
+        .first()
+        .click({ timeout: 10_000 })
+      await openStressConversation(run.page, id, title)
+    }
+    const auditDirectory = join(
+      run.stack.gateway.directory,
+      "ci",
+      "instances",
+      INSTANCE,
+      "conversations",
+      "audit",
+    )
+    const auditBefore = contextAudit(auditDirectory, id)
+    const eventsBefore = nativeContextEvents(native.directory)
+    const oldNative = eventsBefore
+      .filter((each) => each.method === "session/prompt" && each.outcome === "accepted")
+      .at(-1)?.sessionId
+    if (!oldNative || !nativeContextExists(native.directory, oldNative))
+      throw new Error("focused old input did not establish actual used native history")
+    const changed = mkdtempSync(join(run.stack.scratch, "claude-context-changed-"))
+    const oldIds = before.messages.map((each) => each.executionId)
+    const sameIds = (view) =>
+      JSON.stringify(view.messages.map((each) => each.executionId)) ===
+      JSON.stringify(oldIds)
+    let changedEnvironment = false
+    const restart = async (overlay) => {
+      await run.restartConsole.during(run.opened, async () => {
+        const client = run.client
+        run.restarts += 1
+        await run.stack.gateway.restart("SIGTERM", overlay ? { overlay } : undefined)
+        client.close()
+        run.client = await connectClient(run.stack.gateway, INSTANCE, "panel")
+        if (!(await run.restartConsole.readable(60_000)))
+          throw new Error(
+            "native context: browser workspace did not acknowledge restart recovery",
+          )
+        return true
+      })
+    }
+    const published = async (audit, offset) =>
+      waitFor(async () => {
+        const events = nativeContextEvents(native.directory).slice(offset)
+        const missing = events.find(
+          (each) => each.method === "session/resume" && each.outcome === "missing",
+        )
+        if (missing) return { missing }
+        const current = contextAudit(auditDirectory, id)
+        if (newContextEvidence(audit.published, current.published).length !== 1)
+          return null
+        const openings = events.filter(
+          (each) => each.method === "session/new" && each.outcome === "opened",
+        )
+        if (openings.length !== 1) return null
+        const view = await run.client.conversation.read(id).catch(() => null)
+        return view ? { view, audit: current, sessionId: openings[0].sessionId } : null
+      }, 60_000)
+    try {
+      changedEnvironment = true
+      await restart({ CLAUDE_CONFIG_DIR: changed })
+      await reopen()
+      await run.client.conversation.read(id).catch(() => null)
+      const fresh = await published(auditBefore, eventsBefore.length)
+      if (!fresh || fresh.missing) {
+        failures.push(
+          "native context: fingerprint change did not publish one fresh native context",
+        )
+        return
+      }
+      if (
+        !sameIds(fresh.view) ||
+        newContextEvidence(auditBefore.admitted, fresh.audit.admitted).length
+      )
+        throw new Error("fresh context acquired an input before the cold-reopen boundary")
+      if (
+        fresh.sessionId === oldNative ||
+        nativeContextExists(native.directory, fresh.sessionId)
+      )
+        throw new Error(
+          "fresh unused native context already has history or reused the old identity",
+        )
+      if (
+        nativeContextEvents(native.directory)
+          .slice(eventsBefore.length)
+          .some((each) => each.method === "session/prompt")
+      )
+        throw new Error("a prompt reached the fresh context before its cold restart")
+      const coldOffset = nativeContextEvents(native.directory).length
+      // The same changed directory is retained: this is a cold reopen of the
+      // published context, not another fingerprint change.
+      await restart()
+      const recordColdRefusal = () => {
+        if (!run.evidence) return
+        writeFileSync(
+          join(run.evidence, `native-context-${run.engine}-${step.index}-refusal.json`),
+          JSON.stringify(
+            {
+              conversationId: id,
+              oldExecutionIds: oldIds,
+              firstUnusedNative: fresh.sessionId,
+              firstPhase: nativeContextEvents(native.directory).slice(
+                eventsBefore.length,
+                coldOffset,
+              ),
+              coldPhase: nativeContextEvents(native.directory).slice(coldOffset),
+              coldAdmissions: newContextEvidence(
+                fresh.audit.admitted,
+                contextAudit(auditDirectory, id).admitted,
+              ),
+            },
+            null,
+            2,
+          ),
+        )
+      }
+      // The UI remains the restoration trigger. If native restoration removes
+      // its composer, report the exact focused protocol failure instead of
+      // attributing the existing opening deadline to an unrelated selector.
+      try {
+        await reopen()
+      } catch (error) {
+        const missing = nativeContextEvents(native.directory)
+          .slice(coldOffset)
+          .some(
+            (each) =>
+              each.method === "session/resume" &&
+              each.outcome === "missing" &&
+              each.sessionId === fresh.sessionId,
+          )
+        if (!missing) throw error
+        recordColdRefusal()
+        failures.push(
+          "native context: cold reopen tried to resume the missing unused native ID",
+        )
+        return
+      }
+      await run.client.conversation.read(id).catch(() => null)
+      const replacement = await published(fresh.audit, coldOffset)
+      if (!replacement || replacement.missing) {
+        recordColdRefusal()
+        failures.push(
+          replacement?.missing
+            ? "native context: cold reopen tried to resume the missing unused native ID"
+            : "native context: cold reopen did not publish a replacement native context",
+        )
+        return
+      }
+      if (
+        replacement.sessionId === fresh.sessionId ||
+        !sameIds(replacement.view) ||
+        newContextEvidence(fresh.audit.admitted, replacement.audit.admitted).length
+      )
+        throw new Error(
+          "cold replacement changed retained executions or admitted work before Send",
+        )
+      const coldEvents = nativeContextEvents(native.directory).slice(coldOffset)
+      if (
+        coldEvents.some(
+          (each) => each.method === "session/resume" || each.method === "session/prompt",
+        )
+      )
+        throw new Error("cold unused context was resumed or prompted before Send")
+      const newText = prompt(run, STRESS.reply, step, ` native new ${run.engine}`)
+      const known = await send(run, id, newText, failures, new Set(oldIds))
+      const { view: after } = await settled(
+        run,
+        id,
+        known,
+        newText,
+        "completed",
+        failures,
+      )
+      if (failures.length || !after) return
+      const added = after.messages.filter((each) => !oldIds.includes(each.executionId))
+      if (
+        after.messages.length !== before.messages.length + 1 ||
+        added.length !== 1 ||
+        added[0].userText !== newText ||
+        added[0].status !== "completed" ||
+        JSON.stringify(
+          after.messages.slice(0, oldIds.length).map((each) => each.executionId),
+        ) !== JSON.stringify(oldIds)
+      )
+        failures.push(
+          "native context: cold reopen did not retain old executions and complete exactly one new input",
+        )
+      const pane = run.page.locator(css.focusedPane)
+      const count = async (role, text) =>
+        pane
+          .locator(css.message)
+          .filter({ hasText: text })
+          .evaluateAll(
+            (rows, role) =>
+              rows.filter((row) => row.getAttribute("data-role") === role).length,
+            role,
+          )
+      const shown = await waitFor(
+        async () =>
+          (await count("user", oldText)) === 1 &&
+          (await count("agent", `${SAYS.echo}${oldText}`)) === 1 &&
+          (await count("user", newText)) === 1 &&
+          (await count("agent", `${SAYS.echo}${newText}`)) === 1,
+        15_000,
+      )
+      if (!shown)
+        failures.push(
+          "native context: focused pane does not show the retained old exchange and exactly one new reply",
+        )
+      const finalEvents = nativeContextEvents(native.directory).slice(coldOffset)
+      const prompts = finalEvents.filter((each) => each.method === "session/prompt")
+      if (
+        prompts.length !== 1 ||
+        prompts[0].sessionId !== replacement.sessionId ||
+        !nativeContextExists(native.directory, replacement.sessionId)
+      )
+        failures.push(
+          "native context: replacement did not receive exactly the new prompt with persisted native history",
+        )
+      if (run.evidence) {
+        writeFileSync(
+          join(run.evidence, `native-context-${run.engine}-${step.index}.json`),
+          JSON.stringify(
+            {
+              conversationId: id,
+              oldExecutionIds: oldIds,
+              newExecutionId: added[0]?.executionId,
+              oldNative,
+              firstUnusedNative: fresh.sessionId,
+              replacementNative: replacement.sessionId,
+              firstPhase: nativeContextEvents(native.directory).slice(
+                eventsBefore.length,
+                coldOffset,
+              ),
+              coldPhase: finalEvents,
+              focusedPane: shown,
+            },
+            null,
+            2,
+          ),
+        )
+        await pane.screenshot({
+          path: join(run.evidence, `native-context-${run.engine}-${step.index}.png`),
+          scale: "css",
+        })
+      }
+    } finally {
+      if (changedEnvironment) await restart({ CLAUDE_CONFIG_DIR: native.baseline })
+      await run.page
+        .locator(`${css.sidebar} nav`)
+        .getByText("Conversations", { exact: true })
+        .first()
+        .click({ timeout: 10_000 })
+      await openStressConversation(run.page, run.main.id, run.main.title)
+    }
+  })
 }
 
 const steps = {
@@ -3049,6 +3442,7 @@ const steps = {
     })
     // The existing conversation still takes a message, in the window.
     if (failures.length === 0) await steps.reply(run, step, failures)
+    if (failures.length === 0) await unusedNativeContext(run, step, failures)
   },
 
   async linking(run, step, failures) {
@@ -3315,13 +3709,15 @@ const steps = {
         await run.page.mouse.move(1, 1)
         if (!(await shows(false)))
           failures.push("the actions still show once the pointer leaves")
-        // Both actions are in the control tab order: the engine's backward
-        // chord reaches Choose repositories, and its forward chord returns.
+        // Both actions are native tab stops. WebKit on macOS walks plain Tab
+        // through fields only; Option+Tab (Alt+Tab here) walks every control.
+        // The backward chord reaches Choose repositories, and the forward
+        // chord returns. Focus in the row is what shows the actions.
         const disconnect = row.getByRole("button", { name: names.githubDisconnect })
         const focused = (locator) =>
           locator.evaluate((node) => node === document.activeElement)
         await disconnect.focus()
-        await run.page.keyboard.press(`Shift+${keys.nextControl[run.engine]}`)
+        await run.page.keyboard.press(keys.previousControl[run.engine])
         if (!(await focused(row.locator("[data-github-repositories]"))))
           failures.push(
             "backward control navigation from Disconnect did not reach Choose repositories",
@@ -4113,6 +4509,7 @@ const steps = {
       owner = await connectClient(run.stack.gateway, INSTANCE, "owner")
       const launch = scriptedLaunch(run.stack.agent, {
         scenario: run.stack.scenario,
+        nativeContext: run.stack.nativeContext,
         model: run.stack.profile.model,
       })
       for (const label of ["a", "b"])
@@ -4138,6 +4535,14 @@ const steps = {
         )
         return
       }
+      // Devices › Thread order: with nothing ordered the lowest key would
+      // win a tie, so the person leaves that one out and the new
+      // conversation must go to the other.
+      const [leftOut] = [...workers].sort((x, y) => (x.name < y.name ? -1 : 1))
+      const ordered = await run.exclusive(() =>
+        setPoolInclusion(run, leftOut.name, false, failures),
+      )
+      if (!ordered) return
       const conversationId = randomUUID()
       await run.client.conversation.create({
         conversationId,
@@ -4168,6 +4573,13 @@ const steps = {
       }
       if (before.lease?.environment !== "peer" || before.lease?.host !== from.name)
         failures.push(`its lease runs on ${before.lease?.host}, not ${from.name}`)
+      if (from === leftOut)
+        failures.push(`the pool chose ${from.name}, which the person left out`)
+      // Let back in, it is where the conversation moves once its worker drains.
+      const back = await run.exclusive(() =>
+        setPoolInclusion(run, leftOut.name, true, failures),
+      )
+      if (!back) return
       // A person opens it and writes in it: it stays on the worker it is bound to.
       await openStressConversation(
         run.page,
@@ -4315,7 +4727,10 @@ const steps = {
         owner,
         address: run.nativeAddress,
         agent: run.stack.agent,
-        launch: scriptedLaunch(run.stack.agent, { scenario: run.stack.scenario }),
+        launch: scriptedLaunch(run.stack.agent, {
+          scenario: run.stack.scenario,
+          nativeContext: run.stack.nativeContext,
+        }),
         label: `devices${step.index}`,
         connected: async (name) =>
           (await offers(run, (environments) => environments.includes(name))).includes(
@@ -4701,7 +5116,10 @@ const steps = {
           owner,
           address: run.nativeAddress,
           agent: run.stack.agent,
-          launch: scriptedLaunch(run.stack.agent, { scenario: run.stack.scenario }),
+          launch: scriptedLaunch(run.stack.agent, {
+            scenario: run.stack.scenario,
+            nativeContext: run.stack.nativeContext,
+          }),
           label: `t${step.index}`,
           tunnel: { address: UNREACHABLE, origin: address },
           connected: async (name) =>
@@ -6116,8 +6534,10 @@ const steps = {
           `${name}'s input ${tool.input} is not ${JSON.stringify(call.arguments)}`,
         )
     }
-    // The pause after each call shows in the times, which are the session's
-    // own clock: the next call starts no sooner.
+    // The pause runs after the previous call's end is queued and before the
+    // next call is queued. Both times are that queue time on the process
+    // timeline, so a late read cannot shrink the gap. The next call starts
+    // no sooner than the pause.
     for (let index = 1; index < tools.length; index += 1) {
       const gap = tools[index].startedAtMs - tools[index - 1].endedAtMs
       if (gap < TRACE_PAUSE_MS - 100)
@@ -7981,6 +8401,60 @@ async function pairFromWindow(run, failures) {
  * the side rail closed. Called with nothing else in flight
  * (`run.exclusive`).
  */
+/**
+ * Devices › Thread order, as a person uses it: the side rail's Devices,
+ * Thread order, then the computer's switch. Done once the gateway's own
+ * read of the pool says `environment` is let in or left out; the window is
+ * left on the main conversation.
+ */
+async function setPoolInclusion(run, environment, included, failures) {
+  const page = run.page
+  await setSideRail(page, true, failures)
+  if (failures.length) return false
+  await page.locator('[data-rail-item="devices"]').click()
+  await page.locator('[data-devices-action="pool"]').click({ timeout: 15_000 })
+  const row = page.locator(`[data-devices-pool-row="${environment}"]`)
+  if (!(await waitFor(async () => (await row.count()) === 1, 10_000))) {
+    failures.push(`Thread order lists no row for ${environment}`)
+    return false
+  }
+  if ((await row.getAttribute("data-included")) !== String(!included))
+    failures.push(`${environment} is already ${included ? "in" : "left out"}`)
+  await page.locator(`[data-devices-pool-include="${environment}"]`).click()
+  const saved = await waitFor(async () => {
+    const pool = await run.client.devices.pool()
+    return pool.defaultPreference.excluded.includes(environment) === !included
+      ? pool
+      : null
+  }, 10_000)
+  if (!saved) {
+    failures.push(`the pool never saved ${environment} ${included ? "in" : "left out"}`)
+    return false
+  }
+  if (
+    !(await waitFor(
+      async () => (await row.getAttribute("data-included")) === String(included),
+      5_000,
+    ))
+  )
+    failures.push(`Thread order still draws ${environment} as it was`)
+  if (run.evidence)
+    await page
+      .screenshot({
+        path: join(
+          run.evidence,
+          `pool-order-${run.engine}-${included ? "in" : "out"}.png`,
+        ),
+      })
+      .catch(() => {})
+  await page.locator('[data-devices-action="back"]').click()
+  // Back to the chats, and the rail off again as the run had it.
+  await page.locator('[data-rail-item="agents"]').click()
+  await setSideRail(page, false, failures)
+  await openStressConversation(run.page, run.main.id, run.main.title)
+  return failures.length === 0
+}
+
 async function reachFromDevices(run, failures) {
   const gateway = run.stack.gateway
   const config = join(gateway.directory, "ci", "instances", INSTANCE, "config.json")
@@ -8696,6 +9170,19 @@ async function startStack(options) {
   const nativeAddress = `127.0.0.1:${nativePort}`
   const nativeListen = `0.0.0.0:${nativePort}`
   const directory = mkdtempSync(join(tmpdir(), "nessa-stress-"))
+  const nativeContext =
+    knobs.drifts > 0
+      ? (() => {
+          const paths = Object.fromEntries(
+            ["directory", "workspace", "baseline"].map((key) => {
+              const path = join(directory, `native-context-${key}`)
+              mkdirSync(path)
+              return [key, realpathSync(path)]
+            }),
+          )
+          return { ...paths, channel: null }
+        })()
+      : undefined
   // Stop's dispatch assertion also runs without an exported evidence folder.
   const recordingDirectory = options.evidence ?? join(directory, "recording")
   const scenario = join(directory, "stress.json")
@@ -8738,6 +9225,7 @@ async function startStack(options) {
   // The `voice` step's realtime provider, on this machine.
   const realtime = knobs.voices > 0 ? await startFakeRealtime() : null
   const environment = {
+    ...(nativeContext ? { CLAUDE_CONFIG_DIR: nativeContext.baseline } : {}),
     ...(realtime
       ? {
           NESSA_VOICE_REALTIME: realtime.provider(join(directory, "voice-realtime.json")),
@@ -8770,11 +9258,17 @@ async function startStack(options) {
           : undefined,
       as: "panel",
       scenario,
+      nativeContext,
       model: profile.model,
       evidence: recordingDirectory,
       limits: { agentIdleSeconds: knobs.parks > 0 ? PARK_IDLE_SECONDS : 0 },
       // The agent a `handoff` step switches its conversation to.
-      others: knobs.handoffs > 0 ? [otherAgent(options.agent)] : [],
+      others: [
+        ...new Set([
+          ...(knobs.handoffs > 0 ? [otherAgent(options.agent)] : []),
+          ...(nativeContext && options.agent !== "claude" ? ["claude"] : []),
+        ]),
+      ],
       // Off, at a port of its own: the `linking` step turns it on from
       // Settings. Its tunnel too, at a loopback port of its own.
       native: {
@@ -8812,6 +9306,7 @@ async function startStack(options) {
     github,
     realtime,
     scenario,
+    nativeContext,
     // Removed when the stack closes.
     scratch: directory,
     endpoint: stack.gateway.url.replace(/^http/, "ws"),
@@ -8829,6 +9324,9 @@ await main(
     const origin = new URL(stack.url).origin
     await withEngines(options, rep, async (engine, browser) => {
       const layout = options.layouts[0]
+      // Each engine opens a fresh simulated app. Re-establish its owned
+      // disposable vault session after the prior engine's gateway restarts.
+      await stack.vault.unlock()
       let restartConsole
       let reviewAnswers
       let accessRefusals

@@ -434,7 +434,6 @@ impl ConversationService {
 
     /// Authorize a saved channel's runtime settings using current stored
     /// owner facts. The synthetic default channel uses global settings.
-    #[cfg(unix)]
     pub(crate) async fn authorize_channel_settings(
         &self,
         caller: &ConversationCaller,

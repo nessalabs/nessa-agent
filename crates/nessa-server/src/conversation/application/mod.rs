@@ -180,6 +180,7 @@ mod agent_switches;
 mod model_changes;
 mod owner_phone_policy;
 pub(crate) use metadata_target::ConversationMetadataReader;
+pub(crate) use ports::{ConversationAdmissionSnapshot, ConversationAdmissionToken};
 mod passive_read;
 mod permission_rules;
 pub use passive_read::AdmittedCatalogueRead;
@@ -194,6 +195,10 @@ pub use passive_read::AdmittedCatalogueRead;
 )]
 mod organization_budget;
 mod placement;
+mod pool_settings;
+#[cfg(any(unix, test))]
+pub(crate) use pool_settings::PoolSettingsError;
+pub(crate) use pool_settings::{PoolCaller, PoolSettingsStore};
 mod ports;
 mod provider_sessions;
 mod record_read;
@@ -306,7 +311,7 @@ pub use permission_rules::{
     StoredPermissionRule,
 };
 #[cfg(unix)]
-pub(crate) use placement::{PairedEnvironments, WorkerLoad};
+pub(crate) use placement::{MachineUse, PairedEnvironments, WorkerLoad};
 pub use placement::{FETCH_CALL_WAIT, POOL, PUBLISH_CALL_WAIT};
 pub use ports::{
     ArtifactKept, ArtifactRecordGate, AttachmentRelease, AttachmentReleaseCause,
@@ -348,7 +353,9 @@ pub use service::{
     UnsettledEnable, UsageLimitSnapshot, MAX_APP_CALLS, MAX_LISTED_CONVERSATIONS,
     MAX_RESOURCE_META_BYTES,
 };
-pub use service::{CommandAnswer, CommandCall, CommandCallError, EnvironmentListing, HERE};
+pub use service::{
+    CommandAnswer, CommandCall, CommandCallError, EnvironmentListing, EnvironmentLoad, HERE,
+};
 pub(crate) use service::{ExportAdmission, ExportHoldFailure, FENCE_LEASE_MS};
 pub use service::{
     FetchAnswer, FetchCall, FetchCallRefusal, PublishAnswer, PublishCall, PublishCallRefusal,

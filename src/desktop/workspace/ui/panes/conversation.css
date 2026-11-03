@@ -55,17 +55,19 @@
 }
 
 /*
- * A small pane — narrower or shorter than 640px, the room the scene, the
- * greeting and the card need to read as a home — takes a conversation's
- * shape: the header shrinks to a band across the top, its picture control
- * still in its corner, the greeting sits under it at the pane's left
- * at the size of a conversation's title (`transcript.css`), and the composer
- * docks at the foot as a conversation's does (the dock, below). It is decided
- * by the pane's own size, not the window's, and is the same composer either
- * way, so what is typed and where the caret is stay as they were. A long
- * draft still opens the page, in either shape.
+ * A small pane takes a conversation's shape: the header shrinks to a band
+ * across the top, its picture control still in its corner, the greeting sits
+ * under it at the pane's left at the size of a conversation's title
+ * (`transcript.css`), and the composer docks at the foot as a conversation's
+ * does (the dock, below). Narrow is the pane under 640px wide. Short is the
+ * room below the title row under 640px — the room the scene, the greeting
+ * and the card need. That room is the pane body (`panes.css`): the pane's
+ * box runs up behind the title row, so the row is not room they can use.
+ * The window's size never decides it. It is the same composer either way,
+ * so what is typed and where the caret is stay as they were. A long draft
+ * still opens the page, in either shape.
  */
-@container workspace-pane (width < 640px) or (height < 640px) {
+@container workspace-pane-body (width < 640px) or (height < 640px) {
   /* Named, so a change of shape can be told and settled (below). */
   .workspace-pane-home {
     --workspace-home-settle: workspace-home-docked;

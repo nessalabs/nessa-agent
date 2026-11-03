@@ -26,7 +26,8 @@ const DEFINITION: &str = include_str!("channels.sql");
 const UPGRADES: &[nessa_local_database::Upgrade] = &[
     nessa_local_database::Upgrade::new(1, include_str!("channels-workspaces.sql")),
     nessa_local_database::Upgrade::new(2, include_str!("channels-coordinators.sql")),
-    nessa_local_database::Upgrade::new(3, include_str!("channels-placement-moves.sql")),
+    nessa_local_database::Upgrade::new(3, include_str!("channels-pool.sql")),
+    nessa_local_database::Upgrade::new(4, include_str!("channels-placement-moves.sql")),
 ];
 const WRITTEN_COLUMNS: &str = "channel, organization_id, owner_id, request_id, name, folder, folder_made, agent, model, mode, notes, resources, created_at, coordinator_placement, thread_placement";
 const COLUMNS: &str = "channel, organization_id, owner_id, request_id, name, folder, \

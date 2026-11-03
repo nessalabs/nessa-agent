@@ -15,9 +15,12 @@
 //! retained error is one a retry can fix ([`AgentError::leaves_work_owed`]),
 //! its own failure or the runner's that stopped behind another's; or when it
 //! has no result and is still Queued or Running with nothing in this process
-//! running it. In each case no successor has been saved for it yet. Nessa never re-runs a tool: the
-//! successor gives the model a notice and the original request, and the model
-//! checks what is done and carries on, or says it is finished.
+//! running it. In each case no successor has been saved for it yet. A person's
+//! stop or a session close captured on that unfinished turn is owed only so
+//! the missing scheduling edge can be recorded; it is not continued. Nessa
+//! never re-runs a tool: the successor gives the model a notice and the
+//! original request, and the model checks what is done and carries on, or
+//! says it is finished.
 #![deny(missing_docs)]
 
 use super::{Agent, AgentError, QueueAdmission};
@@ -365,15 +368,17 @@ fn owed(
         InvocationStage::Queued | InvocationStage::Running
             if record.result.is_none() && !live(id) =>
         {
-            // A stop already captured keeps its own cause: one the host's
-            // shutdown started is owed, and is recorded as that; anyone
-            // else's leaves the turn as it is.
+            // A stop already captured keeps its own cause. The host's shutdown
+            // and a retryable runner stop are continued. A person's stop or a
+            // session close is unfinished until its scheduling edge is recorded,
+            // and that edge is the whole decision: nothing continues it.
             let (cause, actor) = match &record.local_cancellation {
                 Some(stop)
                     if stop.cause.leaves_work_owed()
                         || (stop.cause == SchedulingCause::RunnerStopped
                             && !superseded
-                            && failure_owed(record)) =>
+                            && failure_owed(record))
+                        || completes_without_successor(stop.cause) =>
                 {
                     (stop.cause, stop.actor.clone())
                 }
@@ -485,6 +490,15 @@ fn failure_owed(record: &InvocationRecord) -> bool {
 
 /// The host's decision not to resume a turn whose last edge is `owed`, an
 /// owed cancellation or a failure a retry can fix, made by `actor`.
+/// A captured stop that ends the turn. Recording its scheduling edge finishes
+/// it. A successor would undo the stop.
+fn completes_without_successor(cause: SchedulingCause) -> bool {
+    matches!(
+        cause,
+        SchedulingCause::TurnStopped | SchedulingCause::SessionClosed
+    )
+}
+
 fn not_resumed(
     owed: &InvocationSchedulingEvent,
     actor: ActionContext,
@@ -670,6 +684,12 @@ impl Agent {
             return Ok(Resumed::NotOwed);
         };
         saved.map_err(AgentError::Storage)?;
+        if completes_without_successor(cause) {
+            return Ok(Resumed::NotOwed);
+        }
+        // The source settlement dropped the scheduler. A decline already waiting
+        // on it must be able to record NotResumed before successor admission.
+        tokio::task::yield_now().await;
         let audit = |resumption| {
             ExecutionAuditRecord::TurnResumed(TurnResumptionRecord::new(
                 self.inner.manager.id().clone(),
@@ -687,7 +707,7 @@ impl Agent {
             return Ok(Resumed::Exhausted);
         };
         let request = successor_request(&record, cause, successor.clone())?;
-        let admission = self
+        let Some(admission) = self
             .accept_work(
                 request,
                 submitter_mode(Submitter::new(
@@ -698,7 +718,10 @@ impl Agent {
                 NoteCandidates::default(),
                 Some(turn.execution_id.clone()),
             )
-            .await?;
+            .await?
+        else {
+            return Ok(Resumed::NotOwed);
+        };
         Ok(
             match self
                 .record_resumption_audit(audit(TurnResumption::Continued { successor }))
@@ -802,6 +825,9 @@ impl Agent {
                     .await
                     .or(edge)
                     .ok_or(AgentError::SubmissionConflict)?;
+                if completes_without_successor(edge.cause) {
+                    return Ok(());
+                }
                 not_resumed(&edge, actor)?
             }
         };

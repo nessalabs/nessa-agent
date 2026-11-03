@@ -152,19 +152,15 @@ impl FilePairingEnvironment {
     }
 
     /// A blocking stream to the gateway for a status request: direct, then,
-    /// with a relay, through it for the key the pending pairing pinned. With
-    /// nothing pending, there is no key to ask for: direct only.
+    /// with a relay, through it for the key this pairing pinned. That key is
+    /// the pending record's while approval is open, and the saved
+    /// credential's once that record has replaced it. With neither, there is
+    /// no key to ask for: direct only.
     async fn connect_or_relay(&self) -> io::Result<TcpStream> {
         let (store, address, relay) =
             (self.store.clone(), self.address.clone(), self.relay.clone());
         let dialing = tokio::task::spawn_blocking(move || {
-            let pin = relay.as_ref().and_then(|_| {
-                store
-                    .load_pending()
-                    .ok()
-                    .flatten()
-                    .map(|pending| *pending.gateway_pin())
-            });
+            let pin = relay.as_ref().and_then(|_| gateway_pin(&store));
             let route = relay.as_ref().zip(pin.as_ref());
             dial_gateway(&address, route, None, CONNECT)
         });
@@ -193,6 +189,23 @@ impl FilePairingEnvironment {
             other => format!("pairing failed: {other:?}"),
         }
     }
+}
+
+/// The gateway key a relay is asked for: the pending pairing's while it is
+/// still open, otherwise the credential that replaced it.
+fn gateway_pin(store: &FilePairingState) -> Option<[u8; 44]> {
+    store
+        .load_pending()
+        .ok()
+        .flatten()
+        .map(|pending| *pending.gateway_pin())
+        .or_else(|| {
+            store
+                .load_credential()
+                .ok()
+                .flatten()
+                .map(|credential| *credential.gateway_pin())
+        })
 }
 
 impl EnvironmentPairing for FilePairingEnvironment {

@@ -30,7 +30,6 @@ use std::sync::{
 use std::sync::{Condvar, Mutex};
 use std::time::{Duration, Instant};
 use tokio::runtime::Handle;
-#[cfg(test)]
 use tokio::sync::Notify;
 
 /// A cold-read budget that cannot be a deadline.
@@ -232,6 +231,11 @@ impl NessaRecordReadSource {
                 let workers = self.workers.clone();
                 Box::new(move || stop.load(Ordering::SeqCst) || workers.is_closed())
             };
+            let budget_elapsed: Arc<dyn Fn() -> bool + Send + Sync> = {
+                let stop = stop.clone();
+                let workers = self.workers.clone();
+                Arc::new(move || stop.load(Ordering::SeqCst) || workers.is_closed())
+            };
             #[cfg(test)]
             let stopped: Box<dyn Fn() -> bool + Send> = match self.between_steps.clone() {
                 Some(hold) => Box::new(move || {
@@ -242,6 +246,9 @@ impl NessaRecordReadSource {
             };
             #[cfg(test)]
             let before_identity = self.before_identity.clone();
+            let started = Arc::new(Notify::new());
+            let signal = started.clone();
+            let wake_storage = storage.clone();
             let work = self.workers.run("nessa-record-read", move || {
                 debug_assert!(Handle::try_current().is_err());
                 #[cfg(test)]
@@ -272,10 +279,12 @@ impl NessaRecordReadSource {
                         return Err(RecordReadError::Admission(ReadRefusal::Unverifiable));
                     }
                 }
+                signal.notify_one();
                 let work = operation::ReadWork {
                     operation,
                     steps,
                     stopped,
+                    budget_elapsed,
                 };
                 let result = operation::execute(
                     storage, runtime, session, identity, admitted, observed, work,
@@ -285,20 +294,33 @@ impl NessaRecordReadSource {
             let mut work = std::pin::pin!(work);
             // Declared after `work`, so it is dropped first: a dropped waiter
             // publishes `stop` before the worker's answer channel is released.
-            let _waiter = StopWhenDropped(stop.clone());
+            let _waiter = StopWhenDropped {
+                stop: stop.clone(),
+                storage: wake_storage.clone(),
+            };
+            // The budget starts once the worker is about to discover, not
+            // while it is still waiting for a thread or looking up identity.
+            // A read that fails before then finishes on the first branch.
             let finished = tokio::select! {
                 biased;
                 finished = &mut work => finished,
-                () = tokio::time::sleep(self.work_budget) => {
-                    // The worker stops at its next step boundary.
-                    stop.store(true, Ordering::SeqCst);
-                    let finished = work.await;
-                    // The budget won, and the read's own answer is that the
-                    // source is still preparing. A worker failure is not this limit.
-                    if matches!(finished, Ok(Err(RecordReadError::SourcePreparing))) {
-                        crate::core::limit_log::note_limit("record.read_work_budget");
+                _ = started.notified() => {
+                    tokio::select! {
+                        biased;
+                        finished = &mut work => finished,
+                        () = tokio::time::sleep(self.work_budget) => {
+                            // The worker stops at its next step boundary.
+                            stop.store(true, Ordering::SeqCst);
+                            wake_storage.wake_discovery_waiters();
+                            let finished = work.await;
+                            // The budget won, and the read's own answer is that the
+                            // source is still preparing. A worker failure is not this limit.
+                            if matches!(finished, Ok(Err(RecordReadError::SourcePreparing))) {
+                                crate::core::limit_log::note_limit("record.read_work_budget");
+                            }
+                            finished
+                        }
                     }
-                    finished
                 }
             };
             finished.map_err(worker_error)?
@@ -306,12 +328,17 @@ impl NessaRecordReadSource {
     }
 }
 
-/// Stops the read's discovery calls once nobody waits for its answer.
-struct StopWhenDropped(Arc<AtomicBool>);
+/// Stops the read's discovery calls once nobody waits for its answer, and
+/// wakes a read blocked on a checked-out discovery entry.
+struct StopWhenDropped {
+    stop: Arc<AtomicBool>,
+    storage: Arc<RecordStorage>,
+}
 
 impl Drop for StopWhenDropped {
     fn drop(&mut self) {
-        self.0.store(true, Ordering::SeqCst);
+        self.stop.store(true, Ordering::SeqCst);
+        self.storage.wake_discovery_waiters();
     }
 }
 

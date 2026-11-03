@@ -250,18 +250,22 @@ pub struct ChannelDefaults {
 }
 
 /// Where the channel's coordinator or worker threads execute. These choices
-/// are independent; Local is the existing path.
+/// are independent; Local is the existing path. Pool (any paired computer,
+/// in the order the pool's preferences give, Boat as overflow) is offered
+/// for worker threads only.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum WorkspacePlacement {
     #[default]
     Local,
     Boat,
+    Pool,
 }
 impl WorkspacePlacement {
     pub fn parse(value: &str) -> Option<Self> {
         match value {
             "local" => Some(Self::Local),
             "boat" => Some(Self::Boat),
+            "pool" => Some(Self::Pool),
             _ => None,
         }
     }
@@ -269,6 +273,7 @@ impl WorkspacePlacement {
         match self {
             Self::Local => "local",
             Self::Boat => "boat",
+            Self::Pool => "pool",
         }
     }
 }

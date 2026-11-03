@@ -6,6 +6,7 @@ pub enum StoreKind {
     CanonicalRecords,
     ConversationMetadata,
     ShareGrants,
+    Channels,
     Notes,
     DriveToolAudit,
     EnvironmentAudit,
@@ -34,6 +35,7 @@ impl StoreKind {
             Self::CanonicalRecords => "canonical-records",
             Self::ConversationMetadata => "conversation-metadata",
             Self::ShareGrants => "share-grants",
+            Self::Channels => "channels",
             Self::Notes => "notes",
             Self::DriveToolAudit => "drive-tool-audit",
             Self::EnvironmentAudit => "environment-audit",
@@ -81,6 +83,7 @@ pub const WRITER_INVENTORY: &[StoreKind] = &[
     StoreKind::CanonicalRecords,
     StoreKind::ConversationMetadata,
     StoreKind::ShareGrants,
+    StoreKind::Channels,
     StoreKind::Notes,
     StoreKind::DriveToolAudit,
     StoreKind::EnvironmentAudit,
@@ -122,7 +125,7 @@ mod tests {
             .iter()
             .filter(|kind| !kind.requires_every_row())
             .all(|kind| !kind.as_str().contains("outbox")));
-        assert_eq!(WRITER_INVENTORY.len(), 22);
+        assert_eq!(WRITER_INVENTORY.len(), 23);
         let mut ordered = WRITER_INVENTORY.to_vec();
         ordered.sort();
         ordered.dedup();
@@ -133,6 +136,7 @@ mod tests {
                 StoreKind::CanonicalRecords
                 | StoreKind::ConversationMetadata
                 | StoreKind::ShareGrants
+                | StoreKind::Channels
                 | StoreKind::Notes
                 | StoreKind::DriveToolAudit
                 | StoreKind::EnvironmentAudit

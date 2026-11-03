@@ -103,3 +103,13 @@ qualification.
 ## Further reading
 
 [Source](../../../../../src/panel/ui/app.tsx) · [Related source](../../../../../src/conversation/adapters/store/slice.ts) · [Related tests](../../../../../src/conversation/adapters/store/control-failure.test.ts)
+
+## Model coverage
+
+Disposition: shared owner model. SDK scheduling and cleanup own stopped work and retained resource cleanup. [sdk-cleanup](../../sdk/cleanup.md) [sdk-scheduling](../../sdk/scheduling.md)
+
+Excluded: The desktop stop-control pending state and gateway/UI error projection are not modeled here.
+
+Source review scope: owner entry points and relevant regression declarations were inventoried against frozen source `77a6b620af4d94b234294f6d273fd74b3dfb44c7`. Existing source checkpoints are retained where this was a partial review. A model result establishes bounded design safety only. Browser appearance and interaction were not checked.
+
+The gateway [Parent Stop owner](../../gateway/parent-stop.md) models the captured descendant target set and durable receipt recovery. It does not imply that closing a local tab stops those targets, or that a stop acknowledgement proves physical release.

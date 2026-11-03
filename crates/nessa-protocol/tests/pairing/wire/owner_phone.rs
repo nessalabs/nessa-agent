@@ -97,6 +97,7 @@ fn reply(record: PairingRecord) -> (Vec<u8>, PublicIntent) {
         DevicePairingStatus::Active {
             record: Box::new(record),
             access_epoch: u64::MAX,
+            tunnel_secret: crate::tunnel::TunnelSecret::new([9; 32]),
         }
     } else {
         DevicePairingStatus::Claimed(Box::new(record))
@@ -354,7 +355,8 @@ fn recovery_uses_existing_record_correlation_and_epoch_owner() {
             wrong,
             &DevicePairingStatus::Active {
                 record: Box::new(active.clone()),
-                access_epoch: u64::MAX
+                access_epoch: u64::MAX,
+                tunnel_secret: crate::tunnel::TunnelSecret::new([9; 32]),
             }
         )
         .err(),
@@ -379,7 +381,8 @@ fn recovery_uses_existing_record_correlation_and_epoch_owner() {
             approved_public,
             &DevicePairingStatus::Active {
                 record: Box::new(approved),
-                access_epoch: u64::MAX
+                access_epoch: u64::MAX,
+                tunnel_secret: crate::tunnel::TunnelSecret::new([9; 32]),
             }
         )
         .err(),

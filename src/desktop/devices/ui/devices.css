@@ -426,3 +426,55 @@ button.devices-tile:focus-visible,
   width: 100%;
   max-width: 720px;
 }
+
+/* Thread order: a quiet row under the list opens it. */
+.devices-pool-link {
+  display: flex;
+  align-self: flex-start;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 16px;
+  padding: 10px 14px;
+  border: 0;
+  border-radius: var(--desktop-radius-lg);
+  background: var(--desktop-pane-fill);
+  box-shadow: var(--desktop-card-rim);
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+  transition: background var(--desktop-fast) var(--desktop-ease);
+}
+
+.devices-pool-link:hover {
+  background: var(--desktop-hover-strong);
+}
+
+.devices-pool-link:focus-visible {
+  outline: var(--desktop-focus-outline);
+  outline-offset: 2px;
+}
+
+.devices-pool {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.devices-pool-mode {
+  align-self: flex-start;
+}
+
+.devices-pool-place {
+  display: inline-flex;
+  min-width: 1.5em;
+  justify-content: center;
+  color: var(--desktop-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.devices-pool-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}

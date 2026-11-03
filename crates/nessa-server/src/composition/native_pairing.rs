@@ -130,6 +130,13 @@ pub(super) struct PreparedNative {
 }
 
 impl PreparedNative {
+    /// The tunnel secrets this gateway issues at pairing.
+    pub(super) fn tunnel_secrets(
+        &self,
+    ) -> Arc<dyn crate::tunnel::application::DeviceTunnelSecrets> {
+        self.gateway.tunnel_secrets()
+    }
+
     /// Serve the web tunnel `tunnel` as well.
     #[cfg(unix)]
     pub(super) fn with_tunnel(mut self, tunnel: super::tunnel::PreparedTunnel) -> Self {
@@ -196,6 +203,7 @@ pub(super) async fn prepare(
     .await
     .map_err(|error| RunError::Native(NativeFailure::Identity(error)))?;
     let registry = inputs.registry;
+    let audience_id = inputs.audience.clone();
     let audience = inputs.audience.as_str().to_owned();
     let audit = Arc::new(DurablePeerAudit::new(
         root.join(PEER_AUDIT_DIRECTORY),
@@ -230,6 +238,12 @@ pub(super) async fn prepare(
             gateway: inputs.gateway,
             key_store: keys,
             identity,
+            tunnel_secrets: crate::tunnel::infrastructure::secrets::FileDeviceSecrets::open(
+                &root,
+                registry.clone(),
+                audience_id,
+                wall.clone(),
+            ),
         })
         .map_err(|error| RunError::Native(NativeFailure::Open(error)))?,
     );
@@ -394,13 +408,46 @@ pub(super) async fn bind(
     // With no relay the sender is dropped here, and the listener's relay
     // source is closed from the start.
     let (joined, relayed) = mpsc::channel::<Relayed<TcpStream, RelayPermit>>(RELAY_CAPACITY);
+    let (published_tx, published) = watch::channel(None);
+    #[cfg(unix)]
+    if let Some(prepared) = tunnel.as_ref() {
+        let mut status = prepared.view().status;
+        let publish = published_tx.clone();
+        tokio::spawn(async move {
+            loop {
+                let next = match status.borrow().clone() {
+                    crate::tunnel::application::TunnelStatus::Ready(address) => {
+                        match nessa_protocol::relay::PublishedOrigin::new(address.as_str()) {
+                            Some(origin) => Some(origin),
+                            None => {
+                                tracing::warn!(
+                                    origin = address.as_str(),
+                                    "the tunnel address is too long to publish on the relay"
+                                );
+                                None
+                            }
+                        }
+                    }
+                    _ => None,
+                };
+                publish.send_replace(next);
+                if status.changed().await.is_err() {
+                    break;
+                }
+            }
+        });
+    }
     let relay = relay.map(|relay| ThroughRelay {
         dial: Arc::new(TcpRelayDial(relay.as_str().to_owned())),
         key: Arc::new(IdentityKey(gateway.clone())),
         admission: connections.clone(),
         timer: Arc::new(TokioTimer::new()),
         joined,
+        address: published,
+        secrets: gateway.tunnel_secrets(),
     });
+    // Keep the watch alive when nothing forwards a tunnel status into it.
+    let _published = published_tx;
     // Likewise with no tunnel: the listener's tunnel source is closed.
     #[cfg_attr(not(unix), allow(unused_variables))]
     let (joined, tunneled) = mpsc::channel::<Tunneled>(TUNNEL_CAPACITY);
@@ -411,7 +458,12 @@ pub(super) async fn bind(
     let tunnel = match tunnel.filter(|tunnel| tunnel.setting().is_some()) {
         Some(tunnel) => match TcpListener::bind(tunnel.ingress()).await {
             Ok(listener) => Some((
-                TunnelIngress::new(listener, connections.clone(), joined),
+                TunnelIngress::new(
+                    listener,
+                    connections.clone(),
+                    gateway.tunnel_secrets(),
+                    joined,
+                ),
                 tunnel,
             )),
             Err(error) => {

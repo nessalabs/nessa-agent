@@ -3,7 +3,8 @@ id: "host-startup-complete-setup-choose-an-agent-and-learn-the-shortcut"
 title: "complete setup, choose an agent, and learn the shortcut"
 kind: "statechart"
 status: "implemented"
-summary: "Setup walks through welcome, agent choice and the summon shortcut, then linger on Linux, before finishing."
+summary: "Setup walks through welcome, agent choice and the summon shortcut,
+  then linger on Linux, before finishing."
 parent: "host-startup"
 sources:
   - "src/onboarding/model/onboarding.ts"
@@ -27,8 +28,21 @@ sources:
   - "src/onboarding/ui/use-setup-handoff.test.ts"
   - "src/composition/dependencies.ts"
 diagramLinks: {}
+model:
+  spec: tla/services/host/startup/OnboardingChoice.tla
+  config: tla/services/host/startup/OnboardingChoice.cfg
+modelCheck:
+  checker: tlc-1.7.4
+  date: 2026-11-03T03:28:29.452Z
+  config: tla/services/host/startup/OnboardingChoice.cfg
+  modelDigest: 35bc8671544dd1fb9743eae3c7f3ebac8ec88fe44c95e0734403216e03370488
+  states: 9
+  held:
+    - PickerHasReadyChoice
+    - CompletionHasChoice
+  broke: []
+  unchecked: []
 ---
-
 # complete setup, choose an agent, and learn the shortcut
 
 Setup walks through welcome, agent choice and the summon shortcut before finishing. On Linux, when the host's linger read is not `not-applicable`, the shortcut is followed by the linger step. The claim on that step is logind's read. Claude, Codex and OpenCode are listed, but only an agent reported as ready can be selected.
@@ -72,3 +86,7 @@ stateDiagram-v2
 ## Further reading
 
 [Source](../../../../../src/onboarding/model/onboarding.ts) · [Related source](../../../../../src/onboarding/ui/use-onboarding.ts) · [Related tests](../../../../../src/onboarding/model/onboarding.test.ts)
+
+## Bounded rule model
+
+Owns readiness-gated agent choice, invalidation while picker is visible and completion versus dismissal. Shortcut visibility lesson, Linux linger, persistence handoff and fresh final readiness probes are excluded. This finite abstraction checks safety only. It does not execute or verify the implementation, promise eventual completion, or qualify external effects. Existing source checkpoints and historical test receipts retain their earlier scope. The scoped model review inspected `src/onboarding/model/onboarding.ts`.

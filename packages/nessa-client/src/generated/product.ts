@@ -2679,6 +2679,44 @@ export interface DevicesListParams {
   /** Absent on the first page. Later pages echo the previous page's next. */
   after?: string
 }
+/** Which paired computers new work goes to first, and which it never goes to. Every computer named in neither list is in the pool, after the ordered ones, the one with the fewest agents first. No computer is named twice, in one list or both. */
+export interface PoolPreference {
+  /** First choice first: a new thread goes to the first of these that serves, is not draining and is not busy. */
+  order: string[]
+  /** Computers left out of the pool: no new work goes to them, and a thread bound to one moves off it when its agent next opens. */
+  excluded: string[]
+}
+/** Read the pool's default preference and one channel's override from one configuration read. */
+export interface DevicesPoolParams {
+  /** Stored channel identity; omitted reads the Nessa default. The synthetic default channel follows the default. */
+  channelId?: string
+}
+/** default: a channel inherits the Nessa default (its override is removed), or the Nessa default is emptied: every computer in, none first. custom: save preference. */
+export const DevicesPoolSelection = { Default: "default", Custom: "custom" } as const
+export type DevicesPoolSelection =
+  (typeof DevicesPoolSelection)[keyof typeof DevicesPoolSelection]
+/** Save the pool's Nessa default or one channel's own preference in config.json. Applies to the next agent opened on the pool; a thread already running stays where it is. Read again after an uncertain response; calls are not replayed. */
+export interface DevicesSetPoolParams {
+  /** Stored channel identity; omitted saves the Nessa default. */
+  channelId?: string
+  /** default forbids preference; custom requires it. */
+  mode: DevicesPoolSelection
+  /** Present only in custom mode. */
+  preference?: PoolPreference
+}
+/** The pool's preferences: the Nessa default, a channel's override, and when a computer is busy. With every computer busy a new pool thread runs in Boat when it is connected. */
+export interface DevicesPool {
+  /** The stored channel read or saved; omitted for the Nessa default. */
+  channelId?: string
+  /** The Nessa default, which every channel without its own follows. */
+  defaultPreference: PoolPreference
+  /** The channel's own preference; omitted when it follows the default. */
+  channelOverride?: PoolPreference
+  /** Processor use at which a computer is busy: passed over for new work while another is not (config.json pool.busyCpuPercent). */
+  busyCpuPercent: number
+  /** Memory use at which a computer is busy (config.json pool.busyMemoryPercent). */
+  busyMemoryPercent: number
+}
 /** Result of server.reach: the addresses this gateway can be reached at beyond the local network, for a paired device to keep. */
 export interface ServerReachResult {
   /** The web tunnel's public address, https://host[:port], when a tunnel is ready; null otherwise. Open wss://<host>/native and speak the native connection inside its binary messages. */
@@ -3363,8 +3401,8 @@ export interface Channel {
   createdAtMs: number
   /** Where the channel coordinator should run, independently of worker threads. */
   coordinatorPlacement: "local" | "boat"
-  /** Where new worker-thread workspaces run. Boat allocates one VM per thread. */
-  threadPlacement: "local" | "boat"
+  /** Where new worker-thread workspaces run. Boat allocates one VM per thread. Pool runs each thread on a paired computer, the first in the pool's order that is not busy, with Boat as overflow (devices.pool). */
+  threadPlacement: "local" | "boat" | "pool"
   /** Stable main-agent conversation identity; null for the default channel. Opening a channel uses this conversation; New thread uses another identity. */
   coordinatorConversationId: string | null
 }
@@ -3388,8 +3426,8 @@ export interface ChannelCreateParams {
   resources?: string[]
   /** Where the channel coordinator should run, independently of worker threads. */
   coordinatorPlacement?: "local" | "boat"
-  /** Where new worker-thread workspaces run. Boat allocates one VM per thread. */
-  threadPlacement?: "local" | "boat"
+  /** Where new worker-thread workspaces run. Boat allocates one VM per thread. Pool runs each thread on a paired computer, the first in the pool's order that is not busy, with Boat as overflow (devices.pool). */
+  threadPlacement?: "local" | "boat" | "pool"
 }
 /** The channel channel.create made, or made earlier under the same requestId. */
 export interface ChannelCreateResult {
@@ -3403,8 +3441,8 @@ export interface ChannelSetPlacementParams {
   channelId: string
   /** Where the channel's main agent runs from now on. */
   coordinatorPlacement: "local" | "boat"
-  /** Where threads made in the channel from now on run. */
-  threadPlacement: "local" | "boat"
+  /** Where threads made in the channel from now on run: pool runs each on a paired computer (devices.pool). */
+  threadPlacement: "local" | "boat" | "pool"
 }
 /** The channel as channel.setPlacement left it. */
 export interface ChannelSetPlacementResult {
@@ -3714,7 +3752,7 @@ export const channelRules = {
 export const bounds = {
   maxOrdinaryResponseBytes: 65536,
   maxRequestFrameBytes: 65536,
-  maxReadyMethods: 113,
+  maxReadyMethods: 115,
   maxAuthCredentialCharacters: 16384,
   maxProductClientIdCharacters: 256,
   maxProductSurfaceInstanceCharacters: 256,
@@ -4041,6 +4079,8 @@ export const ProductMethod = {
   BoatStatus: "boat.status",
   BoatSave: "boat.save",
   BoatDisconnect: "boat.disconnect",
+  DevicesPool: "devices.pool",
+  DevicesSetPool: "devices.setPool",
   BoatRuntimeSettings: "boat.runtimeSettings",
   BoatSetRuntimeSettings: "boat.setRuntimeSettings",
   ConversationWebhookCursor: "conversation.webhook.cursor",
@@ -4167,6 +4207,8 @@ export const productReadyMethods = [
   "boat.status",
   "boat.save",
   "boat.disconnect",
+  "devices.pool",
+  "devices.setPool",
   "boat.runtimeSettings",
   "boat.setRuntimeSettings",
   "conversation.webhook.cursor",
@@ -4284,6 +4326,8 @@ export const productMethodGrants = {
   "boat.status": "credential.manage",
   "boat.save": "credential.manage",
   "boat.disconnect": "credential.manage",
+  "devices.pool": "credential.manage",
+  "devices.setPool": "credential.manage",
   "boat.runtimeSettings": "credential.manage",
   "boat.setRuntimeSettings": "credential.manage",
   "conversation.webhook.cursor": "credential.manage",

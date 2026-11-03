@@ -1,7 +1,7 @@
 //! Allocation ordering. External effects and storage are injected; retries use
 //! the saved VM, and observer cancellation does not cancel accepted provisioning.
 use super::RuntimeSettings;
-use crate::conversation::domain::{ChannelId, VmLifetimeScope};
+use crate::conversation::domain::{ChannelId, SettingsScope};
 use crate::workspaces::domain::{
     AdmissionRejection, Assignment, BoatConnection, CleanupOutcome, EnvironmentIdentity, Failure,
     RefusalDisposition,
@@ -384,7 +384,7 @@ impl Workspaces {
     ) -> Result<Arc<dyn WorkspaceRuntime>, Failure> {
         let id = id.to_owned();
         let mut connection = self.settings.read().await?;
-        let scope = channel.map_or(VmLifetimeScope::Global, VmLifetimeScope::Channel);
+        let scope = channel.map_or(SettingsScope::Global, SettingsScope::Channel);
         let lifetimes = self.runtime_settings.read(&scope).await?;
         if lifetimes.scope() != &scope {
             return Err(Failure::Storage);

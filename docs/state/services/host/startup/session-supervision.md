@@ -3,7 +3,8 @@ id: surface-session-supervision
 title: Surface session supervision
 kind: statechart
 status: implemented
-summary: A mounted surface publishes a usable session after authentication and health, clears it during reconnect, and retires late connection results.
+summary: A mounted surface publishes a usable session after authentication and
+  health, clears it during reconnect, and retires late connection results.
 parent: host-startup
 sourceRevision: "11e2746f7df088a1bd5ee3b2e579ad8a40b5cbd1"
 sources:
@@ -38,8 +39,22 @@ diagramDetails:
       to: Backoff
       label: Permanent retryable close / detach and close
     section: Two retry owners
+model:
+  spec: tla/services/host/startup/SurfaceSupervisor.tla
+  config: tla/services/host/startup/SurfaceSupervisor.cfg
+modelCheck:
+  sourceRevision: "11e2746f7df088a1bd5ee3b2e579ad8a40b5cbd1"
+  checker: tlc-1.7.4
+  date: 2026-11-03T03:28:32.796Z
+  config: tla/services/host/startup/SurfaceSupervisor.cfg
+  modelDigest: 4673e0706db4f0eef0b6d9c64a05d665d87cf77a4803a03afdf60534ce3e0697
+  states: 6
+  held:
+    - PublishedOnlyOwned
+    - RetiredHandleCleared
+  broke: []
+  unchecked: []
 ---
-
 # Surface session supervision
 
 One mounted panel session owns a connection supervisor. Authentication and the authorized health check finish before it publishes a client. A connected handle makes commands available; a reconnecting handle is cleared so new commands cannot use a retired transport.
@@ -96,3 +111,7 @@ There is no physical provider-cleanup acknowledgement in this chart. Calling the
 The [supervisor regressions](../../../../../src/session/adapters/lifecycle/supervisor.test.ts) check deadline boundaries, recovery reset, current-client recovery, stale callbacks, late results, terminal failure and listener/timer release. The [connection setup tests](../../../../../src/session/adapters/client/dev-session.test.ts) cover health wrapping and client retirement.
 
 The checkpoint records the committed implementation inspected. The same commit includes the added lifecycle tests. Native credential checks and server revocation policy remain on the parent page and are outside this bounded source review. See the [journey coverage inventory](../../../user-flow-coverage.md) for executed checks and unrun gates.
+
+## Bounded rule model
+
+Owns client publication, transport reconnect clearing, terminal/backoff classification and disposal fencing a late connection. One generation replacement bounds the model; timer retry attempts, authentication internals and command execution are excluded. This finite abstraction checks safety only. It does not execute or verify the implementation, promise eventual completion, or qualify external effects. Existing source checkpoints and historical test receipts retain their earlier scope. The scoped model review inspected `src/session/adapters/lifecycle/supervisor.ts`.

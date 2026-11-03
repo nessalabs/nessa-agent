@@ -2,7 +2,10 @@
 use super::agent::AgentsConfig;
 use crate::tunnel::application::{TunnelMode, DEFAULT_TUNNEL_INGRESS};
 use crate::{
-    conversation::{domain::CommandPolicy, infrastructure::BoatRuntimeConfig},
+    conversation::{
+        domain::CommandPolicy,
+        infrastructure::{BoatRuntimeConfig, PoolConfig},
+    },
     core::RunError,
     product::{ConfiguredLimits, OperationalLimits, SessionSettings},
 };
@@ -46,6 +49,14 @@ pub(super) struct RuntimeConfig {
     pub agents: Option<AgentsConfig>,
     /// Ordinary VM lifetime defaults and channel overrides, never credentials.
     pub boat: BoatRuntimeConfig,
+    /// Which paired computers new work goes to first, which never, each
+    /// channel's own choice, and when a computer is too busy for new work.
+    /// Settings writes the order and left-out lists (`devices.setPool`).
+    #[allow(
+        dead_code,
+        reason = "parsed here so a bad section refuses the file; read by its own settings adapter"
+    )]
+    pub pool: PoolConfig,
     /// Native device pairing; absent, `null` or `"enabled": false` keeps it
     /// off (design rows S1, S2). Settings › Linked devices writes it
     /// (`native_linking`).
@@ -70,12 +81,25 @@ pub(super) struct RuntimeConfig {
 #[serde(default, deny_unknown_fields, rename_all = "camelCase")]
 pub(super) struct SubagentsConfig {
     pub stop_children_on_parent_stop: bool,
+    /// How many threads one agent may have at work at once before
+    /// `create_thread` answers `thread_limit_reached`. 0, the default,
+    /// bounds none. Only here: no settings view shows it.
+    pub max_live_threads: u64,
 }
 impl Default for SubagentsConfig {
     fn default() -> Self {
         Self {
             stop_children_on_parent_stop: true,
+            max_live_threads: 0,
         }
+    }
+}
+impl SubagentsConfig {
+    /// The bound on one agent's threads at work, `None` for none.
+    pub fn live_threads(&self) -> Option<usize> {
+        usize::try_from(self.max_live_threads)
+            .ok()
+            .filter(|limit| *limit > 0)
     }
 }
 

@@ -74,3 +74,9 @@ sequenceDiagram
 ## Further reading
 
 [Source](../../../../../crates/nessa-server/src/conversation/application/service.rs) · [Related source](../../../../../crates/nessa-server/src/composition/current_agent.rs) · [Related tests](../../../../../crates/nessa-sdk/tests/application/agent_execution/agents/initialization/startup_control.rs)
+
+## Model coverage
+
+Shared owner model: [sdk-attachment](../attachment.md). Generation-bound opening and acknowledged readiness.
+
+Provider authentication, capability validation and actual process launch remain external adapter boundaries. This relationship applies only to the stated scope, not every step of this journey. This scoped mapping retains earlier source checkpoints and is not executed implementation-test evidence.

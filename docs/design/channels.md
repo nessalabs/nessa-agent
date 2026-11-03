@@ -126,7 +126,7 @@ sequenceDiagram
     end
     Store->>Store: UPDATE coordinator_placement, thread_placement (one transaction)
     Gateway-->>Dialog: {channel} with its coordinatorConversationId
-    Dialog-->>Person: the index takes the channel; its next main chat opens on Boat
+    Dialog-->>Person: the index takes the channel, and its next main chat opens on Boat
 ```
 
 ## Making one in the desktop window

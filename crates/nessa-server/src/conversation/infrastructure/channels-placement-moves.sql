@@ -13,4 +13,4 @@ INSERT INTO channel_coordinator_replacements_next (retired, channel, coordinator
     SELECT retired, channel, coordinator, generation, cause FROM channel_coordinator_replacements;
 DROP TABLE channel_coordinator_replacements;
 ALTER TABLE channel_coordinator_replacements_next RENAME TO channel_coordinator_replacements;
-PRAGMA user_version = 4;
+PRAGMA user_version = 5;

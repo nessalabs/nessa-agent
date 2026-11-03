@@ -2640,8 +2640,11 @@ actual private scope locks through physical calls and captures until drain.
 Its original prepare/restore/recovery calls use that same parent admission;
 close capture preserves native-confirmed physical release independently of a
 historical failure. `swift/NativeProductWorker.swift` dispatches the actual product
-child with separately admitted Ready, event and submission lanes. Native tickets
-settle on an independent wait lane; their captures retain native count/byte
+child. Ready and events each admit one waiter and refuse a second as busy.
+`swift/ProductSubmitLane.swift` runs one submission hand-off at a time and keeps
+later submissions waiting in arrival order until that hand-off returns; it does
+not refuse them and it does not wait for the reply. Native tickets
+settle on an independent concurrent wait lane; their captures retain native count/byte
 permits, original UInt64 identity and typed settlement. Synchronous close wakes
 native I/O before physical drain joins those captures. Neither wrapper allocates
 transport IDs, implements request deadlines or copies private device keys.
@@ -2685,7 +2688,11 @@ SDK recovery/quota boundaries live under
 `nessa-sdk/tests/application/agent_execution/subagents/capacity/preparation_recovery.rs`.
 `conversation/infrastructure/ownership_audit.rs` persists coordinator transition
 evidence through the ordinary durable audit owner. Namespace
-`composition/runtime_config.rs` owns `subagents.stopChildrenOnParentStop`.
+`composition/runtime_config.rs` owns `subagents.stopChildrenOnParentStop` and
+`subagents.maxLiveThreads` (the live thread cap `owned_threads.rs` checks under
+the thread admission lock; see [Worker pool preferences](design/worker-pool-preferences.md)).
+The pool order lives in `conversation/infrastructure/pool_config.rs` (config.json
+`pool`), is saved by `pool_settings.rs` and read by `application/placement.rs`.
 The real coordinator/SQLite regressions live in `tests/conversation/parent_stop.rs`;
 `tests/conversation/parent_stop/confirmed_recovery.rs` kills a process between
 native cancel acknowledgement and turn settlement, retaining exact command authority.

@@ -1,11 +1,5 @@
 import Foundation
 
-/// Swift dispatch failures; native failures keep their generated typed payloads.
-public enum NativeWorkerError: Error, Sendable {
-    case busy
-    case closed
-}
-
 /// Dispatch adapter for the synchronous generated API. The lock owns admission;
 /// the supplied serial queue owns physical calls and final native deallocation.
 /// `check-worker.swift` covers cancellation, queued work and close/drain ordering.

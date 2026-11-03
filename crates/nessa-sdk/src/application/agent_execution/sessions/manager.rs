@@ -692,11 +692,9 @@ impl SessionManager {
         let compacted = saved;
         let identity = provider.identity();
         // A different provider name or model is refused before launch (S1,
-        // S2). A fingerprint change where the saved context is not restored
-        // here is saved now (S5): the next open still cannot resume it. A
-        // fingerprint change where it would be resumed is not saved yet (S6).
-        // attach opens a new native session and writes the new fingerprint
-        // with that session's id. docs/design/restoration-fingerprint.md.
+        // S2). Fingerprint changes (S5/S6) defer publication until attach opens
+        // a new native session. Its ID, admission watermark and fingerprint
+        // commit together. docs/design/restoration-fingerprint.md.
         // Lease-only cleanup evidence cannot consume a pending handoff or
         // cancel the fresh-context attachment selected by provider preparation.
         let intent = if preparation == Preparation::Provider {
@@ -736,18 +734,11 @@ impl SessionManager {
                     *self.switching.lock().expect("switch") = Some((actor.clone(), *at_ms));
                     None
                 } else {
-                    let restores = snapshot.provider_context.recorded().is_some_and(|saved| {
-                        provider.restores_saved_context(saved, !snapshot.invocations.is_empty())
-                    });
-                    if restores {
-                        self.open_fresh_context.store(true, Ordering::Relaxed);
-                        None
-                    } else {
-                        Some(SessionChange::ProviderIdentityChanged {
-                            before: snapshot.provider.clone(),
-                            after: identity.clone(),
-                        })
-                    }
+                    // A different restoration fingerprint selects a fresh native
+                    // context. Publish both facts together only after open succeeds,
+                    // including when the previous context was never invoked.
+                    self.open_fresh_context.store(true, Ordering::Relaxed);
+                    None
                 }
             }
             _ => None,
@@ -866,25 +857,37 @@ impl SessionManager {
         // fingerprint still matches. A context-only mismatch (S6) and a
         // provider that starts elsewhere open new context, recorded below.
         let fresh = self.open_fresh_context.load(Ordering::Relaxed);
-        let restore = if fresh {
-            None
-        } else {
+        let (restore, admitted_before) = {
             let evidence = self.evidence.lock().await;
             let snapshot = evidence.observed().expect("prepared session evidence");
-            snapshot
-                .provider_context
-                .recorded()
-                .cloned()
-                .filter(|saved| {
-                    provider.restores_saved_context(saved, !snapshot.invocations.is_empty())
-                })
+            let restore = if fresh {
+                None
+            } else {
+                snapshot
+                    .provider_context
+                    .recorded()
+                    .cloned()
+                    .filter(|saved| {
+                        provider.restores_saved_context(
+                            saved,
+                            snapshot
+                                .provider_context
+                                .has_admitted_work(snapshot.invocations.len()),
+                        )
+                    })
+            };
+            // Admission while open waits belongs to this opening even if the
+            // input is withdrawn before native context publication (C11).
+            (
+                restore,
+                super::validation::terminal_prefix(&snapshot.invocations),
+            )
         };
         let opening = catch_unwind(AssertUnwindSafe(|| {
-            provider.open(ProviderOpenRequest::new(
-                self.id.clone(),
-                restore.clone(),
-                control,
-            ))
+            provider.open(
+                ProviderOpenRequest::new(self.id.clone(), restore.clone(), control)
+                    .with_arrival_clock(self.message_commit_clock.clone()),
+            )
         }));
         let mut opening = match opening {
             Ok(opening) => opening,
@@ -1060,7 +1063,18 @@ impl SessionManager {
                 .expect("prepared session evidence")
                 .provider_context
                 .clone();
-            let after = ProviderContext::Recorded(session.id().clone());
+            let snapshot = evidence.observed().expect("prepared session evidence");
+            // A resumed context keeps its original admission boundary. A fresh
+            // open returning the same native ID in the same provider namespace
+            // is also conservative: ID reuse cannot erase admitted work.
+            let after = if restore.is_some()
+                || (before.recorded() == Some(session.id())
+                    && snapshot.provider.name() == provider.identity().name())
+            {
+                before.clone()
+            } else {
+                ProviderContext::recorded_after(session.id().clone(), admitted_before)
+            };
             if before != after {
                 changes.push(SessionChange::ProviderContext { before, after });
             }
@@ -2340,8 +2354,13 @@ impl SessionManager {
     /// restart draws the same timeline — a tool's start and end, when a
     /// review was asked — from what was saved; a report without a time was
     /// saved before times were kept. The session's clock is the only author:
-    /// a time a provider set on its event is replaced, not trusted.
+    /// a time a provider set on its event is replaced, not trusted. A report
+    /// the session already stamped when it queued it keeps that time, so a
+    /// read delayed past the queue does not move it.
     pub(crate) fn observed(&self, event: ExecutionEvent) -> ExecutionEvent {
+        if event.session_arrival() {
+            return event;
+        }
         event.with_observed_at_ms(self.message_commit_clock.unix_milliseconds())
     }
 

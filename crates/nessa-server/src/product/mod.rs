@@ -60,6 +60,7 @@ pub(crate) mod mcp_servers;
 mod native;
 mod pairing;
 mod peers;
+mod pool;
 mod voice;
 
 pub use github::GithubRoutes;

@@ -53,3 +53,9 @@ A recognized usage-limit result is terminal for this work. The gateway's opt-in 
 ## Further reading
 
 [Source](../../../../../crates/nessa-sdk/src/application/agent_execution/agents/agent.rs) · [Related source](../../../../../crates/nessa-sdk/src/application/agent_execution/agents/scheduling.rs) · [Related tests](../../../../../crates/nessa-sdk/tests/application/agent_execution/scheduling/retries.rs)
+
+## Model coverage
+
+Shared owner model: [sdk-scheduling](../scheduling.md). Accepted work ownership through dispatch and receipt retirement.
+
+Provider streaming and live UI rendering are not modeled; committed output is covered by sdk-history. This relationship applies only to the stated scope, not every step of this journey. This scoped mapping retains earlier source checkpoints and is not executed implementation-test evidence.

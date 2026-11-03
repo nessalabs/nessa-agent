@@ -284,6 +284,14 @@ pub(crate) fn settle(
         correlate_saved(state, recovered, expected_kind).map_err(OwnerPhoneRecoveryFailure::Native)
     })();
     correlation.map_err(|error| OwnerPhoneSettlementFailure::SavedRecord { reported, error })?;
+    if let NativePairingStatus::Active { tunnel_secret, .. } = status {
+        ending
+            .save_tunnel_secret(tunnel_secret.expose())
+            .map_err(|error| OwnerPhoneSettlementFailure::SavedRecord {
+                reported,
+                error: OwnerPhoneRecoveryFailure::Native(NativeClientError::Storage(error)),
+            })?;
+    }
     Ok(OwnerPhoneSettlement::Adopted(reported))
 }
 

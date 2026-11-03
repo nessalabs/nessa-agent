@@ -47,8 +47,9 @@
  *                   window's controls; Use Night Scene takes it back,
  *                   and a file that is not an image is refused with why, in
  *                   that pane's header (issue #320)
- *   home-shape      a new session's home in a pane smaller than 640px either
- *                   way takes a conversation's shape: its composer docked at
+ *   home-shape      a new session's home in a pane under 640px wide, or whose
+ *                   room below the title row is under 640px tall, takes a
+ *                   conversation's shape: its composer docked at
  *                   the foot as the conversation's beside it is, with the
  *                   greeting on and off, the header kept as a band across
  *                   the top with its Customize control, "Working late?" under

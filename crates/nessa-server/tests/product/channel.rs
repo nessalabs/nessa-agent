@@ -237,6 +237,7 @@ fn a_placement_change_names_a_channel_and_two_known_places() {
         json!({"requestId": "r", "channelId": "ch_aaaaaaaaaa", "coordinatorPlacement": "moon", "threadPlacement": "boat"}),
         json!({"requestId": "r", "channelId": "ch_aaaaaaaaaa", "coordinatorPlacement": "boat"}),
         json!({"requestId": "r", "channelId": "ch_aaaaaaaaaa", "coordinatorPlacement": "boat", "threadPlacement": "Boat"}),
+        json!({"requestId": "r", "channelId": "ch_aaaaaaaaaa", "coordinatorPlacement": "pool", "threadPlacement": "pool"}),
     ] {
         assert!(placement_request(refused.clone()).is_none(), "{refused}");
     }
