@@ -1522,25 +1522,32 @@ async fn forward_review_notices(
                 selection_passes += 1;
                 continue 'snapshots;
             }
-            if let Some(metadata) = state.review_metadata.as_ref() {
-                let mut by_conversation = HashMap::new();
-                for token in &admitted_tokens {
-                    if by_conversation
-                        .insert(token.conversation_id().clone(), token)
-                        .is_some_and(|earlier| earlier != token)
-                    {
-                        selection_passes += 1;
-                        continue 'snapshots;
-                    }
+            // The token was read with the row Cedar saw. It still has to name
+            // that row at this authority snapshot. The board is checked after
+            // this await; checking it before would admit a candidate the board
+            // drops while the token read waits.
+            let Some(metadata) = state.review_metadata.as_ref() else {
+                return Err(ReviewNoticePublicationFailure::Audit(
+                    ReviewNoticeAuditFailure::Unavailable,
+                ));
+            };
+            let mut by_conversation = HashMap::new();
+            for token in &admitted_tokens {
+                if by_conversation
+                    .insert(token.conversation_id().clone(), token)
+                    .is_some_and(|earlier| earlier != token)
+                {
+                    selection_passes += 1;
+                    continue 'snapshots;
                 }
-                for token in by_conversation.values() {
-                    let current_token = metadata.admission_current(token).await.map_err(|_| {
-                        ReviewNoticePublicationFailure::Audit(ReviewNoticeAuditFailure::Unavailable)
-                    })?;
-                    if !current_token {
-                        selection_passes += 1;
-                        continue 'snapshots;
-                    }
+            }
+            for token in by_conversation.values() {
+                let current_token = metadata.admission_current(token).await.map_err(|_| {
+                    ReviewNoticePublicationFailure::Audit(ReviewNoticeAuditFailure::Unavailable)
+                })?;
+                if !current_token {
+                    selection_passes += 1;
+                    continue 'snapshots;
                 }
             }
             if !board.is_current(generation, visibility) {

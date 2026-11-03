@@ -197,9 +197,15 @@ pub struct LocalConversationStore {
     grant_write_pause: Mutex<Option<Arc<GrantWritePause>>>,
     #[cfg(test)]
     list_snapshot_pause: Mutex<Option<ListSnapshotPause>>,
+    /// Held across the admission row read and the revision read, so a test
+    /// can commit a tombstone on another connection between them.
+    #[cfg(test)]
+    admission_snapshot_pause: Mutex<Option<AdmissionSnapshotPause>>,
 }
 #[cfg(test)]
 type ListSnapshotPause = (Arc<std::sync::Barrier>, Arc<std::sync::Barrier>);
+#[cfg(test)]
+type AdmissionSnapshotPause = (Arc<std::sync::Barrier>, Arc<std::sync::Barrier>);
 impl LocalConversationStore {
     /// Open the database at `path`, in a composition-selected directory that
     /// must be private and owned by this OS user, creating it when absent.
@@ -220,6 +226,8 @@ impl LocalConversationStore {
             grant_write_pause: Mutex::new(None),
             #[cfg(test)]
             list_snapshot_pause: Mutex::new(None),
+            #[cfg(test)]
+            admission_snapshot_pause: Mutex::new(None),
         })
     }
     /// The access policy a share grant change is admitted by, in its
@@ -262,6 +270,20 @@ impl LocalConversationStore {
     ) {
         *self
             .list_snapshot_pause
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some((entered, resume));
+    }
+
+    /// Hold the next admission read after the row and tombstone, before the
+    /// revision, until `resume`. The read stays inside its transaction.
+    #[cfg(test)]
+    pub(crate) fn pause_admission_snapshot(
+        &self,
+        entered: Arc<std::sync::Barrier>,
+        resume: Arc<std::sync::Barrier>,
+    ) {
+        *self
+            .admission_snapshot_pause
             .lock()
             .unwrap_or_else(PoisonError::into_inner) = Some((entered, resume));
     }
@@ -803,15 +825,25 @@ fn read(
     }
 }
 
-/// Conversation row, catalogue incarnation and change revision under one connection lock.
+/// Row, tombstone, catalogue incarnation and `change_revision` from one
+/// transaction. Separate autocommit statements would let another connection
+/// commit a tombstone between the row and the revision, and the token would
+/// then name a revision the row Cedar sees does not have.
 fn read_admission(
-    connection: &Connection,
+    connection: &mut Connection,
     id: &ConversationId,
+    #[cfg(test)] pause: Option<AdmissionSnapshotPause>,
 ) -> Result<Option<ConversationAdmissionSnapshot>, ConversationError> {
-    let Some(conversation) = read(connection, id)? else {
+    let transaction = connection.transaction().map_err(failed)?;
+    let Some(conversation) = read(&transaction, id)? else {
         return Ok(None);
     };
-    let incarnation: String = connection
+    #[cfg(test)]
+    if let Some((entered, resume)) = pause {
+        entered.wait();
+        resume.wait();
+    }
+    let incarnation: String = transaction
         .cached_row(
             &format!(
                 "SELECT {} FROM catalogue_identity WHERE id = 1",
@@ -821,7 +853,7 @@ fn read_admission(
             |row| row.get(0),
         )
         .map_err(failed)?;
-    let revision: i64 = connection
+    let revision: i64 = transaction
         .cached_row(
             "SELECT change_revision FROM conversations WHERE id = ?1",
             [id.to_string()],
@@ -1132,7 +1164,22 @@ impl ConversationRepository for LocalConversationStore {
         id: &ConversationId,
     ) -> ConversationFuture<'_, Option<ConversationAdmissionSnapshot>> {
         let id = id.clone();
-        self.run(move |connection| read_admission(connection, &id))
+        #[cfg(test)]
+        let pause = self
+            .admission_snapshot_pause
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take();
+        self.run(move |connection| {
+            #[cfg(test)]
+            {
+                read_admission(connection, &id, pause)
+            }
+            #[cfg(not(test))]
+            {
+                read_admission(connection, &id)
+            }
+        })
     }
     fn create(&self, conversation: Conversation) -> ConversationFuture<'_, ConversationCreation> {
         let changes = self.changes.clone();

@@ -875,16 +875,22 @@ impl ConversationRepository for MemoryRepository {
         use crate::conversation::application::{
             ConversationAdmissionSnapshot, ConversationAdmissionToken,
         };
-        let value = self.records.lock().unwrap().get(id).cloned();
-        let value = self.mode_loaded_reply.lock().unwrap().take().or(value);
-        let incarnation = self.catalogue_incarnation.lock().unwrap().clone();
-        let change_revision = self
-            .change_revisions
-            .lock()
-            .unwrap()
-            .get(id)
-            .copied()
-            .unwrap_or(0);
+        // Row and revision under one lock, in the same order as
+        // `record_deletion`, so a tombstone cannot change only one of them.
+        let (stored, incarnation, change_revision) = {
+            let records = self.records.lock().unwrap();
+            let stored = records.get(id).cloned();
+            let incarnation = self.catalogue_incarnation.lock().unwrap().clone();
+            let change_revision = self
+                .change_revisions
+                .lock()
+                .unwrap()
+                .get(id)
+                .copied()
+                .unwrap_or(0);
+            (stored, incarnation, change_revision)
+        };
+        let value = self.mode_loaded_reply.lock().unwrap().take().or(stored);
         let id = id.clone();
         let value = match self.metadata_load_failure.lock().unwrap().take() {
             Some(error) => Err(error),

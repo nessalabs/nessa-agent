@@ -4031,6 +4031,47 @@ async fn a_paired_list_reads_its_head_and_rows_from_one_snapshot() {
     assert_eq!(next.conversations[0].summary.updated_at_ms(), 2);
 }
 
+/// A second connection's tombstone, committed after the row is read and
+/// before the revision, stays out of that admission snapshot.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_admission_read_keeps_the_row_and_revision_from_one_snapshot() {
+    let Opened {
+        _directory,
+        path,
+        store,
+    } = opened();
+    let store = Arc::new(store);
+    let id = new_id();
+    store.create(owned(&id)).await.unwrap();
+    let before = store.load_admission_snapshot(&id).await.unwrap().unwrap();
+    let writer = LocalConversationStore::open(&path).unwrap();
+    raw(&path)
+        .execute_batch("PRAGMA journal_mode = WAL;")
+        .unwrap();
+    let entered = Arc::new(std::sync::Barrier::new(2));
+    let resume = Arc::new(std::sync::Barrier::new(2));
+    store.pause_admission_snapshot(entered.clone(), resume.clone());
+    let reading = store.clone();
+    let reading_id = id.clone();
+    let pending = tokio::spawn(async move { reading.load_admission_snapshot(&reading_id).await });
+    tokio::task::spawn_blocking(move || entered.wait())
+        .await
+        .unwrap();
+    writer
+        .record_deletion(&id, deletion("admission"))
+        .await
+        .unwrap();
+    tokio::task::spawn_blocking(move || resume.wait())
+        .await
+        .unwrap();
+    let during = pending.await.unwrap().unwrap().unwrap();
+    assert!(during.conversation().deletion().is_none());
+    assert_eq!(during.token(), before.token());
+    let after = store.load_admission_snapshot(&id).await.unwrap().unwrap();
+    assert!(after.conversation().deletion().is_some());
+    assert_ne!(after.token(), before.token());
+}
+
 /// Once a receiver loses a grant, subsequent replacements for that principal
 /// do not reveal later catalogue activity to it (row J35).
 #[tokio::test]
