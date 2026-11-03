@@ -71,10 +71,10 @@ function askMicrophone(signal: AbortSignal): Promise<MediaStream> {
       reject(new TransportRefused(sentence))
     }
     const aborted = () => giveUp("Couldn’t connect the call. Try again.")
-    let timer: ReturnType<typeof setTimeout> | undefined
     // A call ended before it asked never asks.
-    if (signal.aborted) return aborted()
-    timer = setTimeout(() => giveUp(microphoneUnanswered), MICROPHONE_TIMEOUT_MS)
+    if (signal.aborted)
+      return reject(new TransportRefused("Couldn’t connect the call. Try again."))
+    const timer = setTimeout(() => giveUp(microphoneUnanswered), MICROPHONE_TIMEOUT_MS)
     signal.addEventListener("abort", aborted, { once: true })
     let asked: Promise<MediaStream>
     try {
