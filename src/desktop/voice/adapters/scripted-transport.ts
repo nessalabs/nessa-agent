@@ -27,7 +27,9 @@ export function scriptedTransport(
         let closedListener: () => void = () => {}
         let closing = false
         let opened = false
+        let answered = false
         socket.addEventListener("message", (message) => {
+          answered = true
           try {
             const event: unknown = JSON.parse(String(message.data))
             if (
@@ -62,6 +64,8 @@ export function scriptedTransport(
             levels: () => ({ input: 0, output: 0 }),
             setMicrophone: () => {},
             setSpeaker: () => {},
+            // No audio is carried: only whether the provider has spoken.
+            check: async () => ({ answered, audioSent: true, microphoneSound: null }),
             close: () => {
               closing = true
               socket.close()

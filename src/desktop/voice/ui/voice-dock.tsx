@@ -7,7 +7,7 @@ import { useCallback, useEffect } from "react"
 import { StatusLabel } from "@nessa-ui/react/status-label"
 import type { VoiceSnapshot } from "../application/voice-controller"
 import { useVoiceController, useVoiceSnapshot } from "./voice-context"
-import { orbTone, VoiceOrb } from "./voice-orb"
+import { VoiceOrb } from "./voice-orb"
 
 /** The bubble's line: what is said or heard now, else the call's state. */
 export function voiceLine(snapshot: VoiceSnapshot): string {
@@ -21,7 +21,7 @@ export function voiceLine(snapshot: VoiceSnapshot): string {
     case "listening":
       return (
         snapshot.hearing.trim() ||
-        (snapshot.microphoneOn ? "Listening" : "Microphone off")
+        (snapshot.microphoneOn ? (snapshot.hint ?? "Listening") : "Microphone off")
       )
     case "failed":
     case "dropped":
@@ -31,7 +31,7 @@ export function voiceLine(snapshot: VoiceSnapshot): string {
   }
 }
 
-export function VoiceDock({ sessionId, agent }: { sessionId: string; agent?: string }) {
+export function VoiceDock({ sessionId }: { sessionId: string }) {
   const controller = useVoiceController()
   const snapshot = useVoiceSnapshot()
   // The pane holds the call while it shows this conversation.
@@ -63,7 +63,7 @@ export function VoiceDock({ sessionId, agent }: { sessionId: string; agent?: str
       <p className="voice-bubble" role="status" aria-live="polite">
         {line}
       </p>
-      <VoiceOrb phase={snapshot.phase} tone={orbTone(agent)} levels={levels} />
+      <VoiceOrb phase={snapshot.phase} levels={levels} />
     </div>
   )
 }
