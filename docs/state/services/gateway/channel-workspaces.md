@@ -131,9 +131,9 @@ connection, and `boat.disconnect` clears both. Every serve of a Boat VM reads
 it afresh and writes it as the first line of `env serve`'s standard input,
 which the VM's shell exports as `CLAUDE_CODE_OAUTH_TOKEN` before `env serve`
 starts; an empty line, sent when none is saved or the vault cannot be read,
-sets nothing. A serve keeps what it started with, so a conversation's
-connection served before the latest save or clear is replaced at its next
-lease once nothing uses it.
+sets nothing. A serve keeps what it started with, so after each save or
+clear every Boat conversation's connection that nothing uses is let go, and
+its next lease is served again.
 
 ## VM lifetime settings
 

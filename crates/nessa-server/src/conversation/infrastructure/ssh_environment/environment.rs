@@ -121,9 +121,6 @@ struct Inner {
     /// opened again once lost, held while connecting, so one is opened at a
     /// time. A paired environment's is [`Reach::Peer`]'s `serving`.
     link: Mutex<Option<Arc<HostLink>>>,
-    /// A workspace's [`WorkspaceConnector::serve_changes`] when its held
-    /// connection was served.
-    served_at: std::sync::atomic::AtomicU64,
 }
 
 /// How a host's connection is had.
@@ -273,7 +270,6 @@ impl SshEnvironment {
                 audit,
                 timings,
                 link: Mutex::new(None),
-                served_at: std::sync::atomic::AtomicU64::new(0),
             }),
         }
     }
@@ -473,20 +469,9 @@ impl Inner {
 
     async fn link(&self, install: Install<'_>) -> Result<Arc<HostLink>, LeaseRefusal> {
         if let Reach::Workspace { connector } = &self.reach {
-            use std::sync::atomic::Ordering;
             let mut held = self.link.lock().await;
-            let changes = connector.serve_changes();
             if let Some(link) = held.as_ref().filter(|link| link.is_open()) {
-                // A serve keeps the environment it started with: one from
-                // before the latest change is replaced, but only once nothing
-                // uses it, as `let_go` lets go; until then it goes on serving.
-                let stale = self.served_at.load(Ordering::SeqCst) != changes;
-                if !stale || !link.holds_nothing() || Arc::strong_count(link) > 1 {
-                    return Ok(link.clone());
-                }
-                let link = held.take().expect("looked at above");
-                link.close();
-                link.ended().await;
+                return Ok(link.clone());
             }
             let connection = tokio::time::timeout(
                 self.timings.connect,
@@ -507,7 +492,6 @@ impl Inner {
                 Opening::NotServed => LeaseRefusal::EnvironmentUnreachable,
             })?;
             *held = Some(link.clone());
-            self.served_at.store(changes, Ordering::SeqCst);
             return Ok(link);
         }
         let (host, connector, installer) = match &self.reach {

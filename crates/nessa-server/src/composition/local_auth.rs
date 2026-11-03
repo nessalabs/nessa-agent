@@ -1308,7 +1308,7 @@ async fn conversations(
         Arc::new(LocalChannelStore::open(&channels_path).map_err(|cause| {
             RunError::opening(crate::core::Dataset::Channels, &channels_path, cause)
         })?);
-    let workspace_environments: Arc<dyn ThreadEnvironments> = Arc::new(ThreadWorkspaces {
+    let thread_workspaces = Arc::new(ThreadWorkspaces {
         service: workspace_service,
         channels: channel_store.clone(),
         audit: workspace_audit,
@@ -1324,6 +1324,9 @@ async fn conversations(
         ),
         environments: Default::default(),
     });
+    // A sign-in saved for Boat reaches conversations already connected.
+    tokio::spawn(thread_workspaces.clone().follow_claude_sign_ins());
+    let workspace_environments: Arc<dyn ThreadEnvironments> = thread_workspaces;
     let clock: Arc<dyn Clock> = Arc::new(SystemClock);
     let host = crate::agent_install::infrastructure::host_platform();
     let opencode = EffectiveOpenCodeProfile::decide(

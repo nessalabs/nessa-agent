@@ -197,9 +197,9 @@ pub(crate) struct Workspaces {
     pub(crate) settings: Arc<dyn Settings>,
     pub(crate) runtime_settings: Arc<dyn RuntimeSettings>,
     pub(crate) claude_sign_ins: Arc<dyn ClaudeSignIns>,
-    /// Counts each save or clear of the Claude sign-in, so a connection
-    /// served before it can be told apart (`serve_changes`).
-    claude_sign_in_changes: Arc<std::sync::atomic::AtomicU64>,
+    /// Counts each save or clear of the Claude sign-in, for whoever must
+    /// serve VMs again after one (`claude_sign_in_changed`).
+    claude_sign_in_changes: tokio::sync::watch::Sender<u64>,
     provider: Arc<dyn Provider>,
     assignments: Arc<dyn Assignments>,
     recovery: Arc<dyn RecoveryAudit>,
@@ -221,7 +221,7 @@ impl Workspaces {
             settings,
             runtime_settings,
             claude_sign_ins,
-            claude_sign_in_changes: Arc::default(),
+            claude_sign_in_changes: tokio::sync::watch::Sender::new(0),
             image: None,
             provider,
             assignments,
@@ -257,13 +257,17 @@ impl Workspaces {
         self.settings.clear().await
     }
     /// How many times the Claude sign-in has been saved or cleared here.
+    #[cfg(test)]
     pub(crate) fn claude_sign_in_changes(&self) -> u64 {
-        self.claude_sign_in_changes
-            .load(std::sync::atomic::Ordering::SeqCst)
+        *self.claude_sign_in_changes.borrow()
+    }
+    /// Told each time the Claude sign-in is saved or cleared.
+    pub(crate) fn claude_sign_in_changed_watch(&self) -> tokio::sync::watch::Receiver<u64> {
+        self.claude_sign_in_changes.subscribe()
     }
     fn claude_sign_in_changed(&self) {
         self.claude_sign_in_changes
-            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            .send_modify(|changes| *changes += 1);
     }
     pub(crate) async fn save(&self, connection: BoatConnection) -> Result<(), Failure> {
         let generation = self.settings.generation()?;

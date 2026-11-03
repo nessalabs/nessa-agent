@@ -120,10 +120,11 @@ sent to another machine. Only the token minted for Boat goes to Boat.
 The action does not resend the failed message. Once the token is saved, the
 card says so, and the person's next message is served with it. A serve keeps
 the environment it started with, so the gateway counts each save or clear of
-the sign-in, and a Boat conversation's connection served before the latest
-change is replaced at its next lease once nothing uses it, as `let_go` lets
-one go. A refused turn leaves nothing on it, so the message sent after
-Authenticate is served again with the token.
+the sign-in, and after each change lets go of every Boat conversation's
+connection that nothing uses, as `let_go` lets one go when a VM rests. A
+refused turn leaves nothing on it, so the message sent after Authenticate is
+served again with the token. This lives outside the lease protocol's sources,
+so the pinned worker image still matches.
 
 | State | Event | Result | Evidence |
 | --- | --- | --- | --- |
@@ -136,8 +137,8 @@ Authenticate is served again with the token.
 | Token minted | Save refused (vault locked, invalid token) | "Could not save the sign-in." and the button is available again; nothing kept | Card test, product dispatch test |
 | Save arguments | Token outside the token alphabet, wrong prefix or too long | `invalid_request`; nothing stored | `ClaudeSignIn` tests |
 | Token saved | Next serve of any Boat VM | First stdin line is the token; `env serve` runs with the variable | SSH serve test |
-| Token saved or cleared, conversation's connection idle | Next lease in it | Connection replaced; the new serve carries the current sign-in | Workspace connection replacement test |
-| Token saved or cleared, a lease on the connection | Next lease in it | Same connection kept; replaced once nothing uses it | Workspace connection replacement test |
+| Token saved or cleared, conversation's connection idle | — | Connection let go; the next lease is served again with the current sign-in | `a_sign_in_change_lets_go_of_idle_workspace_connections_only` |
+| Token saved or cleared, a lease on the connection | — | Asked again for about 30 seconds, then kept; served again once let go some other way | Same test |
 | No token saved | Serve | Empty first line; no variable | SSH serve test |
 | Vault locked or entry unreadable | Serve | Served with an empty line; warning logged; the agent's refusal shows the card again | Runtime test |
 | Token later revoked or expired | Next refusal | Card again; Authenticate replaces the entry | Save-overwrites test |
