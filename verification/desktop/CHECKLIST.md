@@ -971,7 +971,8 @@ in its sandbox". Every row of the bridge's design table is a jsdom test
   against the menus and chips beside it.
 - [ ] **Send from a new session arrives in its transcript.** _Check:_ `smoke.mjs` (`send`).
 - [ ] **A new session's home takes its pane's shape.** In a pane under 640px
-  either way its composer docks at the foot as the conversation's beside it
+  wide, or whose room below the title row is under 640px tall, its composer
+  docks at the foot as the conversation's beside it
   (same distance from the foot, inset and height, ± 1.5 px), with the
   greeting on and turned off; the header stays as a band from the top of the
   pane (72–150px of picture or scene) with its Customize control — in the
