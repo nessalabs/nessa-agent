@@ -35,8 +35,15 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const HOST_BUILDS: Option<&str> = option_env!("NESSA_HOST_BUILDS");
 
 /// Where [`HOST_BUILDS`] are published: the release's download address,
-/// under which each is `nessa-<target>`. Set beside them.
+/// under which each is `nessa-<target>`. Set beside them. A local desktop
+/// build sets [`BUNDLED_HOST_BUILDS`] instead: its builds ship inside the
+/// app, beside this executable.
 pub const HOST_BUILDS_FROM: Option<&str> = option_env!("NESSA_HOST_BUILDS_FROM");
+
+/// The [`HOST_BUILDS_FROM`] that names the `host-builds` folder beside this
+/// executable rather than a download address
+/// (`scripts/desktop/prepare-runtime.mjs` puts them there).
+pub const BUNDLED_HOST_BUILDS: &str = "bundled";
 
 /// Name the lease protocol by the sources that define it, listed once: the
 /// names for checking the list, the fingerprint for the hello.
