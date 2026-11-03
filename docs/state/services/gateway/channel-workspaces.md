@@ -187,10 +187,16 @@ newer worker, and its header displays Local or Boat.
 Allocation and encrypted-vault tests are in `tests/workspaces`. Channel migrations
 and replacement history are exercised against real SQLite. The opt-in real
 provider workflow and its limits are described in
-[workspace verification](../../../../scripts/workspaces/README.md). The existing
-backup omission of channel-owned data is tracked in
-[issue 1161](https://github.com/nessalabs/nessa-agent/issues/1161); allocation receipts
-and environment audit files are included in the EnvironmentAudit inventory.
+[workspace verification](../../../../scripts/workspaces/README.md). Channel
+settings, conversation membership, and the coordinator replacement journal are
+the channel store at `conversations/channels.sqlite3`. The export cut pins that
+file as the `channels` store. Membership stays in `channel_conversations`; it
+is not inferred from a conversation name and it is not copied into an
+allocation receipt. Allocation receipts and environment audit files stay in
+the EnvironmentAudit inventory. Applying the channel snapshot back onto a
+live namespace is separate from this export. The page-wide source checkpoint
+is unchanged: this paragraph records the export only, and placement,
+restoration, and lifetime were not re-reviewed.
 
 An untouched Claude native session is not persisted until its first prompt. SDK
 attachment asks the provider with the saved ID and whether any invocation was
