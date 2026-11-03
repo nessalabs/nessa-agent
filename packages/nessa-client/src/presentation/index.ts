@@ -58,6 +58,7 @@ export type { RecordReadApi } from "./record-read-api.js"
 export type { AgentsApi } from "./agents-api.js"
 export type { ServerApi } from "./server-api.js"
 export type { WorkspaceApi } from "./workspace-api.js"
+export type { AppsApi } from "./apps-api.js"
 export type { ChannelApi } from "./channel-api.js"
 export { channelRefusal } from "./channel-api.js"
 

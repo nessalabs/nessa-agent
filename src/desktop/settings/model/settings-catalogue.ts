@@ -416,6 +416,14 @@ export const settingsEntries = [
     keywords: "allow deny permission rule revoke project",
   },
   {
+    id: "trusted-apps",
+    tab: "access",
+    label: "Apps you always allow",
+    detail:
+      "Apps you answered Always allow send messages as you without asking. Revoke one to be asked again.",
+    keywords: "app mcp always allow trust revoke message",
+  },
+  {
     id: "review-notices",
     tab: "access",
     label: "Review notifications",

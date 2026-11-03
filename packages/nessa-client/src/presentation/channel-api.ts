@@ -6,6 +6,7 @@ import type {
   Channel,
   ChannelCreateParams,
   ChannelListResult,
+  ChannelSetPlacementParams,
 } from "../generated/product.js"
 
 /**
@@ -30,6 +31,13 @@ export type ChannelApi = {
    * always true on what it returns.
    */
   list(): Promise<ChannelListResult>
+  /**
+   * Change where a made channel's agents run. Threads already made keep
+   * running where they started. Moving the main agent answers a fresh
+   * `coordinatorConversationId`: the next main-agent chat starts there, and
+   * the old one stays in the channel as an ordinary thread.
+   */
+  setPlacement(params: ChannelSetPlacementParams): Promise<Channel>
 }
 
 export function createChannelApi(session: RpcRequester): ChannelApi {
@@ -39,6 +47,12 @@ export function createChannelApi(session: RpcRequester): ChannelApi {
       if (!isRecord(answer) || !onlyKeys(answer, ["channel"]))
         throw new Error("Invalid channel create response")
       return channel(answer.channel, "Invalid channel create response")
+    },
+    setPlacement: async (params) => {
+      const answer = await session.request(ProductMethod.ChannelSetPlacement, params)
+      if (!isRecord(answer) || !onlyKeys(answer, ["channel"]))
+        throw new Error("Invalid channel placement response")
+      return channel(answer.channel, "Invalid channel placement response")
     },
     list: async () => {
       const channels: Channel[] = []

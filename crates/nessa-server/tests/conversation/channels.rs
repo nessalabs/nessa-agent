@@ -154,6 +154,7 @@ impl ChannelFolders for TableFolders {
 struct Fixture {
     service: ConversationService,
     source: Arc<RecordingSource>,
+    settings: Arc<crate::conversation_test_support::RecordingSettingsAudit>,
     folders: TableFolders,
     _directory: tempfile::TempDir,
 }
@@ -254,9 +255,13 @@ impl Fixture {
             }),
             Arc::new(folders.clone()),
         );
+        let settings =
+            Arc::new(crate::conversation_test_support::RecordingSettingsAudit::default());
+        service.bind_settings_audit(settings.clone());
         Self {
             service,
             source,
+            settings,
             folders,
             _directory: directory,
         }
@@ -1089,4 +1094,106 @@ async fn owned_threads_use_channel_start_without_accepting_caller_overrides() {
         drop(release);
         fixture.service.shutdown().await.unwrap();
     }
+}
+
+#[tokio::test]
+async fn only_the_owner_moves_a_made_channel_and_an_unchanged_one_stays_as_it_is() {
+    use crate::conversation::application::ChannelError;
+    use crate::conversation::domain::{ChannelExecution, WorkspacePlacement};
+    let fixture = Fixture::new();
+    let made = fixture.channel("request-1", None).await;
+    let boat = ChannelExecution {
+        coordinator: WorkspacePlacement::Boat,
+        threads: WorkspacePlacement::Boat,
+    };
+    // The default channel has no run location to change, and neither another
+    // person nor an unknown id learns whether a channel exists.
+    for (who, id) in [
+        ("person", ChannelId::default_channel()),
+        ("other", made.id().clone()),
+        ("person", ChannelId::from_random([9; 10])),
+    ] {
+        assert_eq!(
+            fixture
+                .service
+                .set_channel_execution(&caller(who, "move"), &id, boat)
+                .await,
+            Err(ChannelError::Forbidden),
+            "{who} moved {id:?}"
+        );
+    }
+    // Asking for where it already runs changes nothing, main chat included.
+    let same = fixture
+        .service
+        .set_channel_execution(&caller("person", "move"), made.id(), made.execution())
+        .await
+        .unwrap();
+    assert_eq!(same, made);
+    let moved = fixture
+        .service
+        .set_channel_execution(&caller("person", "move"), made.id(), boat)
+        .await
+        .unwrap();
+    assert_eq!(moved.execution(), boat);
+    assert_eq!(moved.id(), made.id());
+    // Asked and applied are on record as the person's, with both places; a
+    // refused or unchanged move left none.
+    let records = fixture.settings.records.lock().unwrap().clone();
+    assert_eq!(records.len(), 2);
+    assert_eq!(records[0].operation_id, records[1].operation_id);
+    assert_eq!(records[0].caller, caller("person", "move"));
+    assert_eq!(
+        records[0].change,
+        crate::conversation::application::SettingsChange::ChannelPlacement {
+            channel: made.id().clone(),
+            before: made.execution(),
+            after: boat,
+            coordinator: made.coordinator_id(),
+        }
+    );
+    assert_eq!(
+        fixture.settings.outcomes(),
+        [
+            crate::conversation::application::SettingsOutcome::Requested,
+            crate::conversation::application::SettingsOutcome::Applied {
+                changed: true,
+                coordinator: Some(moved.coordinator_id()),
+            },
+        ]
+    );
+}
+
+#[tokio::test]
+async fn a_move_that_cannot_be_recorded_is_refused_and_changes_nothing() {
+    use crate::conversation::application::ChannelError;
+    use crate::conversation::domain::{ChannelExecution, WorkspacePlacement};
+    let fixture = Fixture::new();
+    let made = fixture.channel("request-1", None).await;
+    fixture
+        .settings
+        .failing
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    let boat = ChannelExecution {
+        coordinator: WorkspacePlacement::Boat,
+        threads: WorkspacePlacement::Boat,
+    };
+    assert_eq!(
+        fixture
+            .service
+            .set_channel_execution(&caller("person", "move"), made.id(), boat)
+            .await,
+        Err(ChannelError::Unavailable)
+    );
+    let listed = fixture
+        .service
+        .list_channels(&caller("person", "list"))
+        .await
+        .unwrap();
+    let kept = listed
+        .channels
+        .iter()
+        .find(|each| each.id() == made.id())
+        .unwrap();
+    assert_eq!(kept.execution(), made.execution());
+    assert_eq!(kept.coordinator_id(), made.coordinator_id());
 }
