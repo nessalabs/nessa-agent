@@ -1,3 +1,4 @@
+import { createAppsApi, type AppsApi } from "./apps-api.js"
 import { createBoatApi, type BoatApi } from "./boat-api.js"
 import { createDevicesApi, type DevicesApi } from "./devices-api.js"
 import { createSubscriptionApi, type SubscriptionApi } from "./subscription-api.js"
@@ -107,6 +108,8 @@ export class NessaClient {
   readonly mcpApps: McpAppsApi
   /** The gateway's stored MCP servers: list, save, remove, and inspect one. */
   readonly mcpServers: McpServersApi
+  /** The apps the person always allows, and a way to stop allowing one. */
+  readonly apps: AppsApi
   /** Issue, list, and revoke scoped product credentials, subject to server authorization. */
   readonly credentials: CredentialApi
   /** Owner pairing: create a one-use code, and approve, deny or cancel an invitation. */
@@ -147,6 +150,7 @@ export class NessaClient {
     this.attachments = createAttachmentApi(wire, upload, newRequestId, httpTimer)
     this.mcpApps = createMcpAppsApi(wire, resources, newRequestId, httpTimer)
     this.mcpServers = createMcpServersApi(wire)
+    this.apps = createAppsApi(wire)
     this.credentials = createCredentialApi(wire, newRequestId)
     this.pairing = createPairingApi(wire)
     this.github = createGithubApi(wire)

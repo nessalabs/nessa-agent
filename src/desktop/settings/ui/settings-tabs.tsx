@@ -57,7 +57,7 @@ import { SavedLoginsGroup } from "./saved-logins"
 import { IntegrationsTab } from "./integrations-tab"
 import { LinkedDevicesTab } from "./linked-devices-tab"
 import { NativeHooksRows } from "./native-hooks-rows"
-import { PermissionRuleRows } from "./permission-rule-rows"
+import { PermissionRuleRows, TrustedAppRows } from "./permission-rule-rows"
 import { ReviewNoticeRows } from "./review-notice-rows"
 
 /**
@@ -526,6 +526,7 @@ function AccessTab() {
         </Row>
       </Group>
       <PermissionRuleRows />
+      <TrustedAppRows />
       <ReviewNoticeRows />
     </>
   )

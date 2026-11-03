@@ -1619,6 +1619,23 @@ export interface McpServersAuthorizeResult {
   /** The token generation, present for ready. */
   generation?: number
 }
+/** The apps the person always allows (apps.trusted): every MCP server whose app was answered "Always allow this app", in name order. An app listed here sends messages as the person without a review. */
+export interface AppsTrustedResult {
+  servers: string[]
+}
+/** Stop always allowing one app (apps.untrust): its next message is reviewed again. */
+export interface AppsUntrustParams {
+  /** Stable action identifier retained for retries of one logical command. */
+  requestId: string
+  /** The MCP server whose app it is, by its configured name. */
+  server: string
+}
+/** What apps.untrust did. applied is false when the app was not always allowed. */
+export interface AppsUntrustResult {
+  /** Stable action identifier retained for retries of one logical command. */
+  requestId: string
+  applied: boolean
+}
 /** Wire input for mcpServers.revoke: fence the remote server id at the listed revision. Local sessions of that server are closed. The result keeps drain, secret deletion, remote observation and evidence apart; an incomplete revoke is not reported as settled. */
 export interface McpServersRevokeParams {
   /** The revision the caller last listed. */
@@ -3416,6 +3433,21 @@ export interface ChannelCreateParams {
 export interface ChannelCreateResult {
   channel: Channel
 }
+/** Change where a made channel's agents run (channel.setPlacement). Threads already made keep running where they started; threads made from now on run in threadPlacement. Moving the main agent names a fresh main conversation (coordinatorConversationId) that starts in the new place; the old one stays in the channel as an ordinary thread. The default channel has no run location to change and is refused forbidden, as is a channel the caller may not change. */
+export interface ChannelSetPlacementParams {
+  /** Stable action identifier retained for retries of one logical command. */
+  requestId: string
+  /** The made channel to change. */
+  channelId: string
+  /** Where the channel's main agent runs from now on. */
+  coordinatorPlacement: "local" | "boat"
+  /** Where threads made in the channel from now on run: pool runs each on a paired computer (devices.pool). */
+  threadPlacement: "local" | "boat" | "pool"
+}
+/** The channel as channel.setPlacement left it. */
+export interface ChannelSetPlacementResult {
+  channel: Channel
+}
 /** Which page of the caller's channels to list (channel.list). Empty for the first. */
 export interface ChannelListParams {
   /** The cursor an earlier page returned: list the channels made after that one. An id the caller has no channel under is refused invalid_request. */
@@ -3769,7 +3801,7 @@ export const channelRules = {
 export const bounds = {
   maxOrdinaryResponseBytes: 65536,
   maxRequestFrameBytes: 65536,
-  maxReadyMethods: 116,
+  maxReadyMethods: 119,
   maxAuthCredentialCharacters: 16384,
   maxProductClientIdCharacters: 256,
   maxProductSurfaceInstanceCharacters: 256,
@@ -4046,6 +4078,8 @@ export const ProductMethod = {
   McpServersInspect: "mcpServers.inspect",
   McpServersAuthorize: "mcpServers.authorize",
   McpServersRevoke: "mcpServers.revoke",
+  AppsTrusted: "apps.trusted",
+  AppsUntrust: "apps.untrust",
   PhoneEndpoint: "phone.endpoint",
   PhoneAuthorize: "phone.authorize",
   PhoneStatus: "phone.status",
@@ -4079,6 +4113,7 @@ export const ProductMethod = {
   WorkspacePublish: "workspace.publish",
   ChannelCreate: "channel.create",
   ChannelList: "channel.list",
+  ChannelSetPlacement: "channel.setPlacement",
   ConversationSubscribeEvents: "conversation.subscribeEvents",
   ConversationReadEarlier: "conversation.readEarlier",
   ConversationPeek: "conversation.peek",
@@ -4175,6 +4210,8 @@ export const productReadyMethods = [
   "mcpServers.inspect",
   "mcpServers.authorize",
   "mcpServers.revoke",
+  "apps.trusted",
+  "apps.untrust",
   "phone.endpoint",
   "phone.authorize",
   "phone.status",
@@ -4208,6 +4245,7 @@ export const productReadyMethods = [
   "workspace.publish",
   "channel.create",
   "channel.list",
+  "channel.setPlacement",
   "conversation.subscribeEvents",
   "conversation.readEarlier",
   "conversation.peek",
@@ -4295,6 +4333,8 @@ export const productMethodGrants = {
   "mcpServers.inspect": "credential.manage",
   "mcpServers.authorize": "credential.manage",
   "mcpServers.revoke": "credential.manage",
+  "apps.trusted": "credential.manage",
+  "apps.untrust": "credential.manage",
   "phone.endpoint": "server.read",
   "phone.authorize": "credential.manage",
   "phone.status": "credential.manage",
@@ -4328,6 +4368,7 @@ export const productMethodGrants = {
   "workspace.publish": "conversation.write",
   "channel.create": "conversation.write",
   "channel.list": "conversation.write",
+  "channel.setPlacement": "conversation.write",
   "conversation.subscribeEvents": "conversation.write",
   "conversation.readEarlier": "conversation.write",
   "conversation.peek": "conversation.write",
