@@ -40,3 +40,19 @@ flowchart TB
 
 - [Wire requests and command uncertainty](commands.md)
 - [Managed connection](connection.md)
+
+## Model coverage
+
+Component index. This page groups independent owners; its component arrows are not a lifecycle or a model proof. Open the feature pages for exact checked scope and exclusions.
+
+- [Subscription opening and bounded consumption](subscriptions.md)
+
+- [Event handler registration generations](event-registration.md)
+
+
+## Native device submissions
+
+[Native product submissions](native-submissions.md) follows the native wrapper's
+FIFO admission lane separately from Rust ticket execution, deadlines and reply
+ownership. Its finite request count is an analysis bound; the Swift lane does
+not implement a queue length limit or queue-wait deadline.

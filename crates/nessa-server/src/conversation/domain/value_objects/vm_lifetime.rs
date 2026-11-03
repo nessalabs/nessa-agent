@@ -1,6 +1,7 @@
 //! A cloud VM's auto-stop choice, shared by channel and workspace behavior.
 //! Inheriting a default is absence of an override, not Unlimited.
 use super::channel::ChannelId;
+use super::settings_scope::SettingsScope;
 use std::num::NonZeroU32;
 
 // Product protocol generation checks its published interval against these
@@ -43,29 +44,11 @@ impl VmLifetime {
 #[path = "../../../../tests/conversation/vm_lifetime.rs"]
 mod tests;
 
-/// The configuration target whose lifetime choices were observed.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum VmLifetimeScope {
-    /// The Nessa default, without a channel override.
-    Global,
-    /// One stored channel's settings.
-    Channel(ChannelId),
-}
-impl VmLifetimeScope {
-    /// The channel identity, absent for the Nessa default.
-    pub fn channel(&self) -> Option<&ChannelId> {
-        match self {
-            Self::Global => None,
-            Self::Channel(channel) => Some(channel),
-        }
-    }
-}
-
 /// A default and optional override observed together for one target.
 /// Absence means inheritance; explicit Unlimited remains independent.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct VmLifetimeSettings {
-    scope: VmLifetimeScope,
+    scope: SettingsScope,
     default: VmLifetime,
     channel: Option<VmLifetime>,
 }
@@ -73,7 +56,7 @@ impl VmLifetimeSettings {
     /// A global read cannot contain a channel override.
     pub const fn global(default: VmLifetime) -> Self {
         Self {
-            scope: VmLifetimeScope::Global,
+            scope: SettingsScope::Global,
             default,
             channel: None,
         }
@@ -85,13 +68,13 @@ impl VmLifetimeSettings {
         override_lifetime: Option<VmLifetime>,
     ) -> Self {
         Self {
-            scope: VmLifetimeScope::Channel(channel),
+            scope: SettingsScope::Channel(channel),
             default,
             channel: override_lifetime,
         }
     }
     /// The target to compare with the initiating read or edit.
-    pub fn scope(&self) -> &VmLifetimeScope {
+    pub fn scope(&self) -> &SettingsScope {
         &self.scope
     }
     /// The observed Nessa default.

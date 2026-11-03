@@ -8,6 +8,7 @@ mod opening_resources;
 mod owned_threads;
 use opening_resources::OpeningResources;
 mod parent_stop;
+mod pool_preferences;
 mod scheduled_messages;
 mod thread_report_admission;
 mod thread_reports;
@@ -1754,6 +1755,7 @@ impl ConversationService {
             } {
                 crate::conversation::domain::WorkspacePlacement::Local => None,
                 crate::conversation::domain::WorkspacePlacement::Boat => Some(super::BOAT),
+                crate::conversation::domain::WorkspacePlacement::Pool => Some(super::POOL),
             }
         });
         // `here` names this machine outright. A conversation the person
@@ -1771,7 +1773,11 @@ impl ConversationService {
         service
             .inner
             .environment
-            .place(&id, requested_place)
+            .place(
+                &id,
+                requested_place,
+                channel.as_ref().map(|channel| channel.id()),
+            )
             .await?;
         service.place_in_channel(&id, channel.as_ref()).await?;
         let outcome = service.inner.metadata.create(proposed.clone()).await?;
@@ -2197,6 +2203,11 @@ impl ConversationService {
                                 None => service.ownership_gate(&id, &actor, Some(owner.acquisition.clone())).await
                                     .map_err(|cause| OpeningFailure { cause, holds: false })?,
                             };
+                            // On the pool, its channel says which workers
+                            // go first and which are left out.
+                            let channel = service.channel_id_of(&id).await.map_err(|cause| {
+                                OpeningFailure { cause, holds: false }
+                            })?;
                             let mut avoid = Vec::new();
                             // The last acknowledged refusal is the fallback if
                             // placement cannot find another worker.
@@ -2205,7 +2216,7 @@ impl ConversationService {
                                 let place = match service
                                     .inner
                                     .environment
-                                    .for_lease(&id, &avoid)
+                                    .for_lease(&id, &avoid, channel.as_ref())
                                     .await
                                 {
                                     Ok(place) => place,
@@ -7852,7 +7863,7 @@ mod parking;
 use parking::ParkWhen;
 mod resumption;
 pub use environment_tools::{
-    CommandAnswer, CommandCall, CommandCallError, EnvironmentListing, HERE,
+    CommandAnswer, CommandCall, CommandCallError, EnvironmentListing, EnvironmentLoad, HERE,
 };
 pub use event_read::{
     event_error_code, project_events, validate_event_cursor, ConversationEventError, EventProgress,

@@ -10,7 +10,8 @@ use crate::browser_session::application::{
 };
 use crate::browser_session::domain::value_objects::RemovalReason;
 use crate::conversation::application::{
-    access_refusal, AccessDecision, RecordReadLease, ReviewNoticeAuditFailure, WindowSlot,
+    access_refusal, AccessDecision, ConversationAdmissionToken, RecordReadLease,
+    ReviewNoticeAuditFailure, WindowSlot,
 };
 #[cfg(test)]
 use crate::conversation_test_support as conversation_support;
@@ -1487,6 +1488,7 @@ async fn forward_review_notices(
         drop(authority_updates.borrow_and_update());
         let mut visible = Vec::with_capacity(reviews.len());
         let mut selected_revision = None;
+        let mut admitted_tokens: Vec<ConversationAdmissionToken> = Vec::new();
         for review in reviews {
             let selection = super::read_access::may_see_review(&state, &session, &review)
                 .await
@@ -1501,6 +1503,7 @@ async fn forward_review_notices(
                         continue 'snapshots;
                     }
                     selected_revision = Some(revision);
+                    admitted_tokens.push(selection.metadata_token().clone());
                     if matches!(selection.decision(), AccessDecision::Allow { .. }) {
                         visible.push(review);
                     }
@@ -1515,6 +1518,31 @@ async fn forward_review_notices(
             .execute(&session)
             .await
             .map_err(ReviewNoticePublicationFailure::Authority)?;
+            if current.revision != revision {
+                selection_passes += 1;
+                continue 'snapshots;
+            }
+            if let Some(metadata) = state.review_metadata.as_ref() {
+                let mut by_conversation = HashMap::new();
+                for token in &admitted_tokens {
+                    if by_conversation
+                        .insert(token.conversation_id().clone(), token)
+                        .is_some_and(|earlier| earlier != token)
+                    {
+                        selection_passes += 1;
+                        continue 'snapshots;
+                    }
+                }
+                for token in by_conversation.values() {
+                    let current_token = metadata.admission_current(token).await.map_err(|_| {
+                        ReviewNoticePublicationFailure::Audit(ReviewNoticeAuditFailure::Unavailable)
+                    })?;
+                    if !current_token {
+                        selection_passes += 1;
+                        continue 'snapshots;
+                    }
+                }
+            }
             if !board.is_current(generation, visibility) {
                 // A spent counter never matches, so it counts as access moving.
                 let board_moved = current.revision == revision
@@ -1535,10 +1563,6 @@ async fn forward_review_notices(
                 // was shown until its review was denied for want of an answer.
                 let (_, waiting) = board.current();
                 visible.retain(|review| waiting.contains(review));
-            }
-            if current.revision != revision {
-                selection_passes += 1;
-                continue 'snapshots;
             }
         }
         // Stable audited selection admits this candidate. As with other gateway
@@ -2012,6 +2036,7 @@ async fn dispatch_authorized(
                 },
             )
         }
+        "devices.pool" | "devices.setPool" => super::pool::dispatch(state, session, frame).await,
         "devices.list" => {
             let Ok(params) = serde_json::from_value::<
                 nessa_protocol::product::generated::DevicesListParams,
@@ -3879,6 +3904,81 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// A tombstone committed while metadata is held must not publish on the
+    /// live row captured before that deletion, even when the recipient is Admin.
+    #[tokio::test]
+    async fn deleted_metadata_cannot_publish_with_later_admin_authority() {
+        let (_directory, board) = open_rules();
+        let id = "00000000-0000-4000-8000-00000000000a";
+        board.waiting(&ReviewNotice {
+            conversation_id: id.into(),
+            execution_id: ExecutionId::new("turn").unwrap(),
+            permission_id: PermissionId::new("permission").unwrap(),
+            tool: "Bash".into(),
+        });
+        let repository = repository_of(vec![owned_conversation(id, "owner")]);
+        let (entered, waiting) = oneshot::channel();
+        let (release, released) = oneshot::channel();
+        *repository.metadata_load_gate.lock().unwrap() = Some((entered, released));
+        let (state, _authority) = fixture(MembershipRole::Admin);
+        let state = state.with_passive_read(
+            Arc::new(UnpairedBinding),
+            repository.clone(),
+            Arc::new(GrantedConversation(id.into())),
+            conversation_support::access_policy(),
+        );
+        let session = authenticate(&state).await;
+        let (authority_updates, updates) = watch::channel(session.auth_revision());
+        let (send, mut receive) = mpsc::channel(1);
+        let task = tokio::spawn(forward_review_notices(
+            board,
+            send,
+            Arc::new(Semaphore::new(1)),
+            state,
+            session,
+            updates,
+        ));
+        timeout(Duration::from_secs(2), waiting)
+            .await
+            .unwrap()
+            .unwrap();
+        let deletion = crate::conversation::domain::ConversationDeletion::new(
+            OrganizationId::new("organization").unwrap(),
+            PrincipalId::new("owner").unwrap(),
+            "panel".into(),
+            "delete".into(),
+            2,
+        )
+        .unwrap();
+        repository
+            .record_deletion(&ConversationId::new(id).unwrap(), deletion)
+            .await
+            .unwrap();
+        release.send(()).unwrap();
+        let queued = timeout(Duration::from_secs(2), receive.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        let WireResponse::ReviewWaiting {
+            payload: snapshot, ..
+        } = queued.message
+        else {
+            panic!("expected review snapshot")
+        };
+        assert!(
+            snapshot.reviews.is_empty(),
+            "live metadata captured before deletion must not publish"
+        );
+        drop(authority_updates);
+        assert_eq!(
+            timeout(Duration::from_secs(2), task)
+                .await
+                .unwrap()
+                .unwrap(),
+            Ok(())
+        );
     }
 
     /// A repository reply is outside data. Its identity is correlated before

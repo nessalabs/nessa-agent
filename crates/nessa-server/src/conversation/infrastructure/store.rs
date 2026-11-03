@@ -14,13 +14,14 @@ use super::catalogue_changes::CatalogueChanges;
 use crate::conversation::application::{
     CatalogueChangeWatch, CatalogueDescriptor, CatalogueHead, CatalogueKey, CataloguePage,
     CataloguePageRequest, CatalogueValue, ConversationAccessPolicyEvaluator,
-    ConversationAgentSwitch, ConversationAgentSwitchState, ConversationCatalogue,
-    ConversationCreation, ConversationCreationDisposition, ConversationError, ConversationFuture,
-    ConversationListing, ConversationModeApplication, ConversationModeRequest,
-    ConversationModeRequestState, ConversationModelApplication, ConversationModelRequest,
-    ConversationModelRequestState, ConversationRepository, ConversationSummaries,
-    ListedConversation, ListedConversations, ObservationCursor, ObservedConversations, Reader,
-    UnfinishedDeletions, UnfinishedMark, UnfinishedTurns, WatchCatalogue,
+    ConversationAdmissionSnapshot, ConversationAdmissionToken, ConversationAgentSwitch,
+    ConversationAgentSwitchState, ConversationCatalogue, ConversationCreation,
+    ConversationCreationDisposition, ConversationError, ConversationFuture, ConversationListing,
+    ConversationModeApplication, ConversationModeRequest, ConversationModeRequestState,
+    ConversationModelApplication, ConversationModelRequest, ConversationModelRequestState,
+    ConversationRepository, ConversationSummaries, ListedConversation, ListedConversations,
+    ObservationCursor, ObservedConversations, Reader, UnfinishedDeletions, UnfinishedMark,
+    UnfinishedTurns, WatchCatalogue,
 };
 use crate::conversation::domain::{
     Conversation, ConversationDeletion, DeletionContradiction, ProviderSessionErasure,
@@ -802,6 +803,39 @@ fn read(
     }
 }
 
+/// Conversation row, catalogue incarnation and change revision under one connection lock.
+fn read_admission(
+    connection: &Connection,
+    id: &ConversationId,
+) -> Result<Option<ConversationAdmissionSnapshot>, ConversationError> {
+    let Some(conversation) = read(connection, id)? else {
+        return Ok(None);
+    };
+    let incarnation: String = connection
+        .cached_row(
+            &format!(
+                "SELECT {} FROM catalogue_identity WHERE id = 1",
+                acquisition::text("incarnation", MAX_ID_BYTES, false)
+            ),
+            [],
+            |row| row.get(0),
+        )
+        .map_err(failed)?;
+    let revision: i64 = connection
+        .cached_row(
+            "SELECT change_revision FROM conversations WHERE id = ?1",
+            [id.to_string()],
+            |row| row.get(0),
+        )
+        .map_err(failed)?;
+    let change_revision =
+        u64::try_from(revision).map_err(|_| unreadable("conversations", &id.to_string()))?;
+    Ok(Some(ConversationAdmissionSnapshot::new(
+        conversation,
+        ConversationAdmissionToken::new(incarnation, id.clone(), change_revision),
+    )))
+}
+
 fn catalogue_incarnation(connection: &Connection, expected: &str) -> Result<(), ConversationError> {
     let current: String = connection
         .cached_row(
@@ -1092,6 +1126,13 @@ impl ConversationRepository for LocalConversationStore {
     fn load(&self, id: &ConversationId) -> ConversationFuture<'_, Option<Conversation>> {
         let id = id.clone();
         self.run(move |connection| read(connection, &id))
+    }
+    fn load_admission_snapshot(
+        &self,
+        id: &ConversationId,
+    ) -> ConversationFuture<'_, Option<ConversationAdmissionSnapshot>> {
+        let id = id.clone();
+        self.run(move |connection| read_admission(connection, &id))
     }
     fn create(&self, conversation: Conversation) -> ConversationFuture<'_, ConversationCreation> {
         let changes = self.changes.clone();

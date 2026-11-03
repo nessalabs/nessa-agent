@@ -4,6 +4,7 @@ import { IconButton } from "../../../ui/icon-button"
 import { useBoatGateway } from "../../../settings/ui/boat-row"
 import { BoatRuntimeControl } from "../../../settings/ui/boat-runtime-control"
 import { gatewayChannelId } from "../../adapters/gateway/gateway-views"
+import { PoolOrder, useDevicesGateway } from "../../../devices"
 
 /** The same settings editor opens from either channel-list layout. */
 export function ChannelSettingsButton({
@@ -16,6 +17,7 @@ export function ChannelSettingsButton({
   const [open, setOpen] = useState(false)
   const trigger = useRef<HTMLButtonElement>(null)
   const gateway = useBoatGateway()
+  const devices = useDevicesGateway()
   const scope = gatewayChannelId(channelId)
   return (
     <>
@@ -46,6 +48,12 @@ export function ChannelSettingsButton({
           <div className="settings-boat settings-surface">
             <BoatRuntimeControl channelId={scope} gateway={gateway} />
           </div>
+          {/* The default channel follows Devices' order, set there. */}
+          {scope !== undefined && devices ? (
+            <div className="settings-surface" data-channel-settings-pool="">
+              <PoolOrder gateway={devices} channelId={scope} />
+            </div>
+          ) : null}
         </Dialog>
       )}
     </>

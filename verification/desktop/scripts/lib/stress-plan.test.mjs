@@ -243,6 +243,14 @@ test("webhook capture/no-send runs once by default and three times at the raised
   assert.equal(knobsFrom({}, { NESSA_STRESS_WEBHOOKS: "3" }).webhooks, 3)
 })
 
+test("native-context drift keeps its default and raised repetition counts", () => {
+  assert.equal(plan(knobsFrom({}, {})).filter((step) => step.kind === "drift").length, 1)
+  assert.equal(
+    plan(knobsFrom({ drifts: "2" }, {})).filter((step) => step.kind === "drift").length,
+    2,
+  )
+})
+
 test("passphrase change count raises independently and can be disabled", () => {
   assert.equal(
     plan(knobsFrom({ passphrases: "3" }, {})).filter((step) => step.kind === "passphrase")

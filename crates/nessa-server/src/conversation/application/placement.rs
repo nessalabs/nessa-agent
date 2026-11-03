@@ -12,7 +12,10 @@
 //!   ──▶ here | that host | that peer
 //!   | peer:any ──▶ ConversationBindings::binding ──▶ the worker it is bound to,
 //!       while that one serves and is not draining
-//!     otherwise ──▶ the serving, not draining worker with fewest agent leases
+//!     otherwise ──▶ PoolSettingsStore::read (the conversation's channel, or
+//!       the Nessa default) ──▶ of the serving, not draining workers it does
+//!       not leave out, the first in its order that is not busy, fewest
+//!       agent leases among equals; every one busy, the first in order
 //!       ──▶ ConversationBindings::bind (written before the lease is asked)
 //!   the lease's fence restores the saved provider context only when the
 //!   binding says this worker opened it (WorkerContext); the context each
@@ -42,7 +45,10 @@
 //! opened, which is only while no lease of it is live, so one worker holds
 //! it at a time. Provider sessions stay on the worker that opened them, so
 //! a moved conversation's agent opens new context there.
-use super::{CommandPolicyEvaluator, ConversationError, Environment, EnvironmentFuture};
+use super::{
+    CommandPolicyEvaluator, ConversationError, Environment, EnvironmentFuture, PoolSettingsStore,
+};
+use crate::conversation::domain::{ChannelId, PoolPreference, PoolSettings, SettingsScope};
 use nessa_protocol::conversation::domain::ConversationId;
 use nessa_sdk::domain::agent_execution::leases::{EnvironmentRef, LeaseEndCause, PeerEnvironment};
 
@@ -75,6 +81,10 @@ use tokio::sync::watch;
 /// pool: its paired environments. An SSH destination holds no `:`, and no
 /// key is `any`, so it names nothing else.
 pub const POOL: &str = "peer:any";
+
+/// When a computer counts as busy where no pool preferences are kept: at
+/// 90% processor or memory use, as an absent `pool` section says.
+const UNCONFIGURED_BUSY_PERMILLE: u32 = 900;
 
 /// How long an `artifacts_publish` call waits, from its ask, for its file
 /// to be staged, read, checked and kept before it answers that it does not
@@ -179,6 +189,31 @@ pub(crate) struct WorkerLoad {
     pub(crate) draining: bool,
 }
 
+/// How busy a paired environment's machine last said it is, each in
+/// tenths of a percent, 0 to 1000.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct MachineUse {
+    /// Processor use across all its processors.
+    pub(crate) cpu_permille: u32,
+    /// Memory in use, of what is installed.
+    pub(crate) memory_permille: u32,
+}
+
+/// One connected paired environment as the pool sees it now.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct PoolStanding {
+    /// How busy its machine last said it is; `None` before it has said.
+    pub(crate) machine: Option<MachineUse>,
+    /// Agents it holds a lease for; `None` when its connection serves none.
+    pub(crate) agents: Option<usize>,
+    /// Its place for new `peer:any` work, 0 first; `None` when it takes
+    /// none: left out, draining, or not serving.
+    pub(crate) rank: Option<usize>,
+    /// Whether it is at or past a busy limit, so the pool passes it over
+    /// while another is not.
+    pub(crate) busy: bool,
+}
+
 /// The paired environments that dial this gateway. Implemented in
 /// infrastructure.
 pub(crate) trait PairedEnvironments: Send + Sync {
@@ -189,19 +224,52 @@ pub(crate) trait PairedEnvironments: Send + Sync {
     /// The paired environments whose connection serves leases now, each
     /// with what it carries, read off that connection.
     fn serving(&self) -> Vec<(PeerEnvironment, WorkerLoad)>;
+    /// How busy `peer`'s machine last said it is; `None` before it has
+    /// said, or for one that never does, which is never busy.
+    fn machine_use(&self, _peer: &PeerEnvironment) -> Option<MachineUse> {
+        None
+    }
 }
 
-/// The worker of `serving` a new lease goes to: one that is not draining
-/// and not in `avoid`, with the fewest leases of an agent, the lowest key
-/// among equals.
-fn least_loaded(
+/// The workers of `serving` that may take a new lease under `preference`:
+/// not draining, not in `avoid`, and not left out.
+fn open<'a>(
+    serving: &'a [(PeerEnvironment, WorkerLoad)],
+    avoid: &'a [PeerEnvironment],
+    preference: &'a PoolPreference,
+) -> impl Iterator<Item = &'a (PeerEnvironment, WorkerLoad)> + 'a {
+    serving.iter().filter(move |(peer, load)| {
+        !load.draining && !avoid.contains(peer) && preference.includes(peer)
+    })
+}
+
+/// Whether `peer`'s machine is too busy for new work under `settings`.
+fn busy(peers: &dyn PairedEnvironments, settings: &PoolSettings, peer: &PeerEnvironment) -> bool {
+    let used = peers.machine_use(peer);
+    settings.busy(
+        used.map(|used| used.cpu_permille),
+        used.map(|used| used.memory_permille),
+    )
+}
+
+/// The worker of `serving` a new lease goes to: of those [`open`] finds,
+/// the first in the preference's order that is not busy, the fewest leases
+/// of an agent among equals, then the lowest key. When every one is busy,
+/// the same choice among all of them: busy is a reason to go elsewhere,
+/// never a reason not to run.
+fn choose(
+    peers: &dyn PairedEnvironments,
     serving: &[(PeerEnvironment, WorkerLoad)],
     avoid: &[PeerEnvironment],
+    settings: &PoolSettings,
 ) -> Option<PeerEnvironment> {
-    serving
-        .iter()
-        .filter(|(peer, load)| !load.draining && !avoid.contains(peer))
-        .min_by_key(|(peer, load)| (load.leases, *peer))
+    let preference = settings.effective();
+    let order =
+        |(peer, load): &&(PeerEnvironment, WorkerLoad)| (preference.rank(peer), load.leases, *peer);
+    open(serving, avoid, preference)
+        .filter(|(peer, _)| !busy(peers, settings, peer))
+        .min_by_key(order)
+        .or_else(|| open(serving, avoid, preference).min_by_key(order))
         .map(|(peer, _)| *peer)
 }
 
@@ -375,6 +443,9 @@ pub(crate) struct Environments {
     /// The default device saved from Devices: where a new conversation that
     /// names no place runs, while it is offered; `None` is here.
     default: Option<watch::Receiver<Option<String>>>,
+    /// Which workers the pool tries first and which it leaves out, by
+    /// channel; `None` puts every worker in, none first.
+    pool_settings: Option<Arc<dyn PoolSettingsStore>>,
 }
 
 impl From<Arc<dyn Environment>> for Environments {
@@ -393,6 +464,7 @@ impl From<Arc<dyn Environment>> for Environments {
             fetch_wait: FETCH_CALL_WAIT,
             reserved: Arc::default(),
             default: None,
+            pool_settings: None,
         }
     }
 }
@@ -424,6 +496,7 @@ impl Environments {
             fetch_wait: FETCH_CALL_WAIT,
             reserved: Arc::default(),
             default: None,
+            pool_settings: None,
         }
     }
 
@@ -467,6 +540,49 @@ impl Environments {
                 .is_some_and(|peers| peers.connected().contains(&peer)),
             Err(_) => self.hosts.contains_key(name),
         }
+    }
+
+    /// These environments, whose pool follows the preferences `settings`
+    /// keeps: which workers go first and which are left out.
+    #[cfg_attr(not(unix), allow(dead_code, reason = "the Unix gateway composes it"))]
+    pub(crate) fn with_pool_settings(mut self, settings: Arc<dyn PoolSettingsStore>) -> Self {
+        self.pool_settings = Some(settings);
+        self
+    }
+
+    /// The pool's preferences for a conversation in `channel` (`None`: the
+    /// default channel, which follows the Nessa default): every worker in,
+    /// none first, when none are kept.
+    ///
+    /// # Errors
+    /// [`ConversationError::Unavailable`] when they cannot be read: a worker
+    /// that was left out is never chosen because its preference was not.
+    pub(crate) async fn pool_settings(
+        &self,
+        channel: Option<&ChannelId>,
+    ) -> Result<PoolSettings, ConversationError> {
+        let scope = channel.map_or(SettingsScope::Global, |channel| {
+            SettingsScope::Channel(channel.clone())
+        });
+        match &self.pool_settings {
+            Some(settings) => settings
+                .read(&scope)
+                .await
+                .map_err(|_| ConversationError::Unavailable),
+            None => Ok(PoolSettings::new(
+                scope,
+                PoolPreference::default(),
+                None,
+                UNCONFIGURED_BUSY_PERMILLE,
+                UNCONFIGURED_BUSY_PERMILLE,
+            )),
+        }
+    }
+
+    /// Where the pool's preferences are kept; `None` when this gateway
+    /// keeps none and every worker is in, none first.
+    pub(crate) fn pool_store(&self) -> Option<&Arc<dyn PoolSettingsStore>> {
+        self.pool_settings.as_ref()
     }
 
     /// These environments, with commands granted as `policy` answers: the
@@ -515,11 +631,54 @@ impl Environments {
     }
 
     /// Whether a conversation can be placed on `peer:any` now: some paired
-    /// environment serves and is not draining.
-    pub(crate) fn pool_serves(&self) -> bool {
-        self.peers
-            .as_ref()
-            .is_some_and(|peers| least_loaded(&peers.serving(), &[]).is_some())
+    /// environment serves, is not draining, and is not left out by
+    /// `settings`.
+    pub(crate) fn pool_serves(&self, settings: &PoolSettings) -> bool {
+        self.peers.as_ref().is_some_and(|peers| {
+            open(&peers.serving(), &[], settings.effective())
+                .next()
+                .is_some()
+        })
+    }
+
+    /// Whether every worker that could take a conversation on `peer:any`
+    /// now is busy: there is at least one, and none is below its limits.
+    fn pool_busy(&self, settings: &PoolSettings) -> bool {
+        self.peers.as_ref().is_some_and(|peers| {
+            let serving = peers.serving();
+            let mut open = open(&serving, &[], settings.effective()).peekable();
+            open.peek().is_some() && open.all(|(peer, _)| busy(peers.as_ref(), settings, peer))
+        })
+    }
+
+    /// What the pool knows of each paired environment connected now, by
+    /// name, under `settings`: how busy its machine said it is, how many
+    /// agents it carries, and where it stands for new `peer:any` work.
+    pub(crate) fn pool_standing(&self, settings: &PoolSettings) -> BTreeMap<String, PoolStanding> {
+        let Some(peers) = self.peers.as_ref() else {
+            return BTreeMap::new();
+        };
+        let serving = peers.serving();
+        let preference = settings.effective();
+        peers
+            .connected()
+            .into_iter()
+            .map(|peer| {
+                let load = serving
+                    .iter()
+                    .find(|(serving, _)| *serving == peer)
+                    .map(|(_, load)| *load);
+                let takes_work =
+                    load.is_some_and(|load| !load.draining) && preference.includes(&peer);
+                let standing = PoolStanding {
+                    machine: peers.machine_use(&peer),
+                    agents: load.map(|load| load.leases),
+                    rank: takes_work.then(|| preference.rank(&peer)),
+                    busy: busy(peers.as_ref(), settings, &peer),
+                };
+                (peer.name(), standing)
+            })
+            .collect()
     }
 
     /// Whether `worker` takes no new lease now: its connection is gone, or
@@ -560,38 +719,71 @@ impl Environments {
     /// Record where a conversation about to be created runs: on `requested`,
     /// which must be a configured host or a connected paired environment,
     /// or here. The pool (any paired computer) asked for with none online
-    /// places it in a cloud workspace of its own instead, when a cloud
-    /// account is connected. One computer asked for by name never moves:
-    /// the person chose where it runs.
+    /// that `channel`'s preferences let it use places it in a cloud
+    /// workspace of its own instead, when a cloud account is connected; so
+    /// does the pool with every such computer busy, as overflow. One
+    /// computer asked for by name never moves: the person chose where it
+    /// runs.
     pub(crate) async fn place(
         &self,
         conversation: &ConversationId,
         requested: Option<&str>,
+        channel: Option<&ChannelId>,
     ) -> Result<(), ConversationError> {
-        let mut requested = requested;
-        if let Some(name) = requested {
-            let pool = name == POOL;
-            let known = name == BOAT && self.boat_connected().await
-                || name == POOL && self.bindings.is_some() && self.pool_serves()
-                || name != POOL && self.offers(name);
-            if !known {
-                // Any computer asked for, with none online: it runs in a
-                // cloud workspace of its own instead, where one can be had,
-                // rather than not at all.
-                match &self.workspaces {
-                    Some(workspaces) if pool && workspaces.available().await => {
-                        tracing::info!(conversation_id = %conversation, asked = name, "no paired computer is online; the conversation runs in a cloud workspace");
-                        requested = Some(BOAT);
-                    }
-                    _ => return Err(ConversationError::EnvironmentNotConfigured),
+        let requested = match requested {
+            None => None,
+            Some(POOL) => Some(self.place_in_pool(conversation, channel).await?),
+            Some(name) => {
+                let known = name == BOAT && self.boat_connected().await || self.offers(name);
+                if !known {
+                    return Err(ConversationError::EnvironmentNotConfigured);
                 }
+                Some(name)
             }
-        }
+        };
         match &self.placements {
             Some(placements) => Ok(placements.place(conversation, requested).await?),
             None if requested.is_none() => Ok(()),
             None => Err(ConversationError::EnvironmentNotConfigured),
         }
+    }
+
+    /// Where a conversation that asked for the pool is placed: the pool,
+    /// while some worker `channel`'s preferences let it use serves and not
+    /// every one is busy. Otherwise a cloud workspace of its own, where one
+    /// can be had, rather than not at all (none online) or behind every
+    /// busy one (overflow); with no cloud, still the pool when some worker
+    /// serves, busy or not.
+    async fn place_in_pool(
+        &self,
+        conversation: &ConversationId,
+        channel: Option<&ChannelId>,
+    ) -> Result<&'static str, ConversationError> {
+        let settings = match self.bindings {
+            Some(_) => Some(self.pool_settings(channel).await?),
+            None => None,
+        };
+        let serves = settings
+            .as_ref()
+            .is_some_and(|settings| self.pool_serves(settings));
+        let busy = settings
+            .as_ref()
+            .is_some_and(|settings| self.pool_busy(settings));
+        if serves && !busy {
+            return Ok(POOL);
+        }
+        if self.boat_connected().await {
+            if busy {
+                tracing::info!(conversation_id = %conversation, "every paired computer the pool may use is busy; the conversation runs in a cloud workspace");
+            } else {
+                tracing::info!(conversation_id = %conversation, asked = POOL, "no paired computer the pool may use is online; the conversation runs in a cloud workspace");
+            }
+            return Ok(BOAT);
+        }
+        if serves {
+            return Ok(POOL);
+        }
+        Err(ConversationError::EnvironmentNotConfigured)
     }
 
     /// Whether a cloud workspace can be had now: this gateway builds them
@@ -697,8 +889,9 @@ impl Environments {
     }
 
     /// Where `conversation`'s agent lease is asked now. For a `peer:any`
-    /// conversation, the worker it is bound to while that one serves and is
-    /// not draining, else the least loaded that does and is not in `avoid`,
+    /// conversation, the worker it is bound to while that one serves, is
+    /// not draining and is not left out by `channel`'s preferences, else
+    /// the one [`choose`] picks of those not in `avoid`,
     /// bound before this answers; with none, the worker it was bound to,
     /// whose lease is then refused unreachable as any absent worker's is,
     /// or, never bound, [`ConversationError::Unavailable`].
@@ -709,6 +902,7 @@ impl Environments {
         &self,
         conversation: &ConversationId,
         avoid: &[PeerEnvironment],
+        channel: Option<&ChannelId>,
     ) -> Result<LeasePlace, ConversationError> {
         let placed = self.placement(conversation).await?;
         if placed.as_deref() == Some(BOAT) && !self.boat_connected().await {
@@ -722,19 +916,19 @@ impl Environments {
             });
         }
         let (peers, bindings) = self.pool()?;
+        let settings = self.pool_settings(channel).await?;
         let bound = bindings.binding(conversation).await?;
+        // A conversation stays on its worker while that one may take it,
+        // busy or not: moving costs it the provider context held there.
         let stays = |serving: &[(PeerEnvironment, WorkerLoad)], bound: &WorkerBinding| {
-            !avoid.contains(&bound.worker)
-                && serving
-                    .iter()
-                    .any(|(peer, load)| *peer == bound.worker && !load.draining)
+            open(serving, avoid, settings.effective()).any(|(peer, _)| *peer == bound.worker)
         };
         // Choosing and reserving are one step, so openings choosing at once
         // spread over the workers.
         let reserved = self.reserved.reserve(peers.serving(), |serving| {
             match bound.as_ref().filter(|bound| stays(serving, bound)) {
                 Some(bound) => Some(bound.worker),
-                None => least_loaded(serving, avoid),
+                None => choose(peers.as_ref(), serving, avoid, &settings),
             }
         });
         let (binding, reservation) = match reserved {

@@ -64,3 +64,11 @@ stateDiagram-v2
 ## Further reading
 
 [Source](../../../../../src/conversation/ui/use-conversation.ts) · [Related source](../../../../../src/panel/ui/app.tsx) · [Related tests](../../../../../src/conversation/adapters/store/reorder.test.ts)
+
+## Model coverage
+
+Disposition: shared owner model. Scheduling owns queued work; local recovery owns stable retry identity. [sdk-scheduling](../../sdk/scheduling.md) [desktop-chat-recover-a-refused-or-unconfirmed-send](recover-a-refused-or-unconfirmed-send.md)
+
+Excluded: Queue drag/reorder UI, steering presentation and cross-layer command integration remain unmodeled.
+
+Source review scope: owner entry points and relevant regression declarations were inventoried against frozen source `77a6b620af4d94b234294f6d273fd74b3dfb44c7`. Existing source checkpoints are retained where this was a partial review. A model result establishes bounded design safety only. Browser appearance and interaction were not checked.

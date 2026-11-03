@@ -19,8 +19,21 @@ sources:
   - "packages/nessa-client/src/presentation/conversation-api.test.ts"
   - "crates/nessa-sdk/tests/application/agent_execution/scheduling/retries.rs"
 diagramLinks: {}
+model:
+  spec: tla/services/desktop/chat/recover-a-refused-or-unconfirmed-send.tla
+  config: tla/services/desktop/chat/recover-a-refused-or-unconfirmed-send.cfg
+modelCheck:
+  checker: tlc-1.7.4
+  date: 2026-11-03T03:27:47.081Z
+  config: tla/services/desktop/chat/recover-a-refused-or-unconfirmed-send.cfg
+  modelDigest: e72ae74dd66cdeb6325b828b767231be4953408075f58d36c0e2eea1f5e4aeac
+  states: 9
+  held:
+    - StableRetry
+    - ReceiptMeaning
+  broke: []
+  unchecked: []
 ---
-
 # recover a refused or unconfirmed send
 
 A known refusal means the send was not accepted. Nessa can restore the unsent draft if doing so would not overwrite a newer draft.
@@ -130,3 +143,15 @@ sequenceDiagram
 ## Further reading
 
 [Source](../../../../../src/conversation/adapters/store/slice.ts) · [Related source](../../../../../src/conversation/application/usecases/send-draft.ts) · [Related tests](../../../../../src/conversation/adapters/store/unsent.test.ts)
+
+## Bounded rule model
+
+One locally retained submission and two attempts separate acceptance, known refusal and uncertain acknowledgement. Explicit retry retains input identity; unknown is never labeled admitted without a receipt or reconciled view. This is the local recovery design, not proof of gateway deduplication, queued follow-up ordering or provider completion. The model checks design safety, not the implementation. It asserts no liveness and abstracts transport timing into nondeterministic completion order. Regression sources are evidence of intended behavior; this documentation change does not claim their execution.
+
+## Model coverage
+
+Disposition: direct model. The bounded rule model section names the modeled owner slice and finite abstraction.
+
+Excluded: All exclusions stated in the owning Bounded rule model section remain outside verification.
+
+Source review scope: owner entry points and relevant regression declarations were inventoried against frozen source `77a6b620af4d94b234294f6d273fd74b3dfb44c7`. Existing source checkpoints are retained where this was a partial review. A model result establishes bounded design safety only. Browser appearance and interaction were not checked.

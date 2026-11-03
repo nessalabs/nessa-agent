@@ -68,3 +68,9 @@ stateDiagram-v2
 ## Further reading
 
 [Design](../../../../design/mcp-app-calls.md) · [Source](../../../../../crates/nessa-server/src/conversation/application/service/app_calls.rs) · [Related tests](../../../../../crates/nessa-server/tests/conversation/app_messages.rs) · [Desktop adapter](../../../../../src/desktop/widgets/app/adapters/gateway/app-messages.ts)
+
+## Model coverage
+
+Shared owner model: [sdk-scheduling](../scheduling.md). Immutable submitted input and save-before-dispatch admission.
+
+Context serialization, rich blocks and provider token accounting are boundary contracts. This relationship applies only to the stated scope, not every step of this journey. This scoped mapping retains earlier source checkpoints and is not executed implementation-test evidence.

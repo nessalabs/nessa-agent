@@ -514,6 +514,8 @@ export type {
   DeviceWorker,
   DevicesListResult,
   DevicesSshHostsResult,
+  DevicesPool,
+  PoolPreference,
 } from "./generated/product.js"
 export type { BoatApi } from "./presentation/boat-api.js"
 export {

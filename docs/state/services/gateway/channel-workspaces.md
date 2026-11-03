@@ -4,7 +4,8 @@ title: Channel workspaces
 kind: statechart
 status: implemented
 sourceRevision: "5b2bd93bc5eb0c983614329f0ba8e602ba83d095"
-summary: A channel independently places its main agent and new threads on Local or Boat and can override the default Boat VM lifetime.
+summary: A channel independently places its main agent and new threads on Local
+  or Boat and can override the default Boat VM lifetime.
 parent: gateway
 sources:
   - crates/nessa-server/src/conversation/application/placement.rs
@@ -42,8 +43,23 @@ sources:
   - src/desktop/settings/ui/boat-runtime-control.tsx
   - src/desktop/workspace/ui/channel-settings/channel-settings.tsx
 diagramLinks: {}
+model:
+  spec: tla/services/gateway/BoatAssignment.tla
+  config: tla/services/gateway/BoatAssignment.cfg
+modelCheck:
+  sourceRevision: "5b2bd93bc5eb0c983614329f0ba8e602ba83d095"
+  checker: tlc-1.7.4
+  date: 2026-11-03T03:28:15.088Z
+  config: tla/services/gateway/BoatAssignment.cfg
+  modelDigest: 52b91a34108496c685fd0488dc2443a7cab48a270019ed343b8f27cc9b37b637
+  states: 6
+  held:
+    - OneTarget
+    - VerifyBeforeAuthority
+    - RefusalIsTerminal
+  broke: []
+  unchecked: []
 ---
-
 # Channel workspaces
 
 This page reviews the alpha placement, allocation and main-chat lifecycle. It
@@ -187,10 +203,16 @@ newer worker, and its header displays Local or Boat.
 Allocation and encrypted-vault tests are in `tests/workspaces`. Channel migrations
 and replacement history are exercised against real SQLite. The opt-in real
 provider workflow and its limits are described in
-[workspace verification](../../../../scripts/workspaces/README.md). The existing
-backup omission of channel-owned data is tracked in
-[issue 1161](https://github.com/nessalabs/nessa-agent/issues/1161); allocation receipts
-and environment audit files are included in the EnvironmentAudit inventory.
+[workspace verification](../../../../scripts/workspaces/README.md). Channel
+settings, conversation membership, and the coordinator replacement journal are
+the channel store at `conversations/channels.sqlite3`. The export cut pins that
+file as the `channels` store. Membership stays in `channel_conversations`; it
+is not inferred from a conversation name and it is not copied into an
+allocation receipt. Allocation receipts and environment audit files stay in
+the EnvironmentAudit inventory. Applying the channel snapshot back onto a
+live namespace is separate from this export. The page-wide source checkpoint
+is unchanged: this paragraph records the export only, and placement,
+restoration, and lifetime were not re-reviewed.
 
 An untouched Claude native session is not persisted until its first prompt. SDK
 attachment asks the provider with the saved ID and whether any invocation was
@@ -220,3 +242,7 @@ inventory; their thread ID links the original conversation creation/lease actor.
 This correction reviews only fresh-allocation readiness and the corresponding
 ADR 1160 sequence. The page-wide source checkpoint is retained; the other
 placement, restoration and lifetime paths were not re-reviewed here.
+
+## Bounded rule model
+
+Owns durable provisioning intent, single VM target, reconnect verification and terminal refusal. Uncertain creation cannot allocate again. Local placement, TTL settings, credential posture fields, SSH leases, rollback acknowledgement and main-chat replacement remain separate unmodeled contracts. This finite abstraction checks safety only. It does not execute or verify the implementation, promise eventual completion, or qualify external effects. Existing source checkpoints and historical test receipts retain their earlier scope. The scoped model review inspected `crates/nessa-server/src/workspaces/domain/workspace.rs`, `crates/nessa-server/src/workspaces/application/workspaces.rs`.

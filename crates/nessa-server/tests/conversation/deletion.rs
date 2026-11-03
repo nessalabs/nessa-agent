@@ -806,6 +806,15 @@ impl ConversationRepository for Unfenceable {
     fn load(&self, id: &ConversationId) -> ConversationFuture<'_, Option<Conversation>> {
         self.0.load(id)
     }
+    fn load_admission_snapshot(
+        &self,
+        id: &ConversationId,
+    ) -> ConversationFuture<
+        '_,
+        Option<crate::conversation::application::ConversationAdmissionSnapshot>,
+    > {
+        self.0.load_admission_snapshot(id)
+    }
     fn unfinished_deletions(&self) -> ConversationFuture<'_, UnfinishedDeletions> {
         self.0.unfinished_deletions()
     }
@@ -1032,6 +1041,15 @@ impl ConversationRepository for Faulty {
             Some(fault) => Self::answer(fault),
             None => self.repository.load(id),
         }
+    }
+    fn load_admission_snapshot(
+        &self,
+        id: &ConversationId,
+    ) -> ConversationFuture<
+        '_,
+        Option<crate::conversation::application::ConversationAdmissionSnapshot>,
+    > {
+        self.repository.load_admission_snapshot(id)
     }
     fn unfinished_deletions(&self) -> ConversationFuture<'_, UnfinishedDeletions> {
         self.repository.unfinished_deletions()
@@ -2221,6 +2239,15 @@ impl ConversationRepository for PausingRepository {
             }
             found
         })
+    }
+    fn load_admission_snapshot(
+        &self,
+        id: &ConversationId,
+    ) -> ConversationFuture<
+        '_,
+        Option<crate::conversation::application::ConversationAdmissionSnapshot>,
+    > {
+        self.inner.load_admission_snapshot(id)
     }
     fn unfinished_deletions(&self) -> ConversationFuture<'_, UnfinishedDeletions> {
         self.inner.unfinished_deletions()

@@ -19,6 +19,64 @@ use std::{future::Future, pin::Pin};
 pub type ConversationFuture<'a, T> =
     Pin<Box<dyn Future<Output = Result<T, ConversationError>> + Send + 'a>>;
 
+/// Opaque admission evidence read with the conversation row.
+///
+/// Catalogue incarnation, conversation identity and `change_revision` come
+/// from one store read. A later validation read must match all three. Cedar
+/// does not see this token.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ConversationAdmissionToken {
+    incarnation: String,
+    conversation_id: ConversationId,
+    change_revision: u64,
+}
+
+impl ConversationAdmissionToken {
+    pub(crate) fn new(
+        incarnation: impl Into<String>,
+        conversation_id: ConversationId,
+        change_revision: u64,
+    ) -> Self {
+        Self {
+            incarnation: incarnation.into(),
+            conversation_id,
+            change_revision,
+        }
+    }
+
+    pub(crate) fn conversation_id(&self) -> &ConversationId {
+        &self.conversation_id
+    }
+}
+
+/// Conversation metadata and the admission token from the same store read.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ConversationAdmissionSnapshot {
+    conversation: Conversation,
+    token: ConversationAdmissionToken,
+}
+
+impl ConversationAdmissionSnapshot {
+    pub(crate) fn new(conversation: Conversation, token: ConversationAdmissionToken) -> Self {
+        Self {
+            conversation,
+            token,
+        }
+    }
+
+    pub(crate) fn conversation(&self) -> &Conversation {
+        &self.conversation
+    }
+
+    pub(crate) fn into_conversation(self) -> Conversation {
+        self.conversation
+    }
+
+    pub(crate) fn token(&self) -> &ConversationAdmissionToken {
+        &self.token
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ConversationCreationDisposition {
     Created,
@@ -205,6 +263,16 @@ pub trait ConversationRepository: Send + Sync {
     /// before records named their agent; [`ConversationError::Metadata`] for
     /// one that cannot be read.
     fn load(&self, id: &ConversationId) -> ConversationFuture<'_, Option<Conversation>>;
+    /// The conversation and its admission token from one read.
+    ///
+    /// Custom stores must take catalogue incarnation, conversation identity
+    /// and the row's monotonic `change_revision` together. A first tombstone
+    /// advances that revision before inventory work. Replacing the catalogue
+    /// changes the incarnation. There is no second policy check here.
+    fn load_admission_snapshot(
+        &self,
+        id: &ConversationId,
+    ) -> ConversationFuture<'_, Option<ConversationAdmissionSnapshot>>;
     /// Create once: Created acknowledges this exact immutable proposal.
     /// Existing returns the retained owner unchanged, including its historical
     /// creation surface, action and time.

@@ -56,9 +56,15 @@ import {
   type WorkerCard,
 } from "../model/devices"
 import { AddComputer } from "./add-computer"
+import { PoolOrder } from "./pool-order"
 import "./devices.css"
 
 const Gateway = createContext<DevicesGateway | undefined>(undefined)
+
+/** The window's devices gateway, for a channel's thread order. */
+export function useDevicesGateway(): DevicesGateway | undefined {
+  return useContext(Gateway)
+}
 
 export function DevicesProvider({
   gateway,
@@ -138,6 +144,7 @@ type Page =
   | { readonly kind: "add" }
   | { readonly kind: "add-computer" }
   | { readonly kind: "add-phone" }
+  | { readonly kind: "pool" }
 
 export function DevicesView() {
   const gateway = useContext(Gateway)
@@ -198,6 +205,22 @@ export function DevicesView() {
         }}
       />
     )
+  if (page.kind === "pool")
+    return (
+      <div className="devices-page" data-devices-page="pool">
+        <BackButton onBack={list} />
+        <div className="devices-heading">
+          <h1>Thread order</h1>
+          <p className="devices-muted">
+            Which computer a new thread on Any computer runs on. A channel can keep its
+            own order in its settings.
+          </p>
+        </div>
+        <div className="devices-settings settings-surface">
+          <PoolOrder gateway={gateway} workers={devices.workers} />
+        </div>
+      </div>
+    )
   if (page.kind === "worker") {
     const worker = devices.workers?.find((each) => each.id === page.id)
     return (
@@ -212,6 +235,7 @@ export function DevicesView() {
       onOpen={(id) => setPage({ kind: "worker", id })}
       onCloud={() => setPage({ kind: "cloud" })}
       onAdd={() => setPage({ kind: "add" })}
+      onPool={() => setPage({ kind: "pool" })}
     />
   )
 }
@@ -238,6 +262,7 @@ function DevicesList({
   onOpen,
   onCloud,
   onAdd,
+  onPool,
 }: {
   read: Read
   gateway: DevicesGateway
@@ -246,6 +271,7 @@ function DevicesList({
   onOpen: (id: string) => void
   onCloud: () => void
   onAdd: () => void
+  onPool: () => void
 }) {
   const now = useNow(30_000)
   const loaded = read.workers !== undefined
@@ -371,6 +397,19 @@ function DevicesList({
               <p className="devices-muted" data-devices-more>
                 More computers than these work for the hub; they are not shown.
               </p>
+            ) : null}
+            {read.workers?.length ? (
+              <button
+                type="button"
+                className="devices-pool-link"
+                onClick={onPool}
+                data-devices-action="pool"
+              >
+                <span>Thread order</span>
+                <span className="devices-muted">
+                  Which computer new threads run on first
+                </span>
+              </button>
             ) : null}
           </section>
           <Suggestions

@@ -3,19 +3,21 @@
 
 use std::time::Duration;
 
+use nessa_timer::Timer;
+
 use crate::application::agent_execution::sessions::{MessageCommitClock, MessageCommitSleep};
 
-/// Monotonic Tokio time for one or more session managers, and the system's
-/// wall clock.
+/// Monotonic Tokio time for one or more session managers, and the process
+/// wall timeline.
 #[derive(Clone, Copy, Debug)]
 pub struct RuntimeMessageCommitClock {
-    origin: tokio::time::Instant,
+    timer: nessa_timer::TokioTimer,
 }
 impl RuntimeMessageCommitClock {
     /// Starts one clock at the current Tokio instant.
     pub fn new() -> Self {
         Self {
-            origin: tokio::time::Instant::now(),
+            timer: nessa_timer::TokioTimer::new(),
         }
     }
 }
@@ -26,20 +28,18 @@ impl Default for RuntimeMessageCommitClock {
 }
 impl MessageCommitClock for RuntimeMessageCommitClock {
     fn now(&self) -> Duration {
-        self.origin.elapsed()
+        self.timer.now().since_origin()
     }
     fn sleep_until(&self, deadline: Duration) -> MessageCommitSleep {
-        match self.origin.checked_add(deadline) {
-            Some(instant) => Box::pin(tokio::time::sleep_until(instant)),
-            None => Box::pin(std::future::pending()),
-        }
+        self.timer
+            .sleep_until(nessa_timer::Moment::from_origin(deadline))
     }
-    /// The system clock; one before the epoch reads as the epoch.
+    /// Unix milliseconds on the process wall timeline
+    /// ([`crate::infrastructure::clock::process_unix_ms`]). One before the
+    /// epoch reads as the epoch. The queue that feeds a session stamps from
+    /// this same clock, so the runtime timeline stays here and a substituted
+    /// clock replaces both.
     fn unix_milliseconds(&self) -> u64 {
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |since| {
-                u64::try_from(since.as_millis()).unwrap_or(u64::MAX)
-            })
+        crate::infrastructure::clock::process_unix_ms()
     }
 }

@@ -63,6 +63,17 @@ async fn bind_with_capacity(
     cascade: bool,
     capacity: usize,
 ) -> OwnershipCoordinator {
+    bind_bounded(service, storage, root, cascade, capacity, None).await
+}
+
+async fn bind_bounded(
+    service: &ConversationService,
+    storage: &Arc<RecordStorage>,
+    root: &Path,
+    cascade: bool,
+    capacity: usize,
+    live_threads: Option<usize>,
+) -> OwnershipCoordinator {
     service.bind_commands(storage.clone());
     let coordinator = OwnershipCoordinator::new(OwnershipDependencies {
         store: Arc::new(SqliteOwnershipStore::open(&root.join("ownership.sqlite3")).unwrap()),
@@ -74,7 +85,7 @@ async fn bind_with_capacity(
     });
     coordinator.resume().await.unwrap();
     service
-        .bind_owned_threads(coordinator.clone(), cascade)
+        .bind_owned_threads_bounded(coordinator.clone(), cascade, live_threads)
         .unwrap();
     let restored = SqliteOwnershipStore::open(&root.join("ownership.sqlite3")).unwrap();
     let snapshot = OwnershipStore::read(&restored).await.unwrap();
@@ -168,6 +179,76 @@ async fn child_creation_audit_failure_cannot_strand_unacquired_cleanup() {
         2,
         "the single child slot is available after definite absence"
     );
+    drop(p);
+    retire(service, storage, metadata).await;
+}
+
+/// With `subagents.maxLiveThreads` at 1, an agent with one thread made and
+/// not yet given work, or at work, is refused another until that thread's
+/// turn ends; a person's own creations are never counted.
+#[tokio::test]
+async fn an_agent_at_its_live_thread_limit_is_refused_another_until_one_finishes() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("data");
+    let provider = Arc::new(ProviderFactory::default());
+    let (service, storage, metadata) = fixture(&root, provider.clone());
+    let _coordinator = bind_bounded(&service, &storage, &root, true, 32, Some(1)).await;
+    let parent = id();
+    opened(&service, &provider, &parent).await;
+    let p = hold_turn(&service, &provider, &parent, "parent").await;
+    let first = child(&service, &parent, "parent", "first").await;
+    let refused = |execution: &'static str, request: &'static str| {
+        let service = service.clone();
+        let parent = parent.clone();
+        async move {
+            service
+                .create_owned_thread(
+                    source(&parent, execution, request),
+                    id(),
+                    RequestedConversation::default(),
+                )
+                .await
+        }
+    };
+    assert!(
+        matches!(
+            refused("parent", "second-unstarted").await,
+            Err(CreationFailure::Target(ConversationError::ThreadLimit))
+        ),
+        "a thread made and not yet given work counts"
+    );
+    drop(p);
+    let working = hold_turn(&service, &provider, &first, "first-turn").await;
+    let p = hold_turn(&service, &provider, &parent, "parent-again").await;
+    let second = refused("parent-again", "second-working").await;
+    assert!(
+        matches!(
+            second,
+            Err(CreationFailure::Target(ConversationError::ThreadLimit))
+        ),
+        "a thread at work counts: {second:?}"
+    );
+    working.send(()).unwrap();
+    // Once its turn ends the place is free.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        match service
+            .create_owned_thread(
+                source(&parent, "parent-again", "second-after"),
+                id(),
+                RequestedConversation::default(),
+            )
+            .await
+        {
+            Ok(_) => break,
+            Err(CreationFailure::Target(ConversationError::ThreadLimit))
+                if tokio::time::Instant::now() < deadline =>
+            {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+            Err(other) => panic!("not created: {other:?}"),
+        }
+    }
     drop(p);
     retire(service, storage, metadata).await;
 }

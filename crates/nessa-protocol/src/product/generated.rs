@@ -2735,6 +2735,53 @@ pub struct DevicesListParams {
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PoolPreference {
+    pub order: Vec<String>,
+    pub excluded: Vec<String>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DevicesPoolParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub channel_id: Option<String>,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+pub enum DevicesPoolSelection {
+    #[serde(rename = "default")]
+    Default,
+    #[serde(rename = "custom")]
+    Custom,
+}
+impl DevicesPoolSelection {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Default => "default",
+            Self::Custom => "custom",
+        }
+    }
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DevicesSetPoolParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub channel_id: Option<String>,
+    pub mode: DevicesPoolSelection,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preference: Option<PoolPreference>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DevicesPool {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub channel_id: Option<String>,
+    pub default_preference: PoolPreference,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub channel_override: Option<PoolPreference>,
+    pub busy_cpu_percent: u64,
+    pub busy_memory_percent: u64,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ServerReachResult {
     #[serde(deserialize_with = "Option::deserialize")]
     pub tunnel: Option<String>,
@@ -4245,6 +4292,8 @@ pub mod product_method {
     pub const BOAT_STATUS: &str = "boat.status";
     pub const BOAT_SAVE: &str = "boat.save";
     pub const BOAT_DISCONNECT: &str = "boat.disconnect";
+    pub const DEVICES_POOL: &str = "devices.pool";
+    pub const DEVICES_SET_POOL: &str = "devices.setPool";
     pub const BOAT_RUNTIME_SETTINGS: &str = "boat.runtimeSettings";
     pub const BOAT_SET_RUNTIME_SETTINGS: &str = "boat.setRuntimeSettings";
     pub const CONVERSATION_WEBHOOK_CURSOR: &str = "conversation.webhook.cursor";
@@ -4443,7 +4492,7 @@ pub fn wire_shape_product_session_ready(value: &Value) -> bool {
         }) && object.get("methods").is_some_and(|field| {
             let _ = field;
             field.as_array().is_some_and(|items| {
-                items.len() <= 113
+                items.len() <= 115
                     && items.iter().all(|item| {
                         let _ = item;
                         item.is_string()
@@ -4573,6 +4622,8 @@ pub const PRODUCT_READY_METHODS: &[&str] = &[
     "boat.status",
     "boat.save",
     "boat.disconnect",
+    "devices.pool",
+    "devices.setPool",
     "boat.runtimeSettings",
     "boat.setRuntimeSettings",
     "conversation.webhook.cursor",
@@ -4646,6 +4697,8 @@ pub fn action_for_method(method: &str) -> Option<&'static str> {
         | "boat.status"
         | "boat.save"
         | "boat.disconnect"
+        | "devices.pool"
+        | "devices.setPool"
         | "boat.runtimeSettings"
         | "boat.setRuntimeSettings"
         | "conversation.webhook.cursor"

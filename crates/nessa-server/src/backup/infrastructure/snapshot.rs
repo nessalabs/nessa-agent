@@ -97,6 +97,14 @@ pub enum SnapshotCopy {
     Deferred(Vec<DeferredStream>),
 }
 
+/// A vacuumed database image, or a file too large to copy.
+pub(crate) enum DatabaseImage {
+    /// The vacuumed image. Free pages are not in these bytes.
+    Ready(Vec<u8>),
+    /// `page_count * page_size` is above [`SESSION_EXPORT_LIMIT`].
+    Bounded,
+}
+
 /// A read transaction on one database file.
 ///
 /// The first read starts the snapshot. A commit that lands after [`Self::open`]
@@ -142,20 +150,35 @@ impl SqliteSnapshot {
         if snapshot_bytes(&self.connection)? > SESSION_EXPORT_LIMIT {
             return Ok(SnapshotCopy::Deferred(deferred_streams(&self.connection)?));
         }
-        let mut memory = Connection::open_in_memory().map_err(|_| ())?;
-        {
-            let backup = Backup::new(&self.connection, &mut memory).map_err(|_| ())?;
-            if !matches!(backup.step(-1).map_err(|_| ())?, StepResult::Done) {
-                return Err(());
-            }
-        }
-        // Online backup copies free pages. Vacuum rebuilds the image from
-        // the live rows, and secure_delete overwrites pages that vacuum frees.
-        memory
-            .execute_batch("PRAGMA secure_delete = ON; VACUUM;")
-            .map_err(|_| ())?;
-        Ok(SnapshotCopy::Ready(serialized_image(memory)?))
+        Ok(SnapshotCopy::Ready(vacuumed_image(&self.connection)?))
     }
+
+    /// The vacuumed image, without naming session conversations.
+    ///
+    /// A file above [`SESSION_EXPORT_LIMIT`] is [`DatabaseImage::Bounded`].
+    /// This does not read event-stream tables, so a channel database can use it.
+    pub(crate) fn database_image(&self) -> Result<DatabaseImage, ()> {
+        if snapshot_bytes(&self.connection)? > SESSION_EXPORT_LIMIT {
+            return Ok(DatabaseImage::Bounded);
+        }
+        Ok(DatabaseImage::Ready(vacuumed_image(&self.connection)?))
+    }
+}
+
+/// Online backup copies free pages. Vacuum rebuilds the image from the live
+/// rows, and `secure_delete` overwrites pages that vacuum frees.
+fn vacuumed_image(source: &Connection) -> Result<Vec<u8>, ()> {
+    let mut memory = Connection::open_in_memory().map_err(|_| ())?;
+    {
+        let backup = Backup::new(source, &mut memory).map_err(|_| ())?;
+        if !matches!(backup.step(-1).map_err(|_| ())?, StepResult::Done) {
+            return Err(());
+        }
+    }
+    memory
+        .execute_batch("PRAGMA secure_delete = ON; VACUUM;")
+        .map_err(|_| ())?;
+    serialized_image(memory)
 }
 
 /// Active conversations in an event-stream session file.

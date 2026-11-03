@@ -49,7 +49,7 @@ use super::{
     peer_update::PeerUpdates,
 };
 use crate::conversation::application::{
-    Environment, EnvironmentFuture, OrganizationBudgets, PairedEnvironments, WorkerLoad,
+    Environment, EnvironmentFuture, MachineUse, OrganizationBudgets, PairedEnvironments, WorkerLoad,
 };
 use nessa_auth::application::{pairing::DeviceConnectionProof, ports::AccessError};
 use nessa_protocol::lease::MachineReport;
@@ -259,6 +259,19 @@ impl PairedEnvironments for PeerEnvironments {
             .collect()
     }
 
+    fn machine_use(&self, peer: &PeerEnvironment) -> Option<MachineUse> {
+        let machine = self
+            .peers
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(peer)
+            .and_then(|environment| environment.machine())?;
+        Some(MachineUse {
+            cpu_permille: machine.cpu_permille.min(1000),
+            memory_permille: permille(machine.memory_used_bytes, machine.memory_total_bytes),
+        })
+    }
+
     fn connected(&self) -> Vec<PeerEnvironment> {
         self.peers
             .lock()
@@ -268,4 +281,13 @@ impl PairedEnvironments for PeerEnvironments {
             .map(|(peer, _)| *peer)
             .collect()
     }
+}
+
+/// `used` of `total`, in tenths of a percent, 0 to 1000; 0 of nothing.
+fn permille(used: u64, total: u64) -> u32 {
+    if total == 0 {
+        return 0;
+    }
+    let share = u128::from(used.min(total)) * 1000 / u128::from(total);
+    u32::try_from(share).unwrap_or(1000)
 }

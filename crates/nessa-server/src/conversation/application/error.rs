@@ -134,6 +134,10 @@ pub enum ConversationError {
     ApprovalModeNotApplied,
     ApprovalModeUncertain,
     Capacity,
+    /// The agent asking for a new thread already has as many of its threads
+    /// at work as the configuration lets one agent have
+    /// (`subagents.maxLiveThreads`). Its next report frees a place.
+    ThreadLimit,
     Unavailable,
     Metadata,
     /// Catalogue request names another database incarnation.

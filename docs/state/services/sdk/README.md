@@ -64,7 +64,7 @@ Ownership snapshots use [bounded physical SQLite work](../storage/README.md#phys
 owned by each store instance. Snapshot revision authority remains with the
 coordinator; this adapter lifetime is separate from submission scheduling.
 
-Turn Stop is a separate [captured-turn command](runtime/stop-cancels-owned-work-and-confirms-process-cleanup.md#turn-cancellation-and-ownership). The ownership graph below describes SDK lifetime closure; it does not establish a product parent-Stop cascade.
+Turn Stop is a separate [captured-turn command](runtime/stop-cancels-owned-work-and-confirms-process-cleanup.md#turn-cancellation-and-ownership). The ownership graph below describes SDK lifetime closure. The separate [product parent Stop](../desktop/chat/stop-active-and-queued-work.md#owned-descendants) now captures unfinished owned descendant turns by default without closing their lifetimes.
 
 ## Parent and child close settlement
 
@@ -142,3 +142,19 @@ Decoded refused SQLite history stays inspectable through a sealed coordinator;
 resume preserves its original rows and performs no audit or recovery writes.
 Malformed wire shapes remain decoder errors. These boundaries share the
 [canonical restore ordering](../../../adr/todo/329-subagents.md#owned-settlement-and-supervision-625-646-649).
+
+## Model coverage
+
+Component index. This page groups independent owners; its component arrows are not a lifecycle or a model proof. Open the feature pages for exact checked scope and exclusions.
+
+- [Parent and child agent ownership](ownership.md)
+
+- [Child preparation](child-preparation.md)
+- [History preparation and restoration](history-restoration.md)
+- [Permission rules and review notices](permission-rules.md)
+
+- [History erasure and incarnation recovery](history-erasure.md)
+
+- [Native context admission and opening](context-admission.md)
+- [Retained context validation](context-validation.md)
+- [Captured Stop recovery](stop-recovery.md)

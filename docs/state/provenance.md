@@ -74,6 +74,170 @@ The supplied Library image resolved, but the supported materialization helper
 reported a download failure. No readable image was available in this executor,
 so it did not supply evidence or scope for the diagrams.
 
+## State verification refresh (2026-11-02)
+
+The implementation review used main at
+`77a6b620af4d94b234294f6d273fd74b3dfb44c7`, confirmed against remote main
+before publication. The verification tooling review additionally used
+`722095a8cd973890701e0fd83890d6af548000f8`, which adds the repository commands
+and models. That is the checkpoint of the new verification guide; it is not a
+claim that these commands existed in the earlier main snapshot.
+
+The refresh reviewed the resource-ticket store, route/audit boundary and linked
+regressions, and the SDK stop finalization, evidence join, reopening guard and
+cleanup-audit regressions. Their two owning pages now carry the implementation
+checkpoint and linked finite TLC models. The source controls remain the runtime
+authority. The models abstract a single ticket and one cleanup/reopening cycle;
+their owning pages name what they omit.
+
+Product parent Stop has landed since the October audit. The gateway's
+`parent_stop.rs` and confirmed-recovery regression were inspected to reconcile
+the stale unmerged warning in the SDK close flow and the SDK index. The existing
+[product Stop page](services/desktop/chat/stop-active-and-queued-work.md#owned-descendants)
+remains the owner of its selection and recovery details. The SDK runtime page
+received that scoped correction; its remaining process-cleanup evidence and
+older checkpoint were not recertified.
+
+Executed locally with Node 24.22.1 on macOS and the Nessa Docs checkout identified
+below:
+
+| Check | Observed result |
+| --- | --- |
+| Entire state catalog, through the canonical renderer loader | 142 accepted pages, zero issues |
+| TLC 1.7.4, resource ticket | 8 distinct states, five invariants held, zero broken or unchecked |
+| TLC 1.7.4, cleanup reopening | 18 distinct states, five invariants held, zero broken or unchecked |
+| Repository command tests, with real TLC controls enabled | Three tests passed; no skips |
+| Negative controls | Reusable consumed ticket breaks `AtMostOnce`; reopening after failed audit breaks `ReopenRequiresAudit`; both commands exit 1 |
+| Unavailable and failed controls | Empty checker cache exits 2 without installing; invalid model exits 2 and preserves the prior saved result; missing linked files fail catalog validation |
+| Browser inspection | Chrome 156.0.8078.74 opened both model charts and the verification guide; both rule badges and diagrams rendered, no page errors |
+
+The saved `modelCheck` records were produced by the canonical service and writer,
+not authored as passing claims. Subsequent read-only runs reproduced both
+passes. These results check the design models, not the implementation. The
+renderer used main after its TLC addition,
+`29cff2787b05038e4b7893f026cc7fb1731e3664`; the command imports its built
+server modules rather than maintaining a second parser or TLC runner.
+
+The new [verification guide](services/tooling/verification.md) inventories the
+current manifest and links the owning browser checklist, provider capture and
+Boat runbooks. No product Rust suites, scripted conversation suite, stress,
+chaos, performance, native-host acceptance, real-provider checks or billable
+Boat tests were run in this documentation/tooling refresh. Those remain separate
+qualification gates. No other lifecycle page received a new behavior checkpoint;
+older pages and historical risk reports keep their prior scope.
+
+## App-wide feature modeling (2026-11-02)
+
+The expanded feature pass uses the same frozen application source,
+`77a6b620af4d94b234294f6d273fd74b3dfb44c7`. The committed model/tooling source
+is `acaeaa68317434b47b7dc8870bd0e172fa66422d`; the verification and feature-map
+guides record that source checkpoint. GPT-6.1 Sol subagents reviewed desktop and
+extensions, gateway and host, and runtime/core ownership in parallel. Integration
+review added backup, peer, tunnel, environment and source-bound thread-tool maps.
+The final source-directory comparison also added Drive and environment-tool
+admission as owners distinct from remote host leases.
+
+The [feature map](feature-verification.md) accounts for 167 pages: 96 directly
+modeled owners, 33 journeys with explicit shared-owner scope, 20 component/feature
+indexes, five value/representation contracts, eight guides and five external
+source boundaries. There are no unassigned stateful pages. These are coverage
+**dispositions**, not a claim that every feature's implementation is proved.
+Partial page reviews retain historical checkpoints and identify their newly
+reviewed source scope in the model section. No root checkpoint is inherited.
+
+New maps include voice, provider sign-in, channel creation, question flights,
+devices, focus/layout/window/persistence ownership, child preparation and closure,
+permission rules, history restoration/erasure, subscription/registration lifetimes,
+backup export/quarantine, peer and environment lifetimes, pairing, captured parent
+Stop and source-bound tools. Database migration and installed-runtime reclamation
+sentences were corrected against source. The [source-observed ordering questions](gaps.md)
+remain questions; no runtime defect or product correction is claimed.
+
+The rich-text investigation read the app's exact pinned UI source,
+`a32191c26ee27c2d8159ab6498a0f0530a93e3ea`. It corrected the earlier blanket
+render-after-fence description: a quiet preview can render behind the generating
+surface while a fence is still open. Effect-scoped cancellation, queue deadlines
+and promise-owned quarantine follow that pinned implementation. Eight actual
+queue-helper tests passed after isolated TypeScript transpilation; that does not
+qualify React mounting, SVG output, browsers or unrelated sibling packages.
+
+Executed with Node 24.22.1 on macOS 26.3 and the same pinned renderer/TLC described
+in the initial refresh:
+
+| Check | Observed result |
+| --- | --- |
+| Canonical catalog and feature coverage | 167 accepted pages, zero issues and zero unmodeled stateful pages |
+| Complete positive corpus | 96 models passed all 303 configured invariant checks; no broken or unchecked rule |
+| Exploration size | 3,543 states across independent models; largest individual model 376, below the 2,000-state bound |
+| Repeatable negative controls | All 106 finite safety weakenings broke their expected invariants; no unchecked rule |
+| Script tests with renderer/TLC integration enabled | Nine passed, zero failed or skipped |
+| Bare Node script tests without renderer setup | Seven passed, two integration tests explicitly skipped |
+| Independent model/source review | Corrected restore receipt/digest/spend correlation, timeout narrowing, source-permit retirement and peer intent ordering; final parent and new-tool owner reviews reported no actionable finding |
+| Local browser pass | Chrome 156.0.8078.74 opened all 167 pages and rendered 203 diagram figures without page or diagram errors |
+| Formatting and whitespace | Prettier and `git diff --check` passed |
+
+[Committed probe evidence](../../verification/state-models/probe-results.json)
+records all baselines, matching model digests and expected rule violations. The
+digests were recorded from the unchanged frozen files after the combined run,
+checked against canonical saved positive records and state counts. The command
+now records them directly for future runs. Saved page results were written only
+by the canonical checker. The mutants ran in temporary directories and did not
+replace source models or authored positive records.
+
+The combined corpus checks independent bounded abstractions, not one exhaustive
+whole-application state space. Real providers, native OS behavior, cryptography,
+cloud provisioning, full conversation stress/chaos and product Rust suites were
+not rerun locally for this documentation expansion. The earlier CI result belongs
+to its earlier PR head; a fresh push requires its own CI result. Model guards are
+not generated production authorization rules. The canonical source, Cedar policies
+and runtime owners remain authoritative.
+
+## Integrated main qualification (2026-11-02)
+
+While the feature pass was being completed, main advanced to
+`719dfce93892e09dcb95e86a060b6d2f42c8f3cc`. The branch merged that source
+without modifying its application implementation. The single scheduling-page
+conflict preserved the incoming narrative/checkpoint and the existing model
+sections. The changed native, SDK, timer and physical-read owners were then
+reconciled by the same GPT-6.1 Sol subagents and cross-reviewed independently.
+
+New direct owners cover native FIFO submission versus ticket execution,
+transcript reader-scroll intent, immutable context admission, raw context
+validation, captured Stop recovery and occupied-cache discovery. New narrow
+pages carry the integrated source checkpoint. Three fully reconciled existing
+SDK pages advance to it; partial corrections retain prior checkpoints. The new
+shared `nessa-timer` crate is recorded as a source contract, not a new product
+scheduler. Current model/tooling source is
+`3f0392b148ee998bf2df949bced96f5a61059769`.
+
+Final integrated checks:
+
+| Check | Observed result |
+| --- | --- |
+| Catalog and ownership map | 173 pages, zero issues and zero unmapped stateful pages; 102 direct models and 33 shared-owner journeys |
+| Complete positive corpus | All 102 models passed 332 configured invariant checks; no broken or unchecked rule |
+| Exploration | 5,202 states summed across independent models; largest individual model 874 |
+| Repeatable controls | All 118 finite weakenings caught their expected invariant; every direct model has a control, none unchecked |
+| Script tests | Nine passed, zero failed/skipped with renderer/TLC enabled; formatting and whitespace checks passed |
+| Browser | Chrome opened all 173 pages and rendered 209 figures with no page/diagram error |
+| Focused native Swift probes | Production submission lane and request wrapper compiled with Swift 6.3.3 strict concurrency/warnings-as-errors and both passed |
+| Independent integration review | Context/Stop, discovery, native handoff/drain and scroll-intent source/model checks reported no actionable finding |
+
+The native probes use the production Swift lane/wrapper and narrow test stand-ins,
+not a generated UniFFI package, phone app or live TLS session. Their analysis
+model has three attempts; the actual Swift FIFO has no admission-length bound
+or queue-wait deadline. Rust request deadlines begin at native admission and
+remain separate from that queue.
+
+One concurrent control attempt stopped with a checker error at a baseline and
+was not counted as passed. The final receipt is the complete sequential rerun,
+with unchanged model inputs. Its baselines record their digests directly.
+The committed [receipt](../../verification/state-models/probe-results.json) and
+[screenshots/setup](../../verification/state-models/README.md) supersede the
+initial 96-model receipt while retaining the earlier history above. Product Rust,
+real-provider/cloud, native end-to-end and full stress/chaos suites remain separate
+from these local documentation/model checks. Fresh-head CI must speak for itself.
+
 ## Choose a user flow
 
 | What the person does | Follow this map | Boundaries to inspect for bugs |

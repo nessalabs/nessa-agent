@@ -68,3 +68,11 @@ stateDiagram-v2
 ## Further reading
 
 [Source](../../../../../src/panel/application/messages-tab.ts) · [Related source](../../../../../src/conversation/ui/conversation-list.tsx) · [Related tests](../../../../../src/conversation/adapters/store/history.test.ts)
+
+## Model coverage
+
+Disposition: shared owner model. Gateway deletion and revisioned list/removal are shared owners. [gateway-conversation](../../gateway/conversation.md) [desktop-workspace-load-browse-and-resynchronize-the-workspace](../workspace/load-browse-and-resynchronize-the-workspace.md)
+
+Excluded: Archive undo timers, list search and pending row presentation remain outside these bounds.
+
+Source review scope: owner entry points and relevant regression declarations were inventoried against frozen source `77a6b620af4d94b234294f6d273fd74b3dfb44c7`. Existing source checkpoints are retained where this was a partial review. A model result establishes bounded design safety only. Browser appearance and interaction were not checked.

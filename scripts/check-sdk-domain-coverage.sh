@@ -57,9 +57,10 @@ skip=(--skip link_attack_tests)
 # The workspace storage dependency is infrastructure, outside the SDK domain gate;
 # keep every SDK domain file included at the same 100% thresholds.
 # `nessa-local-database` is the SQLite opener behind ownership snapshots, the
-# same kind of dependency as `nessa-local-storage`.
+# same kind of dependency as `nessa-local-storage`. `nessa-timer` is the shared
+# monotonic deadline implementation, not SDK domain code.
 CARGO_TARGET_DIR="$coverage_target" cargo llvm-cov -p nessa-sdk --locked \
-  --ignore-filename-regex '/(application|infrastructure|tests|examples)/|/nessa-local-storage/|/nessa-local-database/' \
+  --ignore-filename-regex '/(application|infrastructure|tests|examples)/|/nessa-local-storage/|/nessa-local-database/|/nessa-timer/' \
   --fail-under-lines 100 \
   --fail-under-functions 100 \
   --fail-under-regions 100 \

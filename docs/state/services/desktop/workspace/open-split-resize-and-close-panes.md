@@ -27,8 +27,23 @@ sources:
   - "verification/desktop/scripts/conversation-stress.mjs"
   - "docs/adr/done/253-split-panes-component.md"
 diagramLinks: {}
+model:
+  spec: tla/services/desktop/workspace/open-split-resize-and-close-panes.tla
+  config: tla/services/desktop/workspace/open-split-resize-and-close-panes.cfg
+modelCheck:
+  sourceRevision: "3db7cdea6b545e18545799f590c058646ab9d620"
+  checker: tlc-1.7.4
+  date: 2026-11-03T03:27:56.016Z
+  config: tla/services/desktop/workspace/open-split-resize-and-close-panes.cfg
+  modelDigest: 3c8434014c42e69528967fa5d5d0cf11488143258d1aacc8b8d0b86a283d974a
+  states: 18
+  held:
+    - UniqueItems
+    - FocusExists
+    - RefusalUnchanged
+  broke: []
+  unchecked: []
 ---
-
 # open, split, resize, and close panes
 
 Opening beside a pane first looks for space on the right, then below. When there is no room, it replaces the current content where that action allows replacement.
@@ -83,3 +98,15 @@ stateDiagram-v2
 ## Further reading
 
 [Source](../../../../../src/desktop/workspace/application/usecases/panes.ts) · [Related source](../../../../../src/desktop/workspace/adapters/store/commands.ts) · [Related tests](../../../../../src/desktop/workspace/application/usecases/panes.test.ts)
+
+## Bounded rule model
+
+The two-pane/two-session bound explores unique content, focus, admitted split, allowed replacement, close and no-room refusal. Actual geometry, four-pane limits, draft preservation, motion and keyboard routing are not proved by this abstraction. The model checks design safety, not the implementation. It asserts no liveness and abstracts transport timing into nondeterministic completion order. Regression sources are evidence of intended behavior; this documentation change does not claim their execution.
+
+## Model coverage
+
+Disposition: direct model. The bounded rule model section names the modeled owner slice and finite abstraction.
+
+Excluded: All exclusions stated in the owning Bounded rule model section remain outside verification.
+
+Source review scope: owner entry points and relevant regression declarations were inventoried against frozen source `77a6b620af4d94b234294f6d273fd74b3dfb44c7`. Existing source checkpoints are retained where this was a partial review. A model result establishes bounded design safety only. Browser appearance and interaction were not checked.
