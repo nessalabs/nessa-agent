@@ -361,6 +361,12 @@ import {
 import { phoneFilesVerifier, uploadedInputFiles } from "./lib/stress-input-files.mjs"
 import { observeGatewayRestarts } from "./lib/stress-restart.mjs"
 import {
+  contextAudit,
+  nativeContextEvents,
+  nativeContextExists,
+  newContextEvidence,
+} from "./lib/stress-native-context.mjs"
+import {
   observeReviewAnswers,
   observeAccessRefusals,
   reviewAnswerAcknowledged,
@@ -1686,7 +1692,7 @@ function providerName(provider) {
 async function makeChannel(
   run,
   failures,
-  { name, folder, refusedFolder, notes, resource, dropped },
+  { name, folder, refusedFolder, notes, resource, dropped, model },
 ) {
   const { page } = run
   const pick = (kind, value) =>
@@ -1772,7 +1778,10 @@ async function makeChannel(
   await page.keyboard.press(keys.enter)
   if (!(await asking("model"))) return null
   await photograph(`${name}-3-model`)
-  await page.keyboard.press(keys.enter)
+  if (model) {
+    await pickModel(page, flow.locator(css.modelChip), model)
+    await flow.getByRole("button", { name: "Use this model", exact: true }).click()
+  } else await page.keyboard.press(keys.enter)
   if (!(await asking("notes"))) return null
   await saidWhole(page, `${css.newChannelField}[data-step="notes"]`, "notes", failures)
   if (notes) await page.locator(`${css.newChannelField}[data-step="notes"]`).fill(notes)
@@ -2258,6 +2267,341 @@ async function inlineApp(page, selector, timeout = 20_000) {
     await sleep(100)
   }
   return null
+}
+
+/** C13: a new native context with old SDK history is closed before its first input. */
+async function unusedNativeContext(run, step, failures) {
+  const native = run.stack.nativeContext
+  if (!native) throw new Error("drift requires its focused native context fixture")
+  await run.exclusive(async () => {
+    let created = false
+    if (!native.channel) {
+      const model = catalog.models.find((each) => each.modelId === MODELS.claude)
+      if (!model) throw new CannotRun("the catalog has no focused Claude model")
+      native.channel = await makeChannel(run, failures, {
+        name: `native-context-s${run.knobs.seed}`,
+        folder: native.workspace,
+        model,
+      })
+      if (!native.channel || failures.length) return
+      if (native.channel.folder !== native.workspace)
+        throw new Error("focused native channel did not retain its canonical workspace")
+      created = true
+    } else {
+      await run.page
+        .locator(`${css.sidebar} nav`)
+        .getByText(native.channel.name, { exact: true })
+        .first()
+        .click({ timeout: 10_000 })
+      await openStressConversation(
+        run.page,
+        native.channel.coordinatorConversationId,
+        await titleOf(run, native.channel.coordinatorConversationId),
+      )
+    }
+    const id = native.channel.coordinatorConversationId
+    const oldText = prompt(run, STRESS.reply, step, ` native old ${run.engine}`)
+    const home = run.page.locator(`${css.focusedPane} ${css.paneHome}`)
+    // Creating the channel reserves its coordinator ID. The first UI send
+    // materializes that conversation, so there is no snapshot to read yet.
+    const previous = created
+      ? new Set()
+      : new Set(
+          (await run.client.conversation.read(id)).messages.map(
+            (each) => each.executionId,
+          ),
+        )
+    if (created) {
+      await home.locator(css.field).waitFor({ timeout: 15_000 })
+      await home.locator(css.field).fill(oldText)
+      await home.getByRole(...composerControls.send).click({ timeout: 10_000 })
+      const selected = await waitFor(
+        () => selectedStressConversation(run.page, oldText),
+        30_000,
+      )
+      if (selected !== id)
+        throw new Error("native context step did not send to its channel coordinator")
+      run.sent.set(id, (run.sent.get(id) ?? 0) + 1)
+    } else await send(run, id, oldText, failures, previous)
+    if (!run.checked.includes(id)) run.checked.push(id)
+    const { view: before } = await settled(
+      run,
+      id,
+      previous,
+      oldText,
+      "completed",
+      failures,
+    )
+    if (failures.length || !before) return
+    if (before.model !== MODELS.claude)
+      throw new Error("native context step did not select Claude")
+    const { conversations } = await run.client.conversation.list({})
+    if (
+      conversations.filter((each) => each.channelId === native.channel.channelId)
+        .length !== 1
+    )
+      throw new Error(
+        "focused native workspace has more than its coordinator conversation",
+      )
+    const title = await titleOf(run, id)
+    const reopen = async () => {
+      await run.page
+        .locator(`${css.sidebar} nav`)
+        .getByText(native.channel.name, { exact: true })
+        .first()
+        .click({ timeout: 10_000 })
+      await openStressConversation(run.page, id, title)
+    }
+    const auditDirectory = join(
+      run.stack.gateway.directory,
+      "ci",
+      "instances",
+      INSTANCE,
+      "conversations",
+      "audit",
+    )
+    const auditBefore = contextAudit(auditDirectory, id)
+    const eventsBefore = nativeContextEvents(native.directory)
+    const oldNative = eventsBefore
+      .filter((each) => each.method === "session/prompt" && each.outcome === "accepted")
+      .at(-1)?.sessionId
+    if (!oldNative || !nativeContextExists(native.directory, oldNative))
+      throw new Error("focused old input did not establish actual used native history")
+    const changed = mkdtempSync(join(run.stack.scratch, "claude-context-changed-"))
+    const oldIds = before.messages.map((each) => each.executionId)
+    const sameIds = (view) =>
+      JSON.stringify(view.messages.map((each) => each.executionId)) ===
+      JSON.stringify(oldIds)
+    let changedEnvironment = false
+    const restart = async (overlay) => {
+      await run.restartConsole.during(run.opened, async () => {
+        const client = run.client
+        run.restarts += 1
+        await run.stack.gateway.restart("SIGTERM", overlay ? { overlay } : undefined)
+        client.close()
+        run.client = await connectClient(run.stack.gateway, INSTANCE, "panel")
+        if (!(await run.restartConsole.readable(60_000)))
+          throw new Error(
+            "native context: browser workspace did not acknowledge restart recovery",
+          )
+        return true
+      })
+    }
+    const published = async (audit, offset) =>
+      waitFor(async () => {
+        const events = nativeContextEvents(native.directory).slice(offset)
+        const missing = events.find(
+          (each) => each.method === "session/resume" && each.outcome === "missing",
+        )
+        if (missing) return { missing }
+        const current = contextAudit(auditDirectory, id)
+        if (newContextEvidence(audit.published, current.published).length !== 1)
+          return null
+        const openings = events.filter(
+          (each) => each.method === "session/new" && each.outcome === "opened",
+        )
+        if (openings.length !== 1) return null
+        const view = await run.client.conversation.read(id).catch(() => null)
+        return view ? { view, audit: current, sessionId: openings[0].sessionId } : null
+      }, 60_000)
+    try {
+      changedEnvironment = true
+      await restart({ CLAUDE_CONFIG_DIR: changed })
+      await reopen()
+      await run.client.conversation.read(id).catch(() => null)
+      const fresh = await published(auditBefore, eventsBefore.length)
+      if (!fresh || fresh.missing) {
+        failures.push(
+          "native context: fingerprint change did not publish one fresh native context",
+        )
+        return
+      }
+      if (
+        !sameIds(fresh.view) ||
+        newContextEvidence(auditBefore.admitted, fresh.audit.admitted).length
+      )
+        throw new Error("fresh context acquired an input before the cold-reopen boundary")
+      if (
+        fresh.sessionId === oldNative ||
+        nativeContextExists(native.directory, fresh.sessionId)
+      )
+        throw new Error(
+          "fresh unused native context already has history or reused the old identity",
+        )
+      if (
+        nativeContextEvents(native.directory)
+          .slice(eventsBefore.length)
+          .some((each) => each.method === "session/prompt")
+      )
+        throw new Error("a prompt reached the fresh context before its cold restart")
+      const coldOffset = nativeContextEvents(native.directory).length
+      // The same changed directory is retained: this is a cold reopen of the
+      // published context, not another fingerprint change.
+      await restart()
+      const recordColdRefusal = () => {
+        if (!run.evidence) return
+        writeFileSync(
+          join(run.evidence, `native-context-${run.engine}-${step.index}-refusal.json`),
+          JSON.stringify(
+            {
+              conversationId: id,
+              oldExecutionIds: oldIds,
+              firstUnusedNative: fresh.sessionId,
+              firstPhase: nativeContextEvents(native.directory).slice(
+                eventsBefore.length,
+                coldOffset,
+              ),
+              coldPhase: nativeContextEvents(native.directory).slice(coldOffset),
+              coldAdmissions: newContextEvidence(
+                fresh.audit.admitted,
+                contextAudit(auditDirectory, id).admitted,
+              ),
+            },
+            null,
+            2,
+          ),
+        )
+      }
+      // The UI remains the restoration trigger. If native restoration removes
+      // its composer, report the exact focused protocol failure instead of
+      // attributing the existing opening deadline to an unrelated selector.
+      try {
+        await reopen()
+      } catch (error) {
+        const missing = nativeContextEvents(native.directory)
+          .slice(coldOffset)
+          .some(
+            (each) =>
+              each.method === "session/resume" &&
+              each.outcome === "missing" &&
+              each.sessionId === fresh.sessionId,
+          )
+        if (!missing) throw error
+        recordColdRefusal()
+        failures.push(
+          "native context: cold reopen tried to resume the missing unused native ID",
+        )
+        return
+      }
+      await run.client.conversation.read(id).catch(() => null)
+      const replacement = await published(fresh.audit, coldOffset)
+      if (!replacement || replacement.missing) {
+        recordColdRefusal()
+        failures.push(
+          replacement?.missing
+            ? "native context: cold reopen tried to resume the missing unused native ID"
+            : "native context: cold reopen did not publish a replacement native context",
+        )
+        return
+      }
+      if (
+        replacement.sessionId === fresh.sessionId ||
+        !sameIds(replacement.view) ||
+        newContextEvidence(fresh.audit.admitted, replacement.audit.admitted).length
+      )
+        throw new Error(
+          "cold replacement changed retained executions or admitted work before Send",
+        )
+      const coldEvents = nativeContextEvents(native.directory).slice(coldOffset)
+      if (
+        coldEvents.some(
+          (each) => each.method === "session/resume" || each.method === "session/prompt",
+        )
+      )
+        throw new Error("cold unused context was resumed or prompted before Send")
+      const newText = prompt(run, STRESS.reply, step, ` native new ${run.engine}`)
+      const known = await send(run, id, newText, failures, new Set(oldIds))
+      const { view: after } = await settled(
+        run,
+        id,
+        known,
+        newText,
+        "completed",
+        failures,
+      )
+      if (failures.length || !after) return
+      const added = after.messages.filter((each) => !oldIds.includes(each.executionId))
+      if (
+        after.messages.length !== before.messages.length + 1 ||
+        added.length !== 1 ||
+        added[0].userText !== newText ||
+        added[0].status !== "completed" ||
+        JSON.stringify(
+          after.messages.slice(0, oldIds.length).map((each) => each.executionId),
+        ) !== JSON.stringify(oldIds)
+      )
+        failures.push(
+          "native context: cold reopen did not retain old executions and complete exactly one new input",
+        )
+      const pane = run.page.locator(css.focusedPane)
+      const count = async (role, text) =>
+        pane
+          .locator(css.message)
+          .filter({ hasText: text })
+          .evaluateAll(
+            (rows, role) =>
+              rows.filter((row) => row.getAttribute("data-role") === role).length,
+            role,
+          )
+      const shown = await waitFor(
+        async () =>
+          (await count("user", oldText)) === 1 &&
+          (await count("agent", `${SAYS.echo}${oldText}`)) === 1 &&
+          (await count("user", newText)) === 1 &&
+          (await count("agent", `${SAYS.echo}${newText}`)) === 1,
+        15_000,
+      )
+      if (!shown)
+        failures.push(
+          "native context: focused pane does not show the retained old exchange and exactly one new reply",
+        )
+      const finalEvents = nativeContextEvents(native.directory).slice(coldOffset)
+      const prompts = finalEvents.filter((each) => each.method === "session/prompt")
+      if (
+        prompts.length !== 1 ||
+        prompts[0].sessionId !== replacement.sessionId ||
+        !nativeContextExists(native.directory, replacement.sessionId)
+      )
+        failures.push(
+          "native context: replacement did not receive exactly the new prompt with persisted native history",
+        )
+      if (run.evidence) {
+        writeFileSync(
+          join(run.evidence, `native-context-${run.engine}-${step.index}.json`),
+          JSON.stringify(
+            {
+              conversationId: id,
+              oldExecutionIds: oldIds,
+              newExecutionId: added[0]?.executionId,
+              oldNative,
+              firstUnusedNative: fresh.sessionId,
+              replacementNative: replacement.sessionId,
+              firstPhase: nativeContextEvents(native.directory).slice(
+                eventsBefore.length,
+                coldOffset,
+              ),
+              coldPhase: finalEvents,
+              focusedPane: shown,
+            },
+            null,
+            2,
+          ),
+        )
+        await pane.screenshot({
+          path: join(run.evidence, `native-context-${run.engine}-${step.index}.png`),
+          scale: "css",
+        })
+      }
+    } finally {
+      if (changedEnvironment) await restart({ CLAUDE_CONFIG_DIR: native.baseline })
+      await run.page
+        .locator(`${css.sidebar} nav`)
+        .getByText("Conversations", { exact: true })
+        .first()
+        .click({ timeout: 10_000 })
+      await openStressConversation(run.page, run.main.id, run.main.title)
+    }
+  })
 }
 
 const steps = {
@@ -3088,6 +3432,7 @@ const steps = {
     })
     // The existing conversation still takes a message, in the window.
     if (failures.length === 0) await steps.reply(run, step, failures)
+    if (failures.length === 0) await unusedNativeContext(run, step, failures)
   },
 
   async linking(run, step, failures) {
@@ -4154,6 +4499,7 @@ const steps = {
       owner = await connectClient(run.stack.gateway, INSTANCE, "owner")
       const launch = scriptedLaunch(run.stack.agent, {
         scenario: run.stack.scenario,
+        nativeContext: run.stack.nativeContext,
         model: run.stack.profile.model,
       })
       for (const label of ["a", "b"])
@@ -4356,7 +4702,10 @@ const steps = {
         owner,
         address: run.nativeAddress,
         agent: run.stack.agent,
-        launch: scriptedLaunch(run.stack.agent, { scenario: run.stack.scenario }),
+        launch: scriptedLaunch(run.stack.agent, {
+          scenario: run.stack.scenario,
+          nativeContext: run.stack.nativeContext,
+        }),
         label: `devices${step.index}`,
         connected: async (name) =>
           (await offers(run, (environments) => environments.includes(name))).includes(
@@ -4742,7 +5091,10 @@ const steps = {
           owner,
           address: run.nativeAddress,
           agent: run.stack.agent,
-          launch: scriptedLaunch(run.stack.agent, { scenario: run.stack.scenario }),
+          launch: scriptedLaunch(run.stack.agent, {
+            scenario: run.stack.scenario,
+            nativeContext: run.stack.nativeContext,
+          }),
           label: `t${step.index}`,
           tunnel: { address: UNREACHABLE, origin: address },
           connected: async (name) =>
@@ -8697,6 +9049,19 @@ async function startStack(options) {
   const nativeAddress = `127.0.0.1:${nativePort}`
   const nativeListen = `0.0.0.0:${nativePort}`
   const directory = mkdtempSync(join(tmpdir(), "nessa-stress-"))
+  const nativeContext =
+    knobs.drifts > 0
+      ? (() => {
+          const paths = Object.fromEntries(
+            ["directory", "workspace", "baseline"].map((key) => {
+              const path = join(directory, `native-context-${key}`)
+              mkdirSync(path)
+              return [key, realpathSync(path)]
+            }),
+          )
+          return { ...paths, channel: null }
+        })()
+      : undefined
   // Stop's dispatch assertion also runs without an exported evidence folder.
   const recordingDirectory = options.evidence ?? join(directory, "recording")
   const scenario = join(directory, "stress.json")
@@ -8739,6 +9104,7 @@ async function startStack(options) {
   // The `voice` step's realtime provider, on this machine.
   const realtime = knobs.voices > 0 ? await startFakeRealtime() : null
   const environment = {
+    ...(nativeContext ? { CLAUDE_CONFIG_DIR: nativeContext.baseline } : {}),
     ...(realtime
       ? {
           NESSA_VOICE_REALTIME: realtime.provider(join(directory, "voice-realtime.json")),
@@ -8771,11 +9137,17 @@ async function startStack(options) {
           : undefined,
       as: "panel",
       scenario,
+      nativeContext,
       model: profile.model,
       evidence: recordingDirectory,
       limits: { agentIdleSeconds: knobs.parks > 0 ? PARK_IDLE_SECONDS : 0 },
       // The agent a `handoff` step switches its conversation to.
-      others: knobs.handoffs > 0 ? [otherAgent(options.agent)] : [],
+      others: [
+        ...new Set([
+          ...(knobs.handoffs > 0 ? [otherAgent(options.agent)] : []),
+          ...(nativeContext && options.agent !== "claude" ? ["claude"] : []),
+        ]),
+      ],
       // Off, at a port of its own: the `linking` step turns it on from
       // Settings. Its tunnel too, at a loopback port of its own.
       native: {
@@ -8813,6 +9185,7 @@ async function startStack(options) {
     github,
     realtime,
     scenario,
+    nativeContext,
     // Removed when the stack closes.
     scratch: directory,
     endpoint: stack.gateway.url.replace(/^http/, "ws"),
@@ -8830,6 +9203,9 @@ await main(
     const origin = new URL(stack.url).origin
     await withEngines(options, rep, async (engine, browser) => {
       const layout = options.layouts[0]
+      // Each engine opens a fresh simulated app. Re-establish its owned
+      // disposable vault session after the prior engine's gateway restarts.
+      await stack.vault.unlock()
       let restartConsole
       let reviewAnswers
       let accessRefusals

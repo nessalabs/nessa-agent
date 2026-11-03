@@ -244,7 +244,7 @@ async fn source_visible_commit_before_lost_ack_retries_same_generation_once() {
     let opened = SessionChange::Opened {
         id: id.clone(),
         provider: ProviderIdentity::new("fixture", "model", "workspace").unwrap(),
-        context: ProviderContext::Recorded(ExecutionSessionId::new("remote").unwrap()),
+        context: ProviderContext::recorded_after(ExecutionSessionId::new("remote").unwrap(), 0),
     };
     let initial = super::super::records::fold_changes(None, std::slice::from_ref(&opened)).unwrap();
     inner
@@ -367,7 +367,7 @@ async fn measure_growing_history_message_commit_latency() {
     let opened = SessionChange::Opened {
         id: id.clone(),
         provider: ProviderIdentity::new("fixture", "model", "workspace").unwrap(),
-        context: ProviderContext::Recorded(ExecutionSessionId::new("remote").unwrap()),
+        context: ProviderContext::recorded_after(ExecutionSessionId::new("remote").unwrap(), 0),
     };
     let initial = super::super::records::fold_changes(None, std::slice::from_ref(&opened)).unwrap();
     inner
@@ -495,8 +495,9 @@ async fn measure_save_cost_as_history_grows() {
             notes: Vec::new(),
             id: id.clone(),
             provider: ProviderIdentity::new("fixture", "model", "workspace").unwrap(),
-            provider_context: ProviderContext::Recorded(
+            provider_context: ProviderContext::recorded_after(
                 ExecutionSessionId::new("provider-session").unwrap(),
+                0,
             ),
             invocations,
         };
@@ -597,7 +598,7 @@ async fn dense_control_output_flushes_before_the_record_body_limit_and_reopens()
     let opened = SessionChange::Opened {
         id: id.clone(),
         provider: ProviderIdentity::new("fixture", "model", "workspace").unwrap(),
-        context: ProviderContext::Recorded(ExecutionSessionId::new("remote").unwrap()),
+        context: ProviderContext::recorded_after(ExecutionSessionId::new("remote").unwrap(), 0),
     };
     let initial = super::super::records::fold_changes(None, std::slice::from_ref(&opened)).unwrap();
     inner
@@ -840,8 +841,9 @@ async fn manager(previous_turns: usize) -> (SessionManager, Arc<FaultLease>, Exe
         notes: Vec::new(),
         id: id.clone(),
         provider: ProviderIdentity::new("fixture", "model", "workspace").unwrap(),
-        provider_context: ProviderContext::Recorded(
+        provider_context: ProviderContext::recorded_after(
             ExecutionSessionId::new("provider-session").unwrap(),
+            0,
         ),
         invocations,
     };
@@ -1583,8 +1585,9 @@ fn a_restored_tool_call_that_changes_its_mcp_identity_is_corrupt() {
             current_configuration: None,
             id: SessionId::new("session").unwrap(),
             provider: ProviderIdentity::new("provider", "model", "").unwrap(),
-            provider_context: ProviderContext::Recorded(
+            provider_context: ProviderContext::recorded_after(
                 ExecutionSessionId::new("provider").unwrap(),
+                0,
             ),
             invocations: vec![record],
             queue_history: Vec::new(),
@@ -2787,13 +2790,21 @@ async fn decline_receipt_flush_does_not_take_unrelated_pending_write_ownership()
         .unwrap()
         .provider_context
         .clone();
+    // Clearing this context is refused: its watermark is below the live
+    // invocation, so the context has admitted work. The unrelated pending
+    // write is a different native id at the same boundary, which publication
+    // allows and decline flushing must not save.
+    let after = ProviderContext::recorded_after(
+        ExecutionSessionId::new("unrelated-pending-context").unwrap(),
+        before.admission_watermark().unwrap(),
+    );
     manager
         .evidence
         .lock()
         .await
         .record(vec![SessionChange::ProviderContext {
             before: before.clone(),
-            after: ProviderContext::Absent,
+            after,
         }])
         .unwrap();
     lease.fail_save.store(true, Ordering::SeqCst);

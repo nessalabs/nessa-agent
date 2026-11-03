@@ -6,9 +6,12 @@ provider: ProviderIdentity {
     context: "test",
 }
 provider_context: Recorded(
-    ExecutionSessionId(
-        "<uuid-0>",
-    ),
+    ProviderContextRecord {
+        id: ExecutionSessionId(
+            "<uuid-0>",
+        ),
+        admitted_before: 0,
+    },
 )
 invocations: [
     InvocationRecord {

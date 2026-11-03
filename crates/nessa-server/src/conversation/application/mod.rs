@@ -180,6 +180,7 @@ mod agent_switches;
 mod model_changes;
 mod owner_phone_policy;
 pub(crate) use metadata_target::ConversationMetadataReader;
+pub(crate) use ports::{ConversationAdmissionSnapshot, ConversationAdmissionToken};
 mod passive_read;
 mod permission_rules;
 pub use passive_read::AdmittedCatalogueRead;

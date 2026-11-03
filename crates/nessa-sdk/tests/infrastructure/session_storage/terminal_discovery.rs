@@ -282,6 +282,7 @@ async fn discovery_finishes_captured_tail_under_new_writes_then_discovers_later_
     loop {
         match head(&storage, &id).await {
             RecordReadStatus::Preparing => {}
+            RecordReadStatus::Occupied => panic!("nothing else holds the discovery cache"),
             RecordReadStatus::Ready(value) => {
                 assert_eq!(value, first);
                 break;
@@ -317,6 +318,7 @@ async fn partial_tail_preserves_hash_until_seal_and_unknown_target_stays_invalid
     loop {
         match head(&storage, &id).await {
             RecordReadStatus::Preparing => {}
+            RecordReadStatus::Occupied => panic!("nothing else holds the discovery cache"),
             RecordReadStatus::Ready(value) => {
                 assert_eq!(value, 0);
                 break;
@@ -351,6 +353,7 @@ async fn partial_tail_preserves_hash_until_seal_and_unknown_target_stays_invalid
     loop {
         match head(&storage, &id).await {
             RecordReadStatus::Preparing => {}
+            RecordReadStatus::Occupied => panic!("nothing else holds the discovery cache"),
             RecordReadStatus::Ready(value) => {
                 assert_eq!(value, 0, "a Unit seal is not a save completion");
                 break;
@@ -498,7 +501,7 @@ async fn occupied_stream_and_full_active_cache_refuse_without_replacement_work()
         .unwrap();
     append_save(&storage, &stream, 0, 8).await;
     let owner = storage.terminal_cache.acquire(&stream).unwrap();
-    assert_eq!(head(&storage, &id).await, RecordReadStatus::Preparing);
+    assert_eq!(head(&storage, &id).await, RecordReadStatus::Occupied);
     let mut occupied = vec![owner];
     for index in 1..CACHE_ENTRIES {
         occupied.push(
@@ -517,7 +520,7 @@ async fn occupied_stream_and_full_active_cache_refuse_without_replacement_work()
         .await
         .unwrap();
     append_save(&storage, &second, 0, 8).await;
-    assert_eq!(head(&storage, &another).await, RecordReadStatus::Preparing);
+    assert_eq!(head(&storage, &another).await, RecordReadStatus::Occupied);
     assert_eq!(
         storage
             .terminal_cache
@@ -529,6 +532,107 @@ async fn occupied_stream_and_full_active_cache_refuse_without_replacement_work()
     drop(occupied);
     assert_eq!(head(&storage, &another).await, RecordReadStatus::Ready(2));
     storage.shutdown().await.unwrap();
+}
+
+/// Stream A's unbounded head returns when A's entry is back. Stream B staying
+/// checked out must not keep that wait, or the head would wait forever.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_head_for_one_stream_proceeds_while_another_stays_checked_out() {
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    let directory = tempfile::tempdir().unwrap();
+    let storage = RecordStorage::new(directory.path().join("records")).unwrap();
+    let runtime = storage.runtime().await.unwrap();
+    let stream_a = runtime
+        .create_stream(&StreamId::new("stream-a").unwrap())
+        .await
+        .unwrap();
+    let stream_b = runtime
+        .create_stream(&StreamId::new("stream-b").unwrap())
+        .await
+        .unwrap();
+    append_save(&storage, &stream_a, 0, 8).await;
+    append_save(&storage, &stream_b, 0, 8).await;
+    let hold_a = storage.terminal_cache.acquire(&stream_a).unwrap();
+    let hold_b = storage.terminal_cache.acquire(&stream_b).unwrap();
+    let storage = Arc::new(storage);
+    let reading = {
+        let storage = Arc::clone(&storage);
+        tokio::spawn(
+            async move { captured_head(&storage, &SessionId::new("stream-a").unwrap()).await },
+        )
+    };
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(
+        !reading.is_finished(),
+        "the head finished while its own entry was still checked out"
+    );
+    drop(hold_a);
+    let found = tokio::time::timeout(Duration::from_secs(5), reading)
+        .await
+        .expect("the head returned while the other stream stayed checked out")
+        .expect("the head task joined");
+    assert!(found > 0);
+    assert_eq!(
+        head(&storage, &SessionId::new("stream-b").unwrap()).await,
+        RecordReadStatus::Occupied
+    );
+    drop(hold_b);
+    storage.shutdown().await.unwrap();
+}
+
+/// The unbounded wait must not sit on the runtime's blocking pool. Owner
+/// commands such as `pairing.cancel` run there, and a pool of one thread
+/// never reaches them if this wait has taken it.
+#[test]
+fn an_unbounded_discovery_wait_leaves_the_blocking_pool_free() {
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .max_blocking_threads(1)
+        .enable_all()
+        .build()
+        .unwrap();
+    runtime.block_on(async {
+        let directory = tempfile::tempdir().unwrap();
+        let storage = RecordStorage::new(directory.path().join("records")).unwrap();
+        let records = storage.runtime().await.unwrap();
+        let stream = records
+            .create_stream(&StreamId::new("stream-a").unwrap())
+            .await
+            .unwrap();
+        append_save(&storage, &stream, 0, 8).await;
+        let hold = storage.terminal_cache.acquire(&stream).unwrap();
+        let storage = Arc::new(storage);
+        let handle = tokio::runtime::Handle::current();
+        let reading = {
+            let storage = Arc::clone(&storage);
+            thread::spawn(move || {
+                let mut source = handle
+                    .block_on(
+                        storage.record_source(&SessionId::new("stream-a").unwrap(), sid("origin")),
+                    )
+                    .unwrap()
+                    .unwrap();
+                let scope = source.scope(sid("receiver"), sid("epoch"));
+                source.head(&scope)
+            })
+        };
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let ran = tokio::time::timeout(Duration::from_secs(2), tokio::task::spawn_blocking(|| 1u8))
+            .await
+            .expect("the blocking pool ran while discovery waited");
+        assert_eq!(ran.expect("the blocking job joined"), 1);
+        drop(hold);
+        reading
+            .join()
+            .expect("the head thread joined")
+            .expect("the head returned after its entry was released");
+        storage.shutdown().await.unwrap();
+    });
 }
 
 #[tokio::test]

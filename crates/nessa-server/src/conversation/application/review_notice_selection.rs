@@ -4,8 +4,9 @@
 //! whole-candidate source/revision coherence and admission to its UI lifetime.
 use super::{
     AccessAction, AccessAsk, AccessDecision, AccessResource, AccessSubject,
-    ConversationAccessPolicyEvaluator, ConversationMetadataReader, RequestShape,
-    ReviewNoticeAuditCause, ReviewNoticeAuditFailure, ReviewNoticeAuditRecord, ReviewNoticeAuditor,
+    ConversationAccessPolicyEvaluator, ConversationAdmissionToken, ConversationMetadataReader,
+    RequestShape, ReviewNoticeAuditCause, ReviewNoticeAuditFailure, ReviewNoticeAuditRecord,
+    ReviewNoticeAuditor,
 };
 use nessa_auth::application::{
     ports::{AccessReader, Clock},
@@ -21,6 +22,7 @@ use std::sync::Arc;
 #[must_use]
 pub(crate) struct AuditedReviewSelection {
     record: Arc<ReviewNoticeAuditRecord>,
+    metadata: ConversationAdmissionToken,
 }
 
 impl AuditedReviewSelection {
@@ -29,6 +31,9 @@ impl AuditedReviewSelection {
     }
     pub(crate) fn authority_revision(&self) -> u64 {
         self.record.authority_revision()
+    }
+    pub(crate) fn metadata_token(&self) -> &ConversationAdmissionToken {
+        &self.metadata
     }
 }
 
@@ -72,14 +77,16 @@ impl<'a> SelectReviewNotice<'a> {
         cause: ReviewNoticeAuditCause,
     ) -> Result<Option<AuditedReviewSelection>, ReviewNoticeAuditFailure> {
         let admitted = self.auditor.admit().await?;
-        let Some(conversation) = self
+        let Some(snapshot) = self
             .metadata
-            .load(conversation_id)
+            .load_admission(conversation_id)
             .await
             .map_err(|_| ReviewNoticeAuditFailure::Unavailable)?
         else {
             return Ok(None);
         };
+        let conversation = snapshot.conversation();
+        let metadata = snapshot.token().clone();
         let current = (ReadCurrentSession {
             access: self.access,
             clock: self.clock,
@@ -95,13 +102,13 @@ impl<'a> SelectReviewNotice<'a> {
                 membership: current.membership.role(),
             },
             action: AccessAction::ReviewNotice,
-            resource: AccessResource::of(&conversation),
+            resource: AccessResource::of(conversation),
             held: None,
             request: RequestShape::default(),
             target: None,
         });
         let record = Arc::new(ReviewNoticeAuditRecord::new(
-            &conversation,
+            conversation,
             execution_id,
             permission_id,
             recipient,
@@ -113,6 +120,6 @@ impl<'a> SelectReviewNotice<'a> {
         // record to the admitted owner. Caller/UI loss cannot cancel delivery.
         let acknowledgement = admitted.record(record.clone());
         acknowledgement.await?;
-        Ok(Some(AuditedReviewSelection { record }))
+        Ok(Some(AuditedReviewSelection { record, metadata }))
     }
 }

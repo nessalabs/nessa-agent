@@ -137,9 +137,8 @@ async fn gateway_child() {
             .unwrap();
         let mut changes = Vec::new();
         for index in 0..800 {
-            let context = ProviderContext::Recorded(
-                ExecutionSessionId::new(format!("remote-{index:04}-{}", "x".repeat(120))).unwrap(),
-            );
+            let context = ProviderContext::recorded_after(
+                ExecutionSessionId::new(format!("remote-{index:04}-{}", "x".repeat(120))).unwrap(), 0);
             changes.push(SessionChange::ProviderContext {
                 before: ProviderContext::Absent,
                 after: context.clone(),
@@ -157,9 +156,8 @@ async fn gateway_child() {
             .await
             .unwrap();
         for index in 0..20 {
-            let context = ProviderContext::Recorded(
-                ExecutionSessionId::new(format!("tail-{index}")).unwrap(),
-            );
+            let context = ProviderContext::recorded_after(
+                ExecutionSessionId::new(format!("tail-{index}")).unwrap(), 0);
             writer
                 .save_changes(
                     writer.load().await.unwrap().binding().clone(),

@@ -5,7 +5,7 @@
     {
       "name": "unpaced",
       "bytesPerSecond": null,
-      "payloadBytes": 1403,
+      "payloadBytes": 1484,
       "downloaded": 2,
       "applied": 2,
       "reopenDownloaded": 2,
@@ -16,7 +16,7 @@
     {
       "name": "paced-8000",
       "bytesPerSecond": 8000,
-      "payloadBytes": 1403,
+      "payloadBytes": 1484,
       "downloaded": 2,
       "applied": 2,
       "reopenDownloaded": 2,
