@@ -48,12 +48,20 @@ export function parentRestarted(checkpoint, recording, before, after) {
     (record) =>
       isPrompt(record) && record.frame.params?.sessionId === checkpoint.sessionId,
   )
+  // Only turns after the newest one seen before Stop are new: a view lists a
+  // bounded window of turns, so an older turn the earlier read left out can
+  // come back into it once the running parent's own turn is smaller.
+  let newest = -1
+  for (let index = 0; index < after.length; index++)
+    if (before.has(after[index].executionId)) newest = index
   return (
     dispatched ||
-    after.some(
-      (turn) =>
-        !before.has(turn.executionId) &&
-        (turn.status !== "cancelled" || turn.parts.length !== 0),
-    )
+    after
+      .slice(newest + 1)
+      .some(
+        (turn) =>
+          !before.has(turn.executionId) &&
+          (turn.status !== "cancelled" || turn.parts.length !== 0),
+      )
   )
 }

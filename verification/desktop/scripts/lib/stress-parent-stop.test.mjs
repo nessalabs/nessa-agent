@@ -77,6 +77,20 @@ test("new live, completed, or output-bearing history fails even without dispatch
     )
 })
 
+test("an older turn the earlier read's window left out is not new work", () => {
+  const older = { executionId: "older", status: "completed", parts: [{ text: "reply" }] }
+  const selected = { executionId: "selected", status: "cancelled", parts: [] }
+  assert.equal(parentRestarted(checkpoint, recording, before, [older, selected]), false)
+  assert.equal(
+    parentRestarted(checkpoint, recording, before, [
+      older,
+      selected,
+      { executionId: "new", status: "completed", parts: [] },
+    ]),
+    true,
+  )
+})
+
 test("missing, malformed, incomplete, or replaced recordings cannot prove no restart", () => {
   for (const invalid of ["", "{}\n", "invalid\n", recording.trimEnd()])
     assert.throws(() => parentStopCheckpoint(invalid, text))

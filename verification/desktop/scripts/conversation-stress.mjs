@@ -3170,7 +3170,19 @@ const steps = {
       after.messages.find((turn) => turn.executionId === parent.turn.executionId)
         ?.status !== "cancelled"
     )
-      failures.push("a cancellation report restarted the stopped parent")
+      failures.push(
+        `a cancellation report restarted the stopped parent: ${JSON.stringify(
+          after.messages
+            .filter((turn) => !beforeStop.has(turn.executionId))
+            .map((turn) => ({
+              executionId: turn.executionId,
+              status: turn.status,
+              parts: turn.parts?.length ?? 0,
+              text: turn.userText?.slice(0, 80),
+              agent: turn.agent,
+            })),
+        )}`,
+      )
     if (!(await sendShown(run.page)))
       failures.push("a report returned the parent to Stop")
   },
