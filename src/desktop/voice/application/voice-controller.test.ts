@@ -748,4 +748,45 @@ describe("VoiceController", () => {
       hearingHint({ answered: true, audioSent: true, microphoneSound: null }),
     ).toBeNull()
   })
+
+  it("V18: a check that runs into a mute is dropped, and the unmute checks again", async () => {
+    const { controller, connection, clock } = setup()
+    vi.spyOn(console, "warn").mockImplementation(() => {})
+    await controller.start("s-1")
+    connection.found = { answered: true, audioSent: true, microphoneSound: false }
+    let answer: (found: CallCheck) => void = () => {}
+    connection.check = () => {
+      connection.checks++
+      return new Promise((resolve) => (answer = resolve))
+    }
+    clock.fire()
+    controller.setMicrophone(false)
+    answer(connection.found)
+    await settle()
+    expect(controller.snapshot().hint).toBeNull()
+    // Muted, nothing is waiting to check; the unmute schedules a check.
+    expect(clock.pending.size).toBe(0)
+    controller.setMicrophone(true)
+    expect(clock.pending.size).toBe(1)
+    connection.check = () => {
+      connection.checks++
+      return Promise.resolve(connection.found)
+    }
+    clock.fire()
+    await settle()
+    expect(connection.checks).toBe(2)
+    expect(controller.snapshot().hint).toMatch(/^No sound is coming/)
+    controller.setMicrophone(false)
+    controller.setMicrophone(true)
+    expect(controller.snapshot().hint).toBeNull()
+    vi.restoreAllMocks()
+  })
+
+  it("V18: an ended call's check is cleared and never shown", async () => {
+    const { controller, connection, clock } = setup()
+    await controller.start("s-1")
+    controller.end()
+    expect(clock.pending.size).toBe(0)
+    expect(connection.checks).toBe(0)
+  })
 })

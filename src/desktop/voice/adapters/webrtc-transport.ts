@@ -70,29 +70,38 @@ function askMicrophone(signal: AbortSignal): Promise<MediaStream> {
       signal.removeEventListener("abort", aborted)
       reject(new TransportRefused(sentence))
     }
-    const timer = setTimeout(() => giveUp(microphoneUnanswered), MICROPHONE_TIMEOUT_MS)
     const aborted = () => giveUp("Couldn’t connect the call. Try again.")
+    let timer: ReturnType<typeof setTimeout> | undefined
+    // A call ended before it asked never asks.
+    if (signal.aborted) return aborted()
+    timer = setTimeout(() => giveUp(microphoneUnanswered), MICROPHONE_TIMEOUT_MS)
     signal.addEventListener("abort", aborted, { once: true })
-    navigator.mediaDevices
-      .getUserMedia({
+    let asked: Promise<MediaStream>
+    try {
+      asked = navigator.mediaDevices.getUserMedia({
         audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
       })
-      .then(
-        (stream) => {
-          if (late) {
-            for (const track of stream.getTracks()) track.stop()
-            return
-          }
-          clearTimeout(timer)
-          signal.removeEventListener("abort", aborted)
-          resolve(stream)
-        },
-        (error: unknown) => {
-          if (late) return
-          console.warn("Voice: the microphone was refused", error)
-          giveUp(microphoneRefused)
-        },
-      )
+    } catch (error) {
+      // No microphone at all in this web view.
+      console.warn("Voice: the microphone can’t be asked for", error)
+      return giveUp(microphoneRefused)
+    }
+    asked.then(
+      (stream) => {
+        if (late) {
+          for (const track of stream.getTracks()) track.stop()
+          return
+        }
+        clearTimeout(timer)
+        signal.removeEventListener("abort", aborted)
+        resolve(stream)
+      },
+      (error: unknown) => {
+        if (late) return
+        console.warn("Voice: the microphone was refused", error)
+        giveUp(microphoneRefused)
+      },
+    )
   })
 }
 

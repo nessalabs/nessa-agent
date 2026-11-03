@@ -92,7 +92,7 @@ conversation ends the one running.
 | V15 | any open | mute mic / speaker | the track or audio is off; the call stays |
 | V16 | any open | end, pane closed, conversation left | idle; the transport closed |
 | V17 | any open | transport closed or failed | ended, saying the call dropped |
-| V18 | listening | 12 s after it opened, the provider has not heard the person start speaking, and the microphone is on | the transport checks its own audio once (any event back from the provider, audio bytes going out, sound from the microphone); the first thing found wrong is shown in place of "Listening" until the person is heard |
+| V18 | listening | 12 s after it opened, or after the last unmute, the provider has not heard the person start speaking, and the microphone is on | the transport checks its own audio once over 1 s: any event back from the provider, audio bytes going out (which fails only when the connection itself is down, since silence is sent too), and sound from the microphone (unknown when the meter cannot run). The first thing found wrong is shown in place of "Listening" until the person is heard or the microphone changes; a check that ran into a mute is dropped |
 
 A turn is open while its reply is being written, while the chat is at
 work, or while its message is held waiting for an agent (`waiting` on the

@@ -157,6 +157,10 @@ interface Call {
   responses: number
   /** The provider has heard the person start speaking at least once. */
   heardSpeech: boolean
+  /** V18: the hearing check waiting to run, if any. */
+  hearingCheck: unknown
+  /** How many times the microphone was turned on or off, so a check across one is dropped. */
+  mutes: number
 }
 
 export interface VoiceControllerDependencies {
@@ -217,6 +221,8 @@ export class VoiceController {
       seen: new Set(),
       responses: 0,
       heardSpeech: false,
+      hearingCheck: null,
+      mutes: 0,
     }
     this.call = call
     this.set({ ...idle, phase: "connecting", sessionId })
@@ -279,21 +285,40 @@ export class VoiceController {
       if (this.current(call)) this.replied(call)
     })
     this.update(call)
-    // V18
+    this.scheduleHearingCheck(call)
+  }
+
+  /**
+   * V18: a check of the call's audio, `HEARING_CHECK_MS` from now, replacing
+   * one already waiting. Scheduled when the call opens and on each unmute.
+   */
+  private scheduleHearingCheck(call: Call): void {
+    if (call.hearingCheck !== null) {
+      call.timers.delete(call.hearingCheck)
+      this.dependencies.timers.clearTimeout(call.hearingCheck)
+    }
     const handle = this.dependencies.timers.setTimeout(() => {
       call.timers.delete(handle)
+      call.hearingCheck = null
       void this.checkHearing(call)
     }, HEARING_CHECK_MS)
+    call.hearingCheck = handle
     call.timers.add(handle)
   }
 
-  /** V18: a call that has heard nothing yet looks at its own audio once. */
+  /**
+   * V18: a call that has heard nothing yet looks at its own audio. A muted
+   * microphone is silent by choice, so a check that ran into a mute is
+   * dropped; the unmute schedules another.
+   */
   private async checkHearing(call: Call): Promise<void> {
     const connection = call.connection
-    if (!this.current(call) || !connection || call.heardSpeech) return
-    if (!this.state.microphoneOn) return
+    const muted = () => !this.state.microphoneOn
+    if (!this.current(call) || !connection || call.heardSpeech || muted()) return
+    const mutes = call.mutes
     const found = await connection.check().catch(() => null)
     if (!found || !this.current(call) || call.heardSpeech) return
+    if (muted() || call.mutes !== mutes) return
     console.warn("Voice: nothing heard yet", found)
     const hint = hearingHint(found)
     if (hint) this.update(call, { hint })
@@ -340,7 +365,13 @@ export class VoiceController {
     connection?.setMicrophone(on)
     // Half-heard speech from before the mute is not sent later.
     if (!on) connection?.send({ type: "input_audio_buffer.clear" })
-    this.set({ ...this.state, microphoneOn: on })
+    const call = this.call
+    // V18: what a check found is stale once the microphone changes.
+    if (call) {
+      call.mutes++
+      if (on && !call.heardSpeech && call.connection) this.scheduleHearingCheck(call)
+    }
+    this.set({ ...this.state, microphoneOn: on, hint: null })
   }
 
   /** V15 */

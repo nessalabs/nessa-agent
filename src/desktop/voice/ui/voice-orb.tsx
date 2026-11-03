@@ -3,7 +3,7 @@
  * bottom, with soft clouds drifting across it. It is the same for every
  * agent: the orb is Nessa's voice, not the agent's. It breathes while it
  * connects and listens, swells with the person's voice and the agent's, and
- * its clouds move faster while the agent works. The loudness is read each
+ * pulses quicker while the agent works. The loudness is read each
  * frame from the call (`levels`) into one custom property; the rest is CSS.
  */
 import { useEffect, useRef, type CSSProperties } from "react"
@@ -45,8 +45,12 @@ export function VoiceOrb({
       style={{ "--voice-orb-size": `${size}px` } as CSSProperties}
       aria-hidden
     >
-      <span className="voice-orb-clouds" />
-      <span className="voice-orb-clouds" data-layer="far" />
+      <span className="voice-orb-sky">
+        <span className="voice-orb-clouds" />
+      </span>
+      <span className="voice-orb-sky" data-layer="far">
+        <span className="voice-orb-clouds" />
+      </span>
       <span className="voice-orb-gloss" />
     </div>
   )

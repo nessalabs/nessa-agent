@@ -56,7 +56,6 @@
   --voice-sky-low: #c9d3fb;
   --voice-sky-haze: #f3f4ff;
   --voice-level: 0;
-  --voice-drift: 26s;
   position: relative;
   flex: none;
   width: var(--voice-orb-size);
@@ -80,31 +79,45 @@
     opacity var(--desktop-slow) ease;
 }
 
-/*
- * Soft clouds: blurred white wisps on a strip as wide as the orb, repeated
- * sideways and slid one orb-width per loop, so the drift never jumps.
- */
-.voice-orb-clouds {
+/* A tilted band of sky the clouds cross, a little larger than the orb. */
+.voice-orb-sky {
   position: absolute;
   inset: -10%;
+  rotate: -14deg;
+}
+
+.voice-orb-sky[data-layer="far"] {
+  opacity: 0.55;
+  rotate: -8deg;
+  translate: 0 18%;
+}
+
+/*
+ * Soft clouds: blurred white wisps on a tile 1.2 orbs wide, repeated along a
+ * strip three tiles long that slides one tile per loop, so the drift never
+ * jumps. It moves by `translate`, which the compositor can run.
+ */
+.voice-orb-clouds {
+  --voice-tile: calc(var(--voice-orb-size) * 1.2);
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: calc(var(--voice-tile) * 3);
   background-image:
     radial-gradient(38% 14% at 22% 58%, rgb(255 255 255 / 0.85), transparent 70%),
     radial-gradient(30% 10% at 64% 46%, rgb(255 255 255 / 0.7), transparent 70%),
     radial-gradient(44% 12% at 80% 70%, rgb(255 255 255 / 0.75), transparent 70%),
     radial-gradient(26% 9% at 42% 34%, rgb(255 255 255 / 0.5), transparent 70%);
-  background-size: calc(var(--voice-orb-size) * 1.2) 100%;
+  background-size: var(--voice-tile) 100%;
   background-repeat: repeat-x;
   filter: blur(calc(var(--voice-orb-size) * 0.035));
-  rotate: -14deg;
-  animation: voice-orb-drift var(--voice-drift) linear infinite;
+  animation: voice-orb-drift 26s linear infinite;
 }
 
-.voice-orb-clouds[data-layer="far"] {
-  opacity: 0.55;
-  rotate: -8deg;
-  translate: 0 18%;
+.voice-orb-sky[data-layer="far"] .voice-orb-clouds {
   filter: blur(calc(var(--voice-orb-size) * 0.06));
-  animation-duration: calc(var(--voice-drift) * 1.7);
+  animation-duration: 44s;
   animation-direction: reverse;
 }
 
@@ -133,7 +146,7 @@
 }
 
 .voice-orb[data-phase="working"] {
-  --voice-drift: 9s;
+  animation: voice-orb-breathe 1.6s ease-in-out infinite;
 }
 
 @keyframes voice-orb-breathe {
@@ -145,7 +158,7 @@
 
 @keyframes voice-orb-drift {
   to {
-    background-position-x: calc(var(--voice-orb-size) * -1.2);
+    translate: calc(var(--voice-tile) * -1) 0;
   }
 }
 

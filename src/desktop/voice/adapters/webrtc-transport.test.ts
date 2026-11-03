@@ -121,4 +121,88 @@ describe("webrtcTransport", () => {
     ).rejects.toThrow(sentence)
     expect(stop).toHaveBeenCalledOnce()
   })
+
+  it("checks whether audio is going out and the microphone gives sound", async () => {
+    vi.useFakeTimers()
+    try {
+      let bytes = 100
+      let level = 0.5
+      const channel = {
+        readyState: "connecting",
+        listeners: new Map<string, () => void>(),
+        addEventListener(type: string, run: () => void) {
+          this.listeners.set(type, run)
+        },
+        removeEventListener() {},
+      }
+      vi.stubGlobal("navigator", {
+        mediaDevices: {
+          getUserMedia: async () => ({ getTracks: () => [{ stop() {} }] }),
+        },
+      })
+      vi.stubGlobal("Audio", class {})
+      vi.stubGlobal(
+        "RTCPeerConnection",
+        class {
+          addEventListener() {}
+          addTrack() {}
+          createDataChannel() {
+            return channel
+          }
+          createOffer = async () => ({ type: "offer", sdp: "v=0" })
+          setLocalDescription = async () => {}
+          setRemoteDescription = async () => {
+            channel.readyState = "open"
+          }
+          getStats = async () =>
+            new Map([["a", { type: "outbound-rtp", kind: "audio", bytesSent: bytes }]])
+          close() {}
+        },
+      )
+      vi.stubGlobal(
+        "AudioContext",
+        class {
+          state = "running"
+          createAnalyser = () => ({
+            fftSize: 4,
+            getFloatTimeDomainData(samples: Float32Array) {
+              samples.fill(level)
+            },
+          })
+          createMediaStreamSource = () => ({ connect() {} })
+          resume = async () => {}
+          close = async () => {}
+        },
+      )
+      vi.stubGlobal("fetch", async () => new Response("v=0", { status: 201 }))
+      const connection = await webrtcTransport().connect(
+        call,
+        new AbortController().signal,
+      )
+      const sending = connection.check()
+      bytes = 200
+      await vi.advanceTimersByTimeAsync(1_100)
+      expect(await sending).toEqual({
+        answered: false,
+        audioSent: true,
+        microphoneSound: true,
+      })
+      level = 0
+      const stalled = connection.check()
+      await vi.advanceTimersByTimeAsync(1_100)
+      expect(await stalled).toEqual({
+        answered: false,
+        audioSent: false,
+        microphoneSound: false,
+      })
+      connection.close()
+      expect(await connection.check()).toEqual({
+        answered: false,
+        audioSent: false,
+        microphoneSound: false,
+      })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
 })
