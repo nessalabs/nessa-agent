@@ -18,7 +18,7 @@ model:
 modelCheck:
   sourceRevision: "77a6b620af4d94b234294f6d273fd74b3dfb44c7"
   checker: tlc-1.7.4
-  date: 2026-11-03T02:47:41.206Z
+  date: 2026-11-03T03:27:58.830Z
   config: tla/services/desktop/workspace/question-answer-flights.cfg
   modelDigest: 4491a8ef5dc523eac07806f8b506a1fa1493df030169e7eaab597bb185d17d91
   states: 7

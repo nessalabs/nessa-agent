@@ -83,3 +83,9 @@ models link back to the source that owns those decisions.
 - [Reach a gateway through a tunnel](tunnel-connectivity.md)
 - [Pair a device through current receiver holding](device-pairing.md)
 - [Stop captured parent and descendant turns](parent-stop.md)
+
+
+[Busy record discovery](record-read-discovery.md) owns the distinction between
+occupied cache checkout, validation progress and the active work budget. An
+occupied stream waits for its own release rather than ending a watch or waiting
+for every unrelated stream.

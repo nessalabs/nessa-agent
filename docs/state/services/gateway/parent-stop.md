@@ -18,7 +18,7 @@ model:
 modelCheck:
   sourceRevision: "77a6b620af4d94b234294f6d273fd74b3dfb44c7"
   checker: tlc-1.7.4
-  date: 2026-11-03T02:47:59.928Z
+  date: 2026-11-03T03:28:21.253Z
   config: tla/services/gateway/ParentStop.cfg
   modelDigest: 8bf7bb7811527a2428c54a70abdc9b2dbf6ef3827ad116031cd0c5cefc5d6ab2
   states: 132

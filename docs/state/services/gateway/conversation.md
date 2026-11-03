@@ -27,7 +27,7 @@ model:
   config: tla/services/gateway/ConversationDeletion.cfg
 modelCheck:
   checker: tlc-1.7.4
-  date: 2026-11-03T02:47:56.203Z
+  date: 2026-11-03T03:28:15.750Z
   config: tla/services/gateway/ConversationDeletion.cfg
   modelDigest: 7707bcc10c23280ec4dbe36ead9be3b22d787ac83226df608c5f6ad946226306
   states: 22

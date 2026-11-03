@@ -24,7 +24,7 @@ model:
   config: tla/services/gateway/attachments/AttachmentRefusal.cfg
 modelCheck:
   checker: tlc-1.7.4
-  date: 2026-11-03T02:47:51.818Z
+  date: 2026-11-03T03:28:11.000Z
   config: tla/services/gateway/attachments/AttachmentRefusal.cfg
   modelDigest: 8e8d14684747ce389a54e2046c2ec4e4a057bd9cd529d0ac6bbfba3bd0191287
   states: 52

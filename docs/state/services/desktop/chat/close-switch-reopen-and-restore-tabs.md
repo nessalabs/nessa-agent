@@ -29,7 +29,7 @@ model:
   config: tla/services/desktop/chat/close-switch-reopen-and-restore-tabs.cfg
 modelCheck:
   checker: tlc-1.7.4
-  date: 2026-11-03T02:47:29.376Z
+  date: 2026-11-03T03:27:45.695Z
   config: tla/services/desktop/chat/close-switch-reopen-and-restore-tabs.cfg
   modelDigest: c2457f1440514a1b828b55a37a5e58ac1cfbd8e53ae57cf577395391b3b54a49
   states: 4

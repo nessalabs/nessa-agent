@@ -231,3 +231,13 @@ that share specific owners, and keeps contracts/indexes/reference dependencies
 outside the formal-pass count. The [current evidence](provenance.md#app-wide-feature-modeling-2026-11-02)
 records all 96 positive checks and 106 expected failing controls. This model
 coverage is separate from the historical product/browser qualification above.
+
+
+## Mainline integration after the feature pass
+
+The source at `719dfce93892e09dcb95e86a060b6d2f42c8f3cc` adds context,
+Stop-recovery, discovery-wait and native submission behavior. The
+[feature map](feature-verification.md) now accounts for 173 pages and 102 models;
+the [integrated evidence](provenance.md#integrated-main-qualification-2026-11-02)
+records 118 controlled invariant failures, both focused native Swift probes and
+the updated browser pass. Existing product qualification above stays historical.

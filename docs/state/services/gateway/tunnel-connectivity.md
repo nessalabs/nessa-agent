@@ -28,7 +28,7 @@ diagramLinks: {}
 modelCheck:
   sourceRevision: "77a6b620af4d94b234294f6d273fd74b3dfb44c7"
   checker: tlc-1.7.4
-  date: 2026-11-03T02:48:01.779Z
+  date: 2026-11-03T03:28:24.001Z
   config: tla/services/gateway/TunnelConnectivity.cfg
   modelDigest: 1cbb52c1e363e1808425ca9f90c0df09ede5c0ac72d9f74a921304e695831c2e
   states: 12

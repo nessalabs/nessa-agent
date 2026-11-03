@@ -20,7 +20,7 @@ model:
   config: tla/services/sdk/Ownership.cfg
 modelCheck:
   checker: tlc-1.7.4
-  date: 2026-11-03T02:48:16.685Z
+  date: 2026-11-03T03:28:41.606Z
   config: tla/services/sdk/Ownership.cfg
   modelDigest: befdbb7cddf9ebef059f5be5ab00ed8c5d1a00e444db890e0f5eea8e737c2a8f
   states: 27

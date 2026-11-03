@@ -18,7 +18,7 @@ model:
 modelCheck:
   sourceRevision: "77a6b620af4d94b234294f6d273fd74b3dfb44c7"
   checker: tlc-1.7.4
-  date: 2026-11-03T02:47:44.942Z
+  date: 2026-11-03T03:28:03.518Z
   config: tla/services/desktop/workspace/window-preferences.cfg
   modelDigest: 8fbae88c5c107134b450caed9c4a203e22ec2a7d1ec3b88120182dd5e750761b
   states: 57

@@ -42,7 +42,7 @@ model:
 modelCheck:
   sourceRevision: "11e2746f7df088a1bd5ee3b2e579ad8a40b5cbd1"
   checker: tlc-1.7.4
-  date: 2026-11-03T02:48:11.117Z
+  date: 2026-11-03T03:28:34.150Z
   config: tla/services/host/startup/StartupObservation.cfg
   modelDigest: d2be145d076fda011af799cf387faef0a427128e3c82a2c71cb36a34213a8242
   states: 11

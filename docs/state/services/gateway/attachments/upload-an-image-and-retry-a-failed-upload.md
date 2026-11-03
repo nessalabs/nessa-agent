@@ -32,7 +32,7 @@ model:
   config: tla/services/gateway/attachments/DraftUpload.cfg
 modelCheck:
   checker: tlc-1.7.4
-  date: 2026-11-03T02:47:52.444Z
+  date: 2026-11-03T03:28:11.668Z
   config: tla/services/gateway/attachments/DraftUpload.cfg
   modelDigest: 95925314601b3fcd93e8629461e9d9277176014006f112c1b52d70ed184c2433
   states: 22

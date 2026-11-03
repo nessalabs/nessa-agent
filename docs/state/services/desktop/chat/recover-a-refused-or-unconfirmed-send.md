@@ -24,7 +24,7 @@ model:
   config: tla/services/desktop/chat/recover-a-refused-or-unconfirmed-send.cfg
 modelCheck:
   checker: tlc-1.7.4
-  date: 2026-11-03T02:47:30.626Z
+  date: 2026-11-03T03:27:47.081Z
   config: tla/services/desktop/chat/recover-a-refused-or-unconfirmed-send.cfg
   modelDigest: e72ae74dd66cdeb6325b828b767231be4953408075f58d36c0e2eea1f5e4aeac
   states: 9

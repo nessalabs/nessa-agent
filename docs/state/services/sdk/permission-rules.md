@@ -17,7 +17,7 @@ model:
   config: tla/services/sdk/PermissionRules.cfg
 modelCheck:
   checker: tlc-1.7.4
-  date: 2026-11-03T02:48:17.299Z
+  date: 2026-11-03T03:28:42.267Z
   config: tla/services/sdk/PermissionRules.cfg
   modelDigest: e93dd2b918a81114e8fb07608d4d9f7709368b14f8f7138ac6e9be431ed028a6
   states: 11

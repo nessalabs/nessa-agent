@@ -24,7 +24,7 @@ model:
   config: tla/services/desktop/workspace/load-browse-and-resynchronize-the-workspace.cfg
 modelCheck:
   checker: tlc-1.7.4
-  date: 2026-11-03T02:47:35.624Z
+  date: 2026-11-03T03:27:52.535Z
   config: tla/services/desktop/workspace/load-browse-and-resynchronize-the-workspace.cfg
   modelDigest: be51bb64f77de58c56e3255660a4d176d275706d09095cacffffca00d8c896e3
   states: 16

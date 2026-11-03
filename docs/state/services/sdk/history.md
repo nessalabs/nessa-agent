@@ -5,7 +5,7 @@ kind: "operation"
 status: "implemented"
 summary: "Nessa shows live output while saving conversation records in small batches."
 parent: "sdk"
-sourceRevision: "a412bf9b36c07ced1ed9161cf79e8ba52e594b46"
+sourceRevision: "719dfce93892e09dcb95e86a060b6d2f42c8f3cc"
 sources:
   - "crates/nessa-sdk/src/application/agent_execution/sessions/manager.rs"
   - "crates/nessa-sdk/src/infrastructure/session_storage/record_writer.rs"
@@ -14,12 +14,14 @@ sources:
   - "crates/nessa-sdk/src/application/agent_execution/sessions/validation.rs"
   - "crates/nessa-sdk/src/application/agent_execution/sessions/records.rs"
   - "crates/nessa-sdk/src/application/agent_execution/agents/resumption.rs"
-  - "crates/nessa-sdk/src/domain/agent_execution/sessions/value_objects/attachment.rs"
+  - "crates/nessa-sdk/src/domain/agent_execution/sessions/value_objects/attachm\
+    ent.rs"
   - "crates/nessa-sdk/src/infrastructure/session_storage/snapshot/context.rs"
   - "crates/nessa-sdk/src/infrastructure/session_storage/snapshot/checkpoint.rs"
   - "crates/nessa-sdk/src/infrastructure/claude_acp/sessions/binding.rs"
   - "crates/nessa-server/src/agents/infrastructure/credentialed_claude.rs"
-  - "crates/nessa-sdk/tests/application/agent_execution/sessions/context_admission.rs"
+  - "crates/nessa-sdk/tests/application/agent_execution/sessions/context_admiss\
+    ion.rs"
   - "crates/nessa-sdk/tests/infrastructure/acp/contracts/current_context.rs"
   - "crates/nessa-sdk/src/application/agent_execution/sessions/authorship.rs"
   - "crates/nessa-sdk/src/application/agent_execution/sessions/handoffs.rs"
@@ -40,9 +42,9 @@ model:
   spec: tla/services/sdk/History.tla
   config: tla/services/sdk/History.cfg
 modelCheck:
-  sourceRevision: "50bef867f45f9cb99fa27d798210e8e6a1dfe901"
+  sourceRevision: "719dfce93892e09dcb95e86a060b6d2f42c8f3cc"
   checker: tlc-1.7.4
-  date: 2026-11-03T02:48:16.058Z
+  date: 2026-11-03T03:28:40.936Z
   config: tla/services/sdk/History.cfg
   modelDigest: 86b52eee8a919e72acaee778acc0ba9c20b33af8e47e218a60ccfcc7ae162013
   states: 15
@@ -214,3 +216,11 @@ This is a scoped source review at `77a6b620af4d94b234294f6d273fd74b3dfb44c7`. It
 The distinct preparation/read-side owner is modeled in [history preparation and restoration](history-restoration.md). It checks retained flush, complete/aborted tail validation and record-only versus provider-resume authority. Byte framing, erasure and actual provider behavior remain outside that model.
 
 [History erasure](history-erasure.md) separately owns reset-incarnation recovery and retired-content cleanup before later load/save.
+
+## Latest source reconciliation
+
+Reconciled this owner narrative against `719dfce93892e09dcb95e86a060b6d2f42c8f3cc` after the incoming source changes from `77a6b620af4d94b234294f6d273fd74b3dfb44c7`. The incoming source review at `a412bf9b36c07ced1ed9161cf79e8ba52e594b46` and its narrative are preserved; the new checkpoint includes the current-context boundary, captured final Stop settlement and decline-before-successor admission changes. Existing save, provenance, handoff and preparation explanations were checked for agreement with their unchanged or explicitly revised owners. Historical test discussion retains its original scope; no product suite was executed here.
+
+[Native context admission](context-admission.md) models the manager's captured watermark and acknowledged publication. [Retained context validation](context-validation.md) separately checks terminal-prefix and prior net namespace evidence. Neither model proves native provider restoration, byte codecs or credential acceptance.
+
+[Captured Stop recovery](stop-recovery.md) models the missing final edge without a successor and the scheduler decision that lets a persisted decline win before successor admission. It does not replace gateway command-receipt recovery or physical cleanup.

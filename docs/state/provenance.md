@@ -192,6 +192,52 @@ to its earlier PR head; a fresh push requires its own CI result. Model guards ar
 not generated production authorization rules. The canonical source, Cedar policies
 and runtime owners remain authoritative.
 
+## Integrated main qualification (2026-11-02)
+
+While the feature pass was being completed, main advanced to
+`719dfce93892e09dcb95e86a060b6d2f42c8f3cc`. The branch merged that source
+without modifying its application implementation. The single scheduling-page
+conflict preserved the incoming narrative/checkpoint and the existing model
+sections. The changed native, SDK, timer and physical-read owners were then
+reconciled by the same GPT-6.1 Sol subagents and cross-reviewed independently.
+
+New direct owners cover native FIFO submission versus ticket execution,
+transcript reader-scroll intent, immutable context admission, raw context
+validation, captured Stop recovery and occupied-cache discovery. New narrow
+pages carry the integrated source checkpoint. Three fully reconciled existing
+SDK pages advance to it; partial corrections retain prior checkpoints. The new
+shared `nessa-timer` crate is recorded as a source contract, not a new product
+scheduler. Current model/tooling source is
+`3f0392b148ee998bf2df949bced96f5a61059769`.
+
+Final integrated checks:
+
+| Check | Observed result |
+| --- | --- |
+| Catalog and ownership map | 173 pages, zero issues and zero unmapped stateful pages; 102 direct models and 33 shared-owner journeys |
+| Complete positive corpus | All 102 models passed 332 configured invariant checks; no broken or unchecked rule |
+| Exploration | 5,202 states summed across independent models; largest individual model 874 |
+| Repeatable controls | All 118 finite weakenings caught their expected invariant; every direct model has a control, none unchecked |
+| Script tests | Nine passed, zero failed/skipped with renderer/TLC enabled; formatting and whitespace checks passed |
+| Browser | Chrome opened all 173 pages and rendered 209 figures with no page/diagram error |
+| Focused native Swift probes | Production submission lane and request wrapper compiled with Swift 6.3.3 strict concurrency/warnings-as-errors and both passed |
+| Independent integration review | Context/Stop, discovery, native handoff/drain and scroll-intent source/model checks reported no actionable finding |
+
+The native probes use the production Swift lane/wrapper and narrow test stand-ins,
+not a generated UniFFI package, phone app or live TLS session. Their analysis
+model has three attempts; the actual Swift FIFO has no admission-length bound
+or queue-wait deadline. Rust request deadlines begin at native admission and
+remain separate from that queue.
+
+One concurrent control attempt stopped with a checker error at a baseline and
+was not counted as passed. The final receipt is the complete sequential rerun,
+with unchanged model inputs. Its baselines record their digests directly.
+The committed [receipt](../../verification/state-models/probe-results.json) and
+[screenshots/setup](../../verification/state-models/README.md) supersede the
+initial 96-model receipt while retaining the earlier history above. Product Rust,
+real-provider/cloud, native end-to-end and full stress/chaos suites remain separate
+from these local documentation/model checks. Fresh-head CI must speak for itself.
+
 ## Choose a user flow
 
 | What the person does | Follow this map | Boundaries to inspect for bugs |

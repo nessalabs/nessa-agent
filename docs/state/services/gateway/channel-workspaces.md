@@ -49,7 +49,7 @@ model:
 modelCheck:
   sourceRevision: "5b2bd93bc5eb0c983614329f0ba8e602ba83d095"
   checker: tlc-1.7.4
-  date: 2026-11-03T02:47:55.578Z
+  date: 2026-11-03T03:28:15.088Z
   config: tla/services/gateway/BoatAssignment.cfg
   modelDigest: 52b91a34108496c685fd0488dc2443a7cab48a270019ed343b8f27cc9b37b637
   states: 6

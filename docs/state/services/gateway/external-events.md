@@ -39,7 +39,7 @@ model:
 modelCheck:
   sourceRevision: "7763614c1998cc428a9b6043cbe1ab10cebe6ec4"
   checker: tlc-1.7.4
-  date: 2026-11-03T02:47:58.073Z
+  date: 2026-11-03T03:28:19.161Z
   config: tla/services/gateway/ExternalEvent.cfg
   modelDigest: 05af005c72748b4c44a8ad0c6a003f6dd10b2fe50934b7c5f40767a6e73fe319
   states: 12

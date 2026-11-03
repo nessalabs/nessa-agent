@@ -18,7 +18,7 @@ model:
   config: tla/services/desktop/workspace/switch-the-floating-panel-s-surface.cfg
 modelCheck:
   checker: tlc-1.7.4
-  date: 2026-11-03T02:47:43.697Z
+  date: 2026-11-03T03:28:01.455Z
   config: tla/services/desktop/workspace/switch-the-floating-panel-s-surface.cfg
   modelDigest: 45889e4fc317bfb9122a76ebad214650a37dc76c9fd18ddf5d37d625280e8b57
   states: 40

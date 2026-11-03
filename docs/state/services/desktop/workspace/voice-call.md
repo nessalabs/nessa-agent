@@ -17,7 +17,7 @@ model:
   config: tla/services/desktop/workspace/voice-call.cfg
 modelCheck:
   checker: tlc-1.7.4
-  date: 2026-11-03T02:47:44.316Z
+  date: 2026-11-03T03:28:02.838Z
   config: tla/services/desktop/workspace/voice-call.cfg
   modelDigest: f494d97936f0ff791d7e677b3fc3338fcf3c0bddc733e862b31a8dd5d3014919
   states: 21

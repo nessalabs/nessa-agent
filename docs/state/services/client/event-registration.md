@@ -16,7 +16,7 @@ model:
 diagramLinks: {}
 modelCheck:
   checker: tlc-1.7.4
-  date: 2026-11-03T02:47:28.138Z
+  date: 2026-11-03T03:27:43.549Z
   config: tla/services/client/EventRegistration.cfg
   modelDigest: e2533618b23eea7e4836b2339138c2da9353cce151e635e9d642d92edf37da27
   states: 13

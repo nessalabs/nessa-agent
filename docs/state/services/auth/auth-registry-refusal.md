@@ -14,7 +14,7 @@ model:
   config: tla/services/auth/RegistryRefusal.cfg
 modelCheck:
   checker: tlc-1.7.4
-  date: 2026-11-03T02:47:26.269Z
+  date: 2026-11-03T03:27:41.388Z
   config: tla/services/auth/RegistryRefusal.cfg
   modelDigest: aaf1a8f2207b1252635862a09eb7e2f15961e364d494a56390e381709bad5514
   states: 7

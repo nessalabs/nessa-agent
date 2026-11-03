@@ -31,7 +31,7 @@ diagramLinks: {}
 modelCheck:
   sourceRevision: "77a6b620af4d94b234294f6d273fd74b3dfb44c7"
   checker: tlc-1.7.4
-  date: 2026-11-03T02:47:57.471Z
+  date: 2026-11-03T03:28:17.801Z
   config: tla/services/gateway/EnvironmentLeases.cfg
   modelDigest: d13314c96290d55265aa7000d1e27f624669bb550b7d7bb2e5de458c2fefb36c
   states: 72

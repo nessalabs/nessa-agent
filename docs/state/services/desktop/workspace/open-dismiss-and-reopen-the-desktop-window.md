@@ -20,7 +20,7 @@ model:
   config: tla/services/desktop/workspace/open-dismiss-and-reopen-the-desktop-window.cfg
 modelCheck:
   checker: tlc-1.7.4
-  date: 2026-11-03T02:47:37.485Z
+  date: 2026-11-03T03:27:54.568Z
   config: tla/services/desktop/workspace/open-dismiss-and-reopen-the-desktop-window.cfg
   modelDigest: a3548b58e03d02dd1f1602043d77d2d338c2ea845da4637bcfc42b27d14b14f7
   states: 74

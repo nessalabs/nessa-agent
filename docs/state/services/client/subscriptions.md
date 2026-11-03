@@ -17,7 +17,7 @@ model:
 diagramLinks: {}
 modelCheck:
   checker: tlc-1.7.4
-  date: 2026-11-03T02:47:28.770Z
+  date: 2026-11-03T03:27:45.013Z
   config: tla/services/client/SubscriptionOpen.cfg
   modelDigest: 18dfd92c83e0e260bf92d53604ed5e22203a109711f3b5478974d99cc357ab9c
   states: 17

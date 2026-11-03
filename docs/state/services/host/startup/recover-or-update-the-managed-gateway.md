@@ -32,7 +32,7 @@ model:
   config: tla/services/host/startup/GatewayDeferredStage.cfg
 modelCheck:
   checker: tlc-1.7.4
-  date: 2026-11-03T02:48:07.982Z
+  date: 2026-11-03T03:28:30.792Z
   config: tla/services/host/startup/GatewayDeferredStage.cfg
   modelDigest: f73dc3598786063e43542913987b1c902a36c1db0e08acf934ee0f89f2b0e9f0
   states: 6

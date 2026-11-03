@@ -92,7 +92,7 @@ model:
 modelCheck:
   sourceRevision: "4b33de21f7fd68df83e308de4134ef1dda82f01f"
   checker: tlc-1.7.4
-  date: 2026-11-03T02:48:04.252Z
+  date: 2026-11-03T03:28:26.731Z
   config: tla/services/gateway/WebhookOutbox.cfg
   modelDigest: 503f5d28aa1697fdb612925ae66c7b5ead22e11814ae0e7686f8dcd1cb3448c0
   states: 14

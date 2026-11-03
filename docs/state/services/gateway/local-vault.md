@@ -30,7 +30,7 @@ model:
 modelCheck:
   sourceRevision: "5f45a5e66d10046fd15eae95f6ebc8f4fd87dd56"
   checker: tlc-1.7.4
-  date: 2026-11-03T02:47:59.301Z
+  date: 2026-11-03T03:28:20.561Z
   config: tla/services/gateway/VaultOpening.cfg
   modelDigest: 6c12a5711659d2c0d1b85e7984cb8e9699e6a9c601361219161797177b5a435f
   states: 28

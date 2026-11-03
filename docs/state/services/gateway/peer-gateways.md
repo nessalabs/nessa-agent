@@ -33,7 +33,7 @@ diagramLinks: {}
 modelCheck:
   sourceRevision: "77a6b620af4d94b234294f6d273fd74b3dfb44c7"
   checker: tlc-1.7.4
-  date: 2026-11-03T02:48:00.542Z
+  date: 2026-11-03T03:28:21.923Z
   config: tla/services/gateway/PeerGateways.cfg
   modelDigest: 87734a0a5d2c33f37cf806914eab31eb5ff86381378115867881d37046f4fdb4
   states: 11

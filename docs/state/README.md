@@ -163,7 +163,7 @@ ID under Sources and provenance. Pages without it have no recorded checkpoint;
 the system root does not make its children current. The [checkpoint contract](authoring.md#source-review-checkpoint)
 explains how to maintain it and compare it with a failing checkout.
 
-The [latest verification refresh](provenance.md#app-wide-feature-modeling-2026-11-02)
+The [latest verification refresh](provenance.md#integrated-main-qualification-2026-11-02)
 records its source, checked lifecycle pages and exclusions. The earlier
 [mainline audit](provenance.md#mainline-lifecycle-refresh-2026-10-23) retains its
 historical scope. Its reviewed behavior pages carry that source

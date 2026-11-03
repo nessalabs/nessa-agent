@@ -35,7 +35,7 @@ model:
 modelCheck:
   sourceRevision: "4d718da047acbcf200c10feab62cb45b097ee939"
   checker: tlc-1.7.4
-  date: 2026-11-03T02:47:39.325Z
+  date: 2026-11-03T03:27:56.762Z
   config: tla/services/desktop/workspace/permission-rule-revocation.cfg
   modelDigest: f1bcc9bd46d25600284e2d487154892a9313c90d14262c092225768ac1337b65
   states: 37

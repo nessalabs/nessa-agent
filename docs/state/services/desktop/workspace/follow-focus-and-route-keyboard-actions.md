@@ -20,7 +20,7 @@ model:
   config: tla/services/desktop/workspace/follow-focus-and-route-keyboard-actions.cfg
 modelCheck:
   checker: tlc-1.7.4
-  date: 2026-11-03T02:47:34.373Z
+  date: 2026-11-03T03:27:51.187Z
   config: tla/services/desktop/workspace/follow-focus-and-route-keyboard-actions.cfg
   modelDigest: edb8834ea79f9cfef2768ae9a22783168e852d8a6929907d2fd777075ea53020
   states: 144

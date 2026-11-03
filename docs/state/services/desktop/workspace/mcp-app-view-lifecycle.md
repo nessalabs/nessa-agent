@@ -25,7 +25,7 @@ model:
   config: tla/services/desktop/workspace/mcp-app-view-lifecycle.cfg
 modelCheck:
   checker: tlc-1.7.4
-  date: 2026-11-03T02:47:36.863Z
+  date: 2026-11-03T03:27:53.878Z
   config: tla/services/desktop/workspace/mcp-app-view-lifecycle.cfg
   modelDigest: dd6ffe2d44f4a8a05e38fecf2c3082c21051f640fa8388437fd4dfab30e6013c
   states: 19

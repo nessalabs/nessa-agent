@@ -16,7 +16,7 @@ model:
 diagramLinks: {}
 modelCheck:
   checker: tlc-1.7.4
-  date: 2026-11-03T02:48:14.809Z
+  date: 2026-11-03T03:28:39.591Z
   config: tla/services/sdk/HistoryErasure.cfg
   modelDigest: 3935a603235c9ecfc2d89e7802021fb98beb11a0d3b8c9828989a4e9f80d252d
   states: 7

@@ -21,7 +21,7 @@ model:
 modelCheck:
   sourceRevision: "77a6b620af4d94b234294f6d273fd74b3dfb44c7"
   checker: tlc-1.7.4
-  date: 2026-11-03T02:53:39.874Z
+  date: 2026-11-03T03:28:17.123Z
   config: tla/services/gateway/DriveToolAdmission.cfg
   modelDigest: 0803246c9ecf207cc200749eb2b1fb6f3ce25e80947902953d07e62281a181e2
   states: 80

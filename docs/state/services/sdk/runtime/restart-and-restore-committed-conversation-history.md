@@ -5,7 +5,7 @@ kind: "operation"
 status: "mixed"
 summary: "Restart loads the saved conversation records and reconstructs the committed history."
 parent: "sdk-runtime"
-sourceRevision: "ae6e33529887746079702d4eca5f528ec42146bd"
+sourceRevision: "719dfce93892e09dcb95e86a060b6d2f42c8f3cc"
 sources:
   - "crates/nessa-sdk/src/infrastructure/session_storage/record.rs"
   - "crates/nessa-sdk/src/infrastructure/session_storage/record_writer.rs"
@@ -144,3 +144,11 @@ Shared owner model: [sdk-history](../history.md). Uncertain exact save reconcili
 Provider resume, handoff construction, reset erasure and complete replay validation are outside this save model. This relationship applies only to the stated scope, not every step of this journey. This scoped mapping retains earlier source checkpoints and is not executed implementation-test evidence.
 
 The distinct preparation/read-side owner is modeled in [history preparation and restoration](../history-restoration.md). It checks retained flush, complete/aborted tail validation and record-only versus provider-resume authority. Byte framing, erasure and actual provider behavior remain outside that model.
+
+## Latest source reconciliation
+
+Reconciled this owner narrative against `719dfce93892e09dcb95e86a060b6d2f42c8f3cc` after the incoming source changes from `77a6b620af4d94b234294f6d273fd74b3dfb44c7`. The incoming source review at `ae6e33529887746079702d4eca5f528ec42146bd` and its narrative are preserved; the new checkpoint includes the current-context boundary, captured final Stop settlement and decline-before-successor admission changes. Existing save, provenance, handoff and preparation explanations were checked for agreement with their unchanged or explicitly revised owners. Historical test discussion retains its original scope; no product suite was executed here.
+
+[Native context admission](../context-admission.md) models the manager's captured watermark and acknowledged publication. [Retained context validation](../context-validation.md) separately checks terminal-prefix and prior net namespace evidence. Neither model proves native provider restoration, byte codecs or credential acceptance.
+
+[Captured Stop recovery](../stop-recovery.md) models the missing final edge without a successor and the scheduler decision that lets a persisted decline win before successor admission. It does not replace gateway command-receipt recovery or physical cleanup.

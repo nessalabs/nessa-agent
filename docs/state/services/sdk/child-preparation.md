@@ -18,7 +18,7 @@ model:
   config: tla/services/sdk/ChildPreparation.cfg
 modelCheck:
   checker: tlc-1.7.4
-  date: 2026-11-03T02:48:13.575Z
+  date: 2026-11-03T03:28:36.856Z
   config: tla/services/sdk/ChildPreparation.cfg
   modelDigest: a49bcc048047fd4f5676eebb8e39fad5fa7e278622a9f899274abf76ab8ad1c9
   states: 18

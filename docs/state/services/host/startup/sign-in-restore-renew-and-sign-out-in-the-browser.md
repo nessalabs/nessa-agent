@@ -23,7 +23,7 @@ model:
   config: tla/services/host/startup/BrowserLogout.cfg
 modelCheck:
   checker: tlc-1.7.4
-  date: 2026-11-03T02:48:10.490Z
+  date: 2026-11-03T03:28:33.470Z
   config: tla/services/host/startup/BrowserLogout.cfg
   modelDigest: e4a5696d2ea184aab7c89149dccc4a04741332e377c66938b0ca209b6084f8c5
   states: 5

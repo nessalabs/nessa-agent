@@ -45,7 +45,7 @@ model:
 modelCheck:
   sourceRevision: "11e2746f7df088a1bd5ee3b2e579ad8a40b5cbd1"
   checker: tlc-1.7.4
-  date: 2026-11-03T02:48:09.866Z
+  date: 2026-11-03T03:28:32.796Z
   config: tla/services/host/startup/SurfaceSupervisor.cfg
   modelDigest: 4673e0706db4f0eef0b6d9c64a05d665d87cf77a4803a03afdf60534ce3e0697
   states: 6

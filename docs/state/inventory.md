@@ -34,6 +34,20 @@ checkpoints do not advance merely because the page gains a scoped model. The
 [provenance](provenance.md) distinguishes the model/source review from executed
 product qualification. The historical inventory below remains historical.
 
+## Mainline reconciliation after the feature pass
+
+Main `719dfce93892e09dcb95e86a060b6d2f42c8f3cc` was merged after the initial
+app-wide pass. The incoming implementation was preserved, including native FIFO
+product submissions, immutable session-context admission, captured Stop restart
+settlement, occupied-cache discovery waits and transcript resize handling. The
+corresponding owners and focused controls were reconciled before the integrated
+catalog was checked. This does not restamp unchanged feature pages.
+
+The new `crates/nessa-timer/src/lib.rs` owns the shared monotonic deadline port
+used by SDK and environment waits. Its operation-first deadline tie and
+unconstrained deadline poll remain source contracts. This extraction is not a
+new product scheduler or a modeled promise of eventual completion.
+
 ## Inspection scope
 
 The sweep starts from local revision `1bc93353ffebaf7553c14c624c269fbd21b71583`

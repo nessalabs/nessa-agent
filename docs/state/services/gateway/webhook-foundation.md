@@ -41,7 +41,7 @@ model:
 modelCheck:
   sourceRevision: "b8568beee166680a45a192222da468234933411d"
   checker: tlc-1.7.4
-  date: 2026-11-03T02:48:03.020Z
+  date: 2026-11-03T03:28:25.383Z
   config: tla/services/gateway/WebhookDelivery.cfg
   modelDigest: d28e71068baa7dee53e8a95f7df9eda6ed22221d1e6574faced59cb142fb5a7f
   states: 78

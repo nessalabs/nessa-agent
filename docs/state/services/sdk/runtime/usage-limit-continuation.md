@@ -20,7 +20,7 @@ model:
 modelCheck:
   sourceRevision: "aa91831b5331d3461969f6a7be723a6d3325f29b"
   checker: tlc-1.7.4
-  date: 2026-11-03T02:48:20.404Z
+  date: 2026-11-03T03:28:45.635Z
   config: tla/services/sdk/UsageContinuation.cfg
   modelDigest: 827f83bc18d33adba3fc6fd6437c4fc21a50441afed7432c572b44bc88db972f
   states: 9

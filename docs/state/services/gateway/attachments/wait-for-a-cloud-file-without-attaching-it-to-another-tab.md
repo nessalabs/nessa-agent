@@ -20,7 +20,7 @@ model:
   config: tla/services/gateway/attachments/AttachmentDestination.cfg
 modelCheck:
   checker: tlc-1.7.4
-  date: 2026-11-03T02:47:53.069Z
+  date: 2026-11-03T03:28:12.344Z
   config: tla/services/gateway/attachments/AttachmentDestination.cfg
   modelDigest: c8107533025ecd60c4062cd562ddcd64d3834d9751ffaf9c80c96d6b80bd9c22
   states: 22

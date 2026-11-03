@@ -5,7 +5,7 @@ kind: guide
 status: reference
 summary: Every feature page has a declared owner, bounded model scope or explicit non-lifecycle boundary.
 parent: nessa
-sourceRevision: "acaeaa68317434b47b7dc8870bd0e172fa66422d"
+sourceRevision: "3f0392b148ee998bf2df949bced96f5a61059769"
 sources:
   - package.json
   - scripts/state-docs/coverage.mjs
@@ -23,13 +23,19 @@ to the owner of one part of a journey; the page states what remains outside that
 model. A component index, pure contract or external library reference is accounted
 for without calling it a formal pass.
 
-The app source review is frozen at
+The initial app source review is frozen at
 `77a6b620af4d94b234294f6d273fd74b3dfb44c7`. GPT-6.1 Sol subagents traced
 desktop/extensions, gateway/host, and runtime/core features; the integrating review
 added missing backup, peer, environment, tunnel and agent-tool owners and checked
 the combined catalog. Existing full-page checkpoints remain unchanged after partial
 reviews. New model sections name their current source-review scope. The tables do
 not stamp an entire page, service or application as implementation-verified.
+
+Newer main was then integrated at
+`719dfce93892e09dcb95e86a060b6d2f42c8f3cc`. The affected owners were
+reconciled for context admission/validation, captured Stop recovery, busy-cache
+discovery, native FIFO submissions and reader-scroll intent. Their pages name
+that new checkpoint; unchanged pages retain their prior scope.
 
 ## Check the current map
 
@@ -44,7 +50,7 @@ claim that every source statement, interleaving or operating system was tested.
 
 ## Coverage snapshot
 
-The feature owners below currently link **96 executable models**.
+The feature owners below currently link **102 executable models**.
 TLC results shown are the last saved bounded run. Source guards, policy evaluators,
 storage and process owners remain implementation authority; model exploration is
 design evidence. See [provenance](provenance.md) for executed checks and exclusions.
@@ -52,7 +58,7 @@ design evidence. See [provenance](provenance.md) for executed checks and exclusi
 | Disposition | Pages | Meaning |
 | --- | --- | --- |
 | Value or representation contract | 5 | Accounted for; this is not a TLC pass. |
-| Direct model | 96 | A unique linked spec/config and declared safety rules. |
+| Direct model | 102 | A unique linked spec/config and declared safety rules. |
 | External source boundary | 5 | Accounted for; this is not a TLC pass. |
 | Component/feature index | 20 | Accounted for; this is not a TLC pass. |
 | Reference guide | 8 | Accounted for; this is not a TLC pass. |
@@ -75,6 +81,7 @@ design evidence. See [provenance](provenance.md) for executed checks and exclusi
 | [Wire requests and command uncertainty](services/client/commands.md) | Direct model | 4 rules held; 31 states |
 | [Managed connection](services/client/connection.md) | Direct model | 4 rules held; 15 states |
 | [Event handler registration generations](services/client/event-registration.md) | Direct model | 4 rules held; 13 states |
+| [Queue a native product submission](services/client/native-submissions.md) | Direct model | 6 rules held; 383 states |
 | [Subscription opening and bounded consumption](services/client/subscriptions.md) | Direct model | 4 rules held; 17 states |
 
 ## Credentials features
@@ -93,7 +100,7 @@ design evidence. See [provenance](provenance.md) for executed checks and exclusi
 | [close, switch, reopen, and restore tabs](services/desktop/chat/close-switch-reopen-and-restore-tabs.md) | Direct model | 3 rules held; 4 states |
 | [compose and send the first message](services/desktop/chat/compose-and-send-the-first-message.md) | Direct model | 2 rules held; 313 states |
 | [find, archive, or delete a conversation](services/desktop/chat/find-archive-or-delete-a-conversation.md) | Shared owner; partial scope | [load, browse, and resynchronize the workspace](services/desktop/workspace/load-browse-and-resynchronize-the-workspace.md); [Conversation identity and deletion](services/gateway/conversation.md) |
-| [read a conversation and watch the response](services/desktop/chat/read-a-conversation-and-watch-the-response.md) | Shared owner; partial scope | [Managed connection](services/client/connection.md); [Committed history and restoration](services/sdk/history.md) |
+| [read a conversation and watch the response](services/desktop/chat/read-a-conversation-and-watch-the-response.md) | Shared owner; partial scope | [Managed connection](services/client/connection.md); [Keep the reader position when a transcript grows](services/desktop/workspace/transcript-scroll.md); [Committed history and restoration](services/sdk/history.md) |
 | [recover a refused or unconfirmed send](services/desktop/chat/recover-a-refused-or-unconfirmed-send.md) | Direct model | 2 rules held; 9 states |
 | [rename a tab and inspect conversation details](services/desktop/chat/rename-a-tab-and-inspect-conversation-details.md) | Direct model | 3 rules held; 55 states |
 | [send and manage follow-ups](services/desktop/chat/send-and-manage-follow-ups.md) | Shared owner; partial scope | [recover a refused or unconfirmed send](services/desktop/chat/recover-a-refused-or-unconfirmed-send.md); [Submission scheduling and recovery](services/sdk/scheduling.md) |
@@ -131,6 +138,7 @@ design evidence. See [provenance](provenance.md) for executed checks and exclusi
 | [summon or dismiss the floating panel](services/desktop/workspace/summon-or-dismiss-the-floating-panel.md) | Direct model | 2 rules held; 7 states |
 | [switch the floating panel's surface](services/desktop/workspace/switch-the-floating-panel-s-surface.md) | Direct model | 3 rules held; 40 states |
 | [trace verified pull-request contributions](services/desktop/workspace/trace-verified-pull-request-contributions.md) | Value or representation contract | Not a checked lifecycle |
+| [Keep the reader position when a transcript grows](services/desktop/workspace/transcript-scroll.md) | Direct model | 3 rules held; 181 states |
 | [Talk to a conversation by voice](services/desktop/workspace/voice-call.md) | Direct model | 3 rules held; 21 states |
 | [Keep a local window preference](services/desktop/workspace/window-preferences.md) | Direct model | 2 rules held; 57 states |
 
@@ -194,6 +202,7 @@ design evidence. See [provenance](provenance.md) for executed checks and exclusi
 | [Local vault](services/gateway/local-vault.md) | Direct model | 3 rules held; 28 states |
 | [Stop the captured parent turn and descendants](services/gateway/parent-stop.md) | Direct model | 4 rules held; 132 states |
 | [Enroll, read and forget peer gateways](services/gateway/peer-gateways.md) | Direct model | 6 rules held; 11 states |
+| [Wait for busy record discovery within one read](services/gateway/record-read-discovery.md) | Direct model | 4 rules held; 43 states |
 | [Bounded physical history reads](services/gateway/record-reads.md) | Direct model | 2 rules held; 8 states |
 | [Reach a gateway through a tunnel](services/gateway/tunnel-connectivity.md) | Direct model | 4 rules held; 12 states |
 | [Outbound webhook admission](services/gateway/webhook-admission.md) | Direct model | 3 rules held; 12 states |
@@ -248,6 +257,8 @@ design evidence. See [provenance](provenance.md) for executed checks and exclusi
 | [Provider attachment](services/sdk/attachment.md) | Direct model | 4 rules held; 11 states |
 | [Child preparation and initial task](services/sdk/child-preparation.md) | Direct model | 4 rules held; 18 states |
 | [Work admission and provider cleanup](services/sdk/cleanup.md) | Direct model | 5 rules held; 18 states |
+| [Native context admission and opening](services/sdk/context-admission.md) | Direct model | 6 rules held; 136 states |
+| [Validate retained context admission evidence](services/sdk/context-validation.md) | Direct model | 5 rules held; 874 states |
 | [History erasure and incarnation recovery](services/sdk/history-erasure.md) | Direct model | 4 rules held; 7 states |
 | [History preparation and restoration](services/sdk/history-restoration.md) | Direct model | 3 rules held; 14 states |
 | [Committed history and restoration](services/sdk/history.md) | Direct model | 4 rules held; 15 states |
@@ -270,6 +281,7 @@ design evidence. See [provenance](provenance.md) for executed checks and exclusi
 | [the first agent launch is warmed in the background](services/sdk/runtime/the-first-agent-launch-is-warmed-in-the-background.md) | Direct model | 3 rules held; 9 states |
 | [Usage limits and scheduled continuation](services/sdk/runtime/usage-limit-continuation.md) | Direct model | 5 rules held; 9 states |
 | [Submission scheduling and recovery](services/sdk/scheduling.md) | Direct model | 7 rules held; 81 states |
+| [Finish a captured Stop after restart](services/sdk/stop-recovery.md) | Direct model | 5 rules held; 42 states |
 
 ## Storage features
 

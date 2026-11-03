@@ -55,7 +55,7 @@ model:
 modelCheck:
   sourceRevision: "d883b0ed6544c112f441ae1de73f443c7306280f"
   checker: tlc-1.7.4
-  date: 2026-11-03T02:47:25.658Z
+  date: 2026-11-03T03:27:40.688Z
   config: tla/services/auth/CredentialReceipt.cfg
   modelDigest: 2a74e85eaaa99c6e9d6313a680f8a33ecc10c41cd5d40837ce3a4fb9aeb30b1a
   states: 5

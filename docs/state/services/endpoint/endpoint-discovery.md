@@ -14,7 +14,7 @@ model:
   config: tla/services/endpoint/Discovery.cfg
 modelCheck:
   checker: tlc-1.7.4
-  date: 2026-11-03T02:47:45.566Z
+  date: 2026-11-03T03:28:04.179Z
   config: tla/services/endpoint/Discovery.cfg
   modelDigest: 87f141fdb06388f2adf5590ab2860b547202a4661dbdb1f79c0a921ec628081f
   states: 10

@@ -19,7 +19,7 @@ model:
 modelCheck:
   sourceRevision: "77a6b620af4d94b234294f6d273fd74b3dfb44c7"
   checker: tlc-1.7.4
-  date: 2026-11-03T02:47:40.590Z
+  date: 2026-11-03T03:27:58.144Z
   config: tla/services/desktop/workspace/provider-sign-in.cfg
   modelDigest: 0b2cf68f1d32d1373f5559c21fef2a2fc085ef9871d66c27604bcd68c7c7f768
   states: 10

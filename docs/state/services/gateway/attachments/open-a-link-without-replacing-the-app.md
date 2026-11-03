@@ -26,7 +26,7 @@ model:
 modelCheck:
   sourceRevision: "728e92aba6a4608cfeaee629b72ebbeaa7d6a0ca"
   checker: tlc-1.7.4
-  date: 2026-11-03T02:47:48.056Z
+  date: 2026-11-03T03:28:06.906Z
   config: tla/services/gateway/attachments/open-a-link-without-replacing-the-app.cfg
   modelDigest: 12582752f4f78be6b522a0bd014f2d1b9e770f82a2b566bc21128a9d5e8e50d0
   states: 168

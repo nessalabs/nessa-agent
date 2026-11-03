@@ -50,7 +50,7 @@ model:
 modelCheck:
   sourceRevision: "b14bdf40fc17117dba10024a3a9bd190d28cc990"
   checker: tlc-1.7.4
-  date: 2026-11-03T02:47:34.993Z
+  date: 2026-11-03T03:27:51.855Z
   config: tla/services/desktop/workspace/linked-devices.cfg
   modelDigest: a02a5ef3f73c35041ab5f6180be0a1ddae1500aee7923a239a7b811e093f0c83
   states: 32

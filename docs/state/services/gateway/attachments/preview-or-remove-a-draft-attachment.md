@@ -23,7 +23,7 @@ model:
   config: tla/services/gateway/attachments/PreviewResource.cfg
 modelCheck:
   checker: tlc-1.7.4
-  date: 2026-11-03T02:47:49.291Z
+  date: 2026-11-03T03:28:08.256Z
   config: tla/services/gateway/attachments/PreviewResource.cfg
   modelDigest: cf055d4dc314c86498f6927ad9f4f3b8833493d13c6c8845418eb0768e4403ac
   states: 5

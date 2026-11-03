@@ -28,7 +28,7 @@ diagramLinks: {}
 modelCheck:
   sourceRevision: "77a6b620af4d94b234294f6d273fd74b3dfb44c7"
   checker: tlc-1.7.4
-  date: 2026-11-03T02:47:54.304Z
+  date: 2026-11-03T03:28:13.690Z
   config: tla/services/gateway/BackupExport.cfg
   modelDigest: 66ebc6ffbd95d11483603bd6bbcfcd6ab3bd71f8885940f36854386c1bf4e1ef
   states: 10

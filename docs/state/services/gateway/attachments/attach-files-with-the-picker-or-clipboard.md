@@ -22,7 +22,7 @@ model:
   config: tla/services/gateway/attachments/NativeTicket.cfg
 modelCheck:
   checker: tlc-1.7.4
-  date: 2026-11-03T02:47:46.797Z
+  date: 2026-11-03T03:28:05.558Z
   config: tla/services/gateway/attachments/NativeTicket.cfg
   modelDigest: c7da9257ca57c4a8ba74052fcc8c58874828f1536a6570d7e5f9ae5f2e269725
   states: 12

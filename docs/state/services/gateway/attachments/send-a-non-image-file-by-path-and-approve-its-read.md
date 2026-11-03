@@ -24,7 +24,7 @@ model:
   config: tla/services/gateway/attachments/LinkedFileEvidence.cfg
 modelCheck:
   checker: tlc-1.7.4
-  date: 2026-11-03T02:47:50.567Z
+  date: 2026-11-03T03:28:09.640Z
   config: tla/services/gateway/attachments/LinkedFileEvidence.cfg
   modelDigest: cb5e8af9c31e38f54e07a827082ebc0dd3f02ba62fb3db3b08521ff5f7a11d02
   states: 4

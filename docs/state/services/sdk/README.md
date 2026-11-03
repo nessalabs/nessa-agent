@@ -154,3 +154,7 @@ Component index. This page groups independent owners; its component arrows are n
 - [Permission rules and review notices](permission-rules.md)
 
 - [History erasure and incarnation recovery](history-erasure.md)
+
+- [Native context admission and opening](context-admission.md)
+- [Retained context validation](context-validation.md)
+- [Captured Stop recovery](stop-recovery.md)

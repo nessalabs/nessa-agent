@@ -33,7 +33,7 @@ model:
   config: tla/services/host/startup/OnboardingChoice.cfg
 modelCheck:
   checker: tlc-1.7.4
-  date: 2026-11-03T02:48:06.731Z
+  date: 2026-11-03T03:28:29.452Z
   config: tla/services/host/startup/OnboardingChoice.cfg
   modelDigest: 35bc8671544dd1fb9743eae3c7f3ebac8ec88fe44c95e0734403216e03370488
   states: 9

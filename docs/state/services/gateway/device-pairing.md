@@ -22,7 +22,7 @@ model:
 modelCheck:
   sourceRevision: "77a6b620af4d94b234294f6d273fd74b3dfb44c7"
   checker: tlc-1.7.4
-  date: 2026-11-03T02:47:56.841Z
+  date: 2026-11-03T03:28:16.452Z
   config: tla/services/gateway/DevicePairing.cfg
   modelDigest: 4eefef4b87862cc0bc346604bead81a68c40db0243b754583d647b8d5acd6212
   states: 82

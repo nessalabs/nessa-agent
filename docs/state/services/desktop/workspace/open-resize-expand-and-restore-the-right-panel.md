@@ -28,7 +28,7 @@ model:
 modelCheck:
   sourceRevision: "c5432f75638030f8dfa3941db7a3c8626522be1a"
   checker: tlc-1.7.4
-  date: 2026-11-03T02:47:38.093Z
+  date: 2026-11-03T03:27:55.281Z
   config: tla/services/desktop/workspace/open-resize-expand-and-restore-the-right-panel.cfg
   modelDigest: 8f65239794d99e3abbd5f112ae835e12a00893197c9c5b4e25b60694b7413235
   states: 18

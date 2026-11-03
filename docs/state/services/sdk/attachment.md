@@ -17,7 +17,7 @@ model:
   config: tla/services/sdk/Attachment.cfg
 modelCheck:
   checker: tlc-1.7.4
-  date: 2026-11-03T02:48:12.964Z
+  date: 2026-11-03T03:28:36.159Z
   config: tla/services/sdk/Attachment.cfg
   modelDigest: c12991d5ad9a81b25dacdbc998ce66abe0fd77e78068eec0044047655d3c960b
   states: 11

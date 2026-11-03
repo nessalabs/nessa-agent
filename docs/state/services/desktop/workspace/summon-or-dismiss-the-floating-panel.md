@@ -20,7 +20,7 @@ model:
   config: tla/services/desktop/workspace/summon-or-dismiss-the-floating-panel.cfg
 modelCheck:
   checker: tlc-1.7.4
-  date: 2026-11-03T02:47:43.080Z
+  date: 2026-11-03T03:28:00.793Z
   config: tla/services/desktop/workspace/summon-or-dismiss-the-floating-panel.cfg
   modelDigest: 45fc4657112022a31a69e01f3d1cec32582bec994beb7dbba44be316dac123e8
   states: 7

@@ -23,7 +23,7 @@ model:
   config: tla/services/gateway/attachments/read-rich-text-code-math-and-diagrams-in-a-message.cfg
 modelCheck:
   checker: tlc-1.7.4
-  date: 2026-11-03T02:47:49.942Z
+  date: 2026-11-03T03:28:08.971Z
   config: tla/services/gateway/attachments/read-rich-text-code-math-and-diagrams-in-a-message.cfg
   modelDigest: 5c70d9bea5e9309d68fb0efcd11db8df3d803764f416c9d9bb5114f39ce43328
   states: 376

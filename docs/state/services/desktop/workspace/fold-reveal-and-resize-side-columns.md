@@ -24,7 +24,7 @@ model:
   config: tla/services/desktop/workspace/fold-reveal-and-resize-side-columns.cfg
 modelCheck:
   checker: tlc-1.7.4
-  date: 2026-11-03T02:47:33.738Z
+  date: 2026-11-03T03:27:50.503Z
   config: tla/services/desktop/workspace/fold-reveal-and-resize-side-columns.cfg
   modelDigest: ea4c22a8c63c903096bf7ac642eddf5b41d97d50e59611b4c4d1bb9af1ce2b7e
   states: 14

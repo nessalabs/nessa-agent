@@ -14,7 +14,7 @@ model:
   config: tla/services/storage/Publication.cfg
 modelCheck:
   checker: tlc-1.7.4
-  date: 2026-11-03T02:48:22.275Z
+  date: 2026-11-03T03:28:48.392Z
   config: tla/services/storage/Publication.cfg
   modelDigest: 96b85adc702f02cdb90dd74bf53127b8ed060538a77406b35bd9e874689960bc
   states: 9

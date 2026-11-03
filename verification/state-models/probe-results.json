@@ -1,8 +1,8 @@
 {
   "ok": true,
   "checker": "tlc-1.7.4",
-  "date": "2026-11-03T03:00:51.577Z",
-  "models": 96,
+  "date": "2026-11-03T03:35:02.261Z",
+  "models": 102,
   "baselines": [
     {
       "document": "auth-admission",
@@ -59,6 +59,20 @@
         "StaleNeverRemovesReplacement",
         "ReinstallCurrent",
         "ReplacementSurvivesOldHandle"
+      ]
+    },
+    {
+      "document": "client-native-submissions",
+      "state": "passed",
+      "states": 383,
+      "modelDigest": "3544fe3cdb5ca14d4ae8d2a3105c3d05016f612ef437667941aa318701bcc58b",
+      "held": [
+        "OneBodyAtATime",
+        "BodiesStayInArrivalOrder",
+        "CancelledQueueNeverRuns",
+        "DrainAdmissionOwnedOnce",
+        "ClosedQueueReleased",
+        "TicketCompletionRetainsIdentity"
       ]
     },
     {
@@ -259,6 +273,13 @@
       "states": 40,
       "modelDigest": "45889e4fc317bfb9122a76ebad214650a37dc76c9fd18ddf5d37d625280e8b57",
       "held": ["LateListenerNoToggle", "NoRetiredInvocation", "ResolvedRetiredRemoved"]
+    },
+    {
+      "document": "desktop-transcript-scroll",
+      "state": "passed",
+      "states": 181,
+      "modelDigest": "e69d6ba01e8782d39203de473d53f7bb4bfb7a81f7f0c222087d4ef5a5c8a547",
+      "held": ["ReaderMovementWins", "RetiredObserverInert", "RememberPublishedPosition"]
     },
     {
       "document": "desktop-voice-call",
@@ -518,6 +539,18 @@
       ]
     },
     {
+      "document": "gateway-record-read-discovery",
+      "state": "passed",
+      "states": 43,
+      "modelDigest": "168c851293ec925706759bfec2839ce8e51e46bd4788a2fd512851cbb605a1c8",
+      "held": [
+        "OccupiedDoesNotSpendSteps",
+        "QueueDoesNotSpendWorkBudget",
+        "OwnStreamCanResume",
+        "CapacityUntilSourceJoin"
+      ]
+    },
+    {
       "document": "gateway-record-reads",
       "state": "passed",
       "states": 8,
@@ -689,6 +722,33 @@
       ]
     },
     {
+      "document": "sdk-context-admission",
+      "state": "passed",
+      "states": 136,
+      "modelDigest": "9a71b249fd78e38b4cfb7784cf67054acbd0b6867d5e5ed4eb4e3681f92d4d11",
+      "held": [
+        "TypeOK",
+        "CapturedBoundaryPreserved",
+        "ReusedIdKeepsAdmission",
+        "LaterAdmissionStillUsed",
+        "AtomicIdentityPublication",
+        "MissingUsedContextRefused"
+      ]
+    },
+    {
+      "document": "sdk-context-validation",
+      "state": "passed",
+      "states": 874,
+      "modelDigest": "7136b8b9960de502195b72294cd2b6570ee3e49dacbda147bea96feabe1fe0f1",
+      "held": [
+        "TypeOK",
+        "ValidRetainedCounts",
+        "BoundaryWithinTerminal",
+        "NoClearUsedContext",
+        "SameIdResetNeedsPriorNetChange"
+      ]
+    },
+    {
       "document": "sdk-history-erasure",
       "state": "passed",
       "states": 7,
@@ -811,6 +871,19 @@
       ]
     },
     {
+      "document": "sdk-stop-recovery",
+      "state": "passed",
+      "states": 42,
+      "modelDigest": "89c1fa8cb90e6031db155a486ba3fb3291b3f603d51e0cea022ca5559f9500fd",
+      "held": [
+        "TypeOK",
+        "CapturedStopNeverContinued",
+        "DeclineWinsBeforeAdmission",
+        "SuccessorNeedsSourceEdge",
+        "FinalStopKeepsCause"
+      ]
+    },
+    {
       "document": "storage-database",
       "state": "passed",
       "states": 9,
@@ -848,8 +921,8 @@
       ]
     }
   ],
-  "probes": 106,
-  "completed": 106,
+  "probes": 118,
+  "completed": 118,
   "results": [
     {
       "document": "desktop-mcp-app-view",
@@ -1101,6 +1174,24 @@
       "state": "broke",
       "expected": ["RemovalFence"],
       "broke": ["RemovalFence"],
+      "unchecked": []
+    },
+    {
+      "document": "client-native-submissions",
+      "name": "Reverse the waiting handoff order",
+      "ok": true,
+      "state": "broke",
+      "expected": ["BodiesStayInArrivalOrder"],
+      "broke": ["BodiesStayInArrivalOrder"],
+      "unchecked": []
+    },
+    {
+      "document": "desktop-transcript-scroll",
+      "name": "Reuse stale pin after reader movement before its scroll event",
+      "ok": true,
+      "state": "broke",
+      "expected": ["ReaderMovementWins"],
+      "broke": ["ReaderMovementWins"],
       "unchecked": []
     },
     {
@@ -1482,6 +1573,42 @@
       "unchecked": []
     },
     {
+      "document": "gateway-record-read-discovery",
+      "name": "Charge an occupied cache checkout as a validating discovery step",
+      "ok": true,
+      "state": "broke",
+      "expected": ["OccupiedDoesNotSpendSteps"],
+      "broke": ["OccupiedDoesNotSpendSteps"],
+      "unchecked": []
+    },
+    {
+      "document": "gateway-record-read-discovery",
+      "name": "Expire the discovery work budget before its worker starts",
+      "ok": true,
+      "state": "broke",
+      "expected": ["QueueDoesNotSpendWorkBudget"],
+      "broke": ["QueueDoesNotSpendWorkBudget"],
+      "unchecked": []
+    },
+    {
+      "document": "gateway-record-read-discovery",
+      "name": "Wait for an unrelated occupied stream before retrying this free stream",
+      "ok": true,
+      "state": "broke",
+      "expected": ["OwnStreamCanResume"],
+      "broke": ["OwnStreamCanResume"],
+      "unchecked": []
+    },
+    {
+      "document": "gateway-record-read-discovery",
+      "name": "Release source capacity while waiting on occupied discovery",
+      "ok": true,
+      "state": "broke",
+      "expected": ["CapacityUntilSourceJoin"],
+      "broke": ["CapacityUntilSourceJoin"],
+      "unchecked": []
+    },
+    {
       "document": "sdk-attachment",
       "name": "Publish a fenced attachment candidate as ready",
       "ok": true,
@@ -1707,6 +1834,60 @@
       "unchecked": []
     },
     {
+      "document": "sdk-context-admission",
+      "name": "Recompute the opening watermark after later admission settled",
+      "ok": true,
+      "state": "broke",
+      "expected": ["CapturedBoundaryPreserved"],
+      "broke": ["CapturedBoundaryPreserved", "LaterAdmissionStillUsed"],
+      "unchecked": []
+    },
+    {
+      "document": "sdk-context-admission",
+      "name": "Publish replacement identity without its context evidence",
+      "ok": true,
+      "state": "broke",
+      "expected": ["AtomicIdentityPublication"],
+      "broke": ["AtomicIdentityPublication"],
+      "unchecked": []
+    },
+    {
+      "document": "sdk-context-validation",
+      "name": "Accept a watermark beyond the terminal invocation prefix",
+      "ok": true,
+      "state": "broke",
+      "expected": ["BoundaryWithinTerminal"],
+      "broke": ["BoundaryWithinTerminal"],
+      "unchecked": []
+    },
+    {
+      "document": "sdk-context-validation",
+      "name": "Reset a reused native ID without preceding net namespace evidence",
+      "ok": true,
+      "state": "broke",
+      "expected": ["SameIdResetNeedsPriorNetChange"],
+      "broke": ["SameIdResetNeedsPriorNetChange"],
+      "unchecked": []
+    },
+    {
+      "document": "sdk-stop-recovery",
+      "name": "Continue a captured final person or session Stop",
+      "ok": true,
+      "state": "broke",
+      "expected": ["CapturedStopNeverContinued"],
+      "broke": ["CapturedStopNeverContinued"],
+      "unchecked": []
+    },
+    {
+      "document": "sdk-stop-recovery",
+      "name": "Admit a successor after the persisted decline won",
+      "ok": true,
+      "state": "broke",
+      "expected": ["DeclineWinsBeforeAdmission"],
+      "broke": ["DeclineWinsBeforeAdmission"],
+      "unchecked": []
+    },
+    {
       "document": "mcp-resource-tickets",
       "name": "Redeem a consumed ticket a second time",
       "ok": true,
@@ -1805,6 +1986,5 @@
       "broke": ["ForwardingIsNotAuthority"],
       "unchecked": []
     }
-  ],
-  "digestEvidence": "Recorded from the unchanged frozen models after the combined run; checked against their canonical positive records and baseline state counts."
+  ]
 }

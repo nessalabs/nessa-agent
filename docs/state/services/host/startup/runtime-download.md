@@ -34,7 +34,7 @@ model:
 modelCheck:
   sourceRevision: "11e2746f7df088a1bd5ee3b2e579ad8a40b5cbd1"
   checker: tlc-1.7.4
-  date: 2026-11-03T02:48:08.615Z
+  date: 2026-11-03T03:28:31.466Z
   config: tla/services/host/startup/RuntimeOffer.cfg
   modelDigest: 2e77586f0f7f0a360098cdc00de81dc1d2a21bf962cf360e14d4bee1fc095cdd
   states: 24

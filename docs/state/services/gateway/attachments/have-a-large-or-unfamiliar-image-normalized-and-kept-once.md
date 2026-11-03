@@ -28,7 +28,7 @@ model:
   config: tla/services/gateway/attachments/AttachmentHold.cfg
 modelCheck:
   checker: tlc-1.7.4
-  date: 2026-11-03T02:47:47.416Z
+  date: 2026-11-03T03:28:06.228Z
   config: tla/services/gateway/attachments/AttachmentHold.cfg
   modelDigest: 478ecea34c084aab1cd633647af4934a8d7bf6ad2e61b6efb0ccdcdf06a39ed4
   states: 9

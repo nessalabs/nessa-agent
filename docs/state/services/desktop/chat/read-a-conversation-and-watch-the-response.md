@@ -67,6 +67,6 @@ stateDiagram-v2
 
 Disposition: shared owner model. Read replacement and connection lifetime are shared backend/client owners. [sdk-history](../../sdk/history.md) [client-connection](../../client/connection.md)
 
-Excluded: Transcript rendering, scrolling, animation and projection-to-UI correctness are not checked by those models.
+The desktop [transcript scroll owner](../workspace/transcript-scroll.md) separately models reader movement before a delayed scroll event and observer retirement at source `719dfce93892e09dcb95e86a060b6d2f42c8f3cc`. It does not apply the desktop scroll guarantee to the floating panel. Transcript rendering, animation and projection-to-UI correctness remain outside those models.
 
 Source review scope: owner entry points and relevant regression declarations were inventoried against frozen source `77a6b620af4d94b234294f6d273fd74b3dfb44c7`. Existing source checkpoints are retained where this was a partial review. A model result establishes bounded design safety only. Browser appearance and interaction were not checked.

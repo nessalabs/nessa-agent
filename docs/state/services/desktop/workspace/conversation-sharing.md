@@ -39,7 +39,7 @@ model:
 modelCheck:
   sourceRevision: "0b8019cf45f99b285f10c41199875d474492c6d1"
   checker: tlc-1.7.4
-  date: 2026-11-03T02:47:31.878Z
+  date: 2026-11-03T03:27:48.462Z
   config: tla/services/desktop/workspace/conversation-sharing.cfg
   modelDigest: af985c41cdb4e6ac86d240c8d5a1c29cefa38c30f78a522b6f0c6b889061b4d6
   states: 26

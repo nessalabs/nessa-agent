@@ -47,7 +47,7 @@ model:
 modelCheck:
   sourceRevision: "a32206a4b867e8a4515a37d803b7753dce90d534"
   checker: tlc-1.7.4
-  date: 2026-11-03T02:47:42.463Z
+  date: 2026-11-03T03:28:00.136Z
   config: tla/services/desktop/workspace/settings-action-owners.cfg
   modelDigest: c98657e87a19ea06b16edbf6571df91f0860c98bf9f5786679675809d8636074
   states: 46

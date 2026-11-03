@@ -25,7 +25,7 @@ model:
   config: tla/services/host/startup/CliTokenLifetime.cfg
 modelCheck:
   checker: tlc-1.7.4
-  date: 2026-11-03T02:48:06.126Z
+  date: 2026-11-03T03:28:28.782Z
   config: tla/services/host/startup/CliTokenLifetime.cfg
   modelDigest: ed4afac84b1efda2b748b31d18fcd0be3d3c3386fdffac27aeed93997a8b4944
   states: 22

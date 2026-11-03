@@ -144,3 +144,5 @@ Source review scope: owner entry points and relevant regression declarations wer
 The current composition also supplies GitHub, Boat, vault and voice-key settings rows. Backend connection, encrypted credential and workspace placement owners remain under Gateway. Settings search is a catalogue contract; the catalogue alone does not prove every row has a working effect. Separate provider login is an external flow and does not clear an authentication refusal.
 
 - [Keep a local window preference](window-preferences.md)
+
+- [Keep the reader position when a transcript grows](transcript-scroll.md)

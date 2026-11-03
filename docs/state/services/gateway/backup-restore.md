@@ -32,7 +32,7 @@ diagramLinks: {}
 modelCheck:
   sourceRevision: "77a6b620af4d94b234294f6d273fd74b3dfb44c7"
   checker: tlc-1.7.4
-  date: 2026-11-03T02:47:54.950Z
+  date: 2026-11-03T03:28:14.399Z
   config: tla/services/gateway/BackupRestore.cfg
   modelDigest: e25ce0794c82537eba2def63e1044980fe00f1c0d329a408fa28cabb16114944
   states: 244

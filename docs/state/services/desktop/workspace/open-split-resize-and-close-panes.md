@@ -33,7 +33,7 @@ model:
 modelCheck:
   sourceRevision: "3db7cdea6b545e18545799f590c058646ab9d620"
   checker: tlc-1.7.4
-  date: 2026-11-03T02:47:38.708Z
+  date: 2026-11-03T03:27:56.016Z
   config: tla/services/desktop/workspace/open-split-resize-and-close-panes.cfg
   modelDigest: 3c8434014c42e69528967fa5d5d0cf11488143258d1aacc8b8d0b86a283d974a
   states: 18

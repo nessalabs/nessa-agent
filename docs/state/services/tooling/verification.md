@@ -5,7 +5,7 @@ kind: guide
 status: reference
 summary: Choose catalog, model, scripted, browser and provider checks by the behavior they exercise.
 parent: tooling
-sourceRevision: "acaeaa68317434b47b7dc8870bd0e172fa66422d"
+sourceRevision: "3f0392b148ee998bf2df949bced96f5a61059769"
 sources:
   - package.json
   - scripts/state-docs/check.mjs
@@ -114,6 +114,21 @@ is opt-in and records provider/runtime provenance. The
 account and disposable billable VMs; it is excluded from default CI. Neither
 runs as part of state catalog or model checks. The scale harness also has its
 own workload and evidence; model state counts are not throughput measurements.
+
+## Native device and integration checks
+
+The [native-device guide](../../../../verification/native-device/README.md)
+owns the focused Swift queue and product-request probes introduced on main.
+They compile production wrapper/lane code with narrow test stand-ins. Their
+result is separate from a phone app, generated native package, TLS listener or
+real provider. The [native submission owner](../client/native-submissions.md)
+records the actual queue and downstream ticket boundaries. The Swift FIFO is
+unbounded; finite TLA request counts are analysis bounds, not runtime admission
+limits or queue-wait deadlines.
+
+The updated [browser verification guide](../../../../verification/README.md)
+also records context-admission stress steps from integrated main. Listing them
+here does not claim that the whole stress suite ran locally in this pass.
 
 ## Review scope
 

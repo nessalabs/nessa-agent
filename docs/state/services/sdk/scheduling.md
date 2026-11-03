@@ -3,8 +3,9 @@ id: "sdk-scheduling"
 title: "Submission scheduling and recovery"
 kind: "statechart"
 status: "implemented"
-summary: "Nessa keeps each accepted input's original ID, content, caller and delivery mode."
-sourceRevision: "a831b60b01231b226826405540e86ac370194682"
+summary: "Nessa keeps each accepted input's original ID, content, caller and
+  delivery mode."
+sourceRevision: "719dfce93892e09dcb95e86a060b6d2f42c8f3cc"
 parent: "sdk"
 sources:
   - "crates/nessa-sdk/src/domain/agent_execution/executions/value_objects/sched\
@@ -12,7 +13,8 @@ sources:
   - "crates/nessa-sdk/src/application/agent_execution/agents/scheduling.rs"
   - "crates/nessa-sdk/src/application/agent_execution/agents/resumption.rs"
   - "crates/nessa-sdk/src/application/agent_execution/agents/submissions.rs"
-  - "crates/nessa-sdk/tests/application/agent_execution/agents/conformance/resumption.rs"
+  - "crates/nessa-sdk/tests/application/agent_execution/agents/conformance/resu\
+    mption.rs"
   - "crates/nessa-sdk/docs/agent_execution/scheduling.md"
   - "crates/nessa-sdk/tests/application/agent_execution/scheduling/retries.rs"
 diagramLinks: {}
@@ -20,9 +22,9 @@ model:
   spec: tla/services/sdk/Scheduling.tla
   config: tla/services/sdk/Scheduling.cfg
 modelCheck:
-  sourceRevision: "aa91831b5331d3461969f6a7be723a6d3325f29b"
+  sourceRevision: "719dfce93892e09dcb95e86a060b6d2f42c8f3cc"
   checker: tlc-1.7.4
-  date: 2026-11-03T02:48:21.028Z
+  date: 2026-11-03T03:28:46.335Z
   config: tla/services/sdk/Scheduling.cfg
   modelDigest: c8d24f3319ec656576a94c09f1437d02733f642e6100c02706aff4be528ba614
   states: 81
@@ -96,3 +98,9 @@ The finite model checks safety only. Queue capacity and reordering, input bytes/
 This is a scoped source review at `77a6b620af4d94b234294f6d273fd74b3dfb44c7`. It adds the stated abstraction and does not refresh all earlier narrative claims. Existing page checkpoints are retained where present; reading regression sources is not a test run.
 
 The bounded scheduler also selects an exact or conflicting retry of the same retained submission. Only the exact binding recovers its receipt. Native acknowledgement records injection into the existing target, without allocating a second invocation; timeout still never permits fallback. Save acknowledgement and accepted-owner retirement are separate from queue membership and receipt publication.
+
+## Latest source reconciliation
+
+Reconciled this owner narrative against `719dfce93892e09dcb95e86a060b6d2f42c8f3cc` after the incoming source changes from `77a6b620af4d94b234294f6d273fd74b3dfb44c7`. The incoming source review at `a831b60b01231b226826405540e86ac370194682` and its narrative are preserved; the new checkpoint includes the current-context boundary, captured final Stop settlement and decline-before-successor admission changes. Existing save, provenance, handoff and preparation explanations were checked for agreement with their unchanged or explicitly revised owners. Historical test discussion retains its original scope; no product suite was executed here.
+
+[Captured Stop recovery](stop-recovery.md) models the missing final edge without a successor and the scheduler decision that lets a persisted decline win before successor admission. It does not replace gateway command-receipt recovery or physical cleanup.

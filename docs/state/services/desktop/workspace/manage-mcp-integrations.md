@@ -35,7 +35,7 @@ model:
 modelCheck:
   sourceRevision: "54eada082563badb344bf0fb23c85c318f024b2a"
   checker: tlc-1.7.4
-  date: 2026-11-03T02:47:36.241Z
+  date: 2026-11-03T03:27:53.202Z
   config: tla/services/desktop/workspace/manage-mcp-integrations.cfg
   modelDigest: 24236c4ced1feb49005655651917a82a78f04f81442187ea43be311fc9213c62
   states: 11
