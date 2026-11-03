@@ -344,4 +344,44 @@ export const probes = [
         'artifact = "None" /\\ artifact',
       ),
   },
+  {
+    document: "gateway-record-read-discovery",
+    name: "Charge an occupied cache checkout as a validating discovery step",
+    expectedRules: ["OccupiedDoesNotSpendSteps"],
+    mutate: (spec) =>
+      spec.replace(
+        'phase\' = "Waiting" /\\ UNCHANGED <<started,elapsed,steps,validated,targetOccupied,otherOccupied,held>>',
+        "phase' = \"Waiting\" /\\ steps' = steps + 1 /\\ UNCHANGED <<started,elapsed,validated,targetOccupied,otherOccupied,held>>",
+      ),
+  },
+  {
+    document: "gateway-record-read-discovery",
+    name: "Expire the discovery work budget before its worker starts",
+    expectedRules: ["QueueDoesNotSpendWorkBudget"],
+    mutate: (spec) =>
+      spec.replace(
+        'Elapse == /\\ started /\\ ~elapsed /\\ phase \\in {"Discovering","Waiting"}',
+        "Elapse == /\\ ~elapsed",
+      ),
+  },
+  {
+    document: "gateway-record-read-discovery",
+    name: "Wait for an unrelated occupied stream before retrying this free stream",
+    expectedRules: ["OwnStreamCanResume"],
+    mutate: (spec) =>
+      spec.replace(
+        'Resume == /\\ phase = "Waiting" /\\ ~targetOccupied /\\ ~elapsed',
+        'Resume == /\\ phase = "Waiting" /\\ ~targetOccupied /\\ ~otherOccupied /\\ ~elapsed',
+      ),
+  },
+  {
+    document: "gateway-record-read-discovery",
+    name: "Release source capacity while waiting on occupied discovery",
+    expectedRules: ["CapacityUntilSourceJoin"],
+    mutate: (spec) =>
+      spec.replace(
+        'phase\' = "Waiting" /\\ UNCHANGED <<started,elapsed,steps,validated,targetOccupied,otherOccupied,held>>',
+        "phase' = \"Waiting\" /\\ held' = FALSE /\\ UNCHANGED <<started,elapsed,steps,validated,targetOccupied,otherOccupied>>",
+      ),
+  },
 ]

@@ -204,4 +204,21 @@ export const probes = [
     expectedRules: ["RemovalFence"],
     mutate: (spec) => spec.replace("revision > removed", "TRUE"),
   },
+  {
+    document: "client-native-submissions",
+    name: "Reverse the waiting handoff order",
+    expectedRules: ["BodiesStayInArrivalOrder"],
+    mutate: (spec) =>
+      spec.replace(
+        "selected' = Head(queue) /\\ queue' = Tail(queue)",
+        "selected' = queue[Len(queue)] /\\ queue' = SubSeq(queue,1,Len(queue)-1)",
+      ),
+  },
+  {
+    document: "desktop-transcript-scroll",
+    name: "Reuse stale pin after reader movement before its scroll event",
+    expectedRules: ["ReaderMovementWins"],
+    mutate: (spec) =>
+      spec.replaceAll("IF top # seenTop THEN height - 1 - top < 1 ELSE pinned", "pinned"),
+  },
 ]

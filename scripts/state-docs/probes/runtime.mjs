@@ -285,4 +285,70 @@ export const probes = [
         "OldUnsubscribe == oldHandle /\\ active' = FALSE /\\ oldHandle' = FALSE /\\ UNCHANGED <<current, reinstalled, staleRemoved>>",
       ),
   },
+  {
+    document: "sdk-context-admission",
+    name: "Recompute the opening watermark after later admission settled",
+    expectedRules: ["CapturedBoundaryPreserved"],
+    mutate: (spec) =>
+      replaceExactlyOnce(
+        spec,
+        "Publish == phase = \"Candidate\" /\\ phase' = \"Published\" /\\ boundary' = (IF sameId /\\ sameProvider THEN 0 ELSE captured) /\\ identityCommitted' = TRUE /\\ contextCommitted' = TRUE /\\ UNCHANGED <<count, prefix, captured, sameId, sameProvider, nativeMissing>>",
+        "Publish == phase = \"Candidate\" /\\ phase' = \"Published\" /\\ boundary' = (IF sameId /\\ sameProvider THEN 0 ELSE prefix) /\\ identityCommitted' = TRUE /\\ contextCommitted' = TRUE /\\ UNCHANGED <<count, prefix, captured, sameId, sameProvider, nativeMissing>>",
+      ),
+  },
+  {
+    document: "sdk-context-admission",
+    name: "Publish replacement identity without its context evidence",
+    expectedRules: ["AtomicIdentityPublication"],
+    mutate: (spec) =>
+      replaceExactlyOnce(
+        spec,
+        "Publish == phase = \"Candidate\" /\\ phase' = \"Published\" /\\ boundary' = (IF sameId /\\ sameProvider THEN 0 ELSE captured) /\\ identityCommitted' = TRUE /\\ contextCommitted' = TRUE /\\ UNCHANGED <<count, prefix, captured, sameId, sameProvider, nativeMissing>>",
+        "Publish == phase = \"Candidate\" /\\ phase' = \"Published\" /\\ boundary' = (IF sameId /\\ sameProvider THEN 0 ELSE captured) /\\ identityCommitted' = TRUE /\\ contextCommitted' = FALSE /\\ UNCHANGED <<count, prefix, captured, sameId, sameProvider, nativeMissing>>",
+      ),
+  },
+  {
+    document: "sdk-context-validation",
+    name: "Accept a watermark beyond the terminal invocation prefix",
+    expectedRules: ["BoundaryWithinTerminal"],
+    mutate: (spec) =>
+      replaceExactlyOnce(
+        spec,
+        'Validate == phase = "Inspecting" /\\ prefix <= count /\\ (IF absent THEN count = previous ELSE candidate <= prefix /\\ (~sameId \\/ candidate = previous \\/ namespace = 1)) /\\ phase\' = "Validated" /\\ valid\' = TRUE /\\ UNCHANGED <<count, prefix, candidate, sameId, absent, namespace, steps, previous>>',
+        'Validate == phase = "Inspecting" /\\ prefix <= count /\\ (IF absent THEN count = previous ELSE TRUE /\\ (~sameId \\/ candidate = previous \\/ namespace = 1)) /\\ phase\' = "Validated" /\\ valid\' = TRUE /\\ UNCHANGED <<count, prefix, candidate, sameId, absent, namespace, steps, previous>>',
+      ),
+  },
+  {
+    document: "sdk-context-validation",
+    name: "Reset a reused native ID without preceding net namespace evidence",
+    expectedRules: ["SameIdResetNeedsPriorNetChange"],
+    mutate: (spec) =>
+      replaceExactlyOnce(
+        spec,
+        'Validate == phase = "Inspecting" /\\ prefix <= count /\\ (IF absent THEN count = previous ELSE candidate <= prefix /\\ (~sameId \\/ candidate = previous \\/ namespace = 1)) /\\ phase\' = "Validated" /\\ valid\' = TRUE /\\ UNCHANGED <<count, prefix, candidate, sameId, absent, namespace, steps, previous>>',
+        'Validate == phase = "Inspecting" /\\ prefix <= count /\\ (IF absent THEN count = previous ELSE candidate <= prefix /\\ TRUE) /\\ phase\' = "Validated" /\\ valid\' = TRUE /\\ UNCHANGED <<count, prefix, candidate, sameId, absent, namespace, steps, previous>>',
+      ),
+  },
+  {
+    document: "sdk-stop-recovery",
+    name: "Continue a captured final person or session Stop",
+    expectedRules: ["CapturedStopNeverContinued"],
+    mutate: (spec) =>
+      replaceExactlyOnce(
+        spec,
+        'AdmitSuccessor == phase = "Settled" /\\ cause \\in {"Interrupted", "RetryableFailure"} /\\ ~declined /\\ edge /\\ phase\' = "Continued" /\\ successors\' = 1 /\\ UNCHANGED <<cause, edge, declined, restarts>>',
+        'AdmitSuccessor == phase = "Settled" /\\ ~declined /\\ edge /\\ phase\' = "Continued" /\\ successors\' = 1 /\\ UNCHANGED <<cause, edge, declined, restarts>>',
+      ),
+  },
+  {
+    document: "sdk-stop-recovery",
+    name: "Admit a successor after the persisted decline won",
+    expectedRules: ["DeclineWinsBeforeAdmission"],
+    mutate: (spec) =>
+      replaceExactlyOnce(
+        spec,
+        'AdmitSuccessor == phase = "Settled" /\\ cause \\in {"Interrupted", "RetryableFailure"} /\\ ~declined /\\ edge /\\ phase\' = "Continued" /\\ successors\' = 1 /\\ UNCHANGED <<cause, edge, declined, restarts>>',
+        'AdmitSuccessor == phase = "Settled" /\\ cause \\in {"Interrupted", "RetryableFailure"} /\\ edge /\\ phase\' = "Continued" /\\ successors\' = 1 /\\ UNCHANGED <<cause, edge, declined, restarts>>',
+      ),
+  },
 ]
