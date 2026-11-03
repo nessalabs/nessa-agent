@@ -344,7 +344,7 @@ async fn a_login_is_handed_only_where_the_policy_allows() {
             .login_for(&EnvironmentRef::Peer(peer(4)), agent),
         None
     );
-    // An agent with none saved is handed none.
+    // An agent with none saved is handed none, and nothing is recorded.
     assert_eq!(fixture.service.login_for(&ssh(), AgentId::Codex), None);
     let handed: Vec<_> = fixture
         .audit
@@ -381,11 +381,6 @@ async fn a_login_is_handed_only_where_the_policy_allows() {
                 environment: peer(4).name(),
                 agent,
                 why: Withheld::NotAllowed
-            },
-            LoginEvent::NotSent {
-                environment: "studio".into(),
-                agent: AgentId::Codex,
-                why: Withheld::NoneSaved
             },
         ]
     );
@@ -536,4 +531,26 @@ fn the_durable_audit_writes_one_file_per_phase_and_never_a_login() {
     assert_eq!(withheld["initiator"]["kind"], "gateway");
     assert_eq!(withheld["details"]["reason"], "vault_locked");
     assert_eq!(audit.record(&requested), Err(AuditUnavailable));
+}
+
+/// A switch list this build cannot read switches nothing on, hands nothing
+/// to a paired machine, and is written over by the next switch turned.
+#[tokio::test]
+async fn an_unreadable_switch_list_is_all_off_and_can_be_written_again() {
+    let fixture = fixture();
+    *fixture.logins[&AgentId::Claude].value.lock().unwrap() = Some(b"sk-ant".to_vec());
+    *fixture.devices.value.lock().unwrap() = Some(b"not a list".to_vec());
+    assert!(fixture.service.status().unwrap().devices_on.is_empty());
+    assert_eq!(
+        fixture
+            .service
+            .login_for(&EnvironmentRef::Peer(peer(1)), AgentId::Claude),
+        None
+    );
+    let status = fixture
+        .service
+        .set_device(caller(), peer(1), true)
+        .await
+        .unwrap();
+    assert_eq!(status.devices_on, [peer(1)]);
 }

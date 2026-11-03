@@ -3813,9 +3813,7 @@ const steps = {
 
   async login(run, step, failures) {
     const agent = run.stack.agent
-    const variable = LOGIN_VARIABLES[agent]
     const login = `sk-stress-login-r${step.index}-s${run.knobs.seed}`
-    const namespace = join(run.stack.gateway.directory, "ci", "instances", INSTANCE)
     const shot = (name) =>
       run.evidence
         ? run.page
@@ -3823,6 +3821,23 @@ const steps = {
             .catch(() => {})
         : undefined
     const row = run.page.locator(`[data-saved-login="${agent}"]`)
+    // The login, once saved, is removed again whatever happens after.
+    try {
+      await steps.loginOnWorker(run, step, failures, { agent, login, row, shot })
+    } finally {
+      try {
+        await run.stack.vault.unlock()
+        await run.client.logins.remove(agent)
+      } catch (error) {
+        failures.push(`the saved login could not be removed again: ${error.message}`)
+      }
+    }
+    if (failures.length === 0) await steps.reply(run, step, failures)
+  },
+
+  async loginOnWorker(run, step, failures, { agent, login, row, shot }) {
+    const variable = LOGIN_VARIABLES[agent]
+    const namespace = join(run.stack.gateway.directory, "ci", "instances", INSTANCE)
     // Saved in Settings, as a person pastes it.
     await run.exclusive(async () => {
       const needsUnlock = (await run.client.vault.status()).state === "locked"
@@ -3990,20 +4005,18 @@ const steps = {
       }
       owner?.close()
       rmSync(launches, { force: true })
-      // Nothing the step saved outlives it.
+      // The switch the step turned on is off again.
       try {
         await run.stack.vault.unlock()
         if (worker?.name) await run.client.logins.setDevice(worker.name, false)
-        await run.client.logins.remove(agent)
       } catch (error) {
-        failures.push(`the saved login could not be removed again: ${error.message}`)
+        failures.push(`the worker's switch could not be turned off: ${error.message}`)
       }
       await run.exclusive(async () => {
         await openLinkedDevices(run.page)
         if (await switchLinking(run, false, failures)) await closeSettings(run.page)
       })
     }
-    if (failures.length === 0) await steps.reply(run, step, failures)
   },
 
   async voice(run, step, failures) {

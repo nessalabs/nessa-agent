@@ -30,20 +30,60 @@ fn a_saved_login_is_set_only_where_the_host_has_none_of_its_own() {
     let login = Login::new("sk-ant-oat-x".into()).unwrap();
     let none = BTreeMap::new();
     assert_eq!(
-        login_to_set(AgentId::Claude, Some(&login), &none),
+        login_to_set(AgentId::Claude, Some(&login), &none, |_| false),
         Some(("CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-oat-x"))
     );
     assert_eq!(
-        login_to_set(AgentId::Codex, Some(&login), &none),
+        login_to_set(AgentId::Codex, Some(&login), &none, |_| false),
         Some(("CODEX_API_KEY", "sk-ant-oat-x"))
     );
-    assert_eq!(login_to_set(AgentId::Claude, None, &none), None);
+    assert_eq!(login_to_set(AgentId::Claude, None, &none, |_| false), None);
     // An API key the host set is the host's login too.
     let own = BTreeMap::from([(OsString::from("ANTHROPIC_API_KEY"), OsString::from("mine"))]);
-    assert_eq!(login_to_set(AgentId::Claude, Some(&login), &own), None);
+    assert_eq!(
+        login_to_set(AgentId::Claude, Some(&login), &own, |_| false),
+        None
+    );
     // Another agent's variable is not this agent's login.
     assert_eq!(
-        login_to_set(AgentId::Codex, Some(&login), &own),
+        login_to_set(AgentId::Codex, Some(&login), &own, |_| false),
         Some(("CODEX_API_KEY", "sk-ant-oat-x"))
     );
+}
+
+/// A sign-in the agent's own login command wrote on the host wins too:
+/// Claude Code's `.credentials.json`, Codex's `auth.json`, where the
+/// harness's environment points them.
+#[test]
+fn a_host_signed_in_with_the_agent_s_own_file_keeps_it() {
+    let login = Login::new("sk-ant-oat-x".into()).unwrap();
+    let home = BTreeMap::from([(OsString::from("HOME"), OsString::from("/home/me"))]);
+    assert_eq!(
+        own_sign_in_files(AgentId::Claude, &home),
+        [PathBuf::from("/home/me/.claude/.credentials.json")]
+    );
+    assert_eq!(
+        own_sign_in_files(AgentId::Opencode, &home),
+        [PathBuf::from("/home/me/.local/share/opencode/auth.json")]
+    );
+    let pointed = BTreeMap::from([
+        (OsString::from("HOME"), OsString::from("/home/me")),
+        (OsString::from("CODEX_HOME"), OsString::from("/srv/codex")),
+    ]);
+    assert_eq!(
+        own_sign_in_files(AgentId::Codex, &pointed),
+        [PathBuf::from("/srv/codex/auth.json")]
+    );
+    let signed_in = |path: &Path| path == Path::new("/srv/codex/auth.json");
+    assert_eq!(
+        login_to_set(AgentId::Codex, Some(&login), &pointed, signed_in),
+        None
+    );
+    // Claude's file is somewhere else: not signed in, so it is set.
+    assert_eq!(
+        login_to_set(AgentId::Claude, Some(&login), &pointed, signed_in),
+        Some(("CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-oat-x"))
+    );
+    // No HOME and nothing pointed: nowhere to look.
+    assert!(own_sign_in_files(AgentId::Claude, &BTreeMap::new()).is_empty());
 }

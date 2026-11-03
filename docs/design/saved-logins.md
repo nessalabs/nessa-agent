@@ -8,7 +8,11 @@ Devices that runs agents for it can use that sign-in.
 The gateway's vault is the one place a login is kept. It is never copied
 to another machine's disk: it travels with each agent start, by value, and
 the machine holds it only for the harness it starts with it. Replacing or
-removing a login applies from the next agent started.
+removing a login, or turning a switch off, applies to agents opened after
+it: the login is read once when an agent's lease opens, and an agent already
+open keeps the one it opened with until it closes (an idle agent parks after
+`agentIdleSeconds`, so it reopens with the new answer). The `sent` record is
+written when the lease opens with the login, before the harness starts.
 
 Three yeses are needed before a login reaches a machine, each owned by one
 place:
@@ -23,8 +27,19 @@ The Cedar policy permits SSH hosts and Boat workspaces (this gateway signs
 in as their account and can already set anything a harness there runs
 with), permits a paired machine only while its "Use my saved logins here"
 switch is on (vault entry `login.devices`), and forbids this gateway's own
-machine. A machine whose own `config.json` or environment sets any of an
-agent's login variables keeps its own: the host wins.
+machine. A machine with its own sign-in for an agent keeps it: the host
+wins. Its own sign-in is any of the agent's login variables in the
+harness's environment, or the file the agent's own login command writes
+there (Claude Code's `.credentials.json` in `CLAUDE_CONFIG_DIR` or
+`~/.claude`, Codex's `auth.json` in `CODEX_HOME` or `~/.codex`, OpenCode's
+`auth.json` under `~/.local/share/opencode`). A Claude Code sign-in kept
+only in a Mac's keychain is not seen, so such a Mac is handed the saved
+login unless its owner runs `nessa env ungrant --logins` (or
+`--peer ssh --logins`) there.
+
+An `ssh` entry written before this change has no `acceptLogins`, so a host
+whose owner had narrowed SSH takes no login until they run
+`nessa env grant --peer ssh --logins`. A host with no entry takes them.
 
 ## Flow
 

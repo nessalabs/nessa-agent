@@ -3662,19 +3662,19 @@ export interface LoginsStatus {
   /** The paired machines whose switch is on, by environment name, in name order. */
   devicesOn: string[]
 }
-/** Save an agent's login in the gateway's vault, replacing any saved one (logins.save). Applies from the next agent started on a machine that receives logins. */
+/** Save an agent's login in the gateway's vault, replacing any saved one (logins.save). Applies to agents opened after it on a machine that receives logins; an agent already open keeps the login it opened with. */
 export interface LoginsSaveParams {
   /** The agent the login is for. */
   agent: LoginAgent
   /** The login: a Claude setup-token, or the agent's API key. Printable ASCII with no spaces. */
   login: string
 }
-/** Delete an agent's saved login (logins.remove). Agents already running keep the one they started with until their harness ends. */
+/** Delete an agent's saved login (logins.remove). Agents already open keep the one they opened with until they close. */
 export interface LoginsRemoveParams {
   /** The agent. */
   agent: LoginAgent
 }
-/** Turn a paired machine's "Use my saved logins here" switch on or off (logins.setDevice). Applies from the next agent started there. */
+/** Turn a paired machine's "Use my saved logins here" switch on or off (logins.setDevice). Applies to agents opened there after it; an agent already open keeps what it opened with. */
 export interface LoginsSetDeviceParams {
   /** The paired machine, by its environment name as devices.list gives it. */
   environment: string

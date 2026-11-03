@@ -283,8 +283,14 @@ impl SshEnvironment {
 
     /// Ask `logins` for the saved login of each lease the host grants
     /// `takesLogin`. Only before the environment is shared.
+    /// Composition only: called on an environment nothing else holds yet.
     pub(crate) fn with_logins(mut self, logins: Arc<dyn SavedLogins>) -> Self {
-        if let Some(inner) = Arc::get_mut(&mut self.inner) {
+        let inner = Arc::get_mut(&mut self.inner);
+        debug_assert!(
+            inner.is_some(),
+            "saved logins are given before the environment is shared"
+        );
+        if let Some(inner) = inner {
             inner.logins = Some(logins);
         }
         self

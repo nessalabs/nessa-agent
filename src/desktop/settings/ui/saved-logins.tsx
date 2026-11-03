@@ -60,8 +60,16 @@ function useSavedLogins() {
       current = false
     }
   }, [gateway, take])
+  /**
+   * Unlocks first, then does `work`. What is shown may be unread (a locked
+   * vault refused the read on mount): then it is read again once unlocked,
+   * and `work` is given that, so a change is made from how things stand.
+   */
   const act = async (
-    work: (gateway: SavedLoginsGateway) => Promise<SavedLoginsOutcome>,
+    work: (
+      gateway: SavedLoginsGateway,
+      current: SavedLogins | undefined,
+    ) => Promise<SavedLoginsOutcome>,
   ): Promise<boolean> => {
     if (!gateway || busy) return false
     setBusy(true)
@@ -70,7 +78,15 @@ function useSavedLogins() {
         setError("Unlock Nessa to change saved logins.")
         return false
       }
-      const outcome = await work(gateway)
+      let current = logins
+      if (!current) {
+        const read = await gateway.read()
+        if (read.kind === "read") {
+          current = read.logins
+          setLogins(read.logins)
+        }
+      }
+      const outcome = await work(gateway, current)
       take(outcome)
       return outcome.kind === "read"
     } finally {
@@ -197,8 +213,8 @@ function SavedLoginRow({
 
 /**
  * A paired computer's "Use my saved logins here" switch, as one fact of its
- * page in Devices (a `<dl>` entry). Off until turned on; applies from the
- * next agent started there. Nothing without a gateway.
+ * page in Devices (a `<dl>` entry). Off until turned on; applies to
+ * agents opened there after it. Nothing without a gateway.
  */
 export function DeviceLoginsSwitch({ environment }: { environment: string }) {
   const { gateway, logins, busy, error, act } = useSavedLogins()
@@ -214,7 +230,16 @@ export function DeviceLoginsSwitch({ environment }: { environment: string }) {
           // Unread (a locked vault), it shows off and still works: the
           // change unlocks first, and the gateway answers how it stands.
           disabled={busy}
-          onChange={(next) => void act((gateway) => gateway.setDevice(environment, next))}
+          onChange={(next) =>
+            void act((gateway, current) =>
+              // Read only once unlocked: turned from how it stands, not from
+              // the "off" an unread switch shows.
+              gateway.setDevice(
+                environment,
+                current && !logins ? !current.devicesOn.has(environment) : next,
+              ),
+            )
+          }
         />
         {error && <p role="alert">{error}</p>}
       </dd>

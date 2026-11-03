@@ -30,8 +30,6 @@ pub struct AuditUnavailable;
 pub enum Withheld {
     /// The policy does not let this machine receive logins.
     NotAllowed,
-    /// None is saved for the agent.
-    NoneSaved,
     /// The vault is locked.
     Locked,
     /// The vault, or the policy, could not answer.
@@ -169,11 +167,14 @@ impl SavedLoginsService {
     fn switches(&self) -> Result<DeviceSwitches, LoginsError> {
         match self.devices.read().map_err(store_error)? {
             None => Ok(DeviceSwitches::default()),
-            // A list this build cannot read switches nothing on.
-            Some(bytes) => DeviceSwitches::decode(&bytes).map_err(|InvalidSwitches| {
-                tracing::error!("the saved-login device switches are unreadable; none is on");
-                LoginsError::StorageUnavailable
-            }),
+            // A list this build cannot read switches nothing on, and the
+            // next switch turned writes a list it can.
+            Some(bytes) => Ok(
+                DeviceSwitches::decode(&bytes).unwrap_or_else(|InvalidSwitches| {
+                    tracing::error!("the saved-login device switches are unreadable; none is on");
+                    DeviceSwitches::default()
+                }),
+            ),
         }
     }
 
@@ -303,9 +304,10 @@ impl SavedLoginsService {
     }
 
     /// The saved login a harness of `agent` started on `environment` is
-    /// given: only when the policy lets that machine receive one, and one is
-    /// saved. Recorded either way; a login whose sending cannot be recorded
-    /// is not sent.
+    /// given: only when one is saved and the policy lets that machine
+    /// receive it. Recorded either way, except when none is saved: there is
+    /// nothing to hand or withhold. A login whose handing cannot be
+    /// recorded is not handed.
     pub fn login_for(&self, environment: &EnvironmentRef, agent: AgentId) -> Option<Login> {
         let operation_id = Uuid::new_v4().to_string();
         let name = environment.name();
@@ -320,6 +322,12 @@ impl SavedLoginsService {
                 },
             );
             None
+        };
+        let login = match self.saved(agent) {
+            Ok(Some(login)) => login,
+            Ok(None) => return None,
+            Err(LoginsError::VaultLocked) => return withheld(Withheld::Locked),
+            Err(_) => return withheld(Withheld::Unavailable),
         };
         let switched_on = match environment {
             EnvironmentRef::Peer(peer) => match self.switches() {
@@ -339,12 +347,6 @@ impl SavedLoginsService {
             Ok(false) => return withheld(Withheld::NotAllowed),
             Err(_) => return withheld(Withheld::Unavailable),
         }
-        let login = match self.saved(agent) {
-            Ok(Some(login)) => login,
-            Ok(None) => return withheld(Withheld::NoneSaved),
-            Err(LoginsError::VaultLocked) => return withheld(Withheld::Locked),
-            Err(_) => return withheld(Withheld::Unavailable),
-        };
         self.record(
             &operation_id,
             None,

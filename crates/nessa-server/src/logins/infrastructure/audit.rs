@@ -25,7 +25,6 @@ impl DurableLoginAudit {
 fn withheld(why: Withheld) -> &'static str {
     match why {
         Withheld::NotAllowed => "not_allowed",
-        Withheld::NoneSaved => "none_saved",
         Withheld::Locked => "vault_locked",
         Withheld::Unavailable => "unavailable",
     }

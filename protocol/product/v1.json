@@ -9021,7 +9021,7 @@
     "LoginsSaveParams": {
       "type": "object",
       "additionalProperties": false,
-      "description": "Save an agent's login in the gateway's vault, replacing any saved one (logins.save). Applies from the next agent started on a machine that receives logins.",
+      "description": "Save an agent's login in the gateway's vault, replacing any saved one (logins.save). Applies to agents opened after it on a machine that receives logins; an agent already open keeps the login it opened with.",
       "properties": {
         "agent": {
           "$ref": "#/$defs/LoginAgent",
@@ -9040,7 +9040,7 @@
     "LoginsRemoveParams": {
       "type": "object",
       "additionalProperties": false,
-      "description": "Delete an agent's saved login (logins.remove). Agents already running keep the one they started with until their harness ends.",
+      "description": "Delete an agent's saved login (logins.remove). Agents already open keep the one they opened with until they close.",
       "properties": {
         "agent": { "$ref": "#/$defs/LoginAgent", "description": "The agent." }
       },
@@ -9049,7 +9049,7 @@
     "LoginsSetDeviceParams": {
       "type": "object",
       "additionalProperties": false,
-      "description": "Turn a paired machine's \"Use my saved logins here\" switch on or off (logins.setDevice). Applies from the next agent started there.",
+      "description": "Turn a paired machine's \"Use my saved logins here\" switch on or off (logins.setDevice). Applies to agents opened there after it; an agent already open keeps what it opened with.",
       "properties": {
         "environment": {
           "type": "string",

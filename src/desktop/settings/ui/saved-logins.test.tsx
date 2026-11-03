@@ -171,3 +171,39 @@ it("turns a paired computer's switch on and off", async () => {
   expect(calls.at(-1)).toEqual(["setDevice", peer, false])
   expect(fact().getAttribute("data-device-logins")).toBe("off")
 })
+
+it("turns an unread switch from how it stands once read", async () => {
+  const { gateway, calls } = fake()
+  await gateway.setDevice(peer, true)
+  calls.length = 0
+  let reads = 0
+  const read = gateway.read
+  const locked: SavedLoginsGateway = {
+    ...gateway,
+    // The first read, on mount, meets a locked vault.
+    read: () =>
+      reads++ === 0
+        ? Promise.resolve({
+            kind: "refused",
+            sentence: "Unlock Nessa to change saved logins.",
+          })
+        : read(),
+  }
+  await act(async () =>
+    root.render(
+      <SavedLoginsProvider gateway={locked}>
+        <dl>
+          <DeviceLoginsSwitch environment={peer} />
+        </dl>
+      </SavedLoginsProvider>,
+    ),
+  )
+  const fact = () => need(host.querySelector("[data-device-logins]"))
+  expect(fact().getAttribute("data-device-logins")).toBe("off")
+  await act(async () =>
+    need(fact().querySelector<HTMLButtonElement>('[role="switch"]')).click(),
+  )
+  // It was on: the click turns it off, not on again.
+  expect(calls).toEqual([["setDevice", peer, false]])
+  expect(fact().getAttribute("data-device-logins")).toBe("off")
+})
