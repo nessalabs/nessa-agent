@@ -16,13 +16,28 @@ sources:
   - "crates/nessa-server/tests/conversation/model_changes.rs"
   - "crates/nessa-server/tests/conversation/model_changes/retained_identity.rs"
   - "crates/nessa-server/tests/conversation/store/model_changes.rs"
-  - "crates/nessa-server/src/conversation/domain/value_objects/conversation_deletion.rs"
+  - "crates/nessa-server/src/conversation/domain/value_objects/conversation_del\
+    etion.rs"
   - "crates/nessa-server/src/conversation/domain/entities/conversation.rs"
   - "crates/nessa-server/tests/conversation/deletion.rs"
   - "crates/nessa-server/tests/conversation/retirement.rs"
 diagramLinks: {}
+model:
+  spec: tla/services/gateway/ConversationDeletion.tla
+  config: tla/services/gateway/ConversationDeletion.cfg
+modelCheck:
+  checker: tlc-1.7.4
+  date: 2026-11-03T03:28:15.750Z
+  config: tla/services/gateway/ConversationDeletion.cfg
+  modelDigest: 7707bcc10c23280ec4dbe36ead9be3b22d787ac83226df608c5f6ad946226306
+  states: 22
+  held:
+    - ErasurePrerequisites
+    - UnknownIsNotAbsent
+    - AbsentMeaning
+  broke: []
+  unchecked: []
 ---
-
 # Conversation identity and deletion
 
 A conversation belongs to its original creator and organization. Archive changes whether it appears in lists while keeping its history and work.
@@ -290,3 +305,7 @@ fixture: that fixture excludes newer default work to hold the old exact sequence
 but had not excluded incoming rename/delete work. Its setup now names renames0
 and deletes0 alongside awaits/fresh/windows/linkings/pools0; the exact order assertion
 and production rename/delete defaults remain unchanged.
+
+## Bounded rule model
+
+Owns delete-before-cleanup fencing, stop-before-reading provider identity, unknown versus absent history, actual external disposition and audit-before-local erasure. Failures stutter at retained progress. Model switching, permissions, archive, first request actor attribution and physical provider effects remain outside this deletion model. This finite abstraction checks safety only. It does not execute or verify the implementation, promise eventual completion, or qualify external effects. Existing source checkpoints and historical test receipts retain their earlier scope. The scoped model review inspected `crates/nessa-server/src/conversation/domain/value_objects/conversation_deletion.rs`, `crates/nessa-server/src/conversation/application/service.rs`.

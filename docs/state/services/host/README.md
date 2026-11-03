@@ -121,3 +121,7 @@ See [desktop window behavior](../desktop/workspace/open-dismiss-and-reopen-the-d
 ## Browse startup
 
 [Startup and access flows](startup/README.md) · [Current gaps](../../gaps.md)
+
+## Model coverage
+
+This component index routes to the feature owners. Their finite models check only the safety slices stated on each owner page; no single aggregate application lifecycle is claimed. Source checkpoints do not inherit to child pages.

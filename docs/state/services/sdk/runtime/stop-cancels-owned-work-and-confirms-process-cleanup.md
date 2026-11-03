@@ -3,7 +3,7 @@ id: "sdk-runtime-stop-cancels-owned-work-and-confirms-process-cleanup"
 title: "Turn Stop and attachment cleanup have different owners"
 kind: "operation"
 status: "mixed"
-summary: "Turn Stop cancels one captured turn; attachment close fences work and owns process cleanup."
+summary: "Turn Stop targets captured turns and owned descendants; attachment close owns process cleanup."
 sourceRevision: "aa91831b5331d3461969f6a7be723a6d3325f29b"
 parent: "sdk-runtime"
 sources:
@@ -37,7 +37,7 @@ diagramLinks:
 
 # Turn Stop and attachment cleanup have different owners
 
-Turn Stop cancels one captured turn; attachment close fences work and owns process cleanup. A queued turn is withdrawn, an active turn uses provider cancellation, and a finished turn sends nothing. Turn Stop leaves the attachment open. Archive only changes list visibility; closing a populated tab only detaches its view.
+Turn Stop targets a captured turn and, by default, unfinished owned descendant turns; attachment close fences work and owns process cleanup. A queued turn is withdrawn, an active turn uses provider cancellation, and a finished turn sends nothing. Turn Stop leaves attachments open. Archive only changes list visibility; closing a populated tab only detaches its view.
 
 The cleanup chart below follows attachment close, including failure-driven cleanup, rather than the turn Stop command. Physical process cleanup, release of installed-runtime use and audit delivery are separate results. A repeated close can retry unfinished cleanup. Delete additionally asks the provider to dispose of its session and erases Nessa-owned data. A provider may archive or retain its record, so local erasure must not be presented as proof that every external copy was deleted.
 
@@ -69,7 +69,7 @@ A cleanup record can fail after physical release is confirmed. The gateway then 
 
 [The command owner](../../../../../crates/nessa-server/src/conversation/application/service/mutation.rs) checks the exact turn and saves its attempt before effects. [Agent cancellation](../../../../../crates/nessa-sdk/src/application/agent_execution/agents/agent.rs) accepts only the active turn on a capable attached provider. Moving from queue to execution is retried within a bounded wait; a concurrent close is answered from the turn's eventual final state. A saved attempted Stop without a terminal receipt stays interrupted after restart and is not sent again.
 
-The SDK's [parent and child close settlement](../README.md#parent-and-child-close-settlement) is an implemented ownership lifecycle. It is not evidence that product Stop cascades through child turns. PR #981 remains unmerged at this audit baseline. The [turn Stop flow](../../desktop/chat/stop-active-and-queued-work.md) follows the product operation.
+The SDK's [parent and child close settlement](../README.md#parent-and-child-close-settlement) is a separate ownership lifecycle. Product parent Stop has now landed in [PR #981](https://github.com/nessalabs/nessa-agent/pull/981): by default it captures unfinished owned descendant turns and uses durable exact Stop bindings. It does not seal those lifetimes or close their attachments. The [turn Stop flow](../../desktop/chat/stop-active-and-queued-work.md#owned-descendants) owns the current selection, recovery and opt-out rules. This 2026-11-02 correction reviewed the product Stop boundary only; the remaining process-cleanup sections retain their existing evidence.
 
 ## Confirming the process group
 
@@ -169,3 +169,9 @@ PID namespace, including its intentionally unreaped zombies.
 ## Further reading
 
 [Source](../../../../../src/conversation/adapters/store/slice.ts) · [Related source](../../../../../crates/nessa-server/src/conversation/application/provider_sessions.rs) · [Related tests](../../../../../crates/nessa-sdk/tests/infrastructure/process.rs)
+
+## Model coverage
+
+Shared owner model: [sdk-cleanup](../cleanup.md). Fence admission, retire owners, and separate physical release from audit and finalization.
+
+Whole parent/child lifetime coordination is separately modeled in sdk-ownership; OS process termination is not proven. This relationship applies only to the stated scope, not every step of this journey. This scoped mapping retains earlier source checkpoints and is not executed implementation-test evidence.

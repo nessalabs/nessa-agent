@@ -4,7 +4,8 @@ title: GitHub reads
 kind: statechart
 status: implemented
 sourceRevision: "25f1e3526bd9dda8668c299bf7e40e5bdf22e28f"
-summary: An admitted agent turn can read GitHub metadata without receiving Nessa's sign-in.
+summary: An admitted agent turn can read GitHub metadata without receiving
+  Nessa's sign-in.
 parent: gateway
 sources:
   - crates/nessa-server/src/composition/github_tools.rs
@@ -19,8 +20,22 @@ sources:
   - verification/desktop/scripts/conversation-stress.mjs
 diagramLinks: {}
 diagramDetails: []
+model:
+  spec: tla/services/gateway/GithubRead.tla
+  config: tla/services/gateway/GithubRead.cfg
+modelCheck:
+  sourceRevision: "25f1e3526bd9dda8668c299bf7e40e5bdf22e28f"
+  checker: tlc-1.7.4
+  date: 2026-11-03T03:28:19.875Z
+  config: tla/services/gateway/GithubRead.cfg
+  modelDigest: 1e51020021ee7a90265b81d2fe7e21c9d34d7f716c39922c21f2f96888b81976
+  states: 15
+  held:
+    - CapturedIdentity
+    - RefusalHasNoAnswer
+  broke: []
+  unchecked: []
 ---
-
 # GitHub reads
 
 An agent can ask the gateway for repository, issue or pull request metadata.
@@ -89,3 +104,7 @@ The checkpoint covers the broker, generation gate, response fencing, composition
 and the named regression tests at the source revision above. It does not advance
 unrelated vault, relay, or conversation checkpoints. Executed check results and
 remaining environment limits are recorded in [the credential evidence](../../../../verification/desktop/evidence/github-credential/README.md).
+
+## Bounded rule model
+
+Owns one brokered read's captured vault generation, stop-priority gates and stale response refusal. Replacement after an already returned answer does not retract it. Cedar source admission, response schema bounds and GitHub sign-in mutation lifecycle are separate obligations. This finite abstraction checks safety only. It does not execute or verify the implementation, promise eventual completion, or qualify external effects. Existing source checkpoints and historical test receipts retain their earlier scope. The scoped model review inspected `crates/nessa-server/src/github/application/connections.rs`.

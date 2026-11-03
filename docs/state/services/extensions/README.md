@@ -39,3 +39,11 @@ flowchart LR
 ## Browse this area
 
 - [Extensions and UI](ui/README.md)
+
+## Model coverage
+
+Disposition: component index. Navigation and ownership index, not an independent runtime state machine.
+
+Excluded: Each linked feature retains its own model and source scope.
+
+Source review scope: owner entry points and relevant regression declarations were inventoried against frozen source `77a6b620af4d94b234294f6d273fd74b3dfb44c7`. Existing source checkpoints are retained where this was a partial review. A model result establishes bounded design safety only. Browser appearance and interaction were not checked.

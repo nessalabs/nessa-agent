@@ -3,7 +3,8 @@ id: github-webhooks
 title: GitHub webhook relay
 kind: service
 status: implemented
-summary: Verified GitHub events reach each authorized user's private desktop inbox, with bounded offline catch-up.
+summary: Verified GitHub events reach each authorized user's private desktop
+  inbox, with bounded offline catch-up.
 parent: nessa
 sourceRevision: "eab6d335e064276a95c094d874174fbcbc51344b"
 sources:
@@ -59,8 +60,22 @@ diagramDetails:
   - diagram: 0
     node: Refused
     section: User and stage boundaries
+model:
+  spec: tla/services/github-webhooks/RelayPage.tla
+  config: tla/services/github-webhooks/RelayPage.cfg
+modelCheck:
+  sourceRevision: "eab6d335e064276a95c094d874174fbcbc51344b"
+  checker: tlc-1.7.4
+  date: 2026-11-03T03:28:27.423Z
+  config: tla/services/github-webhooks/RelayPage.cfg
+  modelDigest: e9d0a854c98cc8dcce21588fdb423646b0f3fba329297d2870e6120882b138b1
+  states: 12
+  held:
+    - PrivateRead
+    - AtomicCursor
+  broke: []
+  unchecked: []
 ---
-
 # GitHub webhook relay
 
 GitHub sends signed events to a small Cloudflare inbox while Nessa is offline.
@@ -286,3 +301,9 @@ HTTP success, 409 and 410 bodies share the bounded streamed decoder. The native
 watch sets explicit frame/message limits before assembly while admitting valid
 fragmented changed notifications and full RFC ping/pong control frames. These
 bounds do not claim to erase third-party HTTP-library buffers or provide E2EE.
+
+## Bounded rule model
+
+Owns expected-user verification before authorized relay reading, audit-before-inbox access and one local page/cursor atomic commit. Signature validation, quotas, live watch, vault state, retention windows and cross-page sequence validation are excluded and need their own models. This finite abstraction checks safety only. It does not execute or verify the implementation, promise eventual completion, or qualify external effects. Existing source checkpoints and historical test receipts retain their earlier scope. The scoped model review inspected `packages/github-webhooks/src/relay/application/read.ts`, `crates/nessa-server/src/github_relay/application/catch_up.rs`.
+
+[Private live repository selection](live-selection.md) owns atomic local selection and removal evidence.

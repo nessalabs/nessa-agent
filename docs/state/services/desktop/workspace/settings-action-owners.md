@@ -3,7 +3,8 @@ id: desktop-settings-action-owners
 title: Finish or retire a settings action
 kind: statechart
 status: implemented
-summary: Native-hook saves and notification requests retain one admission and settlement identity across asynchronous work.
+summary: Native-hook saves and notification requests retain one admission and
+  settlement identity across asynchronous work.
 parent: desktop-workspace
 sourceRevision: "a32206a4b867e8a4515a37d803b7753dce90d534"
 sources:
@@ -40,8 +41,22 @@ diagramDetails:
   - diagram: 1
     node: NoticeRetired
     section: Retiring an outstanding prompt
+model:
+  spec: tla/services/desktop/workspace/settings-action-owners.tla
+  config: tla/services/desktop/workspace/settings-action-owners.cfg
+modelCheck:
+  sourceRevision: "a32206a4b867e8a4515a37d803b7753dce90d534"
+  checker: tlc-1.7.4
+  date: 2026-11-03T03:28:00.136Z
+  config: tla/services/desktop/workspace/settings-action-owners.cfg
+  modelDigest: c98657e87a19ea06b16edbf6571df91f0860c98bf9f5786679675809d8636074
+  states: 46
+  held:
+    - NativePublication
+    - GrantReplay
+  broke: []
+  unchecked: []
 ---
-
 # Finish or retire a settings action
 
 A native-hook switch saves a choice for the next Claude or Codex process start.
@@ -195,3 +210,15 @@ These owners/tests were rechecked at the assembled source checkpoint. The
 [full native-hook journey](configure-native-hooks.md) and
 [notification permission journey](enable-review-notices.md) link to this page
 for pending-action detail. Other state pages retain their scoped source reviews.
+
+## Bounded rule model
+
+Independent native-write and notice-prompt owners interleave across two source bindings. Native ownership includes mandatory reread; a grant replays only its bound view, and rejection permits retry. The abstract rebind retains old completion tokens so guards can refuse them. Stored values, ACK matching, browser permission UI and actual OS delivery remain outside the bound. The model checks design safety, not the implementation. It asserts no liveness and abstracts transport timing into nondeterministic completion order. Regression sources are evidence of intended behavior; this documentation change does not claim their execution.
+
+## Model coverage
+
+Disposition: direct model. The bounded rule model section names the modeled owner slice and finite abstraction.
+
+Excluded: All exclusions stated in the owning Bounded rule model section remain outside verification.
+
+Source review scope: owner entry points and relevant regression declarations were inventoried against frozen source `77a6b620af4d94b234294f6d273fd74b3dfb44c7`. Existing source checkpoints are retained where this was a partial review. A model result establishes bounded design safety only. Browser appearance and interaction were not checked.

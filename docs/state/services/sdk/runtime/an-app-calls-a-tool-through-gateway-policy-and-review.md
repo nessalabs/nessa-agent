@@ -46,3 +46,9 @@ stateDiagram-v2
 ## Further reading
 
 [Source](../../../../../crates/nessa-server/src/product/mcp_apps.rs) · [Related source](../../../../../crates/nessa-server/src/conversation/application/service/app_calls.rs) · [Related tests](../../../../../crates/nessa-server/tests/conversation/app_calls.rs)
+
+## Model coverage
+
+Shared owner model: [sdk-reviews](../reviews.md). The exact pending review can be consumed once and response delivery has independent evidence.
+
+Cedar decisions, app policy, attachment provenance and the actual upstream tool invocation are source contracts outside this review model. This relationship applies only to the stated scope, not every step of this journey. This scoped mapping retains earlier source checkpoints and is not executed implementation-test evidence.

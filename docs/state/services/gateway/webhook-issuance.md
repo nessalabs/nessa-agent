@@ -3,7 +3,9 @@ id: gateway-webhook-issuance
 title: Webhook credential issuance
 kind: operation
 status: mixed
-summary: Owner issuance and grants feed supervised canonical signed delivery; local lifecycle evidence is qualified separately from final platform and browser acceptance.
+summary: Owner issuance and grants feed supervised canonical signed delivery;
+  local lifecycle evidence is qualified separately from final platform and
+  browser acceptance.
 sourceRevision: "c790639702213d79bad32aaa148e2744ca7a9d1d"
 parent: gateway
 sources:
@@ -59,8 +61,23 @@ diagramDetails:
   - diagram: 1
     node: Recovery
     section: Original purpose and product session entry
+model:
+  spec: tla/services/gateway/WebhookRegistration.tla
+  config: tla/services/gateway/WebhookRegistration.cfg
+modelCheck:
+  sourceRevision: "c790639702213d79bad32aaa148e2744ca7a9d1d"
+  checker: tlc-1.7.4
+  date: 2026-11-03T03:28:26.054Z
+  config: tla/services/gateway/WebhookRegistration.cfg
+  modelDigest: 5c4fb959ef98bbd891751cd8d19af5658d1061deca7bfbf33f9caa3304341783
+  states: 7
+  held:
+    - ReservationBeforeIssue
+    - NoStoppedInstall
+    - NoBearerResult
+  broke: []
+  unchecked: []
 ---
-
 # Webhook credential issuance
 
 The auth boundary can issue a read-only integration credential through the
@@ -412,3 +429,7 @@ is not a claim that their platform/browser cohorts ran here. All 295 webhook tes
 including the three full retention controls, and required seven-package all-target
 Clippy passed. Whole-feature independent review and exact-head CI/platform/browser
 and default/raised stress acceptance remain pending.
+
+## Bounded rule model
+
+Owns durable reservation before Auth issuance, original binding validation before installation and stopped uninstalled cancellation. Matching replay reuses the same reservation identity; conflicting identities take Refused. Installed stop/drain, actual Auth journal proof and retired-receipt selection remain excluded. This finite abstraction checks safety only. It does not execute or verify the implementation, promise eventual completion, or qualify external effects. Existing source checkpoints and historical test receipts retain their earlier scope. The scoped model review inspected `crates/nessa-server/src/webhooks/application/registration.rs`.

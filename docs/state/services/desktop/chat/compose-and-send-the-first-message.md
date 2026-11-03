@@ -35,8 +35,22 @@ diagramDetails:
       to: Retired
       label: Empty draft [same conversation] / collapse editor
     section: Composer ownership while a send waits
+model:
+  spec: tla/services/desktop/chat/compose-and-send-the-first-message.tla
+  config: tla/services/desktop/chat/compose-and-send-the-first-message.cfg
+modelCheck:
+  sourceRevision: "7f434845423686cdd01a17300c47d10d46911f50"
+  checker: tlc-1.7.4
+  date: 2026-11-03T03:27:46.410Z
+  config: tla/services/desktop/chat/compose-and-send-the-first-message.cfg
+  modelDigest: 50aaaca3d7511adb0c6ab1dc4b196d2175fce1e89af61515fa82770b869c53a2
+  states: 313
+  held:
+    - ObservationBound
+    - StaleCallbackPreservesReplacement
+  broke: []
+  unchecked: []
 ---
-
 # compose and send the first message
 
 Open a new conversation, choose a model and write a message. Enter sends it; Shift+Enter starts a Markdown block. Text can be empty when there are sendable attachments. The voice button has no working voice action yet.
@@ -118,3 +132,15 @@ stateDiagram-v2
 The [CO1–CO4 design table](../../../../design/user-flow-ordering.md#composer-draft-observation) owns these orderings. The [hook regressions](../../../../../src/panel/ui/use-composer-ordering.test.tsx) and [actual-store same-task case](../../../../../src/panel/ui/use-composer.test.ts) exercise the actual hook through a form with controlled submission promises; they do not establish provider completion.
 
 This is a bounded correction to the composer owner. The other linked source files have no implementation changes since the earlier checkpoint. The checkpoint advances to the committed correction after reconciling that hook and its regression tests; the other source owners retain their unchanged implementation.
+
+## Bounded rule model
+
+This model follows the panel composer observation only: two submissions, two tab identities, delayed refusal, explicit expansion and draft-empty observation. The matching callback cannot retire its replacement. Gateway admission, attachment validation and execution are excluded; their owners are linked in the journey above. The model checks design safety, not the implementation. It asserts no liveness and abstracts transport timing into nondeterministic completion order. Regression sources are evidence of intended behavior; this documentation change does not claim their execution.
+
+## Model coverage
+
+Disposition: direct model. The bounded rule model section names the modeled owner slice and finite abstraction.
+
+Excluded: All exclusions stated in the owning Bounded rule model section remain outside verification.
+
+Source review scope: owner entry points and relevant regression declarations were inventoried against frozen source `77a6b620af4d94b234294f6d273fd74b3dfb44c7`. Existing source checkpoints are retained where this was a partial review. A model result establishes bounded design safety only. Browser appearance and interaction were not checked.

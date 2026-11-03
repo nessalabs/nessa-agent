@@ -3,14 +3,16 @@ id: "gateway-record-reads"
 title: "Bounded physical history reads"
 kind: "operation"
 status: "mixed"
-summary: "An authorized reader can page through saved conversation records without starting an agent."
+summary: "An authorized reader can page through saved conversation records
+  without starting an agent."
 sourceRevision: "85277a20a24ca5a0bb1bf8dcdb59593de3ec8577"
 parent: "gateway"
 sources:
   - "crates/nessa-server/src/product/socket.rs"
   - "crates/nessa-server/src/product/record_read/dispatch.rs"
   - "crates/nessa-server/src/conversation/application/record_read/read.rs"
-  - "crates/nessa-server/src/conversation/infrastructure/record_read/operation.rs"
+  - "crates/nessa-server/src/conversation/infrastructure/record_read/operation.\
+    rs"
   - "crates/nessa-server/src/conversation/application/record_read/principal.rs"
   - "crates/nessa-server/src/conversation/infrastructure/record_read/source.rs"
   - "crates/nessa-server/src/conversation/infrastructure/record_scope.rs"
@@ -20,8 +22,22 @@ sources:
   - "crates/nessa-server/tests/webhooks/infrastructure/source.rs"
   - "crates/nessa-client-core/tests/protected/deadline_stream.rs"
 diagramLinks: {}
+model:
+  spec: tla/services/gateway/RecordReadOwnership.tla
+  config: tla/services/gateway/RecordReadOwnership.cfg
+modelCheck:
+  sourceRevision: "85277a20a24ca5a0bb1bf8dcdb59593de3ec8577"
+  checker: tlc-1.7.4
+  date: 2026-11-03T03:28:23.301Z
+  config: tla/services/gateway/RecordReadOwnership.cfg
+  modelDigest: f55de688f55c858e0f52a8c5fc42da3ecdbc9f5cecbe2240b0837d9c8b93f065
+  states: 8
+  held:
+    - RetainedUntilJoin
+    - ReleaseBeforeSend
+  broke: []
+  unchecked: []
 ---
-
 # Bounded physical history reads
 
 An authorized reader can page through saved conversation records without starting an agent. Nessa limits both the number of records and the bytes in each response.
@@ -120,3 +136,13 @@ their previous source revisions.
 ## Further reading
 
 [Source](../../../../crates/nessa-server/src/product/socket.rs) · [Related source](../../../../crates/nessa-server/src/product/record_read/dispatch.rs) · [Related tests](../../../../crates/nessa-client-core/tests/protected/deadline_stream.rs)
+
+## Bounded rule model
+
+Owns paired read capacity transfer, timeout retention until physical source join and writer release before network send. Fresh receiver access, exact physical scope, result byte bounds and unmounted principal read use case are excluded from these ownership invariants. This finite abstraction checks safety only. It does not execute or verify the implementation, promise eventual completion, or qualify external effects. Existing source checkpoints and historical test receipts retain their earlier scope. The scoped model review inspected `crates/nessa-server/src/conversation/application/record_read/read.rs`, `crates/nessa-server/src/conversation/infrastructure/record_read/operation.rs`, `crates/nessa-server/src/product/record_read/dispatch.rs`.
+
+## Busy discovery source correction
+
+The physical read adapter at source `719dfce93892e09dcb95e86a060b6d2f42c8f3cc` distinguishes an occupied discovery checkout from an actual Preparing validation step. Occupied work waits on this stream within the same admitted read without spending a validation step; the 200 ms work clock begins when its worker is ready to discover after stream identity lookup. The source still retains its permit through queueing, the occupied wait and source join. A budget or caller-stop wake lets that wait observe its stopping condition.
+
+The [busy discovery owner](record-read-discovery.md) contains the finite step-accounting, work-start and same-stream availability model. The existing capacity-transfer model remains scoped to source join and writer ownership; it does not acquire those new discovery guarantees by implication. The source delta, operation/source owners, cache wait and their named regressions were inspected. This is a partial update: the broad page checkpoint and historical principal/webhook evidence above remain unchanged. No application suite or platform qualification was run. The shared server Timer now reexports `nessa-timer`; physical record-read work budgeting continues to use its own injected/read-worker stop boundary and runtime wait, rather than asserting a new scheduling lifecycle.

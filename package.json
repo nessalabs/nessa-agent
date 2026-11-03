@@ -73,7 +73,12 @@
     "verify:desktop:safe-area": "node verification/desktop/scripts/safe-area.mjs",
     "verify:desktop:drag": "node verification/desktop/scripts/drag.mjs",
     "verify:desktop:focus": "node verification/desktop/scripts/focus.mjs",
-    "verify:desktop:responsive": "node verification/desktop/scripts/responsive.mjs"
+    "verify:desktop:responsive": "node verification/desktop/scripts/responsive.mjs",
+    "docs:state:check": "node scripts/state-docs/check.mjs",
+    "docs:state:models": "node scripts/state-docs/check.mjs --models",
+    "docs:state:test": "node --test scripts/state-docs/*.test.mjs",
+    "docs:state:coverage": "node scripts/state-docs/check.mjs --coverage",
+    "docs:state:probes": "node scripts/state-docs/probe-models.mjs"
   },
   "dependencies": {
     "@fontsource-variable/geist": "^5.3.0",

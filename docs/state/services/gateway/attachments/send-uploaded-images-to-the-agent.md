@@ -52,3 +52,7 @@ stateDiagram-v2
 ## Further reading
 
 [Source](../../../../../src/conversation/application/usecases/send-draft.ts) · [Related source](../../../../../src/conversation/adapters/store/slice.ts) · [Related tests](../../../../../crates/nessa-server/tests/conversation/attachments.rs)
+
+## Model coverage
+
+The shared model on [gateway-attachments-have-a-large-or-unfamiliar-image-normalized-and-kept-once](have-a-large-or-unfamiliar-image-normalized-and-kept-once.md) owns this journey's modeled slice. Conversation-scoped confirmed hold prerequisite only; SDK prompt conversion and image capability negotiation are excluded. This is scoped design evidence, not whole-journey or implementation verification. The existing source checkpoint is retained.
