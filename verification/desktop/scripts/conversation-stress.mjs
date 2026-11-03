@@ -3851,6 +3851,8 @@ const steps = {
     if (realtime.calls() !== before + 1)
       failures.push(`Talk opened ${realtime.calls() - before} calls, not one`)
     if (!(await orb.isVisible())) failures.push("the call shows no orb")
+    else if ((await orb.locator(".voice-orb-clouds").count()) !== 2)
+      failures.push("the orb is not the sky orb: its clouds are missing")
     for (const name of ["Mute voice", "Mute microphone", "End call"])
       if (!(await pane.getByRole("button", { name, exact: true }).isVisible()))
         failures.push(`the composer shows no ${name} button during the call`)
