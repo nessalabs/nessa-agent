@@ -161,44 +161,39 @@ in the CI package selection. Public API moves update callers and Rustdoc togethe
 
 ## After #981: metadata admission (#934)
 
-Implemented. Selection keeps the admission token read with the conversation:
-catalogue incarnation, conversation id, and `change_revision`. After the
-authority read, publication checks that token and only then checks the board.
-A second Cedar evaluation loses because policy already ran. An unbounded reread
-loop loses because a stale token costs one bounded pass and then the fresh row
-is selected. A deletion after the frame is admitted can still be delivered.
+Checked against main after #981 and #1214. Selection keeps the admission token
+read with the conversation: catalogue incarnation, conversation id, and
+`change_revision`. After the authority read, publication checks that token and
+only then checks the board. A second Cedar evaluation of that same candidate
+loses because policy already ran. An unbounded reread loop loses because a
+stale token costs one bounded pass and then the fresh row is selected. A
+deletion after the frame is admitted can still be delivered.
 
-Proposed stronger contract: selected metadata must coexist with the final
-authority snapshot. Admission is defined at that authority snapshot, conditional
-on subsequent metadata-token validation and final board/visibility validation;
-it does not promise currency at a later socket write or simultaneous final token
-checks. A candidate retains metadata and an opaque token read atomically from
-its owning store: catalogue incarnation, conversation identity and persistent
-row change_revision. Final ordering is authority read, metadata-token validation,
-then the existing synchronous board/visibility check, then admission. Moving
-the board check before awaited metadata validation would open a new race. No
-second Cedar evaluation or global lock is introduced.
-Deletion publishes its tombstone/version before waiting on inventory; the
-candidate loaded before deletion must therefore lose admission even if board
-cleanup is still pending. A deletion after final admission may coexist with
-delivery of the already admitted response, consistent with ADR0010.
+Selected metadata must coexist with the final authority snapshot. Admission is
+defined at that authority snapshot, conditional on subsequent metadata-token
+validation and final board/visibility validation. It does not promise currency
+at a later socket write or simultaneous final token checks. A candidate retains
+metadata and an opaque token from one read of its owning store: catalogue
+incarnation, conversation identity and persistent row `change_revision`.
+`LocalConversationStore` takes those in one transaction. Separate autocommit
+statements let another connection commit a tombstone between the row and the
+revision, and the token then matches a revision the live row Cedar saw does
+not have. The in-memory repository takes the row and the revision under one
+lock. Final ordering is authority read, metadata-token validation, then the
+existing synchronous board/visibility check, then admission. Moving the board
+check before awaited metadata validation would open a new race. No second
+Cedar evaluation or global lock is introduced. Deletion publishes its tombstone
+and the new `change_revision` before waiting on inventory. The candidate loaded
+before deletion loses admission even if board cleanup is still pending. A
+deletion after final admission may coexist with delivery of the already
+admitted response, consistent with ADR0010.
 
-Current source evidence: `review_notice_selection.rs::execute` loads metadata,
-then authority, then calls Cedar and audit. `product/socket.rs::forward_review_notices`
-finally reads authority and checks the board. `LocalConversationStore::record_deletion`
-already advances conversations.change_revision atomically with the first tombstone.
-Cedar receives organization/owner/deleted only: organization and owner are
+Cedar receives organization, owner and deleted only. Organization and owner are
 immutable, deletion has no reversal, create retains tombstones, and revision
 allocation fails instead of wrapping. Incarnation distinguishes database
-replacement. Metadata reader must expose this token, which selection currently
-discards. Custom adapters must supply equivalent atomic reads, monotonic tokens
-and incarnation semantics. Deduplicate retained tokens per conversation within
-the existing review-set bound; retain no locks across Cedar/audit/capacity waits.
-
-This is a proposed decision, to be checked against merged source after #981. A second independent metadata reread alone is not
-a coherent boundary. If the owning store cannot supply the proposed boundary,
-write down the limitation and resolve the design before implementing a claim of
-atomicity.
+replacement. Custom adapters must supply the same atomic read, monotonic token
+and incarnation. Retained tokens are deduplicated per conversation within the
+existing review-set bound. No lock is held across Cedar, audit or capacity waits.
 
 | Row | Deletion ordering | Expected regression through actual publisher |
 | --- | --- | --- |
@@ -211,6 +206,20 @@ atomicity.
 | M7 | Audit fails, caller disconnects, cleanup competes | Existing bounded publisher ownership and typed failure rules remain enforced. |
 | M8 | Visibility changes while metadata-token validation awaits | Final board/visibility check rejects stale candidates. |
 | M9 | Foreign conversation, stale revision, replaced store incarnation | Token validation refuses ABA/foreign evidence; unchanged valid source still publishes. |
+
+Tests, in row order: `deletion_before_the_metadata_read_publishes_no_candidate` (M1),
+`deletion_between_metadata_and_authority_does_not_publish_to_a_promoted_admin` (M2),
+`deletion_after_cedar_before_audit_ack_drops_admission_and_keeps_the_decision` (M3),
+`deletion_during_audit_acknowledgement_retries_once_and_does_not_publish` (M4),
+`deletion_after_admission_still_delivers_the_admitted_notice` (M5),
+`review_notice_policy_decisions_preserve_audit_evidence` (M6),
+`review_notice_audit_failure_closes_without_disclosure` (M7),
+`visibility_change_during_token_validation_drops_the_in_flight_candidate` (M8),
+`replaced_incarnation_with_a_reused_revision_does_not_publish_deleted_metadata` and
+`a_review_notice_refuses_mismatched_metadata_before_policy_or_publication` (M9).
+Another connection committing the tombstone during the admission read is
+`an_admission_read_keeps_the_row_and_revision_from_one_snapshot` and
+`a_tombstone_on_another_connection_during_the_admission_read_does_not_publish_to_a_new_admin`.
 
 ## Verification and checkpoints
 
