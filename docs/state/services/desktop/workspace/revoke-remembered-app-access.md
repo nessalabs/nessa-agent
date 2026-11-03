@@ -45,6 +45,7 @@ stateDiagram-v2
     Rereading --> Ready: Read fails: show last confirmed result
     Revoking --> Ready: Unexpected rejection retains prior list and failure
     Ready --> Reading: Focus or visibility, no revoke pending
+    Unread --> Reading: Focus or visibility retries list
 ```
 
 ## What a reply and a list mean

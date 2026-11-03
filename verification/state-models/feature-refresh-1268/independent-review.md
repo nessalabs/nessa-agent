@@ -7,3 +7,5 @@ Docs-only tasks were answered before source sampling: preference chooses A if el
 Reader findings: define lease/binding/provider context at first use; replace internal publication-identity and chart acknowledgement jargon. Author added local definitions and plain chart wording. Reviewer confirmed closure. Technical source samples: placement ranking/busy selection; channel creation lock and audit; app_calls audit order; TrustedAppRows generation/busy fencing. These support the scoped explanations. Final navigation correction changed Settings→Access to Settings→Privacy & Permissions→Access. Reviewer reported no other material issue and authorized publication after browser checks.
 
 Limits: sampled current source, no whole repository re-audit. New guides are source-only and add no formal pass. Existing model receipts and page checkpoints are unchanged. Browser and mechanical checks are author-owned; product test execution is explicitly not claimed.
+
+Author visual follow-up: added the source-supported Unread→Reading focus/visibility recovery edge and rerendered all four changed pages; no behavior or formal claim changed.
