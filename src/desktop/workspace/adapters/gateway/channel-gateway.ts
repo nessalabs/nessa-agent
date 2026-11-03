@@ -11,11 +11,12 @@ import { ChannelErrorCode, channelRefusal, type ChannelApi } from "@nessa/client
 import { agentForProvider } from "../../../model/composer-options"
 import { ChannelCreationError, type ChannelSource } from "../../application/ports"
 import { channelName, type ChannelFailure } from "../../model/channel-draft"
-import { channelFrom } from "./gateway-views"
+import { channelFrom, gatewayChannelId } from "./gateway-views"
 
 /** What making a channel asks of the window's gateway client. */
 export interface ChannelClient {
-  readonly channels: Pick<ChannelApi, "create">
+  readonly channels: Pick<ChannelApi, "create"> &
+    Partial<Pick<ChannelApi, "setPlacement">>
 }
 
 /** Every channel code, as what it means to the flow. */
@@ -61,6 +62,26 @@ export function channelGateway(options: {
         const code = channelRefusal(error)
         if (code !== undefined) throw new ChannelCreationError(failures[code])
         console.error("Making a channel got no answer the window knows", error)
+        throw new ChannelCreationError("unavailable")
+      }
+    },
+    async setPlacement(channelId, placement, requestId) {
+      const id = gatewayChannelId(channelId)
+      if (id === undefined) throw new ChannelCreationError("forbidden")
+      try {
+        const { channels } = await options.connected()
+        if (!channels.setPlacement) throw new ChannelCreationError("unavailable")
+        return channelFrom(
+          await channels.setPlacement({ requestId, channelId: id, ...placement }),
+        )
+      } catch (error) {
+        if (error instanceof ChannelCreationError) throw error
+        const code = channelRefusal(error)
+        if (code !== undefined) throw new ChannelCreationError(failures[code])
+        console.error(
+          "Changing a channel's run location got no answer the window knows",
+          error,
+        )
         throw new ChannelCreationError("unavailable")
       }
     },

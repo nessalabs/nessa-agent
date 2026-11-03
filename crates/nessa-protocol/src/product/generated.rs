@@ -1679,6 +1679,23 @@ pub struct McpServersAuthorizeResult {
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AppsTrustedResult {
+    pub servers: Vec<String>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AppsUntrustParams {
+    pub request_id: String,
+    pub server: String,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AppsUntrustResult {
+    pub request_id: String,
+    pub applied: bool,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct McpServersRevokeParams {
     pub revision: String,
     pub id: String,
@@ -3679,6 +3696,19 @@ pub struct ChannelCreateResult {
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ChannelSetPlacementParams {
+    pub request_id: String,
+    pub channel_id: String,
+    pub coordinator_placement: String,
+    pub thread_placement: String,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ChannelSetPlacementResult {
+    pub channel: Channel,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ChannelListParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub after: Option<String>,
@@ -4194,6 +4224,8 @@ pub mod product_method {
     pub const MCP_SERVERS_INSPECT: &str = "mcpServers.inspect";
     pub const MCP_SERVERS_AUTHORIZE: &str = "mcpServers.authorize";
     pub const MCP_SERVERS_REVOKE: &str = "mcpServers.revoke";
+    pub const APPS_TRUSTED: &str = "apps.trusted";
+    pub const APPS_UNTRUST: &str = "apps.untrust";
     pub const PHONE_ENDPOINT: &str = "phone.endpoint";
     pub const PHONE_AUTHORIZE: &str = "phone.authorize";
     pub const PHONE_STATUS: &str = "phone.status";
@@ -4227,6 +4259,7 @@ pub mod product_method {
     pub const WORKSPACE_PUBLISH: &str = "workspace.publish";
     pub const CHANNEL_CREATE: &str = "channel.create";
     pub const CHANNEL_LIST: &str = "channel.list";
+    pub const CHANNEL_SET_PLACEMENT: &str = "channel.setPlacement";
     pub const CONVERSATION_SUBSCRIBE_EVENTS: &str = "conversation.subscribeEvents";
     pub const CONVERSATION_READ_EARLIER: &str = "conversation.readEarlier";
     pub const CONVERSATION_PEEK: &str = "conversation.peek";
@@ -4442,7 +4475,7 @@ pub fn wire_shape_product_session_ready(value: &Value) -> bool {
         }) && object.get("methods").is_some_and(|field| {
             let _ = field;
             field.as_array().is_some_and(|items| {
-                items.len() <= 113
+                items.len() <= 116
                     && items.iter().all(|item| {
                         let _ = item;
                         item.is_string()
@@ -4522,6 +4555,8 @@ pub const PRODUCT_READY_METHODS: &[&str] = &[
     "mcpServers.inspect",
     "mcpServers.authorize",
     "mcpServers.revoke",
+    "apps.trusted",
+    "apps.untrust",
     "phone.endpoint",
     "phone.authorize",
     "phone.status",
@@ -4555,6 +4590,7 @@ pub const PRODUCT_READY_METHODS: &[&str] = &[
     "workspace.publish",
     "channel.create",
     "channel.list",
+    "channel.setPlacement",
     "conversation.subscribeEvents",
     "conversation.readEarlier",
     "conversation.peek",
@@ -4611,6 +4647,8 @@ pub fn action_for_method(method: &str) -> Option<&'static str> {
         | "mcpServers.inspect"
         | "mcpServers.authorize"
         | "mcpServers.revoke"
+        | "apps.trusted"
+        | "apps.untrust"
         | "phone.authorize"
         | "phone.status"
         | "pairing.create"
@@ -4691,6 +4729,7 @@ pub fn action_for_method(method: &str) -> Option<&'static str> {
         | "workspace.publish"
         | "channel.create"
         | "channel.list"
+        | "channel.setPlacement"
         | "conversation.subscribeEvents"
         | "conversation.readEarlier"
         | "conversation.peek"

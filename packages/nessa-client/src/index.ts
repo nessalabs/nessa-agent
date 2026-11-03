@@ -31,6 +31,7 @@ export {
   type ServerApi,
   type WorkspaceApi,
   type ChannelApi,
+  type AppsApi,
   channelRefusal,
   type AgentsApi,
   type RecordReadApi,
@@ -479,6 +480,7 @@ export type {
 export type {
   Channel,
   ChannelCreateParams,
+  ChannelSetPlacementParams,
   ChannelListResult,
 } from "./generated/product.js"
 export { ChannelErrorCode } from "./generated/product.js"

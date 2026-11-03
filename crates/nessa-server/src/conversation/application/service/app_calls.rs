@@ -135,6 +135,64 @@ impl fmt::Debug for McpAppResource {
 }
 
 impl ConversationService {
+    /// The apps the person always allows ("Always allow this app"), by
+    /// server; `None` when this gateway runs no MCP apps.
+    pub fn trusted_apps(&self) -> Option<Vec<String>> {
+        self.inner
+            .mcp_apps
+            .as_ref()
+            .map(|ports| ports.trusted.trusted())
+    }
+
+    /// Stop always allowing `server`'s app: its next message is asked about
+    /// again. `Ok(false)` when it was not always allowed, or this gateway
+    /// runs no MCP apps. The change is recorded, as `caller`'s, before it is
+    /// made and once it is; an applied change whose record fails answers
+    /// [`ConversationError::Audit`].
+    pub async fn untrust_app(
+        &self,
+        caller: &ConversationCaller,
+        server: &str,
+    ) -> Result<bool, ConversationError> {
+        let Some(ports) = self.inner.mcp_apps.as_ref() else {
+            return Ok(false);
+        };
+        let operation = uuid::Uuid::new_v4().to_string();
+        let record = |outcome| super::super::SettingsAuditRecord {
+            operation_id: operation.clone(),
+            caller: caller.clone(),
+            change: super::super::SettingsChange::AppUntrust {
+                server: server.to_owned(),
+            },
+            outcome,
+        };
+        self.record_setting(record(super::super::SettingsOutcome::Requested))
+            .await?;
+        match ports.trusted.untrust(server) {
+            Ok(changed) => {
+                self.record_setting(record(super::super::SettingsOutcome::Applied {
+                    changed,
+                    coordinator: None,
+                }))
+                .await?;
+                if changed {
+                    tracing::info!(server, "the person no longer always allows this app");
+                }
+                Ok(changed)
+            }
+            Err(_) => {
+                if self
+                    .record_setting(record(super::super::SettingsOutcome::Failed))
+                    .await
+                    .is_err()
+                {
+                    tracing::warn!(server, "a failed app revoke was not recorded");
+                }
+                Err(ConversationError::Unavailable)
+            }
+        }
+    }
+
     /// Call `call.tool` on the app's own server, as the conversation's own
     /// session: the server's `CallToolResult`, re-encoded. A destructive
     /// tool waits for the person's answer to a review first.
