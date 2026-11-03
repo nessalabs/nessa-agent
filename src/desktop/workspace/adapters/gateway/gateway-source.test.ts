@@ -2433,7 +2433,9 @@ describe("writes", () => {
       sessionId: conversationS,
       messageId: "m",
       text: "",
-      images: [{ id: "i", name: "shot.png", mimeType: "image/png", size: 3, url }],
+      images: [
+        { id: "i", kind: "image", name: "shot.png", mimeType: "image/png", size: 3, url },
+      ],
       model: { provider: "openai", modelId: "gpt-5" },
       initiator: "person",
       start: { channelId: "gateway-conversations", title: "Image" },
@@ -2459,6 +2461,73 @@ describe("writes", () => {
     ])
   })
 
+  it("W1: a message's other files go into its conversation as uploads, named as the person sees them, beside its images", async () => {
+    const { gateway, source } = started()
+    const png = new Uint8Array([1, 2, 3])
+    const pdf = new TextEncoder().encode("%PDF-1.7")
+    const pngUrl = `data:image/png;base64,${Buffer.from(png).toString("base64")}`
+    const pdfUrl = `data:application/pdf;base64,${Buffer.from(pdf).toString("base64")}`
+    await source.send({
+      sessionId: conversationS,
+      messageId: "m",
+      text: "Read these",
+      images: [
+        {
+          id: "f",
+          kind: "file",
+          name: "plan.pdf",
+          mimeType: "application/pdf",
+          size: pdf.length,
+          url: pdfUrl,
+        },
+        {
+          id: "i",
+          kind: "image",
+          name: "shot.png",
+          mimeType: "image/png",
+          size: 3,
+          url: pngUrl,
+        },
+      ],
+      model: { provider: "openai", modelId: "gpt-5" },
+      initiator: "person",
+      start: { channelId: "gateway-conversations", title: "Read these" },
+    })
+    const digest = (bytes: Uint8Array) =>
+      `sha256:${createHash("sha256").update(bytes).digest("hex")}`
+    expect(gateway.calls.map((call) => call.method)).toEqual([
+      "create",
+      "attachmentBegin",
+      "attachmentUpload",
+      "attachmentBegin",
+      "attachmentUpload",
+      "send",
+      "subscribe",
+    ])
+    expect(gateway.calls[3].args).toEqual([
+      conversationS,
+      { digest: digest(pdf), mimeType: "application/pdf", size: pdf.length },
+    ])
+    expect(gateway.calls.find((call) => call.method === "send")?.args).toEqual([
+      conversationS,
+      "Read these",
+      [{ digest: digest(png), mimeType: "image/png", size: 3 }],
+      [],
+      {
+        executionId: "m",
+        requestId: expect.any(String),
+        uploads: [
+          {
+            digest: digest(pdf),
+            mimeType: "application/pdf",
+            size: pdf.length,
+            name: "plan.pdf",
+          },
+        ],
+      },
+    ])
+  })
+
   it("W1: an image the gateway refuses refuses the message, in the upload's words, and sends nothing", async () => {
     const { gateway, source } = started()
     gateway.views.set(conversationS, view(conversationS))
@@ -2478,7 +2547,16 @@ describe("writes", () => {
         sessionId: conversationS,
         messageId: "m",
         text: "Look",
-        images: [{ id: "i", name: "shot.png", mimeType: "image/png", size: 1, url }],
+        images: [
+          {
+            id: "i",
+            kind: "image",
+            name: "shot.png",
+            mimeType: "image/png",
+            size: 1,
+            url,
+          },
+        ],
         model,
         initiator: "person",
       }),
@@ -4233,6 +4311,7 @@ it("PS16: a message with images keeps its words, its images and its conversation
   gateway.once("create", (normal) => created.promise.then(normal))
   const image = {
     id: "i",
+    kind: "image" as const,
     name: "shot.png",
     mimeType: "image/png",
     size: 1,
@@ -4293,6 +4372,7 @@ it("takes no upload ticket for an image whose call ended while its bytes were ha
     images: [
       {
         id: "i",
+        kind: "image",
         name: "a.png",
         mimeType: "image/png",
         size: 1,
@@ -4324,7 +4404,16 @@ it("refuses a message with images, sending nothing, when composition gave no way
       sessionId: conversationS,
       messageId: "m",
       text: "Look",
-      images: [{ id: "i", name: "a.png", mimeType: "image/png", size: 1, url: "data:," }],
+      images: [
+        {
+          id: "i",
+          kind: "image",
+          name: "a.png",
+          mimeType: "image/png",
+          size: 1,
+          url: "data:,",
+        },
+      ],
       model,
       initiator: "person",
     }),

@@ -43,7 +43,8 @@
  * in a later step's arguments or text that is `${name.path}` is replaced by
  * that saved value's field, so one call can name what an earlier call made.
  * `${prompt.text}` is the prompt the turn answers, and `${prompt.images}` the
- * images it carried (`promptImages`); `${session.cwd}` and
+ * images it carried (`promptImages`), `${prompt.files}` the files linked to
+ * it, read where the agent runs (`promptFiles`); `${session.cwd}` and
  * `${session.systemPrompt}` are the folder the session was opened in and the
  * system prompt it was given (Claude's `_meta.systemPrompt`; empty for a
  * harness that takes none). With `times`, the same
@@ -67,6 +68,9 @@
  * `node --version`. It has no caller-supplied command or MCP wrapper. The process
  * runs it only after an allow and completes the original call before its branch.
  */
+import { closeSync, openSync, readSync } from "node:fs"
+import { fileURLToPath } from "node:url"
+
 import { SERVER } from "./local-gateway.mjs"
 import { CLAUDE_CALL_ID } from "./scripted-frames.mjs"
 
@@ -291,6 +295,40 @@ export function promptImages(prompt) {
         `${block.mimeType} ${typeof block.data === "string" ? Buffer.from(block.data, "base64").length : 0} bytes`,
     )
     .join(", ")
+}
+
+/** How much of each linked file `promptFiles` reads back. */
+const FILE_HEAD_BYTES = 256
+
+/**
+ * The files linked to a prompt, as one line a turn can say: each
+ * `resource_link`'s name, then what the agent finds at its `file:` URI on the
+ * machine it runs on — the first bytes, as text — or `missing` when nothing
+ * is there; "none" when no file is linked. A check reads it back to know the
+ * file was placed where the agent works, with the bytes that were sent.
+ */
+export function promptFiles(prompt) {
+  const links = Array.isArray(prompt)
+    ? prompt.filter((block) => plain(block) && block.type === "resource_link")
+    : []
+  if (links.length === 0) return "none"
+  return links
+    .map((block) => `${block.name} = ${JSON.stringify(fileHead(block.uri))}`)
+    .join(", ")
+}
+
+function fileHead(uri) {
+  let fd
+  try {
+    fd = openSync(fileURLToPath(String(uri)), "r")
+    const buffer = Buffer.alloc(FILE_HEAD_BYTES)
+    const read = readSync(fd, buffer, 0, FILE_HEAD_BYTES, 0)
+    return buffer.subarray(0, read).toString("utf8")
+  } catch {
+    return "missing"
+  } finally {
+    if (fd !== undefined) closeSync(fd)
+  }
 }
 
 /**

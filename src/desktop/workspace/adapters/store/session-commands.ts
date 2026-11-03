@@ -22,7 +22,9 @@ import type { WorkspaceFailureReason } from "../../model/failure"
 import type { ModelRef } from "../../model/workspace-index"
 import {
   draftImagesRefusal,
-  pastedImage,
+  draftKind,
+  draftMediaType,
+  draftName,
   type DraftImage,
   type DraftImageLimits,
   type DraftImageRefusal,
@@ -31,7 +33,9 @@ import {
   IMAGE_ATTACHMENT_TYPES,
   MAX_IMAGE_ATTACHMENT_BYTES,
   MAX_MESSAGE_IMAGE_BYTES,
+  MAX_MESSAGE_FILES,
   MAX_MESSAGE_IMAGES,
+  MAX_UPLOAD_BYTES,
 } from "@nessa/client"
 import { knownToSource } from "../../model/revision"
 import {
@@ -209,18 +213,21 @@ export function sendMessage({
   }
 }
 
-/** A message's image bounds, as the message contract sets them. */
+/** A message's attachment bounds, as the message contract sets them. */
 export const DRAFT_IMAGE_LIMITS: DraftImageLimits = {
   images: MAX_MESSAGE_IMAGES,
   bytes: MAX_IMAGE_ATTACHMENT_BYTES,
   totalBytes: MAX_MESSAGE_IMAGE_BYTES,
   types: IMAGE_ATTACHMENT_TYPES,
+  files: MAX_MESSAGE_FILES,
+  fileBytes: MAX_UPLOAD_BYTES,
 }
 
 /**
- * Puts the images among `files` — pasted into a session's composer — on its
- * next message. All of them or none: answers why none were taken, or `null`
- * once they are on it (or there were no images to take).
+ * Puts `files` — pasted into a session's composer or picked with its Attach
+ * button — on its next message: each of the image encodings as an image, any
+ * other file as a file. All of them or none: answers why none were taken, or
+ * `null` once they are on it (or nothing was offered).
  */
 export function addComposerImages({
   sessionId,
@@ -230,20 +237,24 @@ export function addComposerImages({
   files: readonly File[]
 }): WorkspaceCommand<DraftImageRefusal | null> {
   return (dispatch, getState, { newId }) => {
-    const offered = files.filter(pastedImage)
-    if (offered.length === 0) return null
+    if (files.length === 0) return null
+    const offered = files.map((file) => {
+      const mimeType = draftMediaType(file.type)
+      return { file, mimeType, kind: draftKind(mimeType, DRAFT_IMAGE_LIMITS) }
+    })
     const held = entry(getState().workspace.composerImages, sessionId) ?? []
     const refusal = draftImagesRefusal(
       held,
-      offered.map((file) => ({ size: file.size, mimeType: file.type })),
+      offered.map(({ file, kind, mimeType }) => ({ size: file.size, kind, mimeType })),
       DRAFT_IMAGE_LIMITS,
     )
     if (refusal) return refusal
-    const images: DraftImage[] = offered.map((file) => ({
+    const images: DraftImage[] = offered.map(({ file, mimeType, kind }) => ({
       id: newId(),
+      kind,
       // A pasted screenshot can come with no name of its own.
-      name: file.name || "Pasted image",
-      mimeType: file.type,
+      name: draftName(file.name, kind === "image" ? "Pasted image" : "File"),
+      mimeType,
       size: file.size,
       url: URL.createObjectURL(file),
     }))

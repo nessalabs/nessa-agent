@@ -11,7 +11,7 @@ import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { createInterface } from "node:readline"
 import { after, test } from "node:test"
-import { fileURLToPath } from "node:url"
+import { fileURLToPath, pathToFileURL } from "node:url"
 
 import { exited } from "./local-gateway.mjs"
 import { CLAUDE_CALL_ID } from "./scripted-frames.mjs"
@@ -22,6 +22,7 @@ import {
   filled,
   parseScenario,
   permissionCall,
+  promptFiles,
   promptImages,
   promptText,
   runSteps,
@@ -335,6 +336,28 @@ test("the window scenario parses, and the first named turn wins over the fallbac
     ]),
     "image/png 4 bytes, image/jpeg 0 bytes",
   )
+})
+
+test("promptFiles says each linked file by name and what the agent finds at its link", () => {
+  const dir = mkdtempSync(join(tmpdir(), "prompt-files-"))
+  try {
+    const placed = join(dir, "notes.txt")
+    writeFileSync(placed, "the placed bytes")
+    assert.equal(promptFiles([{ type: "text", text: "A" }]), "none")
+    assert.equal(
+      promptFiles([
+        { type: "resource_link", name: "notes.txt", uri: pathToFileURL(placed).href },
+        {
+          type: "resource_link",
+          name: "gone.pdf",
+          uri: pathToFileURL(join(dir, "gone.pdf")).href,
+        },
+      ]),
+      'notes.txt = "the placed bytes", gone.pdf = "missing"',
+    )
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
 })
 
 test("scenarioScript reads the window file's steps, which are the check's expected strings", () => {

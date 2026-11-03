@@ -246,6 +246,14 @@ import {
  *               message, the composer lets it go, the conversation holds it
  *               and the agent says it was handed exactly that image; the
  *               person's message draws it, read back from the conversation
+ *   attach      a text file and an image are picked with the composer's
+ *               Attach button: the file shows by its name, the image as its
+ *               picture; sent with the message, the conversation holds the
+ *               image as an image and the file as an upload under its name,
+ *               the agent is handed the image and finds the file's bytes in
+ *               its workspace, and the person's message draws both. The
+ *               window runs under the packaged app's connect-src, so a read
+ *               of the attachments' bytes the app would block fails here too
  *   trace       the agent makes three calls, one failing, then answers: the
  *               gateway's view keeps each call's start and end time and the
  *               input it was made with; the window draws them as one folded
@@ -316,6 +324,7 @@ import {
   streamWord,
   stressScenario,
 } from "../../../scripts/mcp-test-server/scenarios/stress.mjs"
+import { appConnectPolicy, assertPolicyHolds } from "./lib/app-policy.mjs"
 import { appFrame } from "./lib/apps.mjs"
 import { browse } from "./lib/mdns-probe.mjs"
 import { noteLiveMountResourceAbort, openPage, withEngines } from "./lib/browser.mjs"
@@ -6906,6 +6915,103 @@ const steps = {
         path: join(run.evidence, `paste-${run.engine}-${step.index}-sent.png`),
       })
   },
+  async attach(run, step, failures) {
+    // Picked with the composer's Attach button, from the system's picker: a
+    // file no model takes as an image, and an image.
+    const notes = Buffer.from(`notes for step ${step.index}\n`)
+    const attach = dock(run.page).getByRole("button", { name: "Attach files" })
+    const [chooser] = await Promise.all([
+      run.page.waitForEvent("filechooser", { timeout: 5000 }),
+      attach.click(),
+    ]).catch(() => [undefined])
+    if (!chooser) {
+      failures.push("the composer's Attach button opened no file picker")
+      return
+    }
+    if (!chooser.isMultiple()) failures.push("the file picker takes one file, not many")
+    await chooser.setFiles([
+      { name: "notes.txt", mimeType: "text/plain", buffer: notes },
+      { name: "picked.png", mimeType: "image/png", buffer: tinyPng },
+    ])
+    const tiles = dock(run.page).locator(".desktop-composer-image")
+    const fileTile = tiles.filter({ hasText: "notes.txt" })
+    if (
+      !(await waitFor(
+        async () =>
+          (await tiles.count()) === 2 &&
+          (await fileTile.count()) === 1 &&
+          (await fileTile.getAttribute("data-kind")) === "file" &&
+          (await fileTile.locator("img").count()) === 0 &&
+          (await tiles.locator("img").count()) === 1,
+        5000,
+      ))
+    ) {
+      failures.push(
+        `the composer shows ${await tiles.count()} attachments, not notes.txt by its name and the image as its picture`,
+      )
+      return
+    }
+    if (run.evidence)
+      await dock(run.page).screenshot({
+        path: join(run.evidence, `attach-${run.engine}-${step.index}-composer.png`),
+      })
+    const text = prompt(run, STRESS.attach, step)
+    const seen = await send(run, run.main.id, text, failures)
+    if (!(await waitFor(async () => (await tiles.count()) === 0, 5000)))
+      failures.push("the attachments stayed in the composer after Send")
+    const { turn } = await settled(run, run.main.id, seen, text, "completed", failures)
+    if (!turn) return
+    // The conversation holds the image as an image and the file as an
+    // original upload under its own name.
+    const [image, ...moreImages] = turn.attachments ?? []
+    const [upload, ...moreUploads] = turn.uploads ?? []
+    if (!image || moreImages.length || image.mimeType !== "image/png")
+      failures.push(
+        `the attached turn carries ${JSON.stringify(turn.attachments ?? [])}, not one PNG`,
+      )
+    if (
+      !upload ||
+      moreUploads.length ||
+      upload.name !== "notes.txt" ||
+      upload.mimeType !== "text/plain" ||
+      upload.size !== notes.length
+    )
+      failures.push(
+        `the attached turn's uploads are ${JSON.stringify(turn.uploads ?? [])}, not notes.txt of ${notes.length} bytes`,
+      )
+    if (!image || !upload) return
+    // The agent was handed the image, and found the file's very bytes where
+    // its link points: the gateway placed it in the agent's workspace.
+    const said = (turn.parts ?? []).map((part) => part.text ?? "").join("")
+    // The link's name is the placed file's, `nessa-<digest>-notes.txt`, with
+    // its punctuation escaped for the Markdown it is handed in.
+    const placed = new RegExp(
+      `^${escapeRegExp(`${SAYS.attach}${image.mimeType} ${image.size} bytes and `)}nessa\\\\?-[0-9a-f]{64}\\\\?-notes\\\\?\\.txt = ${escapeRegExp(JSON.stringify(notes.toString("utf8")))}${escapeRegExp(` for ${text}`)}$`,
+    )
+    if (!placed.test(said))
+      failures.push(
+        `the agent said ${JSON.stringify(said)}, not the image and notes.txt's bytes`,
+      )
+    // The window draws both on the person's message, read back from the
+    // conversation once it holds the message, the file by its name.
+    const bubble = run.page
+      .locator('.workspace-message[data-role="user"]')
+      .filter({ hasText: text })
+    const held = bubble.locator('ul[aria-label="2 attachments"]:not([data-local-images])')
+    if (
+      !(await waitFor(
+        async () =>
+          (await held.locator("img").count()) === 1 &&
+          (await held.filter({ hasText: "notes.txt" }).count()) === 1,
+        10_000,
+      ))
+    )
+      failures.push("the sent message does not show its image and notes.txt")
+    else if (run.evidence)
+      await bubble.screenshot({
+        path: join(run.evidence, `attach-${run.engine}-${step.index}-sent.png`),
+      })
+  },
   async table(run, step, failures) {
     const text = prompt(run, STRESS.table, step)
     const seen = await send(run, run.main.id, text, failures)
@@ -9313,6 +9419,11 @@ async function startStack(options) {
   }))
 }
 
+/** `text` as a pattern that matches only itself. */
+function escapeRegExp(text) {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+}
+
 await main(
   meta,
   async ({ options, rep, target: stack }) => {
@@ -9330,7 +9441,18 @@ await main(
       let restartConsole
       let reviewAnswers
       let accessRefusals
+      const gateway = new URL(stack.gateway.url)
+      // The packaged window's connect-src, plus the ports only this check
+      // has: its own gateway's, and the fake voice provider the window's
+      // scripted transport calls in place of WebRTC. A read the app's policy
+      // blocks fails here too (`paste`, `attach`).
+      const contentPolicy = appConnectPolicy([
+        gateway.origin,
+        `ws://${gateway.host}`,
+        ...(stack.realtime ? [stack.realtime.socketOrigin] : []),
+      ])
       const opened = await openPage(browser, {
+        contentPolicy,
         preparePage: async (page) => {
           await stack.vault.install(page)
           restartConsole = observeGatewayRestarts(page, stack.endpoint)
@@ -9352,6 +9474,9 @@ await main(
           ],
         ],
       })
+      // The probe's own refusal is the console line it is expected to leave.
+      opened.noteHarmless(/127\.0\.0\.1:9\/policy-probe/)
+      await assertPolicyHolds(opened.page, contentPolicy)
       const run = new Run(stack, opened, knobs, restartConsole)
       run.reviewAnswers = reviewAnswers
       run.reviewAnswerEvidence = []

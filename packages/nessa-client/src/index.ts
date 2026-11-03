@@ -357,6 +357,7 @@ export type {
   ConversationAttachmentEvidenceFailure,
   ImageAttachment,
   LinkedFile,
+  UploadedFileAttachment,
   ConversationMessage,
   ConversationAgentSource,
   ConversationMessageApp,

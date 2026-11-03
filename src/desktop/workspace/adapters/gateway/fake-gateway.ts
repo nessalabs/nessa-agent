@@ -664,7 +664,12 @@ export function fakeGateway(
             prepared.text,
             prepared.attachments,
             prepared.files,
-            { executionId: prepared.executionId, requestId: prepared.requestId },
+            {
+              executionId: prepared.executionId,
+              requestId: prepared.requestId,
+              // Named only when the message carries other files.
+              ...(prepared.uploads.length ? { uploads: prepared.uploads } : {}),
+            },
           ],
           () => ({
             conversationId: prepared.conversationId,

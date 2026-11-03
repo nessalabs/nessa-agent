@@ -41,6 +41,7 @@ export const STRESS = {
   panelTabs: "stress panel tabs",
   table: "stress table",
   paste: "stress paste",
+  attach: "stress attach",
   trace: "stress trace",
   github: "stress github",
   githubRead: "stress repository read",
@@ -94,6 +95,7 @@ export const SAYS = {
   panelTabs: "Panel tabs: ",
   table: "Tables: ",
   paste: "Images: ",
+  attach: "Attached: ",
   trace: "Traced: ",
   github: "GitHub: ",
   githubRead: "GitHub repository: ",
@@ -341,6 +343,25 @@ export function stressScenario({
           {
             do: "text",
             chunks: [SAYS.paste, "${prompt.images}", " for ", "${prompt.text}"],
+          },
+          { do: "end" },
+        ],
+      },
+      {
+        // Says which images and files the agent was handed — each file by
+        // its name and what it finds where its link points — then the prompt.
+        when: STRESS.attach,
+        steps: [
+          {
+            do: "text",
+            chunks: [
+              SAYS.attach,
+              "${prompt.images}",
+              " and ",
+              "${prompt.files}",
+              " for ",
+              "${prompt.text}",
+            ],
           },
           { do: "end" },
         ],
