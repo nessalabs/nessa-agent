@@ -1,7 +1,7 @@
 //! Real private config files and audit records; only the whole-file parse port
 //! uses a small fixture grammar, independent of gateway startup configuration.
 use crate::{
-    conversation::domain::{ChannelId, VmLifetime, VmLifetimeScope},
+    conversation::domain::{ChannelId, SettingsScope, VmLifetime},
     mcp_servers::{
         application::StoreLock,
         infrastructure::{ConfigCheck, ConfigFiles, ConfigJson, OsConfigFiles, Published},
@@ -81,16 +81,16 @@ async fn global_and_channel_choices_preserve_unrelated_config_and_explicit_unlim
     let (directory, settings) = fixture();
     assert_eq!(
         settings
-            .read(&VmLifetimeScope::Global)
+            .read(&SettingsScope::Global)
             .await
             .unwrap()
             .effective(),
         VmLifetime::Unlimited
     );
-    let channel = VmLifetimeScope::Channel(ChannelId::from_random([1; 10]));
-    let other = VmLifetimeScope::Channel(ChannelId::from_random([2; 10]));
+    let channel = SettingsScope::Channel(ChannelId::from_random([1; 10]));
+    let other = SettingsScope::Channel(ChannelId::from_random([2; 10]));
     settings
-        .save(VmLifetimeScope::Global, Some(finite(14_400)), caller())
+        .save(SettingsScope::Global, Some(finite(14_400)), caller())
         .await
         .unwrap();
     let inherited = settings.read(&channel).await.unwrap();
@@ -101,7 +101,7 @@ async fn global_and_channel_choices_preserve_unrelated_config_and_explicit_unlim
         .await
         .unwrap();
     settings
-        .save(VmLifetimeScope::Global, Some(finite(28_800)), caller())
+        .save(SettingsScope::Global, Some(finite(28_800)), caller())
         .await
         .unwrap();
     assert_eq!(
@@ -179,14 +179,14 @@ async fn audit_refusal_never_acknowledges_and_distinguishes_before_from_after_pu
         });
         assert_eq!(
             settings
-                .save(VmLifetimeScope::Global, Some(finite(3600)), caller())
+                .save(SettingsScope::Global, Some(finite(3600)), caller())
                 .await,
             Err(Failure::Storage)
         );
         if fail_outcome {
             assert_eq!(
                 settings
-                    .read(&VmLifetimeScope::Global)
+                    .read(&SettingsScope::Global)
                     .await
                     .unwrap()
                     .effective(),
@@ -206,16 +206,12 @@ async fn invalid_stored_lifetimes_are_not_reset_or_repaired_by_a_later_edit() {
     let bytes = b"{\"boat\":{\"autoStopSeconds\":0}}";
     std::fs::write(directory.path().join("config.json"), bytes).unwrap();
     assert_eq!(
-        settings.read(&VmLifetimeScope::Global).await,
+        settings.read(&SettingsScope::Global).await,
         Err(Failure::Storage)
     );
     assert_eq!(
         settings
-            .save(
-                VmLifetimeScope::Global,
-                Some(VmLifetime::Unlimited),
-                caller()
-            )
+            .save(SettingsScope::Global, Some(VmLifetime::Unlimited), caller())
             .await,
         Err(Failure::Storage)
     );
@@ -283,7 +279,7 @@ async fn caller_loss_keeps_publication_and_audit_owned_under_the_shared_config_l
         let settings = settings.clone();
         async move {
             settings
-                .save(VmLifetimeScope::Global, Some(finite(14_400)), caller())
+                .save(SettingsScope::Global, Some(finite(14_400)), caller())
                 .await
         }
     });
@@ -384,13 +380,13 @@ async fn failed_non_durable_and_panicking_publication_keep_the_observed_effect_d
         ));
         assert_eq!(
             settings
-                .save(VmLifetimeScope::Global, Some(finite(14_400)), caller())
+                .save(SettingsScope::Global, Some(finite(14_400)), caller())
                 .await,
             Err(Failure::Storage)
         );
         assert_eq!(
             settings
-                .read(&VmLifetimeScope::Global)
+                .read(&SettingsScope::Global)
                 .await
                 .unwrap()
                 .effective(),
@@ -423,21 +419,17 @@ async fn failed_non_durable_and_panicking_publication_keep_the_observed_effect_d
 #[tokio::test]
 async fn resetting_the_global_choice_removes_only_its_config_key() {
     let (directory, settings) = fixture();
-    let channel = VmLifetimeScope::Channel(ChannelId::from_random([1; 10]));
+    let channel = SettingsScope::Channel(ChannelId::from_random([1; 10]));
     settings
         .save(channel.clone(), Some(finite(14_400)), caller())
         .await
         .unwrap();
     settings
-        .save(
-            VmLifetimeScope::Global,
-            Some(VmLifetime::Unlimited),
-            caller(),
-        )
+        .save(SettingsScope::Global, Some(VmLifetime::Unlimited), caller())
         .await
         .unwrap();
     settings
-        .save(VmLifetimeScope::Global, None, caller())
+        .save(SettingsScope::Global, None, caller())
         .await
         .unwrap();
     let stored: Value =
@@ -450,7 +442,7 @@ async fn resetting_the_global_choice_removes_only_its_config_key() {
     );
     assert_eq!(
         settings
-            .read(&VmLifetimeScope::Global)
+            .read(&SettingsScope::Global)
             .await
             .unwrap()
             .effective(),

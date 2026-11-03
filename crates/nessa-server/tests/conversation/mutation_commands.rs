@@ -1457,7 +1457,7 @@ async fn a_submit_linking_a_file_is_refused_on_a_host_before_it_is_staged() {
     service
         .inner
         .environment
-        .place(&target, Some("devbox"))
+        .place(&target, Some("devbox"), None)
         .await
         .unwrap();
     let mut linking = message("read this");

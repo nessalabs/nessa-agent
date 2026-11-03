@@ -10,6 +10,7 @@ import {
   type BoatApi,
   type CredentialApi,
   type DevicesApi,
+  type DevicesPool,
   type DeviceMachine,
   type DeviceWorker,
   type PairingApi,
@@ -23,6 +24,7 @@ import {
 } from "../../settings/model/device-key"
 import { linkedDeviceOf } from "../../adapters/linked-device"
 import type { LinkedDevice } from "../../model/linked-device"
+import type { PoolPreference } from "../model/pool"
 
 /** What the Devices view asks of the window's gateway client. */
 export interface DevicesClient {
@@ -95,6 +97,20 @@ export interface DevicesGateway {
   status(invitationId: string): Promise<Outcome<WorkerPairing>>
   approve(invitationId: string, deviceKey: string): Promise<Outcome<WorkerPairing>>
   cancel(invitationId: string): Promise<Outcome<WorkerPairing>>
+  /**
+   * Where new threads on "Any computer" go: the Nessa default, and
+   * `channelId`'s own order when it has one (a gateway channel id; absent
+   * reads the default).
+   */
+  pool(channelId?: string): Promise<Outcome<DevicesPool>>
+  /**
+   * Save the Nessa default's order (no `channelId`) or a channel's own;
+   * `undefined` makes the channel follow the default again.
+   */
+  setPool(
+    preference: PoolPreference | undefined,
+    channelId?: string,
+  ): Promise<Outcome<DevicesPool>>
 }
 
 type OwnerStatus = Awaited<ReturnType<PairingApi["status"]>>
@@ -191,6 +207,17 @@ export function devicesGateway(options: {
     cancel: (invitationId) =>
       answer(async (client) =>
         pairingOf(await client.pairing.cancel(bytesOf(invitationId, INVITATION_BYTES))),
+      ),
+    pool: (channelId) => answer((client) => client.devices.pool(channelId)),
+    setPool: (preference, channelId) =>
+      answer((client) =>
+        client.devices.setPool(
+          preference && {
+            order: [...preference.order],
+            excluded: [...preference.excluded],
+          },
+          channelId,
+        ),
       ),
   }
 }

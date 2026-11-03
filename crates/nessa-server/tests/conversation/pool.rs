@@ -26,6 +26,8 @@ fn context(name: &str) -> ExecutionSessionId {
 struct Workers {
     environments: Mutex<BTreeMap<PeerEnvironment, Arc<dyn Environment>>>,
     serving: Mutex<Vec<(PeerEnvironment, WorkerLoad)>>,
+    /// Processor use each machine last reported, in tenths of a percent.
+    cpu: Mutex<BTreeMap<PeerEnvironment, u32>>,
 }
 
 impl Workers {
@@ -67,6 +69,13 @@ impl PairedEnvironments for Workers {
     fn serving(&self) -> Vec<(PeerEnvironment, WorkerLoad)> {
         self.serving.lock().unwrap().clone()
     }
+
+    fn machine_use(&self, peer: &PeerEnvironment) -> Option<MachineUse> {
+        self.cpu.lock().unwrap().get(peer).map(|cpu| MachineUse {
+            cpu_permille: *cpu,
+            memory_permille: 100,
+        })
+    }
 }
 
 struct Pool {
@@ -97,13 +106,20 @@ fn pool() -> Pool {
 impl Pool {
     async fn placed(&self) {
         self.environments
-            .place(&conversation(), Some(POOL))
+            .place(&conversation(), Some(POOL), None)
             .await
             .unwrap();
     }
 
     async fn lease(&self, avoid: &[PeerEnvironment]) -> Result<LeasePlace, ConversationError> {
-        self.environments.for_lease(&conversation(), avoid).await
+        self.environments
+            .for_lease(&conversation(), avoid, None)
+            .await
+    }
+
+    async fn serves(&self) -> bool {
+        let settings = self.environments.pool_settings(None).await.unwrap();
+        self.environments.pool_serves(&settings)
     }
 
     async fn bound(&self) -> Option<WorkerBinding> {
@@ -120,15 +136,17 @@ async fn the_pool_is_placed_on_only_while_a_worker_serves_and_is_not_draining() 
     let pool = pool();
     for serving in [&[][..], &[(worker(1), 0, true), (worker(2), 3, true)][..]] {
         pool.workers.set(serving);
-        assert!(!pool.environments.pool_serves());
+        assert!(!pool.serves().await);
         assert!(matches!(
-            pool.environments.place(&conversation(), Some(POOL)).await,
+            pool.environments
+                .place(&conversation(), Some(POOL), None)
+                .await,
             Err(ConversationError::EnvironmentNotConfigured)
         ));
     }
     pool.workers
         .set(&[(worker(1), 0, true), (worker(2), 3, false)]);
-    assert!(pool.environments.pool_serves());
+    assert!(pool.serves().await);
     pool.placed().await;
     assert_eq!(
         pool.environments.placement(&conversation()).await.unwrap(),
@@ -177,7 +195,9 @@ async fn with_no_paired_computer_online_the_pool_runs_in_the_cloud_when_it_can()
             Arc::new(FileBindings::new(root.path().join("bindings")).unwrap()),
         )
         .with_workspaces(Arc::new(Cloud(connected)));
-        let placed = environments.place(&conversation(), Some(&asked)).await;
+        let placed = environments
+            .place(&conversation(), Some(&asked), None)
+            .await;
         if connected {
             placed.unwrap();
             assert_eq!(
@@ -212,7 +232,7 @@ async fn with_no_paired_computer_online_the_pool_runs_in_the_cloud_when_it_can()
     .with_workspaces(Arc::new(Cloud(true)));
     assert!(matches!(
         environments
-            .place(&conversation(), Some(&worker(1).name()))
+            .place(&conversation(), Some(&worker(1).name()), None)
             .await,
         Err(ConversationError::EnvironmentNotConfigured)
     ));
@@ -225,7 +245,9 @@ async fn with_no_paired_computer_online_the_pool_runs_in_the_cloud_when_it_can()
     )
     .with_workspaces(Arc::new(Cloud(true)));
     assert!(matches!(
-        environments.place(&conversation(), Some("devbox")).await,
+        environments
+            .place(&conversation(), Some("devbox"), None)
+            .await,
         Err(ConversationError::EnvironmentNotConfigured)
     ));
 }
@@ -247,13 +269,19 @@ async fn boat_without_a_connected_account_is_not_configured() {
         .with_workspaces(Arc::new(Cloud(connected)))
     };
     assert!(matches!(
-        with(false).place(&conversation(), Some(BOAT)).await,
+        with(false).place(&conversation(), Some(BOAT), None).await,
         Err(ConversationError::EnvironmentNotConfigured)
     ));
-    with(true).place(&conversation(), Some(BOAT)).await.unwrap();
-    assert!(with(true).for_lease(&conversation(), &[]).await.is_ok());
+    with(true)
+        .place(&conversation(), Some(BOAT), None)
+        .await
+        .unwrap();
+    assert!(with(true)
+        .for_lease(&conversation(), &[], None)
+        .await
+        .is_ok());
     assert!(matches!(
-        with(false).for_lease(&conversation(), &[]).await,
+        with(false).for_lease(&conversation(), &[], None).await,
         Err(ConversationError::EnvironmentNotConfigured)
     ));
 }
@@ -267,7 +295,7 @@ async fn a_gateway_that_pairs_no_environments_places_nothing_on_the_pool() {
         Arc::new(FilePlacements::new(root.path().join("placements")).unwrap()),
     );
     assert!(matches!(
-        environments.place(&conversation(), Some(POOL)).await,
+        environments.place(&conversation(), Some(POOL), None).await,
         Err(ConversationError::EnvironmentNotConfigured)
     ));
 }
@@ -437,7 +465,7 @@ async fn a_context_opened_again_is_not_written_again() {
 async fn a_conversation_off_the_pool_carries_no_worker_context() {
     let pool = pool();
     pool.environments
-        .place(&conversation(), None)
+        .place(&conversation(), None, None)
         .await
         .unwrap();
     let place = pool.lease(&[]).await.unwrap();
@@ -467,10 +495,16 @@ async fn leases_chosen_at_once_are_spread_before_any_reaches_its_worker() {
         .set(&[(worker(1), 0, false), (worker(2), 0, false)]);
     let other = ConversationId::new("6d1b0a3f-2e4c-4d8b-9f70-3c0e5b2d8f41").unwrap();
     pool.placed().await;
-    pool.environments.place(&other, Some(POOL)).await.unwrap();
+    pool.environments
+        .place(&other, Some(POOL), None)
+        .await
+        .unwrap();
     // Neither lease has reached its worker's connection yet, and both are
     // chosen at once: each reads its binding before either chooses.
-    let (first, second) = tokio::join!(pool.lease(&[]), pool.environments.for_lease(&other, &[]));
+    let (first, second) = tokio::join!(
+        pool.lease(&[]),
+        pool.environments.for_lease(&other, &[], None)
+    );
     let (first, second) = (first.unwrap(), second.unwrap());
     // Whichever chose first took the lowest key; the other, the next.
     assert!(
@@ -480,8 +514,15 @@ async fn leases_chosen_at_once_are_spread_before_any_reaches_its_worker() {
     // Let go once asked: the connection counts them from then on.
     drop((first, second));
     let third = ConversationId::new("7e2c1b4a-3f5d-4e9c-8a81-4d1f6c3e9a52").unwrap();
-    pool.environments.place(&third, Some(POOL)).await.unwrap();
-    let after = pool.environments.for_lease(&third, &[]).await.unwrap();
+    pool.environments
+        .place(&third, Some(POOL), None)
+        .await
+        .unwrap();
+    let after = pool
+        .environments
+        .for_lease(&third, &[], None)
+        .await
+        .unwrap();
     assert!(pool.is(&after, worker(1)));
 }
 
@@ -509,4 +550,213 @@ async fn a_pool_conversation_is_named_by_its_worker_once_bound_and_is_never_this
         .reads_this_machine(&conversation())
         .await
         .unwrap());
+}
+
+/// Pool preferences a test sets: the same answer for every scope.
+struct Preferences(Mutex<crate::conversation::domain::PoolSettings>);
+
+impl Preferences {
+    fn new(order: &[PeerEnvironment], excluded: &[PeerEnvironment], busy: u32) -> Arc<Self> {
+        Arc::new(Self(Mutex::new(
+            crate::conversation::domain::PoolSettings::new(
+                crate::conversation::domain::SettingsScope::Global,
+                crate::conversation::domain::PoolPreference::new(order.to_vec(), excluded.to_vec())
+                    .unwrap(),
+                None,
+                busy,
+                busy,
+            ),
+        )))
+    }
+}
+
+#[async_trait::async_trait]
+impl crate::conversation::application::PoolSettingsStore for Preferences {
+    async fn read(
+        &self,
+        _: &crate::conversation::domain::SettingsScope,
+    ) -> Result<
+        crate::conversation::domain::PoolSettings,
+        crate::conversation::application::PoolSettingsError,
+    > {
+        Ok(self.0.lock().unwrap().clone())
+    }
+    async fn save(
+        &self,
+        _: crate::conversation::domain::SettingsScope,
+        _: Option<crate::conversation::domain::PoolPreference>,
+        _: crate::conversation::application::PoolCaller,
+    ) -> Result<
+        crate::conversation::domain::PoolSettings,
+        crate::conversation::application::PoolSettingsError,
+    > {
+        unreachable!("placement never saves")
+    }
+}
+
+fn preferred(order: &[PeerEnvironment], excluded: &[PeerEnvironment], busy: u32) -> Pool {
+    let Pool {
+        _root,
+        workers,
+        bindings,
+        environments,
+    } = pool();
+    Pool {
+        _root,
+        workers,
+        bindings,
+        environments: environments.with_pool_settings(Preferences::new(order, excluded, busy)),
+    }
+}
+
+impl Workers {
+    /// Each worker serving, with its leases and its machine's processor
+    /// use in tenths of a percent.
+    fn set_busy(&self, serving: &[(PeerEnvironment, usize, u32)]) {
+        self.set(
+            &serving
+                .iter()
+                .map(|(peer, leases, _)| (*peer, *leases, false))
+                .collect::<Vec<_>>(),
+        );
+        *self.cpu.lock().unwrap() = serving.iter().map(|(peer, _, cpu)| (*peer, *cpu)).collect();
+    }
+}
+
+#[tokio::test]
+async fn the_first_computer_in_the_order_takes_new_work_however_many_leases_it_holds() {
+    let pool = preferred(&[worker(3), worker(1)], &[], 900);
+    pool.workers
+        .set_busy(&[(worker(1), 0, 10), (worker(2), 0, 10), (worker(3), 5, 10)]);
+    pool.placed().await;
+    let place = pool.lease(&[]).await.unwrap();
+    assert!(pool.is(&place, worker(3)));
+}
+
+#[tokio::test]
+async fn a_busy_computer_is_passed_over_for_the_next_in_order_and_kept_when_all_are_busy() {
+    let pool = preferred(&[worker(3), worker(1)], &[], 900);
+    pool.workers
+        .set_busy(&[(worker(1), 0, 10), (worker(2), 0, 10), (worker(3), 0, 950)]);
+    pool.placed().await;
+    let place = pool.lease(&[]).await.unwrap();
+    assert!(pool.is(&place, worker(1)), "the second in order, not busy");
+    drop(place);
+    // Bound, it stays while it may take the conversation, busy or not.
+    pool.workers
+        .set_busy(&[(worker(1), 0, 990), (worker(2), 0, 10), (worker(3), 0, 10)]);
+    let place = pool.lease(&[]).await.unwrap();
+    assert!(pool.is(&place, worker(1)));
+    drop(place);
+    // A new conversation with every computer busy goes to the first in order.
+    let other = ConversationId::new("6d1b0a3f-2e4c-4d8b-9f70-3cae5b2d8f41").unwrap();
+    pool.workers.set_busy(&[
+        (worker(1), 0, 990),
+        (worker(2), 0, 990),
+        (worker(3), 0, 990),
+    ]);
+    pool.environments
+        .place(&other, Some(POOL), None)
+        .await
+        .unwrap();
+    let place = pool
+        .environments
+        .for_lease(&other, &[], None)
+        .await
+        .unwrap();
+    assert!(pool.is(&place, worker(3)));
+}
+
+#[tokio::test]
+async fn a_computer_left_out_is_never_chosen_and_a_bound_one_moves_off_it() {
+    let pool = preferred(&[], &[worker(1)], 900);
+    pool.workers.set_busy(&[(worker(1), 0, 10)]);
+    // Only a left-out computer serves: the pool cannot be placed on.
+    assert!(!pool.serves().await);
+    assert!(matches!(
+        pool.environments
+            .place(&conversation(), Some(POOL), None)
+            .await,
+        Err(ConversationError::EnvironmentNotConfigured)
+    ));
+    pool.workers
+        .set_busy(&[(worker(1), 0, 10), (worker(2), 3, 10)]);
+    pool.placed().await;
+    let place = pool.lease(&[]).await.unwrap();
+    assert!(pool.is(&place, worker(2)));
+    drop(place);
+    // A binding to a computer that was later left out moves off it.
+    pool.bindings
+        .bind(
+            &conversation(),
+            &WorkerBinding {
+                worker: worker(1),
+                context: None,
+            },
+        )
+        .await
+        .unwrap();
+    let place = pool.lease(&[]).await.unwrap();
+    assert!(pool.is(&place, worker(2)));
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn with_every_computer_busy_a_new_pool_conversation_overflows_to_the_cloud() {
+    use crate::conversation::application::placement::BOAT;
+    let root = tempfile::tempdir().unwrap();
+    let workers = Arc::new(Workers::default());
+    let environments = Environments::new(
+        in_process_environment(),
+        BTreeMap::new(),
+        Arc::new(FilePlacements::new(root.path().join("placements")).unwrap()),
+    )
+    .with_peers(
+        workers.clone(),
+        Arc::new(FileBindings::new(root.path().join("bindings")).unwrap()),
+    )
+    .with_workspaces(Arc::new(Cloud(true)))
+    .with_pool_settings(Preferences::new(&[], &[], 800));
+    workers.set_busy(&[(worker(1), 0, 850), (worker(2), 0, 800)]);
+    environments
+        .place(&conversation(), Some(POOL), None)
+        .await
+        .unwrap();
+    assert_eq!(
+        environments
+            .placement(&conversation())
+            .await
+            .unwrap()
+            .as_deref(),
+        Some(BOAT)
+    );
+    // One computer below its limit keeps new work on the pool.
+    let other = ConversationId::new("6d1b0a3f-2e4c-4d8b-9f70-3cae5b2d8f41").unwrap();
+    workers.set_busy(&[(worker(1), 0, 850), (worker(2), 0, 799)]);
+    environments.place(&other, Some(POOL), None).await.unwrap();
+    assert_eq!(
+        environments.placement(&other).await.unwrap().as_deref(),
+        Some(POOL)
+    );
+}
+
+#[tokio::test]
+async fn the_pool_standing_names_each_computers_load_and_place() {
+    let pool = preferred(&[worker(3)], &[worker(2)], 900);
+    pool.workers
+        .set_busy(&[(worker(1), 2, 950), (worker(2), 0, 10), (worker(3), 1, 10)]);
+    let settings = pool.environments.pool_settings(None).await.unwrap();
+    let standing = pool.environments.pool_standing(&settings);
+    let first = &standing[&worker(3).name()];
+    assert_eq!(
+        (first.rank, first.agents, first.busy),
+        (Some(0), Some(1), false)
+    );
+    let unordered = &standing[&worker(1).name()];
+    assert_eq!(
+        (unordered.rank, unordered.agents, unordered.busy),
+        (Some(1), Some(2), true)
+    );
+    assert_eq!(unordered.machine.map(|used| used.cpu_permille), Some(950));
+    assert_eq!(standing[&worker(2).name()].rank, None, "left out");
 }

@@ -159,7 +159,7 @@ export const KNOBS = {
   },
   pools: {
     default: 1,
-    what: "times a conversation placed on any worker moves to another when its worker drains",
+    what: "times a conversation placed on any worker goes where Devices › Thread order lets it (one worker left out there, then let back in) and moves to another when its worker drains",
   },
   devices: {
     default: 1,

@@ -2036,6 +2036,7 @@ async fn dispatch_authorized(
                 },
             )
         }
+        "devices.pool" | "devices.setPool" => super::pool::dispatch(state, session, frame).await,
         "devices.list" => {
             let Ok(params) = serde_json::from_value::<
                 nessa_protocol::product::generated::DevicesListParams,
