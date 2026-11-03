@@ -27,6 +27,7 @@ export const STRESS = {
   cut: "stress cut",
   fail: "stress fail",
   limit: "stress usage limit",
+  signIn: "stress sign in",
   delegate: "stress delegate",
   parentStop: "stress parent stop",
   ownedChild: "stress owned child",
@@ -583,6 +584,10 @@ export function stressScenario({
           },
           { do: "end" },
         ],
+      },
+      {
+        when: STRESS.signIn,
+        steps: [{ do: "auth-required" }],
       },
       {
         when: STRESS.fail,

@@ -1,8 +1,8 @@
 //! Boat's adapter uses the real vault's encryption and unlock-generation fence.
 use crate::workspaces::{
-    application::Settings,
-    domain::{BoatConnection, Failure},
-    infrastructure::VaultSettings,
+    application::{ClaudeSignIns, Settings},
+    domain::{BoatConnection, ClaudeSignIn, Failure},
+    infrastructure::{VaultClaudeSignIns, VaultSettings},
 };
 use nessa_vault::{
     application::{Caller, Clock, ObservationClock, Vault},
@@ -73,4 +73,45 @@ async fn tokens_are_encrypted_and_stale_unlocks_cannot_publish_or_clear_the_new_
     assert_eq!(saved.environment, "nessa");
     session.close().unwrap();
     assert!(matches!(settings.read().await, Err(Failure::Locked)));
+}
+
+#[tokio::test]
+async fn a_claude_sign_in_is_encrypted_replaced_and_cleared_in_the_vault() {
+    let root = tempfile::tempdir().unwrap();
+    let vault = Vault::new(
+        Arc::new(EncryptedFileVault::new(
+            root.path().join("vault"),
+            Arc::new(OsEntropy),
+        )),
+        Arc::new(FileAudit::new(root.path().join("audit"), Arc::new(Time))),
+        Arc::new(Time),
+    );
+    let session = vault.session(
+        "fixture-socket".into(),
+        Caller {
+            principal: "fixture-owner".into(),
+            credential: "fixture-credential".into(),
+        },
+    );
+    let sign_ins = VaultClaudeSignIns(vault.clone());
+    let token = |value: &str| ClaudeSignIn::new(value.into()).unwrap();
+    assert!(matches!(
+        sign_ins.save(token("sk-ant-oat01-locked")).await,
+        Err(Failure::Locked)
+    ));
+    vault.create(&session.lease(), passphrase(), &[]).unwrap();
+    assert!(sign_ins.read().await.unwrap().is_none());
+    sign_ins.save(token("sk-ant-oat01-first")).await.unwrap();
+    sign_ins.save(token("sk-ant-oat01-second")).await.unwrap();
+    let encrypted = std::fs::read(root.path().join("vault/entries.enc")).unwrap();
+    assert!(!encrypted
+        .windows(b"sk-ant-oat01".len())
+        .any(|w| w == b"sk-ant-oat01"));
+    assert_eq!(
+        sign_ins.read().await.unwrap().unwrap().as_bytes(),
+        b"sk-ant-oat01-second"
+    );
+    sign_ins.clear().await.unwrap();
+    assert!(sign_ins.read().await.unwrap().is_none());
+    sign_ins.clear().await.unwrap();
 }

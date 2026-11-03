@@ -1101,14 +1101,15 @@ async fn one_stalled_socket_delays_no_commit_and_no_other_subscriber() {
     let id = other.subscribe("subscribe", &fixture.id).await;
     other.next().await;
     fixture.stall(&mut stalled).await;
-    let started = Instant::now();
     fixture.turn("turn-1").await;
     fixture.settled_read(1).await;
     other.until(&id, |frame| settled(frame, 1)).await;
+    // Told by order, not by a clock: the stall ends only when the gateway
+    // gives up on that socket after its delivery timeout, ending its task.
+    // Both arrived while it is still stalled, so neither waited on it.
     assert!(
-        started.elapsed() < Duration::from_millis(SUBSCRIPTION_DELIVERY_TIMEOUT_MS / 2),
-        "the commit and the other socket's frame waited on nothing: {:?}",
-        started.elapsed()
+        !stalled.socket.is_finished(),
+        "the commit and the other socket's frame waited for the stalled socket to be dropped"
     );
     stalled.close().await;
     other.close().await;

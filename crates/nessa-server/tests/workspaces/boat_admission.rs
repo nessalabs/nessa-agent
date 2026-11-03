@@ -360,6 +360,7 @@ async fn server() -> Server {
             .unwrap(),
         relay_socket: "unused".into(),
         relay_program: "unused".into(),
+        claude_sign_ins: Arc::new(NoSignIn),
     };
     Server {
         provider,
@@ -876,4 +877,18 @@ async fn oversized_vm_bodies_are_bounded_without_losing_a_previously_received_ta
         Some(AdmissionRefusal::InvalidReceipt)
     );
     assert_eq!(server.state.lock().unwrap().commands, 0);
+}
+
+struct NoSignIn;
+#[async_trait::async_trait]
+impl crate::workspaces::application::ClaudeSignIns for NoSignIn {
+    async fn read(&self) -> Result<Option<crate::workspaces::domain::ClaudeSignIn>, Failure> {
+        Ok(None)
+    }
+    async fn save(&self, _: crate::workspaces::domain::ClaudeSignIn) -> Result<(), Failure> {
+        Ok(())
+    }
+    async fn clear(&self) -> Result<(), Failure> {
+        Ok(())
+    }
 }
