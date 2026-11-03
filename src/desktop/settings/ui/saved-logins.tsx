@@ -211,7 +211,9 @@ export function DeviceLoginsSwitch({ environment }: { environment: string }) {
         <Toggle
           label="Use my saved logins here"
           checked={on}
-          disabled={busy || logins === undefined}
+          // Unread (a locked vault), it shows off and still works: the
+          // change unlocks first, and the gateway answers how it stands.
+          disabled={busy}
           onChange={(next) => void act((gateway) => gateway.setDevice(environment, next))}
         />
         {error && <p role="alert">{error}</p>}
