@@ -6,9 +6,10 @@ use std::{collections::BTreeMap, path::Path, sync::Arc};
 
 use super::local_auth::{conversation_root, SystemClock};
 use crate::core::RunError;
+use crate::logins::infrastructure::login_store;
 use crate::logins::{
     application::SavedLoginsService,
-    domain::{devices_entry, login_entry},
+    domain::devices_entry,
     infrastructure::{cedar::CedarLoginPolicyEvaluator, DurableLoginAudit},
 };
 use crate::secrets::{SecretStore, VaultSecret};
@@ -22,28 +23,26 @@ use nessa_vault::application::Vault;
 pub(super) fn compose(
     namespace: &Path,
     vault: Arc<Vault>,
+    changed: Arc<dyn Fn(AgentId) + Send + Sync>,
 ) -> Result<Arc<SavedLoginsService>, RunError> {
     let policy = CedarLoginPolicyEvaluator::new()
         .map_err(|_| RunError::Agent("the saved-login policy bundle does not validate".into()))?;
     let logins: BTreeMap<AgentId, Arc<dyn SecretStore>> = AgentId::ALL
         .iter()
-        .map(|agent| {
-            (
-                *agent,
-                Arc::new(VaultSecret::new(vault.clone(), login_entry(*agent)))
-                    as Arc<dyn SecretStore>,
-            )
-        })
+        .map(|agent| (*agent, login_store(&vault, *agent)))
         .collect();
-    Ok(Arc::new(SavedLoginsService::new(
-        logins,
-        Arc::new(VaultSecret::new(vault, devices_entry())),
-        Arc::new(policy),
-        Arc::new(DurableLoginAudit::new(
-            conversation_root(namespace).join("audit").join("logins"),
-            Arc::new(SystemClock),
-        )),
-    )))
+    Ok(Arc::new(
+        SavedLoginsService::new(
+            logins,
+            Arc::new(VaultSecret::new(vault, devices_entry())),
+            Arc::new(policy),
+            Arc::new(DurableLoginAudit::new(
+                conversation_root(namespace).join("audit").join("logins"),
+                Arc::new(SystemClock),
+            )),
+        )
+        .on_change(changed),
+    ))
 }
 
 /// The environments' seam over the service: which login a harness started

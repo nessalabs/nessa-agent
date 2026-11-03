@@ -123,6 +123,9 @@ pub struct SavedLoginsService {
     audit: Arc<dyn LoginAudit>,
     /// Changes one at a time, so each sees what the last one left.
     changes: tokio::sync::Mutex<()>,
+    /// Told after an agent's login is saved or removed, so whatever was
+    /// started with the old one can start again with the new.
+    changed: Arc<dyn Fn(AgentId) + Send + Sync>,
 }
 
 fn store_error(problem: SecretUnavailable) -> LoginsError {
@@ -146,7 +149,16 @@ impl SavedLoginsService {
             policy,
             audit,
             changes: tokio::sync::Mutex::new(()),
+            changed: Arc::new(|_| {}),
         }
+    }
+
+    /// These logins, telling `changed` after each agent's login is saved or
+    /// removed.
+    #[must_use]
+    pub fn on_change(mut self, changed: Arc<dyn Fn(AgentId) + Send + Sync>) -> Self {
+        self.changed = changed;
+        self
     }
 
     fn store(&self, agent: AgentId) -> Result<&Arc<dyn SecretStore>, LoginsError> {
@@ -234,6 +246,7 @@ impl SavedLoginsService {
             self.record_failure(&operation_id, &caller, LoginEvent::SaveFailed { agent });
             return Err(store_error(problem));
         }
+        (self.changed)(agent);
         // Made but not recorded is never answered as a success.
         self.record(&operation_id, Some(&caller), LoginEvent::Saved { agent })?;
         self.status()
@@ -261,6 +274,7 @@ impl SavedLoginsService {
             self.record_failure(&operation_id, &caller, LoginEvent::RemoveFailed { agent });
             return Err(store_error(problem));
         }
+        (self.changed)(agent);
         self.record(&operation_id, Some(&caller), LoginEvent::Removed { agent })?;
         self.status()
     }

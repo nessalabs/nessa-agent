@@ -73,6 +73,37 @@ impl BoatConnection {
     }
 }
 
+/// The owner's long-lived Claude sign-in for Boat VMs, as `claude setup-token`
+/// mints it. Boat gives a VM made from an image none of the owner's own
+/// logins, so this is what Claude in one runs with. It reaches a VM as one
+/// line of a serve's standard input, so it holds only the token alphabet:
+/// nothing that could end that line or be read as anything else.
+#[derive(Clone)]
+pub(crate) struct ClaudeSignIn(Secret);
+impl ClaudeSignIn {
+    const PREFIX: &'static str = "sk-ant-oat";
+    const MAX_LEN: usize = 512;
+    pub(crate) fn new(token: String) -> Result<Self, Failure> {
+        if !token.starts_with(Self::PREFIX)
+            || token.len() > Self::MAX_LEN
+            || !token
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_'))
+        {
+            return Err(Failure::InvalidInput);
+        }
+        Ok(Self(Secret::new(token.into_bytes())))
+    }
+    pub(crate) fn as_bytes(&self) -> &[u8] {
+        self.0.as_slice()
+    }
+}
+impl std::fmt::Debug for ClaudeSignIn {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("ClaudeSignIn(<redacted>)")
+    }
+}
+
 /// A saved fact, never a guess reconstructed from a missing provider resource.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Assignment {

@@ -37,6 +37,14 @@ only in a Mac's keychain is not seen, so such a Mac is handed the saved
 login unless its owner runs `nessa env ungrant --logins` (or
 `--peer ssh --logins`) there.
 
+Boat's **Authenticate** (`boat.saveClaudeSignIn`) saves into the same
+`login.claude` entry, so the Claude row in Saved logins and Boat's sign-in
+are one fact; a `boat.claude-sign-in` entry an earlier build kept is moved
+there when first read. Boat VMs are served with it in their environment, so
+there the host wins with the same login. A Claude login saved or removed in
+Settings lets go of idle Boat connections as Authenticate does, so the next
+lease is served with it. Disconnecting Boat keeps the login.
+
 An `ssh` entry written before this change has no `acceptLogins`, so a host
 whose owner had narrowed SSH takes no login until they run
 `nessa env grant --peer ssh --logins`. A host with no entry takes them.

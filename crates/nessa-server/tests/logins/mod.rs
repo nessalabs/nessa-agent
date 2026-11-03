@@ -551,3 +551,29 @@ async fn an_unreadable_switch_list_is_all_off_and_can_be_written_again() {
         .unwrap();
     assert_eq!(status.devices_on, [peer(1)]);
 }
+
+#[tokio::test]
+async fn each_saved_or_removed_login_is_told_and_nothing_else_is() {
+    let Fixture { service, .. } = fixture();
+    let told = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let service = service.on_change({
+        let told = told.clone();
+        Arc::new(move |agent| told.lock().unwrap().push(agent))
+    });
+    service
+        .save(caller(), AgentId::Claude, login("first"))
+        .await
+        .unwrap();
+    service
+        .save(caller(), AgentId::Codex, login("codex"))
+        .await
+        .unwrap();
+    service.remove(caller(), AgentId::Claude).await.unwrap();
+    // Nothing to remove, and a switch, change no login.
+    service.remove(caller(), AgentId::Opencode).await.unwrap();
+    service.set_device(caller(), peer(1), true).await.unwrap();
+    assert_eq!(
+        *told.lock().unwrap(),
+        [AgentId::Claude, AgentId::Codex, AgentId::Claude]
+    );
+}

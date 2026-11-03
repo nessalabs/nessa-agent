@@ -204,6 +204,106 @@ await main(
           }
         }
       }
+      // ADR 501: Claude refused in a Boat VM offers Authenticate, which waits
+      // on the browser, says when the sign-in is kept, and says which stage failed.
+      for (const surface of ["desktop", "panel"]) {
+        for (const width of [360, 1000]) {
+          const target = new URL(
+            surface === "panel" ? selectors.panelPage : selectors.page,
+            url,
+          )
+          target.searchParams.set("provider", "claude")
+          target.searchParams.set("lease", "boat")
+          const opened = await openPage(browser, {
+            url: target.href,
+            width,
+            height: 700,
+            readySelector: selectors.card,
+          })
+          const { page } = opened
+          try {
+            const card = page.locator(selectors.card)
+            const button = page.locator(selectors.button)
+            if ((await button.textContent()) !== "Authenticate")
+              throw new Error("a Boat refusal does not offer Authenticate")
+            const rect = await card.boundingBox()
+            if (!rect || rect.height > 130 || rect.x + rect.width > width)
+              throw new Error(`Boat card does not fit: ${JSON.stringify(rect)}`)
+            await page.waitForFunction(
+              (selector) => !document.querySelector(selector)?.disabled,
+              selectors.button,
+            )
+            await button.click()
+            await page
+              .getByText("Finish signing in in your browser.", { exact: true })
+              .waitFor()
+            if (!(await button.isDisabled()))
+              throw new Error("Authenticate in flight is not disabled")
+            if (options.shots) {
+              mkdirSync(options.shots, { recursive: true })
+              await page.screenshot({
+                path: resolve(
+                  options.shots,
+                  `${engine}-${surface}-boat-${width}-waiting.png`,
+                ),
+              })
+            }
+            await page.evaluate(() => window.__providerSignIn.release())
+            await page
+              .getByText("Signed in for Boat workspaces. Send your message again.", {
+                exact: true,
+              })
+              .waitFor()
+            if ((await button.count()) !== 0)
+              throw new Error("a kept sign-in still offers Authenticate")
+            if (options.shots)
+              await page.screenshot({
+                path: resolve(
+                  options.shots,
+                  `${engine}-${surface}-boat-${width}-signed-in.png`,
+                ),
+              })
+            const failed = {}
+            for (const [stage, text] of [
+              ["minted", "Could not sign in. Try again."],
+              ["saved", "Could not save the sign-in. Unlock Nessa and try again."],
+            ]) {
+              await page.goto(target.href)
+              await card.waitFor()
+              await page.evaluate((at) => {
+                window.__providerSignIn.boatFail = at
+              }, stage)
+              await page.waitForFunction(
+                (selector) => !document.querySelector(selector)?.disabled,
+                selectors.button,
+              )
+              await button.click()
+              await page.evaluate(() => window.__providerSignIn.release())
+              await page.getByText(text, { exact: true }).waitFor()
+              await page.waitForFunction(
+                (selector) => !document.querySelector(selector)?.disabled,
+                selectors.button,
+              )
+              failed[stage] = true
+            }
+            const calls = await page.evaluate(() => window.__providerSignIn.calls)
+            if (calls.some((value) => value !== "boat"))
+              throw new Error("a Boat refusal launched this computer's sign-in")
+            rep.add({
+              name: "provider-sign-in-boat",
+              engine,
+              surface,
+              width,
+              passed: true,
+              cardHeight: rect.height,
+              failedStagesShown: Object.keys(failed),
+              errors: opened.heldErrorCount,
+            })
+          } finally {
+            await opened.close()
+          }
+        }
+      }
       for (const [label, query, shown] of [
         ["oauth-diagnostic", { diagnostic: OAUTH_DIAGNOSTIC }, false],
         ["required-work", { diagnostic: REQUIRED_WORK, requiredWork: "failed" }, true],

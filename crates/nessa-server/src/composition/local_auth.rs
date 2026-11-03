@@ -14,7 +14,7 @@ use crate::{
         domain::Failure as WorkspaceFailure,
         infrastructure::{
             worker_image, BoatProvider, ConfigBoatRuntimeSettings, FileAssignments,
-            RuntimeSettingsAudit, VaultSettings,
+            RuntimeSettingsAudit, VaultClaudeSignIns, VaultSettings,
         },
     },
 };
@@ -295,6 +295,13 @@ pub(super) async fn product_state(
     #[cfg(unix)]
     let _ = rustls::crypto::ring::default_provider().install_default();
     #[cfg(unix)]
+    let claude_sign_ins = Arc::new(VaultClaudeSignIns(
+        crate::logins::infrastructure::login_store(
+            &vault.vault,
+            nessa_protocol::agents::AgentId::Claude,
+        ),
+    ));
+    #[cfg(unix)]
     let workspace_service = Arc::new(
         Workspaces::new(
             Arc::new(VaultSettings(vault.vault.clone())),
@@ -310,10 +317,12 @@ pub(super) async fn product_state(
                     libc::geteuid()
                 }),
                 relay_program: std::env::current_exe().map_err(setup_error)?,
+                claude_sign_ins: claude_sign_ins.clone(),
             }),
             Arc::new(FileAssignments(namespace.join("boat-workspaces"))),
             Arc::new(WorkspaceRecoveryAudit(workspace_audit.clone())),
             runtime_settings,
+            claude_sign_ins,
         )
         .with_image(worker_image()),
     );
@@ -405,7 +414,23 @@ pub(super) async fn product_state(
     let voice = super::voice::compose(namespace, vault.vault.clone());
     // The agents' saved logins, in the same vault, handed to the machines
     // the policy lets receive them (issue #1260).
-    let saved_logins = super::logins::compose(namespace, vault.vault.clone())?;
+    // A Claude login saved or removed there is also Boat's sign-in: its
+    // idle VM connections are let go, to be served again with it.
+    #[cfg(unix)]
+    let login_changed: Arc<dyn Fn(nessa_protocol::agents::AgentId) + Send + Sync> = {
+        let workspaces = Arc::downgrade(&workspace_service);
+        Arc::new(move |agent| {
+            if agent == nessa_protocol::agents::AgentId::Claude {
+                if let Some(workspaces) = workspaces.upgrade() {
+                    workspaces.claude_sign_in_changed();
+                }
+            }
+        })
+    };
+    #[cfg(not(unix))]
+    let login_changed: Arc<dyn Fn(nessa_protocol::agents::AgentId) + Send + Sync> =
+        Arc::new(|_| {});
+    let saved_logins = super::logins::compose(namespace, vault.vault.clone(), login_changed)?;
     // A leftover plaintext sign-in is removed before agents start, whether or
     // not the vault is unlocked. A failed delete stops startup; the file is
     // not left in place and treated as signed out.
@@ -1313,7 +1338,7 @@ async fn conversations(
         Arc::new(LocalChannelStore::open(&channels_path).map_err(|cause| {
             RunError::opening(crate::core::Dataset::Channels, &channels_path, cause)
         })?);
-    let workspace_environments: Arc<dyn ThreadEnvironments> = Arc::new(ThreadWorkspaces {
+    let thread_workspaces = Arc::new(ThreadWorkspaces {
         service: workspace_service,
         channels: channel_store.clone(),
         audit: workspace_audit,
@@ -1330,6 +1355,9 @@ async fn conversations(
         environments: Default::default(),
         logins: Some(Arc::new(super::logins::ServiceLogins(saved_logins.clone()))),
     });
+    // A sign-in saved for Boat reaches conversations already connected.
+    tokio::spawn(thread_workspaces.clone().follow_claude_sign_ins());
+    let workspace_environments: Arc<dyn ThreadEnvironments> = thread_workspaces;
     let clock: Arc<dyn Clock> = Arc::new(SystemClock);
     let host = crate::agent_install::infrastructure::host_platform();
     let opencode = EffectiveOpenCodeProfile::decide(

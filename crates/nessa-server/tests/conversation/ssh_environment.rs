@@ -4527,3 +4527,76 @@ async fn a_saved_login_is_asked_for_and_sent_only_where_the_host_takes_one() {
         [Some("sk-ant-oat-x".to_owned()), None]
     );
 }
+
+/// After a Claude sign-in change (ADR 501), a conversation's idle workspace
+/// connection is let go, so the next lease is served again with the sign-in
+/// now saved; one with a lease on it is kept.
+#[tokio::test(start_paused = true)]
+async fn a_sign_in_change_lets_go_of_idle_workspace_connections_only() {
+    struct Cut(Arc<Connector>);
+    impl Drop for Cut {
+        fn drop(&mut self) {
+            self.0.cut();
+        }
+    }
+    struct Through(Arc<Connector>);
+    impl super::connector::WorkspaceConnector for Through {
+        fn connect(
+            &self,
+            _: bool,
+        ) -> crate::conversation::application::EnvironmentFuture<
+            '_,
+            Result<LeaseConnection, LeaseRefusal>,
+        > {
+            Box::pin(async move {
+                let mut connection =
+                    LeaseConnector::connect(self.0.as_ref(), &devbox(), String::new())
+                        .map_err(|_| LeaseRefusal::EnvironmentUnreachable)?;
+                connection.keep = Box::new((connection.keep, Cut(self.0.clone())));
+                Ok(connection)
+            })
+        }
+    }
+    let connector = Connector::new(Reach::Serving);
+    let environment = Arc::new(SshEnvironment::workspace(
+        Arc::new(Through(connector.clone())),
+        Arc::new(Audit::default()),
+    ));
+    // The refused turn's lease ends, as a refusal leaves it.
+    let refused = environment
+        .open(&lease(), &terms("claude"), binding_only())
+        .await
+        .unwrap();
+    refused.hold.end(LeaseEndCause::Closed).await;
+    drop(refused);
+    // In use while a lease is on it: kept, after asking again.
+    let held = environment
+        .open(&lease(), &terms("claude"), binding_only())
+        .await
+        .unwrap();
+    crate::conversation::infrastructure::workspaces::let_go_each(vec![environment.clone()]).await;
+    let beside = environment
+        .open(&lease(), &terms("claude"), binding_only())
+        .await
+        .unwrap();
+    assert_eq!(
+        connector.connects.load(Ordering::SeqCst),
+        1,
+        "a connection in use is kept"
+    );
+    for opened in [held, beside] {
+        opened.hold.end(LeaseEndCause::Closed).await;
+    }
+    // Nothing uses it now: let go, and the next lease is served again.
+    crate::conversation::infrastructure::workspaces::let_go_each(vec![environment.clone()]).await;
+    let resent = environment
+        .open(&lease(), &terms("claude"), binding_only())
+        .await
+        .unwrap();
+    assert_eq!(
+        connector.connects.load(Ordering::SeqCst),
+        2,
+        "the next lease after the change is served again"
+    );
+    resent.hold.end(LeaseEndCause::Closed).await;
+}

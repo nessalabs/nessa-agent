@@ -266,11 +266,18 @@ impl Relay {
         let Ok(Some(hello)) =
             tokio::time::timeout(HELLO_TIMEOUT, read_line::<Hello>(&mut input)).await
         else {
+            tracing::warn!("an MCP stand-in sent no readable hello in time; closed");
             return;
         };
-        let refused = |reason: StandInRefusal, message: String| Answer::Refused {
-            reason: reason.into(),
-            message,
+        // Every refusal is said here as well as to the stand-in: the harness
+        // only reports its server's connection as closed.
+        let server = hello.server.clone();
+        let refused = |reason: StandInRefusal, message: String| {
+            tracing::warn!(%server, ?reason, %message, "refused an MCP stand-in");
+            Answer::Refused {
+                reason: reason.into(),
+                message,
+            }
         };
         // Whose it is, before anything about the server is said.
         let Some(owner) = self.grants.owner(&hello.session) else {
