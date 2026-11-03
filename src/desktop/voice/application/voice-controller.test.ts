@@ -789,4 +789,27 @@ describe("VoiceController", () => {
     expect(clock.pending.size).toBe(0)
     expect(connection.checks).toBe(0)
   })
+
+  it("V18: a check across a mute and unmute is dropped as stale", async () => {
+    const { controller, connection, clock } = setup()
+    await controller.start("s-1")
+    let answer: (found: CallCheck) => void = () => {}
+    connection.check = () => {
+      connection.checks++
+      return new Promise((resolve) => (answer = resolve))
+    }
+    clock.fire()
+    controller.setMicrophone(false)
+    controller.setMicrophone(true)
+    // What it found was measured partly muted.
+    answer({ answered: true, audioSent: true, microphoneSound: false })
+    await settle()
+    expect(controller.snapshot().hint).toBeNull()
+  })
+
+  it("V18: a sending check that could not be read is no fault", () => {
+    expect(
+      hearingHint({ answered: true, audioSent: null, microphoneSound: null }),
+    ).toBeNull()
+  })
 })

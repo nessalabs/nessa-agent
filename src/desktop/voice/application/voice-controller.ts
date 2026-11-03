@@ -86,7 +86,7 @@ export const HEARING_CHECK_MS = 12_000
  */
 export function hearingHint(found: CallCheck): string | null {
   if (!found.answered) return "OpenAI isn’t answering this call. End it and try again."
-  if (!found.audioSent)
+  if (found.audioSent === false)
     return "Your voice isn’t being sent to OpenAI. End the call and try again."
   if (found.microphoneSound === false)
     return "No sound is coming from the microphone. Check the input in System Settings › Sound."

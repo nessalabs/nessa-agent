@@ -127,6 +127,7 @@ describe("webrtcTransport", () => {
     try {
       let bytes = 100
       let level = 0.5
+      let statsFail = false
       const channel = {
         readyState: "connecting",
         listeners: new Map<string, () => void>(),
@@ -154,8 +155,12 @@ describe("webrtcTransport", () => {
           setRemoteDescription = async () => {
             channel.readyState = "open"
           }
-          getStats = async () =>
-            new Map([["a", { type: "outbound-rtp", kind: "audio", bytesSent: bytes }]])
+          getStats = async () => {
+            if (statsFail) throw new Error("no stats")
+            return new Map([
+              ["a", { type: "outbound-rtp", kind: "audio", bytesSent: bytes }],
+            ])
+          }
           close() {}
         },
       )
@@ -195,6 +200,10 @@ describe("webrtcTransport", () => {
         audioSent: false,
         microphoneSound: false,
       })
+      statsFail = true
+      const unread = connection.check()
+      await vi.advanceTimersByTimeAsync(1_100)
+      expect((await unread).audioSent).toBeNull()
       connection.close()
       expect(await connection.check()).toEqual({
         answered: false,

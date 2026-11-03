@@ -93,7 +93,8 @@
 }
 
 /*
- * Soft clouds: blurred white wisps on a tile 1.2 orbs wide, repeated along a
+ * Soft clouds: blurred white wisps on a tile 1.2 orbs wide, each fading out
+ * well inside the tile so its edges never show, repeated along a
  * strip three tiles long that slides one tile per loop, so the drift never
  * jumps. It moves by `translate`, which the compositor can run.
  */
@@ -105,9 +106,9 @@
   left: 0;
   width: calc(var(--voice-tile) * 3);
   background-image:
-    radial-gradient(38% 14% at 22% 58%, rgb(255 255 255 / 0.85), transparent 70%),
+    radial-gradient(30% 14% at 26% 58%, rgb(255 255 255 / 0.85), transparent 70%),
     radial-gradient(30% 10% at 64% 46%, rgb(255 255 255 / 0.7), transparent 70%),
-    radial-gradient(44% 12% at 80% 70%, rgb(255 255 255 / 0.75), transparent 70%),
+    radial-gradient(34% 12% at 72% 70%, rgb(255 255 255 / 0.75), transparent 70%),
     radial-gradient(26% 9% at 42% 34%, rgb(255 255 255 / 0.5), transparent 70%);
   background-size: var(--voice-tile) 100%;
   background-repeat: repeat-x;

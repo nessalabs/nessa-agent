@@ -268,17 +268,18 @@ export function webrtcTransport(): RealtimeTransport {
           const live = peer
           if (released || !live)
             return { answered, audioSent: false, microphoneSound: false }
-          const before = await audioBytesSent(live).catch(() => 0)
+          // A statistics read that fails says nothing either way.
+          const before = await audioBytesSent(live).catch(() => null)
           let loudest = 0
           const until = Date.now() + CHECK_MS
           while (Date.now() < until) {
             loudest = Math.max(loudest, input())
             await new Promise((resolve) => setTimeout(resolve, 50))
           }
-          const after = await audioBytesSent(live).catch(() => 0)
+          const after = await audioBytesSent(live).catch(() => null)
           return {
             answered,
-            audioSent: after > before,
+            audioSent: before === null || after === null ? null : after > before,
             microphoneSound: context?.state === "running" ? loudest >= SOUND_LEVEL : null,
           }
         },
