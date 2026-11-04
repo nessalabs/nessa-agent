@@ -48,7 +48,7 @@ import {
 } from "./gateway-source"
 
 const { a: conversationA, b: conversationB, s: conversationS } = gatewayConversationIds
-const timing = { callMs: 5_000, retryMs: 1_000 }
+const timing = { callMs: 5_000, workspaceCallMs: 20_000, retryMs: 1_000 }
 const model = { provider: "anthropic", modelId: "claude-opus-5" }
 
 /** A clock and timers the test moves by hand. */
@@ -3471,6 +3471,110 @@ describe("writes", () => {
     expect(await sending).toMatchObject({ reason: "unavailable" })
     expect(gateway.count("create")).toBe(0)
     expect(gateway.count("send")).toBe(0)
+  })
+
+  it("C6: a message into a conversation on a workspace waits the workspace budget, and says so to the client", async () => {
+    const { gateway, source, advance } = started()
+    gateway.rows.set(conversationA, row(conversationA))
+    gateway.views.set(
+      conversationA,
+      view(conversationA, {
+        lease: {
+          state: "ended",
+          revision: 2,
+          environment: "boat",
+          sandbox: "harness_default",
+          cause: "closed",
+          cleanup: "confirmed",
+          droppedEvents: 0,
+        },
+      }),
+    )
+    await source.index()
+    await source.transcript(conversationA)
+    const waking = deferred<unknown>()
+    gateway.once("send", () => waking.promise)
+    const sending = source
+      .send({
+        sessionId: conversationA,
+        messageId: "m",
+        text: "Hi",
+        model,
+        initiator: "person",
+      })
+      .catch((error: unknown) => error)
+    // Past the ordinary budget, the workspace is still being woken: still on its way.
+    await advance(timing.callMs)
+    expect(await Promise.race([sending, Promise.resolve("pending")])).toBe("pending")
+    expect(gateway.calls.find((call) => call.method === "send")?.args.at(-1)).toEqual({
+      waitsOnWorkspace: true,
+    })
+    waking.resolve({
+      conversationId: conversationA,
+      executionId: "m",
+      disposition: "queued",
+      requestId: "r",
+    })
+    await flush()
+    expect(await sending).not.toBeInstanceOf(Error)
+  })
+
+  it("C6: a first message in a channel waits the workspace budget while its workspace is made", async () => {
+    const { gateway, source, advance } = started()
+    const made = deferred<unknown>()
+    gateway.once("create", () => made.promise)
+    const sending = source
+      .send({
+        sessionId: conversationS,
+        messageId: "m",
+        text: "Hi",
+        model,
+        initiator: "person",
+        start: { channelId: "ch_aaaaaaaaaa", title: "Hi" },
+      })
+      .catch((error: unknown) => error)
+    await advance(timing.callMs)
+    expect(await Promise.race([sending, Promise.resolve("pending")])).toBe("pending")
+    made.resolve({ conversationId: conversationS })
+    await flush()
+    expect(await sending).not.toBeInstanceOf(Error)
+    expect(gateway.calls.find((call) => call.method === "send")?.args.at(-1)).toEqual({
+      waitsOnWorkspace: true,
+    })
+  })
+
+  it("C6: a message into a conversation that runs here keeps the ordinary budget", async () => {
+    const { gateway, source, advance } = started()
+    gateway.rows.set(conversationA, row(conversationA))
+    gateway.views.set(
+      conversationA,
+      view(conversationA, {
+        lease: {
+          state: "ended",
+          revision: 2,
+          environment: "here",
+          sandbox: "harness_default",
+          cause: "closed",
+          cleanup: "confirmed",
+          droppedEvents: 0,
+        },
+      }),
+    )
+    await source.index()
+    await source.transcript(conversationA)
+    gateway.once("send", () => new Promise(() => {}))
+    const sending = source
+      .send({
+        sessionId: conversationA,
+        messageId: "m",
+        text: "Hi",
+        model,
+        initiator: "person",
+      })
+      .catch((error: unknown) => error)
+    await advance(timing.callMs)
+    expect(await sending).toMatchObject({ reason: "unavailable" })
+    expect(gateway.calls.find((call) => call.method === "send")?.args).toHaveLength(5)
   })
 
   it("C6: a message whose create answered after its call settled is not sent", async () => {

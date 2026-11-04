@@ -3,7 +3,7 @@ import { expect, it } from "vitest"
 import budgets from "../../../../protocol/defaults/agent-startup-budgets.json"
 import {
   conversationDeleteTimeoutMs,
-  conversationWorkspaceCreateTimeoutMs,
+  conversationWorkspaceTimeoutMs,
 } from "./agent-budgets.js"
 
 /**
@@ -21,7 +21,7 @@ it("waits out one delete's worst case, plus the stated margin", () => {
 })
 
 it("allows workspace preparation before a channel agent exchange", () => {
-  expect(conversationWorkspaceCreateTimeoutMs).toBe(
+  expect(conversationWorkspaceTimeoutMs).toBe(
     budgets.workspace.connectMs + conversationDeleteTimeoutMs,
   )
 })
