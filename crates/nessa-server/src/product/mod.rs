@@ -25,6 +25,9 @@
 //! one live read path a client follows a conversation, its list or the agent
 //! catalog by. Its frames share the socket's one writer and its one event
 //! numbering (`event_sequence`) with permission review notices.
+//!
+//! `turn_timing` notes, on this machine only, how long a send waited for the
+//! first reply text. `nessa doctor` reads that file; nothing is sent.
 
 mod attachment;
 pub(crate) mod catalogue_read;
@@ -40,6 +43,7 @@ mod refusal_causes;
 mod socket;
 mod state;
 mod subscription;
+mod turn_timing;
 mod webhook_reset;
 pub(crate) mod wire;
 mod workspace;

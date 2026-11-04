@@ -7,7 +7,8 @@
 //! context shares in `trusted_origin`. `read_workers` owns tracked blocking
 //! source work and retained drain shared by record and catalogue infrastructure.
 //! Source adapters retain authorization and capacity policy; attachment consumers
-//! are integrated separately.
+//! are integrated separately. `local_timings` is the duration files kept in the
+//! log directory; `nessa doctor` reads them and nothing sends them.
 //!
 //! How a run ends is decided in `ending`, out of four facts: what went wrong
 //! (`error`), which number says it (`exit_code`), whether launchd should start
@@ -36,6 +37,7 @@ mod error;
 mod exit_code;
 pub mod launch;
 pub(crate) mod limit_log;
+pub(crate) mod local_timings;
 #[cfg(unix)]
 mod log_file;
 pub mod logging;

@@ -432,6 +432,11 @@ async fn answer(
                 let id = conversation_id(&params.conversation_id)?;
                 let caller = caller(params.request_id.clone());
                 let execution_id = params.execution_id.clone();
+                // A send's clock starts here, before the agent is asked, so
+                // the wait includes getting the turn under way. A steer is
+                // not a send and is not timed.
+                let started_ms = state.clock.unix_milliseconds();
+                let timed_execution = execution_id.clone();
                 let store = service.commands().ok_or(ConversationError::Unavailable)?;
                 // Admission still starts an unpaired session as an owner turn.
                 // Whether that turn may offer a remember choice is this
@@ -461,6 +466,9 @@ async fn answer(
                     Some(receipt) => receipt,
                     None => service.current_submission(id, caller, execution_id).await?,
                 };
+                if frame.method == "conversation.send" {
+                    state.local_timings.sent(&timed_execution, started_ms);
+                }
                 Ok(success(&frame.id, &receipt))
             }
             "conversation.stop" => {
@@ -1083,6 +1091,9 @@ pub(super) async fn read_view(
     // caller is sent.
     trace_conversation_read(id, read.as_ref().err());
     let (view, cursor) = read?;
+    state
+        .local_timings
+        .observe(&view, state.clock.unix_milliseconds());
     Ok((wire_view(state, view).await?, cursor))
 }
 

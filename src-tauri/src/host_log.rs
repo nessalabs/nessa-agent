@@ -11,6 +11,10 @@
 //! launch still shows it. A file that has reached the cap at open is renamed
 //! aside; this run appends to a new `host.log`.
 //!
+//! The first gateway-ready mark is also written as one millisecond line in
+//! `launch-to-gateway-ready-ms` beside that log. `nessa doctor` reads it.
+//! The file stays on this machine.
+//!
 //! ```text
 //!   main ──install──▶ stderr
 //!                 └── host.log  (default data logs, then the real namespace)
@@ -43,6 +47,22 @@ static STARTED: OnceLock<Instant> = OnceLock::new();
 static WINDOW_AT: Mutex<Option<Duration>> = Mutex::new(None);
 static GATEWAY_AT: Mutex<Option<Duration>> = Mutex::new(None);
 static ACTIVE: OnceLock<LogWriter> = OnceLock::new();
+/// The first gateway-ready mark, and whether it has been written beside host.log.
+/// Doctor reads `launch-to-gateway-ready-ms` (the same name as
+/// `nessa_server::core::local_timings::LAUNCH_TO_GATEWAY_READY_FILE`).
+static LAUNCH_RECORD: Mutex<LaunchRecord> = Mutex::new(LaunchRecord {
+    ms: None,
+    written: false,
+});
+
+struct LaunchRecord {
+    ms: Option<u64>,
+    written: bool,
+}
+
+/// How many launch samples the file keeps. Doctor shows the last eight.
+const LAUNCH_KEPT: usize = 32;
+const LAUNCH_SAMPLES: &str = "launch-to-gateway-ready-ms";
 
 /// What a cheap look at the executable path can say about the bundle.
 ///
@@ -117,7 +137,11 @@ pub fn install(directory: Option<&Path>) {
 /// lines already written and the previous file says where they continued.
 pub fn open(directory: &Path) -> io::Result<PathBuf> {
     match ACTIVE.get() {
-        Some(writer) => writer.open(directory),
+        Some(writer) => {
+            let path = writer.open(directory)?;
+            try_record_launch();
+            Ok(path)
+        }
         None => Err(io::Error::other("startup log is not installed")),
     }
 }
@@ -218,6 +242,99 @@ pub fn gateway_ready() {
             "startup timing"
         ),
     }
+    {
+        let mut record = lock(&LAUNCH_RECORD);
+        record.ms = Some(milliseconds(timing.since_process_start));
+        record.written = false;
+    }
+    try_record_launch();
+}
+
+/// Write the remembered launch sample next to `host.log` once that directory
+/// is open. A failure here is logged and does not stop startup.
+fn try_record_launch() {
+    let ms = {
+        let record = lock(&LAUNCH_RECORD);
+        if record.written {
+            return;
+        }
+        record.ms
+    };
+    let Some(ms) = ms else {
+        return;
+    };
+    let Some(log) = current_path() else {
+        return;
+    };
+    let Some(directory) = log.parent() else {
+        return;
+    };
+    match append_launch_sample(&directory.join(LAUNCH_SAMPLES), ms) {
+        Ok(()) => lock(&LAUNCH_RECORD).written = true,
+        Err(error) => tracing::warn!(
+            target: "nessa.timing",
+            %error,
+            "could not record launch to gateway ready"
+        ),
+    }
+}
+
+fn append_launch_sample(path: &Path, ms: u64) -> io::Result<()> {
+    if path
+        .symlink_metadata()
+        .is_ok_and(|meta| meta.file_type().is_symlink())
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            "timing file is a symlink",
+        ));
+    }
+    let existing = match fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => String::new(),
+        Err(error) => return Err(error),
+    };
+    let mut values: Vec<u64> = existing
+        .lines()
+        .filter_map(|line| line.trim().parse().ok())
+        .collect();
+    let skip = values.len().saturating_sub(LAUNCH_KEPT - 1);
+    values = values.into_iter().skip(skip).collect();
+    values.push(ms);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let temporary = path.with_file_name(format!(
+        ".{}.tmp",
+        path.file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("launch")
+    ));
+    {
+        let mut file = fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(&temporary)?;
+        set_private_file(&file)?;
+        for value in &values {
+            writeln!(file, "{value}")?;
+        }
+        file.sync_all()?;
+    }
+    fs::rename(&temporary, path)?;
+    Ok(())
+}
+
+#[cfg(unix)]
+fn set_private_file(file: &fs::File) -> io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    file.set_permissions(fs::Permissions::from_mode(0o600))
+}
+
+#[cfg(not(unix))]
+fn set_private_file(_file: &fs::File) -> io::Result<()> {
+    Ok(())
 }
 
 fn nessa_target(target: &str) -> bool {
@@ -694,5 +811,28 @@ mod tests {
         assert!(text.contains("since_window_shown_ms"), "{text}");
         *lock(&WINDOW_AT) = None;
         *lock(&GATEWAY_AT) = None;
+    }
+
+    #[test]
+    fn launch_samples_keep_the_newest_durations_and_ignore_a_symlink() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let path = directory.path().join(LAUNCH_SAMPLES);
+        for ms in 1..=LAUNCH_KEPT + 2 {
+            append_launch_sample(&path, ms as u64).expect("append");
+        }
+        let text = read(&path);
+        let numbers: Vec<u64> = text.lines().map(|line| line.parse().unwrap()).collect();
+        assert_eq!(numbers.len(), LAUNCH_KEPT);
+        assert_eq!(numbers[0], 3);
+        assert_eq!(*numbers.last().unwrap(), (LAUNCH_KEPT + 2) as u64);
+        #[cfg(unix)]
+        {
+            let target = directory.path().join("elsewhere");
+            fs::write(&target, "1\n").unwrap();
+            let link = directory.path().join("linked");
+            std::os::unix::fs::symlink(&target, &link).unwrap();
+            assert!(append_launch_sample(&link, 9).is_err());
+            assert_eq!(fs::read_to_string(target).unwrap(), "1\n");
+        }
     }
 }
