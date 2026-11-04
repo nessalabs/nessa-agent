@@ -16,6 +16,7 @@ import {
 import { rustWireShapes } from "./product-protocol/rust-wire-shapes.mjs"
 import { validateExternalRustTypes } from "./product-protocol/rust-types.mjs"
 import { eventMetadataRules } from "./product-protocol/event-metadata.mjs"
+import { buildSurfaceCatalog } from "./product-protocol/surface-catalog.mjs"
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..")
 const pairingDirectory = "crates/nessa-auth/src/domain/pairing/value_objects"
@@ -1014,7 +1015,22 @@ const formattedNativeVault = spawnSync("rustfmt", ["--edition", "2021"], {
   encoding: "utf8",
 })
 if (formattedNativeVault.status !== 0) throw new Error(formattedNativeVault.stderr)
+const surfaceCatalog = buildSurfaceCatalog({
+  manifest,
+  schema,
+  exclusions: JSON.parse(
+    readFileSync(resolve(root, "protocol/product/surface-exclusions.json"), "utf8"),
+  ),
+  hints: JSON.parse(
+    readFileSync(resolve(root, "protocol/product/surface-hints.json"), "utf8"),
+  ),
+})
+const surfaceCatalogJson = await format(JSON.stringify(surfaceCatalog), {
+  ...(await resolveConfig(resolve(root, "prettier.config.js"))),
+  parser: "json",
+})
 const outputs = [
+  ["protocol/product/surface-catalog.generated.json", surfaceCatalogJson],
   ["src-tauri/src/vault/application/contract.rs", formattedNativeVault.stdout],
   [`${pairingDirectory}/wire_values.rs`, pairing.rust],
   [

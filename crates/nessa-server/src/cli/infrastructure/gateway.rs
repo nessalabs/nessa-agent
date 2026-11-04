@@ -1,7 +1,9 @@
 //! CLI command interpretation over the shared bounded local product transport.
 use crate::cli::application::{BrowserToken, CliError, Gateway, GatewayIdentity, TokenRequest};
 use nessa_auth::application::dto::CredentialMetadataDto;
-use nessa_client_core::local_product::{LocalProduct, LocalProductError};
+use nessa_client_core::local_product::{
+    ExchangeError, LocalProduct, LocalProductError, ProductCaller,
+};
 use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
 use std::{net::SocketAddr, path::Path};
@@ -11,7 +13,15 @@ pub struct LocalGateway {
 }
 impl LocalGateway {
     pub fn connect(address: SocketAddr, credential_file: &Path) -> Result<Self, CliError> {
-        let client = LocalProduct::connect(address, credential_file).map_err(problem)?;
+        Self::connect_as(address, credential_file, ProductCaller::CLI)
+    }
+    /// [`connect`] as `caller`. The credential file is whose grants Cedar sees.
+    pub fn connect_as(
+        address: SocketAddr,
+        credential_file: &Path,
+        caller: ProductCaller,
+    ) -> Result<Self, CliError> {
+        let client = LocalProduct::connect_as(address, credential_file, caller).map_err(problem)?;
         let found = client.identity();
         let identity = GatewayIdentity {
             gateway_id: found.gateway_id.clone(),
@@ -54,6 +64,22 @@ impl Gateway for LocalGateway {
             return Err(CliError::Unhealthy);
         }
         Ok(())
+    }
+    fn call(
+        &mut self,
+        method: &str,
+        params: Value,
+    ) -> Result<Value, crate::cli::application::GatewayCallError> {
+        self.client
+            .exchange(method, params)
+            .map_err(|error| match error {
+                ExchangeError::Refused { code } => {
+                    crate::cli::application::GatewayCallError::Refused { code }
+                }
+                ExchangeError::Session(error) => {
+                    crate::cli::application::GatewayCallError::Transport(problem(error))
+                }
+            })
     }
     fn issue(&mut self, request: TokenRequest) -> Result<BrowserToken, CliError> {
         let result: Value = self.request("credential.issue", json!({

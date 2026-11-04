@@ -19,6 +19,30 @@ use std::{
 use tungstenite::{client::client_with_config, protocol::WebSocketConfig, Message, WebSocket};
 use zeroize::Zeroizing;
 
+/// Who presents a credential on the product socket. Cedar sees the credential's
+/// principal, not this name. The surface kind stays `cli`: the schema has no
+/// separate MCP kind, and the instance distinguishes the two callers.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ProductCaller {
+    /// Client id sent in `session.authenticate`.
+    pub id: &'static str,
+    /// Surface instance sent in `session.authenticate`.
+    pub instance: &'static str,
+}
+
+impl ProductCaller {
+    /// The `nessa call` and `nessa doctor` caller.
+    pub const CLI: Self = Self {
+        id: "nessa-cli",
+        instance: "nessa-cli",
+    };
+    /// The `nessa mcp` caller.
+    pub const MCP: Self = Self {
+        id: "nessa-mcp",
+        instance: "nessa-mcp",
+    };
+}
+
 /// Local mode accepts numeric loopback only. Cloud transport is not implemented.
 pub struct LocalProduct {
     socket: WebSocket<TcpStream>,
@@ -44,6 +68,15 @@ impl LocalProduct {
     /// Connect and authenticate with a private credential file in at most ten seconds.
     /// Numeric loopback only; dropping the client closes its session.
     pub fn connect(address: SocketAddr, credential_file: &Path) -> Result<Self, LocalProductError> {
+        Self::connect_as(address, credential_file, ProductCaller::CLI)
+    }
+    /// [`connect`] as `caller`. The credential is the principal Cedar sees;
+    /// `caller` only names who presented it.
+    pub fn connect_as(
+        address: SocketAddr,
+        credential_file: &Path,
+        caller: ProductCaller,
+    ) -> Result<Self, LocalProductError> {
         if !address.ip().is_loopback() {
             return Err(LocalProductError::NonLocal);
         }
@@ -61,13 +94,21 @@ impl LocalProduct {
         if credential.is_empty() || credential.len() > 16384 {
             return Err(LocalProductError::InvalidCredential);
         }
-        Self::connect_with_credential(address, credential)
+        Self::connect_with_caller(address, credential, caller)
     }
     /// Authenticate an app-owned connection with transient credential input.
     /// The caller keeps the secret out of arguments, environment and persistence.
     pub fn connect_with_credential(
         address: SocketAddr,
         credential: &str,
+    ) -> Result<Self, LocalProductError> {
+        Self::connect_with_caller(address, credential, ProductCaller::CLI)
+    }
+    /// [`connect_with_credential`] as `caller`.
+    pub fn connect_with_caller(
+        address: SocketAddr,
+        credential: &str,
+        caller: ProductCaller,
     ) -> Result<Self, LocalProductError> {
         if !address.ip().is_loopback() {
             return Err(LocalProductError::NonLocal);
@@ -118,7 +159,7 @@ impl LocalProduct {
         if challenge.min_version > 1 || challenge.max_version < 1 {
             return Err(LocalProductError::Protocol);
         }
-        let ready: ProductSessionReady = result.request("session.authenticate", json!({"minVersion":1,"maxVersion":1,"nonce":challenge.nonce,"credential":credential,"client":{"id":"nessa-cli"},"surface":{"kind":"cli","instance":"nessa-cli"}}))?;
+        let ready: ProductSessionReady = result.request("session.authenticate", json!({"minVersion":1,"maxVersion":1,"nonce":challenge.nonce,"credential":credential,"client":{"id":caller.id},"surface":{"kind":"cli","instance":caller.instance}}))?;
         if ready.version != 1
             || ready.gateway_id.is_empty()
             || ready.organization_id.is_empty()
@@ -170,18 +211,31 @@ impl LocalProduct {
         method: &str,
         params: Value,
     ) -> Result<T, LocalProductError> {
-        let result = self.request_once(method, params);
+        let result = match self.request_once(method, params) {
+            Ok(Reply::Payload(payload)) => decode(payload),
+            Ok(Reply::Refused(code)) => Err(refusal(&code)),
+            Err(error) => Err(error),
+        };
         after_dispatch(method, result, || {
             // A late answer must not be consumed by a subsequent explicit unlock.
             // Closing also retires this connection's prior unlock authority.
             let _ = self.socket.get_ref().shutdown(std::net::Shutdown::Both);
         })
     }
-    fn request_once<T: DeserializeOwned>(
-        &mut self,
-        method: &str,
-        params: Value,
-    ) -> Result<T, LocalProductError> {
+    /// [`request`] without collapsing the gateway's refusal code.
+    ///
+    /// The payload is the JSON the product handler returned. A refusal keeps
+    /// that handler's `code` and drops its message. Passphrase-change delivery
+    /// that this client cannot confirm still retires the connection.
+    pub fn exchange(&mut self, method: &str, params: Value) -> Result<Value, ExchangeError> {
+        let result = self.request_once(method, params);
+        settle(method, result, || {
+            // A late answer must not be consumed by a subsequent explicit unlock.
+            // Closing also retires this connection's prior unlock authority.
+            let _ = self.socket.get_ref().shutdown(std::net::Shutdown::Both);
+        })
+    }
+    fn request_once(&mut self, method: &str, params: Value) -> Result<Reply, LocalProductError> {
         self.deadline = Instant::now() + Duration::from_secs(10);
         self.next_id += 1;
         let id = self.next_id.to_string();
@@ -212,17 +266,7 @@ impl LocalProduct {
             // The shared envelope decoder has already proved a boolean outcome
             // with exactly one error/payload. Arbitrary server text stays private.
             let error = response.error.ok_or(LocalProductError::Protocol)?;
-            return Err(match error.code.as_str() {
-                "unauthorized" => LocalProductError::Unauthorized,
-                "forbidden" => LocalProductError::Denied,
-                "credential_capacity" => LocalProductError::Capacity,
-                code => {
-                    match serde_json::from_value::<VaultErrorCode>(Value::String(code.to_owned())) {
-                        Ok(code) => LocalProductError::Vault(code),
-                        Err(_) => LocalProductError::Rejected,
-                    }
-                }
-            });
+            return Ok(Reply::Refused(error.code));
         }
         let payload = response.payload.ok_or(LocalProductError::Protocol)?;
         // Validate before generic decoding: Value callers must obey the same
@@ -230,7 +274,75 @@ impl LocalProduct {
         if method == "vault.changePassphrase" {
             let _: VaultPassphraseChangeStatus = decode(payload.clone())?;
         }
-        decode(payload)
+        Ok(Reply::Payload(payload))
+    }
+}
+
+enum Reply {
+    Payload(Value),
+    Refused(String),
+}
+
+/// A product call's outcome. `Refused` is the handler's code; `Session` is
+/// this transport, and it carries no server text.
+pub enum ExchangeError {
+    /// The handler refused the call. The message is dropped.
+    Refused {
+        /// The product error code.
+        code: String,
+    },
+    /// The exchange did not produce a handler answer.
+    Session(LocalProductError),
+}
+
+fn refusal(code: &str) -> LocalProductError {
+    match code {
+        "unauthorized" => LocalProductError::Unauthorized,
+        "forbidden" => LocalProductError::Denied,
+        "credential_capacity" => LocalProductError::Capacity,
+        code => match serde_json::from_value::<VaultErrorCode>(Value::String(code.to_owned())) {
+            Ok(code) => LocalProductError::Vault(code),
+            Err(_) => LocalProductError::Rejected,
+        },
+    }
+}
+
+fn preserved_refusal(code: &str) -> bool {
+    matches!(
+        refusal(code),
+        LocalProductError::Vault(_) | LocalProductError::Unauthorized | LocalProductError::Denied
+    )
+}
+
+/// The passphrase-change rule in [`after_dispatch`], applied to a raw reply
+/// so the gateway's code survives when the change itself is confirmed.
+fn settle(
+    method: &str,
+    result: Result<Reply, LocalProductError>,
+    retire: impl FnOnce(),
+) -> Result<Value, ExchangeError> {
+    let settled = match result {
+        Ok(Reply::Payload(payload)) => Ok(payload),
+        Ok(Reply::Refused(code)) => Err(ExchangeError::Refused { code }),
+        Err(error) => Err(ExchangeError::Session(error)),
+    };
+    if method != "vault.changePassphrase" {
+        return settled;
+    }
+    match settled {
+        Err(ExchangeError::Refused { ref code }) if preserved_refusal(code) => settled,
+        Err(ExchangeError::Session(
+            LocalProductError::Vault(_)
+            | LocalProductError::Unauthorized
+            | LocalProductError::Denied,
+        )) => settled,
+        Err(_) => {
+            retire();
+            Err(ExchangeError::Session(LocalProductError::Vault(
+                VaultErrorCode::VaultChangeNotConfirmed,
+            )))
+        }
+        confirmed => confirmed,
     }
 }
 // A recognized response preserves the gateway's publication/audit fact. Any
