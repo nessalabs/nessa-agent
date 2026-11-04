@@ -93,6 +93,13 @@ nonzero. An MCP tool call returns that same JSON as its text and marks the tool
 result an error. The process keeps serving. The refusal text from the gateway
 is not copied out: the code is the contract.
 
+Each tool's input schema is the method's parameter object, with `type` set to
+`object` on that schema. A call waits as long as the longest handler can still
+be working, including an agent install's archive transfer. If the answer does
+not arrive in that time, or the reply cannot be tied to the request, the
+connection is closed. The next call signs in again, so it cannot read the late
+reply.
+
 What this page does not cover: subscriptions stay excluded because one reply
 would drop their events, and upload or resource bytes still travel on their HTTP
 routes. In-app Claude and Codex harnesses are not yet launched with `nessa mcp`.

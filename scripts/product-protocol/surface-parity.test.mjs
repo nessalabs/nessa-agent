@@ -30,10 +30,7 @@ test("every manifest method is exposed or excluded with a reason", () => {
     assert.equal(listed && reason !== undefined, false, method)
     if (reason !== undefined) assert.notEqual(reason.trim(), "")
   }
-  assert.equal(
-    exposed.size + excluded.size,
-    Object.keys(manifest.methods).length,
-  )
+  assert.equal(exposed.size + excluded.size, Object.keys(manifest.methods).length)
 })
 
 test("a new manifest method with no entry and no exclusion fails", () => {
@@ -51,10 +48,7 @@ test("an exclusion without a reason fails", () => {
   input.exclusions = { ...input.exclusions, "server.health": "   " }
   input.hints = { ...input.hints }
   delete input.hints["server.health"]
-  assert.throws(
-    () => buildSurfaceCatalog(input),
-    /server\.health needs a written reason/,
-  )
+  assert.throws(() => buildSurfaceCatalog(input), /server\.health needs a written reason/)
 })
 
 test("excluding a method removes it from the exposed list", () => {

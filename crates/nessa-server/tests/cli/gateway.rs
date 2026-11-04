@@ -1,9 +1,10 @@
 use crate::cli::{
-    application::{CliError, Gateway, TokenRequest},
+    application::{CliError, Gateway, GatewayCallError, TokenRequest},
     infrastructure::LocalGateway,
 };
+use nessa_client_core::local_product::ProductCaller;
 use serde_json::{json, Value};
-use std::{io::Write, net::TcpListener, thread};
+use std::{io::Write, net::TcpListener, thread, time::Duration};
 use tungstenite::{accept, Message};
 
 #[test]
@@ -105,5 +106,72 @@ fn adapter_rejects_an_authenticated_identity_with_nonportable_expiry() {
         LocalGateway::connect(address, &token).err(),
         Some(CliError::Protocol)
     );
+    server.join().unwrap();
+}
+
+fn handshake(socket: &mut tungstenite::WebSocket<std::net::TcpStream>) -> String {
+    socket.send(Message::Text(json!({"type":"event","event":"session.challenge","seq":0,"stateVersion":0,"payload":{"minVersion":1,"maxVersion":1,"nonce":"challenge","expiresAt":9999999999_u64}}).to_string().into())).unwrap();
+    let auth: Value = serde_json::from_str(socket.read().unwrap().to_text().unwrap()).unwrap();
+    let id = auth["id"].as_str().unwrap().to_owned();
+    socket.send(Message::Text(json!({"type":"res","id":id,"ok":true,"payload":{
+        "version":1,"gatewayId":"gateway","organizationId":"org","principalId":"caller","membershipId":"member","credentialId":"cli","audienceId":"gateway","expiresAt":null,"grants":[],"methods":[]
+    }}).to_string().into())).unwrap();
+    id
+}
+
+#[test]
+fn a_timed_out_call_reconnects_instead_of_reading_the_late_reply() {
+    let root = tempfile::tempdir().unwrap();
+    let token = root.path().join("cli.token");
+    nessa_local_storage::open(&token, nessa_local_storage::OpenMode::CreateNew)
+        .unwrap()
+        .write_all(b"private-token")
+        .unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        let mut socket = accept(stream).unwrap();
+        handshake(&mut socket);
+        let request: Value =
+            serde_json::from_str(socket.read().unwrap().to_text().unwrap()).unwrap();
+        assert_eq!(request["method"], "server.health");
+        thread::sleep(Duration::from_millis(250));
+        let _ = socket.send(Message::Text(
+            json!({"type":"res","id":request["id"],"ok":true,"payload":{"marker":"late"}})
+                .to_string()
+                .into(),
+        ));
+        let (stream, _) = listener.accept().unwrap();
+        let mut socket = accept(stream).unwrap();
+        handshake(&mut socket);
+        let request: Value =
+            serde_json::from_str(socket.read().unwrap().to_text().unwrap()).unwrap();
+        assert_eq!(request["method"], "server.health");
+        socket
+            .send(Message::Text(
+                json!({"type":"res","id":request["id"],"ok":true,"payload":{"marker":"fresh"}})
+                    .to_string()
+                    .into(),
+            ))
+            .unwrap();
+    });
+    let mut gateway = LocalGateway::open(
+        address,
+        token,
+        ProductCaller::CLI,
+        Duration::from_millis(40),
+    )
+    .unwrap();
+    let error = gateway.call("server.health", json!({})).unwrap_err();
+    assert!(
+        matches!(
+            error,
+            GatewayCallError::Transport(CliError::TimedOut | CliError::Transport)
+        ),
+        "{error:?}"
+    );
+    let fresh = gateway.call("server.health", json!({})).unwrap();
+    assert_eq!(fresh["marker"], "fresh");
     server.join().unwrap();
 }

@@ -152,17 +152,30 @@ fn description(method: &Method) -> String {
 
 fn input_schema(method: &Method) -> Value {
     let Some(params) = &method.params else {
-        return json!({
-            "type": "object",
-            "properties": {},
-            "additionalProperties": false,
-        });
+        return empty_object();
     };
+    let Some(root) = catalog().defs.get(params).cloned() else {
+        return empty_object();
+    };
+    // The parameter object is the tool schema. MCP requires `type` to be
+    // "object" on the schema itself; a `$ref` wrapper does not count.
+    let mut schema = root;
+    schema
+        .as_object_mut()
+        .map(|fields| fields.insert("type".to_owned(), json!("object")));
+    let mut nested = reachable(params);
+    nested.remove(params);
+    if !nested.is_empty() {
+        schema["$defs"] = Value::Object(nested);
+    }
+    schema
+}
+
+fn empty_object() -> Value {
     json!({
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "$id": format!("nessa://protocol/product/surface/{params}"),
-        "$defs": reachable(params),
-        "$ref": format!("#/$defs/{params}"),
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false,
     })
 }
 

@@ -136,4 +136,97 @@ fn mcp_lists_each_exposed_method_and_not_an_excluded_one() {
         .unwrap();
     assert_eq!(delete["annotations"]["readOnlyHint"], false);
     assert_eq!(delete["annotations"]["destructiveHint"], true);
+    let create = listed
+        .iter()
+        .find(|tool| tool["name"] == "conversation.create")
+        .unwrap();
+    assert_eq!(create["inputSchema"]["type"], "object");
+    assert!(create["inputSchema"].get("$ref").is_none());
+    assert!(create["inputSchema"]["properties"]
+        .get("conversationId")
+        .is_some());
+}
+
+/// The MCP tool definition, as the 2025-06-18 contract requires `inputSchema.type`
+/// to be the string `object` on the schema itself.
+fn mcp_tools_contract() -> Value {
+    json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "required": ["tools"],
+        "additionalProperties": false,
+        "properties": {
+            "tools": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "required": ["name", "inputSchema"],
+                    "additionalProperties": false,
+                    "properties": {
+                        "name": {"type": "string", "minLength": 1},
+                        "description": {"type": "string"},
+                        "inputSchema": {
+                            "type": "object",
+                            "required": ["type"],
+                            "properties": {
+                                "type": {"const": "object"},
+                                "properties": {"type": "object"},
+                                "required": {"type": "array", "items": {"type": "string"}}
+                            }
+                        },
+                        "annotations": {
+                            "type": "object",
+                            "properties": {
+                                "readOnlyHint": {"type": "boolean"},
+                                "destructiveHint": {"type": "boolean"},
+                                "idempotentHint": {"type": "boolean"},
+                                "openWorldHint": {"type": "boolean"}
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    })
+}
+
+#[test]
+fn tools_list_matches_the_mcp_tool_contract() {
+    let input = concat!(
+        r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}"#,
+        "\n",
+        r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#,
+        "\n",
+    );
+    let mut gateway = recording(Ok(json!({})));
+    let mut output = Vec::new();
+    serve_mcp(&mut gateway, Cursor::new(input), &mut output).unwrap();
+    let reply = String::from_utf8(output).unwrap();
+    let listed = reply
+        .lines()
+        .nth(1)
+        .and_then(|line| serde_json::from_str::<Value>(line).ok())
+        .expect("tools/list reply");
+    let document = json!({"tools": listed["result"]["tools"].clone()});
+    let validator = jsonschema::options()
+        .offline()
+        .build(&mcp_tools_contract())
+        .expect("MCP tool contract");
+    assert!(
+        validator.is_valid(&document),
+        "{}",
+        validator.validate(&document).expect_err("invalid catalog")
+    );
+    assert!(gateway.calls.is_empty());
+}
+
+#[test]
+fn the_surface_wait_outlasts_an_archive_install() {
+    use crate::agent_install::infrastructure::https_archives::ARCHIVE_TRANSFER_TIMEOUT;
+    use crate::cli::application::surface_call_budget;
+    use std::time::Duration;
+    let budget = surface_call_budget();
+    assert!(budget >= ARCHIVE_TRANSFER_TIMEOUT);
+    assert!(budget >= Duration::from_millis(233_000));
+    assert!(budget >= Duration::from_millis(300_000 + 60_000));
 }
