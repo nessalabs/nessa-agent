@@ -10,6 +10,11 @@
  * checks that the interaction did what it is named for (a split adds a pane,
  * a move reorders), so a no-op cannot pass as fast.
  */
+import {
+  bootstrapMedianInterval,
+  comparisonVerdict,
+  pairedDifferences,
+} from "./lib/compare.mjs"
 import { attempt, CannotRun, chosen, log, table } from "./lib/cli.mjs"
 import { need, openPage, withEngines } from "./lib/browser.mjs"
 import {
@@ -300,6 +305,7 @@ const meta = {
     runs: { type: "string", default: "3" },
     throttle: { type: "string", default: "4" },
     only: { type: "string" },
+    base: { type: "string" },
     width: { type: "string", default: "1600" },
     height: { type: "string", default: "1000" },
   },
@@ -307,6 +313,14 @@ const meta = {
 Usage: node verification/desktop/scripts/perf-budget.mjs [options]
 
   --runs <n>          Fresh-page runs per interaction and layout (default 3).
+                      With --base, this many pairs (base, then head).
+  --base <url>        Page of the build to compare against. Runs alternate
+                      base, head, base, head on this same host. The table adds
+                      the median of (head − base) longest-frame and its 95%
+                      bootstrap interval. A row is a regression or a win only
+                      when that interval excludes zero; otherwise it is no
+                      change. The 50 ms budget still applies to the head runs
+                      and is what fails the row.
   --throttle <rate>   CDP CPU throttling rate (default 4, the budget's).
   --only <list>       Interactions to run, comma-separated. Available:
                       ${Object.keys(scenarios).join(", ")}
@@ -341,6 +355,7 @@ await main(meta, async ({ options, rep, url, mode }) => {
     : null
   const viewport = { width: Number(options.width), height: Number(options.height) }
   const rows = []
+  const baseUrl = options.base || null
 
   await withEngines(options, rep, async (engine, browser) => {
     const calibration = await attempt(rep, { name: "calibration", engine }, async () => {
@@ -376,10 +391,11 @@ await main(meta, async ({ options, rep, url, mode }) => {
         await attempt(rep, { name, engine, layout }, async () => {
           if (typeof s.expect !== "function")
             throw new CannotRun(`${name} has no functional assertion`)
-          const detail = []
-          for (let r = 0; r < runs; r++) {
+          const headRuns = []
+          const baseRuns = []
+          const oneRun = async (browser, pageUrl) => {
             const opened = await openPage(browser, {
-              url,
+              url: pageUrl,
               layout,
               ...viewport,
               initScripts: [observers],
@@ -395,17 +411,22 @@ await main(meta, async ({ options, rep, url, mode }) => {
               const before = await snapshot(page)
               const m = await measure(page, () => s.act(page), s.settle ?? 1000)
               const after = await snapshot(page)
-              detail.push({
+              return {
                 ...m,
                 before,
                 after,
                 did: s.expect(before, after),
-              })
+              }
             } finally {
               await opened.close()
             }
           }
-          const budget = interactionBudget(detail)
+          for (let r = 0; r < runs; r++) {
+            if (baseUrl) baseRuns.push(await oneRun(browser, baseUrl))
+            headRuns.push(await oneRun(browser, url))
+          }
+          const budget = interactionBudget(headRuns)
+          const comparison = baseUrl ? compareRuns(headRuns, baseRuns) : null
           const row = {
             layout,
             name,
@@ -413,6 +434,14 @@ await main(meta, async ({ options, rep, url, mode }) => {
             median: Math.round(budget.median),
             over50: budget.over50,
             runs: budget.presentedRuns,
+            ...(comparison
+              ? {
+                  diff: shown(comparison.medianDifference),
+                  low: shown(comparison.interval.low),
+                  high: shown(comparison.interval.high),
+                  call: comparison.verdict,
+                }
+              : {}),
           }
           rows.push(row)
           const failures = []
@@ -420,9 +449,9 @@ await main(meta, async ({ options, rep, url, mode }) => {
             failures.push(
               `longest frame ${budget.maxFrame} ms > ${budgetMs} ms (runs: ${row.runs})`,
             )
-          for (const d of detail)
+          for (const d of [...baseRuns, ...headRuns])
             if (d.did) failures.push(`did not do what it is named for: ${d.did}`)
-          if (detail.some((d) => d.noLoaf))
+          if ([...baseRuns, ...headRuns].some((d) => d.noLoaf))
             log(
               "note: no Long Animation Frame timing in this browser; attribution is empty",
             )
@@ -430,14 +459,51 @@ await main(meta, async ({ options, rep, url, mode }) => {
             max: budget.maxFrame,
             median: budget.median,
             over50: budget.over50,
-            runs: detail,
+            runs: headRuns,
+            ...(comparison ? { baseRuns, comparison } : {}),
             failures,
           }
         })
       }
   })
-  if (rows.length)
+  if (rows.length) {
+    const columns = baseUrl
+      ? ["layout", "name", "max", "median", "over50", "diff", "low", "high", "call", "runs"]
+      : ["layout", "name", "max", "median", "over50", "runs"]
+    const compared = baseUrl
+      ? " diff is the median of head − base longest-frame, with its 95% interval; a call is a regression or a win only when the interval excludes zero."
+      : ""
     log(
-      `\n${table(rows, ["layout", "name", "max", "median", "over50", "runs"])}\n(ms; budget ${budgetMs} ms at ${rate}× throttle)\n`,
+      `\n${table(rows, columns)}\n(ms; budget ${budgetMs} ms at ${rate}× throttle.${compared})\n`,
     )
+  }
 })
+
+/** Two decimals for the table. The JSON comparison keeps the unrounded interval. */
+function shown(value) {
+  return Math.round(value * 100) / 100
+}
+
+function compareRuns(headRuns, baseRuns) {
+  const differences = pairedDifferences(
+    headRuns.map((run) => run.maxFrame),
+    baseRuns.map((run) => run.maxFrame),
+  )
+  const interval = bootstrapMedianInterval(differences)
+  return {
+    metric: "maxFrame",
+    unit: "ms",
+    difference: "head - base",
+    differences,
+    medianDifference: interval.median,
+    interval: {
+      low: interval.low,
+      high: interval.high,
+      level: interval.level,
+      resamples: interval.resamples,
+      seed: interval.seed,
+      method: interval.method,
+    },
+    verdict: comparisonVerdict(interval.low, interval.high),
+  }
+}
