@@ -658,7 +658,7 @@ export function fakeGateway(
             )
           return { conversationId }
         }) as never,
-      submit: (prepared) => {
+      submit: (prepared, options) => {
         preparedSubmissionFields(prepared)
         return answer(
           "send",
@@ -668,6 +668,8 @@ export function fakeGateway(
             prepared.attachments,
             prepared.files,
             { executionId: prepared.executionId, requestId: prepared.requestId },
+            // Recorded only when given, so a plain send's arguments stay as they were.
+            ...(options ? [options] : []),
           ],
           () => ({
             conversationId: prepared.conversationId,

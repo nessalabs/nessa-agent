@@ -11,7 +11,7 @@ import { fakeGateway, gatewayConversationIds, view } from "./fake-gateway"
 import { gatewaySource, type GatewayClock } from "./gateway-source"
 
 const { s: conversationS } = gatewayConversationIds
-const timing = { callMs: 5_000, retryMs: 1_000 }
+const timing = { callMs: 5_000, workspaceCallMs: 20_000, retryMs: 1_000 }
 const clock: GatewayClock = { now: () => 1_000_000, after: () => () => {} }
 
 const flush = async () => {

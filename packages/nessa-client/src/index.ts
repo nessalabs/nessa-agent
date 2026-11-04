@@ -198,6 +198,7 @@ export type {
   ConversationCreateOptions,
   ConversationListOptions,
   ConversationPrepareOptions,
+  ConversationSubmitOptions,
   PreparedSubmission,
   SubmissionInput,
   ConversationShareOptions,
@@ -533,3 +534,4 @@ export {
 } from "./generated/product.js"
 
 export { NessaBoatError } from "./presentation/boat-api.js"
+export { conversationWorkspaceTimeoutMs } from "./application/agent-budgets.js"
