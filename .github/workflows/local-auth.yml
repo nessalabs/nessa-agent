@@ -504,11 +504,11 @@ jobs:
             partition: all
     runs-on: ${{ matrix.os }}
     # The apt step can run 65 minutes and the Rust tests can run to their own
-    # 45 (#366). On the 21 green Ubuntu legs of 2026-10-07, every other step
-    # together was at most 11.3 minutes in one run. 65 + 45 + 11.3 is 121.3,
-    # so 130 minutes lets both step bounds finish before the job does.
+    # 60 (#366). On the 21 green Ubuntu legs of 2026-10-07, every other step
+    # together was at most 11.3 minutes in one run. 65 + 60 + 11.3 is 136.3,
+    # so 140 minutes lets both step bounds finish before the job does.
     # Windows, which does not install these packages, took at most 27.9.
-    timeout-minutes: 130
+    timeout-minutes: 140
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/native-crypto
@@ -611,7 +611,10 @@ jobs:
         timeout-minutes: 45
       - shell: bash
         run: node scripts/cargo-test-parallel.mjs --concurrency 2 --partition ${{ matrix.partition }} -- -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-client-core -p nessa-device-client -p nessa-sdk -p nessa-timer -p nessa-vault
-        timeout-minutes: 45
+        # macOS ran this in 41.6 minutes on main (run 41708958692, 2026-11-03)
+        # and hit 45 twice on one PR the same night; 60 still ends a deadlock
+        # long before the job does (#366).
+        timeout-minutes: 60
       # Passing libtest output is normally captured. Keep these bounded native
       # receipts visible even when a separate strict fixture precondition fails.
       - name: Capture native retained-file security query order

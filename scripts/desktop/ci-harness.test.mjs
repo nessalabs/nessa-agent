@@ -335,9 +335,9 @@ test("apt installs and every CI job are bounded", () => {
   assert.equal(scriptBudget, 62.75)
 
   // Minutes, from 21 green local-auth runs on 2026-10-07 and the four release
-  // runs that exist. local-auth is 130 because the 65 minute apt step, the
-  // 45 minute Rust test step, and at most 11.3 minutes of everything else
-  // sum past 120. The release build is 120 because 65 + 25.7 does too.
+  // runs that exist. local-auth is 140 because the 65 minute apt step, the
+  // 60 minute Rust test step, and at most 11.3 minutes of everything else
+  // sum past 130. The release build is 120 because 65 + 25.7 does too.
   const bounds = {
     "local-auth.yml": {
       workflows: 10,
@@ -346,7 +346,7 @@ test("apt installs and every CI job are bounded", () => {
       "desktop-release-profile": 45,
       frontend: 30,
       "conversation-stress": 60,
-      "local-auth": 130,
+      "local-auth": 140,
       "windows-server-tests": 80,
       "sdk-domain-coverage": 60,
       "required-checks": 10,
