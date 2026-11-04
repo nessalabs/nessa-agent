@@ -3,6 +3,7 @@ id: gateway-surface-call
 title: Call a gateway method from the CLI or MCP
 kind: operation
 status: implemented
+sourceRevision: "fb129e83a4bc7d7af2dfc9810791a974ddd58a1d"
 summary: The CLI and MCP send one catalog method through the signed-in gateway session, and Cedar decides.
 parent: gateway
 sources:
