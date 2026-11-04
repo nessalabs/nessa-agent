@@ -3577,6 +3577,32 @@ describe("writes", () => {
     expect(gateway.calls.find((call) => call.method === "send")?.args).toHaveLength(5)
   })
 
+  it("C6: a first message in a channel gets the whole workspace budget for its send after a slow create", async () => {
+    const { gateway, source, advance } = started()
+    const made = deferred<unknown>()
+    gateway.once("create", () => made.promise)
+    const taken = deferred<unknown>()
+    gateway.once("send", () => taken.promise)
+    const sending = source
+      .send({
+        sessionId: conversationS,
+        messageId: "m",
+        text: "Hi",
+        model,
+        initiator: "person",
+        start: { channelId: "ch_aaaaaaaaaa", title: "Hi" },
+      })
+      .catch((error: unknown) => error)
+    await advance(timing.workspaceCallMs - 1)
+    made.resolve({ conversationId: conversationS })
+    await flush()
+    await advance(timing.workspaceCallMs - 1)
+    expect(await Promise.race([sending, Promise.resolve("pending")])).toBe("pending")
+    // A send the gateway never answers still settles, on its own budget.
+    await advance(1)
+    expect(await sending).toMatchObject({ reason: "unavailable" })
+  })
+
   it("C6: a message whose create answered after its call settled is not sent", async () => {
     const { gateway, source, advance } = started()
     const created = deferred<unknown>()

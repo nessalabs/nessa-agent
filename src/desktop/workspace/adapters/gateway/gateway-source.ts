@@ -1778,14 +1778,18 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
       }
       if (prepared) {
         const submitted = prepared
-        return within(
-          async (live) => {
+        // A message that waits on a workspace opens and sends on a budget
+        // each, as the client gives each its own deadline: making the
+        // workspace cannot use up the send's time. Any other keeps one call.
+        if (!waitsOnWorkspace)
+          return within(async (live) => {
             await open(live)
             await submit(live, submitted)
-          },
-          undefined,
-          budgetMs,
-        )
+          })
+        return (async () => {
+          await within((live) => open(live), undefined, budgetMs)
+          await within((live) => submit(live, submitted), undefined, budgetMs)
+        })()
       }
       // With images, each step is a call of its own, on its own budget: the
       // conversation opened, which must exist to hold them, then each image
