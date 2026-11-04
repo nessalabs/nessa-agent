@@ -20,6 +20,7 @@ pub mod github;
 pub mod github_relay;
 pub mod health;
 pub(crate) mod limits;
+pub mod logins;
 pub mod mcp_authorization;
 pub mod mcp_servers;
 pub mod peer_gateways;

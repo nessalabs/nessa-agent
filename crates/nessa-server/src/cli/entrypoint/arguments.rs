@@ -4,7 +4,7 @@ use crate::agent_install::domain::AgentName;
 use nessa_protocol::relay::RelayAddress;
 use nessa_protocol::tunnel::TunnelAddress;
 
-pub const HELP: &str = "Nessa\n\n  nessa server [--provision-local]\n  nessa auth init --local [--owner-token-file PATH]\n  nessa auth token [--local] [--ttl 12h|7d|30m|60s | --no-expiry] [--credential-file PATH]\n  nessa doctor [--local] [--credential-file PATH]\n  nessa install-agent NAME\n  nessa github connect OWNER/REPO --passphrase-stdin [--accept-gap]\n  nessa github events OWNER/REPO --passphrase-stdin\n  nessa github disconnect OWNER/REPO --passphrase-stdin\n  nessa limits [--json]\n  nessa env serve\n  nessa env enroll ADDRESS CODE\n  nessa env dial ADDRESS [--relay HOST:PORT] [--tunnel https://HOST] [--drain-deadline 20s] [--enroll-code-file PATH]\n  nessa env grant [--peer ssh|PIN] [--agent NAME... | --all-agents] [--commands --max-timeout 10m] [--max-lease 8h]\n  nessa env ungrant [--peer ssh|PIN] (--agent NAME | --commands | --all)\n  nessa env grants\n  nessa env protocol\n  nessa artifact publish PATH [--type MEDIA/TYPE]\n  nessa relay serve --listen HOST:PORT\n  nessa auth provision-surface --local --surface-id NAME [--grants ACTIONS]\n  nessa auth recover-owner --local --owner-token-file PATH\n\ninstall-agent downloads the release of an agent's own runtime that Nessa has\ntested, verifies it against a compiled-in digest, and reports what it installed\nas JSON on stdout. Installing one already present downloads nothing.\n\n`env serve` is the environment role a gateway starts over SSH, from the copy of\nits own build it installs under ~/.nessa/env on first use: it speaks lease frames on stdin and stdout and runs the agent\nharnesses this host's own config.json configures. Not for people.\n`env enroll` pairs this machine with the gateway at ADDRESS (host:port of its\nnative listener) as an environment, with the code of an environment invitation\nthe owner created there; the owner then approves it. `env dial` serves that\ngateway's leases over connections this machine dials, waiting for the\napproval first and dialing again whenever a connection ends, until stopped.\nWith --relay, a dial that does not connect to ADDRESS within a moment, or is\nrefused, asks that relay for the gateway instead (`relay serve`, below), and with\n--tunnel, the gateway's web tunnel at that address (Settings › Linked\ndevices shows it); enrolling still needs ADDRESS itself.\nWith --drain-deadline, SIGINT or SIGTERM drains instead: every lease ends with\nits cleanup recorded on both sides, then it exits; past the deadline, or on a\nsecond signal, the connection is closed. Set it below a container's stop grace.\nWith --enroll-code-file, a machine paired with nothing first enrolls with the\ncode that file holds, and one already paired with the gateway at ADDRESS goes\nstraight to dialing, so a container can run the same command on every start;\none paired with another gateway refuses.\nA gateway that speaks another lease protocol, and that this machine lets run\ncommands, sends its build: `env dial` checks it, keeps it under environment/builds\nand runs it in its own place, then and on every later start.\n`env grant` and `env ungrant` change what this machine's owner grants one\ngateway: `ssh` (whoever runs env serve over SSH) or a dialed gateway by its\npin, by default the gateway this machine is paired with, else `ssh`. Without\nan entry, `ssh` is granted everything this host runs and a dialed gateway\nnothing; a grant only narrows what config.json lets this host run. A change\napplies from the next lease; leases already running go on. `env grants`\nprints every entry as JSON on stdout. `env grant` takes agents, commands, a\nlease limit or any of them; --max-timeout replaces the peer's longest command\nrun, and --max-lease the longest an agent's lease may last before this machine\nends it (none: until ended; `ungrant --all` takes it back).\n`env protocol` prints the lease protocol this build speaks, which a gateway\nchecks a copy it installs on a host against before putting it in place.\n\n`artifact publish` attaches a file in the workspace to the conversation whose\nagent runs it, from a host serving `env serve`: the gateway receives it by\ndigest and verifies it. It prints the outcome as JSON on stdout.\n\n`relay serve` runs a relay at HOST:PORT that a gateway and its paired readers\nboth connect out to, so a reader that cannot reach the gateway directly is\njoined to it there. The relay copies their bytes and cannot read them: what\ncrosses is the same TLS a direct connection carries. It keeps nothing and runs\nuntil stopped.\n\n`limits` and `limits --json` print the effective operational limits as JSON\non stdout. A missing config file prints the defaults. An unusable config\nfile prints nothing and fails.\n\nLocal is the current backend. Cloud auth is not implemented.\n`server --provision-local` creates the owner and panel credentials of the selected\nnamespace when they are absent, then serves; it never replaces existing ones.\nWithout it, `nessa server` only serves what the offline auth commands provisioned.\nNESSA_HOST, NESSA_PORT, NESSA_STAGE, NESSA_DATA_DIR and NESSA_INSTANCE select the local gateway.\nToken defaults to no expiry (capped by issuer expiry) and prints only the secret to stdout; pipe it to pbcopy.\n";
+pub const HELP: &str = "Nessa\n\n  nessa server [--provision-local]\n  nessa auth init --local [--owner-token-file PATH]\n  nessa auth token [--local] [--ttl 12h|7d|30m|60s | --no-expiry] [--credential-file PATH]\n  nessa doctor [--local] [--credential-file PATH]\n  nessa install-agent NAME\n  nessa github connect OWNER/REPO --passphrase-stdin [--accept-gap]\n  nessa github events OWNER/REPO --passphrase-stdin\n  nessa github disconnect OWNER/REPO --passphrase-stdin\n  nessa limits [--json]\n  nessa env serve\n  nessa env enroll ADDRESS CODE\n  nessa env dial ADDRESS [--relay HOST:PORT] [--tunnel https://HOST] [--drain-deadline 20s] [--enroll-code-file PATH]\n  nessa env grant [--peer ssh|PIN] [--agent NAME... | --all-agents] [--commands --max-timeout 10m] [--max-lease 8h] [--logins]\n  nessa env ungrant [--peer ssh|PIN] (--agent NAME | --commands | --logins | --all)\n  nessa env grants\n  nessa env protocol\n  nessa artifact publish PATH [--type MEDIA/TYPE]\n  nessa relay serve --listen HOST:PORT\n  nessa auth provision-surface --local --surface-id NAME [--grants ACTIONS]\n  nessa auth recover-owner --local --owner-token-file PATH\n\ninstall-agent downloads the release of an agent's own runtime that Nessa has\ntested, verifies it against a compiled-in digest, and reports what it installed\nas JSON on stdout. Installing one already present downloads nothing.\n\n`env serve` is the environment role a gateway starts over SSH, from the copy of\nits own build it installs under ~/.nessa/env on first use: it speaks lease frames on stdin and stdout and runs the agent\nharnesses this host's own config.json configures. Not for people.\n`env enroll` pairs this machine with the gateway at ADDRESS (host:port of its\nnative listener) as an environment, with the code of an environment invitation\nthe owner created there; the owner then approves it. `env dial` serves that\ngateway's leases over connections this machine dials, waiting for the\napproval first and dialing again whenever a connection ends, until stopped.\nWith --relay, a dial that does not connect to ADDRESS within a moment, or is\nrefused, asks that relay for the gateway instead (`relay serve`, below), and with\n--tunnel, the gateway's web tunnel at that address (Settings › Linked\ndevices shows it); enrolling still needs ADDRESS itself.\nWith --drain-deadline, SIGINT or SIGTERM drains instead: every lease ends with\nits cleanup recorded on both sides, then it exits; past the deadline, or on a\nsecond signal, the connection is closed. Set it below a container's stop grace.\nWith --enroll-code-file, a machine paired with nothing first enrolls with the\ncode that file holds, and one already paired with the gateway at ADDRESS goes\nstraight to dialing, so a container can run the same command on every start;\none paired with another gateway refuses.\nA gateway that speaks another lease protocol, and that this machine lets run\ncommands, sends its build: `env dial` checks it, keeps it under environment/builds\nand runs it in its own place, then and on every later start.\n`env grant` and `env ungrant` change what this machine's owner grants one\ngateway: `ssh` (whoever runs env serve over SSH) or a dialed gateway by its\npin, by default the gateway this machine is paired with, else `ssh`. Without\nan entry, `ssh` is granted everything this host runs and a dialed gateway\nnothing; a grant only narrows what config.json lets this host run. A change\napplies from the next lease; leases already running go on. `env grants`\nprints every entry as JSON on stdout. `env grant` takes agents, commands, a\nlease limit or any of them; --max-timeout replaces the peer's longest command\nrun, and --max-lease the longest an agent's lease may last before this machine\nends it (none: until ended; `ungrant --all` takes it back). --logins lets\nthe gateway hand this machine its saved login for each agent it starts here,\nset only where config.json sets none of that agent's own; `ssh` takes them\nwithout an entry, and `ungrant --logins` takes that back.\n`env protocol` prints the lease protocol this build speaks, which a gateway\nchecks a copy it installs on a host against before putting it in place.\n\n`artifact publish` attaches a file in the workspace to the conversation whose\nagent runs it, from a host serving `env serve`: the gateway receives it by\ndigest and verifies it. It prints the outcome as JSON on stdout.\n\n`relay serve` runs a relay at HOST:PORT that a gateway and its paired readers\nboth connect out to, so a reader that cannot reach the gateway directly is\njoined to it there. The relay copies their bytes and cannot read them: what\ncrosses is the same TLS a direct connection carries. It keeps nothing and runs\nuntil stopped.\n\n`limits` and `limits --json` print the effective operational limits as JSON\non stdout. A missing config file prints the defaults. An unusable config\nfile prints nothing and fails.\n\nLocal is the current backend. Cloud auth is not implemented.\n`server --provision-local` creates the owner and panel credentials of the selected\nnamespace when they are absent, then serves; it never replaces existing ones.\nWithout it, `nessa server` only serves what the offline auth commands provisioned.\nNESSA_HOST, NESSA_PORT, NESSA_STAGE, NESSA_DATA_DIR and NESSA_INSTANCE select the local gateway.\nToken defaults to no expiry (capped by issuer expiry) and prints only the secret to stdout; pipe it to pbcopy.\n";
 
 /// Whether a serving process may create the local credentials it needs.
 ///
@@ -104,6 +104,8 @@ pub enum Command {
         max_timeout_ms: Option<u64>,
         /// How long each harness's lease may last, if this sets it.
         max_lease_ms: Option<u64>,
+        /// Whether the gateway's saved logins are taken from now.
+        logins: bool,
     },
     /// Take a grant back from a gateway, from its next lease (#706).
     EnvUngrant {
@@ -159,6 +161,8 @@ pub enum Ungranted {
     Agent(String),
     /// Commands.
     Commands,
+    /// Saved logins.
+    Logins,
     /// Everything.
     All,
 }
@@ -427,14 +431,15 @@ fn dial(rest: &[String]) -> Result<Command, String> {
 /// `env grant`'s words after the verb.
 fn grant(words: &[String]) -> Result<Command, String> {
     const USAGE: &str = "env grant takes --agent NAME (repeated) or --all-agents, \
-                         --commands with --max-timeout DURATION, or --max-lease DURATION, \
-                         and an optional --peer";
+                         --commands with --max-timeout DURATION, --max-lease DURATION, \
+                         or --logins, and an optional --peer";
     let mut peer = None;
     let mut named = Vec::new();
     let mut all = false;
     let mut commands = false;
     let mut max_timeout_ms = None;
     let mut max_lease_ms = None;
+    let mut logins = false;
     let mut words = words.iter();
     while let Some(word) = words.next() {
         match word.as_str() {
@@ -448,6 +453,7 @@ fn grant(words: &[String]) -> Result<Command, String> {
             "--max-lease" if max_lease_ms.is_none() => {
                 max_lease_ms = Some(duration_ms(&value(words.next(), USAGE)?)?);
             }
+            "--logins" if !logins => logins = true,
             _ => return Err(USAGE.into()),
         }
     }
@@ -458,7 +464,7 @@ fn grant(words: &[String]) -> Result<Command, String> {
         (true, false) => return Err("env grant takes --agent or --all-agents, not both".into()),
     };
     if commands != max_timeout_ms.is_some()
-        || (agents.is_none() && !commands && max_lease_ms.is_none())
+        || (agents.is_none() && !commands && max_lease_ms.is_none() && !logins)
     {
         return Err(USAGE.into());
     }
@@ -467,13 +473,14 @@ fn grant(words: &[String]) -> Result<Command, String> {
         agents,
         max_timeout_ms,
         max_lease_ms,
+        logins,
     })
 }
 
 /// `env ungrant`'s words after the verb.
 fn ungrant(words: &[String]) -> Result<Command, String> {
     const USAGE: &str =
-        "env ungrant takes one of --agent NAME, --commands or --all, and an optional --peer";
+        "env ungrant takes one of --agent NAME, --commands, --logins or --all, and an optional --peer";
     let mut peer = None;
     let mut what = None;
     let mut words = words.iter();
@@ -485,6 +492,7 @@ fn ungrant(words: &[String]) -> Result<Command, String> {
             }
             "--agent" => Ungranted::Agent(value(words.next(), USAGE)?),
             "--commands" => Ungranted::Commands,
+            "--logins" => Ungranted::Logins,
             "--all" => Ungranted::All,
             _ => return Err(USAGE.into()),
         };

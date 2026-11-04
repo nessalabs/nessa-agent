@@ -196,6 +196,9 @@ pub struct ProductRouteState {
     /// The GitHub sign-in (`github.*`). `None` — no agents run here —
     /// answers `github_not_configured`.
     pub(crate) github: Option<Arc<super::GithubRoutes>>,
+    /// The saved logins (`logins.*`). `None` answers
+    /// `logins_not_configured`.
+    pub(crate) logins: Option<Arc<crate::logins::application::SavedLoginsService>>,
     /// The voice key and calls (`voice.*`). `None` answers
     /// `voice_not_configured`.
     pub(crate) voice: Option<Arc<crate::voice::application::VoiceCalls>>,
@@ -344,6 +347,7 @@ impl ProductRouteState {
             tunnel_secrets: None,
             devices: None,
             github: None,
+            logins: None,
             voice: None,
             vault: None,
             vault_lease: None,
@@ -492,6 +496,15 @@ impl ProductRouteState {
     /// Register the GitHub sign-in the github methods answer for.
     pub fn with_github(mut self, github: Arc<super::GithubRoutes>) -> Self {
         self.github = Some(github);
+        self
+    }
+
+    /// Register the saved logins the logins methods answer for.
+    pub fn with_logins(
+        mut self,
+        logins: Arc<crate::logins::application::SavedLoginsService>,
+    ) -> Self {
+        self.logins = Some(logins);
         self
     }
 

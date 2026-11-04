@@ -454,6 +454,22 @@
       "params": "ConversationWebhookResetParams",
       "grant": "credential.manage"
     },
+    "logins.status": {
+      "params": null,
+      "grant": "credential.manage"
+    },
+    "logins.save": {
+      "params": "LoginsSaveParams",
+      "grant": "credential.manage"
+    },
+    "logins.remove": {
+      "params": "LoginsRemoveParams",
+      "grant": "credential.manage"
+    },
+    "logins.setDevice": {
+      "params": "LoginsSetDeviceParams",
+      "grant": "credential.manage"
+    },
     "voice.status": {
       "params": null,
       "grant": "credential.manage"

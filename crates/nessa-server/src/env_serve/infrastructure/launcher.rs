@@ -5,7 +5,8 @@
 //! ```text
 //! launch(agent, binding variables) ──▶ LaunchSpec for agent (host config)
 //!     command = spec.executable spec.args, in workspace,
-//!     environment = accepted binding variables, then the host's own (host wins),
+//!     environment = accepted binding variables, the gateway's saved login
+//!                   in the agent's login variable, then the host's own (host wins),
 //!                   then the lease's publish point (NESSA_ARTIFACTS), this side's,
 //!                   and this build's directory first on the host's PATH
 //!     ──▶ SupervisedHarness::start ──▶ HarnessProcess
@@ -14,11 +15,17 @@
 //! Arrows are calls, in order. The gateway sets only the variables the
 //! agent's binding declares it sets (`LAUNCH_VARIABLES`); any other name is
 //! refused, so a gateway cannot choose the executable, the search path, a
-//! preloaded library or a credential here. A harness given a publish point
-//! finds `nessa` on its search path: the copy serving its lease, which a
+//! preloaded library or a credential here. The one credential it may hand
+//! over is the agent's own saved login, only under a lease this host's
+//! grant lets take one, and only in the variable the agent reads its login
+//! from (the first of `lease::login_variables`); a login the host
+//! configures itself wins. A harness given a publish point finds `nessa` on its search path: the copy serving its lease, which a
 //! gateway installs where no search path looks (`env_serve::install`).
 use crate::env_serve::application::{HarnessLauncher, PUBLISH_POINT_VARIABLE};
-use nessa_protocol::agents::AgentId;
+use nessa_protocol::{
+    agents::AgentId,
+    lease::{login_variables, Login},
+};
 use nessa_sdk::{
     application::agent_execution::{agents::AgentError, providers::HarnessProcess},
     domain::agent_execution::leases::SandboxProfiles,
@@ -94,6 +101,7 @@ impl HarnessLauncher for ConfiguredLauncher {
         &self,
         agent: &str,
         environment: &BTreeMap<String, String>,
+        login: Option<&Login>,
         publish_point: Option<&str>,
     ) -> Result<HarnessProcess, AgentError> {
         let id = AgentId::parse(agent)
@@ -116,8 +124,13 @@ impl HarnessLauncher for ConfiguredLauncher {
             .args(&spec.args)
             .current_dir(&self.workspace)
             .env_clear()
-            .envs(environment)
-            .envs(&spec.environment);
+            .envs(environment);
+        if let Some((variable, login)) =
+            login_to_set(id, login, &spec.environment, |path| path.exists())
+        {
+            command.env(variable, login);
+        }
+        command.envs(&spec.environment);
         if let Some(point) = publish_point {
             command.env(PUBLISH_POINT_VARIABLE, point);
             let this_build = std::env::current_exe().ok();
@@ -136,6 +149,72 @@ impl HarnessLauncher for ConfiguredLauncher {
             SupervisedHarness::start(command)
         }
     }
+}
+
+/// Where the gateway's `login` for `agent` goes, and its value: the
+/// variable the agent reads its login from, only where the host has no
+/// sign-in of its own for that agent. The host's own wins, whether it is
+/// one of the agent's login variables in the `configured` environment or
+/// the agent's own sign-in file where that environment points it
+/// ([`own_sign_in_files`]), which `exists` is asked about. A sign-in kept
+/// only in the macOS keychain is not seen.
+pub(crate) fn login_to_set<'a>(
+    agent: AgentId,
+    login: Option<&'a Login>,
+    configured: &BTreeMap<OsString, OsString>,
+    exists: impl Fn(&Path) -> bool,
+) -> Option<(&'static str, &'a str)> {
+    let variables = login_variables(agent);
+    let host_has_own = variables
+        .iter()
+        .any(|name| configured.contains_key(&OsString::from(name)))
+        || own_sign_in_files(agent, configured)
+            .iter()
+            .any(|path| exists(path));
+    match (login, host_has_own, variables.first()) {
+        (Some(login), false, Some(variable)) => Some((variable, login.expose())),
+        _ => None,
+    }
+}
+
+/// Where `agent` keeps a sign-in its own login command wrote, under the
+/// environment the harness is started with: Claude Code's
+/// `.credentials.json` (in `CLAUDE_CONFIG_DIR`, else `~/.claude`), Codex's
+/// `auth.json` (in `CODEX_HOME`, else `~/.codex`), and OpenCode's
+/// `auth.json` (in `$XDG_DATA_HOME/opencode`, else
+/// `~/.local/share/opencode`). None where neither is set.
+pub(crate) fn own_sign_in_files(
+    agent: AgentId,
+    configured: &BTreeMap<OsString, OsString>,
+) -> Vec<std::path::PathBuf> {
+    let get = |name: &str| {
+        configured
+            .get(&OsString::from(name))
+            .filter(|value| !value.is_empty())
+            .map(std::path::PathBuf::from)
+    };
+    let home = get("HOME");
+    let under = |variable: &str, default: &[&str], file: &str| {
+        get(variable)
+            .or_else(|| {
+                home.as_ref().map(|home| {
+                    default
+                        .iter()
+                        .fold(home.clone(), |path, part| path.join(part))
+                })
+            })
+            .map(|directory| directory.join(file))
+    };
+    match agent {
+        AgentId::Claude => under("CLAUDE_CONFIG_DIR", &[".claude"], ".credentials.json"),
+        AgentId::Codex => under("CODEX_HOME", &[".codex"], "auth.json"),
+        AgentId::Opencode => get("XDG_DATA_HOME")
+            .map(|data| data.join("opencode"))
+            .or_else(|| home.as_ref().map(|home| home.join(".local/share/opencode")))
+            .map(|directory| directory.join("auth.json")),
+    }
+    .into_iter()
+    .collect()
 }
 
 /// What `execvp` searches when `PATH` is unset.

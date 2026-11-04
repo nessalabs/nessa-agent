@@ -23,6 +23,7 @@ import {
 import { useNow } from "../../../clock"
 import { linkedOn, type LinkedDevice } from "../../model/linked-device"
 import { LinkedDevicesTab } from "../../settings/ui/linked-devices-tab"
+import { DeviceLoginsSwitch } from "../../settings/ui/saved-logins"
 import { BoatConnectionFields, useBoatConnection } from "../../settings/ui/boat-row"
 import type { CloudState, DevicesGateway } from "../adapters/devices-gateway"
 import {
@@ -743,6 +744,7 @@ function WorkerPage({
                     : "No, it is offline"}
               </dd>
             </div>
+            <DeviceLoginsSwitch environment={worker.environment} />
             <div>
               <dt>Environment</dt>
               <dd className="devices-mono" title={worker.environment}>

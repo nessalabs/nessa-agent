@@ -4005,6 +4005,77 @@ pub struct ConversationWebhookResetResult {
     pub position: String,
     pub applied_at_ms: u64,
 }
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+pub enum LoginAgent {
+    #[serde(rename = "claude")]
+    Claude,
+    #[serde(rename = "codex")]
+    Codex,
+    #[serde(rename = "opencode")]
+    Opencode,
+}
+impl LoginAgent {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Claude => "claude",
+            Self::Codex => "codex",
+            Self::Opencode => "opencode",
+        }
+    }
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SavedLogin {
+    pub agent: LoginAgent,
+    pub saved: bool,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LoginsStatus {
+    pub logins: Vec<SavedLogin>,
+    pub devices_on: Vec<String>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LoginsSaveParams {
+    pub agent: LoginAgent,
+    pub login: String,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LoginsRemoveParams {
+    pub agent: LoginAgent,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LoginsSetDeviceParams {
+    pub environment: String,
+    pub on: bool,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+pub enum LoginsErrorCode {
+    #[serde(rename = "logins_not_configured")]
+    LoginsNotConfigured,
+    #[serde(rename = "logins_storage_unavailable")]
+    LoginsStorageUnavailable,
+    #[serde(rename = "logins_audit_unavailable")]
+    LoginsAuditUnavailable,
+    #[serde(rename = "logins_too_many_devices")]
+    LoginsTooManyDevices,
+    #[serde(rename = "vault_locked")]
+    VaultLocked,
+}
+impl LoginsErrorCode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::LoginsNotConfigured => "logins_not_configured",
+            Self::LoginsStorageUnavailable => "logins_storage_unavailable",
+            Self::LoginsAuditUnavailable => "logins_audit_unavailable",
+            Self::LoginsTooManyDevices => "logins_too_many_devices",
+            Self::VaultLocked => "vault_locked",
+        }
+    }
+}
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct VoiceStatus {
@@ -4281,6 +4352,10 @@ pub mod product_method {
     pub const BOAT_SET_RUNTIME_SETTINGS: &str = "boat.setRuntimeSettings";
     pub const CONVERSATION_WEBHOOK_CURSOR: &str = "conversation.webhook.cursor";
     pub const CONVERSATION_WEBHOOK_RESET: &str = "conversation.webhook.reset";
+    pub const LOGINS_STATUS: &str = "logins.status";
+    pub const LOGINS_SAVE: &str = "logins.save";
+    pub const LOGINS_REMOVE: &str = "logins.remove";
+    pub const LOGINS_SET_DEVICE: &str = "logins.setDevice";
     pub const VOICE_STATUS: &str = "voice.status";
     pub const VOICE_SAVE_KEY: &str = "voice.saveKey";
     pub const VOICE_FORGET_KEY: &str = "voice.forgetKey";
@@ -4475,7 +4550,7 @@ pub fn wire_shape_product_session_ready(value: &Value) -> bool {
         }) && object.get("methods").is_some_and(|field| {
             let _ = field;
             field.as_array().is_some_and(|items| {
-                items.len() <= 116
+                items.len() <= 120
                     && items.iter().all(|item| {
                         let _ = item;
                         item.is_string()
@@ -4612,6 +4687,10 @@ pub const PRODUCT_READY_METHODS: &[&str] = &[
     "boat.setRuntimeSettings",
     "conversation.webhook.cursor",
     "conversation.webhook.reset",
+    "logins.status",
+    "logins.save",
+    "logins.remove",
+    "logins.setDevice",
     "voice.status",
     "voice.saveKey",
     "voice.forgetKey",
@@ -4687,6 +4766,10 @@ pub fn action_for_method(method: &str) -> Option<&'static str> {
         | "boat.setRuntimeSettings"
         | "conversation.webhook.cursor"
         | "conversation.webhook.reset"
+        | "logins.status"
+        | "logins.save"
+        | "logins.remove"
+        | "logins.setDevice"
         | "voice.status"
         | "voice.saveKey"
         | "voice.forgetKey" => Some("credential.manage"),

@@ -119,8 +119,12 @@ fn operation(operation: &GrantOperation) -> Value {
             agents,
             commands,
             max_lease,
+            logins,
         } => {
             let mut value = json!({"op": "grant"});
+            if *logins {
+                value["acceptLogins"] = json!(true);
+            }
             match agents {
                 Some(Agents::All) => value["agents"] = json!("*"),
                 Some(Agents::Named(names)) => {
@@ -138,6 +142,7 @@ fn operation(operation: &GrantOperation) -> Value {
         }
         GrantOperation::UngrantAgent(agent) => json!({"op": "ungrant", "agent": agent.as_str()}),
         GrantOperation::UngrantCommands => json!({"op": "ungrant", "commands": true}),
+        GrantOperation::UngrantLogins => json!({"op": "ungrant", "acceptLogins": true}),
         GrantOperation::UngrantAll => json!({"op": "ungrant", "all": true}),
     }
 }

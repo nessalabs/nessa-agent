@@ -68,7 +68,7 @@ pub(super) async fn dispatch(
                 ) else {
                     return failure(&frame.id, "invalid_request");
                 };
-                service.save_claude_sign_in(params.token).await
+                save_claude_login(state, session, params.token).await
             }
             _ => return failure(&frame.id, "invalid_request"),
         };
@@ -87,6 +87,34 @@ pub(super) async fn dispatch(
             Err(error) => failure(&frame.id, code(error)),
         }
     }
+}
+/// Keep `token`, which `claude setup-token` minted, as the saved Claude
+/// login (issue #1260): Saved logins records the change, and tells Boat so
+/// its idle VM connections are served again with it.
+#[cfg(unix)]
+async fn save_claude_login(
+    state: &ProductRouteState,
+    session: &AuthenticatedSession,
+    token: String,
+) -> Result<(), Failure> {
+    let token = zeroize::Zeroizing::new(token);
+    // Boat serves it as one line of a VM's input: only the token alphabet.
+    crate::workspaces::domain::ClaudeSignIn::new((*token).clone())?;
+    let login =
+        nessa_protocol::lease::Login::new((*token).clone()).map_err(|_| Failure::InvalidInput)?;
+    let logins = state.logins.as_ref().ok_or(Failure::Storage)?;
+    logins
+        .save(
+            super::logins::caller(session),
+            nessa_protocol::agents::AgentId::Claude,
+            login,
+        )
+        .await
+        .map(|_| ())
+        .map_err(|error| match error {
+            crate::logins::application::LoginsError::VaultLocked => Failure::Locked,
+            _ => Failure::Storage,
+        })
 }
 #[cfg(unix)]
 fn code(error: Failure) -> &'static str {

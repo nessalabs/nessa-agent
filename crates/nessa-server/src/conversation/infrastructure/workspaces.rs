@@ -32,6 +32,8 @@ pub(crate) struct ThreadWorkspaces {
     /// protocol, as on an SSH host.
     pub(crate) installer: Arc<HostInstaller>,
     pub(crate) environments: Mutex<BTreeMap<String, Arc<SshEnvironment>>>,
+    /// Asked for each VM lease's saved login; `None` hands none.
+    pub(crate) logins: Option<Arc<dyn super::ssh_environment::SavedLogins>>,
 }
 /// The VM's copy being chosen, and installed if it must be, on a task of
 /// its own: an install outlasts the opening that started it.
@@ -273,7 +275,7 @@ impl ThreadEnvironments for ThreadWorkspaces {
         if environments.len() >= MAX_RETAINED_ENVIRONMENTS {
             return Err(ConversationError::Unavailable);
         }
-        let environment = Arc::new(SshEnvironment::workspace(
+        let environment = SshEnvironment::workspace(
             Arc::new(Connector {
                 service: self.service.clone(),
                 channels: self.channels.clone(),
@@ -286,7 +288,11 @@ impl ThreadEnvironments for ThreadWorkspaces {
                 },
             }),
             self.audit.clone(),
-        ));
+        );
+        let environment = Arc::new(match &self.logins {
+            Some(logins) => environment.with_logins(logins.clone()),
+            None => environment,
+        });
         environments.insert(conversation.to_string(), environment.clone());
         Ok(environment)
     }

@@ -1,11 +1,12 @@
 //! Lease frames: their wire shape, the hello another build is recognised by,
 //! and the bounds on a frame and the bytes it carries.
 use super::{
-    decode, encode, fingerprint, read_hello, ArtifactReadRefusal, Cleanup, Collection,
-    CollectionRefusal, CommandEnd, Data, EndingCause, FetchOutcome, FetchRefusal, FromEnvironment,
-    GrantRefusal, GrantedTerms, Hello, MachineDisk, MachineReport, PublishRefusal, Sandbox,
-    StagedArtifact, ToEnvironment, MAX_DATA_BYTES, MAX_FRAME_BYTES, MAX_MACHINE_DISKS,
-    MAX_MACHINE_FIGURE, MAX_MACHINE_TEXT_BYTES,
+    decode, encode, fingerprint, login_variables, read_hello, ArtifactReadRefusal, Cleanup,
+    Collection, CollectionRefusal, CommandEnd, Data, EndingCause, FetchOutcome, FetchRefusal,
+    FromEnvironment, GrantRefusal, GrantedTerms, Hello, InvalidLogin, Login, MachineDisk,
+    MachineReport, PublishRefusal, Sandbox, StagedArtifact, ToEnvironment, MAX_DATA_BYTES,
+    MAX_FRAME_BYTES, MAX_LOGIN_BYTES, MAX_MACHINE_DISKS, MAX_MACHINE_FIGURE,
+    MAX_MACHINE_TEXT_BYTES,
 };
 use crate::pairing::FrameReader;
 use std::collections::BTreeMap;
@@ -33,6 +34,7 @@ fn every_frame_round_trips_and_names_its_lease() {
             lease: "l".into(),
             channel: 1,
             environment: BTreeMap::from([("ANTHROPIC_MODEL".into(), "m".into())]),
+            login: None,
         },
         ToEnvironment::Input {
             lease: "l".into(),
@@ -122,6 +124,7 @@ fn every_frame_round_trips_and_names_its_lease() {
                 sandbox: Sandbox::HarnessDefault,
                 timeout_ms: None,
                 lease_ms: None,
+                takes_login: false,
             },
         },
         FromEnvironment::Granted {
@@ -130,6 +133,7 @@ fn every_frame_round_trips_and_names_its_lease() {
                 sandbox: Sandbox::None,
                 timeout_ms: Some(30_000),
                 lease_ms: None,
+                takes_login: false,
             },
         },
         FromEnvironment::Refused {
@@ -151,6 +155,7 @@ fn every_frame_round_trips_and_names_its_lease() {
                 sandbox: Sandbox::HarnessDefault,
                 timeout_ms: None,
                 lease_ms: Some(3_600_000),
+                takes_login: false,
             },
         },
         FromEnvironment::Ending {
@@ -239,6 +244,47 @@ fn every_frame_round_trips_and_names_its_lease() {
     }
 }
 
+/// A start carries the agent's saved login only when it has one, never a
+/// variable name, and the login is never printed.
+#[test]
+fn a_start_carries_a_login_by_value_and_never_prints_it() {
+    let login = Login::new("sk-ant-oat01-abc".into()).unwrap();
+    let start = ToEnvironment::Start {
+        lease: "l".into(),
+        channel: 1,
+        environment: BTreeMap::new(),
+        login: Some(login.clone()),
+    };
+    assert_eq!(
+        serde_json::to_value(&start).unwrap(),
+        serde_json::json!({"type": "start", "lease": "l", "channel": 1, "environment": {}, "login": "sk-ant-oat01-abc"})
+    );
+    assert!(!format!("{start:?}").contains("sk-ant"));
+    let decoded: ToEnvironment = decode(&body(&encode(&start).unwrap())).unwrap();
+    assert_eq!(decoded, start);
+    let none = ToEnvironment::Start {
+        lease: "l".into(),
+        channel: 1,
+        environment: BTreeMap::new(),
+        login: None,
+    };
+    assert_eq!(
+        serde_json::to_value(&none).unwrap(),
+        serde_json::json!({"type": "start", "lease": "l", "channel": 1, "environment": {}})
+    );
+    for bad in ["", "has space", "line\nbreak"] {
+        assert_eq!(Login::new(bad.into()), Err(InvalidLogin));
+    }
+    assert_eq!(
+        Login::new("x".repeat(MAX_LOGIN_BYTES + 1)),
+        Err(InvalidLogin)
+    );
+    assert_eq!(
+        login_variables(crate::agents::AgentId::Claude).first(),
+        Some(&"CLAUDE_CODE_OAUTH_TOKEN")
+    );
+}
+
 /// A grant asks for its sandbox by name, and its answer says the terms
 /// granted: a harness's carries no timeout, a command's its narrowed one.
 #[test]
@@ -259,12 +305,13 @@ fn a_grant_names_its_sandbox_and_its_answer_the_granted_terms() {
             sandbox: Sandbox::HarnessDefault,
             timeout_ms: None,
             lease_ms: None,
+            takes_login: false,
         },
     })
     .unwrap();
     assert_eq!(
         harness,
-        serde_json::json!({"type": "granted", "lease": "l", "terms": {"sandbox": "harnessDefault"}})
+        serde_json::json!({"type": "granted", "lease": "l", "terms": {"sandbox": "harnessDefault", "takesLogin": false}})
     );
     let command = serde_json::to_value(FromEnvironment::Granted {
         lease: "l".into(),
@@ -272,12 +319,13 @@ fn a_grant_names_its_sandbox_and_its_answer_the_granted_terms() {
             sandbox: Sandbox::None,
             timeout_ms: Some(5_000),
             lease_ms: None,
+            takes_login: false,
         },
     })
     .unwrap();
     assert_eq!(
         command,
-        serde_json::json!({"type": "granted", "lease": "l", "terms": {"sandbox": "none", "timeoutMs": 5000}})
+        serde_json::json!({"type": "granted", "lease": "l", "terms": {"sandbox": "none", "timeoutMs": 5000, "takesLogin": false}})
     );
     // A harness's lease may be granted a duration, which the environment
     // ends it past, and says so.
@@ -287,12 +335,13 @@ fn a_grant_names_its_sandbox_and_its_answer_the_granted_terms() {
             sandbox: Sandbox::HarnessDefault,
             timeout_ms: None,
             lease_ms: Some(60_000),
+            takes_login: false,
         },
     })
     .unwrap();
     assert_eq!(
         limited,
-        serde_json::json!({"type": "granted", "lease": "l", "terms": {"sandbox": "harnessDefault", "leaseMs": 60000}})
+        serde_json::json!({"type": "granted", "lease": "l", "terms": {"sandbox": "harnessDefault", "leaseMs": 60000, "takesLogin": false}})
     );
     assert_eq!(
         serde_json::to_value(FromEnvironment::Ending {

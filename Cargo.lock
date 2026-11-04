@@ -3750,6 +3750,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "uuid",
+ "zeroize",
 ]
 
 [[package]]

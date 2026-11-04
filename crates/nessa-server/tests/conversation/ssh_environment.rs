@@ -101,6 +101,7 @@ impl HarnessLauncher for Echo {
         &self,
         _agent: &str,
         _environment: &BTreeMap<String, String>,
+        _login: Option<&nessa_protocol::lease::Login>,
         _publish_point: Option<&str>,
     ) -> Result<HarnessProcess, AgentError> {
         let (input, mut harness_in) = duplex(4096);
@@ -351,6 +352,7 @@ impl LeaseConnector for Connector {
                             let granted = encode(&FromEnvironment::Granted {
                                 lease,
                                 terms: WireTerms {
+                                    takes_login: false,
                                     sandbox: Sandbox::HarnessDefault,
                                     timeout_ms: None,
                                     lease_ms: None,
@@ -392,6 +394,7 @@ impl LeaseConnector for Connector {
                                 FromEnvironment::Granted {
                                     lease: lease.clone(),
                                     terms: WireTerms {
+                                        takes_login: false,
                                         sandbox: Sandbox::None,
                                         timeout_ms: Some(timeout_ms),
                                         lease_ms: None,
@@ -432,6 +435,7 @@ impl LeaseConnector for Connector {
                             } => Some(FromEnvironment::Granted {
                                 lease,
                                 terms: WireTerms {
+                                    takes_login: false,
                                     sandbox: Sandbox::None,
                                     timeout_ms: Some(timeout_ms),
                                     lease_ms: None,
@@ -515,6 +519,7 @@ impl LeaseConnector for Connector {
                             } => Some(FromEnvironment::Granted {
                                 lease,
                                 terms: WireTerms {
+                                    takes_login: false,
                                     sandbox: Sandbox::None,
                                     timeout_ms: Some(timeout_ms),
                                     lease_ms: None,
@@ -565,6 +570,7 @@ impl LeaseConnector for Connector {
                                 said.push(FromEnvironment::Granted {
                                     lease: lease.clone(),
                                     terms: WireTerms {
+                                        takes_login: false,
                                         sandbox: Sandbox::HarnessDefault,
                                         timeout_ms: None,
                                         lease_ms: None,
@@ -617,6 +623,7 @@ impl LeaseConnector for Connector {
                                 said.push(FromEnvironment::Granted {
                                     lease: lease.clone(),
                                     terms: WireTerms {
+                                        takes_login: false,
                                         sandbox: Sandbox::HarnessDefault,
                                         timeout_ms: None,
                                         lease_ms: None,
@@ -1135,6 +1142,7 @@ async fn frames_naming_nothing_held_are_dropped_with_evidence() {
     let granted = serde_json::to_vec(&FromEnvironment::Granted {
         lease: "never-asked".into(),
         terms: WireTerms {
+            takes_login: false,
             sandbox: Sandbox::HarnessDefault,
             timeout_ms: None,
             lease_ms: None,
@@ -1870,6 +1878,7 @@ async fn a_stop_is_waited_for_through_every_step_the_host_takes() {
             &self,
             _agent: &str,
             _environment: &BTreeMap<String, String>,
+            _login: Option<&nessa_protocol::lease::Login>,
             _publish_point: Option<&str>,
         ) -> Result<HarnessProcess, AgentError> {
             let (input, _harness_in) = duplex(64);
@@ -3613,7 +3622,7 @@ async fn a_revoked_link_ends_each_lease_as_revoked_and_closes_once_they_are_ende
         )
         .await
         .unwrap();
-    let mut harness = link.start(id.as_str(), BTreeMap::new()).unwrap();
+    let mut harness = link.start(id.as_str(), BTreeMap::new(), None).unwrap();
     harness.input.write_all(b"ping").await.unwrap();
     assert_eq!(read_some(&mut harness.output).await, b"ping");
     assert!(link.revoke(Duration::from_secs(30)), "this call revoked it");
@@ -3624,7 +3633,7 @@ async fn a_revoked_link_ends_each_lease_as_revoked_and_closes_once_they_are_ende
     // From the moment it is revoked, nothing more is started or published
     // on it: the host is ending every lease.
     assert_eq!(
-        link.start(id.as_str(), BTreeMap::new()).err(),
+        link.start(id.as_str(), BTreeMap::new(), None).err(),
         Some(super::link::StartError::Closed)
     );
     assert_eq!(
@@ -4413,6 +4422,110 @@ async fn a_workspace_connection_is_let_go_only_while_nothing_uses_it() {
         "the next lease connects again"
     );
     again.hold.end(LeaseEndCause::Closed).await;
+}
+
+/// A saved login reaches the harness only under a lease the host's owner
+/// lets take one: the gateway asks for it then, once per lease, and never
+/// otherwise.
+#[tokio::test]
+async fn a_saved_login_is_asked_for_and_sent_only_where_the_host_takes_one() {
+    struct Remembering {
+        stopped: Arc<AtomicUsize>,
+        logins: Mutex<Vec<Option<String>>>,
+    }
+    impl HarnessLauncher for Remembering {
+        fn workspace(&self) -> &str {
+            "/srv/work"
+        }
+        fn runs(&self, agent: &str) -> bool {
+            agent == "claude"
+        }
+        fn sandboxes(&self) -> SandboxProfiles {
+            SandboxProfiles::HARNESS_DEFAULT
+        }
+        fn launch(
+            &self,
+            agent: &str,
+            environment: &BTreeMap<String, String>,
+            login: Option<&nessa_protocol::lease::Login>,
+            publish_point: Option<&str>,
+        ) -> Result<HarnessProcess, AgentError> {
+            self.logins
+                .lock()
+                .unwrap()
+                .push(login.map(|login| login.expose().to_owned()));
+            Echo {
+                stopped: self.stopped.clone(),
+            }
+            .launch(agent, environment, None, publish_point)
+        }
+    }
+    #[derive(Default)]
+    struct Saved {
+        asked: Mutex<Vec<(String, nessa_protocol::agents::AgentId)>>,
+    }
+    impl super::SavedLogins for Saved {
+        fn login<'a>(
+            &'a self,
+            environment: &'a EnvironmentRef,
+            agent: nessa_protocol::agents::AgentId,
+        ) -> crate::conversation::application::EnvironmentFuture<
+            'a,
+            Option<nessa_protocol::lease::Login>,
+        > {
+            self.asked.lock().unwrap().push((environment.name(), agent));
+            Box::pin(async {
+                Some(nessa_protocol::lease::Login::new("sk-ant-oat-x".into()).unwrap())
+            })
+        }
+    }
+    let stopped = Arc::new(AtomicUsize::new(0));
+    let launcher = Arc::new(Remembering {
+        stopped: stopped.clone(),
+        logins: Mutex::new(Vec::new()),
+    });
+    let connector = Connector::with(Reach::Serving, launcher.clone(), stopped);
+    let saved = Arc::new(Saved::default());
+    let environment =
+        environment(connector.clone(), Arc::new(Audit::default())).with_logins(saved.clone());
+    async fn start(
+        environment: &SshEnvironment,
+    ) -> crate::conversation::application::EnvironmentLease {
+        let (binding, host) = binding(true);
+        let opened = environment
+            .open(&lease(), &terms("claude"), binding)
+            .await
+            .unwrap_or_else(|_| panic!("granted"));
+        let host = host.lock().unwrap().clone().unwrap();
+        let HarnessProcess {
+            mut input,
+            mut output,
+            ..
+        } = host.start(HarnessLaunch::default()).unwrap();
+        // Its first bytes back mean the host launched it.
+        input.write_all(b"hi").await.unwrap();
+        assert_eq!(read_some(output.as_mut()).await, b"hi");
+        opened
+    }
+    // SSH with no entry takes the owner's saved logins.
+    let _first = start(&environment).await;
+    assert_eq!(
+        *saved.asked.lock().unwrap(),
+        [("devbox".to_owned(), nessa_protocol::agents::AgentId::Claude)]
+    );
+    assert_eq!(
+        *launcher.logins.lock().unwrap(),
+        [Some("sk-ant-oat-x".to_owned())]
+    );
+    // The host's owner takes them back: the next lease asks for none and
+    // its harness starts with none.
+    *connector.grants.0.lock().unwrap() = Some(PeerGrant::everything().without_logins());
+    let _second = start(&environment).await;
+    assert_eq!(saved.asked.lock().unwrap().len(), 1);
+    assert_eq!(
+        *launcher.logins.lock().unwrap(),
+        [Some("sk-ant-oat-x".to_owned()), None]
+    );
 }
 
 /// After a Claude sign-in change (ADR 501), a conversation's idle workspace

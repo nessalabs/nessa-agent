@@ -53,12 +53,6 @@ mod tests {
         async fn read(&self) -> Result<Option<ClaudeSignIn>, Failure> {
             self.0.clone()
         }
-        async fn save(&self, _: ClaudeSignIn) -> Result<(), Failure> {
-            unreachable!("a serve never saves")
-        }
-        async fn clear(&self) -> Result<(), Failure> {
-            unreachable!("a serve never clears")
-        }
     }
 
     #[tokio::test]

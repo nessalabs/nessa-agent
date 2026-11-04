@@ -58,9 +58,6 @@ pub(crate) trait Settings: Send + Sync {
 pub(crate) trait ClaudeSignIns: Send + Sync {
     /// `None` when none is saved.
     async fn read(&self) -> Result<Option<ClaudeSignIn>, Failure>;
-    /// Replaces any saved one.
-    async fn save(&self, sign_in: ClaudeSignIn) -> Result<(), Failure>;
-    async fn clear(&self) -> Result<(), Failure>;
 }
 #[async_trait]
 pub(crate) trait Assignments: Send + Sync {
@@ -196,8 +193,7 @@ pub(crate) struct Rested {
 pub(crate) struct Workspaces {
     pub(crate) settings: Arc<dyn Settings>,
     pub(crate) runtime_settings: Arc<dyn RuntimeSettings>,
-    pub(crate) claude_sign_ins: Arc<dyn ClaudeSignIns>,
-    /// Counts each save or clear of the Claude sign-in, for whoever must
+    /// Counts each change of the Claude sign-in, for whoever must
     /// serve VMs again after one (`claude_sign_in_changed`).
     claude_sign_in_changes: tokio::sync::watch::Sender<u64>,
     provider: Arc<dyn Provider>,
@@ -215,12 +211,10 @@ impl Workspaces {
         assignments: Arc<dyn Assignments>,
         recovery: Arc<dyn RecoveryAudit>,
         runtime_settings: Arc<dyn RuntimeSettings>,
-        claude_sign_ins: Arc<dyn ClaudeSignIns>,
     ) -> Self {
         Self {
             settings,
             runtime_settings,
-            claude_sign_ins,
             claude_sign_in_changes: tokio::sync::watch::Sender::new(0),
             image: None,
             provider,
@@ -243,20 +237,13 @@ impl Workspaces {
         self.save(BoatConnection::new(token, "nessa".into(), image)?)
             .await
     }
-    /// Keep `token`, which `claude setup-token` minted, for every later
-    /// serve of a Boat VM.
-    pub(crate) async fn save_claude_sign_in(&self, token: String) -> Result<(), Failure> {
-        self.claude_sign_ins.save(ClaudeSignIn::new(token)?).await?;
-        self.claude_sign_in_changed();
-        Ok(())
-    }
-    /// Forget the Boat connection and the Claude sign-in made for it.
+    /// Forget the Boat connection. The Claude sign-in stays: it is the
+    /// saved Claude login every other machine is handed too, removed from
+    /// Settings › Saved logins.
     pub(crate) async fn disconnect(&self) -> Result<(), Failure> {
-        self.claude_sign_ins.clear().await?;
-        self.claude_sign_in_changed();
         self.settings.clear().await
     }
-    /// How many times the Claude sign-in has been saved or cleared here.
+    /// How many times the Claude sign-in was said to have changed.
     #[cfg(test)]
     pub(crate) fn claude_sign_in_changes(&self) -> u64 {
         *self.claude_sign_in_changes.borrow()
@@ -265,7 +252,9 @@ impl Workspaces {
     pub(crate) fn claude_sign_in_changed_watch(&self) -> tokio::sync::watch::Receiver<u64> {
         self.claude_sign_in_changes.subscribe()
     }
-    fn claude_sign_in_changed(&self) {
+    /// Say the Claude sign-in changed: also when Settings › Saved logins
+    /// saved or removed it.
+    pub(crate) fn claude_sign_in_changed(&self) {
         self.claude_sign_in_changes
             .send_modify(|changes| *changes += 1);
     }

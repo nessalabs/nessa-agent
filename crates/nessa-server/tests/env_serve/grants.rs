@@ -15,12 +15,12 @@ fn pin(byte: u8) -> [u8; 44] {
     [byte; 44]
 }
 
-/// A peer with no entry is shown as, and changed from, everything for SSH
-/// and nothing for a dialed gateway. Whether it may lease is the lease
+/// A peer with no entry is shown as, and changed from, everything for SSH,
+/// its saved logins included, and nothing for a dialed gateway. Whether it may lease is the lease
 /// policy's (`lease_policy.rs`), held to the same answer there.
 #[test]
 fn a_peer_without_an_entry_is_shown_as_its_defaults() {
-    assert_eq!(unwritten(&Peer::Ssh), PeerGrant::everything());
+    assert_eq!(unwritten(&Peer::Ssh), PeerGrant::everything().with_logins());
     assert_eq!(
         unwritten(&Peer::Gateway { pin: pin(1) }),
         PeerGrant::nothing()
