@@ -1,5 +1,6 @@
 use super::CliError;
 use nessa_client_core::local_product::MAX_SAFE_TIMESTAMP;
+use serde_json::Value;
 /// Verified identity returned by the gateway handshake, not command arguments.
 pub struct GatewayIdentity {
     pub gateway_id: String,
@@ -24,11 +25,24 @@ pub struct BrowserToken {
     pub secret: String,
 }
 
+/// One product call. `Refused` keeps the handler's code. `Unconfirmed` is a
+/// sent change whose answer never arrived; `code` is the settlement the
+/// transport already published. `Transport` is any other failure to complete
+/// the exchange, and it carries no server text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GatewayCallError {
+    Refused { code: String },
+    Unconfirmed { code: String },
+    Transport(CliError),
+}
+
 /// The CLI consumes authenticated gateway operations, never local registry storage.
 pub trait Gateway {
     fn identity(&self) -> &GatewayIdentity;
     fn health(&mut self) -> Result<(), CliError>;
     fn issue(&mut self, request: TokenRequest) -> Result<BrowserToken, CliError>;
+    /// Send one manifest method. The gateway's Cedar check is the authorization.
+    fn call(&mut self, method: &str, params: Value) -> Result<Value, GatewayCallError>;
 }
 
 /// Request a browser credential with an optional TTL, capped by the caller's expiry.

@@ -1,28 +1,92 @@
 //! CLI command interpretation over the shared bounded local product transport.
-use crate::cli::application::{BrowserToken, CliError, Gateway, GatewayIdentity, TokenRequest};
+use super::surface_call_budget;
+use crate::cli::application::{
+    BrowserToken, CliError, Gateway, GatewayCallError, GatewayIdentity, TokenRequest,
+};
 use nessa_auth::application::dto::CredentialMetadataDto;
-use nessa_client_core::local_product::{LocalProduct, LocalProductError};
+use nessa_client_core::local_product::{
+    ExchangeError, LocalProduct, LocalProductError, ProductCaller,
+};
+use nessa_protocol::product::generated::VaultErrorCode;
 use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
-use std::{net::SocketAddr, path::Path};
+use std::{
+    net::SocketAddr,
+    path::{Path, PathBuf},
+    time::Duration,
+};
 pub struct LocalGateway {
-    client: LocalProduct,
+    client: Option<LocalProduct>,
     identity: GatewayIdentity,
+    address: SocketAddr,
+    credential: PathBuf,
+    caller: ProductCaller,
+    wait: Duration,
 }
 impl LocalGateway {
     pub fn connect(address: SocketAddr, credential_file: &Path) -> Result<Self, CliError> {
-        let client = LocalProduct::connect(address, credential_file).map_err(problem)?;
-        let found = client.identity();
-        let identity = GatewayIdentity {
-            gateway_id: found.gateway_id.clone(),
-            organization_id: found.organization_id.clone(),
-            principal_id: found.principal_id.clone(),
-            expires_at: found.expires_at,
+        Self::connect_as(address, credential_file, ProductCaller::CLI)
+    }
+    /// [`connect`] as `caller`. The credential file is whose grants Cedar sees.
+    pub fn connect_as(
+        address: SocketAddr,
+        credential_file: &Path,
+        caller: ProductCaller,
+    ) -> Result<Self, CliError> {
+        Self::open(
+            address,
+            credential_file.to_path_buf(),
+            caller,
+            surface_call_budget(),
+        )
+    }
+    /// `wait` is how long one surface call may run before its outcome is unknown.
+    pub fn open(
+        address: SocketAddr,
+        credential: PathBuf,
+        caller: ProductCaller,
+        wait: Duration,
+    ) -> Result<Self, CliError> {
+        let mut gateway = Self {
+            client: None,
+            identity: GatewayIdentity {
+                gateway_id: String::new(),
+                organization_id: String::new(),
+                principal_id: String::new(),
+                expires_at: None,
+            },
+            address,
+            credential,
+            caller,
+            wait,
         };
-        Ok(Self { client, identity })
+        gateway.live()?;
+        Ok(gateway)
+    }
+    fn live(&mut self) -> Result<&mut LocalProduct, CliError> {
+        if self.client.is_none() {
+            let client = LocalProduct::connect_as(self.address, &self.credential, self.caller)
+                .map_err(problem)?;
+            let found = client.identity();
+            self.identity = GatewayIdentity {
+                gateway_id: found.gateway_id.clone(),
+                organization_id: found.organization_id.clone(),
+                principal_id: found.principal_id.clone(),
+                expires_at: found.expires_at,
+            };
+            self.client = Some(client);
+        }
+        self.client.as_mut().ok_or(CliError::Transport)
+    }
+    fn retire_if_unknown(&mut self) {
+        if self.client.as_ref().is_some_and(LocalProduct::retired) {
+            self.client = None;
+        }
     }
     fn request<T: DeserializeOwned>(&mut self, method: &str, params: Value) -> Result<T, CliError> {
-        self.client.request(method, params).map_err(problem)
+        let result = self.live()?.request(method, params).map_err(problem);
+        self.retire_if_unknown();
+        result
     }
 }
 fn decode<T: DeserializeOwned>(value: Value) -> Result<T, CliError> {
@@ -41,6 +105,9 @@ fn problem(error: LocalProductError) -> CliError {
         LocalProductError::Unauthorized => CliError::Unauthorized,
         LocalProductError::Denied => CliError::Denied,
         LocalProductError::Capacity => CliError::Capacity,
+        LocalProductError::Vault(VaultErrorCode::VaultChangeNotConfirmed) => {
+            CliError::VaultChangeNotConfirmed
+        }
         LocalProductError::Rejected | LocalProductError::Vault(_) => CliError::Rejected,
     }
 }
@@ -54,6 +121,23 @@ impl Gateway for LocalGateway {
             return Err(CliError::Unhealthy);
         }
         Ok(())
+    }
+    fn call(&mut self, method: &str, params: Value) -> Result<Value, GatewayCallError> {
+        let wait = self.wait;
+        let outcome = {
+            let client = self.live().map_err(GatewayCallError::Transport)?;
+            client.exchange(method, params, wait)
+        };
+        self.retire_if_unknown();
+        outcome.map_err(|error| match error {
+            ExchangeError::Refused { code } => GatewayCallError::Refused { code },
+            ExchangeError::Session(LocalProductError::Vault(
+                VaultErrorCode::VaultChangeNotConfirmed,
+            )) => GatewayCallError::Unconfirmed {
+                code: VaultErrorCode::VaultChangeNotConfirmed.as_str().to_owned(),
+            },
+            ExchangeError::Session(error) => GatewayCallError::Transport(problem(error)),
+        })
     }
     fn issue(&mut self, request: TokenRequest) -> Result<BrowserToken, CliError> {
         let result: Value = self.request("credential.issue", json!({

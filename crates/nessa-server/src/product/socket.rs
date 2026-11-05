@@ -5084,6 +5084,51 @@ mod tests {
         );
     }
 
+    /// `nessa call` and `nessa mcp` prepare this same request. Without
+    /// `server.read`, Cedar refuses it before the health handler runs.
+    #[tokio::test]
+    async fn a_surface_call_without_the_grant_is_forbidden_by_cedar() {
+        let (state, authority) = fixture(MembershipRole::Member);
+        {
+            let mut held = authority.snapshot.lock().unwrap();
+            let organization = held.credential.organization_id().clone();
+            held.credential = Credential::new(
+                CredentialId::new("credential").unwrap(),
+                PrincipalId::new("principal").unwrap(),
+                organization.clone(),
+                AudienceId::new("gateway").unwrap(),
+                100,
+                200,
+                vec![Grant::new(
+                    Action::new("conversation.read").unwrap(),
+                    Resource::new(organization, ResourceId::new("gateway-resource").unwrap()),
+                )],
+            )
+            .unwrap();
+        }
+        let session = authenticate(&state).await;
+        let prepared = crate::cli::application::prepare("server.health", &json!({}))
+            .expect("server.health is a surface method");
+        let mut frame = request("surface", &prepared.method);
+        frame.params = prepared.params;
+        let OutgoingMessage::Response(denied) = dispatch(&state, &session, frame).await else {
+            panic!("response expected")
+        };
+        assert!(!denied.ok);
+        assert_eq!(denied.error.unwrap().code, "forbidden");
+
+        let (state, _) = fixture(MembershipRole::Member);
+        let session = authenticate(&state).await;
+        let prepared = crate::cli::application::prepare("server.health", &json!({})).unwrap();
+        let mut frame = request("surface", &prepared.method);
+        frame.params = prepared.params;
+        let OutgoingMessage::Response(allowed) = dispatch(&state, &session, frame).await else {
+            panic!("response expected")
+        };
+        assert!(allowed.ok);
+        assert_eq!(allowed.payload.unwrap()["uptimeMs"], 42);
+    }
+
     #[tokio::test]
     async fn member_cannot_reach_credential_handler_even_with_grant() {
         let (state, _) = fixture(MembershipRole::Member);

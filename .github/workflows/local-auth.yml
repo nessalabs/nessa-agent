@@ -454,8 +454,8 @@ jobs:
       matrix:
         partition: [server-conversation, server-other]
     runs-on: windows-latest
-    # The test step's 70 plus at most 4 minutes of setup.
-    timeout-minutes: 80
+    # The test step's 90 plus at most 4 minutes of setup.
+    timeout-minutes: 95
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/native-crypto
@@ -480,10 +480,11 @@ jobs:
           RUST_TEST_NOCAPTURE: "1"
         # The step compiles before it tests. Cargo.lock is part of the cache
         # key, so a change that edits it compiles the graph cold: about 25
-        # minutes on this runner, then 20 to 25 of tests for server-other.
-        # 70 covers that; a warm run ends in under 30.
+        # minutes on this runner. Run 41947356093 was still inside
+        # server-other's 2349 tests when a 70-minute deadline fired, with
+        # 2283 passed. 90 covers that cold path. A warm run ends in under 35.
         run: node scripts/cargo-test-parallel.mjs --concurrency 2 --partition ${{ matrix.partition }} -- -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-client-core -p nessa-device-client -p nessa-sdk -p nessa-timer -p nessa-vault
-        timeout-minutes: 70
+        timeout-minutes: 90
 
   local-auth:
     needs: changes

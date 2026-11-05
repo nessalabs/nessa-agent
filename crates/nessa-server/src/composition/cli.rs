@@ -2,13 +2,14 @@
 use super::local_auth::SystemClock;
 use crate::{
     cli::{
-        application::{issue_token, Gateway},
-        infrastructure::LocalGateway,
+        application::{invoke, issue_token, refusal_body, Gateway},
+        infrastructure::{serve_mcp, LocalGateway},
     },
     core::{local_timings, RunError},
     env::Environment,
 };
 use nessa_auth::application::ports::Clock;
+use nessa_client_core::local_product::ProductCaller;
 use nessa_gateway_endpoint::{
     application::DiscoverGatewayEndpoint, infrastructure::FileEndpointDiscovery,
 };
@@ -19,6 +20,44 @@ use std::{
     path::PathBuf,
 };
 use uuid::Uuid;
+
+/// Send one catalog method and print the handler's JSON.
+pub(super) fn call(
+    method: &str,
+    params: &str,
+    credential_file: Option<PathBuf>,
+) -> Result<(), RunError> {
+    let params = serde_json::from_str(params)
+        .map_err(|_| failure("call --params must be one JSON value"))?;
+    let mut gateway = connect(credential_file, ProductCaller::CLI)?;
+    finish(invoke(&mut gateway, method, params))
+}
+
+/// Serve the catalog as MCP tools on stdin and stdout, as the nessa-mcp credential.
+pub(super) fn mcp(credential_file: Option<PathBuf>) -> Result<(), RunError> {
+    let mut gateway = connect(credential_file, ProductCaller::MCP)?;
+    serve_mcp(&mut gateway, std::io::stdin().lock(), std::io::stdout())
+        .map_err(|error| failure(error.to_string()))
+}
+
+fn finish(
+    outcome: Result<serde_json::Value, crate::cli::application::CallFailure>,
+) -> Result<(), RunError> {
+    match outcome {
+        Ok(payload) => {
+            serde_json::to_writer(io::stdout().lock(), &payload)
+                .and_then(|()| writeln!(io::stdout()).map_err(serde_json::Error::io))
+                .map_err(|_| failure("call output failed"))?;
+            Ok(())
+        }
+        Err(error) => {
+            serde_json::to_writer(io::stdout().lock(), &refusal_body(&error))
+                .and_then(|()| writeln!(io::stdout()).map_err(serde_json::Error::io))
+                .map_err(|_| failure("call output failed"))?;
+            Err(failure(error.to_string()))
+        }
+    }
+}
 
 pub(super) fn online(
     token: bool,
@@ -110,6 +149,24 @@ pub(super) fn online(
     })?;
     Ok(())
 }
+
+fn connect(
+    credential_file: Option<PathBuf>,
+    caller: ProductCaller,
+) -> Result<LocalGateway, RunError> {
+    let config = Environment::from_system()?;
+    let address = gateway_address(&config)?;
+    let file = credential_file
+        .or_else(|| {
+            config
+                .auth_directory
+                .as_ref()
+                .map(|root| root.join(format!("surfaces/{}.token", caller.instance)))
+        })
+        .ok_or_else(|| failure("local credential directory unavailable"))?;
+    LocalGateway::connect_as(address, &file, caller).map_err(|error| failure(error.to_string()))
+}
+
 fn gateway_address(config: &Environment) -> Result<SocketAddr, RunError> {
     let address: SocketAddr = config
         .listen_addr()

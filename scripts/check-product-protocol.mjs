@@ -598,6 +598,7 @@ const contractTests = spawnSync(
     "scripts/product-protocol/phone-wire.test.mjs",
     "scripts/product-protocol/rust-wire-shapes.test.mjs",
     "scripts/product-protocol/protocol-generation.test.mjs",
+    "scripts/product-protocol/surface-parity.test.mjs",
   ],
   { cwd: root, stdio: "inherit" },
 )

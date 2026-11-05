@@ -1,4 +1,4 @@
-use super::{after_dispatch, LocalProduct, LocalProductError, LocalProductIdentity};
+use super::{after_dispatch, ExchangeError, LocalProduct, LocalProductError, LocalProductIdentity};
 use nessa_protocol::product::generated::VaultStatus;
 use serde_json::{json, Value};
 use std::{
@@ -41,6 +41,7 @@ fn peer(
             },
             deadline: Instant::now() + Duration::from_secs(2),
             next_id: 0,
+            retired: false,
         },
         worker,
     )
@@ -311,4 +312,41 @@ fn bounded_valid_notices_preserve_correlation_and_change_uncertainty() {
         drop(client);
         worker.join().unwrap();
     }
+}
+
+#[test]
+fn a_timed_out_exchange_is_not_read_by_the_next_call() {
+    let (mut client, worker) = peer(move |mut socket, request| {
+        assert_eq!(request["method"], "server.health");
+        thread::sleep(Duration::from_millis(200));
+        let _ = socket.send(Message::Text(
+            json!({"type":"res","id":request["id"],"ok":true,"payload":{"ok":true,"late":true}})
+                .to_string()
+                .into(),
+        ));
+        assert!(
+            socket.read().is_err(),
+            "the timed-out connection accepts no later call"
+        );
+    });
+    let timed_out = client
+        .exchange("server.health", json!({}), Duration::from_millis(30))
+        .expect_err("the wait is the call's budget");
+    assert!(
+        matches!(
+            timed_out,
+            ExchangeError::Session(LocalProductError::TimedOut | LocalProductError::Transport)
+        ),
+        "{timed_out:?}"
+    );
+    assert!(client.retired());
+    let again = client
+        .exchange("agents.install", json!({}), Duration::from_secs(1))
+        .expect_err("a retired connection is not reused");
+    assert!(matches!(
+        again,
+        ExchangeError::Session(LocalProductError::Transport)
+    ));
+    drop(client);
+    worker.join().unwrap();
 }

@@ -27,6 +27,7 @@ const genericOutputs = [
 const productOutputs = [
   "crates/nessa-auth/src/domain/pairing/value_objects/wire_values.rs",
   "protocol/product/pairing-values.generated.json",
+  "protocol/product/surface-catalog.generated.json",
   "packages/nessa-client/src/generated/product.ts",
   "crates/nessa-protocol/src/product/generated.rs",
   "crates/nessa-protocol/src/product_contract/generated.rs",
@@ -172,6 +173,20 @@ test("a method with no declared grant is refused before any artifact is written"
       generate(path, "generate-product-protocol"),
     )
     assert.match(result.stderr, /mcpServers\.list has no declared grant/)
+  }))
+
+test("a method with no surface entry is refused before any artifact is written", () =>
+  fixture((path) => {
+    edit(path, "protocol/product/manifest.json", (manifest) => {
+      manifest.methods["example.extra"] = { params: null, grant: "server.read" }
+    })
+    const result = unchanged(path, productOutputs, () =>
+      generate(path, "generate-product-protocol"),
+    )
+    assert.match(
+      result.stderr,
+      /example\.extra has no CLI or MCP entry and is not excluded/,
+    )
   }))
 
 test("current supported generators publish complete outputs", () =>
