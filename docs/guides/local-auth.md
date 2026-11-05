@@ -81,7 +81,11 @@ using the administrative commands below before issuing again.
 
 `doctor` checks configuration loading, private credential access, authenticated
 connection and authorized health. It writes JSON to stdout and returns nonzero
-on failure. Diagnostics do not include credentials. Online commands default to
+on failure. Diagnostics do not include credentials. The same JSON carries
+`timings`: the last few launch-to-gateway-ready and message-to-first-token
+durations recorded on this machine (latest and median), or `none yet` when
+nothing has been recorded. Those files live in the stage log directory beside
+`host.log` and `gateway.log`. They are not sent anywhere. Online commands default to
 local mode; `--local` is optional. They use the same `NESSA_*` namespace, stage,
 host and port as the server, and cannot send local credentials to remote hosts.
 Use `--credential-file /absolute/path` for an existing owner credential.

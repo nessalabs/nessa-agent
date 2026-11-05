@@ -2162,6 +2162,7 @@ impl ConversationService {
                 super::SubmissionMode::Queue,
                 false,
                 Some(selection),
+                None,
             )
             .await
         {
