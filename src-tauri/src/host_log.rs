@@ -11,6 +11,10 @@
 //! launch still shows it. A file that has reached the cap at open is renamed
 //! aside; this run appends to a new `host.log`.
 //!
+//! The first gateway-ready mark is also written as one millisecond line in
+//! `launch-to-gateway-ready-ms` beside that log. `nessa doctor` reads it.
+//! The file stays on this machine.
+//!
 //! ```text
 //!   main ──install──▶ stderr
 //!                 └── host.log  (default data logs, then the real namespace)
@@ -43,6 +47,53 @@ static STARTED: OnceLock<Instant> = OnceLock::new();
 static WINDOW_AT: Mutex<Option<Duration>> = Mutex::new(None);
 static GATEWAY_AT: Mutex<Option<Duration>> = Mutex::new(None);
 static ACTIVE: OnceLock<LogWriter> = OnceLock::new();
+
+/// How many launch samples the file keeps. Doctor shows the last eight.
+const LAUNCH_KEPT: usize = 32;
+/// Doctor reads this name (`nessa_server` `LAUNCH_TO_GATEWAY_READY_FILE`).
+pub const LAUNCH_TO_GATEWAY_READY_FILE: &str = "launch-to-gateway-ready-ms";
+
+/// Where a launch-to-gateway-ready duration is kept. Composition builds the
+/// file; tests substitute their own. The startup path does not open the file
+/// itself.
+pub trait LaunchTimingStore: Send + Sync {
+    fn record(&self, elapsed_ms: u64);
+}
+
+/// The file beside `host.log`. The mutex covers the whole rewrite.
+pub struct FileLaunchTimings {
+    path: PathBuf,
+    gate: Mutex<()>,
+}
+
+impl FileLaunchTimings {
+    pub fn at(path: PathBuf) -> Self {
+        Self {
+            path,
+            gate: Mutex::new(()),
+        }
+    }
+}
+
+impl LaunchTimingStore for FileLaunchTimings {
+    fn record(&self, elapsed_ms: u64) {
+        let _held = lock(&self.gate);
+        if let Err(error) = append_launch_sample(&self.path, elapsed_ms) {
+            tracing::warn!(
+                target: "nessa.timing",
+                %error,
+                "could not record launch to gateway ready"
+            );
+        }
+    }
+}
+
+/// Keeps nothing. Used when the service namespace has no log directory.
+pub struct UnavailableLaunchTimings;
+
+impl LaunchTimingStore for UnavailableLaunchTimings {
+    fn record(&self, _elapsed_ms: u64) {}
+}
 
 /// What a cheap look at the executable path can say about the bundle.
 ///
@@ -187,7 +238,11 @@ pub fn window_shown(label: &str) {
 }
 
 /// The first time the gateway phase becomes ready.
-pub fn gateway_ready() {
+///
+/// The file write does not run on the caller. When a Tokio runtime is
+/// present it goes to a blocking thread; otherwise the caller is already
+/// outside one and the store is asked directly.
+pub fn gateway_ready(timings: Arc<dyn LaunchTimingStore>) {
     let since_start = elapsed();
     let first = {
         let mut slot = lock(&GATEWAY_AT);
@@ -218,6 +273,75 @@ pub fn gateway_ready() {
             "startup timing"
         ),
     }
+    let elapsed_ms = milliseconds(timing.since_process_start);
+    let write = move || timings.record(elapsed_ms);
+    match tokio::runtime::Handle::try_current() {
+        Ok(handle) => {
+            handle.spawn_blocking(write);
+        }
+        Err(_) => write(),
+    }
+}
+
+fn append_launch_sample(path: &Path, ms: u64) -> io::Result<()> {
+    if path
+        .symlink_metadata()
+        .is_ok_and(|meta| meta.file_type().is_symlink())
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            "timing file is a symlink",
+        ));
+    }
+    let existing = match fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => String::new(),
+        Err(error) => return Err(error),
+    };
+    let mut values: Vec<u64> = existing
+        .lines()
+        .filter_map(|line| line.trim().parse().ok())
+        .collect();
+    let skip = values.len().saturating_sub(LAUNCH_KEPT - 1);
+    values = values.into_iter().skip(skip).collect();
+    values.push(ms);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("launch");
+    let ticket = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
+    let temporary = path.with_file_name(format!(".{name}.{ticket}.{}.tmp", std::process::id()));
+    {
+        let mut file = fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(&temporary)?;
+        set_private_file(&file)?;
+        for value in &values {
+            writeln!(file, "{value}")?;
+        }
+        file.sync_all()?;
+    }
+    fs::rename(&temporary, path)?;
+    Ok(())
+}
+
+#[cfg(unix)]
+fn set_private_file(file: &fs::File) -> io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    file.set_permissions(fs::Permissions::from_mode(0o600))
+}
+
+#[cfg(not(unix))]
+fn set_private_file(_file: &fs::File) -> io::Result<()> {
+    Ok(())
 }
 
 fn nessa_target(target: &str) -> bool {
@@ -461,6 +585,15 @@ fn set_private(_path: &Path) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Arc, Mutex};
+
+    struct MemoryLaunch(Arc<Mutex<Vec<u64>>>);
+
+    impl LaunchTimingStore for MemoryLaunch {
+        fn record(&self, elapsed_ms: u64) {
+            self.0.lock().unwrap().push(elapsed_ms);
+        }
+    }
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
 
@@ -672,12 +805,15 @@ mod tests {
         let writer = LogWriter::new();
         writer.open(&directory.path().join("logs")).expect("open");
         let subscriber = tracing_subscriber::registry().with(nessa_layer(writer.clone()));
+        let recorded = Arc::new(Mutex::new(Vec::new()));
+        let timings: Arc<dyn LaunchTimingStore> = Arc::new(MemoryLaunch(Arc::clone(&recorded)));
         tracing::subscriber::with_default(subscriber, || {
             window_shown("main");
-            gateway_ready();
-            gateway_ready();
+            gateway_ready(Arc::clone(&timings));
+            gateway_ready(Arc::clone(&timings));
             window_shown("main");
         });
+        assert_eq!(recorded.lock().unwrap().len(), 1);
         let text = read(&logs(&directory.path().join("logs")));
         assert_eq!(text.matches("window shown").count(), 2, "{text}");
         assert_eq!(
@@ -694,5 +830,46 @@ mod tests {
         assert!(text.contains("since_window_shown_ms"), "{text}");
         *lock(&WINDOW_AT) = None;
         *lock(&GATEWAY_AT) = None;
+    }
+
+    #[test]
+    fn launch_samples_keep_the_newest_durations_and_ignore_a_symlink() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let path = directory.path().join(LAUNCH_TO_GATEWAY_READY_FILE);
+        for ms in 1..=LAUNCH_KEPT + 2 {
+            append_launch_sample(&path, ms as u64).expect("append");
+        }
+        let text = read(&path);
+        let numbers: Vec<u64> = text.lines().map(|line| line.parse().unwrap()).collect();
+        assert_eq!(numbers.len(), LAUNCH_KEPT);
+        assert_eq!(numbers[0], 3);
+        assert_eq!(*numbers.last().unwrap(), (LAUNCH_KEPT + 2) as u64);
+        #[cfg(unix)]
+        {
+            let target = directory.path().join("elsewhere");
+            fs::write(&target, "1\n").unwrap();
+            let link = directory.path().join("linked");
+            std::os::unix::fs::symlink(&target, &link).unwrap();
+            assert!(append_launch_sample(&link, 9).is_err());
+            assert_eq!(fs::read_to_string(target).unwrap(), "1\n");
+        }
+    }
+
+    #[test]
+    fn concurrent_launch_records_keep_every_sample() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let timings = FileLaunchTimings::at(directory.path().join("launch"));
+        let timings = &timings;
+        std::thread::scope(|scope| {
+            for ms in 0..8u64 {
+                scope.spawn(move || timings.record(ms));
+            }
+        });
+        let mut numbers: Vec<u64> = read(&directory.path().join("launch"))
+            .lines()
+            .map(|line| line.parse().unwrap())
+            .collect();
+        numbers.sort_unstable();
+        assert_eq!(numbers, (0..8).collect::<Vec<_>>());
     }
 }

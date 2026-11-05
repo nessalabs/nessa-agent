@@ -18,6 +18,12 @@ use std::sync::Arc;
 /// the provider or queued for a later boundary. Dropping the submitter
 /// without that call drops the check. [`Agent::enqueue`](crate::application::agent_execution::agents::Agent::enqueue)
 /// does not call it.
+///
+/// A notice attached with [`Self::when_admitted`] is not part of that
+/// identity either. A fresh queue admission calls it once, while the
+/// scheduler lock is still held, before the runner is started. A recovered
+/// retry does not call it. [`Agent::steer`](crate::application::agent_execution::agents::Agent::steer)
+/// does not call it.
 #[derive(Clone)]
 pub struct Submitter {
     /// Caller attribution verified by the host. Audit, scheduling and queue
@@ -33,6 +39,21 @@ pub struct Submitter {
     /// The approval mode the turn must run at, checked at admission against
     /// the mode the agent would run it at. Not compared on retry.
     pub(crate) approval_mode: Option<ApprovalMode>,
+    /// Called once on a fresh queue admission, before the runner starts.
+    /// Not compared on retry. Absent when the host has nothing to arm.
+    pub(crate) admission: Option<Arc<dyn AdmissionNotice>>,
+}
+
+/// Told once that a queued turn was admitted, before its runner can publish.
+///
+/// The scheduler lock is held. The notice returns without waiting and without
+/// calling back into the agent; a call that takes the scheduler lock again
+/// deadlocks the admission. A panic fails that admission task. A recovered
+/// retry of the same submission does not call it, and neither does
+/// [`Agent::steer`](crate::application::agent_execution::agents::Agent::steer).
+pub trait AdmissionNotice: Send + Sync {
+    /// The turn is queued and its runner has not been started.
+    fn admitted(&self);
 }
 
 /// Host decision after a steered turn's input is saved and before the
@@ -94,6 +115,7 @@ impl Submitter {
             initiation,
             after_save: None,
             approval_mode: None,
+            admission: None,
         }
     }
 
@@ -133,6 +155,19 @@ impl Submitter {
         self
     }
 
+    /// Run `notice` once when this submission is freshly queued.
+    ///
+    /// Replaces a notice already attached. The call happens on the admission
+    /// task, still holding the scheduler lock, before
+    /// [`Agent::enqueue`](crate::application::agent_execution::agents::Agent::enqueue)
+    /// starts the runner, so a reader cannot observe the turn's reply before
+    /// the notice has returned. A recovered retry does not call it. The notice
+    /// is not part of retry identity.
+    pub fn when_admitted(mut self, notice: Arc<dyn AdmissionNotice>) -> Self {
+        self.admission = Some(notice);
+        self
+    }
+
     /// Whether a turn the agent would run at `mode` is one this submitter
     /// may be admitted for.
     pub(crate) fn admits(&self, mode: Option<ApprovalMode>) -> Result<(), AgentError> {
@@ -159,6 +194,7 @@ impl fmt::Debug for Submitter {
             .field("initiation", &self.initiation)
             .field("after_save", &self.after_save.is_some())
             .field("approval_mode", &self.approval_mode)
+            .field("admission", &self.admission.is_some())
             .finish()
     }
 }

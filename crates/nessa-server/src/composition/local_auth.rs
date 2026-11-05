@@ -716,6 +716,17 @@ pub(super) async fn product_state(
             product = product.with_mcp_authorization(authorization);
         }
     }
+    // The auth directory's parent is the stage namespace. Timings sit in its
+    // logs folder, the same place `nessa doctor` reads, and stay on this machine.
+    if let Some(namespace) = directory.parent() {
+        product = product.with_local_timings(Arc::new(
+            crate::product::turn_timing::FileFirstTokenStore::new(
+                namespace
+                    .join("logs")
+                    .join(crate::core::local_timings::MESSAGE_TO_FIRST_TOKEN_FILE),
+            ),
+        ));
+    }
     Ok(LocalProduct {
         routes: product,
         webhook_delivery,

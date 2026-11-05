@@ -5,7 +5,7 @@ use crate::{
         application::{invoke, issue_token, refusal_body, Gateway},
         infrastructure::{serve_mcp, LocalGateway},
     },
-    core::RunError,
+    core::{local_timings, RunError},
     env::Environment,
 };
 use nessa_auth::application::ports::Clock;
@@ -65,18 +65,59 @@ pub(super) fn online(
     ttl_seconds: Option<u64>,
 ) -> Result<(), RunError> {
     let config = Environment::from_system()?;
-    let address = gateway_address(&config)?;
-    let file = credential_file
+    let timings = (!token).then(|| {
+        local_timings::doctor_timings(
+            Environment::log_directory_from_system()
+                .ok()
+                .flatten()
+                .as_deref(),
+        )
+    });
+    let address = match gateway_address(&config) {
+        Ok(address) => address,
+        Err(error) => {
+            return if let Some(timings) = timings {
+                finish_doctor(json!({
+                    "ok": false,
+                    "backend": "local",
+                    "authenticated": false,
+                    "healthy": false,
+                    "error": error.to_string(),
+                    "timings": timings,
+                }))
+            } else {
+                Err(error)
+            };
+        }
+    };
+    let file = match credential_file
         .or_else(|| {
             config
                 .auth_directory
                 .as_ref()
                 .map(|root| root.join("surfaces/nessa-cli.token"))
         })
-        .ok_or_else(|| failure("local credential directory unavailable"))?;
+        .ok_or_else(|| failure("local credential directory unavailable"))
+    {
+        Ok(file) => file,
+        Err(error) => {
+            return if let Some(timings) = timings {
+                finish_doctor(json!({
+                    "ok": false,
+                    "backend": "local",
+                    "authenticated": false,
+                    "healthy": false,
+                    "error": error.to_string(),
+                    "timings": timings,
+                }))
+            } else {
+                Err(error)
+            };
+        }
+    };
     let connected = LocalGateway::connect(address, &file);
     if !token {
-        let report = match connected {
+        let mut report = match connected {
             Ok(mut gateway) => match gateway.health() {
                 Ok(()) => {
                     json!({"ok":true,"backend":"local","stage":config.stage.as_str(),"gateway":address.to_string(),"authenticated":true,"healthy":true,"gatewayId":gateway.identity().gateway_id,"principalId":gateway.identity().principal_id})
@@ -89,14 +130,10 @@ pub(super) fn online(
                 json!({"ok":false,"backend":"local","authenticated":false,"healthy":false,"error":error.to_string()})
             }
         };
-        serde_json::to_writer(io::stdout().lock(), &report)
-            .map_err(|_| failure("doctor output failed"))?;
-        writeln!(io::stdout()).map_err(|_| failure("doctor output failed"))?;
-        return if report["ok"] == true {
-            Ok(())
-        } else {
-            Err(failure("doctor found a local gateway problem"))
-        };
+        if let Some(object) = report.as_object_mut() {
+            object.insert("timings".to_owned(), timings.unwrap_or_else(|| json!({})));
+        }
+        return finish_doctor(report);
     }
     let mut gateway = connected.map_err(|error| failure(error.to_string()))?;
     let request_id = Uuid::new_v4().to_string();
@@ -112,6 +149,7 @@ pub(super) fn online(
     })?;
     Ok(())
 }
+
 fn connect(
     credential_file: Option<PathBuf>,
     caller: ProductCaller,
@@ -135,21 +173,32 @@ fn gateway_address(config: &Environment) -> Result<SocketAddr, RunError> {
         .parse()
         .map_err(|_| failure("invalid local gateway address"))?;
     match config.gateway_endpoint_storage() {
-        Some((root, directory)) => {
-            DiscoverGatewayEndpoint::new(&FileEndpointDiscovery::new(root, directory))
-                .execute()
-                .map_err(|error| failure(error.to_string()))?
-                .map(|endpoint| {
-                    endpoint
-                        .web_socket_url()
-                        .trim_start_matches("ws://")
-                        .parse()
-                        .map_err(|_| failure("invalid published gateway address"))
-                })
-                .transpose()
-                .map(|found| found.unwrap_or(address))
-        }
+        Some((root, directory)) => Ok(DiscoverGatewayEndpoint::new(&FileEndpointDiscovery::new(
+            root, directory,
+        ))
+        .execute()
+        .map_err(|error| failure(error.to_string()))?
+        .map(|endpoint| {
+            endpoint
+                .web_socket_url()
+                .trim_start_matches("ws://")
+                .parse()
+                .map_err(|_| failure("invalid published gateway address"))
+        })
+        .transpose()?
+        .unwrap_or(address)),
         None => Ok(address),
+    }
+}
+
+fn finish_doctor(report: serde_json::Value) -> Result<(), RunError> {
+    serde_json::to_writer(io::stdout().lock(), &report)
+        .map_err(|_| failure("doctor output failed"))?;
+    writeln!(io::stdout()).map_err(|_| failure("doctor output failed"))?;
+    if report["ok"] == true {
+        Ok(())
+    } else {
+        Err(failure("doctor found a local gateway problem"))
     }
 }
 

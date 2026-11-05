@@ -1193,6 +1193,7 @@ impl ConversationService {
                     message,
                     mode,
                     true,
+                    None,
                 )
                 .await;
             if submitted.is_ok() {

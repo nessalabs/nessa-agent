@@ -59,7 +59,8 @@ src/                      composition root (`main.tsx`, `store.ts`)
   diagnostics/            development page-console forwarding
 src-tauri/src/
   diagnostics.rs          debug-only page-to-terminal diagnostic bridge
-  host_log.rs             desktop startup log (`{data}/logs/host.log`)
+  host_log.rs             desktop startup log (`{data}/logs/host.log`) and the
+                          launch-to-gateway-ready samples beside it
   host_refusal.rs         typed startup refusals shared with the page
   host_refusal/copy.rs    startup copy consumed by refusals and the load document
   links/policy.rs         navigation decisions; links.rs owns the opener/plugin
@@ -2273,6 +2274,11 @@ The `nessa-server` crate builds the `nessa` executable. `cli/entrypoint/` parses
 commands, `cli/application/` coordinates token requests through its gateway port,
 and `cli/infrastructure/` implements the bounded local WebSocket adapter.
 `composition/cli.rs` wires the adapter, clock, identities and stdout/stderr.
+`nessa doctor` adds `timings` from `core/local_timings.rs`, read from the log
+directory on this machine and not sent. The gateway appends first-token samples
+through `product/turn_timing.rs`.
+`scripts/measure-subscription-bytes.mjs` counts `conversation.view` bytes for
+one streamed turn over a local proxy shaped like a slow link.
 `install-agent` is parsed here too — its agent name is read into `AgentName` at
 this edge, so nothing further in holds a name it still has to doubt — and
 `composition/install_command.rs` runs it on a blocking thread, because the work

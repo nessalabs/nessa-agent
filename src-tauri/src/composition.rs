@@ -277,7 +277,20 @@ impl HostDependencies {
                         clock.clone(),
                     ),
                     gateway::infrastructure::login_shell_path(),
-                    gateway::infrastructure::startup_events(app),
+                    gateway::infrastructure::startup_events(
+                        app,
+                        service_namespace
+                            .as_ref()
+                            .map(|namespace| {
+                                Arc::new(crate::host_log::FileLaunchTimings::at(
+                                    namespace
+                                        .log_directory()
+                                        .join(crate::host_log::LAUNCH_TO_GATEWAY_READY_FILE),
+                                ))
+                                    as Arc<dyn crate::host_log::LaunchTimingStore>
+                            })
+                            .unwrap_or_else(|| Arc::new(crate::host_log::UnavailableLaunchTimings)),
+                    ),
                     gateway::infrastructure::reconciliation_ids(),
                     reconciliation_audit,
                     clock,
