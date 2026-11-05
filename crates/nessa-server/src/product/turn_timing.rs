@@ -87,7 +87,9 @@ impl FirstTokenStore for UnavailableFirstTokenStore {
 struct PendingTurn {
     conversation_id: String,
     execution_id: String,
-    started_ms: u64,
+    /// `None` after the duration was recorded, so a later retry of the same
+    /// send does not start another clock against text that is already there.
+    started_ms: Option<u64>,
 }
 
 pub(crate) struct TurnTimings {
@@ -107,8 +109,9 @@ impl TurnTimings {
         }
     }
 
-    /// Start, or restart, the clock for this conversation's execution.
-    /// Nothing is written.
+    /// Arm the clock for a newly admitted send. A second call for the same
+    /// conversation and execution leaves the original clock, including after
+    /// its duration was already recorded. Nothing is written.
     pub(crate) fn sent(&self, conversation_id: &str, execution_id: &str, started_ms: u64) {
         if !self.store.available() {
             return;
@@ -190,16 +193,16 @@ fn note_sent(
     execution_id: &str,
     started_ms: u64,
 ) -> Vec<PendingTurn> {
-    let mut next: Vec<PendingTurn> = entries
-        .into_iter()
-        .filter(|pending| {
-            pending.conversation_id != conversation_id || pending.execution_id != execution_id
-        })
-        .collect();
+    if entries.iter().any(|pending| {
+        pending.conversation_id == conversation_id && pending.execution_id == execution_id
+    }) {
+        return entries;
+    }
+    let mut next = entries;
     next.push(PendingTurn {
         conversation_id: conversation_id.to_owned(),
         execution_id: execution_id.to_owned(),
-        started_ms,
+        started_ms: Some(started_ms),
     });
     let skip = next.len().saturating_sub(PENDING_LIMIT);
     next.into_iter().skip(skip).collect()
@@ -214,17 +217,17 @@ fn take_ready(
     let mut durations = Vec::new();
     let remaining = entries
         .into_iter()
-        .filter(|pending| {
+        .map(|mut pending| {
             let this_conversation = pending.conversation_id == conversation_id
+                && pending.started_ms.is_some()
                 && ready
                     .iter()
                     .any(|execution| *execution == pending.execution_id);
             if this_conversation {
-                durations.push(now_ms.saturating_sub(pending.started_ms));
-                false
-            } else {
-                true
+                durations.push(now_ms.saturating_sub(pending.started_ms.unwrap_or(now_ms)));
+                pending.started_ms = None;
             }
+            pending
         })
         .collect();
     (remaining, durations)
@@ -303,7 +306,7 @@ mod tests {
     }
 
     #[test]
-    fn the_first_text_records_the_wait_once_and_a_restart_replaces_the_clock() {
+    fn the_first_text_records_the_wait_once_and_a_retry_keeps_the_clock() {
         let untouched = note_sent(Vec::new(), "conversation", "turn", 100);
         let (left, durations) = take_ready(untouched, "conversation", &[], 250);
         assert!(durations.is_empty());
@@ -311,7 +314,7 @@ mod tests {
         let entries = note_sent(Vec::new(), "conversation", "turn", 100);
         let (left, durations) = take_ready(entries, "conversation", &["turn"], 250);
         assert_eq!(durations, vec![150]);
-        assert!(left.is_empty());
+        assert_eq!(left[0].started_ms, None);
         let restarted = note_sent(
             note_sent(Vec::new(), "conversation", "turn", 100),
             "conversation",
@@ -319,7 +322,17 @@ mod tests {
             400,
         );
         let (_, durations) = take_ready(restarted, "conversation", &["turn"], 450);
-        assert_eq!(durations, vec![50]);
+        assert_eq!(durations, vec![350]);
+    }
+
+    #[test]
+    fn a_retry_after_the_reply_does_not_start_another_clock() {
+        let entries = note_sent(Vec::new(), "conversation", "turn", 100);
+        let (left, durations) = take_ready(entries, "conversation", &["turn"], 180);
+        assert_eq!(durations, vec![80]);
+        let retried = note_sent(left, "conversation", "turn", 200);
+        let (_, durations) = take_ready(retried, "conversation", &["turn"], 210);
+        assert!(durations.is_empty());
     }
 
     #[test]
@@ -332,9 +345,11 @@ mod tests {
         );
         let (left, durations) = take_ready(entries, "one", &["turn"], 180);
         assert_eq!(durations, vec![80]);
-        assert_eq!(left.len(), 1);
-        assert_eq!(left[0].conversation_id, "two");
-        assert_eq!(left[0].started_ms, 300);
+        let other = left
+            .iter()
+            .find(|pending| pending.conversation_id == "two")
+            .expect("the other conversation keeps its clock");
+        assert_eq!(other.started_ms, Some(300));
         let (_, durations) = take_ready(left, "two", &["turn"], 350);
         assert_eq!(durations, vec![50]);
     }
@@ -393,6 +408,6 @@ mod tests {
         timings.record_ready("conversation", &["turn"], 4);
         wait_until(&store.finished, 1);
         assert!(store.samples.lock().unwrap().is_empty());
-        assert!(lock(&timings.pending).is_empty());
+        assert_eq!(lock(&timings.pending)[0].started_ms, None);
     }
 }

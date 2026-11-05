@@ -10,6 +10,32 @@ export const throttleProfile = {
   frameBoundBytes: 65536,
 }
 
+/**
+ * When each message is fully delivered on a link whose one-way delay is
+ * `propagationMs` and whose downlink serializes at `downBytesPerSecond`.
+ *
+ * Serialization of downlink bytes is queued. Propagation starts when that
+ * message's own bytes are on the wire, so it overlaps the next message's
+ * serialization. Uplink messages wait only for propagation; they do not
+ * queue behind the downlink. `nowMs` is when this batch is offered.
+ *
+ * Returns one delivery time per message, in the same order.
+ */
+export function linkDeliveryMs(
+  messages,
+  { propagationMs, downBytesPerSecond, nowMs = 0, downFreeAt = nowMs },
+) {
+  let freeAt = downFreeAt
+  const at = messages.map((message) => {
+    if (message.direction === "up") return nowMs + propagationMs
+    const transmitMs = (message.bytes / downBytesPerSecond) * 1000
+    const started = Math.max(nowMs, freeAt)
+    freeAt = started + transmitMs
+    return freeAt + propagationMs
+  })
+  return { at, downFreeAt: freeAt }
+}
+
 export function summarizeViews(frames, agentTextBytes) {
   const totalBytes = frames.reduce((sum, frame) => sum + frame.bytes, 0)
   const maxFrameBytes = frames.reduce((max, frame) => Math.max(max, frame.bytes), 0)

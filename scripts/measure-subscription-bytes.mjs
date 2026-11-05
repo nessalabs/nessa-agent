@@ -41,7 +41,11 @@ import {
   startGateway,
   stopGateway,
 } from "./conversation-smoke/runtime.mjs"
-import { summarizeViews, throttleProfile } from "./subscription-byte-summary.mjs"
+import {
+  linkDeliveryMs,
+  summarizeViews,
+  throttleProfile,
+} from "./subscription-byte-summary.mjs"
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)))
 const historyTurns = 12
@@ -332,33 +336,47 @@ async function throttleProxy(upstreamUrl) {
   assert.ok(address && typeof address === "object")
   const views = []
   let captureFrom = null
-  let chain = Promise.resolve()
-  const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+  // Downlink serialization only. Propagation is not on this clock: each
+  // message waits its own one-way delay after its bytes have been serialized,
+  // overlapping the next message. Uplink does not use this clock.
+  let downFreeAt = 0
+  const propagationMs = throttleProfile.rttMs / 2
   server.on("connection", (downstream) => {
     const upstream = new WebSocket(new URL("/session", upstreamUrl).href)
     const queued = []
-    const forward = (step) => {
-      chain = chain.then(step).catch(() => {})
+    const after = (at, send) => {
+      const wait = Math.max(0, at - Date.now())
+      setTimeout(send, wait)
     }
     downstream.on("message", (bytes, binary) => {
-      forward(async () => {
-        await delay(throttleProfile.rttMs / 2)
+      const size = Buffer.isBuffer(bytes) ? bytes.length : Buffer.byteLength(bytes)
+      const planned = linkDeliveryMs([{ direction: "up", bytes: size }], {
+        propagationMs,
+        downBytesPerSecond: throttleProfile.downBytesPerSecond,
+        nowMs: Date.now(),
+        downFreeAt,
+      })
+      after(planned.at[0], () => {
         if (upstream.readyState === WebSocket.OPEN) upstream.send(bytes, { binary })
         else queued.push([bytes, binary])
       })
     })
     upstream.on("open", () => {
-      forward(async () => {
-        for (const [bytes, binary] of queued.splice(0)) upstream.send(bytes, { binary })
-      })
+      for (const [bytes, binary] of queued.splice(0)) upstream.send(bytes, { binary })
     })
     upstream.on("error", () => {})
     downstream.on("error", () => {})
     upstream.on("message", (bytes, binary) => {
       const buffer = Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes)
-      forward(async () => {
-        await delay(throttleProfile.rttMs / 2)
-        await delay((buffer.length / throttleProfile.downBytesPerSecond) * 1000)
+      const now = Date.now()
+      const planned = linkDeliveryMs([{ direction: "down", bytes: buffer.length }], {
+        propagationMs,
+        downBytesPerSecond: throttleProfile.downBytesPerSecond,
+        nowMs: now,
+        downFreeAt,
+      })
+      downFreeAt = planned.downFreeAt
+      after(planned.at[0], () => {
         record(buffer)
         if (downstream.readyState === WebSocket.OPEN) downstream.send(buffer, { binary })
       })

@@ -462,6 +462,11 @@ async fn answer(
                     )
                     .await
                     .map_err(mutation_failure)?;
+                // `delivery` is present only for the call that enqueued the
+                // turn. A retry of an accepted send leaves it empty and must
+                // not move a clock that is already running, or start one
+                // against text that is already in the view.
+                let newly_admitted = submitted.delivery.is_some();
                 let receipt = match submitted.delivery {
                     Some(receipt) => receipt,
                     None => {
@@ -470,7 +475,7 @@ async fn answer(
                             .await?
                     }
                 };
-                if frame.method == "conversation.send" {
+                if frame.method == "conversation.send" && newly_admitted {
                     state
                         .local_timings
                         .sent(&id.to_string(), &timed_execution, started_ms);

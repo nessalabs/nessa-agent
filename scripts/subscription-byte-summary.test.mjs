@@ -1,7 +1,11 @@
 import assert from "node:assert/strict"
 import { describe, it } from "node:test"
 
-import { summarizeViews, throttleProfile } from "./subscription-byte-summary.mjs"
+import {
+  linkDeliveryMs,
+  summarizeViews,
+  throttleProfile,
+} from "./subscription-byte-summary.mjs"
 
 describe("subscription byte summary", () => {
   it("totals frames and compares them with the turn's own text", () => {
@@ -32,6 +36,19 @@ describe("subscription byte summary", () => {
     assert.equal(summary.totalBytesPerTextByte, null)
     assert.equal(throttleProfile.rttMs, 150)
     assert.equal(throttleProfile.downBytesPerSecond, 200_000)
+  })
+
+  it("overlaps one-way delay and serializes only the downlink", () => {
+    const down = Array.from({ length: 10 }, () => ({ direction: "down", bytes: 100 }))
+    const planned = linkDeliveryMs([...down, { direction: "up", bytes: 1000 }], {
+      propagationMs: 75,
+      downBytesPerSecond: 200_000,
+      nowMs: 0,
+    })
+    assert.equal(planned.at[0], 75.5)
+    assert.equal(planned.at[9], 80)
+    assert.equal(planned.at[10], 75)
+    assert.equal(planned.downFreeAt, 5)
   })
 
   it("reports an empty turn as no frames", () => {
