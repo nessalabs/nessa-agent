@@ -401,6 +401,35 @@ it("skips inert composers when choosing the target", async () => {
   }
 })
 
+it("keeps looking through a flight longer than thirty frames", async () => {
+  host.innerHTML =
+    '<div data-pane-focused><form class="desktop-composer"><textarea aria-label="Ready" /></form></div>'
+  const pane = host.firstElementChild as HTMLElement
+  pane.setAttribute(marks.flying, "")
+  const now = performance.now.bind(performance)
+  let clock = now()
+  performance.now = () => clock
+  const stop = focusInFront(host)
+  try {
+    // Forty frames at 16ms is 640ms: past a 30-frame cap, inside the one-second budget.
+    for (let i = 0; i < 40; i++) {
+      clock += 16
+      await act(async () => animation.runFrame())
+    }
+    expect(caretIn()).not.toBe("Ready")
+    pane.removeAttribute(marks.flying)
+    clock += 16
+    await act(async () => animation.runFrame())
+    expect(caretIn()).not.toBe("Ready")
+    clock += 16
+    await act(async () => animation.runFrame())
+    expect(caretIn()).toBe("Ready")
+  } finally {
+    performance.now = now
+    stop()
+  }
+})
+
 it.each([marks.flying, marks.measuring, arrivalWaitingAttribute])(
   "waits for %s to release before finding its field",
   async (attribute) => {

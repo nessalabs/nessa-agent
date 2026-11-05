@@ -115,9 +115,18 @@ function panelTarget(scope: ParentNode): HTMLElement | null {
 }
 
 /**
- * Puts the caret in what is in front (`caretTarget`), trying for a few frames
- * while a new pane fills in; `done` is told once it has landed, or given up.
- * Returns a function that stops trying.
+ * How long to keep looking for the composer in front. A split's flight is
+ * 340ms (`--desktop-flight` in `styles.css`). Counting frames gives up inside
+ * that flight on a 120Hz display and leaves the caret in the pane that was
+ * left (`focus.test.tsx`, "keeps looking through a flight longer than thirty
+ * frames").
+ */
+const focusBudgetMs = 1000
+
+/**
+ * Puts the caret in what is in front (`caretTarget`), trying until it has
+ * landed or `focusBudgetMs` has passed; `done` is told once it has landed,
+ * or given up. Returns a function that stops trying.
  */
 export function focusInFront(
   scope: ParentNode = document,
@@ -132,12 +141,12 @@ export function focusAfterPaint(
   done: () => void = () => {},
 ): () => void {
   let frame = 0
-  let tries = 0
   let active = true
   const held = document.activeElement
+  const started = performance.now()
   const attempt = () => {
     if (!active) return
-    if (tries++ >= 30) return done()
+    if (performance.now() - started >= focusBudgetMs) return done()
     const field = target()
     if (!field) {
       frame = requestAnimationFrame(attempt)
