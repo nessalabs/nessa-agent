@@ -444,6 +444,10 @@ _ADR 238 › Focus follows the focused pane_; keys in
   Wait for the command's expected pane membership, destination, focus mark and
   composer together, with finite motion finished, within the existing 3 s
   settlement budget. The old pane's caret cannot complete a new-pane command.
+- [ ] **A fast display still lands the caret after a split.** Frames every
+  8ms, the flight still on its own 340ms clock: ⇧⌘N and ⇧⌘\\ leave the caret
+  in the new pane's composer. A search of thirty frames ends inside that
+  flight. _Check:_ `focus.mjs` (`focus-fast-frames`).
 - [ ] **Closing ⌘K without a pick, or Settings, gives focus back** to what
   opened it. _Check:_ `focus.mjs` (`focus-panes`).
 - [ ] **Replacing a workspace layout retires queued focus settlement**: deliver

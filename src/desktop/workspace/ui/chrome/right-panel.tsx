@@ -14,7 +14,11 @@ import { memo, useLayoutEffect, useRef } from "react"
 import { PANEL_MAX_WIDTH, PANEL_MIN_WIDTH } from "../../../model/right-panel"
 import { IconButton } from "../../../ui/icon-button"
 import { ResizeEdge } from "../../../ui/resize-edge"
-import { chatPanelAttribute, focusInFront } from "../../adapters/dom/focus"
+import {
+  chatPanelAttribute,
+  focusInFront,
+  performanceFocusClock,
+} from "../../adapters/dom/focus"
 import { useWorkspaceFrame } from "../workspace-frame"
 import { PanelContent } from "./panel-content"
 import "./right-panel.css"
@@ -87,7 +91,7 @@ export const WorkspacePanel = memo(function WorkspacePanel({
     if (open || !holds.current) return
     holds.current = false
     const scope = panel.current?.closest<HTMLElement>("[data-workspace]")
-    if (scope) return focusInFront(scope)
+    if (scope) return focusInFront(scope, performanceFocusClock)
   }, [open])
   return (
     <>

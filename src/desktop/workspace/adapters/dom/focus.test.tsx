@@ -38,11 +38,24 @@ import {
 import { widgetBodyAttribute } from "../../../widgets"
 import { marks } from "../../../split-panes"
 import {
+  focusBudgetMs,
   focusedPaneAttribute,
+  focusAfterPaint,
   focusInFront,
   retireHomeFocus,
   useFocusFollowsPane,
+  type FocusClock,
 } from "./focus"
+
+/** A clock the test moves. The search reads this, not `performance.now`. */
+function manualClock(): FocusClock & { time: number } {
+  return {
+    time: 0,
+    now() {
+      return this.time
+    },
+  }
+}
 
 /** Panes as the page draws them, each with a composer, and a list beside them. */
 function Page() {
@@ -406,26 +419,68 @@ it("keeps looking through a flight longer than thirty frames", async () => {
     '<div data-pane-focused><form class="desktop-composer"><textarea aria-label="Ready" /></form></div>'
   const pane = host.firstElementChild as HTMLElement
   pane.setAttribute(marks.flying, "")
-  const now = performance.now.bind(performance)
-  let clock = now()
-  performance.now = () => clock
-  const stop = focusInFront(host)
+  const clock = manualClock()
+  const stop = focusInFront(host, clock)
   try {
-    // Forty frames at 16ms is 640ms: past a 30-frame cap, inside the one-second budget.
-    for (let i = 0; i < 40; i++) {
-      clock += 16
+    // Ninety frames at 4ms is 360ms: past the 340ms flight and a 50-frame cap
+    // at 240Hz, inside the one-second budget.
+    for (let i = 0; i < 90; i++) {
+      clock.time += 4
       await act(async () => animation.runFrame())
     }
     expect(caretIn()).not.toBe("Ready")
     pane.removeAttribute(marks.flying)
-    clock += 16
+    clock.time += 4
     await act(async () => animation.runFrame())
     expect(caretIn()).not.toBe("Ready")
-    clock += 16
+    clock.time += 4
     await act(async () => animation.runFrame())
     expect(caretIn()).toBe("Ready")
   } finally {
-    performance.now = now
+    stop()
+  }
+})
+
+it("stops when the target keeps changing past the budget", async () => {
+  host.innerHTML =
+    '<div data-pane-focused><form class="desktop-composer"><textarea aria-label="A" /></form></div>'
+  const form = host.querySelector("form")
+  const clock = manualClock()
+  let made = 0
+  const stop = focusAfterPaint(() => {
+    const next = document.createElement("textarea")
+    next.setAttribute("aria-label", `T${made++}`)
+    form?.replaceChildren(next)
+    return next
+  }, clock)
+  try {
+    await act(async () => animation.runFrame())
+    clock.time = focusBudgetMs
+    await act(async () => animation.runFrame())
+    expect(animation.pending()).toBe(0)
+    expect(caretIn()).not.toBe("T0")
+  } finally {
+    stop()
+  }
+})
+
+it("stops looking once the budget passes with no composer", async () => {
+  host.innerHTML = '<div data-pane-focused><form class="desktop-composer"></form></div>'
+  const clock = manualClock()
+  const stop = focusInFront(host, clock)
+  try {
+    await act(async () => animation.runFrame())
+    expect(animation.pending()).toBe(1)
+    clock.time = focusBudgetMs
+    await act(async () => animation.runFrame())
+    expect(animation.pending()).toBe(0)
+    const late = document.createElement("textarea")
+    late.setAttribute("aria-label", "Late")
+    host.querySelector("form")?.append(late)
+    await act(async () => animation.runFrame())
+    expect(document.activeElement).not.toBe(late)
+    expect(animation.pending()).toBe(0)
+  } finally {
     stop()
   }
 })

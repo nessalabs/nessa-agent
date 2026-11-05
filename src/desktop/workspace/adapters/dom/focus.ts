@@ -121,7 +121,17 @@ function panelTarget(scope: ParentNode): HTMLElement | null {
  * left (`focus.test.tsx`, "keeps looking through a flight longer than thirty
  * frames").
  */
-const focusBudgetMs = 1000
+export const focusBudgetMs = 1000
+
+/** The time the focus search reads. Callers pass one; tests pass their own. */
+export interface FocusClock {
+  now(): number
+}
+
+/** The window's clock, the same one a frame is stamped with. */
+export const performanceFocusClock: FocusClock = {
+  now: () => performance.now(),
+}
 
 /**
  * Puts the caret in what is in front (`caretTarget`), trying until it has
@@ -130,25 +140,36 @@ const focusBudgetMs = 1000
  */
 export function focusInFront(
   scope: ParentNode = document,
+  clock: FocusClock = performanceFocusClock,
   done: () => void = () => {},
 ): () => void {
-  return focusAfterPaint(() => caretTarget(scope), done)
+  return focusAfterPaint(() => caretTarget(scope), clock, done)
 }
 
-/** Resolves a caller-owned target, waits for its paint, then rechecks focus authority. */
+/**
+ * Resolves a caller-owned target, waits for its paint, then rechecks focus
+ * authority. The budget starts on the first attempt, not when the search is
+ * scheduled: a hidden window pauses frames, and a search that woke after a
+ * second would otherwise give up before it looked. A target that is already
+ * there is focused; the budget ends the search only when nothing is there,
+ * or when what is there keeps changing (`focus.test.tsx`).
+ */
 export function focusAfterPaint(
   target: () => HTMLElement | null,
+  clock: FocusClock = performanceFocusClock,
   done: () => void = () => {},
 ): () => void {
   let frame = 0
   let active = true
   const held = document.activeElement
-  const started = performance.now()
+  let started: number | undefined
   const attempt = () => {
     if (!active) return
-    if (performance.now() - started >= focusBudgetMs) return done()
+    const now = clock.now()
+    const begun = (started ??= now)
     const field = target()
     if (!field) {
+      if (now - begun >= focusBudgetMs) return done()
       frame = requestAnimationFrame(attempt)
       return
     }
@@ -160,7 +181,10 @@ export function focusAfterPaint(
       if (inModal(focus) || field.closest("[inert]")) return done()
       // A deliberate focus move during the wait belongs to the person.
       if (focus !== held && focus !== document.body && focus !== field) return done()
-      if (target() !== field) return attempt()
+      if (target() !== field) {
+        if (clock.now() - begun >= focusBudgetMs) return done()
+        return attempt()
+      }
       field.focus({ preventScroll: true })
       done()
     })
@@ -202,6 +226,7 @@ function signature(store: DesktopStore): {
 export function useFocusFollowsPane(
   store: DesktopStore,
   root: RefObject<HTMLElement | null>,
+  clock: FocusClock = performanceFocusClock,
 ): void {
   useEffect(() => {
     const scope = root.current
@@ -231,7 +256,7 @@ export function useFocusFollowsPane(
         if (key !== null && marked?.getAttribute("data-pane-key") !== String(key))
           return null
         return caretTarget(scope)
-      })
+      }, clock)
     }
     /**
      * `moved`: another pane took focus — a key, a split, an agent — so the
@@ -264,7 +289,7 @@ export function useFocusFollowsPane(
     const intoPanel = () => {
       if (inModal(document.activeElement)) return
       stop()
-      stop = focusAfterPaint(() => panelTarget(scope))
+      stop = focusAfterPaint(() => panelTarget(scope), clock)
     }
 
     let seen = signature(store)
@@ -313,7 +338,7 @@ export function useFocusFollowsPane(
       last = null
       if (!inPanel) return follow()
       stop()
-      stop = focusAfterPaint(() => panelTarget(scope) ?? caretTarget(scope))
+      stop = focusAfterPaint(() => panelTarget(scope) ?? caretTarget(scope), clock)
     }
     const watcher = new MutationObserver(fellAway((held) => !held.isConnected))
     watcher.observe(scope, { childList: true, subtree: true })
@@ -345,5 +370,5 @@ export function useFocusFollowsPane(
       hiding?.disconnect()
       scope.removeEventListener("focusin", onFocusIn)
     }
-  }, [store, root])
+  }, [store, root, clock])
 }
