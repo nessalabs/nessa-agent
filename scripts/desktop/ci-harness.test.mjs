@@ -338,6 +338,8 @@ test("apt installs and every CI job are bounded", () => {
   // runs that exist. local-auth is 140 because the 65 minute apt step, the
   // 60 minute Rust test step, and at most 11.3 minutes of everything else
   // sum past 130. The release build is 120 because 65 + 25.7 does too.
+  // windows-server-tests is 95 because its test step is 90 and setup is at
+  // most 4 minutes. Run 41947356093 was still inside server-other at 70.
   const bounds = {
     "local-auth.yml": {
       workflows: 10,
@@ -347,7 +349,7 @@ test("apt installs and every CI job are bounded", () => {
       frontend: 30,
       "conversation-stress": 60,
       "local-auth": 140,
-      "windows-server-tests": 80,
+      "windows-server-tests": 95,
       "sdk-domain-coverage": 60,
       "required-checks": 10,
     },
