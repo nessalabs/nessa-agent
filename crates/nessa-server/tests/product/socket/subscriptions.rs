@@ -5814,7 +5814,7 @@ async fn first_text_seen_before_send_returns_uses_the_admission_clock() {
         dispatch(&state, &session, frame).await
     });
 
-    let arrived = timeout(EXPECTED, async {
+    timeout(EXPECTED, async {
         tokio::select! {
             result = &mut sending => {
                 let result = result.expect("send task");
@@ -5824,12 +5824,13 @@ async fn first_text_seen_before_send_returns_uses_the_admission_clock() {
                 };
                 panic!("send finished before the settled save: {text}");
             }
-            arrived = arrived => arrived.expect("the settled save closed its signal"),
+            arrived = arrived => {
+                arrived.expect("the settled save closed its signal");
+            }
         }
     })
     .await
     .expect("the settled save did not start");
-    let _ = arrived;
 
     let deadline = std::time::Instant::now() + EXPECTED;
     loop {
