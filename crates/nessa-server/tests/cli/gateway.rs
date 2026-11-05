@@ -1,10 +1,17 @@
 use crate::cli::{
-    application::{CliError, Gateway, GatewayCallError, TokenRequest},
-    infrastructure::LocalGateway,
+    application::{invoke, refusal_body, CliError, Gateway, GatewayCallError, TokenRequest},
+    infrastructure::{serve_mcp, LocalGateway},
 };
 use nessa_client_core::local_product::ProductCaller;
+use nessa_protocol::product::generated::VaultErrorCode;
 use serde_json::{json, Value};
-use std::{io::Write, net::TcpListener, thread, time::Duration};
+use std::{
+    io::{Cursor, Write},
+    net::TcpListener,
+    sync::mpsc,
+    thread,
+    time::Duration,
+};
 use tungstenite::{accept, Message};
 
 #[test]
@@ -173,5 +180,76 @@ fn a_timed_out_call_reconnects_instead_of_reading_the_late_reply() {
     );
     let fresh = gateway.call("server.health", json!({})).unwrap();
     assert_eq!(fresh["marker"], "fresh");
+    server.join().unwrap();
+}
+
+#[test]
+fn a_dropped_passphrase_change_stays_unconfirmed_on_the_cli_and_on_mcp() {
+    let root = tempfile::tempdir().unwrap();
+    let token = root.path().join("cli.token");
+    nessa_local_storage::open(&token, nessa_local_storage::OpenMode::CreateNew)
+        .unwrap()
+        .write_all(b"private-token")
+        .unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let (sent, received) = mpsc::channel();
+    let server = thread::spawn(move || {
+        for _ in 0..2 {
+            let (stream, _) = listener.accept().unwrap();
+            let mut socket = accept(stream).unwrap();
+            handshake(&mut socket);
+            let request: Value =
+                serde_json::from_str(socket.read().unwrap().to_text().unwrap()).unwrap();
+            sent.send(request["method"].as_str().unwrap_or("").to_owned())
+                .unwrap();
+            drop(socket);
+        }
+    });
+    let params = json!({"passphrase": "disposable replacement phrase"});
+    let mut cli = LocalGateway::open(
+        address,
+        token.clone(),
+        ProductCaller::CLI,
+        Duration::from_secs(2),
+    )
+    .unwrap();
+    let failure = invoke(&mut cli, "vault.changePassphrase", params.clone()).unwrap_err();
+    let code = VaultErrorCode::VaultChangeNotConfirmed.as_str();
+    assert_eq!(failure.code, code);
+    assert_eq!(
+        failure.detail,
+        CliError::VaultChangeNotConfirmed.to_string()
+    );
+    assert_eq!(refusal_body(&failure)["code"], code);
+    assert_ne!(failure.code, "transport");
+
+    let mut mcp =
+        LocalGateway::open(address, token, ProductCaller::MCP, Duration::from_secs(2)).unwrap();
+    let input = concat!(
+        r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}"#,
+        "\n",
+        r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"vault.changePassphrase","arguments":{"passphrase":"disposable replacement phrase"}}}"#,
+        "\n",
+    );
+    let mut output = Vec::new();
+    serve_mcp(&mut mcp, Cursor::new(input), &mut output).unwrap();
+    let reply = String::from_utf8(output).unwrap();
+    let call = reply
+        .lines()
+        .nth(1)
+        .and_then(|line| serde_json::from_str::<Value>(line).ok())
+        .expect("tools/call reply");
+    assert_eq!(call["result"]["isError"], true);
+    let text = call["result"]["content"][0]["text"].as_str().unwrap();
+    assert_eq!(serde_json::from_str::<Value>(text).unwrap()["code"], code);
+    assert!(!text.contains("transport"));
+    assert!(!text.contains("rejected"));
+
+    let methods: Vec<_> = received.try_iter().collect();
+    assert_eq!(
+        methods,
+        ["vault.changePassphrase", "vault.changePassphrase"]
+    );
     server.join().unwrap();
 }

@@ -42,7 +42,7 @@ pub fn invoke(
             Err(CallFailure::code(&code, "the gateway refused the call"))
         }
         Err(GatewayCallError::Transport(error)) => {
-            Err(CallFailure::code("transport", error.to_string()))
+            Err(CallFailure::code(error.surface_code(), error.to_string()))
         }
     }
 }

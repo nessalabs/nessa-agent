@@ -5,6 +5,7 @@ use nessa_auth::application::dto::CredentialMetadataDto;
 use nessa_client_core::local_product::{
     ExchangeError, LocalProduct, LocalProductError, ProductCaller,
 };
+use nessa_protocol::product::generated::VaultErrorCode;
 use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
 use std::{
@@ -102,6 +103,9 @@ fn problem(error: LocalProductError) -> CliError {
         LocalProductError::Unauthorized => CliError::Unauthorized,
         LocalProductError::Denied => CliError::Denied,
         LocalProductError::Capacity => CliError::Capacity,
+        LocalProductError::Vault(VaultErrorCode::VaultChangeNotConfirmed) => {
+            CliError::VaultChangeNotConfirmed
+        }
         LocalProductError::Rejected | LocalProductError::Vault(_) => CliError::Rejected,
     }
 }

@@ -98,7 +98,9 @@ Each tool's input schema is the method's parameter object, with `type` set to
 be working, including an agent install's archive transfer. If the answer does
 not arrive in that time, or the reply cannot be tied to the request, the
 connection is closed. The next call signs in again, so it cannot read the late
-reply.
+reply. A `vault.changePassphrase` call that was sent and then lost is not that
+ordinary failure: both surfaces report `vault_change_not_confirmed`, because
+the change may already have taken effect.
 
 What this page does not cover: subscriptions stay excluded because one reply
 would drop their events, and upload or resource bytes still travel on their HTTP

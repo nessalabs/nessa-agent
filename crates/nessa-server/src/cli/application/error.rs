@@ -1,3 +1,4 @@
+use nessa_protocol::product::generated::VaultErrorCode;
 use std::{error::Error, fmt};
 
 /// Redacted command failures; protocol/provider text never becomes diagnostics.
@@ -17,6 +18,9 @@ pub enum CliError {
     Denied,
     Capacity,
     Rejected,
+    /// `vault.changePassphrase` was sent and the answer never arrived.
+    /// The change may already have taken effect.
+    VaultChangeNotConfirmed,
     Unhealthy,
     SecretUnavailable,
     ScopeMismatch,
@@ -38,6 +42,9 @@ impl fmt::Display for CliError {
             Self::Denied => "CLI credential is not authorized for this command",
             Self::Capacity => "gateway credential capacity reached",
             Self::Rejected => "gateway rejected the command",
+            Self::VaultChangeNotConfirmed => {
+                "passphrase change was sent and is not confirmed; it may already have taken effect"
+            }
             Self::Unhealthy => "gateway health probe failed",
             Self::SecretUnavailable => "token secret unavailable; inspect credentials before issuing again",
             Self::ScopeMismatch => "issued credential does not match requested browser access",
@@ -45,3 +52,14 @@ impl fmt::Display for CliError {
     }
 }
 impl Error for CliError {}
+
+impl CliError {
+    /// Code a surface call publishes when the exchange fails in this process.
+    /// An unconfirmed passphrase change keeps the settlement code.
+    pub(crate) fn surface_code(self) -> &'static str {
+        match self {
+            Self::VaultChangeNotConfirmed => VaultErrorCode::VaultChangeNotConfirmed.as_str(),
+            _ => "transport",
+        }
+    }
+}
