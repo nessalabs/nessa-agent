@@ -95,53 +95,57 @@ async function measure() {
   mkdirSync(workspace)
   symlinkSync(workspace, selectedWorkspace, "dir")
   const fixtureSupervisor = await createFixtureSupervisor()
-  const initialized = spawnSync(
-    binary,
-    ["auth", "init", "--local", "--owner-token-file", ownerPath],
-    { cwd: root, env, encoding: "utf8" },
-  )
-  if (initialized.status !== 0) {
-    throw new Error(initialized.stderr || "auth init failed")
-  }
-  const configPath = join(dataRoot, "ci", "instances", instance, "config.json")
-  writeFileSync(
-    configPath,
-    JSON.stringify({
-      agents: {
-        catalog: join(root, "crates/nessa-sdk/data/models.json"),
-        workspace: selectedWorkspace,
-        mcpServers: [],
-        selected: "claude",
-        runtimes: {
-          claude: {
-            command: process.execPath,
-            args: [
-              join(root, "scripts/conversation-smoke/claude-acp-fixture.mjs"),
-              "provider-evidence.jsonl",
-              "provider-state.json",
-              String(fixtureSupervisor.port),
-              fixtureSupervisor.nonce,
-            ],
-            model: "claude-haiku-4-5-20251001",
-            toolsEnabled: true,
-            contextTokens: 100000,
-            outputTokens: 4096,
-          },
-        },
-      },
-      session: {
-        handshakeTimeoutMs: 5000,
-        writeTimeoutMs: 15000,
-        currentStateIntervalMs: 50,
-      },
-    }),
-    { mode: 0o600 },
-  )
-  chmodSync(configPath, 0o600)
-  const gateway = startGateway(binary, root, env, port)
   const clients = []
   let proxy
+  let gateway
+  // The supervisor is already listening. Auth init and the config write can
+  // fail before a gateway exists; cleanup still has to close that server or
+  // the process stays up after the error is reported.
   try {
+    const initialized = spawnSync(
+      binary,
+      ["auth", "init", "--local", "--owner-token-file", ownerPath],
+      { cwd: root, env, encoding: "utf8" },
+    )
+    if (initialized.status !== 0) {
+      throw new Error(initialized.stderr || "auth init failed")
+    }
+    const configPath = join(dataRoot, "ci", "instances", instance, "config.json")
+    writeFileSync(
+      configPath,
+      JSON.stringify({
+        agents: {
+          catalog: join(root, "crates/nessa-sdk/data/models.json"),
+          workspace: selectedWorkspace,
+          mcpServers: [],
+          selected: "claude",
+          runtimes: {
+            claude: {
+              command: process.execPath,
+              args: [
+                join(root, "scripts/conversation-smoke/claude-acp-fixture.mjs"),
+                "provider-evidence.jsonl",
+                "provider-state.json",
+                String(fixtureSupervisor.port),
+                fixtureSupervisor.nonce,
+              ],
+              model: "claude-haiku-4-5-20251001",
+              toolsEnabled: true,
+              contextTokens: 100000,
+              outputTokens: 4096,
+            },
+          },
+        },
+        session: {
+          handshakeTimeoutMs: 5000,
+          writeTimeoutMs: 15000,
+          currentStateIntervalMs: 50,
+        },
+      }),
+      { mode: 0o600 },
+    )
+    chmodSync(configPath, 0o600)
+    gateway = startGateway(binary, root, env, port)
     await gateway.ready({ timeoutMs: 30_000 })
     const credential = readFileSync(ownerPath, "utf8").trim()
     const connect = (url) =>
@@ -181,9 +185,11 @@ async function measure() {
   } finally {
     if (proxy) await proxy.close().catch(() => {})
     for (const client of clients) client.close()
-    await stopGateway(gateway).catch((error) => {
-      process.stderr.write(`gateway stop: ${error.message}\n`)
-    })
+    if (gateway) {
+      await stopGateway(gateway).catch((error) => {
+        process.stderr.write(`gateway stop: ${error.message}\n`)
+      })
+    }
     await fixtureSupervisor.shutdown().catch((error) => {
       process.stderr.write(`fixture stop: ${error.message}\n`)
     })
