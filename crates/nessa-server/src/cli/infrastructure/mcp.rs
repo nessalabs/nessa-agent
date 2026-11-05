@@ -33,15 +33,14 @@ struct Request {
 /// A clean EOF is success. A frame past one mebibyte stops the server.
 pub fn serve(
     gateway: &mut dyn Gateway,
-    input: impl BufRead,
+    mut input: impl BufRead,
     mut output: impl Write,
 ) -> Result<(), McpStop> {
     let mut initialized = false;
-    for line in input.lines() {
-        let line = line.map_err(|error| McpStop(error.to_string()))?;
-        if line.len() > MAX_LINE {
-            return Err(McpStop("MCP frame exceeds 1 MiB".into()));
-        }
+    loop {
+        let Some(line) = read_frame(&mut input)? else {
+            return Ok(());
+        };
         if line.is_empty() {
             continue;
         }
@@ -95,7 +94,51 @@ pub fn serve(
         };
         write_message(&mut output, response)?;
     }
-    Ok(())
+}
+
+/// One frame, without its newline. `None` is a clean end of input.
+///
+/// Only the first [`MAX_LINE`] bytes, plus one more to see the newline, are
+/// looked at. A frame that is still going at that point stops the server.
+/// The bytes after it are not copied and not read.
+fn read_frame(input: &mut impl BufRead) -> Result<Option<String>, McpStop> {
+    let mut buf = Vec::new();
+    loop {
+        let available = input
+            .fill_buf()
+            .map_err(|error| McpStop(error.to_string()))?;
+        if available.is_empty() {
+            if buf.is_empty() {
+                return Ok(None);
+            }
+            return frame_text(buf);
+        }
+        let room = MAX_LINE + 1 - buf.len();
+        let window = &available[..available.len().min(room)];
+        if let Some(newline) = window.iter().position(|byte| *byte == b'\n') {
+            buf.extend_from_slice(&window[..newline]);
+            input.consume(newline + 1);
+            if buf.last() == Some(&b'\r') {
+                buf.pop();
+            }
+            return frame_text(buf);
+        }
+        if window.len() == room {
+            return Err(McpStop("MCP frame exceeds 1 MiB".into()));
+        }
+        buf.extend_from_slice(window);
+        let read = window.len();
+        input.consume(read);
+    }
+}
+
+fn frame_text(buf: Vec<u8>) -> Result<Option<String>, McpStop> {
+    if buf.len() > MAX_LINE {
+        return Err(McpStop("MCP frame exceeds 1 MiB".into()));
+    }
+    String::from_utf8(buf)
+        .map(Some)
+        .map_err(|error| McpStop(error.to_string()))
 }
 
 fn call_tool(gateway: &mut dyn Gateway, params: Option<&Value>) -> Value {
@@ -152,4 +195,79 @@ fn error(id: Value, code: i64, message: &str) -> Value {
 fn write_message(output: &mut impl Write, message: Value) -> Result<(), McpStop> {
     writeln!(output, "{message}").map_err(|error| McpStop(error.to_string()))?;
     output.flush().map_err(|error| McpStop(error.to_string()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{serve, MAX_LINE};
+    use crate::cli::application::{
+        BrowserToken, CliError, Gateway, GatewayCallError, GatewayIdentity, TokenRequest,
+    };
+    use serde_json::Value;
+    use std::io::{self, BufRead, Read};
+
+    struct Idle {
+        identity: GatewayIdentity,
+        calls: usize,
+    }
+
+    impl Gateway for Idle {
+        fn identity(&self) -> &GatewayIdentity {
+            &self.identity
+        }
+        fn health(&mut self) -> Result<(), CliError> {
+            Ok(())
+        }
+        fn issue(&mut self, _: TokenRequest) -> Result<BrowserToken, CliError> {
+            Err(CliError::Protocol)
+        }
+        fn call(&mut self, _: &str, _: Value) -> Result<Value, GatewayCallError> {
+            self.calls += 1;
+            Err(GatewayCallError::Transport(CliError::Protocol))
+        }
+    }
+
+    /// The whole unread input is visible at once, as a cursor would show it.
+    /// `pos` is how far the server consumed.
+    struct Stream {
+        data: Vec<u8>,
+        pos: usize,
+    }
+
+    impl Read for Stream {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            let n = (&self.data[self.pos..]).read(buf)?;
+            self.pos += n;
+            Ok(n)
+        }
+    }
+
+    impl BufRead for Stream {
+        fn fill_buf(&mut self) -> io::Result<&[u8]> {
+            Ok(&self.data[self.pos..])
+        }
+        fn consume(&mut self, amount: usize) {
+            self.pos += amount;
+        }
+    }
+
+    #[test]
+    fn an_oversized_frame_stops_before_the_rest_is_buffered() {
+        let mut data = vec![b'{'; MAX_LINE + 64];
+        data.extend_from_slice(b"\n{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}\n");
+        let mut input = Stream { data, pos: 0 };
+        let mut gateway = Idle {
+            identity: GatewayIdentity {
+                gateway_id: "gateway".into(),
+                organization_id: "org".into(),
+                principal_id: "caller".into(),
+                expires_at: None,
+            },
+            calls: 0,
+        };
+        let error = serve(&mut gateway, &mut input, Vec::new()).expect_err("oversized frame");
+        assert_eq!(error.to_string(), "MCP frame exceeds 1 MiB");
+        assert!(input.pos <= MAX_LINE + 1, "consumed {}", input.pos);
+        assert_eq!(gateway.calls, 0);
+    }
 }
