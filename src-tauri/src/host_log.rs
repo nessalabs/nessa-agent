@@ -47,22 +47,53 @@ static STARTED: OnceLock<Instant> = OnceLock::new();
 static WINDOW_AT: Mutex<Option<Duration>> = Mutex::new(None);
 static GATEWAY_AT: Mutex<Option<Duration>> = Mutex::new(None);
 static ACTIVE: OnceLock<LogWriter> = OnceLock::new();
-/// The first gateway-ready mark, and whether it has been written beside host.log.
-/// Doctor reads `launch-to-gateway-ready-ms` (the same name as
-/// `nessa_server::core::local_timings::LAUNCH_TO_GATEWAY_READY_FILE`).
-static LAUNCH_RECORD: Mutex<LaunchRecord> = Mutex::new(LaunchRecord {
-    ms: None,
-    written: false,
-});
-
-struct LaunchRecord {
-    ms: Option<u64>,
-    written: bool,
-}
 
 /// How many launch samples the file keeps. Doctor shows the last eight.
 const LAUNCH_KEPT: usize = 32;
-const LAUNCH_SAMPLES: &str = "launch-to-gateway-ready-ms";
+/// Doctor reads this name (`nessa_server` `LAUNCH_TO_GATEWAY_READY_FILE`).
+pub const LAUNCH_TO_GATEWAY_READY_FILE: &str = "launch-to-gateway-ready-ms";
+
+/// Where a launch-to-gateway-ready duration is kept. Composition builds the
+/// file; tests substitute their own. The startup path does not open the file
+/// itself.
+pub trait LaunchTimingStore: Send + Sync {
+    fn record(&self, elapsed_ms: u64);
+}
+
+/// The file beside `host.log`. The mutex covers the whole rewrite.
+pub struct FileLaunchTimings {
+    path: PathBuf,
+    gate: Mutex<()>,
+}
+
+impl FileLaunchTimings {
+    pub fn at(path: PathBuf) -> Self {
+        Self {
+            path,
+            gate: Mutex::new(()),
+        }
+    }
+}
+
+impl LaunchTimingStore for FileLaunchTimings {
+    fn record(&self, elapsed_ms: u64) {
+        let _held = lock(&self.gate);
+        if let Err(error) = append_launch_sample(&self.path, elapsed_ms) {
+            tracing::warn!(
+                target: "nessa.timing",
+                %error,
+                "could not record launch to gateway ready"
+            );
+        }
+    }
+}
+
+/// Keeps nothing. Used when the service namespace has no log directory.
+pub struct UnavailableLaunchTimings;
+
+impl LaunchTimingStore for UnavailableLaunchTimings {
+    fn record(&self, _elapsed_ms: u64) {}
+}
 
 /// What a cheap look at the executable path can say about the bundle.
 ///
@@ -137,11 +168,7 @@ pub fn install(directory: Option<&Path>) {
 /// lines already written and the previous file says where they continued.
 pub fn open(directory: &Path) -> io::Result<PathBuf> {
     match ACTIVE.get() {
-        Some(writer) => {
-            let path = writer.open(directory)?;
-            try_record_launch();
-            Ok(path)
-        }
+        Some(writer) => writer.open(directory),
         None => Err(io::Error::other("startup log is not installed")),
     }
 }
@@ -211,7 +238,11 @@ pub fn window_shown(label: &str) {
 }
 
 /// The first time the gateway phase becomes ready.
-pub fn gateway_ready() {
+///
+/// The file write does not run on the caller. When a Tokio runtime is
+/// present it goes to a blocking thread; otherwise the caller is already
+/// outside one and the store is asked directly.
+pub fn gateway_ready(timings: Arc<dyn LaunchTimingStore>) {
     let since_start = elapsed();
     let first = {
         let mut slot = lock(&GATEWAY_AT);
@@ -242,40 +273,13 @@ pub fn gateway_ready() {
             "startup timing"
         ),
     }
-    {
-        let mut record = lock(&LAUNCH_RECORD);
-        record.ms = Some(milliseconds(timing.since_process_start));
-        record.written = false;
-    }
-    try_record_launch();
-}
-
-/// Write the remembered launch sample next to `host.log` once that directory
-/// is open. A failure here is logged and does not stop startup.
-fn try_record_launch() {
-    let ms = {
-        let record = lock(&LAUNCH_RECORD);
-        if record.written {
-            return;
+    let elapsed_ms = milliseconds(timing.since_process_start);
+    let write = move || timings.record(elapsed_ms);
+    match tokio::runtime::Handle::try_current() {
+        Ok(handle) => {
+            handle.spawn_blocking(write);
         }
-        record.ms
-    };
-    let Some(ms) = ms else {
-        return;
-    };
-    let Some(log) = current_path() else {
-        return;
-    };
-    let Some(directory) = log.parent() else {
-        return;
-    };
-    match append_launch_sample(&directory.join(LAUNCH_SAMPLES), ms) {
-        Ok(()) => lock(&LAUNCH_RECORD).written = true,
-        Err(error) => tracing::warn!(
-            target: "nessa.timing",
-            %error,
-            "could not record launch to gateway ready"
-        ),
+        Err(_) => write(),
     }
 }
 
@@ -304,12 +308,15 @@ fn append_launch_sample(path: &Path, ms: u64) -> io::Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
-    let temporary = path.with_file_name(format!(
-        ".{}.tmp",
-        path.file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or("launch")
-    ));
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("launch");
+    let ticket = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
+    let temporary = path.with_file_name(format!(".{name}.{ticket}.{}.tmp", std::process::id()));
     {
         let mut file = fs::OpenOptions::new()
             .create(true)
@@ -578,6 +585,15 @@ fn set_private(_path: &Path) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Arc, Mutex};
+
+    struct MemoryLaunch(Arc<Mutex<Vec<u64>>>);
+
+    impl LaunchTimingStore for MemoryLaunch {
+        fn record(&self, elapsed_ms: u64) {
+            self.0.lock().unwrap().push(elapsed_ms);
+        }
+    }
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
 
@@ -789,12 +805,15 @@ mod tests {
         let writer = LogWriter::new();
         writer.open(&directory.path().join("logs")).expect("open");
         let subscriber = tracing_subscriber::registry().with(nessa_layer(writer.clone()));
+        let recorded = Arc::new(Mutex::new(Vec::new()));
+        let timings: Arc<dyn LaunchTimingStore> = Arc::new(MemoryLaunch(Arc::clone(&recorded)));
         tracing::subscriber::with_default(subscriber, || {
             window_shown("main");
-            gateway_ready();
-            gateway_ready();
+            gateway_ready(Arc::clone(&timings));
+            gateway_ready(Arc::clone(&timings));
             window_shown("main");
         });
+        assert_eq!(recorded.lock().unwrap().len(), 1);
         let text = read(&logs(&directory.path().join("logs")));
         assert_eq!(text.matches("window shown").count(), 2, "{text}");
         assert_eq!(
@@ -816,7 +835,7 @@ mod tests {
     #[test]
     fn launch_samples_keep_the_newest_durations_and_ignore_a_symlink() {
         let directory = tempfile::tempdir().expect("temporary directory");
-        let path = directory.path().join(LAUNCH_SAMPLES);
+        let path = directory.path().join(LAUNCH_TO_GATEWAY_READY_FILE);
         for ms in 1..=LAUNCH_KEPT + 2 {
             append_launch_sample(&path, ms as u64).expect("append");
         }
@@ -834,5 +853,22 @@ mod tests {
             assert!(append_launch_sample(&link, 9).is_err());
             assert_eq!(fs::read_to_string(target).unwrap(), "1\n");
         }
+    }
+
+    #[test]
+    fn concurrent_launch_records_keep_every_sample() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let timings = FileLaunchTimings::at(directory.path().join("launch"));
+        std::thread::scope(|scope| {
+            for ms in 0..8 {
+                scope.spawn(|| timings.record(ms));
+            }
+        });
+        let mut numbers: Vec<u64> = read(&directory.path().join("launch"))
+            .lines()
+            .map(|line| line.parse().unwrap())
+            .collect();
+        numbers.sort_unstable();
+        assert_eq!(numbers, (0..8).collect::<Vec<_>>());
     }
 }

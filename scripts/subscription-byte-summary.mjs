@@ -13,7 +13,10 @@ export const throttleProfile = {
 export function summarizeViews(frames, agentTextBytes) {
   const totalBytes = frames.reduce((sum, frame) => sum + frame.bytes, 0)
   const maxFrameBytes = frames.reduce((max, frame) => Math.max(max, frame.bytes), 0)
-  const maxPayloadBytes = frames.reduce((max, frame) => Math.max(max, frame.payloadBytes), 0)
+  const maxPayloadBytes = frames.reduce(
+    (max, frame) => Math.max(max, frame.payloadBytes),
+    0,
+  )
   const nearBound = frames.filter(
     (frame) => frame.payloadBytes >= throttleProfile.frameBoundBytes * 0.9,
   ).length

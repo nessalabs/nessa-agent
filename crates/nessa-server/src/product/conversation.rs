@@ -464,10 +464,16 @@ async fn answer(
                     .map_err(mutation_failure)?;
                 let receipt = match submitted.delivery {
                     Some(receipt) => receipt,
-                    None => service.current_submission(id, caller, execution_id).await?,
+                    None => {
+                        service
+                            .current_submission(id.clone(), caller, execution_id)
+                            .await?
+                    }
                 };
                 if frame.method == "conversation.send" {
-                    state.local_timings.sent(&timed_execution, started_ms);
+                    state
+                        .local_timings
+                        .sent(&id.to_string(), &timed_execution, started_ms);
                 }
                 Ok(success(&frame.id, &receipt))
             }

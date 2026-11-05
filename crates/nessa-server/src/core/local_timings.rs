@@ -19,6 +19,8 @@ use serde_json::{json, Value};
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Mutex;
 
 /// File the desktop host appends. Doctor reads the same name.
 pub const LAUNCH_TO_GATEWAY_READY_FILE: &str = "launch-to-gateway-ready-ms";
@@ -72,8 +74,36 @@ impl TimingSamples {
     }
 }
 
+/// One timing file. The mutex covers the whole read, rewrite and rename, so
+/// two conversations finishing a first token at once cannot drop a sample
+/// or share a temporary file.
+pub(crate) struct FileTimingJournal {
+    path: PathBuf,
+    gate: Mutex<()>,
+}
+
+impl FileTimingJournal {
+    pub(crate) fn new(path: PathBuf) -> Self {
+        Self {
+            path,
+            gate: Mutex::new(()),
+        }
+    }
+
+    pub(crate) fn record(&self, elapsed_ms: u64) -> io::Result<()> {
+        let _held = self
+            .gate
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        append_sample(&self.path, elapsed_ms)
+    }
+}
+
 /// Append `ms` and keep the last [`STORED`] integer lines.
-pub(crate) fn append_sample(path: &Path, ms: u64) -> io::Result<()> {
+///
+/// Callers serialize this. The temporary name is still unique, so a crash
+/// cannot leave the next write truncating a file another write still holds.
+fn append_sample(path: &Path, ms: u64) -> io::Result<()> {
     if path
         .symlink_metadata()
         .is_ok_and(|meta| meta.file_type().is_symlink())
@@ -179,11 +209,13 @@ fn write_private(path: &Path, values: &[u64]) -> io::Result<()> {
 }
 
 fn temporary_path(path: &Path) -> PathBuf {
+    static TEMPORARIES: AtomicU64 = AtomicU64::new(1);
     let name = path
         .file_name()
         .and_then(|name| name.to_str())
         .unwrap_or("timings");
-    path.with_file_name(format!(".{name}.tmp"))
+    let ticket = TEMPORARIES.fetch_add(1, Ordering::Relaxed);
+    path.with_file_name(format!(".{name}.{ticket}.tmp"))
 }
 
 #[cfg(unix)]
@@ -256,6 +288,25 @@ mod tests {
             doctor_timings(None)["launchToGatewayReady"]["note"],
             "none yet"
         );
+    }
+
+    #[test]
+    fn concurrent_records_keep_every_sample() {
+        let directory = tempfile::tempdir().unwrap();
+        let journal = FileTimingJournal::new(directory.path().join("samples"));
+        std::thread::scope(|scope| {
+            for ms in 0..8 {
+                let journal = &journal;
+                scope.spawn(move || journal.record(ms).unwrap());
+            }
+        });
+        let mut numbers: Vec<u64> = fs::read_to_string(journal.path)
+            .unwrap()
+            .lines()
+            .map(|line| line.parse().unwrap())
+            .collect();
+        numbers.sort_unstable();
+        assert_eq!(numbers, (0..8).collect::<Vec<_>>());
     }
 
     #[cfg(unix)]

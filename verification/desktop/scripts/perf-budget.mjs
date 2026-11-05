@@ -468,7 +468,18 @@ await main(meta, async ({ options, rep, url, mode }) => {
   })
   if (rows.length) {
     const columns = baseUrl
-      ? ["layout", "name", "max", "median", "over50", "diff", "low", "high", "call", "runs"]
+      ? [
+          "layout",
+          "name",
+          "max",
+          "median",
+          "over50",
+          "diff",
+          "low",
+          "high",
+          "call",
+          "runs",
+        ]
       : ["layout", "name", "max", "median", "over50", "runs"]
     const compared = baseUrl
       ? " diff is the median of head − base longest-frame, with its 95% interval; a call is a regression or a win only when the interval excludes zero."

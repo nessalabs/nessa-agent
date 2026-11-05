@@ -387,8 +387,11 @@ impl ProductRouteState {
         self
     }
 
-    pub(crate) fn with_local_timings(mut self, path: std::path::PathBuf) -> Self {
-        self.local_timings = Arc::new(TurnTimings::recording(path));
+    pub(crate) fn with_local_timings(
+        mut self,
+        store: Arc<dyn super::turn_timing::FirstTokenStore>,
+    ) -> Self {
+        self.local_timings = Arc::new(TurnTimings::recording(store));
         self
     }
 

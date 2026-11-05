@@ -36,7 +36,11 @@ import { dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { WebSocket, WebSocketServer } from "ws"
 import { NessaClient, NessaClientConfig } from "@nessa/client"
-import { createFixtureSupervisor, startGateway, stopGateway } from "./conversation-smoke/runtime.mjs"
+import {
+  createFixtureSupervisor,
+  startGateway,
+  stopGateway,
+} from "./conversation-smoke/runtime.mjs"
 import { summarizeViews, throttleProfile } from "./subscription-byte-summary.mjs"
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)))
@@ -282,10 +286,13 @@ async function waitForRead(client, conversationId, executionId, description) {
   while (Date.now() < deadline) {
     const view = await client.conversation.read(conversationId)
     message = view.messages?.find((item) => item.executionId === executionId)
-    if (message && ["completed", "failed", "cancelled"].includes(message.status)) return message
+    if (message && ["completed", "failed", "cancelled"].includes(message.status))
+      return message
     await new Promise((resolve) => setTimeout(resolve, 100))
   }
-  throw new Error(`timed out waiting for ${description}: ${JSON.stringify(message ?? null)}`)
+  throw new Error(
+    `timed out waiting for ${description}: ${JSON.stringify(message ?? null)}`,
+  )
 }
 
 async function waitForStatus(followed, executionId, description) {
@@ -295,11 +302,16 @@ async function waitForStatus(followed, executionId, description) {
     if (followed.ended()) {
       throw new Error(`${description} subscription ended: ${followed.ended().reason}`)
     }
-    message = followed.current()?.messages?.find((item) => item.executionId === executionId)
-    if (message && ["completed", "failed", "cancelled"].includes(message.status)) return message
+    message = followed
+      .current()
+      ?.messages?.find((item) => item.executionId === executionId)
+    if (message && ["completed", "failed", "cancelled"].includes(message.status))
+      return message
     await new Promise((resolve) => setTimeout(resolve, 50))
   }
-  throw new Error(`timed out waiting for ${description}: ${JSON.stringify(message ?? null)}`)
+  throw new Error(
+    `timed out waiting for ${description}: ${JSON.stringify(message ?? null)}`,
+  )
 }
 
 function reservePort() {
