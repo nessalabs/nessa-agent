@@ -3,7 +3,7 @@
 //! The catalog accepts the method and its params. The gateway port sends them.
 //! Cedar, on that gateway, is the permission check.
 use super::surface::{prepare, PrepareError};
-use super::{Gateway, GatewayCallError};
+use super::{CliError, Gateway, GatewayCallError};
 use serde_json::{json, Value};
 
 /// A call that did not return a payload. `code` is what stdout reports.
@@ -41,8 +41,12 @@ pub fn invoke(
         Err(GatewayCallError::Refused { code }) => {
             Err(CallFailure::code(&code, "the gateway refused the call"))
         }
+        Err(GatewayCallError::Unconfirmed { code }) => Err(CallFailure::code(
+            &code,
+            CliError::VaultChangeNotConfirmed.to_string(),
+        )),
         Err(GatewayCallError::Transport(error)) => {
-            Err(CallFailure::code(error.surface_code(), error.to_string()))
+            Err(CallFailure::code("transport", error.to_string()))
         }
     }
 }

@@ -1,6 +1,8 @@
 //! CLI command interpretation over the shared bounded local product transport.
 use super::surface_call_budget;
-use crate::cli::application::{BrowserToken, CliError, Gateway, GatewayIdentity, TokenRequest};
+use crate::cli::application::{
+    BrowserToken, CliError, Gateway, GatewayCallError, GatewayIdentity, TokenRequest,
+};
 use nessa_auth::application::dto::CredentialMetadataDto;
 use nessa_client_core::local_product::{
     ExchangeError, LocalProduct, LocalProductError, ProductCaller,
@@ -120,26 +122,21 @@ impl Gateway for LocalGateway {
         }
         Ok(())
     }
-    fn call(
-        &mut self,
-        method: &str,
-        params: Value,
-    ) -> Result<Value, crate::cli::application::GatewayCallError> {
+    fn call(&mut self, method: &str, params: Value) -> Result<Value, GatewayCallError> {
         let wait = self.wait;
         let outcome = {
-            let client = self
-                .live()
-                .map_err(crate::cli::application::GatewayCallError::Transport)?;
+            let client = self.live().map_err(GatewayCallError::Transport)?;
             client.exchange(method, params, wait)
         };
         self.retire_if_unknown();
         outcome.map_err(|error| match error {
-            ExchangeError::Refused { code } => {
-                crate::cli::application::GatewayCallError::Refused { code }
-            }
-            ExchangeError::Session(error) => {
-                crate::cli::application::GatewayCallError::Transport(problem(error))
-            }
+            ExchangeError::Refused { code } => GatewayCallError::Refused { code },
+            ExchangeError::Session(LocalProductError::Vault(
+                VaultErrorCode::VaultChangeNotConfirmed,
+            )) => GatewayCallError::Unconfirmed {
+                code: VaultErrorCode::VaultChangeNotConfirmed.as_str().to_owned(),
+            },
+            ExchangeError::Session(error) => GatewayCallError::Transport(problem(error)),
         })
     }
     fn issue(&mut self, request: TokenRequest) -> Result<BrowserToken, CliError> {

@@ -25,11 +25,14 @@ pub struct BrowserToken {
     pub secret: String,
 }
 
-/// One product call. `Refused` keeps the handler's code. `Transport` is this
-/// process failing to complete the exchange, and it carries no server text.
+/// One product call. `Refused` keeps the handler's code. `Unconfirmed` is a
+/// sent change whose answer never arrived; `code` is the settlement the
+/// transport already published. `Transport` is any other failure to complete
+/// the exchange, and it carries no server text.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GatewayCallError {
     Refused { code: String },
+    Unconfirmed { code: String },
     Transport(CliError),
 }
 

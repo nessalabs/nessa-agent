@@ -1,4 +1,3 @@
-use nessa_protocol::product::generated::VaultErrorCode;
 use std::{error::Error, fmt};
 
 /// Redacted command failures; protocol/provider text never becomes diagnostics.
@@ -52,14 +51,3 @@ impl fmt::Display for CliError {
     }
 }
 impl Error for CliError {}
-
-impl CliError {
-    /// Code a surface call publishes when the exchange fails in this process.
-    /// An unconfirmed passphrase change keeps the settlement code.
-    pub(crate) fn surface_code(self) -> &'static str {
-        match self {
-            Self::VaultChangeNotConfirmed => VaultErrorCode::VaultChangeNotConfirmed.as_str(),
-            _ => "transport",
-        }
-    }
-}
