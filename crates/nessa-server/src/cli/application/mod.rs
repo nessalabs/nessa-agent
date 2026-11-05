@@ -10,12 +10,10 @@
 mod call;
 mod commands;
 mod surface;
-mod wait;
 pub use call::{invoke, refusal_body, CallFailure};
 pub use commands::{
     issue_token, BrowserToken, Gateway, GatewayCallError, GatewayIdentity, TokenRequest,
 };
 pub use surface::{prepare, tools, Prepared};
-pub use wait::surface_call_budget;
 mod error;
 pub use error::CliError;

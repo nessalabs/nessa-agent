@@ -1,7 +1,6 @@
 //! CLI command interpretation over the shared bounded local product transport.
-use crate::cli::application::{
-    surface_call_budget, BrowserToken, CliError, Gateway, GatewayIdentity, TokenRequest,
-};
+use super::surface_call_budget;
+use crate::cli::application::{BrowserToken, CliError, Gateway, GatewayIdentity, TokenRequest};
 use nessa_auth::application::dto::CredentialMetadataDto;
 use nessa_client_core::local_product::{
     ExchangeError, LocalProduct, LocalProductError, ProductCaller,
