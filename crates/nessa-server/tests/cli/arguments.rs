@@ -579,6 +579,8 @@ fn github_passphrases_use_stdin_and_never_an_argument_or_stage_override() {
 
 #[test]
 fn call_and_mcp_take_a_method_or_only_a_credential_file() {
+    let credential = std::env::temp_dir().join("cli.token");
+    let credential = credential.to_str().expect("temp path is unicode");
     assert_eq!(
         parse(&args(&[
             "call",
@@ -586,13 +588,13 @@ fn call_and_mcp_take_a_method_or_only_a_credential_file() {
             "--params",
             "{}",
             "--credential-file",
-            "/tmp/cli.token"
+            credential
         ]))
         .unwrap(),
         Command::Call {
             method: "conversation.list".into(),
             params: "{}".into(),
-            credential_file: Some("/tmp/cli.token".into()),
+            credential_file: Some(credential.into()),
         }
     );
     assert!(matches!(
