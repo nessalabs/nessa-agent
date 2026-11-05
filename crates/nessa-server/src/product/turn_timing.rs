@@ -1,11 +1,14 @@
 //! How long a send waited for the first reply text, on this machine only.
 //!
-//! `conversation.send` notes the gateway clock when it starts. The next view
-//! of that turn that contains reply text (`kind` `text`, not empty, not a
+//! `conversation.send` notes the gateway clock when the turn is freshly
+//! queued, before its runner can publish. The time noted is when the send
+//! began, so the wait includes getting the turn under way. The next view of
+//! that turn that contains reply text (`kind` `text`, not empty, not a
 //! thought) records the elapsed milliseconds. A steer is not a send. A view
-//! with no reply text leaves the clock running. Pending clocks are keyed by
-//! conversation and execution, because an execution id is only unique inside
-//! one conversation.
+//! with no reply text leaves the clock running. A retry of the same send
+//! does not start another clock. Pending clocks are keyed by conversation
+//! and execution, because an execution id is only unique inside one
+//! conversation.
 //!
 //! The read path does not open a file. It asks [`FirstTokenStore`], and the
 //! file work runs on a blocking thread. Composition builds the store: a file

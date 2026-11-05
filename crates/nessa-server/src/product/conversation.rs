@@ -64,11 +64,13 @@ use nessa_sdk::application::agent_execution::{
         CreationFailure, CreationReceipt, CreationStage, CreationStorageError, MutationFailure,
         MutationOutcome, MutationReceipt, MutationStage,
     },
+    executions::AdmissionNotice,
     permissions::{is_remember_option, PermissionCaller, PermissionSelectionState},
     sessions::{NoteDelivery, NoteRetirementReason, NoteState},
 };
 use nessa_sdk::domain::agent_execution::executions::Initiation;
 use serde_json::{json, Value};
+use std::sync::Arc;
 
 /// `initiation` is who a turn this request starts is saved as started by,
 /// as the request was admitted (`read_access::admit_request`).
@@ -432,11 +434,21 @@ async fn answer(
                 let id = conversation_id(&params.conversation_id)?;
                 let caller = caller(params.request_id.clone());
                 let execution_id = params.execution_id.clone();
-                // A send's clock starts here, before the agent is asked, so
-                // the wait includes getting the turn under way. A steer is
-                // not a send and is not timed.
+                // The clock is this moment, before the agent is asked, so the
+                // wait includes getting the turn under way. It is registered
+                // when the turn is freshly queued, before the runner can
+                // publish, because a subscription can read the reply while
+                // the mutation save is still finishing. A steer is not timed.
+                // A retry does not register again.
                 let started_ms = state.clock.unix_milliseconds();
-                let timed_execution = execution_id.clone();
+                let on_admission = (frame.method == "conversation.send").then(|| {
+                    Arc::new(FirstTokenNotice {
+                        timings: Arc::clone(&state.local_timings),
+                        conversation_id: id.to_string(),
+                        execution_id: execution_id.clone(),
+                        started_ms,
+                    }) as Arc<dyn AdmissionNotice>
+                });
                 let store = service.commands().ok_or(ConversationError::Unavailable)?;
                 // Admission still starts an unpaired session as an owner turn.
                 // Whether that turn may offer a remember choice is this
@@ -450,7 +462,7 @@ async fn answer(
                         .await
                         .is_ok();
                 let submitted = service
-                    .submit_command(
+                    .submit_command_notifying(
                         store,
                         id.clone(),
                         caller.clone(),
@@ -459,14 +471,13 @@ async fn answer(
                         execution_id.clone(),
                         submitted_message(&params),
                         mode,
+                        on_admission,
                     )
                     .await
                     .map_err(mutation_failure)?;
                 // `delivery` is present only for the call that enqueued the
-                // turn. A retry of an accepted send leaves it empty and must
-                // not move a clock that is already running, or start one
-                // against text that is already in the view.
-                let newly_admitted = submitted.delivery.is_some();
+                // turn. A retry of an accepted send leaves it empty. The
+                // clock was registered at that enqueue, or not at all.
                 let receipt = match submitted.delivery {
                     Some(receipt) => receipt,
                     None => {
@@ -475,11 +486,6 @@ async fn answer(
                             .await?
                     }
                 };
-                if frame.method == "conversation.send" && newly_admitted {
-                    state
-                        .local_timings
-                        .sent(&id.to_string(), &timed_execution, started_ms);
-                }
                 Ok(success(&frame.id, &receipt))
             }
             "conversation.stop" => {
@@ -1078,6 +1084,24 @@ fn listed_rule(rule: ListedPermissionRule) -> Option<PermissionRule> {
         tool: rule.tool,
         effect,
     })
+}
+
+/// Registers the first-token clock for one freshly queued send.
+///
+/// `admitted` runs on the admission task, before the runner starts. The
+/// clock is the time the send began, not the time the runner was started.
+struct FirstTokenNotice {
+    timings: Arc<super::turn_timing::TurnTimings>,
+    conversation_id: String,
+    execution_id: String,
+    started_ms: u64,
+}
+
+impl AdmissionNotice for FirstTokenNotice {
+    fn admitted(&self) {
+        self.timings
+            .sent(&self.conversation_id, &self.execution_id, self.started_ms);
+    }
 }
 
 /// Who sends a conversation command: the credential's verified identity.

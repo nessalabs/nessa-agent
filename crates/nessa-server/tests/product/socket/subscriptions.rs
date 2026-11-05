@@ -304,6 +304,7 @@ fn conversation_service_with_repository(
         repository,
         mode_audit,
         metadata.clone(),
+        storage.clone(),
     )
 }
 
@@ -314,6 +315,7 @@ fn conversation_service_with_summaries(
     repository: Arc<dyn ConversationRepository>,
     mode_audit: Arc<dyn ConversationModeAudit>,
     summaries: Arc<dyn crate::conversation::application::ConversationSummaries>,
+    commands: Arc<dyn nessa_sdk::application::agent_execution::commands::CreationStorage>,
 ) -> Arc<ConversationService> {
     let service = ConversationService::new(
         ConversationDependencies {
@@ -345,7 +347,7 @@ fn conversation_service_with_summaries(
         None,
     )
     .unwrap();
-    service.bind_commands(storage.clone());
+    service.bind_commands(commands);
     // The store is the grant table, as `composition::local_auth` binds it.
     service.bind_note_authors(metadata.clone());
     service.bind_drive_tools(crate::conversation::application::DriveTools {
@@ -426,6 +428,22 @@ impl SubscriptionFixture {
         )
             -> Arc<dyn crate::conversation::application::ConversationSummaries>,
     ) -> Self {
+        Self::open(summaries, |storage| {
+            storage.clone()
+                as Arc<dyn nessa_sdk::application::agent_execution::commands::CreationStorage>
+        })
+        .await
+    }
+
+    async fn open(
+        summaries: impl FnOnce(
+            &Arc<LocalConversationStore>,
+        )
+            -> Arc<dyn crate::conversation::application::ConversationSummaries>,
+        commands: impl FnOnce(
+            &Arc<RecordStorage>,
+        ) -> Arc<dyn nessa_sdk::application::agent_execution::commands::CreationStorage>,
+    ) -> Self {
         let directory = tempfile::tempdir().unwrap();
         let private = directory.path().join("conversations");
         nessa_local_storage::create_directory(&private).unwrap();
@@ -444,6 +462,7 @@ impl SubscriptionFixture {
             metadata.clone(),
             Arc::new(AcceptingModeAudit),
             summaries(&metadata),
+            commands(&storage),
         );
         let (state, authority) = fixture(MembershipRole::Member);
         grants(&authority, &["conversation.write", "server.read"]);
@@ -5601,4 +5620,312 @@ fn a_full_waiting_set_drops_titles_rather_than_outgrow_a_frame() {
     );
     within(&long);
     assert!(long.reviews.iter().all(|review| review.title.is_none()));
+}
+
+/// Holds the settled-mutation save so a test can read the reply first.
+struct SettledSaveGate {
+    inner: Arc<RecordStorage>,
+    started: Arc<std::sync::Mutex<Option<oneshot::Sender<()>>>>,
+    release: Arc<std::sync::Mutex<Option<oneshot::Receiver<()>>>>,
+}
+
+struct SettledSaveLease {
+    original: Arc<dyn nessa_sdk::application::agent_execution::commands::CreationStorageLease>,
+    started: Arc<std::sync::Mutex<Option<oneshot::Sender<()>>>>,
+    release: Arc<std::sync::Mutex<Option<oneshot::Receiver<()>>>>,
+}
+
+impl nessa_sdk::application::agent_execution::commands::CreationStorage for SettledSaveGate {
+    fn open_creation(
+        &self,
+        principal: String,
+        request: String,
+        create: bool,
+    ) -> nessa_sdk::application::agent_execution::commands::CreationFuture<
+        '_,
+        Option<Arc<dyn nessa_sdk::application::agent_execution::commands::CreationStorageLease>>,
+    > {
+        let inner = Arc::clone(&self.inner);
+        let started = Arc::clone(&self.started);
+        let release = Arc::clone(&self.release);
+        Box::pin(async move {
+            Ok(inner
+                .open_creation(principal, request, create)
+                .await?
+                .map(|original| {
+                    Arc::new(SettledSaveLease {
+                        original,
+                        started,
+                        release,
+                    })
+                        as Arc<
+                            dyn nessa_sdk::application::agent_execution::commands::CreationStorageLease,
+                        >
+                }))
+        })
+    }
+
+    fn creations(
+        &self,
+        principal: String,
+    ) -> nessa_sdk::application::agent_execution::commands::CreationFuture<
+        '_,
+        Vec<nessa_sdk::application::agent_execution::commands::CreationReceipt>,
+    > {
+        self.inner.creations(principal)
+    }
+
+    fn mutations(
+        &self,
+        principal: String,
+    ) -> nessa_sdk::application::agent_execution::commands::CreationFuture<
+        '_,
+        Vec<nessa_sdk::application::agent_execution::commands::MutationReceipt>,
+    > {
+        self.inner.mutations(principal)
+    }
+}
+
+impl nessa_sdk::application::agent_execution::commands::CreationStorageLease for SettledSaveLease {
+    fn load(
+        &self,
+        request_id: &str,
+    ) -> nessa_sdk::application::agent_execution::commands::CreationFuture<
+        '_,
+        Option<nessa_sdk::application::agent_execution::commands::CreationReceipt>,
+    > {
+        self.original.load(request_id)
+    }
+
+    fn save(
+        &self,
+        receipt: nessa_sdk::application::agent_execution::commands::CreationReceipt,
+    ) -> nessa_sdk::application::agent_execution::commands::CreationFuture<'_, ()> {
+        self.original.save(receipt)
+    }
+
+    fn load_mutation(
+        &self,
+        request_id: &str,
+    ) -> nessa_sdk::application::agent_execution::commands::CreationFuture<
+        '_,
+        Option<nessa_sdk::application::agent_execution::commands::MutationReceipt>,
+    > {
+        self.original.load_mutation(request_id)
+    }
+
+    fn save_mutation(
+        &self,
+        receipt: nessa_sdk::application::agent_execution::commands::MutationReceipt,
+    ) -> nessa_sdk::application::agent_execution::commands::CreationFuture<'_, ()> {
+        let stage = receipt.stage();
+        let original = Arc::clone(&self.original);
+        let started = Arc::clone(&self.started);
+        let release = Arc::clone(&self.release);
+        Box::pin(async move {
+            if stage == nessa_sdk::application::agent_execution::commands::MutationStage::Settled {
+                let notify = started.lock().expect("save gate").take();
+                let wait = release.lock().expect("save gate").take();
+                if let Some(notify) = notify {
+                    let _ = notify.send(());
+                }
+                if let Some(wait) = wait {
+                    let _ = wait.await;
+                }
+            }
+            original.save_mutation(receipt).await
+        })
+    }
+}
+
+struct TimingSamples(std::sync::Mutex<Vec<u64>>);
+
+impl crate::product::turn_timing::FirstTokenStore for TimingSamples {
+    fn record(
+        &self,
+        elapsed_ms: u64,
+    ) -> Result<(), crate::product::turn_timing::FirstTokenFailure> {
+        self.0.lock().expect("samples").push(elapsed_ms);
+        Ok(())
+    }
+}
+
+struct StepClock(std::sync::atomic::AtomicU64);
+
+impl nessa_auth::application::ports::Clock for StepClock {
+    fn unix_milliseconds(&self) -> u64 {
+        self.0.load(std::sync::atomic::Ordering::SeqCst)
+    }
+}
+
+/// A subscription can read the first reply while the send's mutation save is
+/// still finishing. The sample is the wait from when the send began. Without
+/// the clock being registered at admission, that read finds no clock and
+/// records nothing.
+#[tokio::test]
+async fn first_text_seen_before_send_returns_uses_the_admission_clock() {
+    use std::sync::atomic::Ordering;
+
+    let started = Arc::new(std::sync::Mutex::new(None));
+    let release = Arc::new(std::sync::Mutex::new(None));
+    let started_slot = Arc::clone(&started);
+    let release_slot = Arc::clone(&release);
+    let mut fixture = SubscriptionFixture::open(
+        |metadata| metadata.clone(),
+        move |storage| {
+            Arc::new(SettledSaveGate {
+                inner: Arc::clone(storage),
+                started: started_slot,
+                release: release_slot,
+            })
+        },
+    )
+    .await;
+    let samples = Arc::new(TimingSamples(std::sync::Mutex::new(Vec::new())));
+    // Stay inside the credential's lifetime. The sample is how far this
+    // clock moves between the send and the reply, not a fixed epoch.
+    let began = fixture.state.clock.unix_milliseconds();
+    let clock = Arc::new(StepClock(std::sync::atomic::AtomicU64::new(began)));
+    fixture.state = fixture.state.with_local_timings(samples.clone());
+    fixture.state.clock = clock.clone();
+
+    let (notify, arrived) = oneshot::channel();
+    let (go, resume) = oneshot::channel();
+    *started.lock().expect("save gate") = Some(notify);
+    *release.lock().expect("save gate") = Some(resume);
+
+    let state = fixture.state.clone();
+    let session = fixture.session.clone();
+    let conversation = fixture.id.to_string();
+    let mut sending = tokio::spawn(async move {
+        let frame = RequestFrame::new(
+            "call",
+            "conversation.send",
+            &json!({
+                "conversationId": conversation,
+                "requestId": "send-early-text",
+                "executionId": "early-text",
+                "text": "question early-text",
+                "attachments": [],
+                "files": [],
+            }),
+        )
+        .unwrap();
+        dispatch(&state, &session, frame).await
+    });
+
+    let arrived = timeout(EXPECTED, async {
+        tokio::select! {
+            result = &mut sending => {
+                let result = result.expect("send task");
+                let text = match &result {
+                    OutgoingMessage::Response(response) => serde_json::to_value(response).unwrap(),
+                    other => serde_json::json!({ "other": format!("{other:?}") }),
+                };
+                panic!("send finished before the settled save: {text}");
+            }
+            arrived = arrived => arrived.expect("the settled save closed its signal"),
+        }
+    })
+    .await
+    .expect("the settled save did not start");
+    let _ = arrived;
+
+    let deadline = std::time::Instant::now() + EXPECTED;
+    loop {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the reply was not visible while send was still saving"
+        );
+        let read = timeout(
+            Duration::from_secs(2),
+            fixture.service.read_at(
+                fixture.id.clone(),
+                caller(&fixture.session, "during-save".into()),
+                crate::conversation::application::ReadOpening::LiveOnly,
+            ),
+        )
+        .await;
+        match read {
+            Ok(Ok((view, _)))
+                if view
+                    .messages
+                    .iter()
+                    .any(|message| crate::product::turn_timing::has_reply_text(&message.parts)) =>
+            {
+                break;
+            }
+            Ok(_) => tokio::time::sleep(Duration::from_millis(10)).await,
+            Err(_) => panic!("reading the reply blocked while send was still saving"),
+        }
+    }
+
+    clock.0.store(began + 350, Ordering::SeqCst);
+    timeout(
+        Duration::from_secs(2),
+        crate::product::conversation::read_view(
+            &fixture.state,
+            &fixture.service,
+            &fixture.session,
+            &fixture.id,
+            "observe-early-text",
+            crate::conversation::application::ReadOpening::LiveOnly,
+        ),
+    )
+    .await
+    .expect("observing the reply blocked")
+    .expect("the reply view");
+
+    let sample_deadline = std::time::Instant::now() + Duration::from_secs(2);
+    while samples.0.lock().expect("samples").is_empty() {
+        assert!(
+            std::time::Instant::now() < sample_deadline,
+            "first text was visible before the clock was registered"
+        );
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    assert_eq!(samples.0.lock().expect("samples").as_slice(), &[350]);
+
+    go.send(()).expect("the save was still waiting");
+    let sent = timeout(EXPECTED, sending)
+        .await
+        .expect("send did not finish")
+        .expect("send task");
+    let OutgoingMessage::Response(response) = sent else {
+        panic!("a response");
+    };
+    let sent = serde_json::to_value(response).unwrap();
+    assert_eq!(sent["ok"], true, "{sent}");
+
+    let retried = fixture
+        .call(
+            "conversation.send",
+            json!({
+                "conversationId": fixture.id.to_string(),
+                "requestId": "send-early-text",
+                "executionId": "early-text",
+                "text": "question early-text",
+                "attachments": [],
+                "files": [],
+            }),
+        )
+        .await;
+    assert_eq!(retried["ok"], true, "{retried}");
+    clock.0.store(began + 5_000, Ordering::SeqCst);
+    crate::product::conversation::read_view(
+        &fixture.state,
+        &fixture.service,
+        &fixture.session,
+        &fixture.id,
+        "observe-retry",
+        crate::conversation::application::ReadOpening::LiveOnly,
+    )
+    .await
+    .expect("the retry view");
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert_eq!(
+        samples.0.lock().expect("samples").as_slice(),
+        &[350],
+        "a retry started another clock"
+    );
 }

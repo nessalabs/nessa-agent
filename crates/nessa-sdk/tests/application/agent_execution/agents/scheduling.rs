@@ -852,6 +852,39 @@ fn actor() -> ActionContext {
     ActionContext::new("caller", "test", "failed-pending").unwrap()
 }
 
+struct CountingNotice(AtomicUsize);
+
+impl nessa_sdk::application::agent_execution::executions::AdmissionNotice for CountingNotice {
+    fn admitted(&self) {
+        self.0.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
+/// A recovered retry must not notify again: the first admission already armed
+/// whatever the host keeps, and a second call would restart that clock.
+#[tokio::test]
+async fn a_fresh_queue_admission_notifies_once_and_a_retry_does_not() {
+    let audit = Arc::new(PausingSettlementAudit {
+        settlements: Mutex::new(Vec::new()),
+        gate: Mutex::new(None),
+    });
+    let agent = prepared(Arc::new(InMemoryStorage::new()), audit).await;
+    let notices = Arc::new(CountingNotice(AtomicUsize::new(0)));
+    let input = request("notify-once");
+    let first = Submitter::owner(actor()).when_admitted(notices.clone());
+    tokio::time::timeout(Duration::from_secs(5), agent.enqueue(input.clone(), first))
+        .await
+        .expect("admission stalled")
+        .unwrap();
+    assert_eq!(notices.0.load(Ordering::SeqCst), 1);
+    let retry = Submitter::owner(actor()).when_admitted(notices.clone());
+    tokio::time::timeout(Duration::from_secs(5), agent.enqueue(input, retry))
+        .await
+        .expect("retry stalled")
+        .unwrap();
+    assert_eq!(notices.0.load(Ordering::SeqCst), 1);
+}
+
 #[tokio::test]
 async fn failed_attachment_settlement_panics_do_not_discard_the_queue_tail() {
     let mutation = Arc::new(Mutex::new(None));

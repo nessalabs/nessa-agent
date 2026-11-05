@@ -4098,6 +4098,7 @@ async fn a_detached_scheduled_command_keeps_its_submission_permit() {
         SubmissionMode::Queue,
         false,
         Some(permit),
+        None,
     );
     let mut waiting = Box::pin(waiting);
     assert!(futures_util::poll!(&mut waiting).is_pending());
