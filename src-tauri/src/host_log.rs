@@ -859,9 +859,10 @@ mod tests {
     fn concurrent_launch_records_keep_every_sample() {
         let directory = tempfile::tempdir().expect("temporary directory");
         let timings = FileLaunchTimings::at(directory.path().join("launch"));
+        let timings = &timings;
         std::thread::scope(|scope| {
-            for ms in 0..8 {
-                scope.spawn(|| timings.record(ms));
+            for ms in 0..8u64 {
+                scope.spawn(move || timings.record(ms));
             }
         });
         let mut numbers: Vec<u64> = read(&directory.path().join("launch"))
