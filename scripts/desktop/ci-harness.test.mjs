@@ -202,8 +202,8 @@ test("native Linux verification matches the release distribution and retains smo
     assert.ok(matrix, "native verification declares its platform matrix")
     assert.deepEqual(
       matrix[1].split(",").map((name) => name.trim()),
-      ["windows-latest", linux[1], "macos-15-intel"],
-      "native verification must use the release's Linux distribution and its Intel macOS image",
+      ["windows-latest", linux[1], "macos-latest"],
+      "native verification must use the release's Linux distribution",
     )
     assert.ok(native.includes(`- os: ${linux[1]}${newline}            partition: all`))
     assert.ok(

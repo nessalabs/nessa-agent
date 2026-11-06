@@ -504,27 +504,31 @@ jobs:
         timeout-minutes: 90
 
   local-auth:
-    needs: changes
+    needs: [changes, desktop-release-profile]
     if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
     strategy:
       fail-fast: false
       # Native verification uses the shipping Linux baseline. A newer
       # ubuntu-latest image can change WebKitGTK/WebDriver packages and ABI
       # underneath the release contract (ci-harness.test.mjs, issue #1167).
-      # macos-latest is Apple Silicon. Runs 42072698358 and 42079903038
-      # never acquired one for this leg ("The job was not acquired by Runner
-      # of type hosted even after multiple attempts"), while the release
-      # profile job on the same label did. macos-15-intel is the x86_64
-      # image release.yml already builds, so this leg runs instead of
-      # waiting on the arm64 pool. The commands are the same.
+      # Native verification uses the shipping Linux baseline. A newer
+      # ubuntu-latest image can change WebKitGTK/WebDriver packages and ABI
+      # underneath the release contract (ci-harness.test.mjs, issue #1167).
+      # The macOS leg stays on macos-latest (Apple Silicon). Runs 42072698358
+      # and 42079903038 cancelled it with no steps: "The job was not acquired
+      # by Runner of type hosted even after multiple attempts", while
+      # desktop-release-profile on the same label did get a runner. This job
+      # waits for that compile so the two do not ask for the arm64 pool at
+      # once. macos-15-intel was tried on c4563c958 and is not a substitute:
+      # 55 tests failed there, backup promotion with Retained and Rename.
       matrix:
-        os: [windows-latest, ubuntu-22.04, macos-15-intel]
+        os: [windows-latest, ubuntu-22.04, macos-latest]
         include:
           - os: windows-latest
             partition: remaining
           - os: ubuntu-22.04
             partition: all
-          - os: macos-15-intel
+          - os: macos-latest
             partition: all
     runs-on: ${{ matrix.os }}
     # The apt step can run 65 minutes and the Rust tests can run to their own
