@@ -320,9 +320,15 @@ jobs:
     needs: changes
     if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
     runs-on: ubuntu-latest
-    # Planning bound: a cold gateway build, the browser download, the stress
+    # Planning bound: a cold gateway build, the browser install, the stress
     # check, and the chaos check's seeds (with a shrink if one fails).
-    timeout-minutes: 60
+    # Run 42072698358 finished in 33 minutes, 38 seconds of that in the
+    # browser install and about 31 minutes after it. Run 42079903038 was
+    # still fetching apt packages when the install step's 30 minute bound
+    # fired. The install step now allows the 45 minutes a moving apt install
+    # is given in scripts/desktop/install-linux-build-deps.sh. 45 + 31 is 76,
+    # so this job is 90.
+    timeout-minutes: 90
     env:
       STRESS_EVIDENCE: ${{ github.workspace }}-stress-evidence
     steps:
@@ -338,9 +344,20 @@ jobs:
           node-version: 24
       - uses: ./.github/actions/pnpm-install
       - name: Install the pinned browsers and their runtime dependencies
-        run: pnpm exec playwright install --with-deps chromium webkit
-        # The Ubuntu dependency download exceeded 15 minutes in run 40248544263.
-        timeout-minutes: 30
+        run: |
+          set -euo pipefail
+          # A dropped Azure mirror connection used to hold apt until this
+          # step's own bound (run 42079903038). The retries and the socket
+          # timeout are the ones install-linux-build-deps.sh already uses.
+          sudo tee /etc/apt/apt.conf.d/99-nessa-ci-retries >/dev/null <<'EOF'
+          Acquire::Retries "3";
+          Acquire::http::Timeout "30";
+          Acquire::https::Timeout "30";
+          EOF
+          pnpm exec playwright install --with-deps chromium webkit
+        # 45 minutes is that script's ceiling for an install that is still
+        # moving. Run 42079903038 had not finished fetching at 30.
+        timeout-minutes: 45
       - name: Verify row action hover ownership in pinned Chromium
         run: NESSA_HOVER_BROWSER=bundled node --test verification/desktop/scripts/lib/hover-state.test.mjs
       # nessa-mcp: the stress check's `github` step runs commands through
@@ -494,14 +511,20 @@ jobs:
       # Native verification uses the shipping Linux baseline. A newer
       # ubuntu-latest image can change WebKitGTK/WebDriver packages and ABI
       # underneath the release contract (ci-harness.test.mjs, issue #1167).
+      # macos-latest is Apple Silicon. Runs 42072698358 and 42079903038
+      # never acquired one for this leg ("The job was not acquired by Runner
+      # of type hosted even after multiple attempts"), while the release
+      # profile job on the same label did. macos-15-intel is the x86_64
+      # image release.yml already builds, so this leg runs instead of
+      # waiting on the arm64 pool. The commands are the same.
       matrix:
-        os: [windows-latest, ubuntu-22.04, macos-latest]
+        os: [windows-latest, ubuntu-22.04, macos-15-intel]
         include:
           - os: windows-latest
             partition: remaining
           - os: ubuntu-22.04
             partition: all
-          - os: macos-latest
+          - os: macos-15-intel
             partition: all
     runs-on: ${{ matrix.os }}
     # The apt step can run 65 minutes and the Rust tests can run to their own

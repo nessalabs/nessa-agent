@@ -190,7 +190,7 @@ test("the Windows split preserves full build flags, platform coverage, guards, c
     assert.equal(runners.length, 3)
     assert.match(runners[0], /^windows-latest$/)
     assert.match(runners[1], /^ubuntu-\d{2}\.\d{2}$/)
-    assert.match(runners[2], /^macos-latest$/)
+    assert.match(runners[2], /^macos-15-intel$/)
     for (const [index, runner] of runners.entries()) {
       const partition = index === 0 ? "remaining" : "all"
       assert.ok(local.includes(`- os: ${runner}\n            partition: ${partition}`))
