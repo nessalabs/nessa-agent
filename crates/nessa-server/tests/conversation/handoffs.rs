@@ -30,6 +30,49 @@ use nessa_sdk::application::agent_execution::sessions::HandoffKind;
 use nessa_sdk::infrastructure::session_storage::{RecordStorage, RuntimeMessageCommitClock};
 
 const BOUND: Duration = Duration::from_secs(10);
+/// How long a wait in these tests rests between two looks. A wait that only
+/// yields runs again at once: it keeps a worker busy and keeps asking for the
+/// scheduler lock and the store's read workers that the turn it waits for
+/// needs, so on a loaded runner the waiting slows the very thing it awaits.
+const POLL: Duration = Duration::from_millis(5);
+
+/// What a bounded wait last saw, and when: a wait that runs out says which
+/// step it was on and how long the run had gone, so a timeout on a loaded
+/// runner tells a stalled turn from a turn that ended and an agent that did
+/// not go idle.
+#[derive(Default)]
+struct Seen(
+    std::sync::Mutex<Option<(String, std::time::Instant)>>,
+    std::sync::OnceLock<std::time::Instant>,
+);
+
+impl Seen {
+    fn note(&self, what: String) {
+        let now = std::time::Instant::now();
+        self.1.get_or_init(|| now);
+        let mut last = self.0.lock().unwrap();
+        if last.as_ref().map(|(seen, _)| seen) != Some(&what) {
+            *last = Some((what, now));
+        }
+    }
+}
+
+impl std::fmt::Display for Seen {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let Some(started) = self.1.get() else {
+            return f.write_str("its first look never answered");
+        };
+        match &*self.0.lock().unwrap() {
+            Some((what, since)) => write!(
+                f,
+                "last saw {what} from {} ms of {} ms",
+                since.duration_since(*started).as_millis(),
+                started.elapsed().as_millis(),
+            ),
+            None => f.write_str("it saw nothing"),
+        }
+    }
+}
 const CODEX_MODEL: &str = "codex-model";
 
 struct Fixture {
@@ -164,17 +207,25 @@ impl Fixture {
         .await
         .expect("the message is answered")
         .unwrap();
+        let seen = Seen::default();
         tokio::time::timeout(BOUND, async {
             loop {
                 let view = self.service.read(id.clone(), caller("read")).await.unwrap();
+                let status = view
+                    .messages
+                    .iter()
+                    .find(|message| message.execution_id == action)
+                    .map(|message| message.status);
+                seen.note(format!("message status {status:?}"));
                 if view.messages.iter().any(|message| {
                     message.execution_id == action
                         && message.status == ConversationMessageStatus::Completed
                 }) {
                     break;
                 }
-                tokio::time::sleep(Duration::from_millis(5)).await;
+                tokio::time::sleep(POLL).await;
             }
+            seen.note("completed; waiting for the agent to be idle".into());
             let slot = self
                 .service
                 .inner
@@ -186,11 +237,11 @@ impl Fixture {
                 .unwrap();
             let live = self.service.wait_for_slot(id, slot).await.unwrap();
             while !live.agent.is_idle().await {
-                tokio::task::yield_now().await;
+                tokio::time::sleep(POLL).await;
             }
         })
         .await
-        .unwrap_or_else(|_| panic!("{action} completes"));
+        .unwrap_or_else(|_| panic!("{action} completes; {seen}"));
     }
 
     async fn switch(&self, id: &ConversationId, action: &str) -> Result<bool, ConversationError> {
@@ -318,9 +369,18 @@ impl Fixture {
             )
             .await
             .unwrap();
+        let seen = Seen::default();
         tokio::time::timeout(BOUND, async {
             loop {
                 let snapshot = self.snapshot(id).await;
+                let invocation = snapshot
+                    .invocations
+                    .iter()
+                    .find(|invocation| invocation.request.execution_id.as_str() == action);
+                seen.note(match invocation {
+                    None => "no invocation saved".into(),
+                    Some(invocation) => format!("saved result {:?}", invocation.result),
+                });
                 if snapshot.invocations.iter().any(|invocation| {
                     invocation.request.execution_id.as_str() == action
                         && invocation.result.as_ref().is_some_and(|result| {
@@ -333,15 +393,16 @@ impl Fixture {
                 }) {
                     break;
                 }
-                tokio::task::yield_now().await;
+                tokio::time::sleep(POLL).await;
             }
+            seen.note("limit saved; waiting for the agent to be idle".into());
             let live = self.service.resolve(id, &caller("read")).await.unwrap();
             while !live.agent.is_idle().await {
-                tokio::task::yield_now().await;
+                tokio::time::sleep(POLL).await;
             }
         })
         .await
-        .expect("usage-limit turn settles");
+        .unwrap_or_else(|_| panic!("usage-limit turn settles; {seen}"));
     }
 
     async fn restart(self) -> Self {
@@ -498,7 +559,7 @@ async fn a_switch_is_refused_to_the_same_agent_and_while_a_turn_runs() {
             .iter()
             .any(|execution| execution == "running")
         {
-            tokio::time::sleep(Duration::from_millis(5)).await;
+            tokio::time::sleep(POLL).await;
         }
     })
     .await
@@ -805,7 +866,7 @@ async fn a_fork_retried_while_the_first_runs_is_saved_once() {
     // The fork's own opening, not a notification an earlier one left.
     tokio::time::timeout(BOUND, async {
         while fixture.claude.open_calls.load(Ordering::SeqCst) == opened {
-            tokio::time::sleep(Duration::from_millis(5)).await;
+            tokio::time::sleep(POLL).await;
         }
     })
     .await
@@ -1072,7 +1133,7 @@ async fn a_pending_agent_switch_retries_invalidation_as_its_original_request() {
             if live.agent.is_idle().await {
                 break;
             }
-            tokio::task::yield_now().await;
+            tokio::time::sleep(POLL).await;
         }
     })
     .await

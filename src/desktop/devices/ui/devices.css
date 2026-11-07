@@ -49,13 +49,15 @@
 
 /* The window's button reset (`chrome.css`) is unlayered, so it outranks the
    kit's ink; the filled action takes its ink back, as New channel's does. */
-.devices-page .devices-primary {
+.devices-page .devices-primary,
+.devices-page .devices-pill-connect {
   color: var(--nessa-button-inverse-ink, var(--background));
 }
 
 /* ——— The hub ——— */
 
 .devices-hub {
+  position: relative;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -425,6 +427,137 @@ button.devices-tile:focus-visible,
 .devices-settings {
   width: 100%;
   max-width: 720px;
+}
+
+/* A tile with a star: the star sits over the tile's stage, beside its
+   button rather than inside it. */
+.devices-tile-holder {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+}
+
+.devices-tile-holder > .devices-tile {
+  flex: 1;
+}
+
+.devices-star-slot {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+}
+
+/* At rest only the chosen star shows; any star shows while its device is
+   hovered or the star has focus. */
+.devices-star {
+  color: var(--desktop-ink-2);
+  opacity: 0;
+  transition: opacity var(--desktop-fast) var(--desktop-ease);
+}
+
+.devices-star[data-chosen] {
+  color: var(--foreground);
+  opacity: 1;
+}
+
+.devices-tile-holder:hover .devices-star,
+.devices-hub:hover .devices-star,
+.devices-star:focus-visible {
+  opacity: 1;
+}
+
+.devices-suggestions-head {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.devices-suggestions-head h2 {
+  margin: 0;
+  font-size: var(--desktop-text-read);
+  font-weight: 600;
+}
+
+.devices-suggestions-head p {
+  margin: 0;
+}
+
+.devices-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.devices-pill {
+  display: inline-flex;
+  min-width: 0;
+  max-width: 100%;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+  padding: 4px 4px 4px 14px;
+  border-radius: var(--desktop-radius-pill);
+  background: var(--desktop-pane-fill);
+  box-shadow: var(--desktop-card-rim);
+  font-size: var(--desktop-text-body);
+  transition: background-color var(--desktop-fast) var(--desktop-ease);
+}
+
+.devices-pill:hover,
+.devices-pill:focus-within {
+  background: var(--desktop-hover-strong);
+}
+
+.devices-pill-name {
+  overflow: hidden;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.devices-pill-note {
+  overflow: hidden;
+  min-width: 0;
+  font-size: var(--desktop-text-footnote);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Connect waits behind the hover: kept in the layout, so the pill does
+   not move, and reachable by keyboard all along. */
+.devices-pill-connect {
+  opacity: 0;
+  transition: opacity var(--desktop-fast) var(--desktop-ease);
+}
+
+.devices-pill:hover .devices-pill-connect,
+.devices-pill:focus-within .devices-pill-connect,
+.devices-pill[data-state="failed"] .devices-pill-connect {
+  opacity: 1;
+}
+
+.devices-pill:not(:has(.devices-pill-connect)) {
+  padding-right: 14px;
+}
+
+/* No hover on touch: every action shows. */
+@media (hover: none) {
+  .devices-star,
+  .devices-pill-connect {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .devices-star,
+  .devices-pill,
+  .devices-pill-connect {
+    transition: none;
+  }
 }
 
 /* Thread order: a quiet row under the list opens it. */

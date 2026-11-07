@@ -48,4 +48,21 @@ describe("the agent catalog's places", () => {
       }),
     ).toThrow("Invalid agent catalog environments")
   })
+
+  it("names a default device only among its places", () => {
+    const catalog = (defaultEnvironment: unknown) => ({
+      agents: [],
+      environments: ["devbox"],
+      commandHosts: [],
+      nativeHooks: { claude: "off", codex: "off" },
+      defaultEnvironment,
+    })
+    expect(agentsList(catalog("devbox")).defaultEnvironment).toBe("devbox")
+    expect(() => agentsList(catalog("other"))).toThrow(
+      "Invalid agent catalog default environment",
+    )
+    expect(() => agentsList(catalog(null))).toThrow(
+      "Invalid agent catalog default environment",
+    )
+  })
 })

@@ -96,29 +96,57 @@ export type ConversationSelection = {
   agent: string
   model: string
   approvalMode: ApprovalMode
-  /** The SSH host the conversation runs on for its whole life, one the
-   * gateway's catalog names; absent runs it on the gateway's own machine. */
+  /** Where the conversation runs for its whole life: an SSH host or paired
+   * machine the gateway's catalog names, or {@link HERE} for the gateway's
+   * own machine. Absent runs it on the gateway's default device (the
+   * catalog's `defaultEnvironment`), or its own machine when it has none. */
   environment?: string
+}
+
+/** The gateway's own machine, named outright: a draft that chose it keeps
+ * it even when another device is the default. */
+export const HERE = "here"
+
+/**
+ * Where a draft will run, as the gateway places it: what it chose, else the
+ * default device `fallback` names. `undefined` is the gateway's own machine.
+ */
+export function chosenEnvironment(
+  selection: ConversationSelection | undefined,
+  fallback: string | undefined,
+): string | undefined {
+  const chosen = selection?.environment ?? fallback
+  return chosen === HERE ? undefined : chosen
 }
 
 /**
  * Whether a file on this machine can be linked into the conversation by its
- * path: only when its agent runs here. One placed on an SSH host — chosen for
- * this tab, or named by its lease — reads that host's files, where this
- * machine's path names nothing, or something else. The gateway refuses such a
- * message (`linked_file_unreachable`); this is the panel's early word for it.
- * Images travel with their bytes and are unaffected.
+ * path: only when its agent runs here. One placed on an SSH host or another
+ * computer — chosen for this tab, named by its lease, or, for a draft not yet
+ * created that chose nowhere, the default device `defaultEnvironment` names —
+ * reads that machine's files, where this machine's path names nothing, or
+ * something else. The gateway refuses such a message
+ * (`linked_file_unreachable`); this is the panel's early word for it. Images
+ * travel with their bytes and are unaffected.
  */
-export function linksFilesHere(conversation: {
-  selection?: ConversationSelection
-  remote?: { lease?: { environment?: "here" | "ssh" | "peer" | "boat" } }
-}): boolean {
+export function linksFilesHere(
+  conversation: {
+    selection?: ConversationSelection
+    remote?: { lease?: { environment?: "here" | "ssh" | "peer" | "boat" } }
+    serverConversationId?: string
+    turns?: readonly unknown[]
+  },
+  defaultEnvironment?: string,
+): boolean {
   const environment = conversation.remote?.lease?.environment
-  return (
-    !conversation.selection?.environment &&
-    environment !== "ssh" &&
-    environment !== "peer"
+  // The default applies where the gateway applies it: at creation, to a
+  // conversation that names no place. Once created, its lease says.
+  const draft = !conversation.serverConversationId && !conversation.turns?.length
+  const chosen = chosenEnvironment(
+    conversation.selection,
+    draft ? defaultEnvironment : undefined,
   )
+  return chosen === undefined && environment !== "ssh" && environment !== "peer"
 }
 
 /** Creation fixes the selection before the first send or attachment upload. */

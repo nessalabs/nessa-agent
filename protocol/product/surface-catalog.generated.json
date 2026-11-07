@@ -524,6 +524,27 @@
       "destructive": false
     },
     {
+      "name": "devices.sshHosts",
+      "params": null,
+      "grant": "credential.manage",
+      "readOnly": true,
+      "destructive": false
+    },
+    {
+      "name": "devices.connectSsh",
+      "params": "DevicesConnectSshParams",
+      "grant": "credential.manage",
+      "readOnly": false,
+      "destructive": false
+    },
+    {
+      "name": "devices.setDefault",
+      "params": "DevicesSetDefaultParams",
+      "grant": "credential.manage",
+      "readOnly": false,
+      "destructive": false
+    },
+    {
       "name": "github.cancel",
       "params": null,
       "grant": "credential.manage",

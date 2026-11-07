@@ -2,16 +2,27 @@
 //! a machine ([`MachineProbe`]); [`LiveWorkers`] reads the paired
 //! environments' connections; [`PairedKeys`] says which keys are paired
 //! now; [`WorkerSightings`] keeps when each was last seen, over a
-//! [`SightingStore`].
+//! [`SightingStore`]. `ssh_config.rs` reads the machines an SSH
+//! configuration names ([`SshConfigSource`]); `setup.rs` connects them and
+//! keeps the default device ([`DeviceSetup`]).
 mod machine;
+#[cfg_attr(not(unix), allow(dead_code, reason = "the Unix gateway composes it"))]
+mod setup;
 mod sightings;
+#[cfg_attr(not(unix), allow(dead_code, reason = "the Unix gateway composes it"))]
+mod ssh_config;
 
 #[cfg(all(test, unix))]
 pub(crate) use machine::MACHINE_READ_LIMIT;
 pub(crate) use machine::{read_machine, MachineProbe};
+pub(crate) use setup::{Connect, ConnectRefusal, ConnectState, DefaultRefusal, DeviceSetup};
+// What only the Unix gateway composes a setup from.
+#[cfg(unix)]
+pub(crate) use setup::{DeviceSettings, HostInstall, SetupFuture};
 #[cfg(test)]
 use sightings::SAVE_EVERY_MS;
 pub(crate) use sightings::{Sighting, SightingStore, WorkerSightings};
+pub(crate) use ssh_config::{SshConfigSource, SshHost, SSH_CONFIG_BYTES};
 
 use nessa_protocol::lease::MachineReport;
 use nessa_sdk::domain::agent_execution::leases::PeerEnvironment;
