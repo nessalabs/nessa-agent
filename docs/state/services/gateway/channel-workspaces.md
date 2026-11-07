@@ -267,3 +267,5 @@ placement, restoration and lifetime paths were not re-reviewed here.
 ## Bounded rule model
 
 Owns durable provisioning intent, single VM target, reconnect verification and terminal refusal. Uncertain creation cannot allocate again. Local placement, TTL settings, credential posture fields, SSH leases, rollback acknowledgement and main-chat replacement remain separate unmodeled contracts. This finite abstraction checks safety only. It does not execute or verify the implementation, promise eventual completion, or qualify external effects. Existing source checkpoints and historical test receipts retain their earlier scope. The scoped model review inspected `crates/nessa-server/src/workspaces/domain/workspace.rs`, `crates/nessa-server/src/workspaces/application/workspaces.rs`.
+
+The newer [channel run-location control](../desktop/workspace/change-channel-run-location.md) describes moving an existing channel, main creation locking and committed-but-unconfirmed audit outcomes. [Pool ordering](../desktop/workspace/choose-worker-pool-order.md) describes Any computer and cloud overflow. These source-only task guides do not extend this page’s allocation model.

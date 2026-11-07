@@ -11,6 +11,7 @@ use nessa_sdk::application::agent_execution::commands::{
     MutationBinding, MutationCoordinator, MutationFailure, MutationOperation, MutationOutcome,
     MutationPlan, MutationReceipt, MutationStage, MutationTarget,
 };
+use nessa_sdk::application::agent_execution::executions::AdmissionNotice;
 use nessa_sdk::application::agent_execution::providers::ProviderSessionState;
 use nessa_sdk::domain::agent_execution::executions::{
     AgentSource, ExecutionId, Initiation, Initiator, InvocationStage,
@@ -71,6 +72,39 @@ impl ConversationService {
         message: SubmittedMessage,
         mode: SubmissionMode,
     ) -> Result<SubmittedCommand, MutationFailure<ConversationError>> {
+        self.submit_command_notifying(
+            storage,
+            id,
+            caller,
+            initiation,
+            offers_remember,
+            execution_id,
+            message,
+            mode,
+            None,
+        )
+        .await
+    }
+
+    /// [`Self::submit_command`], and `on_admission` runs once if this call
+    /// freshly queues the turn, before that turn's runner starts.
+    ///
+    /// A settled retry does not enqueue and does not call it. The notice
+    /// returns while the agent's scheduler lock is held, so a conversation
+    /// read cannot observe the reply until the notice has returned.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) async fn submit_command_notifying(
+        &self,
+        storage: Arc<dyn CreationStorage>,
+        id: ConversationId,
+        caller: ConversationCaller,
+        initiation: Initiation,
+        offers_remember: bool,
+        execution_id: String,
+        message: SubmittedMessage,
+        mode: SubmissionMode,
+        on_admission: Option<Arc<dyn AdmissionNotice>>,
+    ) -> Result<SubmittedCommand, MutationFailure<ConversationError>> {
         let service = self.clone();
         tokio::spawn(async move {
             let _threads = service.inner.thread_admission.clone().lock_owned().await;
@@ -85,6 +119,7 @@ impl ConversationService {
                     message,
                     mode,
                     false,
+                    on_admission,
                 )
                 .await
         })
@@ -104,6 +139,7 @@ impl ConversationService {
         message: SubmittedMessage,
         mode: SubmissionMode,
         from_agent: bool,
+        on_admission: Option<Arc<dyn AdmissionNotice>>,
     ) -> Result<SubmittedCommand, MutationFailure<ConversationError>> {
         self.submit_command_permitted(
             storage,
@@ -116,6 +152,7 @@ impl ConversationService {
             mode,
             from_agent,
             None,
+            on_admission,
         )
         .await
     }
@@ -134,6 +171,7 @@ impl ConversationService {
         mode: SubmissionMode,
         from_agent: bool,
         selection: Option<Arc<SubmissionPermit>>,
+        on_admission: Option<Arc<dyn AdmissionNotice>>,
     ) -> Result<SubmittedCommand, MutationFailure<ConversationError>> {
         let agent_source = match initiation.initiator() {
             Initiator::Agent(source) => Some(source),
@@ -196,6 +234,7 @@ impl ConversationService {
                 mode,
                 delivery: captured,
                 selection,
+                on_admission,
             });
             MutationCoordinator::new(storage)
                 .execute(binding, target)
@@ -385,6 +424,7 @@ struct SubmitTarget {
     mode: SubmissionMode,
     delivery: Arc<Mutex<Option<SubmissionReceipt>>>,
     selection: Option<Arc<SubmissionPermit>>,
+    on_admission: Option<Arc<dyn AdmissionNotice>>,
 }
 impl MutationTarget for SubmitTarget {
     type Error = ConversationError;
@@ -419,6 +459,7 @@ impl MutationTarget for SubmitTarget {
         let mode = self.mode;
         let delivery = self.delivery.clone();
         let selection = self.selection.clone();
+        let on_admission = self.on_admission.clone();
         Box::pin(async move {
             // `submit_command` holds admission through this effect.
             let submitted = service
@@ -434,6 +475,7 @@ impl MutationTarget for SubmitTarget {
                     },
                     true,
                     selection,
+                    on_admission,
                 )
                 .await
                 .map_err(SubmitFailure::into_error);

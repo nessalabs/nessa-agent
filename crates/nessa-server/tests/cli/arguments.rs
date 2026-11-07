@@ -602,3 +602,41 @@ fn github_passphrases_use_stdin_and_never_an_argument_or_stage_override() {
         }
     }
 }
+
+#[test]
+fn call_and_mcp_take_a_method_or_only_a_credential_file() {
+    let credential = std::env::temp_dir().join("cli.token");
+    let credential = credential.to_str().expect("temp path is unicode");
+    assert_eq!(
+        parse(&args(&[
+            "call",
+            "conversation.list",
+            "--params",
+            "{}",
+            "--credential-file",
+            credential
+        ]))
+        .unwrap(),
+        Command::Call {
+            method: "conversation.list".into(),
+            params: "{}".into(),
+            credential_file: Some(credential.into()),
+        }
+    );
+    assert!(matches!(
+        parse(&args(&["mcp"])).unwrap(),
+        Command::Mcp {
+            credential_file: None
+        }
+    ));
+    for words in [
+        vec!["call"],
+        vec!["call", "conversation.list"],
+        vec!["call", "--params", "{}"],
+        vec!["call", "conversation.list", "--params", "-1"],
+        vec!["mcp", "--credential-file", "relative"],
+        vec!["mcp", "--params", "{}"],
+    ] {
+        assert!(parse(&args(&words)).is_err(), "{words:?}");
+    }
+}

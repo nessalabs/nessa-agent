@@ -125,6 +125,15 @@ production build at 4× CPU throttling.
   maxima for display. A 50.1 ms frame fails when that table shows 50; an exact
   50 ms frame and a 49.6 ms frame pass.
   _Check:_ `lib/perf.test.mjs` (`frame budget`).
+- [ ] **A base comparison labels a row only when its interval excludes zero.**
+  `--base <url>` alternates a fresh base page and a fresh head page, pair by
+  pair, on the same host. The difference is the head run's longest frame minus
+  the base run's. The median of those differences carries a 95% bootstrap
+  interval. The row is a regression when the whole interval is above zero, a
+  win when it is below, and no change when zero is inside it, including on an
+  endpoint. That label does not fail the row. The 50 ms budget still does, on
+  the head runs. The JSON keeps every raw head run, as before, and the base runs.
+  _Check:_ `lib/compare.test.mjs`.
 - [ ] **Style-and-layout time is a duration on the performance clock** (#369). The
   sample shifts `start`, `renderStart`, and `styleAndLayoutStart` together
   onto the interaction. A zero phase start means that phase did not run, so
@@ -435,6 +444,10 @@ _ADR 238 › Focus follows the focused pane_; keys in
   Wait for the command's expected pane membership, destination, focus mark and
   composer together, with finite motion finished, within the existing 3 s
   settlement budget. The old pane's caret cannot complete a new-pane command.
+- [ ] **A fast display still lands the caret after a split.** Frames every
+  8ms, the flight still on its own 340ms clock: ⇧⌘N and ⇧⌘\\ leave the caret
+  in the new pane's composer. A search of thirty frames ends inside that
+  flight. _Check:_ `focus.mjs` (`focus-fast-frames`).
 - [ ] **Closing ⌘K without a pick, or Settings, gives focus back** to what
   opened it. _Check:_ `focus.mjs` (`focus-panes`).
 - [ ] **Replacing a workspace layout retires queued focus settlement**: deliver

@@ -157,6 +157,10 @@ fn validate_options(args: &[String], allowed: &[&str]) -> Result<(), RunError> {
 /// consent when pairing (design row S17 in `docs/design/auth/device-pairing.md`).
 const OWNER_GRANTS: &str = "server.read,conversation.read,conversation.write,credential.manage";
 
+/// What `nessa mcp` holds unless an operator names other grants: conversation
+/// work and health, not credential administration.
+const MCP_GRANTS: &str = "server.read,conversation.read,conversation.write";
+
 /// Each grant named once, and each one a surface may hold. Which actions that
 /// is belongs to the policy bundle (`credential.hold`), asked here for the
 /// surface's kind and path, the same question the registry asks when it
@@ -233,10 +237,10 @@ fn provision_command(
     validate_options(args, &["--surface-id", "--grants", "--expires-at"])?;
     let surface =
         option_value(args, "--surface-id")?.ok_or_else(|| failure("--surface-id is required"))?;
-    let defaults = if surface == "nessa-panel" {
-        OWNER_GRANTS
-    } else {
-        "server.read"
+    let defaults = match surface {
+        "nessa-panel" => OWNER_GRANTS,
+        "nessa-mcp" => MCP_GRANTS,
+        _ => "server.read",
     };
     let grants = option_value(args, "--grants")?.unwrap_or(defaults);
     let policy = grant_policy()?;

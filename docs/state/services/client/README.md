@@ -19,7 +19,8 @@ diagramLinks:
 
 The product client connects a Nessa surface to the gateway. It authenticates, sends requests and reports replies or uncertainty.
 
-This page describes the TypeScript surface client. The separate Rust `nessa-client-core` owns device enrollment, private caches and [retained history reads](../sdk/runtime/an-authorized-receiver-reads-physical-history-without-opening-an-agent.md).
+This area covers the TypeScript surface client and the Swift native submission
+wrapper. The separate Rust `nessa-client-core` owns device enrollment, private caches and [retained history reads](../sdk/runtime/an-authorized-receiver-reads-physical-history-without-opening-an-agent.md).
 
 The gateway and SDK own the work after acceptance. Losing a client connection can end the wait without ending that work.
 
@@ -40,6 +41,7 @@ flowchart TB
 
 - [Wire requests and command uncertainty](commands.md)
 - [Managed connection](connection.md)
+- [Queue a native product submission](native-submissions.md)
 
 ## Model coverage
 
@@ -48,7 +50,6 @@ Component index. This page groups independent owners; its component arrows are n
 - [Subscription opening and bounded consumption](subscriptions.md)
 
 - [Event handler registration generations](event-registration.md)
-
 
 ## Native device submissions
 

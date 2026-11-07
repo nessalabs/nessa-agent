@@ -1,9 +1,17 @@
 use crate::cli::{
-    application::{CliError, Gateway, TokenRequest},
-    infrastructure::LocalGateway,
+    application::{invoke, refusal_body, CliError, Gateway, GatewayCallError, TokenRequest},
+    infrastructure::{serve_mcp, LocalGateway},
 };
+use nessa_client_core::local_product::ProductCaller;
+use nessa_protocol::product::generated::VaultErrorCode;
 use serde_json::{json, Value};
-use std::{io::Write, net::TcpListener, thread};
+use std::{
+    io::{Cursor, Write},
+    net::TcpListener,
+    sync::mpsc,
+    thread,
+    time::Duration,
+};
 use tungstenite::{accept, Message};
 
 #[test]
@@ -104,6 +112,144 @@ fn adapter_rejects_an_authenticated_identity_with_nonportable_expiry() {
     assert_eq!(
         LocalGateway::connect(address, &token).err(),
         Some(CliError::Protocol)
+    );
+    server.join().unwrap();
+}
+
+fn handshake(socket: &mut tungstenite::WebSocket<std::net::TcpStream>) -> String {
+    socket.send(Message::Text(json!({"type":"event","event":"session.challenge","seq":0,"stateVersion":0,"payload":{"minVersion":1,"maxVersion":1,"nonce":"challenge","expiresAt":9999999999_u64}}).to_string().into())).unwrap();
+    let auth: Value = serde_json::from_str(socket.read().unwrap().to_text().unwrap()).unwrap();
+    let id = auth["id"].as_str().unwrap().to_owned();
+    socket.send(Message::Text(json!({"type":"res","id":id,"ok":true,"payload":{
+        "version":1,"gatewayId":"gateway","organizationId":"org","principalId":"caller","membershipId":"member","credentialId":"cli","audienceId":"gateway","expiresAt":null,"grants":[],"methods":[]
+    }}).to_string().into())).unwrap();
+    id
+}
+
+#[test]
+fn a_timed_out_call_reconnects_instead_of_reading_the_late_reply() {
+    let root = tempfile::tempdir().unwrap();
+    let token = root.path().join("cli.token");
+    nessa_local_storage::open(&token, nessa_local_storage::OpenMode::CreateNew)
+        .unwrap()
+        .write_all(b"private-token")
+        .unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        let mut socket = accept(stream).unwrap();
+        handshake(&mut socket);
+        let request: Value =
+            serde_json::from_str(socket.read().unwrap().to_text().unwrap()).unwrap();
+        assert_eq!(request["method"], "server.health");
+        thread::sleep(Duration::from_millis(250));
+        let _ = socket.send(Message::Text(
+            json!({"type":"res","id":request["id"],"ok":true,"payload":{"marker":"late"}})
+                .to_string()
+                .into(),
+        ));
+        let (stream, _) = listener.accept().unwrap();
+        let mut socket = accept(stream).unwrap();
+        handshake(&mut socket);
+        let request: Value =
+            serde_json::from_str(socket.read().unwrap().to_text().unwrap()).unwrap();
+        assert_eq!(request["method"], "server.health");
+        socket
+            .send(Message::Text(
+                json!({"type":"res","id":request["id"],"ok":true,"payload":{"marker":"fresh"}})
+                    .to_string()
+                    .into(),
+            ))
+            .unwrap();
+    });
+    let mut gateway = LocalGateway::open(
+        address,
+        token,
+        ProductCaller::CLI,
+        Duration::from_millis(40),
+    )
+    .unwrap();
+    let error = gateway.call("server.health", json!({})).unwrap_err();
+    assert!(
+        matches!(
+            error,
+            GatewayCallError::Transport(CliError::TimedOut | CliError::Transport)
+        ),
+        "{error:?}"
+    );
+    let fresh = gateway.call("server.health", json!({})).unwrap();
+    assert_eq!(fresh["marker"], "fresh");
+    server.join().unwrap();
+}
+
+#[test]
+fn a_dropped_passphrase_change_stays_unconfirmed_on_the_cli_and_on_mcp() {
+    let root = tempfile::tempdir().unwrap();
+    let token = root.path().join("cli.token");
+    nessa_local_storage::open(&token, nessa_local_storage::OpenMode::CreateNew)
+        .unwrap()
+        .write_all(b"private-token")
+        .unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let (sent, received) = mpsc::channel();
+    let server = thread::spawn(move || {
+        for _ in 0..2 {
+            let (stream, _) = listener.accept().unwrap();
+            let mut socket = accept(stream).unwrap();
+            handshake(&mut socket);
+            let request: Value =
+                serde_json::from_str(socket.read().unwrap().to_text().unwrap()).unwrap();
+            sent.send(request["method"].as_str().unwrap_or("").to_owned())
+                .unwrap();
+            drop(socket);
+        }
+    });
+    let params = json!({"passphrase": "disposable replacement phrase"});
+    let mut cli = LocalGateway::open(
+        address,
+        token.clone(),
+        ProductCaller::CLI,
+        Duration::from_secs(2),
+    )
+    .unwrap();
+    let failure = invoke(&mut cli, "vault.changePassphrase", params.clone()).unwrap_err();
+    let code = VaultErrorCode::VaultChangeNotConfirmed.as_str();
+    assert_eq!(failure.code, code);
+    assert_eq!(
+        failure.detail,
+        CliError::VaultChangeNotConfirmed.to_string()
+    );
+    assert_eq!(refusal_body(&failure)["code"], code);
+    assert_ne!(failure.code, "transport");
+
+    let mut mcp =
+        LocalGateway::open(address, token, ProductCaller::MCP, Duration::from_secs(2)).unwrap();
+    let input = concat!(
+        r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}"#,
+        "\n",
+        r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"vault.changePassphrase","arguments":{"passphrase":"disposable replacement phrase"}}}"#,
+        "\n",
+    );
+    let mut output = Vec::new();
+    serve_mcp(&mut mcp, Cursor::new(input), &mut output).unwrap();
+    let reply = String::from_utf8(output).unwrap();
+    let call = reply
+        .lines()
+        .nth(1)
+        .and_then(|line| serde_json::from_str::<Value>(line).ok())
+        .expect("tools/call reply");
+    assert_eq!(call["result"]["isError"], true);
+    let text = call["result"]["content"][0]["text"].as_str().unwrap();
+    assert_eq!(serde_json::from_str::<Value>(text).unwrap()["code"], code);
+    assert!(!text.contains("transport"));
+    assert!(!text.contains("rejected"));
+
+    let methods: Vec<_> = received.try_iter().collect();
+    assert_eq!(
+        methods,
+        ["vault.changePassphrase", "vault.changePassphrase"]
     );
     server.join().unwrap();
 }

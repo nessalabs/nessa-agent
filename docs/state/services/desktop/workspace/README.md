@@ -146,3 +146,13 @@ The current composition also supplies GitHub, Boat, vault and voice-key settings
 - [Keep a local window preference](window-preferences.md)
 
 - [Keep the reader position when a transcript grows](transcript-scroll.md)
+
+## Newer placement and access tasks
+
+The following task guides were source-reviewed at `31d023ed3e4cd60053f771d44137f6af1e1b92ca`; this addition does not advance this index’s other owner checkpoints.
+
+- [Choose where new threads run](choose-worker-pool-order.md): pool order, exclusions, cloud overflow and the separate live-thread cap.
+- [Change a channel’s run location](change-channel-run-location.md): creation locks, successor identity and uncertain audit outcomes.
+- [Revoke remembered app access](revoke-remembered-app-access.md): gateway-wide app trust and fresh-list recovery.
+
+These are source-only task guides, not additional formal passes.

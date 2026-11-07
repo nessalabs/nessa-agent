@@ -320,9 +320,15 @@ jobs:
     needs: changes
     if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
     runs-on: ubuntu-latest
-    # Planning bound: a cold gateway build, the browser download, the stress
+    # Planning bound: a cold gateway build, the browser install, the stress
     # check, and the chaos check's seeds (with a shrink if one fails).
-    timeout-minutes: 60
+    # Run 42072698358 finished in 33 minutes, 38 seconds of that in the
+    # browser install and about 31 minutes after it. Run 42079903038 was
+    # still fetching apt packages when the install step's 30 minute bound
+    # fired. The install step now allows the 45 minutes a moving apt install
+    # is given in scripts/desktop/install-linux-build-deps.sh. 45 + 31 is 76,
+    # so this job is 90.
+    timeout-minutes: 90
     env:
       STRESS_EVIDENCE: ${{ github.workspace }}-stress-evidence
     steps:
@@ -338,9 +344,20 @@ jobs:
           node-version: 24
       - uses: ./.github/actions/pnpm-install
       - name: Install the pinned browsers and their runtime dependencies
-        run: pnpm exec playwright install --with-deps chromium webkit
-        # The Ubuntu dependency download exceeded 15 minutes in run 40248544263.
-        timeout-minutes: 30
+        run: |
+          set -euo pipefail
+          # A dropped Azure mirror connection used to hold apt until this
+          # step's own bound (run 42079903038). The retries and the socket
+          # timeout are the ones install-linux-build-deps.sh already uses.
+          sudo tee /etc/apt/apt.conf.d/99-nessa-ci-retries >/dev/null <<'EOF'
+          Acquire::Retries "3";
+          Acquire::http::Timeout "30";
+          Acquire::https::Timeout "30";
+          EOF
+          pnpm exec playwright install --with-deps chromium webkit
+        # 45 minutes is that script's ceiling for an install that is still
+        # moving. Run 42079903038 had not finished fetching at 30.
+        timeout-minutes: 45
       - name: Verify row action hover ownership in pinned Chromium
         run: NESSA_HOVER_BROWSER=bundled node --test verification/desktop/scripts/lib/hover-state.test.mjs
       # nessa-mcp: the stress check's `github` step runs commands through
@@ -454,8 +471,8 @@ jobs:
       matrix:
         partition: [server-conversation, server-other]
     runs-on: windows-latest
-    # The test step's 70 plus at most 4 minutes of setup.
-    timeout-minutes: 80
+    # The test step's 90 plus at most 4 minutes of setup.
+    timeout-minutes: 95
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/native-crypto
@@ -480,19 +497,30 @@ jobs:
           RUST_TEST_NOCAPTURE: "1"
         # The step compiles before it tests. Cargo.lock is part of the cache
         # key, so a change that edits it compiles the graph cold: about 25
-        # minutes on this runner, then 20 to 25 of tests for server-other.
-        # 70 covers that; a warm run ends in under 30.
+        # minutes on this runner. Run 41947356093 was still inside
+        # server-other's 2349 tests when a 70-minute deadline fired, with
+        # 2283 passed. 90 covers that cold path. A warm run ends in under 35.
         run: node scripts/cargo-test-parallel.mjs --concurrency 2 --partition ${{ matrix.partition }} -- -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-client-core -p nessa-device-client -p nessa-sdk -p nessa-timer -p nessa-vault
-        timeout-minutes: 70
+        timeout-minutes: 90
 
   local-auth:
-    needs: changes
+    needs: [changes, desktop-release-profile]
     if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
     strategy:
       fail-fast: false
       # Native verification uses the shipping Linux baseline. A newer
       # ubuntu-latest image can change WebKitGTK/WebDriver packages and ABI
       # underneath the release contract (ci-harness.test.mjs, issue #1167).
+      # Native verification uses the shipping Linux baseline. A newer
+      # ubuntu-latest image can change WebKitGTK/WebDriver packages and ABI
+      # underneath the release contract (ci-harness.test.mjs, issue #1167).
+      # The macOS leg stays on macos-latest (Apple Silicon). Runs 42072698358
+      # and 42079903038 cancelled it with no steps: "The job was not acquired
+      # by Runner of type hosted even after multiple attempts", while
+      # desktop-release-profile on the same label did get a runner. This job
+      # waits for that compile so the two do not ask for the arm64 pool at
+      # once. macos-15-intel was tried on c4563c958 and is not a substitute:
+      # 55 tests failed there, backup promotion with Retained and Rename.
       matrix:
         os: [windows-latest, ubuntu-22.04, macos-latest]
         include:
@@ -504,11 +532,11 @@ jobs:
             partition: all
     runs-on: ${{ matrix.os }}
     # The apt step can run 65 minutes and the Rust tests can run to their own
-    # 45 (#366). On the 21 green Ubuntu legs of 2026-10-07, every other step
-    # together was at most 11.3 minutes in one run. 65 + 45 + 11.3 is 121.3,
-    # so 130 minutes lets both step bounds finish before the job does.
+    # 60 (#366). On the 21 green Ubuntu legs of 2026-10-07, every other step
+    # together was at most 11.3 minutes in one run. 65 + 60 + 11.3 is 136.3,
+    # so 140 minutes lets both step bounds finish before the job does.
     # Windows, which does not install these packages, took at most 27.9.
-    timeout-minutes: 130
+    timeout-minutes: 140
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/native-crypto
@@ -611,7 +639,10 @@ jobs:
         timeout-minutes: 45
       - shell: bash
         run: node scripts/cargo-test-parallel.mjs --concurrency 2 --partition ${{ matrix.partition }} -- -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-client-core -p nessa-device-client -p nessa-sdk -p nessa-timer -p nessa-vault
-        timeout-minutes: 45
+        # macOS ran this in 41.6 minutes on main (run 41708958692, 2026-11-03)
+        # and hit 45 twice on one PR the same night; 60 still ends a deadlock
+        # long before the job does (#366).
+        timeout-minutes: 60
       # Passing libtest output is normally captured. Keep these bounded native
       # receipts visible even when a separate strict fixture precondition fails.
       - name: Capture native retained-file security query order

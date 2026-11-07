@@ -1012,6 +1012,7 @@ impl Agent {
         let admission_generation =
             format!("{}:{}", self.inner.instance_id, work.provider_generation());
         let effort_level = self.effort_level();
+        let notice = submitter.admission.clone();
         let receipt =
             Self::accept_pending(&mut scheduler, input, submitter, index, kind, None, work);
         let audit_record = ExecutionAuditRecord::QueueAdmitted(
@@ -1061,6 +1062,14 @@ impl Agent {
             *retained = admission.evidence.clone();
         }
         if acknowledged {
+            // Before the runner is spawned, and before this lock is released.
+            // A reader blocked on the conversation can proceed only after that
+            // release, so the notice has already returned by the time a reply
+            // can be observed. A recovered retry returned above and does not
+            // notify again.
+            if let Some(notice) = notice {
+                notice.admitted();
+            }
             self.start_runner(&mut scheduler);
             return Ok(Some(admission));
         }

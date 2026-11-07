@@ -133,6 +133,17 @@ here does not claim that the whole stress suite ran locally in this pass.
 ## Review scope
 
 This page inventories the manifest and the cited verification guides. The
-[refresh record](../../provenance.md#state-verification-refresh-2026-11-02)
+[latest recorded qualification](../../provenance.md#integrated-main-qualification-2026-11-02)
 records actual local checks and exclusions. Listing an entry point here does not
 claim its suite passed.
+
+
+## Reader-quality correction (2026-11-03)
+
+A docs-only reader exercise and source-aware review corrected two owner pages:
+backup acceptance and native submissions. The
+[review record](../../../../verification/state-models/reader-review.md) records
+the tasks and findings resolved. Catalog validation accepted all 173 pages, and
+Chrome rendered all 209 diagrams without errors after the edits. This sampled
+prose review did not rerun TLC or product tests and does not refresh unrelated
+source checkpoints.

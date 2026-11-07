@@ -308,3 +308,7 @@ billable cloud resources and browser measurements need their own execution evide
 Models can intentionally permit uncertain cleanup, lost replies or older stored
 values when the source does; a successful check does not turn those outcomes into
 successful external effects. No universal fairness or eventual-completion claim is made.
+
+## Subsequent placement and access source review
+
+[Refresh 1268](feature-refresh-1268.md) maps newer pool order, channel movement and remembered-app revocation at source `31d023ed`. These source-only guides do not add model coverage or change this earlier verification receipt.

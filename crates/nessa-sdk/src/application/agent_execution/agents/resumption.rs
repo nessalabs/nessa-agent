@@ -23,6 +23,7 @@
 //! says it is finished.
 #![deny(missing_docs)]
 
+use super::scheduling::Scheduler;
 use super::{Agent, AgentError, QueueAdmission};
 use crate::application::agent_execution::caller_wake::{contain_caller_wake, CallerWaiter};
 use crate::application::agent_execution::{
@@ -42,7 +43,7 @@ use crate::domain::agent_execution::{
 };
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
-use tokio::sync::watch;
+use tokio::sync::{watch, MutexGuard};
 
 type DeclineResult = watch::Receiver<Option<Result<(), AgentError>>>;
 #[derive(Default)]
@@ -675,21 +676,27 @@ impl Agent {
         let successor = Resumption::of(&turn.execution_id).successor();
         // A spent chain is ended by this decision, so it is no longer owed.
         let end = successor.is_none().then(|| actor.clone());
-        let Some(OwedSettlement {
-            record,
-            cause,
-            saved,
-        }) = self.settle_owed(turn, OwedDecision::Resume(end)).await?
+        let Some((
+            OwedSettlement {
+                record,
+                cause,
+                saved,
+            },
+            scheduler,
+        )) = self.settle_owed(turn, OwedDecision::Resume(end)).await?
         else {
             return Ok(Resumed::NotOwed);
         };
+        drop(scheduler);
         saved.map_err(AgentError::Storage)?;
         if completes_without_successor(cause) {
             return Ok(Resumed::NotOwed);
         }
-        // The source settlement dropped the scheduler. A decline already waiting
-        // on it must be able to record NotResumed before successor admission.
-        tokio::task::yield_now().await;
+        // Settlement released the scheduler. A decline already in flight has
+        // to persist NotResumed before this admission, or the same-task
+        // re-lock barges ahead of it and queues a successor. Joining that
+        // attempt is the decision.
+        self.finish_in_flight_decline(&turn.execution_id).await;
         let audit = |resumption| {
             ExecutionAuditRecord::TurnResumed(TurnResumptionRecord::new(
                 self.inner.manager.id().clone(),
@@ -793,6 +800,34 @@ impl Agent {
         }
     }
 
+    /// Wait until a decline of `id` that has already started records its
+    /// decision. The scheduler must be free: that attempt needs it.
+    async fn finish_in_flight_decline(&self, id: &ExecutionId) {
+        loop {
+            let mut waiting = {
+                let attempts = self
+                    .inner
+                    .decline_attempts
+                    .0
+                    .lock()
+                    .expect("decline attempts");
+                let Some(waiting) = attempts.get(id) else {
+                    return;
+                };
+                if waiting.borrow().is_some() {
+                    return;
+                }
+                waiting.clone()
+            };
+            if waiting.changed().await.is_err() {
+                return;
+            }
+            if waiting.borrow().is_some() {
+                return;
+            }
+        }
+    }
+
     async fn deliver_decline(
         &self,
         turn: &OwedTurn,
@@ -808,30 +843,30 @@ impl Agent {
                     .and_then(|record| record.decline.clone())
             })
             .await;
-        let event = match existing {
-            Some(decision) => decision.event().clone(),
+        let (event, scheduler) = match existing {
+            Some(decision) => (decision.event().clone(), self.inner.scheduler.lock().await),
             None => {
-                let Some(settlement) = self.settle_owed(turn, OwedDecision::PrepareDecline).await?
+                let Some((settlement, scheduler)) =
+                    self.settle_owed(turn, OwedDecision::PrepareDecline).await?
                 else {
                     return Ok(());
                 };
                 let edge = settlement.record.scheduling.last().cloned();
-                // settle_owed may have just recorded Interrupted, so read its
-                // canonical locally observed edge under the writer owner.
+                // settle_owed may have just recorded Interrupted. Read that
+                // edge while this attempt still holds the scheduler.
                 let edge = self
                     .inner
                     .manager
-                    .read_invocations(|history| history[turn.index].scheduling.last().cloned())
+                    .read_invocations(|history| history.get(turn.index)?.scheduling.last().cloned())
                     .await
                     .or(edge)
                     .ok_or(AgentError::SubmissionConflict)?;
                 if completes_without_successor(edge.cause) {
                     return Ok(());
                 }
-                not_resumed(&edge, actor)?
+                (not_resumed(&edge, actor)?, scheduler)
             }
         };
-        let scheduler = self.inner.scheduler.lock().await;
         let still_owned = self
             .inner
             .manager
@@ -855,10 +890,12 @@ impl Agent {
             .prepare_decline(turn.index, event)
             .await
             .map_err(AgentError::Storage)?;
-        drop(scheduler);
         if decision.acknowledged() {
             return Ok(());
         }
+        // The NotResumed edge is part of the same scheduler hold as the
+        // preparation. Releasing between them lets resume admit a successor
+        // after this decline has already won.
         let saved = self
             .inner
             .manager
@@ -866,6 +903,7 @@ impl Agent {
             .await
             .map_err(AgentError::Storage)?
             .saved;
+        drop(scheduler);
         let (cause, reached, submitted) = self
             .inner
             .manager
@@ -979,7 +1017,7 @@ impl Agent {
         &self,
         turn: &OwedTurn,
         decision: OwedDecision,
-    ) -> Result<Option<OwedSettlement>, AgentError> {
+    ) -> Result<Option<(OwedSettlement, MutexGuard<'_, Scheduler>)>, AgentError> {
         let (end, resuming) = match decision {
             OwedDecision::Resume(end) => (end, true),
             OwedDecision::PrepareDecline => (None, false),
@@ -1039,11 +1077,13 @@ impl Agent {
         } else {
             Ok(())
         };
-        drop(scheduler);
-        Ok(Some(OwedSettlement {
-            record,
-            cause: owed_edge.cause,
-            saved,
-        }))
+        Ok(Some((
+            OwedSettlement {
+                record,
+                cause: owed_edge.cause,
+                saved,
+            },
+            scheduler,
+        )))
     }
 }

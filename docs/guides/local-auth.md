@@ -81,7 +81,11 @@ using the administrative commands below before issuing again.
 
 `doctor` checks configuration loading, private credential access, authenticated
 connection and authorized health. It writes JSON to stdout and returns nonzero
-on failure. Diagnostics do not include credentials. Online commands default to
+on failure. Diagnostics do not include credentials. The same JSON carries
+`timings`: the last few launch-to-gateway-ready and message-to-first-token
+durations recorded on this machine (latest and median), or `none yet` when
+nothing has been recorded. Those files live in the stage log directory beside
+`host.log` and `gateway.log`. They are not sent anywhere. Online commands default to
 local mode; `--local` is optional. They use the same `NESSA_*` namespace, stage,
 host and port as the server, and cannot send local credentials to remote hosts.
 Use `--credential-file /absolute/path` for an existing owner credential.
@@ -219,12 +223,15 @@ Stop the gateway, then provision or replace the credential assigned to a surface
 ```sh
 target/debug/nessa auth provision-surface --local --surface-id terminal --grants server.read
 target/debug/nessa auth provision-surface --local --surface-id nessa-panel --grants server.read,conversation.read,conversation.write,credential.manage
+target/debug/nessa auth provision-surface --local --surface-id nessa-mcp
 ```
 
 Each surface has a distinct principal, membership, and token. Reprovisioning revokes
 only that surface's prior credentials. Other surface names default to `server.read`;
-`nessa-panel` defaults to the three implemented permissions above. Add `--expires-at`
-for temporary access. This is an offline OS-authorized operation, never a capability
+`nessa-panel` defaults to the owner set, and `nessa-mcp` defaults to
+`server.read`, `conversation.read`, and `conversation.write` (not `credential.manage`).
+`nessa server --provision-local` creates the MCP file when it is absent.
+`nessa mcp` signs in with it. Add `--expires-at` for temporary access. This is an offline OS-authorized operation, never a capability
 selected by remote `client.id` or `surface` metadata.
 
 The Node SDK loads `auth/surfaces/<client.id>.token` automatically when `auth` is

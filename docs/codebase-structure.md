@@ -59,7 +59,8 @@ src/                      composition root (`main.tsx`, `store.ts`)
   diagnostics/            development page-console forwarding
 src-tauri/src/
   diagnostics.rs          debug-only page-to-terminal diagnostic bridge
-  host_log.rs             desktop startup log (`{data}/logs/host.log`)
+  host_log.rs             desktop startup log (`{data}/logs/host.log`) and the
+                          launch-to-gateway-ready samples beside it
   host_refusal.rs         typed startup refusals shared with the page
   host_refusal/copy.rs    startup copy consumed by refusals and the load document
   links/policy.rs         navigation decisions; links.rs owns the opener/plugin
@@ -830,6 +831,12 @@ audit boundary concerns the new unpaired `review.notice` decision.
 | Board or shared visibility changes during audit acknowledgement | Publisher discards the candidate and filters the current board/shared state before admission | `review_notice_reselects_after_shared_changes_during_audit` |
 | Every tentative selection changes before acknowledgement completes | At most three passes, then a typed temporary-unavailable close; no stale snapshot or unbounded retry | `review_notice_continuous_change_has_bounded_selection_attempts` |
 | Admitted snapshot waits for UI capacity, then authority changes | Already admitted snapshot may finish; pending version then produces a fresh audited replacement | `review_authority_updates_survive_waiting_publication` |
+| Tombstone commits on another connection during the admission read, then membership becomes Admin | The read's transaction keeps the live row with its old revision; token validation rejects it; the deleted row is not published | `a_tombstone_on_another_connection_during_the_admission_read_does_not_publish_to_a_new_admin` |
+| Deletion between the metadata read and the authority read, board still waiting | Live metadata is not combined with the new Admin role | `deletion_between_metadata_and_authority_does_not_publish_to_a_promoted_admin` |
+| Deletion after Cedar, before audit acknowledgement | The recorded decision stays the pre-deletion allow; the candidate is not admitted | `deletion_after_cedar_before_audit_ack_drops_admission_and_keeps_the_decision` |
+| Visibility changes while token validation waits | The board check after that wait drops the in-flight candidate | `visibility_change_during_token_validation_drops_the_in_flight_candidate` |
+| Catalogue incarnation replaced and the revision is reused | Token validation refuses the old incarnation; the deleted row is not published | `replaced_incarnation_with_a_reused_revision_does_not_publish_deleted_metadata` |
+| Deletion after the frame is admitted, while UI capacity waits | The admitted notice may still be delivered | `deletion_after_admission_still_delivers_the_admitted_notice` |
 | Sink fails, panics, or the injected deadline passes | Typed audit failure prevents the snapshot and closes through the independent control lane; cleanup still runs | `review_notice_audit_failure_closes_without_disclosure` |
 | Audit fails while the control lane is full | Publisher completion reaches the connection owner through its retained join handle; close admission may fail, but the owner always stops receiving and tears down | `review_notice_audit_failure_with_full_control_lane_ends_connection` |
 | Publisher terminates unexpectedly | Connection owner observes completion, requests temporary-unavailable closure and tears down instead of retaining a silent live connection | `review_notice_publisher_panic_ends_connection` |
@@ -2267,6 +2274,11 @@ The `nessa-server` crate builds the `nessa` executable. `cli/entrypoint/` parses
 commands, `cli/application/` coordinates token requests through its gateway port,
 and `cli/infrastructure/` implements the bounded local WebSocket adapter.
 `composition/cli.rs` wires the adapter, clock, identities and stdout/stderr.
+`nessa doctor` adds `timings` from `core/local_timings.rs`, read from the log
+directory on this machine and not sent. The gateway appends first-token samples
+through `product/turn_timing.rs`.
+`scripts/measure-subscription-bytes.mjs` counts `conversation.view` bytes for
+one streamed turn over a local proxy shaped like a slow link.
 `install-agent` is parsed here too — its agent name is read into `AgentName` at
 this edge, so nothing further in holds a name it still has to doubt — and
 `composition/install_command.rs` runs it on a blocking thread, because the work

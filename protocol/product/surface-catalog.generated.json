@@ -1,0 +1,835 @@
+{
+  "excluded": [
+    {
+      "method": "session.authenticate",
+      "reason": "Opens the session. A signed-in call cannot send it; the gateway answers already_authenticated."
+    },
+    {
+      "method": "attachment.write",
+      "reason": "One piece of an upload's bytes for a surface that cannot reach PUT /attachments. The action is attachment.begin; the bytes are not a JSON call."
+    },
+    {
+      "method": "conversation.subscribe",
+      "reason": "Follows one conversation by a stream of events after the acknowledgement. One call would drop the stream."
+    },
+    {
+      "method": "conversation.subscribeList",
+      "reason": "Follows the conversation list by a stream of events after the acknowledgement. One call would drop the stream."
+    },
+    {
+      "method": "conversation.subscribeEvents",
+      "reason": "Follows one conversation's events by a stream after the acknowledgement. One call would drop the stream."
+    },
+    {
+      "method": "agents.subscribe",
+      "reason": "Follows the agent catalog by a stream of events after the acknowledgement. One call would drop the stream."
+    }
+  ],
+  "methods": [
+    {
+      "name": "auth.session",
+      "params": null,
+      "grant": null,
+      "readOnly": true,
+      "destructive": false
+    },
+    {
+      "name": "server.health",
+      "params": null,
+      "grant": "server.read",
+      "readOnly": true,
+      "destructive": false
+    },
+    {
+      "name": "server.reach",
+      "params": null,
+      "grant": "server.read",
+      "readOnly": true,
+      "destructive": false
+    },
+    {
+      "name": "credential.issue",
+      "params": "CredentialIssueParams",
+      "grant": "credential.manage",
+      "readOnly": false,
+      "destructive": false
+    },
+    {
+      "name": "credential.list",
+      "params": null,
+      "grant": "credential.manage",
+      "readOnly": true,
+      "destructive": false
+    },
+    {
+      "name": "credential.revoke",
+      "params": "CredentialRevokeParams",
+      "grant": "credential.manage",
+      "readOnly": false,
+      "destructive": true
+    },
+    {
+      "name": "conversation.create",
+      "params": "ConversationCreateParams",
+      "grant": "conversation.write",
+      "readOnly": false,
+      "destructive": false
+    },
+    {
+      "name": "conversation.read",
+      "params": "ConversationReadParams",
+      "grant": "conversation.write",
+      "readOnly": true,
+      "destructive": false
+    },
+    {
+      "name": "conversation.recordsHead",
+      "params": "ConversationRecordsHeadParams",
+      "grant": "conversation.read",
+      "readOnly": true,
+      "destructive": false
+    },
+    {
+      "name": "conversation.recordsPage",
+      "params": "ConversationRecordsPageParams",
+      "grant": "conversation.read",
+      "readOnly": true,
+      "destructive": false
+    },
+    {
+      "name": "conversation.list",
+      "params": "ConversationListParams",
+      "grant": "conversation.write",
+      "readOnly": true,
+      "destructive": false
+    },
+    {
+      "name": "conversation.observe",
+      "params": "ConversationObserveParams",
+      "grant": "conversation.write",
+      "readOnly": true,
+      "destructive": false
+    },
+    {
+      "name": "conversation.send",
+      "params": "ConversationSendParams",
+      "grant": "conversation.write",
+      "readOnly": false,
+      "destructive": false
+    },
+    {
+      "name": "conversation.steer",
+      "params": "ConversationSendParams",
+      "grant": "conversation.write",
+      "readOnly": false,
+      "destructive": false
+    },
+    {
+      "name": "conversation.remove",
+      "params": "ConversationRemoveParams",
+      "grant": "conversation.write",
+      "readOnly": false,
+      "destructive": false
+    },
+    {
+      "name": "conversation.stop",
+      "params": "ConversationStopParams",
+      "grant": "conversation.write",
+      "readOnly": false,
+      "destructive": false
+    },
+    {
+      "name": "conversation.receipt",
+      "params": "ConversationReceiptParams",
+      "grant": "conversation.write",
+      "readOnly": true,
+      "destructive": false
+    },
+    {
+      "name": "conversation.message",
+      "params": "ConversationMessageParams",
+      "grant": "conversation.write",
+      "readOnly": false,
+      "destructive": false
+    },
+    {
+      "name": "conversation.messageStatus",
+      "params": "ConversationMessageStatusParams",
+      "grant": "conversation.write",
+      "readOnly": true,
+      "destructive": false
+    },
+    {
+      "name": "conversation.answer",
+      "params": "ConversationAnswerParams",
+      "grant": "conversation.write",
+      "readOnly": false,
+      "destructive": false
+    },
+    {
+      "name": "conversation.permissionReview",
+      "params": "ConversationPermissionReviewParams",
+      "grant": "conversation.write",
+      "readOnly": true,
+      "destructive": false
+    },
+    {
+      "name": "conversation.questionReview",
+      "params": "ConversationQuestionReviewParams",
+      "grant": "conversation.write",
+      "readOnly": true,
+      "destructive": false
+    },
+    {
+      "name": "conversation.answerQuestion",
+      "params": "ConversationAnswerQuestionParams",
+      "grant": "conversation.write",
+      "readOnly": false,
+      "destructive": false
+    },
+    {
+      "name": "conversation.cancel",
+      "params": "ConversationCancelParams",
+      "grant": "conversation.write",
+      "readOnly": false,
+      "destructive": false
+    },
+    {
+      "name": "conversation.close",
+      "params": "ConversationCloseParams",
+      "grant": "conversation.write",
+      "readOnly": false,
+      "destructive": false
+    },
+    {
+      "name": "conversation.archive",
+      "params": "ConversationArchiveParams",
+      "grant": "conversation.write",
+      "readOnly": false,
+      "destructive": false
+    },
+    {
+      "name": "conversation.unarchive",
+      "params": "ConversationArchiveParams",
+      "grant": "conversation.write",
+      "readOnly": false,
+      "destructive": false
+    },
+    {
+      "name": "conversation.rename",
+      "params": "ConversationRenameParams",
+      "grant": "conversation.write",
+      "readOnly": false,
+      "destructive": false
+    },
+    {
+      "name": "conversation.delete",
+      "params": "ConversationDeleteParams",
+      "grant": "conversation.write",
+      "readOnly": false,
+      "destructive": true
+    },
+    {
+      "name": "conversation.reorder",
+      "params": "ConversationReorderParams",
+      "grant": "conversation.write",
+      "readOnly": false,
+      "destructive": false
+    },
+    {
+      "name": "artifact.read",
+      "params": "ArtifactReadParams",
+      "grant": "conversation.read",
+      "readOnly": true,
+      "destructive": false
+    },
+    {
+      "name": "attachment.begin",
+      "params": "AttachmentBeginParams",
+      "grant": "conversation.write",
+      "readOnly": false,
+      "destructive": false
+    },
+    {
+      "name": "agents.list",
+      "params": null,
+      "grant": "server.read",
+      "readOnly": true,
+      "destructive": false
+    },
+    {
+      "name": "agents.setNativeHooks",
+      "params": "AgentsSetNativeHooksParams",
+      "grant": "credential.manage",
+      "readOnly": false,
+      "destructive": false
+    },
+    {
+      "name": "agents.unsubscribe",
+      "params": "ConversationUnsubscribeParams",
+      "grant": "server.read",
+      "readOnly": false,
+      "destructive": false
+    },
+    {
+      "name": "conversation.setApprovalMode",
+      "params": "ConversationSetApprovalModeParams",
+      "grant": "conversation.write",
+      "readOnly": false,
+      "destructive": false
+    },
+    {
+      "name": "conversation.setUsageLimitAutoContinue",
+      "params": "ConversationSetUsageLimitAutoContinueParams",
+      "grant": "credential.manage",
+      "readOnly": false,
+      "destructive": false
+    },
+    {
+      "name": "agents.installOptions",
+      "params": null,
+      "grant": "server.read",
+      "readOnly": true,
+      "destructive": false
+    },
+    {
+      "name": "agents.install",
+      "params": "AgentInstallParams",
+      "grant": "conversation.write",
+      "readOnly": false,
+      "destructive": false
+    },
+    {
+      "name": "conversation.catalogueHead",
+      "params": "ConversationCatalogueHeadParams",
+      "grant": "conversation.read",
+      "readOnly": true,
+      "destructive": false
+    },
+    {
+      "name": "conversation.catalogueManifest",
+      "params": "ConversationCatalogueManifestParams",
+      "grant": "conversation.read",
+      "readOnly": true,
+      "destructive": false
+    },
+    {
+      "name": "conversation.catalogueResolve",
+      "params": "ConversationCatalogueResolveParams",
+      "grant": "conversation.read",
+      "readOnly": true,
+      "destructive": false
+    },
+    {
+      "name": "mcp.callTool",
+      "params": "McpCallToolParams",
+      "grant": "conversation.write",
+      "readOnly": false,
+      "destructive": false
+    },
+    {
+      "name": "mcp.readResource",
+      "params": "McpReadResourceParams",
+      "grant": "conversation.write",
+      "readOnly": false,
+      "destructive": false
+    },
+    {
+      "name": "mcp.releaseApp",
+      "params": "McpReleaseAppParams",
+      "grant": "conversation.write",
+      "readOnly": false,
+      "destructive": false
+    },
+    {
+      "name": "mcp.sendMessage",
+      "params": "McpSendMessageParams",
+      "grant": "conversation.write",
+      "readOnly": false,
+      "destructive": false
+    },
+    {
+      "name": "mcp.updateModelContext",
+      "params": "McpUpdateModelContextParams",
+      "grant": "conversation.write",
+      "readOnly": false,
+      "destructive": false
+    },
+    {
+      "name": "mcpServers.list",
+      "params": null,
+      "grant": "credential.manage",
+      "readOnly": true,
+      "destructive": false
+    },
+    {
+      "name": "mcpServers.save",
+      "params": "McpServersSaveParams",
+      "grant": "credential.manage",
+      "readOnly": false,
+      "destructive": false
+    },
+    {
+      "name": "mcpServers.remove",
+      "params": "McpServersRemoveParams",
+      "grant": "credential.manage",
+      "readOnly": false,
+      "destructive": true
+    },
+    {
+      "name": "mcpServers.inspect",
+      "params": "McpServersInspectParams",
+      "grant": "credential.manage",
+      "readOnly": false,
+      "destructive": false
+    },
+    {
+      "name": "mcpServers.authorize",
+      "params": "McpServersAuthorizeParams",
+      "grant": "credential.manage",
+      "readOnly": false,
+      "destructive": false
+    },
+    {
+      "name": "mcpServers.revoke",
+      "params": "McpServersRevokeParams",
+      "grant": "credential.manage",
+      "readOnly": false,
+      "destructive": true
+    },
+    {
+      "name": "apps.trusted",
+      "params": null,
+      "grant": "credential.manage",
+      "readOnly": true,
+      "destructive": false
+    },
+    {
+      "name": "apps.untrust",
+      "params": "AppsUntrustParams",
+      "grant": "credential.manage",
+      "readOnly": false,
+      "destructive": true
+    },
+    {
+      "name": "phone.endpoint",
+      "params": "PhoneEndpointParams",
+      "grant": "server.read",
+      "readOnly": true,
+      "destructive": false
+    },
+    {
+      "name": "phone.authorize",
+      "params": "PhoneAuthorizeParams",
+      "grant": "credential.manage",
+      "readOnly": false,
+      "destructive": false
+    },
+    {
+      "name": "phone.status",
+      "params": "PhoneStatusParams",
+      "grant": "credential.manage",
+      "readOnly": true,
+      "destructive": false
+    },
+    {
+      "name": "pairing.create",
+      "params": "PairingCreateParams",
+      "grant": "credential.manage",
+      "readOnly": false,
+      "destructive": false
+    },
+    {
+      "name": "pairing.pending",
+      "params": null,
+      "grant": "credential.manage",
+      "readOnly": true,
+      "destructive": false
+    },
+    {
+      "name": "pairing.status",
+      "params": "PairingInvitationParams",
+      "grant": "credential.manage",
+      "readOnly": true,
+      "destructive": false
+    },
+    {
+      "name": "pairing.approve",
+      "params": "PairingApproveParams",
+      "grant": "credential.manage",
+      "readOnly": false,
+      "destructive": false
+    },
+    {
+      "name": "pairing.deny",
+      "params": "PairingInvitationParams",
+      "grant": "credential.manage",
+      "readOnly": false,
+      "destructive": true
+    },
+    {
+      "name": "pairing.cancel",
+      "params": "PairingInvitationParams",
+      "grant": "credential.manage",
+      "readOnly": false,
+      "destructive": false
+    },
+    {
+      "name": "pairing.setLinking",
+      "params": "PairingSetLinkingParams",
+      "grant": "credential.manage",
+      "readOnly": false,
+      "destructive": false
+    },
+    {
+      "name": "pairing.setTunnel",
+      "params": "PairingSetTunnelParams",
+      "grant": "credential.manage",
+      "readOnly": false,
+      "destructive": false
+    },
+    {
+      "name": "pairing.tunnel",
+      "params": null,
+      "grant": "credential.manage",
+      "readOnly": true,
+      "destructive": false
+    },
+    {
+      "name": "github.liveEvents",
+      "params": "GithubLiveEventsParams",
+      "grant": "credential.manage",
+      "readOnly": false,
+      "destructive": false
+    },
+    {
+      "name": "github.status",
+      "params": null,
+      "grant": "credential.manage",
+      "readOnly": true,
+      "destructive": false
+    },
+    {
+      "name": "github.connect",
+      "params": null,
+      "grant": "credential.manage",
+      "readOnly": false,
+      "destructive": false
+    },
+    {
+      "name": "devices.list",
+      "params": "DevicesListParams",
+      "grant": "server.read",
+      "readOnly": true,
+      "destructive": false
+    },
+    {
+      "name": "github.cancel",
+      "params": null,
+      "grant": "credential.manage",
+      "readOnly": false,
+      "destructive": false
+    },
+    {
+      "name": "github.disconnect",
+      "params": null,
+      "grant": "credential.manage",
+      "readOnly": false,
+      "destructive": true
+    },
+    {
+      "name": "peer.enroll",
+      "params": "PeerEnrollParams",
+      "grant": "credential.manage",
+      "readOnly": false,
+      "destructive": false
+    },
+    {
+      "name": "peer.list",
+      "params": null,
+      "grant": "credential.manage",
+      "readOnly": true,
+      "destructive": false
+    },
+    {
+      "name": "peer.forget",
+      "params": "PeerForgetParams",
+      "grant": "credential.manage",
+      "readOnly": false,
+      "destructive": true
+    },
+    {
+      "name": "peer.relay",
+      "params": "PeerRelayParams",
+      "grant": "credential.manage",
+      "readOnly": false,
+      "destructive": false
+    },
+    {
+      "name": "conversation.unsubscribe",
+      "params": "ConversationUnsubscribeParams",
+      "grant": "conversation.write",
+      "readOnly": false,
+      "destructive": false
+    },
+    {
+      "name": "conversation.share",
+      "params": "ConversationShareParams",
+      "grant": "credential.manage",
+      "readOnly": false,
+      "destructive": false
+    },
+    {
+      "name": "conversation.unshare",
+      "params": "ConversationUnshareParams",
+      "grant": "credential.manage",
+      "readOnly": false,
+      "destructive": true
+    },
+    {
+      "name": "conversation.shares",
+      "params": "ConversationSharesParams",
+      "grant": "credential.manage",
+      "readOnly": true,
+      "destructive": false
+    },
+    {
+      "name": "conversation.permissionRules",
+      "params": "ConversationPermissionRulesParams",
+      "grant": "conversation.write",
+      "readOnly": true,
+      "destructive": false
+    },
+    {
+      "name": "conversation.revokePermissionRule",
+      "params": "ConversationRevokePermissionRuleParams",
+      "grant": "conversation.write",
+      "readOnly": false,
+      "destructive": true
+    },
+    {
+      "name": "workspace.publish",
+      "params": "WorkspacePublishParams",
+      "grant": "conversation.write",
+      "readOnly": false,
+      "destructive": false
+    },
+    {
+      "name": "channel.create",
+      "params": "ChannelCreateParams",
+      "grant": "conversation.write",
+      "readOnly": false,
+      "destructive": false
+    },
+    {
+      "name": "channel.list",
+      "params": "ChannelListParams",
+      "grant": "conversation.write",
+      "readOnly": true,
+      "destructive": false
+    },
+    {
+      "name": "channel.setPlacement",
+      "params": "ChannelSetPlacementParams",
+      "grant": "conversation.write",
+      "readOnly": false,
+      "destructive": false
+    },
+    {
+      "name": "conversation.readEarlier",
+      "params": "ConversationReadEarlierParams",
+      "grant": "conversation.write",
+      "readOnly": true,
+      "destructive": false
+    },
+    {
+      "name": "conversation.peek",
+      "params": "ConversationReadParams",
+      "grant": "conversation.write",
+      "readOnly": true,
+      "destructive": false
+    },
+    {
+      "name": "conversation.setModel",
+      "params": "ConversationSetModelParams",
+      "grant": "conversation.write",
+      "readOnly": false,
+      "destructive": false
+    },
+    {
+      "name": "conversation.switchAgent",
+      "params": "ConversationSwitchAgentParams",
+      "grant": "conversation.write",
+      "readOnly": false,
+      "destructive": false
+    },
+    {
+      "name": "conversation.fork",
+      "params": "ConversationForkParams",
+      "grant": "conversation.write",
+      "readOnly": false,
+      "destructive": false
+    },
+    {
+      "name": "vault.status",
+      "params": null,
+      "grant": "credential.manage",
+      "readOnly": true,
+      "destructive": false
+    },
+    {
+      "name": "vault.setup",
+      "params": "VaultPassphraseParams",
+      "grant": "credential.manage",
+      "readOnly": false,
+      "destructive": false
+    },
+    {
+      "name": "vault.unlock",
+      "params": "VaultPassphraseParams",
+      "grant": "credential.manage",
+      "readOnly": false,
+      "destructive": false
+    },
+    {
+      "name": "vault.changePassphrase",
+      "params": "VaultPassphraseParams",
+      "grant": "credential.manage",
+      "readOnly": false,
+      "destructive": true
+    },
+    {
+      "name": "vault.lock",
+      "params": null,
+      "grant": "credential.manage",
+      "readOnly": false,
+      "destructive": false
+    },
+    {
+      "name": "boat.status",
+      "params": null,
+      "grant": "credential.manage",
+      "readOnly": true,
+      "destructive": false
+    },
+    {
+      "name": "boat.save",
+      "params": "BoatSaveParams",
+      "grant": "credential.manage",
+      "readOnly": false,
+      "destructive": false
+    },
+    {
+      "name": "boat.saveClaudeSignIn",
+      "params": "BoatClaudeSignInParams",
+      "grant": "credential.manage",
+      "readOnly": false,
+      "destructive": false
+    },
+    {
+      "name": "boat.disconnect",
+      "params": null,
+      "grant": "credential.manage",
+      "readOnly": false,
+      "destructive": true
+    },
+    {
+      "name": "devices.pool",
+      "params": "DevicesPoolParams",
+      "grant": "credential.manage",
+      "readOnly": true,
+      "destructive": false
+    },
+    {
+      "name": "devices.setPool",
+      "params": "DevicesSetPoolParams",
+      "grant": "credential.manage",
+      "readOnly": false,
+      "destructive": false
+    },
+    {
+      "name": "boat.runtimeSettings",
+      "params": "BoatRuntimeReadParams",
+      "grant": "credential.manage",
+      "readOnly": true,
+      "destructive": false
+    },
+    {
+      "name": "boat.setRuntimeSettings",
+      "params": "BoatRuntimeSetParams",
+      "grant": "credential.manage",
+      "readOnly": false,
+      "destructive": false
+    },
+    {
+      "name": "conversation.webhook.cursor",
+      "params": "ConversationWebhookCursorParams",
+      "grant": "credential.manage",
+      "readOnly": false,
+      "destructive": false
+    },
+    {
+      "name": "conversation.webhook.reset",
+      "params": "ConversationWebhookResetParams",
+      "grant": "credential.manage",
+      "readOnly": false,
+      "destructive": true
+    },
+    {
+      "name": "logins.status",
+      "params": null,
+      "grant": "credential.manage",
+      "readOnly": true,
+      "destructive": false
+    },
+    {
+      "name": "logins.save",
+      "params": "LoginsSaveParams",
+      "grant": "credential.manage",
+      "readOnly": false,
+      "destructive": false
+    },
+    {
+      "name": "logins.remove",
+      "params": "LoginsRemoveParams",
+      "grant": "credential.manage",
+      "readOnly": false,
+      "destructive": true
+    },
+    {
+      "name": "logins.setDevice",
+      "params": "LoginsSetDeviceParams",
+      "grant": "credential.manage",
+      "readOnly": false,
+      "destructive": false
+    },
+    {
+      "name": "voice.status",
+      "params": null,
+      "grant": "credential.manage",
+      "readOnly": true,
+      "destructive": false
+    },
+    {
+      "name": "voice.saveKey",
+      "params": "VoiceSaveKeyParams",
+      "grant": "credential.manage",
+      "readOnly": false,
+      "destructive": false
+    },
+    {
+      "name": "voice.forgetKey",
+      "params": null,
+      "grant": "credential.manage",
+      "readOnly": false,
+      "destructive": true
+    },
+    {
+      "name": "voice.startCall",
+      "params": "VoiceStartCallParams",
+      "grant": "conversation.write",
+      "readOnly": false,
+      "destructive": false
+    }
+  ]
+}

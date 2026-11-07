@@ -12,7 +12,7 @@ import { DesktopIcon } from "../../../ui/icons"
 import { useWorkspaceSelector } from "../../adapters/store/hooks"
 import { selectChannels, selectListedSessions } from "../../adapters/store/selectors"
 import { useNow } from "../../../../clock"
-import { focusInFront } from "../../adapters/dom/focus"
+import { focusInFront, performanceFocusClock } from "../../adapters/dom/focus"
 import { isMac } from "../../../adapters/platform"
 import { commandKey, commandLabel } from "../../../model/keyboard"
 import { agentName, agentOf } from "../../model/workspace-index"
@@ -52,7 +52,7 @@ function Highlight({ text, hits }: { text: string; hits: readonly number[] }) {
  */
 /**
  * A pick hands the caret to what is in front — the focused pane's composer — which may still be
- * filling in (`focusInFront` tries for a few frames). The try is kept so it
+ * filling in (`focusInFront` keeps looking through the pane's flight). The try is kept so it
  * can be called off — by the switcher opening again, or the person pressing
  * somewhere else first — rather than land the caret after they moved on.
  */
@@ -65,7 +65,7 @@ function handToComposer() {
     stopHanding = () => {}
   }
   // Landed (or given up), there is nothing left to call off: the listener goes.
-  const stop = focusInFront(document, finish)
+  const stop = focusInFront(document, performanceFocusClock, finish)
   const callOff = () => {
     stop()
     finish()

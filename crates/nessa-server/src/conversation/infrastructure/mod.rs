@@ -5,7 +5,10 @@
 //! `nessa-local-database`), and is the repository, the summaries and the
 //! listing and the reader-scoped catalogue at once. Paired lists acquire
 //! their bounded rows and scoped head in one transaction (L9 in
-//! `docs/design/record-subscriptions.md`). `export_facts` reads that
+//! `docs/design/record-subscriptions.md`). An admission snapshot reads the
+//! row, tombstone, catalogue incarnation and `change_revision` in one
+//! transaction, so another connection's tombstone cannot pair a live row
+//! with the new revision. `export_facts` reads that
 //! database for the export cut: live grants, and grants whose latest journal
 //! row is a revoke.
 //!
