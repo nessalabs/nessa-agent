@@ -89,34 +89,6 @@ export function draftImagesRefusal(
 const sizeOf = (drafts: readonly Pick<DraftImage, "size">[]) =>
   drafts.reduce((sum, draft) => sum + draft.size, 0)
 
-const mediaType = /^[a-z0-9][a-z0-9!#$&^_.+-]*\/[a-z0-9][a-z0-9!#$&^_.+-]*$/
-
-/**
- * The media type a file is uploaded as: what the system said it is, lowercase
- * and without parameters, or `application/octet-stream` when it said nothing
- * the upload contract takes (a file of a kind nobody registered has none).
- */
-export function draftMediaType(type: string): string {
-  const bare = type.split(";")[0].trim().toLowerCase()
-  return bare.length <= 127 && mediaType.test(bare) ? bare : "application/octet-stream"
-}
-
-const utf8 = new TextEncoder()
-
-/**
- * A file's name as a message may carry it: never a path or control text, at
- * most 255 UTF-8 bytes, and something when the system gave nothing. Only what
- * the person sees and the agent finds the file under; it never names where
- * the file goes.
- */
-export function draftName(name: string, fallback: string): string {
-  // eslint-disable-next-line no-control-regex
-  let cleaned = name.replace(/[/\\\u0000-\u001f\u007f-\u009f]/gu, "_").trim()
-  while (utf8.encode(cleaned).byteLength > 255)
-    cleaned = [...cleaned].slice(0, -1).join("")
-  return /\P{White_Space}/u.test(cleaned) ? cleaned : fallback
-}
-
 /**
  * What a message of attachments and no words says in a title or a preview:
  * images by their count, one file by its name, and once any file is among

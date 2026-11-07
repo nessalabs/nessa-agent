@@ -1,12 +1,6 @@
 import { describe, expect, it } from "vitest"
 
-import {
-  draftImagesRefusal,
-  draftKind,
-  draftMediaType,
-  draftName,
-  imagesLine,
-} from "./draft-images"
+import { draftImagesRefusal, draftKind, imagesLine } from "./draft-images"
 
 const limits = {
   images: 2,
@@ -56,16 +50,6 @@ describe("attachments on one message", () => {
     expect(draftKind("image/png", limits)).toBe("image")
     expect(draftKind("image/heic", limits)).toBe("file")
     expect(draftKind("application/pdf", limits)).toBe("file")
-  })
-
-  it("uploads a file under a media type and name the message contract takes", () => {
-    expect(draftMediaType("Text/Plain; charset=utf-8")).toBe("text/plain")
-    expect(draftMediaType("")).toBe("application/octet-stream")
-    expect(draftName("notes.txt", "File")).toBe("notes.txt")
-    expect(draftName("a/b\u0007.txt", "File")).toBe("a_b_.txt")
-    expect(draftName("   ", "File")).toBe("File")
-    const long = draftName("é".repeat(200), "File")
-    expect(new TextEncoder().encode(long).byteLength).toBeLessThanOrEqual(255)
   })
 
   it("names a message of attachments alone by what it carries", () => {

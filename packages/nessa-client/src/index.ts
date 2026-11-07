@@ -328,6 +328,9 @@ export {
   MAX_MESSAGE_IMAGES,
   MAX_UPLOAD_BYTES,
   type StoredAttachment,
+  uploadedFileName,
+  uploadMediaType,
+  validUploadedFileName,
 } from "./protocol/attachment-validate.js"
 export { clientDueAtMs, deadlinePendingLine } from "./protocol/deadline-pending.js"
 export type {

@@ -23,8 +23,6 @@ import type { ModelRef } from "../../model/workspace-index"
 import {
   draftImagesRefusal,
   draftKind,
-  draftMediaType,
-  draftName,
   type DraftImage,
   type DraftImageLimits,
   type DraftImageRefusal,
@@ -36,6 +34,8 @@ import {
   MAX_MESSAGE_FILES,
   MAX_MESSAGE_IMAGES,
   MAX_UPLOAD_BYTES,
+  uploadedFileName,
+  uploadMediaType,
 } from "@nessa/client"
 import { knownToSource } from "../../model/revision"
 import {
@@ -239,7 +239,7 @@ export function addComposerImages({
   return (dispatch, getState, { newId }) => {
     if (files.length === 0) return null
     const offered = files.map((file) => {
-      const mimeType = draftMediaType(file.type)
+      const mimeType = uploadMediaType(file.type)
       return { file, mimeType, kind: draftKind(mimeType, DRAFT_IMAGE_LIMITS) }
     })
     const held = entry(getState().workspace.composerImages, sessionId) ?? []
@@ -253,7 +253,7 @@ export function addComposerImages({
       id: newId(),
       kind,
       // A pasted screenshot can come with no name of its own.
-      name: draftName(file.name, kind === "image" ? "Pasted image" : "File"),
+      name: uploadedFileName(file.name, kind === "image" ? "Pasted image" : "File"),
       mimeType,
       size: file.size,
       url: URL.createObjectURL(file),
