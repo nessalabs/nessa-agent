@@ -25,4 +25,18 @@ describe("where a draft runs", () => {
     expect(linksFilesHere({ selection: selection() })).toBe(true)
     expect(linksFilesHere({ selection: selection("devbox") })).toBe(false)
   })
+
+  it("links no files into a draft that will run on another default device", () => {
+    // Unchosen, a draft runs on the default device, which reads its own files.
+    expect(linksFilesHere({ selection: selection() }, "devbox")).toBe(false)
+    expect(linksFilesHere({}, `peer:${"ab".repeat(32)}`)).toBe(false)
+    // This computer, chosen outright, still takes them.
+    expect(linksFilesHere({ selection: selection(HERE) }, "devbox")).toBe(true)
+    // Once created, its lease says where it runs, not today's default.
+    const created = { selection: selection(), serverConversationId: "c", turns: [{}] }
+    expect(linksFilesHere(created, "devbox")).toBe(true)
+    expect(
+      linksFilesHere({ ...created, remote: { lease: { environment: "ssh" as const } } }),
+    ).toBe(false)
+  })
 })

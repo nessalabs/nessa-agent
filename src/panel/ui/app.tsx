@@ -212,7 +212,11 @@ export function App({
       ? choices?.catalog.nativeHooks[nativeHooksAgent]
       : undefined
   const readNativeHooks = React.useCallback(async () => nativeHooksNow, [nativeHooksNow])
-  const attachments = useFileAttachments(chat, attachmentResources)
+  const attachments = useFileAttachments(
+    chat,
+    attachmentResources,
+    choices?.catalog.defaultEnvironment,
+  )
   const uploads = useAttachmentUploads(chat, attachmentResources, digest)
   const folderDrop = useFolderDrop(
     attachments.captureDestination,
@@ -822,7 +826,10 @@ export function App({
                 <ComposerTray
                   disabled={attachments.reading}
                   onChoose={attachments.chooseFiles}
-                  linksFiles={linksFilesHere(chat.active)}
+                  linksFiles={linksFilesHere(
+                    chat.active,
+                    choices?.catalog.defaultEnvironment,
+                  )}
                   onSignOut={onSignOut}
                   agentInstallations={agentInstallations}
                   // Where a new conversation runs: offered only when the

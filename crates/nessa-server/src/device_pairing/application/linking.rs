@@ -140,11 +140,14 @@ pub enum LinkingSubject {
     /// An SSH host added to `sshHosts` from Devices (`devices.connectSsh`):
     /// asked for before this build is installed on it, saved after.
     SshHost { host: String },
-    /// The default device (`devices.setDefault`), changed from `before` to
-    /// `environment`: `None` is this machine.
+    /// The default device (`devices.setDefault`), changed to
+    /// `environment`: `None` is this machine. `before` is the saved default
+    /// it replaced, as `config.json` said under the lock (`Some(None)`: this
+    /// machine); a record made before the file was read, such as the
+    /// request, has `None`, since only the file says what it replaced.
     DefaultDevice {
         environment: Option<String>,
-        before: Option<String>,
+        before: Option<Option<String>>,
     },
 }
 

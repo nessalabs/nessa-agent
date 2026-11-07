@@ -110,10 +110,11 @@ fn stored(record: &LinkingAuditRecord) -> Value {
             before,
         } => (
             "default_device",
-            vec![
-                ("environment", json!(environment)),
-                ("before", json!(before)),
-            ],
+            // `before` only once the file was read: absent says "not read
+            // yet", which a null ("this machine") must not stand for.
+            std::iter::once(("environment", json!(environment)))
+                .chain(before.as_ref().map(|before| ("before", json!(before))))
+                .collect(),
         ),
     };
     let mut value = json!({
@@ -295,10 +296,10 @@ mod tests {
         audit
             .record(&LinkingAuditRecord {
                 operation_id: "op2".into(),
-                caller,
+                caller: caller.clone(),
                 subject: LinkingSubject::DefaultDevice {
                     environment: None,
-                    before: Some("box".into()),
+                    before: Some(Some("box".into())),
                 },
                 enabled: false,
                 running: true,
@@ -320,6 +321,24 @@ mod tests {
         assert_eq!(device["environment"], Value::Null);
         assert!(device.as_object().unwrap().contains_key("environment"));
         assert_eq!(device["before"], "box");
+        // Before the file is read, what it replaced is not known: no
+        // `before` at all, never a null that reads as this machine.
+        audit
+            .record(&LinkingAuditRecord {
+                operation_id: "op3".into(),
+                caller: caller.clone(),
+                subject: LinkingSubject::DefaultDevice {
+                    environment: Some("box".into()),
+                    before: None,
+                },
+                enabled: true,
+                running: true,
+                phase: LinkingAuditPhase::Requested,
+            })
+            .unwrap();
+        let asked = read("default-device-op3-requested.json");
+        assert_eq!(asked["environment"], "box");
+        assert!(!asked.as_object().unwrap().contains_key("before"));
     }
 
     #[test]

@@ -87,12 +87,13 @@ enum Change {
     Tunnel(TunnelRequest),
     /// Add an SSH host to `sshHosts` (`devices.connectSsh`).
     SshHost(SshDestination),
-    /// Save the default device (`devices.setDefault`), the saved one
-    /// `before` it; `None` is this machine. Read at each creation, so it
-    /// never restarts anything.
+    /// Save the default device (`devices.setDefault`); `None` is this
+    /// machine. Read at each creation, so it never restarts anything.
+    /// `before` is the one `config.json` held, read under the lock as it
+    /// is replaced, so it is `None` until then.
     DefaultDevice {
         to: Option<String>,
-        before: Option<String>,
+        before: Option<Option<String>>,
     },
 }
 
@@ -229,8 +230,22 @@ impl ConfigLinking {
             written,
             moved,
             ref tunnel,
+            ref default_before,
             ..
         } = saved;
+        // A default's outcome names the one the file held, read as it was
+        // replaced, never the one this run last published.
+        let read;
+        let change = match (change, default_before) {
+            (Change::DefaultDevice { to, .. }, Some(before)) => {
+                read = Change::DefaultDevice {
+                    to: to.clone(),
+                    before: Some(before.clone()),
+                };
+                &read
+            }
+            _ => change,
+        };
         // Recorded before it is answered or applied: a change whose outcome
         // was not kept is saved, and waits for the next start.
         self.record(
@@ -335,6 +350,7 @@ impl ConfigLinking {
                 moved,
                 mode: None,
                 tunnel: None,
+                default_before: None,
             });
         };
         let config = self.config.clone();
@@ -351,6 +367,7 @@ impl ConfigLinking {
             moved,
             mode: None,
             tunnel: None,
+            default_before: None,
         })
     }
 
@@ -391,19 +408,29 @@ impl ConfigLinking {
     /// Save `environment` as `defaultEnvironment`, holding the lock; `None`
     /// removes it. Read at each creation, so nothing restarts.
     async fn save_default(&self, environment: Option<String>) -> Result<Saved, LinkingError> {
-        self.publish_edit(LinkingApply::Unchanged, move |document| {
-            let before = document.get("defaultEnvironment").cloned();
-            match &environment {
-                Some(name) => {
-                    document.insert("defaultEnvironment".into(), Value::String(name.clone()));
+        let replaced = Arc::new(std::sync::Mutex::new(None));
+        let seen = replaced.clone();
+        let saved = self
+            .publish_edit(LinkingApply::Unchanged, move |document| {
+                let before = document.get("defaultEnvironment").cloned();
+                *seen.lock().unwrap() =
+                    Some(before.as_ref().and_then(Value::as_str).map(str::to_owned));
+                match &environment {
+                    Some(name) => {
+                        document.insert("defaultEnvironment".into(), Value::String(name.clone()));
+                    }
+                    None => {
+                        document.remove("defaultEnvironment");
+                    }
                 }
-                None => {
-                    document.remove("defaultEnvironment");
-                }
-            }
-            Ok(before != document.get("defaultEnvironment").cloned())
+                Ok(before != document.get("defaultEnvironment").cloned())
+            })
+            .await?;
+        let default_before = replaced.lock().unwrap().take();
+        Ok(Saved {
+            default_before,
+            ..saved
         })
-        .await
     }
 
     /// Read `config.json`, apply `edit` (whether it changed the document),
@@ -433,6 +460,7 @@ impl ConfigLinking {
             moved: None,
             mode: None,
             tunnel: None,
+            default_before: None,
         })
     }
 
@@ -518,6 +546,7 @@ impl ConfigLinking {
             moved: None,
             mode: Some(edited.mode),
             tunnel: Some(edited.replaced),
+            default_before: None,
         })
     }
 
@@ -731,7 +760,6 @@ impl DeviceSettings for ConfigLinking {
     fn set_default(
         &self,
         caller: LinkingCaller,
-        before: Option<String>,
         environment: Option<String>,
     ) -> SetupFuture<'_, Result<(), LinkingError>> {
         Box::pin(async move {
@@ -741,7 +769,7 @@ impl DeviceSettings for ConfigLinking {
                 &caller,
                 &Change::DefaultDevice {
                     to: environment.clone(),
-                    before,
+                    before: None,
                 },
             )
             .await?;
@@ -779,6 +807,9 @@ struct Saved {
     mode: Option<TunnelMode>,
     /// A tunnel change's setting before and after, for its audit record.
     tunnel: Option<TunnelReplaced>,
+    /// A default change's saved default as the file held it, for its audit
+    /// record: `Some(None)` when it named none.
+    default_before: Option<Option<String>>,
 }
 
 /// What a tunnel edit makes of `config.json`.
@@ -1048,6 +1079,8 @@ mod tests {
     #[derive(Default)]
     struct Audit {
         records: Mutex<Vec<LinkingAuditPhase>>,
+        /// Each kept record's subject, beside its phase.
+        subjects: Mutex<Vec<LinkingSubject>>,
         refuse: Option<fn(&LinkingAuditPhase) -> bool>,
     }
     impl LinkingAudit for Audit {
@@ -1057,6 +1090,7 @@ mod tests {
             }
             assert_eq!(record.caller, caller());
             self.records.lock().unwrap().push(record.phase.clone());
+            self.subjects.lock().unwrap().push(record.subject.clone());
             Ok(())
         }
     }
@@ -1222,16 +1256,53 @@ mod tests {
             serde_json::from_slice::<Value>(&bytes).unwrap()["defaultEnvironment"].clone()
         };
         settings
-            .set_default(caller(), None, Some("box".into()))
+            .set_default(caller(), Some("box".into()))
             .await
             .unwrap();
         assert_eq!(saved(&files), "box");
-        settings
-            .set_default(caller(), Some("box".into()), None)
-            .await
-            .unwrap();
+        settings.set_default(caller(), None).await.unwrap();
         assert_eq!(saved(&files), Value::Null);
         assert!(linking.restart.serving(), "nothing restarts");
+        let default = |environment: Option<&str>, before: Option<Option<&str>>| {
+            LinkingSubject::DefaultDevice {
+                environment: environment.map(str::to_owned),
+                before: before.map(|before| before.map(str::to_owned)),
+            }
+        };
+        // Asked for with what it replaced unknown; applied naming what
+        // the file held.
+        assert_eq!(
+            *linking.audit.subjects.lock().unwrap(),
+            [
+                default(Some("box"), None),
+                default(Some("box"), Some(None)),
+                default(None, None),
+                default(None, Some(Some("box"))),
+            ]
+        );
+    }
+
+    /// A default saved whose outcome was not recorded is still in the file:
+    /// the next change names it as the one replaced, since `before` is read
+    /// from the file, never from what this run last published.
+    #[tokio::test]
+    async fn a_default_names_the_one_the_file_held_as_it_replaces_it() {
+        let files = files(Some(
+            r#"{"sshHosts":["box","other"],"defaultEnvironment":"box"}"#,
+        ));
+        let linking = linking(files.clone(), false);
+        let settings: &dyn DeviceSettings = &linking.linking;
+        settings
+            .set_default(caller(), Some("other".into()))
+            .await
+            .unwrap();
+        assert_eq!(
+            linking.audit.subjects.lock().unwrap().last(),
+            Some(&LinkingSubject::DefaultDevice {
+                environment: Some("other".into()),
+                before: Some(Some("box".into())),
+            })
+        );
     }
 
     #[tokio::test]

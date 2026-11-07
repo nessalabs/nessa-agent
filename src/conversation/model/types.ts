@@ -121,23 +121,32 @@ export function chosenEnvironment(
 
 /**
  * Whether a file on this machine can be linked into the conversation by its
- * path: only when its agent runs here. One placed on an SSH host — chosen for
- * this tab, or named by its lease — reads that host's files, where this
- * machine's path names nothing, or something else. The gateway refuses such a
- * message (`linked_file_unreachable`); this is the panel's early word for it.
- * Images travel with their bytes and are unaffected.
+ * path: only when its agent runs here. One placed on an SSH host or another
+ * computer — chosen for this tab, named by its lease, or, for a draft not yet
+ * created that chose nowhere, the default device `defaultEnvironment` names —
+ * reads that machine's files, where this machine's path names nothing, or
+ * something else. The gateway refuses such a message
+ * (`linked_file_unreachable`); this is the panel's early word for it. Images
+ * travel with their bytes and are unaffected.
  */
-export function linksFilesHere(conversation: {
-  selection?: ConversationSelection
-  remote?: { lease?: { environment?: "here" | "ssh" | "peer" | "boat" } }
-}): boolean {
+export function linksFilesHere(
+  conversation: {
+    selection?: ConversationSelection
+    remote?: { lease?: { environment?: "here" | "ssh" | "peer" | "boat" } }
+    serverConversationId?: string
+    turns?: readonly unknown[]
+  },
+  defaultEnvironment?: string,
+): boolean {
   const environment = conversation.remote?.lease?.environment
-  const chosen = conversation.selection?.environment
-  return (
-    (chosen === undefined || chosen === HERE) &&
-    environment !== "ssh" &&
-    environment !== "peer"
+  // The default applies where the gateway applies it: at creation, to a
+  // conversation that names no place. Once created, its lease says.
+  const draft = !conversation.serverConversationId && !conversation.turns?.length
+  const chosen = chosenEnvironment(
+    conversation.selection,
+    draft ? defaultEnvironment : undefined,
   )
+  return chosen === undefined && environment !== "ssh" && environment !== "peer"
 }
 
 /** Creation fixes the selection before the first send or attachment upload. */

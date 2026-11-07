@@ -81,12 +81,11 @@ pub(crate) trait DeviceSettings: Send + Sync {
         operation: String,
         host: SshDestination,
     ) -> SetupFuture<'_, Result<LinkingApply, LinkingError>>;
-    /// Save `environment` as `defaultEnvironment` in place of `before`,
-    /// `None` removing it.
+    /// Save `environment` as `defaultEnvironment`, `None` removing it; the
+    /// audit names the one the file held, read as it is replaced.
     fn set_default(
         &self,
         caller: LinkingCaller,
-        before: Option<String>,
         environment: Option<String>,
     ) -> SetupFuture<'_, Result<(), LinkingError>>;
 }
@@ -297,12 +296,7 @@ impl DeviceSetup {
             }
         }
         let _choosing = self.choosing.lock().await;
-        let before = self.default.borrow().clone();
-        match self
-            .settings
-            .set_default(caller, before, environment.clone())
-            .await
-        {
+        match self.settings.set_default(caller, environment.clone()).await {
             Ok(()) => {
                 self.default.send_replace(environment.clone());
                 Ok(environment)
@@ -368,7 +362,7 @@ mod tests {
         begun: Mutex<Vec<(String, String)>>,
         not_installed: Mutex<Vec<(String, String)>>,
         added: Mutex<Vec<(String, String)>>,
-        defaults: Mutex<Vec<(Option<String>, Option<String>)>>,
+        defaults: Mutex<Vec<Option<String>>>,
         refuse_begin: Option<LinkingError>,
         refuse: Option<LinkingError>,
     }
@@ -425,14 +419,13 @@ mod tests {
         fn set_default(
             &self,
             _caller: LinkingCaller,
-            before: Option<String>,
             environment: Option<String>,
         ) -> SetupFuture<'_, Result<(), LinkingError>> {
             Box::pin(async move {
                 if let Some(error) = self.refuse {
                     return Err(error);
                 }
-                self.defaults.lock().unwrap().push((before, environment));
+                self.defaults.lock().unwrap().push(environment);
                 Ok(())
             })
         }
@@ -633,14 +626,10 @@ mod tests {
             .unwrap();
         setup.set_default(caller(), None).await.unwrap();
         assert_eq!(*read.borrow(), None);
-        // Each saved with the one it replaced.
+        // Each saved in turn; what each replaced is read from the file.
         assert_eq!(
             *settings.defaults.lock().unwrap(),
-            [
-                (None, Some("served".into())),
-                (Some("served".into()), Some(peer.clone())),
-                (Some(peer), None)
-            ]
+            [Some("served".into()), Some(peer), None]
         );
         assert_eq!(setup.default_environment(), None);
     }
