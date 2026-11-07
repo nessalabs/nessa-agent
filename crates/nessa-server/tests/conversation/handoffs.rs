@@ -217,7 +217,10 @@ impl Fixture {
                     .find(|message| message.execution_id == action)
                     .map(|message| message.status);
                 seen.note(format!("message status {status:?}"));
-                if status == Some(ConversationMessageStatus::Completed) {
+                if view.messages.iter().any(|message| {
+                    message.execution_id == action
+                        && message.status == ConversationMessageStatus::Completed
+                }) {
                     break;
                 }
                 tokio::time::sleep(POLL).await;
@@ -378,14 +381,15 @@ impl Fixture {
                     None => "no invocation saved".into(),
                     Some(invocation) => format!("saved result {:?}", invocation.result),
                 });
-                if invocation.is_some_and(|invocation| {
-                    invocation.result.as_ref().is_some_and(|result| {
-                        result
-                            .as_ref()
-                            .err()
-                            .and_then(AgentError::usage_limit)
-                            .is_some()
-                    })
+                if snapshot.invocations.iter().any(|invocation| {
+                    invocation.request.execution_id.as_str() == action
+                        && invocation.result.as_ref().is_some_and(|result| {
+                            result
+                                .as_ref()
+                                .err()
+                                .and_then(AgentError::usage_limit)
+                                .is_some()
+                        })
                 }) {
                     break;
                 }
