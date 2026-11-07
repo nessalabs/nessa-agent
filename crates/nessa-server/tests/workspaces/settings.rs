@@ -129,6 +129,10 @@ async fn a_claude_sign_in_is_the_saved_claude_login_and_an_older_entry_moves_the
         login.read().unwrap().unwrap().as_slice(),
         b"sk-ant-oat01-second"
     );
+    // An API key saved as the Claude login is not Boat's sign-in: each
+    // lease hands it over instead.
+    login.write(b"sk-ant-api03-key").unwrap();
+    assert!(sign_ins.read().await.unwrap().is_none());
     login.delete().unwrap();
     assert!(sign_ins.read().await.unwrap().is_none());
 }

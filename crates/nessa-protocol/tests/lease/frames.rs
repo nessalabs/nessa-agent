@@ -1,11 +1,11 @@
 //! Lease frames: their wire shape, the hello another build is recognised by,
 //! and the bounds on a frame and the bytes it carries.
 use super::{
-    decode, encode, fingerprint, login_variables, read_hello, ArtifactReadRefusal, Cleanup,
-    Collection, CollectionRefusal, CommandEnd, Data, EndingCause, FetchOutcome, FetchRefusal,
-    FromEnvironment, GrantRefusal, GrantedTerms, Hello, InvalidLogin, Login, MachineDisk,
-    MachineReport, PublishRefusal, Sandbox, StagedArtifact, ToEnvironment, MAX_DATA_BYTES,
-    MAX_FRAME_BYTES, MAX_LOGIN_BYTES, MAX_MACHINE_DISKS, MAX_MACHINE_FIGURE,
+    decode, encode, fingerprint, login_variable, login_variables, read_hello, ArtifactReadRefusal,
+    Cleanup, Collection, CollectionRefusal, CommandEnd, Data, EndingCause, FetchOutcome,
+    FetchRefusal, FromEnvironment, GrantRefusal, GrantedTerms, Hello, InvalidLogin, Login,
+    MachineDisk, MachineReport, PublishRefusal, Sandbox, StagedArtifact, ToEnvironment,
+    MAX_DATA_BYTES, MAX_FRAME_BYTES, MAX_LOGIN_BYTES, MAX_MACHINE_DISKS, MAX_MACHINE_FIGURE,
     MAX_MACHINE_TEXT_BYTES,
 };
 use crate::pairing::FrameReader;
@@ -282,6 +282,23 @@ fn a_start_carries_a_login_by_value_and_never_prints_it() {
     assert_eq!(
         login_variables(crate::agents::AgentId::Claude).first(),
         Some(&"CLAUDE_CODE_OAUTH_TOKEN")
+    );
+    // Claude Code refuses an API key as an OAuth token, so each goes where
+    // it reads that kind.
+    let claude = |value: &str| {
+        login_variable(
+            crate::agents::AgentId::Claude,
+            &Login::new(value.into()).unwrap(),
+        )
+    };
+    assert_eq!(claude("sk-ant-oat01-x"), "CLAUDE_CODE_OAUTH_TOKEN");
+    assert_eq!(claude("sk-ant-api03-x"), "ANTHROPIC_API_KEY");
+    assert_eq!(
+        login_variable(
+            crate::agents::AgentId::Codex,
+            &Login::new("sk-proj-x".into()).unwrap()
+        ),
+        "CODEX_API_KEY"
     );
 }
 

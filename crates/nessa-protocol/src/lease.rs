@@ -271,15 +271,27 @@ impl<'de> Deserialize<'de> for Login {
     }
 }
 
-/// The variables an agent's harness reads a login from. The first is the
-/// only one a [`Login`] is ever put in, on either end; a host that sets any
-/// of them itself has its own login, and a gateway's is not used.
+/// The variables an agent's harness reads a login from. A [`Login`] is put
+/// only in the one [`login_variable`] names for it; a host that sets any of
+/// them itself has its own login, and a gateway's is not used.
 #[must_use]
 pub fn login_variables(agent: crate::agents::AgentId) -> &'static [&'static str] {
     match agent {
         crate::agents::AgentId::Claude => &["CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY"],
         crate::agents::AgentId::Codex => &["CODEX_API_KEY", "OPENAI_API_KEY"],
         crate::agents::AgentId::Opencode => &["OPENCODE_API_KEY"],
+    }
+}
+
+/// The one variable `login` is put in for `agent`: the first of
+/// [`login_variables`], except an Anthropic API key (`sk-ant-api…`), which
+/// Claude Code reads from `ANTHROPIC_API_KEY` and refuses as an OAuth token.
+#[must_use]
+pub fn login_variable(agent: crate::agents::AgentId, login: &Login) -> &'static str {
+    let variables = login_variables(agent);
+    match agent {
+        crate::agents::AgentId::Claude if login.expose().starts_with("sk-ant-api") => variables[1],
+        _ => variables[0],
     }
 }
 

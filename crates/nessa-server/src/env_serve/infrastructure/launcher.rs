@@ -18,13 +18,13 @@
 //! preloaded library or a credential here. The one credential it may hand
 //! over is the agent's own saved login, only under a lease this host's
 //! grant lets take one, and only in the variable the agent reads its login
-//! from (the first of `lease::login_variables`); a login the host
+//! from (`lease::login_variable`); a login the host
 //! configures itself wins. A harness given a publish point finds `nessa` on its search path: the copy serving its lease, which a
 //! gateway installs where no search path looks (`env_serve::install`).
 use crate::env_serve::application::{HarnessLauncher, PUBLISH_POINT_VARIABLE};
 use nessa_protocol::{
     agents::AgentId,
-    lease::{login_variables, Login},
+    lease::{login_variable, login_variables, Login},
 };
 use nessa_sdk::{
     application::agent_execution::{agents::AgentError, providers::HarnessProcess},
@@ -171,8 +171,8 @@ pub(crate) fn login_to_set<'a>(
         || own_sign_in_files(agent, configured)
             .iter()
             .any(|path| exists(path));
-    match (login, host_has_own, variables.first()) {
-        (Some(login), false, Some(variable)) => Some((variable, login.expose())),
+    match (login, host_has_own) {
+        (Some(login), false) => Some((login_variable(agent, login), login.expose())),
         _ => None,
     }
 }

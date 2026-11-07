@@ -97,14 +97,17 @@ impl ClaudeSignIns for VaultClaudeSignIns {
     async fn read(&self) -> Result<Option<ClaudeSignIn>, Failure> {
         let store = self.0.clone();
         tokio::task::spawn_blocking(move || {
-            store
+            Ok(store
                 .read()
                 .map_err(unavailable)?
-                .map(|bytes| {
-                    let token = String::from_utf8(bytes.to_vec()).map_err(|_| Failure::Storage)?;
-                    ClaudeSignIn::new(token).map_err(|_| Failure::Storage)
-                })
-                .transpose()
+                // A saved Claude login that is not a `claude setup-token`
+                // token (an API key) is not served as Boat's sign-in: each
+                // lease then hands it over in its own variable.
+                .and_then(|bytes| {
+                    String::from_utf8(bytes.to_vec())
+                        .ok()
+                        .and_then(|token| ClaudeSignIn::new(token).ok())
+                }))
         })
         .await
         .map_err(|_| Failure::Storage)?

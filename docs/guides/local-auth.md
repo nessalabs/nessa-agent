@@ -375,7 +375,8 @@ With `--logins`, the gateway may hand an agent it starts here the login
 saved for that agent in its vault (Settings › Connections › Accounts ›
 Saved logins), once its owner also turns on "Use my saved logins here" for
 this machine in Devices. It goes in the agent's login variable
-(`CLAUDE_CODE_OAUTH_TOKEN`, `CODEX_API_KEY`, `OPENCODE_API_KEY`) only when
+(`CLAUDE_CODE_OAUTH_TOKEN`, or `ANTHROPIC_API_KEY` for an Anthropic API key;
+`CODEX_API_KEY`; `OPENCODE_API_KEY`) only when
 this machine has no sign-in of its own for that agent: none of its login
 variables, and no sign-in file from the agent's own login command
 (`~/.claude/.credentials.json`, `~/.codex/auth.json`,

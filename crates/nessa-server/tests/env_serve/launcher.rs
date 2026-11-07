@@ -38,6 +38,12 @@ fn a_saved_login_is_set_only_where_the_host_has_none_of_its_own() {
         Some(("CODEX_API_KEY", "sk-ant-oat-x"))
     );
     assert_eq!(login_to_set(AgentId::Claude, None, &none, |_| false), None);
+    // A saved Anthropic API key goes where Claude Code reads one.
+    let key = Login::new("sk-ant-api03-x".into()).unwrap();
+    assert_eq!(
+        login_to_set(AgentId::Claude, Some(&key), &none, |_| false),
+        Some(("ANTHROPIC_API_KEY", "sk-ant-api03-x"))
+    );
     // An API key the host set is the host's login too.
     let own = BTreeMap::from([(OsString::from("ANTHROPIC_API_KEY"), OsString::from("mine"))]);
     assert_eq!(
