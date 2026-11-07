@@ -25,7 +25,7 @@ async function ready() {
   const source = gatewaySource({
     connect: async () => gateway.client,
     clock,
-    timing: { callMs: 5000, retryMs: 1000 },
+    timing: { callMs: 5000, workspaceCallMs: 20000, retryMs: 1000 },
   })
   const updates: WorkspaceUpdate[] = []
   source.subscribe((update) => updates.push(update))

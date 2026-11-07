@@ -79,6 +79,15 @@ view's own `truncated` and `transcriptState` (`history` on its transcript).
 It does not page records to reconstruct older text, and a turn the view left
 out does not hide the turns the view did draw.
 
+A followed view is that whole replacement on every change. What that costs on
+a slow link is measured by `scripts/measure-subscription-bytes.mjs`: a local
+proxy with a 150 ms round trip and 1.6 Mbps toward the follower, a scripted
+stream, and a short conversation beside one with twelve earlier turns. The
+reading that added the script stayed far under the 64 KiB frame bound (largest
+frame 2067 bytes with no history, 8780 bytes after twelve turns), so a view
+stays a full replacement. A later reading whose frames sit near that bound is
+what would justify sending only what changed.
+
 ## How it works
 
 ### Stress capacity observation

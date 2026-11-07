@@ -19,7 +19,9 @@
  * focus the person took to the page stays there (focus-regroup-*). Focus on the
  * scene's Customize control in a new session's home stays there as the window
  * shortens and the home takes a small pane's shape, its header kept as a
- * band (focus-home-scene).
+ * band (focus-home-scene). Frames every 8ms, with the pane flight still on
+ * its own clock, ⇧⌘N and ⇧⌘\\ still land the caret in the new composer
+ * (focus-fast-frames): a thirty-frame search ends inside that flight.
  */
 import { attempt, CannotRun } from "./lib/cli.mjs"
 import { need, openPage, withCleanup, withEngines } from "./lib/browser.mjs"
@@ -1094,6 +1096,7 @@ Steps (each asserts where the caret is afterwards):
   focus-reply (1440 × 900 and 1000 × 700): ↓ then ⌘R at once, and typing at
   once → the caret and every key are in the next row's reply pill; sending,
   which moves that row to Working → the caret stays in that session's pill
+  focus-fast-frames: frames every 8ms, ⇧⌘N and ⇧⌘\\ still put the caret in the new composer
   focus-answers-overview, -card: a held ⌘↩, and two queued ⌘↩ events within 250ms, each answer one request;
   a held ↩ on a pane card's Allow Once, and a double click on Deny and on
   Always Allow, each answer one, and the held ↩ sends nothing typed
@@ -1217,6 +1220,80 @@ async function boundKeys(page) {
   }
 }
 
+/** Frames every 8ms. The pane flight stays on the page clock, so thirty frames end inside it. */
+async function fastFrames(page) {
+  await page.evaluate(() => {
+    const queued = new Map()
+    let next = 1
+    const cancelNative = window.cancelAnimationFrame.bind(window)
+    window.requestAnimationFrame = (callback) => {
+      const id = next++
+      const timer = window.setTimeout(() => {
+        queued.delete(id)
+        callback(performance.now())
+      }, 8)
+      queued.set(id, timer)
+      return id
+    }
+    window.cancelAnimationFrame = (id) => {
+      const timer = queued.get(id)
+      if (timer !== undefined) {
+        window.clearTimeout(timer)
+        queued.delete(id)
+      }
+      cancelNative(id)
+    }
+  })
+}
+
+/**
+ * ⇧⌘N and ⇧⌘\\ with those frames: the caret is in the new pane's composer.
+ * The flight's own motion is not the signal here. Replacing the frame clock
+ * can leave a finite animation running in WebKit, and a thirty-frame search
+ * fails by leaving the caret in the pane that was left.
+ */
+async function splitsAtFastFrames(page, layout) {
+  await hideColumns(page, layout)
+  await focusComposer(page)
+  await fastFrames(page)
+  const failures = []
+  const trail = []
+  for (const [label, press] of [
+    ["⇧⌘N (new session beside)", keys.newSessionBeside],
+    ["⇧⌘\\ (split down)", keys.splitDown],
+  ]) {
+    const before = await order(page)
+    await page.keyboard.press(press)
+    const deadline = Date.now() + 3000
+    let after = await state(page)
+    let keys = await order(page)
+    let problem = fastSplitProblem(before, keys, after)
+    while (problem && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 16))
+      after = await state(page)
+      keys = await order(page)
+      problem = fastSplitProblem(before, keys, after)
+    }
+    trail.push({ step: label, ...after, keys, ok: !problem })
+    if (problem) {
+      failures.push(`${label}: ${problem}`)
+      break
+    }
+  }
+  return { trail, failures }
+}
+
+/** The new pane is focused and the caret is in its composer, or why not. */
+function fastSplitProblem(before, keys, after) {
+  const added = keys.filter((key) => !before.includes(key))
+  if (added.length !== 1) return "the split did not add one pane"
+  if (after.focusedPane !== added[0])
+    return (
+      inComposer(after) ?? `focused pane is ${after.focusedPane}, new pane is ${added[0]}`
+    )
+  return inComposer(after)
+}
+
 await main(meta, async ({ options, rep, url }) => {
   await withEngines(options, rep, async (engine, browser) => {
     for (const layout of options.layouts) {
@@ -1322,6 +1399,15 @@ await main(meta, async ({ options, rep, url }) => {
         },
         () => opened.close(),
       )
+      await attempt(rep, { name: "focus-fast-frames", engine, layout }, async () => {
+        const fresh = await openPage(browser, { url, layout, width: 1440, height: 900 })
+        try {
+          await need(fresh.page, css.composer, "a composer")
+          return await splitsAtFastFrames(fresh.page, layout)
+        } finally {
+          await fresh.close()
+        }
+      })
       await attempt(rep, { name: "focus-bound-keys", engine, layout }, async () => {
         const fresh = await openPage(browser, { url, layout, width: 1440, height: 900 })
         try {

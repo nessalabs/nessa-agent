@@ -1,0 +1,8 @@
+{
+  "session.authenticate": "Opens the session. A signed-in call cannot send it; the gateway answers already_authenticated.",
+  "attachment.write": "One piece of an upload's bytes for a surface that cannot reach PUT /attachments. The action is attachment.begin; the bytes are not a JSON call.",
+  "conversation.subscribe": "Follows one conversation by a stream of events after the acknowledgement. One call would drop the stream.",
+  "conversation.subscribeList": "Follows the conversation list by a stream of events after the acknowledgement. One call would drop the stream.",
+  "conversation.subscribeEvents": "Follows one conversation's events by a stream after the acknowledgement. One call would drop the stream.",
+  "agents.subscribe": "Follows the agent catalog by a stream of events after the acknowledgement. One call would drop the stream."
+}

@@ -16,8 +16,9 @@ use crate::{
 use nessa_auth::application::session::AuthenticatedSession;
 #[cfg(unix)]
 use nessa_protocol::product::generated::{
-    BoatRuntimeReadParams, BoatRuntimeSelection, BoatRuntimeSetParams, BoatRuntimeSettings,
-    BoatSaveParams, BoatVmLifetime, VmLifetimeMode, NON_NULL_BOAT_RUNTIME_OPTIONS,
+    BoatClaudeSignInParams, BoatRuntimeReadParams, BoatRuntimeSelection, BoatRuntimeSetParams,
+    BoatRuntimeSettings, BoatSaveParams, BoatVmLifetime, VmLifetimeMode,
+    NON_NULL_BOAT_RUNTIME_OPTIONS,
 };
 use nessa_protocol::protocol::{OutgoingMessage, RequestFrame};
 
@@ -50,7 +51,7 @@ pub(super) async fn dispatch(
             "boat.disconnect"
                 if frame.params.is_null() || frame.params == serde_json::json!({}) =>
             {
-                service.settings.clear().await
+                service.disconnect().await
             }
             "boat.save" => {
                 let Ok(params) = serde_json::from_value::<BoatSaveParams>(std::mem::replace(
@@ -60,6 +61,14 @@ pub(super) async fn dispatch(
                     return failure(&frame.id, "invalid_request");
                 };
                 service.save_token(params.token).await
+            }
+            "boat.saveClaudeSignIn" => {
+                let Ok(params) = serde_json::from_value::<BoatClaudeSignInParams>(
+                    std::mem::replace(&mut frame.params, serde_json::json!({})),
+                ) else {
+                    return failure(&frame.id, "invalid_request");
+                };
+                service.save_claude_sign_in(params.token).await
             }
             _ => return failure(&frame.id, "invalid_request"),
         };

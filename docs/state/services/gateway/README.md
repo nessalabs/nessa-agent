@@ -83,6 +83,7 @@ models link back to the source that owns those decisions.
 - [Reach a gateway through a tunnel](tunnel-connectivity.md)
 - [Pair a device through current receiver holding](device-pairing.md)
 - [Stop captured parent and descendant turns](parent-stop.md)
+- [Call a gateway method from the CLI or MCP](call-a-method-from-the-cli-or-mcp.md)
 
 
 [Busy record discovery](record-read-discovery.md) owns the distinction between

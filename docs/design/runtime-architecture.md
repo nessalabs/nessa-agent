@@ -856,6 +856,17 @@ that platform needs it, and keeps it under its digest; a kept copy that no
 longer measures is downloaded again. A draft release serves no downloads,
 so this works once the release is published.
 
+**Local builds carry the Linux build.** A Boat VM runs Linux x86_64, so a
+Mac app built locally needs that build too, and no release exists for it.
+A local macOS build (`scripts/desktop/prepare-runtime.mjs`) cross-builds
+the Linux `nessa` from the same checkout with cargo-zigbuild (glibc 2.35, as
+the release's Ubuntu 22.04), compiles the gateway with its pin and
+`NESSA_HOST_BUILDS_FROM=bundled`, and ships the file in
+`runtime/host-builds/`. `bundled` means that folder beside the gateway's own
+executable; the file is read with the same length bound and digest check as
+a download. A release's own pins skip this; `NESSA_SKIP_HOST_BUILDS=1`
+builds an app that cannot start Boat chats, said in the build output.
+
 **Verified on hosts.** The host commands run on both CI systems (Linux and
 macOS) with their own `sh`, `uname`, digest tool, `mktemp`, `find` and
 `mv`, through each login shell the runner has (macOS: bash, zsh, tcsh),

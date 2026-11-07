@@ -70,6 +70,7 @@ const panel = (
             <App
               onProviderSignIn={signInToProvider}
               canSignInToProvider={providerLoginAvailable}
+              boatSignIn={dependencies.boatClaudeSignIn}
               attachmentResources={dependencies.attachments}
               canChoosePaths={dependencies.canChoosePaths}
               digest={dependencies.digest}

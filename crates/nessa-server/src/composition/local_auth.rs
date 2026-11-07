@@ -14,7 +14,7 @@ use crate::{
         domain::Failure as WorkspaceFailure,
         infrastructure::{
             worker_image, BoatProvider, ConfigBoatRuntimeSettings, FileAssignments,
-            RuntimeSettingsAudit, VaultSettings,
+            RuntimeSettingsAudit, VaultClaudeSignIns, VaultSettings,
         },
     },
 };
@@ -295,6 +295,8 @@ pub(super) async fn product_state(
     #[cfg(unix)]
     let _ = rustls::crypto::ring::default_provider().install_default();
     #[cfg(unix)]
+    let claude_sign_ins = Arc::new(VaultClaudeSignIns(vault.vault.clone()));
+    #[cfg(unix)]
     let workspace_service = Arc::new(
         Workspaces::new(
             Arc::new(VaultSettings(vault.vault.clone())),
@@ -310,10 +312,12 @@ pub(super) async fn product_state(
                     libc::geteuid()
                 }),
                 relay_program: std::env::current_exe().map_err(setup_error)?,
+                claude_sign_ins: claude_sign_ins.clone(),
             }),
             Arc::new(FileAssignments(namespace.join("boat-workspaces"))),
             Arc::new(WorkspaceRecoveryAudit(workspace_audit.clone())),
             runtime_settings,
+            claude_sign_ins,
         )
         .with_image(worker_image()),
     );
@@ -734,6 +738,17 @@ pub(super) async fn product_state(
         if let Some(authorization) = mcp_authorization {
             product = product.with_mcp_authorization(authorization);
         }
+    }
+    // The auth directory's parent is the stage namespace. Timings sit in its
+    // logs folder, the same place `nessa doctor` reads, and stay on this machine.
+    if let Some(namespace) = directory.parent() {
+        product = product.with_local_timings(Arc::new(
+            crate::product::turn_timing::FileFirstTokenStore::new(
+                namespace
+                    .join("logs")
+                    .join(crate::core::local_timings::MESSAGE_TO_FIRST_TOKEN_FILE),
+            ),
+        ));
     }
     Ok(LocalProduct {
         routes: product,
@@ -1331,7 +1346,7 @@ async fn conversations(
         Arc::new(LocalChannelStore::open(&channels_path).map_err(|cause| {
             RunError::opening(crate::core::Dataset::Channels, &channels_path, cause)
         })?);
-    let workspace_environments: Arc<dyn ThreadEnvironments> = Arc::new(ThreadWorkspaces {
+    let thread_workspaces = Arc::new(ThreadWorkspaces {
         service: workspace_service,
         channels: channel_store.clone(),
         audit: workspace_audit,
@@ -1347,6 +1362,9 @@ async fn conversations(
         ),
         environments: Default::default(),
     });
+    // A sign-in saved for Boat reaches conversations already connected.
+    tokio::spawn(thread_workspaces.clone().follow_claude_sign_ins());
+    let workspace_environments: Arc<dyn ThreadEnvironments> = thread_workspaces;
     let clock: Arc<dyn Clock> = Arc::new(SystemClock);
     let host = crate::agent_install::infrastructure::host_platform();
     let opencode = EffectiveOpenCodeProfile::decide(

@@ -3905,6 +3905,11 @@ impl VaultErrorCode {
 pub struct BoatSaveParams {
     pub token: String,
 }
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BoatClaudeSignInParams {
+    pub token: String,
+}
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 pub enum BoatErrorCode {
     #[serde(rename = "vault_locked")]
@@ -4324,6 +4329,7 @@ pub mod product_method {
     pub const VAULT_LOCK: &str = "vault.lock";
     pub const BOAT_STATUS: &str = "boat.status";
     pub const BOAT_SAVE: &str = "boat.save";
+    pub const BOAT_SAVE_CLAUDE_SIGN_IN: &str = "boat.saveClaudeSignIn";
     pub const BOAT_DISCONNECT: &str = "boat.disconnect";
     pub const DEVICES_POOL: &str = "devices.pool";
     pub const DEVICES_SET_POOL: &str = "devices.setPool";
@@ -4525,7 +4531,7 @@ pub fn wire_shape_product_session_ready(value: &Value) -> bool {
         }) && object.get("methods").is_some_and(|field| {
             let _ = field;
             field.as_array().is_some_and(|items| {
-                items.len() <= 118
+                items.len() <= 119
                     && items.iter().all(|item| {
                         let _ = item;
                         item.is_string()
@@ -4657,6 +4663,7 @@ pub const PRODUCT_READY_METHODS: &[&str] = &[
     "vault.lock",
     "boat.status",
     "boat.save",
+    "boat.saveClaudeSignIn",
     "boat.disconnect",
     "devices.pool",
     "devices.setPool",
@@ -4734,6 +4741,7 @@ pub fn action_for_method(method: &str) -> Option<&'static str> {
         | "vault.lock"
         | "boat.status"
         | "boat.save"
+        | "boat.saveClaudeSignIn"
         | "boat.disconnect"
         | "devices.pool"
         | "devices.setPool"

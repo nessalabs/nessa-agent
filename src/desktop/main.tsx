@@ -24,6 +24,8 @@ import {
   sandboxSchemeRegistered,
   signInToProvider,
   providerLoginAvailable,
+  mintClaudeSignIn,
+  claudeSignInMintAvailable,
   saveFile,
   writeClipboardText,
 } from "../host"
@@ -169,6 +171,7 @@ const dependencies = createDesktopDependencies({
   signInToProvider,
   paths: channelPaths,
   providerLoginAvailable,
+  mintClaudeSignIn: { available: claudeSignInMintAvailable, mint: mintClaudeSignIn },
   gateway,
   reviewNotices: nativeNotices ? { sync: syncReviewNotices } : undefined,
   workspace: seeded?.workspace,

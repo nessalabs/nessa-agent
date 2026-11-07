@@ -9,7 +9,7 @@ mod settings;
 mod ssh;
 pub(crate) use assignments::FileAssignments;
 pub(crate) use boat::BoatProvider;
-pub(crate) use settings::VaultSettings;
+pub(crate) use settings::{VaultClaudeSignIns, VaultSettings};
 
 mod release;
 pub(crate) use release::worker_image;

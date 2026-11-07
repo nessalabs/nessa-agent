@@ -2560,7 +2560,7 @@ it("requires an explicit valid requested Head and refuses unsolicited Head field
   })
 })
 it("keeps a channel create pending through cloud preparation without replaying it", async () => {
-  const { conversationWorkspaceCreateTimeoutMs } =
+  const { conversationWorkspaceTimeoutMs } =
     await import("../application/agent-budgets.js")
   const request = vi.fn(
     async (_method: string, _params: unknown, _deadline?: unknown) => ({
@@ -2571,8 +2571,29 @@ it("keeps a channel create pending through cloud preparation without replaying i
   await api.create({ conversationId, channelId: "ch_aaaaaaaaaa" })
   expect(request).toHaveBeenCalledTimes(1)
   expect(request.mock.calls[0]?.[2]).toEqual({
-    atLeastMs: conversationWorkspaceCreateTimeoutMs,
+    atLeastMs: conversationWorkspaceTimeoutMs,
   })
+})
+
+it("waits for a workspace only when a send says it may have to", async () => {
+  const { conversationWorkspaceTimeoutMs } =
+    await import("../application/agent-budgets.js")
+  const request = vi.fn(
+    async (_method: string, _params: unknown, _deadline?: unknown) => ({
+      executionId: "execution",
+      disposition: "queued",
+    }),
+  )
+  const api = createConversationApi({ request }, () => "request")
+  const prepared = () =>
+    api.prepare(conversationId, "hi", [], [], { executionId: "execution" })
+  await api.submit(prepared(), { waitsOnWorkspace: true })
+  await api.submit(prepared())
+  expect(request).toHaveBeenCalledTimes(2)
+  expect(request.mock.calls[0]?.[2]).toEqual({
+    atLeastMs: conversationWorkspaceTimeoutMs,
+  })
+  expect(request.mock.calls[1]?.[2]).toBeUndefined()
 })
 
 it("captures file-only uploads immutably and includes them in the admitted request", async () => {

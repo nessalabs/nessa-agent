@@ -51,6 +51,6 @@ pub use events::{ExecutionEvent, ExecutionUpdate};
 pub use permission_authority::PermissionAuthoritySource;
 pub use question::AdmittedQuestion;
 pub use request::ExecutionRequest;
-pub use submitter::{AfterSaveCheck, AfterSaveRefusal, Submitter};
+pub use submitter::{AdmissionNotice, AfterSaveCheck, AfterSaveRefusal, Submitter};
 
 pub use crate::domain::agent_execution::executions::SubmissionMode;

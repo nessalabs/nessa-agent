@@ -236,6 +236,27 @@ as `PUT /attachments` takes an upload:
   `sha256` before rendering, and hands them to its sandbox; the frame never
   sees the ticket.
 
+## Calling a method from the CLI or MCP
+
+`nessa call <method> --params '<json>'` and `nessa mcp` expose one list, generated
+from [product/manifest.json](product/manifest.json) minus
+[product/surface-exclusions.json](product/surface-exclusions.json). Each entry's
+params are the method's definition in [product/v1.json](product/v1.json). A call
+opens the same `/session` socket the app uses and sends the method. The gateway's
+Cedar check is the permission decision, for the credential that signed in.
+
+`nessa call` reads `auth/surfaces/nessa-cli.token` unless `--credential-file`
+names another. `nessa mcp` reads `auth/surfaces/nessa-mcp.token`. Provisioning
+that surface without `--grants` gives it `server.read`, `conversation.read`, and
+`conversation.write`. A method outside those grants is refused with the gateway's
+code. The handler's JSON is the successful output. A refusal is
+`{"ok":false,"code":"..."}` on stdout for `call`, and the same JSON as the MCP
+tool text. Diagnostics stay on stderr.
+
+`pnpm protocol:check` fails when a manifest method is neither in that generated
+list nor excluded with a written reason. The exclusions are the handshake, upload
+byte pieces, and the subscriptions whose events a single call would drop.
+
 Credential lifecycle RPC errors distinguish `credential_conflict`,
 `credential_capacity`, and `credential_not_found` from
 `credential_store_unavailable`. The first three reject the command; they do not

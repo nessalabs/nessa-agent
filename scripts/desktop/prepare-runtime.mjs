@@ -13,6 +13,7 @@ import {
 } from "node:fs"
 import { dirname, join } from "node:path"
 
+import { hostBuildName, hostBuildPin } from "./host-builds.mjs"
 import { materializeBinLinks } from "./materialize-bin-links.mjs"
 import { runtimeFingerprint, verifyRuntimeFingerprint } from "./runtime-fingerprint.mjs"
 
@@ -51,6 +52,77 @@ function validatePreparedRuntime(out, executables) {
   }
 }
 
+/**
+ * The Linux a Boat VM runs, and the oldest glibc its `nessa` is linked
+ * against (the release builds it on Ubuntu 22.04, glibc 2.35).
+ */
+export const BOAT_HOST_TARGET = "x86_64-unknown-linux-gnu"
+const BOAT_HOST_GLIBC = "2.35"
+
+/**
+ * The `nessa` a local build carries for Boat VMs, and the build environment
+ * that pins it (#734's pins, read from the app rather than a release).
+ *
+ * A gateway installs itself on a host with no copy of its build; on another
+ * platform it sends that platform's build, which it knows only by the pin it
+ * was compiled with. A release compiles those pins in (NESSA_HOST_BUILDS);
+ * a local Mac build had none, so it could never start a Boat chat. So a local
+ * build cross-builds the Linux `nessa` from the same sources first, compiles
+ * the gateway with its pin and NESSA_HOST_BUILDS_FROM=bundled, and ships the
+ * file in runtime/host-builds/, where the gateway reads it.
+ *
+ * Returns undefined when the environment already pins release builds (the
+ * release workflow) or opts out with NESSA_SKIP_HOST_BUILDS=1.
+ */
+export function crossBuildHostBuilds({ root, environment, run }) {
+  if (environment.NESSA_HOST_BUILDS || environment.NESSA_HOST_BUILDS_FROM)
+    return undefined
+  if (environment.NESSA_SKIP_HOST_BUILDS === "1") {
+    process.stderr.write(
+      "→ NESSA_SKIP_HOST_BUILDS=1: this app cannot start chats in Boat VMs\n",
+    )
+    return undefined
+  }
+  try {
+    run("cargo", ["zigbuild", "--help"], { cwd: root, stdio: "ignore" })
+  } catch {
+    throw new Error(
+      "A local build carries the Linux `nessa` Boat VMs run, cross-built with cargo-zigbuild. " +
+        `Install it (brew install zig && cargo install cargo-zigbuild && rustup target add ${BOAT_HOST_TARGET}), ` +
+        "or set NESSA_SKIP_HOST_BUILDS=1 to build an app that cannot start Boat chats.",
+    )
+  }
+  run(
+    "cargo",
+    [
+      "zigbuild",
+      "--release",
+      "-p",
+      "nessa-server",
+      "--bin",
+      "nessa",
+      "--target",
+      `${BOAT_HOST_TARGET}.${BOAT_HOST_GLIBC}`,
+    ],
+    { cwd: root, stdio: "inherit" },
+  )
+  const metadata = JSON.parse(
+    run("cargo", ["metadata", "--no-deps", "--format-version", "1"], {
+      cwd: root,
+      encoding: "utf8",
+    }),
+  )
+  const binary = join(metadata.target_directory, BOAT_HOST_TARGET, "release", "nessa")
+  if (!existsSync(binary))
+    throw new Error(`cargo zigbuild did not produce ${BOAT_HOST_TARGET}'s nessa`)
+  const pin = hostBuildPin(BOAT_HOST_TARGET, readFileSync(binary))
+  process.stdout.write(`→ Boat VMs get ${hostBuildName(BOAT_HOST_TARGET)} (${pin})\n`)
+  return {
+    files: { [hostBuildName(BOAT_HOST_TARGET)]: binary },
+    environment: { NESSA_HOST_BUILDS: pin, NESSA_HOST_BUILDS_FROM: "bundled" },
+  }
+}
+
 /** Read the native Rust target without guessing it from Node's platform names. */
 export function rustHostTarget(versionOutput) {
   const host = versionOutput.match(/^host: (.+)$/m)?.[1]
@@ -70,6 +142,8 @@ export function assembleDesktopRuntime({
   requestedTarget,
   prepareNode,
   finalizeExecutables,
+  hostBuilds = false,
+  environment = process.env,
   run = execFileSync,
 }) {
   const host = rustHostTarget(run("rustc", ["-vV"], { encoding: "utf8" }))
@@ -86,9 +160,13 @@ export function assembleDesktopRuntime({
   // earlier manifest must not make its old tree look like the result.
   rmSync(join(out, "manifest.json"), { force: true })
 
+  const carried = hostBuilds
+    ? crossBuildHostBuilds({ root, environment, run })
+    : undefined
   run("cargo", ["build", "--release", "-p", "nessa-server", "-p", "nessa-mcp"], {
     cwd: root,
     stdio: "inherit",
+    ...(carried && { env: { ...environment, ...carried.environment } }),
   })
   const metadata = JSON.parse(
     run("cargo", ["metadata", "--no-deps", "--format-version", "1"], {
@@ -108,6 +186,12 @@ export function assembleDesktopRuntime({
   try {
     for (const name of [executables.gateway, executables.mcp])
       cpSync(join(metadata.target_directory, "release", name), join(stage, name))
+    // Beside the gateway, where NESSA_HOST_BUILDS_FROM=bundled reads them.
+    if (carried) {
+      mkdirSync(join(stage, "host-builds"))
+      for (const [name, binary] of Object.entries(carried.files))
+        cpSync(binary, join(stage, "host-builds", name))
+    }
 
     const nodeVersion = prepareNode({ executable: executables.node, out: stage })
     if (typeof nodeVersion !== "string" || nodeVersion.length === 0)

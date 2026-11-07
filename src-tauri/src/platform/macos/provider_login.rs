@@ -12,7 +12,16 @@ impl ProviderLogin for MacosProviderLogin {
     fn open(&self, provider: Provider) -> Result<(), LoginFailure> {
         open(provider)
     }
+    fn mints_claude_sign_in(&self) -> bool {
+        true
+    }
+    fn mint_claude_sign_in(&self) -> Result<String, LoginFailure> {
+        super::claude_sign_in::mint(MINT_TIMEOUT)
+    }
 }
+
+/// Long enough to sign in, with a second factor, in a browser opened cold.
+const MINT_TIMEOUT: Duration = Duration::from_secs(600);
 
 fn script(provider: Provider) -> &'static str {
     // Only this closed provider enum chooses terminal syntax, never external text.

@@ -1522,25 +1522,32 @@ async fn forward_review_notices(
                 selection_passes += 1;
                 continue 'snapshots;
             }
-            if let Some(metadata) = state.review_metadata.as_ref() {
-                let mut by_conversation = HashMap::new();
-                for token in &admitted_tokens {
-                    if by_conversation
-                        .insert(token.conversation_id().clone(), token)
-                        .is_some_and(|earlier| earlier != token)
-                    {
-                        selection_passes += 1;
-                        continue 'snapshots;
-                    }
+            // The token was read with the row Cedar saw. It still has to name
+            // that row at this authority snapshot. The board is checked after
+            // this await; checking it before would admit a candidate the board
+            // drops while the token read waits.
+            let Some(metadata) = state.review_metadata.as_ref() else {
+                return Err(ReviewNoticePublicationFailure::Audit(
+                    ReviewNoticeAuditFailure::Unavailable,
+                ));
+            };
+            let mut by_conversation = HashMap::new();
+            for token in &admitted_tokens {
+                if by_conversation
+                    .insert(token.conversation_id().clone(), token)
+                    .is_some_and(|earlier| earlier != token)
+                {
+                    selection_passes += 1;
+                    continue 'snapshots;
                 }
-                for token in by_conversation.values() {
-                    let current_token = metadata.admission_current(token).await.map_err(|_| {
-                        ReviewNoticePublicationFailure::Audit(ReviewNoticeAuditFailure::Unavailable)
-                    })?;
-                    if !current_token {
-                        selection_passes += 1;
-                        continue 'snapshots;
-                    }
+            }
+            for token in by_conversation.values() {
+                let current_token = metadata.admission_current(token).await.map_err(|_| {
+                    ReviewNoticePublicationFailure::Audit(ReviewNoticeAuditFailure::Unavailable)
+                })?;
+                if !current_token {
+                    selection_passes += 1;
+                    continue 'snapshots;
                 }
             }
             if !board.is_current(generation, visibility) {
@@ -5087,6 +5094,51 @@ mod tests {
             current_session_error(&state, &session).await,
             Some(AccessError::InactiveMembership)
         );
+    }
+
+    /// `nessa call` and `nessa mcp` prepare this same request. Without
+    /// `server.read`, Cedar refuses it before the health handler runs.
+    #[tokio::test]
+    async fn a_surface_call_without_the_grant_is_forbidden_by_cedar() {
+        let (state, authority) = fixture(MembershipRole::Member);
+        {
+            let mut held = authority.snapshot.lock().unwrap();
+            let organization = held.credential.organization_id().clone();
+            held.credential = Credential::new(
+                CredentialId::new("credential").unwrap(),
+                PrincipalId::new("principal").unwrap(),
+                organization.clone(),
+                AudienceId::new("gateway").unwrap(),
+                100,
+                200,
+                vec![Grant::new(
+                    Action::new("conversation.read").unwrap(),
+                    Resource::new(organization, ResourceId::new("gateway-resource").unwrap()),
+                )],
+            )
+            .unwrap();
+        }
+        let session = authenticate(&state).await;
+        let prepared = crate::cli::application::prepare("server.health", &json!({}))
+            .expect("server.health is a surface method");
+        let mut frame = request("surface", &prepared.method);
+        frame.params = prepared.params;
+        let OutgoingMessage::Response(denied) = dispatch(&state, &session, frame).await else {
+            panic!("response expected")
+        };
+        assert!(!denied.ok);
+        assert_eq!(denied.error.unwrap().code, "forbidden");
+
+        let (state, _) = fixture(MembershipRole::Member);
+        let session = authenticate(&state).await;
+        let prepared = crate::cli::application::prepare("server.health", &json!({})).unwrap();
+        let mut frame = request("surface", &prepared.method);
+        frame.params = prepared.params;
+        let OutgoingMessage::Response(allowed) = dispatch(&state, &session, frame).await else {
+            panic!("response expected")
+        };
+        assert!(allowed.ok);
+        assert_eq!(allowed.payload.unwrap()["uptimeMs"], 42);
     }
 
     #[tokio::test]

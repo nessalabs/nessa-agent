@@ -88,6 +88,8 @@ export {
   deny,
   pinSession,
   providerLoginAvailable,
+  signInForBoat,
+  boatSignInAvailable,
   removeComposerImage,
   renameSession,
   forkSession,

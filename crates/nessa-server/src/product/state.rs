@@ -1,4 +1,5 @@
 use super::operational_limits::OperationalLimits;
+use super::turn_timing::TurnTimings;
 use crate::agent_install::application::AgentInstallations;
 use crate::agents::application::{AgentProbe, SharedAgentReadiness};
 use crate::agents::infrastructure::NativeHooksPreferences;
@@ -117,6 +118,9 @@ pub struct ProductRouteState {
     pub(crate) verifier: Arc<dyn CredentialVerifier>,
     pub(crate) access: Arc<dyn AccessReader>,
     pub(crate) clock: Arc<dyn Clock>,
+    /// Send-to-first-token samples written under the log directory. Quiet
+    /// until composition points it at that file. Nothing leaves the machine.
+    pub(crate) local_timings: Arc<TurnTimings>,
     pub(crate) policy: Arc<dyn PolicyEvaluator>,
     pub(crate) owner_phone_purpose: Arc<dyn OwnerPhonePurposeSource>,
     pub(crate) owner_phone_policy: Arc<dyn OwnerPhonePolicyEvaluator>,
@@ -337,6 +341,7 @@ impl ProductRouteState {
             verifier: dependencies.verifier,
             access: dependencies.access,
             clock: dependencies.clock,
+            local_timings: Arc::new(TurnTimings::quiet()),
             policy: dependencies.policy,
             owner_phone_purpose: dependencies.owner_phone_purpose,
             owner_phone_policy: dependencies.owner_phone_policy,
@@ -389,6 +394,14 @@ impl ProductRouteState {
         store: Arc<dyn crate::browser_session::application::SessionStore>,
     ) -> Self {
         self.browser_sessions = Some(store);
+        self
+    }
+
+    pub(crate) fn with_local_timings(
+        mut self,
+        store: Arc<dyn super::turn_timing::FirstTokenStore>,
+    ) -> Self {
+        self.local_timings = Arc::new(TurnTimings::recording(store));
         self
     }
 

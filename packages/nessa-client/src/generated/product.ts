@@ -3591,6 +3591,11 @@ export interface BoatSaveParams {
   /** Boat infrastructure token. Never returned or logged. */
   token: string
 }
+/** Keep the owner's Claude sign-in for Boat VMs in the unlocked vault, replacing any saved one. Boat gives VMs made from Nessa's image none of the owner's own logins, so Claude in a Boat VM runs with this. Refused as invalid_request unless it is a setup-token token. */
+export interface BoatClaudeSignInParams {
+  /** Long-lived Claude token that `claude setup-token` minted on the owner's machine. Never returned or logged. */
+  token: string
+}
 /** Typed Boat connection refusals. Worker unavailable requires a matching Nessa release image; environment blocks credentials requires allowing connected agents in the dedicated Boat environment. Provisioning and cleanup uncertainty require reconciliation, not automatic replacement. No code or diagnostic contains credential values. */
 export const BoatErrorCode = {
   VaultLocked: "vault_locked",
@@ -3812,7 +3817,7 @@ export const channelRules = {
 export const bounds = {
   maxOrdinaryResponseBytes: 65536,
   maxRequestFrameBytes: 65536,
-  maxReadyMethods: 118,
+  maxReadyMethods: 119,
   maxAuthCredentialCharacters: 16384,
   maxProductClientIdCharacters: 256,
   maxProductSurfaceInstanceCharacters: 256,
@@ -4141,6 +4146,7 @@ export const ProductMethod = {
   VaultLock: "vault.lock",
   BoatStatus: "boat.status",
   BoatSave: "boat.save",
+  BoatSaveClaudeSignIn: "boat.saveClaudeSignIn",
   BoatDisconnect: "boat.disconnect",
   DevicesPool: "devices.pool",
   DevicesSetPool: "devices.setPool",
@@ -4272,6 +4278,7 @@ export const productReadyMethods = [
   "vault.lock",
   "boat.status",
   "boat.save",
+  "boat.saveClaudeSignIn",
   "boat.disconnect",
   "devices.pool",
   "devices.setPool",
@@ -4394,6 +4401,7 @@ export const productMethodGrants = {
   "vault.lock": "credential.manage",
   "boat.status": "credential.manage",
   "boat.save": "credential.manage",
+  "boat.saveClaudeSignIn": "credential.manage",
   "boat.disconnect": "credential.manage",
   "devices.pool": "credential.manage",
   "devices.setPool": "credential.manage",

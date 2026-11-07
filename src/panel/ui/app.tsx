@@ -1,3 +1,4 @@
+import type { BoatClaudeSignIn } from "../../provider-authentication/model/boat-sign-in"
 import type { AgentInstallations } from "../../onboarding"
 import { ComposerDeliveryMode } from "@nessa-ui/react/composer-queue"
 import type { FollowConversationChoices } from "../adapters/agent-choices"
@@ -117,6 +118,7 @@ export function App({
   agentInstallations,
   onProviderSignIn,
   canSignInToProvider,
+  boatSignIn,
 }: {
   attachmentResources: AttachmentResources
   /**
@@ -138,6 +140,8 @@ export function App({
   followConversationChoices: FollowConversationChoices
   onProviderSignIn?: (provider: "claude" | "codex") => Promise<void>
   canSignInToProvider?: () => Promise<boolean>
+  /** A Claude sign-in minted for Boat VMs, for a refusal from one (ADR 501). */
+  boatSignIn?: BoatClaudeSignIn
   agentInstallations?: AgentInstallations
 }) {
   const scheme = useColorScheme()
@@ -595,6 +599,7 @@ export function App({
                   onOpenPaste={openPaste}
                   onProviderSignIn={onProviderSignIn}
                   canSignInToProvider={canSignInToProvider}
+                  boatSignIn={boatSignIn}
                   onUsageLimitAutoContinue={(enabled) =>
                     chat.setUsageLimitAutoContinue(enabled)
                   }

@@ -42,8 +42,8 @@
 //! the host, verified, so the next lease is served by it and recorded
 //! `Connected`; the audit keeps the `InstallStarted` with no outcome.
 use super::audit::{EnvironmentAudit, EnvironmentEvent, InstallRefusal};
-use super::release::{pins, prune, HttpsReleases, ReleaseBuild, ReleaseDownload};
-use crate::env::{HOST_BUILDS, HOST_BUILDS_FROM, LEASE_PROTOCOL};
+use super::release::{pins, prune, BundledReleases, HttpsReleases, ReleaseBuild, ReleaseDownload};
+use crate::env::{BUNDLED_HOST_BUILDS, HOST_BUILDS, HOST_BUILDS_FROM, LEASE_PROTOCOL};
 use crate::env_serve::install::{
     probe_command, serve_command, upload_command, Platform, Probe, Upload, UploadRefusal,
 };
@@ -220,6 +220,37 @@ impl ReleaseCopy {
     }
 }
 
+/// The release builds this build was compiled with: downloaded from the
+/// release, or, for a local desktop build, read from the `host-builds`
+/// folder its app put beside this executable.
+fn released_with_this_build(cache: &Path) -> Vec<ReleaseCopy> {
+    if HOST_BUILDS_FROM != Some(BUNDLED_HOST_BUILDS) {
+        return ReleaseCopy::pinned(
+            HOST_BUILDS,
+            HOST_BUILDS_FROM,
+            Arc::new(HttpsReleases::default()),
+            cache,
+        );
+    }
+    let beside = std::env::current_exe().map(|path| {
+        path.parent()
+            .unwrap_or_else(|| Path::new("/"))
+            .join("host-builds")
+    });
+    match beside {
+        Ok(folder) => ReleaseCopy::pinned(
+            HOST_BUILDS,
+            Some(&folder.to_string_lossy()),
+            Arc::new(BundledReleases),
+            cache,
+        ),
+        Err(error) => {
+            tracing::error!(%error, "this build's own path is unknown, so the builds bundled beside it cannot be found; it installs only itself");
+            Vec::new()
+        }
+    }
+}
+
 /// How long a host's answers may take.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct InstallTimings {
@@ -300,12 +331,7 @@ impl HostInstaller {
             LEASE_PROTOCOL,
             InstallTimings::default(),
         )
-        .with_releases(ReleaseCopy::pinned(
-            HOST_BUILDS,
-            HOST_BUILDS_FROM,
-            Arc::new(HttpsReleases::default()),
-            &cache,
-        ))
+        .with_releases(released_with_this_build(&cache))
     }
 
     /// This build's SHA-256, taken from its executable the first time it is
