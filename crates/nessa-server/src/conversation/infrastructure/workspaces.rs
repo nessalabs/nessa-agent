@@ -205,6 +205,54 @@ impl WorkspaceConnector for Connector {
         })
     }
 }
+impl ThreadWorkspaces {
+    /// After each change to the Claude sign-in, let go of every conversation's
+    /// connection that nothing uses, so its next lease is served again with
+    /// the sign-in now saved (ADR 501): a serve keeps the environment it
+    /// started with. One in use is asked again, as `rest` asks, and kept if it
+    /// stays in use; it is served again once it is let go some other way.
+    /// Holds them only while letting go, so it ends once they are dropped.
+    pub(crate) async fn follow_claude_sign_ins(self: Arc<Self>) {
+        let mut changes = self.service.claude_sign_in_changed_watch();
+        let workspaces = Arc::downgrade(&self);
+        drop(self);
+        while changes.changed().await.is_ok() {
+            let Some(workspaces) = workspaces.upgrade() else {
+                return;
+            };
+            workspaces.let_go_all().await;
+        }
+    }
+
+    async fn let_go_all(&self) {
+        let environments: Vec<_> = self
+            .environments
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .values()
+            .cloned()
+            .collect();
+        let_go_each(environments).await;
+    }
+}
+
+/// Let go of each environment's connection once nothing uses it, asking
+/// again as `rest` does; one still in use after that keeps its connection.
+pub(crate) async fn let_go_each(environments: Vec<Arc<SshEnvironment>>) {
+    for environment in environments {
+        let mut wait = Duration::from_secs(1);
+        while !environment.let_go().await {
+            if wait > LET_GO_PATIENCE {
+                tracing::warn!(
+                    "a Boat connection is still in use; it keeps the Claude sign-in it was served with"
+                );
+                break;
+            }
+            tokio::time::sleep(wait).await;
+            wait *= 2;
+        }
+    }
+}
 impl ThreadEnvironments for ThreadWorkspaces {
     fn environment(
         &self,

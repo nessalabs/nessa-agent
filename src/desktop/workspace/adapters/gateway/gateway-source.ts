@@ -34,7 +34,8 @@
  *   it maps changes. A removal is the summary's next count. A view frame
  *   behind the cursor already applied in the same history is not applied
  *   (D8).
- * - **Every call settles on its own timer** (`timing.callMs`, from `clock`),
+ * - **Every call settles on its own timer** (`timing.callMs`, from `clock`;
+ *   `timing.workspaceCallMs` for a send that may wake or make a workspace),
  *   connection included, rejecting `unavailable` when it runs out; and a
  *   call that has settled sends nothing consequential afterwards (`dispatch`).
  * - **Only a first message sends `create`.** The gateway resolves the
@@ -116,6 +117,7 @@ import {
   type ConnectionState,
   type ConversationApi,
   conversationTitle,
+  conversationWorkspaceTimeoutMs,
   type ConversationListResult,
   type ConversationObserveCursor,
   type ConversationSummary,
@@ -260,6 +262,14 @@ export interface GatewayTiming {
   /** How long any call may take before it settles as `unavailable`. */
   readonly callMs: number
   /**
+   * `callMs` for a send that may first have to wake or make the workspace its
+   * conversation runs in: a first message in a channel, or one into a
+   * conversation that runs away from this machine. It outlasts the client's
+   * own deadline for such a send, so the gateway's answer, not this timer,
+   * says how it went.
+   */
+  readonly workspaceCallMs: number
+  /**
    * How long, after a connect failed, the subscriptions and an MCP App wait
    * before connecting again (#419); and how long a subscription that ended
    * for a reason asking again may change waits before it is opened again.
@@ -274,6 +284,8 @@ export interface GatewayTiming {
  */
 export const defaultGatewayTiming: GatewayTiming = {
   callMs: 35_000,
+  // The same 5 s past the client's own deadline that `callMs` gives its 30 s.
+  workspaceCallMs: conversationWorkspaceTimeoutMs + 5_000,
   retryMs: 5_000,
 }
 
@@ -547,8 +559,9 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
   }
 
   /**
-   * Settles `work` within the call budget, rejecting `unavailable` when it
-   * runs out. The work may go on after its caller was answered; it is told
+   * Settles `work` within the call budget (`budgetMs`, `timing.callMs`
+   * unless the call says otherwise), rejecting `unavailable` when it runs
+   * out. The work may go on after its caller was answered; it is told
    * whether its call is still open (`live`), and sends nothing consequential
    * once it is not (`dispatch`, C6). A `trace` records the ask and, when the
    * call is refused, the reason — on this same turn, not a later one.
@@ -558,6 +571,7 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
   const within = <T>(
     work: (live: () => boolean, ended: AbortSignal) => Promise<T>,
     trace?: ReadTrace,
+    budgetMs: number = timing.callMs,
   ): Promise<T> =>
     new Promise<T>((resolve, reject) => {
       if (disposed) return reject(new WorkspaceSourceError("unavailable"))
@@ -569,7 +583,7 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
         callEnds.delete(ended)
         ended.abort()
       }
-      const cancel = clock.after(timing.callMs, () => {
+      const cancel = clock.after(budgetMs, () => {
         const already = settled
         settled = true
         end()
@@ -787,6 +801,18 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
 
   /** The model a session is known to run on: the gateway's own word for it, from its last frame. */
   const knownModel = (sessionId: string) => runningModel(reads.get(sessionId)?.view)
+  /**
+   * Whether a message into `sessionId` may first have to wake or make the
+   * workspace it runs in. Where its agent last ran decides; before it has run
+   * anywhere, a channel other than the default one may place it on a
+   * workspace, the same rule the client gives a channel's create.
+   */
+  const mayWaitOnWorkspace = (sessionId: string): boolean => {
+    const environment = reads.get(sessionId)?.view?.lease?.environment
+    if (environment !== undefined) return environment !== "here"
+    const summary = summaries.get(sessionId)
+    return summary !== undefined && gatewayChannelId(summary.channelId) !== undefined
+  }
   const modelOf = (sessionId: string) => modelFor(knownModel(sessionId))
 
   /**
@@ -1667,6 +1693,12 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
       const start = message.start !== undefined
       const access = message.start?.access
       const channelId = message.start && gatewayChannelId(message.start.channelId)
+      // A first message in a channel, or one into a conversation that runs on
+      // a workspace, may wait while that workspace is woken or made: the
+      // client and this source both wait that out rather than calling a send
+      // that is still on its way a failure.
+      const waitsOnWorkspace = start ? Boolean(channelId) : mayWaitOnWorkspace(sessionId)
+      const budgetMs = waitsOnWorkspace ? timing.workspaceCallMs : timing.callMs
       const drafts = (message.images ?? []).map((image) => Object.freeze({ ...image }))
       // An image goes to the model as one; any other file is placed where
       // the agent works, which may be another machine than this one.
@@ -1739,7 +1771,10 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
           )
             throw new WorkspaceSourceError("not-supported")
           try {
-            return connected.conversation.submit(submitted)
+            return connected.conversation.submit(
+              submitted,
+              waitsOnWorkspace ? { waitsOnWorkspace } : undefined,
+            )
           } catch (error) {
             // A client argument refusal is explicit, unlike a lost acknowledgement.
             if (error instanceof TypeError)
@@ -1753,10 +1788,18 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
       }
       if (prepared) {
         const submitted = prepared
-        return within(async (live) => {
-          await open(live)
-          await submit(live, submitted)
-        })
+        // A message that waits on a workspace opens and sends on a budget
+        // each, as the client gives each its own deadline: making the
+        // workspace cannot use up the send's time. Any other keeps one call.
+        if (!waitsOnWorkspace)
+          return within(async (live) => {
+            await open(live)
+            await submit(live, submitted)
+          })
+        return (async () => {
+          await within((live) => open(live), undefined, budgetMs)
+          await within((live) => submit(live, submitted), undefined, budgetMs)
+        })()
       }
       // With attachments, each step is a call of its own, on its own budget:
       // the conversation opened, which must exist to hold them, then each
@@ -1766,7 +1809,7 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
       const read = options.imageBytes
       if (!read) return Promise.reject(new WorkspaceSourceError("not-supported"))
       return (async () => {
-        await within((live) => open(live))
+        await within((live) => open(live), undefined, budgetMs)
         const attachments: ImageAttachment[] = []
         for (const image of images)
           attachments.push(
@@ -1786,7 +1829,7 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
             ),
           )
         const submitted = submission(attachments, uploads)
-        await within((live) => submit(live, submitted))
+        await within((live) => submit(live, submitted), undefined, budgetMs)
       })()
     },
     approve: (sessionId, approvalId, scope, _initiator, optionId) =>

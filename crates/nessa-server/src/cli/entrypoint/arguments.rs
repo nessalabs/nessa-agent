@@ -4,7 +4,7 @@ use crate::agent_install::domain::AgentName;
 use nessa_protocol::relay::RelayAddress;
 use nessa_protocol::tunnel::TunnelAddress;
 
-pub const HELP: &str = "Nessa\n\n  nessa server [--provision-local]\n  nessa auth init --local [--owner-token-file PATH]\n  nessa auth token [--local] [--ttl 12h|7d|30m|60s | --no-expiry] [--credential-file PATH]\n  nessa doctor [--local] [--credential-file PATH]\n  nessa install-agent NAME\n  nessa github connect OWNER/REPO --passphrase-stdin [--accept-gap]\n  nessa github events OWNER/REPO --passphrase-stdin\n  nessa github disconnect OWNER/REPO --passphrase-stdin\n  nessa limits [--json]\n  nessa env serve\n  nessa env enroll ADDRESS CODE\n  nessa env dial ADDRESS [--relay HOST:PORT] [--tunnel https://HOST] [--drain-deadline 20s] [--enroll-code-file PATH]\n  nessa env grant [--peer ssh|PIN] [--agent NAME... | --all-agents] [--commands --max-timeout 10m] [--max-lease 8h]\n  nessa env ungrant [--peer ssh|PIN] (--agent NAME | --commands | --all)\n  nessa env grants\n  nessa env protocol\n  nessa artifact publish PATH [--type MEDIA/TYPE]\n  nessa relay serve --listen HOST:PORT\n  nessa auth provision-surface --local --surface-id NAME [--grants ACTIONS]\n  nessa auth recover-owner --local --owner-token-file PATH\n\ninstall-agent downloads the release of an agent's own runtime that Nessa has\ntested, verifies it against a compiled-in digest, and reports what it installed\nas JSON on stdout. Installing one already present downloads nothing.\n\n`env serve` is the environment role a gateway starts over SSH, from the copy of\nits own build it installs under ~/.nessa/env on first use: it speaks lease frames on stdin and stdout and runs the agent\nharnesses this host's own config.json configures. Not for people.\n`env enroll` pairs this machine with the gateway at ADDRESS (host:port of its\nnative listener) as an environment, with the code of an environment invitation\nthe owner created there; the owner then approves it. `env dial` serves that\ngateway's leases over connections this machine dials, waiting for the\napproval first and dialing again whenever a connection ends, until stopped.\nWith --relay, a dial that does not connect to ADDRESS within a moment, or is\nrefused, asks that relay for the gateway instead (`relay serve`, below), and with\n--tunnel, the gateway's web tunnel at that address (Settings › Linked\ndevices shows it); enrolling still needs ADDRESS itself.\nWith --drain-deadline, SIGINT or SIGTERM drains instead: every lease ends with\nits cleanup recorded on both sides, then it exits; past the deadline, or on a\nsecond signal, the connection is closed. Set it below a container's stop grace.\nWith --enroll-code-file, a machine paired with nothing first enrolls with the\ncode that file holds, and one already paired with the gateway at ADDRESS goes\nstraight to dialing, so a container can run the same command on every start;\none paired with another gateway refuses.\nA gateway that speaks another lease protocol, and that this machine lets run\ncommands, sends its build: `env dial` checks it, keeps it under environment/builds\nand runs it in its own place, then and on every later start.\n`env grant` and `env ungrant` change what this machine's owner grants one\ngateway: `ssh` (whoever runs env serve over SSH) or a dialed gateway by its\npin, by default the gateway this machine is paired with, else `ssh`. Without\nan entry, `ssh` is granted everything this host runs and a dialed gateway\nnothing; a grant only narrows what config.json lets this host run. A change\napplies from the next lease; leases already running go on. `env grants`\nprints every entry as JSON on stdout. `env grant` takes agents, commands, a\nlease limit or any of them; --max-timeout replaces the peer's longest command\nrun, and --max-lease the longest an agent's lease may last before this machine\nends it (none: until ended; `ungrant --all` takes it back).\n`env protocol` prints the lease protocol this build speaks, which a gateway\nchecks a copy it installs on a host against before putting it in place.\n\n`artifact publish` attaches a file in the workspace to the conversation whose\nagent runs it, from a host serving `env serve`: the gateway receives it by\ndigest and verifies it. It prints the outcome as JSON on stdout.\n\n`relay serve` runs a relay at HOST:PORT that a gateway and its paired readers\nboth connect out to, so a reader that cannot reach the gateway directly is\njoined to it there. The relay copies their bytes and cannot read them: what\ncrosses is the same TLS a direct connection carries. It keeps nothing and runs\nuntil stopped.\n\n`limits` and `limits --json` print the effective operational limits as JSON\non stdout. A missing config file prints the defaults. An unusable config\nfile prints nothing and fails.\n\nLocal is the current backend. Cloud auth is not implemented.\n`server --provision-local` creates the owner and panel credentials of the selected\nnamespace when they are absent, then serves; it never replaces existing ones.\nWithout it, `nessa server` only serves what the offline auth commands provisioned.\nNESSA_HOST, NESSA_PORT, NESSA_STAGE, NESSA_DATA_DIR and NESSA_INSTANCE select the local gateway.\nToken defaults to no expiry (capped by issuer expiry) and prints only the secret to stdout; pipe it to pbcopy.\n";
+pub const HELP: &str = "Nessa\n\n  nessa server [--provision-local]\n  nessa auth init --local [--owner-token-file PATH]\n  nessa auth token [--local] [--ttl 12h|7d|30m|60s | --no-expiry] [--credential-file PATH]\n  nessa doctor [--local] [--credential-file PATH]\n  nessa call METHOD --params JSON [--credential-file PATH]\n  nessa mcp [--credential-file PATH]\n  nessa install-agent NAME\n  nessa github connect OWNER/REPO --passphrase-stdin [--accept-gap]\n  nessa github events OWNER/REPO --passphrase-stdin\n  nessa github disconnect OWNER/REPO --passphrase-stdin\n  nessa limits [--json]\n  nessa env serve\n  nessa env enroll ADDRESS CODE\n  nessa env dial ADDRESS [--relay HOST:PORT] [--tunnel https://HOST] [--drain-deadline 20s] [--enroll-code-file PATH]\n  nessa env grant [--peer ssh|PIN] [--agent NAME... | --all-agents] [--commands --max-timeout 10m] [--max-lease 8h]\n  nessa env ungrant [--peer ssh|PIN] (--agent NAME | --commands | --all)\n  nessa env grants\n  nessa env protocol\n  nessa artifact publish PATH [--type MEDIA/TYPE]\n  nessa relay serve --listen HOST:PORT\n  nessa auth provision-surface --local --surface-id NAME [--grants ACTIONS]\n  nessa auth recover-owner --local --owner-token-file PATH\n\ninstall-agent downloads the release of an agent's own runtime that Nessa has\ntested, verifies it against a compiled-in digest, and reports what it installed\nas JSON on stdout. Installing one already present downloads nothing.\n\n`env serve` is the environment role a gateway starts over SSH, from the copy of\nits own build it installs under ~/.nessa/env on first use: it speaks lease frames on stdin and stdout and runs the agent\nharnesses this host's own config.json configures. Not for people.\n`env enroll` pairs this machine with the gateway at ADDRESS (host:port of its\nnative listener) as an environment, with the code of an environment invitation\nthe owner created there; the owner then approves it. `env dial` serves that\ngateway's leases over connections this machine dials, waiting for the\napproval first and dialing again whenever a connection ends, until stopped.\nWith --relay, a dial that does not connect to ADDRESS within a moment, or is\nrefused, asks that relay for the gateway instead (`relay serve`, below), and with\n--tunnel, the gateway's web tunnel at that address (Settings › Linked\ndevices shows it); enrolling still needs ADDRESS itself.\nWith --drain-deadline, SIGINT or SIGTERM drains instead: every lease ends with\nits cleanup recorded on both sides, then it exits; past the deadline, or on a\nsecond signal, the connection is closed. Set it below a container's stop grace.\nWith --enroll-code-file, a machine paired with nothing first enrolls with the\ncode that file holds, and one already paired with the gateway at ADDRESS goes\nstraight to dialing, so a container can run the same command on every start;\none paired with another gateway refuses.\nA gateway that speaks another lease protocol, and that this machine lets run\ncommands, sends its build: `env dial` checks it, keeps it under environment/builds\nand runs it in its own place, then and on every later start.\n`env grant` and `env ungrant` change what this machine's owner grants one\ngateway: `ssh` (whoever runs env serve over SSH) or a dialed gateway by its\npin, by default the gateway this machine is paired with, else `ssh`. Without\nan entry, `ssh` is granted everything this host runs and a dialed gateway\nnothing; a grant only narrows what config.json lets this host run. A change\napplies from the next lease; leases already running go on. `env grants`\nprints every entry as JSON on stdout. `env grant` takes agents, commands, a\nlease limit or any of them; --max-timeout replaces the peer's longest command\nrun, and --max-lease the longest an agent's lease may last before this machine\nends it (none: until ended; `ungrant --all` takes it back).\n`env protocol` prints the lease protocol this build speaks, which a gateway\nchecks a copy it installs on a host against before putting it in place.\n\n`artifact publish` attaches a file in the workspace to the conversation whose\nagent runs it, from a host serving `env serve`: the gateway receives it by\ndigest and verifies it. It prints the outcome as JSON on stdout.\n\n`relay serve` runs a relay at HOST:PORT that a gateway and its paired readers\nboth connect out to, so a reader that cannot reach the gateway directly is\njoined to it there. The relay copies their bytes and cannot read them: what\ncrosses is the same TLS a direct connection carries. It keeps nothing and runs\nuntil stopped.\n\n`limits` and `limits --json` print the effective operational limits as JSON\non stdout. A missing config file prints the defaults. An unusable config\nfile prints nothing and fails.\n\nLocal is the current backend. Cloud auth is not implemented.\n`server --provision-local` creates the owner, panel, and nessa-mcp credentials of the selected\nnamespace when they are absent, then serves; it never replaces existing ones.\nWithout it, `nessa server` only serves what the offline auth commands provisioned.\n`call` sends one manifest method on the signed-in gateway session and prints the\nhandler's JSON on stdout. `mcp` serves those same methods as MCP tools, using the\nnessa-mcp credential and only the grants that credential holds. Cedar on the gateway\ndecides both. A method the surface catalog excludes is not a call and not a tool.\nNESSA_HOST, NESSA_PORT, NESSA_STAGE, NESSA_DATA_DIR and NESSA_INSTANCE select the local gateway.\nToken defaults to no expiry (capped by issuer expiry) and prints only the secret to stdout; pipe it to pbcopy.\n";
 
 /// Whether a serving process may create the local credentials it needs.
 ///
@@ -140,6 +140,17 @@ pub enum Command {
     RelayServe {
         /// The address to listen on, `host:port`.
         listen: String,
+    },
+    /// Send one manifest method on the signed-in gateway session.
+    Call {
+        method: String,
+        /// JSON text of the method's params.
+        params: String,
+        credential_file: Option<PathBuf>,
+    },
+    /// Serve the manifest methods as an MCP server, on this process's stdio.
+    Mcp {
+        credential_file: Option<PathBuf>,
     },
 }
 
@@ -314,6 +325,14 @@ pub fn parse(args: &[String]) -> Result<Command, String> {
             return Ok(Command::Desktop(directory.into()));
         }
     }
+    if let [command, rest @ ..] = args {
+        if command == "call" {
+            return parse_call(rest);
+        }
+        if command == "mcp" {
+            return parse_mcp(rest);
+        }
+    }
     let (token, rest) = match args {
         [auth, token, rest @ ..] if auth == "auth" && token == "token" => (true, rest),
         [doctor, rest @ ..] if doctor == "doctor" => (false, rest),
@@ -377,6 +396,60 @@ pub fn parse(args: &[String]) -> Result<Command, String> {
     } else {
         Command::Doctor { credential_file }
     })
+}
+
+fn parse_call(rest: &[String]) -> Result<Command, String> {
+    const USAGE: &str = "call takes METHOD --params JSON [--credential-file PATH]";
+    let [method, flags @ ..] = rest else {
+        return Err(USAGE.into());
+    };
+    if method.is_empty() || method.starts_with('-') || flags.len() % 2 != 0 {
+        return Err(USAGE.into());
+    }
+    let mut params = None;
+    let mut credential_file = None;
+    for pair in flags.chunks(2) {
+        match (pair[0].as_str(), pair[1].as_str()) {
+            ("--params", value) if params.is_none() && !value.starts_with('-') => {
+                params = Some(value.to_owned());
+            }
+            ("--credential-file", path) if credential_file.is_none() && !path.starts_with('-') => {
+                let path = PathBuf::from(path);
+                if !path.is_absolute() {
+                    return Err("--credential-file requires an absolute path".into());
+                }
+                credential_file = Some(path);
+            }
+            _ => return Err(USAGE.into()),
+        }
+    }
+    let Some(params) = params else {
+        return Err(USAGE.into());
+    };
+    Ok(Command::Call {
+        method: method.clone(),
+        params,
+        credential_file,
+    })
+}
+
+fn parse_mcp(rest: &[String]) -> Result<Command, String> {
+    const USAGE: &str = "mcp takes only an optional --credential-file PATH";
+    if rest.len() > 2 || rest.len() == 1 {
+        return Err(USAGE.into());
+    }
+    let credential_file = if rest.is_empty() {
+        None
+    } else if rest.len() == 2 && rest[0] == "--credential-file" && !rest[1].starts_with('-') {
+        let path = PathBuf::from(&rest[1]);
+        if !path.is_absolute() {
+            return Err("--credential-file requires an absolute path".into());
+        }
+        Some(path)
+    } else {
+        return Err(USAGE.into());
+    };
+    Ok(Command::Mcp { credential_file })
 }
 
 /// `env dial ADDRESS [--relay RELAY] [--tunnel ORIGIN] [--drain-deadline

@@ -1341,6 +1341,25 @@ export async function signInToProvider(provider: "claude" | "codex"): Promise<vo
   await invoke("sign_in_to_provider", { provider })
 }
 
+/** Mints a Claude sign-in for Boat VMs in the background and answers its token,
+ * for the gateway's vault only (ADR 501). Rejects when the person did not finish. */
+export async function mintClaudeSignIn(): Promise<string> {
+  if (!inTauri) throw new Error("Claude sign-in requires the native desktop host.")
+  const { invoke } = await import("@tauri-apps/api/core")
+  return await invoke<string>("mint_claude_sign_in")
+}
+
+/** Whether this host can mint a Claude sign-in for Boat. */
+export async function claudeSignInMintAvailable(): Promise<boolean> {
+  if (!inTauri) return false
+  try {
+    const { invoke } = await import("@tauri-apps/api/core")
+    return await invoke<boolean>("claude_sign_in_mint_available")
+  } catch {
+    return false
+  }
+}
+
 /** Native composition owns login availability; unreachable hosts offer no action. */
 export async function providerLoginAvailable(): Promise<boolean> {
   if (!inTauri) return false

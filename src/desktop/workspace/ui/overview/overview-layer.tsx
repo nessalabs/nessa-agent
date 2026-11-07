@@ -10,7 +10,7 @@ import {
 import { flushSync } from "react-dom"
 import { isMac } from "../../../adapters/platform"
 import { matchesChord } from "../../../model/keyboard"
-import { focusInFront } from "../../adapters/dom/focus"
+import { focusInFront, performanceFocusClock } from "../../adapters/dom/focus"
 import { useAtLeastWide } from "../../adapters/dom/width"
 import { showContent, showOverviewGroup } from "../../adapters/store/commands"
 import { useWorkspaceDispatch, useWorkspaceSelector } from "../../adapters/store/hooks"
@@ -81,7 +81,7 @@ export const OverviewLayer = memo(function OverviewLayer({
       setCoverReady(false)
       setMountReady(false)
       const frame = requestAnimationFrame(() => {
-        stop.current = focusInFront(root.current ?? document)
+        stop.current = focusInFront(root.current ?? document, performanceFocusClock)
       })
       return () => cancelAnimationFrame(frame)
     }

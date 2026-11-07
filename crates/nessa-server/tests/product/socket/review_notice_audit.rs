@@ -1879,3 +1879,394 @@ async fn review_notice_missing_metadata_is_a_successful_hidden_selection() {
     assert_eq!(policy.asked(), 0);
     assert!(audit.records.lock().unwrap().is_empty());
 }
+
+fn owner_tombstone(owner: &str) -> crate::conversation::domain::ConversationDeletion {
+    crate::conversation::domain::ConversationDeletion::new(
+        OrganizationId::new("organization").unwrap(),
+        PrincipalId::new(owner).unwrap(),
+        "panel".into(),
+        "delete".into(),
+        2,
+    )
+    .unwrap()
+}
+
+fn review_count(queued: QueuedResponse) -> usize {
+    let WireResponse::ReviewWaiting { payload, .. } = queued.message else {
+        panic!("review snapshot expected");
+    };
+    payload.reviews.len()
+}
+
+/// M1. The row is already a tombstone when selection reads it.
+#[tokio::test]
+async fn deletion_before_the_metadata_read_publishes_no_candidate() {
+    let audit = Arc::new(RecordingReviewNoticeAudit::default());
+    let fixture = ReviewFixture::new(audit.clone(), Arc::new(MonotonicReviewNoticeClock::new()));
+    fixture
+        .repository
+        .record_deletion(&ConversationId::new(TARGET).unwrap(), owner_tombstone("other"))
+        .await
+        .unwrap();
+    let payload = notice_snapshot(
+        fixture.board.clone(),
+        fixture.state.clone(),
+        authenticate(&fixture.state).await,
+    )
+    .await;
+    assert!(payload.reviews.is_empty());
+    let records = audit.records.lock().unwrap();
+    assert_eq!(records.len(), 1);
+    assert!(records[0].deleted());
+    assert!(!matches!(records[0].decision(), AccessDecision::Allow { .. }));
+}
+
+/// M2. Tombstone commits while the metadata read is held, then the recipient
+/// becomes Admin, and the board still has the review.
+#[tokio::test]
+async fn deletion_between_metadata_and_authority_does_not_publish_to_a_promoted_admin() {
+    let audit = Arc::new(RecordingReviewNoticeAudit::default());
+    let fixture = ReviewFixture::new(audit.clone(), Arc::new(MonotonicReviewNoticeClock::new()));
+    *fixture.authority.snapshot.lock().unwrap() =
+        snapshot(MembershipRole::Member, MembershipStatus::Active);
+    let (entered, waiting) = oneshot::channel();
+    let (release, released) = oneshot::channel();
+    *fixture.repository.metadata_load_gate.lock().unwrap() = Some((entered, released));
+    let (task, mut receive, authority) = fixture.publish(Arc::new(Semaphore::new(1))).await;
+    timeout(Duration::from_secs(2), waiting)
+        .await
+        .unwrap()
+        .unwrap();
+    fixture
+        .repository
+        .record_deletion(&ConversationId::new(TARGET).unwrap(), owner_tombstone("other"))
+        .await
+        .unwrap();
+    *fixture.authority.snapshot.lock().unwrap() =
+        snapshot(MembershipRole::Admin, MembershipStatus::Active);
+    fixture.authority.snapshot.lock().unwrap().revision = 2;
+    release.send(()).unwrap();
+    let queued = timeout(Duration::from_secs(2), receive.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        review_count(queued),
+        0,
+        "live metadata captured before the tombstone must not publish to the new admin"
+    );
+    {
+        let records = audit.records.lock().unwrap();
+        assert!(records.len() >= 2);
+        assert!(!records[0].deleted());
+        assert_eq!(records[0].membership(), MembershipRole::Admin);
+        assert!(matches!(records[0].decision(), AccessDecision::Allow { .. }));
+        assert!(records.last().unwrap().deleted());
+    }
+    drop(authority);
+    assert_eq!(task.await.unwrap(), Ok(()));
+}
+
+/// M3. Cedar has answered from the live row. The tombstone commits before
+/// audit acknowledgement. The recorded decision stays that allow.
+#[tokio::test]
+async fn deletion_after_cedar_before_audit_ack_drops_admission_and_keeps_the_decision() {
+    let (audit, acknowledge) = GatedAudit::one();
+    let fixture = ReviewFixture::new(audit.clone(), Arc::new(MonotonicReviewNoticeClock::new()));
+    let (task, mut receive, authority) = fixture.publish(Arc::new(Semaphore::new(1))).await;
+    audit.captured().await;
+    {
+        let records = audit.records.lock().unwrap();
+        assert_eq!(records.len(), 1);
+        assert!(!records[0].deleted());
+        assert!(matches!(records[0].decision(), AccessDecision::Allow { .. }));
+    }
+    fixture
+        .repository
+        .record_deletion(&ConversationId::new(TARGET).unwrap(), owner_tombstone("other"))
+        .await
+        .unwrap();
+    acknowledge.send(Ok(())).unwrap();
+    let queued = timeout(Duration::from_secs(2), receive.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(review_count(queued), 0);
+    {
+        let records = audit.records.lock().unwrap();
+        assert!(!records[0].deleted());
+        assert!(matches!(records[0].decision(), AccessDecision::Allow { .. }));
+        assert!(records.last().unwrap().deleted());
+    }
+    drop(authority);
+    assert_eq!(task.await.unwrap(), Ok(()));
+}
+
+/// M4. The same acknowledgement wait, after the tombstone: one fresh
+/// selection, then the empty frame. The publisher does not keep rereading.
+#[tokio::test]
+async fn deletion_during_audit_acknowledgement_retries_once_and_does_not_publish() {
+    let (audit, acknowledge) = GatedAudit::one();
+    let fixture = ReviewFixture::new(audit.clone(), Arc::new(MonotonicReviewNoticeClock::new()));
+    let (task, mut receive, authority) = fixture.publish(Arc::new(Semaphore::new(1))).await;
+    audit.captured().await;
+    fixture
+        .repository
+        .record_deletion(&ConversationId::new(TARGET).unwrap(), owner_tombstone("other"))
+        .await
+        .unwrap();
+    acknowledge.send(Ok(())).unwrap();
+    let queued = timeout(Duration::from_secs(2), receive.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(review_count(queued), 0);
+    assert_eq!(audit.records.lock().unwrap().len(), 2);
+    drop(authority);
+    assert_eq!(task.await.unwrap(), Ok(()));
+    assert_eq!(audit.records.lock().unwrap().len(), 2);
+}
+
+/// M5. The frame was admitted, then the tombstone commits while publication
+/// waits for a UI slot. That admitted notice may still be delivered.
+#[tokio::test]
+async fn deletion_after_admission_still_delivers_the_admitted_notice() {
+    let (audit, acknowledge) = GatedAudit::one();
+    let fixture = ReviewFixture::new(audit.clone(), Arc::new(MonotonicReviewNoticeClock::new()));
+    let session = authenticate(&fixture.state).await;
+    let (authority, updates) = watch::channel(session.auth_revision());
+    let (send, mut receive) = mpsc::channel(1);
+    let slots = Arc::new(Semaphore::new(0));
+    let mut publisher = Box::pin(forward_review_notices(
+        fixture.board.clone(),
+        send,
+        slots.clone(),
+        fixture.state.clone(),
+        session,
+        updates,
+    ));
+    timeout(Duration::from_secs(2), async {
+        loop {
+            if audit.records.lock().unwrap().len() == 1 {
+                break;
+            }
+            assert!(futures_util::poll!(publisher.as_mut()).is_pending());
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    audit.captured().await;
+    {
+        let records = audit.records.lock().unwrap();
+        assert!(!records[0].deleted());
+        assert!(matches!(records[0].decision(), AccessDecision::Allow { .. }));
+    }
+    let (validation_entered, mut validation_waiting) = oneshot::channel();
+    let (validation_release, validation_released) = oneshot::channel();
+    *fixture.repository.metadata_load_gate.lock().unwrap() =
+        Some((validation_entered, validation_released));
+    acknowledge.send(Ok(())).unwrap();
+    timeout(Duration::from_secs(2), async {
+        loop {
+            if validation_waiting.try_recv().is_ok() {
+                break;
+            }
+            assert!(futures_util::poll!(publisher.as_mut()).is_pending());
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    validation_release.send(()).unwrap();
+    assert!(futures_util::poll!(publisher.as_mut()).is_pending());
+    assert!(receive.try_recv().is_err());
+    fixture
+        .repository
+        .record_deletion(&ConversationId::new(TARGET).unwrap(), owner_tombstone("other"))
+        .await
+        .unwrap();
+    slots.add_permits(1);
+    let queued = drive_review_publication(publisher.as_mut(), &mut receive).await;
+    assert_eq!(review_count(queued), 1);
+    assert_eq!(audit.records.lock().unwrap().len(), 1);
+    drop(authority);
+    assert!(futures_util::poll!(publisher.as_mut()).is_ready());
+}
+
+/// M8. Visibility moves while token validation is waiting. The board check
+/// after that wait drops the candidate captured before the move.
+#[tokio::test]
+async fn visibility_change_during_token_validation_drops_the_in_flight_candidate() {
+    let audit = Arc::new(RecordingReviewNoticeAudit::default());
+    let fixture = ReviewFixture::new(audit.clone(), Arc::new(MonotonicReviewNoticeClock::new()));
+    let (entered, waiting) = oneshot::channel();
+    let (release, released) = oneshot::channel();
+    *fixture.repository.metadata_load_gate.lock().unwrap() = Some((entered, released));
+    let (task, mut receive, authority) = fixture.publish(Arc::new(Semaphore::new(1))).await;
+    timeout(Duration::from_secs(2), waiting)
+        .await
+        .unwrap()
+        .unwrap();
+    let (validation_entered, validation_waiting) = oneshot::channel();
+    let (validation_release, validation_released) = oneshot::channel();
+    *fixture.repository.metadata_load_gate.lock().unwrap() =
+        Some((validation_entered, validation_released));
+    release.send(()).unwrap();
+    timeout(Duration::from_secs(2), validation_waiting)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(receive.try_recv().is_err());
+    fixture.board.clear(
+        TARGET,
+        &ExecutionId::new("turn").unwrap(),
+        &PermissionId::new("permission").unwrap(),
+    );
+    fixture.board.recheck_visibility();
+    validation_release.send(()).unwrap();
+    let queued = timeout(Duration::from_secs(2), receive.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(review_count(queued), 0);
+    drop(authority);
+    assert_eq!(task.await.unwrap(), Ok(()));
+}
+
+/// M9. The catalogue incarnation is replaced and the revision counter is
+/// reused at the value the live read captured. The old token must not admit
+/// the deleted row.
+#[tokio::test]
+async fn replaced_incarnation_with_a_reused_revision_does_not_publish_deleted_metadata() {
+    let audit = Arc::new(RecordingReviewNoticeAudit::default());
+    let fixture = ReviewFixture::new(audit.clone(), Arc::new(MonotonicReviewNoticeClock::new()));
+    let (entered, waiting) = oneshot::channel();
+    let (release, released) = oneshot::channel();
+    *fixture.repository.metadata_load_gate.lock().unwrap() = Some((entered, released));
+    let (task, mut receive, authority) = fixture.publish(Arc::new(Semaphore::new(1))).await;
+    timeout(Duration::from_secs(2), waiting)
+        .await
+        .unwrap()
+        .unwrap();
+    let id = ConversationId::new(TARGET).unwrap();
+    fixture
+        .repository
+        .record_deletion(&id, owner_tombstone("other"))
+        .await
+        .unwrap();
+    *fixture.repository.catalogue_incarnation.lock().unwrap() = "replaced-catalogue".into();
+    fixture
+        .repository
+        .change_revisions
+        .lock()
+        .unwrap()
+        .insert(id, 0);
+    release.send(()).unwrap();
+    let queued = timeout(Duration::from_secs(2), receive.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(review_count(queued), 0);
+    {
+        let records = audit.records.lock().unwrap();
+        assert!(!records[0].deleted());
+        assert!(matches!(records[0].decision(), AccessDecision::Allow { .. }));
+        assert!(records.last().unwrap().deleted());
+    }
+    drop(authority);
+    assert_eq!(task.await.unwrap(), Ok(()));
+}
+
+/// Another connection commits the tombstone after this read has the live row
+/// and before it reads `change_revision`. Promoting the recipient does not
+/// publish that row.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_tombstone_on_another_connection_during_the_admission_read_does_not_publish_to_a_new_admin()
+{
+    let directory = tempfile::tempdir().unwrap();
+    let private = directory.path().join("conversations");
+    nessa_local_storage::create_directory(&private).unwrap();
+    let path = private.join("metadata.sqlite3");
+    let store = Arc::new(LocalConversationStore::open(&path).unwrap());
+    store
+        .create(owned_conversation(TARGET, "owner"))
+        .await
+        .unwrap();
+    let writer = LocalConversationStore::open(&path).unwrap();
+    nessa_local_database::rusqlite::Connection::open(&path)
+        .unwrap()
+        .execute_batch("PRAGMA journal_mode = WAL;")
+        .unwrap();
+    let (_rules_directory, board) = open_rules();
+    board.waiting(&ReviewNotice {
+        conversation_id: TARGET.into(),
+        execution_id: ExecutionId::new("turn").unwrap(),
+        permission_id: PermissionId::new("permission").unwrap(),
+        tool: "Bash".into(),
+    });
+    let audit = Arc::new(RecordingReviewNoticeAudit::default());
+    let (state, authority) = fixture(MembershipRole::Member);
+    let state = state
+        .with_passive_read(
+            Arc::new(UnpairedBinding),
+            store.clone(),
+            Arc::new(GrantedConversation(TARGET.into())),
+            conversation_support::access_policy(),
+        )
+        .with_review_notice_auditor(Arc::new(ReviewNoticeAuditor::new(
+            audit.clone(),
+            Arc::new(MonotonicReviewNoticeClock::new()),
+        )));
+    let session = authenticate(&state).await;
+    let entered = Arc::new(std::sync::Barrier::new(2));
+    let resume = Arc::new(std::sync::Barrier::new(2));
+    store.pause_admission_snapshot(entered.clone(), resume.clone());
+    let (authority_send, updates) = watch::channel(session.auth_revision());
+    let (send, mut receive) = mpsc::channel(1);
+    let task = tokio::spawn(forward_review_notices(
+        board,
+        send,
+        Arc::new(Semaphore::new(1)),
+        state,
+        session,
+        updates,
+    ));
+    tokio::task::spawn_blocking(move || entered.wait())
+        .await
+        .unwrap();
+    writer
+        .record_deletion(
+            &ConversationId::new(TARGET).unwrap(),
+            owner_tombstone("owner"),
+        )
+        .await
+        .unwrap();
+    *authority.snapshot.lock().unwrap() = snapshot(MembershipRole::Admin, MembershipStatus::Active);
+    authority.snapshot.lock().unwrap().revision = 2;
+    tokio::task::spawn_blocking(move || resume.wait())
+        .await
+        .unwrap();
+    let queued = timeout(Duration::from_secs(2), receive.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        review_count(queued),
+        0,
+        "a live row paired with the post-deletion revision must not publish"
+    );
+    {
+        let records = audit.records.lock().unwrap();
+        assert!(
+            records
+                .iter()
+                .any(|record| !record.deleted()
+                    && record.membership() == MembershipRole::Admin
+                    && matches!(record.decision(), AccessDecision::Allow { .. }))
+        );
+        assert!(records.last().unwrap().deleted());
+    }
+    drop(authority_send);
+    assert_eq!(task.await.unwrap(), Ok(()));
+}

@@ -42,6 +42,9 @@ sources:
   - src/desktop/settings/ui/boat-row.tsx
   - src/desktop/settings/ui/boat-runtime-control.tsx
   - src/desktop/workspace/ui/channel-settings/channel-settings.tsx
+  - crates/nessa-server/src/workspaces/infrastructure/runtime.rs
+  - src/provider-authentication/model/boat-sign-in.ts
+  - src-tauri/src/platform/macos/claude_sign_in.rs
 diagramLinks: {}
 model:
   spec: tla/services/gateway/BoatAssignment.tla
@@ -116,6 +119,21 @@ second resource. An observer disappearing does not cancel the allocation task's
 receipt publication. Closing or deleting chat history preserves workspace files
 and VM identity. Users manage VM stop/delete in Boat. No automatic stop is the
 initial Nessa default; alpha has no idle parking or active TTL renewal.
+
+## Claude sign-in in Boat VMs
+
+Boat gives a VM made from the pinned image share code none of the owner's
+logins, so Claude in it is refused until a sign-in is supplied (ADR 501, #1246).
+**Authenticate** on the refusal card has the desktop host run `claude
+setup-token` in the background and hands its token to `boat.saveClaudeSignIn`.
+The gateway keeps it in the vault entry `boat.claude-sign-in`, beside the
+connection, and `boat.disconnect` clears both. Every serve of a Boat VM reads
+it afresh and writes it as the first line of `env serve`'s standard input,
+which the VM's shell exports as `CLAUDE_CODE_OAUTH_TOKEN` before `env serve`
+starts; an empty line, sent when none is saved or the vault cannot be read,
+sets nothing. A serve keeps what it started with, so after each save or
+clear every Boat conversation's connection that nothing uses is let go, and
+its next lease is served again.
 
 ## VM lifetime settings
 
@@ -246,3 +264,5 @@ placement, restoration and lifetime paths were not re-reviewed here.
 ## Bounded rule model
 
 Owns durable provisioning intent, single VM target, reconnect verification and terminal refusal. Uncertain creation cannot allocate again. Local placement, TTL settings, credential posture fields, SSH leases, rollback acknowledgement and main-chat replacement remain separate unmodeled contracts. This finite abstraction checks safety only. It does not execute or verify the implementation, promise eventual completion, or qualify external effects. Existing source checkpoints and historical test receipts retain their earlier scope. The scoped model review inspected `crates/nessa-server/src/workspaces/domain/workspace.rs`, `crates/nessa-server/src/workspaces/application/workspaces.rs`.
+
+The newer [channel run-location control](../desktop/workspace/change-channel-run-location.md) describes moving an existing channel, main creation locking and committed-but-unconfirmed audit outcomes. [Pool ordering](../desktop/workspace/choose-worker-pool-order.md) describes Any computer and cloud overflow. These source-only task guides do not extend this page’s allocation model.

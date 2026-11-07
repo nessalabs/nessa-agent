@@ -335,10 +335,29 @@ async fn ambiguous_calls_and_pre_admission_cancellation_launch_nothing() {
         ],
     )
     .await;
-    assert!(matches!(
-        start(&service, &target, "build", "make").await,
-        Err(BackgroundTaskError::UnobservedCall)
-    ));
+    // `updates_sent` means both events were queued, not that the session has
+    // recorded both. One visible call is a real start; ambiguity is two.
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let view = service.read(target.clone(), caller("both")).await.unwrap();
+            let seen = view
+                .tools
+                .iter()
+                .filter(|tool| tool.tool_id == "one" || tool.tool_id == "two")
+                .count();
+            if seen == 2 {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("both background calls were not in the view");
+    let started = start(&service, &target, "build", "make").await;
+    assert!(
+        matches!(started, Err(BackgroundTaskError::UnobservedCall)),
+        "{started:?}"
+    );
     let (_stop, stopped) = watch::channel(true);
     assert!(service
         .start_background_task(

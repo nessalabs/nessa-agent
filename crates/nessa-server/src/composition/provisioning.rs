@@ -3,6 +3,7 @@
 //! ```text
 //! auth/credentials.v1.json absent ──► auth init          ──► <root>/owner.token
 //! auth/surfaces/nessa-panel.token absent ──► provision-surface ──► panel token
+//! auth/surfaces/nessa-mcp.token absent ──► provision-surface ──► mcp token
 //! ```
 //! Arrows mean "is created by". Each check is a guard, not a refresh: a file that
 //! is already there is left exactly as it is, so restarting a server never
@@ -92,6 +93,28 @@ fn provision_with(auth_command: &dyn AuthCommand, config: &Environment) -> Resul
                 )
             })?;
     }
+    // The MCP server's own credential. A file that is already there is left
+    // as it is, the same guard as the panel.
+    if !auth.join("surfaces/nessa-mcp.token").exists() {
+        tracing::info!(
+            stage = config.stage.as_str(),
+            token = %auth.join("surfaces/nessa-mcp.token").display(),
+            "no MCP surface credential; provisioning one for nessa-mcp",
+        );
+        auth_command
+            .execute(&[
+                "auth".into(),
+                "provision-surface".into(),
+                "--surface-id".into(),
+                "nessa-mcp".into(),
+            ])
+            .map_err(|error| {
+                context(
+                    "could not provision the nessa-mcp surface credential",
+                    error,
+                )
+            })?;
+    }
     Ok(())
 }
 
@@ -152,13 +175,23 @@ mod tests {
         )
         .unwrap();
         token.write_all(b"fixture-token").unwrap();
-        drop((registry, token));
+        let mut mcp = nessa_local_storage::open(
+            &auth.join("surfaces/nessa-mcp.token"),
+            nessa_local_storage::OpenMode::CreateNew,
+        )
+        .unwrap();
+        mcp.write_all(b"mcp-token").unwrap();
+        drop((registry, token, mcp));
 
         ensure_local_credentials(&environment(auth.clone())).unwrap();
 
         assert_eq!(
             std::fs::read_to_string(auth.join("surfaces/nessa-panel.token")).unwrap(),
             "fixture-token"
+        );
+        assert_eq!(
+            std::fs::read_to_string(auth.join("surfaces/nessa-mcp.token")).unwrap(),
+            "mcp-token"
         );
         assert_eq!(
             std::fs::read_to_string(auth.join("credentials.v1.json")).unwrap(),
@@ -210,14 +243,9 @@ mod minting_tests {
             }
         }
 
-        /// The subcommand of each call, which is what the branches differ by.
-        fn subcommands(&self) -> Vec<String> {
-            self.asked
-                .lock()
-                .unwrap()
-                .iter()
-                .filter_map(|args| args.get(1).cloned())
-                .collect()
+        /// Each command, which is what the branches differ by.
+        fn invocations(&self) -> Vec<Vec<String>> {
+            self.asked.lock().unwrap().clone()
         }
     }
 
@@ -235,6 +263,11 @@ mod minting_tests {
                 Err(other) => Err(failure(other.to_string())),
             }
         }
+    }
+
+    fn surface_argument(args: &[String]) -> Option<&str> {
+        let index = args.iter().position(|arg| arg == "--surface-id")?;
+        args.get(index + 1).map(String::as_str)
     }
 
     fn namespace() -> (tempfile::TempDir, Environment) {
@@ -260,16 +293,20 @@ mod minting_tests {
         assert!(matches!(error, RunError::RuntimeConfig(_)), "{error}");
     }
 
-    /// The startup path of a fresh machine: both credentials are minted, in
-    /// that order, and each by the command that mints it.
+    /// The startup path of a fresh machine: the owner, then the panel, then
+    /// the MCP credential, each by the command that mints it.
     #[test]
-    fn an_empty_namespace_mints_an_owner_and_a_surface() {
+    fn an_empty_namespace_mints_an_owner_and_its_surfaces() {
         let (_temporary, config) = namespace();
         let auth = FakeAuth::succeeding();
 
         provision_with(&auth, &config).expect("a fresh namespace provisions");
 
-        assert_eq!(auth.subcommands(), vec!["init", "provision-surface"]);
+        let asked = auth.invocations();
+        assert_eq!(asked.len(), 3);
+        assert_eq!(asked[0].get(1).map(String::as_str), Some("init"));
+        assert_eq!(surface_argument(&asked[1]), Some("nessa-panel"));
+        assert_eq!(surface_argument(&asked[2]), Some("nessa-mcp"));
     }
 
     /// Each guard is its own: a registry that exists is not re-initialised, and
@@ -284,7 +321,13 @@ mod minting_tests {
 
         provision_with(&auth, &config).expect("provisioning continues");
 
-        assert_eq!(auth.subcommands(), vec!["provision-surface"]);
+        let asked = auth.invocations();
+        assert_eq!(asked.len(), 2);
+        assert!(asked
+            .iter()
+            .all(|args| args.get(1).map(String::as_str) == Some("provision-surface")));
+        assert_eq!(surface_argument(&asked[0]), Some("nessa-panel"));
+        assert_eq!(surface_argument(&asked[1]), Some("nessa-mcp"));
     }
 
     /// A failure names the step, so the process exit says which of the two a

@@ -1,7 +1,7 @@
 //! Boat VM allocation plus an attached workspace-sdk backend. Nessa owns VM
 //! creation/deletion; the SDK owns supervisor runs and files inside that VM.
 use crate::workspaces::{
-    application::{Provider, WorkspaceReceipt, WorkspaceRuntime},
+    application::{ClaudeSignIns, Provider, WorkspaceReceipt, WorkspaceRuntime},
     domain::{BoatConnection, EnvironmentIdentity, Failure},
 };
 use async_trait::async_trait;
@@ -24,6 +24,9 @@ pub(crate) struct BoatProvider {
     pub(crate) api_base: String,
     pub(crate) relay_socket: std::path::PathBuf,
     pub(crate) relay_program: std::path::PathBuf,
+    /// Read again at every serve, so a sign-in saved after a VM connected
+    /// reaches the next serve of it.
+    pub(crate) claude_sign_ins: Arc<dyn ClaudeSignIns>,
 }
 fn api(connection: &BoatConnection, base: &str) -> Result<Api, Failure> {
     let token =
@@ -206,7 +209,10 @@ impl Provider for BoatProvider {
             root.clone(),
         )
         .await?;
-        Ok(Arc::new(super::runtime::BoatRuntime { access }))
+        Ok(Arc::new(super::runtime::BoatRuntime {
+            access,
+            claude_sign_ins: self.claude_sign_ins.clone(),
+        }))
     }
     async fn stop(&self, connection: &BoatConnection, vm: &str) -> Result<(), Failure> {
         // Boat archives it: its disk is kept as a snapshot, nothing runs or

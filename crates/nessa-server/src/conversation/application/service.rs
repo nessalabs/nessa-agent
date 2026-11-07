@@ -83,8 +83,8 @@ use nessa_sdk::application::agent_execution::{
     },
     commands::{CreationStorage, CreationTaskFault},
     executions::{
-        AfterSaveCheck, AfterSaveRefusal, ExecutionAudit, ExecutionRequest, ExecutionUpdate,
-        Submitter,
+        AdmissionNotice, AfterSaveCheck, AfterSaveRefusal, ExecutionAudit, ExecutionRequest,
+        ExecutionUpdate, Submitter,
     },
     permissions::{
         is_remember_option, ActionContext, ApprovalAttribution, ApprovalBasis, PermissionAnswer,
@@ -3965,6 +3965,7 @@ impl ConversationService {
             writer,
             held,
             None,
+            None,
         )
         .await
     }
@@ -3981,6 +3982,7 @@ impl ConversationService {
         writer: Writer,
         held: bool,
         selection: Option<Arc<SubmissionPermit>>,
+        on_admission: Option<Arc<dyn AdmissionNotice>>,
     ) -> Result<SubmissionReceipt, SubmitFailure> {
         // A message that reaches an agent between a failed turn and its
         // recovery is refused with nothing taken (`Halt::Again`): the agent
@@ -4007,6 +4009,7 @@ impl ConversationService {
                 held,
                 carried.clone(),
                 selection.clone(),
+                on_admission.clone(),
             );
             let outcome = tokio::spawn(submission).await;
             if !matches!(outcome, Ok(Err(Halt::Again(_)))) || std::time::Instant::now() >= deadline
@@ -4056,6 +4059,7 @@ impl ConversationService {
             held,
             carried,
             None,
+            None,
         )
     }
 
@@ -4071,6 +4075,7 @@ impl ConversationService {
         held: bool,
         carried: Carried,
         selection: Option<Arc<SubmissionPermit>>,
+        on_admission: Option<Arc<dyn AdmissionNotice>>,
     ) -> (
         Arc<AtomicBool>,
         impl Future<Output = Result<SubmissionReceipt, Halt>> + Send + 'static,
@@ -4520,6 +4525,9 @@ impl ConversationService {
             // the Drive grant as it stood at admission, its tools checked
             // (rows J15 and J27).
             let mut submitter = Submitter::new(actor, initiation);
+            if let Some(notice) = on_admission {
+                submitter = submitter.when_admitted(notice);
+            }
             if let Some(mode) = required_mode {
                 submitter = submitter.with_approval_mode(mode);
             }

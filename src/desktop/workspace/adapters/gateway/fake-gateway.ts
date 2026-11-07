@@ -634,6 +634,9 @@ export function fakeGateway(
       save: async () => {
         throw new Error("Boat provisioning is unavailable in this fixture")
       },
+      saveClaudeSignIn: async () => {
+        throw new Error("Boat sign-in is unavailable in this fixture")
+      },
       disconnect: async () => ({ state: "disconnected" as const }),
     },
     conversation: {
@@ -655,7 +658,7 @@ export function fakeGateway(
             )
           return { conversationId }
         }) as never,
-      submit: (prepared) => {
+      submit: (prepared, options) => {
         preparedSubmissionFields(prepared)
         return answer(
           "send",
@@ -670,6 +673,8 @@ export function fakeGateway(
               // Named only when the message carries other files.
               ...(prepared.uploads.length ? { uploads: prepared.uploads } : {}),
             },
+            // Recorded only when given, so a plain send's arguments stay as they were.
+            ...(options ? [options] : []),
           ],
           () => ({
             conversationId: prepared.conversationId,

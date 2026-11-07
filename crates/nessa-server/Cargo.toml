@@ -109,6 +109,7 @@ sysinfo = { version = "0.33", default-features = false, features = ["disk", "sys
 # watch identity outside the schema-published pattern; tests match minted
 # identities against the same pattern.
 regex = "1"
+jsonschema = { version = "0.60.2", default-features = false }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # Use encrypted Secret Service sessions with interaction explicitly disabled.

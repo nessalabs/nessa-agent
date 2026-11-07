@@ -8,6 +8,7 @@ import {
   type BoatRuntimeSetParams,
   type BoatRuntimeSettings,
   type BoatVmLifetime,
+  type BoatClaudeSignInParams,
   type BoatSaveParams,
   type BoatStatus,
 } from "../generated/product.js"
@@ -20,7 +21,10 @@ export type BoatApi = {
   /** Validate and encrypt a user-owned Boat connection. Keep the token transient.
    * Calls are never replayed; after an uncertain outcome, read status. */
   save(params: BoatSaveParams): Promise<BoatStatus>
-  /** Forget this connection. Existing remote credentials/VMs are not revoked or
+  /** Keep the owner's Claude sign-in for Boat VMs, minted by `claude
+   * setup-token`, replacing any saved one. Keep the token transient. */
+  saveClaudeSignIn(params: BoatClaudeSignInParams): Promise<BoatStatus>
+  /** Forget this connection and the Claude sign-in kept for it. Existing remote credentials/VMs are not revoked or
    * deleted by this command. Read status after an uncertain response. */
   disconnect(): Promise<BoatStatus>
   /** Read ordinary configuration, without reading or unlocking the token vault.
@@ -157,6 +161,8 @@ export function createBoatApi(session: RpcRequester): BoatApi {
   return {
     status: () => call(ProductMethod.BoatStatus, {}, boatStatus),
     save: (params) => call(ProductMethod.BoatSave, { ...params }, boatStatus),
+    saveClaudeSignIn: (params) =>
+      call(ProductMethod.BoatSaveClaudeSignIn, { token: params.token }, boatStatus),
     disconnect: () => call(ProductMethod.BoatDisconnect, {}, boatStatus),
     runtimeSettings: (params = {}) =>
       runtimeCall(ProductMethod.BoatRuntimeSettings, params),

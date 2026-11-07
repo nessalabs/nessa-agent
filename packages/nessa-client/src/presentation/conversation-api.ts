@@ -16,7 +16,7 @@ import {
 import type { RequestDeadline, RpcRequester } from "../application/session-port.js"
 import {
   conversationDeleteTimeoutMs,
-  conversationWorkspaceCreateTimeoutMs,
+  conversationWorkspaceTimeoutMs,
 } from "../application/agent-budgets.js"
 import { bounds, passiveReadTiming, ProductMethod } from "../generated/product.js"
 import type {
@@ -117,6 +117,11 @@ export type ConversationPrepareOptions = ConversationActionOptions & {
   /** Reuse only for the same logical message. */ executionId?: string
   /** Queued by default; steering uses the agent's supported behavior. */ mode?:
     "queued" | "steering"
+}
+/** How a prepared message is submitted. */
+export type ConversationSubmitOptions = {
+  /** The conversation runs away from this machine: its workspace may be woken or made first. */
+  waitsOnWorkspace?: boolean
 }
 /** A share or revoke, built on the grant as it was read. */
 export type ConversationShareOptions = ConversationActionOptions & {
@@ -276,8 +281,17 @@ export type ConversationApi = {
     files?: readonly LinkedFile[],
     options?: ConversationPrepareOptions,
   ) => PreparedSubmission
-  /** Submit the exact immutable message prepared before any asynchronous effects. */
-  submit: (prepared: PreparedSubmission) => Promise<ConversationSubmission>
+  /**
+   * Submit the exact immutable message prepared before any asynchronous effects.
+   * `options.waitsOnWorkspace` says the conversation runs away from this
+   * machine, so its workspace may have to be woken or made before the message
+   * is taken: the request then waits as long as a channel create does
+   * (`conversationWorkspaceTimeoutMs`) rather than the configured timeout.
+   */
+  submit: (
+    prepared: PreparedSubmission,
+    options?: ConversationSubmitOptions,
+  ) => Promise<ConversationSubmission>
   /**
    * Leave a note in this conversation: saved with who left it, it starts and
    * steers no turn. A `record_only` note is only kept; a `next_turn` note
@@ -923,7 +937,7 @@ export function createConversationApi(
         true,
         false,
         options.channelId !== undefined || options.environment === "boat:thread"
-          ? { atLeastMs: conversationWorkspaceCreateTimeoutMs }
+          ? { atLeastMs: conversationWorkspaceTimeoutMs }
           : undefined,
       )
     },
@@ -1040,7 +1054,7 @@ export function createConversationApi(
         executionId: options.executionId ?? newId(),
         requestId: options.requestId ?? newId(),
       }),
-    submit: (prepared) => {
+    submit: (prepared, options = {}) => {
       const {
         conversationId,
         executionId,
@@ -1072,6 +1086,11 @@ export function createConversationApi(
             requestId,
             target,
           }),
+        true,
+        false,
+        options.waitsOnWorkspace === true
+          ? { atLeastMs: conversationWorkspaceTimeoutMs }
+          : undefined,
       )
     },
     message: (id, text, delivery, options = {}) => {

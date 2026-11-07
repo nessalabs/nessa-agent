@@ -196,3 +196,5 @@ runtime authority; linked tests are evidence to inspect, not a claim they ran in
 this sweep. New pages distinguish implemented, fixture, proposed, mixed, and
 reference content. The old flow maps have moved into this hierarchy; they no
 longer have a separate authoritative location.
+
+[Newer placement and access tasks](feature-refresh-1268.md) map pool ordering, channel movement and remembered app revocation with explicit source-only verification scope.

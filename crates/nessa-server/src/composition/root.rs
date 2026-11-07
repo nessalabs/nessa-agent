@@ -99,6 +99,12 @@ impl CompositionRoot {
             } => super::cli::online(true, credential_file, ttl_seconds),
             Command::VaultSession => super::vault_session::serve(),
             Command::Doctor { credential_file } => super::cli::online(false, credential_file, None),
+            Command::Call {
+                method,
+                params,
+                credential_file,
+            } => super::cli::call(&method, &params, credential_file),
+            Command::Mcp { credential_file } => super::cli::mcp(credential_file),
             Command::InstallAgent { agent } => super::install_command::execute(&agent).await,
             Command::Limits => print_limits(),
             Command::GithubConnect {
