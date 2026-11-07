@@ -145,6 +145,10 @@ export const KNOBS = {
     default: 1,
     what: "images pasted into the composer as a screenshot is, shown as tiles, sent with the message and handed to the agent",
   },
+  attaches: {
+    default: 1,
+    what: "a file and an image picked with the composer's Attach button, sent with the message: the image handed to the agent as one, the file placed where it works",
+  },
   tables: {
     default: 1,
     what: "turns whose answer streams Markdown tables, one narrow and one wider than the reply",
@@ -318,6 +322,7 @@ export function plan(knobs, accessScenario = "full") {
   add(knobs.huddles, () => ({ kind: "huddle" }))
   add(knobs.webhooks, () => ({ kind: "webhook" }))
   add(knobs.pastes, () => ({ kind: "paste" }))
+  add(knobs.attaches, () => ({ kind: "attach" }))
   if (knobs.long > 0) steps.push({ kind: "long", turns: knobs.long })
   if (knobs.reviews > 0) steps.push({ kind: "reviews" })
   while (steps.length < knobs.rounds)

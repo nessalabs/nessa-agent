@@ -56,7 +56,7 @@ export function uploadFailureSummary(reason: UploadFailure): string {
     case "unavailable":
       return "Couldn't reach the gateway."
     case "rejected":
-      return "The gateway refused the image."
+      return "The gateway refused the attachment."
   }
 }
 

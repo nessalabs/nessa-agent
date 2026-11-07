@@ -148,7 +148,14 @@ it("offers a paste of images to its owner, shows each as a tile it can take off,
   // The field inserts nothing of its own for it.
   expect(paste.defaultPrevented).toBe(true)
   await render([
-    { id: "i", name: "image.png", mimeType: "image/png", size: 1, url: "blob:shot" },
+    {
+      id: "i",
+      kind: "image",
+      name: "image.png",
+      mimeType: "image/png",
+      size: 1,
+      url: "blob:shot",
+    },
   ])
   expect(host.querySelector(".desktop-composer-images img")?.getAttribute("src")).toBe(
     "blob:shot",
@@ -162,6 +169,74 @@ it("offers a paste of images to its owner, shows each as a tile it can take off,
       ?.click(),
   )
   expect(removed).toEqual(["i"])
+  await act(async () => root.unmount())
+})
+
+it("offers files picked with Attach to its owner, and shows a file by its name, not a picture", async () => {
+  const picked: File[][] = []
+  const root = createRoot(host)
+  const render = (images: ComposerImages["images"]) =>
+    act(async () =>
+      root.render(
+        <Composer
+          page={false}
+          onPageChange={() => {}}
+          onSend={() => {}}
+          text=""
+          onTextChange={() => {}}
+          model={undefined}
+          onModelChange={() => {}}
+          images={{ images, onPaste: (files) => picked.push(files), onRemove: () => {} }}
+        />,
+      ),
+    )
+  await render([])
+  const input = host.querySelector<HTMLInputElement>('input[type="file"]')
+  const attach = host.querySelector<HTMLButtonElement>(
+    'button[aria-label="Attach files"]',
+  )
+  if (!input || !attach) throw new Error("no Attach")
+  expect(input.multiple).toBe(true)
+  let opened = 0
+  input.addEventListener("click", () => opened++)
+  await act(async () => attach.click())
+  expect(opened).toBe(1)
+  const pdf = new File(["%PDF"], "plan.pdf", { type: "application/pdf" })
+  Object.defineProperty(input, "files", { value: [pdf], configurable: true })
+  await act(async () => {
+    input.dispatchEvent(new Event("change", { bubbles: true }))
+  })
+  expect(picked).toEqual([[pdf]])
+  await render([
+    {
+      id: "f",
+      kind: "file",
+      name: "plan.pdf",
+      mimeType: "application/pdf",
+      size: 4,
+      url: "blob:pdf",
+    },
+  ])
+  const tile = host.querySelector('.desktop-composer-image[data-kind="file"]')
+  expect(tile?.textContent).toContain("plan.pdf")
+  expect(tile?.querySelector("img")).toBeNull()
+  await act(async () => root.unmount())
+})
+
+it("offers no Attach without an owner for attachments", async () => {
+  const root = createRoot(host)
+  await act(async () =>
+    root.render(
+      <Composer
+        page={false}
+        onPageChange={() => {}}
+        text=""
+        onTextChange={() => {}}
+        model={undefined}
+      />,
+    ),
+  )
+  expect(host.querySelector('button[aria-label="Attach files"]')).toBeNull()
   await act(async () => root.unmount())
 })
 

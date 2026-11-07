@@ -126,6 +126,7 @@ import {
   type ConversationView,
   type ConversationViewCursor,
   type ImageAttachment,
+  type UploadedFileAttachment,
   type PermissionReviewWaiting,
   type PreparedSubmission,
   type QuestionDetail,
@@ -152,6 +153,7 @@ import type { Transcript } from "../../model/transcript"
 import type { DraftImage } from "../../model/draft-images"
 import {
   AttachmentStagingError,
+  stageFile,
   stageImage,
   uploadFailureSummary,
   worthRetrying,
@@ -1697,8 +1699,15 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
       // that is still on its way a failure.
       const waitsOnWorkspace = start ? Boolean(channelId) : mayWaitOnWorkspace(sessionId)
       const budgetMs = waitsOnWorkspace ? timing.workspaceCallMs : timing.callMs
-      const images = (message.images ?? []).map((image) => Object.freeze({ ...image }))
-      const submission = (attachments: ImageAttachment[]) => {
+      const drafts = (message.images ?? []).map((image) => Object.freeze({ ...image }))
+      // An image goes to the model as one; any other file is placed where
+      // the agent works, which may be another machine than this one.
+      const images = drafts.filter((draft) => draft.kind === "image")
+      const files = drafts.filter((draft) => draft.kind === "file")
+      const submission = (
+        attachments: ImageAttachment[],
+        uploads: UploadedFileAttachment[],
+      ) => {
         try {
           return prepareSubmission({
             conversationId: sessionId,
@@ -1711,6 +1720,7 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
             requestId: crypto.randomUUID(),
             text,
             attachments,
+            ...(uploads.length ? { uploads } : {}),
             mode: "queued",
           })
         } catch (error) {
@@ -1718,14 +1728,14 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
           throw error
         }
       }
-      // Every message is checked before anything is sent. One with images is
-      // checked naming stand-ins of their encodings and sizes — its text may
-      // be blank only beside them — and prepared for real once they are
-      // uploaded and it can name what the gateway holds.
+      // Every message is checked before anything is sent. One with images or
+      // files is checked naming stand-ins of their encodings and sizes — its
+      // text may be blank only beside them — and prepared for real once they
+      // are uploaded and it can name what the gateway holds.
       let prepared: PreparedSubmission | undefined
       try {
-        const checked = submission(images.map(standIn))
-        prepared = images.length ? undefined : checked
+        const checked = submission(images.map(standIn), files.map(fileStandIn))
+        prepared = drafts.length ? undefined : checked
       } catch (error) {
         return Promise.reject(error)
       }
@@ -1791,10 +1801,11 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
           await within((live) => submit(live, submitted), undefined, budgetMs)
         })()
       }
-      // With images, each step is a call of its own, on its own budget: the
-      // conversation opened, which must exist to hold them, then each image
-      // put into it — an upload stops when its call ends — and only then the
-      // message naming what it holds. A refusal of any is the message's.
+      // With attachments, each step is a call of its own, on its own budget:
+      // the conversation opened, which must exist to hold them, then each
+      // image and file put into it — an upload stops when its call ends — and
+      // only then the message naming what it holds. A refusal of any is the
+      // message's.
       const read = options.imageBytes
       if (!read) return Promise.reject(new WorkspaceSourceError("not-supported"))
       return (async () => {
@@ -1808,7 +1819,16 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
               ),
             ),
           )
-        const submitted = submission(attachments)
+        const uploads: UploadedFileAttachment[] = []
+        for (const file of files)
+          uploads.push(
+            await within((live, ended) =>
+              dispatch(live, (connected) =>
+                uploadFile(connected, sessionId, file, read, clock, ended),
+              ),
+            ),
+          )
+        const submitted = submission(attachments, uploads)
         await within((live) => submit(live, submitted), undefined, budgetMs)
       })()
     },
@@ -2220,35 +2240,80 @@ function standIn(image: DraftImage): ImageAttachment {
   }
 }
 
-/**
- * Puts one of a message's images into its conversation, reading the bytes
- * back from the object URL the window holds them under, and answers what the
- * message names it by. Staging is the conversation vertical's
- * (`stageImage`); a refusal comes back as the send's, in its words.
- */
-async function uploadImage(
+/** What a message names for a file not yet uploaded, as `standIn` does for an image. */
+function fileStandIn(file: DraftImage): UploadedFileAttachment {
+  return {
+    digest: `sha256:${"0".repeat(64)}`,
+    mimeType: file.mimeType,
+    size: file.size,
+    name: file.name,
+  }
+}
+
+/** Puts one of a message's images into its conversation (`upload`, `stageImage`). */
+function uploadImage(
   connected: Pick<GatewayClient, "attachments">,
   conversationId: string,
   image: DraftImage,
   read: ImageBytes,
   clock: GatewayClock,
-  /** Aborted when the call this upload is part of ends. */
   ended: AbortSignal,
 ): Promise<ImageAttachment> {
+  return upload(image, read, clock, ended, (described, bytes, staging) =>
+    stageImage(() => connected.attachments, conversationId, described, bytes, staging),
+  )
+}
+
+/** Puts one of a message's other files into its conversation (`upload`, `stageFile`). */
+function uploadFile(
+  connected: Pick<GatewayClient, "attachments">,
+  conversationId: string,
+  file: DraftImage,
+  read: ImageBytes,
+  clock: GatewayClock,
+  ended: AbortSignal,
+): Promise<UploadedFileAttachment> {
+  return upload(file, read, clock, ended, (described, bytes, staging) =>
+    stageFile(
+      () => connected.attachments,
+      conversationId,
+      { ...described, name: file.name },
+      bytes,
+      staging,
+    ),
+  )
+}
+
+/**
+ * Puts one of a message's attachments into its conversation, reading the
+ * bytes back from the object URL the window holds them under, and answers
+ * what the message names it by. Staging is the conversation vertical's
+ * (`stage`); a refusal comes back as the send's, in its words.
+ */
+async function upload<T>(
+  draft: DraftImage,
+  read: ImageBytes,
+  clock: GatewayClock,
+  /** Aborted when the call this upload is part of ends. */
+  ended: AbortSignal,
+  stage: (
+    described: { digest: string; mimeType: string; size: number },
+    bytes: Blob,
+    staging: { signal: AbortSignal; wait: (ms: number) => Promise<void> },
+  ) => Promise<T>,
+): Promise<T> {
   let bytes: Blob
   try {
-    bytes = await read.bytes(image.url)
+    bytes = await read.bytes(draft.url)
   } catch {
     throw new WorkspaceSourceError("not-supported", undefined, {
-      message: `${image.name} could not be read.`,
+      message: `${draft.name} could not be read.`,
       code: "unreadable",
     })
   }
   try {
-    return await stageImage(
-      () => connected.attachments,
-      conversationId,
-      { digest: await read.digest(bytes), mimeType: image.mimeType, size: bytes.size },
+    return await stage(
+      { digest: await read.digest(bytes), mimeType: draft.mimeType, size: bytes.size },
       bytes,
       {
         signal: ended,

@@ -6,6 +6,7 @@ import { releasedImageUrls } from "./draft-images"
 
 const image = (url: string): DraftImage => ({
   id: url,
+  kind: "image",
   name: `${url}.png`,
   mimeType: "image/png",
   size: 1,

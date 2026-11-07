@@ -1,6 +1,7 @@
 import { memo } from "react"
 import { TranscriptDivider } from "@nessa-ui/react/transcript-divider"
 import { ChatAttachmentTile } from "@nessa-ui/react/chat-bubbles"
+import { DesktopIcon } from "../../../ui/icons"
 import {
   PublishedFiles,
   MessageImages,
@@ -294,7 +295,7 @@ function MessageWidget({ sessionId, widget }: { sessionId: string; widget: Widge
 /** Why a message did not reach the agent, and the two ways on: send it again, or let it go. */
 
 /**
- * The images on a message this window sent and its conversation does not hold
+ * The images and files on a message this window sent and its conversation does not hold
  * yet, drawn from the bytes the window holds, as the tiles the conversation's
  * own reference will draw once it does (`MessageImages`).
  */
@@ -307,8 +308,17 @@ function LocalImages({ images }: { images: readonly DraftImage[] }) {
       className="nessa-message-images m-0 flex list-none flex-wrap gap-1.5 p-0 [&:not(:first-child)]:mt-2"
     >
       {images.map((image) => (
-        <li key={image.id} title={image.name} className="inline-flex">
-          <ChatAttachmentTile label={image.name} imageSrc={image.url} />
+        <li
+          key={image.id}
+          title={image.name}
+          className="inline-flex"
+          data-kind={image.kind}
+        >
+          {image.kind === "image" ? (
+            <ChatAttachmentTile label={image.name} imageSrc={image.url} />
+          ) : (
+            <ChatAttachmentTile label={image.name} icon={<DesktopIcon name="file" />} />
+          )}
         </li>
       ))}
     </ul>
