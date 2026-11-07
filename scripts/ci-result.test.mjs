@@ -197,7 +197,11 @@ test("the Windows split preserves full build flags, platform coverage, guards, c
     }
     assert.match(server, /runs-on: windows-latest/)
     for (const block of [local, server]) {
-      assert.match(block, /needs: changes/)
+      if (block === local) {
+        assert.match(block, /needs: \[changes, desktop-release-profile\]/)
+      } else {
+        assert.match(block, /needs: changes/)
+      }
       assert.match(
         block,
         /if: \$\{\{ !cancelled\(\) && needs\.changes\.outputs\.code != 'false' \}\}/,
