@@ -116,3 +116,5 @@ Disposition: direct model. The bounded rule model section names the modeled owne
 Excluded: All exclusions stated in the owning Bounded rule model section remain outside verification.
 
 Source review scope: owner entry points and relevant regression declarations were inventoried against frozen source `77a6b620af4d94b234294f6d273fd74b3dfb44c7`. Existing source checkpoints are retained where this was a partial review. A model result establishes bounded design safety only. Browser appearance and interaction were not checked.
+
+[Remembered app access](revoke-remembered-app-access.md) is a separate owner with different stale-read and audit boundaries; this page’s rule model does not cover app-trust removal.

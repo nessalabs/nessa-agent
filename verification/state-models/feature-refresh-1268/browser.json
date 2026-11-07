@@ -1,0 +1,33 @@
+{
+  "ok": true,
+  "browser": "156.0.8078.80",
+  "viewport": {
+    "width": 1440,
+    "height": 1000
+  },
+  "pages": 4,
+  "diagrams": 3,
+  "errors": [],
+  "results": [
+    {
+      "id": "feature-refresh-1268",
+      "figures": 0,
+      "failed": 0
+    },
+    {
+      "id": "desktop-channel-run-location",
+      "figures": 1,
+      "failed": 0
+    },
+    {
+      "id": "desktop-worker-pool-order",
+      "figures": 1,
+      "failed": 0
+    },
+    {
+      "id": "desktop-remembered-app-access",
+      "figures": 1,
+      "failed": 0
+    }
+  ]
+}
