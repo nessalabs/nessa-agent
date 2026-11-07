@@ -361,12 +361,7 @@ import { startFakeRealtime } from "./lib/fake-realtime.mjs"
 import { freePort } from "./lib/server.mjs"
 import { Follower } from "./lib/stress-followers.mjs"
 import { asOlderBuild, metadataFile, schemaVersion } from "./lib/stress-upgrade.mjs"
-import {
-  REACHABLE as SSH_REACHABLE,
-  UNREACHABLE as SSH_UNREACHABLE,
-  writeFakeSsh,
-  writeSshConfig,
-} from "./lib/stress-ssh-hosts.mjs"
+import { nextSshHosts, writeFakeSsh, writeSshConfig } from "./lib/stress-ssh-hosts.mjs"
 import {
   pairedCatalogue,
   preparePairedCatalogue,
@@ -5117,8 +5112,11 @@ const steps = {
             .screenshot({ path: join(run.evidence, `ssh-${run.engine}-${label}.png`) })
             .catch(() => {})
         : Promise.resolve()
-    // The person's SSH configuration, read as Devices is opened.
-    writeSshConfig(join(gateway.directory, "home"))
+    // The person's SSH configuration, read as Devices is opened, naming
+    // machines no earlier run of this step connected.
+    const hosts = nextSshHosts()
+    const { reachable: SSH_REACHABLE, unreachable: SSH_UNREACHABLE } = hosts
+    writeSshConfig(join(gateway.directory, "home"), hosts)
     try {
       const { suggested } = await run.client.devices.sshHosts()
       const names = suggested.map((each) => each.host)
