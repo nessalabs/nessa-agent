@@ -10,6 +10,8 @@
 //! sends a host this build does not run on (issue #734).
 //! `peer.rs` is the paired environments (issue #706): the same adapter, over
 //! a connection the host dials into this gateway's native listener.
+//! `logins.rs` asks which saved login a harness started on a host is
+//! given (issue #1260).
 //! Unix only, as its composition (`composition/local_auth.rs`) and the
 //! `nessa env serve` it speaks to are.
 //!
@@ -22,6 +24,8 @@ mod durable_audit;
 mod environment;
 mod install;
 mod link;
+mod logins;
+pub(crate) use logins::SavedLogins;
 mod open_ssh;
 mod peer;
 mod peer_update;

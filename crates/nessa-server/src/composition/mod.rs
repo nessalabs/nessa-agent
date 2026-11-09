@@ -56,6 +56,7 @@ mod install_command;
 #[cfg(unix)]
 mod installed_launch;
 mod local_auth;
+mod logins;
 #[cfg(unix)]
 mod managed_adapter;
 #[cfg(unix)]

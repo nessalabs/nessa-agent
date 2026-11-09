@@ -327,6 +327,10 @@ describe("Linked devices", () => {
     )
     const pair = host.querySelector<HTMLButtonElement>("[data-linked-action='pair']")
     expect(pair?.disabled).toBe(false)
+    // WebKit pointer clicks leave focus on the previous control. Closing the
+    // pairing dialog must still return to its row, not that unrelated control.
+    host.tabIndex = -1
+    host.focus()
     await act(async () => pair?.click())
     expect(gate.creates).toBe(1)
     const dialog = document.querySelector("[data-slot='dialog']")

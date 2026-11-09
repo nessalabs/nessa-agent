@@ -40,7 +40,8 @@ use std::{io::Write, path::Path};
 /// `nessa env grant`: grant `peer` the `agents`, and commands of at most
 /// `max_timeout_ms` each, beside the agents it has now. `max_timeout_ms`
 /// replaces the peer's longest command run, shorter or longer, and
-/// `max_lease_ms` the longest a harness's lease may last.
+/// `max_lease_ms` the longest a harness's lease may last; `logins` lets the
+/// gateway hand its saved login to each harness it starts here.
 ///
 /// # Errors
 /// The peer or an agent is not one, the timeout or lease limit is out of
@@ -50,6 +51,7 @@ pub(super) async fn grant(
     agents: Option<GrantedAgents>,
     max_timeout_ms: Option<u64>,
     max_lease_ms: Option<u64>,
+    logins: bool,
 ) -> Result<(), RunError> {
     let agents = agents.map(granted_agents).transpose()?;
     let commands = max_timeout_ms
@@ -81,6 +83,7 @@ pub(super) async fn grant(
             agents,
             commands,
             max_lease,
+            logins,
         },
     )
 }
@@ -94,6 +97,7 @@ pub(super) async fn ungrant(peer: Option<&str>, what: Ungranted) -> Result<(), R
     let operation = match what {
         Ungranted::Agent(name) => GrantOperation::UngrantAgent(agent_name(&name)?),
         Ungranted::Commands => GrantOperation::UngrantCommands,
+        Ungranted::Logins => GrantOperation::UngrantLogins,
         Ungranted::All => GrantOperation::UngrantAll,
     };
     let directory = environment_directory()?;

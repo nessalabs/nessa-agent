@@ -213,6 +213,88 @@ impl<'de> Deserialize<'de> for Data {
     }
 }
 
+/// A saved login the gateway hands one harness at its start: the agent's
+/// own sign-in, read from the gateway's vault. Never printed: its `Debug`
+/// says only that it is there, and it is never written to an audit.
+///
+/// The variable it is put in is the agent's ([`login_variables`]), never
+/// one the gateway names, so a login can only ever be that agent's.
+#[derive(Clone, PartialEq, Eq)]
+pub struct Login(zeroize::Zeroizing<String>);
+
+/// The most bytes of a [`Login`].
+pub const MAX_LOGIN_BYTES: usize = 4096;
+
+/// A value no [`Login`] can be: empty, longer than [`MAX_LOGIN_BYTES`], or
+/// holding anything but visible ASCII.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct InvalidLogin;
+
+impl Login {
+    /// `value`, when a login can hold it.
+    ///
+    /// # Errors
+    /// [`InvalidLogin`].
+    pub fn new(value: String) -> Result<Self, InvalidLogin> {
+        if value.is_empty()
+            || value.len() > MAX_LOGIN_BYTES
+            || !value.bytes().all(|byte| byte.is_ascii_graphic())
+        {
+            return Err(InvalidLogin);
+        }
+        Ok(Self(zeroize::Zeroizing::new(value)))
+    }
+
+    /// The login itself, for the one launch that is given it.
+    #[must_use]
+    pub fn expose(&self) -> &str {
+        self.0.as_str()
+    }
+}
+
+impl std::fmt::Debug for Login {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("Login(redacted)")
+    }
+}
+
+impl Serialize for Login {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.0.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for Login {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Self::new(String::deserialize(deserializer)?)
+            .map_err(|_| serde::de::Error::custom("not a login"))
+    }
+}
+
+/// The variables an agent's harness reads a login from. A [`Login`] is put
+/// only in the one [`login_variable`] names for it; a host that sets any of
+/// them itself has its own login, and a gateway's is not used.
+#[must_use]
+pub fn login_variables(agent: crate::agents::AgentId) -> &'static [&'static str] {
+    match agent {
+        crate::agents::AgentId::Claude => &["CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY"],
+        crate::agents::AgentId::Codex => &["CODEX_API_KEY", "OPENAI_API_KEY"],
+        crate::agents::AgentId::Opencode => &["OPENCODE_API_KEY"],
+    }
+}
+
+/// The one variable `login` is put in for `agent`: the first of
+/// [`login_variables`], except an Anthropic API key (`sk-ant-api…`), which
+/// Claude Code reads from `ANTHROPIC_API_KEY` and refuses as an OAuth token.
+#[must_use]
+pub fn login_variable(agent: crate::agents::AgentId, login: &Login) -> &'static str {
+    let variables = login_variables(agent);
+    match agent {
+        crate::agents::AgentId::Claude if login.expose().starts_with("sk-ant-api") => variables[1],
+        _ => variables[0],
+    }
+}
+
 /// What releasing a harness, or everything a lease started, took, as the
 /// environment saw it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -322,6 +404,11 @@ pub struct GrantedTerms {
     /// harness's lease, and `None` when it may last until ended.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lease_ms: Option<u64>,
+    /// Whether the environment takes this gateway's saved login for a
+    /// harness it starts under the lease ([`ToEnvironment::Start`]'s
+    /// `login`): its owner's grant, never the gateway's choice. Always
+    /// false for a command lease.
+    pub takes_login: bool,
 }
 
 /// Why an environment is ending a lease the gateway did not ask it to end.
@@ -378,6 +465,9 @@ pub enum StartFailure {
     /// The environment could not record the start in its own audit, so it
     /// started nothing.
     AuditUnavailable,
+    /// The start carried a login, and the lease was not granted to take
+    /// one ([`GrantedTerms::takes_login`]): nothing started.
+    LoginNotTaken,
 }
 
 /// One file an environment staged for the gateway to collect: what it is,
@@ -576,6 +666,11 @@ pub enum ToEnvironment {
         channel: u32,
         /// Binding-owned variables.
         environment: BTreeMap<String, String>,
+        /// The gateway's saved login for the lease's agent, put in that
+        /// agent's first [`login_variables`]; only when the lease was granted
+        /// `takes_login`, and the host's own configuration still wins.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        login: Option<Login>,
     },
     /// Bytes for the harness's standard input.
     Input {

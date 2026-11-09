@@ -384,6 +384,7 @@ fn env_grant_names_agents_or_every_agent_and_commands_with_their_longest_run() {
             agents: Some(GrantedAgents::Named(vec!["claude".into(), "codex".into()])),
             max_timeout_ms: None,
             max_lease_ms: None,
+            logins: false,
         }
     );
     assert_eq!(
@@ -403,6 +404,7 @@ fn env_grant_names_agents_or_every_agent_and_commands_with_their_longest_run() {
             agents: Some(GrantedAgents::All),
             max_timeout_ms: Some(600_000),
             max_lease_ms: None,
+            logins: false,
         }
     );
     assert_eq!(
@@ -419,6 +421,7 @@ fn env_grant_names_agents_or_every_agent_and_commands_with_their_longest_run() {
             agents: None,
             max_timeout_ms: Some(90_000),
             max_lease_ms: None,
+            logins: false,
         }
     );
     assert_eq!(
@@ -435,6 +438,7 @@ fn env_grant_names_agents_or_every_agent_and_commands_with_their_longest_run() {
             agents: None,
             max_timeout_ms: Some(3_600_000),
             max_lease_ms: None,
+            logins: false,
         }
     );
     assert_eq!(
@@ -444,6 +448,7 @@ fn env_grant_names_agents_or_every_agent_and_commands_with_their_longest_run() {
             agents: None,
             max_timeout_ms: None,
             max_lease_ms: Some(28_800_000),
+            logins: false,
         }
     );
     assert_eq!(
@@ -461,10 +466,22 @@ fn env_grant_names_agents_or_every_agent_and_commands_with_their_longest_run() {
             agents: Some(GrantedAgents::Named(vec!["claude".into()])),
             max_timeout_ms: None,
             max_lease_ms: Some(1_800_000),
+            logins: false,
+        }
+    );
+    assert_eq!(
+        parse(&args(&["env", "grant", "--logins"])).unwrap(),
+        Command::EnvGrant {
+            peer: None,
+            agents: None,
+            max_timeout_ms: None,
+            max_lease_ms: None,
+            logins: true,
         }
     );
     for refused in [
         vec!["env", "grant"],
+        vec!["env", "grant", "--logins", "--logins"],
         vec!["env", "grant", "--max-lease"],
         vec!["env", "grant", "--max-lease", "0s"],
         vec!["env", "grant", "--max-lease", "8"],
@@ -493,7 +510,7 @@ fn env_grant_names_agents_or_every_agent_and_commands_with_their_longest_run() {
         assert!(parse(&args(&refused)).is_err(), "{refused:?}");
     }
     assert!(crate::cli::entrypoint::HELP.contains(
-        "nessa env grant [--peer ssh|PIN] [--agent NAME... | --all-agents] [--commands --max-timeout 10m] [--max-lease 8h]"
+        "nessa env grant [--peer ssh|PIN] [--agent NAME... | --all-agents] [--commands --max-timeout 10m] [--max-lease 8h] [--logins]"
     ));
 }
 
@@ -511,6 +528,13 @@ fn env_ungrant_takes_one_thing_back_and_env_grants_lists_them() {
         Command::EnvUngrant {
             peer: Some("ssh".into()),
             what: Ungranted::Commands,
+        }
+    );
+    assert_eq!(
+        parse(&args(&["env", "ungrant", "--logins"])).unwrap(),
+        Command::EnvUngrant {
+            peer: None,
+            what: Ungranted::Logins,
         }
     );
     assert_eq!(
@@ -535,7 +559,9 @@ fn env_ungrant_takes_one_thing_back_and_env_grants_lists_them() {
         assert!(parse(&args(&refused)).is_err(), "{refused:?}");
     }
     let help = crate::cli::entrypoint::HELP;
-    assert!(help.contains("nessa env ungrant [--peer ssh|PIN] (--agent NAME | --commands | --all)"));
+    assert!(help.contains(
+        "nessa env ungrant [--peer ssh|PIN] (--agent NAME | --commands | --logins | --all)"
+    ));
     assert!(help.contains("nessa env grants"));
 }
 

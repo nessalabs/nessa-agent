@@ -181,12 +181,14 @@ impl CompositionRoot {
                 agents,
                 max_timeout_ms,
                 max_lease_ms,
+                logins,
             } => {
                 super::env_grant_command::grant(
                     peer.as_deref(),
                     agents,
                     max_timeout_ms,
                     max_lease_ms,
+                    logins,
                 )
                 .await
             }

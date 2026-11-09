@@ -107,6 +107,7 @@ impl HarnessLauncher for Publisher {
         &self,
         _agent: &str,
         _environment: &BTreeMap<String, String>,
+        _login: Option<&nessa_protocol::lease::Login>,
         publish_point: Option<&str>,
     ) -> Result<HarnessProcess, AgentError> {
         *self.point.lock().unwrap() = publish_point.map(str::to_owned);

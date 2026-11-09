@@ -23,6 +23,9 @@ name = "nessa-backup-plan"
 path = "src/backup_plan_main.rs"
 
 [dependencies]
+# Sets the in-memory credential store in a saved Codex key's home config by
+# TOML key, wherever and however the existing file spells it.
+toml_edit = { version = "=0.25.13", default-features = false, features = ["parse", "display"] }
 tempfile = "3"
 nessa-vault = { path = "../nessa-vault" }
 base64 = "0.22"

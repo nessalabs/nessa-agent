@@ -218,7 +218,7 @@
         "methods": {
           "type": "array",
           "items": { "type": "string" },
-          "maxItems": 119,
+          "maxItems": 123,
           "description": "Registered product methods; permission is checked for every command."
         }
       },
@@ -9155,6 +9155,102 @@
         }
       },
       "required": ["requestId", "receiptId", "scope", "position", "appliedAtMs"]
+    },
+    "LoginAgent": {
+      "type": "string",
+      "enum": ["claude", "codex", "opencode"],
+      "description": "An agent whose sign-in the gateway can keep as a saved login."
+    },
+    "SavedLogin": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Whether one agent has a saved login. The login itself is never returned.",
+      "properties": {
+        "agent": { "$ref": "#/$defs/LoginAgent", "description": "The agent." },
+        "saved": {
+          "type": "boolean",
+          "description": "Whether a login is saved in the gateway's vault for it."
+        }
+      },
+      "required": ["agent", "saved"]
+    },
+    "LoginsStatus": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Result of every logins method: which agents have a saved login, and which paired machines are switched on to be handed them when an agent starts there. SSH hosts and Boat workspaces always may be; this gateway's own machine never is.",
+      "properties": {
+        "logins": {
+          "type": "array",
+          "minItems": 3,
+          "maxItems": 3,
+          "items": { "$ref": "#/$defs/SavedLogin" },
+          "description": "One entry per agent, in the order claude, codex, opencode."
+        },
+        "devicesOn": {
+          "type": "array",
+          "maxItems": 256,
+          "items": { "type": "string", "pattern": "^peer:[0-9a-f]{64}$" },
+          "description": "The paired machines whose switch is on, by environment name, in name order."
+        }
+      },
+      "required": ["logins", "devicesOn"]
+    },
+    "LoginsSaveParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Save an agent's login in the gateway's vault, replacing any saved one (logins.save). Applies to agents opened after it on a machine that receives logins; an agent already open keeps the login it opened with.",
+      "properties": {
+        "agent": {
+          "$ref": "#/$defs/LoginAgent",
+          "description": "The agent the login is for."
+        },
+        "login": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096,
+          "pattern": "^[!-~]+$",
+          "description": "The login: a Claude setup-token, or the agent's API key. Printable ASCII with no spaces."
+        }
+      },
+      "required": ["agent", "login"]
+    },
+    "LoginsRemoveParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Delete an agent's saved login (logins.remove). Agents already open keep the one they opened with until they close.",
+      "properties": {
+        "agent": { "$ref": "#/$defs/LoginAgent", "description": "The agent." }
+      },
+      "required": ["agent"]
+    },
+    "LoginsSetDeviceParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Turn a paired machine's \"Use my saved logins here\" switch on or off (logins.setDevice). Applies to agents opened there after it; an agent already open keeps what it opened with.",
+      "properties": {
+        "environment": {
+          "type": "string",
+          "pattern": "^peer:[0-9a-f]{64}$",
+          "description": "The paired machine, by its environment name as devices.list gives it."
+        },
+        "on": {
+          "type": "boolean",
+          "description": "Whether its agents may be handed the saved logins."
+        }
+      },
+      "required": ["environment", "on"]
+    },
+    "LoginsErrorCode": {
+      "type": "string",
+      "enum": [
+        "logins_not_configured",
+        "logins_storage_unavailable",
+        "logins_audit_unavailable",
+        "logins_change_unrecorded",
+        "logins_too_many_devices",
+        "vault_locked"
+      ],
+      "description": "Why the gateway refused a logins method. logins_not_configured: this gateway keeps no saved logins. logins_storage_unavailable: the vault could not read or change them; what was saved still is. logins_audit_unavailable: the change could not be recorded before it was made, so nothing changed. logins_change_unrecorded: the change was made but its outcome could not be recorded; read logins.status for how things stand. logins_too_many_devices: more paired machines are switched on than a list holds. vault_locked: unlock Nessa first."
     },
     "VoiceStatus": {
       "type": "object",

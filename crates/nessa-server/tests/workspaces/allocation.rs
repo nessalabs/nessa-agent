@@ -58,28 +58,6 @@ impl Assignments for Store {
     }
 }
 struct Config;
-/// The Claude sign-in kept for Boat VMs, and the connection cleared with it.
-#[derive(Default)]
-struct SignIns {
-    saved: std::sync::Mutex<Option<ClaudeSignIn>>,
-    cleared: std::sync::atomic::AtomicBool,
-}
-#[async_trait]
-impl ClaudeSignIns for SignIns {
-    async fn read(&self) -> Result<Option<ClaudeSignIn>, Failure> {
-        Ok(self.saved.lock().unwrap().clone())
-    }
-    async fn save(&self, sign_in: ClaudeSignIn) -> Result<(), Failure> {
-        *self.saved.lock().unwrap() = Some(sign_in);
-        Ok(())
-    }
-    async fn clear(&self) -> Result<(), Failure> {
-        *self.saved.lock().unwrap() = None;
-        self.cleared
-            .store(true, std::sync::atomic::Ordering::SeqCst);
-        Ok(())
-    }
-}
 #[async_trait]
 impl Settings for Config {
     fn generation(&self) -> Result<u64, Failure> {
@@ -345,7 +323,6 @@ fn fixture_with_audit() -> (Arc<Workspaces>, Arc<Store>, Arc<FakeProvider>, Arc<
             store.clone(),
             audit.clone(),
             Arc::new(Config),
-            Arc::new(SignIns::default()),
         )),
         store,
         provider,
@@ -406,7 +383,6 @@ async fn config_default_and_channel_override_reach_admitted_creation_and_existin
         store,
         audit,
         settings.clone(),
-        Arc::new(SignIns::default()),
     );
     provider.proceed.add_permits(2);
     service.open(id(101), true, None).await.unwrap();
@@ -447,7 +423,6 @@ async fn wrong_scope_lifetime_snapshot_refuses_before_provider_create() {
         store,
         audit,
         Arc::new(WrongRuntimeScope),
-        Arc::new(SignIns::default()),
     );
     assert!(matches!(
         service.open(id(103), true, None).await,
@@ -611,7 +586,6 @@ async fn a_new_vm_is_made_from_the_pinned_image_not_the_one_saved_with_the_accou
         store.clone(),
         audit,
         Arc::new(Config),
-        Arc::new(SignIns::default()),
     )
     .with_image(Some("pinned-image"));
     // The account was connected while another build pinned "fixture-image".
@@ -876,6 +850,7 @@ fn connection_cache_refuses_capacity_without_evicting_borrowed_environments() {
             ),
         ),
         environments: Default::default(),
+        logins: None,
     };
     let identity =
         |n: usize| ConversationId::new(&uuid::Uuid::from_u128(n as u128 + 1).to_string()).unwrap();
@@ -1201,17 +1176,8 @@ async fn failed_refusal_storage_or_audit_never_deletes_existing_workspace_data()
     }
 }
 
-#[tokio::test]
-async fn a_claude_sign_in_is_kept_only_in_the_token_alphabet() {
-    let sign_ins = Arc::new(SignIns::default());
-    let service = Workspaces::new(
-        Arc::new(Config),
-        Arc::new(FakeProvider::new(Default::default())),
-        Arc::new(Store::default()),
-        Arc::new(Audit::default()),
-        Arc::new(Config),
-        sign_ins.clone(),
-    );
+#[test]
+fn a_claude_sign_in_is_only_the_token_alphabet() {
     for refused in [
         "",
         "sk-ant-api03-abc",
@@ -1221,51 +1187,30 @@ async fn a_claude_sign_in_is_kept_only_in_the_token_alphabet() {
         &format!("sk-ant-oat01-{}", "a".repeat(512)),
     ] {
         assert_eq!(
-            service.save_claude_sign_in(refused.into()).await,
+            ClaudeSignIn::new(refused.into()).map(|_| ()),
             Err(Failure::InvalidInput),
             "{refused:?}"
         );
     }
-    assert!(sign_ins.saved.lock().unwrap().is_none());
-    assert_eq!(
-        service.claude_sign_in_changes(),
-        0,
-        "a refused sign-in changes no serve"
-    );
-    service
-        .save_claude_sign_in("sk-ant-oat01-first_A-1".into())
-        .await
-        .unwrap();
-    service
-        .save_claude_sign_in("sk-ant-oat01-second".into())
-        .await
-        .unwrap();
-    assert_eq!(
-        sign_ins.saved.lock().unwrap().as_ref().unwrap().as_bytes(),
-        b"sk-ant-oat01-second"
-    );
-    assert_eq!(service.claude_sign_in_changes(), 2);
+    assert!(ClaudeSignIn::new("sk-ant-oat01-first_A-1".into()).is_ok());
 }
 
 #[tokio::test]
-async fn disconnecting_boat_forgets_its_claude_sign_in() {
-    let sign_ins = Arc::new(SignIns::default());
+async fn disconnecting_boat_keeps_the_saved_claude_login() {
     let service = Workspaces::new(
         Arc::new(Config),
         Arc::new(FakeProvider::new(Default::default())),
         Arc::new(Store::default()),
         Arc::new(Audit::default()),
         Arc::new(Config),
-        sign_ins.clone(),
     );
-    service
-        .save_claude_sign_in("sk-ant-oat01-kept".into())
-        .await
-        .unwrap();
+    // Workspaces holds no way to change the sign-in: it is the saved Claude
+    // login other machines are handed too, so disconnecting tells no change.
     service.disconnect().await.unwrap();
-    assert!(sign_ins.saved.lock().unwrap().is_none());
-    assert_eq!(service.claude_sign_in_changes(), 2);
-    assert!(sign_ins.cleared.load(std::sync::atomic::Ordering::SeqCst));
+    assert_eq!(service.claude_sign_in_changes(), 0);
+    // Saving or removing it, which Saved logins does, is what is told.
+    service.claude_sign_in_changed();
+    assert_eq!(service.claude_sign_in_changes(), 1);
 }
 
 #[tokio::test]

@@ -469,7 +469,12 @@ function PairingDialog({
       description={sentences.pairingDetail}
       size="lg"
       className="linked-pairing-dialog"
-      onReturnFocus={onReturnFocus}
+      onCloseAutoFocus={(event) => {
+        // Pointer activation in WebKit can leave focus on an unrelated control.
+        // This dialog returns to the pairing row even when that control survives.
+        event.preventDefault()
+        onReturnFocus()
+      }}
     >
       {shown ? (
         <div className="linked-pairing" data-linked-pairing data-state={shown.state}>

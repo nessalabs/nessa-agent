@@ -9,6 +9,7 @@
  */
 import { chromium, webkit } from "playwright"
 
+import { enforcePolicy } from "./app-policy.mjs"
 import { CannotRun, log } from "./cli.mjs"
 import { attachLines, reportDetached, reporterBound, watchLines } from "./page-lines.mjs"
 import { harmlessConsole, css, storage } from "./selectors.mjs"
@@ -110,6 +111,8 @@ export async function waitUntilSettled(page, timeout = 30_000) {
  * @param {Record<string,string>} [o.prefs] extra localStorage entries
  * @param {Array<Function|[Function, unknown]>} [o.initScripts] extra init scripts
  * @param {boolean} [o.resourceReads] observe factories to browser cutoff; retain Requests through final reporting
+ * @param {string} [o.contentPolicy] served as every document's content policy
+ *        (`lib/app-policy.mjs`), as the packaged app's webview applies its own
  * @param {(page: import("playwright").Page, context: import("playwright").BrowserContext) => Promise<void>} [o.preparePage]
  *        Runs after the page exists and before navigation, so a CDP session
  *        can disable the cache or enable performance metrics for that load.
@@ -137,6 +140,7 @@ export async function openPage(browser, o) {
   let page
   let resource
   try {
+    if (o.contentPolicy) await enforcePolicy(context, o.contentPolicy)
     await context.addInitScript(seed, [prefs, o.mac !== false, css.surface])
     for (const script of o.initScripts ?? []) {
       if (Array.isArray(script)) await context.addInitScript(script[0], script[1])

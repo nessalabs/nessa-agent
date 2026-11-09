@@ -31,6 +31,11 @@ test("packaged desktop content policy permits required local capabilities", () =
     "img-src": ["'self'", "asset:", "http://asset.localhost", "blob:", "data:", "https:"],
     "connect-src": [
       "'self'",
+      // The window reads a pasted image's or attached file's bytes back from
+      // its object URL to upload them (desktop/dependencies.ts, `imageBytes`).
+      // 'self' does not match blob: URLs, so without it every attachment
+      // fails as unreadable before anything reaches the gateway.
+      "blob:",
       "ipc:",
       "http://ipc.localhost",
       "ws://127.0.0.1:7420",

@@ -300,6 +300,45 @@ export function artifactReadRange(
   return bytes
 }
 
+const utf8 = new TextEncoder()
+const uploadedFileNamePattern = new RegExp(bounds.uploadedFileNamePattern, "u")
+
+/** `UploadedFileAttachment.name`: something, within its byte bound, of characters the schema takes. */
+export function validUploadedFileName(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    /\P{White_Space}/u.test(value) &&
+    utf8.encode(value).byteLength <= bounds.maxUploadedFileNameBytes &&
+    uploadedFileNamePattern.test(value)
+  )
+}
+
+/**
+ * A file's name made into one an upload may carry: each character the schema
+ * refuses (a path separator, control text) becomes `_`, it is cut to the
+ * byte bound, and `fallback` stands in when nothing is left. Derived from the
+ * same rule {@link validUploadedFileName} checks, so the two cannot drift.
+ */
+export function uploadedFileName(name: string, fallback: string): string {
+  let cleaned = [...name]
+    .map((character) => (uploadedFileNamePattern.test(character) ? character : "_"))
+    .join("")
+    .trim()
+  while (utf8.encode(cleaned).byteLength > bounds.maxUploadedFileNameBytes)
+    cleaned = [...cleaned].slice(0, -1).join("").trimEnd()
+  return validUploadedFileName(cleaned) ? cleaned : fallback
+}
+
+/**
+ * The media type a file is uploaded as: what the system said it is,
+ * lowercase and without parameters, or `application/octet-stream` when that
+ * is not one the upload contract takes (a kind nobody registered has none).
+ */
+export function uploadMediaType(type: string): string {
+  const bare = type.split(";")[0].trim().toLowerCase()
+  return validMediaType(bare) ? bare : "application/octet-stream"
+}
+
 /** Stored non-image inputs use the upload contract plus the published name rule. */
 export function uploadedFilesProblem(value: unknown): string | undefined {
   if (!Array.isArray(value) || value.length > bounds.maxMessageFiles)
@@ -322,13 +361,7 @@ export function uploadedFilesProblem(value: unknown): string | undefined {
       size: file.size,
     })
     if (problem) return problem
-    if (
-      typeof file.name !== "string" ||
-      !/\P{White_Space}/u.test(file.name) ||
-      new TextEncoder().encode(file.name).byteLength > bounds.maxUploadedFileNameBytes ||
-      !new RegExp(bounds.uploadedFileNamePattern, "u").test(file.name)
-    )
-      return "invalid uploaded filename"
+    if (!validUploadedFileName(file.name)) return "invalid uploaded filename"
     total += file.size
   }
   return total > bounds.maxUploadBytes
