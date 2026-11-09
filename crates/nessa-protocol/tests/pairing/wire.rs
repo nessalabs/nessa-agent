@@ -201,6 +201,46 @@ fn gateway_choice_is_required_and_device_wire_stays_unchanged() {
 }
 
 #[test]
+fn a_present_same_person_choice_cannot_be_null_for_any_class_or_codec_entry() {
+    for class in ConsentClass::ALL {
+        let base = public();
+        let intent = PublicIntent::new(
+            base.invitation(),
+            base.attempt(),
+            base.consent(),
+            base.generation(),
+            base.expiry_ms(),
+            class,
+        )
+        .unwrap();
+        for (request, bytes) in [
+            (
+                true,
+                encode_request(&NativePairingRequest::Status(intent)).unwrap(),
+            ),
+            (false, encode_hello(intent).unwrap()),
+        ] {
+            let mut value: Value = serde_json::from_slice(&bytes).unwrap();
+            value["public"]["samePerson"] = Value::Null;
+            let bytes = serde_json::to_vec(&value).unwrap();
+            if request {
+                assert_eq!(
+                    decode_request(&bytes).unwrap_err(),
+                    NativeWireError::Invalid,
+                    "{class:?} request"
+                );
+            } else {
+                assert_eq!(
+                    decode_reply(&bytes).unwrap_err(),
+                    NativeWireError::Invalid,
+                    "{class:?} reply"
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn current_enrollment_messages_preserve_their_representation() {
     for request in [
         NativePairingRequest::Hello(public().attempt()),

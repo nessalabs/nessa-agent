@@ -18,9 +18,21 @@ pub(super) struct WirePublic<'a> {
     generation: u64,
     expiry_ms: u64,
     class: Cow<'a, str>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "present_choice"
+    )]
     same_person: Option<bool>,
 }
+// Absence is represented by the field default. A present choice is a bool;
+// JSON null must not acquire the meaning of an omitted non-peer field.
+fn present_choice<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<bool>, D::Error> {
+    bool::deserialize(deserializer).map(Some)
+}
+
 impl WirePublic<'_> {
     pub(super) fn from_domain(public: PublicIntent) -> WirePublic<'static> {
         WirePublic {

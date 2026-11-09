@@ -78,18 +78,7 @@ impl PersonLinkChange {
         if revocation.is_some() && revoked.is_none() {
             return Err(PairingError::Conflict);
         }
-        if let Some((terminal, initiator)) = record.terminal() {
-            if !matches!(
-                terminal,
-                TerminalCause::Cancelled | TerminalCause::CredentialRevoked
-            ) {
-                return Err(PairingError::Conflict);
-            }
-            let revoked = revoked.ok_or(PairingError::Conflict)?;
-            if &PairingInitiator::from_credential(revoked.initiator()) != initiator {
-                return Err(PairingError::WrongActor);
-            }
-        }
+        record.verify_terminal_revocation(revocation)?;
         // The fixed expiry and retained revocation time preserve which boundary
         // ended this credential first, including a retry after the other event.
         let expired_first = credential.expires_at().is_some_and(|expiry| {

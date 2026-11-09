@@ -1032,3 +1032,66 @@ async fn expiry_before_the_first_link_consumes_the_choice_without_replay() {
     assert_eq!(link_count(&later_path), 1);
     fixture.gateway.shutdown().await;
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn custom_terminal_evidence_is_correlated_before_any_link_or_audit_effect() {
+    use nessa_auth::application::pairing::{PairingLinkSource, PersonLinkError};
+    use nessa_auth::domain::pairing::{PairingEvent, PairingInitiator, TerminalCause};
+    use nessa_server::conversation::infrastructure::LocalPersonLinks;
+    let fixture = Fixture::new().await;
+    let (_metadata, _) = grant_store(&fixture);
+    for (name, seed) in [("first", 53), ("second", 54)] {
+        let (id, key) = claim(&fixture, name, true, seed).await;
+        fixture
+            .gateway
+            .approve(&fixture.session, id, key, OsEntropy)
+            .await
+            .unwrap();
+    }
+    let mut facts = Vec::new();
+    fixture
+        .registry
+        .with_current_links(&mut |current| {
+            facts = current.to_vec();
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(facts.len(), 2);
+    assert_ne!(facts[0].credential.id(), facts[1].credential.id());
+    let invalid = &mut facts[1];
+    let revoked_at = invalid.credential.issued_at() + 1;
+    let owner = invalid.record.intent().owner().clone();
+    let revocation = invalid
+        .credential
+        .revoke(
+            revoked_at,
+            nessa_auth::domain::Initiator::Principal(owner.clone()),
+        )
+        .unwrap()
+        .unwrap();
+    invalid.record = invalid
+        .record
+        .transition(
+            PairingEvent::end(TerminalCause::Cancelled),
+            PairingInitiator::Principal(owner),
+            (revoked_at + 1) * 1000,
+        )
+        .unwrap()
+        .after()
+        .clone();
+    invalid.revocation = Some(
+        nessa_auth::application::revocation::CredentialRevocation::restore(
+            nessa_auth::application::dto::CredentialTransitionDto::record(&revocation, 1, 1, None),
+            &invalid.credential,
+        )
+        .unwrap(),
+    );
+    let source = Arc::new(FiniteSource(facts));
+    let root = private_root(fixture.directory.path(), "contradictory-terminal");
+    let path = root.join("grants.sqlite3");
+    let links = LocalPersonLinks::open(&path, source.clone(), fixture.time.clone()).unwrap();
+    assert_eq!(links.reconcile(&source.0), Err(PersonLinkError::Conflict));
+    assert_eq!(link_count(&path), 0);
+    assert_eq!(audit_count(&path), 0);
+    fixture.gateway.shutdown().await;
+}

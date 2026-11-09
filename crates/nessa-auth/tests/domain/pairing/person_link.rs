@@ -4,7 +4,7 @@ use nessa_auth::domain::{
     OrganizationId, PrincipalId, Resource, ResourceId,
 };
 
-fn active(choice: bool) -> (PairingRecord, Credential) {
+fn enrolled(choice: bool, published: bool) -> (PairingRecord, Credential) {
     let owner = PrincipalId::new("owner").unwrap();
     let intent = ConsentIntent::new(
         ConsentIntentId::new([2; 16]),
@@ -62,7 +62,10 @@ fn active(choice: bool) -> (PairingRecord, Credential) {
             PairingEvent::activate(1),
             PairingInitiator::Principal(owner.clone()),
         ),
-    ] {
+    ]
+    .into_iter()
+    .take(if published { 6 } else { 5 })
+    {
         record = record
             .transition(event, actor, 1001)
             .unwrap()
@@ -80,6 +83,10 @@ fn active(choice: bool) -> (PairingRecord, Credential) {
     )
     .unwrap();
     (record, credential)
+}
+
+fn active(choice: bool) -> (PairingRecord, Credential) {
+    enrolled(choice, true)
 }
 
 #[test]
@@ -162,6 +169,20 @@ fn enrollment_revoke_keeps_its_owner_and_does_not_relabel_the_credential() {
     assert_eq!(
         change.initiator(),
         &PersonLinkInitiator::Principal(PrincipalId::new("owner").unwrap())
+    );
+    let (id, request) = record.stage_binding().unwrap();
+    let (receiver, epoch) = record.receiver_binding().unwrap();
+    let cleaned = record
+        .transition(
+            PairingEvent::cleanup(id.clone(), request, receiver.clone(), epoch + 1),
+            PairingInitiator::System,
+            9000,
+        )
+        .unwrap();
+    assert_eq!(cleaned.verify_cancellation_revocation(None), Ok(()));
+    assert_eq!(
+        PersonLinkChange::from_record(cleaned.after(), &credential, Some(&revocation), 9).unwrap(),
+        Some(change)
     );
 }
 
@@ -285,4 +306,119 @@ fn a_retry_after_expiry_and_revoke_keeps_the_first_boundary_and_initiator() {
             assert_eq!(change.initiator(), &PersonLinkInitiator::Expiry);
         }
     }
+}
+
+fn superseded(
+    transition: &nessa_auth::domain::CredentialTransition,
+) -> nessa_auth::domain::CredentialTransition {
+    nessa_auth::domain::CredentialTransition::new(
+        transition.credential_id().clone(),
+        transition.before().copied(),
+        *transition.after(),
+        nessa_auth::domain::TransitionCause::Revoked(
+            nessa_auth::domain::RevocationCause::Superseded {
+                by: CredentialId::new("replacement").unwrap(),
+                kind: nessa_auth::domain::Supersession::Provision,
+            },
+        ),
+        transition.initiator().clone(),
+        transition.at(),
+    )
+    .unwrap()
+}
+
+#[test]
+fn person_link_terminal_evidence_rejects_a_cancellation_with_another_revocation_time_or_cause() {
+    let (record, mut credential) = active(true);
+    let owner = PairingInitiator::Principal(PrincipalId::new("owner").unwrap());
+    let revocation = credential
+        .revoke(2, Initiator::Principal(PrincipalId::new("owner").unwrap()))
+        .unwrap()
+        .unwrap();
+    for (at, revocation) in [(3000, revocation.clone()), (2000, superseded(&revocation))] {
+        let cancellation = record
+            .transition(
+                PairingEvent::end(TerminalCause::Cancelled),
+                owner.clone(),
+                at,
+            )
+            .unwrap();
+        assert_eq!(
+            cancellation.verify_cancellation_revocation(Some(&revocation)),
+            Err(PairingError::Conflict)
+        );
+        assert_eq!(
+            PersonLinkChange::from_record(cancellation.after(), &credential, Some(&revocation), 3),
+            Err(PairingError::Conflict)
+        );
+    }
+}
+
+#[test]
+fn person_link_terminal_evidence_rejects_replacing_the_original_revocation() {
+    let (record, original) = active(true);
+    let mut credential = original.clone();
+    let revocation = credential
+        .revoke(2, Initiator::Principal(PrincipalId::new("owner").unwrap()))
+        .unwrap()
+        .unwrap();
+    let terminal = record
+        .transition(
+            PairingEvent::credential_revoked(revocation.clone()),
+            PairingInitiator::Principal(PrincipalId::new("owner").unwrap()),
+            record
+                .canonical_revocation_lower_bound_ms(&revocation)
+                .unwrap(),
+        )
+        .unwrap();
+    assert_eq!(
+        PersonLinkChange::from_record(terminal.after(), &credential, Some(&revocation), 3)
+            .unwrap()
+            .unwrap()
+            .cause(),
+        PersonLinkCause::CredentialRevoked
+    );
+    assert_eq!(
+        PersonLinkChange::from_record(
+            terminal.after(),
+            &credential,
+            Some(&superseded(&revocation)),
+            3
+        ),
+        Err(PairingError::Conflict)
+    );
+    let mut later = original;
+    let later_revocation = later
+        .revoke(3, Initiator::Principal(PrincipalId::new("owner").unwrap()))
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        PersonLinkChange::from_record(terminal.after(), &later, Some(&later_revocation), 3),
+        Err(PairingError::Conflict)
+    );
+}
+
+#[test]
+fn person_link_terminal_evidence_rejects_an_unpublished_reserved_credential() {
+    let (record, mut credential) = enrolled(true, false);
+    assert_eq!(record.phase(), PairingPhase::Staging);
+    let revocation = credential
+        .revoke(2, Initiator::Principal(PrincipalId::new("owner").unwrap()))
+        .unwrap()
+        .unwrap();
+    let cancelled = record
+        .transition(
+            PairingEvent::end(TerminalCause::Cancelled),
+            PairingInitiator::Principal(PrincipalId::new("owner").unwrap()),
+            2000,
+        )
+        .unwrap();
+    assert_eq!(
+        cancelled.verify_cancellation_revocation(Some(&revocation)),
+        Ok(())
+    );
+    assert_eq!(
+        PersonLinkChange::from_record(cancelled.after(), &credential, Some(&revocation), 2),
+        Err(PairingError::Conflict)
+    );
 }

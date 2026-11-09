@@ -380,6 +380,14 @@ revocation keeps its original initiator after the clock passes the expiry.
 The two orderings are covered by
 `a_retry_after_expiry_and_revoke_keeps_the_first_boundary_and_initiator`.
 
+Attribution consumes the original terminal decision together with its credential
+revocation. An Active cancellation must match the canonical Explicit revocation,
+actor and whole-second command time; an independent credential-revocation event
+must match that exact original transition. A cancelled pre-publication reservation
+cannot supply a published credential. The domain record retains this evidence
+from the same history replay used by the registry; custom effect sources use the
+same validator rather than reconstructing a second decision.
+
 The terminal receipt also consumes a choice whose initial link never committed:
 expiry can be observed while the Active-to-link write is still owed. The
 ordering is tested by
