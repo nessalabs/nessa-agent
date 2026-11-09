@@ -147,7 +147,7 @@ export function scriptedLaunch(
  * `scenario`, it runs that file. With `evidence`, the run's logs are written
  * there. With `others`, agents besides `options.agent`, each is configured
  * as the scripted agent too, speaking its own profile, so a conversation can
- * be switched to it. `limits`, `native` and `webhooks` are the gateway config's sections (`startLocalGateway`); `environment` is more of the gateway's environment, and `servers` more stored MCP servers beside `mcptest`. `options.mode` `prod` previews a production build; the default is a
+ * be switched to it. `executable` selects an explicit test-only gateway wrapper. `limits`, `native` and `webhooks` are the gateway config's sections (`startLocalGateway`); `environment` is more of the gateway's environment, and `servers` more stored MCP servers beside `mcptest`. `options.mode` `prod` previews a production build; the default is a
  * dev server. Resolves with `{ url, mode, close, client, gateway, timings,
  * token }`: `url` the desktop page, `token()` the owner token, `close()`
  * stops all three. A gateway that does not start is "could not run", with
@@ -157,6 +157,7 @@ export async function startGatewayStack(
   options,
   instance,
   {
+    executable,
     vault = false,
     initializeVault = true,
     as = "owner",
@@ -215,6 +216,7 @@ export async function startGatewayStack(
   const gateway = await startLocalGateway({
     stage,
     agent,
+    executable,
     port: await freePort(),
     instance,
     agentArgv: command.argv,

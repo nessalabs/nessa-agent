@@ -1,6 +1,10 @@
 //! Real conversation/store/provider orchestration with a controlled process port.
 use super::*;
 use crate::conversation::application::service::environment_tools::running_turn;
+#[cfg(unix)]
+use crate::conversation::application::{ThreadEnvironments, WorkspaceRest};
+#[cfg(unix)]
+use crate::conversation::infrastructure::FilePlacements;
 use crate::conversation::{
     application::{
         background_tasks::{
@@ -9,11 +13,11 @@ use crate::conversation::{
         },
         AgentToolAudit, AgentToolAuditRecord, ConversationFuture, Environment,
         EnvironmentDeclaration, EnvironmentFuture, EnvironmentLease, Environments,
-        ThreadEnvironments, WorkspaceRest,
     },
     domain::{BackgroundCommand, BackgroundTaskId, TaskCause, TaskDelivery, TaskOutcome, TaskStop},
-    infrastructure::{in_process_environment, FilePlacements, LocalBackgroundTasks},
+    infrastructure::{in_process_environment, LocalBackgroundTasks},
 };
+#[cfg(unix)]
 use nessa_auth::application::ports::Clock;
 use nessa_sdk::{
     application::agent_execution::{executions::ExecutionUpdate, providers::AgentProvider},
@@ -23,8 +27,10 @@ use nessa_sdk::{
         tools::{McpTool, ToolCallId, ToolCallInput, ToolCallUpdate, ToolStatus},
     },
 };
+#[cfg(unix)]
+use std::sync::atomic::AtomicU64;
 use std::sync::{
-    atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
+    atomic::{AtomicBool, AtomicUsize, Ordering},
     Arc, Mutex as StdMutex,
 };
 use tokio::sync::{watch, Notify};
@@ -972,8 +978,10 @@ impl Environment for FakeVmEnvironment {
         Box::pin(async { Some(LeaseCleanup::NotHeld) })
     }
 }
+#[cfg(unix)]
 #[derive(Default)]
 struct FakeVmWorkspaces(AtomicUsize);
+#[cfg(unix)]
 impl ThreadEnvironments for FakeVmWorkspaces {
     fn environment(&self, _: &ConversationId) -> Result<Arc<dyn Environment>, ConversationError> {
         Ok(Arc::new(FakeVmEnvironment(
@@ -989,14 +997,17 @@ impl ThreadEnvironments for FakeVmWorkspaces {
         Box::pin(async { true })
     }
 }
+#[cfg(unix)]
 #[derive(Default)]
 struct VmClock(AtomicU64);
+#[cfg(unix)]
 impl Clock for VmClock {
     fn unix_milliseconds(&self) -> u64 {
         self.0.load(Ordering::SeqCst)
     }
 }
 
+#[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn vm_background_stress_holds_past_idle_then_rests_and_restart_does_not_replay() {
     let repetitions = std::env::var("NESSA_VM_BACKGROUND_STRESS_REPEATS").map_or(3, |count| {

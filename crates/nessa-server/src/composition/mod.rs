@@ -119,3 +119,7 @@ pub(crate) use root::cleanup_product;
 mod vault;
 
 mod vault_session;
+
+#[cfg(all(test, unix))]
+#[path = "../../tests/composition/vm_background_gateway.rs"]
+mod vm_background_gateway;

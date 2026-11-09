@@ -55,10 +55,15 @@ impl BackgroundRunner for WorkspaceBackgroundTasks {
             let timeout = Duration::from_secs(command.timeout_seconds() + 15);
             let stream = match self
                 .workspaces
-                .background(conversation, &workspace, &command)
+                .background(conversation, &workspace, &command, &stop)
                 .await
             {
-                Ok(stream) => stream,
+                Ok(Some(stream)) => stream,
+                Ok(None) => {
+                    let mut outcome = TaskOutcome::not_started();
+                    outcome.cause = TaskCause::Cancelled;
+                    return outcome;
+                }
                 Err(error) => {
                     tracing::warn!(%error, "background SSH session could not be opened");
                     return interrupted();

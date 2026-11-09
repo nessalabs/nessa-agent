@@ -316,6 +316,12 @@ impl HostInstaller {
         }
     }
 
+    #[cfg(all(test, unix))]
+    pub(crate) fn with_build_source(mut self, build: Arc<dyn BuildSource>) -> Self {
+        self.build = build;
+        self
+    }
+
     /// With `releases` for hosts this build does not run on.
     pub(crate) fn with_releases(mut self, releases: Vec<ReleaseCopy>) -> Self {
         self.releases = releases;

@@ -8,7 +8,7 @@ use crate::{
         ChannelStore, ConversationError, Environment, EnvironmentFuture, ThreadEnvironments,
         WorkspaceRest, MAX_RETAINED_ENVIRONMENTS,
     },
-    conversation::domain::BackgroundCommand,
+    conversation::domain::{BackgroundCommand, TaskStop},
     env::LEASE_PROTOCOL,
     workspaces::application::{
         RestCause, ServedCopy, WorkspaceRuntime, WorkspaceStream, Workspaces,
@@ -22,6 +22,7 @@ use std::{
     sync::{Arc, Mutex},
     time::Duration,
 };
+use tokio::sync::watch::Receiver;
 
 /// The longest wait between two asks to let a resting thread's connection
 /// go: 1 + 2 + 4 + 8 + 16 seconds in all.
@@ -366,7 +367,8 @@ impl ThreadWorkspaces {
         conversation: ConversationId,
         workspace: &str,
         command: &BackgroundCommand,
-    ) -> std::io::Result<WorkspaceStream> {
+        stop: &Receiver<Option<TaskStop>>,
+    ) -> std::io::Result<Option<WorkspaceStream>> {
         let runtime = open_workspace(
             self.service.as_ref(),
             self.channels.as_ref(),
@@ -375,22 +377,45 @@ impl ThreadWorkspaces {
         )
         .await
         .map_err(|_| std::io::Error::other("workspace unavailable"))?;
-        let host = SshDestination::new(format!("boat-{conversation}"))
-            .map_err(|_| std::io::Error::other("invalid workspace identity"))?;
-        self.installer
-            .ensure_on(
-                &VmShell(runtime.as_ref()),
-                &host,
-                &conversation.to_string(),
-                self.audit.as_ref(),
-            )
-            .await
-            .map_err(|_| std::io::Error::other("background build unavailable"))?;
-        let program = self
-            .installer
-            .background_command(workspace, command)
-            .await
-            .map_err(|_| std::io::Error::other("background command unavailable"))?;
-        runtime.background(program).await
+        background_on(
+            self.installer.as_ref(),
+            self.audit.as_ref(),
+            runtime.as_ref(),
+            &conversation,
+            workspace,
+            command,
+            stop,
+        )
+        .await
     }
+}
+
+async fn background_on(
+    installer: &HostInstaller,
+    audit: &dyn EnvironmentAudit,
+    runtime: &dyn WorkspaceRuntime,
+    conversation: &ConversationId,
+    workspace: &str,
+    command: &BackgroundCommand,
+    stop: &Receiver<Option<TaskStop>>,
+) -> std::io::Result<Option<WorkspaceStream>> {
+    if stop.borrow().is_some() {
+        return Ok(None);
+    }
+    let host = SshDestination::new(format!("boat-{conversation}"))
+        .map_err(|_| std::io::Error::other("invalid workspace identity"))?;
+    installer
+        .ensure_on(&VmShell(runtime), &host, &conversation.to_string(), audit)
+        .await
+        .map_err(|_| std::io::Error::other("background build unavailable"))?;
+    let program = installer
+        .background_command(workspace, command)
+        .await
+        .map_err(|_| std::io::Error::other("background command unavailable"))?;
+    // Preparation may outlast the cancellation request. Keep its owner
+    // until it returns, but never launch a command for a stopped task.
+    if stop.borrow().is_some() {
+        return Ok(None);
+    }
+    runtime.background(program).await.map(Some)
 }
