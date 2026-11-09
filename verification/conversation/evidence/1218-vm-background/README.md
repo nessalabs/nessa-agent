@@ -256,3 +256,19 @@ paid resources or real credentials were used. TLA+ and diagram rendering were
 not rerun: the diagram's states are unchanged; preparation-stop ordering is now
 explicit in prose and the ordering table. The reviewed state page advances its
 sourceRevision to the exact code checkpoint, preserving its historical modelCheck.
+
+
+### Windows CI import correction
+
+CI run [42657520316](https://github.com/nessalabs/nessa-agent/actions/runs/42657520316)
+on `ff2471f3616dad5d3a89341777c70f19c2893aeb` passed frontend, gateway-contract
+and release-profile desktop compilation, but Windows clippy rejected unused
+`running_turn` and `Environments` imports in the VM stress fixture. The source
+correction `8fb90870e6cb63fe7a6f5ad982301fd46883b1bc` guards those imports with Unix, matching their sole caller.
+Warnings remain denied. Independent review checked all remaining imports and
+found no further mismatch.
+
+[The correction receipt](followup/windows-imports.json) verifies that this is the
+only source file changed since the qualified checkpoint; its test bodies and all
+production source are byte-identical. The runtime/browser evidence above carries
+forward. Windows confirmation requires the new exact-head CI run.

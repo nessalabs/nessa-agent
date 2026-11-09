@@ -48,3 +48,14 @@ Code checkpoint: `0b93e7c525e1c4720913493772d1006bab2b5225`. [Exact commands, lo
 The gateway installs its exact helper build even when an older VM image speaks the same lease protocol. Terminal output is delivered with the final record. Unconfirmed cleanup retains existing ownership and can keep the VM from resting; automatic reconciliation is unchanged. Command timeout measures execution; there is no overall preparation deadline.
 
 The browser runs selected the VM step, not the full conversation plan. Sidebar, real Boat/SSH and OS-level SSH teardown, native macOS/Windows and minimum-Rust checks were not run locally. WebKit used workspace-owned runtime libraries; its system-ldconfig host check was skipped, while browser launch and all assertions ran. No paid resources or real credentials were used. Exact-head CI remains pending; this PR stays draft.
+
+
+## CI follow-up
+
+CI on `ff2471f3616dad5d3a89341777c70f19c2893aeb` passed frontend,
+gateway-contract and release-profile desktop compilation. Windows clippy found
+two unused imports in the Unix VM stress fixture. Source correction `8fb90870e6cb63fe7a6f5ad982301fd46883b1bc`
+guards those imports; warnings remain denied. Independent review confirmed the
+guards and checked the remaining imports. This changes no production source or
+test bodies relative to the verified checkpoint. New exact-head Windows and
+full-plan CI confirmation remain required.

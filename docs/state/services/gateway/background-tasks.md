@@ -6,7 +6,7 @@ status: implemented
 summary: A local or cloud command can outlive its calling agent turn and resume that
   conversation with its outcome.
 parent: gateway
-sourceRevision: "0b93e7c525e1c4720913493772d1006bab2b5225"
+sourceRevision: "8fb90870e6cb63fe7a6f5ad982301fd46883b1bc"
 sources:
   - crates/nessa-server/src/conversation/application/service/background_tasks.rs
   - crates/nessa-server/src/conversation/domain/background_task/lifecycle.rs
