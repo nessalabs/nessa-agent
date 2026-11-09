@@ -40,16 +40,18 @@ export const settingsCategories = [
   {
     id: "connections",
     label: "Connections",
+    // MCP servers first: Accounts reads the vault, so opening Connections on
+    // it would ask for the passphrase before the person chose a page.
     tabs: [
-      {
-        id: "accounts",
-        label: "Accounts",
-        keywords: "sign in github login voice openai",
-      },
       {
         id: "integrations",
         label: "MCP servers",
         keywords: "mcp servers tools integrations",
+      },
+      {
+        id: "accounts",
+        label: "Accounts",
+        keywords: "sign in github login voice openai",
       },
       {
         id: "devices",

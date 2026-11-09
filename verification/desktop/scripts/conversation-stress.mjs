@@ -3585,7 +3585,8 @@ const steps = {
         ? page.screenshot({ path: join(run.evidence, `mcp-${what}.png`) }).catch(() => {})
         : undefined
     await run.exclusive(async () => {
-      await openMcpServers(page)
+      if ((await openMcpServers(page)).prompted)
+        failures.push("opening Connections asked for the passphrase")
       await shot("list")
       // Added from the window, off for new conversations so no agent starts it.
       await page.getByRole("button", { name: names.mcp.add, exact: true }).click()
@@ -7913,12 +7914,19 @@ async function reopened(run, conversationId) {
   return { ms, view, reads }
 }
 
-/** Opens Settings › Connections › MCP servers, as a person does, and waits for its list. */
+/**
+ * Opens Settings › Connections › MCP servers, as a person does, and waits
+ * for its list. Connections opens on MCP servers, which needs no vault: a
+ * passphrase prompt there (a locked vault) is a failure the caller reports.
+ */
 async function openMcpServers(page) {
   if (!(await page.$(css.settings))) await page.keyboard.press(keys.settings)
   await page.locator(css.settingsCategory, { hasText: names.connections }).click()
-  await page.locator(css.settingsTab, { hasText: names.integrations }).click()
   await page.waitForSelector(selectorFor.mcpServersIn("listed"), { timeout: 10_000 })
+  const prompted = await page.locator('[data-vault-dialog="unlock"]').isVisible()
+  const tab = page.locator(css.settingsTab, { hasText: names.integrations })
+  if ((await tab.getAttribute("aria-selected")) !== "true") await tab.click()
+  return { prompted }
 }
 
 /** Chooses `item` from the ⋯ menu of the MCP server row named `name`. */

@@ -97,8 +97,9 @@ describe("the settings catalogue", () => {
       "about",
     ])
     expect(tabsOf("connections").map((tab) => tab.id)).toEqual([
-      "accounts",
+      // Accounts reads the vault: Connections does not open on it.
       "integrations",
+      "accounts",
       "devices",
     ])
     expect(tabsOf("privacy").map((tab) => tab.id)).toEqual(["access", "native-hooks"])
@@ -165,7 +166,7 @@ describe("searchSettings", () => {
   it("finds a category by its label, on its first tab", () => {
     expect(searchSettings("connections")[0]).toMatchObject({
       category: "connections",
-      tab: "accounts",
+      tab: "integrations",
       label: "Connections",
     })
   })
