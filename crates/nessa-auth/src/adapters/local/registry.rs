@@ -1806,6 +1806,8 @@ fn validate_registry(
     let mut reserved = HashSet::new();
     let mut original_requests = HashSet::new();
     for (stored, record) in registry.pairings.iter().zip(&pairings) {
+        pairing::owner_principal(registry, record.intent())
+            .map_err(|_| CredentialRegistryFault::InvalidState(RegistryInvariant::PrincipalKind))?;
         if let Some(request) = stored.owner_phone_request().map_err(|_| {
             CredentialRegistryFault::InvalidState(RegistryInvariant::CredentialBinding)
         })? {

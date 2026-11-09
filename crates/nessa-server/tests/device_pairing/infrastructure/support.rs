@@ -483,6 +483,14 @@ impl FaultyStore {
     }
 }
 impl PairingStore for FaultyStore {
+    fn validate_same_person_owner(
+        &self,
+        intent: &nessa_auth::domain::pairing::ConsentIntent,
+    ) -> Result<(), PairingStoreError> {
+        self.read()?;
+        self.inner.validate_same_person_owner(intent)
+    }
+
     fn publish_first_gateway_key(
         &self,
         keys: &dyn GatewayKeyStore,

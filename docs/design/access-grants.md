@@ -380,6 +380,16 @@ revocation keeps its original initiator after the clock passes the expiry.
 The two orderings are covered by
 `a_retry_after_expiry_and_revoke_keeps_the_first_boundary_and_initiator`.
 
+The person is the authoritative Human principal that owns the invitation, not
+an administrator role or a surface identifier. A true choice requires the
+credential authority's principal record to match that owner and identify a Human.
+An admin Integration surface with no published acts-for mapping cannot select
+this choice; refusal leaves its invitation and credential state unchanged. A
+false choice keeps ordinary pairing. Surface provisioning's issuance journal is
+not itself an acts-for contract, and no namespace/admin inference substitutes
+for a person fact. The same domain validator checks that fact before registration,
+again at the canonical invitation commit, and with the effect's credential cut.
+
 Attribution consumes the original terminal decision together with its credential
 revocation. An Active cancellation must match the canonical Explicit revocation,
 actor and whole-second command time; an independent credential-revocation event

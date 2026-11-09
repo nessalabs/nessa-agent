@@ -28,6 +28,18 @@ use crate::{
 };
 use std::sync::Arc;
 impl PairingStore for LocalCredentialStore {
+    fn validate_same_person_owner(
+        &self,
+        intent: &crate::domain::pairing::ConsentIntent,
+    ) -> Result<(), PairingStoreError> {
+        let slot = self
+            .registry()
+            .map_err(|_| PairingStoreError::Unavailable)?;
+        super::owner_principal(slot.as_ref().ok_or(PairingStoreError::Unavailable)?, intent)
+            .map(|_| ())
+            .map_err(PairingStoreError::Domain)
+    }
+
     fn publish_first_gateway_key(
         &self,
         keys: &dyn GatewayKeyStore,
@@ -198,6 +210,7 @@ impl PairingStore for LocalCredentialStore {
             {
                 return Err(PairingStoreError::Domain(PairingError::Invalid));
             }
+            super::owner_principal(current, record.intent()).map_err(PairingStoreError::Domain)?;
             self.config
                 .validate_pairing_count(
                     current

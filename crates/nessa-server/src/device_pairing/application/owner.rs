@@ -89,6 +89,11 @@ impl PairingOwner<'_> {
             .execute(session, &intent, self.gateway)
             .await
             .map_err(OwnerError::Authorization)?;
+        if intent.same_person() {
+            self.enrollments
+                .validate_same_person_owner(&intent)
+                .map_err(OwnerError::Enrollment)?;
+        }
         // Admitted: settle past-due records so they release the slot and the
         // live limit before the collection check below.
         for record in self

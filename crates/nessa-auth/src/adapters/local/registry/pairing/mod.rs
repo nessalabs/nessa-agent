@@ -13,3 +13,4 @@ pub(super) use projection::StoredPairing;
 mod tests;
 
 mod person_links;
+pub(super) use person_links::owner_principal;

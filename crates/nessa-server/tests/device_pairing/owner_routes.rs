@@ -854,3 +854,80 @@ async fn set_tunnel_reaches_the_port_checked_and_the_saved_tunnel_reads_without_
         assert_eq!(refused, code);
     }
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn same_person_choice_requires_an_authoritative_human_not_an_admin_surface() {
+    let fixture = Fixture::new().await;
+    let IssueCredentialOutcome::Issued { evidence, .. } = fixture
+        .registry
+        .provision_surface(
+            "pairing-admin",
+            "pairing-admin-request".into(),
+            "pairing-admin-credential".into(),
+            vec!["credential.manage".into(), "conversation.read".into()],
+            100,
+            None,
+        )
+        .unwrap()
+    else {
+        panic!("a fresh admin surface is issued")
+    };
+    assert_eq!(
+        fixture
+            .registry
+            .principal_kind("surface:pairing-admin")
+            .unwrap(),
+        Some(nessa_auth::domain::PrincipalKind::Integration)
+    );
+    let token = String::from_utf8(evidence.expose_bytes().to_vec()).unwrap();
+    let address = serve(&fixture, true).await;
+    blocking(|| {
+        let mut surface = ProductClient::connect(address, &token);
+        let plain = surface.ok("pairing.create", json!({"enrollee":"gateway"}));
+        let id = invitation(&plain["status"]);
+        assert!(!fixture
+            .registry
+            .read_pairing(InvitationId::new(
+                serde_json::from_value(id.clone()).unwrap()
+            ))
+            .unwrap()
+            .intent()
+            .same_person());
+        surface.ok("pairing.cancel", json!({"invitationId":id}));
+    });
+    let before = fixture.registry.pending_pairings().unwrap();
+    let revision = fixture.registry.identity().unwrap().revision;
+    blocking(|| {
+        let mut surface = ProductClient::connect(address, &token);
+        assert_eq!(
+            surface.refused(
+                "pairing.create",
+                json!({"enrollee":"gateway","samePerson":true})
+            ),
+            "pairing_ineligible"
+        );
+    });
+    assert_eq!(fixture.registry.pending_pairings().unwrap(), before);
+    assert_eq!(fixture.registry.identity().unwrap().revision, revision);
+    blocking(|| {
+        let human = ProductClient::connect(address, &fixture.owner_token).ok(
+            "pairing.create",
+            json!({"enrollee":"gateway","samePerson":true}),
+        );
+        let record = fixture
+            .registry
+            .read_pairing(InvitationId::new(
+                serde_json::from_value(invitation(&human["status"])).unwrap(),
+            ))
+            .unwrap();
+        assert!(record.intent().same_person());
+        assert_eq!(
+            fixture
+                .registry
+                .principal_kind(record.intent().owner().as_str())
+                .unwrap(),
+            Some(nessa_auth::domain::PrincipalKind::Human)
+        );
+    });
+    fixture.gateway.shutdown().await;
+}

@@ -2,7 +2,7 @@
 //! ports coordinate its grant-store effect; they do not decide access policy.
 use crate::{
     application::revocation::CredentialRevocation,
-    domain::{pairing::PairingRecord, Credential},
+    domain::{pairing::PairingRecord, Credential, Principal},
 };
 
 /// Coherent retained evidence supplied by the credential authority. Consumers
@@ -11,6 +11,8 @@ use crate::{
 pub struct PairingLinkEvidence {
     /// The immutable invitation and its current canonical phase.
     pub record: PairingRecord,
+    /// Existing authoritative identity of the invitation owner, including kind.
+    pub owner: Principal,
     /// Current metadata for exactly that invitation's credential.
     pub credential: Credential,
     /// Original revocation, when present; the retry is not a new initiator.

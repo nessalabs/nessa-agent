@@ -1060,6 +1060,16 @@ async fn custom_terminal_evidence_is_correlated_before_any_link_or_audit_effect(
         .unwrap();
     assert_eq!(facts.len(), 2);
     assert_ne!(facts[0].credential.id(), facts[1].credential.id());
+    let mut wrong_person = facts.clone();
+    wrong_person[1].owner = nessa_auth::domain::Principal::new(
+        wrong_person[1].record.intent().owner().clone(),
+        nessa_auth::domain::PrincipalKind::Integration,
+    );
+    let mut wrong_identity = facts.clone();
+    wrong_identity[1].owner = nessa_auth::domain::Principal::new(
+        nessa_auth::domain::PrincipalId::new("another-human").unwrap(),
+        nessa_auth::domain::PrincipalKind::Human,
+    );
     let invalid = &mut facts[1];
     let revoked_at = invalid.credential.issued_at() + 1;
     let owner = invalid.record.intent().owner().clone();
@@ -1092,6 +1102,14 @@ async fn custom_terminal_evidence_is_correlated_before_any_link_or_audit_effect(
     let root = private_root(fixture.directory.path(), "contradictory-terminal");
     let path = root.join("grants.sqlite3");
     let links = LocalPersonLinks::open(&path, source.clone(), fixture.time.clone()).unwrap();
+    for contradictory in [&wrong_person, &wrong_identity] {
+        assert_eq!(
+            links.reconcile(contradictory),
+            Err(PersonLinkError::Conflict)
+        );
+        assert_eq!(link_count(&path), 0);
+        assert_eq!(audit_count(&path), 0);
+    }
     assert_eq!(links.reconcile(&source.0), Err(PersonLinkError::Conflict));
     assert_eq!(link_count(&path), 0);
     assert_eq!(audit_count(&path), 0);

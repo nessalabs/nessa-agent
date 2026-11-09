@@ -1,7 +1,8 @@
 use super::wire_values::{DEVICE_KEY_BYTES, IDENTITY_BYTES};
 use crate::domain::{
     models::{CONVERSATION_READ, ENVIRONMENT_SERVE},
-    Action, AudienceId, Grant, Initiator, MembershipId, OrganizationId, PrincipalId, Resource,
+    Action, AudienceId, Grant, Initiator, MembershipId, OrganizationId, Principal, PrincipalId,
+    PrincipalKind, Resource,
 };
 use std::{error::Error, fmt};
 
@@ -263,6 +264,25 @@ impl ConsentIntent {
     /// Immutable invitation choice; this conveys no capability.
     pub fn same_person(&self) -> bool {
         self.same_person
+    }
+
+    /// Validate an existing authoritative principal fact for attribution.
+    /// Classification is descriptive, not a grant: management still asks Cedar.
+    pub fn validate_same_person_owner(
+        &self,
+        owner: Option<&Principal>,
+    ) -> Result<(), PairingError> {
+        if !self.same_person {
+            return Ok(());
+        }
+        let owner = owner.ok_or(PairingError::Conflict)?;
+        if owner.id() != &self.owner {
+            return Err(PairingError::Conflict);
+        }
+        if owner.kind() != PrincipalKind::Human {
+            return Err(PairingError::Invalid);
+        }
+        Ok(())
     }
 
     /// Who this consent enrolls; fixed when the owner created it.

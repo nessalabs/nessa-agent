@@ -2,7 +2,8 @@
 use super::{InvitationId, PairingError, PairingInitiator};
 use crate::domain::{
     pairing::{PairingPhase, PairingRecord, TerminalCause},
-    Credential, CredentialId, CredentialTransition, OrganizationId, PrincipalId, TransitionCause,
+    Credential, CredentialId, CredentialTransition, OrganizationId, Principal, PrincipalId,
+    TransitionCause,
 };
 
 /// Original cause of an attribution insert or removal.
@@ -44,6 +45,7 @@ impl PersonLinkChange {
     /// A pending invitation cannot yield an association.
     pub fn from_record(
         record: &PairingRecord,
+        owner: &Principal,
         credential: &Credential,
         revocation: Option<&CredentialTransition>,
         now_seconds: u64,
@@ -51,6 +53,7 @@ impl PersonLinkChange {
         if !record.intent().same_person() {
             return Ok(None);
         }
+        record.intent().validate_same_person_owner(Some(owner))?;
         if !record.intent().class().is_peer()
             || record.credential() != Some(credential.id())
             || record.credential_principal().as_ref() != Some(credential.principal_id())
@@ -112,7 +115,7 @@ impl PersonLinkChange {
         Ok(Some(Self {
             organization: credential.organization_id().clone(),
             gateway: credential.principal_id().clone(),
-            person: record.intent().owner().clone(),
+            person: owner.id().clone(),
             credential: credential.id().clone(),
             invitation: record.id(),
             cause,

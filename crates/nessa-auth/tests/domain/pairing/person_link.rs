@@ -85,6 +85,19 @@ fn enrolled(choice: bool, published: bool) -> (PairingRecord, Credential) {
     (record, credential)
 }
 
+fn linked_change(
+    record: &PairingRecord,
+    credential: &Credential,
+    revocation: Option<&nessa_auth::domain::CredentialTransition>,
+    now: u64,
+) -> Result<Option<PersonLinkChange>, PairingError> {
+    let owner = nessa_auth::domain::Principal::new(
+        record.intent().owner().clone(),
+        nessa_auth::domain::PrincipalKind::Human,
+    );
+    PersonLinkChange::from_record(record, &owner, credential, revocation, now)
+}
+
 fn active(choice: bool) -> (PairingRecord, Credential) {
     enrolled(choice, true)
 }
@@ -96,7 +109,7 @@ fn choice_changes_attribution_without_changing_principal_class_or_grants() {
     assert_eq!(linked.intent().class(), plain.intent().class());
     assert_eq!(credential.principal_id(), plain_credential.principal_id());
     assert_eq!(credential.grants(), plain_credential.grants());
-    let change = PersonLinkChange::from_record(&linked, &credential, None, 1)
+    let change = linked_change(&linked, &credential, None, 1)
         .unwrap()
         .unwrap();
     assert!(change.links());
@@ -107,7 +120,7 @@ fn choice_changes_attribution_without_changing_principal_class_or_grants() {
         .unwrap()
         .same_person());
     assert_eq!(
-        PersonLinkChange::from_record(&plain, &plain_credential, None, 1).unwrap(),
+        linked_change(&plain, &plain_credential, None, 1).unwrap(),
         None
     );
 }
@@ -115,11 +128,11 @@ fn choice_changes_attribution_without_changing_principal_class_or_grants() {
 #[test]
 fn exclusive_expiry_and_revocation_remove_only_the_original_credential_link() {
     let (record, mut credential) = active(true);
-    assert!(PersonLinkChange::from_record(&record, &credential, None, 9)
+    assert!(linked_change(&record, &credential, None, 9)
         .unwrap()
         .unwrap()
         .links());
-    let expired = PersonLinkChange::from_record(&record, &credential, None, 10)
+    let expired = linked_change(&record, &credential, None, 10)
         .unwrap()
         .unwrap();
     assert!(!expired.links());
@@ -130,10 +143,10 @@ fn exclusive_expiry_and_revocation_remove_only_the_original_credential_link() {
         .unwrap()
         .unwrap();
     assert_eq!(
-        PersonLinkChange::from_record(&record, &credential, None, 3),
+        linked_change(&record, &credential, None, 3),
         Err(PairingError::Conflict)
     );
-    let revoked = PersonLinkChange::from_record(&record, &credential, Some(&revocation), 3)
+    let revoked = linked_change(&record, &credential, Some(&revocation), 3)
         .unwrap()
         .unwrap();
     assert_eq!(revoked.cause(), PersonLinkCause::CredentialRevoked);
@@ -160,7 +173,7 @@ fn enrollment_revoke_keeps_its_owner_and_does_not_relabel_the_credential() {
         .unwrap()
         .after()
         .clone();
-    let change = PersonLinkChange::from_record(&record, &credential, Some(&revocation), 2)
+    let change = linked_change(&record, &credential, Some(&revocation), 2)
         .unwrap()
         .unwrap();
     assert!(!change.links());
@@ -181,7 +194,7 @@ fn enrollment_revoke_keeps_its_owner_and_does_not_relabel_the_credential() {
         .unwrap();
     assert_eq!(cleaned.verify_cancellation_revocation(None), Ok(()));
     assert_eq!(
-        PersonLinkChange::from_record(cleaned.after(), &credential, Some(&revocation), 9).unwrap(),
+        linked_change(cleaned.after(), &credential, Some(&revocation), 9).unwrap(),
         Some(change)
     );
 }
@@ -235,7 +248,7 @@ fn unrelated_credential_or_principal_cannot_supply_a_link() {
         )
         .unwrap();
         assert_eq!(
-            PersonLinkChange::from_record(&record, &mismatched, None, 2),
+            linked_change(&record, &mismatched, None, 2),
             Err(PairingError::Conflict)
         );
     }
@@ -250,7 +263,7 @@ fn unrelated_credential_or_principal_cannot_supply_a_link() {
     )
     .unwrap();
     assert_eq!(
-        PersonLinkChange::from_record(&record, &no_grants, None, 2),
+        linked_change(&record, &no_grants, None, 2),
         Err(PairingError::Conflict)
     );
 }
@@ -292,7 +305,7 @@ fn a_retry_after_expiry_and_revoke_keeps_the_first_boundary_and_initiator() {
             )
             .unwrap()
             .unwrap();
-        let change = PersonLinkChange::from_record(&record, &credential, Some(&revocation), 12)
+        let change = linked_change(&record, &credential, Some(&revocation), 12)
             .unwrap()
             .unwrap();
         if revoked_at < 10 {
@@ -348,7 +361,7 @@ fn person_link_terminal_evidence_rejects_a_cancellation_with_another_revocation_
             Err(PairingError::Conflict)
         );
         assert_eq!(
-            PersonLinkChange::from_record(cancellation.after(), &credential, Some(&revocation), 3),
+            linked_change(cancellation.after(), &credential, Some(&revocation), 3),
             Err(PairingError::Conflict)
         );
     }
@@ -372,14 +385,14 @@ fn person_link_terminal_evidence_rejects_replacing_the_original_revocation() {
         )
         .unwrap();
     assert_eq!(
-        PersonLinkChange::from_record(terminal.after(), &credential, Some(&revocation), 3)
+        linked_change(terminal.after(), &credential, Some(&revocation), 3)
             .unwrap()
             .unwrap()
             .cause(),
         PersonLinkCause::CredentialRevoked
     );
     assert_eq!(
-        PersonLinkChange::from_record(
+        linked_change(
             terminal.after(),
             &credential,
             Some(&superseded(&revocation)),
@@ -393,7 +406,7 @@ fn person_link_terminal_evidence_rejects_replacing_the_original_revocation() {
         .unwrap()
         .unwrap();
     assert_eq!(
-        PersonLinkChange::from_record(terminal.after(), &later, Some(&later_revocation), 3),
+        linked_change(terminal.after(), &later, Some(&later_revocation), 3),
         Err(PairingError::Conflict)
     );
 }
@@ -418,7 +431,47 @@ fn person_link_terminal_evidence_rejects_an_unpublished_reserved_credential() {
         Ok(())
     );
     assert_eq!(
-        PersonLinkChange::from_record(cancelled.after(), &credential, Some(&revocation), 2),
+        linked_change(cancelled.after(), &credential, Some(&revocation), 2),
         Err(PairingError::Conflict)
+    );
+}
+
+#[test]
+fn same_person_requires_the_exact_authoritative_human_and_false_choice_needs_no_person() {
+    use nessa_auth::domain::{Principal, PrincipalKind};
+    let (record, credential) = active(true);
+    assert_eq!(
+        record.intent().validate_same_person_owner(None),
+        Err(PairingError::Conflict)
+    );
+    for kind in [
+        PrincipalKind::Integration,
+        PrincipalKind::Agent,
+        PrincipalKind::Gateway,
+    ] {
+        let owner = Principal::new(record.intent().owner().clone(), kind);
+        assert_eq!(
+            PersonLinkChange::from_record(&record, &owner, &credential, None, 2),
+            Err(PairingError::Invalid)
+        );
+    }
+    let other = Principal::new(
+        PrincipalId::new("another-person").unwrap(),
+        PrincipalKind::Human,
+    );
+    assert_eq!(
+        PersonLinkChange::from_record(&record, &other, &credential, None, 2),
+        Err(PairingError::Conflict)
+    );
+    assert!(linked_change(&record, &credential, None, 2)
+        .unwrap()
+        .unwrap()
+        .links());
+    let (plain, credential) = active(false);
+    assert_eq!(plain.intent().validate_same_person_owner(None), Ok(()));
+    let surface = Principal::new(plain.intent().owner().clone(), PrincipalKind::Integration);
+    assert_eq!(
+        PersonLinkChange::from_record(&plain, &surface, &credential, None, 2),
+        Ok(None)
     );
 }

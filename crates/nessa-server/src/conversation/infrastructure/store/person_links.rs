@@ -111,6 +111,7 @@ impl PairingPersonLinks for LocalPersonLinks {
                 }
                 PersonLinkChange::from_record(
                     &fact.record,
+                    &fact.owner,
                     &fact.credential,
                     fact.revocation.as_ref().map(|r| r.transition()),
                     observed / 1000,

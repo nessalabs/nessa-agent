@@ -1,13 +1,40 @@
 //! Bridge the registry's one serialized history to the grant owner's effect.
 use super::super::{
-    domain_credential, revocation_of, LocalCredentialStore, LocalStoreError, Registry,
+    domain_credential, principal_kind, revocation_of, LocalCredentialStore, LocalStoreError,
+    Registry,
 };
 use crate::application::{
     pairing::{PairingLinkEvidence, PairingLinkSource, PairingPersonLinks, PersonLinkError},
     revocation::CredentialRevocation,
 };
-use crate::domain::pairing::PairingRecord;
+use crate::domain::{
+    pairing::{ConsentIntent, PairingError, PairingRecord},
+    Principal, PrincipalId,
+};
 use std::sync::Arc;
+
+pub(in crate::adapters::local::registry) fn owner_principal(
+    registry: &Registry,
+    intent: &ConsentIntent,
+) -> Result<Option<Principal>, PairingError> {
+    let owner = if intent.same_person() {
+        registry
+            .principals
+            .iter()
+            .find(|principal| principal.id == intent.owner().as_str())
+            .map(|principal| {
+                Ok(Principal::new(
+                    PrincipalId::new(&principal.id).map_err(|_| PairingError::Invalid)?,
+                    principal_kind(principal).map_err(|_| PairingError::Invalid)?,
+                ))
+            })
+            .transpose()?
+    } else {
+        None
+    };
+    intent.validate_same_person_owner(owner.as_ref())?;
+    Ok(owner)
+}
 
 pub(super) fn evidence(registry: &Registry) -> Result<Vec<PairingLinkEvidence>, PersonLinkError> {
     let mut facts = Vec::new();
@@ -35,8 +62,12 @@ pub(super) fn evidence(registry: &Registry) -> Result<Vec<PairingLinkEvidence>, 
             .map(|record| CredentialRevocation::restore(record, &credential))
             .transpose()
             .map_err(|_| PersonLinkError::Conflict)?;
+        let owner = owner_principal(registry, record.intent())
+            .map_err(|_| PersonLinkError::Conflict)?
+            .ok_or(PersonLinkError::Conflict)?;
         facts.push(PairingLinkEvidence {
             record,
+            owner,
             credential,
             revocation,
         });
