@@ -422,6 +422,7 @@ export function Segmented<T extends string>({
         <SegmentedControlOption
           key={option.id}
           value={option.id}
+          data-value={option.id}
           disabled={!available || option.disabled === true}
         >
           {option.label}

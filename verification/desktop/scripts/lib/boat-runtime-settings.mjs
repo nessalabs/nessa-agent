@@ -43,7 +43,7 @@ export async function channelRuntimeSettings(run, channel, failures) {
     // seals the app lease; answer that independent request through the UI.
     await unlockRequestedVault(client, page)
     const global = page.locator(css.boatRuntimeSettings)
-    await global.locator("select").selectOption("14400")
+    await global.locator('[data-value="14400"]').click()
     const defaultSaved = await waitFor(
       async () =>
         (await client.boat.runtimeSettings()).defaultLifetime.seconds === 14_400,
@@ -52,8 +52,8 @@ export async function channelRuntimeSettings(run, channel, failures) {
     if (!defaultSaved)
       failures.push("the global VM lifetime was not saved through settings")
     receipts.default = await client.boat.runtimeSettings()
-    // A choice saves as it is made; the select is live again once it lands.
-    await waitFor(() => global.locator("select").isEnabled(), 10_000)
+    // A choice saves as it is made; the choices are live again once it lands.
+    await waitFor(() => global.locator('[data-value="never"]').isEnabled(), 10_000)
     if (run.evidence)
       await page.screenshot({
         path: join(run.evidence, `boat-default-${channel.channelId}.png`),
@@ -87,11 +87,43 @@ export async function channelRuntimeSettings(run, channel, failures) {
     await gear.click()
     const dialog = page.locator(css.channelSettingsDialog)
     const control = dialog.locator(css.boatRuntimeSettings)
-    const select = control.locator("select")
-    await waitFor(async () => (await select.inputValue()) === "default", 10_000)
-    if ((await select.inputValue()) !== "default")
+    await control.waitFor({ timeout: 10_000 })
+    // Every control fits inside the dialog, and no setting's name is
+    // squeezed onto a line per word beside its control (UI audit #1).
+    const fit = await dialog.evaluate((box) => {
+      const edge = box.getBoundingClientRect()
+      const spilled = [...box.querySelectorAll("button, select, input")]
+        .filter((each) => {
+          const rect = each.getBoundingClientRect()
+          return (
+            rect.width > 0 &&
+            (rect.right > edge.right + 0.5 || rect.left < edge.left - 0.5)
+          )
+        })
+        .map((each) => each.textContent?.trim() || each.getAttribute("aria-label"))
+      const squeezed = [...box.querySelectorAll('[data-slot="settings-row-label"]')]
+        .filter((label) => {
+          const lines =
+            label.getBoundingClientRect().height /
+            parseFloat(getComputedStyle(label).lineHeight)
+          return lines > 1.5
+        })
+        .map((label) => label.textContent)
+      return { spilled, squeezed, selects: box.querySelectorAll("select").length }
+    })
+    if (fit.spilled.length > 0)
+      failures.push(
+        `channel settings controls run past the dialog: ${fit.spilled.join(", ")}`,
+      )
+    if (fit.squeezed.length > 0)
+      failures.push(`channel settings names wrap: ${fit.squeezed.join(", ")}`)
+    if (fit.selects > 0) failures.push("channel settings still use a native select")
+    const chosen = () => control.getAttribute("data-selection")
+    const choose = (value) => control.locator(`[data-value="${value}"]`).click()
+    await waitFor(async () => (await chosen()) === "default", 10_000)
+    if ((await chosen()) !== "default")
       failures.push("a new channel did not inherit the VM lifetime default")
-    await select.selectOption("never")
+    await choose("never")
     if (
       !(await waitFor(
         async () =>
@@ -101,7 +133,7 @@ export async function channelRuntimeSettings(run, channel, failures) {
       ))
     )
       failures.push("the channel's explicit unlimited lifetime was not saved")
-    await waitFor(() => select.isEnabled(), 10_000)
+    await waitFor(() => control.locator('[data-value="default"]').isEnabled(), 10_000)
     receipts.override = await client.boat.runtimeSettings({
       channelId: channel.channelId,
     })
@@ -111,7 +143,7 @@ export async function channelRuntimeSettings(run, channel, failures) {
       await page.screenshot({
         path: join(run.evidence, `boat-channel-${channel.channelId}.png`),
       })
-    await select.selectOption("default")
+    await choose("default")
     if (
       !(await waitFor(
         async () =>
@@ -220,7 +252,10 @@ export async function channelPlacementSettings(run, channel, failures) {
   // offered, disabled, the move is asked of the gateway directly, as another
   // window would, and the dialog is checked once the window reads it again.
   await control.waitFor({ timeout: 10_000 })
-  const boatOffered = (await option("threads", "Boat").count()) > 0
+  // Boat is always named; it can be chosen only once connected.
+  const boatOffered =
+    (await option("threads", "Boat").count()) > 0 &&
+    !(await option("threads", "Boat").isDisabled())
   const toBoat = async (row, current) => {
     if (!boatOffered) {
       await client.channels.setPlacement({
@@ -259,7 +294,7 @@ export async function channelPlacementSettings(run, channel, failures) {
       failures.push("the channel settings do not show where its main agent runs")
     receipts.boatOffered = boatOffered
     if (!boatOffered) {
-      const waiting = option("threads", "Boat (not connected)")
+      const waiting = option("threads", "Boat")
       if ((await waiting.count()) === 0 || !(await waiting.isDisabled()))
         failures.push("Boat is not shown as unavailable while it is not connected")
     }
