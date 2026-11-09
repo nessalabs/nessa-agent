@@ -317,7 +317,7 @@ pub(super) async fn product_state(
                 relay_socket: super::mcp_servers::relay_socket(namespace, unsafe {
                     libc::geteuid()
                 }),
-                relay_program: child_program().map_err(setup_error)?,
+                relay_program: std::env::current_exe().map_err(setup_error)?,
                 claude_sign_ins: claude_sign_ins.clone(),
             }),
             Arc::new(FileAssignments(namespace.join("boat-workspaces"))),
