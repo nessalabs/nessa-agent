@@ -23,8 +23,6 @@ describe("peekOf", () => {
     expect(peek.since[0].parts).toEqual([step("a"), text("Here.")])
     expect(peek.since[0].id).toBe(drawn.id)
     expect(peek.since[1]).toBe(plain)
-    expect(peek.earlier).toBe(false)
-    expect(peekOf(conversation(asked, drawn, plain), 2).earlier).toBe(true)
   })
 
   it("draws no message of widgets alone, so a turn of only widgets draws nothing", () => {
@@ -63,7 +61,6 @@ describe("peekOf", () => {
     const peek = peekOf(conversation(first, earlier, asked, steps, words))
     expect(peek.asked).toBe(asked)
     expect(peek.since).toEqual([steps, words])
-    expect(peek.earlier).toBe(false)
   })
 
   it("draws the latest parts of a long turn and says there is more above, the oldest drawn cut to its latest parts", () => {
@@ -75,7 +72,6 @@ describe("peekOf", () => {
     const latest = message("agent", 4, ...parts(30, 10))
     const peek = peekOf(conversation(asked, early, middle, latest), 24)
     expect(peek.asked).toBe(asked)
-    expect(peek.earlier).toBe(true)
     expect(peek.since).toHaveLength(2)
     // The latest message as it is; the one before it cut to its last 14 parts, under its own id.
     expect(peek.since[1]).toBe(latest)
@@ -91,7 +87,6 @@ describe("peekOf", () => {
       24,
     )
     expect(peek.since[0].parts).toEqual(many.slice(-24))
-    expect(peek.earlier).toBe(true)
   })
 
   it("draws a turn that fits whole, and says nothing is above", () => {
@@ -99,7 +94,6 @@ describe("peekOf", () => {
     const peek = peekOf(conversation(message("user", 1, text("Go.")), whole), 24)
     expect(peek.since).toEqual([whole])
     expect(peek.since[0]).toBe(whole)
-    expect(peek.earlier).toBe(false)
   })
 
   it("bounds the conversation before the person has written, as a turn", () => {
@@ -109,7 +103,6 @@ describe("peekOf", () => {
     const peek = peekOf(conversation(...opening), 24)
     expect(peek.asked).toBeNull()
     expect(peek.since).toEqual(opening.slice(-24))
-    expect(peek.earlier).toBe(true)
   })
 
   it("tells the whole conversation before the person has written", () => {
@@ -117,7 +110,6 @@ describe("peekOf", () => {
     const peek = peekOf(conversation(opening))
     expect(peek.asked).toBeNull()
     expect(peek.since).toEqual([opening])
-    expect(peek.earlier).toBe(false)
   })
 
   it("ends on the person's message while the agent has not answered it", () => {

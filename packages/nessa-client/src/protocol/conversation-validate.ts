@@ -475,6 +475,7 @@ function transcriptTurns(item: Record<string, unknown>, targetsListed: boolean) 
     exact(message, [
       "executionId",
       "userText",
+      "retried",
       "attachments",
       "uploads",
       "files",
@@ -608,6 +609,9 @@ function transcriptTurns(item: Record<string, unknown>, targetsListed: boolean) 
       if (part.messageId !== undefined) identity(part, "messageId")
     }
     const userText = text(message, "userText", 65536)
+    // Present only on a turn the gateway sent again for the person, and then true.
+    if (message.retried !== undefined && message.retried !== true)
+      throw new Error("Conversation retried mark is not true")
     const status = text(message, "status")
     oneOf(status, [
       "queued",

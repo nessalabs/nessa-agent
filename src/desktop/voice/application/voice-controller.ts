@@ -14,6 +14,7 @@ import { tidy } from "../model/tidy"
 import {
   TransportRefused,
   VoiceStartRefused,
+  type VoiceFix,
   type AgentReply,
   type CallCheck,
   type RealtimeConnection,
@@ -52,8 +53,8 @@ export interface VoiceSnapshot {
   readonly notice: string | null
   /** V18: why an open call that has heard nothing may not hear the person. */
   readonly hint: string | null
-  /** A failed call that saving an OpenAI key would fix, so the notice offers it. */
-  readonly needsKey: boolean
+  /** What fixes a failed call in place (a key, or unlocking), so the notice offers it. */
+  readonly fix: VoiceFix | null
 }
 
 /** What `send_to_agent` and `stop_agent` answer the voice. */
@@ -76,7 +77,7 @@ const idle: VoiceSnapshot = {
   speakerOn: true,
   notice: null,
   hint: null,
-  needsKey: false,
+  fix: null,
 }
 
 /** V18: how long an open call waits for the person's voice before it looks why not. */
@@ -239,7 +240,7 @@ export class VoiceController {
           error instanceof VoiceStartRefused
             ? error.sentence
             : "Couldn’t start the call.",
-          error instanceof VoiceStartRefused && error.needsKey,
+          error instanceof VoiceStartRefused ? error.fix : null,
         )
       return
     }
@@ -400,7 +401,7 @@ export class VoiceController {
     call.connection = null
   }
 
-  private fail(notice: string, needsKey = false): void {
+  private fail(notice: string, fix: VoiceFix | null = null): void {
     const call = this.call
     if (call) this.release(call)
     this.call = null
@@ -408,7 +409,7 @@ export class VoiceController {
       ...idle,
       phase: "failed",
       notice,
-      needsKey,
+      fix,
       sessionId: call?.sessionId ?? null,
     })
   }

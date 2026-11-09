@@ -1697,6 +1697,7 @@ checks["overview-story"] = async ({ page, engine, options }) => {
       const summary = peek.querySelector(sel.peekSummary)
       return {
         summary: summary?.textContent ?? null,
+        nowLines: peek.querySelectorAll(".agents-peek-now > p").length,
         summaryLines: summary
           ? Math.round(
               summary.getBoundingClientRect().height /
@@ -1713,7 +1714,9 @@ checks["overview-story"] = async ({ page, engine, options }) => {
         ],
         room: peek.scrollHeight - peek.clientHeight,
         scrollTop: peek.scrollTop,
-        earlier: story.querySelector(sel.peekEarlier)?.textContent.trim() ?? null,
+        earlier: /Earlier in this turn/.test(story.textContent)
+          ? story.textContent
+          : null,
         steps: story.querySelectorAll(sel.transcriptStep).length,
         header: document.querySelector(sel.overviewHeader).getBoundingClientRect().top,
       }
@@ -1725,6 +1728,8 @@ checks["overview-story"] = async ({ page, engine, options }) => {
       `opened conversation darkened or disappeared: ${JSON.stringify(openedPaint)}`,
     )
   if (!before.summary) failures.push("no line of what is going on")
+  if (before.nowLines !== 1)
+    failures.push(`the peek says where it stands in ${before.nowLines} lines, not one`)
   if (before.summaryLines !== 1)
     failures.push(`the line runs to ${before.summaryLines} lines`)
   const kinds = before.order.map(([k]) => k)
@@ -1748,9 +1753,9 @@ checks["overview-story"] = async ({ page, engine, options }) => {
     failures.push(`the peek scrolled to ${after.scrollTop} of ${before.room}px`)
   if (Math.abs(after.header - before.header) > 0.5)
     failures.push("the list's header moved as the peek scrolled")
-  if (before.earlier !== "Earlier in this turn · Open")
+  if (before.earlier !== null)
     failures.push(
-      `a turn longer than the peek draws says ${JSON.stringify(before.earlier)}`,
+      `the story still says what is above it: ${JSON.stringify(before.earlier)}`,
     )
   if (before.steps > 24)
     failures.push(`the peek draws ${before.steps} steps, over its bound`)

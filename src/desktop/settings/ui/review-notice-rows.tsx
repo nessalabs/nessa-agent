@@ -57,6 +57,7 @@ export function ReviewNoticeRows() {
           access === "not-asked" ? (
             <button
               type="button"
+              className="settings-button"
               disabled={asking}
               onClick={() => {
                 if (latest.current?.source !== source || latest.current.kind === "ask")

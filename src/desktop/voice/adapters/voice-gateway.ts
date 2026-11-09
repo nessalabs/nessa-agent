@@ -11,7 +11,7 @@ import {
   type VoiceCall,
   type VoiceRefusalCode as VoiceRefusal,
 } from "@nessa/client"
-import { VoiceStartRefused, type VoiceGateway } from "../application/ports"
+import { VoiceStartRefused, type VoiceFix, type VoiceGateway } from "../application/ports"
 
 /** What the voice adapters ask of the window's gateway client. */
 export interface VoiceClient {
@@ -28,7 +28,7 @@ const refusals: Record<VoiceRefusal, string> = {
     "Couldn’t read or change the saved key. Try again.",
   [VoiceRefusalCode.VoiceAuditUnavailable]:
     "Couldn’t keep a record of this, so nothing changed. Try again.",
-  [VoiceRefusalCode.VaultLocked]: "Unlock Nessa to use voice.",
+  [VoiceRefusalCode.VaultLocked]: "Nessa is locked.",
   [VoiceRefusalCode.Forbidden]: "This window isn’t allowed to use voice.",
   [VoiceRefusalCode.Unauthorized]: "This window isn’t allowed to use voice.",
   [VoiceRefusalCode.InvalidRequest]: "The gateway didn’t understand the request.",
@@ -47,13 +47,18 @@ export function voiceRefusalSentence(error: unknown): string {
     : unanswered
 }
 
-/** Whether a refusal is fixed by saving an OpenAI key. */
-function needsKey(error: unknown): boolean {
-  return (
-    error instanceof NessaVoiceError &&
-    (error.refusal === VoiceRefusalCode.VoiceKeyMissing ||
-      error.refusal === VoiceRefusalCode.VoiceKeyRejected)
-  )
+/** What the person can do in place about a refusal, if anything. */
+function fixFor(error: unknown): VoiceFix | null {
+  if (!(error instanceof NessaVoiceError)) return null
+  switch (error.refusal) {
+    case VoiceRefusalCode.VoiceKeyMissing:
+    case VoiceRefusalCode.VoiceKeyRejected:
+      return "key"
+    case VoiceRefusalCode.VaultLocked:
+      return "unlock"
+    default:
+      return null
+  }
 }
 
 /** The gateway side of a call, over the window's client. */
@@ -63,7 +68,7 @@ export function voiceGateway(connected: () => Promise<VoiceClient>): VoiceGatewa
       try {
         return await (await connected()).voice.startCall(conversationId)
       } catch (error) {
-        throw new VoiceStartRefused(voiceRefusalSentence(error), needsKey(error))
+        throw new VoiceStartRefused(voiceRefusalSentence(error), fixFor(error))
       }
     },
   }

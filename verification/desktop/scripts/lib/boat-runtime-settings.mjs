@@ -42,6 +42,54 @@ export async function channelRuntimeSettings(run, channel, failures) {
     // Accounts also reads protected GitHub status. A prior listener restart
     // seals the app lease; answer that independent request through the UI.
     await unlockRequestedVault(client, page)
+    // Settings' sidebar is the app's flat sidebar, not a floating card.
+    const sidebar = await page.locator(".settings-glass").evaluate((glass) => {
+      const style = getComputedStyle(glass)
+      const box = glass.getBoundingClientRect()
+      return {
+        left: box.left,
+        top: box.top,
+        radius: style.borderTopLeftRadius,
+        shadow: style.boxShadow,
+      }
+    })
+    if (
+      sidebar.left !== 0 ||
+      sidebar.top !== 0 ||
+      sidebar.radius !== "0px" ||
+      sidebar.shadow !== "none"
+    )
+      failures.push(`Settings' sidebar is a card: ${JSON.stringify(sidebar)}`)
+    // Each account is one row: a word of state and one button. The token is
+    // pasted in a dialog, never in a field in the list; Auto-stop is its own
+    // row beside Boat's.
+    const boat = page.locator('[data-setting="boat"]')
+    if ((await boat.locator("input, select").count()) !== 0)
+      failures.push("the Boat row shows a field instead of one button")
+    if (!/Not connected|Connected|Locked/.test(await boat.innerText()))
+      failures.push(`the Boat row says ${JSON.stringify(await boat.innerText())}`)
+    if ((await boat.locator(css.boatRuntimeSettings).count()) !== 0)
+      failures.push("Auto-stop is inside the Boat row, not a row of its own")
+    const connect = boat.locator('[data-boat-action="connect"]')
+    if (await connect.count()) {
+      await connect.click()
+      const dialog = page.locator("[data-boat-dialog]")
+      const asked = await dialog
+        .locator('input[type="password"]')
+        .waitFor({ timeout: 5_000 })
+        .then(
+          () => true,
+          () => false,
+        )
+      if (!asked) failures.push("Connect… on the Boat row opens no token field")
+      const font = await dialog
+        .locator('input[type="password"]')
+        .evaluate((input) => getComputedStyle(input).fontFamily)
+        .catch(() => "")
+      if (/mono/i.test(font)) failures.push(`the Boat token field is in ${font}`)
+      await page.keyboard.press("Escape")
+      await dialog.waitFor({ state: "hidden", timeout: 5_000 })
+    }
     const global = page.locator(css.boatRuntimeSettings)
     await global.locator('[data-value="14400"]').click()
     const defaultSaved = await waitFor(

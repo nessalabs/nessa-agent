@@ -6,6 +6,7 @@
 import { useCallback, useEffect } from "react"
 import { StatusLabel } from "@nessa-ui/react/status-label"
 import { VoiceKeyButton } from "../../settings/ui/voice-key-row"
+import { useVaultUnlock } from "../../../vault"
 import type { VoiceSnapshot } from "../application/voice-controller"
 import { useVoiceController, useVoiceSnapshot } from "./voice-context"
 import { VoiceOrb } from "./voice-orb"
@@ -37,6 +38,7 @@ export function VoiceDock({ sessionId }: { sessionId: string }) {
   const snapshot = useVoiceSnapshot()
   // The pane holds the call while it shows this conversation.
   useEffect(() => controller?.show(sessionId), [controller, sessionId])
+  const unlock = useVaultUnlock()
   const levels = useCallback(
     () => controller?.levels() ?? { input: 0, output: 0 },
     [controller],
@@ -49,7 +51,21 @@ export function VoiceDock({ sessionId }: { sessionId: string }) {
         <StatusLabel role="status" tone="warning" className="voice-notice">
           {snapshot.notice}
         </StatusLabel>
-        {snapshot.needsKey ? (
+        {snapshot.fix === "unlock" ? (
+          <button
+            type="button"
+            className="voice-notice-dismiss"
+            data-voice-fix="unlock"
+            onClick={() => {
+              void unlock().then((open) => {
+                // Unlocked, the call starts as the person first asked.
+                if (open) void controller.start(sessionId)
+              })
+            }}
+          >
+            Unlock
+          </button>
+        ) : snapshot.fix === "key" ? (
           <VoiceKeyButton
             className="voice-notice-dismiss"
             onSaved={() => controller.dismiss()}
