@@ -214,7 +214,7 @@ async fn native_startup_history_without_key_refuses_before_bind() {
         // A first start publishes the key; an invitation is enrollment history.
         assert!(namespace.key_file().exists());
         let created = commands
-            .create(&session, ConsentClass::DeviceRead)
+            .create(&session, ConsentClass::DeviceRead, false)
             .await
             .unwrap();
         // The peer commands hold the same key store, so they go too.
@@ -275,7 +275,7 @@ async fn native_bind_failure_preserves_key_and_history() {
     .await
     .unwrap();
     let created = commands
-        .create(&session, ConsentClass::DeviceRead)
+        .create(&session, ConsentClass::DeviceRead, false)
         .await
         .unwrap();
     let key = std::fs::read(namespace.key_file()).unwrap();
@@ -349,7 +349,9 @@ async fn native_shutdown_joins_a_held_peer() {
     assert!(matches!(peer.read(&mut byte), Ok(0) | Err(_)));
     // The runtime's create admission is closed by the join.
     assert!(matches!(
-        commands.create(&session, ConsentClass::DeviceRead).await,
+        commands
+            .create(&session, ConsentClass::DeviceRead, false)
+            .await,
         Err(PairingRuntimeError::ShuttingDown)
     ));
     assert!(

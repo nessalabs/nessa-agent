@@ -18,6 +18,8 @@ pub(super) struct WirePublic<'a> {
     generation: u64,
     expiry_ms: u64,
     class: Cow<'a, str>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    same_person: Option<bool>,
 }
 impl WirePublic<'_> {
     pub(super) fn from_domain(public: PublicIntent) -> WirePublic<'static> {
@@ -28,10 +30,16 @@ impl WirePublic<'_> {
             generation: public.generation(),
             expiry_ms: public.expiry_ms(),
             class: Cow::Borrowed(public.class().as_str()),
+            same_person: public.class().is_peer().then_some(public.same_person()),
         }
     }
     pub(super) fn into_domain(self) -> Result<PublicIntent, NativeWireError> {
         let class = ConsentClass::parse(&self.class).ok_or(NativeWireError::Invalid)?;
+        let choice = match (class.is_peer(), self.same_person) {
+            (true, Some(choice)) => choice,
+            (false, None) => false,
+            _ => return Err(NativeWireError::Invalid),
+        };
         PublicIntent::new(
             InvitationId::new(self.invitation),
             AttemptId::new(self.attempt),
@@ -40,6 +48,7 @@ impl WirePublic<'_> {
             self.expiry_ms,
             class,
         )
+        .and_then(|public| public.with_same_person(choice))
         .map_err(NativeWireError::Correlation)
     }
 }

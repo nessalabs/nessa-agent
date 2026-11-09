@@ -24,6 +24,8 @@ impl ShareGrants for Scripted {
         self.0.lock().unwrap().push(receiver_id.to_owned());
         let held = |role| {
             Ok(Some(HeldGrant {
+                principal_id: nessa_auth::domain::PrincipalId::new("test-reader").unwrap(),
+                person: None,
                 capabilities: role,
                 policy_revision: 9,
             }))

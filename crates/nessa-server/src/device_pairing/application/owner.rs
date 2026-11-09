@@ -71,6 +71,7 @@ impl PairingOwner<'_> {
         id: InvitationId,
         consent: ConsentIntentId,
         class: ConsentClass,
+        same_person: bool,
     ) -> Result<PreparedInvitation, OwnerError> {
         let context = session.context();
         let intent = ConsentIntent::new(
@@ -82,6 +83,7 @@ impl PairingOwner<'_> {
             self.gateway.clone(),
             class,
         )
+        .and_then(|intent| intent.with_same_person(same_person))
         .map_err(OwnerError::Domain)?;
         self.authorization
             .execute(session, &intent, self.gateway)

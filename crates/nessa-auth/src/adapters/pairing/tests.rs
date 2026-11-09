@@ -124,18 +124,6 @@ fn native_mutual_key_proof_and_pake_confirm_the_same_channel() {
 #[cfg(unix)]
 #[test]
 fn a_relabelled_enrollment_class_does_not_complete_the_pake() {
-    let server_key =
-        NativeIdentity::restore(PrivateKeyMaterial::new(Zeroizing::new([10; 32]))).unwrap();
-    let client_key =
-        NativeIdentity::restore(PrivateKeyMaterial::new(Zeroizing::new([11; 32]))).unwrap();
-    let code = ManualCode::parse(b"ABCD2345").unwrap();
-    let invitation = ServerInvitation::register(
-        &mut Entropy,
-        &code,
-        public().invitation(),
-        server_key.public_spki(),
-    )
-    .unwrap();
     let relabelled = PublicIntent::new(
         public().invitation(),
         public().attempt(),
@@ -145,6 +133,43 @@ fn a_relabelled_enrollment_class_does_not_complete_the_pake() {
         ConsentClass::PeerRead,
     )
     .unwrap();
+    rejects_relabelled_public(public(), relabelled);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_same_person_choice_cannot_be_relabelled_in_either_direction() {
+    let peer = PublicIntent::new(
+        public().invitation(),
+        public().attempt(),
+        public().consent(),
+        public().generation(),
+        public().expiry_ms(),
+        ConsentClass::PeerRead,
+    )
+    .unwrap();
+    for original in [false, true] {
+        rejects_relabelled_public(
+            peer.with_same_person(original).unwrap(),
+            peer.with_same_person(!original).unwrap(),
+        );
+    }
+}
+
+#[cfg(unix)]
+fn rejects_relabelled_public(original: PublicIntent, relabelled: PublicIntent) {
+    let server_key =
+        NativeIdentity::restore(PrivateKeyMaterial::new(Zeroizing::new([10; 32]))).unwrap();
+    let client_key =
+        NativeIdentity::restore(PrivateKeyMaterial::new(Zeroizing::new([11; 32]))).unwrap();
+    let code = ManualCode::parse(b"ABCD2345").unwrap();
+    let invitation = ServerInvitation::register(
+        &mut Entropy,
+        &code,
+        original.invitation(),
+        server_key.public_spki(),
+    )
+    .unwrap();
     let (a, b) = streams();
     let (server_lengths, client_lengths) = message_lengths();
     let server = thread::spawn(move || {
@@ -152,7 +177,7 @@ fn a_relabelled_enrollment_class_does_not_complete_the_pake() {
             NativeTransport::accept(a, &server_key).unwrap(),
             server_lengths,
         );
-        let context = transport.pairing_context(public()).unwrap();
+        let context = transport.pairing_context(original).unwrap();
         let request = transport.read_message().unwrap();
         let (_attempt, response) = invitation.start(&mut Entropy, &request, context).unwrap();
         transport.write_message(&response).unwrap();
@@ -164,7 +189,7 @@ fn a_relabelled_enrollment_class_does_not_complete_the_pake() {
     let context = transport.pairing_context(relabelled).unwrap();
     assert_ne!(
         context.as_bytes(),
-        transport.pairing_context(public()).unwrap().as_bytes()
+        transport.pairing_context(original).unwrap().as_bytes()
     );
     let (attempt, request) = ClientAttempt::start(&mut Entropy, &code).unwrap();
     transport.write_message(&request).unwrap();

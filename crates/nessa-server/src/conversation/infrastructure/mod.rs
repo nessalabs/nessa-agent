@@ -148,8 +148,8 @@ pub use catalogue_read::NessaCatalogueReadSource;
 pub use record_read::{InvalidReadWorkBudget, NessaRecordReadSource};
 pub(crate) use record_read::{DISCOVERY_STEPS_PER_READ, READ_WORK_BUDGET};
 pub use store::{
-    ExportFacts, ExportFences, ExportSkip, LocalConversationStore, MetadataSnapshot, NamedRecord,
-    RevocationFact,
+    ConversationStoreOpenError, ExportFacts, ExportFences, ExportSkip, LocalConversationStore,
+    LocalPersonLinks, MetadataSnapshot, NamedRecord, RevocationFact,
 };
 
 mod catalogue_source;

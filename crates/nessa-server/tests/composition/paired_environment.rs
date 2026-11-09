@@ -255,7 +255,11 @@ impl Gateway {
     /// A machine pairs into a new invitation of `class`, which the owner
     /// approves: its key and the gateway's pin, and its credential.
     async fn pair(&self, root: &Path, class: ConsentClass) -> Machine {
-        let created = self.commands.create(&self.session, class).await.unwrap();
+        let created = self
+            .commands
+            .create(&self.session, class, false)
+            .await
+            .unwrap();
         nessa_local_storage::create_directory(root).unwrap();
         let root = root.canonicalize().unwrap();
         nessa_local_storage::create_directory_beneath(&root, Path::new("state")).unwrap();
@@ -779,7 +783,7 @@ async fn an_enrolled_environment_waits_for_approval_then_stays_dialed_in() {
     let a = Gateway::start(&directory.path().join("a")).await;
     let created = a
         .commands
-        .create(&a.session, ConsentClass::PeerEnvironment)
+        .create(&a.session, ConsentClass::PeerEnvironment, false)
         .await
         .unwrap();
     let environment = directory.path().join("e-environment");
@@ -922,7 +926,7 @@ async fn waiting_for_approval_ends_when_denied_or_never_paired() {
 
     let created = a
         .commands
-        .create(&a.session, ConsentClass::PeerEnvironment)
+        .create(&a.session, ConsentClass::PeerEnvironment, false)
         .await
         .unwrap();
     let denied = directory.path().join("denied");
@@ -1025,7 +1029,7 @@ async fn an_environment_with_only_a_relay_path_is_approved_and_serves_through_it
     let a = Gateway::start_relayed(&directory.path().join("a"), relay.clone()).await;
     let created = a
         .commands
-        .create(&a.session, ConsentClass::PeerEnvironment)
+        .create(&a.session, ConsentClass::PeerEnvironment, false)
         .await
         .unwrap();
     let environment = directory.path().join("e-environment");
@@ -2366,7 +2370,7 @@ async fn k2_a_code_file_enrolls_once_then_dials() {
     let a = Gateway::start(&directory.path().join("a")).await;
     let created = a
         .commands
-        .create(&a.session, ConsentClass::PeerEnvironment)
+        .create(&a.session, ConsentClass::PeerEnvironment, false)
         .await
         .unwrap();
     let code = FileEnrollmentCode(code_file(directory.path(), "code", created.code()));
@@ -2440,7 +2444,7 @@ async fn k2_a_volume_paired_to_one_gateway_refuses_enrolling_with_another() {
     );
     let for_a = a
         .commands
-        .create(&a.session, ConsentClass::PeerEnvironment)
+        .create(&a.session, ConsentClass::PeerEnvironment, false)
         .await
         .unwrap();
     // A code the gateway never gave: refused, and the address it recorded
@@ -2465,7 +2469,7 @@ async fn k2_a_volume_paired_to_one_gateway_refuses_enrolling_with_another() {
 
     let for_b = b
         .commands
-        .create(&b.session, ConsentClass::PeerEnvironment)
+        .create(&b.session, ConsentClass::PeerEnvironment, false)
         .await
         .unwrap();
     let code_b = FileEnrollmentCode(code_file(directory.path(), "code-b", for_b.code()));

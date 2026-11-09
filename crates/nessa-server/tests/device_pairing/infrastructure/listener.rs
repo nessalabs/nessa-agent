@@ -134,7 +134,12 @@ async fn native_listener_skips_connection_failures_and_backs_off_on_exhaustion()
     let fixture = Fixture::new().await;
     fixture
         .gateway
-        .create(fixture.session.clone(), ConsentClass::DeviceRead, OsEntropy)
+        .create(
+            fixture.session.clone(),
+            ConsentClass::DeviceRead,
+            false,
+            OsEntropy,
+        )
         .await
         .unwrap();
     let pin = fixture.gateway.identity().public_spki();
@@ -255,7 +260,12 @@ async fn native_listener_stops_on_a_listening_socket_failure() {
     let store = store.get().unwrap().clone();
     fixture
         .gateway
-        .create(fixture.session.clone(), ConsentClass::DeviceRead, OsEntropy)
+        .create(
+            fixture.session.clone(),
+            ConsentClass::DeviceRead,
+            false,
+            OsEntropy,
+        )
         .await
         .unwrap();
     let pin = fixture.gateway.identity().public_spki();
@@ -324,7 +334,12 @@ async fn native_listener_serves_relayed_connections_on_their_own_permits() {
     // An open invitation, so a device's Hello is answered.
     fixture
         .gateway
-        .create(fixture.session.clone(), ConsentClass::DeviceRead, OsEntropy)
+        .create(
+            fixture.session.clone(),
+            ConsentClass::DeviceRead,
+            false,
+            OsEntropy,
+        )
         .await
         .unwrap();
     let pin = fixture.gateway.identity().public_spki();
@@ -408,7 +423,12 @@ async fn a_tunneled_key_with_no_credential_is_closed_before_its_first_request() 
     let fixture = Fixture::new().await;
     fixture
         .gateway
-        .create(fixture.session.clone(), ConsentClass::DeviceRead, OsEntropy)
+        .create(
+            fixture.session.clone(),
+            ConsentClass::DeviceRead,
+            false,
+            OsEntropy,
+        )
         .await
         .unwrap();
     let pin = fixture.gateway.identity().public_spki();
@@ -495,7 +515,12 @@ async fn a_credentialed_key_through_the_tunnel_cannot_pair() {
     let fixture = Fixture::new().await;
     fixture
         .gateway
-        .create(fixture.session.clone(), ConsentClass::DeviceRead, OsEntropy)
+        .create(
+            fixture.session.clone(),
+            ConsentClass::DeviceRead,
+            false,
+            OsEntropy,
+        )
         .await
         .unwrap();
     let pin = fixture.gateway.identity().public_spki();

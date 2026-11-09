@@ -1746,3 +1746,28 @@ the client and gives the head an access path by receiver
   into the exchange, so approving it yields only that class's gateway
   credential (read-only, or serve-only for an environment), never a device
   credential that names the owner.
+
+## Same-person attribution
+
+`pairing.create {enrollee: "gateway", samePerson: true}` fixes the owner's
+choice on the invitation. Omitted or false records no association. The choice
+is bound into the authenticated exchange and retained private enrollment;
+changing it in transit fails the exchange. Devices and owner-phone consent
+cannot choose it. Environment gateways use the same peer choice.
+
+After the canonical credential becomes Active, the grant store links that
+exact gateway principal and credential to the owner's person principal. Link
+and audit commit together. An Active response can report `activationStopped`
+when that later write fails. Reapproving, the next grant write, or restart
+reconciliation retries the durable choice without issuing another credential.
+Read admission returns the gateway principal and optional person beside its
+existing share grant, only after the association commits. The person changes
+no Cedar action, credential class, grant subject or capability.
+
+Credential revocation, enrollment cancellation and exclusive credential expiry
+remove the association with the original cause and initiator. A failed removal
+is retried before another grant write and blocks a later credential on the same
+gateway principal from activating, even when its new choice is false. Committed
+removal receipts prevent replay of an earlier invitation. See the canonical
+[Same person contract](../access-grants.md#same-person) and
+[attribution recovery flow](../../state/services/gateway/same-person.md).

@@ -336,6 +336,22 @@ pub(super) async fn product_state(
     } else {
         None
     };
+    // Pairing attribution belongs to grants even when no agent or conversation
+    // service is configured. Keep its file independent of metadata startup.
+    if settings.agents.is_none() && settings.native.is_some() {
+        let root = conversation_root(namespace);
+        nessa_local_storage::create_directory(&root).map_err(setup_error)?;
+        let path = root.join("metadata.grants.sqlite3");
+        let links = crate::conversation::infrastructure::LocalPersonLinks::open(
+            &path,
+            store.clone(),
+            Arc::new(SystemClock),
+        )
+        .map_err(|cause| RunError::opening(crate::core::Dataset::AccessGrants, &path, cause))?;
+        store.bind_person_links(links).map_err(|error| {
+            RunError::Authentication(format!("person attribution reconciliation: {error:?}"))
+        })?;
+    }
     // Before any socket is bound: the key is restored or first published,
     // this gateway's unfinished enrollments are settled, and ended ones have
     // their receivers settled (design rows S3–S8).
@@ -480,6 +496,17 @@ pub(super) async fn product_state(
                     },
                 )
                 .await?;
+                let links = built
+                    .metadata
+                    .bind_person_link_source(store.clone(), Arc::new(SystemClock))
+                    .map_err(|error| {
+                        RunError::Authentication(format!("person attribution store: {error}"))
+                    })?;
+                store.bind_person_links(links).map_err(|error| {
+                    RunError::Authentication(format!(
+                        "person attribution reconciliation: {error:?}"
+                    ))
+                })?;
                 built
                     .service
                     .bind_fence_capture(inventory.clone() as Arc<dyn FenceCapture>);
@@ -1414,12 +1441,18 @@ async fn conversations(
     let metadata_path = root.join("metadata.sqlite3");
     let metadata = Arc::new(
         LocalConversationStore::open(&metadata_path)
-            .map_err(|cause| {
-                RunError::opening(
+            .map_err(|cause| match cause {
+                crate::conversation::infrastructure::ConversationStoreOpenError::Metadata(
+                    cause,
+                ) => RunError::opening(
                     crate::core::Dataset::ConversationMetadata,
                     &metadata_path,
                     cause,
-                )
+                ),
+                crate::conversation::infrastructure::ConversationStoreOpenError::Grants {
+                    path,
+                    cause,
+                } => RunError::opening(crate::core::Dataset::AccessGrants, &path, cause),
             })?
             .with_access_policy(access_policy.clone()),
     );

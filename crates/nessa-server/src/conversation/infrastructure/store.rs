@@ -2,7 +2,11 @@ mod acquisition;
 mod agent_switches;
 mod cached;
 mod export;
+mod grant_database;
+pub use grant_database::ConversationStoreOpenError;
 mod model_changes;
+mod person_links;
+pub use person_links::LocalPersonLinks;
 mod share_grants;
 
 pub use export::{
@@ -179,6 +183,8 @@ pub struct LocalConversationStore {
     connection: Arc<Mutex<Connection>>,
     changes: CatalogueChanges,
     access: Option<Arc<dyn ConversationAccessPolicyEvaluator>>,
+    grant_path: std::path::PathBuf,
+    person_links: std::sync::RwLock<Option<Arc<person_links::LocalPersonLinks>>>,
     /// One mutex per `(conversation, receiver)`, taken by that grant's
     /// revision hold and by a change of that same grant. A turn on one
     /// grant does not block a change or a turn on another. The entry is
@@ -212,8 +218,22 @@ impl LocalConversationStore {
     /// The opener's own error is returned, because composition decides from
     /// it whether starting again could help
     /// (docs/adr/todo/202-versioned-local-datasets.md).
-    pub fn open(path: &Path) -> Result<Self, OpenError> {
+    pub fn open(path: &Path) -> Result<Self, ConversationStoreOpenError> {
+        // Refuse a foreign grant version before opening conversation metadata.
+        let grant_path = grant_database::path(path);
+        let _grants = grant_database::open(&grant_path).map_err(|cause| {
+            ConversationStoreOpenError::Grants {
+                path: grant_path.clone(),
+                cause,
+            }
+        })?;
         let connection = nessa_local_database::open(path, &schema()?)?;
+        grant_database::attach(&connection, &grant_path).map_err(|cause| {
+            ConversationStoreOpenError::Grants {
+                path: grant_path.clone(),
+                cause: OpenError::Database(cause),
+            }
+        })?;
         model_changes::validate_shape(&connection)?;
         agent_switches::validate_shape(&connection)?;
         connection.set_prepared_statement_cache_capacity(cached::STATEMENTS);
@@ -221,6 +241,8 @@ impl LocalConversationStore {
             connection: Arc::new(Mutex::new(connection)),
             changes: CatalogueChanges::default(),
             access: None,
+            grant_path,
+            person_links: std::sync::RwLock::new(None),
             grant_gates: share_grants::GrantGates::new(),
             #[cfg(test)]
             grant_write_pause: Mutex::new(None),
@@ -293,8 +315,19 @@ impl LocalConversationStore {
         work: impl FnOnce(&mut Connection) -> Result<T, ConversationError> + Send + 'static,
     ) -> ConversationFuture<'_, T> {
         let connection = self.connection.clone();
+        let links = self
+            .person_links
+            .read()
+            .map(|slot| slot.clone())
+            .map_err(|_| ConversationError::Metadata);
         Box::pin(async move {
+            let links = links?;
             tokio::task::spawn_blocking(move || {
+                if let Some(links) = links {
+                    if links.with_current(|| Ok(())).is_err() {
+                        tracing::warn!("person attribution reconciliation remains owed");
+                    }
+                }
                 // A call that panicked left no transaction open — rusqlite
                 // rolls one back as it unwinds — so the connection is still
                 // fit for the next caller.
@@ -418,23 +451,25 @@ fn granted_head(
                 "SELECT MAX(
                      COALESCE((SELECT MAX(c.change_revision) FROM conversations AS c
                                WHERE c.organization = ?1 AND c.owner = ?2 AND {}), 0),
-                     COALESCE((SELECT MAX(j.revision) FROM share_grant_changes AS j
+                     COALESCE((SELECT MAX(j.revision) FROM grants.share_grant_changes AS j
                                JOIN conversations AS c ON c.id = j.resource_id
                                WHERE c.organization = ?1 AND c.owner = ?2
                                  AND j.resource_kind = '{kind}'
                                  AND j.receiver_id = ?3
                                  AND (j.before = 'none') <> (j.after = 'none')), 0),
-                     COALESCE((SELECT MAX(later.revision) FROM share_grant_changes AS later
-                               JOIN share_grant_changes AS j
+                     COALESCE((SELECT MAX(later.revision) FROM grants.share_grant_changes AS later
+                               JOIN grants.share_grant_changes AS j
                                  ON j.resource_kind = later.resource_kind
                                 AND j.resource_id = later.resource_id
                                 AND j.principal_id = later.principal_id
+                                AND j.receiver_id IS later.receiver_id
                                 AND j.sequence = (
                                     SELECT MAX(previous.sequence)
-                                    FROM share_grant_changes AS previous
+                                    FROM grants.share_grant_changes AS previous
                                     WHERE previous.resource_kind = later.resource_kind
                                       AND previous.resource_id = later.resource_id
                                       AND previous.principal_id = later.principal_id
+                                      AND previous.receiver_id IS later.receiver_id
                                       AND previous.sequence < later.sequence)
                                 AND j.receiver_id = ?3
                                 AND j.after <> 'none'

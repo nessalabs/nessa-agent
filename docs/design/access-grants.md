@@ -372,6 +372,14 @@ successful write of the grant store retries it, and a new enrollment of
 that gateway key is refused until the removal commits. This section does
 not add a link state.
 
+The committed unlink audit is the receipt that this invitation's choice
+finished; a read or restore does not apply that old choice again. When expiry
+and revocation both apply, their retained times preserve the first boundary:
+expiry at or before `revoked_at` keeps expiry as initiator, and an earlier
+revocation keeps its original initiator after the clock passes the expiry.
+The two orderings are covered by
+`a_retry_after_expiry_and_revoke_keeps_the_first_boundary_and_initiator`.
+
 ## Live follow
 
 [#851](https://github.com/nessalabs/nessa-agent/issues/851) already follows

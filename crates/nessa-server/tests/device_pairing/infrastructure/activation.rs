@@ -198,7 +198,12 @@ impl Claimed {
     async fn new(fixture: &Fixture, name: &str) -> Self {
         let created = fixture
             .gateway
-            .create(fixture.session.clone(), ConsentClass::DeviceRead, OsEntropy)
+            .create(
+                fixture.session.clone(),
+                ConsentClass::DeviceRead,
+                false,
+                OsEntropy,
+            )
             .await
             .unwrap();
         let (address, stop, listener, _) = fixture.listener().await;
@@ -723,7 +728,12 @@ async fn device_keeps_the_issued_credential_and_clears_pending() {
     let fixture = Fixture::new().await;
     let created = fixture
         .gateway
-        .create(fixture.session.clone(), ConsentClass::DeviceRead, OsEntropy)
+        .create(
+            fixture.session.clone(),
+            ConsentClass::DeviceRead,
+            false,
+            OsEntropy,
+        )
         .await
         .unwrap();
     let (address, stop, listener, _) = fixture.listener().await;
@@ -1006,7 +1016,12 @@ async fn terminal_status_ends_the_device_record_and_allows_a_new_enrollment() {
     );
     let created = fixture
         .gateway
-        .create(fixture.session.clone(), ConsentClass::DeviceRead, OsEntropy)
+        .create(
+            fixture.session.clone(),
+            ConsentClass::DeviceRead,
+            false,
+            OsEntropy,
+        )
         .await
         .unwrap();
     let code = ManualCode::parse(created.code().expose_bytes()).unwrap();

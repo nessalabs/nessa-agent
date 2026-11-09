@@ -22,7 +22,12 @@ async fn staging() -> (Fixture, nessa_auth::domain::pairing::InvitationId) {
     let (fixture, switches) = activation::fixture().await;
     let created = fixture
         .gateway
-        .create(fixture.session.clone(), ConsentClass::DeviceRead, OsEntropy)
+        .create(
+            fixture.session.clone(),
+            ConsentClass::DeviceRead,
+            false,
+            OsEntropy,
+        )
         .await
         .unwrap();
     let (address, stop, listener, _) = fixture.listener().await;

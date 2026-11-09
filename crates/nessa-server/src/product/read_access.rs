@@ -297,7 +297,7 @@ pub(super) async fn admit_conversation(
         .admit(
             AccessAction::Read,
             &conversation,
-            held.map(|held| held.capabilities),
+            held.as_ref().map(|held| held.capabilities),
             RequestShape::default(),
         )
         .map_err(paired_code)
@@ -539,7 +539,7 @@ pub(super) async fn admit_request(
         .admit(
             action,
             &conversation,
-            held.map(|held| held.capabilities),
+            held.as_ref().map(|held| held.capabilities),
             request_shape(frame),
         )
         .map_err(paired_code)?;
@@ -904,7 +904,11 @@ pub(super) async fn paired_share(
     else {
         return Err("forbidden");
     };
-    match access.allows(action, &conversation, held.map(|held| held.capabilities)) {
+    match access.allows(
+        action,
+        &conversation,
+        held.as_ref().map(|held| held.capabilities),
+    ) {
         Ok(true) => Ok(()),
         Ok(false) | Err(_) => Err("forbidden"),
     }

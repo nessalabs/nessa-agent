@@ -253,6 +253,7 @@ impl RunError {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Dataset {
     ConversationMetadata,
+    AccessGrants,
     ReceiverAccess,
     BrowserSessions,
     PermissionRules,
@@ -265,6 +266,7 @@ impl fmt::Display for Dataset {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
             Self::ConversationMetadata => "conversation metadata",
+            Self::AccessGrants => "access grants",
             Self::ReceiverAccess => "receiver access",
             Self::BrowserSessions => "browser sessions",
             Self::PermissionRules => "permission rules",
@@ -488,6 +490,11 @@ mod tests {
         };
         // Refused, and never rewritten: the file is whatever it was.
         assert_eq!(std::fs::read(&path).ok(), before);
+        let crate::conversation::infrastructure::ConversationStoreOpenError::Metadata(cause) =
+            cause
+        else {
+            panic!("expected metadata refusal");
+        };
         RunError::opening(Dataset::ConversationMetadata, &path, cause)
     }
 
@@ -557,6 +564,11 @@ mod tests {
         let path = directory.path().join("absent").join("metadata.sqlite3");
         let Err(cause) = LocalConversationStore::open(&path) else {
             panic!("the store opened");
+        };
+        let crate::conversation::infrastructure::ConversationStoreOpenError::Metadata(cause) =
+            cause
+        else {
+            panic!("expected metadata refusal");
         };
         let error = RunError::opening(Dataset::ConversationMetadata, &path, cause);
         assert!(matches!(error, RunError::Agent(_)), "{error}");

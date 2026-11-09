@@ -46,13 +46,18 @@ describe("client.pairing", () => {
     expect(created.status.phase).toBe("available")
   })
 
-  it("names a peer gateway as the enrollee when asked", async () => {
+  it("passes the peer gateway and immutable same-person choice", async () => {
     const { api, calls } = session(() => ({
       code: "ABCD-2345",
       status: { ...status, class: "peer-gateway-conversation-read" },
     }))
-    const created = await api.create({ enrollee: PairingEnrollee.Gateway })
-    expect(calls).toEqual([{ method: "pairing.create", params: { enrollee: "gateway" } }])
+    const created = await api.create({
+      enrollee: PairingEnrollee.Gateway,
+      samePerson: true,
+    })
+    expect(calls).toEqual([
+      { method: "pairing.create", params: { enrollee: "gateway", samePerson: true } },
+    ])
     expect(created.status.class).toBe("peer-gateway-conversation-read")
   })
 

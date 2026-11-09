@@ -10,3 +10,6 @@ mod peer;
 
 #[path = "domain/pairing/owner_phone.rs"]
 mod owner_phone;
+
+#[path = "domain/pairing/person_link.rs"]
+mod person_link;

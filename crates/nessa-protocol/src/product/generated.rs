@@ -2393,6 +2393,8 @@ impl PairingEnrollee {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PairingCreateParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub same_person: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub enrollee: Option<PairingEnrollee>,
 }
 #[derive(Deserialize, Serialize)]

@@ -28,3 +28,6 @@ mod support;
 
 #[path = "device_pairing/infrastructure/receiver_dispatch.rs"]
 mod receiver_dispatch;
+
+#[path = "device_pairing/infrastructure/person_links.rs"]
+mod person_links;

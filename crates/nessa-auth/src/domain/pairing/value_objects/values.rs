@@ -120,6 +120,13 @@ pub enum ConsentClass {
     OwnerPhoneReadWrite,
 }
 impl ConsentClass {
+    pub(crate) fn validate_same_person(self, same_person: bool) -> Result<(), PairingError> {
+        if same_person && !self.is_peer() {
+            return Err(PairingError::Invalid);
+        }
+        Ok(())
+    }
+
     /// Every class, in no particular order.
     pub const ALL: [Self; 4] = [
         Self::DeviceRead,
@@ -241,8 +248,23 @@ pub struct ConsentIntent {
     grant: Grant,
     additional_grants: Vec<Grant>,
     class: ConsentClass,
+    same_person: bool,
 }
 impl ConsentIntent {
+    /// Retain the owner's attribution choice independently of credential class.
+    /// Only peer gateway invitations can name another gateway as the same person.
+    pub fn with_same_person(self, same_person: bool) -> Result<Self, PairingError> {
+        self.class.validate_same_person(same_person)?;
+        Ok(Self {
+            same_person,
+            ..self
+        })
+    }
+    /// Immutable invitation choice; this conveys no capability.
+    pub fn same_person(&self) -> bool {
+        self.same_person
+    }
+
     /// Who this consent enrolls; fixed when the owner created it.
     pub fn class(&self) -> ConsentClass {
         self.class
@@ -274,6 +296,7 @@ impl ConsentIntent {
             grant,
             additional_grants: grants,
             class,
+            same_person: false,
         })
     }
     /// Public opaque consent identity.

@@ -255,7 +255,7 @@ async fn invite(
 ) -> (String, nessa_auth::domain::pairing::InvitationId) {
     let created = fixture
         .gateway
-        .create(fixture.session.clone(), class, OsEntropy)
+        .create(fixture.session.clone(), class, false, OsEntropy)
         .await
         .unwrap();
     let code = std::str::from_utf8(created.code().display_bytes().as_ref())

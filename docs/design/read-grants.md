@@ -26,16 +26,17 @@ default and access is per conversation.
 ## What a grant is
 
 A grant is one row: the grantee's principal, one resource, a capability
-set, the constraints a drive grant carries, and the grant epoch. The
-metadata database keeps it in `share_grants`, keyed by principal, resource
-kind, and resource id. This slice writes kind `conversation` and the
-conversation id. A directory grant uses kind `directory` under the same key.
-`receiver_id` is the receiver a paired device or gateway is bound to, because
-admission still finds that grant by its receiver. An integration, and a later
-agent, store the principal and no receiver. A grant with a principal and no
-receiver can be stored, a paired grant is still found by its receiver, and two
-rows for the same principal, resource kind, and resource id cannot both exist
-(`a_grant_is_keyed_by_principal_and_may_name_no_receiver`).
+set, the constraints a drive grant carries, and the grant epoch. The separate,
+versioned `metadata.grants.sqlite3` file keeps `share_grants` and its audit.
+Its subject is the receiver for a paired party, otherwise the principal;
+subject kind, subject id, resource kind and resource id form the unique key.
+Two receivers of the same principal can therefore hold independent grants.
+The metadata adapter attaches this file so a grant, its journal and the
+conversation catalogue revision commit together. Legacy metadata grant tables
+remain unused; opening this file never imports their rows.
+This slice writes resource kind `conversation` and the conversation id.
+A directory uses kind `directory` under the same subject key. `receiver_id`
+continues to identify paired admission; a principal-only row has no receiver.
 The only sets are `read`, `read` and `comment`, and those plus `drive`.
 What they used to be called — Read, Comment, Drive — is that set. A set
 that includes `drive`, and only that set, also carries constraints: the

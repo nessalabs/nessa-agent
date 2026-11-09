@@ -2808,6 +2808,8 @@ mod tests {
             let allowed = receiver_id == "device" && id.to_string() == self.0;
             Box::pin(async move {
                 Ok(allowed.then_some(HeldGrant {
+                    principal_id: nessa_auth::domain::PrincipalId::new("test-reader").unwrap(),
+                    person: None,
                     capabilities: Capabilities::read(),
                     policy_revision: 1,
                 }))
@@ -2853,6 +2855,8 @@ mod tests {
                 && id.to_string() == self.conversation;
             Box::pin(async move {
                 Ok(allowed.then_some(HeldGrant {
+                    principal_id: nessa_auth::domain::PrincipalId::new("test-reader").unwrap(),
+                    person: None,
                     capabilities: Capabilities::read(),
                     policy_revision: 1,
                 }))

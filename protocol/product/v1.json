@@ -6071,6 +6071,10 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
+        "samePerson": {
+          "type": "boolean",
+          "description": "Immutable attribution choice for a peer gateway. This adds no capability and does not change enrollment class; absent means false."
+        },
         "enrollee": {
           "$ref": "#/$defs/PairingEnrollee",
           "description": "Who the invitation enrolls; absent means device."
@@ -6299,7 +6303,7 @@
         },
         "activationStopped": {
           "$ref": "#/$defs/PairingActivationStop",
-          "description": "Present when activation stopped before active: whether approving again can finish it."
+          "description": "Present when activation or its next person-attribution write stopped. The credential may already be Active; approving again retries the owed link without another credential or receiver."
         }
       },
       "required": ["status"],

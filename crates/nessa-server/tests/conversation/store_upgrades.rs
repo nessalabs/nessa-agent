@@ -247,7 +247,11 @@ fn a_step_that_fails_leaves_the_file_at_its_version_and_says_which() {
         .unwrap();
     assert!(matches!(
         LocalConversationStore::open(&path),
-        Err(nessa_local_database::OpenError::Upgrade { from: 6, .. })
+        Err(
+            crate::conversation::infrastructure::ConversationStoreOpenError::Metadata(
+                nessa_local_database::OpenError::Upgrade { from: 6, .. }
+            )
+        )
     ));
     assert_eq!(version(&path), 6);
     let kept: String = Connection::open(&path)

@@ -226,8 +226,12 @@ async fn deliverable(
 
 /// The capabilities a party holds on one conversation, and the grant epoch
 /// that set them, read together. The epoch is [`ShareGrant::policy_revision`].
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HeldGrant {
+    /// Actual gateway/device/integration principal named by this grant.
+    pub principal_id: PrincipalId,
+    /// Committed same-person attribution; ignored by capability policy.
+    pub person: Option<PrincipalId>,
     pub capabilities: Capabilities,
     /// As [`ShareGrant::policy_revision`]: the grant epoch.
     pub policy_revision: u64,
@@ -255,7 +259,8 @@ impl ResourceKind {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ShareGrant {
     pub conversation_id: ConversationId,
-    /// The grantee. The row's key, with the resource kind and resource id.
+    /// The credential principal. A paired row is keyed by its receiver; an
+    /// unpaired row is keyed by this principal, with resource kind and id.
     pub principal_id: PrincipalId,
     /// The receiver a paired device or gateway is bound to. Absent for an
     /// integration, and for a later agent, which store no receiver.
@@ -371,7 +376,7 @@ pub trait ShareGrants: Send + Sync {
                 .await?
                 .grants
                 .into_iter()
-                .find(|grant| &grant.principal_id == principal))
+                .find(|grant| &grant.principal_id == principal && grant.receiver_id.is_none()))
         })
     }
 

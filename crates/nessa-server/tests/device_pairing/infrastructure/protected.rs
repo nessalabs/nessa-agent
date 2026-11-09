@@ -216,7 +216,7 @@ async fn pair_as(
 ) -> Paired {
     let created = fixture
         .gateway
-        .create(fixture.session.clone(), class, OsEntropy)
+        .create(fixture.session.clone(), class, false, OsEntropy)
         .await
         .unwrap();
     let (_, store) = pending(fixture.directory.path(), name);
@@ -1361,7 +1361,12 @@ async fn open_product_is_only_a_first_envelope_and_needs_sessions() {
     // the one under test.
     fixture
         .gateway
-        .create(fixture.session.clone(), ConsentClass::DeviceRead, OsEntropy)
+        .create(
+            fixture.session.clone(),
+            ConsentClass::DeviceRead,
+            false,
+            OsEntropy,
+        )
         .await
         .unwrap();
     let replies = blocking(move || {

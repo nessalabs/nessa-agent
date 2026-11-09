@@ -139,6 +139,9 @@ CREATE TABLE summaries (
     archived INTEGER NOT NULL CHECK (archived IN (0, 1))
 ) STRICT;
 
+-- Frozen legacy metadata tables. Current grants live in store/grants.sql in
+-- their own versioned file; runtime queries explicitly select that database.
+-- These old rows are retained without migration and are not read or written.
 -- Which paired party may do what in which resource (issues 704, 707, 889).
 -- A row is the access grant; revoking removes it. Nothing is granted by
 -- default or by list. The row is keyed by the grantee's principal, the
