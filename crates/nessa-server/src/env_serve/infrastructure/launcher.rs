@@ -243,21 +243,22 @@ fn prepare_codex_home(directory: &Path) -> Option<String> {
         .lines()
         .filter(|line| line.trim_start().starts_with("cli_auth_credentials_store"))
         .count();
-    let already = store_lines == 1 && existing.lines().any(|line| line.trim() == EPHEMERAL_STORE);
+    // The setting goes first: a key after a `[table]` header belongs to
+    // that table, so one appended to a config with tables is not Codex's
+    // credential store at all.
+    let already =
+        store_lines == 1 && existing.lines().next().map(str::trim) == Some(EPHEMERAL_STORE);
     if !already {
-        let mut kept: Vec<&str> = existing
+        let kept: Vec<&str> = existing
             .lines()
             .filter(|line| !line.trim_start().starts_with("cli_auth_credentials_store"))
             .collect();
-        while kept.last().is_some_and(|line| line.is_empty()) {
-            kept.pop();
+        let mut text = format!("{EPHEMERAL_STORE}\n");
+        if kept.iter().any(|line| !line.trim().is_empty()) {
+            text.push('\n');
+            text.push_str(kept.join("\n").trim_start_matches('\n'));
+            text.push('\n');
         }
-        if !kept.is_empty() {
-            kept.push("");
-        }
-        kept.push(EPHEMERAL_STORE);
-        let mut text = kept.join("\n");
-        text.push('\n');
         std::fs::write(&config, text).ok()?;
     }
     directory.to_str().map(str::to_owned)

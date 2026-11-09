@@ -257,3 +257,38 @@ fn a_host_signed_in_with_the_agent_s_own_file_keeps_it() {
     // No HOME and nothing pointed: nowhere to look.
     assert!(own_sign_in_files(AgentId::Claude, &BTreeMap::new()).is_empty());
 }
+
+/// A Codex home whose `config.toml` already holds tables gets the
+/// credential store at the root, before every table: a key after a
+/// `[table]` header is that table's, not Codex's setting.
+#[test]
+fn the_ephemeral_store_is_set_at_the_root_of_a_config_with_tables() {
+    let login = Login::new("sk-proj-secret".into()).unwrap();
+    let root = tempfile::tempdir().unwrap();
+    let home = root.path().join("codex");
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::write(
+        home.join("config.toml"),
+        "model = \"gpt\"\n\n[projects.\"/workspace\"]\ntrust_level = \"trusted\"\ncli_auth_credentials_store = \"file\"\n",
+    )
+    .unwrap();
+    for _ in 0..2 {
+        login_to_set(
+            AgentId::Codex,
+            Some(&login),
+            &BTreeMap::new(),
+            |_| false,
+            Some(&home),
+        )
+        .unwrap();
+        let config = std::fs::read_to_string(home.join("config.toml")).unwrap();
+        let first_table = config.find('[').unwrap();
+        let setting = config.find("cli_auth_credentials_store").unwrap();
+        assert_eq!(setting, 0, "{config}");
+        assert!(setting < first_table);
+        assert_eq!(config.matches("cli_auth_credentials_store").count(), 1);
+        assert!(config.contains("cli_auth_credentials_store = \"ephemeral\""));
+        assert!(config.contains("model = \"gpt\""));
+        assert!(config.contains("[projects.\"/workspace\"]\ntrust_level = \"trusted\""));
+    }
+}
