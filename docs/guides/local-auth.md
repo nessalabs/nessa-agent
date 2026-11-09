@@ -361,6 +361,7 @@ one:
 nessa env grant --agent claude                          # the gateway this machine paired with
 nessa env grant --commands --max-timeout 10m            # commands, each cut to at most 10 minutes
 nessa env grant --max-lease 8h                          # each agent lease ended after 8 hours
+nessa env grant --logins                                # take the gateway's saved logins
 nessa env ungrant --commands
 nessa env grants                                        # every entry, as JSON
 ```
@@ -370,8 +371,27 @@ A second `--max-timeout` replaces the first, shorter or longer, and a second
 agent's harness itself and the gateway records the lease as expired; with
 none, a lease lasts until it is ended. `ungrant --all` takes the limit back.
 
+With `--logins`, the gateway may hand an agent it starts here the login
+saved for that agent in its vault (Settings › Connections › Accounts ›
+Saved logins), once its owner also turns on "Use my saved logins here" for
+this machine in Devices. It goes in the agent's login variable
+(`CLAUDE_CODE_OAUTH_TOKEN`, or `ANTHROPIC_API_KEY` for an Anthropic API key;
+`CODEX_API_KEY`; `OPENCODE_API_KEY`) only when
+this machine has no sign-in of its own for that agent: none of its login
+variables, and no sign-in file the harness will read
+(`~/.claude/.credentials.json`, `~/.codex/auth.json`). A saved Codex key
+also selects the adapter's api-key method and one `CODEX_HOME` for this
+host, whose credential store is ephemeral, because the variable alone does
+not sign the pinned Codex in. The key is not written into that directory.
+Codex keeps its threads there, so a later harness on this host can resume
+them. OpenCode is started
+in a private data directory, so `~/.local/share/opencode/auth.json` is not
+that sign-in; `OPENCODE_API_KEY` in the harness environment is. A Claude
+sign-in kept only in a Mac's keychain is not seen. The login is not written
+into the user's own sign-in files. `ungrant --logins` takes it back.
+
 `--peer ssh` changes what a gateway reaching this machine over SSH gets
-instead. Without an entry, SSH keeps everything the machine's `config.json`
+instead. SSH takes saved logins without an entry. Without an entry, SSH keeps everything the machine's `config.json`
 runs, so to narrow it run `nessa env ungrant --peer ssh --all` and then grant
 what it keeps. A grant only narrows: `config.json` still decides what the
 machine runs at all, and `envServe.commands` must be on for any command. A

@@ -5,6 +5,32 @@ use crate::env_serve::domain::{Agents, CommandGrant, MaxLease};
 use nessa_sdk::domain::agent_execution::leases::CommandWork;
 use std::sync::Mutex;
 
+fn terms(lease_ms: Option<u64>, takes_login: bool) -> AgentTerms {
+    AgentTerms {
+        lease_ms,
+        takes_login,
+    }
+}
+
+/// A dialed gateway's saved logins are taken only once its entry says so;
+/// SSH, with no entry, takes them, as it can already set anything its
+/// harness runs with.
+#[test]
+fn a_saved_login_is_taken_only_where_the_grant_says() {
+    let allow = Answering::new(true);
+    let entry = PeerGrant::new(Agents::All, None).with_logins();
+    let grants = Grants(Ok(Some(entry.clone())));
+    assert_eq!(
+        admit_agent(&grants, &allow, &DIALED, "claude"),
+        Ok(terms(None, true))
+    );
+    let taken_back = Grants(Ok(Some(entry.without_logins())));
+    assert_eq!(
+        admit_agent(&taken_back, &allow, &DIALED, "claude"),
+        Ok(terms(None, false))
+    );
+}
+
 /// Grants as a test sets them: an entry, none, or unreadable.
 struct Grants(Result<Option<PeerGrant>, String>);
 impl PeerGrants for Grants {
@@ -69,8 +95,14 @@ fn the_policy_decides_over_the_facts_as_read() {
     );
     let none = Grants(Ok(None));
     let allow = Answering::new(true);
-    assert_eq!(admit_agent(&none, &allow, &Peer::Ssh, "codex"), Ok(None));
-    assert_eq!(admit_agent(&none, &allow, &DIALED, "codex"), Ok(None));
+    assert_eq!(
+        admit_agent(&none, &allow, &Peer::Ssh, "codex"),
+        Ok(terms(None, true))
+    );
+    assert_eq!(
+        admit_agent(&none, &allow, &DIALED, "codex"),
+        Ok(terms(None, false))
+    );
     let asked = allow.asked.lock().unwrap();
     assert_eq!((asked[0].1, &asked[0].2), (false, &unwritten(&Peer::Ssh)));
     assert_eq!((asked[1].1, &asked[1].2), (false, &unwritten(&DIALED)));
@@ -87,7 +119,7 @@ fn a_yes_carries_the_terms() {
     let grants = Grants(Ok(Some(entry)));
     assert_eq!(
         admit_agent(&grants, &allow, &DIALED, "claude"),
-        Ok(Some(5_000))
+        Ok(terms(Some(5_000), false))
     );
     assert_eq!(admit_command(&grants, &allow, &DIALED, 120_000), Ok(60_000));
     assert_eq!(admit_command(&grants, &allow, &DIALED, 1_000), Ok(1_000));

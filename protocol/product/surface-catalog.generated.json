@@ -797,6 +797,34 @@
       "destructive": true
     },
     {
+      "name": "logins.status",
+      "params": null,
+      "grant": "credential.manage",
+      "readOnly": true,
+      "destructive": false
+    },
+    {
+      "name": "logins.save",
+      "params": "LoginsSaveParams",
+      "grant": "credential.manage",
+      "readOnly": false,
+      "destructive": false
+    },
+    {
+      "name": "logins.remove",
+      "params": "LoginsRemoveParams",
+      "grant": "credential.manage",
+      "readOnly": false,
+      "destructive": true
+    },
+    {
+      "name": "logins.setDevice",
+      "params": "LoginsSetDeviceParams",
+      "grant": "credential.manage",
+      "readOnly": false,
+      "destructive": false
+    },
+    {
       "name": "voice.status",
       "params": null,
       "grant": "credential.manage",

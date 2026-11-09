@@ -46,6 +46,7 @@ use super::{
     audit::EnvironmentAudit,
     connector::{ArtifactTransport, LeaseConnection},
     environment::{SshEnvironment, SshTimings},
+    logins::SavedLogins,
     peer_update::PeerUpdates,
 };
 use crate::conversation::application::{
@@ -105,6 +106,8 @@ pub(crate) struct PeerEnvironments {
     sightings: Option<Arc<dyn Sightings>>,
     /// Told to each connection whose host speaks another protocol.
     updates: Option<Arc<PeerUpdates>>,
+    /// Asked for each lease's saved login; `None` hands none.
+    logins: Option<Arc<dyn SavedLogins>>,
 }
 
 impl PeerEnvironments {
@@ -123,6 +126,29 @@ impl PeerEnvironments {
             connections: watch::Sender::new(0),
             sightings: None,
             updates: None,
+            logins: None,
+        }
+    }
+
+    /// Ask `logins` for the saved login of each lease a paired machine
+    /// grants `takesLogin`.
+    pub(crate) fn with_logins(mut self, logins: Arc<dyn SavedLogins>) -> Self {
+        self.logins = Some(logins);
+        self
+    }
+
+    fn made(&self, peer: PeerEnvironment) -> SshEnvironment {
+        let environment = SshEnvironment::peer(
+            peer,
+            self.credentials.clone(),
+            self.audit.clone(),
+            self.timings,
+            self.connections.clone(),
+            self.budgets.clone(),
+        );
+        match &self.logins {
+            Some(logins) => environment.with_logins(logins.clone()),
+            None => environment,
         }
     }
 
@@ -212,16 +238,7 @@ impl PeerEnvironments {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .entry(peer)
-            .or_insert_with(|| {
-                Arc::new(SshEnvironment::peer(
-                    peer,
-                    self.credentials.clone(),
-                    self.audit.clone(),
-                    self.timings,
-                    self.connections.clone(),
-                    self.budgets.clone(),
-                ))
-            })
+            .or_insert_with(|| Arc::new(self.made(peer)))
             .clone()
     }
 }
@@ -239,14 +256,7 @@ impl PairedEnvironments for PeerEnvironments {
             .cloned();
         match known {
             Some(environment) => environment,
-            None => Arc::new(SshEnvironment::peer(
-                *peer,
-                self.credentials.clone(),
-                self.audit.clone(),
-                self.timings,
-                self.connections.clone(),
-                self.budgets.clone(),
-            )),
+            None => Arc::new(self.made(*peer)),
         }
     }
 

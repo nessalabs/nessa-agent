@@ -454,5 +454,21 @@
   "voice.startCall": {
     "readOnly": false,
     "destructive": false
+  },
+  "logins.status": {
+    "readOnly": true,
+    "destructive": false
+  },
+  "logins.save": {
+    "readOnly": false,
+    "destructive": false
+  },
+  "logins.remove": {
+    "readOnly": false,
+    "destructive": true
+  },
+  "logins.setDevice": {
+    "readOnly": false,
+    "destructive": false
   }
 }

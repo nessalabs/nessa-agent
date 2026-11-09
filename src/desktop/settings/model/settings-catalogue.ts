@@ -364,6 +364,13 @@ export const settingsEntries = [
     keywords: "voice talk speak microphone openai realtime key",
   },
   {
+    id: "saved-logins",
+    tab: "accounts",
+    label: "Saved logins",
+    detail: "Sign agents in on your other computers with logins kept in Nessa's vault.",
+    keywords: "login sign in token api key claude codex opencode ssh boat devices sync",
+  },
+  {
     id: "boat",
     tab: "accounts",
     label: "Boat",

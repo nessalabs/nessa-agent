@@ -125,12 +125,16 @@ authentication with the environment key switched off, so `codex login status`
 answers "not logged in" on a machine where one of them is the only thing set,
 and Nessa's readiness answers the same. The adapter will take a
 `DEFAULT_AUTH_REQUEST` and sign itself in from that key at startup, which is why
-this binding does not set one: that login writes the key, in plaintext, into the
-user's own `auth.json` under `CODEX_HOME`, where it outlives the variable and is
-then preferred to it. Setting `cli_auth_credentials_store` to `ephemeral` does
-not avoid the write — checked against the pinned adapter rather than assumed. A
-gateway starting an agent must not move an operator's credential onto the user's
-disk, so signing Codex in remains `codex login`.
+this binding does not set one on this machine: that would sign in against
+the operator's own `CODEX_HOME`. A saved login handed to another machine is
+the host's business. The host sets `DEFAULT_AUTH_REQUEST` to
+`{"methodId":"api-key"}` (the key stays in `CODEX_API_KEY`; the adapter logs
+the request) and one durable `CODEX_HOME` for that host. Its `config.toml`
+sets `cli_auth_credentials_store` to `ephemeral`, and Codex keeps threads
+under `sessions/` there, so a later harness can resume them. Codex 0.154's
+ephemeral store keeps the key in the process. The pinned app-server starts
+with environment-key authentication off, so the variable alone does not
+sign it in.
 
 ## Deleting a session
 

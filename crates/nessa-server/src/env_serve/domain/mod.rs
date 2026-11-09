@@ -3,6 +3,6 @@
 //! it, and the terms a lease the lease policy allows is admitted on.
 mod grants;
 pub(crate) use grants::{
-    command_timeout, lease_ms, unwritten, AgentName, Agents, AllAgents, CommandGrant,
+    command_timeout, lease_ms, takes_login, unwritten, AgentName, Agents, AllAgents, CommandGrant,
     GrantOperation, MaxLease, NotGranted, Peer, PeerGrant,
 };

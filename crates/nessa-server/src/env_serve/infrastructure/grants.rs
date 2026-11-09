@@ -12,7 +12,9 @@
 //! An entry's `agents` is a list of agent names or `"*"` for every agent,
 //! and none when missing; its `commands` is the longest a command may run,
 //! and no commands when missing; its `maxLeaseMs` is the longest a
-//! harness's lease may last from its grant, and until ended when missing.
+//! harness's lease may last from its grant, and until ended when missing;
+//! its `acceptLogins` (schema version 3) lets the gateway hand its saved
+//! login to each harness it starts, and none is taken when missing.
 //! A peer with no entry holds what `domain::unwritten` says (everything
 //! for `ssh`, nothing for a dialed gateway), and the lease policy
 //! (`cedar/policies.cedar`) decides over that grant as over a written one.
@@ -70,6 +72,10 @@ const SCHEMA_VERSION: u32 = 1;
 /// The shape with lease limits (`maxLeaseMs`), which a build reading only
 /// version 1 refuses.
 const SCHEMA_VERSION_LEASES: u32 = 2;
+/// The shape with saved logins taken (`acceptLogins`), lease limits or not,
+/// which a build reading only versions 1 and 2 refuses: it fails closed,
+/// taking no login, rather than misreading the file.
+const SCHEMA_VERSION_LOGINS: u32 = 3;
 /// Most bytes the file may have: room for many peers, and a bound on what
 /// every lease reads.
 pub(crate) const MAX_BYTES: u64 = 64 * 1024;
@@ -196,6 +202,8 @@ struct StoredGrant {
     commands: Option<StoredCommands>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     max_lease_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    accept_logins: bool,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -399,13 +407,14 @@ fn decode(bytes: &[u8]) -> Result<BTreeMap<Peer, PeerGrant>, GrantsError> {
     let unreadable = |reason: String| GrantsError::Unreadable(reason);
     let version: Version =
         serde_json::from_slice(bytes).map_err(|error| unreadable(error.to_string()))?;
-    let leases = match version.schema_version {
-        version if version == u64::from(SCHEMA_VERSION) => false,
-        version if version == u64::from(SCHEMA_VERSION_LEASES) => true,
+    let (leases, logins) = match version.schema_version {
+        version if version == u64::from(SCHEMA_VERSION) => (false, false),
+        version if version == u64::from(SCHEMA_VERSION_LEASES) => (true, false),
+        version if version == u64::from(SCHEMA_VERSION_LOGINS) => (true, true),
         other => {
             return Err(unreadable(format!(
                 "it has schema version {other}, and this build reads \
-                 {SCHEMA_VERSION} and {SCHEMA_VERSION_LEASES}"
+                 {SCHEMA_VERSION}, {SCHEMA_VERSION_LEASES} and {SCHEMA_VERSION_LOGINS}"
             )))
         }
     };
@@ -451,6 +460,18 @@ fn decode(bytes: &[u8]) -> Result<BTreeMap<Peer, PeerGrant>, GrantsError> {
                     .map_err(|_| unreadable(format!("{name}'s maxLeaseMs is out of bounds")))?,
             ),
         };
+        let grant = match entry.accept_logins {
+            false => grant,
+            // Only version 3 holds it, as only version 2 and later hold a
+            // lease limit.
+            true if !logins => {
+                return Err(unreadable(format!(
+                    "{name} has acceptLogins, which schema version {} cannot hold",
+                    version.schema_version
+                )))
+            }
+            true => grant.with_logins(),
+        };
         grants.insert(peer, grant);
     }
     Ok(grants)
@@ -458,8 +479,11 @@ fn decode(bytes: &[u8]) -> Result<BTreeMap<Peer, PeerGrant>, GrantsError> {
 
 fn encode(grants: &BTreeMap<Peer, PeerGrant>) -> Stored {
     let leases = grants.values().any(|grant| grant.max_lease().is_some());
+    let logins = grants.values().any(PeerGrant::logins);
     Stored {
-        schema_version: if leases {
+        schema_version: if logins {
+            SCHEMA_VERSION_LOGINS
+        } else if leases {
             SCHEMA_VERSION_LEASES
         } else {
             SCHEMA_VERSION
@@ -484,6 +508,7 @@ fn stored(grant: &PeerGrant) -> StoredGrant {
             max_timeout_ms: commands.max_timeout_ms(),
         }),
         max_lease_ms: grant.max_lease().map(MaxLease::ms),
+        accept_logins: grant.logins(),
     }
 }
 

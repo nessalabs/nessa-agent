@@ -209,6 +209,10 @@ export const KNOBS = {
     default: 1,
     what: "voice calls through a fake realtime provider: a key saved in Settings, Talk, spoken words sent tidied and the reply handed back, the microphone muted, a turn stopped by voice, End call",
   },
+  logins: {
+    default: 1,
+    what: "times an agent's login is saved in Settings › Accounts and a paired worker that takes logins starts the agent without it until its switch in Devices is on, then with it; removed again after",
+  },
   launches: {
     default: 1,
     what: "window reloads while the host is still starting the gateway: no startup screen, and the conversation listed as soon as it is up",
@@ -322,6 +326,7 @@ export function plan(knobs, accessScenario = "full") {
   add(knobs.menus, () => ({ kind: "menu" }))
   add(knobs.githubs, () => ({ kind: "github" }))
   add(knobs.voices, () => ({ kind: "voice" }))
+  add(knobs.logins, () => ({ kind: "login" }))
   add(knobs.passphrases, () => ({ kind: "passphrase" }))
   add(knobs.channels, () => ({ kind: "channel" }))
   add(knobs.huddles, () => ({ kind: "huddle" }))
