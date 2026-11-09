@@ -1035,7 +1035,9 @@ async fn expiry_before_the_first_link_consumes_the_choice_without_replay() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn custom_terminal_evidence_is_correlated_before_any_link_or_audit_effect() {
-    use nessa_auth::application::pairing::{PairingLinkSource, PersonLinkError};
+    use nessa_auth::application::pairing::{
+        PairingLinkSource, PairingPersonLinks, PersonLinkError,
+    };
     use nessa_auth::domain::pairing::{PairingEvent, PairingInitiator, TerminalCause};
     use nessa_server::conversation::infrastructure::LocalPersonLinks;
     let fixture = Fixture::new().await;
