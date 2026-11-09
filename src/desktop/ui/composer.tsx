@@ -149,6 +149,7 @@ export function Composer({
 }) {
   const draft = text
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const formRef = useRef<HTMLFormElement>(null)
 
   // Measured after each edit, before paint, so the layout changes with the
   // keystroke that crossed a threshold rather than a frame after it.
@@ -175,6 +176,7 @@ export function Composer({
 
   return (
     <form
+      ref={formRef}
       className="desktop-composer"
       // A turn is running: the composer offers Stop (a quiet pane shows only that).
       data-running={onStop ? "" : undefined}
@@ -288,6 +290,8 @@ export function Composer({
           <ComposerAccessMode
             value={access?.value ?? "ask-approval"}
             onValueChange={access?.onChange}
+            // Its menu ends where the composer ends, not past it.
+            alignTo={formRef}
             disabled={!access}
             className="desktop-chip"
             contentClassName="desktop-popover"

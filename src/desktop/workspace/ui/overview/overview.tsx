@@ -14,6 +14,7 @@ import {
 } from "@nessa-ui/react/segmented-control"
 import { StatusGlyph } from "../chrome/status-glyph"
 import { EmptyState } from "@nessa-ui/react/empty-state"
+import { LoadingText } from "@nessa-ui/react/loading-text"
 import { PageHeader } from "@nessa-ui/react/page-header"
 import { flushSync } from "react-dom"
 import { reducedMotion } from "../../../adapters/motion-preference"
@@ -769,7 +770,11 @@ export function AgentsOverview({
                     takesKey={takesKey}
                     onShowAll={() => setFilter(everySession)}
                   />
-                ) : null}
+                ) : (
+                  // Until the list is read and its first rows drawn, the page
+                  // says it is loading rather than standing blank.
+                  <LoadingText className="agents-overview-loading" />
+                )}
                 <p className="agents-overview-said" aria-live="polite">
                   {said}
                 </p>

@@ -5797,6 +5797,10 @@ const steps = {
       failures.push("⌘W did not close the pane beside")
       return
     }
+    // A new session beside names itself: alone, a home is its greeting;
+    // beside another pane every pane says what it is (UI audit #27).
+    await homeBesideNamed(run.page, failures)
+    if (failures.length) return
     await run.page.keyboard.press(keys.toggleSidebar)
     await channelShowsList(run.page, failures)
     if (failures.length) return
@@ -6999,6 +7003,13 @@ const steps = {
                 ),
               ),
               cut: label ? label.scrollWidth > label.clientWidth : false,
+              color: label ? getComputedStyle(label).color : "",
+              detail: (() => {
+                const detail = column.querySelector("[data-cut]")
+                return detail
+                  ? { text: detail.textContent ?? "", from: detail.dataset.cut }
+                  : null
+              })(),
             }
           })(),
         }
@@ -7046,6 +7057,29 @@ const steps = {
           )
       }
     }
+    // The verb is never cut (only a long title of its own is). A path gives
+    // way from its start, keeping the file name; anything else from its end.
+    // A failed call is told by its glyph and bar: its words keep the tone of
+    // a call that went well (UI audit #24).
+    for (const [index, row] of drawn.entries()) {
+      if (!row.name) continue
+      if (!TRACE_CALLS[index].title && row.name.cut)
+        failures.push(`row ${index + 1}'s verb ${JSON.stringify(row.name.text)} is cut`)
+      const detail = row.name.detail
+      if (detail) {
+        const path = !/\s/.test(detail.text) && detail.text.includes("/")
+        if (detail.from !== (path ? "start" : "end"))
+          failures.push(
+            `row ${index + 1}'s detail ${JSON.stringify(detail.text)} is cut from its ${detail.from}`,
+          )
+      }
+    }
+    const fine = drawn.find((row) => row.status !== "failed" && row.name)
+    for (const [index, row] of drawn.entries())
+      if (row.status === "failed" && fine && row.name?.color !== fine.name.color)
+        failures.push(
+          `row ${index + 1} failed and its words are drawn ${row.name?.color}, not ${fine.name.color}`,
+        )
     // A call's card shows the input it was made with.
     const asked = TRACE_CALLS.findIndex((call) => Object.keys(call.arguments).length)
     const row = rows.nth(asked)
@@ -7103,6 +7137,34 @@ const steps = {
       }
       await page.keyboard.press(keys.escape)
       await menuGone()
+      // The access menu ends where the composer ends, not past it toward the
+      // window's edge (UI audit #26).
+      const access = page
+        .locator(css.focusedPane)
+        .locator('.workspace-dock [data-slot="composer-access-mode"]')
+      await access.click({ timeout: 10_000 })
+      const accessMenu = page.locator('[data-slot="composer-access-mode-content"]')
+      await accessMenu.waitFor({ timeout: 5_000 })
+      const edges = await access.evaluate((control) => ({
+        menu: document
+          .querySelector('[data-slot="composer-access-mode-content"]')
+          ?.getBoundingClientRect().right,
+        composer: control.closest(".desktop-composer")?.getBoundingClientRect().right,
+      }))
+      if (
+        typeof edges.menu !== "number" ||
+        typeof edges.composer !== "number" ||
+        Math.abs(edges.menu - edges.composer) > 1
+      )
+        failures.push(
+          `the access menu ends at ${edges.menu}, not at the composer's edge ${edges.composer}`,
+        )
+      if (run.evidence)
+        await page.screenshot({
+          path: join(run.evidence, `menu-${run.engine}-access.png`),
+        })
+      await page.keyboard.press(keys.escape)
+      await accessMenu.waitFor({ state: "detached", timeout: 5_000 })
       // The overview's filter: the chosen choice's check before its number,
       // the numbers in one column, and a number picks its choice.
       const had = await page.evaluate((key) => {
@@ -7121,6 +7183,37 @@ const steps = {
         await page.getByRole("button", { name: names.overviewShowAll }).click()
         await page.locator(css.overviewListed).waitFor({ timeout: 10_000 })
       }
+      // The first group starts right under the header; a row waiting on a
+      // command is its title and that command, with no line of why above it;
+      // a reply from the peek is the composer in its compact size (UI audit
+      // #22, #23).
+      const overview = await page.evaluate(() => {
+        const header = document
+          .querySelector(".agents-overview-header")
+          ?.getBoundingClientRect()
+        const group = document
+          .querySelector(".agents-overview-group")
+          ?.getBoundingClientRect()
+        return {
+          gap: header && group ? Math.round(group.top - header.bottom) : null,
+          doubled: [...document.querySelectorAll(".agents-request")].filter(
+            (row) =>
+              row.querySelector(".agents-request-command") &&
+              row.querySelector(".agents-request-why"),
+          ).length,
+          pills: [...document.querySelectorAll(".agents-reply-pill")].map((pill) =>
+            pill.matches('.desktop-composer[data-size="compact"]'),
+          ),
+        }
+      })
+      if (overview.gap !== null && overview.gap > 32)
+        failures.push(
+          `the overview's first group starts ${overview.gap}px under its header`,
+        )
+      if (overview.doubled)
+        failures.push(`${overview.doubled} overview rows say why above their command`)
+      if (overview.pills.some((compact) => !compact))
+        failures.push("a reply from the overview is not the composer's compact size")
       const pick = async (key) => {
         await filter.click({ timeout: 10_000 })
         await page.keyboard.press(key)
@@ -7363,6 +7456,66 @@ const steps = {
       failures.push(
         "the wide table does not fade its right side, where columns are hidden",
       )
+    // Each table's copy control sits above its panel's top-right corner, never
+    // on a column name: the wide table cuts its last column at the panel
+    // edge, so a control inside the panel covered that name (UI audit #25).
+    await tables.nth(1).hover()
+    const copies = await message.evaluate((element) =>
+      [...element.querySelectorAll('[data-slot="markdown-table"]')].map((table) => {
+        const copy = table
+          .querySelector('[data-slot="copy-button"]')
+          ?.getBoundingClientRect()
+        const panel = table
+          .querySelector('[data-slot="table-container"]')
+          .getBoundingClientRect()
+        return copy
+          ? { above: copy.bottom <= panel.top + 0.5, right: copy.right - panel.right }
+          : null
+      }),
+    )
+    for (const [index, copy] of copies.entries()) {
+      if (!copy) failures.push(`table ${index + 1} has no copy control`)
+      else if (!copy.above || Math.abs(copy.right) > 1)
+        failures.push(
+          `table ${index + 1}'s copy control is not above its top-right corner (${JSON.stringify(copy)})`,
+        )
+    }
+    // Scrolled up, the way back to the latest sits on the composer's top
+    // edge, half over it, rather than on a line of the reply (UI audit #28).
+    const transcript = run.page.locator(css.focusedPane).locator(".workspace-transcript")
+    if (
+      await transcript.evaluate((each) => each.scrollHeight > each.clientHeight + 200)
+    ) {
+      const box = await transcript.boundingBox()
+      await run.page.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
+      await run.page.mouse.wheel(0, -600)
+      const jump = run.page
+        .locator(css.focusedPane)
+        .locator(".workspace-jump:not([data-hidden])")
+      if (!(await waitFor(async () => (await jump.count()) === 1, 5_000)))
+        failures.push("scrolled up, the way back to the latest did not show")
+      else {
+        const placed = await jump.evaluate((button) => {
+          const at = button.getBoundingClientRect()
+          const composer = button
+            .closest(".workspace-pane")
+            ?.querySelector(".workspace-dock .desktop-composer")
+            ?.getBoundingClientRect()
+          const middle = at.top + at.height / 2
+          const hit = document.elementFromPoint(at.left + at.width / 2, middle)
+          return {
+            off: composer ? Math.round(middle - composer.top) : null,
+            onTop: Boolean(hit?.closest(".workspace-jump")),
+          }
+        })
+        if (placed.off === null || Math.abs(placed.off) > 6 || !placed.onTop)
+          failures.push(
+            `the way back to the latest is not on the composer's top edge: ${JSON.stringify(placed)}`,
+          )
+        await jump.click()
+        await waitFor(async () => (await jump.count()) === 0, 5_000)
+      }
+    }
     if (run.evidence)
       await run.page.screenshot({
         path: join(run.evidence, `table-${run.engine ?? "window"}.png`),
@@ -7851,11 +8004,62 @@ async function flatPanes(page, failures) {
     panes: await page.locator(css.pane).count(),
     hairlines: await page.locator(`${css.chat} ${css.paneEdge}[data-axis="x"]`).count(),
     broken: await flatSurfaceFailures(page),
+    // Room between each pane's composer and the pane's right edge: one
+    // gutter in every pane, a narrow one too (UI audit #27).
+    gutters: await page.locator(css.pane).evaluateAll((panes) =>
+      panes.map((pane) => {
+        const composer = pane.querySelector(".workspace-dock .desktop-composer")
+        return composer
+          ? Math.round(
+              pane.getBoundingClientRect().right - composer.getBoundingClientRect().right,
+            )
+          : null
+      }),
+    ),
   })
   const holds = (state) =>
-    state.panes === 2 && state.hairlines === 1 && state.broken.length === 0
+    state.panes === 2 &&
+    state.hairlines === 1 &&
+    state.broken.length === 0 &&
+    state.gutters.every((gutter) => gutter !== null && gutter >= 16)
   if (await waitFor(async () => holds(await now()), 10_000)) return
   failures.push(`the panes are not one flat surface: ${JSON.stringify(await now())}`)
+}
+
+/**
+ * Opens a new session beside the one pane (⇧⌘N), checks its header reads
+ * "New session" and is shown while the conversation's stays as it was, then
+ * closes it again (⌘W).
+ */
+async function homeBesideNamed(page, failures) {
+  await page.keyboard.press(keys.newSessionBeside)
+  if (
+    !(await waitFor(async () => (await page.locator(css.pane).count()) === 2, 10_000))
+  ) {
+    failures.push(
+      `a new session beside left ${await page.locator(css.pane).count()} panes, not 2`,
+    )
+    return
+  }
+  const home = page.locator(css.focusedPane)
+  const named = await waitFor(
+    async () =>
+      (await home.locator(css.paneHome).count()) === 1 &&
+      (await home
+        .locator("[data-shown] .workspace-pane-title")
+        .textContent()
+        .catch(() => "")) === "New session",
+    5_000,
+  )
+  if (!named)
+    failures.push(
+      `the new session beside is not named: ${JSON.stringify(
+        await home.locator(".workspace-pane-title").allTextContents(),
+      )}`,
+    )
+  await page.keyboard.press(keys.closePane)
+  if (!(await waitFor(async () => (await page.locator(css.pane).count()) === 1, 10_000)))
+    failures.push("⌘W did not close the new session beside")
 }
 
 /**

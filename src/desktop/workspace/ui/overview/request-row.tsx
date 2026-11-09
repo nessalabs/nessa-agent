@@ -22,14 +22,17 @@ import { AgentTile } from "../chrome/agent-tile"
 import { failureCopy, readFailureCopy } from "../failure-copy"
 import { offersChoice, optionOf, shownWhole } from "../../model/transcript"
 import { approvalReason, approvalRequest } from "../transcript/approval-request"
-import { named, Saying, shownCommand, shownName, spoken } from "../transcript/said"
+import { Saying, shownCommand, spoken } from "../transcript/said"
 import { overviewKeys } from "./overview-keys"
 import { SessionPeek } from "./session-peek"
 import type { OnAnswer, Settling } from "./settling"
 
 /**
- * One session waiting on the person, as a row of the list: its title, one
- * line of why, and the command itself — the only monospace on the page.
+ * One session waiting on the person, as a row of the list: its title and
+ * one line under it. For an agent's command that line is the command itself
+ * (the only monospace on the page), which already says what is asked; for an
+ * app's tool it is who asks for what; a refusal or a failed read takes its
+ * place.
  * The review's answers wait at its end until the row is pointed at or has
  * the keyboard. Where the review offers always as well as once, holding ⌥
  * turns the once button into that answer, as ⌥ shows the other choice in a
@@ -179,37 +182,29 @@ export const RequestRow = memo(function RequestRow({
         <AgentTile model={summary.model} size={24} />
         <span className="agents-row-text">
           <span className="agents-row-title agents-truncate">{summary.title}</span>
-          <span className="agents-request-why agents-truncate">
-            {refused ? (
-              <span className="agents-request-failure" role="status">
-                {failureCopy(refused)}
-              </span>
-            ) : unreadable ? (
-              <span className="agents-request-failure" role="status">
-                {readFailureCopy(unreadable, "conversation")}
-              </span>
-            ) : approval ? (
-              <Saying said={approvalReason(approval)} />
-            ) : (
-              summary.preview
-            )}
-          </span>
-          {approval ? (
-            approval.origin.kind === "app" ? (
-              <code
-                className="agents-request-command agents-truncate"
-                title={shownName(approval.command)}
-              >
-                <Saying said={[named(approval.command)]} />
-              </code>
-            ) : (
-              <code
-                className="agents-request-command agents-truncate"
-                title={agentCommand}
-              >
-                <bdi dir="ltr">{agentCommand}</bdi>
-              </code>
-            )
+          {refused || unreadable || !approval || approval.origin.kind === "app" ? (
+            <span className="agents-request-why agents-truncate">
+              {refused ? (
+                <span className="agents-request-failure" role="status">
+                  {failureCopy(refused)}
+                </span>
+              ) : unreadable ? (
+                <span className="agents-request-failure" role="status">
+                  {readFailureCopy(unreadable, "conversation")}
+                </span>
+              ) : approval ? (
+                // An app's tool name alone says little; its line says who asks for what.
+                <Saying said={approvalReason(approval)} />
+              ) : (
+                summary.preview
+              )}
+            </span>
+          ) : null}
+          {approval && approval.origin.kind !== "app" && !refused && !unreadable ? (
+            // An agent's command already says what is asked, so it is the row's second line.
+            <code className="agents-request-command agents-truncate" title={agentCommand}>
+              <bdi dir="ltr">{agentCommand}</bdi>
+            </code>
           ) : null}
         </span>
         <span className="agents-request-end">

@@ -257,6 +257,19 @@
   margin-top: 36px;
 }
 
+/* The first group starts right under the header: the header's own space is the gap. */
+.agents-overview-group:first-child {
+  margin-top: 0;
+}
+
+/* While the list loads, a quiet word where its first row will be. */
+.agents-overview-loading {
+  display: block;
+  margin: 0 2px;
+  color: var(--desktop-muted);
+  font-size: var(--desktop-text-body);
+}
+
 .agents-overview-group h2 {
   display: flex;
   align-items: center;
@@ -809,7 +822,7 @@ html:not(.dark) .agents-request {
   box-shadow: inset 0 0 0 1.5px var(--desktop-focus-ring);
 }
 
-/* ——— Replying from the peek: a pill, the composer pared down ——— */
+/* ——— Replying from the peek: the composer in its compact size ——— */
 
 .agents-reply {
   display: grid;
@@ -854,56 +867,7 @@ html:not(.dark) .agents-request {
   flex: none;
 }
 
-.agents-reply-pill {
-  display: flex;
-  align-items: flex-end;
-  gap: 6px;
-  padding: 5px 5px 5px 14px;
-  border-radius: 18px;
-  background: color-mix(in oklab, var(--background) 62%, transparent);
-  -webkit-backdrop-filter: blur(16px);
-  backdrop-filter: blur(16px);
-  box-shadow: inset 0 0 0 1px var(--desktop-rim);
-  transition:
-    background-color var(--desktop-base) ease,
-    box-shadow var(--desktop-base) ease;
-}
-
-.agents-reply-pill:focus-within {
-  background: color-mix(in oklab, var(--background) 50%, transparent);
-  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--foreground) 12%, transparent);
-}
-
-.agents-reply-pill textarea {
-  flex: 1;
-  min-width: 0;
-  min-height: 26px;
-  padding: 4px 0;
-  border: 0;
-  outline: none;
-  resize: none;
-  background: transparent;
-  color: var(--foreground);
-  font: inherit;
-  font-size: var(--desktop-text-body);
-  line-height: 18px;
-}
-
-.agents-reply-pill textarea::placeholder {
-  color: var(--desktop-faint);
-}
-
-.agents-reply-send.desktop-send {
-  width: 26px;
-  height: 26px;
-  flex: none;
-}
-
-.agents-reply-send svg {
-  width: 14px;
-  height: 14px;
-}
-
+/* The composer's compact size (`.desktop-composer[data-size="compact"]`, styles.css). */
 .agents-reply-pill[data-sending] .agents-reply-send {
   opacity: 0.5;
 }

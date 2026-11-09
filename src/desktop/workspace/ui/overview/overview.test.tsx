@@ -448,9 +448,24 @@ describe("the agents overview", () => {
     expect(card("second")?.getAttribute("aria-label")).toMatch(
       /\. The \u2068a\uFFFD\uFFFDb\u2069 app wants to run \u2068c\uFFFD\uFFFD\uFFFDd \{\}\u2069\.$/,
     )
-    const command = card("second")?.querySelector<HTMLElement>(".agents-request-command")
-    expect(command?.querySelector("bdi")?.textContent).toBe("c\uFFFD\uFFFD\uFFFDd {}")
-    expect(command?.title).toBe("c\uFFFD\uFFFD\uFFFDd {}")
+    // An app's row says who asks for what on its second line (the gateway's
+    // title, which names the tool and the server); the tool name alone would
+    // say less, so there is no command line under it.
+    expect(card("second")?.querySelector(".agents-request-command")).toBeNull()
+    expect(card("second")?.querySelector(".agents-request-why")?.textContent).toBe(
+      "Why second.",
+    )
+    expect(card("second")?.textContent).not.toMatch(bidiControls)
+  })
+
+  it("an agent's row is its title and its command: the command says what is asked", async () => {
+    await mount()
+    await open()
+    const row = card("first")
+    expect(row?.querySelector(".agents-request-command bdi")?.textContent).toBe(
+      "security import build.p12",
+    )
+    expect(row?.querySelector(".agents-request-why")).toBeNull()
   })
 
   it("E2-1 (#390): a row for an app's message shows an override in its server's name as U+FFFD", async () => {

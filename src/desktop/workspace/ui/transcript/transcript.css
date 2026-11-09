@@ -423,7 +423,7 @@
 
 /* ——— Back to the latest ——— */
 
-/* The scroller and what floats over its foot, just above the composer. */
+/* The scroller, and the way back to the latest that sits on its foot. */
 .workspace-transcript-frame {
   position: relative;
   display: flex;
@@ -434,9 +434,11 @@
 
 .desktop-icon-button.workspace-jump {
   position: absolute;
-  bottom: 12px;
+  /* Centred on the scroller's foot, which is the composer's top edge: half
+     of it over the composer, so it never sits on a line of the reply. */
+  bottom: calc(var(--icon-button-size) / -2);
   left: 50%;
-  z-index: 1;
+  z-index: 2;
   translate: -50% 0;
   border: 1px solid color-mix(in oklab, var(--foreground) 14%, transparent);
   background: var(--popover);
