@@ -55,7 +55,7 @@ Checks, per engine and layout (--only <names> to pick):
            added; the list order, in Ongoing and Ended sections with no
            avatars or summary, and the closed child; one breadcrumb, the
            panel tab's, naming the open child; expanded, the chat surface
-           from the window's top with Back to Panel; a child opens, focus
+           below the window toolbar with an opaque background and Back to Panel; a child opens, focus
            stays in the panel, the transcript follows then stays put when
            scrolled up; Escape returns to the list (the panel's next Escape
            changes nothing; the window's returns to the panes)
@@ -382,22 +382,35 @@ const checks = {
     if (!(await contentIs(page, content.widget)))
       failures.push("Open in Window did not show the window")
     await need(page, css.widgetWindow, "the window")
-    // Expanded, it is the chat surface's own ground, from the window's top,
-    // with its way back to the panel where the expand control was.
-    const ground = await page.evaluate((sel) => {
-      const window_ = document.querySelector(sel)
-      const surface = window_.closest("[data-surface]")
-      return {
-        top: window_.getBoundingClientRect().top,
-        fill: getComputedStyle(window_).backgroundColor,
-        surface: getComputedStyle(surface).backgroundColor,
-      }
-    }, css.widgetWindow)
-    if (ground.top !== 0)
-      failures.push(`the window starts ${ground.top}px down, not at the top`)
-    // Its fill is the surface's: clear, on the window's ambient ground.
-    if (ground.fill !== ground.surface)
-      failures.push(`the window is ${ground.fill}, the surface ${ground.surface}`)
+    // Window widgets begin below the shared toolbar and cover the retained
+    // panes with the theme background (panes.css; styles.test.ts).
+    const ground = await page.evaluate(
+      ({ widget, titlebar }) => {
+        const window_ = document.querySelector(widget)
+        const toolbar = document.querySelector(titlebar)
+        const sample = document.createElement("span")
+        sample.style.cssText =
+          "position:absolute;visibility:hidden;background:var(--background)"
+        window_.append(sample)
+        const background = getComputedStyle(sample).backgroundColor
+        sample.remove()
+        return {
+          top: window_.getBoundingClientRect().top,
+          toolbarBottom: toolbar.getBoundingClientRect().bottom,
+          fill: getComputedStyle(window_).backgroundColor,
+          background,
+        }
+      },
+      { widget: css.widgetWindow, titlebar: css.titlebar },
+    )
+    if (Math.abs(ground.top - ground.toolbarBottom) > 1)
+      failures.push(
+        `the widget starts at ${ground.top}, toolbar ends at ${ground.toolbarBottom}`,
+      )
+    if (ground.fill !== ground.background)
+      failures.push(
+        `the widget is ${ground.fill}, theme background is ${ground.background}`,
+      )
     const hidden = await page.evaluate(
       () => getComputedStyle(document.querySelector(".split-panes-grid")).visibility,
     )

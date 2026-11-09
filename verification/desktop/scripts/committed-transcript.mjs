@@ -210,7 +210,9 @@ await main(
                   ...(requests.some(
                     (request) =>
                       request.executionId !== "exact-live-execution" ||
-                      request.questionId !== "retained-question",
+                      request.questionId !== "retained-question" ||
+                      // fixture-state.ts `committedQuestion.question`
+                      request.question !== "fedcba9876543210fedcba9876543210",
                   )
                     ? ["action turn/question identities mixed"]
                     : []),

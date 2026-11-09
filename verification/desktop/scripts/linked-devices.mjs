@@ -528,6 +528,13 @@ await main(meta, async ({ options, rep, url }) => {
     })
 
     await gatewayStep("tunnel", { mode: "on" }, async (page) => {
+      // Linking and the tunnel are read independently. Wait for this read before
+      // checking its off-state sentence rather than sampling the loading state.
+      await page.waitForFunction(
+        (selector) => document.querySelector(selector)?.dataset.tunnelEnabled === "false",
+        css.tunnel,
+        { timeout: 10_000 },
+      )
       const text = await panelText(page)
       const toggle = page.locator(css.tunnelSwitch)
       const before = [
