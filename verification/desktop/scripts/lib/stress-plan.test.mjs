@@ -190,6 +190,7 @@ test("the legacy seed preserves the existing non-model work's relative order", (
         huddles: "0",
         webhooks: "0",
         pastes: "0",
+        attaches: "0",
         awaits: "0",
         closes: "0",
         fresh: "0",

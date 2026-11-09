@@ -12,6 +12,7 @@ import {
   type AttachmentApi,
   type AttachmentBeginRefusal,
   type StoredAttachment,
+  type UploadedFileAttachment,
 } from "@nessa/client"
 import {
   AttachmentStagingError,
@@ -126,6 +127,58 @@ function storedImageRefusal(stored: StoredAttachment): AttachmentStagingError {
   return new AttachmentStagingError("rejected")
 }
 
+/** What a staging is given besides the bytes: when to stop, and the busy retries' clock. */
+type StagingOptions = {
+  /** Aborted when the file stops being wanted; the upload stops with it. */
+  signal: AbortSignal
+  /** Resolves after `ms`: the busy retries' clock. */
+  wait: (ms: number) => Promise<void>
+}
+
+/**
+ * Upload `bytes` into conversation `conversationId` and answer what the
+ * gateway stored them as — the one upload every staging shares. Rejects with
+ * {@link AttachmentStagingError}, whatever went wrong.
+ */
+async function stageStored(
+  attachments: () => Pick<AttachmentApi, "begin" | "upload">,
+  conversationId: string,
+  file: UploadedFile,
+  bytes: Blob,
+  { signal, wait }: StagingOptions,
+): Promise<StoredAttachment> {
+  try {
+    // No longer wanted while its bytes were read: no ticket is taken for it.
+    if (signal.aborted) throw new AttachmentStagingError("interrupted")
+    const beginning = await attachments().begin(conversationId, file)
+    // Either way the reference is the gateway's. The digest in `file` only
+    // identified the upload; it is never what a message names.
+    // The conversation already holds these bytes: nothing to send, no
+    // ticket to send it with, and the reference comes with the answer.
+    if (beginning.state === "stored") return beginning.stored
+    for (let attempt = 0; ; attempt++) {
+      try {
+        return await attachments().upload(
+          beginning.ticket,
+          { mimeType: file.mimeType, bytes },
+          { signal },
+        )
+      } catch (error) {
+        const delay = BUSY_RETRY_DELAYS_MS[attempt]
+        const busy =
+          error instanceof NessaAttachmentError &&
+          error.code === "temporarily_unavailable"
+        // Only "no room just now" leaves the ticket unspent. Every other
+        // failure ends this attempt; trying again means beginning again.
+        if (!busy || delay === undefined || signal.aborted) throw error
+        await wait(delay)
+      }
+    }
+  } catch (error) {
+    throw error instanceof AttachmentStagingError ? error : stagingFailure(error)
+  }
+}
+
 /**
  * Upload `bytes` into conversation `conversationId`, which must already exist
  * on the gateway, and answer the reference a message names the image by.
@@ -140,56 +193,35 @@ export async function stageImage(
   conversationId: string,
   file: UploadedFile,
   bytes: Blob,
-  {
-    signal,
-    wait,
-  }: {
-    /** Aborted when the image stops being wanted; the upload stops with it. */
-    signal: AbortSignal
-    /** Resolves after `ms`: the busy retries' clock. */
-    wait: (ms: number) => Promise<void>
-  },
+  options: StagingOptions,
 ): Promise<ImageReference> {
-  try {
-    // No longer wanted while its bytes were read: no ticket is taken for it.
-    if (signal.aborted) throw new AttachmentStagingError("interrupted")
-    const beginning = await attachments().begin(conversationId, file)
-    // Either way the reference is the gateway's. The digest in `file` only
-    // identified the upload; it is never what a message names.
-    let stored
-    if (beginning.state === "stored") {
-      // The conversation already holds these bytes: nothing to send, no
-      // ticket to send it with, and the reference comes with the answer.
-      stored = beginning.stored
-    } else {
-      for (let attempt = 0; ; attempt++) {
-        try {
-          stored = await attachments().upload(
-            beginning.ticket,
-            { mimeType: file.mimeType, bytes },
-            { signal },
-          )
-          break
-        } catch (error) {
-          const delay = BUSY_RETRY_DELAYS_MS[attempt]
-          const busy =
-            error instanceof NessaAttachmentError &&
-            error.code === "temporarily_unavailable"
-          // Only "no room just now" leaves the ticket unspent. Every other
-          // failure ends this attempt; trying again means beginning again.
-          if (!busy || delay === undefined || signal.aborted) throw error
-          await wait(delay)
-        }
-      }
-    }
-    // Storage keeps any file. A message names only the four image
-    // encodings, within the protocol's bound, and this is where that is
-    // decided — separately for each of those, because a readable 6 MiB PNG
-    // and a stored PDF are not the same news for the tile.
-    const image = asImageAttachment(stored)
-    if (!image) throw storedImageRefusal(stored)
-    return image
-  } catch (error) {
-    throw error instanceof AttachmentStagingError ? error : stagingFailure(error)
-  }
+  const stored = await stageStored(attachments, conversationId, file, bytes, options)
+  // Storage keeps any file. A message names only the four image
+  // encodings, within the protocol's bound, and this is where that is
+  // decided — separately for each of those, because a readable 6 MiB PNG
+  // and a stored PDF are not the same news for the tile.
+  const image = asImageAttachment(stored)
+  if (!image) throw storedImageRefusal(stored)
+  return image
+}
+
+/**
+ * Upload any file into conversation `conversationId`, which must already
+ * exist on the gateway, and answer the original stored input a message names
+ * it by (`conversation.prepare`'s `uploads`): what the gateway stored, under
+ * the name the person sees. The gateway places it where the agent works —
+ * on this machine, or in the cloud computer or host the conversation runs
+ * on — when the message is sent. Rejects with {@link AttachmentStagingError},
+ * whatever went wrong.
+ */
+export async function stageFile(
+  attachments: () => Pick<AttachmentApi, "begin" | "upload">,
+  conversationId: string,
+  file: UploadedFile & { name: string },
+  bytes: Blob,
+  options: StagingOptions,
+): Promise<UploadedFileAttachment> {
+  const { name, ...described } = file
+  const stored = await stageStored(attachments, conversationId, described, bytes, options)
+  return { digest: stored.digest, mimeType: stored.mimeType, size: stored.size, name }
 }
