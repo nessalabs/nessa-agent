@@ -1,0 +1,12 @@
+[
+  {
+    "path": "crates/nessa-server/src/conversation/application/service.rs",
+    "originalSha256": "1954b57daf8b0ea09627666196a1636f794520d774b556363ae9b1568a6d623f",
+    "mutatedSha256": "478f2272181cf40c2957d76871e51f0323688666fa54343747c958c9e19fef58"
+  },
+  {
+    "path": "crates/nessa-server/src/conversation/infrastructure/workspaces.rs",
+    "originalSha256": "ef0f2b2390822378263275a3adb931f7e145e374d9e4704c5b6c0be3d59da811",
+    "mutatedSha256": "07cbf1a9a40c22a091b0157568482c09a2419900186d6f4844a44fdda0e24b96"
+  }
+]

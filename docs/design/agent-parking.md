@@ -177,7 +177,8 @@ Only local and per-thread Boat workspaces support this operation.
 | New admitted call | Save its binding before starting a runner; a retry returns that binding |
 | VM runner starts | Open the existing workspace with provisioning disabled; retain its runtime's `InUse` token |
 | VM command starts | Run this gateway's installed build's `background-run` over SSH; Shepherd owns the command scope |
-| Stop requested | Send a stop byte; keep reading until Shepherd reports exit and cleanup |
+| Stop during workspace opening or helper installation | Retain accepted preparation until it answers; successful preparation observing stop settles cancelled/not-started before launch; a preparation error remains interrupted with unconfirmed cleanup |
+| Stop after the VM stream opens | Send a stop byte; keep reading until Shepherd reports exit and cleanup |
 | SSH stdin closes | VM runner cancels Shepherd and waits for scope cleanup |
 | Command exits while SSH stdin stays open | A nonblocking stdin descriptor allows the helper to return without leaving a blocking read holding runtime shutdown |
 | SSH output buffer fills | Nonblocking write readiness preserves the bounded terminal record until the reader drains it |
@@ -186,6 +187,11 @@ Only local and per-thread Boat workspaces support this operation.
 | Idle limit passes while task runs | Existing background owner prevents parking, and `InUse` prevents a direct rest |
 | Verified task and delivery finish | Clear the background owner; the next eligible idle sweep can rest the VM |
 | Gateway restarts | Existing recovery settles saved unfinished tasks interrupted without replaying commands |
+
+The gated `a_stop_during_background_install_does_not_launch_the_command`
+regression covers stopping during preparation. The command timeout measures
+execution; the transport deadline begins after preparation, without a startup
+deadline.
 
 The transport keeps bounded terminal output and accepts only a validated outcome.
 It does not distribute agent logins or change command authorization. Provider-owned

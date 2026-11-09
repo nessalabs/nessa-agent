@@ -2,38 +2,49 @@
 
 **Before:** `background.start` in a cloud thread is refused because it has no local workspace.
 
-**After:** the command runs under Shepherd in the thread's existing VM, keeps the VM in use, and settles the original task with its output and cleanup evidence.
+**After:** the command runs under Shepherd in the thread's existing VM, keeps the VM in use, and settles its original task with bounded output and cleanup evidence.
 
 Closes #1218.
 
-## Background
+## The change
 
-The gateway already owns background-task admission, persistence, continuation and idle parking. The workspace runtime owns the hold that prevents a VM from resting. This change joins those existing owners with an independent SSH command session.
+The admitted lease supplies a typed local/VM target and the VM's reported cwd. The VM runner opens the existing workspace without provisioning, installs the verified helper build, and retains `InUse` through an independent SSH command stream. Existing native-call correlation, channel/allocation checks and authorization remain in place. The task's conversation and immutable placement identify where it ran.
 
-## The problem
+```mermaid
+sequenceDiagram
+  participant Agent
+  participant Gateway
+  participant VM
+  Agent->>Gateway: background.start, observed native call
+  Gateway->>Gateway: admit and save task binding
+  Gateway->>VM: SSH background-run (cwd, timeout)
+  Note over Gateway,VM: Stream retains workspace InUse
+  VM->>VM: Shepherd owns bash scope
+  VM-->>Gateway: bounded terminal outcome after cleanup
+  Gateway->>Gateway: settle and deliver continuation
+  Note over Gateway,VM: VM may rest after task and delivery finish
+```
 
-Cloud leases report a VM working directory, while background admission accepted only a local directory. No task could therefore keep a cloud thread awake through the existing background owner.
+A stop during successful preparation settles cancelled before command launch, while accepted preparation remains owned until it answers. Once launched, a stop byte or closed SSH stdin asks Shepherd to clean up. Missing or invalid terminal evidence settles interrupted with cleanup unconfirmed. Gateway restart interrupts saved unfinished tasks without replay.
 
-## The solution
+This branch integrates main `19d631ebd34c6ece0062cbd0edbbd5e269d54c1d`, preserving its saved-login wiring. The background helper does not distribute agent logins. The lease fingerprint inputs, worker-image pin, consent and Cedar policies are unchanged by this PR.
 
-The source commit `9f10c41087f6602abae76168efd312e8574a4d6c` adds a typed execution target from the admitted lease, requires the VM's reported cwd, and keeps unsupported placements refused. The VM runner opens the existing workspace without provisioning, uses the verified installed build's `background-run` helper, and retains `InUse` through the SSH stream. Agent and background connections share the existing channel/allocation checks.
+## Verification
 
-The helper runs the same bounded Shepherd command runner used locally. A cancellation byte or closed SSH stdin requests cleanup. A valid terminal record settles the task; losing the connection without one settles interrupted with cleanup unconfirmed. Restart uses the existing recovery path and never replays the command. Location is derived from the task's conversation and immutable placement.
+Code checkpoint: `0b93e7c525e1c4720913493772d1006bab2b5225`. [Exact commands, logs, manifests and review](verification/conversation/evidence/1218-vm-background/README.md).
 
-## How we checked it
+- 37 background, 86 workspace, 130 SSH-adapter and 31 CLI tests passed. The opt-in real-SSH test remains ignored.
+- Both real helper-binary tests passed: open stdin, cleared synthetic secrets and a large record on shared socket stdio.
+- Server clippy on all targets with warnings denied, Rust formatting, 68 focused Node tests, 108 architecture tests, architecture checks, driver lint and formatting passed.
+- The conversation stress driver's `vmBackground` step passed at one and three repetitions per engine in Chromium and WebKit, columns, dev mode: 10/10 and 14/14 checks. It sends through the composer and checks unchanged live Boat lease, running row past idle, admitted cwd, completion, one continuation and subsequent rest. The fake provider and scripted in-process agent lease use the real helper and workspace holds. Only the initialized test composition accelerates cloud idle to three seconds; production remains five minutes.
+- Six original revert probes and the follow-up startup-stop/browser-admission probes failed as expected; sources were restored byte for byte. The probed fix hunks remained unchanged after main integration. The CLI stdin hang and truncated socket output were also reproduced before their fixes.
+- Independent review has no remaining confirmed correctness findings.
 
-The repository file `verification/conversation/evidence/1218-vm-background/README.md` records commands, counts and revert probes.
+![Existing waterfall while the VM task runs](verification/desktop/evidence/1218-vm-background/background-chromium-running.png)
+![Collapsed waterfall after completion](verification/desktop/evidence/1218-vm-background/background-webkit-finished.png)
 
-- 36 background, 85 workspace, 128 SSH and 31 CLI tests passed; the opt-in real-SSH test was ignored.
-- Both real helper CLI tests passed, covering open stdin, cleared synthetic secrets, and a large record on shared socket stdio.
-- The fake-VM stress test passed at its default 3 repetitions and at 10 repetitions.
-- Six deliberate reversions made their regression tests fail. Both the blocking-stdin hang and truncated socket-output record were reproduced before their fixes.
-- Server and CI-package clippy with all targets and `-D warnings`, formatting, architecture checks and stress-plan tests passed.
+## Limits and rollout
 
-## Tradeoffs and follow-ups
+The gateway installs its exact helper build even when an older VM image speaks the same lease protocol. Terminal output is delivered with the final record. Unconfirmed cleanup retains existing ownership and can keep the VM from resting; automatic reconciliation is unchanged. Command timeout measures execution; there is no overall preparation deadline.
 
-Unconfirmed cleanup retains the existing failed owner and can keep the VM from idle rest; automatic reconciliation is unchanged. The final record carries the bounded output tail; there is no interim output publication. Shells a provider starts outside `background.start` remain outside this task owner. Real Boat/SSH and browser VM tests were not run; no paid resources or real credentials were created. The lease protocol, worker-image pin, saved-login behavior and authorization policies are unchanged.
-
-## Rollout
-
-The gateway installs its verified helper build into an existing VM before using it, including an image whose lease protocol already matches. This description is prepared locally. No branch has been pushed and no PR has been published; publication awaits the user's approval.
+The browser runs selected the VM step, not the full conversation plan. Sidebar, real Boat/SSH and OS-level SSH teardown, native macOS/Windows and minimum-Rust checks were not run locally. WebKit used workspace-owned runtime libraries; its system-ldconfig host check was skipped, while browser launch and all assertions ran. No paid resources or real credentials were used. Exact-head CI remains pending; this PR stays draft.

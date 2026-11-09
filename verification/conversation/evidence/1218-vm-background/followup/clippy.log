@@ -1,0 +1,43 @@
+    Checking nessa-local-storage v0.1.0 (/workspace/nessa-agent-1218/crates/nessa-local-storage)
+    Checking nessa-timer v0.1.0 (/workspace/nessa-agent-1218/crates/nessa-timer)
+   Compiling nessa-vault v0.1.0 (/workspace/nessa-agent-1218/crates/nessa-vault)
+    Checking winnow v1.0.4
+   Compiling nessa-server v0.1.0 (/workspace/nessa-agent-1218/crates/nessa-server)
+    Checking toml_writer v1.1.2+spec-1.1.0
+    Checking toml_datetime v1.1.1+spec-1.1.0
+    Checking nessa-images v0.1.0 (/workspace/nessa-agent-1218/crates/nessa-images)
+    Checking nessa-agent-credentials v0.1.0 (/workspace/nessa-agent-1218/crates/nessa-agent-credentials)
+    Checking nessa-local-database v0.1.0 (/workspace/nessa-agent-1218/crates/nessa-local-database)
+    Checking nessa-auth v0.1.0 (/workspace/nessa-agent-1218/crates/nessa-auth)
+    Checking nessa-gateway-endpoint v0.1.0 (/workspace/nessa-agent-1218/crates/nessa-gateway-endpoint)
+    Checking toml_parser v1.1.3+spec-1.1.0
+    Checking nessa-sdk v0.1.0 (/workspace/nessa-agent-1218/crates/nessa-sdk)
+    Checking toml_edit v0.25.13+spec-1.1.0
+    Checking nessa-protocol v0.1.0 (/workspace/nessa-agent-1218/crates/nessa-protocol)
+    Checking nessa-client-core v0.1.0 (/workspace/nessa-agent-1218/crates/nessa-client-core)
+    Checking nessa-device-client v0.1.0 (/workspace/nessa-agent-1218/crates/nessa-device-client)
+warning: constant evaluation is taking a long time
+    --> crates/nessa-protocol/src/lease.rs:1235:20
+     |
+1235 |         while at < source.len() {
+     |                    ^^^^^^^^^^^^ the const evaluator is currently interpreting this expression
+     |
+help: the constant being evaluated
+    --> crates/nessa-server/src/env/config.rs:58:9
+     |
+  58 |           const LEASE_PROTOCOL_DIGITS: [u8; 16] =
+     |           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+  70 | / lease_protocol!(
+  71 | |     "../../../nessa-protocol/src/lease.rs",
+  72 | |     "../../../nessa-protocol/src/pairing/frames.rs",
+  73 | |     "../../../nessa-protocol/src/build_update.rs",
+...    |
+ 116 | |     "../../../nessa-sdk/src/domain/agent_execution/leases/value_objects.rs",
+ 117 | | );
+     | |_- in this macro invocation
+     = note: this warning originates in the macro `lease_protocol` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: `nessa-server` (lib) generated 1 warning
+warning: `nessa-server` (lib test) generated 1 warning (1 duplicate)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 2m 35s

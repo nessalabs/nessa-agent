@@ -2749,7 +2749,11 @@ VM without provisioning and the workspace runtime retains `InUse` for its stream
 `composition/background_command.rs` wires the VM helper's account environment and
 Shepherd to stdin/stdout; agent credentials do not enter that command environment.
 The service decorates existing tool rows; frontend transcript code retains their
-background identity while the turn ends. See [the lifecycle](state/services/gateway/background-tasks.md).
+background identity while the turn ends. The desktop stress `vmBackground` step
+uses `stress-vm-background.mjs` to launch the ignored, test-only
+`tests/composition/vm_background_gateway.rs` gateway: production admission and VM
+background dispatch, a fake workspace provider, and the real helper subprocess.
+Released binaries contain no fixture selector. See [the lifecycle](state/services/gateway/background-tasks.md).
 
 ## GitHub webhook ingress and relay
 

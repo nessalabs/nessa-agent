@@ -2569,6 +2569,13 @@ vault dialog blocking the main conversation click.
   the MCP relay. Its original waterfall row stays running after the calling turn
   finishes, then settles with the command's actual output. Exactly one internal
   continuation reaches the conversation and no synthetic user bubble appears.
+- The `vmBackground` step places its conversation on Boat through a test-only
+  gateway composition. Its fake provider uses the real workspace holds, verified
+  helper installer and Shepherd subprocess, with no Boat HTTP or SSH. Send is
+  through the composer. The task runs in its admitted VM cwd, remains running
+  past the fixture’s accelerated idle limit (3 seconds; production remains
+  5 minutes), settles the original row once, and permits rest afterward. Run its
+  default count and raised `--vmBackgroundTasks 3`; the nightly load uses 3.
 - Check the running and completed row in Chromium and WebKit. Ordinary foreground
   tools still settle when their calling turn ends. No separate task list is added.
 

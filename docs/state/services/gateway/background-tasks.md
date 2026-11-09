@@ -6,7 +6,7 @@ status: implemented
 summary: A local or cloud command can outlive its calling agent turn and resume that
   conversation with its outcome.
 parent: gateway
-sourceRevision: "9f10c41087f6602abae76168efd312e8574a4d6c"
+sourceRevision: "0b93e7c525e1c4720913493772d1006bab2b5225"
 sources:
   - crates/nessa-server/src/conversation/application/service/background_tasks.rs
   - crates/nessa-server/src/conversation/domain/background_task/lifecycle.rs
@@ -20,6 +20,8 @@ sources:
   - crates/nessa-server/tests/conversation/background_transport.rs
   - crates/nessa-server/tests/background_run_binary.rs
   - crates/nessa-server/tests/conversation/background_tasks.rs
+  - crates/nessa-server/src/conversation/infrastructure/workspaces.rs
+  - crates/nessa-server/tests/conversation/workspace_copies.rs
   - src/desktop/workspace/adapters/gateway/gateway-steps.ts
   - src/desktop/workspace/model/transcript.ts
 diagramLinks: {}
@@ -93,6 +95,14 @@ parking. In the VM, a separate SSH session runs the gateway's verified installed
 direct rest also leaves the VM running. The gateway opens only the existing VM,
 with provisioning disabled. The workspace reported by its lease and the
 conversation's immutable placement identify where the saved task ran.
+
+Cancellation is checked after opening the workspace and again after helper
+installation, before launching the command. Preparation keeps its existing
+allocation/install owner until it answers. After preparation succeeds, a stop
+received during it settles cancelled without starting a command. A preparation
+error retains the interrupted outcome and unconfirmed cleanup. The command timeout measures
+execution in Shepherd, while the gateway transport deadline begins after
+preparation. It does not bound workspace preparation.
 
 The helper uses the same bounded Shepherd runner as local execution. Its cleared
 account environment contains no forwarded agent logins. A stop byte or stdin EOF
