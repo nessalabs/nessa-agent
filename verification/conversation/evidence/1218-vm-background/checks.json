@@ -83,14 +83,7 @@
   },
   {
     "check": "helper-binary",
-    "command": [
-      "cargo",
-      "test",
-      "-p",
-      "nessa-server",
-      "--test",
-      "background_run_binary"
-    ],
+    "command": ["cargo", "test", "-p", "nessa-server", "--test", "background_run_binary"],
     "environment": {},
     "status": 0,
     "seconds": 33.76
@@ -113,23 +106,14 @@
   },
   {
     "check": "format",
-    "command": [
-      "cargo",
-      "fmt",
-      "--all",
-      "--",
-      "--check"
-    ],
+    "command": ["cargo", "fmt", "--all", "--", "--check"],
     "environment": {},
     "status": 0,
     "seconds": 8.05
   },
   {
     "check": "architecture",
-    "command": [
-      "node",
-      "scripts/check-architecture.mjs"
-    ],
+    "command": ["node", "scripts/check-architecture.mjs"],
     "environment": {},
     "status": 0,
     "seconds": 6.13
