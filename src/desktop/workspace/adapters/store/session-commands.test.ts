@@ -114,6 +114,21 @@ describe("sending", () => {
     expect(outboxOf(store, draftId)[0]).toMatchObject({ localImages: [image, file] })
   })
 
+  it("stores a file under the name the upload contract publishes", async () => {
+    const { store } = await ready()
+    store.dispatch(newSession())
+    const [draftId] = shown(store)
+    const text = new File(["x"], "a/b\\c\u0007.txt", { type: "text/plain" })
+    expect(store.dispatch(addComposerImages({ sessionId: draftId, files: [text] }))).toBe(
+      null,
+    )
+    expect(store.getState().workspace.composerImages[draftId][0]).toMatchObject({
+      kind: "file",
+      name: "a_b_c_.txt",
+      mimeType: "text/plain",
+    })
+  })
+
   it("puts a refused message's images, and its words, back in the composer when it is let go", async () => {
     const { store, source } = await ready()
     store.dispatch(newSession())
