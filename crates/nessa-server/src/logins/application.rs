@@ -45,18 +45,27 @@ pub enum LoginEvent {
     SaveRequested { agent: AgentId, replacing: bool },
     /// The save did not complete; whatever was saved still is.
     SaveFailed { agent: AgentId },
+    /// The vault refused the save and then could not say what it holds:
+    /// the new login may or may not be saved.
+    SaveUnsettled { agent: AgentId },
     /// The login is saved.
     Saved { agent: AgentId },
     /// An agent's saved login is about to be deleted.
     RemoveRequested { agent: AgentId },
     /// The delete did not complete; the login is still saved.
     RemoveFailed { agent: AgentId },
+    /// The vault refused the delete and then could not say what it holds:
+    /// the login may or may not still be saved.
+    RemoveUnsettled { agent: AgentId },
     /// No login is saved for the agent now.
     Removed { agent: AgentId },
     /// A paired machine's switch is about to be turned `on` or off.
     SwitchRequested { peer: PeerEnvironment, on: bool },
     /// The switch did not change.
     SwitchFailed { peer: PeerEnvironment, on: bool },
+    /// The vault refused the switch and then could not say what it holds:
+    /// the switch may or may not be as asked.
+    SwitchUnsettled { peer: PeerEnvironment, on: bool },
     /// The switch is as asked now.
     Switched { peer: PeerEnvironment, on: bool },
     /// A harness of `agent` on `environment` is started with its login,
@@ -114,8 +123,10 @@ pub enum LoginsError {
     StorageUnavailable,
     /// The change could not be recorded before it was made, so it was not.
     AuditUnavailable,
-    /// The change was made, but its outcome could not be recorded. What
-    /// is saved now is the change: read the status again.
+    /// The change was made, but its outcome could not be recorded: this
+    /// service's record of it could not be kept, or the vault made it and
+    /// then could not keep its own. What is saved now is the change: read
+    /// the status again.
     ChangeUnrecorded,
     TooManyDevices,
 }
@@ -137,6 +148,33 @@ pub struct SavedLoginsService {
     /// Told after an agent's login is saved or removed, so whatever was
     /// started with the old one can start again with the new.
     changed: Arc<dyn Fn(AgentId) + Send + Sync>,
+}
+
+/// What a store that refused a change holds now. A store can make a change
+/// and still refuse it: the vault writes the entry, then cannot keep its own
+/// record of the write.
+enum Settled {
+    /// It holds what was asked: the change was made.
+    Made,
+    /// It holds something else: the change was not made.
+    NotMade,
+    /// It cannot say.
+    Unknown,
+}
+
+fn settled(store: &dyn SecretStore, wanted: Option<&[u8]>) -> Settled {
+    match store.read() {
+        Ok(held) if held.as_deref().map(Vec::as_slice) == wanted => Settled::Made,
+        Ok(_) => Settled::NotMade,
+        Err(_) => Settled::Unknown,
+    }
+}
+
+/// The three ways a refused change can end, recorded as what happened.
+struct Ends {
+    made: LoginEvent,
+    failed: LoginEvent,
+    unsettled: LoginEvent,
 }
 
 fn store_error(problem: SecretUnavailable) -> LoginsError {
@@ -242,6 +280,44 @@ impl SavedLoginsService {
         }
     }
 
+    /// The answer to a change `store` refused with `problem`, recorded as
+    /// what its read-back shows. A change that may have been made tells
+    /// `changed` for `agent`: starting again with the same login costs a
+    /// restart, keeping an old one sends a login that is gone.
+    fn refused(
+        &self,
+        operation_id: &str,
+        caller: &LoginCaller,
+        problem: SecretUnavailable,
+        held: Settled,
+        agent: Option<AgentId>,
+        ends: Ends,
+    ) -> LoginsError {
+        let tell = || {
+            if let Some(agent) = agent {
+                (self.changed)(agent);
+            }
+        };
+        match held {
+            Settled::Made => {
+                tell();
+                // The vault's own record of the change is lost whether or
+                // not this one is kept.
+                let _ = self.record_outcome(operation_id, caller, ends.made);
+                LoginsError::ChangeUnrecorded
+            }
+            Settled::NotMade => {
+                self.record_failure(operation_id, caller, ends.failed);
+                store_error(problem)
+            }
+            Settled::Unknown => {
+                tell();
+                self.record_failure(operation_id, caller, ends.unsettled);
+                store_error(problem)
+            }
+        }
+    }
+
     /// Which agents have a login saved, and which machines are switched on.
     pub fn status(&self) -> Result<LoginsStatus, LoginsError> {
         let mut saved = BTreeMap::new();
@@ -272,8 +348,19 @@ impl SavedLoginsService {
             LoginEvent::SaveRequested { agent, replacing },
         )?;
         if let Err(problem) = store.write(login.expose().as_bytes()) {
-            self.record_failure(&operation_id, &caller, LoginEvent::SaveFailed { agent });
-            return Err(store_error(problem));
+            let held = settled(store.as_ref(), Some(login.expose().as_bytes()));
+            return Err(self.refused(
+                &operation_id,
+                &caller,
+                problem,
+                held,
+                Some(agent),
+                Ends {
+                    made: LoginEvent::Saved { agent },
+                    failed: LoginEvent::SaveFailed { agent },
+                    unsettled: LoginEvent::SaveUnsettled { agent },
+                },
+            ));
         }
         (self.changed)(agent);
         // Made but not recorded is never answered as a success.
@@ -300,8 +387,19 @@ impl SavedLoginsService {
             LoginEvent::RemoveRequested { agent },
         )?;
         if let Err(problem) = store.delete() {
-            self.record_failure(&operation_id, &caller, LoginEvent::RemoveFailed { agent });
-            return Err(store_error(problem));
+            let held = settled(store.as_ref(), None);
+            return Err(self.refused(
+                &operation_id,
+                &caller,
+                problem,
+                held,
+                Some(agent),
+                Ends {
+                    made: LoginEvent::Removed { agent },
+                    failed: LoginEvent::RemoveFailed { agent },
+                    unsettled: LoginEvent::RemoveUnsettled { agent },
+                },
+            ));
         }
         (self.changed)(agent);
         self.record_outcome(&operation_id, &caller, LoginEvent::Removed { agent })?;
@@ -330,13 +428,22 @@ impl SavedLoginsService {
             Some(&caller),
             LoginEvent::SwitchRequested { peer, on },
         )?;
-        if let Err(problem) = self.devices.write(&encode_switches(&next)) {
-            self.record_failure(
+        let wanted = encode_switches(&next);
+        if let Err(problem) = self.devices.write(&wanted) {
+            let held = settled(self.devices.as_ref(), Some(&wanted));
+            // A switch is read at each lease: nothing started needs telling.
+            return Err(self.refused(
                 &operation_id,
                 &caller,
-                LoginEvent::SwitchFailed { peer, on },
-            );
-            return Err(store_error(problem));
+                problem,
+                held,
+                None,
+                Ends {
+                    made: LoginEvent::Switched { peer, on },
+                    failed: LoginEvent::SwitchFailed { peer, on },
+                    unsettled: LoginEvent::SwitchUnsettled { peer, on },
+                },
+            ));
         }
         self.record_outcome(&operation_id, &caller, LoginEvent::Switched { peer, on })?;
         self.status()
@@ -346,7 +453,9 @@ impl SavedLoginsService {
     /// given: only when one is saved and the policy lets that machine
     /// receive it. Recorded either way, except when none is saved: there is
     /// nothing to hand or withhold. A login whose handing cannot be
-    /// recorded is not handed.
+    /// recorded is not handed, and a record that cannot be kept is logged as
+    /// an error: the lease still starts, with no login, so a machine signed
+    /// in on its own still works while the audit is down.
     pub fn login_for(
         &self,
         environment: &EnvironmentRef,
@@ -356,7 +465,7 @@ impl SavedLoginsService {
         let operation_id = Uuid::new_v4().to_string();
         let name = environment.name();
         let withheld = |why: Withheld| {
-            let _ = self.record(
+            let kept = self.record(
                 &operation_id,
                 None,
                 LoginEvent::NotSent {
@@ -366,6 +475,14 @@ impl SavedLoginsService {
                     why,
                 },
             );
+            if kept.is_err() {
+                tracing::error!(
+                    environment = %name,
+                    agent = agent.name(),
+                    lease,
+                    "a withheld saved login could not be recorded"
+                );
+            }
             None
         };
         let login = match self.saved(agent) {
@@ -392,7 +509,7 @@ impl SavedLoginsService {
             Ok(false) => return withheld(Withheld::NotAllowed),
             Err(_) => return withheld(Withheld::Unavailable),
         }
-        self.record(
+        let kept = self.record(
             &operation_id,
             None,
             LoginEvent::Sent {
@@ -400,9 +517,19 @@ impl SavedLoginsService {
                 agent,
                 lease: lease.to_owned(),
             },
-        )
-        .ok()
-        .map(|()| login)
+        );
+        match kept {
+            Ok(()) => Some(login),
+            Err(_) => {
+                tracing::error!(
+                    environment = %name,
+                    agent = agent.name(),
+                    lease,
+                    "a saved login was not handed: its handoff could not be recorded"
+                );
+                None
+            }
+        }
     }
 }
 

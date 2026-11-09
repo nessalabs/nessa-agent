@@ -16,7 +16,15 @@ written when the lease opens with the login, before the harness starts. Each `se
 or `withheld` record names the lease that asked, whose own records name who
 started it. A save, removal or switch whose outcome cannot be recorded
 after it was made answers `logins_change_unrecorded`, not a refusal: the
-change stands, and Settings reads the status again.
+change stands, and Settings reads the status again. So does one the vault
+made and then refused (it wrote the entry but could not keep its own record
+of the write): after any refused change the entry is read back, a change it
+holds is recorded as made, and one it cannot say about is recorded
+`unsettled`, never `failed`. A save or removal that may have been made tells
+Boat to start again with whatever is saved now. A `sent` or `withheld`
+record that cannot be kept is logged as an error; the login is not handed,
+and the lease still opens, so a machine signed in on its own keeps working
+while the audit is down.
 
 Three yeses are needed before a login reaches a machine, each owned by one
 place:

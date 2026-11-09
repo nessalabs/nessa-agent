@@ -41,6 +41,9 @@ pub(super) fn stored(record: &LoginRecord) -> (&'static str, Value) {
         LoginEvent::SaveFailed { agent } => {
             ("failed", "login_save", json!({ "agent": agent.name() }))
         }
+        LoginEvent::SaveUnsettled { agent } => {
+            ("unsettled", "login_save", json!({ "agent": agent.name() }))
+        }
         LoginEvent::Saved { agent } => ("saved", "login_save", json!({ "agent": agent.name() })),
         LoginEvent::RemoveRequested { agent } => (
             "requested",
@@ -50,6 +53,11 @@ pub(super) fn stored(record: &LoginRecord) -> (&'static str, Value) {
         LoginEvent::RemoveFailed { agent } => {
             ("failed", "login_remove", json!({ "agent": agent.name() }))
         }
+        LoginEvent::RemoveUnsettled { agent } => (
+            "unsettled",
+            "login_remove",
+            json!({ "agent": agent.name() }),
+        ),
         LoginEvent::Removed { agent } => {
             ("removed", "login_remove", json!({ "agent": agent.name() }))
         }
@@ -60,6 +68,11 @@ pub(super) fn stored(record: &LoginRecord) -> (&'static str, Value) {
         ),
         LoginEvent::SwitchFailed { peer, on } => (
             "failed",
+            "login_device_switch",
+            json!({ "environment": peer.name(), "on": on }),
+        ),
+        LoginEvent::SwitchUnsettled { peer, on } => (
+            "unsettled",
             "login_device_switch",
             json!({ "environment": peer.name(), "on": on }),
         ),

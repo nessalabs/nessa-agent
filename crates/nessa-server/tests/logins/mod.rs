@@ -25,6 +25,24 @@ struct MemorySecret {
     value: Mutex<Option<Vec<u8>>>,
     locked: Mutex<bool>,
     writes_fail: Mutex<bool>,
+    /// Makes each change, then refuses it, as a vault that cannot keep its
+    /// own record of the write does.
+    refuses_after_change: Mutex<bool>,
+    /// Makes each change, then refuses it and locks: nothing can be read.
+    locks_after_change: Mutex<bool>,
+}
+
+impl MemorySecret {
+    fn after_change(&self) -> Result<(), SecretUnavailable> {
+        if *self.locks_after_change.lock().unwrap() {
+            *self.locked.lock().unwrap() = true;
+            return Err(SecretUnavailable::Locked);
+        }
+        if *self.refuses_after_change.lock().unwrap() {
+            return Err(SecretUnavailable::Unavailable);
+        }
+        Ok(())
+    }
 }
 
 impl SecretStore for MemorySecret {
@@ -42,11 +60,11 @@ impl SecretStore for MemorySecret {
             return Err(SecretUnavailable::Unavailable);
         }
         *self.value.lock().unwrap() = Some(bytes.to_vec());
-        Ok(())
+        self.after_change()
     }
     fn delete(&self) -> Result<(), SecretUnavailable> {
         *self.value.lock().unwrap() = None;
-        Ok(())
+        self.after_change()
     }
 }
 
@@ -457,6 +475,19 @@ async fn nothing_is_handed_when_any_step_cannot_answer() {
         fixture.service.login_for(&ssh(), AgentId::Codex, "lease-1"),
         None
     );
+    // A withheld login whose record cannot be kept is still withheld.
+    assert_eq!(
+        fixture
+            .service
+            .login_for(&EnvironmentRef::Peer(peer(1)), AgentId::Codex, "lease-1"),
+        None
+    );
+    *fixture.audit.refuses.lock().unwrap() = false;
+    assert!(!fixture
+        .audit
+        .events()
+        .iter()
+        .any(|event| matches!(event, LoginEvent::Sent { .. })));
 
     let unavailable = fixture_with(Arc::new(Unavailable));
     *unavailable.logins[&AgentId::Codex].value.lock().unwrap() = Some(b"sk-key".to_vec());
@@ -641,4 +672,85 @@ async fn a_change_made_but_not_recorded_is_not_called_refused() {
         Err(LoginsError::ChangeUnrecorded)
     );
     assert!(!fixture.service.status().unwrap().saved[&AgentId::Claude]);
+}
+
+/// A vault that makes a change and then refuses it (its own record of the
+/// write could not be kept) is read back: a change it holds is recorded as
+/// made, answered as unrecorded, and told so what started with the old
+/// login starts again; one it cannot say about is recorded unsettled and
+/// told too; one it does not hold is recorded failed.
+#[tokio::test]
+async fn a_change_the_vault_made_and_then_refused_is_read_back() {
+    let Fixture {
+        logins,
+        devices,
+        audit,
+        service,
+    } = fixture();
+    let told = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let service = service.on_change({
+        let told = told.clone();
+        Arc::new(move |agent| told.lock().unwrap().push(agent))
+    });
+    let agent = AgentId::Claude;
+    *logins[&agent].refuses_after_change.lock().unwrap() = true;
+    assert_eq!(
+        service.save(caller(), agent, login("first")).await,
+        Err(LoginsError::ChangeUnrecorded)
+    );
+    assert_eq!(
+        service.remove(caller(), agent).await,
+        Err(LoginsError::ChangeUnrecorded)
+    );
+    *devices.refuses_after_change.lock().unwrap() = true;
+    assert_eq!(
+        service.set_device(caller(), peer(1), true).await,
+        Err(LoginsError::ChangeUnrecorded)
+    );
+    assert_eq!(service.status().unwrap().devices_on, [peer(1)]);
+    assert_eq!(
+        audit.events(),
+        [
+            LoginEvent::SaveRequested {
+                agent,
+                replacing: false
+            },
+            LoginEvent::Saved { agent },
+            LoginEvent::RemoveRequested { agent },
+            LoginEvent::Removed { agent },
+            LoginEvent::SwitchRequested {
+                peer: peer(1),
+                on: true
+            },
+            LoginEvent::Switched {
+                peer: peer(1),
+                on: true
+            },
+        ]
+    );
+    assert_eq!(*told.lock().unwrap(), [agent, agent]);
+
+    *logins[&agent].refuses_after_change.lock().unwrap() = false;
+    *logins[&agent].locks_after_change.lock().unwrap() = true;
+    assert_eq!(
+        service.save(caller(), agent, login("second")).await,
+        Err(LoginsError::VaultLocked)
+    );
+    assert_eq!(
+        audit.events().last(),
+        Some(&LoginEvent::SaveUnsettled { agent })
+    );
+    assert_eq!(*told.lock().unwrap(), [agent, agent, agent]);
+
+    let codex = AgentId::Codex;
+    *logins[&codex].writes_fail.lock().unwrap() = true;
+    assert_eq!(
+        service.save(caller(), codex, login("key")).await,
+        Err(LoginsError::StorageUnavailable)
+    );
+    assert_eq!(
+        audit.events().last(),
+        Some(&LoginEvent::SaveFailed { agent: codex })
+    );
+    assert_eq!(*told.lock().unwrap(), [agent, agent, agent]);
 }
