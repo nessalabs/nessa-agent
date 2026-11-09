@@ -910,10 +910,23 @@ async fn same_person_choice_requires_an_authoritative_human_not_an_admin_surface
     assert_eq!(fixture.registry.pending_pairings().unwrap(), before);
     assert_eq!(fixture.registry.identity().unwrap().revision, revision);
     blocking(|| {
-        let human = ProductClient::connect(address, &fixture.owner_token).ok(
+        use std::io::Write as _;
+
+        // The ordinary bootstrap CLI credential names the Human owner. Caller
+        // metadata (nessa-cli) does not turn that principal into an Integration.
+        let credential = fixture.directory.path().join("owner-cli.token");
+        nessa_local_storage::open(&credential, nessa_local_storage::OpenMode::CreateNew)
+            .unwrap()
+            .write_all(fixture.owner_token.as_bytes())
+            .unwrap();
+        let mut cli =
+            nessa_server::cli::infrastructure::LocalGateway::connect(address, &credential).unwrap();
+        let human = nessa_server::cli::application::invoke(
+            &mut cli,
             "pairing.create",
             json!({"enrollee":"gateway","samePerson":true}),
-        );
+        )
+        .unwrap();
         let record = fixture
             .registry
             .read_pairing(InvitationId::new(
