@@ -192,6 +192,28 @@ const mcpServerRules = {}
   }
 }
 
+// How many paired machines may be switched on to receive saved logins,
+// owned by the gateway's logins domain: the schema's bound must equal it, or
+// generation fails, so the service and a client admit the same lists.
+{
+  const source = readFileSync(
+    resolve(root, "crates/nessa-server/src/logins/domain.rs"),
+    "utf8",
+  )
+  const owned = Number(
+    source
+      .match(/pub const MAX_SWITCHED_ON: usize = ([0-9_]+);/)?.[1]
+      .replaceAll("_", ""),
+  )
+  if (
+    !Number.isSafeInteger(owned) ||
+    schema.$defs.LoginsStatus.properties.devicesOn.maxItems !== owned
+  )
+    throw new Error(
+      "LoginsStatus.devicesOn.maxItems drifted from the gateway's MAX_SWITCHED_ON",
+    )
+}
+
 // A channel's bounds, owned by the gateway's channel value objects and
 // published as schema data so its prose and a client name the same numbers:
 // each value must equal the constant it names, or generation fails.

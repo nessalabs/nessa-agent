@@ -205,7 +205,12 @@ pub(crate) fn login_to_set(
     let variables = login_variables(agent);
     let host_has_own = variables
         .iter()
-        .any(|name| configured.contains_key(&OsString::from(name)))
+        // An exported but empty variable signs nothing in.
+        .any(|name| {
+            configured
+                .get(&OsString::from(name))
+                .is_some_and(|value| !value.is_empty())
+        })
         || own_sign_in_files(agent, configured)
             .iter()
             .any(|path| exists(path));
@@ -226,40 +231,36 @@ pub(crate) fn login_to_set(
     Some(handed)
 }
 
-/// The one line Codex 0.154 reads as an in-memory credential store.
-const EPHEMERAL_STORE: &str = "cli_auth_credentials_store = \"ephemeral\"";
+/// Codex 0.154's credential-store setting, and the value that keeps a
+/// key in the process.
+const CREDENTIAL_STORE: &str = "cli_auth_credentials_store";
+const EPHEMERAL: &str = "ephemeral";
 
 /// Make `directory` usable as `CODEX_HOME` for a saved key. The directory
 /// stays: Codex writes thread rollouts under `sessions/` there, and a
-/// later harness resumes by that id. `config.toml` keeps every other line
-/// and sets the credential store to ephemeral, so the key is not written
-/// into `auth.json`. `None` when the directory cannot be prepared: the
-/// key is then not handed.
+/// later harness resumes by that id. `config.toml` keeps everything else
+/// and sets the root credential-store key to ephemeral, so the key is not
+/// written into `auth.json`. `None` when the directory cannot be prepared
+/// or its config is not TOML: the key is then not handed.
 fn prepare_codex_home(directory: &Path) -> Option<String> {
     std::fs::create_dir_all(directory).ok()?;
     let config = directory.join("config.toml");
-    let existing = std::fs::read_to_string(&config).unwrap_or_default();
-    let store_lines = existing
-        .lines()
-        .filter(|line| line.trim_start().starts_with("cli_auth_credentials_store"))
-        .count();
-    // The setting goes first: a key after a `[table]` header belongs to
-    // that table, so one appended to a config with tables is not Codex's
-    // credential store at all.
-    let already =
-        store_lines == 1 && existing.lines().next().map(str::trim) == Some(EPHEMERAL_STORE);
-    if !already {
-        let kept: Vec<&str> = existing
-            .lines()
-            .filter(|line| !line.trim_start().starts_with("cli_auth_credentials_store"))
-            .collect();
-        let mut text = format!("{EPHEMERAL_STORE}\n");
-        if kept.iter().any(|line| !line.trim().is_empty()) {
-            text.push('\n');
-            text.push_str(kept.join("\n").trim_start_matches('\n'));
-            text.push('\n');
-        }
-        std::fs::write(&config, text).ok()?;
+    let existing = match std::fs::read_to_string(&config) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(_) => return None,
+    };
+    // Set by TOML key, not by line: the root table's key however the file
+    // spells it, placed before every table. A config that is not TOML is
+    // left alone, and the key is not handed.
+    let mut document: toml_edit::DocumentMut = existing.parse().ok()?;
+    let ephemeral = document
+        .get(CREDENTIAL_STORE)
+        .and_then(toml_edit::Item::as_str)
+        == Some(EPHEMERAL);
+    if !ephemeral {
+        document[CREDENTIAL_STORE] = toml_edit::value(EPHEMERAL);
+        std::fs::write(&config, document.to_string()).ok()?;
     }
     directory.to_str().map(str::to_owned)
 }

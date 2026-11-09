@@ -258,37 +258,69 @@ fn a_host_signed_in_with_the_agent_s_own_file_keeps_it() {
     assert!(own_sign_in_files(AgentId::Claude, &BTreeMap::new()).is_empty());
 }
 
-/// A Codex home whose `config.toml` already holds tables gets the
-/// credential store at the root, before every table: a key after a
-/// `[table]` header is that table's, not Codex's setting.
+/// A Codex home whose `config.toml` already holds tables, or spells the
+/// setting as a quoted key, gets the credential store set by TOML key: one
+/// root key, read back as ephemeral, everything else kept. A config that is
+/// not TOML is left alone and the key is not handed.
 #[test]
-fn the_ephemeral_store_is_set_at_the_root_of_a_config_with_tables() {
+fn the_ephemeral_store_is_set_by_toml_key_in_an_existing_config() {
     let login = Login::new("sk-proj-secret".into()).unwrap();
+    for existing in [
+        "model = \"gpt\"\n\n[projects.\"/workspace\"]\ntrust_level = \"trusted\"\n",
+        "\"cli_auth_credentials_store\" = \"file\"\nmodel = \"gpt\"\n\n[projects.\"/workspace\"]\ntrust_level = \"trusted\"\n",
+        "model = \"gpt\"\n[projects.\"/workspace\"]\ntrust_level = \"trusted\"\ncli_auth_credentials_store = \"file\"\n",
+    ] {
+        let root = tempfile::tempdir().unwrap();
+        let home = root.path().join("codex");
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::write(home.join("config.toml"), existing).unwrap();
+        for _ in 0..2 {
+            login_to_set(AgentId::Codex, Some(&login), &BTreeMap::new(), |_| false, Some(&home))
+                .unwrap();
+            let config = std::fs::read_to_string(home.join("config.toml")).unwrap();
+            let document: toml_edit::DocumentMut = config.parse().unwrap();
+            assert_eq!(
+                document["cli_auth_credentials_store"].as_str(),
+                Some("ephemeral"),
+                "{config}"
+            );
+            assert_eq!(document["model"].as_str(), Some("gpt"));
+            assert_eq!(
+                document["projects"]["/workspace"]["trust_level"].as_str(),
+                Some("trusted")
+            );
+        }
+    }
     let root = tempfile::tempdir().unwrap();
     let home = root.path().join("codex");
     std::fs::create_dir_all(&home).unwrap();
-    std::fs::write(
-        home.join("config.toml"),
-        "model = \"gpt\"\n\n[projects.\"/workspace\"]\ntrust_level = \"trusted\"\ncli_auth_credentials_store = \"file\"\n",
-    )
-    .unwrap();
-    for _ in 0..2 {
+    std::fs::write(home.join("config.toml"), "not = [toml").unwrap();
+    assert_eq!(
         login_to_set(
             AgentId::Codex,
             Some(&login),
             &BTreeMap::new(),
             |_| false,
-            Some(&home),
-        )
-        .unwrap();
-        let config = std::fs::read_to_string(home.join("config.toml")).unwrap();
-        let first_table = config.find('[').unwrap();
-        let setting = config.find("cli_auth_credentials_store").unwrap();
-        assert_eq!(setting, 0, "{config}");
-        assert!(setting < first_table);
-        assert_eq!(config.matches("cli_auth_credentials_store").count(), 1);
-        assert!(config.contains("cli_auth_credentials_store = \"ephemeral\""));
-        assert!(config.contains("model = \"gpt\""));
-        assert!(config.contains("[projects.\"/workspace\"]\ntrust_level = \"trusted\""));
-    }
+            Some(&home)
+        ),
+        None
+    );
+    assert_eq!(
+        std::fs::read_to_string(home.join("config.toml")).unwrap(),
+        "not = [toml"
+    );
+}
+
+/// An exported but empty login variable is no sign-in: the saved login is
+/// still handed.
+#[test]
+fn an_empty_login_variable_is_not_the_host_s_own_sign_in() {
+    let login = Login::new("sk-ant-oat-x".into()).unwrap();
+    let empty = BTreeMap::from([(OsString::from("ANTHROPIC_API_KEY"), OsString::new())]);
+    assert_eq!(
+        var(AgentId::Claude, Some(&login), &empty).as_deref(),
+        Some("CLAUDE_CODE_OAUTH_TOKEN")
+    );
+    let set = BTreeMap::from([(OsString::from("ANTHROPIC_API_KEY"), OsString::from("mine"))]);
+    assert_eq!(var(AgentId::Claude, Some(&login), &set), None);
 }

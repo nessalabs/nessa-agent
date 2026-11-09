@@ -25,7 +25,8 @@ pub fn devices_entry() -> EntryName {
 }
 
 /// The most paired machines a switch list holds: more than any Devices
-/// list shows.
+/// list shows. `LoginsStatus.devicesOn.maxItems` in the product schema
+/// publishes it, and protocol generation fails if the two differ.
 pub const MAX_SWITCHED_ON: usize = 256;
 
 /// The paired machines whose owner switched on "Use my saved logins here".
