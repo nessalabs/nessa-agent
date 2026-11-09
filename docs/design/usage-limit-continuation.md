@@ -126,6 +126,14 @@ causal turn remains eligible. The partial unique index covers only `scheduled`, 
 
 ### Agent switching and selection invalidation
 
+The scripted stress limit uses the selected harness's wire contract: Claude's
+`-32603` weekly-limit message, or Codex's `data.codexErrorInfo` equal to
+`usageLimitExceeded`. A Claude-looking string alone on Codex stays a generic
+failure. `scripted-scenario.test.mjs` checks both real stdio frames and that
+negative control; `stress-scenario.test.mjs` checks the workload selects this
+terminal step. The window still requires the typed limit for its actual agent,
+unknown recovery, no diagnostic, and the unchanged continuation checkbox checks.
+
 Model changes and agent switches use one typed selection-invalidation owner.
 Its durable identity is conversation, selection kind (model or agent), and the
 original request id. The cancellation cause follows that kind; the audit actor
@@ -139,6 +147,13 @@ comes from the saved original request, including recovery under another caller.
 | A submission resolves a live or restarted opening while an agent switch is Pending | Under the existing submission lock, settle the saved switch and its original invalidation before admitting the new turn; failed invalidation refuses admission without a new execution | `a_pending_agent_switch_retries_invalidation_as_its_original_request` |
 | Original invalidation committed, Applied metadata did not | Retry reads that request's invalidation receipt; a later blocked turn is not invalidated by the old request | `a_pending_agent_switch_retries_invalidation_as_its_original_request` |
 | Selection holds the submission lock before delivery classification | Delivery waits before `begin_submit`; its owned permit continues through supervised enqueue | `a_selection_lock_blocks_the_durable_submit_claim` |
+| A person/report owns thread admission before scheduled delivery starts | Scheduled delivery waits before taking selection; all paths acquire thread, service admission, then selection, without an opposing lock order | `a_thread_admission_precedes_the_scheduled_selection_permit` |
+| A retryable source is canonically resumed, then its successor reaches a usage limit | The shared owed-history owner follows only validated canonical links and holds RunnerStopped work after the original queue position, including a tail saved before the successor | `a_canonical_successor_limit_withholds_an_earlier_runner_stopped_tail` |
+| A prepared decline is still unacknowledged when a later limit empties the ordinary owed list | Retry the original actor and independent audit/storage obligations; neither the limit nor an empty list acknowledges that decision | `a_later_limit_does_not_acknowledge_an_original_pending_decline` |
+| A scheduled continuation is admitted with a Person-sender invocation | Exact retained schedule command evidence distinguishes that automatic action from explicit person authority; it does not release a retained child report | `an_admitted_scheduled_continuation_is_not_an_explicit_person_turn` |
+| A genuine later person command uses scheduling-looking text or an execution name | Only equality with the original immutable automatic command binding excludes it; spelling and prompt text grant no origin | Positive controls in `an_admitted_scheduled_continuation_is_not_an_explicit_person_turn` |
+| A process left a schedule intent before SDK admission, then a distinct person command admits the same execution | The actual person receipt remains person authority; retained automatic intent with a different action binding cannot relabel it | `a_retained_schedule_intent_does_not_relabel_a_distinct_person_command` |
+| Schedule command evidence cannot be read or its retained tuple is malformed | Report admission returns the existing typed failure and retains its obligation; no missing read is treated as person authority | Schedule evidence read-failure and retained-evidence adapter controls |
 | Delivery holds the lock first | Selection waits through classification, command admission and enqueue; it cannot report Applied in that gap | `a_detached_scheduled_command_keeps_its_submission_permit` |
 | Crash leaves an unattempted submitting row, then selection changes (including away and back or preference off) | Before Applied, seal the original command under its request lease with the distinct durable model/agent refusal. Attempted and terminal receipts retain their original meaning | `an_agent_switch_seals_a_crash_left_unattempted_continuation` |
 | A pre-fix submitting row has no command receipt; away/back selections are already Applied and have retained invalidation evidence | Read the row's retained causal invalidation after original receipt and pending-request recovery; seal unattempted work before preference or current-string classification. If both kinds remain without a receipt, agent invalidation takes precedence; this does not infer historical request order | `an_applied_pre_fix_selection_still_refuses_its_continuation_after_returning` |

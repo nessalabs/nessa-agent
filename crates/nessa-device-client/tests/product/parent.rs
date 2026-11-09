@@ -126,6 +126,7 @@ fn compose_product(
         runtime: Builder::new_current_thread().enable_all().build().unwrap(),
         product: ProductDependencies {
             connector,
+            relay: Arc::new(Mutex::new(None)),
             wake,
             limits,
         },
@@ -675,6 +676,7 @@ fn close_during_issued_load_fences_provisional_installation_and_preserves_privat
             runtime: Builder::new_current_thread().enable_all().build().unwrap(),
             product: ProductDependencies {
                 connector: network.clone(),
+                relay: Arc::new(Mutex::new(None)),
                 wake: Arc::new(ThreadProductWake::default()),
                 limits: ProductLimits::default(),
             },
@@ -1059,6 +1061,7 @@ fn poisoned_parent_drain_preserves_distinct_faults_and_joins_before_private_rele
             runtime: Builder::new_current_thread().enable_all().build().unwrap(),
             product: ProductDependencies {
                 connector: Arc::new(CleanupConnector { gate: gate.clone() }),
+                relay: Arc::new(Mutex::new(None)),
                 wake: Arc::new(ThreadProductWake::default()),
                 limits: ProductLimits::default(),
             },
@@ -1193,6 +1196,7 @@ fn exact_private_failure_conflicting_records_and_pending_only_refuse_without_con
             runtime: Builder::new_current_thread().enable_all().build().unwrap(),
             product: ProductDependencies {
                 connector: connector.clone(),
+                relay: Arc::new(Mutex::new(None)),
                 wake: Arc::new(ThreadProductWake::default()),
                 limits: ProductLimits::default(),
             },
@@ -1257,6 +1261,7 @@ fn retained_refresh_admits_while_foreign_event_waiter_owns_its_original_child() 
         runtime: Builder::new_current_thread().enable_all().build().unwrap(),
         product: ProductDependencies {
             connector: Arc::new(LocalProductConnector::default()),
+            relay: Arc::new(Mutex::new(None)),
             wake: wake.clone(),
             limits: ProductLimits::default(),
         },
@@ -1545,6 +1550,7 @@ fn closed_registration_gate_prevents_worker_start_and_native_connect() {
             runtime: Builder::new_current_thread().enable_all().build().unwrap(),
             product: ProductDependencies {
                 connector: network.clone(),
+                relay: Arc::new(Mutex::new(None)),
                 wake: Arc::new(ThreadProductWake::default()),
                 limits: ProductLimits::default(),
             },

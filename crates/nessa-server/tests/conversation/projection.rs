@@ -304,11 +304,15 @@ fn review_snapshot(events: Vec<ExecutionEvent>) -> SessionSnapshot {
         current_configuration: None,
         id: SessionId::new("conversation").unwrap(),
         provider: ProviderIdentity::new("fixture", "model", "configuration").unwrap(),
-        provider_context: ProviderContext::Recorded(
+        provider_context: ProviderContext::recorded_after(
             ExecutionSessionId::new("provider-session").unwrap(),
+            0,
         ),
         queue_history: vec![],
         invocations: vec![InvocationRecord {
+            decline: None,
+            cancellation_delivery: None,
+            resumed_from: None,
             target_event_offset: None,
             submission: InvocationSubmissionMode::Immediate,
             request: ExecutionRequest {
@@ -798,7 +802,7 @@ fn committed_mcp_ui_enrichment_remains_inside_the_complete_view_budget() {
     let enriched = projection.read();
     assert!(serde_json::to_vec(&enriched).unwrap().len() > MAX_VIEW_BYTES);
     let bounded = bound_view(enriched);
-    assert!(bounded.truncated);
+    assert!(bounded.earlier);
     assert!(serde_json::to_vec(&bounded).unwrap().len() <= MAX_VIEW_BYTES);
     assert!(bounded
         .tools

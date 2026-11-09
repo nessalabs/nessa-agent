@@ -528,7 +528,7 @@ export interface ConversationUsageLimit {
 export interface ConversationMessage {
   /** Stable invocation identifier retained for retries of one logical message, at most 256 UTF-8 bytes. */
   executionId: string
-  /** User input text; empty for a message of images alone. */
+  /** User input text, whole; empty for a message of images alone. Its only bound is the frame's. */
   userText: string
   /** Images the user sent with this turn, in attachment order. */
   attachments: ImageAttachment[]
@@ -538,6 +538,8 @@ export interface ConversationMessage {
   files: LinkedFile[]
   /** The app that wrote this turn on the person's behalf; absent when the person wrote it. */
   app?: ConversationMessageApp
+  /** The verified source turn whose agent wrote this input; absent for a person or app. */
+  agent?: ConversationAgentSource
   /** Current invocation state. */
   status: ConversationMessageStatus
   /** Bounded diagnostic for this invocation. */
@@ -554,6 +556,8 @@ export interface ConversationMessage {
   parts: ConversationPart[]
   /** Target event count when steering was admitted locally; does not imply provider consumption timing. */
   steeringOffset?: number
+  /** Where the first listed part starts in the whole turn, when the view begins partway through it. The person's message and the parts before it are read with conversation.readEarlier. Absent when the turn is listed from its start. */
+  startsAt?: ConversationPartPosition
 }
 /** A waiting input that may be removed before dispatch. */
 export interface ConversationPending {
@@ -569,8 +573,17 @@ export interface ConversationPending {
   files: LinkedFile[]
   /** The app that wrote this waiting input on the person's behalf; absent when the person wrote it. */
   app?: ConversationMessageApp
+  /** The verified source turn whose agent wrote this waiting input. */
+  agent?: ConversationAgentSource
   /** Queue or steering admission. */
   mode: ConversationPendingMode
+}
+/** The source conversation and turn whose agent wrote a message or note. Origin does not grant owner authority. */
+export interface ConversationAgentSource {
+  /** Canonical ID of the conversation in which the sending agent ran. */
+  conversationId: string
+  /** ID of the source turn or the child turn a report concerns. */
+  executionId: string
 }
 /** The MCP App that wrote a turn on the person's behalf (mcp.sendMessage): the tool call whose UI it is, and the MCP server and tool that call was to. */
 export interface ConversationMessageApp {
@@ -739,8 +752,10 @@ export interface ConversationView {
   capabilities: ConversationCapabilities
   /** Current provider attachment lifecycle. */
   lifecycle: ConversationLifecycle
-  /** Some history, text or whole interactions were omitted to bound this response; interactionViewError explains omitted actionable units. */
+  /** Something no read gives back was omitted to bound this response: a gap between the turns listed, notes, artifacts, or whole interactions; interactionViewError explains omitted actionable units. Older turns that only come before the first one listed are earlier instead. */
   truncated: boolean
+  /** Turns, or the start of the first turn listed, came before what this view lists. They are read with conversation.readEarlier, before the first message's start. */
+  earlier: boolean
   /** Why complete pending reviews or questions cannot safely be shown; do not infer omitted choices or question fields. */
   interactionViewError?: string
   /** All currently pending execution IDs are represented, so an exact reorder may be attempted. */
@@ -808,7 +823,7 @@ export interface ConversationCreateParams {
   model?: string
   /** Initial preset, default ask; ignored on reopen. */
   approvalMode?: ApprovalMode
-  /** Where this conversation's agent runs for its whole life: one of the environments agents.list returns, an SSH destination, a paired environment's peer: name, or peer:any, any worker of the gateway's pool, which the gateway chooses each time the agent is opened. Omitted runs it on the gateway's own machine. Ignored when the conversation already exists, which keeps the environment it was created with. */
+  /** Where this conversation's agent runs for its whole life: one of the environments agents.list returns, an SSH destination, a paired environment's peer: name, peer:any, any worker of the gateway's pool, which the gateway chooses each time the agent is opened, or here, the gateway's own machine. Omitted, with no channel (or the default channel), runs it on the default device (devices.setDefault) while that is offered, else on the gateway's own machine; a child conversation an agent starts never takes the default. Ignored when the conversation already exists, which keeps the environment it was created with. */
   environment?: string
   /** The channel the conversation is in for its whole life, one channel.list returns: its agent works in that channel's folder and is told the channel's notes and resources. Omitted, or default, is the default channel, whose folder is the gateway's configured workspace. A channel other than default runs on the gateway's own machine, so it is refused invalid_request beside an environment. channel_not_found when the caller has no such channel. Ignored when the conversation already exists, which stays in the channel it was created in. */
   channelId?: string
@@ -823,6 +838,44 @@ export interface ConversationPeekResult {
   /** Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization. */
   conversationId: string
   executionId: string | null
+}
+/** A place in a turn: the part, counted from the turn's first, and the byte within that part's text. */
+export interface ConversationPartPosition {
+  /** The part, counted from the turn's first part. */
+  part: number
+  /** The UTF-8 byte within that part's text where the place falls; 0 at the part's start. */
+  byte: number
+}
+/** A place in a conversation's history: the start of a turn, before the person's message, when at is absent; otherwise a place among the turn's parts, after the person's message. */
+export interface ConversationPoint {
+  /** The turn the point is in. */
+  executionId: string
+  /** A place among the turn's parts, after the person's message; absent for the turn's start, before it. */
+  at?: ConversationPartPosition
+}
+/** Read what came before a point in the conversation's history: the turns nearest it that fit one frame. With after, only what comes after that point, to fill a gap between two points. */
+export interface ConversationReadEarlierParams {
+  /** Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization. */
+  conversationId: string
+  /** Where what is read ends: the first point the reader already holds. */
+  before: ConversationPoint
+  /** Where what is read starts, when the reader holds what comes before it; absent to read back toward the first turn. */
+  after?: ConversationPoint
+}
+/** What came before a point, oldest first, ending where the point is. The first message starts partway through its turn when it carries startsAt. */
+export interface ConversationEarlier {
+  /** Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization. */
+  conversationId: string
+  /** The turns before the point, oldest first; the first may start partway (startsAt) and the last may end partway, where the point falls. */
+  messages: ConversationMessage[]
+  /** The calls the messages made. */
+  tools: ConversationTool[]
+  /** The fork the conversation began as, with its copied turns, on the page that reaches the start; empty otherwise. */
+  handoffs: ConversationHandoff[]
+  /** Something comes before the first message's start (after the after point, when one was given). */
+  more: boolean
+  /** The page left out something no read gives back, as a view's truncated says. */
+  truncated: boolean
 }
 /** Read the current bounded projection. */
 export interface ConversationReadParams {
@@ -1315,7 +1368,7 @@ export interface ConversationPart {
   offset: number
   /** Text, exposed thought content, a tool call, or a Nessa-owned runtime notice. A tool call is one part however many updates it has, at its first update's offset; its current state is its entry in tools. */
   kind: "text" | "thought" | "tool" | "local_notice"
-  /** Exact text fragment for text, thought, or local notice observations; empty for a tool call. */
+  /** Exact text for text, thought, or local notice observations; empty for a tool call. Adjacent streamed chunks of one kind are joined into one part, so its only bound is the frame's. */
   text: string
   /** The tool call's identity, which names its entry in tools; empty otherwise. */
   toolId: string
@@ -1565,6 +1618,23 @@ export interface McpServersAuthorizeResult {
   deadlineMs?: number
   /** The token generation, present for ready. */
   generation?: number
+}
+/** The apps the person always allows (apps.trusted): every MCP server whose app was answered "Always allow this app", in name order. An app listed here sends messages as the person without a review. */
+export interface AppsTrustedResult {
+  servers: string[]
+}
+/** Stop always allowing one app (apps.untrust): its next message is reviewed again. */
+export interface AppsUntrustParams {
+  /** Stable action identifier retained for retries of one logical command. */
+  requestId: string
+  /** The MCP server whose app it is, by its configured name. */
+  server: string
+}
+/** What apps.untrust did. applied is false when the app was not always allowed. */
+export interface AppsUntrustResult {
+  /** Stable action identifier retained for retries of one logical command. */
+  requestId: string
+  applied: boolean
 }
 /** Wire input for mcpServers.revoke: fence the remote server id at the listed revision. Local sessions of that server are closed. The result keeps drain, secret deletion, remote observation and evidence apart; an incomplete revoke is not reported as settled. */
 export interface McpServersRevokeParams {
@@ -1973,6 +2043,8 @@ export interface AgentsSetNativeHooksResult {
 }
 /** Configured agents and their model-specific choices. */
 export interface AgentsListResult {
+  /** Of environments, the one a new conversation runs on when it names none: the default device saved with devices.setDefault, while it is one of environments. Absent: this gateway's own machine. agents.subscribe reads it again each time the default changes. */
+  defaultEnvironment?: string
   /** Configured agents. */
   agents: AgentOption[]
   /** Places a new conversation may run besides this gateway: the SSH destinations config.json names, in the order it names them, then, while any paired environment is connected, `peer:any` (the gateway picks one of them for each opening of the conversation's agent and keeps it there while it serves and is not draining), then each paired environment connected when the catalog is read, as `peer:` and its key in lowercase hex. At most 16 of the first and 8 of the last. agents.list reads it once; agents.subscribe reads it again each time a paired environment connects, disconnects or is revoked. */
@@ -2546,6 +2618,165 @@ export interface PairingTunnelResult {
   /** Why the last attempt failed, when status is failed: unsupported (no pinned cloudflared for this machine), download, unverified (the download did not match its pin), storage, token, ingress (the loopback ingress could not be bound), start or not_ready. */
   failure?: string
 }
+/** What one machine reports about itself: its name, system and how busy it is. A worker sends it over its lease connection (the lease protocol's Machine frame); the hub reads its own. */
+export interface DeviceMachine {
+  /** The machine's own name for itself; empty when it has none. */
+  hostname: string
+  /** The operating system family: macos, linux, windows, … */
+  os: string
+  /** The system's version, e.g. 15.4 or 24.04; empty when unknown. */
+  osVersion: string
+  /** The processor architecture: aarch64, x86_64, … */
+  arch: string
+  /** Logical processors. */
+  cpus: number
+  /** Processor use across all of them, in thousandths. */
+  cpuPermille: number
+  /** Memory installed. */
+  memoryTotalBytes: number
+  /** Memory in use; never more than memoryTotalBytes. */
+  memoryUsedBytes: number
+  /** Size of every disk in disks together. */
+  diskTotalBytes: number
+  /** Space used on them together; never more than diskTotalBytes. */
+  diskUsedBytes: number
+  /** Each local disk, once however many volumes share it, the root first. Absent or empty when none could be read. */
+  disks?: DeviceDisk[]
+}
+/** One local disk of a machine. */
+export interface DeviceDisk {
+  /** Where it is mounted, e.g. / or /Volumes/Archive. */
+  mount: string
+  /** Its size. */
+  totalBytes: number
+  /** Space used on it; never more than totalBytes. */
+  usedBytes: number
+}
+/** A paired environment (`nessa env serve`) that has served this gateway. */
+export interface DeviceWorker {
+  /** Its environment name, peer: and its key in hex: what a conversation's placement names. */
+  environment: string
+  /** online: its connection serves leases and takes new work. draining: it serves the leases it holds and takes no new ones. offline: no connection serves leases now. */
+  state: "online" | "draining" | "offline"
+  /** Agent leases its connection carries now; 0 offline. */
+  agents: number
+  /** Its latest report: live while online, the last one saved while offline. Absent before it first reported. */
+  machine?: DeviceMachine
+  /** Unix milliseconds it last reported, saved at most every few minutes; absent before it first reported. */
+  lastSeenMs?: number
+}
+/** Result of devices.list: this gateway's own machine (the hub) and one page of the paired environments that work for it. */
+export interface DevicesListResult {
+  /** The device a new conversation runs on when it names no environment and no channel: an SSH destination config.json names, or a paired environment's peer: name. Absent: this gateway's own machine (the hub). Saved with devices.setDefault. On the first page only. A paired environment that is not connected when a conversation is created leaves that conversation on the hub. */
+  defaultEnvironment?: string
+  /** The SSH hosts conversations may run on, as config.json names them, each with what the gateway's ~/.ssh/config resolves it to. On the first page only. */
+  sshHosts?: DeviceSshHost[]
+  /** The machine this gateway runs on, on the first page (one asked with no after); absent on later pages and when it cannot be read. */
+  hub?: DeviceMachine
+  /** Where this gateway's native listener, which workers dial, is bound: host:port, [v6]:port for IPv6. Absent while native linking is off. A loopback host means only this machine can reach it. */
+  listening?: string
+  /** One page of the workers connected now or seen before and still paired, at most 64, in the order of their environment names, each after the page's after. */
+  workers: DeviceWorker[]
+  /** The last worker listed, when more follow: ask again with it as after for the next page. Absent on the last page. */
+  next?: string
+}
+/** An SSH host as the gateway's OpenSSH configuration names it. */
+export interface DeviceSshHost {
+  /** The destination as ssh is given it: an alias in ~/.ssh/config, or user@host. */
+  host: string
+  /** Where it connects, when the configuration sets HostName. */
+  hostName?: string
+  /** The account it signs in as, when the configuration sets User. */
+  user?: string
+  /** Its port, when the configuration sets one. */
+  port?: number
+}
+/** Result of devices.sshHosts: the machines the gateway's ~/.ssh/config names that conversations could run on, and the connections under way. */
+export interface DevicesSshHostsResult {
+  /** Every host the configuration names plainly (not a pattern), in its order, at most 32: less those config.json already names, any that is not an SSH destination, and git servers (user git, a known forge such as github.com or gitlab.com, or a host name beginning git., gitlab., gitea. or forgejo.), which answer git and run no shell. Options are resolved as ssh resolves them: the first value any matching Host block gives; Match blocks are not read. Include is followed, from ~/.ssh, at most 32 files and 256 KiB. */
+  suggested: DeviceSshHost[]
+  /** Each host devices.connectSsh is setting up now, or set up or failed to since the gateway started. */
+  connecting: DeviceSshConnect[]
+}
+/** Where one devices.connectSsh stands. */
+export interface DeviceSshConnect {
+  /** The destination being connected. */
+  host: string
+  /** installing: the gateway is asking the host whether this build is there and, if not, sending it. restarting: it is installed and saved in config.json's sshHosts, and the gateway is starting again to serve it; once it answers, the host is in devices.list's sshHosts. connected: it is installed, and this gateway already serves it. failed: see refusal; nothing was saved. */
+  state: "installing" | "restarting" | "connected" | "failed"
+  /** Why it failed, present exactly when state is failed. The environment_ codes are a lease's own (ConversationLease.refusal). devices_host_limit: config.json already names 16 SSH hosts, or 16 connections are under way. devices_busy: config.json is held by another change, or the gateway is already restarting. devices_unavailable: config.json or its audit could not be written. */
+  refusal?:
+    | "environment_unreachable"
+    | "environment_platform_unsupported"
+    | "environment_install_failed"
+    | "environment_version_mismatch"
+    | "devices_host_limit"
+    | "devices_busy"
+    | "devices_unavailable"
+}
+/** Set a machine up for conversations to run on over SSH: the gateway installs this build there, as a conversation's first lease would, then adds it to config.json's sshHosts and starts again in place to serve it. Answered at once; devices.sshHosts says how it goes. Asking again for a host being set up changes nothing. The install and the change are audited under one operation. */
+export interface DevicesConnectSshParams {
+  /** An SSH destination: an alias in the gateway's ~/.ssh/config, or user@host. Letters, digits, ., _, - and @, beginning with a letter or digit, and never here. */
+  host: string
+}
+/** Result of devices.connectSsh. */
+export interface DevicesConnectSshResult {
+  /** Where it stands now. */
+  connecting: DeviceSshConnect
+}
+/** Choose the device new conversations run on when they name no environment and no channel: from this gateway's surfaces and from a phone alike. Saved in config.json as defaultEnvironment and applied at once, without a restart. Each change is audited. */
+export interface DevicesSetDefaultParams {
+  /** An SSH destination config.json names, a paired environment's peer: name (peer: and its key in lowercase hex), or null for this gateway's own machine. Anything else is refused devices_not_a_device. */
+  environment: string | null
+}
+/** Result of devices.setDefault. */
+export interface DevicesSetDefaultResult {
+  /** The saved default: null for this gateway's own machine. */
+  defaultEnvironment: string | null
+}
+/** Which page of the hub's workers to list. */
+export interface DevicesListParams {
+  /** Absent on the first page. Later pages echo the previous page's next. */
+  after?: string
+}
+/** Which paired computers new work goes to first, and which it never goes to. Every computer named in neither list is in the pool, after the ordered ones, the one with the fewest agents first. No computer is named twice, in one list or both. */
+export interface PoolPreference {
+  /** First choice first: a new thread goes to the first of these that serves, is not draining and is not busy. */
+  order: string[]
+  /** Computers left out of the pool: no new work goes to them, and a thread bound to one moves off it when its agent next opens. */
+  excluded: string[]
+}
+/** Read the pool's default preference and one channel's override from one configuration read. */
+export interface DevicesPoolParams {
+  /** Stored channel identity; omitted reads the Nessa default. The synthetic default channel follows the default. */
+  channelId?: string
+}
+/** default: a channel inherits the Nessa default (its override is removed), or the Nessa default is emptied: every computer in, none first. custom: save preference. */
+export const DevicesPoolSelection = { Default: "default", Custom: "custom" } as const
+export type DevicesPoolSelection =
+  (typeof DevicesPoolSelection)[keyof typeof DevicesPoolSelection]
+/** Save the pool's Nessa default or one channel's own preference in config.json. Applies to the next agent opened on the pool; a thread already running stays where it is. Read again after an uncertain response; calls are not replayed. */
+export interface DevicesSetPoolParams {
+  /** Stored channel identity; omitted saves the Nessa default. */
+  channelId?: string
+  /** default forbids preference; custom requires it. */
+  mode: DevicesPoolSelection
+  /** Present only in custom mode. */
+  preference?: PoolPreference
+}
+/** The pool's preferences: the Nessa default, a channel's override, and when a computer is busy. With every computer busy a new pool thread runs in Boat when it is connected. */
+export interface DevicesPool {
+  /** The stored channel read or saved; omitted for the Nessa default. */
+  channelId?: string
+  /** The Nessa default, which every channel without its own follows. */
+  defaultPreference: PoolPreference
+  /** The channel's own preference; omitted when it follows the default. */
+  channelOverride?: PoolPreference
+  /** Processor use at which a computer is busy: passed over for new work while another is not (config.json pool.busyCpuPercent). */
+  busyCpuPercent: number
+  /** Memory use at which a computer is busy (config.json pool.busyMemoryPercent). */
+  busyMemoryPercent: number
+}
 /** Result of server.reach: the addresses this gateway can be reached at beyond the local network, for a paired device to keep. */
 export interface ServerReachResult {
   /** The web tunnel's public address, https://host[:port], when a tunnel is ready; null otherwise. Open wss://<host>/native and speak the native connection inside its binary messages. */
@@ -2848,8 +3079,12 @@ export interface ConversationNote {
   /** Who left it. */
   author: ConversationNoteAuthor
 }
-/** owner: the conversation's owner left it. grant: someone the conversation is shared with left it, under their grant. */
-export const ConversationNoteAuthorKind = { Owner: "owner", Grant: "grant" } as const
+/** owner: the conversation's owner. grant: a share grant holder. agent: another turn's agent. */
+export const ConversationNoteAuthorKind = {
+  Owner: "owner",
+  Grant: "grant",
+  Agent: "agent",
+} as const
 export type ConversationNoteAuthorKind =
   (typeof ConversationNoteAuthorKind)[keyof typeof ConversationNoteAuthorKind]
 /** Under which authority a note was left, and from which surface: the label it carries in the transcript and to the model. */
@@ -2858,6 +3093,8 @@ export interface ConversationNoteAuthor {
   kind: ConversationNoteAuthorKind
   /** The verified surface it was left from. */
   surface: string
+  /** The verified source turn when kind is agent. */
+  agent?: ConversationAgentSource
 }
 /** A point after which the conversation's agent ran in a new session that had not seen the turns before it: a switch to another agent or model (conversation.switchAgent), or the fork the conversation began as (conversation.fork). The first turn after it was given those turns as text. Show it as a line in the transcript, after the turn it follows. */
 export interface ConversationHandoff {
@@ -2887,6 +3124,7 @@ export interface ConversationHandoffAgent {
 }
 /** One turn a fork copied, as the new conversation's agent was given it: what was said, and the agent's final reply. Text only. */
 export interface ConversationCarriedTurn {
+  agent?: ConversationAgentSource
   /** What was said in the turn, when it said anything in text. */
   said?: string
   /** The agent's final reply, when it gave one. */
@@ -3123,7 +3361,7 @@ export const WorkspaceShowing = {
   Widget: "widget",
 } as const
 export type WorkspaceShowing = (typeof WorkspaceShowing)[keyof typeof WorkspaceShowing]
-/** A widget a pane or the window shows, by the plugin that draws it and its id within that plugin. */
+/** A widget the panel, a pane, or the window shows, by the plugin that draws it and its id within that plugin. */
 export interface WorkspaceWidget {
   /** The plugin that draws the widget. */
   plugin: string
@@ -3162,7 +3400,16 @@ export interface WorkspaceColumn {
   /** The column's panes, top to bottom. */
   panes: WorkspacePane[]
 }
-/** What one desktop window shows now: its arrangement, which side columns are drawn, what fills its content region, and its panes left to right, each column top to bottom. It names conversations by id only; their titles and agents are the gateway's to say. */
+/** The focused chat's right panel. Other chats' panels are not here; focusing that chat is what publishes them. open is whether this panel is drawn. tabs are that chat's, in the order they were opened, and front is the one in front: present exactly when tabs is not empty, and one of them. */
+export interface WorkspacePanel {
+  /** Whether the panel is drawn beside the panes. Closed, its tabs are not on screen; they are still this chat's. */
+  open: boolean
+  /** The focused chat's panel tabs, in the order they were opened. Empty when that chat has none. At most 16, the domain's MAX_PANEL_TABS. */
+  tabs: WorkspaceWidget[]
+  /** The tab in front. Present exactly when tabs is not empty, and one of them. */
+  front?: WorkspaceWidget
+}
+/** What one desktop window shows now: its arrangement, which side columns are drawn, what fills its content region, the focused chat's right panel, and its panes left to right, each column top to bottom. It names conversations by id only; their titles and agents are the gateway's to say. */
 export interface WorkspaceWindow {
   /** The window's layout. */
   arrangement: WorkspaceArrangement
@@ -3174,6 +3421,8 @@ export interface WorkspaceWindow {
   showing: WorkspaceShowing
   /** The widget drawn over the panes, when showing is widget. */
   widget?: WorkspaceWidget
+  /** The focused chat's right panel: whether it is drawn, its tabs, and the tab in front. */
+  panel: WorkspacePanel
   /** The panes' columns, left to right. */
   columns: WorkspaceColumn[]
 }
@@ -3212,8 +3461,8 @@ export interface Channel {
   createdAtMs: number
   /** Where the channel coordinator should run, independently of worker threads. */
   coordinatorPlacement: "local" | "boat"
-  /** Where new worker-thread workspaces run. Boat allocates one VM per thread. */
-  threadPlacement: "local" | "boat"
+  /** Where new worker-thread workspaces run. Boat allocates one VM per thread. Pool runs each thread on a paired computer, the first in the pool's order that is not busy, with Boat as overflow (devices.pool). */
+  threadPlacement: "local" | "boat" | "pool"
   /** Stable main-agent conversation identity; null for the default channel. Opening a channel uses this conversation; New thread uses another identity. */
   coordinatorConversationId: string | null
 }
@@ -3237,11 +3486,26 @@ export interface ChannelCreateParams {
   resources?: string[]
   /** Where the channel coordinator should run, independently of worker threads. */
   coordinatorPlacement?: "local" | "boat"
-  /** Where new worker-thread workspaces run. Boat allocates one VM per thread. */
-  threadPlacement?: "local" | "boat"
+  /** Where new worker-thread workspaces run. Boat allocates one VM per thread. Pool runs each thread on a paired computer, the first in the pool's order that is not busy, with Boat as overflow (devices.pool). */
+  threadPlacement?: "local" | "boat" | "pool"
 }
 /** The channel channel.create made, or made earlier under the same requestId. */
 export interface ChannelCreateResult {
+  channel: Channel
+}
+/** Change where a made channel's agents run (channel.setPlacement). Threads already made keep running where they started; threads made from now on run in threadPlacement. Moving the main agent names a fresh main conversation (coordinatorConversationId) that starts in the new place; the old one stays in the channel as an ordinary thread. The default channel has no run location to change and is refused forbidden, as is a channel the caller may not change. */
+export interface ChannelSetPlacementParams {
+  /** Stable action identifier retained for retries of one logical command. */
+  requestId: string
+  /** The made channel to change. */
+  channelId: string
+  /** Where the channel's main agent runs from now on. */
+  coordinatorPlacement: "local" | "boat"
+  /** Where threads made in the channel from now on run: pool runs each on a paired computer (devices.pool). */
+  threadPlacement: "local" | "boat" | "pool"
+}
+/** The channel as channel.setPlacement left it. */
+export interface ChannelSetPlacementResult {
   channel: Channel
 }
 /** Which page of the caller's channels to list (channel.list). Empty for the first. */
@@ -3286,6 +3550,15 @@ export interface VaultStatus {
   /** Whether protected local credentials are unconfigured, locked, or available to this app session. */
   state: VaultState
 }
+/** A confirmed passphrase change seals the vault; explicitly unlock again with the new phrase. */
+export const VaultPassphraseChangeState = { Locked: "locked" } as const
+export type VaultPassphraseChangeState =
+  (typeof VaultPassphraseChangeState)[keyof typeof VaultPassphraseChangeState]
+/** Confirmed passphrase replacement. Its complete success payload is locked; this does not confirm audit-failed or unknown publication outcomes. */
+export interface VaultPassphraseChangeStatus {
+  /** The vault is sealed after a confirmed passphrase change; explicitly unlock with the new phrase before protected use. */
+  state: VaultPassphraseChangeState
+}
 /** Transient passphrase proof for creating or unlocking the local vault. Mutations must never be automatically replayed. */
 export interface VaultPassphraseParams {
   /** Transient secret input, never logged or saved. Strength and byte bounds are owned by defaults/vault-contract.json. */
@@ -3294,6 +3567,7 @@ export interface VaultPassphraseParams {
 /** Redacted local-vault failures. Wrong passphrase can also mean damaged authenticated ciphertext; no failure resets the vault. */
 export const VaultErrorCode = {
   VaultUnavailable: "vault_unavailable",
+  VaultForbidden: "vault_forbidden",
   VaultLocked: "vault_locked",
   VaultPassphrasePolicy: "vault_passphrase_policy",
   VaultWrongPassphrase: "vault_wrong_passphrase",
@@ -3305,11 +3579,21 @@ export const VaultErrorCode = {
   VaultCapacity: "vault_capacity",
   VaultAuditUnavailable: "vault_audit_unavailable",
   VaultMigrationUnavailable: "vault_migration_unavailable",
+  VaultChangeUnchanged: "vault_change_unchanged",
+  VaultChangeUnchangedAuditUnavailable: "vault_change_unchanged_audit_unavailable",
+  VaultChangeNotConfirmed: "vault_change_not_confirmed",
+  VaultChangeNotConfirmedAuditUnavailable: "vault_change_not_confirmed_audit_unavailable",
+  VaultChangedAuditUnavailable: "vault_changed_audit_unavailable",
 } as const
 export type VaultErrorCode = (typeof VaultErrorCode)[keyof typeof VaultErrorCode]
 /** Connect a user-owned Boat account. The gateway validates the token and its release worker image, configures its dedicated agent environment, then encrypts the token in the unlocked vault. Does not authenticate a model subscription. */
 export interface BoatSaveParams {
   /** Boat infrastructure token. Never returned or logged. */
+  token: string
+}
+/** Keep the owner's Claude sign-in for Boat VMs in the unlocked vault, replacing any saved one. Boat gives VMs made from Nessa's image none of the owner's own logins, so Claude in a Boat VM runs with this. Refused as invalid_request unless it is a setup-token token. */
+export interface BoatClaudeSignInParams {
+  /** Long-lived Claude token that `claude setup-token` minted on the owner's machine. Never returned or logged. */
   token: string
 }
 /** Typed Boat connection refusals. Worker unavailable requires a matching Nessa release image; environment blocks credentials requires allowing connected agents in the dedicated Boat environment. Provisioning and cleanup uncertainty require reconciliation, not automatic replacement. No code or diagnostic contains credential values. */
@@ -3378,6 +3662,100 @@ export interface BoatRuntimeSettings {
   /** The stored channel whose settings were read or saved. Omitted only for the global default; an override requires this identity. */
   channelId?: string
 }
+/** Read the owner-only registered webhook checkpoint. Performs no canonical record I/O or delivery control. */
+export interface ConversationWebhookCursorParams {
+  /** Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization. */
+  conversationId: string
+  /** The actual registered webhook target credential owned by this conversation owner; this is not a paired-device selector. */
+  credentialId: string
+  /** Explicitly request a separately observed canonical Head under current owner read authority. Omitted/false performs no canonical admission or physical Head I/O. This does not reconcile or mutate the native checkpoint. */
+  includeSourceHead?: boolean
+}
+/** Reset only a frozen webhook checkpoint. requestId is its server-issued frozen capture UUID. Fresh owner authorization applies on replay; no caller-supplied scope or offset is accepted. */
+export interface ConversationWebhookResetParams {
+  /** Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization. */
+  conversationId: string
+  /** The actual registered webhook target credential owned by this conversation owner; this is not a paired-device selector. */
+  credentialId: string
+  /** The frozen capture UUID returned by the owner cursor query. Explicit retries retain this exact identity. */
+  requestId: string
+}
+/** Current native scoped checkpoint, without reconciliation or publication. An explicitly requested observedSourceHead is read afterward under current owner authority; compare complete scopes before positions. requestId is available only while reset-required. Neither observation grants receiver or send authority. */
+export interface ConversationWebhookCursorResult {
+  /** Complete scope/incarnation bound to the native checkpoint; its presence grants no read or delivery authority. */
+  scope: RecordScope
+  /** Canonical unsigned decimal position committed in this native scope. */
+  position: string
+  /** Whether fresh source capture requires an explicit owner reset for this frozen generation. */
+  resetRequired: boolean
+  /** Frozen capture UUID when resetRequired is true; null otherwise. Not a caller-selected rewind identity. */
+  requestId: string | null
+  /** Present only when explicitly requested and successfully read. Observed after the native checkpoint; these are separate non-atomic observations. Not a delivery, reset, publication or current-at-commit acknowledgement. */
+  observedSourceHead?: ConversationRecordsHeadResult
+}
+/** Immutable result: reset applied for this explicitly observed scope at position zero. Does not promise current-at-commit, resumed delivery or current resetRequired status. Same request replays this result without another rewind. */
+export interface ConversationWebhookResetResult {
+  /** Original frozen capture request UUID; matching replay returns the same selection without another rewind. */
+  requestId: string
+  /** Immutable native selection and audit receipt UUID for this applied reset. */
+  receiptId: string
+  /** Complete server-observed incarnation selected by this reset. It need not remain current when the native commit completes. */
+  scope: RecordScope
+  /** Scoped checkpoint selected by the reset, always zero in the returned observed incarnation. */
+  position: "0"
+  /** Original native selection observation time in Unix milliseconds, retained unchanged on replay. */
+  appliedAtMs: number
+}
+/** Result of voice.status, voice.saveKey and voice.forgetKey: whether the gateway holds a realtime voice key. The key itself is never returned. */
+export interface VoiceStatus {
+  /** Whether a key is saved in the gateway's vault. */
+  keySaved: boolean
+  /** The realtime model a call runs. */
+  model: string
+}
+/** Save the realtime voice provider's API key in the gateway's vault, replacing any saved one (voice.saveKey). */
+export interface VoiceSaveKeyParams {
+  /** The key: printable ASCII with no spaces. */
+  key: string
+}
+/** Start a voice call about one conversation (voice.startCall): the gateway mints a short-lived client secret with its saved key. */
+export interface VoiceStartCallParams {
+  /** The conversation the call talks to. */
+  conversationId: string
+}
+/** How the window connects a call. webrtc: OpenAI's realtime calls over WebRTC, with the microphone and spoken audio. scripted: a WebSocket carrying the same realtime events and no audio, served by a scripted provider the gateway was started with (the stress check's fake). */
+export const VoiceTransport = { Webrtc: "webrtc", Scripted: "scripted" } as const
+export type VoiceTransport = (typeof VoiceTransport)[keyof typeof VoiceTransport]
+/** The functions a voice call may call. send_to_agent: send what the person asked, in their own transcribed words, to the conversation as a message. stop_agent: stop the agent's running turn, as the Stop button does. */
+export const VoiceToolName = {
+  SendToAgent: "send_to_agent",
+  StopAgent: "stop_agent",
+} as const
+export type VoiceToolName = (typeof VoiceToolName)[keyof typeof VoiceToolName]
+/** Result of voice.startCall: how to connect one call. The secret is good for one connection before expiresAt; what the call is told and may call was fixed when it was minted. */
+export interface VoiceCall {
+  /** How to connect. */
+  transport: VoiceTransport
+  /** Where to connect: the WebRTC offer's address, or the scripted provider's WebSocket. */
+  callUrl: string
+  /** The short-lived secret the connection presents. Never the saved key. */
+  clientSecret: string
+  /** Unix milliseconds after which the secret connects nothing. */
+  expiresAt: number
+  /** The realtime model the call runs. */
+  model: string
+}
+/** Why the gateway refused a voice method. voice_not_configured: this gateway has no voice provider. voice_key_missing: no key is saved. voice_key_rejected: the provider refused the saved key. voice_unreachable: the provider could not be reached or answered something unreadable. voice_storage_unavailable: the vault could not save or delete the key; what was saved still is. voice_audit_unavailable: the change could not be recorded, so nothing changed and no call started. vault_locked: unlock Nessa first. */
+export const VoiceErrorCode = {
+  VoiceNotConfigured: "voice_not_configured",
+  VoiceKeyMissing: "voice_key_missing",
+  VoiceKeyRejected: "voice_key_rejected",
+  VoiceUnreachable: "voice_unreachable",
+  VoiceStorageUnavailable: "voice_storage_unavailable",
+  VoiceAuditUnavailable: "voice_audit_unavailable",
+  VaultLocked: "vault_locked",
+} as const
+export type VoiceErrorCode = (typeof VoiceErrorCode)[keyof typeof VoiceErrorCode]
 export const vmLifetimeSeconds = { minimum: 1, maximum: 4294967295 } as const
 export const subscriptionLimits = {
   conversationTargets: 8,
@@ -3439,7 +3817,7 @@ export const channelRules = {
 export const bounds = {
   maxOrdinaryResponseBytes: 65536,
   maxRequestFrameBytes: 65536,
-  maxReadyMethods: 101,
+  maxReadyMethods: 119,
   maxAuthCredentialCharacters: 16384,
   maxProductClientIdCharacters: 256,
   maxProductSurfaceInstanceCharacters: 256,
@@ -3716,6 +4094,8 @@ export const ProductMethod = {
   McpServersInspect: "mcpServers.inspect",
   McpServersAuthorize: "mcpServers.authorize",
   McpServersRevoke: "mcpServers.revoke",
+  AppsTrusted: "apps.trusted",
+  AppsUntrust: "apps.untrust",
   PhoneEndpoint: "phone.endpoint",
   PhoneAuthorize: "phone.authorize",
   PhoneStatus: "phone.status",
@@ -3731,6 +4111,10 @@ export const ProductMethod = {
   GithubLiveEvents: "github.liveEvents",
   GithubStatus: "github.status",
   GithubConnect: "github.connect",
+  DevicesList: "devices.list",
+  DevicesSshHosts: "devices.sshHosts",
+  DevicesConnectSsh: "devices.connectSsh",
+  DevicesSetDefault: "devices.setDefault",
   GithubCancel: "github.cancel",
   GithubDisconnect: "github.disconnect",
   PeerEnroll: "peer.enroll",
@@ -3748,7 +4132,9 @@ export const ProductMethod = {
   WorkspacePublish: "workspace.publish",
   ChannelCreate: "channel.create",
   ChannelList: "channel.list",
+  ChannelSetPlacement: "channel.setPlacement",
   ConversationSubscribeEvents: "conversation.subscribeEvents",
+  ConversationReadEarlier: "conversation.readEarlier",
   ConversationPeek: "conversation.peek",
   ConversationSetModel: "conversation.setModel",
   ConversationSwitchAgent: "conversation.switchAgent",
@@ -3756,12 +4142,22 @@ export const ProductMethod = {
   VaultStatus: "vault.status",
   VaultSetup: "vault.setup",
   VaultUnlock: "vault.unlock",
+  VaultChangePassphrase: "vault.changePassphrase",
   VaultLock: "vault.lock",
   BoatStatus: "boat.status",
   BoatSave: "boat.save",
+  BoatSaveClaudeSignIn: "boat.saveClaudeSignIn",
   BoatDisconnect: "boat.disconnect",
+  DevicesPool: "devices.pool",
+  DevicesSetPool: "devices.setPool",
   BoatRuntimeSettings: "boat.runtimeSettings",
   BoatSetRuntimeSettings: "boat.setRuntimeSettings",
+  ConversationWebhookCursor: "conversation.webhook.cursor",
+  ConversationWebhookReset: "conversation.webhook.reset",
+  VoiceStatus: "voice.status",
+  VoiceSaveKey: "voice.saveKey",
+  VoiceForgetKey: "voice.forgetKey",
+  VoiceStartCall: "voice.startCall",
 } as const
 export const ProductEvent = {
   SessionChallenge: "session.challenge",
@@ -3830,6 +4226,8 @@ export const productReadyMethods = [
   "mcpServers.inspect",
   "mcpServers.authorize",
   "mcpServers.revoke",
+  "apps.trusted",
+  "apps.untrust",
   "phone.endpoint",
   "phone.authorize",
   "phone.status",
@@ -3845,6 +4243,10 @@ export const productReadyMethods = [
   "github.liveEvents",
   "github.status",
   "github.connect",
+  "devices.list",
+  "devices.sshHosts",
+  "devices.connectSsh",
+  "devices.setDefault",
   "github.cancel",
   "github.disconnect",
   "peer.enroll",
@@ -3862,7 +4264,9 @@ export const productReadyMethods = [
   "workspace.publish",
   "channel.create",
   "channel.list",
+  "channel.setPlacement",
   "conversation.subscribeEvents",
+  "conversation.readEarlier",
   "conversation.peek",
   "conversation.setModel",
   "conversation.switchAgent",
@@ -3870,12 +4274,22 @@ export const productReadyMethods = [
   "vault.status",
   "vault.setup",
   "vault.unlock",
+  "vault.changePassphrase",
   "vault.lock",
   "boat.status",
   "boat.save",
+  "boat.saveClaudeSignIn",
   "boat.disconnect",
+  "devices.pool",
+  "devices.setPool",
   "boat.runtimeSettings",
   "boat.setRuntimeSettings",
+  "conversation.webhook.cursor",
+  "conversation.webhook.reset",
+  "voice.status",
+  "voice.saveKey",
+  "voice.forgetKey",
+  "voice.startCall",
 ] as const
 /** The grant each product method asks Cedar for, generated from protocol/product/manifest.json. null means another owner admits the method: the handshake or auth.session. Writing to a conversation — an answer, an upload, an app's calls — asks for conversation.write; reading its records or catalogue asks for conversation.read; running a configured server, or enrolling a device, asks for credential.manage. */
 export const productMethodGrants = {
@@ -3935,6 +4349,8 @@ export const productMethodGrants = {
   "mcpServers.inspect": "credential.manage",
   "mcpServers.authorize": "credential.manage",
   "mcpServers.revoke": "credential.manage",
+  "apps.trusted": "credential.manage",
+  "apps.untrust": "credential.manage",
   "phone.endpoint": "server.read",
   "phone.authorize": "credential.manage",
   "phone.status": "credential.manage",
@@ -3950,6 +4366,10 @@ export const productMethodGrants = {
   "github.liveEvents": "credential.manage",
   "github.status": "credential.manage",
   "github.connect": "credential.manage",
+  "devices.list": "server.read",
+  "devices.sshHosts": "credential.manage",
+  "devices.connectSsh": "credential.manage",
+  "devices.setDefault": "credential.manage",
   "github.cancel": "credential.manage",
   "github.disconnect": "credential.manage",
   "peer.enroll": "credential.manage",
@@ -3967,7 +4387,9 @@ export const productMethodGrants = {
   "workspace.publish": "conversation.write",
   "channel.create": "conversation.write",
   "channel.list": "conversation.write",
+  "channel.setPlacement": "conversation.write",
   "conversation.subscribeEvents": "conversation.write",
+  "conversation.readEarlier": "conversation.write",
   "conversation.peek": "conversation.write",
   "conversation.setModel": "conversation.write",
   "conversation.switchAgent": "conversation.write",
@@ -3975,12 +4397,22 @@ export const productMethodGrants = {
   "vault.status": "credential.manage",
   "vault.setup": "credential.manage",
   "vault.unlock": "credential.manage",
+  "vault.changePassphrase": "credential.manage",
   "vault.lock": "credential.manage",
   "boat.status": "credential.manage",
   "boat.save": "credential.manage",
+  "boat.saveClaudeSignIn": "credential.manage",
   "boat.disconnect": "credential.manage",
+  "devices.pool": "credential.manage",
+  "devices.setPool": "credential.manage",
   "boat.runtimeSettings": "credential.manage",
   "boat.setRuntimeSettings": "credential.manage",
+  "conversation.webhook.cursor": "credential.manage",
+  "conversation.webhook.reset": "credential.manage",
+  "voice.status": "credential.manage",
+  "voice.saveKey": "credential.manage",
+  "voice.forgetKey": "credential.manage",
+  "voice.startCall": "conversation.write",
 } as const
 export const catalogueWireSchemas = {
   RecordScope: {

@@ -30,11 +30,12 @@ fn actor(value: &ActionContext) -> usize {
         .saturating_add(value.surface_id().len())
         .saturating_add(value.request_id().len())
 }
-/// The grant's identity text; an owner holds no text of its own.
+/// Variable identity text held by an initiator.
 fn initiator(value: &Initiator) -> usize {
     match value {
         Initiator::Owner => 0,
         Initiator::Grant(grant) => grant.grant().len(),
+        Initiator::Agent(source) => source.payload_bytes(),
     }
 }
 fn initiation(value: &Initiation) -> usize {
@@ -101,7 +102,7 @@ pub(super) fn handoff(record: &HandoffRecord) -> usize {
             .as_str()
             .len()
             .saturating_add(std::mem::size_of_val(history.turns()))
-            .saturating_add(history.text_bytes()),
+            .saturating_add(history.payload_bytes()),
     };
     record
         .id
@@ -178,6 +179,10 @@ fn lease_record(record: &LeaseRecord) -> usize {
             .as_str()
             .len()
             .saturating_add(who.as_ref().map_or(0, actor)),
+        LeaseRecord::SdkCleanupAcknowledged { lease, lifetime }
+        | LeaseRecord::SdkCleanupRetired { lease, lifetime } => {
+            lease.as_str().len().saturating_add(lifetime.as_str().len())
+        }
         LeaseRecord::Ended { lease, .. }
         | LeaseRecord::Interrupted { lease }
         | LeaseRecord::CleanupReported { lease, .. } => lease.as_str().len(),
@@ -349,6 +354,7 @@ pub(super) fn invocation(record: &InvocationRecord) -> usize {
         .saturating_add(match message.sender() {
             MessageSender::Person | MessageSender::Internal => 0,
             MessageSender::App(app) => app.payload_bytes(),
+            MessageSender::Agent(source) => source.payload_bytes(),
         })
         .saturating_add(std::mem::size_of_val(message.app_model_context()))
         .saturating_add(
@@ -383,10 +389,28 @@ pub(super) fn invocation(record: &InvocationRecord) -> usize {
         );
     let acknowledgment = acknowledgement(&record.acknowledgement);
     let bytes = 0usize
+        .saturating_add(
+            record
+                .decline
+                .as_ref()
+                .map_or(0, |decision| scheduling_payload(decision.event())),
+        )
+        .saturating_add(
+            record
+                .cancellation_delivery
+                .as_ref()
+                .map_or(0, |decision| scheduling_payload(decision.event())),
+        )
         .saturating_add(prompt)
         .saturating_add(events)
         .saturating_add(scheduling)
         .saturating_add(record.request.execution_id.as_str().len())
+        .saturating_add(
+            record
+                .resumed_from
+                .as_ref()
+                .map_or(0, |id| id.as_str().len()),
+        )
         .saturating_add(actor(&record.actor))
         .saturating_add(initiation(&record.initiation))
         .saturating_add(
@@ -480,6 +504,20 @@ pub(super) fn touched(
                 0
             }
         }
+        SessionChange::DeclinePrepared { .. } => record.map_or(0, |record| {
+            record
+                .decline
+                .as_ref()
+                .map_or(0, |decision| scheduling_payload(decision.event()))
+        }),
+        SessionChange::DeclineAcknowledged { .. } => 0,
+        SessionChange::CancellationPrepared { .. } => record.map_or(0, |record| {
+            record
+                .cancellation_delivery
+                .as_ref()
+                .map_or(0, |decision| scheduling_payload(decision.event()))
+        }),
+        SessionChange::CancellationAcknowledged { .. } => 0,
         SessionChange::SchedulingTransition { .. } => record.map_or(0, |record| {
             record
                 .scheduling

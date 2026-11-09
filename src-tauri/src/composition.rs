@@ -101,6 +101,10 @@ pub struct HostDependencies {
     pub credential: Arc<dyn SurfaceCredentials>,
     /// Health-correlated endpoint source bound to the same service namespace.
     pub endpoint: Arc<GatewayEndpointAccess>,
+    /// The local gateway's `config.json`, which Settings opens for the
+    /// person to edit a server's command by hand; none when the service
+    /// namespace was not usable.
+    pub gateway_config: Option<std::path::PathBuf>,
     /// Where the person chooses files to attach: the operating system's own
     /// file dialog, which the webview has no way of putting on screen itself.
     pub picker: Arc<dyn FilePicker>,
@@ -273,7 +277,20 @@ impl HostDependencies {
                         clock.clone(),
                     ),
                     gateway::infrastructure::login_shell_path(),
-                    gateway::infrastructure::startup_events(app),
+                    gateway::infrastructure::startup_events(
+                        app,
+                        service_namespace
+                            .as_ref()
+                            .map(|namespace| {
+                                Arc::new(crate::host_log::FileLaunchTimings::at(
+                                    namespace
+                                        .log_directory()
+                                        .join(crate::host_log::LAUNCH_TO_GATEWAY_READY_FILE),
+                                ))
+                                    as Arc<dyn crate::host_log::LaunchTimingStore>
+                            })
+                            .unwrap_or_else(|| Arc::new(crate::host_log::UnavailableLaunchTimings)),
+                    ),
                     gateway::infrastructure::reconciliation_ids(),
                     reconciliation_audit,
                     clock,
@@ -287,6 +304,9 @@ impl HostDependencies {
             service_namespace.clone(),
             stage.clone(),
         ));
+        let gateway_config = service_namespace
+            .as_ref()
+            .map(|namespace| namespace.config_file());
         let endpoint = Arc::new(GatewayEndpointAccess::new(
             stage.clone(),
             gateway_endpoint::infrastructure::endpoint_discovery(service_namespace),
@@ -328,6 +348,7 @@ impl HostDependencies {
             shortcuts: Arc::new(ShortcutsFile::at(config_root)),
             credential,
             endpoint,
+            gateway_config,
             picker: attachments::file_picker(app),
             save_destination: saving::save_destination(app),
             save_sessions: saving::save_sessions(),

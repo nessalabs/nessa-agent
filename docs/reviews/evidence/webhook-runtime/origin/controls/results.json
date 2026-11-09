@@ -1,0 +1,44 @@
+[
+  {
+    "index": 0,
+    "rule": "held original actor",
+    "test": "actual_original_actor",
+    "caught": true,
+    "restored": true
+  },
+  {
+    "index": 1,
+    "rule": "held original command",
+    "test": "actual_original_command",
+    "caught": true,
+    "restored": true
+  },
+  {
+    "index": 2,
+    "rule": "committed origin revision",
+    "test": "matching_reply_cannot_turn_a_future_origin",
+    "caught": true,
+    "restored": true
+  },
+  {
+    "index": 3,
+    "rule": "journal sequence",
+    "test": "contradictory_auth_reply",
+    "caught": true,
+    "restored": true
+  },
+  {
+    "index": 4,
+    "rule": "journal revision",
+    "test": "contradictory_auth_reply",
+    "caught": true,
+    "restored": true
+  },
+  {
+    "index": 5,
+    "rule": "typed ambiguous recovery",
+    "test": "ordinary_origin_requires_explicit_recovery",
+    "caught": true,
+    "restored": true
+  }
+]

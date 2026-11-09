@@ -1,0 +1,14 @@
+Source0d0b12f32ceface5bf2f556c85d67fe3ff7cf06c run40252725334 job121348333981
+2026-10-26T01:19:38.3620732Z pool: worker a33 drained in 28 ms
+2026-10-26T01:19:40.7801790Z ok    033 pool [chromium columns]
+2026-10-26T01:19:42.5788577Z ok    034 aside [chromium columns]
+2026-10-26T01:19:45.1031784Z ok    035 panel [chromium columns]
+2026-10-26T01:19:46.0157228Z ERROR 036 webhook [chromium columns]
+2026-10-26T01:19:46.0158127Z         ! forbidden · forbidden
+2026-10-26T01:19:47.1236643Z ERROR 037 switch [chromium columns]
+2026-10-26T01:19:47.1237476Z         ! not run: 036 webhook did not hold
+2026-10-26T01:16:07.3432891Z scripted-scenarios: 8/8 held
+2026-10-26T01:16:29.9805179Z usage-limit: 16/16 held
+2026-10-26T01:17:23.6547623Z drag: 8/8 held
+2026-10-26T01:20:14.7815087Z conversation-stress: 39/50 held (some could not run)
+2026-10-26T01:21:28.2056235Z conversation-chaos: 2/2 runs held

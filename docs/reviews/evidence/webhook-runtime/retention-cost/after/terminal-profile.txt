@@ -1,0 +1,12 @@
+
+running 1 test
+PROFILE terminal position=1 elapsed_ms=52 vm_steps_approx=300
+PROFILE terminal position=128 elapsed_ms=5387 vm_steps_approx=3850000
+PROFILE terminal position=256 elapsed_ms=11118 vm_steps_approx=15270200
+PROFILE terminal position=512 elapsed_ms=15954 vm_steps_approx=60819000
+PROFILE terminal position=768 elapsed_ms=23048 vm_steps_approx=136645300
+PROFILE terminal position=1024 elapsed_ms=28398 vm_steps_approx=242748800
+PROFILE terminal position=1025 elapsed_ms=28414 vm_steps_approx=243223000
+test webhooks::infrastructure::outbox::store::tests::terminal_retention_is_bounded ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 85 filtered out; finished in 28.70s

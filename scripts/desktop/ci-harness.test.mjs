@@ -79,7 +79,7 @@ test("local and CI aggregate the same named frontend and native checks", () => {
   }
   assert.match(
     workflow,
-    /cargo fmt -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-client-core -p nessa-device-client -p nessa-sdk -p nessa-vault -- --check/,
+    /cargo fmt -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-client-core -p nessa-device-client -p nessa-sdk -p nessa-timer -p nessa-vault -- --check/,
   )
   assert.equal(
     root.scripts.architecture,
@@ -91,17 +91,17 @@ test("local and CI aggregate the same named frontend and native checks", () => {
   // limit (#366). The package list is one build; the runner overlaps binaries.
   assert.match(
     workflow,
-    /run: node scripts\/cargo-test-parallel\.mjs --concurrency 2 --partition \$\{\{ matrix\.partition \}\} -- -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-client-core -p nessa-device-client -p nessa-sdk -p nessa-vault\r?\n\s+timeout-minutes: \d+\r?\n/,
+    /run: node scripts\/cargo-test-parallel\.mjs --concurrency 2 --partition \$\{\{ matrix\.partition \}\} -- -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-client-core -p nessa-device-client -p nessa-sdk -p nessa-timer -p nessa-vault\r?\n\s+timeout-minutes: \d+\r?\n/,
   )
   assert.doesNotMatch(
     workflow,
-    /run: cargo test -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-client-core -p nessa-device-client -p nessa-sdk -p nessa-vault\b/,
+    /run: cargo test -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-client-core -p nessa-device-client -p nessa-sdk -p nessa-timer -p nessa-vault\b/,
   )
   // Both Windows partitions compile the same package graph; the remaining
   // partition owns dependency crates' tests, including the vault's regressions.
   assert.match(
     workflow,
-    /run: node scripts\/cargo-test-parallel\.mjs --concurrency 2 --partition \$\{\{ matrix\.partition \}\} -- -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-client-core -p nessa-device-client -p nessa-sdk -p nessa-vault\r?\n/,
+    /run: node scripts\/cargo-test-parallel\.mjs --concurrency 2 --partition \$\{\{ matrix\.partition \}\} -- -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-client-core -p nessa-device-client -p nessa-sdk -p nessa-timer -p nessa-vault\r?\n/,
   )
   // The coverage gate runs the same SDK tests again, instrumented, in its own job.
   assert.match(
@@ -110,7 +110,7 @@ test("local and CI aggregate the same named frontend and native checks", () => {
   )
   assert.match(
     workflow,
-    /cargo clippy -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-client-core -p nessa-device-client -p nessa-sdk -p nessa-vault --all-targets -- -D warnings/,
+    /cargo clippy -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-client-core -p nessa-device-client -p nessa-sdk -p nessa-timer -p nessa-vault --all-targets -- -D warnings/,
   )
   // The database opener's privacy checks answer differently on each OS, so
   // they run in the matrix, as `pnpm check` runs them locally.
@@ -335,9 +335,11 @@ test("apt installs and every CI job are bounded", () => {
   assert.equal(scriptBudget, 62.75)
 
   // Minutes, from 21 green local-auth runs on 2026-10-07 and the four release
-  // runs that exist. local-auth is 130 because the 65 minute apt step, the
-  // 45 minute Rust test step, and at most 11.3 minutes of everything else
-  // sum past 120. The release build is 120 because 65 + 25.7 does too.
+  // runs that exist. local-auth is 140 because the 65 minute apt step, the
+  // 60 minute Rust test step, and at most 11.3 minutes of everything else
+  // sum past 130. The release build is 120 because 65 + 25.7 does too.
+  // windows-server-tests is 95 because its test step is 90 and setup is at
+  // most 4 minutes. Run 41947356093 was still inside server-other at 70.
   const bounds = {
     "local-auth.yml": {
       workflows: 10,
@@ -345,9 +347,11 @@ test("apt installs and every CI job are bounded", () => {
       "gateway-contract": 45,
       "desktop-release-profile": 45,
       frontend: 30,
-      "conversation-stress": 60,
-      "local-auth": 130,
-      "windows-server-tests": 60,
+      // 90: the browser install may use 45 minutes (run 42079903038 was still
+      // fetching at 30) and the rest of green run 42072698358 took 31.
+      "conversation-stress": 90,
+      "local-auth": 140,
+      "windows-server-tests": 95,
       "sdk-domain-coverage": 60,
       "required-checks": 10,
     },
@@ -402,6 +406,17 @@ test("apt installs and every CI job are bounded", () => {
       assert.ok(stepTimeout < jobTimeout, `${stepTimeout} < ${jobTimeout}`)
     }
   }
+
+  // The stress job's browser install is apt too. Run 42079903038 was still
+  // fetching when a 30 minute step ended. 45 is the moving-install ceiling
+  // above, and it has to finish while the job is still alive.
+  assert.match(localAuth, /Acquire::Retries "3"/)
+  assert.match(localAuth, /Acquire::https::Timeout "30"/)
+  assert.match(
+    localAuth,
+    /pnpm exec playwright install --with-deps chromium webkit\r?\n(?:\s+#.*\r?\n)*\s+timeout-minutes: 45\r?\n/,
+  )
+  assert.ok(45 < bounds["local-auth.yml"]["conversation-stress"])
 })
 
 test("an underscore or uppercase job with no timeout is not absorbed by the previous job", () => {

@@ -222,9 +222,20 @@ fn native_session_keeps_paired_records_offline_reopens_and_purges_on_terminal() 
     let address: SocketAddr = profile["gatewayAddress"].as_str().unwrap().parse().unwrap();
     let state_root = Path::new(profile["stateRoot"].as_str().unwrap());
     let state_directory = Path::new(profile["stateDirectory"].as_str().unwrap());
-    let open = || NativeSession::open(state_root, state_directory, address, None).unwrap();
+    // This lifecycle assertion requires a completed pass, not wall-clock expiry.
+    // The separate budget regression advances this same clock explicitly.
+    let open = || {
+        NativeSession::open_with_clock(
+            state_root,
+            state_directory,
+            address,
+            None,
+            Arc::new(ManualClock::default()),
+        )
+        .unwrap()
+    };
     let native = open();
-    let refresh = native.refresh(ReadStop::new()).unwrap();
+    let refresh = watched(&native, || native.refresh(ReadStop::new())).unwrap();
     assert!(matches!(
         refresh.initial().observation(),
         Some(NativePairingStatus::Active { .. })
@@ -288,12 +299,12 @@ fn native_session_keeps_paired_records_offline_reopens_and_purges_on_terminal() 
     let restarted = Gateway::start(&root);
     let resumed = open();
     let resumed_stamp = resumed.bind_saved_receiver().unwrap();
-    let refresh = resumed.refresh(ReadStop::new()).unwrap();
+    let refresh = watched(&resumed, || resumed.refresh(ReadStop::new())).unwrap();
     assert!(refresh.read().unwrap().result().as_ref().unwrap().complete);
     assert!(!refresh.read().unwrap().result().as_ref().unwrap().moved);
     drop(restarted);
     let _revoked = Gateway::start_mode(&root, "revoke");
-    let terminal = resumed.refresh(ReadStop::new()).unwrap();
+    let terminal = watched(&resumed, || resumed.refresh(ReadStop::new())).unwrap();
     let status = terminal.initial();
     assert!(matches!(
         status.observation(),

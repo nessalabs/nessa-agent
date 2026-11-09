@@ -167,7 +167,7 @@ async function bounded(promise, ms, expire) {
  * Call after the UI intent that requests unlock, not after an arbitrary restart. */
 export async function unlockRequestedVault(client, page) {
   if ((await client.vault.status()).state !== "locked") return
-  await page.locator('[data-vault-dialog="unlock"]').waitFor()
+  await page.locator('[data-vault-dialog="unlock"]').waitFor({ timeout: 15_000 })
   await unlockVault(page)
   if ((await client.vault.status()).state !== "unlocked")
     throw new Error("The requesting window did not unlock its vault")
@@ -198,4 +198,25 @@ export async function unlockVault(page, { screenshot, expectedContainer } = {}) 
     await dialog.getByRole("button", { name: "Unlock", exact: true }).click()
     await dialog.waitFor({ state: "hidden" })
   }
+}
+
+/** Drive an explicit change and unlock through the window, keeping the native
+ * owner. The optional readback verifies sealing without issuing a mutation. */
+export async function changeVaultPassphrase(page, passphrase, { locked } = {}) {
+  await page.getByRole("button", { name: "Change passphrase", exact: true }).click()
+  const change = page.locator("[data-vault-change]")
+  await change.getByLabel("New passphrase", { exact: true }).fill(passphrase)
+  await change.getByLabel("Confirm new passphrase").fill(passphrase)
+  await change.getByRole("button", { name: "Change passphrase", exact: true }).click()
+  await change
+    .getByRole("status")
+    .filter({ hasText: "Your passphrase changed" })
+    .waitFor()
+  if (locked && !(await locked()))
+    throw new Error("Passphrase change did not seal the vault")
+  await change.getByRole("button", { name: "Unlock vault", exact: true }).click()
+  const unlock = page.locator('[data-vault-dialog="unlock"]')
+  await unlock.getByLabel("Passphrase", { exact: true }).fill(passphrase)
+  await unlock.getByRole("button", { name: "Unlock", exact: true }).click()
+  await unlock.waitFor({ state: "hidden" })
 }

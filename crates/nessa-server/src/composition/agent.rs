@@ -97,13 +97,6 @@ pub(super) struct AgentsConfig {
     #[cfg(unix)]
     #[serde(skip)]
     pub stand_ins: nessa_sdk::infrastructure::acp::sessions::StandInSessions,
-    /// What each provider open's sign-ins outside the agent's own vendor are
-    /// read from: the GitHub connection once it is composed
-    /// ([`super::github`]), none before. Never configured. Unix only, as
-    /// launching an agent is.
-    #[cfg(unix)]
-    #[serde(skip)]
-    pub open_credentials: nessa_sdk::infrastructure::acp::sessions::OpenCredentials,
     /// The agent a conversation runs on when nothing else names one.
     ///
     /// Left out where only one agent is configured, because there is nothing to
@@ -1256,7 +1249,7 @@ pub(super) mod build {
             environment,
             runtime_environment,
             credential_environment,
-            open_credentials: config.open_credentials.clone(),
+            open_credentials: nessa_sdk::infrastructure::acp::sessions::OpenCredentials::none(),
             workspace,
             tools_enabled: runtime.tools_enabled,
             // MCP servers are tools: a runtime with tools off is given none,

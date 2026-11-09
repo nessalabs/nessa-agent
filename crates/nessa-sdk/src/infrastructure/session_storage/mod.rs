@@ -10,6 +10,8 @@
 //! a worker; the expected-identity constructor rechecks the stream key. Bounded
 //! product reads reuse terminal-discovery metadata/hash in a sixteen-entry cache
 //! and return [`RecordReadStatus::Preparing`] until a captured tail is validated.
+//! [`RecordReadStatus::Occupied`] means another owner holds the entry: that
+//! call did no validation, and the product read waits instead of counting it.
 //! That cache retains no worker or semantic body.
 //! `save_batch` arms one save's remaining physical events so their first append
 //! commits a bounded chunk in one SQLite transaction. A rolled-back chunk
@@ -79,6 +81,8 @@ pub use record_source::{
     physical_record_schema, NessaRecordSource, RecordStreamIdentity,
     MAX_PHYSICAL_RECORD_PAYLOAD_BYTES,
 };
+#[cfg(any(test, feature = "test-support"))]
+pub use terminal_discovery::DiscoveryHold;
 pub use terminal_discovery::RecordReadStatus;
 mod transcript;
 pub use transcript::{

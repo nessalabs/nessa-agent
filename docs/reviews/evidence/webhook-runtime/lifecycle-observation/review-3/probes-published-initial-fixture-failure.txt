@@ -1,0 +1,23 @@
+
+running 4 tests
+
+thread 'webhooks::infrastructure::outbox::store::tests::independent_probes::diagnostic_published_initial_issue_is_also_acknowledgement_proof' (163214) panicked at /tmp/nessa-w24-m2-independent-review/probes.rs:7:240:
+called `Result::unwrap()` on an `Err` value: SqliteFailure(Error { code: ConstraintViolation, extended_code: 1555 }, Some("UNIQUE constraint failed: audit.id"))
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test webhooks::infrastructure::outbox::store::tests::independent_probes::diagnostic_published_initial_issue_is_also_acknowledgement_proof ... FAILED
+
+thread 'webhooks::infrastructure::outbox::store::tests::independent_probes::required_initial_rejection_with_only_retained_source_history' (163217) panicked at /tmp/nessa-w24-m2-independent-review/probes.rs:73:3:
+assertion `left == right` failed
+  left: Ok(())
+ right: Err(Invalid)
+test webhooks::infrastructure::outbox::store::tests::independent_probes::required_initial_rejection_with_only_retained_source_history ... FAILED
+test webhooks::infrastructure::outbox::store::tests::independent_probes::diagnostic_retained_cursor_history_proves_initial_issue_completion ... ok
+test webhooks::infrastructure::outbox::store::tests::independent_probes::independent_owed_issue_expiry_refuses_first_cold_open_before_bytes_or_files_change ... ok
+
+failures:
+
+failures:
+    webhooks::infrastructure::outbox::store::tests::independent_probes::diagnostic_published_initial_issue_is_also_acknowledgement_proof
+    webhooks::infrastructure::outbox::store::tests::independent_probes::required_initial_rejection_with_only_retained_source_history
+
+test result: FAILED. 2 passed; 2 failed; 0 ignored; 0 measured; 122 filtered out; finished in 0.06s

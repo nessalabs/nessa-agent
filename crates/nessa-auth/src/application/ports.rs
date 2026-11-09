@@ -130,12 +130,41 @@ pub trait SessionVerifier: Send + Sync {
 /// Credential and membership must come from one committed authorization revision.
 #[derive(Debug, Clone)]
 pub struct AccessSnapshot {
+    /// Actual original issuance read coherently from this authority's journal.
+    pub origin: super::origin::CredentialOrigin,
+    /// Actual original revocation from the same journal/snapshot, absent only
+    /// while the credential has not been revoked. This carries no bearer.
+    pub revocation: Option<super::revocation::CredentialRevocation>,
     /// Current secret-free credential metadata.
     pub credential: Credential,
     /// Membership linked to the credential actor and organization.
     pub membership: Membership,
     /// Committed authorization-state version used for this snapshot.
     pub revision: u64,
+}
+impl AccessSnapshot {
+    /// Consume coherent revocation evidence when lifecycle coordination needs it.
+    /// Absence with revoked metadata, a different credential/history or a future
+    /// journal revision fails closed; no actor is reconstructed from the caller.
+    pub fn revocation_fact(
+        &self,
+    ) -> Result<Option<&super::revocation::CredentialRevocation>, AccessError> {
+        if !self.origin.matches(&self.credential, self.revision) {
+            return Err(AccessError::IdentityMismatch);
+        }
+        match (self.credential.revoked_at(), self.revocation.as_ref()) {
+            (None, None) => Ok(None),
+            (Some(_), Some(fact))
+                if fact.matches(&self.credential, self.revision)
+                    && fact.sequence() > self.origin.sequence()
+                    && fact.revision() >= self.origin.revision() =>
+            {
+                Ok(Some(fact))
+            }
+            (Some(_), None) => Err(AccessError::Unavailable),
+            _ => Err(AccessError::IdentityMismatch),
+        }
+    }
 }
 /// Read current credential and membership metadata from one committed revision.
 pub trait AccessReader: Send + Sync {
@@ -145,6 +174,30 @@ pub trait AccessReader: Send + Sync {
     /// observe that revision or newer; concurrent reads may observe either complete
     /// revision. Returned snapshots remain owned and unchanged after publication.
     fn read<'a>(&'a self, credential: &'a CredentialId) -> PortFuture<'a, AccessSnapshot>;
+}
+
+/// A coherent access read kept still through one bounded external effect.
+/// This is synchronization evidence, not an authorization decision. Callers
+/// still validate identity, expiry and Cedar policy, and own the effect deadline.
+pub struct AccessHold {
+    pub snapshot: AccessSnapshot,
+    _keep: Box<dyn Send>,
+}
+
+impl AccessHold {
+    pub fn held(snapshot: AccessSnapshot, keep: impl Send + 'static) -> Self {
+        Self {
+            snapshot,
+            _keep: Box::new(keep),
+        }
+    }
+}
+
+/// Credential mutation and effect admission share this authority's fence.
+/// A successful mutation waits for previously held effects; subsequent holds
+/// observe the mutation. Implementations must cover every mutation entry point.
+pub trait AccessAdmission: Send + Sync {
+    fn hold<'a>(&'a self, credential: &'a CredentialId) -> PortFuture<'a, AccessHold>;
 }
 
 /// Absolute time for credential expiration, distinct from the server uptime clock.
@@ -192,6 +245,8 @@ pub enum IssuePath {
     Bootstrap,
     /// A signed-in administrator issues a credential over the product protocol.
     ProductIssue,
+    /// An outbound webhook registration proposes its integration credential.
+    WebhookIssue,
     /// The local operator provisions a surface's credential offline.
     SurfaceProvision,
     /// The local operator replaces the owner credential offline.

@@ -1,0 +1,7 @@
+{
+  "path": "application/revocation.rs",
+  "old": "&& self.transition.after().revoked_at == current.revoked_at()",
+  "new": "",
+  "originalHash": "a3b712324b78e325a78a30f672d839f5c7e80f06d012ac271f1124ee31751f6c",
+  "changedHash": "7eab0ba8e65161209d7964ce5d735a54769cff19e3530e77fde28264f139e5b9"
+}

@@ -27,12 +27,17 @@ import type { DesktopThemeId } from "../../../model/theme"
 import type { DesktopStore } from "../../../store"
 import { workspaceDragOptions } from "../../adapters/dom/split-panes-drag"
 import { useSplitPanesDrag, type SplitPanesSource } from "../../../split-panes"
-import { focusInFront, useFocusFollowsPane } from "../../adapters/dom/focus"
+import {
+  focusInFront,
+  performanceFocusClock,
+  useFocusFollowsPane,
+} from "../../adapters/dom/focus"
 import { useWidgetEscape, type EscapeScopes } from "../../adapters/dom/widget-escape"
 import { labelOf, useKeyBindings, type Binding } from "../../adapters/dom/shortcuts"
 import { drawn } from "../../../model/side-column"
 import {
   arrangementShown,
+  panelShown,
   canOpenBeside,
   closeInFront,
   focusPane,
@@ -144,7 +149,7 @@ function useWorkspaceKeys(
     // Already the focused pane, its key does not move, so focus-follows has
     // nothing to follow: the caret is brought back from wherever it is — the
     // panel, say — here.
-    if (already) focusInFront()
+    if (already) focusInFront(document, performanceFocusClock)
   }
   const focusBeside = (step: -1 | 1) => {
     const panes = selectPanes(store.getState())
@@ -255,6 +260,14 @@ function useShownArrangement(region: SidebarRegion) {
       dispatch(arrangementShown({ arrangement: null }))
     }
   }, [dispatch, region.arrangement])
+}
+
+/** The layout says whether the right panel is drawn, for the person's agents. */
+function useShownPanel(open: boolean) {
+  const dispatch = useWorkspaceDispatch()
+  useEffect(() => {
+    dispatch(panelShown({ open }))
+  }, [dispatch, open])
 }
 
 function useWorkspaceChrome(region: SidebarRegion) {
@@ -575,6 +588,7 @@ export interface WorkspaceWindowModel {
   panelWidth: number
   onTogglePanel: () => void
   onTogglePanelMaximized: () => void
+  onNewSession: () => void
   onPanelDragStart: () => void
   onPanelDragMove: (delta: number) => void
 }
@@ -594,6 +608,7 @@ export function useWorkspaceWindow({
   const [theme] = useThemePreference()
   const store = useWorkspaceStore()
   const chrome = useWorkspaceChrome(region)
+  useShownPanel(chrome.panelOpen)
   const dragging = useColumnDrag(region, root, chrome.listOpen, chrome.sidebarWidth)
   const switching = useWorkspaceSwitcher(
     region,
@@ -604,7 +619,7 @@ export function useWorkspaceWindow({
   )
   usePanelEscape(root, chrome.panelMaximized, chrome.setPanelMaximized)
   const panelDrag = usePanelDrag(chrome.panelWidth, chrome.resizePanel, chrome.closePanel)
-  useFocusFollowsPane(store, root)
+  useFocusFollowsPane(store, root, performanceFocusClock)
   // The panes' drag spans the window: sessions are picked up from its lists.
   const splitPanes = useMemo(() => workspaceSplitPanes(store), [store])
   const dragOptions = useMemo(workspaceDragOptions, [])
@@ -622,6 +637,7 @@ export function useWorkspaceWindow({
   const dispatch = useWorkspaceDispatch()
   const onToggleSidebar = useCallback(() => dispatch(toggleSidebar()), [dispatch])
   const onToggleSessionList = useCallback(() => dispatch(toggleSessionList()), [dispatch])
+  const onNewSession = useCallback(() => dispatch(newSession()), [dispatch])
   const onRevealSidebar = useCallback(
     () => dispatch(toggleSidebar({ open: true })),
     [dispatch],
@@ -675,6 +691,7 @@ export function useWorkspaceWindow({
     panelWidth: chrome.panelWidth,
     onTogglePanel: chrome.togglePanel,
     onTogglePanelMaximized: chrome.toggleMaximized,
+    onNewSession,
     ...panelDrag,
     ...dragging,
   }

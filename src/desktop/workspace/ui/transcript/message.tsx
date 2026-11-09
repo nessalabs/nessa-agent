@@ -1,5 +1,6 @@
 import { memo } from "react"
 import { TranscriptDivider } from "@nessa-ui/react/transcript-divider"
+import { ChatAttachmentTile } from "@nessa-ui/react/chat-bubbles"
 import {
   PublishedFiles,
   MessageImages,
@@ -7,6 +8,8 @@ import {
   UnreadableOverflowLine,
   UnreadablePartLine,
 } from "../../../../conversation"
+import { useWorkspaceSelector } from "../../adapters/store/hooks"
+import { selectWidgetOpenElsewhere } from "../../adapters/store/selectors"
 import { useInlineWidgetHost } from "../../adapters/store/widget-hosts"
 import { InlineWidget, type WidgetRef } from "../../../widgets"
 import { handoffLine } from "../../model/handoff"
@@ -24,6 +27,8 @@ import { ChatPill } from "./chat-pill"
 import { AgentProse, RichText } from "./rich-text"
 import { named, Saying, type Said } from "./said"
 import { ToolSteps } from "./tool-steps"
+import type { DraftImage } from "../../model/draft-images"
+import type { TranscriptView } from "../../model/transcript-view"
 
 /**
  * Who wrote a message of the person's on their behalf: the app's tool, from
@@ -42,18 +47,23 @@ export function messageAuthor(app: MessageApp): Said {
  * (`PublishedFiles`). A note somebody left is a row of its own, neither
  * (`TranscriptNote`). A record this read could not apply is one line
  * (`UnreadablePartLine`), and so is the point where the agent ran on in a
- * new session, a switch or a fork (`handoffLine`). Memoised on the
- * message itself, so a reply streaming in renders only the message it grows.
+ * new session, a switch or a fork (`handoffLine`). In the compact view
+ * (`transcript-view.ts`) the agent's tool runs are left out, and a reply that
+ * was only tool runs draws nothing. Memoised on the message itself, so a
+ * reply streaming in renders only the message it grows.
  */
 export const Message = memo(function Message({
   sessionId,
   message,
   isNew,
+  view = "detailed",
 }: {
   sessionId: string
   message: MessageValue
   /** Arrived while the conversation was open, so it rises into place. */
   isNew: boolean
+  /** How much of the agent's work to show; detailed where not said. */
+  view?: TranscriptView
 }) {
   if (message.role === "note")
     return (
@@ -101,16 +111,22 @@ export const Message = memo(function Message({
     // thread, and what it did (`model/thread-report.ts`).
     const first = message.parts[0]
     const report = first?.kind === "text" ? threadReportOf(first.text) : null
-    if (report)
+    if (
+      report &&
+      message.agent?.conversationId === report.thread &&
+      message.agent.executionId === report.execution
+    )
       return (
         <div
           className="workspace-message"
           data-role="thread-report"
+          data-message-agent={message.agent.conversationId}
           data-new={isNew || undefined}
         >
           <p className="workspace-thread-report" data-outcome={report.outcome}>
+            <span>Agent report from </span>
             <ChatPill sessionId={report.thread} />
-            <span>{reportVerb(report.outcome)}</span>
+            <span> {reportVerb(report.outcome)}</span>
           </p>
         </div>
       )
@@ -121,7 +137,14 @@ export const Message = memo(function Message({
         data-new={isNew || undefined}
         data-sending={message.delivery?.state === "sending" || undefined}
       >
-        {message.app ? (
+        {message.agent ? (
+          <p
+            className="workspace-message-author"
+            data-message-agent={message.agent.conversationId}
+          >
+            Sent by an agent in <ChatPill sessionId={message.agent.conversationId} />
+          </p>
+        ) : message.app ? (
           <p
             className="workspace-message-author"
             data-message-app={`${message.app.server}/${message.app.tool}`}
@@ -136,18 +159,27 @@ export const Message = memo(function Message({
                 <RichText text={part.text} />
               </p>
             ) : part.kind === "attachments" ? (
-              <MessageImages key={index} content={part.content} />
+              <MessageImages
+                key={index}
+                content={part.content}
+                conversationId={sessionId}
+              />
             ) : null,
           )}
+          {message.localImages?.length ? (
+            <LocalImages images={message.localImages} />
+          ) : null}
         </div>
         {message.terminal ? <TurnTerminalMark terminal={message.terminal} /> : null}
       </div>
     )
   }
-  const groups = groupSteps(message.parts)
+  const all = groupSteps(message.parts)
+  const groups = view === "compact" ? all.filter((group) => !Array.isArray(group)) : all
   const widgetOccurrences = new Map<string, number>()
-  // A reply that has only just begun streaming has nothing to show yet.
-  // A turn that ended still shows how it ended, even when it said nothing.
+  // A reply that has only just begun streaming has nothing to show yet, nor
+  // has one of only tool runs in the compact view. A turn that ended still
+  // shows how it ended, even when it said nothing.
   if (
     groups.every(
       (group) => !Array.isArray(group) && group.kind === "text" && !group.text,
@@ -253,7 +285,32 @@ function TurnTerminalMark({ terminal }: { terminal: TurnTerminal }) {
 /** A widget in a message: its card, whose pane opens beside this conversation. */
 function MessageWidget({ sessionId, widget }: { sessionId: string; widget: WidgetRef }) {
   const host = useInlineWidgetHost(widget, sessionId)
-  return <InlineWidget widget={widget} host={host} />
+  const openElsewhere = useWorkspaceSelector((state) =>
+    selectWidgetOpenElsewhere(state, widget),
+  )
+  return <InlineWidget widget={widget} host={host} openElsewhere={openElsewhere} />
 }
 
 /** Why a message did not reach the agent, and the two ways on: send it again, or let it go. */
+
+/**
+ * The images on a message this window sent and its conversation does not hold
+ * yet, drawn from the bytes the window holds, as the tiles the conversation's
+ * own reference will draw once it does (`MessageImages`).
+ */
+function LocalImages({ images }: { images: readonly DraftImage[] }) {
+  return (
+    <ul
+      aria-label={images.length === 1 ? "1 attachment" : `${images.length} attachments`}
+      // The pasted copy, drawn until the conversation holds the message.
+      data-local-images=""
+      className="nessa-message-images m-0 flex list-none flex-wrap gap-1.5 p-0 [&:not(:first-child)]:mt-2"
+    >
+      {images.map((image) => (
+        <li key={image.id} title={image.name} className="inline-flex">
+          <ChatAttachmentTile label={image.name} imageSrc={image.url} />
+        </li>
+      ))}
+    </ul>
+  )
+}

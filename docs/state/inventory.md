@@ -14,6 +14,40 @@ diagramLinks: {}
 
 # Repository state and lifecycle inventory
 
+## App-wide feature mapping (2026-11-02)
+
+The current expansion starts from the same frozen app source as PR #1256,
+`77a6b620af4d94b234294f6d273fd74b3dfb44c7`. It inventories the actual desktop,
+panel, onboarding, provider authentication, voice, vault, gateway contexts,
+SDK, product clients and native host modules before assigning stateful owners.
+This scope includes previously missing voice, channel creation, child preparation,
+subscription ownership, backup export/restore, environment leases, peer gateway,
+tunnel and agent-tool maps. The [feature verification map](feature-verification.md)
+provides the per-page accounting; the command reads the canonical catalog rather
+than maintaining a separate navigation manifest.
+
+A directly linked model checks its own declared safety abstraction. A shared
+mapping points to an existing owning model and names excluded UI or transport
+work. Contracts, indexes and external sibling-library references are accounted
+for without pretending they are a checked application lifecycle. Existing source
+checkpoints do not advance merely because the page gains a scoped model. The
+[provenance](provenance.md) distinguishes the model/source review from executed
+product qualification. The historical inventory below remains historical.
+
+## Mainline reconciliation after the feature pass
+
+Main `719dfce93892e09dcb95e86a060b6d2f42c8f3cc` was merged after the initial
+app-wide pass. The incoming implementation was preserved, including native FIFO
+product submissions, immutable session-context admission, captured Stop restart
+settlement, occupied-cache discovery waits and transcript resize handling. The
+corresponding owners and focused controls were reconciled before the integrated
+catalog was checked. This does not restamp unchanged feature pages.
+
+The new `crates/nessa-timer/src/lib.rs` owns the shared monotonic deadline port
+used by SDK and environment waits. Its operation-first deadline tie and
+unconstrained deadline poll remain source contracts. This extraction is not a
+new product scheduler or a modeled promise of eventual completion.
+
 ## Inspection scope
 
 The sweep starts from local revision `1bc93353ffebaf7553c14c624c269fbd21b71583`

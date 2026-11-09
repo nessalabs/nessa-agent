@@ -1,5 +1,5 @@
 use super::frames::{OutgoingMessage, ResponseFrame};
-use super::generated_types::{HealthResult, RuntimeStatus};
+use super::generated_types::{HealthResult, RuntimeStatus, WebhookStatus};
 
 pub use crate::product::generated::MAX_PAYLOAD_BYTES;
 
@@ -7,11 +7,13 @@ pub use crate::product::generated::MAX_PAYLOAD_BYTES;
 pub fn health_check_message(
     request_id: &str,
     uptime_ms: u64,
+    webhook: Option<WebhookStatus>,
 ) -> Result<OutgoingMessage, serde_json::Error> {
     let payload = HealthResult {
         ok: true,
         runtime_status: RuntimeStatus::Ready,
         uptime_ms: i64::try_from(uptime_ms).unwrap_or(i64::MAX),
+        webhook,
     };
     Ok(OutgoingMessage::Response(ResponseFrame::success(
         request_id, &payload,

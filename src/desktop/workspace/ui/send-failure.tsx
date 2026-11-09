@@ -6,6 +6,7 @@ import { useWorkspaceDispatch, useWorkspaceSelector } from "../adapters/store/ho
 import { useRememberedValue } from "../adapters/store/remembered-session"
 import { selectFailedMessage } from "../adapters/store/selectors"
 import { failureCopy } from "./failure-copy"
+import { BoatTokenForm, useBoatConnection } from "../../settings/ui/boat-row"
 
 /** Both conversation and overview composers act on the same refused message. */
 export function WorkspaceSendFailure({ sessionId }: { sessionId: string }) {
@@ -30,6 +31,24 @@ export function WorkspaceSendFailure({ sessionId }: { sessionId: string }) {
       {reason === "agent-not-configured" && agent ? (
         <SelectedAgentSetup agent={agent} recovery />
       ) : null}
+      {diagnostic?.code === "environment_not_configured" ? <BoatRecovery /> : null}
     </>
+  )
+}
+
+/**
+ * A message refused because where its chat runs is not set up: when Boat is
+ * not connected, that is the likely place, so connecting it is offered here.
+ */
+function BoatRecovery() {
+  const boat = useBoatConnection()
+  if (boat.unread || boat.status === undefined || boat.status.state === "connected")
+    return null
+  return (
+    <div className="settings-boat" data-boat-connect>
+      <p role="status">Chats on Boat need Boat connected on this Nessa.</p>
+      <BoatTokenForm connection={boat} />
+      {boat.error && <p role="alert">{boat.error}</p>}
+    </div>
   )
 }

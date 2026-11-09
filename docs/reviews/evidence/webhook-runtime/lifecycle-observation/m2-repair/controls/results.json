@@ -1,0 +1,37 @@
+[
+  {
+    "rule": "owed-issue",
+    "caught": true,
+    "byteRestored": true
+  },
+  {
+    "rule": "phase-proof",
+    "caught": true,
+    "byteRestored": true
+  },
+  {
+    "rule": "cursor-proof",
+    "caught": true,
+    "byteRestored": true
+  },
+  {
+    "rule": "delivery-proof",
+    "caught": true,
+    "byteRestored": true
+  },
+  {
+    "rule": "published-history",
+    "caught": true,
+    "byteRestored": true
+  },
+  {
+    "rule": "cursor-index",
+    "caught": true,
+    "byteRestored": true
+  },
+  {
+    "rule": "delivery-index",
+    "caught": true,
+    "byteRestored": true
+  }
+]

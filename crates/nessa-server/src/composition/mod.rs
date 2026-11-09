@@ -40,6 +40,8 @@ mod credential_registry;
 #[cfg(unix)]
 mod current_agent;
 #[cfg(unix)]
+mod device_setup;
+#[cfg(unix)]
 mod env_dial_command;
 #[cfg(unix)]
 mod env_grant_command;
@@ -48,6 +50,8 @@ mod env_serve_command;
 #[cfg(unix)]
 mod github;
 mod github_relay;
+#[cfg(unix)]
+mod github_tools;
 mod install_command;
 #[cfg(unix)]
 mod installed_launch;
@@ -62,6 +66,7 @@ mod opencode_profile;
 mod relay_command;
 #[cfg(unix)]
 mod tunnel;
+mod voice;
 
 mod runtime_config;
 
@@ -105,6 +110,10 @@ mod peer_reading_tests;
 #[path = "../../tests/composition/read_only_online.rs"]
 mod read_only_online_tests;
 
+mod webhooks;
+
+#[cfg(test)]
+pub(crate) use root::cleanup_product;
 mod vault;
 
 mod vault_session;

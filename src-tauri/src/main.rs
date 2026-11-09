@@ -9,6 +9,7 @@ mod composition;
 mod desktop_window;
 mod diagnostics;
 mod gateway;
+mod gateway_config;
 mod gateway_endpoint;
 mod host;
 mod host_log;
@@ -35,6 +36,8 @@ mod vault;
 mod stage_port;
 mod startup;
 mod surface_credential;
+#[cfg(all(test, unix))]
+mod test_executable;
 mod tray;
 mod updater;
 
@@ -122,6 +125,8 @@ fn main() {
             agent_credentials::infrastructure::save_agent_api_key,
             provider_authentication::commands::sign_in_to_provider,
             provider_authentication::commands::provider_login_available,
+            provider_authentication::commands::mint_claude_sign_in,
+            provider_authentication::commands::claude_sign_in_mint_available,
             gateway::infrastructure::gateway_startup,
             gateway::infrastructure::retry_gateway_startup,
             gateway::infrastructure::runtime_copy,
@@ -137,6 +142,7 @@ fn main() {
             channel_paths::choose_channel_folder,
             channel_paths::choose_channel_resources,
             channel_paths::home_folder,
+            gateway_config::open_gateway_config,
             saving::save_file_begin,
             saving::save_file_part,
             saving::save_file_finish,

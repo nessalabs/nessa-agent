@@ -12,6 +12,7 @@ pub use generated_catalog::{event as wire_event, method as wire_method};
 pub use generated_types::{
     ClientInfo, ClientPlatform, ClientRole, GatewayError, HealthParams, HealthResult,
     RuntimeStatus, Scope, ShortcutAction, ShortcutArgs, ShortcutBinding, ShortcutScope,
-    ShortcutSurface, ShortcutsDocument, SurfaceInfo, SurfaceKind,
+    ShortcutSurface, ShortcutsDocument, SurfaceInfo, SurfaceKind, WebhookNativeMutations,
+    WebhookPendingOutcome, WebhookRefusal, WebhookStatus,
 };
 pub use json::{unique_envelope, unique_value};

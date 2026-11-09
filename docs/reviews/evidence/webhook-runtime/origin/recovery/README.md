@@ -1,0 +1,17 @@
+# Historical webhook receipt recovery
+
+Source checkpoint `1c1355b537037e7416486856211b74c605804fa7`, immediate base `ee0d8eff159d96eeb70161f1c3ad774ae16da558`. This closes the reproduced behavior for Minor M1 from [fresh review round 1](../review-1/report.md), with subsequent clean independent round 2 verification linked below. It is not full #896 completion.
+
+The actual auth issuance owner reads original provenance before selecting command transitions for a matching webhook receipt. One shared origin decoder serves access snapshots and receipt replay. Original AdminIssue returns typed OriginRecoveryRequired through LocalStoreError, CredentialAdminError and RegistrationFailure. No original actor, command, receipt or auth bytes are replaced; no destination is installed, and the private intent stays. Product request replay retains its existing behavior. The existing Product wire contract maps a substitute adapter's webhook-only recovery refusal to credential_conflict; the new webhook result remains an unmounted application API.
+
+Canonical registration tests cover five accepted historical shapes: original matching actor/command, absent correlation, LocalOperator with absent correlation, another existing principal, and a nonreceipt correlation. Each checks direct typed auth output, repeated registration recovery, no installed registration, one retained intent, and unchanged auth bytes. Ordinary historical Product replay still yields its previous unavailable-evidence outcome without rewriting history.
+
+Actual checks at this source: Auth 214 unit + 60 integration passed; canonical server webhooks 130 passed; existing Product substitute-adapter rejection test passed for issue/list/revoke; seven-package all-target locked Clippy -D warnings passed; architecture and format passed. [Three isolated mutation controls](controls/results.json) each failed the intended regression and passed after byte-identical restoration: original receipt inspection, Product purpose boundary, and typed recovery forwarding. The private baseline ran 30 registration tests. Initial partial-move fixture compile failures are preserved; they are corrected, not ignored.
+
+The earlier broad server run's unrelated Codex CleanupUnconfirmed failure remains open evidence; this focused correction does not repair it or claim full-suite green. Canonical browser Chromium/WebKit, feature E2E/stress/chaos and exact-head CI remain required. Foundation CI retry, pinned browser download and old report delivery denials remain binding; no such operation was retried.
+
+Copied text logs remove trailing whitespace and terminal blank lines for repository whitespace checks. Original execution logs remain unchanged under `/tmp`; statuses, assertions and diagnostics are preserved. The review report itself is unchanged.
+
+Nessa Docs validates 135 pages with zero issues. Four diagrams render with zero page errors in system Chromium 151.0.7922.173; the changed issuance diagram was visually inspected. Issuance advances only to the exact source checkpoint above; unchanged outbox documentation keeps its prior 946bbc checkpoint. These diagrams are documentation evidence, not the required pinned Chromium/WebKit product gate.
+
+Fresh [round 2](../review-2/report.md) is clean at `8346c4ae9b69a6127041e4e07d2156143d0b2732`, source/test `1c1355b537037e7416486856211b74c605804fa7`: all four severity buckets empty and M1 independently verified fixed. Full #896 integration and qualification remain pending.

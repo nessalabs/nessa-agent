@@ -1,0 +1,18 @@
+{
+  "sourceRevision": "26b2bd355f8d3d203b0db76b94f9f78a2da41ffe",
+  "files": {
+    "crates/nessa-server/src/webhooks/application/outbox.rs": "ae6f30f14978d0b9934dc17a9f04d3ee6d33f0ced0babf6210d4fbc379c88b36",
+    "crates/nessa-server/src/webhooks/infrastructure/outbox/audit.rs": "1fe1578d4d2bb2db8a87372133920588ec620469fd617bdc56281d3262dfa540",
+    "crates/nessa-server/src/webhooks/infrastructure/outbox/capacity.rs": "dc8f8ba86e6200caa86c3094571ce6d8ce15b6d93ff5aee37bac94eff860510f",
+    "crates/nessa-server/src/webhooks/infrastructure/outbox/codec.rs": "e2690bf8fba9245a94e63c598c466231ec910e07085ed360e4f4b1bfc4b2bcf3",
+    "crates/nessa-server/src/webhooks/infrastructure/outbox/cursor.rs": "355ffe55bb6bdfba92f34e6006d82ba757e1e76ea195edea65a3079940f025fc",
+    "crates/nessa-server/src/webhooks/infrastructure/outbox/journal.rs": "c6b37da3351420f6ae9ca2da6a06d316fa842ba3ea4e73e71039bf82ab54c502",
+    "crates/nessa-server/src/webhooks/infrastructure/outbox/mod.rs": "7a1e3af832356eb999ea4d78f733df7b3f894c8b42fcad000728a7305271f9f8",
+    "crates/nessa-server/src/webhooks/infrastructure/outbox/publication.rs": "f0cde28616e754848604a9d073ce25bc121d13b8ce98962e3b112a67f97353aa",
+    "crates/nessa-server/src/webhooks/infrastructure/outbox/queue.rs": "c63c2038b6ab34efeb03216d195e4458023209f7d64aec3a13c1cbeb3310a634",
+    "crates/nessa-server/src/webhooks/infrastructure/outbox/registry.rs": "1a696278d7daa601c9369eef0376f5501487757f548f243de7a618e9446d907e",
+    "crates/nessa-server/src/webhooks/infrastructure/outbox/schema.sql": "ed6c025389fb5dec9a6a3c851a0590ef115fcf2a2a5e3cad543251a32310c2a6",
+    "crates/nessa-server/src/webhooks/infrastructure/outbox/stored.rs": "a2aead3aff5a6f2a104da4f35a6771212ac6777956f57847a07d755076386f20",
+    "crates/nessa-server/tests/webhooks/infrastructure/outbox.rs": "a5b6be4d7e159341db54261e61ad6f5ca1e48c230f47bde9bcfb958f07699af4"
+  }
+}

@@ -38,6 +38,7 @@ it("keeps the mounted dialog subscribed after StrictMode replay and a later tran
     setup: async () => "unlocked",
     unlock: async () => "unlocked",
     lock: async () => "locked",
+    changePassphrase: async () => "locked",
   }
   const container = document.createElement("div")
   document.body.append(container)
@@ -71,6 +72,7 @@ it("places protected-use dialogs in their surface layer and cancels when that re
     setup: async () => "unlocked",
     unlock: async () => "unlocked",
     lock: async () => "locked",
+    changePassphrase: async () => "locked",
   }
   const container = document.createElement("div")
   document.body.append(container)

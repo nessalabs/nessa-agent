@@ -1,0 +1,38 @@
+# SQLite no-attempt total-deadline affected review — round 2
+
+Technical publication excerpt; original report SHA-256: `466e325aa1678ce8ab2e57d8c97dec9cd67541b8d6f111246a51aa88f10f6682`.
+
+Verdict: clean within this bounded SQL-fixture correction. Blocker:none. Major:none. Minor:none. Nit:none. This is the requested affected round2 after total-budget tightening, not a whole-feature round or a reset of any previous review count. The earlier one-second-only review remains historical.
+
+## Source manifest
+
+Author checkout `/workspace/nessa-webhook-delivery-review`, HEAD `3f2f63115e63434ff9be13f63967c8e42b63e29a` plus frozen four files below. Inspected full dirty production-fixture/test diff against that HEAD and assembled helper change from published `c2ac8c4fff3128a182d3d9e06f99218de36c63e3`: formerly immediate busy refusal became bounded read-only lock acquisition; current correction caps it inside caller's existing final fifteen-second interval. No product source change. Prepared checkout `/workspace/nessa-webhook-browser-prep` supplied identical overlay for independent execution. Untracked node_modules excluded.
+
+- `verification/desktop/scripts/lib/gateway-stack.mjs` SHA256 `aa23ac12603883a9d7b3f6a1f2da3f494201083c8b4551cb746b279bff317909`
+- `verification/desktop/scripts/lib/gateway-stack.test.mjs` SHA256 `d9d06fe786a5dc915839b738f3fbf80faf434e859a2c52f4bd76734d18266206`
+- `verification/desktop/scripts/conversation-stress.mjs` SHA256 `44a22f37995d399fb9f36793b3462a7eaf7ed7403d819aa71ff1b4ce6691da1e`
+- `verification/desktop/scripts/lib/webhook-deadline.test.mjs` SHA256 `f5a9545e69935be0c71c1652d31eaa738c45dc0d95c702eb3638a32c6295e49a`
+
+## Source, budget and agreement checks
+
+Applied actual CODING_STANDARDS local gate, affected dimensions, agreement and evidence/closure. Related facts checked together: fixed captured Head/six-field scope; matching credential/conversation selection; actual native queued rows; durable attempt-admission fields; remaining caller deadline; and cleanup ownership. A cursor at Head alone is not no-send evidence.
+
+The final webhook case chooses one `Date.now()+15000` timestamp immediately before final catchUp, passes it into catchUp and passes the very same value to actual webhookNoAttempt. It does not start another fifteen seconds after catchUp. Baseline catchUp retains its previous independent fifteen-second purpose. Final catchUp passes only max(0,deadline-now) to existing waitFor. Existing waitFor may finish an awaited cursor response after its nominal interval, and its polling sleep is not a hard abort; helper must and does reject an already-expired timestamp before DatabaseSync construction or positive logging. No late successful proof is accepted. This change does not promise hard cancellation of arbitrary outstanding network, filesystem, SQLite CPU execution or cleanup at an exact wall-clock instant.
+
+`lockWait` requires finite future deadline and returns min(1000,deadline-Date.now()). Constructor invokes it before database open; before prepare and before statement.all, fresh connection-local PRAGMA busy_timeout consumes remaining original time rather than renewing SQL wait. No widened total case budget, source selection or security boundary. Statement stepping occurs under its recalculated lock budget; final lockWait after row parsing/validation refuses expiry during read or validation before returning proof. Deadline failure, SQLITE_BUSY, malformed rows or wrong evidence all throw rather than become absence/success.
+
+DatabaseSync opens existing private fixture path readOnly:true. Only connection-local busy handler is changed by PRAGMA; no product/database schema, journal mode, credential or durable busy configuration is mutated. SELECT retains exact credential and conversation join, ascending position, LIMIT1025 with refusal >1024 or empty. Every row must have exact complete six-field saved scope matching captured scope, queued phase, numeric attempts0 and timestamp_ms exactly null; at least one position reaches fixed Head. No assertion weakened. All opened database paths run synchronous finally.close after success, deadline/SQL/parse/validation refusal; failed constructor exposes no usable returned owner. Statements never escape. Production Sending precedes actual POST, so rejecting any attempt row remains necessary even if transport later refuses.
+
+Test Worker holds actual exclusive SQL lock and owns its own connection; valid delayed release commits/closes before reported release, persistent/failed branches finally terminate and await worker, then main DB closes and disposable directory is removed. VM test executes actual extracted webhook method, including finally unshare, owner.close and navigation cleanup, but intentionally substitutes browser/CLI/gateway operations. It consumes final catchUp interval then calls actual helper; missing DB path proves expiry must refuse before opening. Tests restore temporary Date.now in finally. No live endpoint or recipient used.
+
+## Independent execution and adversarial evidence
+
+Node v24.19.0. Ran only two focused files with node --test in prepared checkout: gateway-stack.test.mjs and webhook-deadline.test.mjs. Seven passed, zero failed/skipped,1.407s; `/tmp/nessa-896-sqlite-total-deadline-independent-tests.log`. Includes finite/expired/missing/no-send/scope cases, expiry during validation, actual held lock refusing,40ms remaining refusing under500ms, actual200ms released lock yielding genuine rows, and actual caller VM refusing renewed proof while cleanup runs.
+
+Adapted prior independent late-Sending probe in new `/tmp/nessa-896-sqlite-total-deadline-late-release-probe.mjs` solely to supply mandatory `Date.now()+15000` deadline. Actual Worker begins exclusive transaction, changes queued row to Sending/attempts1, releases/commits after200ms while helper waits. Actual current helper throws `webhook delivery crossed attempt admission`; subsequent DB read confirms attempts1. Passed; `/tmp/nessa-896-sqlite-total-deadline-late-release.log`. This falsifies a false no-send result from trusting an old queued snapshot across writer release. Scratch probe finally awaits worker termination and closes/removes own disposable DB.
+
+Inspected author mutation receipts `/tmp/nessa-896-sqlite-deadline-mutation-*.log`: zeroWait fails expected released-lock positive, renewedSQLbudget fails remaining-budget elapsed assertion, removed final guard fails expected validation-expiry rejection, renewed caller budget fails actual case expected pre-open expiry rejection. These are author-owned source mutation runs, not reviewer reruns. Current hashes independently match restored frozen brief. Author409helper/target-lint/format results are supplied receipts, not newly rerun broad gates. Independently git diff --check passed. Reviewer made no author/prepared source or target/cache/CI edits; only new report and scratch probe/logs under/tmp.
+
+## Qualification limits
+
+No Chromium/WebKit/full stress, production suite, platform retry/dispatch/download, real registration/credential or external recipient executed. OldCI40262852364 terminal platform successes and retained browser partial evidence remain historical: original busy failure and unrun Cr3/menu/GitHubWK are not erased by these controls. New exact-head browser/CI acceptance remains separate qualification; this review only clears the bounded source/test repair for normal publication. No generic waitFor rewrite, budget increase, weakened assertions, schema/policy or selection changes were added. No access denial or new infrastructure blocker encountered. Publication/merge remain outside this affected review.

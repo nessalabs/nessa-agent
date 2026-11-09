@@ -15,6 +15,7 @@ use nessa_sdk::{
         },
     },
     domain::agent_execution::{
+        executions::AgentSource,
         permissions::PermissionEffect,
         prompts::{ImageReference, LinkedFile, MessageSender, UserMessage},
     },
@@ -58,7 +59,13 @@ pub struct ConversationView {
     pub tools: Vec<ConversationTool>,
     pub capabilities: ConversationCapabilities,
     pub lifecycle: ConversationLifecycle,
+    /// Something was left out that no read gives back: a gap between the
+    /// turns listed, a tool's output, a note. Older turns that are only
+    /// before the first one listed are [`Self::earlier`] instead.
     pub truncated: bool,
+    /// Turns, or the start of the first turn listed, came before what this
+    /// view lists and are read with `conversation.readEarlier`. Always sent.
+    pub earlier: bool,
     /// Whether the bounded view contains every currently waiting identity.
     pub queue_complete: bool,
     /// Completeness of the committed transcript independently of display limits.
@@ -231,6 +238,13 @@ pub struct ConversationMessage {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub required_work_failed: Option<bool>,
     pub parts: Vec<ConversationPart>,
+    /// Where the turn's first listed part starts in the whole turn, when the
+    /// view begins partway through it. What comes before — the person's
+    /// message and the parts ahead of it — is read with
+    /// `conversation.readEarlier`. Absent when the turn is listed from its
+    /// start.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub starts_at: Option<ConversationPartPosition>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub steering_offset: Option<usize>,
     #[serde(skip)]
@@ -249,6 +263,9 @@ pub struct ConversationMessage {
     /// person wrote it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub app: Option<ConversationMessageApp>,
+    /// The source turn whose agent wrote this input; absent for a person or app.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent: Option<ConversationAgentSource>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub steering_target: Option<String>,
     pub status: ConversationMessageStatus,
@@ -260,6 +277,42 @@ pub struct ConversationMessage {
     /// continuation is scheduled is added when the gateway publishes the view.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub usage_limit: Option<ConversationUsageLimit>,
+}
+
+/// A place in a turn: the part, counted from the turn's first, and the byte
+/// within that part's text.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConversationPartPosition {
+    pub part: usize,
+    pub byte: usize,
+}
+
+/// A place in a conversation's history: the start of a turn, before the
+/// person's message, when `at` is absent; otherwise a place among its parts,
+/// after the person's message.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ConversationPoint {
+    pub execution_id: String,
+    pub at: Option<ConversationPartPosition>,
+}
+
+/// What came before a point in a conversation, as `conversation.readEarlier`
+/// answers. `messages` end where the point is, oldest first; the first one
+/// starts partway through its turn when it carries `starts_at`. `tools` are
+/// the calls those messages made. `handoffs` holds the fork the conversation
+/// began as, with its copied turns, once the page reaches the start. `more`
+/// says whether anything is before the first message's start. `truncated`
+/// says the page left out something no read gives back, as a view's does.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConversationEarlier {
+    pub conversation_id: String,
+    pub messages: Vec<ConversationMessage>,
+    pub tools: Vec<ConversationTool>,
+    pub handoffs: Vec<ConversationHandoff>,
+    pub more: bool,
+    pub truncated: bool,
 }
 
 /// Which harness reported a usage limit. OpenCode is not a value.
@@ -308,6 +361,9 @@ pub struct ConversationPending {
     /// As [`ConversationMessage::app`].
     #[serde(skip_serializing_if = "Option::is_none")]
     pub app: Option<ConversationMessageApp>,
+    /// The source turn whose agent wrote this waiting input.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent: Option<ConversationAgentSource>,
     pub mode: ConversationPendingMode,
 }
 /// The MCP App that wrote a turn on the person's behalf: the tool call whose
@@ -324,13 +380,38 @@ impl ConversationMessageApp {
     /// The app that wrote `message`, or `None` when the person did.
     pub fn of(message: &UserMessage) -> Option<Self> {
         match message.sender() {
-            MessageSender::Person | MessageSender::Internal => None,
+            MessageSender::Person | MessageSender::Internal | MessageSender::Agent(_) => None,
             MessageSender::App(app) => Some(Self {
                 execution_id: app.execution_id().as_str().into(),
                 tool_id: app.tool_id().as_str().into(),
                 server: app.tool().server().into(),
                 tool: app.tool().tool().into(),
             }),
+        }
+    }
+}
+/// Verified origin of an agent-authored message or note. It carries no
+/// permission to act as the source turn's human initiator.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConversationAgentSource {
+    pub conversation_id: String,
+    pub execution_id: String,
+}
+impl ConversationAgentSource {
+    /// Read an agent message's origin from the SDK's saved sender.
+    pub fn of(message: &UserMessage) -> Option<Self> {
+        match message.sender() {
+            MessageSender::Agent(source) => Some(source.into()),
+            _ => None,
+        }
+    }
+}
+impl From<&AgentSource> for ConversationAgentSource {
+    fn from(source: &AgentSource) -> Self {
+        Self {
+            conversation_id: source.conversation().into(),
+            execution_id: source.execution().as_str().into(),
         }
     }
 }
@@ -1101,8 +1182,17 @@ impl ConversationNote {
                     nessa_sdk::domain::agent_execution::executions::Initiator::Grant(_) => {
                         ConversationNoteAuthorKind::Grant
                     }
+                    nessa_sdk::domain::agent_execution::executions::Initiator::Agent(_) => {
+                        ConversationNoteAuthorKind::Agent
+                    }
                 },
                 surface: note.actor.surface_id().into(),
+                agent: match &note.author {
+                    nessa_sdk::domain::agent_execution::executions::Initiator::Agent(source) => {
+                        Some(source.into())
+                    }
+                    _ => None,
+                },
             },
         }
     }
@@ -1182,6 +1272,7 @@ impl ConversationHandoff {
                     .turns()
                     .iter()
                     .map(|turn| ConversationCarriedTurn {
+                        agent: turn.agent_source().map(Into::into),
                         said: turn.said().map(Into::into),
                         reply: turn.reply().map(Into::into),
                     })
@@ -1224,6 +1315,9 @@ pub struct ConversationHandoffAgent {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConversationCarriedTurn {
+    /// Verified author of the copied input, when an agent wrote it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent: Option<ConversationAgentSource>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub said: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1236,6 +1330,8 @@ pub struct ConversationCarriedTurn {
 pub struct ConversationNoteAuthor {
     pub kind: ConversationNoteAuthorKind,
     pub surface: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent: Option<ConversationAgentSource>,
 }
 /// Under which authority a note was left.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -1243,6 +1339,7 @@ pub struct ConversationNoteAuthor {
 pub enum ConversationNoteAuthorKind {
     Owner,
     Grant,
+    Agent,
 }
 
 /// Non-secret runtime facts selected by server composition.

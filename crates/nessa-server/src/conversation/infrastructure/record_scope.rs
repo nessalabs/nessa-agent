@@ -1,5 +1,6 @@
 //! Translate an admitted receiver into the exact SDK record source scope.
 
+use crate::conversation::application::PrincipalRecordScope;
 use nessa_protocol::conversation::read_scope::{
     passive_read_selector, validate_record_selector, ReadRefusal, ReceiverReadScope,
 };
@@ -50,6 +51,32 @@ fn compare_record_scope(
         return Err(ReadRefusal::Unverifiable);
     }
     Ok(exact)
+}
+
+/// Principal selection uses the SDK tuple without creating receiver authority.
+pub(super) fn principal_scope_from_identity(
+    admitted: &PrincipalRecordScope,
+    identity: &RecordStreamIdentity,
+) -> Result<Scope, ReadRefusal> {
+    let (subject, epoch) = admitted.selector();
+    let scope = identity.scope(subject, epoch);
+    admitted.validate(&scope)?;
+    Ok(scope)
+}
+
+/// Both admitted entries must still match the actual opened SDK source.
+pub(super) fn exact_principal_record_scope(
+    admitted: &PrincipalRecordScope,
+    source: &NessaRecordSource,
+    requested: &Scope,
+) -> Result<(), ReadRefusal> {
+    admitted.validate(requested)?;
+    let (subject, epoch) = admitted.selector();
+    let exact = source.scope(subject, epoch);
+    if &exact != requested {
+        return Err(ReadRefusal::Unverifiable);
+    }
+    Ok(())
 }
 
 #[cfg(test)]

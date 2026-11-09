@@ -1,0 +1,7 @@
+0 schema.sql caught/restored
+Traceback (most recent call last):
+  File "/tmp/nessa-shared-reset-mutations.py", line 42, in <module>
+    if run.returncode==0:raise RuntimeError(f'uncaught mutation {index}: {file} {old}')
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+RuntimeError: uncaught mutation 1: schema.sql CREATE TRIGGER source_reset_member_immutable BEFORE UPDATE ON source_reset_members
+BEGIN SELECT RAISE(ABORT,'immutable source capture'); END;

@@ -5,6 +5,8 @@ export {
   conversationHistoryEmpty,
   conversationSelectionOpen,
   linksFilesHere,
+  chosenEnvironment,
+  HERE,
   type AssistantTurn,
   type BusyConversation,
   type AgentFeatures,
@@ -106,3 +108,4 @@ export {
   usageLimitOnClientClock,
   type UsageLimitNotice,
 } from "./usage-limit"
+export type { AgentSource } from "./authorship"

@@ -2950,6 +2950,15 @@ impl ConversationRepository for GatedCreateRepository {
     fn load(&self, id: &ConversationId) -> ConversationFuture<'_, Option<Conversation>> {
         self.inner.load(id)
     }
+    fn load_admission_snapshot(
+        &self,
+        id: &ConversationId,
+    ) -> ConversationFuture<
+        '_,
+        Option<crate::conversation::application::ConversationAdmissionSnapshot>,
+    > {
+        self.inner.load_admission_snapshot(id)
+    }
     fn unfinished_deletions(&self) -> ConversationFuture<'_, UnfinishedDeletions> {
         self.inner.unfinished_deletions()
     }
@@ -2987,6 +2996,15 @@ impl ConversationRepository for GatedCreateRepository {
     }
     fn requires_mode_verification(&self, id: &ConversationId) -> ConversationFuture<'_, bool> {
         self.inner.requires_mode_verification(id)
+    }
+    fn close_thread(&self, id: &ConversationId) -> ConversationFuture<'_, ()> {
+        self.inner.close_thread(id)
+    }
+    fn open_thread(&self, id: &ConversationId) -> ConversationFuture<'_, ()> {
+        self.inner.open_thread(id)
+    }
+    fn thread_closed(&self, id: &ConversationId) -> ConversationFuture<'_, bool> {
+        self.inner.thread_closed(id)
     }
     fn observe_mode_application(
         &self,
@@ -4552,8 +4570,9 @@ async fn a_context_only_fingerprint_change_opens_fresh_and_keeps_the_conversatio
         current_configuration: None,
         id: session_id.clone(),
         provider: ProviderIdentity::new("gateway-test", "test", "previous-config").unwrap(),
-        provider_context: ProviderContext::Recorded(
+        provider_context: ProviderContext::recorded_after(
             ExecutionSessionId::new("retained-context").unwrap(),
+            0,
         ),
         queue_history: vec![],
         invocations: vec![],
@@ -6126,7 +6145,7 @@ async fn returned_committed_views_bound_late_titles_and_preserve_pending_selecti
             .await
             .unwrap();
         assert!(
-            view.truncated,
+            view.earlier,
             "metadata addition must reach the budget owner: pending={pending_mode}, size={}, baseline={size}, length={length}", serde_json::to_vec(&view).unwrap().len()
         );
         assert!(serde_json::to_vec(&view).unwrap().len() <= 60_000);

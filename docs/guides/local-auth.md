@@ -81,7 +81,11 @@ using the administrative commands below before issuing again.
 
 `doctor` checks configuration loading, private credential access, authenticated
 connection and authorized health. It writes JSON to stdout and returns nonzero
-on failure. Diagnostics do not include credentials. Online commands default to
+on failure. Diagnostics do not include credentials. The same JSON carries
+`timings`: the last few launch-to-gateway-ready and message-to-first-token
+durations recorded on this machine (latest and median), or `none yet` when
+nothing has been recorded. Those files live in the stage log directory beside
+`host.log` and `gateway.log`. They are not sent anywhere. Online commands default to
 local mode; `--local` is optional. They use the same `NESSA_*` namespace, stage,
 host and port as the server, and cannot send local credentials to remote hosts.
 Use `--credential-file /absolute/path` for an existing owner credential.
@@ -219,12 +223,15 @@ Stop the gateway, then provision or replace the credential assigned to a surface
 ```sh
 target/debug/nessa auth provision-surface --local --surface-id terminal --grants server.read
 target/debug/nessa auth provision-surface --local --surface-id nessa-panel --grants server.read,conversation.read,conversation.write,credential.manage
+target/debug/nessa auth provision-surface --local --surface-id nessa-mcp
 ```
 
 Each surface has a distinct principal, membership, and token. Reprovisioning revokes
 only that surface's prior credentials. Other surface names default to `server.read`;
-`nessa-panel` defaults to the three implemented permissions above. Add `--expires-at`
-for temporary access. This is an offline OS-authorized operation, never a capability
+`nessa-panel` defaults to the owner set, and `nessa-mcp` defaults to
+`server.read`, `conversation.read`, and `conversation.write` (not `credential.manage`).
+`nessa server --provision-local` creates the MCP file when it is absent.
+`nessa mcp` signs in with it. Add `--expires-at` for temporary access. This is an offline OS-authorized operation, never a capability
 selected by remote `client.id` or `surface` metadata.
 
 The Node SDK loads `auth/surfaces/<client.id>.token` automatically when `auth` is
@@ -374,6 +381,22 @@ Each change is kept, with who made it and the grant before and after, in
 `environment/grants-audit.jsonl`; a change that cannot be recorded there is
 not made.
 
+When the gateway is updated to a build that speaks another lease protocol,
+it refuses this machine's connection and says which protocol it speaks. If
+this machine lets that gateway run commands (`nessa env grant --commands`),
+it then asks the gateway for its build, checks its size, its SHA-256 and the
+protocol the copy itself says, keeps it in `environment/builds/` beside its
+pairing, and runs it in its own place with the same arguments. Every later
+start of the same `nessa` runs the kept build first, so a container started
+again from its old image still serves; a newer image runs itself. Without
+that grant, nothing is fetched: the machine logs that its build is out of
+date and keeps dialing until it runs the gateway's build. A gateway allowed
+only agents never gets to run a build here, since an agent's harness may be
+sandboxed and a build is not. Another protocol is followed whichever way it
+moved, so a gateway rolled back takes its machines back too. A fetch that
+fails is tried again after ten minutes, and the gateway sends one machine its
+build at most once in ten minutes; the builds kept are only the current one.
+
 To serve one gateway from a container, run one container per gateway, and so
 per organization: a gateway is one organization, and a machine is paired with
 one gateway. [docs/guides/env-worker/](env-worker/) has an example image and a
@@ -420,8 +443,10 @@ its restart policy starts it again.
 
 Run several workers for one gateway, each on a volume of its own and paired
 with an invitation of its own, and create conversations on `peer:any`: the
-gateway puts each on the worker with the fewest agents running, and keeps it
-there while that worker serves. To replace a worker with no gap, start the new
+gateway puts each on the first worker in Devices › Thread order (config.json
+`pool`) that is online and not busy, the one with the fewest agents running
+among equals, and keeps it there while that worker serves. A channel can keep
+an order of its own; see [Worker pool preferences](../design/worker-pool-preferences.md). To replace a worker with no gap, start the new
 one on a new volume first, then stop the old one: draining, it tells the
 gateway at once, its leases end, and the next message to each of its
 conversations starts that conversation's agent on another worker, with new

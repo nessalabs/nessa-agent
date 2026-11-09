@@ -73,3 +73,7 @@ flowchart LR
 ## Further reading
 
 [Source](../../../../../src/session/adapters/client/credential-source.ts) · [Related source](../../../../../src-tauri/src/surface_credential.rs) · [Related tests](../../../../../src/session/adapters/client/credential-source.test.ts)
+
+## Model coverage
+
+The shared model on [surface-session-supervision](session-supervision.md) owns this journey's modeled slice. Frontend session publication, reconnect clearing and late-result fencing only; credential-origin checks, server Auth expiry and revocation are separate boundary contracts. This is scoped design evidence, not whole-journey or implementation verification. The existing source checkpoint is retained.

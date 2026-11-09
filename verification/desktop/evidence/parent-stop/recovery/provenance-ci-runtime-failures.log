@@ -1,0 +1,90 @@
+[nessa-server nessa_server] failures:
+[nessa-server nessa_server]
+[nessa-server nessa_server] ---- conversation::application::service::deletion_tests::a_lease_held_past_every_timed_try_is_left_for_the_next_start stdout ----
+[nessa-server nessa_server]
+[nessa-server nessa_server] thread 'conversation::application::service::deletion_tests::a_lease_held_past_every_timed_try_is_left_for_the_next_start' (198101) panicked at crates/nessa-server/src/conversation/application/../../../tests/conversation/deletion.rs:4823:25:
+[nessa-server nessa_server] two timed tries spent
+[nessa-server nessa_server]
+[nessa-server nessa_server] ---- conversation::application::service::handoff_tests::a_switch_whose_agent_cannot_open_is_not_made stdout ----
+[nessa-server nessa_server]
+[nessa-server nessa_server] thread 'conversation::application::service::handoff_tests::a_switch_whose_agent_cannot_open_is_not_made' (198458) panicked at crates/nessa-server/src/conversation/application/../../../tests/conversation/handoffs.rs:207:10:
+[nessa-server nessa_server] the switch is answered: Elapsed(())
+[nessa-server nessa_server]
+[nessa-server nessa_server] ---- conversation::application::service::handoff_tests::an_agent_switch_invalidates_the_original_limit_before_applying stdout ----
+[nessa-server nessa_server]
+[nessa-server nessa_server] thread 'conversation::application::service::handoff_tests::an_agent_switch_invalidates_the_original_limit_before_applying' (198478) panicked at crates/nessa-server/src/conversation/application/../../../tests/conversation/handoffs.rs:207:10:
+[nessa-server nessa_server] the switch is answered: Elapsed(())
+[nessa-server nessa_server]
+[nessa-server nessa_server] ---- conversation::application::service::handoff_tests::an_applied_pre_fix_selection_still_refuses_its_continuation_after_returning stdout ----
+[nessa-server nessa_server]
+[nessa-server nessa_server] thread 'conversation::application::service::handoff_tests::an_applied_pre_fix_selection_still_refuses_its_continuation_after_returning' (198515) panicked at crates/nessa-server/src/conversation/application/../../../tests/conversation/handoffs.rs:344:10:
+[nessa-server nessa_server] usage-limit turn settles: Elapsed(())
+[nessa-server nessa_server]
+[nessa-server nessa_server] ---- conversation::application::service::handoff_tests::an_agent_switch_seals_a_crash_left_unattempted_continuation stdout ----
+[nessa-server nessa_server]
+[nessa-server nessa_server] thread 'conversation::application::service::handoff_tests::an_agent_switch_seals_a_crash_left_unattempted_continuation' (198489) panicked at crates/nessa-server/src/conversation/application/../../../tests/conversation/handoffs.rs:207:10:
+[nessa-server nessa_server] the switch is answered: Elapsed(())
+[nessa-server nessa_server]
+[nessa-server nessa_server] ---- conversation::application::service::mutation::tests::a_stop_whose_cancel_meets_the_agent_ending_is_answered_by_the_turns_end stdout ----
+[nessa-server nessa_server]
+[nessa-server nessa_server] thread 'conversation::application::service::mutation::tests::a_stop_whose_cancel_meets_the_agent_ending_is_answered_by_the_turns_end' (198803) panicked at crates/nessa-server/src/conversation/application/service/../../../../tests/conversation/mutation_commands.rs:1709:5:
+[nessa-server nessa_server] Err(Target(Agent(AttachmentAuthorizationStale)))
+[nessa-server nessa_server]
+[nessa-server nessa_server] ---- conversation::application::service::mutation::tests::a_submit_admitted_before_retirement_does_not_hold_it_back stdout ----
+[nessa-server nessa_server]
+[nessa-server nessa_server] thread 'conversation::application::service::mutation::tests::a_submit_admitted_before_retirement_does_not_hold_it_back' (198826) panicked at crates/nessa-server/src/conversation/application/service/../../../../tests/conversation/mutation_commands.rs:449:10:
+[nessa-server nessa_server] retirement is not held back by a submit it already admitted: Elapsed(())
+[nessa-server nessa_server]
+[nessa-server nessa_server] ---- conversation::application::service::mutation::tests::parent_stop::parent_stop_preserves_a_canonical_successor_with_an_explicit_person_command stdout ----
+[nessa-server nessa_server]
+[nessa-server nessa_server] thread 'conversation::application::service::mutation::tests::parent_stop::parent_stop_preserves_a_canonical_successor_with_an_explicit_person_command' (200518) panicked at crates/nessa-server/src/conversation/application/service/../../../../tests/conversation/parent_stop.rs:3638:29:
+[nessa-server nessa_server] assertion `left == right` failed: legacy fixture represents the real child's exact result
+[nessa-server nessa_server]   left: Ended("completed", Some("Response: active"))
+[nessa-server nessa_server]  right: Ended("completed", None)
+[nessa-server nessa_server]
+[nessa-server nessa_server] ---- conversation::application::service::mutation::tests::parent_stop::parent_stop_preserves_a_later_successor_after_an_intermediate_person_submit stdout ----
+[nessa-server nessa_server]
+[nessa-server nessa_server] thread 'conversation::application::service::mutation::tests::parent_stop::parent_stop_preserves_a_later_successor_after_an_intermediate_person_submit' (200535) panicked at crates/nessa-server/src/conversation/application/service/../../../../tests/conversation/parent_stop.rs:3638:29:
+[nessa-server nessa_server] assertion `left == right` failed: legacy fixture represents the real child's exact result
+[nessa-server nessa_server]   left: Ended("completed", Some("Response: active"))
+[nessa-server nessa_server]  right: Ended("completed", None)
+[nessa-server nessa_server]
+[nessa-server nessa_server] ---- conversation::application::service::mutation::tests::parent_stop::parent_stop_preserves_a_report_successor_with_its_own_person_submit stdout ----
+[nessa-server nessa_server]
+[nessa-server nessa_server] thread 'conversation::application::service::mutation::tests::parent_stop::parent_stop_preserves_a_report_successor_with_its_own_person_submit' (200561) panicked at crates/nessa-server/src/conversation/application/service/../../../../tests/conversation/parent_stop.rs:3638:29:
+[nessa-server nessa_server] assertion `left == right` failed: legacy fixture represents the real child's exact result
+[nessa-server nessa_server]   left: Ended("completed", Some("Response: active"))
+[nessa-server nessa_server]  right: Ended("completed", None)
+[nessa-server nessa_server]
+[nessa-server nessa_server] ---- conversation::application::service::mutation::tests::parent_stop::parent_stop_preserves_an_active_later_successor_after_an_intermediate_person_submit stdout ----
+[nessa-server nessa_server]
+[nessa-server nessa_server] thread 'conversation::application::service::mutation::tests::parent_stop::parent_stop_preserves_an_active_later_successor_after_an_intermediate_person_submit' (200572) panicked at crates/nessa-server/src/conversation/application/service/../../../../tests/conversation/parent_stop.rs:3638:29:
+[nessa-server nessa_server] assertion `left == right` failed: legacy fixture represents the real child's exact result
+[nessa-server nessa_server]   left: Ended("completed", Some("Response: active"))
+[nessa-server nessa_server]  right: Ended("completed", None)
+[nessa-server nessa_server]
+[nessa-server nessa_server] ---- workspaces::provider_contract_tests::shipping_worker_covers_the_compiled_lease_protocol stdout ----
+[nessa-server nessa_server]
+[nessa-server nessa_server] thread 'workspaces::provider_contract_tests::shipping_worker_covers_the_compiled_lease_protocol' (216196) panicked at crates/nessa-server/src/workspaces/../../tests/workspaces/provider_contract.rs:28:5:
+[nessa-server nessa_server] publish and pin the credential-free worker for this lease protocol before shipping
+[nessa-server nessa_server]
+[nessa-server nessa_server]
+[nessa-server nessa_server] failures:
+[nessa-server nessa_server]     conversation::application::service::deletion_tests::a_lease_held_past_every_timed_try_is_left_for_the_next_start
+[nessa-server nessa_server]     conversation::application::service::handoff_tests::a_switch_whose_agent_cannot_open_is_not_made
+[nessa-server nessa_server]     conversation::application::service::handoff_tests::an_agent_switch_invalidates_the_original_limit_before_applying
+[nessa-server nessa_server]     conversation::application::service::handoff_tests::an_agent_switch_seals_a_crash_left_unattempted_continuation
+[nessa-server nessa_server]     conversation::application::service::handoff_tests::an_applied_pre_fix_selection_still_refuses_its_continuation_after_returning
+[nessa-server nessa_server]     conversation::application::service::mutation::tests::a_stop_whose_cancel_meets_the_agent_ending_is_answered_by_the_turns_end
+[nessa-server nessa_server]     conversation::application::service::mutation::tests::a_submit_admitted_before_retirement_does_not_hold_it_back
+[nessa-server nessa_server]     conversation::application::service::mutation::tests::parent_stop::parent_stop_preserves_a_canonical_successor_with_an_explicit_person_command
+[nessa-server nessa_server]     conversation::application::service::mutation::tests::parent_stop::parent_stop_preserves_a_later_successor_after_an_intermediate_person_submit
+[nessa-server nessa_server]     conversation::application::service::mutation::tests::parent_stop::parent_stop_preserves_a_report_successor_with_its_own_person_submit
+[nessa-server nessa_server]     conversation::application::service::mutation::tests::parent_stop::parent_stop_preserves_an_active_later_successor_after_an_intermediate_person_submit
+[nessa-server nessa_server]     workspaces::provider_contract_tests::shipping_worker_covers_the_compiled_lease_protocol
+[nessa-server nessa_server]
+[nessa-server nessa_server] test result: FAILED. 4495 passed; 12 failed; 16 ignored; 0 measured; 0 filtered out; finished in 423.40s
+[nessa-server nessa_server]
+nessa-server nessa_server finished in 423.8s with exit 101
+nessa-server nessa_server exited with 101
+local subreaper: reaped 22 adopted descendants; command status 256

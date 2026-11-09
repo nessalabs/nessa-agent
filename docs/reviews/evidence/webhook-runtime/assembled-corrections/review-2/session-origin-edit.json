@@ -1,0 +1,5 @@
+{
+  "path": "/tmp/nessa-assembled-final-review/crates/nessa-auth/src/adapters/cedar/policies.cedar",
+  "before": "[\"bootstrap\", \"admin_issue\", \"device_pairing\", \"surface_provision\", \"owner_recovery\"]",
+  "after": "[\"bootstrap\", \"admin_issue\", \"webhook_issue\", \"device_pairing\", \"surface_provision\", \"owner_recovery\"]"
+}

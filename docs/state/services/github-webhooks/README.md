@@ -3,7 +3,8 @@ id: github-webhooks
 title: GitHub webhook relay
 kind: service
 status: implemented
-summary: Verified GitHub events reach each authorized user's private desktop inbox, with bounded offline catch-up.
+summary: Verified GitHub events reach each authorized user's private desktop
+  inbox, with bounded offline catch-up.
 parent: nessa
 sourceRevision: "eab6d335e064276a95c094d874174fbcbc51344b"
 sources:
@@ -59,8 +60,22 @@ diagramDetails:
   - diagram: 0
     node: Refused
     section: User and stage boundaries
+model:
+  spec: tla/services/github-webhooks/RelayPage.tla
+  config: tla/services/github-webhooks/RelayPage.cfg
+modelCheck:
+  sourceRevision: "eab6d335e064276a95c094d874174fbcbc51344b"
+  checker: tlc-1.7.4
+  date: 2026-11-03T03:28:27.423Z
+  config: tla/services/github-webhooks/RelayPage.cfg
+  modelDigest: e9d0a854c98cc8dcce21588fdb423646b0f3fba329297d2870e6120882b138b1
+  states: 12
+  held:
+    - PrivateRead
+    - AtomicCursor
+  broke: []
+  unchecked: []
 ---
-
 # GitHub webhook relay
 
 GitHub sends signed events to a small Cloudflare inbox while Nessa is offline.
@@ -147,11 +162,15 @@ saved locally. Reconnect does not silently skip it. The owner can acknowledge th
 missing range; that transition records its original cursor and cause before
 advancing. Local retention is seven days from import, cleaned during page commits,
 with the same payload/event caps and at most 16 account/repository bindings.
-Page commits and Settings selection trim local audit records. Direct gap and CLI
-acceptance paths may exceed that row cap until the next cleanup; the
-[source-observed follow-up](https://github.com/nessalabs/nessa-agent/issues/1185)
-needs an API-level runtime regression and a transaction-owned correction. This
-exception concerns encrypted local audit metadata, not the cloud payload cap.
+Page commits, Settings selection, a direct gap, and accepting that gap from
+the command line each trim the local audit store they write before that
+transaction commits. The cap is `auditRows` in the relay contract. A failed
+audit write rolls the gap, the cursor, and the new audit row back together.
+Rows already past the cap are not migrated; the next transition that writes
+that store brings it back to the cap. [ADR 1185](../../../adr/done/1185-bound-native-relay-audit-retention.md)
+records the transitions. This bound is encrypted local audit metadata, not
+the cloud payload cap. The page checkpoint above was not moved: this paragraph
+is the #1185 correction, and the rest of this page was not re-reviewed.
 Erasing retention also ends that store's deduplication history.
 
 ## User and stage boundaries
@@ -282,3 +301,9 @@ HTTP success, 409 and 410 bodies share the bounded streamed decoder. The native
 watch sets explicit frame/message limits before assembly while admitting valid
 fragmented changed notifications and full RFC ping/pong control frames. These
 bounds do not claim to erase third-party HTTP-library buffers or provide E2EE.
+
+## Bounded rule model
+
+Owns expected-user verification before authorized relay reading, audit-before-inbox access and one local page/cursor atomic commit. Signature validation, quotas, live watch, vault state, retention windows and cross-page sequence validation are excluded and need their own models. This finite abstraction checks safety only. It does not execute or verify the implementation, promise eventual completion, or qualify external effects. Existing source checkpoints and historical test receipts retain their earlier scope. The scoped model review inspected `packages/github-webhooks/src/relay/application/read.ts`, `crates/nessa-server/src/github_relay/application/catch_up.rs`.
+
+[Private live repository selection](live-selection.md) owns atomic local selection and removal evidence.

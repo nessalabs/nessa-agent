@@ -1,0 +1,5 @@
+
+running 1 test
+test webhooks::infrastructure::outbox::store::tests::registration_tests::failure_tests::independent_actual_auth_command_origin_can_be_rewritten_in_reply ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 86 filtered out; finished in 0.01s

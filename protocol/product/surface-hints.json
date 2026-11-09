@@ -1,0 +1,458 @@
+{
+  "auth.session": {
+    "readOnly": true,
+    "destructive": false
+  },
+  "server.health": {
+    "readOnly": true,
+    "destructive": false
+  },
+  "server.reach": {
+    "readOnly": true,
+    "destructive": false
+  },
+  "credential.issue": {
+    "readOnly": false,
+    "destructive": false
+  },
+  "credential.list": {
+    "readOnly": true,
+    "destructive": false
+  },
+  "credential.revoke": {
+    "readOnly": false,
+    "destructive": true
+  },
+  "conversation.create": {
+    "readOnly": false,
+    "destructive": false
+  },
+  "conversation.read": {
+    "readOnly": true,
+    "destructive": false
+  },
+  "conversation.recordsHead": {
+    "readOnly": true,
+    "destructive": false
+  },
+  "conversation.recordsPage": {
+    "readOnly": true,
+    "destructive": false
+  },
+  "conversation.list": {
+    "readOnly": true,
+    "destructive": false
+  },
+  "conversation.observe": {
+    "readOnly": true,
+    "destructive": false
+  },
+  "conversation.send": {
+    "readOnly": false,
+    "destructive": false
+  },
+  "conversation.steer": {
+    "readOnly": false,
+    "destructive": false
+  },
+  "conversation.remove": {
+    "readOnly": false,
+    "destructive": false
+  },
+  "conversation.stop": {
+    "readOnly": false,
+    "destructive": false
+  },
+  "conversation.receipt": {
+    "readOnly": true,
+    "destructive": false
+  },
+  "conversation.message": {
+    "readOnly": false,
+    "destructive": false
+  },
+  "conversation.messageStatus": {
+    "readOnly": true,
+    "destructive": false
+  },
+  "conversation.answer": {
+    "readOnly": false,
+    "destructive": false
+  },
+  "conversation.permissionReview": {
+    "readOnly": true,
+    "destructive": false
+  },
+  "conversation.questionReview": {
+    "readOnly": true,
+    "destructive": false
+  },
+  "conversation.answerQuestion": {
+    "readOnly": false,
+    "destructive": false
+  },
+  "conversation.cancel": {
+    "readOnly": false,
+    "destructive": false
+  },
+  "conversation.close": {
+    "readOnly": false,
+    "destructive": false
+  },
+  "conversation.archive": {
+    "readOnly": false,
+    "destructive": false
+  },
+  "conversation.unarchive": {
+    "readOnly": false,
+    "destructive": false
+  },
+  "conversation.rename": {
+    "readOnly": false,
+    "destructive": false
+  },
+  "conversation.delete": {
+    "readOnly": false,
+    "destructive": true
+  },
+  "conversation.reorder": {
+    "readOnly": false,
+    "destructive": false
+  },
+  "artifact.read": {
+    "readOnly": true,
+    "destructive": false
+  },
+  "attachment.begin": {
+    "readOnly": false,
+    "destructive": false
+  },
+  "agents.list": {
+    "readOnly": true,
+    "destructive": false
+  },
+  "agents.setNativeHooks": {
+    "readOnly": false,
+    "destructive": false
+  },
+  "agents.unsubscribe": {
+    "readOnly": false,
+    "destructive": false
+  },
+  "conversation.setApprovalMode": {
+    "readOnly": false,
+    "destructive": false
+  },
+  "conversation.setUsageLimitAutoContinue": {
+    "readOnly": false,
+    "destructive": false
+  },
+  "agents.installOptions": {
+    "readOnly": true,
+    "destructive": false
+  },
+  "agents.install": {
+    "readOnly": false,
+    "destructive": false
+  },
+  "conversation.catalogueHead": {
+    "readOnly": true,
+    "destructive": false
+  },
+  "conversation.catalogueManifest": {
+    "readOnly": true,
+    "destructive": false
+  },
+  "conversation.catalogueResolve": {
+    "readOnly": true,
+    "destructive": false
+  },
+  "mcp.callTool": {
+    "readOnly": false,
+    "destructive": false
+  },
+  "mcp.readResource": {
+    "readOnly": false,
+    "destructive": false
+  },
+  "mcp.releaseApp": {
+    "readOnly": false,
+    "destructive": false
+  },
+  "mcp.sendMessage": {
+    "readOnly": false,
+    "destructive": false
+  },
+  "mcp.updateModelContext": {
+    "readOnly": false,
+    "destructive": false
+  },
+  "mcpServers.list": {
+    "readOnly": true,
+    "destructive": false
+  },
+  "mcpServers.save": {
+    "readOnly": false,
+    "destructive": false
+  },
+  "mcpServers.remove": {
+    "readOnly": false,
+    "destructive": true
+  },
+  "mcpServers.inspect": {
+    "readOnly": false,
+    "destructive": false
+  },
+  "mcpServers.authorize": {
+    "readOnly": false,
+    "destructive": false
+  },
+  "mcpServers.revoke": {
+    "readOnly": false,
+    "destructive": true
+  },
+  "apps.trusted": {
+    "readOnly": true,
+    "destructive": false
+  },
+  "apps.untrust": {
+    "readOnly": false,
+    "destructive": true
+  },
+  "phone.endpoint": {
+    "readOnly": true,
+    "destructive": false
+  },
+  "phone.authorize": {
+    "readOnly": false,
+    "destructive": false
+  },
+  "phone.status": {
+    "readOnly": true,
+    "destructive": false
+  },
+  "pairing.create": {
+    "readOnly": false,
+    "destructive": false
+  },
+  "pairing.pending": {
+    "readOnly": true,
+    "destructive": false
+  },
+  "pairing.status": {
+    "readOnly": true,
+    "destructive": false
+  },
+  "pairing.approve": {
+    "readOnly": false,
+    "destructive": false
+  },
+  "pairing.deny": {
+    "readOnly": false,
+    "destructive": true
+  },
+  "pairing.cancel": {
+    "readOnly": false,
+    "destructive": false
+  },
+  "pairing.setLinking": {
+    "readOnly": false,
+    "destructive": false
+  },
+  "pairing.setTunnel": {
+    "readOnly": false,
+    "destructive": false
+  },
+  "pairing.tunnel": {
+    "readOnly": true,
+    "destructive": false
+  },
+  "github.liveEvents": {
+    "readOnly": false,
+    "destructive": false
+  },
+  "github.status": {
+    "readOnly": true,
+    "destructive": false
+  },
+  "github.connect": {
+    "readOnly": false,
+    "destructive": false
+  },
+  "devices.list": {
+    "readOnly": true,
+    "destructive": false
+  },
+  "github.cancel": {
+    "readOnly": false,
+    "destructive": false
+  },
+  "github.disconnect": {
+    "readOnly": false,
+    "destructive": true
+  },
+  "peer.enroll": {
+    "readOnly": false,
+    "destructive": false
+  },
+  "peer.list": {
+    "readOnly": true,
+    "destructive": false
+  },
+  "peer.forget": {
+    "readOnly": false,
+    "destructive": true
+  },
+  "peer.relay": {
+    "readOnly": false,
+    "destructive": false
+  },
+  "conversation.unsubscribe": {
+    "readOnly": false,
+    "destructive": false
+  },
+  "conversation.share": {
+    "readOnly": false,
+    "destructive": false
+  },
+  "conversation.unshare": {
+    "readOnly": false,
+    "destructive": true
+  },
+  "conversation.shares": {
+    "readOnly": true,
+    "destructive": false
+  },
+  "conversation.permissionRules": {
+    "readOnly": true,
+    "destructive": false
+  },
+  "conversation.revokePermissionRule": {
+    "readOnly": false,
+    "destructive": true
+  },
+  "workspace.publish": {
+    "readOnly": false,
+    "destructive": false
+  },
+  "channel.create": {
+    "readOnly": false,
+    "destructive": false
+  },
+  "channel.list": {
+    "readOnly": true,
+    "destructive": false
+  },
+  "channel.setPlacement": {
+    "readOnly": false,
+    "destructive": false
+  },
+  "conversation.readEarlier": {
+    "readOnly": true,
+    "destructive": false
+  },
+  "conversation.peek": {
+    "readOnly": true,
+    "destructive": false
+  },
+  "conversation.setModel": {
+    "readOnly": false,
+    "destructive": false
+  },
+  "conversation.switchAgent": {
+    "readOnly": false,
+    "destructive": false
+  },
+  "conversation.fork": {
+    "readOnly": false,
+    "destructive": false
+  },
+  "vault.status": {
+    "readOnly": true,
+    "destructive": false
+  },
+  "vault.setup": {
+    "readOnly": false,
+    "destructive": false
+  },
+  "vault.unlock": {
+    "readOnly": false,
+    "destructive": false
+  },
+  "vault.changePassphrase": {
+    "readOnly": false,
+    "destructive": true
+  },
+  "vault.lock": {
+    "readOnly": false,
+    "destructive": false
+  },
+  "boat.status": {
+    "readOnly": true,
+    "destructive": false
+  },
+  "boat.save": {
+    "readOnly": false,
+    "destructive": false
+  },
+  "boat.saveClaudeSignIn": {
+    "readOnly": false,
+    "destructive": false
+  },
+  "boat.disconnect": {
+    "readOnly": false,
+    "destructive": true
+  },
+  "devices.pool": {
+    "readOnly": true,
+    "destructive": false
+  },
+  "devices.setPool": {
+    "readOnly": false,
+    "destructive": false
+  },
+  "devices.sshHosts": {
+    "readOnly": true,
+    "destructive": false
+  },
+  "devices.connectSsh": {
+    "readOnly": false,
+    "destructive": false
+  },
+  "devices.setDefault": {
+    "readOnly": false,
+    "destructive": false
+  },
+  "boat.runtimeSettings": {
+    "readOnly": true,
+    "destructive": false
+  },
+  "boat.setRuntimeSettings": {
+    "readOnly": false,
+    "destructive": false
+  },
+  "conversation.webhook.cursor": {
+    "readOnly": false,
+    "destructive": false
+  },
+  "conversation.webhook.reset": {
+    "readOnly": false,
+    "destructive": true
+  },
+  "voice.status": {
+    "readOnly": true,
+    "destructive": false
+  },
+  "voice.saveKey": {
+    "readOnly": false,
+    "destructive": false
+  },
+  "voice.forgetKey": {
+    "readOnly": false,
+    "destructive": true
+  },
+  "voice.startCall": {
+    "readOnly": false,
+    "destructive": false
+  }
+}

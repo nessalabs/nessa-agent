@@ -1065,8 +1065,10 @@ fn seed(
         let lease = storage.open(id.clone()).await.unwrap();
         let provider = ProviderIdentity::new("claude", "claude-sonnet-5", "workspace").unwrap();
         // Provider observations are owned by a recorded provider session.
-        let context =
-            ProviderContext::Recorded(ExecutionSessionId::new("bench-provider-session").unwrap());
+        let context = ProviderContext::recorded_after(
+            ExecutionSessionId::new("bench-provider-session").unwrap(),
+            0,
+        );
         let mut snapshot = SessionSnapshot {
             model_change: None,
             current_configuration: None,
@@ -1148,6 +1150,9 @@ fn turn_record(turn: usize) -> (InvocationRecord, String, String) {
     let user = filler(turn, 80 + (turn * 37) % 320, "Question");
     let assistant = filler(turn, 400 + (turn * 211) % 2000, "Answer");
     let record = InvocationRecord {
+        decline: None,
+        cancellation_delivery: None,
+        resumed_from: None,
         target_event_offset: None,
         submission: SubmissionMode::Immediate,
         request: ExecutionRequest {

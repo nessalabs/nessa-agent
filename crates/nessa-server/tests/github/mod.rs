@@ -6,14 +6,18 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use async_trait::async_trait;
+use serde_json::Value;
 use tokio::sync::Notify;
 
 use crate::github::application::{
     ApiFailure, AuditUnavailable, DeviceAuthorization, DeviceCode, EndCause, GithubApi,
     GithubAudit, GithubAuditEvent, GithubAuditRecord, GithubCaller, GithubConnections, GithubError,
-    GithubTokenStore, PollAnswer, StoreUnavailable,
+    GithubReadError, GithubReadFailure, GithubTokenStore, PollAnswer, StoreUnavailable,
 };
-use crate::github::domain::{AccessToken, ConnectEnd, GithubAccount, GithubSignIn, GithubStatus};
+use crate::github::domain::{
+    AccessToken, ConnectEnd, GithubAccount, GithubReadKind, GithubRepository, GithubSignIn,
+    GithubStatus,
+};
 use crate::timer::{manual::ManualTimer, Moment, Timer};
 
 const INTERVAL: Duration = Duration::from_secs(5);
@@ -49,6 +53,10 @@ struct ScriptedGithub {
     /// Held polls wait here until the test lets them answer.
     hold_polls: Mutex<Option<Arc<Notify>>>,
     accounts: Mutex<VecDeque<Result<GithubAccount, ApiFailure>>>,
+    reads: Mutex<Vec<(AccessToken, GithubRepository, GithubReadKind)>>,
+    read_answer: Mutex<Result<Value, GithubReadFailure>>,
+    read_started: Notify,
+    hold_reads: Mutex<Option<Arc<Notify>>>,
 }
 
 impl Default for ScriptedGithub {
@@ -68,6 +76,10 @@ impl Default for ScriptedGithub {
             polled: Mutex::new(0),
             hold_polls: Mutex::default(),
             accounts: Mutex::default(),
+            reads: Mutex::default(),
+            read_answer: Mutex::new(Err(GithubReadFailure::NotFound)),
+            read_started: Notify::new(),
+            hold_reads: Mutex::new(None),
         }
     }
 }
@@ -108,6 +120,23 @@ impl GithubApi for ScriptedGithub {
             .unwrap()
             .pop_front()
             .unwrap_or(Ok(octo()))
+    }
+    async fn read_repository(
+        &self,
+        token: &AccessToken,
+        repository: &GithubRepository,
+        kind: GithubReadKind,
+    ) -> Result<Value, GithubReadFailure> {
+        self.reads
+            .lock()
+            .unwrap()
+            .push((token.clone(), repository.clone(), kind));
+        self.read_started.notify_one();
+        let hold = self.hold_reads.lock().unwrap().clone();
+        if let Some(hold) = hold {
+            hold.notified().await;
+        }
+        self.read_answer.lock().unwrap().clone()
     }
 }
 
@@ -159,6 +188,9 @@ impl GithubTokenStore for MemoryStore {
             return Err(StoreUnavailable);
         }
         *self.held.lock().unwrap() = None;
+        Ok(())
+    }
+    async fn discard_plaintext(&self) -> Result<(), StoreUnavailable> {
         Ok(())
     }
 }
@@ -737,6 +769,13 @@ async fn an_approval_that_cannot_be_recorded_or_stored_is_dropped() {
         assert_eq!(connections.token(), None);
         assert_eq!(fixture.store.held.lock().unwrap().clone(), None);
     }
+}
+
+fn never_stopped() -> tokio::sync::watch::Receiver<bool> {
+    let (send, receive) = tokio::sync::watch::channel(false);
+    // A retained false sender represents a live call in these positive tests.
+    tokio::spawn(async move { send.closed().await });
+    receive
 }
 
 async fn signed_in(fixture: &Fixture) -> GithubConnections {
@@ -1412,3 +1451,136 @@ async fn a_closed_vault_during_approved_receipts_preserves_a_new_restoration_and
         );
     }
 }
+
+#[tokio::test]
+async fn a_locked_startup_removes_a_plaintext_sign_in() {
+    use nessa_local_storage::create_directory;
+    use nessa_vault::{
+        application::{Clock, ObservationClock, Vault},
+        domain::Failure,
+        infrastructure::{EncryptedFileVault, FileAudit, OsEntropy},
+    };
+    use std::sync::Arc;
+    struct Time;
+    impl Clock for Time {
+        fn seconds(&self) -> u64 {
+            0
+        }
+    }
+    impl ObservationClock for Time {
+        fn unix_millis(&self) -> Result<u64, Failure> {
+            Ok(1793030400000)
+        }
+    }
+    let root = tempfile::tempdir().unwrap();
+    let vault = Vault::new(
+        Arc::new(EncryptedFileVault::new(
+            root.path().join("vault"),
+            Arc::new(OsEntropy),
+        )),
+        Arc::new(FileAudit::new(root.path().join("audit"), Arc::new(Time))),
+        Arc::new(Time),
+    );
+    let directory = root.path().join("github");
+    create_directory(&directory).unwrap();
+    let file = directory.join("sign-in.json");
+    std::fs::write(
+        &file,
+        br#"{"accountId":7,"login":"octo","token":"ghu_locked_startup"}"#,
+    )
+    .unwrap();
+    let access = Arc::new(crate::github::infrastructure::GithubVaultAccess(
+        vault.clone(),
+    ));
+    assert!(vault.unlocked_generation().is_none());
+    let store = Arc::new(crate::github::infrastructure::GithubTokenVault::new(
+        directory,
+        Arc::new(crate::secrets::VaultSecret::new(
+            vault,
+            nessa_vault::domain::EntryName::new("github-sign-in").unwrap(),
+        )),
+    ));
+    let fixture = Fixture::new();
+    let start = |store| {
+        let github = fixture.github.clone();
+        let access = access.clone();
+        let audit = fixture.audit.clone();
+        let timer = fixture.timer.clone();
+        async move { GithubConnections::load(github, access, store, audit, timer).await }
+    };
+    let connections = start(store.clone()).await;
+    assert!(!file.exists());
+    assert_eq!(
+        connections.status(),
+        GithubStatus::SignedOut {
+            last: None,
+            unrecorded: false,
+        }
+    );
+    let connections = start(store).await;
+    assert!(!file.exists());
+    assert_eq!(
+        connections.status(),
+        GithubStatus::SignedOut {
+            last: None,
+            unrecorded: false,
+        }
+    );
+}
+
+#[tokio::test]
+async fn a_plaintext_sign_in_that_cannot_be_removed_fails_startup() {
+    use nessa_local_storage::create_directory;
+    use nessa_vault::{
+        application::{Clock, ObservationClock, Vault},
+        domain::Failure,
+        infrastructure::{EncryptedFileVault, FileAudit, OsEntropy},
+    };
+    use std::sync::Arc;
+    struct Time;
+    impl Clock for Time {
+        fn seconds(&self) -> u64 {
+            0
+        }
+    }
+    impl ObservationClock for Time {
+        fn unix_millis(&self) -> Result<u64, Failure> {
+            Ok(1793030400000)
+        }
+    }
+    let root = tempfile::tempdir().unwrap();
+    let vault = Vault::new(
+        Arc::new(EncryptedFileVault::new(
+            root.path().join("vault"),
+            Arc::new(OsEntropy),
+        )),
+        Arc::new(FileAudit::new(root.path().join("audit"), Arc::new(Time))),
+        Arc::new(Time),
+    );
+    let directory = root.path().join("github");
+    create_directory(&directory.join("sign-in.json")).unwrap();
+    let access = Arc::new(crate::github::infrastructure::GithubVaultAccess(
+        vault.clone(),
+    ));
+    let store = Arc::new(crate::github::infrastructure::GithubTokenVault::new(
+        directory.clone(),
+        Arc::new(crate::secrets::VaultSecret::new(
+            vault,
+            nessa_vault::domain::EntryName::new("github-sign-in").unwrap(),
+        )),
+    ));
+    let fixture = Fixture::new();
+    let connections =
+        GithubConnections::load(fixture.github, access, store, fixture.audit, fixture.timer).await;
+    assert!(directory.join("sign-in.json").is_dir());
+    assert_eq!(
+        connections.status(),
+        GithubStatus::SignedOut {
+            last: Some(ConnectEnd::StoreUnavailable),
+            unrecorded: false,
+        }
+    );
+}
+
+mod read_http;
+mod reads;

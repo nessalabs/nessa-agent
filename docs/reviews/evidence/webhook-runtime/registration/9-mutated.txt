@@ -1,0 +1,17 @@
+
+running 1 test
+test webhooks::infrastructure::outbox::store::tests::registration_tests::intent_count_and_byte_capacity_refuse_without_partial_insert ... FAILED
+
+failures:
+
+---- webhooks::infrastructure::outbox::store::tests::registration_tests::intent_count_and_byte_capacity_refuse_without_partial_insert stdout ----
+
+thread 'webhooks::infrastructure::outbox::store::tests::registration_tests::intent_count_and_byte_capacity_refuse_without_partial_insert' (82159) panicked at /tmp/nessa-registration-probes/crates/nessa-server/src/webhooks/infrastructure/outbox/../../../../tests/webhooks/infrastructure/outbox/registration.rs:353:5:
+assertion failed: matches!(f.store.reserve(oversized).await, Err(OutboxError::Capacity))
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    webhooks::infrastructure::outbox::store::tests::registration_tests::intent_count_and_byte_capacity_refuse_without_partial_insert
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 83 filtered out; finished in 0.01s

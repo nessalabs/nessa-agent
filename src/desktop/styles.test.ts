@@ -484,6 +484,12 @@ it("lays night-scene text out on the frame after its box is measured", () => {
   expect(layers).toMatch(/contain:\s*layout paint style/)
 })
 
+// CSS comments neither hide the active rule nor count as an active rule.
+const shortHomeRuleKeepsSliver = (source: string) =>
+  /@container \(max-height: 520px\) \{\s*\.desktop-header:not\(\[data-sliver\]\) \{\s*display:\s*none/.test(
+    source.replace(/\/\*[\s\S]*?\*\//g, " "),
+  )
+
 it("keeps a conversation's sliver of the header still, beneath the text, and out of short panes", () => {
   const body = (selector: string) => styles.slice(styles.indexOf(selector)).split("}")[0]
   expect(styles).toContain(".desktop-header[data-sliver] {")
@@ -494,10 +500,41 @@ it("keeps a conversation's sliver of the header still, beneath the text, and out
   expect(styles).toMatch(
     /\.desktop-night-scene\[data-still\] \.desktop-night-scene-rain > span,\s*\.desktop-night-scene\[data-still\] \.desktop-night-scene-steam > span \{\s*animation:\s*none/,
   )
+  // The general short-home rule must not hide this sliver at 520px.
+  expect(shortHomeRuleKeepsSliver(styles)).toBe(true)
   // Gone from a pane shorter than 220px.
   expect(styles).toMatch(
     /@container workspace-pane \(max-height: 219px\) \{\s*\.desktop-header\[data-sliver\] \{\s*display:\s*none/,
   )
+})
+
+it("rejects a short-home rule that also hides the conversation sliver", () => {
+  const missingProtection = styles.replace(
+    ".desktop-header:not([data-sliver]) {",
+    ".desktop-header {",
+  )
+  expect(shortHomeRuleKeepsSliver(missingProtection)).toBe(false)
+})
+
+it("a commented-out short-home guard cannot replace the active protection", () => {
+  const missingProtection = styles.replace(
+    ".desktop-header:not([data-sliver]) {",
+    ".desktop-header {",
+  )
+  const commentedGuard = `
+    /* @container (max-height: 520px) {
+      .desktop-header:not([data-sliver]) { display: none; }
+    } */
+  `
+  expect(shortHomeRuleKeepsSliver(missingProtection + commentedGuard)).toBe(false)
+})
+
+it("a comment cannot join a split declaration into the short-home guard", () => {
+  const splitDeclaration = styles.replace(
+    /(\.desktop-header:not\(\[data-sliver\]\)\s*\{\s*)display:/,
+    "$1dis/**/play:",
+  )
+  expect(shortHomeRuleKeepsSliver(splitDeclaration)).toBe(false)
 })
 
 it("keeps a running step's time on one line, whatever the pane's width", () => {
@@ -517,13 +554,31 @@ it("puts nothing of a pane but its picture under the window's controls: its head
   )
   const body = (sheet: string, selector: string) =>
     sheet.slice(sheet.indexOf(selector)).split("}")[0]
-  // Cards, including full-window widgets, begin below the window toolbar.
-  expect(body(panes, ".workspace-chat {")).toMatch(
-    /padding:\s*var\(--desktop-titlebar-height\)/,
+  // A top-row pane's header fills the titlebar row — a gutter, the header,
+  // a gutter: `--desktop-titlebar-height` — so what follows begins below it.
+  expect(body(panes, ".workspace-pane {")).toMatch(
+    /--workspace-pane-top:\s*calc\(max\(0, 1 - var\(--ri\)\) \* var\(--desktop-gutter\)\)/,
+  )
+  expect(body(panes, ".workspace-pane-header {")).toMatch(
+    /height:\s*calc\(var\(--desktop-control-size\) \+ 2 \* var\(--desktop-control-inset\)\)/,
+  )
+  expect(body(panes, ".workspace-pane-header {")).toMatch(
+    /margin:\s*var\(--workspace-pane-top\) 0/,
   )
   expect(body(panes, ".workspace-widget-window {")).toMatch(
-    /top:\s*var\(--desktop-titlebar-height\)/,
+    /--workspace-pane-top:\s*var\(--desktop-gutter\)/,
   )
+  // In the corner, the header's name and controls start after the window's.
+  const corner = body(panes, ".workspace[data-panes-alone]\n  .workspace-pane:is(")
+  expect(corner).toMatch(
+    /\.workspace-pane-header \{\s*padding-left: var\(--desktop-titlebar-safe-start\)/,
+  )
+  expect(
+    body(
+      panes,
+      ".workspace[data-panes-alone] .workspace-widget-window .workspace-pane-header {",
+    ),
+  ).toMatch(/padding-left: var\(--desktop-titlebar-safe-start\)/)
 })
 
 it("moves Settings' sidebar by transform, never by animating its width", () => {
@@ -641,6 +696,30 @@ it("says !important in the workspace's stylesheets only where a rule waits on it
     "ui/source-list/source-list.css": 6,
     "ui/transcript/approval-card.css": 1,
   })
+})
+
+it("judges a short home by the room below the title row, not the pane's box", () => {
+  // The pane runs up behind its title row. A query on the pane counts that
+  // row as room, so a 640px window — a 640px pane — keeps the large scene.
+  const panes = readFileSync(
+    new URL("./workspace/ui/panes/panes.css", import.meta.url),
+    "utf8",
+  )
+  const bodyRule = panes.indexOf("container: workspace-pane-body / size")
+  const body = panes
+    .slice(
+      panes.lastIndexOf(".workspace-pane-body:has(> .workspace-pane-home) {", bodyRule),
+    )
+    .split("}")[0]
+  expect(body).toContain("container: workspace-pane-body / size")
+  const home = readFileSync(
+    new URL("./workspace/ui/panes/conversation.css", import.meta.url),
+    "utf8",
+  )
+  expect(home).toContain(
+    "@container workspace-pane-body (width < 640px) or (height < 640px)",
+  )
+  expect(home).not.toContain("@container workspace-pane (width < 640px)")
 })
 
 it("quiets a short pane's composer at the height the pane limits name", () => {

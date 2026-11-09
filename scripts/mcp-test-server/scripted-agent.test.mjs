@@ -6,7 +6,16 @@
 import { strict as assert } from "node:assert"
 import { spawn, spawnSync } from "node:child_process"
 import { dirname, join } from "node:path"
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs"
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs"
 import { tmpdir } from "node:os"
 import { createInterface } from "node:readline"
 import { setTimeout as sleep } from "node:timers/promises"
@@ -44,9 +53,9 @@ after(() => {
  * with the answer and the notifications before it, or rejects after 20 s: an
  * agent that never answers fails its test rather than hanging the suite.
  */
-function start(agent, env = {}, tool = "review_rows") {
+function start(agent, env = {}, tool = "review_rows", extraArguments = []) {
   const script = join(here, "scripted-agent.mjs")
-  const child = spawn(process.execPath, [script, agent, tool], {
+  const child = spawn(process.execPath, [script, agent, tool, ...extraArguments], {
     env: { ...process.env, ...env },
     stdio: ["pipe", "pipe", "inherit"],
   })
@@ -181,6 +190,225 @@ test("claude: the model from session/new, and the recorded four frames", async (
   assert.equal(tools.at(-1).rawOutput, '{"rows":[1,2]}')
   agent.child.stdin.end()
   assert.equal(await exited(agent.child, 5000), true)
+})
+
+/** Run-owned focused native state and its processes, closed before removal. */
+function nativeFixture(t, scenario = false) {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "scripted-native-context-")))
+  const workspace = join(root, "workspace")
+  const otherWorkspace = join(root, "other-workspace")
+  const directory = join(root, "native")
+  mkdirSync(workspace)
+  mkdirSync(otherWorkspace)
+  const scenarioPath = join(root, "scenario.json")
+  writeFileSync(
+    scenarioPath,
+    JSON.stringify({
+      turns: [
+        { steps: [{ do: "text", chunks: ["Native fixture reply."] }, { do: "end" }] },
+      ],
+    }),
+  )
+  const agents = []
+  const close = async (current) => {
+    if (current.child.exitCode === null && current.child.signalCode === null)
+      current.child.stdin.end()
+    if (!(await exited(current.child, 5000))) {
+      current.child.kill("SIGKILL")
+      assert.equal(await exited(current.child, 2000), true, "native fixture was reaped")
+    }
+  }
+  t.after(async () => {
+    try {
+      for (const current of agents) await close(current)
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+  const nativeArguments = [
+    "--native-context-directory",
+    directory,
+    "--native-context-workspace",
+    workspace,
+  ]
+  return {
+    root,
+    workspace,
+    otherWorkspace,
+    directory,
+    nativeArguments,
+    close,
+    params: (cwd = workspace) => ({
+      cwd,
+      mcpServers: scenario ? [] : [mcptest],
+      _meta: {
+        claudeCode: { options: { model: "claude-test", permissionMode: "default" } },
+      },
+    }),
+    open: (strict = true) => {
+      const current = start("claude", {}, scenario ? "--scenario" : "review_rows", [
+        ...(scenario ? [scenarioPath] : []),
+        ...(strict ? nativeArguments : []),
+      ])
+      agents.push(current)
+      return current
+    },
+    events: () =>
+      readFileSync(join(directory, "events.jsonl"), "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line)),
+    markers: () => readdirSync(directory).filter((name) => name.endsWith(".used")),
+  }
+}
+
+test("focused Claude rejects an unused native ID after restart with the real resource-not-found envelope", async (t) => {
+  const fixture = nativeFixture(t)
+  const first = fixture.open()
+  const opened = await first.request("session/new", fixture.params())
+  const id = opened.result.sessionId
+  assert.equal(fixture.markers().length, 0)
+  await fixture.close(first)
+  const restored = fixture.open()
+  const answer = await restored.request("session/resume", {
+    ...fixture.params(),
+    sessionId: id,
+  })
+  assert.equal(answer.jsonrpc, "2.0")
+  assert.equal(typeof answer.id, "number")
+  assert.deepEqual(answer.error, { code: -32002, message: "Resource not found" })
+  assert.equal(Object.hasOwn(answer, "result"), false)
+  assert.deepEqual(fixture.events(), [
+    { method: "session/new", sessionId: id, outcome: "opened" },
+    { method: "session/resume", sessionId: id, outcome: "missing" },
+  ])
+  assert.equal(fixture.markers().length, 0)
+})
+
+for (const scenario of [false, true]) {
+  test(`focused Claude persists ${scenario ? "scenario" : "recorded"} prompt admission and restores only its exact native ID`, async (t) => {
+    const fixture = nativeFixture(t, scenario)
+    const first = fixture.open()
+    const opened = await first.request("session/new", fixture.params())
+    const id = opened.result.sessionId
+    const prompt = await first.request("session/prompt", {
+      sessionId: id,
+      prompt: [{ type: "text", text: "fixture prompt" }],
+    })
+    assert.equal(prompt.result.stopReason, "end_turn")
+    assert.equal(fixture.markers().length, 1)
+    assert.equal(readFileSync(join(fixture.directory, fixture.markers()[0]), "utf8"), id)
+    if (!scenario) {
+      // The later recorded-path prompt is idleTurn, a separate entry point.
+      // Losing this fixture-owned marker makes its persistence load-bearing.
+      rmSync(join(fixture.directory, fixture.markers()[0]))
+      const idle = await first.request("session/prompt", { sessionId: id, prompt: [] })
+      assert.equal(idle.result.stopReason, "end_turn")
+      assert.equal(fixture.markers().length, 1)
+      assert.equal(
+        readFileSync(join(fixture.directory, fixture.markers()[0]), "utf8"),
+        id,
+      )
+    }
+    await fixture.close(first)
+    const restored = fixture.open()
+    const answer = await restored.request("session/resume", {
+      ...fixture.params(),
+      sessionId: id,
+    })
+    assert.equal(answer.result.sessionId, id)
+    assert.deepEqual(answer.notes, [], "resume did not replay a prompt")
+    const wrong = await restored.request("session/resume", {
+      ...fixture.params(),
+      sessionId: `${id}-different`,
+    })
+    assert.deepEqual(wrong.error, { code: -32002, message: "Resource not found" })
+    const unsafePath = await restored.request("session/resume", {
+      ...fixture.params(),
+      sessionId: "../../not-a-native-record",
+    })
+    assert.deepEqual(unsafePath.error, { code: -32002, message: "Resource not found" })
+    assert.equal(fixture.markers().length, 1)
+    assert.deepEqual(fixture.events().slice(0, scenario ? 3 : 4), [
+      { method: "session/new", sessionId: id, outcome: "opened" },
+      { method: "session/prompt", sessionId: id, outcome: "accepted" },
+      ...(!scenario
+        ? [{ method: "session/prompt", sessionId: id, outcome: "accepted" }]
+        : []),
+      { method: "session/resume", sessionId: id, outcome: "restored" },
+    ])
+    assert.equal(
+      fixture.events().filter((event) => event.method === "session/prompt").length,
+      scenario ? 1 : 2,
+    )
+    const unknown = await restored.request("session/set_config_option", {
+      sessionId: id,
+      configId: "unrelated-option",
+      value: "unknown",
+    })
+    assert.equal(
+      unknown.error.code,
+      -32603,
+      "unexpected fixture failures retain their code",
+    )
+  })
+}
+
+test("native strictness is confined to its focused workspace and default launches remain unchanged", async (t) => {
+  const fixture = nativeFixture(t)
+  const focused = fixture.open()
+  const opened = await focused.request("session/new", fixture.params())
+  await fixture.close(focused)
+  const other = fixture.open()
+  const otherAnswer = await other.request("session/resume", {
+    ...fixture.params(fixture.otherWorkspace),
+    sessionId: opened.result.sessionId,
+  })
+  assert.equal(otherAnswer.result.sessionId, opened.result.sessionId)
+  await fixture.close(other)
+  const ordinary = fixture.open(false)
+  const defaultAnswer = await ordinary.request("session/resume", {
+    ...fixture.params(),
+    sessionId: opened.result.sessionId,
+  })
+  assert.equal(defaultAnswer.result.sessionId, opened.result.sessionId)
+  assert.deepEqual(fixture.events(), [
+    { method: "session/new", sessionId: opened.result.sessionId, outcome: "opened" },
+  ])
+  assert.equal(fixture.markers().length, 0)
+})
+
+test("incomplete or invalid native context options fail before any protocol or MCP session starts", (t) => {
+  const fixture = nativeFixture(t)
+  for (const args of [
+    ["claude", "review_rows", "--native-context-directory", fixture.directory],
+    ["claude", "review_rows", "--native-context-workspace", fixture.workspace],
+    [
+      "claude",
+      "review_rows",
+      "--native-context-directory",
+      "relative",
+      "--native-context-workspace",
+      fixture.workspace,
+    ],
+    ["codex", "review_rows", ...fixture.nativeArguments],
+  ]) {
+    const invalid = spawnSync(
+      process.execPath,
+      [join(here, "scripted-agent.mjs"), ...args],
+      {
+        encoding: "utf8",
+        timeout: 5000,
+      },
+    )
+    assert.equal(invalid.status, 2)
+    assert.equal(invalid.stdout, "")
+    assert.match(
+      invalid.stderr,
+      /native context options require Claude and two absolute paths/,
+    )
+  }
+  assert.equal(existsSync(fixture.directory), false)
 })
 
 /**

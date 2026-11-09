@@ -180,6 +180,7 @@ mod agent_switches;
 mod model_changes;
 mod owner_phone_policy;
 pub(crate) use metadata_target::ConversationMetadataReader;
+pub(crate) use ports::{ConversationAdmissionSnapshot, ConversationAdmissionToken};
 mod passive_read;
 mod permission_rules;
 pub use passive_read::AdmittedCatalogueRead;
@@ -194,6 +195,10 @@ pub use passive_read::AdmittedCatalogueRead;
 )]
 mod organization_budget;
 mod placement;
+mod pool_settings;
+#[cfg(any(unix, test))]
+pub(crate) use pool_settings::PoolSettingsError;
+pub(crate) use pool_settings::{PoolCaller, PoolSettingsStore};
 mod ports;
 mod provider_sessions;
 mod record_read;
@@ -206,6 +211,8 @@ pub use review_notice_audit::{
 mod review_notice_selection;
 pub(crate) use review_notice_selection::{AuditedReviewSelection, SelectReviewNotice};
 mod service;
+mod settings_audit;
+pub use settings_audit::{SettingsAudit, SettingsAuditRecord, SettingsChange, SettingsOutcome};
 mod session_key;
 mod source_permits;
 pub use source_permits::{SourcePermit, SourcePermits};
@@ -268,12 +275,16 @@ pub use mcp_apps::{
     ContextDrop, DroppedContexts, HeldResource, McpAppAsk, McpAppAudit, McpAppAuditPhase,
     McpAppAuditRecord, McpAppError, McpAppFailure, McpAppFuture, McpAppInitiator, McpAppOutcome,
     McpAppPorts, McpAppRef, McpAppWithdrawal, McpApps, ResourceTickets, TicketEnd, TicketRefusal,
-    MAX_HELD_RESOURCE_BYTES, MAX_HELD_TICKETS, RESOURCE_TICKET_LIFETIME_MS,
+    TrustNotKept, TrustedApps, MAX_HELD_RESOURCE_BYTES, MAX_HELD_TICKETS,
+    RESOURCE_TICKET_LIFETIME_MS,
 };
 pub(crate) use passive_read::access_refusal;
 pub use passive_read::{AdmitPassiveRead, PassiveRead, PassiveReadGrants, ReceiverAuthority};
 // Composed only by the Unix gateway (`composition/local_auth.rs`).
-pub use app_call_policy::{admit_app_question, AppCallPolicyEvaluator, AppQuestion};
+pub use app_call_policy::{
+    admit_app_question, message_skips_review, AppCallPolicyEvaluator, AppQuestion,
+    UnreviewedMessage,
+};
 pub use command_policy::{
     admit_command, CommandInitiator, CommandPolicyEvaluator, CommandQuestion,
 };
@@ -300,7 +311,7 @@ pub use permission_rules::{
     StoredPermissionRule,
 };
 #[cfg(unix)]
-pub(crate) use placement::{PairedEnvironments, WorkerLoad};
+pub(crate) use placement::{MachineUse, PairedEnvironments, WorkerLoad};
 pub use placement::{FETCH_CALL_WAIT, POOL, PUBLISH_CALL_WAIT};
 pub use ports::{
     ArtifactKept, ArtifactRecordGate, AttachmentRelease, AttachmentReleaseCause,
@@ -320,8 +331,9 @@ pub use provider_sessions::{
     ProviderSessionEraser, ProviderSessionErasers, ProviderSessionHandler,
 };
 pub use record_read::{
-    ReadRecords, RecordHead, RecordReadError, RecordReadFuture, RecordReadLease,
-    RecordReadOperation, RecordReadResponse, RecordReadSource, RecordReadValue,
+    PrincipalRecordReadSource, PrincipalRecordScope, ReadRecords, RecordHead, RecordReadError,
+    RecordReadFuture, RecordReadLease, RecordReadOperation, RecordReadResponse, RecordReadSource,
+    RecordReadValue,
 };
 pub use service::{
     event_error_code, project_events, validate_event_cursor, ConversationEventError, EventProgress,
@@ -341,7 +353,9 @@ pub use service::{
     UnsettledEnable, UsageLimitSnapshot, MAX_APP_CALLS, MAX_LISTED_CONVERSATIONS,
     MAX_RESOURCE_META_BYTES,
 };
-pub use service::{CommandAnswer, CommandCall, CommandCallError, EnvironmentListing, HERE};
+pub use service::{
+    CommandAnswer, CommandCall, CommandCallError, EnvironmentListing, EnvironmentLoad, HERE,
+};
 pub(crate) use service::{ExportAdmission, ExportHoldFailure, FENCE_LEASE_MS};
 pub use service::{
     FetchAnswer, FetchCall, FetchCallRefusal, PublishAnswer, PublishCall, PublishCallRefusal,
@@ -395,6 +409,7 @@ pub(crate) mod lease_tests;
 
 #[cfg(unix)]
 pub(crate) use placement::ThreadEnvironments;
+pub(crate) use placement::WorkspaceRest;
 pub(crate) use placement::{BOAT, MAX_RETAINED_ENVIRONMENTS};
 
 #[cfg(unix)]

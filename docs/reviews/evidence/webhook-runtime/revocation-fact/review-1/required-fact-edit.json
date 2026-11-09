@@ -1,0 +1,7 @@
+{
+  "path": "application/ports.rs",
+  "old": "(Some(_), None) => Err(AccessError::Unavailable),",
+  "new": "(Some(_), None) => Ok(None),",
+  "originalHash": "a9784678362710ee4c687a275dd89def7d4987b558f87335719de7c0335a57dc",
+  "changedHash": "cf65001f073ae9c273d3153bb9fad4e7bc38d8e4dc963d312008d0b7b3577508"
+}

@@ -34,7 +34,7 @@ mod submission;
 pub use submission::SubmissionMode;
 
 mod initiation;
-pub use initiation::{GrantInitiator, Initiation, Initiator, ToolChecking};
+pub use initiation::{AgentSource, GrantInitiator, Initiation, Initiator, ToolChecking};
 
 mod queue_order;
 pub use queue_order::{QueueOrderChange, QueueOrderError};

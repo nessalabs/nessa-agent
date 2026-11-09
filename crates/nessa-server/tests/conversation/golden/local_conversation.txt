@@ -6,12 +6,18 @@ provider: ProviderIdentity {
     context: "test",
 }
 provider_context: Recorded(
-    ExecutionSessionId(
-        "<uuid-0>",
-    ),
+    ProviderContextRecord {
+        id: ExecutionSessionId(
+            "<uuid-0>",
+        ),
+        admitted_before: 0,
+    },
 )
 invocations: [
     InvocationRecord {
+        decline: None,
+        cancellation_delivery: None,
+        resumed_from: None,
         target_event_offset: None,
         submission: Queued,
         request: ExecutionRequest {
@@ -67,6 +73,7 @@ invocations: [
                 observed_at_ms: Some(
                     1792000000000,
                 ),
+                session_arrival: false,
             },
             ExecutionEvent {
                 execution_id: ExecutionId(
@@ -79,6 +86,7 @@ invocations: [
                 observed_at_ms: Some(
                     1792000000000,
                 ),
+                session_arrival: false,
             },
         ],
         scheduling: [

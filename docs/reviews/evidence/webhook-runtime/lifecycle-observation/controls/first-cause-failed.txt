@@ -1,0 +1,16 @@
+
+running 1 test
+
+thread 'webhooks::domain::registration_lifecycle_tests::actual_revocation_stops_directly_and_does_not_replace_an_earlier_expiry_fact' (140314) panicked at /tmp/nessa-lifecycle-frozen/crates/nessa-server/tests/webhooks/domain/registration_lifecycle.rs:137:5:
+assertion `left == right` failed
+  left: StopObservation { reason: Revoked { initiator: PrincipalId("later-canonical-revoker") }, at_ms: 21000 }
+ right: StopObservation { reason: Expired { observed_by: Owner(PrincipalId("first-reader")) }, at_ms: 10000 }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test webhooks::domain::registration_lifecycle_tests::actual_revocation_stops_directly_and_does_not_replace_an_earlier_expiry_fact ... FAILED
+
+failures:
+
+failures:
+    webhooks::domain::registration_lifecycle_tests::actual_revocation_stops_directly_and_does_not_replace_an_earlier_expiry_fact
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 104 filtered out; finished in 0.00s

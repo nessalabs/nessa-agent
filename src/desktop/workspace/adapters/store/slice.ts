@@ -27,6 +27,7 @@ import type {
 import type { EdgeMove } from "../../../split-panes"
 import type { PaneRoom } from "../../../split-panes/model/pane-sizing"
 import type { Transcript, TurnMessage } from "../../model/transcript"
+import type { DraftImage } from "../../model/draft-images"
 import type {
   Initiator,
   WorkspaceDependencies,
@@ -44,7 +45,6 @@ import * as overview from "../../application/usecases/overview"
 import type { AgentsFilter } from "../../model/overview/filter"
 import type { AgentsGroup } from "../../model/overview/agents-glance"
 import * as panes from "../../application/usecases/panes"
-import * as sessionTabs from "../../application/usecases/session-tabs"
 import * as chatPanel from "../../application/usecases/chat-panel"
 import * as sessions from "../../application/usecases/sessions"
 import * as access from "../../application/usecases/access"
@@ -63,11 +63,6 @@ const workspaceSlice = createSlice({
   name: "workspace",
   initialState: initialWorkspace as WorkspaceState,
   reducers: {
-    // Documents share the existing pane arrangement.
-    sessionTabClosed: (
-      state,
-      { payload }: Payload<{ sessionId: string; draftId: string }>,
-    ) => sessionTabs.closeSessionTab(state, payload),
     // A chat's right panel: its widgets, as tabs (`usecases/chat-panel.ts`).
     panelTabShown: (
       state,
@@ -190,6 +185,8 @@ const workspaceSlice = createSlice({
       state,
       { payload }: Payload<{ arrangement: WindowArrangement | null }>,
     ) => window.arrangementShown(state, payload),
+    panelShown: (state, { payload }: Payload<{ open: boolean }>) =>
+      window.panelShown(state, payload),
     toggleSidebar: (state, { payload }: Payload<{ open?: boolean } | undefined>) =>
       navigation.toggleSidebar(state, payload ?? {}),
     toggleSessionList: (state, { payload }: Payload<{ open?: boolean } | undefined>) =>
@@ -361,6 +358,14 @@ const workspaceSlice = createSlice({
       sessions.sessionRead(state, payload),
     setComposerText: (state, { payload }: Payload<{ sessionId: string; text: string }>) =>
       sessions.composerTextChanged(state, payload),
+    composerImagesAdded: (
+      state,
+      { payload }: Payload<{ sessionId: string; images: readonly DraftImage[] }>,
+    ) => sessions.composerImagesAdded(state, payload),
+    composerImageRemoved: (
+      state,
+      { payload }: Payload<{ sessionId: string; imageId: string }>,
+    ) => sessions.composerImageRemoved(state, payload),
 
     // A row's edits in place
     renameStarted: (state, { payload }: Payload<{ sessionId: string }>) =>
@@ -471,6 +476,23 @@ const workspaceSlice = createSlice({
       state,
       { payload }: Payload<{ opening: string; channel: Channel; draftId: string }>,
     ) => channelCreation.channelMade(state, payload),
+    // A channel's settings changed: the index keeps its section and the rest
+    // of what the window knows of it, and takes where its agents run now.
+    channelPlaced: (state, { payload }: Payload<{ channel: Channel }>) => ({
+      ...state,
+      channels: state.channels.map((each) =>
+        each.id === payload.channel.id
+          ? {
+              ...each,
+              coordinatorPlacement: payload.channel.coordinatorPlacement,
+              threadPlacement: payload.channel.threadPlacement,
+              ...(payload.channel.coordinatorConversationId
+                ? { coordinatorConversationId: payload.channel.coordinatorConversationId }
+                : {}),
+            }
+          : each,
+      ),
+    }),
   },
 })
 
@@ -530,9 +552,7 @@ const goesSomewhere: ReadonlySet<string> = new Set(
  * over the panes, only when it changed them, so no pane changes unseen
  * beneath it; one that changes nothing — a move at the edge, a close of no
  * pane — leaves the view as it is. Fitting the panes to the window is not
- * asked by anyone, and leaves the view as it is. Closing a document tab stays
- * in the current view: the tab strip shows its removal even over Agents, and
- * a hidden tab close does not change a pane.
+ * asked by anyone, and leaves the view as it is.
  */
 const changesPanes: ReadonlySet<string> = new Set(
   [

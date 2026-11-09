@@ -105,6 +105,8 @@ pub(super) struct AttachmentEvidenceSlot {
 pub(super) struct CloseAttempt {
     pub(super) id: u64,
     pub(super) attempt_id: u64,
+    pub(super) provider_generation: u64,
+    pub(super) attachment_generation: u64,
     pub(super) request: SessionCloseRequest,
     pub(super) physical: watch::Receiver<Option<CleanupReport>>,
     pub(super) result: watch::Receiver<Option<CleanupReport>>,
@@ -119,6 +121,8 @@ impl CloseAttempt {
         request: SessionCloseRequest,
         report: CleanupReport,
         evidence: Vec<AttachmentEvidenceSlot>,
+        provider_generation: u64,
+        attachment_generation: u64,
     ) -> Self {
         let (physical_completion, physical) = watch::channel(Some(report.clone()));
         let (completion, result) = watch::channel(None);
@@ -126,6 +130,8 @@ impl CloseAttempt {
         Self {
             id,
             attempt_id,
+            provider_generation,
+            attachment_generation,
             request,
             physical,
             result,
@@ -192,6 +198,8 @@ mod tests {
                 transition: AttachmentEvidenceTransition::Started,
                 result,
             }],
+            0,
+            0,
         )
     }
 

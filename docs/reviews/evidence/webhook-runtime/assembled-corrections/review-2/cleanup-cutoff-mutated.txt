@@ -1,0 +1,14 @@
+
+running 1 test
+
+thread 'webhooks::infrastructure::outbox::store::tests::cleanup_tests::terminal_cleanup_walks_one_indexed_cutoff_per_registration' (143869) panicked at /tmp/nessa-assembled-final-review/crates/nessa-server/src/webhooks/infrastructure/outbox/../../../../tests/webhooks/infrastructure/outbox/cleanup.rs:59:9:
+count=128 VM steps=67862
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test webhooks::infrastructure::outbox::store::tests::cleanup_tests::terminal_cleanup_walks_one_indexed_cutoff_per_registration ... FAILED
+
+failures:
+
+failures:
+    webhooks::infrastructure::outbox::store::tests::cleanup_tests::terminal_cleanup_walks_one_indexed_cutoff_per_registration
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 107 filtered out; finished in 0.02s

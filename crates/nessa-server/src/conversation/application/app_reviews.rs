@@ -61,12 +61,38 @@ pub const APP_REVIEW_DEADLINE: Duration = Duration::from_millis(MCP_APP_REVIEW_D
 pub const ALLOW: &str = "allow";
 /// The option that denies it.
 pub const DENY: &str = "deny";
-/// The options an app's review offers, each with what it decides: the one
-/// table both the view (`open`) and an answer (`answer`) read.
-const OPTIONS: [(&str, &str, ConversationPermissionOptionEffect); 2] = [
-    (ALLOW, "Allow", ConversationPermissionOptionEffect::Allow),
-    (DENY, "Deny", ConversationPermissionOptionEffect::Deny),
-];
+/// The option that allows an app's message and every later one of that app:
+/// the id the desktop draws as its "always" choice (Nessa's remember-allow).
+pub const ALLOW_APP: &str = "nessa.remember.allow";
+/// The options an app's review offers, each with what it decides: the
+/// table the view (`open`) reads, and the review's own copy is what an
+/// answer (`answer`) is checked against. Only a message offers to allow the
+/// app from now on; a destructive tool is always asked about.
+fn options(
+    ask: ReviewAsk,
+) -> &'static [(
+    &'static str,
+    &'static str,
+    ConversationPermissionOptionEffect,
+)] {
+    const TOOL: [(&str, &str, ConversationPermissionOptionEffect); 2] = [
+        (ALLOW, "Allow", ConversationPermissionOptionEffect::Allow),
+        (DENY, "Deny", ConversationPermissionOptionEffect::Deny),
+    ];
+    const MESSAGE: [(&str, &str, ConversationPermissionOptionEffect); 3] = [
+        (ALLOW, "Allow", ConversationPermissionOptionEffect::Allow),
+        (
+            ALLOW_APP,
+            "Always allow this app",
+            ConversationPermissionOptionEffect::Allow,
+        ),
+        (DENY, "Deny", ConversationPermissionOptionEffect::Deny),
+    ];
+    match ask {
+        ReviewAsk::RunTool => &TOOL,
+        ReviewAsk::SendMessage => &MESSAGE,
+    }
+}
 /// The most app reviews one conversation has open at once, so that with the
 /// agent's own they stay within the 64 a view carries.
 pub const MAX_OPEN_APP_REVIEWS: usize = 16;
@@ -117,6 +143,8 @@ pub struct ReviewAnswerer {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ReviewEnd {
     Allowed(ReviewAnswerer),
+    /// Allowed, and every later message of the same app too.
+    AllowedForApp(ReviewAnswerer),
     Denied(ReviewAnswerer),
     Expired,
     /// Withdrawn, `by` whom: `None` is the app itself, its request gone.
@@ -579,9 +607,13 @@ impl AppReviews {
         if open.execution_id != execution || open.review != review {
             return ReviewAnswer::Stale;
         }
-        let end = match OPTIONS.iter().find(|&&(id, ..)| id == option) {
-            Some((.., ConversationPermissionOptionEffect::Allow)) => ReviewEnd::Allowed(by),
-            Some((.., ConversationPermissionOptionEffect::Deny)) => ReviewEnd::Denied(by),
+        // Only an option this review offered.
+        let end = match open.options.iter().find(|offered| offered.id == option) {
+            Some(offered) if offered.id == ALLOW_APP => ReviewEnd::AllowedForApp(by),
+            Some(offered) => match offered.effect {
+                ConversationPermissionOptionEffect::Allow => ReviewEnd::Allowed(by),
+                ConversationPermissionOptionEffect::Deny => ReviewEnd::Denied(by),
+            },
             None => return ReviewAnswer::Stale,
         };
         let open = state.remove(key).expect("present");
@@ -836,7 +868,7 @@ fn review_of(
         },
         tool_name: tool.to_owned(),
         arguments_json: arguments_json.to_owned(),
-        options: OPTIONS
+        options: options(ask)
             .iter()
             .map(|&(id, label, effect)| ConversationPermissionOption {
                 id: id.into(),

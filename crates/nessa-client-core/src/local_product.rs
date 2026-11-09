@@ -2,7 +2,12 @@
 //! The connection lifetime owns server-side session resources; dropping it closes
 //! the socket. Consumers own command interpretation and authorization remains at
 //! the gateway. No protocol payload or server message enters diagnostics.
-use nessa_protocol::product::generated::{ProductSessionReady, SessionChallenge};
+use nessa_protocol::{
+    product::generated::{
+        ProductSessionReady, SessionChallenge, VaultErrorCode, VaultPassphraseChangeStatus,
+    },
+    protocol::{OutgoingMessage, ResponseFrame},
+};
 use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
 use std::{
@@ -14,12 +19,42 @@ use std::{
 use tungstenite::{client::client_with_config, protocol::WebSocketConfig, Message, WebSocket};
 use zeroize::Zeroizing;
 
+/// How long a probe such as health or token issuance waits. A surface call
+/// passes its own budget; this is not that budget.
+const PROBE_WAIT: Duration = Duration::from_secs(10);
+
+/// Who presents a credential on the product socket. Cedar sees the credential's
+/// principal, not this name. The surface kind stays `cli`: the schema has no
+/// separate MCP kind, and the instance distinguishes the two callers.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ProductCaller {
+    /// Client id sent in `session.authenticate`.
+    pub id: &'static str,
+    /// Surface instance sent in `session.authenticate`.
+    pub instance: &'static str,
+}
+
+impl ProductCaller {
+    /// The `nessa call` and `nessa doctor` caller.
+    pub const CLI: Self = Self {
+        id: "nessa-cli",
+        instance: "nessa-cli",
+    };
+    /// The `nessa mcp` caller.
+    pub const MCP: Self = Self {
+        id: "nessa-mcp",
+        instance: "nessa-mcp",
+    };
+}
+
 /// Local mode accepts numeric loopback only. Cloud transport is not implemented.
 pub struct LocalProduct {
     socket: WebSocket<TcpStream>,
     identity: LocalProductIdentity,
     deadline: Instant,
     next_id: u64,
+    /// Set once an exchange's outcome is unknown. Later calls do not read it.
+    retired: bool,
 }
 impl LocalProduct {
     /// An independent cancellation handle. Shutting it down ends the connection
@@ -39,6 +74,15 @@ impl LocalProduct {
     /// Connect and authenticate with a private credential file in at most ten seconds.
     /// Numeric loopback only; dropping the client closes its session.
     pub fn connect(address: SocketAddr, credential_file: &Path) -> Result<Self, LocalProductError> {
+        Self::connect_as(address, credential_file, ProductCaller::CLI)
+    }
+    /// [`connect`] as `caller`. The credential is the principal Cedar sees;
+    /// `caller` only names who presented it.
+    pub fn connect_as(
+        address: SocketAddr,
+        credential_file: &Path,
+        caller: ProductCaller,
+    ) -> Result<Self, LocalProductError> {
         if !address.ip().is_loopback() {
             return Err(LocalProductError::NonLocal);
         }
@@ -56,13 +100,21 @@ impl LocalProduct {
         if credential.is_empty() || credential.len() > 16384 {
             return Err(LocalProductError::InvalidCredential);
         }
-        Self::connect_with_credential(address, credential)
+        Self::connect_with_caller(address, credential, caller)
     }
     /// Authenticate an app-owned connection with transient credential input.
     /// The caller keeps the secret out of arguments, environment and persistence.
     pub fn connect_with_credential(
         address: SocketAddr,
         credential: &str,
+    ) -> Result<Self, LocalProductError> {
+        Self::connect_with_caller(address, credential, ProductCaller::CLI)
+    }
+    /// [`connect_with_credential`] as `caller`.
+    pub fn connect_with_caller(
+        address: SocketAddr,
+        credential: &str,
+        caller: ProductCaller,
     ) -> Result<Self, LocalProductError> {
         if !address.ip().is_loopback() {
             return Err(LocalProductError::NonLocal);
@@ -96,6 +148,7 @@ impl LocalProduct {
             socket,
             deadline,
             next_id: 0,
+            retired: false,
             identity: LocalProductIdentity {
                 gateway_id: String::new(),
                 organization_id: String::new(),
@@ -103,15 +156,17 @@ impl LocalProduct {
                 expires_at: None,
             },
         };
-        let challenge = result.read()?;
-        if challenge["type"] != "event" || challenge["event"] != "session.challenge" {
+        let OutgoingMessage::Event(challenge) = result.read()? else {
+            return Err(LocalProductError::Protocol);
+        };
+        if challenge.event != "session.challenge" {
             return Err(LocalProductError::Protocol);
         }
-        let challenge: SessionChallenge = decode(challenge["payload"].clone())?;
+        let challenge: SessionChallenge = decode(challenge.payload)?;
         if challenge.min_version > 1 || challenge.max_version < 1 {
             return Err(LocalProductError::Protocol);
         }
-        let ready: ProductSessionReady = result.request("session.authenticate", json!({"minVersion":1,"maxVersion":1,"nonce":challenge.nonce,"credential":credential,"client":{"id":"nessa-cli"},"surface":{"kind":"cli","instance":"nessa-cli"}}))?;
+        let ready: ProductSessionReady = result.request("session.authenticate", json!({"minVersion":1,"maxVersion":1,"nonce":challenge.nonce,"credential":credential,"client":{"id":caller.id},"surface":{"kind":"cli","instance":caller.instance}}))?;
         if ready.version != 1
             || ready.gateway_id.is_empty()
             || ready.organization_id.is_empty()
@@ -130,7 +185,7 @@ impl LocalProduct {
         };
         Ok(result)
     }
-    fn read(&mut self) -> Result<Value, LocalProductError> {
+    fn read(&mut self) -> Result<OutgoingMessage, LocalProductError> {
         loop {
             let remaining = self
                 .deadline
@@ -147,7 +202,7 @@ impl LocalProduct {
                 .map_err(|_| LocalProductError::Transport)?
             {
                 Message::Text(text) if text.len() <= 1_048_576 => {
-                    return serde_json::from_str(&text).map_err(|_| LocalProductError::Protocol)
+                    return OutgoingMessage::decode(&text).map_err(|_| LocalProductError::Protocol)
                 }
                 Message::Ping(_) | Message::Pong(_) => continue,
                 _ => return Err(LocalProductError::Protocol),
@@ -156,53 +211,217 @@ impl LocalProduct {
     }
     /// Send one correlated command and decode its bounded reply. Calls are serialized
     /// by the mutable borrow; no command replay occurs after an uncertain delivery.
+    /// An unconfirmed passphrase-change delivery retires the connection so a late
+    /// response cannot be consumed by the next request.
     pub fn request<T: DeserializeOwned>(
         &mut self,
         method: &str,
         params: Value,
     ) -> Result<T, LocalProductError> {
-        self.deadline = Instant::now() + Duration::from_secs(10);
+        if self.retired {
+            return Err(LocalProductError::Transport);
+        }
+        let result = match self.request_once(method, params, PROBE_WAIT) {
+            Ok(Reply::Payload(payload)) => decode(payload),
+            Ok(Reply::Refused(code)) => Err(refusal(&code)),
+            Err(error) => Err(error),
+        };
+        after_dispatch(method, result, || self.retire())
+    }
+    /// [`request`] without collapsing the gateway's refusal code.
+    ///
+    /// `wait` is how long this call may run before its outcome is unknown.
+    /// The payload is the JSON the handler returned. A refusal keeps that
+    /// handler's `code` and drops its message. An outcome that is not a
+    /// correlated reply retires the connection, so a later call cannot read it.
+    pub fn exchange(
+        &mut self,
+        method: &str,
+        params: Value,
+        wait: Duration,
+    ) -> Result<Value, ExchangeError> {
+        if self.retired {
+            return Err(ExchangeError::Session(LocalProductError::Transport));
+        }
+        match self.request_once(method, params, wait) {
+            Ok(Reply::Payload(payload)) => Ok(payload),
+            Ok(Reply::Refused(code)) => {
+                if passphrase_change_unconfirmed(method, true, preserved_code(&code)) {
+                    self.retire();
+                    Err(unconfirmed_change())
+                } else {
+                    Err(ExchangeError::Refused { code })
+                }
+            }
+            Err(error) => {
+                if passphrase_change_unconfirmed(method, true, preserved_error(&error)) {
+                    Err(unconfirmed_change())
+                } else {
+                    Err(ExchangeError::Session(error))
+                }
+            }
+        }
+    }
+    /// This connection will not be read again. Idempotent.
+    pub fn retired(&self) -> bool {
+        self.retired
+    }
+    fn retire(&mut self) {
+        if self.retired {
+            return;
+        }
+        self.retired = true;
+        // A late answer must not be consumed by the next call.
+        let _ = self.socket.get_ref().shutdown(std::net::Shutdown::Both);
+    }
+    fn request_once(
+        &mut self,
+        method: &str,
+        params: Value,
+        wait: Duration,
+    ) -> Result<Reply, LocalProductError> {
+        self.deadline = Instant::now() + wait;
         self.next_id += 1;
         let id = self.next_id.to_string();
-        self.socket
+        if self
+            .socket
             .send(Message::Text(
                 json!({"type":"req","id":id,"method":method,"params":params})
                     .to_string()
                     .into(),
             ))
-            .map_err(|_| LocalProductError::Transport)?;
+            .is_err()
+        {
+            self.retire();
+            return Err(LocalProductError::Transport);
+        }
         // Product sessions may push review snapshots before a command response.
         // This command-only transport does not subscribe; bound ignored notices
         // as well as bytes and time so a stream cannot starve correlation.
+        let response = match self.correlated(&id) {
+            Ok(response) => response,
+            Err(error) => {
+                self.retire();
+                return Err(error);
+            }
+        };
+        if !response.ok {
+            // The shared envelope decoder has already proved a boolean outcome
+            // with exactly one error/payload. Arbitrary server text stays private.
+            let Some(error) = response.error else {
+                self.retire();
+                return Err(LocalProductError::Protocol);
+            };
+            return Ok(Reply::Refused(error.code));
+        }
+        let Some(payload) = response.payload else {
+            self.retire();
+            return Err(LocalProductError::Protocol);
+        };
+        // Validate before generic decoding: Value callers must obey the same
+        // Locked-only change contract as callers requesting the generated DTO.
+        if method == "vault.changePassphrase"
+            && decode::<VaultPassphraseChangeStatus>(payload.clone()).is_err()
+        {
+            self.retire();
+            return Err(LocalProductError::Protocol);
+        }
+        Ok(Reply::Payload(payload))
+    }
+    fn correlated(&mut self, id: &str) -> Result<ResponseFrame, LocalProductError> {
         let mut response = self.read()?;
         for _ in 0..64 {
-            if response["type"] != "event" {
+            if !matches!(response, OutgoingMessage::Event(_)) {
                 break;
             }
             response = self.read()?;
         }
-        if response["type"] != "res" || response["id"] != id {
+        let OutgoingMessage::Response(response) = response else {
+            return Err(LocalProductError::Correlation);
+        };
+        if response.id != id {
             return Err(LocalProductError::Correlation);
         }
-        if response["ok"] != true {
-            // No arbitrary server message is allowed into diagnostics (it may contain secrets).
-            return Err(match response["error"]["code"].as_str() {
-                Some("unauthorized") => LocalProductError::Unauthorized,
-                Some("forbidden") => LocalProductError::Denied,
-                Some("credential_capacity") => LocalProductError::Capacity,
-                Some(code) => match serde_json::from_value::<
-                    nessa_protocol::product::generated::VaultErrorCode,
-                >(Value::String(code.to_owned()))
-                {
-                    Ok(code) => LocalProductError::Vault(code),
-                    Err(_) => LocalProductError::Rejected,
-                },
-                None => LocalProductError::Rejected,
-            });
-        }
-        decode(response["payload"].clone())
+        Ok(response)
     }
 }
+
+enum Reply {
+    Payload(Value),
+    Refused(String),
+}
+
+/// A product call's outcome. `Refused` is the handler's code; `Session` is
+/// this transport, and it carries no server text.
+#[derive(Debug)]
+pub enum ExchangeError {
+    /// The handler refused the call. The message is dropped.
+    Refused {
+        /// The product error code.
+        code: String,
+    },
+    /// The exchange did not produce a handler answer.
+    Session(LocalProductError),
+}
+
+fn refusal(code: &str) -> LocalProductError {
+    match code {
+        "unauthorized" => LocalProductError::Unauthorized,
+        "forbidden" => LocalProductError::Denied,
+        "credential_capacity" => LocalProductError::Capacity,
+        code => match serde_json::from_value::<VaultErrorCode>(Value::String(code.to_owned())) {
+            Ok(code) => LocalProductError::Vault(code),
+            Err(_) => LocalProductError::Rejected,
+        },
+    }
+}
+
+fn preserved_error(error: &LocalProductError) -> bool {
+    matches!(
+        error,
+        LocalProductError::Vault(_) | LocalProductError::Unauthorized | LocalProductError::Denied
+    )
+}
+
+fn preserved_code(code: &str) -> bool {
+    preserved_error(&refusal(code))
+}
+
+fn unconfirmed_change() -> ExchangeError {
+    ExchangeError::Session(LocalProductError::Vault(
+        VaultErrorCode::VaultChangeNotConfirmed,
+    ))
+}
+
+/// The passphrase-change settlement, one decision for every caller.
+///
+/// A decoded status confirms the change. So does a vault, unauthorized, or
+/// forbidden refusal: those are the handler's answer. Any other failure after
+/// the request was sent is unconfirmed. The caller then retires the connection
+/// and reports `vault_change_not_confirmed`.
+fn passphrase_change_unconfirmed(method: &str, failed: bool, preserved: bool) -> bool {
+    method == "vault.changePassphrase" && failed && !preserved
+}
+
+/// A recognized response preserves the gateway's publication/audit fact. Any
+/// unrecognized or missing answer after sending a change is an uncertain
+/// mutation. [`passphrase_change_unconfirmed`] is that decision.
+fn after_dispatch<T>(
+    method: &str,
+    result: Result<T, LocalProductError>,
+    retire: impl FnOnce(),
+) -> Result<T, LocalProductError> {
+    if let Err(error) = &result {
+        if passphrase_change_unconfirmed(method, true, preserved_error(error)) {
+            retire();
+            return Err(LocalProductError::Vault(
+                VaultErrorCode::VaultChangeNotConfirmed,
+            ));
+        }
+    }
+    result
+}
+
 fn decode<T: DeserializeOwned>(value: Value) -> Result<T, LocalProductError> {
     serde_json::from_value(value).map_err(|_| LocalProductError::Protocol)
 }
@@ -216,7 +435,7 @@ impl Drop for LocalProduct {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LocalProductError {
     /// A recognized redacted vault refusal; arbitrary server text is discarded.
-    Vault(nessa_protocol::product::generated::VaultErrorCode),
+    Vault(VaultErrorCode),
     /// The requested address is not numeric loopback.
     NonLocal,
     /// The private credential file cannot be read.
@@ -272,3 +491,7 @@ impl Drop for LocalProductCancellation {
 
 /// Largest integer exactly represented by product JSON consumers.
 pub const MAX_SAFE_TIMESTAMP: u64 = 9_007_199_254_740_991;
+
+#[cfg(test)]
+#[path = "../tests/product/local_product.rs"]
+mod tests;

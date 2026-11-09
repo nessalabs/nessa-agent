@@ -1,0 +1,18 @@
+
+running 1 test
+test webhooks::infrastructure::outbox::store::tests::cleanup_tests::deleting_nonterminal_metadata_does_not_erase_its_acknowledged_history ... FAILED
+
+failures:
+
+---- webhooks::infrastructure::outbox::store::tests::cleanup_tests::deleting_nonterminal_metadata_does_not_erase_its_acknowledged_history stdout ----
+
+thread 'webhooks::infrastructure::outbox::store::tests::cleanup_tests::deleting_nonterminal_metadata_does_not_erase_its_acknowledged_history' (132811) panicked at /tmp/nessa-retention-cost-controls/crates/nessa-server/src/webhooks/infrastructure/outbox/../../../../tests/webhooks/infrastructure/outbox/cleanup.rs:210:5:
+assertion failed: c.query_row("SELECT count(*) FROM audit WHERE delivery=?1 AND published=1",
+            [&id], |r| r.get::<_, i64>(0)).unwrap() > 0
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    webhooks::infrastructure::outbox::store::tests::cleanup_tests::deleting_nonterminal_metadata_does_not_erase_its_acknowledged_history
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 89 filtered out; finished in 0.01s

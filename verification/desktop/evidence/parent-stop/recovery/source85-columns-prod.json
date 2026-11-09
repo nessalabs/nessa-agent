@@ -1,0 +1,206 @@
+{
+  "check": "columns",
+  "ok": true,
+  "started": "2026-10-30T00:31:36.603Z",
+  "finished": "2026-10-30T00:32:34.769Z",
+  "target": {
+    "url": "http://127.0.0.1:1448/desktop.html",
+    "mode": "prod"
+  },
+  "results": [
+    {
+      "engine": "chromium",
+      "layout": "columns",
+      "name": "console",
+      "harmless": [
+        "console.error: Failed to load resource: the server responded with a status of 404 (Not Found) (http://127.0.0.1:1448/favicon.ico)"
+      ],
+      "failures": [],
+      "ok": true
+    },
+    {
+      "engine": "chromium",
+      "layout": "columns",
+      "size": "760x700",
+      "name": "content-visible",
+      "runs": [
+        {
+          "key": "Meta+KeyB",
+          "frames": 17,
+          "positions": 11,
+          "flights": 13,
+          "mounted": [],
+          "mountedFrames": 0,
+          "minimumMountedOpacity": 1
+        },
+        {
+          "key": "Meta+KeyB",
+          "frames": 14,
+          "positions": 8,
+          "flights": 10,
+          "mounted": [],
+          "mountedFrames": 0,
+          "minimumMountedOpacity": 1
+        },
+        {
+          "key": "Meta+Alt+KeyS",
+          "frames": 21,
+          "positions": 5,
+          "flights": 14,
+          "mounted": [],
+          "mountedFrames": 0,
+          "minimumMountedOpacity": 1
+        },
+        {
+          "key": "Meta+Alt+KeyS",
+          "frames": 34,
+          "positions": 7,
+          "flights": 24,
+          "mounted": [],
+          "mountedFrames": 0,
+          "minimumMountedOpacity": 1
+        },
+        {
+          "key": "mount filled pane",
+          "frames": 89,
+          "positions": 1,
+          "flights": 40,
+          "mounted": ["2"],
+          "mountedFrames": 15,
+          "minimumMountedOpacity": 1
+        }
+      ],
+      "failures": [],
+      "ok": true
+    },
+    {
+      "engine": "chromium",
+      "layout": "columns",
+      "size": "760x700",
+      "name": "reply-held",
+      "sample": [
+        {
+          "label": "Split panes for the chat workspace",
+          "text": "unsent reply"
+        },
+        {
+          "label": "Notarize the macOS build",
+          "text": ""
+        }
+      ],
+      "label": "Split panes for the chat workspace",
+      "before": 1,
+      "opened": 2,
+      "after": 1,
+      "failures": [],
+      "ok": true
+    },
+    {
+      "engine": "chromium",
+      "layout": "columns",
+      "size": "760x700",
+      "name": "stop-held",
+      "sample": [
+        {
+          "label": "Split panes for the chat workspace",
+          "stop": "Stop",
+          "live": "Editing workspace-panes.tsx42s"
+        },
+        {
+          "label": "Notarize the macOS build",
+          "stop": "Stop",
+          "live": ""
+        }
+      ],
+      "title": "Split panes for the chat workspace",
+      "before": 1,
+      "opened": 2,
+      "after": 1,
+      "failures": [],
+      "ok": true
+    },
+    {
+      "engine": "chromium",
+      "layout": "sidebar",
+      "size": "760x700",
+      "name": "content-visible",
+      "runs": [
+        {
+          "key": "Meta+KeyB",
+          "frames": 11,
+          "positions": 5,
+          "flights": 6,
+          "mounted": [],
+          "mountedFrames": 0,
+          "minimumMountedOpacity": 1
+        },
+        {
+          "key": "Meta+KeyB",
+          "frames": 9,
+          "positions": 3,
+          "flights": 5,
+          "mounted": [],
+          "mountedFrames": 0,
+          "minimumMountedOpacity": 1
+        },
+        {
+          "key": "mount filled pane",
+          "frames": 43,
+          "positions": 11,
+          "flights": 22,
+          "mounted": ["2"],
+          "mountedFrames": 15,
+          "minimumMountedOpacity": 1
+        }
+      ],
+      "failures": [],
+      "ok": true
+    },
+    {
+      "engine": "chromium",
+      "layout": "sidebar",
+      "size": "760x700",
+      "name": "reply-held",
+      "sample": [
+        {
+          "label": "Split panes for the chat workspace",
+          "text": "unsent reply"
+        },
+        {
+          "label": "Notarize the macOS build",
+          "text": ""
+        }
+      ],
+      "label": "Split panes for the chat workspace",
+      "before": 1,
+      "opened": 2,
+      "after": 1,
+      "failures": [],
+      "ok": true
+    },
+    {
+      "engine": "chromium",
+      "layout": "sidebar",
+      "size": "760x700",
+      "name": "stop-held",
+      "sample": [
+        {
+          "label": "Split panes for the chat workspace",
+          "stop": "Stop",
+          "live": "Editing workspace-panes.tsx43s"
+        },
+        {
+          "label": "Notarize the macOS build",
+          "stop": "Stop",
+          "live": ""
+        }
+      ],
+      "title": "Split panes for the chat workspace",
+      "before": 1,
+      "opened": 2,
+      "after": 1,
+      "failures": [],
+      "ok": true
+    }
+  ]
+}

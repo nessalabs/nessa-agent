@@ -102,3 +102,7 @@ reply and settlement decisions retain their existing application authority.
 - [Shared physical lifetime mechanism](../../../../crates/nessa-local-storage/src/physical_operation.rs)
 - [SQLite ownership adapter](../../../../crates/nessa-sdk/src/infrastructure/session_storage/ownership.rs)
 - [Actual cancellation and cleanup tests](../../../../crates/nessa-sdk/src/infrastructure/session_storage/ownership/tests.rs)
+
+## Model coverage
+
+Component index. This page groups independent owners; its component arrows are not a lifecycle or a model proof. Open the feature pages for exact checked scope and exclusions.

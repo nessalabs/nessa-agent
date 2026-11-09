@@ -49,7 +49,11 @@ main's cache independently; the second server runner adds billed time and a cold
 can cost substantially more. Timing comparisons must name the runs, cache mode,
 queue time and other platform bottlenecks; preliminary estimates are not results.
 
-The redistribution retains each 45-minute test-step deadline and inherited
+The Windows server steps have a 90-minute deadline: the step compiles before
+it tests, and a change to `Cargo.lock` misses the cache and compiles the graph
+cold (about 25 minutes). Run 41947356093 was still inside server-other's tests
+when a 70-minute deadline fired, with 2283 of 2349 passed. A warm run ends in
+under 35 minutes. The redistribution retains the inherited
 libtest thread settings. The server library's two ordinary selections use
 separate runners, so their process-local fixtures and CPU budgets are isolated;
 current-head CI checks for effects through shared OS resources.

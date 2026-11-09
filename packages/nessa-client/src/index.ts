@@ -31,6 +31,7 @@ export {
   type ServerApi,
   type WorkspaceApi,
   type ChannelApi,
+  type AppsApi,
   channelRefusal,
   type AgentsApi,
   type RecordReadApi,
@@ -197,6 +198,7 @@ export type {
   ConversationCreateOptions,
   ConversationListOptions,
   ConversationPrepareOptions,
+  ConversationSubmitOptions,
   PreparedSubmission,
   SubmissionInput,
   ConversationShareOptions,
@@ -241,6 +243,19 @@ export {
   type GithubAccount,
   type GithubCode,
   type GithubConnection,
+} from "./generated/product.js"
+export { type VoiceApi } from "./presentation/voice-api.js"
+export {
+  NessaVoiceError,
+  VoiceRefusalCode,
+  type VoiceMethod,
+} from "./application/voice-error.js"
+export {
+  VoiceErrorCode,
+  VoiceToolName,
+  VoiceTransport,
+  type VoiceCall,
+  type VoiceStatus,
 } from "./generated/product.js"
 export { type PairingApi } from "./presentation/pairing-api.js"
 export {
@@ -317,6 +332,9 @@ export {
 export { clientDueAtMs, deadlinePendingLine } from "./protocol/deadline-pending.js"
 export type {
   ConversationView,
+  ConversationEarlier,
+  ConversationPoint,
+  ConversationPartPosition,
   ApprovalMode,
   ApprovalModeChoice,
   AgentModelOption,
@@ -341,6 +359,7 @@ export type {
   ImageAttachment,
   LinkedFile,
   ConversationMessage,
+  ConversationAgentSource,
   ConversationMessageApp,
   ConversationPart,
   ConversationRuntime,
@@ -383,6 +402,10 @@ export type {
   ConversationShareResult,
   ConversationSharesCursor,
   ConversationSharesResult,
+  ConversationWebhookCursorParams,
+  ConversationWebhookCursorResult,
+  ConversationWebhookResetParams,
+  ConversationWebhookResetResult,
   ConversationToolPolicy,
 } from "./generated/product.js"
 export {
@@ -458,6 +481,7 @@ export type {
 export type {
   Channel,
   ChannelCreateParams,
+  ChannelSetPlacementParams,
   ChannelListResult,
 } from "./generated/product.js"
 export { ChannelErrorCode } from "./generated/product.js"
@@ -467,6 +491,7 @@ export type {
   WorkspacePane,
   WorkspacePaneItem,
   WorkspacePaneKind,
+  WorkspacePanel,
   WorkspacePublishResult,
   WorkspaceShowing,
   WorkspaceWidget,
@@ -475,8 +500,26 @@ export type {
 
 export { type VaultApi } from "./presentation/vault-api.js"
 export { NessaVaultError } from "./application/vault-error.js"
-export { VaultErrorCode, VaultState, type VaultStatus } from "./generated/product.js"
+export {
+  VaultErrorCode,
+  VaultState,
+  VaultPassphraseChangeState,
+  type VaultStatus,
+  type VaultPassphraseChangeStatus,
+} from "./generated/product.js"
 
+export type { DevicesApi } from "./presentation/devices-api.js"
+export type {
+  DeviceDisk,
+  DeviceMachine,
+  DeviceSshConnect,
+  DeviceSshHost,
+  DeviceWorker,
+  DevicesListResult,
+  DevicesSshHostsResult,
+  DevicesPool,
+  PoolPreference,
+} from "./generated/product.js"
 export type { BoatApi } from "./presentation/boat-api.js"
 export {
   BoatErrorCode,
@@ -490,6 +533,8 @@ export {
   BoatRuntimeSelection,
   vmLifetimeSeconds,
   type BoatSaveParams,
+  type BoatClaudeSignInParams,
 } from "./generated/product.js"
 
 export { NessaBoatError } from "./presentation/boat-api.js"
+export { conversationWorkspaceTimeoutMs } from "./application/agent-budgets.js"

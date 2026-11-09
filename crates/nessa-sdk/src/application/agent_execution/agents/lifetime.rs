@@ -11,6 +11,8 @@
 //! [`Agent::end_owned_lifetime`](super::Agent::end_owned_lifetime).
 #![deny(missing_docs)]
 
+use crate::domain::agent_execution::sessions::SessionId;
+use crate::domain::agent_execution::subagents::AgentLifetimeId;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc, Mutex,
@@ -22,6 +24,28 @@ use super::AgentError;
 use crate::application::agent_execution::{
     permissions::ActionContext, providers::SessionCloseRequest,
 };
+
+/// Exact ownership target whose current lease may receive SDK cleanup evidence.
+/// Resource cleanup may precede a graph close; the lease is checked by the
+/// session owner. SDK-issued gates refuse stale installation identities.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OwnedCleanupScope {
+    lifetime: AgentLifetimeId,
+    session: SessionId,
+}
+impl OwnedCleanupScope {
+    pub(crate) fn new(lifetime: AgentLifetimeId, session: SessionId) -> Self {
+        Self { lifetime, session }
+    }
+    /// Minted target lifetime, including a cascaded child's own identity.
+    pub fn lifetime(&self) -> &AgentLifetimeId {
+        &self.lifetime
+    }
+    /// Session owned by that target; the writer must match it before publication.
+    pub fn session(&self) -> &SessionId {
+        &self.session
+    }
+}
 
 /// Whether a provider-attachment stop also ends the ownership lifetime.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -63,6 +87,11 @@ pub trait OwnedLifetime: Send + Sync {
     fn admission_scope(&self) -> Arc<Mutex<()>>;
     /// Published seal. The lifecycle loads it without taking the tree scope.
     fn seal(&self) -> Arc<AtomicBool>;
+    /// Published current cleanup owner. A custom gate without durable evidence
+    /// support grants no authority to certify SDK resource cleanup.
+    fn cleanup_scope(&self) -> Option<OwnedCleanupScope> {
+        None
+    }
     /// Whether descendants may still be admitted. `Acquire` pairs with the seal store.
     fn is_sealed(&self) -> bool {
         self.seal().load(Ordering::Acquire)
@@ -73,8 +102,16 @@ pub trait OwnedLifetime: Send + Sync {
     /// Seal for a host-attributed close and start the descendant drain.
     /// Physical cleanup still starts when the audit port rejects the intent.
     async fn seal_for_host(&self, actor: &ActionContext) -> Result<(), AgentError>;
-    /// Record this Agent's own attachment cleanup under the close that sealed it.
-    /// Returns after publishing the observation and scheduling reconciliation;
+    /// Complete this Agent's attachment phase under the close that sealed it.
+    /// A registered resource owner remains the authority for whole-lifetime
+    /// release: its close consumes this Agent's result and any surrounding
+    /// resources. Bare attachment-owned roots may publish their own observation.
+    /// `released` confirms all of this Agent's owned resources, including its
+    /// executable-use guard; a process outcome with release pending does not.
+    /// `bare_owned_root_cannot_acknowledge_pending_executable_use_release` and
+    /// `bare_root_pending_release_waits_for_real_receipt_in_both_close_modes`
+    /// enforce this producer distinction at the real Agent/gate boundary.
+    /// Returns after handing off the phase and scheduling reconciliation;
     /// it does not await the resource close that may be producing this callback.
     /// Audit and persistence outcomes belong to [`Self::join_descendants`] and
     /// the coordinator's explicit close operation. The real Agent regressions

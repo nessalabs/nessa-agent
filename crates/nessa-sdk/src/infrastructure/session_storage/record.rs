@@ -66,6 +66,9 @@ pub struct RecordStorage {
 }
 
 impl RecordStorage {
+    pub(super) fn command_path(&self) -> PathBuf {
+        self.options.path.clone()
+    }
     /// Verifies the private records directory. Composition calls
     /// [`Self::initialize`] before accepting conversations.
     pub fn new(root: impl Into<PathBuf>) -> Result<Self, StorageError> {
@@ -805,6 +808,8 @@ mod tests {
             unreachable!("input helper constructs an accepted input")
         };
         SessionChange::InputAccepted(Box::new(InvocationRecord {
+            decline: None,
+            cancellation_delivery: None,
             request: ExecutionRequest {
                 user_message: UserMessage::text_only(PromptText::new("x".repeat(bytes)).unwrap()),
                 ..record.request.clone()
@@ -834,6 +839,9 @@ mod tests {
         scheduling: Vec<InvocationSchedulingEvent>,
     ) -> SessionChange {
         SessionChange::InputAccepted(Box::new(InvocationRecord {
+            decline: None,
+            cancellation_delivery: None,
+            resumed_from: None,
             target_event_offset: None,
             submission,
             request: ExecutionRequest {
@@ -1166,6 +1174,9 @@ mod tests {
             .unwrap();
         let secret = "NESSA_ERASE_PRIVATE_INPUT_275";
         let input = InvocationRecord {
+            decline: None,
+            cancellation_delivery: None,
+            resumed_from: None,
             target_event_offset: None,
             submission: SubmissionMode::Immediate,
             request: ExecutionRequest {
@@ -1230,8 +1241,10 @@ mod tests {
             .await
             .unwrap();
         let original = opened_receipt.next().clone();
-        let a_context = ProviderContext::Recorded(ExecutionSessionId::new("ctx-A").unwrap());
-        let b_context = ProviderContext::Recorded(ExecutionSessionId::new("ctx-B").unwrap());
+        let a_context =
+            ProviderContext::recorded_after(ExecutionSessionId::new("ctx-A").unwrap(), 0);
+        let b_context =
+            ProviderContext::recorded_after(ExecutionSessionId::new("ctx-B").unwrap(), 0);
         let a = SessionChange::ProviderContext {
             before: prior.provider_context.clone(),
             after: a_context.clone(),
@@ -1290,7 +1303,10 @@ mod tests {
         let a_snapshot = records::fold_changes(Some(&prior), a.changes()).unwrap();
         let changed_b = SessionChange::ProviderContext {
             before: a_snapshot.provider_context.clone(),
-            after: ProviderContext::Recorded(ExecutionSessionId::new("ctx-changed-B").unwrap()),
+            after: ProviderContext::recorded_after(
+                ExecutionSessionId::new("ctx-changed-B").unwrap(),
+                0,
+            ),
         };
         let changed_b = SessionSaveUnit::new(vec![changed_b]).unwrap();
         assert!(matches!(
@@ -1324,7 +1340,7 @@ mod tests {
         assert_eq!(rows(&root), 5);
         let c = SessionChange::ProviderContext {
             before: b_context,
-            after: ProviderContext::Recorded(ExecutionSessionId::new("ctx-C").unwrap()),
+            after: ProviderContext::recorded_after(ExecutionSessionId::new("ctx-C").unwrap(), 0),
         };
         lease
             .save_changes(
@@ -1357,8 +1373,10 @@ mod tests {
             .await
             .unwrap();
         let original = opened_receipt.next().clone();
-        let a_context = ProviderContext::Recorded(ExecutionSessionId::new("ctx-A").unwrap());
-        let b_context = ProviderContext::Recorded(ExecutionSessionId::new("ctx-B").unwrap());
+        let a_context =
+            ProviderContext::recorded_after(ExecutionSessionId::new("ctx-A").unwrap(), 0);
+        let b_context =
+            ProviderContext::recorded_after(ExecutionSessionId::new("ctx-B").unwrap(), 0);
         let a_change = SessionChange::ProviderContext {
             before: ProviderContext::Absent,
             after: a_context.clone(),
@@ -1488,7 +1506,7 @@ mod tests {
             .unwrap();
         let context = SessionChange::ProviderContext {
             before: ProviderContext::Absent,
-            after: ProviderContext::Recorded(ExecutionSessionId::new("remote").unwrap()),
+            after: ProviderContext::recorded_after(ExecutionSessionId::new("remote").unwrap(), 0),
         };
         observed = records::fold_changes(Some(&observed), std::slice::from_ref(&context)).unwrap();
         lease
@@ -1500,6 +1518,9 @@ mod tests {
             .unwrap();
         let execution_id = ExecutionId::new("execution").unwrap();
         let input = SessionChange::InputAccepted(Box::new(InvocationRecord {
+            decline: None,
+            cancellation_delivery: None,
+            resumed_from: None,
             target_event_offset: None,
             submission: SubmissionMode::Immediate,
             request: ExecutionRequest {
@@ -1715,7 +1736,8 @@ mod tests {
             )
             .await
             .unwrap();
-        let recorded = ProviderContext::Recorded(ExecutionSessionId::new("remote").unwrap());
+        let recorded =
+            ProviderContext::recorded_after(ExecutionSessionId::new("remote").unwrap(), 0);
         let context = SessionChange::ProviderContext {
             before: ProviderContext::Absent,
             after: recorded.clone(),
@@ -1979,7 +2001,7 @@ mod tests {
             .unwrap();
         let context = SessionChange::ProviderContext {
             before: ProviderContext::Absent,
-            after: ProviderContext::Recorded(ExecutionSessionId::new("remote").unwrap()),
+            after: ProviderContext::recorded_after(ExecutionSessionId::new("remote").unwrap(), 0),
         };
         let execution_id = ExecutionId::new("execution").unwrap();
         let input = accepted_input(execution_id.clone(), SubmissionMode::Immediate, vec![]);
@@ -2146,7 +2168,8 @@ mod tests {
         for (name, offset) in [("target-before-dispatch", 0), ("future-target-output", 1)] {
             let id = SessionId::new(name).unwrap();
             let lease = storage.open(id.clone()).await.unwrap();
-            let recorded = ProviderContext::Recorded(ExecutionSessionId::new("remote").unwrap());
+            let recorded =
+                ProviderContext::recorded_after(ExecutionSessionId::new("remote").unwrap(), 0);
             let opened = SessionChange::Opened {
                 id: id.clone(),
                 provider: ProviderIdentity::new("provider", "model", "workspace").unwrap(),
@@ -2294,7 +2317,7 @@ mod tests {
         let lease = storage.open(id.clone()).await.unwrap();
         let a = ExecutionSessionId::new("context-A").unwrap();
         let b = ExecutionSessionId::new("context-B").unwrap();
-        let context = ProviderContext::Recorded(a.clone());
+        let context = ProviderContext::recorded_after(a.clone(), 0);
         let opened = SessionChange::Opened {
             id: id.clone(),
             provider: ProviderIdentity::new("provider", "model", "workspace").unwrap(),
@@ -2398,11 +2421,11 @@ mod tests {
         let bad = vec![
             SessionChange::ProviderContext {
                 before: context.clone(),
-                after: ProviderContext::Recorded(b.clone()),
+                after: ProviderContext::recorded_after(b.clone(), 0),
             },
             cancelled.clone(),
             SessionChange::ProviderContext {
-                before: ProviderContext::Recorded(b),
+                before: ProviderContext::recorded_after(b, 0),
                 after: context,
             },
         ];
@@ -2448,6 +2471,9 @@ mod tests {
         };
         let input = |execution_id: ExecutionId| {
             SessionChange::InputAccepted(Box::new(InvocationRecord {
+                decline: None,
+                cancellation_delivery: None,
+                resumed_from: None,
                 target_event_offset: None,
                 submission: SubmissionMode::Immediate,
                 request: ExecutionRequest {
@@ -2590,7 +2616,7 @@ mod tests {
             .unwrap();
         let context = SessionChange::ProviderContext {
             before: ProviderContext::Absent,
-            after: ProviderContext::Recorded(ExecutionSessionId::new("remote").unwrap()),
+            after: ProviderContext::recorded_after(ExecutionSessionId::new("remote").unwrap(), 0),
         };
         successful =
             records::fold_changes(Some(&successful), std::slice::from_ref(&context)).unwrap();
@@ -3149,7 +3175,7 @@ mod tests {
             .unwrap();
         let context = SessionChange::ProviderContext {
             before: ProviderContext::Absent,
-            after: ProviderContext::Recorded(ExecutionSessionId::new("remote").unwrap()),
+            after: ProviderContext::recorded_after(ExecutionSessionId::new("remote").unwrap(), 0),
         };
         lease
             .save_changes(
@@ -3160,6 +3186,9 @@ mod tests {
             .unwrap();
         let execution_id = ExecutionId::new("accepted").unwrap();
         let input = SessionChange::InputAccepted(Box::new(InvocationRecord {
+            decline: None,
+            cancellation_delivery: None,
+            resumed_from: None,
             target_event_offset: None,
             submission: SubmissionMode::Immediate,
             request: ExecutionRequest {

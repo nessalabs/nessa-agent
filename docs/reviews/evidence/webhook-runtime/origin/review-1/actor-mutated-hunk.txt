@@ -1,0 +1,11 @@
+if !origin.matches(&credential, hold.snapshot.revision)
+            || false
+            || origin.correlation() != Some(intent.issue.request_id.as_str())
+            || transitions.len() != 1
+            || transitions[0].sequence != origin.sequence()
+            || transitions[0].revision != origin.revision()
+            || transitions[0].correlation.as_deref() != Some(intent.issue.request_id.as_str())
+            || CredentialTransition::try_from(transitions[0].clone()).as_ref() != Ok(&expected)
+        {
+            return Err(RegistrationFailure::Inconsistent);
+        }

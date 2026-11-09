@@ -69,8 +69,14 @@ const warmPreview = () => void import("./attachment-preview")
 export function useFileAttachments(
   chat: ReturnType<typeof useConversation>,
   resources: AttachmentResources,
+  // The gateway's default device: where a draft that chose nowhere runs.
+  defaultEnvironment?: string,
 ) {
   const store = useStore() as AppStore
+  const defaultDevice = React.useRef(defaultEnvironment)
+  React.useLayoutEffect(() => {
+    defaultDevice.current = defaultEnvironment
+  }, [defaultEnvironment])
   const currentScope = React.useRef({ store, resources, attachFiles: chat.attachFiles })
   React.useLayoutEffect(() => {
     currentScope.current = { store, resources, attachFiles: chat.attachFiles }
@@ -656,7 +662,11 @@ export function useFileAttachments(
     const conversation = conversationsOf(destination).find(
       (conversation) => conversation.id === destination.conversationId,
     )
-    if (linked.length && conversation && !linksFilesHere(conversation)) {
+    if (
+      linked.length &&
+      conversation &&
+      !linksFilesHere(conversation, defaultDevice.current)
+    ) {
       refuse({ reason: "file-not-on-host", name: linked[0].name }, destination)
       return
     }

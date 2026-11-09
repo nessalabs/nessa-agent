@@ -14,7 +14,7 @@ use crate::{
         domain::Failure as WorkspaceFailure,
         infrastructure::{
             worker_image, BoatProvider, ConfigBoatRuntimeSettings, FileAssignments,
-            RuntimeSettingsAudit, VaultSettings,
+            RuntimeSettingsAudit, VaultClaudeSignIns, VaultSettings,
         },
     },
 };
@@ -48,7 +48,7 @@ use crate::{
             CedarToolPolicyEvaluator, DurableAgentToolAudit, DurableConversationCreationAudit,
             DurableConversationDeletionAudit, DurableConversationFileLinkAudit,
             DurableConversationModeAudit, DurableDriveToolAudit, DurableMcpAppAudit,
-            LocalConversationStore,
+            DurableOwnershipAudit, DurableTrustedApps,
         },
     },
 };
@@ -62,19 +62,20 @@ use crate::{
     browser_session::adapters::PersistentSessions,
     conversation::{
         application::{
-            ConversationAccessPolicyEvaluator, ConversationRepository, ConversationService,
-            FenceCapture, McpAppAudit, ReceiverAuthority, ReviewNoticeAuditor, ShareGrants,
-            WatchCatalogue, WatchRecords,
+            ConversationAccessPolicyEvaluator, ConversationService, FenceCapture, McpAppAudit,
+            ReceiverAuthority, ReviewNoticeAuditor, ShareGrants, WatchCatalogue, WatchRecords,
         },
         infrastructure::{
-            CedarConversationAccessPolicy, DurableReviewNoticeAudit, LocalReceiverAuthority,
-            MonotonicReviewNoticeClock, NessaCatalogueReadSource, NessaRecordReadSource,
+            CedarConversationAccessPolicy, DurableReviewNoticeAudit, LocalConversationStore,
+            LocalReceiverAuthority, MonotonicReviewNoticeClock, NessaCatalogueReadSource,
+            NessaRecordReadSource,
         },
     },
     core::RunError,
     env::Environment,
     mcp_servers::infrastructure::ResourceTicketStore,
     product::{ProductDependencies, ProductRouteState},
+    webhooks::infrastructure::{DeliveryDependencies, HttpsWebhook, SystemResolver},
 };
 use nessa_agent_credentials::CredentialNamespace;
 use nessa_auth::{
@@ -103,11 +104,17 @@ use nessa_protocol::{
     agents::AgentId,
     conversation::tool_uis::{McpToolUis, NoMcpToolUis},
 };
+#[cfg(unix)]
+use nessa_sdk::application::agent_execution::subagents::{
+    LiveCapacity, OwnershipCoordinator, OwnershipDependencies, OwnershipStore,
+};
 use nessa_sdk::domain::agent_execution::leases::SshDestination;
 #[cfg(unix)]
 use nessa_sdk::infrastructure::clock::RuntimeClock;
 #[cfg(unix)]
-use nessa_sdk::infrastructure::session_storage::{InMemoryStorage, RecordStorage};
+use nessa_sdk::infrastructure::session_storage::{
+    InMemoryStorage, RecordStorage, SqliteOwnershipStore,
+};
 #[cfg(unix)]
 use nessa_sdk::{
     application::agent_execution::providers::{ApprovalMode, ApprovalModeChoice},
@@ -147,6 +154,8 @@ impl Clock for SystemClock {
 /// cannot be started here.
 pub(super) struct LocalProduct {
     pub(super) routes: ProductRouteState,
+    /// Prepared only; the root starts delivery after fallible startup settles.
+    pub(super) webhook_delivery: Option<DeliveryDependencies>,
     pub(super) record_reader: Option<Arc<NessaRecordReadSource>>,
     pub(super) catalogue_reader: Option<Arc<NessaCatalogueReadSource>>,
     /// Startup preparations for fixed providers plus the current OpenCode
@@ -286,6 +295,8 @@ pub(super) async fn product_state(
     #[cfg(unix)]
     let _ = rustls::crypto::ring::default_provider().install_default();
     #[cfg(unix)]
+    let claude_sign_ins = Arc::new(VaultClaudeSignIns(vault.vault.clone()));
+    #[cfg(unix)]
     let workspace_service = Arc::new(
         Workspaces::new(
             Arc::new(VaultSettings(vault.vault.clone())),
@@ -301,10 +312,12 @@ pub(super) async fn product_state(
                     libc::geteuid()
                 }),
                 relay_program: std::env::current_exe().map_err(setup_error)?,
+                claude_sign_ins: claude_sign_ins.clone(),
             }),
             Arc::new(FileAssignments(namespace.join("boat-workspaces"))),
             Arc::new(WorkspaceRecoveryAudit(workspace_audit.clone())),
             runtime_settings,
+            claude_sign_ins,
         )
         .with_image(worker_image()),
     );
@@ -380,6 +393,11 @@ pub(super) async fn product_state(
     // and its use depends on the order.
     let packaged_agents = bundle.is_some();
     let limits = settings.limits()?;
+    // The default device, as config.json saves it: read at each creation,
+    // and moved by Devices (`devices.setDefault`) without a restart.
+    #[cfg_attr(not(unix), allow(unused_variables))]
+    let (default_device, default_read) =
+        tokio::sync::watch::channel(settings.default_environment());
     // Paired environments dial the native listener, so they are served only
     // where it is.
     let serving = settings.native.as_ref().map(|_| ServingAuth {
@@ -392,6 +410,14 @@ pub(super) async fn product_state(
     // for every command, passive read and share change (ADR 803 step 3).
     let access_policy: Arc<dyn ConversationAccessPolicyEvaluator> =
         Arc::new(CedarConversationAccessPolicy::new().map_err(RunError::Agent)?);
+    // Voice calls, with their key in the same vault.
+    let voice = super::voice::compose(namespace, vault.vault.clone());
+    // A leftover plaintext sign-in is removed before agents start, whether or
+    // not the vault is unlocked. A failed delete stops startup; the file is
+    // not left in place and treated as signed out.
+    crate::github::infrastructure::remove_plaintext_sign_in(namespace.join("github"))
+        .await
+        .map_err(|_| RunError::Agent("the plaintext GitHub sign-in could not be removed".into()))?;
     // The GitHub sign-in, composed where agents are: they are what it is for.
     #[cfg(unix)]
     let github = match &settings.agents {
@@ -401,14 +427,6 @@ pub(super) async fn product_state(
     let (conversations, agent_probe, warm_ups, mcp, environment_peers) =
         match (&settings.agents, receivers.clone()) {
             (Some(agents), Some(receivers)) => {
-                #[cfg(unix)]
-                let agents = &{
-                    let mut agents = agents.clone();
-                    if let Some(github) = &github {
-                        agents.open_credentials = github.credentials.clone();
-                    }
-                    agents
-                };
                 let mut built = conversations(
                     agents,
                     directory,
@@ -417,6 +435,10 @@ pub(super) async fn product_state(
                     packaged_agents,
                     record_origin.clone(),
                     ConversationSettings {
+                        stop_children_on_parent_stop: settings
+                            .subagents
+                            .stop_children_on_parent_stop,
+                        live_threads: settings.subagents.live_threads(),
                         #[cfg(unix)]
                         workspace_service: workspace_service.clone(),
                         #[cfg(unix)]
@@ -429,9 +451,12 @@ pub(super) async fn product_state(
                             limits.organization_commands(),
                         ),
                         ssh_hosts: settings.ssh_hosts()?,
+                        default_device: default_read.clone(),
                         command_policy: settings.command_policy()?,
                         serving,
                         access_policy: access_policy.clone(),
+                        #[cfg(unix)]
+                        github: github.as_ref().map(|github| github.connections.clone()),
                     },
                 )
                 .await?;
@@ -485,6 +510,14 @@ pub(super) async fn product_state(
         store: store.clone(),
         inventory: Some(inventory.clone()),
     });
+    let webhooks = super::webhooks::prepare(
+        &settings,
+        directory,
+        store.clone(),
+        admin.clone(),
+        Arc::new(SystemClock),
+    )
+    .await?;
     let caller_kinds = store.clone();
     let mut product = ProductRouteState::new(
         gateway,
@@ -516,6 +549,9 @@ pub(super) async fn product_state(
         PersistentSessions::open(&path, SystemClock.unix_seconds())
             .map_err(|cause| RunError::opening_browser_sessions(&path, cause))?
     }));
+    if let Some(runtime) = &webhooks {
+        product = product.with_webhooks(runtime.clone());
+    }
     if bundle.is_some() {
         product =
             product.with_agent_installations(Arc::new(super::install_command::GatewayInstaller {
@@ -534,6 +570,9 @@ pub(super) async fn product_state(
     #[cfg(unix)]
     if let Some(github) = github {
         product = product.with_github(github.routes);
+    }
+    if let Some(voice) = voice {
+        product = product.with_voice(voice);
     }
     #[cfg(unix)]
     let restart = Arc::new(crate::core::self_restart::SelfRestart::default());
@@ -572,15 +611,54 @@ pub(super) async fn product_state(
                 None => tokio::sync::watch::channel(None).1,
             },
         );
-        product = product.with_native_linking(Arc::new(linking));
+        let linking = Arc::new(linking.with_ssh_hosts(settings.ssh_hosts()?));
+        product = product.with_native_linking(linking.clone());
+        // Devices sets SSH hosts up and keeps the default device through the
+        // same config.json, audit and restart.
+        product = product.with_device_setup(
+            Arc::new(crate::devices::application::DeviceSetup::new(
+                Arc::new(crate::devices::infrastructure::HomeSshConfig::new(
+                    super::device_setup::home(),
+                )),
+                settings.ssh_hosts()?,
+                Arc::new(super::device_setup::SshInstall::new(&conversation_root(
+                    namespace,
+                ))?),
+                linking,
+                default_device,
+            )),
+            default_read,
+        );
         if let Some(tunnel) = &tunnel {
             product = product.with_tunnel(tunnel.view());
         }
     }
-    let (listener_environments, connected_environments) = environment_peers.unzip();
+    let (listener_environments, connected_environments, paired_workers) = match environment_peers {
+        Some((listener, connected, workers)) => (Some(listener), Some(connected), Some(workers)),
+        None => (None, None, None),
+    };
+    // The hub's devices: this machine, and the paired environments when any
+    // may dial in. Without them only saved sightings are listed.
+    let (live_workers, sightings) = match paired_workers {
+        Some((live, sightings)) => (Some(live), sightings),
+        None => (
+            None,
+            Arc::new(worker_sightings(&conversation_root(namespace))),
+        ),
+    };
+    product = product.with_devices(Arc::new(crate::devices::application::Devices::new(
+        Arc::new(crate::devices::infrastructure::SystemMachine::new(
+            namespace.to_path_buf(),
+        )),
+        live_workers,
+        sightings,
+    )));
     let native = match native {
         Some((prepared, commands, peers)) => {
-            product = product.with_pairing(Arc::new(commands)).with_peers(peers);
+            product = product
+                .with_pairing(Arc::new(commands))
+                .with_peers(peers)
+                .with_tunnel_secrets(prepared.tunnel_secrets());
             let prepared = match listener_environments {
                 Some(environments) => prepared.with_environments(environments),
                 None => prepared,
@@ -594,6 +672,7 @@ pub(super) async fn product_state(
         }
         None => None,
     };
+    let mut webhook_delivery = None;
     let mut record_reader = None;
     let mut catalogue_reader = None;
     if let Some((
@@ -620,6 +699,16 @@ pub(super) async fn product_state(
             Uuid::new_v4(),
         )
         .map_err(|error| RunError::Agent(format!("review-notice audit unavailable: {error:?}")))?;
+        if product.webhooks.is_some() {
+            webhook_delivery = Some(DeliveryDependencies {
+                metadata: metadata.clone(),
+                source: reader.clone(),
+                policy: access_policy.clone(),
+                capacity: product.record_reads.clone(),
+                gateway: product.gateway.clone(),
+                http: Arc::new(HttpsWebhook::new(Arc::new(SystemResolver::new()))),
+            });
+        }
         record_reader = Some(reader.clone());
         catalogue_reader = Some(catalogue.clone());
         product = product
@@ -650,8 +739,20 @@ pub(super) async fn product_state(
             product = product.with_mcp_authorization(authorization);
         }
     }
+    // The auth directory's parent is the stage namespace. Timings sit in its
+    // logs folder, the same place `nessa doctor` reads, and stay on this machine.
+    if let Some(namespace) = directory.parent() {
+        product = product.with_local_timings(Arc::new(
+            crate::product::turn_timing::FileFirstTokenStore::new(
+                namespace
+                    .join("logs")
+                    .join(crate::core::local_timings::MESSAGE_TO_FIRST_TOKEN_FILE),
+            ),
+        ));
+    }
     Ok(LocalProduct {
         routes: product,
+        webhook_delivery,
         record_reader,
         catalogue_reader,
         warm_ups,
@@ -716,7 +817,7 @@ struct BuiltConversations {
     record_watches: Arc<dyn WatchRecords>,
     catalogue_watches: Arc<dyn WatchCatalogue>,
     receivers: Arc<dyn ReceiverAuthority>,
-    metadata: Arc<dyn ConversationRepository>,
+    metadata: Arc<LocalConversationStore>,
     share_grants: Arc<dyn ShareGrants>,
     attachments: (AttachmentService, HeldReads),
     agents_catalog: AgentsListResult,
@@ -752,12 +853,25 @@ struct BuiltConversations {
 type PairedParts = (
     Arc<dyn crate::device_pairing::infrastructure::EnvironmentPeers>,
     crate::product::ConnectedEnvironments,
+    PairedWorkers,
+);
+
+/// The paired environments' connections, which keys are paired, and their
+/// saved sightings, for `devices.list`.
+type PairedWorkers = (
+    (
+        Arc<dyn crate::devices::application::LiveWorkers>,
+        Arc<dyn crate::devices::application::PairedKeys>,
+    ),
+    Arc<crate::devices::application::WorkerSightings>,
 );
 
 /// What `config.json` says about conversations besides their agents.
 // Read only where conversations run: Unix process supervision.
 #[cfg_attr(not(unix), allow(dead_code))]
 struct ConversationSettings {
+    stop_children_on_parent_stop: bool,
+    live_threads: Option<usize>,
     #[cfg(unix)]
     workspace_service: Arc<Workspaces>,
     #[cfg(unix)]
@@ -772,6 +886,9 @@ struct ConversationSettings {
     organization: crate::conversation::application::OrganizationBudgets,
     /// The SSH hosts a conversation may be created on.
     ssh_hosts: Vec<SshDestination>,
+    /// The default device a new conversation that names no place runs on.
+    #[cfg_attr(not(unix), allow(dead_code))]
+    default_device: tokio::sync::watch::Receiver<Option<String>>,
     /// Where the agent may run commands; `None` grants it no environment
     /// tools.
     command_policy: Option<crate::conversation::domain::CommandPolicy>,
@@ -780,6 +897,9 @@ struct ConversationSettings {
     serving: Option<ServingAuth>,
     /// Who may locate, act on, read and share a conversation.
     access_policy: Arc<dyn ConversationAccessPolicyEvaluator>,
+    /// The gateway-owned GitHub sign-in used only by source-authorized reads.
+    #[cfg(unix)]
+    github: Option<Arc<crate::github::application::GithubConnections>>,
 }
 
 /// The registry, policy and identity a paired environment's key is asked
@@ -817,6 +937,7 @@ async fn conversations(
 pub(super) fn mcp_app_ports(
     mcp: &mut super::mcp_servers::McpComposition,
     audit: Arc<dyn McpAppAudit>,
+    trusted: Arc<dyn crate::conversation::application::TrustedApps>,
 ) -> McpAppPorts {
     let dropped = mcp.start_recorders(audit.clone());
     McpAppPorts {
@@ -827,6 +948,7 @@ pub(super) fn mcp_app_ports(
         tickets: mcp.resource_tickets.clone(),
         dropped,
         policy: mcp.app_policy.clone(),
+        trusted,
     }
 }
 
@@ -1097,6 +1219,16 @@ pub(crate) fn conversation_root(namespace: &Path) -> std::path::PathBuf {
     namespace.join("conversations")
 }
 
+/// Each paired environment's last sighting, `<conversations>/workers`.
+fn worker_sightings(root: &Path) -> crate::devices::application::WorkerSightings {
+    crate::devices::application::WorkerSightings::new(
+        Arc::new(crate::devices::infrastructure::FileSightings::new(
+            root.join("workers"),
+        )),
+        Arc::new(crate::devices::infrastructure::SystemWallClock),
+    )
+}
+
 #[cfg(unix)]
 async fn conversations(
     agents: &AgentsConfig,
@@ -1108,6 +1240,8 @@ async fn conversations(
     settings: ConversationSettings,
 ) -> Result<BuiltConversations, RunError> {
     let ConversationSettings {
+        stop_children_on_parent_stop,
+        live_threads,
         workspace_service,
         workspace_audit,
         read_work_budget,
@@ -1115,9 +1249,11 @@ async fn conversations(
         agent_idle,
         organization,
         ssh_hosts,
+        default_device,
         command_policy,
         serving,
         access_policy,
+        github,
     } = settings;
     let mut warm_ups = Vec::new();
     // The gateway holds the one connection to each MCP server (ADR 344), so
@@ -1135,6 +1271,10 @@ async fn conversations(
     let background_tools = super::background_tools::BackgroundTools::new();
     let mut built_in: Vec<Arc<dyn BuiltInServer>> =
         vec![conversation_tools.clone(), background_tools.clone()];
+    let github_tools = github.map(super::github_tools::GithubTools::new);
+    if let Some(tools) = &github_tools {
+        built_in.push(tools.clone());
+    }
     if let Some(tools) = &environment_tools {
         built_in.push(tools.clone());
     }
@@ -1206,12 +1346,25 @@ async fn conversations(
         Arc::new(LocalChannelStore::open(&channels_path).map_err(|cause| {
             RunError::opening(crate::core::Dataset::Channels, &channels_path, cause)
         })?);
-    let workspace_environments: Arc<dyn ThreadEnvironments> = Arc::new(ThreadWorkspaces {
+    let thread_workspaces = Arc::new(ThreadWorkspaces {
         service: workspace_service,
         channels: channel_store.clone(),
         audit: workspace_audit,
+        // Its own shell is never used: each VM's install runs over that
+        // VM's connection.
+        installer: Arc::new(
+            crate::conversation::infrastructure::ssh_environment::HostInstaller::this_build(
+                Arc::new(
+                    crate::conversation::infrastructure::ssh_environment::OpenSshConnector::new(),
+                ),
+                root.join("host-builds"),
+            ),
+        ),
         environments: Default::default(),
     });
+    // A sign-in saved for Boat reaches conversations already connected.
+    tokio::spawn(thread_workspaces.clone().follow_claude_sign_ins());
+    let workspace_environments: Arc<dyn ThreadEnvironments> = thread_workspaces;
     let clock: Arc<dyn Clock> = Arc::new(SystemClock);
     let host = crate::agent_install::infrastructure::host_platform();
     let opencode = EffectiveOpenCodeProfile::decide(
@@ -1441,7 +1594,36 @@ async fn conversations(
         serving,
         organization,
     )?;
-    let environment = environment.with_workspaces(workspace_environments);
+    let environment = environment
+        .with_workspaces(workspace_environments)
+        .with_default(default_device);
+    // Which paired computers the pool tries first and which it leaves out,
+    // kept in config.json beside every other ordinary setting.
+    let environment = {
+        let namespace = directory
+            .parent()
+            .ok_or_else(|| RunError::Agent("invalid namespace directory".into()))?;
+        let config = Arc::new(ConfigJson::new(
+            Arc::new(OsConfigFiles::new(super::runtime_config::config_path(
+                namespace,
+            ))),
+            ConfigCheck {
+                limit: super::runtime_config::MAX_CONFIG_BYTES,
+                parses: Box::new(|bytes| {
+                    super::runtime_config::RuntimeConfig::parse(bytes).is_ok()
+                }),
+            },
+            Arc::new(RuntimeClock::new()),
+        ));
+        let settings = crate::conversation::infrastructure::ConfigPoolSettings::new(
+            config,
+            root.join("audit").join("pool-settings"),
+            Arc::new(SystemClock),
+            Arc::new(Uuid::new_v4),
+        )
+        .map_err(|error| RunError::Agent(error.to_string()))?;
+        environment.with_pool_settings(Arc::new(settings))
+    };
     let dependencies = ConversationDependencies {
         input_files: Some(Arc::new(
             crate::conversation::application::InputFileDelivery {
@@ -1487,7 +1669,11 @@ async fn conversations(
                 },
                 workspace,
                 tool_uis,
-                mcp_app_ports(mcp, mcp_app_audit.clone()),
+                mcp_app_ports(
+                    mcp,
+                    mcp_app_audit.clone(),
+                    Arc::new(DurableTrustedApps::new(root.clone())),
+                ),
             );
             (service, Some((mcp.resource_tickets.clone(), mcp_app_audit)))
         }
@@ -1510,6 +1696,15 @@ async fn conversations(
     service.bind_agent_tool_audit(Arc::new(
         DurableAgentToolAudit::new(root.join("audit").join("agent-tools"), clock.clone())
             .map_err(|error| RunError::Agent(error.to_string()))?,
+    ));
+    // Changes made from Settings (an app no longer always allowed, a
+    // channel moved) are recorded before they are reported.
+    service.bind_settings_audit(Arc::new(
+        crate::conversation::infrastructure::DurableSettingsAudit::new(
+            root.join("audit").join("settings"),
+            clock.clone(),
+        )
+        .map_err(|error| RunError::Agent(error.to_string()))?,
     ));
     // Reports an agent's sent turn owes back are kept across a restart.
     let thread_reports_path = root.join("thread-reports.sqlite3");
@@ -1555,6 +1750,38 @@ async fn conversations(
             },
         )?,
     ));
+    let ownership_path = root.join("ownership.sqlite3");
+    let ownership_store = Arc::new(
+        SqliteOwnershipStore::open(&ownership_path)
+            .map_err(|error| RunError::Agent(format!("ownership store: {error}")))?,
+    );
+    let ownership = OwnershipCoordinator::new(OwnershipDependencies {
+        store: ownership_store.clone(),
+        audit: Arc::new(
+            DurableOwnershipAudit::new(root.join("audit").join("ownership"), clock.clone())
+                .map_err(|error| RunError::Agent(error.to_string()))?,
+        ),
+        factory: service.owned_thread_factory(),
+        room: Arc::new(LiveCapacity::new(live_conversations)),
+    });
+    ownership
+        .resume()
+        .await
+        .map_err(|error| RunError::Agent(error.to_string()))?;
+    service
+        .bind_owned_threads_bounded(ownership, stop_children_on_parent_stop, live_threads)
+        .map_err(|error| RunError::Agent(error.to_string()))?;
+    let ownership_snapshot = OwnershipStore::read(ownership_store.as_ref())
+        .await
+        .map_err(|error| RunError::Agent(format!("ownership read: {error:?}")))?;
+    service
+        .recover_owned_threads(&ownership_snapshot)
+        .await
+        .map_err(|error| RunError::Agent(format!("owned thread recovery: {error:?}")))?;
+    service
+        .recover_parent_stops(&ownership_snapshot)
+        .await
+        .map_err(|error| RunError::Agent(error.to_string()))?;
     conversation_tools.attach(service.clone());
     background_tools.attach(service.clone());
     let background_path = root.join("background-tasks.sqlite3");
@@ -1577,6 +1804,9 @@ async fn conversations(
         Arc::new(super::background_tools::Arguments),
         Arc::new(crate::timer::TokioTimer::new()),
     );
+    if let Some(tools) = github_tools {
+        tools.attach(service.clone());
+    }
     // A note's author is checked against the same grant table the socket
     // admits it by (row J23).
     service.bind_note_authors(metadata.clone());
@@ -1650,11 +1880,13 @@ fn environments(
     serving: Option<ServingAuth>,
     organization: crate::conversation::application::OrganizationBudgets,
 ) -> Result<(Environments, Option<PairedParts>), RunError> {
-    use super::paired_environments::{ListenerEnvironments, RegistryServing};
+    use super::paired_environments::{
+        ListenerEnvironments, PeerWorkers, RegistryPaired, RegistryServing, SavedSightings,
+    };
     use crate::conversation::infrastructure::{
         ssh_environment::{
             DurableEnvironmentAudit, HostInstaller, OpenSshConnector, PeerEnvironments,
-            SshEnvironment, SshTimings,
+            PeerUpdates, SshEnvironment, SshTimings,
         },
         CedarCommandPolicyEvaluator, FileBindings, FilePlacements,
     };
@@ -1672,27 +1904,40 @@ fn environments(
                 .map_err(|error| RunError::Agent(error.to_string()))?,
         )
     };
+    let sightings = Arc::new(worker_sightings(root));
+    let paired_keys = serving.as_ref().map(|serving| {
+        Arc::new(RegistryPaired {
+            store: serving.store.clone(),
+            audience: serving.audience.clone(),
+        }) as Arc<dyn crate::devices::application::PairedKeys>
+    });
+    // One installer for SSH hosts and paired ones alike: the same build,
+    // and the same release builds it pins, kept in one cache.
+    let connector = Arc::new(OpenSshConnector::new());
+    let installer = Arc::new(HostInstaller::this_build(
+        connector.clone(),
+        root.join("host-builds"),
+    ));
     let peers = match (serving, &audit) {
-        (Some(serving), Some(audit)) => Some(Arc::new(PeerEnvironments::new(
-            Arc::new(RegistryServing {
-                store: serving.store,
-                policy: serving.policy,
-                clock: Arc::new(SystemClock),
-                gateway: serving.gateway,
-                audience: serving.audience,
-            }),
-            audit.clone(),
-            SshTimings::default(),
-            organization,
-        ))),
+        (Some(serving), Some(audit)) => Some(Arc::new(
+            PeerEnvironments::new(
+                Arc::new(RegistryServing {
+                    store: serving.store,
+                    policy: serving.policy,
+                    clock: Arc::new(SystemClock),
+                    gateway: serving.gateway,
+                    audience: serving.audience,
+                }),
+                audit.clone(),
+                SshTimings::default(),
+                organization,
+            )
+            .with_sightings(Arc::new(SavedSightings(sightings.clone())))
+            .with_updates(Arc::new(PeerUpdates::new(installer.clone(), audit.clone()))),
+        )),
         _ => None,
     };
     if let (false, Some(audit)) = (hosts.is_empty(), &audit) {
-        let connector = Arc::new(OpenSshConnector::new());
-        let installer = Arc::new(HostInstaller::this_build(
-            connector.clone(),
-            root.join("host-builds"),
-        ));
         for host in hosts {
             environments.insert(
                 host.as_str().to_owned(),
@@ -1721,9 +1966,13 @@ fn environments(
             .map_err(|_| RunError::Agent("the command policy bundle does not validate".into()))?;
         environments = environments.with_commands(Arc::new(evaluator));
     }
-    let paired = peers.map(|peers| {
+    let paired = peers.zip(paired_keys).map(|(peers, paired_keys)| {
         let connected = peers.clone();
         let changes = peers.connections();
+        let workers: PairedWorkers = (
+            (Arc::new(PeerWorkers(peers.clone())), paired_keys),
+            sightings,
+        );
         (
             Arc::new(ListenerEnvironments(peers))
                 as Arc<dyn crate::device_pairing::infrastructure::EnvironmentPeers>,
@@ -1744,6 +1993,7 @@ fn environments(
                         .collect()
                 }),
             },
+            workers,
         )
     });
     Ok((environments, paired))
@@ -1819,6 +2069,7 @@ fn agent_catalog(
         environments: hosts.iter().map(|host| host.as_str().to_owned()).collect(),
         // Read with the places each time the catalog is (`agents_catalog_now`).
         command_hosts: Vec::new(),
+        default_environment: None,
         native_hooks: AgentsNativeHooks {
             claude: NativeHooksChoice::Off,
             codex: NativeHooksChoice::Off,
@@ -1877,10 +2128,14 @@ impl CredentialAdmin for LocalAdmin {
         let store = self.store.clone();
         let inventory = self.inventory.clone();
         Box::pin(async move {
-            let outcome = tokio::task::spawn_blocking(move || store.revoke_sync(request))
-                .await
-                .map_err(|_| CredentialAdminError::Unavailable)?
-                .map_err(CredentialAdminError::from)?;
+            let runtime = tokio::runtime::Handle::current();
+            // The detached physical owner waits for current effects and then
+            // commits. A socket disappearing must not cancel a revocation
+            // already handed to this owner, or occupy a socket runtime thread.
+            let outcome =
+                tokio::task::spawn_blocking(move || runtime.block_on(store.revoke(request)))
+                    .await
+                    .map_err(|_| CredentialAdminError::Unavailable)??;
             if let Some(inventory) = inventory {
                 if let Err(error) = inventory.capture().await {
                     tracing::warn!(
@@ -1952,6 +2207,25 @@ impl RecoveryAudit for WorkspaceRecoveryAudit {
                 thread: thread.clone(),
                 vm: vm.clone(),
                 confirmed: *confirmed,
+            },
+            RecoveryEvent::StopRequested { thread, vm, cause } => {
+                EnvironmentEvent::WorkspaceStopRequested {
+                    thread: thread.clone(),
+                    vm: vm.clone(),
+                    cause: cause.as_str().into(),
+                }
+            }
+            RecoveryEvent::StopAnswered {
+                thread,
+                vm,
+                cause,
+                failure,
+            } => EnvironmentEvent::WorkspaceStopAnswered {
+                thread: thread.clone(),
+                vm: vm.clone(),
+                cause: cause.as_str().into(),
+                accepted: failure.is_none(),
+                failure: failure.map(str::to_owned),
             },
         };
         self.0

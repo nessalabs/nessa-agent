@@ -67,3 +67,11 @@ Controlled same-task callbacks and provider replacement are covered by regressio
 ## Evidence and execution limits
 
 [Rendered rows](../../../../../src/desktop/settings/ui/native-hooks-rows.test.tsx) cover stored choices, refusal, a lost write answer, missing catalog entries, focus refresh and overlapping reads. [Adapter tests](../../../../../src/desktop/settings/adapters/native-hooks-gateway.test.ts) cover reading and writing through the agents API. The rows now also cover repeated input, ownership through rereading, source replacement and unmount. [Action-owner evidence](settings-action-owners.md) distinguishes those controlled cases from live next-start behavior and production rebinding. This page was re-reviewed against the assembled source checkpoint; unrelated pages retain their earlier checkpoints.
+
+## Model coverage
+
+Disposition: shared owner model. The native-save region owns admission through reread and source retirement. [desktop-settings-action-owners](settings-action-owners.md)
+
+Excluded: Harness startup application, missing-agent projection and policy are outside the bounded settings model.
+
+Source review scope: owner entry points and relevant regression declarations were inventoried against frozen source `77a6b620af4d94b234294f6d273fd74b3dfb44c7`. Existing source checkpoints are retained where this was a partial review. A model result establishes bounded design safety only. Browser appearance and interaction were not checked.

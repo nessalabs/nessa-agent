@@ -1,0 +1,896 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Huddle</title>
+<style>
+  :root { color-scheme: dark; --ground: #0d0d0e; --ink: #ececee; --quiet: #8a8a8f; --faint: #5c5c62; --mark: #E5825B; }
+  html, body { margin: 0; height: 100%; background: var(--ground); color: var(--ink);
+    font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Inter", system-ui, sans-serif; letter-spacing: -0.005em; overflow: hidden; }
+  #title { position: absolute; top: 14px; left: 0; right: 0; text-align: center; font-size: 13px; color: var(--quiet); }
+  #title b { color: var(--ink); font-weight: 600; margin-right: 6px; }
+  #stage { position: absolute; inset: 44px 0 110px 0; overflow: auto; }
+  #paper { position: relative; transform-origin: 0 0; padding: 8px 48px 48px; }
+  #empty { color: var(--faint); text-align: center; margin-top: 18vh; font-size: 15px; }
+  .line { display: grid; grid-template-columns: 44px minmax(0, 1fr); column-gap: 16px; border-radius: 6px;
+    font: 13px/1.65 ui-monospace, "SF Mono", Menlo, monospace; white-space: pre-wrap; word-break: break-word; }
+  .line .no { color: var(--faint); text-align: right; user-select: none; }
+  .line.highlight { background: rgba(229,130,91,0.14); }
+  .line.underline .tx { text-decoration: underline; text-decoration-color: var(--mark); text-decoration-thickness: 2px; text-underline-offset: 4px; }
+  .line.pointed { outline: 1px solid rgba(255,255,255,0.18); }
+  #ink { position: absolute; inset: 0; pointer-events: none; overflow: visible; }
+  #captions { position: absolute; left: 50%; bottom: 96px; transform: translateX(-50%); width: min(720px, 90%);
+    text-align: center; font-size: 16px; color: var(--ink); min-height: 24px; }
+  #captions .you { color: var(--quiet); }
+  #island { position: absolute; left: 50%; bottom: 28px; transform: translateX(-50%); display: flex; align-items: center; gap: 12px;
+    height: 56px; width: auto; min-width: 320px; max-width: calc(100% - 32px); box-sizing: border-box; padding: 0 8px; border-radius: 28px; background: #000;
+    box-shadow: 0 0 0 1px rgba(255,255,255,0.08), 0 18px 40px rgba(0,0,0,0.6); }
+  #sand { width: 40px; height: 40px; border-radius: 50%; flex-shrink: 0; background: #000; box-shadow: inset 0 0 0 0.5px rgba(255,255,255,0.18); }
+  #state { flex-grow: 1; font-size: 14px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #state .k { color: var(--ink); font-weight: 500; }
+  #state.quiet { color: var(--quiet); font-weight: 400; }
+  button { font: inherit; }
+  .round { width: 40px; height: 40px; border-radius: 20px; border: 0; flex-shrink: 0; display: flex; align-items: center; justify-content: center; cursor: pointer; }
+  #captionsButton { background: transparent; color: #a8a8ad; }
+  #captionsButton[aria-pressed="true"] { background: #2a2a2c; color: #fff; }
+  #end { background: #ff453a; color: #fff; }
+  #start { height: 40px; border-radius: 20px; border: 0; padding: 0 16px; background: #f4f4f5; color: #111; font-weight: 600; cursor: pointer; flex-shrink: 0; }
+  #mode { background: transparent; border: 0; color: var(--quiet); font-size: 12px; cursor: pointer; padding: 0 4px; }
+  #tasks { position: absolute; top: 40px; right: 12px; display: flex; flex-direction: column; align-items: flex-end; gap: 6px; max-width: 46%; z-index: 2; }
+  .chip { display: flex; align-items: center; gap: 7px; height: 26px; max-width: 100%; box-sizing: border-box; padding: 0 10px; border-radius: 13px;
+    background: #000; border: 0; box-shadow: 0 0 0 1px rgba(255,255,255,0.08); color: var(--quiet); font-family: inherit; font-size: 12px; line-height: 1; white-space: nowrap; }
+  .chip .label { overflow: hidden; text-overflow: ellipsis; }
+  .chip .dot { width: 6px; height: 6px; border-radius: 3px; flex-shrink: 0; background: var(--faint); }
+  .chip[data-state="working"] .dot { background: var(--mark); animation: pulse 1.2s ease-in-out infinite; }
+  .chip[data-state="done"] .dot { background: #4cc38a; }
+  .chip[data-state="declined"] { opacity: 0.6; }
+  .chip.agent { color: var(--ink); cursor: pointer; }
+  .chip.agent .dot { background: #9ec1ff; }
+  .chip.agent::after { content: "↗"; color: var(--faint); }
+  .chip.agent:hover { box-shadow: 0 0 0 1px rgba(255,255,255,0.2); }
+  .chip { transition: opacity 250ms ease-out; }
+  .chip.leaving { opacity: 0; }
+  @keyframes pulse { 50% { opacity: 0.35; } }
+  @media (prefers-reduced-motion: reduce) { .chip[data-state="working"] .dot { animation: none; } }
+  #debug { position: absolute; right: 12px; bottom: 8px; font: 11px ui-monospace, Menlo, monospace; color: var(--faint); max-width: 50%; text-align: right; }
+  [hidden] { display: none !important; }
+  #openPanel { display: none; position: absolute; right: 12px; top: -4px; height: 24px; padding: 0 10px; border: 0; border-radius: 12px;
+    background: #000; box-shadow: 0 0 0 1px rgba(255,255,255,0.1); color: var(--ink); font-size: 12px; cursor: pointer; }
+  #openPanel:hover { box-shadow: 0 0 0 1px rgba(255,255,255,0.22); }
+  body.inline #openPanel { display: block; }
+  /* A card in the message: a fixed height (reported to the host), the stage
+     clipped inside it, and nothing drawn past its edges. */
+  body.inline { height: 440px; position: relative; overflow: hidden; border-radius: 12px; }
+  body.inline #stage { inset: 40px 0 84px 0; }
+  body.inline #island { bottom: 16px; }
+  body.inline #captions { bottom: 80px; }
+  body.inline #debug { bottom: 4px; }
+  body.inline #empty { margin-top: 90px; }
+  /* Markdown is drawn as a document. Each block keeps the source lines it came
+     from (data-n to data-to), so draw, view and pointing still speak in lines. */
+  #paper.doc { max-width: 780px; margin: 0 auto; }
+  .line.md { display: block; white-space: normal; word-break: normal; font: 15px/1.7 -apple-system, BlinkMacSystemFont, "Inter", system-ui, sans-serif;
+    margin: 0; padding: 2px 10px; border-radius: 6px; overflow-wrap: break-word; }
+  .md.h1 { font-size: 26px; line-height: 1.3; font-weight: 650; letter-spacing: -0.02em; margin: 20px 0 10px; }
+  .md.h2 { font-size: 20px; line-height: 1.35; font-weight: 620; letter-spacing: -0.015em; margin: 22px 0 8px; }
+  .md.h3 { font-size: 17px; font-weight: 600; margin: 18px 0 6px; }
+  .md.h4, .md.h5, .md.h6 { font-size: 15px; font-weight: 600; margin: 14px 0 4px; color: var(--quiet); }
+  .md.p { margin: 6px 0; color: #d6d6da; }
+  .md.li { position: relative; padding-left: calc(28px + var(--depth, 0) * 20px); margin: 2px 0; color: #d6d6da; }
+  .md.li .bullet { position: absolute; left: calc(10px + var(--depth, 0) * 20px); color: var(--faint); }
+  .md.quote { border-left: 3px solid #333336; color: var(--quiet); padding-left: 16px; margin: 8px 0; border-radius: 0 6px 6px 0; }
+  .md.pre { font: 12.5px/1.6 ui-monospace, "SF Mono", Menlo, monospace; background: #151517; padding: 12px 14px; margin: 10px 0;
+    white-space: pre; overflow-x: auto; color: #cfcfd4; box-shadow: inset 0 0 0 1px rgba(255,255,255,0.05); }
+  .md.hr { height: 0; border-top: 1px solid #262629; margin: 18px 10px; padding: 0; }
+  .md.table { overflow-x: auto; margin: 10px 0; }
+  .md table { border-collapse: collapse; font-size: 13.5px; }
+  .md th, .md td { text-align: left; padding: 6px 12px; border-bottom: 1px solid #262629; vertical-align: top; }
+  .md th { color: var(--quiet); font-weight: 600; }
+  .md code { font: 0.88em ui-monospace, "SF Mono", Menlo, monospace; background: #1c1c1f; padding: 1px 5px; border-radius: 4px; }
+  .md.pre code { background: none; padding: 0; font: inherit; }
+  .md.pre { border-radius: 6px; }
+  .md.pre .line.md.cl { font: inherit; white-space: pre; padding: 0 6px; margin: 0 -6px; border-radius: 4px; overflow-wrap: normal; }
+  .line.md.diagram { display: flex; justify-content: center; padding: 12px 0; margin: 10px 0; }
+  .line.md.diagram svg { max-width: 100%; height: auto; }
+  .diagram [data-line] { cursor: pointer; }
+  .diagram .mmd-mark, .diagram .mmd-mark rect, .diagram .mmd-mark polygon, .diagram .mmd-mark circle,
+  .diagram .mmd-mark path, .diagram .mmd-mark line, .diagram .mmd-mark ellipse {
+    stroke: var(--mark) !important; stroke-width: 2.5px !important; transition: stroke 200ms ease-out, fill 200ms ease-out; }
+  .diagram rect.mmd-mark, .diagram .mmd-mark rect, .diagram .mmd-mark polygon, .diagram .mmd-mark circle { fill: rgba(229,130,91,0.18) !important; }
+  .diagram text.mmd-mark, .diagram .mmd-mark text, .diagram .mmd-mark tspan { fill: var(--mark) !important; stroke: none !important; }
+  .diagram .mmd-mark span, .diagram .mmd-mark p, .diagram .mmd-mark div { color: var(--mark) !important; }
+  .diagram .mmd-pointed, .diagram .mmd-pointed rect, .diagram .mmd-pointed path, .diagram .mmd-pointed line { stroke: rgba(255,255,255,0.7) !important; }
+  .md .link { color: #9ec1ff; }
+  .md strong { color: var(--ink); font-weight: 620; }
+  .md.underline { text-decoration: underline; text-decoration-color: var(--mark); text-decoration-thickness: 2px; text-underline-offset: 4px; }
+</style>
+</head>
+<body>
+<div id="title"><b>Huddle</b><span id="file"></span><button id="openPanel" type="button">Open ↗</button></div>
+<div id="stage"><div id="paper"><p id="empty">Start a huddle and ask about a file.</p><svg id="ink"></svg></div></div>
+<div id="captions" hidden></div>
+<div id="island" role="group" aria-label="Call">
+  <canvas id="sand" width="80" height="80" aria-hidden="true"></canvas>
+  <span id="state" class="quiet">Your voice goes to OpenAI</span>
+  <button id="mode" hidden>Always on</button>
+  <button id="start">Start</button>
+  <button id="captionsButton" class="round" aria-label="Captions" aria-pressed="false" hidden>
+    <svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><rect x="3" y="5" width="18" height="14" rx="4"/><path d="M7 12h4M13 12h4M7 15.5h7"/></svg>
+  </button>
+  <button id="end" class="round" aria-label="End call" hidden>
+    <svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path transform="translate(0 -1.6)" d="M3.5 13.6c4.6-4.1 12.4-4.1 17 0 .5.5.6 1.2.2 1.8l-1.2 1.6c-.4.5-1.1.7-1.7.4l-2.3-1c-.5-.2-.8-.7-.8-1.3v-1.4a12 12 0 0 0-5.4 0v1.4c0 .6-.3 1.1-.8 1.3l-2.3 1c-.6.3-1.3.1-1.7-.4l-1.2-1.6c-.4-.6-.3-1.3.2-1.8z"/></svg>
+  </button>
+</div>
+<div id="tasks" hidden></div>
+<div id="debug"></div>
+<script>
+(function () {
+  "use strict";
+  var $ = function (id) { return document.getElementById(id); };
+  var debug = function (text) { $("debug").textContent = text; };
+  // Tables keyed by text from outside (host ids, the model, diagram source) are read
+  // only for keys they hold, so "constructor" never finds Object's own function.
+  function own(table, key) { return Object.hasOwn(table, key) ? table[key] : undefined; }
+
+  // ---- MCP Apps bridge, by hand (2026-01-26) ----
+  var host = window.parent, next = 1, waiting = {};
+  function post(message) { host.postMessage(message, "*"); }
+  function ask(method, params) {
+    var id = next++;
+    post({ jsonrpc: "2.0", id: id, method: method, params: params || {} });
+    return new Promise(function (done) { waiting[id] = done; });
+  }
+  function tell(method, params) { post({ jsonrpc: "2.0", method: method, params: params || {} }); }
+  async function callTool(name, args) {
+    var reply = await ask("tools/call", { name: name, arguments: args || {} });
+    if (reply.error) throw new Error(reply.error.message || "refused");
+    var result = reply.result || {};
+    if (result.isError) throw new Error(((result.content || [])[0] || {}).text || name + " failed");
+    return result.structuredContent || {};
+  }
+  window.addEventListener("message", function (event) {
+    if (event.source !== host) return;
+    var m = event.data;
+    if (!m || m.jsonrpc !== "2.0") return;
+    if (m.id !== undefined && own(waiting, m.id) && !m.method) { var done = waiting[m.id]; delete waiting[m.id]; done(m); return; }
+    if (m.method === "ui/notifications/tool-result") {
+      var opened = (m.params && m.params.structuredContent) || {};
+      if (opened.path) show({ path: opened.path }).catch(function () {});
+      if (typeof opened.openedAt === "number") { openedAt = opened.openedAt; expandIfFresh(); }
+    }
+    if (m.method === "ui/notifications/host-context-changed" && m.params && m.params.displayMode) placeIn(m.params.displayMode);
+    if (m.method === "ui/resource-teardown") { endCall(); post({ jsonrpc: "2.0", id: m.id, result: {} }); }
+  });
+  // Inline, the card's height is the app's to say. Unsaid, the host draws a
+  // strip, and the stage's bottom-anchored parts bleed into the message above.
+  var INLINE_HEIGHT = 440;
+  function placeIn(mode) {
+    var inline = mode === "inline";
+    document.body.classList.toggle("inline", inline);
+    if (inline) { tell("ui/notifications/size-changed", { height: INLINE_HEIGHT }); expandIfFresh(); }
+  }
+  // The card asks for the panel once, for a huddle_open that just ran. An old card
+  // drawn again (scrolling back, or its panel tab closed) stays a card, so a tab
+  // the person closed is not opened again; the card's Open button still opens it.
+  var FRESH_MS = 30000, openedAt = null, expandAsked = false;
+  function expandIfFresh() {
+    if (expandAsked || !document.body.classList.contains("inline") || openedAt === null) return;
+    if (Date.now() - openedAt > FRESH_MS) return;
+    expandAsked = true;
+    openPanel();
+  }
+  function openPanel() { ask("ui/request-display-mode", { mode: "fullscreen" }); }
+  ask("ui/initialize", { protocolVersion: "2026-01-26", appInfo: { name: "huddle", version: "0.0.1" },
+    appCapabilities: { availableDisplayModes: ["inline", "fullscreen"] } }).then(function (reply) {
+    tell("ui/notifications/initialized");
+    placeIn(((reply.result || {}).hostContext || {}).displayMode);
+    var granted = (((reply.result || {}).hostCapabilities || {}).sandbox || {}).permissions || {};
+    debug(granted.microphone ? "mic granted by host" : "host did not grant the mic");
+  });
+
+  // ---- Stage: show, draw, view, clear ----
+  var current = null, marks = {}, markId = 0, zoom = 1, shows = 0;
+  var paper = $("paper"), stage = $("stage"), ink = $("ink");
+  // A row is one source line, or one markdown block covering data-n to data-to.
+  function lineEl(n) {
+    var rows = paper.querySelectorAll(".line");
+    for (var i = 0; i < rows.length; i++) {
+      var from = Number(rows[i].dataset.n), to = Number(rows[i].dataset.to || from);
+      if (n >= from && n <= to) return rows[i];
+    }
+    return null;
+  }
+  function range(from, to) {
+    var out = [];
+    for (var n = from; n <= (to || from); n++) { var el = lineEl(n); if (el && out.indexOf(el) < 0) out.push(el); }
+    return out;
+  }
+  function isMarkdown(path) { return /\.(md|markdown|mdx)$/i.test(path); }
+  function isMermaid(path) { return /\.(mmd|mermaid)$/i.test(path); }
+  async function show(args) {
+    var file = await callTool("huddle_read_file", { path: args.path });
+    current = file.path;
+    var shown = ++shows;
+    $("file").textContent = file.path;
+    Object.keys(marks).forEach(function (id) { removeMark(id); });
+    Array.prototype.slice.call(paper.children).forEach(function (el) { if (el !== ink) el.remove(); });
+    var lines = file.content.split("\n");
+    var markdown = isMarkdown(file.path), diagram = isMermaid(file.path);
+    paper.classList.toggle("doc", markdown || diagram);
+    var frag = document.createDocumentFragment();
+    if (markdown) frag = renderMarkdown(lines);
+    if (diagram) frag.appendChild(mermaidSlot(lines, 0, 0, lines.length - 1));
+    if (!markdown && !diagram) lines.forEach(function (text, i) {
+      var row = document.createElement("div");
+      row.className = "line"; row.dataset.n = String(i + 1);
+      var no = document.createElement("span"); no.className = "no"; no.textContent = String(i + 1);
+      var tx = document.createElement("span"); tx.className = "tx"; tx.textContent = text || " ";
+      row.appendChild(no); row.appendChild(tx); frag.appendChild(row);
+    });
+    paper.insertBefore(frag, ink);
+    // Diagrams are drawn before show answers, so a mark the model makes next lands
+    // on the drawing and is not wiped when the drawing replaces the code rows.
+    await upgradeDiagrams();
+    if (shown !== shows) return { shown: file.path, replaced: true };
+    if (args.line) view({ line: args.line }); else stage.scrollTop = 0;
+    shownText = numbered(lines);
+    return { shown: file.path, lines: lines.length, content: shownText.text, cut: shownText.cut };
+  }
+  // The voice model hears, it does not see: what is on the stage reaches it as
+  // numbered text, so it can explain the file and point at the right lines.
+  var MAX_SHOWN_CHARS = 24000, shownText = null;
+  function numbered(lines) {
+    var text = "", cut = false;
+    for (var i = 0; i < lines.length; i++) {
+      var row = (i + 1) + "| " + lines[i] + "\n";
+      if (text.length + row.length > MAX_SHOWN_CHARS) { cut = true; break; }
+      text += row;
+    }
+    return { text: text, cut: cut };
+  }
+  // ---- Markdown, drawn without a library (the app's CSP loads no scripts) ----
+  function escapeHtml(text) {
+    return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  }
+  function inline(text) {
+    var codes = [];
+    var out = escapeHtml(text).replace(/`([^`]+)`/g, function (_, code) { codes.push(code); return "\u0000" + (codes.length - 1) + "\u0000"; });
+    out = out
+      .replace(/!\[([^\]]*)\]\([^)]*\)/g, "$1")
+      .replace(/\[([^\]]+)\]\(([^)\s]+)[^)]*\)/g, '<span class="link" title="$2">$1</span>')
+      .replace(/\*\*([^*]+)\*\*|__([^_]+)__/g, function (_, a, b) { return "<strong>" + (a || b) + "</strong>"; })
+      .replace(/(^|[^*\w])\*([^*\s][^*]*)\*/g, "$1<em>$2</em>")
+      .replace(/(^|[^_\w])_([^_\s][^_]*)_(?!\w)/g, "$1<em>$2</em>");
+    return out.replace(/\u0000(\d+)\u0000/g, function (_, i) { return "<code>" + codes[Number(i)] + "</code>"; });
+  }
+  function tableCells(row) { return row.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map(function (c) { return c.trim(); }); }
+  function renderMarkdown(lines) {
+    var frag = document.createDocumentFragment(), i = 0;
+    function block(kind, from, to, html) {
+      var el = document.createElement("div");
+      el.className = "line md " + kind; el.dataset.n = String(from + 1);
+      if (to > from) el.dataset.to = String(to + 1);
+      el.innerHTML = html; frag.appendChild(el); return el;
+    }
+    var special = /^\s*(#{1,6}\s|```|~~~|>|([-*+]|\d+[.)])\s|(\*\s*){3,}$|(-\s*){3,}$|(_\s*){3,}$)/;
+    while (i < lines.length) {
+      var line = lines[i], m;
+      if (!line.trim()) { i++; continue; }
+      if ((m = line.match(/^\s*(```|~~~)/))) {
+        var fence = m[1], start = i, body = [], lang = line.trim().slice(fence.length).trim().toLowerCase();
+        i++;
+        while (i < lines.length && lines[i].trim().indexOf(fence) !== 0) body.push(lines[i++]);
+        var last = Math.min(i, lines.length - 1);
+        frag.appendChild(lang === "mermaid" ? mermaidSlot(body, start + 1, start, last) : codeBlock(body, start + 1));
+        i++; continue;
+      }
+      if ((m = line.match(/^\s*(#{1,6})\s+(.*?)\s*#*\s*$/))) { block("h" + m[1].length, i, i, inline(m[2])); i++; continue; }
+      if (/^\s*((\*\s*){3,}|(-\s*){3,}|(_\s*){3,})$/.test(line)) { block("hr", i, i, ""); i++; continue; }
+      if (/^\s*>/.test(line)) {
+        var qs = i, quote = [];
+        while (i < lines.length && /^\s*>/.test(lines[i])) quote.push(lines[i++].replace(/^\s*>\s?/, ""));
+        block("quote", qs, i - 1, inline(quote.join(" "))); continue;
+      }
+      if ((m = line.match(/^(\s*)([-*+]|\d+[.)])\s+(.*)$/))) {
+        var ls = i, text = m[3], depth = Math.floor(m[1].replace(/\t/g, "    ").length / 2);
+        var marker = /\d/.test(m[2]) ? escapeHtml(m[2]) : "•";
+        i++;
+        while (i < lines.length && lines[i].trim() && !special.test(lines[i]) && /^\s+/.test(lines[i])) text += " " + lines[i++].trim();
+        var item = block("li", ls, i - 1, '<span class="bullet">' + marker + "</span>" + inline(text.replace(/^\[( |x)\]\s+/i, function (_, done) { return done.trim() ? "☑ " : "☐ "; })));
+        item.style.setProperty("--depth", String(Math.min(depth, 6)));
+        continue;
+      }
+      if (line.indexOf("|") >= 0 && i + 1 < lines.length && /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/.test(lines[i + 1])) {
+        var ts = i, head = tableCells(line), rows = [];
+        i += 2;
+        while (i < lines.length && lines[i].indexOf("|") >= 0 && lines[i].trim()) rows.push(tableCells(lines[i++]));
+        var html = "<table><thead><tr>" + head.map(function (c) { return "<th>" + inline(c) + "</th>"; }).join("") + "</tr></thead><tbody>" +
+          rows.map(function (r) { return "<tr>" + r.map(function (c) { return "<td>" + inline(c) + "</td>"; }).join("") + "</tr>"; }).join("") + "</tbody></table>";
+        block("table", ts, i - 1, html); continue;
+      }
+      var ps = i, para = [];
+      while (i < lines.length && lines[i].trim() && !special.test(lines[i])) para.push(lines[i++].trim());
+      if (!para.length) para.push(lines[i++].trim());
+      block("p", ps, i - 1, inline(para.join(" ")));
+    }
+    return frag;
+  }
+  // A code block keeps one row per source line, so a mark lands on that line.
+  function codeBlock(body, first) {
+    var box = document.createElement("div");
+    box.className = "md pre";
+    body.forEach(function (text, j) {
+      var row = document.createElement("div");
+      row.className = "line md cl"; row.dataset.n = String(first + j + 1);
+      row.textContent = text || " "; box.appendChild(row);
+    });
+    return box;
+  }
+
+  // ---- Mermaid: drawn by mermaid itself, then each piece tied to its source line ----
+  // A slot shows the code rows until the diagram is drawn, and keeps them if it cannot be.
+  var MERMAID = "https://cdn.jsdelivr.net/npm/mermaid@11.4.1/dist/mermaid.esm.min.mjs";
+  var mermaidLoad = null, diagramCount = 0;
+  function mermaidSlot(body, first, from, to) {
+    var slot = codeBlock(body, first);
+    slot.classList.add("mmd-slot");
+    slot.mermaid = { body: body, first: first, from: from, to: to };
+    return slot;
+  }
+  function loadMermaid() {
+    if (!mermaidLoad) mermaidLoad = import(MERMAID).then(function (module) {
+      var m = module.default;
+      m.initialize({ startOnLoad: false, theme: "dark", securityLevel: "strict",
+        themeVariables: { background: "transparent", fontFamily: '-apple-system, BlinkMacSystemFont, "Inter", system-ui, sans-serif' } });
+      return m;
+    });
+    return mermaidLoad;
+  }
+  async function upgradeDiagrams() {
+    var slots = Array.prototype.slice.call(paper.querySelectorAll(".mmd-slot"));
+    if (!slots.length) return;
+    var m;
+    try { m = await loadMermaid(); } catch (error) { mermaidLoad = null; debug("mermaid did not load: " + (error && error.message)); return; }
+    for (var k = 0; k < slots.length; k++) {
+      var slot = slots[k], src = slot.mermaid;
+      if (!slot.isConnected) continue;
+      var renderId = "huddle-diagram-" + (++diagramCount);
+      try {
+        var drawn = await m.render(renderId, src.body.join("\n"));
+        if (!slot.isConnected) continue;
+        var row = document.createElement("div");
+        row.className = "line md diagram"; row.dataset.n = String(src.from + 1);
+        if (src.to > src.from) row.dataset.to = String(src.to + 1);
+        row.innerHTML = drawn.svg;
+        row.diagram = indexDiagram(row.querySelector("svg"), src.body, src.first);
+        slot.replaceWith(row);
+      } catch (error) {
+        // A failed render leaves mermaid's own error drawing in the body; the code rows stay instead.
+        ["d" + renderId, renderId].forEach(function (id) { var left = document.getElementById(id); if (left) left.remove(); });
+        debug("diagram kept as code: " + String(error && error.message).split("\n")[0].slice(0, 80));
+      }
+    }
+  }
+  // The pieces a diagram's source names, each with its 1-based line and its SVG elements.
+  function indexDiagram(svg, body, first) {
+    var kind = (body.find(function (l) { return l.trim() && !/^\s*%%/.test(l); }) || "").trim().split(/\s+/)[0];
+    var items = /^sequenceDiagram/i.test(kind) ? sequenceItems(svg, body, first)
+      : /^(flowchart|graph)$/i.test(kind) ? flowItems(svg, body, first) : [];
+    items.forEach(function (item) {
+      item.els.forEach(function (el) { el.setAttribute("data-line", String(item.line)); });
+    });
+    return { items: items.filter(function (item) { return item.els.length; }) };
+  }
+  function byClass(svg, selector) { return Array.prototype.slice.call(svg.querySelectorAll(selector)); }
+  function sequenceItems(svg, body, first) {
+    var items = [], declared = {}, seen = {}, stack = [], blocks = [], messages = 0, notes = 0;
+    var texts = byClass(svg, ".messageText"), arrows = byClass(svg, '[class^="messageLine"]');
+    var noteBoxes = byClass(svg, "rect.note"), noteTexts = byClass(svg, ".noteText");
+    // A participant is drawn twice, at the top and the bottom; a mark lights both.
+    function actorEls(name) {
+      var out = [];
+      byClass(svg, ".actor-top, .actor-bottom").forEach(function (el) {
+        if (el.getAttribute("name") !== name) return;
+        out.push(el);
+        var label = el.nextElementSibling;
+        if (label && label.tagName.toLowerCase() === "text") out.push(label);
+      });
+      return out;
+    }
+    body.forEach(function (raw, j) {
+      var line = raw.trim(), n = first + j + 1, m;
+      if (!line || /^%%/.test(line)) return;
+      if ((m = line.match(/^(?:create\s+)?(participant|actor)\s+(.+?)(?:\s+as\s+(.+))?$/i))) {
+        declared[m[2]] = true; seen[m[2]] = true;
+        items.push({ type: "participant", line: n, names: [m[2], m[3] || m[2]], els: actorEls(m[2]) });
+      } else if ((m = line.match(/^(loop|alt|opt|par|critical|break|rect|box)\b\s*(.*)$/i))) {
+        stack.push({ kind: m[1].toLowerCase(), label: m[2], line: n, branches: [] });
+      } else if ((m = line.match(/^(else|and|option)\b\s*(.*)$/i)) && stack.length) {
+        stack[stack.length - 1].branches.push({ label: m[2], line: n });
+      } else if (/^end$/i.test(line) && stack.length) {
+        var done = stack.pop(); done.end = n; blocks.push(done);
+      } else if ((m = line.match(/^note\s+(?:over|left of|right of)\s+([^:]+):\s*(.*)$/i))) {
+        items.push({ type: "note", line: n, names: [m[2]], els: [noteBoxes[notes], noteTexts[notes]].filter(Boolean) });
+        notes++;
+      } else if ((m = line.match(/^([^:]+?)\s*(<<-{1,2}>>|-{1,2}>>|-{1,2}>|-{1,2}x|-{1,2}\))\s*[+-]?\s*([^:]+?)\s*:\s*(.*)$/))) {
+        [m[1], m[3]].forEach(function (name) {
+          if (!own(seen, name)) { seen[name] = true; items.push({ type: "participant", line: n, byLine: false, names: [name], els: actorEls(name) }); }
+        });
+        items.push({ type: "message", line: n, names: [m[4]], els: [texts[messages], arrows[messages]].filter(Boolean) });
+        messages++;
+      }
+    });
+    // Mermaid draws each loop, alt, opt... as a group holding its label box. Match by kind and label.
+    var groups = byClass(svg, ".labelBox").map(function (box) { return box.parentNode; }), used = [];
+    blocks.sort(function (a, b) { return a.line - b.line; }).forEach(function (block) {
+      if (block.kind === "rect" || block.kind === "box") return;
+      var group = groups.find(function (g) {
+        if (used.indexOf(g) >= 0) return false;
+        var kind = g.querySelector(".labelText"), label = g.querySelector(".loopText");
+        return kind && kind.textContent.trim().toLowerCase() === block.kind && (!block.label || !label || label.textContent.indexOf(block.label) >= 0);
+      }) || groups.find(function (g) { return used.indexOf(g) < 0; });
+      if (!group) return;
+      used.push(group);
+      items.push({ type: "block", line: block.line, names: [block.label], els: [group] });
+      var labels = byClass(group, ".loopText");
+      block.branches.forEach(function (branch) {
+        var label = labels.find(function (t) { return branch.label && t.textContent.indexOf(branch.label) >= 0; });
+        if (label) items.push({ type: "block", line: branch.line, names: [branch.label], els: [label] });
+      });
+    });
+    return items;
+  }
+  // One flowchart statement: groups of node ids (A & B) joined by links, and each node's label.
+  function flowStatement(text) {
+    var groups = [[]], labels = {}, shaped = {}, i = 0;
+    var close = { "[": "]", "(": ")", "{": "}", ">": "]" };
+    while (i < text.length) {
+      var rest = text.slice(i), m;
+      if ((m = rest.match(/^\s+/))) { i += m[0].length; continue; }
+      if ((m = rest.match(/^&/))) { i++; continue; }
+      if ((m = rest.match(/^(<)?(?:(--|==)\s+[^-=>]+?\s+)?(-{2,}|={2,}|-\.+-|~{3})(>|o|x)?/)) && m[0].length > 1) {
+        i += m[0].length;
+        var label = text.slice(i).match(/^\s*\|[^|]*\|/);
+        if (label) i += label[0].length;
+        groups.push([]); continue;
+      }
+      if ((m = rest.match(/^[A-Za-z0-9_][\w.]*/))) {
+        var id = m[0]; i += id.length;
+        groups[groups.length - 1].push(id);
+        var open = text[i];
+        if (close[open] && !(open === ">" && /^>\s*$/.test(text.slice(i)))) {
+          var depth = 0, j = i, quote = false;
+          for (; j < text.length; j++) {
+            var c = text[j];
+            if (c === '"') quote = !quote;
+            if (quote) continue;
+            if (c === open && open !== ">") depth++;
+            else if (c === close[open]) { depth--; if (depth <= 0 || open === ">") break; }
+          }
+          labels[id] = text.slice(i + 1, j).replace(/^[\[\(\{\/\\>"]+|[\]\)\}\/\\"]+$/g, "").trim();
+          shaped[id] = true;
+          i = j + 1;
+        }
+        var cls = text.slice(i).match(/^:::\w+/);
+        if (cls) i += cls[0].length;
+        continue;
+      }
+      i++;
+    }
+    return { groups: groups.filter(function (g) { return g.length; }), labels: labels, shaped: shaped };
+  }
+  function flowItems(svg, body, first) {
+    var items = [], nodes = {}, edgeIndex = 0;
+    var nodeEls = {};
+    byClass(svg, "g.node").forEach(function (g) {
+      var m = (g.id || "").match(/flowchart-(.+)-\d+$/);
+      if (m) nodeEls[m[1]] = g;
+    });
+    var paths = byClass(svg, "path.flowchart-link"), edgeLabels = byClass(svg, "g.edgeLabel");
+    function edgePath(k) { return paths.find(function (p) { return new RegExp("_" + k + "$").test(p.id); }) || paths[k]; }
+    body.forEach(function (raw, j) {
+      var n = first + j + 1;
+      raw.split(";").forEach(function (part) {
+        var line = part.trim();
+        if (!line || /^(%%|flowchart\b|graph\b|subgraph\b|end$|classDef\b|class\b|style\b|linkStyle\b|click\b|direction\b)/i.test(line)) return;
+        var stmt = flowStatement(line);
+        stmt.groups.forEach(function (group) {
+          group.forEach(function (id) {
+            var known = own(nodes, id), shaped = !!own(stmt.shaped, id), drawn = own(nodeEls, id);
+            if (!known || (shaped && !known.shaped)) {
+              if (known) items.splice(items.indexOf(known), 1);
+              nodes[id] = { type: "node", line: n, shaped: shaped, names: [id, own(stmt.labels, id) || id], els: drawn ? [drawn] : [] };
+              items.push(nodes[id]);
+            }
+          });
+        });
+        for (var g = 0; g + 1 < stmt.groups.length; g++) {
+          stmt.groups[g].forEach(function (from) {
+            stmt.groups[g + 1].forEach(function (to) {
+              var k = edgeIndex++, label = edgeLabels[k];
+              items.push({ type: "edge", line: n, names: [from + "->" + to],
+                els: [edgePath(k), label && label.textContent.trim() ? label : null].filter(Boolean) });
+            });
+          });
+        }
+      });
+    });
+    return items;
+  }
+  // The diagram pieces a mark names: by an element's name, or by the lines it covers.
+  function diagramTargets(row, spec) {
+    var items = row.diagram ? row.diagram.items : [];
+    if (spec.element) {
+      var want = String(spec.element).trim().toLowerCase();
+      var exact = items.filter(function (item) { return item.names.some(function (name) { return String(name).trim().toLowerCase() === want; }); });
+      return exact.length ? exact : items.filter(function (item) {
+        return item.names.some(function (name) { return String(name).toLowerCase().indexOf(want) >= 0; });
+      });
+    }
+    var from = spec.from_line, to = spec.to_line || spec.from_line;
+    return items.filter(function (item) { return item.byLine !== false && item.line >= from && item.line <= to; });
+  }
+
+  function removeMark(id) {
+    var mark = own(marks, id); if (!mark) return;
+    mark.rows.forEach(function (row) { row.classList.remove(mark.kind); });
+    (mark.parts || []).forEach(function (el) { el.classList.remove("mmd-mark"); });
+    delete marks[id];
+  }
+  // A mark on a drawn diagram lands on the pieces its lines (or element) name.
+  function drawOnDiagram(spec, row) {
+    var targets = diagramTargets(row, spec);
+    if (!targets.length) return null;
+    var parts = [];
+    targets.forEach(function (item) { item.els.forEach(function (el) { if (parts.indexOf(el) < 0) parts.push(el); }); });
+    parts.forEach(function (el) { el.classList.add("mmd-mark"); });
+    return { kind: "highlight", rows: [], parts: parts, line: targets[0].line };
+  }
+  function draw(args) {
+    if (!current) return { error: "Nothing is on the stage. Call show first." };
+    var ids = [], missed = [], firstLine = null;
+    (args.marks || []).forEach(function (spec) {
+      var diagrams = Array.prototype.slice.call(paper.querySelectorAll(".line.diagram"));
+      var onDiagram = spec.element
+        ? diagrams.find(function (d) { return diagramTargets(d, spec).length; })
+        : (spec.from_line && diagrams.find(function (d) {
+            var from = Number(d.dataset.n), to = Number(d.dataset.to || from);
+            return spec.from_line >= from && spec.from_line <= to && diagramTargets(d, spec).length;
+          }));
+      if (onDiagram) {
+        var dm = drawOnDiagram(spec, onDiagram);
+        var did = "m" + (++markId);
+        marks[did] = dm; ids.push(did);
+        if (firstLine === null) firstLine = dm.line;
+        return;
+      }
+      if (!spec.from_line) { missed.push(spec.element || "?"); return; }
+      // A line of a diagram that names no piece (its header, an end) marks nothing,
+      // rather than tinting the whole drawing.
+      var rows = range(spec.from_line, spec.to_line).filter(function (row) { return !row.classList.contains("diagram"); });
+      if (!rows.length) { missed.push("line " + spec.from_line); return; }
+      if (firstLine === null) firstLine = spec.from_line;
+      // Marks are highlights and underlines: a circle around a range said less than the range lit up.
+      var kind = spec.kind === "underline" ? "underline" : "highlight";
+      rows.forEach(function (row) { row.classList.add(kind); });
+      marks["m" + (++markId)] = { kind: kind, rows: rows }; ids.push("m" + markId);
+    });
+    if (firstLine !== null) view({ line: firstLine });
+    return missed.length ? { ids: ids, not_found: missed } : { ids: ids };
+  }
+
+  function view(args) {
+    if (args.zoom) { zoom = Math.max(0.5, Math.min(3, args.zoom)); paper.style.transform = "scale(" + zoom + ")"; }
+    if (args.fit) { zoom = 1; paper.style.transform = ""; }
+    var row = args.line && lineEl(args.line);
+    if (row) stage.scrollTo({ top: row.offsetTop * zoom - stage.clientHeight / 3, behavior: "smooth" });
+    return { ok: true };
+  }
+  function clear(args) {
+    var ids = args.ids && args.ids.length ? args.ids : Object.keys(marks);
+    ids.forEach(removeMark);
+    return { cleared: ids };
+  }
+  // The person points back: a click on a line is sent with their next words.
+  var pointed = null;
+  paper.addEventListener("click", function (event) {
+    if (!event.target.closest) return;
+    var piece = event.target.closest("[data-line]");
+    var row = piece || event.target.closest(".line");
+    if (!row) return;
+    if (pointed) pointed.classList.remove(pointed.classList.contains("line") ? "pointed" : "mmd-pointed");
+    pointed = row; row.classList.add(piece ? "mmd-pointed" : "pointed");
+    var where = piece ? piece.getAttribute("data-line") : row.dataset.n + (row.dataset.to ? "–" + row.dataset.to : "");
+    send({ type: "conversation.item.create", item: { type: "message", role: "user",
+      content: [{ type: "input_text", text: "(The person is pointing at " + current + " line " + where +
+        (piece ? ", a piece of the diagram" : "") + ".)" }] } });
+  });
+
+  var stageTools = {
+    show: show, draw: draw, view: view, clear: clear,
+    list_files: function (args) { return callTool("huddle_list_files", { dir: args.dir || "." }); },
+    ask_agent: askAgent,
+  };
+  var toolSpecs = [
+    { type: "function", name: "show", description: "Put a file on the stage, optionally scrolled to a line.",
+      parameters: { type: "object", properties: { path: { type: "string" }, line: { type: "integer" } }, required: ["path"] } },
+    { type: "function", name: "draw", description: "Draw marks over the file on the stage. A mark covers a source line range " +
+        "(from_line, to_line). On a Mermaid diagram (sequence or flowchart) a mark lands on the exact piece those lines define: " +
+        "a participant, a message arrow, a note, a loop/alt box, a node or an edge. Highlight the few lines you are talking about, not whole sections. When you know a piece's name but not its line, " +
+        "give element instead: a participant name, a node id or label, or a message's text.",
+      parameters: { type: "object", properties: { marks: { type: "array", items: { type: "object",
+        properties: { kind: { type: "string", enum: ["highlight", "underline"] }, from_line: { type: "integer" }, to_line: { type: "integer" },
+          element: { type: "string", description: "A diagram piece by name, instead of from_line." } },
+        required: ["kind"] } } }, required: ["marks"] } },
+    { type: "function", name: "view", description: "Scroll to a line, zoom (0.5 to 3), or fit.",
+      parameters: { type: "object", properties: { line: { type: "integer" }, zoom: { type: "number" }, fit: { type: "boolean" } } } },
+    { type: "function", name: "clear", description: "Remove marks by id, or all marks.",
+      parameters: { type: "object", properties: { ids: { type: "array", items: { type: "string" } } } } },
+    { type: "function", name: "list_files", description: "List files under a folder of the project, relative to its root.",
+      parameters: { type: "object", properties: { dir: { type: "string" } } } },
+    { type: "function", name: "ask_agent", description: "Hand a task to Claude, the coding agent in this Nessa chat: reading more code, " +
+        "searching, running or changing things. Returns at once; the person approves it in the chat, and Claude reports back later. " +
+        "Say you asked, then keep talking.",
+      parameters: { type: "object", properties: { task: { type: "string", description: "What Claude should do, in a sentence or two." } }, required: ["task"] } },
+  ];
+
+  // ---- Handing work to Claude, and its reports ----
+  // A request goes to the chat as the person's message (Nessa asks them first);
+  // Claude answers through huddle_report, which this app collects from the inbox.
+  var tasks = [], polling = null;
+  function chip(text, cls) {
+    var el = document.createElement(cls === "agent" ? "button" : "div");
+    el.className = "chip " + (cls || "");
+    el.innerHTML = '<span class="dot"></span><span class="label"></span>';
+    el.querySelector(".label").textContent = text;
+    $("tasks").appendChild(el); $("tasks").hidden = false;
+    return el;
+  }
+  function setChip(el, state, text) {
+    el.dataset.state = state;
+    if (text) el.querySelector(".label").textContent = text;
+    // A settled request says so for a moment, then leaves; agent chips stay.
+    if (state === "done" || state === "declined") setTimeout(function () { dropChip(el); }, 4000);
+  }
+  function dropChip(el) {
+    el.classList.add("leaving");
+    setTimeout(function () { el.remove(); $("tasks").hidden = !$("tasks").children.length; }, 250);
+  }
+  function askAgent(args) {
+    var task = String(args.task || "").trim();
+    if (!task) return { error: "Say what Claude should do." };
+    var entry = { task: task, request: crypto.randomUUID(), el: chip("Waiting for your OK · " + task, "task") };
+    setChip(entry.el, "waiting");
+    tasks.push(entry);
+    ask("ui/message", { role: "user", content: [{ type: "text", text: "Huddle (voice) asks: " + task +
+      "\n\nWhen you are done, call huddle_report with request \"" + entry.request + "\", a 1–3 sentence summary, and the title and session id of any agent threads you started." }] })
+      .then(function (reply) {
+        if (reply.error || (reply.result && reply.result.isError)) {
+          setChip(entry.el, "declined", "Not sent · " + task);
+          tasks.splice(tasks.indexOf(entry), 1);
+          tellVoice("(Your request to Claude was not sent: the person declined it, or Claude was busy. Request: " + task + ")");
+          return;
+        }
+        entry.working = true;
+        setChip(entry.el, "working", "Claude · working · " + task);
+        poll();
+      });
+    return { sent: true, note: "The person approves it in the chat first; Claude reports back when done." };
+  }
+  function poll() {
+    if (polling || !tasks.some(function (t) { return t.working; })) return;
+    polling = setInterval(async function () {
+      if (!tasks.some(function (t) { return t.working; })) { clearInterval(polling); polling = null; return; }
+      var inbox, requests = tasks.filter(function (t) { return t.working; }).map(function (t) { return t.request; });
+      try { inbox = await callTool("huddle_inbox", { requests: requests }); } catch (_) { return; }
+      (inbox.reports || []).forEach(function (report) {
+        var entry = tasks.find(function (t) { return t.working && t.request === report.request; });
+        if (entry) { entry.working = false; tasks.splice(tasks.indexOf(entry), 1); setChip(entry.el, "done", "Claude · done · " + entry.task); }
+        (report.agents || []).forEach(function (agent) {
+          var link = chip(agent.title, "agent");
+          link.title = "Open this agent's conversation";
+          link.addEventListener("click", function () { ask("ui/open-link", { url: "nessa:session/" + agent.sessionId }); });
+        });
+        tellVoice("(Report from Claude: " + report.summary + ")");
+      });
+    }, 2000);
+  }
+  function tellVoice(text) {
+    if (!pc) return;
+    send({ type: "conversation.item.create", item: { type: "message", role: "user", content: [{ type: "input_text", text: text }] } });
+    respond();
+  }
+
+  // ---- The call ----
+  var pc = null, dc = null, mic = null, audio = null, alwaysOn = true, phase = "idle";
+  var audioCtx = null, micLevel = null, voiceLevel = null, responding = false, owed = false;
+  // One response at a time: asked for while one runs, it is sent when that one is done.
+  function respond() {
+    if (responding) { owed = true; return; }
+    responding = true; send({ type: "response.create" });
+  }
+  function send(event) { if (dc && dc.readyState === "open") dc.send(JSON.stringify(event)); }
+  function setState(text, quiet) { var s = $("state"); s.innerHTML = text; s.className = quiet ? "quiet" : ""; }
+  function analyser(stream) {
+    var node = audioCtx.createAnalyser(); node.fftSize = 512;
+    audioCtx.createMediaStreamSource(stream).connect(node);
+    var data = new Uint8Array(node.fftSize);
+    return function () {
+      node.getByteTimeDomainData(data);
+      var sum = 0; for (var i = 0; i < data.length; i++) { var v = (data[i] - 128) / 128; sum += v * v; }
+      return Math.min(1, Math.sqrt(sum / data.length) * 4);
+    };
+  }
+  function idleText() { return alwaysOn ? "Listening" : 'Hold <span class="k">Space</span> to talk'; }
+
+  async function startCall() {
+    $("start").disabled = true;
+    setState("Connecting…", true);
+    try {
+      mic = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
+    } catch (error) {
+      setState("No microphone", true); debug("getUserMedia: " + (error && error.name) + " " + (error && error.message));
+      $("start").disabled = false; return;
+    }
+    audioCtx = new AudioContext();
+    micLevel = analyser(mic);
+    pc = new RTCPeerConnection();
+    audio = new Audio(); audio.autoplay = true;
+    pc.ontrack = function (event) { audio.srcObject = event.streams[0]; voiceLevel = analyser(event.streams[0]); };
+    // The mode chosen on an earlier call holds: push to talk sends nothing until Space.
+    mic.getTracks()[0].enabled = alwaysOn;
+    pc.addTrack(mic.getTracks()[0], mic);
+    dc = pc.createDataChannel("oai-events");
+    dc.onopen = function () {
+      send({ type: "session.update", session: { type: "realtime", tools: toolSpecs, tool_choice: "auto",
+        audio: { input: { turn_detection: alwaysOn ? { type: "semantic_vad", interrupt_response: true } : null,
+          transcription: { model: "gpt-4o-mini-transcribe" } } } } });
+      // A file shown before the call started is on the stage: give the model its text.
+      if (current && shownText)
+        send({ type: "conversation.item.create", item: { type: "message", role: "user", content: [{ type: "input_text",
+          text: "(On the stage now: " + current + (shownText.cut ? ", first part only" : "") + ")\n" + shownText.text }] } });
+      phase = "listening"; setState(idleText());
+      $("start").hidden = true; $("end").hidden = false; $("captionsButton").hidden = false; $("mode").hidden = false;
+    };
+    dc.onmessage = function (event) { onEvent(JSON.parse(event.data)); };
+    var offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+    var answer = null, route = "";
+    try {
+      var key = await callTool("huddle_start_call");
+      var response = await fetch("https://api.openai.com/v1/realtime/calls", { method: "POST", body: offer.sdp,
+        headers: { Authorization: "Bearer " + key.clientSecret, "Content-Type": "application/sdp" } });
+      if (!response.ok) throw new Error("OpenAI answered " + response.status + ": " + (await response.text()).slice(0, 200));
+      answer = await response.text(); route = "page → OpenAI";
+    } catch (error) {
+      debug("direct call failed (" + (error && error.message) + "), trying the server");
+      try { answer = (await callTool("huddle_connect", { sdp: offer.sdp })).sdp; route = "server → OpenAI"; }
+      catch (second) { setState("Couldn't connect", true); debug(String(second && second.message)); endCall(); return; }
+    }
+    await pc.setRemoteDescription({ type: "answer", sdp: answer });
+    debug("connected: " + route);
+    loop();
+  }
+
+  async function onEvent(e) {
+    switch (e.type) {
+      case "input_audio_buffer.speech_started": phase = "listening"; setState("Listening"); break;
+      case "output_audio_buffer.started": phase = "talking"; setState('Huddle is talking <span style="color:#7c7c82;font-weight:400">· esc to stop</span>'); break;
+      case "output_audio_buffer.stopped": case "output_audio_buffer.cleared": phase = "listening"; setState(idleText()); break;
+      case "response.output_audio_transcript.delta": caption("them", e.delta, true); break;
+      case "conversation.item.input_audio_transcription.completed": caption("you", e.transcript, false); break;
+      case "response.function_call_arguments.done": {
+        var args = {}; try { args = JSON.parse(e.arguments || "{}"); } catch (_) {}
+        var output;
+        if (!Object.hasOwn(stageTools, e.name)) output = { error: "Unknown tool: " + String(e.name) };
+        else try { output = await stageTools[e.name](args); } catch (error) { output = { error: String(error && error.message) }; }
+        send({ type: "conversation.item.create", item: { type: "function_call_output", call_id: e.call_id, output: JSON.stringify(output || {}) } });
+        // A tool can finish after its response is done; either way the model is asked to go on.
+        respond(); break;
+      }
+      case "response.created": responding = true; break;
+      case "response.done":
+        responding = false;
+        if (owed) { owed = false; respond(); }
+        break;
+      case "error": debug("OpenAI: " + ((e.error && e.error.message) || "error")); break;
+    }
+  }
+
+  var captionText = "";
+  function caption(who, text, append) {
+    var box = $("captions");
+    if (who === "you") { captionText = ""; box.innerHTML = ""; var s = document.createElement("span"); s.className = "you"; s.textContent = text; box.appendChild(s); return; }
+    captionText = append ? captionText + text : text;
+    box.textContent = captionText.slice(-220);
+  }
+
+  function interrupt() { send({ type: "response.cancel" }); send({ type: "output_audio_buffer.clear" }); }
+  function endCall() {
+    if (dc) try { dc.close(); } catch (_) {}
+    if (pc) try { pc.close(); } catch (_) {}
+    if (mic) mic.getTracks().forEach(function (t) { t.stop(); });
+    if (audioCtx) audioCtx.close();
+    pc = dc = mic = audioCtx = micLevel = voiceLevel = null; phase = "idle"; responding = owed = false;
+    $("start").hidden = false; $("start").disabled = false; $("end").hidden = true; $("captionsButton").hidden = true; $("mode").hidden = true;
+    setState("Your voice goes to OpenAI", true);
+  }
+  function setMode(on) {
+    alwaysOn = on; $("mode").textContent = on ? "Always on" : "Push to talk";
+    if (mic) mic.getTracks()[0].enabled = on;
+    send({ type: "session.update", session: { type: "realtime", audio: { input: { turn_detection: on ? { type: "semantic_vad", interrupt_response: true } : null } } } });
+    if (phase !== "talking") setState(idleText());
+  }
+
+  $("start").addEventListener("click", startCall);
+  $("openPanel").addEventListener("click", openPanel);
+  $("end").addEventListener("click", endCall);
+  $("mode").addEventListener("click", function () { setMode(!alwaysOn); });
+  $("captionsButton").addEventListener("click", function () {
+    var on = this.getAttribute("aria-pressed") !== "true";
+    this.setAttribute("aria-pressed", String(on)); $("captions").hidden = !on;
+  });
+  window.addEventListener("keydown", function (event) {
+    if (!pc) return;
+    if (event.key === "Escape") { interrupt(); event.preventDefault(); }
+    if (event.code === "Space" && !alwaysOn && !event.repeat) {
+      event.preventDefault(); interrupt(); send({ type: "input_audio_buffer.clear" });
+      mic.getTracks()[0].enabled = true; phase = "listening"; setState("Listening");
+    }
+  });
+  // Space released outside the frame never reaches keyup: losing focus stops the
+  // talk and drops what it held, so nothing is sent without Space held.
+  function dropTalk() {
+    if (!pc || alwaysOn || !mic.getTracks()[0].enabled) return;
+    mic.getTracks()[0].enabled = false; send({ type: "input_audio_buffer.clear" });
+    setState(idleText());
+  }
+  window.addEventListener("blur", dropTalk);
+  document.addEventListener("visibilitychange", function () { if (document.hidden) dropTalk(); });
+  window.addEventListener("keyup", function (event) {
+    if (!pc || alwaysOn || event.code !== "Space" || !mic.getTracks()[0].enabled) return;
+    event.preventDefault(); mic.getTracks()[0].enabled = false;
+    send({ type: "input_audio_buffer.commit" }); send({ type: "response.create" });
+    setState(idleText());
+  });
+
+  // ---- The sand avatar: Nessa's halftone disc, moved by the voice that is speaking ----
+  var canvas = $("sand"), g = canvas.getContext("2d"), cells = 15, frame = 0;
+  var blooms = [{ x: 0.32, y: 0.3, r: 0.78, s: 0.95 }, { x: 0.8, y: 0.72, r: 0.6, s: 0.7 }, { x: 0.62, y: 0.12, r: 0.5, s: 0.5 }];
+  function paint(level, mode, t) {
+    var size = canvas.width, cell = size / cells;
+    g.clearRect(0, 0, size, size); g.fillStyle = "#ebe6dc";
+    for (var j = 0; j < cells; j++) for (var i = 0; i < cells; i++) {
+      var cx = (i + 0.5) / cells, cy = (j + 0.5) / cells, d = Math.hypot(cx - 0.5, cy - 0.5);
+      if (d > 0.5) continue;
+      var lit = 0;
+      blooms.forEach(function (b) { var f = Math.max(0, 1 - Math.hypot(cx - b.x, cy - b.y) / b.r); lit += b.s * f * f; });
+      var light = 0.1 + 0.9 * Math.min(1, lit), push = 0, dx = 0, dy = 0;
+      if (mode === "listening") {
+        // Rings travel out from the middle, pushed by your voice.
+        var ring = Math.max(0, Math.cos((d * 14 - t * 0.12) * 1.0));
+        push = level * ring; dx = (cx - 0.5) / (d || 1) * push * cell * 0.6; dy = (cy - 0.5) / (d || 1) * push * cell * 0.6;
+        light = Math.min(1, light * (0.75 + push));
+      } else if (mode === "talking") {
+        // The grains shiver with its words.
+        var grain = Math.sin(i * 12.9898 + j * 78.233 + t * 0.35);
+        dx = grain * level * cell * 0.35; dy = Math.cos(i * 4.1 + j * 7.7 + t * 0.3) * level * cell * 0.35;
+        light = Math.min(1, light * (0.8 + level * 0.6));
+      }
+      var w = cell * 0.95 * Math.sqrt(light);
+      if (w < cell * 0.25) continue;
+      g.beginPath(); g.arc(i * cell + cell / 2 + dx, j * cell + cell / 2 + dy, w / 2, 0, Math.PI * 2); g.fill();
+    }
+  }
+  function loop() {
+    if (!pc) { paint(0, "resting", 0); return; }
+    frame++;
+    var level = phase === "talking" ? (voiceLevel ? voiceLevel() : 0) : (micLevel && (alwaysOn || mic.getTracks()[0].enabled) ? micLevel() : 0);
+    paint(level, phase === "talking" ? "talking" : "listening", frame);
+    requestAnimationFrame(loop);
+  }
+  paint(0, "resting", 0);
+})();
+</script>
+</body>
+</html>

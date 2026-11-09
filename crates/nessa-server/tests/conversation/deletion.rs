@@ -806,6 +806,15 @@ impl ConversationRepository for Unfenceable {
     fn load(&self, id: &ConversationId) -> ConversationFuture<'_, Option<Conversation>> {
         self.0.load(id)
     }
+    fn load_admission_snapshot(
+        &self,
+        id: &ConversationId,
+    ) -> ConversationFuture<
+        '_,
+        Option<crate::conversation::application::ConversationAdmissionSnapshot>,
+    > {
+        self.0.load_admission_snapshot(id)
+    }
     fn unfinished_deletions(&self) -> ConversationFuture<'_, UnfinishedDeletions> {
         self.0.unfinished_deletions()
     }
@@ -835,6 +844,15 @@ impl ConversationRepository for Unfenceable {
     }
     fn requires_mode_verification(&self, id: &ConversationId) -> ConversationFuture<'_, bool> {
         self.0.requires_mode_verification(id)
+    }
+    fn close_thread(&self, id: &ConversationId) -> ConversationFuture<'_, ()> {
+        self.0.close_thread(id)
+    }
+    fn open_thread(&self, id: &ConversationId) -> ConversationFuture<'_, ()> {
+        self.0.open_thread(id)
+    }
+    fn thread_closed(&self, id: &ConversationId) -> ConversationFuture<'_, bool> {
+        self.0.thread_closed(id)
     }
     fn observe_mode_application(
         &self,
@@ -1024,6 +1042,15 @@ impl ConversationRepository for Faulty {
             None => self.repository.load(id),
         }
     }
+    fn load_admission_snapshot(
+        &self,
+        id: &ConversationId,
+    ) -> ConversationFuture<
+        '_,
+        Option<crate::conversation::application::ConversationAdmissionSnapshot>,
+    > {
+        self.repository.load_admission_snapshot(id)
+    }
     fn unfinished_deletions(&self) -> ConversationFuture<'_, UnfinishedDeletions> {
         self.repository.unfinished_deletions()
     }
@@ -1053,6 +1080,15 @@ impl ConversationRepository for Faulty {
     }
     fn requires_mode_verification(&self, id: &ConversationId) -> ConversationFuture<'_, bool> {
         self.repository.requires_mode_verification(id)
+    }
+    fn close_thread(&self, id: &ConversationId) -> ConversationFuture<'_, ()> {
+        self.repository.close_thread(id)
+    }
+    fn open_thread(&self, id: &ConversationId) -> ConversationFuture<'_, ()> {
+        self.repository.open_thread(id)
+    }
+    fn thread_closed(&self, id: &ConversationId) -> ConversationFuture<'_, bool> {
+        self.repository.thread_closed(id)
     }
     fn observe_mode_application(
         &self,
@@ -2204,6 +2240,15 @@ impl ConversationRepository for PausingRepository {
             found
         })
     }
+    fn load_admission_snapshot(
+        &self,
+        id: &ConversationId,
+    ) -> ConversationFuture<
+        '_,
+        Option<crate::conversation::application::ConversationAdmissionSnapshot>,
+    > {
+        self.inner.load_admission_snapshot(id)
+    }
     fn unfinished_deletions(&self) -> ConversationFuture<'_, UnfinishedDeletions> {
         self.inner.unfinished_deletions()
     }
@@ -2233,6 +2278,15 @@ impl ConversationRepository for PausingRepository {
     }
     fn requires_mode_verification(&self, id: &ConversationId) -> ConversationFuture<'_, bool> {
         self.inner.requires_mode_verification(id)
+    }
+    fn close_thread(&self, id: &ConversationId) -> ConversationFuture<'_, ()> {
+        self.inner.close_thread(id)
+    }
+    fn open_thread(&self, id: &ConversationId) -> ConversationFuture<'_, ()> {
+        self.inner.open_thread(id)
+    }
+    fn thread_closed(&self, id: &ConversationId) -> ConversationFuture<'_, bool> {
+        self.inner.thread_closed(id)
     }
     fn observe_mode_application(
         &self,

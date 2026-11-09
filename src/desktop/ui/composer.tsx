@@ -3,7 +3,10 @@ import {
   ComposerAccessMode,
   type ComposerAccessModeValue,
 } from "@nessa-ui/react/composer-access-mode"
+import { ChatAttachmentTile } from "@nessa-ui/react/chat-bubbles"
 import { StatusLabel } from "@nessa-ui/react/status-label"
+import { pastedFiles } from "../adapters/pasted-files"
+import type { DraftImage } from "../workspace/model/draft-images"
 import {
   defaultThinkingLevel,
   shortModelName,
@@ -19,8 +22,11 @@ import {
   MenuItem,
   MenuLabel,
 } from "./menu"
+import { IconButton } from "./icon-button"
 import { ThinkingControl } from "./thinking-control"
 import { tooltip } from "./tooltip"
+
+const noImages: readonly DraftImage[] = []
 
 /** How many lines the draft fills, from the text area's height less its padding. */
 function draftLines(textarea: HTMLTextAreaElement): number {
@@ -44,11 +50,42 @@ export interface ComposerAccess {
 }
 
 /**
+ * The images on a composer's next message, owned outside
+ * (`workspace/ui/panes/composer-images.ts`): shown as tiles above the text,
+ * each with a button that takes it off (`onRemove`); a paste of images is
+ * offered to `onPaste` (`pastedFiles`), and `notice` says why the last ones
+ * offered were not taken.
+ */
+export interface ComposerImages {
+  readonly images: readonly DraftImage[]
+  readonly onPaste: (files: File[]) => void
+  readonly onRemove: (imageId: string) => void
+  readonly notice?: string
+}
+
+/**
+ * A voice call from the composer, owned outside (`voice/ui/composer-voice.ts`):
+ * the button that starts one, and while one talks to this conversation
+ * (`active`) its speaker and microphone switches and the round end button,
+ * in place of the voice button.
+ */
+export interface ComposerVoice {
+  readonly active: boolean
+  readonly start: () => void
+  readonly end: () => void
+  readonly microphoneOn: boolean
+  readonly speakerOn: boolean
+  readonly setMicrophone: (on: boolean) => void
+  readonly setSpeaker: (on: boolean) => void
+}
+
+/**
  * The home composer: a message, and beneath it the three choices a turn is
  * sent with — model, thinking, and what the agent may do without asking.
  * Nothing is sent yet: the shell has no conversation wiring, and says so.
  */
 export function Composer({
+  images: attached,
   page,
   onPageChange,
   model: shown,
@@ -58,6 +95,7 @@ export function Composer({
   onSend,
   onStop,
   access,
+  voice,
   text,
   onTextChange,
   placeholder = "What would you like to work on?",
@@ -91,6 +129,8 @@ export function Composer({
    * and the shield is disabled rather than showing a choice nobody keeps.
    */
   access?: ComposerAccess
+  /** A voice call; without it the composer offers none. */
+  voice?: ComposerVoice
   /**
    * What is typed and not sent, held by whoever owns it — the workspace keeps
    * a session's in its state, so it outlives a change of layout — and told of
@@ -101,6 +141,11 @@ export function Composer({
   text: string
   onTextChange: (text: string) => void
   placeholder?: string
+  /**
+   * The images on the next message, held with its text by whoever owns it.
+   * Without it a paste of images does nothing here.
+   */
+  images?: ComposerImages
 }) {
   const draft = text
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -116,10 +161,12 @@ export function Composer({
     const next = nextPageMode(page, draft === "" ? 1 : draftLines(textarea))
     if (next !== page) onPageChange(next)
   }, [draft, page, onPageChange])
+  const images = attached?.images ?? noImages
+  // Images alone are a message too: its text may be empty beside them.
+  const empty = draft.trim() === "" && images.length === 0
   const send = () => {
-    const message = draft.trim()
-    if (!onSend || message === "") return
-    onSend(message)
+    if (!onSend || empty) return
+    onSend(draft.trim())
   }
   const model = shown && findComposerModel(shown.provider, shown.modelId)
   const [thinking, setThinking] = useState(defaultThinkingLevel)
@@ -145,6 +192,24 @@ export function Composer({
           textareaRef.current?.focus()
         }}
       >
+        {images.length ? (
+          <ul className="desktop-composer-images" aria-label="Images to send">
+            {images.map((image) => (
+              <li key={image.id} className="desktop-composer-image">
+                <ChatAttachmentTile label={image.name} imageSrc={image.url} />
+                <button
+                  type="button"
+                  className="desktop-composer-image-remove"
+                  aria-label={`Remove ${image.name}`}
+                  {...tooltip(`Remove ${image.name}`, { side: "above" })}
+                  onClick={() => attached?.onRemove(image.id)}
+                >
+                  <DesktopIcon name="close" />
+                </button>
+              </li>
+            ))}
+          </ul>
+        ) : null}
         <textarea
           ref={textareaRef}
           aria-label="Message"
@@ -152,6 +217,14 @@ export function Composer({
           rows={2}
           value={draft}
           onChange={(event) => onTextChange(event.target.value)}
+          onPaste={(event) => {
+            if (!attached) return
+            const files = pastedFiles(event.clipboardData)
+            if (files.length === 0) return
+            // Files and no text: nothing for the field to insert.
+            event.preventDefault()
+            attached.onPaste(files)
+          }}
           onKeyDown={(event) => {
             // Return sends; Shift-Return, and Return while composing an IME word, do not.
             if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing)
@@ -163,6 +236,11 @@ export function Composer({
           }}
         />
       </div>
+      {attached?.notice ? (
+        <StatusLabel role="status" tone="warning" className="desktop-composer-notice">
+          {attached.notice}
+        </StatusLabel>
+      ) : null}
       {modelNotice ? (
         <StatusLabel role="status" tone="neutral" className="desktop-composer-notice">
           {modelNotice}
@@ -235,6 +313,7 @@ export function Composer({
               }
             />
           </span>
+          {voice ? <VoiceControls voice={voice} /> : null}
           {onStop ? (
             <button
               key="stop"
@@ -257,7 +336,7 @@ export function Composer({
                 shortcut: onSend ? "↩" : undefined,
                 side: "above",
               })}
-              disabled={!onSend || draft.trim() === ""}
+              disabled={!onSend || empty}
             >
               <DesktopIcon name="send" />
             </button>
@@ -265,6 +344,53 @@ export function Composer({
         </div>
       </div>
     </form>
+  )
+}
+
+/** The voice button, or a call's speaker, microphone and end. */
+function VoiceControls({ voice }: { voice: ComposerVoice }) {
+  if (!voice.active)
+    return (
+      <IconButton
+        key="voice"
+        icon="voice"
+        label="Talk"
+        tooltipSide="above"
+        className="desktop-voice-start"
+        onClick={voice.start}
+      />
+    )
+  return (
+    <>
+      <IconButton
+        key="speaker"
+        icon={voice.speakerOn ? "speaker" : "speakerOff"}
+        label={voice.speakerOn ? "Mute voice" : "Unmute voice"}
+        tooltipSide="above"
+        className="desktop-voice-toggle"
+        aria-pressed={voice.speakerOn}
+        onClick={() => voice.setSpeaker(!voice.speakerOn)}
+      />
+      <IconButton
+        key="microphone"
+        icon={voice.microphoneOn ? "microphone" : "microphoneOff"}
+        label={voice.microphoneOn ? "Mute microphone" : "Unmute microphone"}
+        tooltipSide="above"
+        className="desktop-voice-toggle"
+        aria-pressed={voice.microphoneOn}
+        onClick={() => voice.setMicrophone(!voice.microphoneOn)}
+      />
+      <button
+        key="end"
+        type="button"
+        className="desktop-voice-end"
+        aria-label="End call"
+        {...tooltip("End call", { side: "above" })}
+        onClick={voice.end}
+      >
+        <DesktopIcon name="close" />
+      </button>
+    </>
   )
 }
 

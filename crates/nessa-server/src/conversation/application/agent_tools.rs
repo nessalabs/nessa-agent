@@ -1,6 +1,7 @@
 //! Attribution and durable admission evidence for source-bound agent tools.
 use super::{ConversationCaller, ConversationFuture};
 use nessa_protocol::conversation::domain::ConversationId;
+use nessa_sdk::domain::agent_execution::executions::{AgentSource, ExecutionId};
 
 /// Detached admissions one source conversation retains at once, across all its
 /// tools. A cancelled response does not free this place; other sources are not
@@ -14,14 +15,19 @@ pub const MAX_EVENT_READERS: usize = 4;
 pub struct AgentToolSource {
     pub(super) caller: ConversationCaller,
     pub(super) source: ConversationId,
-    pub(super) execution: String,
+    pub(super) execution: ExecutionId,
 }
 impl AgentToolSource {
     pub fn conversation(&self) -> &ConversationId {
         &self.source
     }
     pub fn execution(&self) -> &str {
-        &self.execution
+        self.execution.as_str()
+    }
+    /// Source origin verified by this admission, for a target message or note.
+    pub fn author(&self) -> Result<AgentSource, super::ConversationError> {
+        AgentSource::new(self.source.to_string(), self.execution.clone())
+            .map_err(|_| super::ConversationError::InvalidInput)
     }
     pub fn caller(&self) -> ConversationCaller {
         self.caller.clone()

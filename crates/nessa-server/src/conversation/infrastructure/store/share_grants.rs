@@ -18,15 +18,16 @@ use super::{
     cells, failed, next_revision, read, stored_time, time, unreadable, LocalConversationStore,
 };
 use crate::conversation::application::{
-    AccessAction, ConversationError, ConversationFuture, HeldGrant, OwnerAccess, ResourceKind,
-    RevisionHold, ShareGrant, ShareGrantChange, ShareGrantList, ShareGrantReceipt,
-    ShareGrantTransition, ShareGrants, MAX_DRIVE_GRANTS_PER_CONVERSATION, MAX_POLICY_REVISION,
-    MAX_SHARE_GRANTS_PER_CONVERSATION,
+    AccessAction, ConversationCaller, ConversationError, ConversationFuture, HeldGrant,
+    OwnerAccess, ResourceKind, RevisionHold, ShareGrant, ShareGrantChange, ShareGrantList,
+    ShareGrantReceipt, ShareGrantTransition, ShareGrants, MAX_DRIVE_GRANTS_PER_CONVERSATION,
+    MAX_POLICY_REVISION, MAX_SHARE_GRANTS_PER_CONVERSATION,
 };
 use crate::conversation::domain::{
     Capabilities, CommandHosts, ShareAccess, ToolChoice, ToolPolicy, ToolPreset, ToolRules,
 };
-use nessa_auth::domain::{CredentialId, MAX_IDENTIFIER_BYTES};
+use nessa_auth::application::ports::AccessHold;
+use nessa_auth::domain::{CredentialId, PrincipalId, MAX_IDENTIFIER_BYTES};
 use nessa_local_database::rusqlite::{params, OptionalExtension, Transaction, TransactionBehavior};
 use nessa_protocol::conversation::domain::ConversationId;
 use serde_json::{json, Value};
@@ -399,6 +400,39 @@ fn count(transaction: &Transaction<'_>, sql: &str, id: &str) -> Result<i64, Conv
 }
 
 impl ShareGrants for LocalConversationStore {
+    fn hold_principal_gate<'a>(
+        &'a self,
+        id: &'a ConversationId,
+        principal: &'a PrincipalId,
+    ) -> ConversationFuture<'a, RevisionHold> {
+        Box::pin(async move {
+            let permit = self
+                .grant_gates
+                .lock(
+                    CONVERSATION.to_owned(),
+                    id.to_string(),
+                    principal.as_str().to_owned(),
+                )
+                .await;
+            Ok(RevisionHold::held(permit))
+        })
+    }
+
+    fn hold_principal_revision<'a>(
+        &'a self,
+        id: &'a ConversationId,
+        principal: &'a PrincipalId,
+        policy_revision: u64,
+    ) -> ConversationFuture<'a, RevisionHold> {
+        Box::pin(async move {
+            let permit = self.hold_principal_gate(id, principal).await?;
+            match self.principal_grant(id, principal).await? {
+                Some(grant) if grant.policy_revision == policy_revision => Ok(permit),
+                _ => Err(ConversationError::Revoked),
+            }
+        })
+    }
+
     fn held_grant<'a>(
         &'a self,
         id: &'a ConversationId,
@@ -431,36 +465,28 @@ impl ShareGrants for LocalConversationStore {
     }
 
     fn change(&self, change: ShareGrantChange) -> ConversationFuture<'_, ShareGrantReceipt> {
-        Box::pin(async move {
-            // The principal a hold locks is the live row's, which a revoke
-            // names only by credential. Look it up, lock that grant, and
-            // write. If the row's principal is no longer the one locked, the
-            // attempt writes nothing and tries the principal it found.
-            for _ in 0..4 {
-                let key = self.principal_to_lock(&change).await?;
-                let permit = match &key {
-                    Some(principal) => Some(
-                        self.grant_gates
-                            .lock(
-                                CONVERSATION.to_owned(),
-                                change.conversation_id.to_string(),
-                                principal.clone(),
-                            )
-                            .await,
-                    ),
-                    None => None,
-                };
-                // The permit moves into the blocking write. Dropping this
-                // future detaches that write; it does not drop the permit
-                // while the write can still commit.
-                match self.apply_change(change.clone(), key, permit).await? {
-                    ChangeAttempt::Applied(receipt) => return Ok(receipt),
-                    ChangeAttempt::Retry => continue,
-                }
-            }
-            tracing::error!("a share grant change could not lock the principal it writes");
-            Err(ConversationError::Metadata)
-        })
+        self.change_owned(change, None)
+    }
+    fn grant_principal_with_credential(
+        &self,
+        conversation: ConversationId,
+        access: ShareAccess,
+        expected_policy_revision: Option<u64>,
+        initiator: ConversationCaller,
+        at_ms: u64,
+        credential: AccessHold,
+    ) -> ConversationFuture<'_, ShareGrantReceipt> {
+        let change = ShareGrantChange {
+            transition: ShareGrantTransition::Grant(access),
+            conversation_id: conversation,
+            principal_id: Some(credential.snapshot.credential.principal_id().clone()),
+            receiver_id: None,
+            credential_id: credential.snapshot.credential.id().clone(),
+            expected_policy_revision,
+            initiator,
+            at_ms,
+        };
+        self.change_owned(change, Some(credential))
     }
     fn hold_revision<'a>(
         &'a self,
@@ -677,6 +703,47 @@ impl LocalConversationStore {
         })
     }
 
+    /// Same grant write path, optionally retaining one original Auth owner.
+    fn change_owned(
+        &self,
+        change: ShareGrantChange,
+        credential: Option<AccessHold>,
+    ) -> ConversationFuture<'_, ShareGrantReceipt> {
+        Box::pin(async move {
+            let credential = credential.map(|held| Arc::new(Mutex::new(held)));
+            // The principal a hold locks is the live row's, which a revoke
+            // names only by credential. Look it up, lock that grant, and
+            // write. If the row's principal is no longer the one locked, the
+            // attempt writes nothing and tries the principal it found.
+            for _ in 0..4 {
+                let key = self.principal_to_lock(&change).await?;
+                let permit = match &key {
+                    Some(principal) => Some(
+                        self.grant_gates
+                            .lock(
+                                CONVERSATION.to_owned(),
+                                change.conversation_id.to_string(),
+                                principal.clone(),
+                            )
+                            .await,
+                    ),
+                    None => None,
+                };
+                // The permit moves into the blocking write. Dropping this
+                // future detaches that write; it does not drop the permit
+                // while the write can still commit.
+                match self
+                    .apply_change(change.clone(), key, permit, credential.clone())
+                    .await?
+                {
+                    ChangeAttempt::Applied(receipt) => return Ok(receipt),
+                    ChangeAttempt::Retry => continue,
+                }
+            }
+            tracing::error!("a share grant change could not lock the principal it writes");
+            Err(ConversationError::Metadata)
+        })
+    }
     /// Write `change` while `expected` is the principal the caller has locked.
     /// `Retry` when that is not the row this write would touch; nothing is
     /// committed. The connection is taken here, after the grant lock.
@@ -689,6 +756,7 @@ impl LocalConversationStore {
         change: ShareGrantChange,
         expected: Option<String>,
         permit: Option<GrantPermit>,
+        credential: Option<Arc<Mutex<AccessHold>>>,
     ) -> ConversationFuture<'_, ChangeAttempt> {
         let changes = self.changes.clone();
         let access = self.access.clone();
@@ -706,6 +774,10 @@ impl LocalConversationStore {
                 // task; it does not release the gate while the write can
                 // still commit.
                 let _permit = permit;
+                // Same original Auth owner as the application, retained in
+                // actual blocking work even if its awaiting caller disappears.
+                // This mutex is never locked; it makes the Send hold shareable.
+                let credential_owner = credential;
                 #[cfg(test)]
                 if let Some(pause) = pause {
                     pause.block_until_released();
@@ -747,6 +819,20 @@ impl LocalConversationStore {
                     principal,
                 )?;
                 let after = wanted(&change.transition);
+                // The credential-owned entry constructs an exact principal
+                // grant. Ordinary paired None keeps its existing meaning.
+                // Check under the same principal gate/transaction before any
+                // replay receipt, including a receiver-absent older request.
+                if credential_owner.is_some() {
+                    let receiver_present: Option<bool> = transaction.cached_row(
+                        "SELECT receiver_id IS NOT NULL FROM share_grants WHERE resource_kind=?1 AND resource_id=?2 AND principal_id=?3",
+                        params![CONVERSATION, id, change.principal_id.as_ref().map(PrincipalId::as_str)],
+                        |row| row.get(0),
+                    ).optional().map_err(failed)?;
+                    if receiver_present == Some(true) {
+                        return Err(ConversationError::ShareTargetNotPaired);
+                    }
+                }
                 // A retried request answers what it answered the first time, so
                 // a share whose reply was lost cannot, retried after a later
                 // unshare, grant again (row G16). That holds for a request that
@@ -802,8 +888,14 @@ impl LocalConversationStore {
                         .principal_id
                         .as_ref()
                         .is_some_and(|named| named.as_str() != granted);
-                    let other_receiver = change.receiver_id.is_some()
-                        && change.receiver_id.as_deref() != journaled_receiver.as_deref();
+                    let other_receiver = if credential_owner.is_some() {
+                        // Principal None is exact absence, never the paired
+                        // path's omitted/lost-reply receiver selector.
+                        journaled_receiver.is_some()
+                    } else {
+                        change.receiver_id.is_some()
+                            && change.receiver_id.as_deref() != journaled_receiver.as_deref()
+                    };
                     if credential != change.credential_id.as_str()
                         || journaled_after != after
                         || other_principal
@@ -1165,6 +1257,36 @@ impl LocalConversationStore {
                 Err(error) => Err(failed(error)),
             }
         })
+    }
+}
+
+impl LocalConversationStore {
+    /// Bounded scheduling candidates, not read authority. The caller must
+    /// freshly admit each principal/resource revision before physical reads.
+    pub(crate) async fn principal_conversations(
+        &self,
+        principal: PrincipalId,
+        credential: CredentialId,
+        limit: usize,
+    ) -> Result<Vec<(ConversationId, u64)>, ConversationError> {
+        let take = limit
+            .checked_add(1)
+            .and_then(|n| i64::try_from(n).ok())
+            .ok_or(ConversationError::Metadata)?;
+        self.run(move |connection| {
+            let mut statement=connection.prepare("SELECT resource_id,policy_revision FROM share_grants WHERE principal_id=?1 AND credential_id=?2 AND resource_kind=?3 AND receiver_id IS NULL ORDER BY resource_id LIMIT ?4").map_err(failed)?;
+            let mut rows=statement.query(params![principal.as_str(),credential.as_str(),CONVERSATION,take]).map_err(failed)?;
+            let mut result=Vec::new();
+            while let Some(row)=rows.next().map_err(failed)? {
+                // The UUID value object checks borrowed text before its fixed-size value.
+                let text=row.get_ref(0).map_err(failed)?.as_str().map_err(|_|ConversationError::Metadata)?;
+                let id=ConversationId::new(text).map_err(|_|ConversationError::Metadata)?;
+                let revision=sequence(row.get::<_,i64>(1).map_err(failed)?).ok_or(ConversationError::Metadata)?;
+                result.push((id,revision));
+            }
+            if result.len()>limit {return Err(ConversationError::Capacity);}
+            Ok(result)
+        }).await
     }
 }
 

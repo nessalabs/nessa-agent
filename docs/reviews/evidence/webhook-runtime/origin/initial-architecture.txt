@@ -1,0 +1,3 @@
+architecture check failed:
+
+  crates/nessa-auth/src/application/session.rs: domain/application references must point inward, through application-owned ports

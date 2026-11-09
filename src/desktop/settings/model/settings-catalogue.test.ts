@@ -102,8 +102,9 @@ describe("the settings catalogue", () => {
   it("knows a setting named like its tab, whose group needs no title on screen", () => {
     expect(namesItsTab("agents")).toBe(true)
     expect(namesItsTab("workspace-layout")).toBe(true)
-    expect(namesItsTab("mcp-servers")).toBe(false)
+    expect(namesItsTab("mcp-servers")).toBe(true)
     expect(namesItsTab("icon-family")).toBe(false)
+    expect(namesItsTab("github")).toBe(false)
   })
 
   it("keeps Access first and routes hook settings to their own privacy tab", () => {

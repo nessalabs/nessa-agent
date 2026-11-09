@@ -255,6 +255,10 @@ fn phase(phase: &McpAppAuditPhase) -> Value {
         McpAppAuditPhase::Approved { permission_id } => {
             json!({"kind": "approved", "permissionId": permission_id})
         }
+        McpAppAuditPhase::AppTrusted {
+            permission_id,
+            kept,
+        } => json!({"kind": "app_trusted", "permissionId": permission_id, "kept": kept}),
         McpAppAuditPhase::Denied { permission_id } => {
             json!({"kind": "denied", "permissionId": permission_id})
         }

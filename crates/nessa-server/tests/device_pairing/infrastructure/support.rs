@@ -204,6 +204,7 @@ impl Fixture {
             })
             .unwrap();
         let session = AuthenticateSession {
+            policy: &nessa_auth::adapters::cedar::CedarPolicyEvaluator::new().unwrap(),
             verifier: registry.as_ref(),
             access: registry.as_ref(),
             clock: &Time,
@@ -234,6 +235,9 @@ impl Fixture {
                 gateway: resource,
                 key_store: keys.clone(),
                 identity,
+                tunnel_secrets: Arc::new(
+                    nessa_server::tunnel::application::MemoryDeviceSecrets::new(),
+                ),
             })
             .unwrap(),
         );
@@ -303,6 +307,9 @@ impl Fixture {
                 gateway: resource,
                 key_store: keys.clone(),
                 identity,
+                tunnel_secrets: Arc::new(
+                    nessa_server::tunnel::application::MemoryDeviceSecrets::new(),
+                ),
             })
             .unwrap(),
         );

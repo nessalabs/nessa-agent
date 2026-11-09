@@ -3,7 +3,8 @@ id: desktop-permission-rule-revocation
 title: Revoke a remembered permission rule
 kind: statechart
 status: implemented
-summary: A revoke owns its row controls through acknowledgement and a fresh list read; focus refreshes cannot reopen a pending action.
+summary: A revoke owns its row controls through acknowledgement and a fresh list
+  read; focus refreshes cannot reopen a pending action.
 parent: desktop-workspace
 sourceRevision: "4d718da047acbcf200c10feab62cb45b097ee939"
 sources:
@@ -28,8 +29,23 @@ diagramDetails:
       to: Retired
       label: Unmount or source replacement / invalidate request owner
     section: Retirement and physical effects
+model:
+  spec: tla/services/desktop/workspace/permission-rule-revocation.tla
+  config: tla/services/desktop/workspace/permission-rule-revocation.cfg
+modelCheck:
+  sourceRevision: "4d718da047acbcf200c10feab62cb45b097ee939"
+  checker: tlc-1.7.4
+  date: 2026-11-03T03:27:56.762Z
+  config: tla/services/desktop/workspace/permission-rule-revocation.cfg
+  modelDigest: f1bcc9bd46d25600284e2d487154892a9313c90d14262c092225768ac1337b65
+  states: 37
+  held:
+    - RereadMeaning
+    - RetainedMeaning
+    - NoEarlySuccess
+  broke: []
+  unchecked: []
 ---
-
 # Revoke a remembered permission rule
 
 Settings → Privacy & Permissions → Access lists remembered tool rules for a workspace. Revoke removes a selected rule through the gateway. While that operation is pending, the row controls remain disabled through both its acknowledgement and the list read that follows.
@@ -88,3 +104,17 @@ Retiring the component does not cancel an admitted gateway revoke. There is no c
 [Component regressions](../../../../../src/desktop/settings/ui/permission-rule-rows.test.tsx) cover focus and visibility refresh, post-command read ownership, an earlier background read, source replacement, unmount and repeated same-task clicks. Existing cases retain the distinct acknowledgement/reread combinations above.
 
 The Chromium [ordering fixture](../../../../../verification/desktop/evidence/user-flow-ordering/README.md) mounts the production component. The baseline permits a second frontend dispatch after focus; the fixed owner retains one pending dispatch and enables recovery after settlement. WebKit and real gateway integration remain separate, unrun gates in this environment.
+
+## Bounded rule model
+
+One rule and two source bindings separate revoke acknowledgement from reread truth. Acknowledgement can be lost while the next read proves absence. This bound omits read failure copy and backend Cedar policy. A new revoke clears its previous report in the model, matching a fresh pending presentation. The model checks design safety, not the implementation. It asserts no liveness and abstracts transport timing into nondeterministic completion order. Regression sources are evidence of intended behavior; this documentation change does not claim their execution.
+
+## Model coverage
+
+Disposition: direct model. The bounded rule model section names the modeled owner slice and finite abstraction.
+
+Excluded: All exclusions stated in the owning Bounded rule model section remain outside verification.
+
+Source review scope: owner entry points and relevant regression declarations were inventoried against frozen source `77a6b620af4d94b234294f6d273fd74b3dfb44c7`. Existing source checkpoints are retained where this was a partial review. A model result establishes bounded design safety only. Browser appearance and interaction were not checked.
+
+[Remembered app access](revoke-remembered-app-access.md) is a separate owner with different stale-read and audit boundaries; this page’s rule model does not cover app-trust removal.

@@ -1,5 +1,5 @@
 /**
- * The gateway's stored MCP servers, for Settings › Integrations: the window's
+ * The gateway's stored MCP servers, for Settings › MCP servers: the window's
  * client (`client.mcpServers`) read into the model's words
  * (`model/mcp-servers.ts`). Who may manage servers is the gateway's to say,
  * by its answers; nothing here reads the credential's grants. Each refusal code and problem is
@@ -50,7 +50,7 @@ export interface McpServersClient {
 export type McpServersConnection =
   { readonly type: "connected" } | { readonly type: "unreachable" }
 
-/** The stored servers, as Settings › Integrations manages them. */
+/** The stored servers, as Settings › MCP servers manages them. */
 export interface McpServersGateway {
   readonly limits: McpServersLimits
   /** Tells `handler` how the connection stands, now and on each change, until the returned stop. */

@@ -20,6 +20,8 @@
 //! [`RelayFrameError`]. Readers of the preamble read exactly a header and
 //! then exactly its body, never through a buffer, so the bytes after
 //! `Joined` are left on the socket for the two ends.
+use hmac::{Hmac, Mac};
+use sha2::Sha256;
 use std::{
     fmt,
     io::{self, Read, Write},
@@ -30,8 +32,16 @@ use std::{
 pub const VERSION: u8 = 1;
 /// Version, type and body length.
 pub const HEADER: usize = 3;
-/// The longest frame: a header and a signature.
-pub const MAX_FRAME: usize = HEADER + 64;
+/// The longest body a relay frame carries. A signed tunnel origin is an
+/// Ed25519 signature ([`ORIGIN_SIGNATURE`] bytes) and then the origin text.
+pub const MAX_PUBLISHED: usize = 255;
+/// Ed25519 signature prefixed to a published tunnel origin.
+pub const ORIGIN_SIGNATURE: usize = 64;
+/// The longest origin text that still fits once its signature is prefixed.
+/// Longer than this is not published; a quick or named hostname fits.
+pub const MAX_ORIGIN: usize = MAX_PUBLISHED - ORIGIN_SIGNATURE;
+/// The longest frame: a header and a published tunnel origin.
+pub const MAX_FRAME: usize = HEADER + MAX_PUBLISHED;
 /// How long a connection may take to send its whole preamble, or a
 /// gateway its proof.
 pub const PREAMBLE_DEADLINE: Duration = Duration::from_secs(10);
@@ -56,7 +66,7 @@ pub type GatewayKey = [u8; 32];
 pub type JoinToken = [u8; 16];
 
 /// One preamble frame.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub enum RelayFrame {
     /// A gateway asks to be registered under `key`.
     Serve {
@@ -103,6 +113,152 @@ pub enum RelayFrame {
     /// The key has a serve connection, but its gateway did not accept in
     /// time.
     NoAnswer,
+    /// The gateway names its current tunnel origin. Empty clears it.
+    Publish {
+        /// The origin, or none.
+        origin: Box<PublishedOrigin>,
+    },
+    /// A reader asks for the tunnel origin of the gateway registered under `key`.
+    Lookup {
+        /// The gateway it wants.
+        key: GatewayKey,
+    },
+    /// The reader's proof it holds a paired device's tunnel secret.
+    Seal {
+        /// HMAC over the lookup context, the gateway key and the challenge.
+        mac: [u8; 32],
+    },
+    /// The relay asks the gateway whether `mac` is a paired device's.
+    Admit {
+        /// Which lookup this answers.
+        token: JoinToken,
+        /// The challenge the reader sealed.
+        nonce: [u8; 32],
+        /// The reader's seal.
+        mac: [u8; 32],
+    },
+    /// The gateway accepts the lookup `token` names.
+    Allow {
+        /// The lookup to answer.
+        token: JoinToken,
+    },
+    /// The gateway refuses the lookup `token` names.
+    Deny {
+        /// The lookup to refuse.
+        token: JoinToken,
+    },
+    /// The tunnel origin for a lookup the gateway allowed. Empty means none.
+    Located {
+        /// The origin, or none.
+        origin: Box<PublishedOrigin>,
+    },
+    /// The relay will not say the origin: the gateway refused, or the
+    /// lookup could not be asked.
+    Unlisted,
+}
+
+/// A tunnel origin carried in a relay frame. Empty means there is none.
+/// The bytes past `len` are zero.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct PublishedOrigin {
+    len: u8,
+    bytes: [u8; MAX_PUBLISHED],
+}
+
+impl PublishedOrigin {
+    /// `text` as an origin, before the gateway signs it. Empty, non-ASCII, or
+    /// longer than [`MAX_ORIGIN`] does not fit in a signed frame.
+    pub fn new(text: &str) -> Option<Self> {
+        Self::raw(text.as_bytes()).filter(|_| !text.is_empty() && text.is_ascii())
+    }
+
+    /// The bytes a relay carries for `text`: its Ed25519 signature, then the text.
+    pub fn signed(signature: &[u8; ORIGIN_SIGNATURE], text: &str) -> Option<Self> {
+        if text.is_empty() || !text.is_ascii() || text.len() > MAX_ORIGIN {
+            return None;
+        }
+        let mut raw = [0; MAX_PUBLISHED];
+        raw[..ORIGIN_SIGNATURE].copy_from_slice(signature);
+        raw[ORIGIN_SIGNATURE..ORIGIN_SIGNATURE + text.len()].copy_from_slice(text.as_bytes());
+        Some(Self {
+            len: u8::try_from(ORIGIN_SIGNATURE + text.len()).unwrap_or(u8::MAX),
+            bytes: raw,
+        })
+    }
+
+    /// The signature and origin text, when this body is a signed origin.
+    pub fn signature_and_text(&self) -> Option<([u8; ORIGIN_SIGNATURE], &str)> {
+        let bytes = self.as_bytes();
+        if bytes.len() <= ORIGIN_SIGNATURE {
+            return None;
+        }
+        let mut signature = [0; ORIGIN_SIGNATURE];
+        signature.copy_from_slice(&bytes[..ORIGIN_SIGNATURE]);
+        let text = std::str::from_utf8(&bytes[ORIGIN_SIGNATURE..]).ok()?;
+        if text.is_empty() || !text.is_ascii() {
+            return None;
+        }
+        Some((signature, text))
+    }
+
+    fn raw(raw: &[u8]) -> Option<Self> {
+        if raw.is_empty() || raw.len() > MAX_ORIGIN {
+            return None;
+        }
+        let mut bytes = [0; MAX_PUBLISHED];
+        bytes[..raw.len()].copy_from_slice(raw);
+        Some(Self {
+            len: u8::try_from(raw.len()).unwrap_or(u8::MAX),
+            bytes,
+        })
+    }
+
+    /// No origin.
+    pub fn clear() -> Self {
+        Self {
+            len: 0,
+            bytes: [0; MAX_PUBLISHED],
+        }
+    }
+
+    /// The origin bytes, with no padding.
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.bytes[..usize::from(self.len)]
+    }
+
+    /// The origin text, or `None` when it is empty or not UTF-8.
+    pub fn text(&self) -> Option<&str> {
+        if self.len == 0 {
+            None
+        } else {
+            std::str::from_utf8(self.as_bytes()).ok()
+        }
+    }
+}
+
+impl fmt::Debug for PublishedOrigin {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if let Some((_, text)) = self.signature_and_text() {
+            return write!(formatter, "PublishedOrigin({text})");
+        }
+        match self.text() {
+            Some(text) => write!(formatter, "PublishedOrigin({text})"),
+            None => formatter.write_str("PublishedOrigin(none)"),
+        }
+    }
+}
+
+/// HMAC-SHA256 over `nessa-tunnel-lookup-v1`, the gateway key and `nonce`,
+/// keyed by the device's tunnel secret. The relay sees the mac, not the secret.
+pub fn tunnel_lookup_mac(secret: &[u8; 32], gateway: &GatewayKey, nonce: &[u8; 32]) -> [u8; 32] {
+    let mut mac = Hmac::<Sha256>::new_from_slice(secret).expect("hmac accepts a 32 byte key");
+    mac.update(b"nessa-tunnel-lookup-v1\0");
+    mac.update(gateway);
+    mac.update(nonce);
+    let bytes = mac.finalize().into_bytes();
+    let mut out = [0; 32];
+    out.copy_from_slice(&bytes);
+    out
 }
 
 impl fmt::Debug for RelayFrame {
@@ -121,6 +277,14 @@ impl fmt::Debug for RelayFrame {
             Self::Joined => f.write_str("Joined"),
             Self::Offline => f.write_str("Offline"),
             Self::NoAnswer => f.write_str("NoAnswer"),
+            Self::Publish { origin } => write!(f, "Publish({origin:?})"),
+            Self::Lookup { key } => write!(f, "Lookup({})", key_id(key)),
+            Self::Seal { .. } => f.write_str("Seal"),
+            Self::Admit { .. } => f.write_str("Admit"),
+            Self::Allow { .. } => f.write_str("Allow"),
+            Self::Deny { .. } => f.write_str("Deny"),
+            Self::Located { origin } => write!(f, "Located({origin:?})"),
+            Self::Unlisted => f.write_str("Unlisted"),
         }
     }
 }
@@ -275,15 +439,31 @@ const PONG: u8 = 9;
 const JOINED: u8 = 10;
 const OFFLINE: u8 = 11;
 const NO_ANSWER: u8 = 12;
+const PUBLISH: u8 = 13;
+const LOOKUP: u8 = 14;
+const SEAL: u8 = 15;
+const ADMIT: u8 = 16;
+const ALLOW: u8 = 17;
+const DENY: u8 = 18;
+const LOCATED: u8 = 19;
+const UNLISTED: u8 = 20;
 
-/// The body length a frame type has, or `None` for an unknown type.
-fn body_length(kind: u8) -> Option<usize> {
+/// How long a body may be. `Fixed` is exact. `AtMost` is a published origin.
+enum Body {
+    Fixed(usize),
+    AtMost(usize),
+}
+
+/// The body rule for a frame type, or `None` for an unknown type.
+fn body_rule(kind: u8) -> Option<Body> {
     match kind {
-        SERVE | CONNECT | CHALLENGE => Some(32),
-        ACCEPT => Some(48),
-        PROOF => Some(64),
-        INCOMING => Some(16),
-        REGISTERED | PING | PONG | JOINED | OFFLINE | NO_ANSWER => Some(0),
+        SERVE | CONNECT | CHALLENGE | LOOKUP | SEAL => Some(Body::Fixed(32)),
+        ACCEPT => Some(Body::Fixed(48)),
+        PROOF => Some(Body::Fixed(64)),
+        INCOMING | ALLOW | DENY => Some(Body::Fixed(16)),
+        ADMIT => Some(Body::Fixed(80)),
+        REGISTERED | PING | PONG | JOINED | OFFLINE | NO_ANSWER | UNLISTED => Some(Body::Fixed(0)),
+        PUBLISH | LOCATED => Some(Body::AtMost(MAX_PUBLISHED)),
         _ => None,
     }
 }
@@ -312,14 +492,18 @@ pub fn parse_header(bytes: [u8; HEADER]) -> Result<Header, RelayFrameError> {
     if version != VERSION {
         return Err(RelayFrameError::Version(version));
     }
-    let expected = body_length(kind).ok_or(RelayFrameError::Type(kind))?;
-    if usize::from(length) != expected {
-        return Err(RelayFrameError::Length { kind, length });
-    }
-    Ok(Header {
-        kind,
-        length: expected,
-    })
+    let length = usize::from(length);
+    let length = match body_rule(kind).ok_or(RelayFrameError::Type(kind))? {
+        Body::Fixed(expected) if length == expected => expected,
+        Body::AtMost(max) if length <= max => length,
+        Body::Fixed(_) | Body::AtMost(_) => {
+            return Err(RelayFrameError::Length {
+                kind,
+                length: u8::try_from(length).unwrap_or(u8::MAX),
+            })
+        }
+    };
+    Ok(Header { kind, length })
 }
 
 /// The frame a checked header and its body make.
@@ -363,8 +547,33 @@ pub fn parse_body(header: Header, body: &[u8]) -> Result<RelayFrame, RelayFrameE
         JOINED => RelayFrame::Joined,
         OFFLINE => RelayFrame::Offline,
         NO_ANSWER => RelayFrame::NoAnswer,
+        PUBLISH => RelayFrame::Publish {
+            origin: Box::new(published(body)),
+        },
+        LOOKUP => RelayFrame::Lookup { key: array32(0) },
+        SEAL => RelayFrame::Seal { mac: array32(0) },
+        ADMIT => RelayFrame::Admit {
+            token: token(0),
+            nonce: array32(16),
+            mac: array32(48),
+        },
+        ALLOW => RelayFrame::Allow { token: token(0) },
+        DENY => RelayFrame::Deny { token: token(0) },
+        LOCATED => RelayFrame::Located {
+            origin: Box::new(published(body)),
+        },
+        UNLISTED => RelayFrame::Unlisted,
         kind => return Err(RelayFrameError::Type(kind)),
     })
+}
+
+fn published(body: &[u8]) -> PublishedOrigin {
+    let mut bytes = [0; MAX_PUBLISHED];
+    bytes[..body.len()].copy_from_slice(body);
+    PublishedOrigin {
+        len: u8::try_from(body.len()).unwrap_or(u8::MAX),
+        bytes,
+    }
 }
 
 impl RelayFrame {
@@ -383,6 +592,14 @@ impl RelayFrame {
             Self::Joined => (JOINED, &[]),
             Self::Offline => (OFFLINE, &[]),
             Self::NoAnswer => (NO_ANSWER, &[]),
+            Self::Publish { origin } => (PUBLISH, &[origin.as_bytes()]),
+            Self::Lookup { key } => (LOOKUP, &[key]),
+            Self::Seal { mac } => (SEAL, &[mac]),
+            Self::Admit { token, nonce, mac } => (ADMIT, &[token, nonce, mac]),
+            Self::Allow { token } => (ALLOW, &[token]),
+            Self::Deny { token } => (DENY, &[token]),
+            Self::Located { origin } => (LOCATED, &[origin.as_bytes()]),
+            Self::Unlisted => (UNLISTED, &[]),
         };
         let length: usize = body.iter().map(|part| part.len()).sum();
         let mut bytes = Vec::with_capacity(HEADER + length);

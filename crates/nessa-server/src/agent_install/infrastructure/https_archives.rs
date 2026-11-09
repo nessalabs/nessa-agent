@@ -23,7 +23,10 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 ///
 /// The client's own default is thirty seconds, which would fail almost every
 /// real download, so this is set explicitly rather than left alone.
-const TRANSFER_TIMEOUT: Duration = Duration::from_secs(45 * 60);
+/// The longest one archive transfer may run. A product call that waits for an
+/// install has to outlast this, or it reports failure while the transfer
+/// continues.
+pub const ARCHIVE_TRANSFER_TIMEOUT: Duration = Duration::from_secs(45 * 60);
 
 /// How many hops a redirect chain may take before it is treated as a loop.
 const REDIRECT_LIMIT: usize = 10;
@@ -79,7 +82,7 @@ impl HttpsArchives {
         install_tls_backend();
         Client::builder()
             .connect_timeout(CONNECT_TIMEOUT)
-            .timeout(TRANSFER_TIMEOUT)
+            .timeout(ARCHIVE_TRANSFER_TIMEOUT)
             .https_only(true)
             .redirect(Policy::limited(REDIRECT_LIMIT))
             .user_agent(concat!("nessa/", env!("CARGO_PKG_VERSION")))

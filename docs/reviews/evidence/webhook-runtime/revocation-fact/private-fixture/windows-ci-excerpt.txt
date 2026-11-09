@@ -1,0 +1,27 @@
+2026-10-23T20:56:52.9113840Z [nessa-auth revocation]
+2026-10-23T20:56:52.9114686Z [nessa-auth revocation] ---- historical_revocation_actor_and_absent_correlation_are_not_inferred_from_receipt stdout ----
+2026-10-23T20:56:52.9115275Z [nessa-auth revocation]
+2026-10-23T20:56:52.9116132Z [nessa-auth revocation] thread 'historical_revocation_actor_and_absent_correlation_are_not_inferred_from_receipt' (816) panicked at crates\nessa-auth\tests\revocation.rs:61:10:
+2026-10-23T20:56:52.9117124Z [nessa-auth revocation] called `Result::unwrap()` on an `Err` value: Io(Custom { kind: PermissionDenied, error: UnsafeFile })
+2026-10-23T20:56:52.9117951Z [nessa-auth revocation] note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+2026-10-23T20:56:52.9118310Z [nessa-auth revocation]
+2026-10-23T20:56:52.9118644Z [nessa-auth revocation] ---- expiry_has_no_revocation_actor_and_later_fact_does_not_rewrite_issuance stdout ----
+2026-10-23T20:56:52.9119010Z [nessa-auth revocation]
+2026-10-23T20:56:52.9119494Z [nessa-auth revocation] thread 'expiry_has_no_revocation_actor_and_later_fact_does_not_rewrite_issuance' (7868) panicked at crates\nessa-auth\tests\revocation.rs:61:10:
+2026-10-23T20:56:52.9120114Z [nessa-auth revocation] called `Result::unwrap()` on an `Err` value: Io(Custom { kind: PermissionDenied, error: UnsafeFile })
+2026-10-23T20:56:52.9120478Z [nessa-auth revocation]
+2026-10-23T20:56:52.9120828Z [nessa-auth revocation] ---- both_actual_supersessions_preserve_cause_actor_and_replacement stdout ----
+2026-10-23T20:56:52.9121189Z [nessa-auth revocation]
+2026-10-23T20:56:52.9121645Z [nessa-auth revocation] thread 'both_actual_supersessions_preserve_cause_actor_and_replacement' (1200) panicked at crates\nessa-auth\tests\revocation.rs:61:10:
+2026-10-23T20:56:52.9129435Z [nessa-auth revocation] called `Result::unwrap()` on an `Err` value: Io(Custom { kind: PermissionDenied, error: UnsafeFile })
+2026-10-23T20:56:52.9130183Z [nessa-auth revocation]
+2026-10-23T20:56:52.9130760Z [nessa-auth revocation] ---- explicit_fact_is_coherent_held_original_and_survives_cold_restore stdout ----
+2026-10-23T20:56:52.9131267Z [nessa-auth revocation]
+2026-10-23T20:56:52.9132029Z [nessa-auth revocation] thread 'explicit_fact_is_coherent_held_original_and_survives_cold_restore' (6352) panicked at crates\nessa-auth\tests\revocation.rs:61:10:
+2026-10-23T20:56:52.9133023Z [nessa-auth revocation] called `Result::unwrap()` on an `Err` value: Io(Custom { kind: PermissionDenied, error: UnsafeFile })
+2026-10-23T20:56:52.9133561Z [nessa-auth revocation]
+2026-10-23T20:56:52.9134180Z [nessa-auth revocation] ---- malformed_actual_revocation_history_rejects_cold_open_without_replacing_bytes stdout ----
+2026-10-23T20:56:52.9134728Z [nessa-auth revocation]
+2026-10-23T20:56:52.9135533Z [nessa-auth revocation] thread 'malformed_actual_revocation_history_rejects_cold_open_without_replacing_bytes' (5300) panicked at crates\nessa-auth\tests\revocation.rs:61:10:
+2026-10-23T20:56:52.9136584Z [nessa-auth revocation] called `Result::unwrap()` on an `Err` value: Io(Custom { kind: PermissionDenied, error: UnsafeFile })
+2026-10-23T20:56:52.9137129Z [nessa-auth revocation]

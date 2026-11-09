@@ -11,6 +11,7 @@ import type {
   AttachmentApi,
   AuthApi,
   GithubApi,
+  VoiceApi,
   CredentialApi,
   McpAppsApi,
   McpServersApi,
@@ -37,7 +38,10 @@ const settingsParts = {
   credentials: {} as CredentialApi,
   auth: {} as AuthApi,
   github: {} as GithubApi,
+  voice: {} as VoiceApi,
   vault: {} as import("@nessa/client").VaultApi,
+  // The Devices page is not opened here.
+  devices: {} as import("@nessa/client").DevicesApi,
   boat: {} as import("@nessa/client").BoatApi,
   // Read back only for a file a view names; none here does.
   attachments: {} as AttachmentApi,

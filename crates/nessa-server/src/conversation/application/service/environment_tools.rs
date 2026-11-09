@@ -10,7 +10,7 @@
 //!   ──▶ CommandEnvironment::grant ── refused ──▶ CommandRefused
 //!   ──▶ the terms granted within those asked? ── no ──▶ the hold dropped,
 //!       CommandRefused(environment not granted)
-//!   ──▶ CommandIssued with the terms granted (the turn's person, this call)
+//!   ──▶ CommandIssued with the terms granted (the turn's actor, this call)
 //!       ── unsaved ──▶ the hold dropped
 //!   ──▶ files it publishes, collected under the command lease
 //!   ──▶ CommandHold::run(stop) ──▶ CommandEnded{exit, output, cleanup}
@@ -18,8 +18,8 @@
 //!
 //! Arrows are steps, in order; every refusal and every end is a record in the
 //! conversation's stream, under its Live agent lease, naming who asked. The
-//! command runs for the person whose turn asked for it: that turn's actor,
-//! with the tool call as its request. A command is bounded by its tool call:
+//! granted command runs for the actor whose turn asked for it, with the tool
+//! call as its request. A command is bounded by its tool call:
 //! the caller going away, or the agent's lease ending, stops it (row L15),
 //! and what it printed is kept as evidence under its record's bound.
 //!
@@ -27,8 +27,8 @@
 //! policy's (`CommandPolicyEvaluator`, ADR 803 step 4), asked for the turn's
 //! initiator: the owner uses every host the gateway grants commands on, a
 //! Drive grant's turn only those its policy at the turn's revision names, and
-//! none when it names none. `environments_list` asks the same policy, so a
-//! grant's turn is shown only the hosts it may use.
+//! an agent-authored turn is refused by Cedar. `environments_list` asks the
+//! same policy, so it does not offer command hosts to an agent-authored turn.
 //!
 //! What is recorded issued is what the environment granted, never what was
 //! asked (row L1): its timeout may be shorter than asked, under the
@@ -79,6 +79,28 @@ pub struct EnvironmentListing {
     pub commands: bool,
     /// Whether this conversation's agent runs there.
     pub current: bool,
+    /// For a connected paired environment, how loaded it is and where it
+    /// stands for new `peer:any` work in this conversation's channel.
+    pub load: Option<EnvironmentLoad>,
+}
+
+/// How loaded a paired environment is, as its connection last said, and
+/// where the pool puts it for new work. Nothing is reached to answer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct EnvironmentLoad {
+    /// Processor use in whole percent; `None` before it has said.
+    pub cpu_percent: Option<u32>,
+    /// Memory use in whole percent; `None` before it has said.
+    pub memory_percent: Option<u32>,
+    /// Agents it runs now; `None` when its connection serves none.
+    pub agents: Option<usize>,
+    /// Its place for new `peer:any` work, 1 first; computers not put in
+    /// order share the place after the ordered ones. `None` when the pool
+    /// gives it none: left out, or not taking work.
+    pub pool_place: Option<usize>,
+    /// At or past a busy limit: the pool passes it over while another
+    /// computer is not.
+    pub busy: bool,
 }
 
 /// One `run` call.
@@ -168,7 +190,15 @@ impl ConversationService {
             reachable: Some(true),
             commands: false,
             current: current.is_none(),
+            load: None,
         }];
+        // A pool setting that cannot be read leaves load unknown, never
+        // refuses the listing.
+        let channel = self.channel_id_of(id).await.ok().flatten();
+        let standing = match environments.pool_settings(channel.as_ref()).await {
+            Ok(settings) => environments.pool_standing(&settings),
+            Err(_) => Default::default(),
+        };
         let hosts = environments
             .hosts()
             .iter()
@@ -200,6 +230,13 @@ impl ConversationService {
                 reachable: commands.and_then(|commands| commands.reachable()),
                 commands: commands.is_some() && usable,
                 current: is_current,
+                load: standing.get(&name).map(|standing| EnvironmentLoad {
+                    cpu_percent: standing.machine.map(|used| used.cpu_permille / 10),
+                    memory_percent: standing.machine.map(|used| used.memory_permille / 10),
+                    agents: standing.agents,
+                    pool_place: standing.rank.map(|rank| rank + 1),
+                    busy: standing.busy,
+                }),
                 name,
             });
         }
@@ -773,10 +810,11 @@ fn running_invocation(snapshot: &SessionSnapshot) -> Option<&InvocationRecord> {
 }
 
 /// Who a turn's commands run for, as the command policy is asked about
-/// them: the owner, or the Drive grant that started it with its policy at
-/// the revision the turn was admitted under.
+/// them: the owner, an agent, or the Drive grant that started it with its
+/// policy at the revision the turn was admitted under.
 enum TurnInitiator {
     Owner,
+    Agent,
     Grant { grant: String, policy: ToolPolicy },
 }
 
@@ -786,6 +824,7 @@ impl TurnInitiator {
     fn of(admitted: &AdmittedPolicies, initiation: &Initiation) -> Option<Self> {
         match initiation.initiator() {
             Initiator::Owner => Some(Self::Owner),
+            Initiator::Agent(_) => Some(Self::Agent),
             Initiator::Grant(grant) => {
                 admitted
                     .policy(grant.grant(), grant.policy_revision())
@@ -800,6 +839,7 @@ impl TurnInitiator {
     fn ask(&self) -> CommandInitiator<'_> {
         match self {
             Self::Owner => CommandInitiator::Owner,
+            Self::Agent => CommandInitiator::Agent,
             Self::Grant { grant, policy } => CommandInitiator::Grant { grant, policy },
         }
     }
@@ -892,4 +932,23 @@ fn has_room(current: Option<&CurrentLease>, parent: &LeaseId) -> bool {
                 && lease.phase() == LeasePhase::Live
                 && lease.commands().len() < Lease::MAX_LIVE_COMMANDS
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{AdmittedPolicies, CommandInitiator, TurnInitiator};
+    use nessa_sdk::domain::agent_execution::executions::{AgentSource, ExecutionId, Initiation};
+
+    #[test]
+    fn an_agent_authored_turn_reaches_the_command_policy_as_an_agent() {
+        let source = AgentSource::new(
+            "00000000-0000-4000-8000-000000000002",
+            ExecutionId::new("source-turn").unwrap(),
+        )
+        .unwrap();
+        let initiation = Initiation::agent(source);
+        let initiator = TurnInitiator::of(&AdmittedPolicies::default(), &initiation)
+            .expect("agent initiation is not a missing grant policy");
+        assert_eq!(initiator.ask(), CommandInitiator::Agent);
+    }
 }

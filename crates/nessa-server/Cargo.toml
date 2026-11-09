@@ -35,11 +35,13 @@ nessa-protocol = { path = "../nessa-protocol" }
 # H of ADR 252). Without the example's command line.
 nessa-client-core = { path = "../nessa-client-core", default-features = false }
 nessa-sdk = { path = "../nessa-sdk" }
+nessa-timer = { path = "../nessa-timer", features = ["runtime"] }
 nessa-sync = { workspace = true }
 nessa-images = { path = "../nessa-images" }
 nessa-local-database = { path = "../nessa-local-database", features = ["encryption"] }
 zeroize = "=1.9.0"
 keyring = { version = "=3.6.3", default-features = false, features = ["windows-native"] }
+fs2 = "0.4"
 nessa-local-storage = { path = "../nessa-local-storage", features = ["physical-operation"] }
 nessa-gateway-endpoint = { path = "../nessa-gateway-endpoint" }
 nessa-auth = { path = "../nessa-auth" }
@@ -53,6 +55,7 @@ serde = { version = "1", features = ["derive"] }
 # `env` name is still visible. Decoding the entry as a `Value` first would
 # keep one of the two.
 serde_json = { version = "1", features = ["raw_value"] }
+serde_path_to_error = "0.1.20"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "sync", "time", "signal", "io-util", "io-std", "process"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
@@ -100,11 +103,13 @@ flate2 = "1"
 tar = "0.4"
 # Parsing a pinned archive URL, rather than matching on its spelling.
 url = "2"
+sysinfo = { version = "0.33", default-features = false, features = ["disk", "system"] }
 
 # Already built for cedar-policy. The example client refuses an acknowledged
 # watch identity outside the schema-published pattern; tests match minted
 # identities against the same pattern.
 regex = "1"
+jsonschema = { version = "0.60.2", default-features = false }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # Use encrypted Secret Service sessions with interaction explicitly disabled.
@@ -128,6 +133,10 @@ security-framework = "3.7"
 security-framework-sys = "2.17"
 
 [dev-dependencies]
+# Ephemeral isolated TLS recipients use real platform verification with a
+# fresh CA and short-lived server-auth leaf, including on macOS.
+rcgen = { version = "=0.14.10", default-features = false, features = ["crypto", "ring"] }
+time = "0.3"
 # Cancel actual HTTP service futures at a deterministic command-storage gate.
 tower = { version = "0.5", features = ["util"] }
 # Online process tests drive the example's command entry point.
@@ -137,6 +146,7 @@ nessa-device-client = { path = "../nessa-device-client" }
 # Plants an unmarked session record. A production build of this crate does not
 # enable it.
 nessa-sdk = { path = "../nessa-sdk", features = ["test-support"] }
+nessa-timer = { path = "../nessa-timer", features = ["test-support"] }
 tokio = { version = "1", features = ["test-util", "io-util"] }
 # Only to build the pixels a substitute system decoder hands back. The image
 # library this workspace already compiles; nothing new is built.

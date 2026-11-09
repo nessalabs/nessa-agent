@@ -1,0 +1,28 @@
+[
+  {
+    "args": [
+      "git",
+      "-C",
+      "/workspace/nessa-webhook-runtime",
+      "diff",
+      "--check",
+      "434843c502deb642378a6369ca86cc2ddd3f41b8..21516a70ec72341d07d92a290cfc9ddf69dd8894"
+    ],
+    "exit_code": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "args": [
+      "git",
+      "-C",
+      "/workspace/nessa-webhook-runtime",
+      "diff",
+      "--check",
+      "8e9f8c93277f4654f15632c89503d37be6d8a2e8..21516a70ec72341d07d92a290cfc9ddf69dd8894"
+    ],
+    "exit_code": 0,
+    "stdout": "",
+    "stderr": ""
+  }
+]

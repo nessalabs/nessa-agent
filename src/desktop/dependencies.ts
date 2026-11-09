@@ -1,4 +1,6 @@
+import { boatClaudeSignIn } from "../provider-authentication/model/boat-sign-in"
 import { boatGateway, type BoatGateway } from "./settings/adapters/boat-gateway"
+import { devicesGateway, type DevicesClient, type DevicesGateway } from "./devices"
 import { gatewayVault, type VaultSource } from "../vault"
 import type { VaultApi, BoatApi } from "@nessa/client"
 /**
@@ -48,8 +50,16 @@ import {
   heldFileReader,
   HeldFileReadError,
   monotonicWallClock,
+  sha256Digest,
   type HeldFileReader,
 } from "../conversation"
+import {
+  voiceGateway,
+  voiceKeyGateway,
+  type VoiceGateway,
+  type VoiceClient,
+  type VoiceKeyGateway,
+} from "./voice"
 import {
   githubGateway,
   linkedDevicesGateway,
@@ -107,6 +117,7 @@ import {
   sampleWidgetSession,
   type GatewayClient,
   type GatewaySource,
+  type ImageBytes,
   type SharingClient,
   type WindowPublishClient,
   type WorkspaceDependencies,
@@ -121,6 +132,8 @@ export interface DesktopDependencies extends WorkspaceDependencies {
   readonly mcpServers: McpServersGateway | undefined
   /** Pairing and linked devices, for Settings; absent without a gateway. Provided by `main.tsx`. */
   readonly linkedDevices: LinkedDevicesGateway | undefined
+  /** The hub's machines, for the side rail's Devices; absent without a gateway. Provided by `main.tsx`. */
+  readonly devices: DevicesGateway | undefined
   /** Claude and Codex native-hook choices, for Settings; absent without a gateway. Provided by `main.tsx`. */
   readonly nativeHooks: NativeHooksGateway | undefined
   /** Remembered permission rules, for Settings; absent without a gateway. Provided by `main.tsx`. */
@@ -128,6 +141,10 @@ export interface DesktopDependencies extends WorkspaceDependencies {
   /** The gateway's GitHub sign-in, for Settings; absent without a gateway. Provided by `main.tsx`. */
   readonly boat: BoatGateway | undefined
   readonly github: GithubGateway | undefined
+  /** The gateway's side of a voice call; absent without a gateway. Provided by `main.tsx`. */
+  readonly voice: VoiceGateway | undefined
+  /** The saved voice key, for Settings; absent without a gateway. */
+  readonly voiceKey: VoiceKeyGateway | undefined
   readonly vault: VaultSource | undefined
   /**
    * How the window reads back a file a conversation holds — one its agent
@@ -149,6 +166,10 @@ export function createDesktopDependencies(
     workspace?: WorkspaceSource
     signInToProvider?: WorkspaceDependencies["signInToProvider"]
     providerLoginAvailable?: WorkspaceDependencies["providerLoginAvailable"]
+    /** The host's Claude sign-in minting for Boat VMs, where it has one (`main.tsx`). */
+    mintClaudeSignIn?: { available: () => Promise<boolean>; mint: () => Promise<string> }
+    /** A Boat sign-in beside a given `workspace`; the gateway's own is composed here. */
+    boatClaudeSignIn?: WorkspaceDependencies["boatClaudeSignIn"]
     /**
      * Connects to the gateway whose conversations the window shows, and whose
      * servers' apps it draws where `apps` are; ignored beside `workspace`.
@@ -232,12 +253,24 @@ export function createDesktopDependencies(
       : undefined,
     signInToProvider: options.signInToProvider,
     providerLoginAvailable: options.providerLoginAvailable,
+    // Minted by the host, kept by the gateway the window's conversations are on.
+    boatClaudeSignIn:
+      options.boatClaudeSignIn ??
+      (source && options.mintClaudeSignIn
+        ? boatClaudeSignIn({
+            available: options.mintClaudeSignIn.available,
+            mint: options.mintClaudeSignIn.mint,
+            save: async (token) =>
+              (await source.connected()).boat.saveClaudeSignIn({ token }),
+          })
+        : undefined),
     mcpServers: source
       ? mcpServersGateway({ connected: () => source.connected(), after })
       : undefined,
     linkedDevices: source
       ? linkedDevicesGateway({ connected: () => source.connected(), after })
       : undefined,
+    devices: source ? devicesGateway({ connected: () => source.connected() }) : undefined,
     nativeHooks: source
       ? nativeHooksGateway({ connected: () => source.connected() })
       : undefined,
@@ -247,6 +280,8 @@ export function createDesktopDependencies(
     vault: options.vault ?? (source ? gatewayVault(() => source.connected()) : undefined),
     boat: source ? boatGateway(() => source.connected()) : undefined,
     github: source ? githubGateway({ connected: () => source.connected() }) : undefined,
+    voice: source ? voiceGateway(() => source.connected()) : undefined,
+    voiceKey: source ? voiceKeyGateway(() => source.connected()) : undefined,
     // Shared on the gateway's own client; the sample shares in memory, and a
     // window with neither offers no Share.
     sharing: source
@@ -290,8 +325,10 @@ export function createDesktopDependencies(
   }
 }
 
-/** A gateway client the window can show conversations, draw apps, read held files, manage MCP servers, pair devices, set native hooks, sign in to GitHub and share sessions through. */
+/** A gateway client the window can show conversations, draw apps, read held files, manage MCP servers, pair devices, set native hooks, sign in to GitHub, share sessions and start voice calls through. */
 type WindowGatewayClient = GatewayClient &
+  DevicesClient &
+  VoiceClient &
   GithubClient & { readonly vault: VaultApi; readonly boat: BoatApi } & McpServersClient &
   LinkedDevicesClient &
   NativeHooksClient &
@@ -333,13 +370,19 @@ function gatewayWorkspace(
   reviewNotices: HostNotices | undefined,
 ): GatewaySource<WindowGatewayClient> {
   const onReviewWaiting = reviewWaiting(reviewNotices)
-  if (!apps) return gatewaySource({ connect, clock, onReviewWaiting })
+  // A pasted image's bytes are behind its object URL; Web Crypto names them.
+  const imageBytes: ImageBytes = {
+    bytes: async (url) => (await fetch(url)).blob(),
+    digest: sha256Digest,
+  }
+  if (!apps) return gatewaySource({ connect, clock, onReviewWaiting, imageBytes })
   const mcpApps = (): Promise<McpAppsApi> =>
     source.connected().then((client) => client.mcpApps)
   const source: GatewaySource<WindowGatewayClient> = gatewaySource({
     connect,
     clock,
     onReviewWaiting,
+    imageBytes,
     apps: gatewayApps({
       registry,
       mcpApps: {

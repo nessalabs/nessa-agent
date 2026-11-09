@@ -1,0 +1,24 @@
+    Checking nessa-server v0.1.0 (/workspace/nessa-agent/crates/nessa-server)
+warning: constant evaluation is taking a long time
+   --> /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/core/src/slice/mod.rs:117:8
+    |
+    = note: the const evaluator is currently interpreting this expression
+help: the constant being evaluated
+   --> crates/nessa-server/src/env/config.rs:51:9
+    |
+ 51 |           const LEASE_PROTOCOL_DIGITS: [u8; 16] =
+    |           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+ 63 | / lease_protocol!(
+ 64 | |     "../../../nessa-protocol/src/lease.rs",
+ 65 | |     "../../../nessa-protocol/src/pairing/frames.rs",
+ 66 | |     "../env_serve/mod.rs",
+...   |
+105 | |     "../../../nessa-sdk/src/domain/agent_execution/leases/value_objects.rs",
+106 | | );
+    | |_- in this macro invocation
+    = note: this warning originates in the macro `lease_protocol` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: `nessa-server` (lib) generated 1 warning
+warning: `nessa-server` (lib test) generated 1 warning (1 duplicate)
+    Finished `dev` profile [unoptimized] target(s) in 1m 09s

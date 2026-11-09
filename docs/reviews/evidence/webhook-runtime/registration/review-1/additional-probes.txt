@@ -1,0 +1,8 @@
+
+running 3 tests
+test webhooks::infrastructure::outbox::store::tests::registration_tests::failure_tests::independent_substituted_auth_purpose_and_kind_pass_existing_correlation ... ok
+test webhooks::infrastructure::outbox::store::tests::registration_tests::independent_substituted_reservation_changes_destination_before_auth_and_install ... ok
+interruption thresholds misreported as Invalid: [23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 46, 47]
+test webhooks::infrastructure::outbox::store::tests::registration_tests::independent_transient_step_interruption_is_reported_as_invalid_intent ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 84 filtered out; finished in 0.02s

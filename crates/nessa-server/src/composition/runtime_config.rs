@@ -2,7 +2,10 @@
 use super::agent::AgentsConfig;
 use crate::tunnel::application::{TunnelMode, DEFAULT_TUNNEL_INGRESS};
 use crate::{
-    conversation::{domain::CommandPolicy, infrastructure::BoatRuntimeConfig},
+    conversation::{
+        domain::CommandPolicy,
+        infrastructure::{BoatRuntimeConfig, PoolConfig},
+    },
     core::RunError,
     product::{ConfiguredLimits, OperationalLimits, SessionSettings},
 };
@@ -35,13 +38,25 @@ pub(super) const MAX_CONFIG_BYTES: usize = 65_536;
 #[derive(Default, Debug, Deserialize)]
 #[serde(default, deny_unknown_fields, rename_all = "camelCase")]
 pub(super) struct RuntimeConfig {
+    /// Private endpoint/MAC seeds selected by the existing credential.issue principal.
+    pub webhooks: Vec<super::webhooks::WebhookConfig>,
     pub registry: LocalStoreConfig,
+    /// Ordinary parent turn Stop policy for this namespace.
+    pub subagents: SubagentsConfig,
     pub session: SessionConfig,
     /// Tier-3 admission and the cold-read budget. Absent keeps the defaults.
     pub limits: LimitsConfig,
     pub agents: Option<AgentsConfig>,
     /// Ordinary VM lifetime defaults and channel overrides, never credentials.
     pub boat: BoatRuntimeConfig,
+    /// Which paired computers new work goes to first, which never, each
+    /// channel's own choice, and when a computer is too busy for new work.
+    /// Settings writes the order and left-out lists (`devices.setPool`).
+    #[allow(
+        dead_code,
+        reason = "parsed here so a bad section refuses the file; read by its own settings adapter"
+    )]
+    pub pool: PoolConfig,
     /// Native device pairing; absent, `null` or `"enabled": false` keeps it
     /// off (design rows S1, S2). Settings › Linked devices writes it
     /// (`native_linking`).
@@ -51,6 +66,11 @@ pub(super) struct RuntimeConfig {
     /// destination (a `~/.ssh/config` alias or `user@host`). Absent or empty
     /// names none, and no conversation reaches a host (issue #699).
     pub ssh_hosts: Vec<String>,
+    /// The device a new conversation runs on when it names no environment
+    /// and no channel: one of `sshHosts`, or a paired environment's `peer:`
+    /// name. Absent is this machine. Devices writes it
+    /// (`devices.setDefault`); it is read at each creation.
+    pub default_environment: Option<String>,
     /// What `nessa env serve` on this host offers a gateway beyond agents.
     /// Absent offers nothing more. Read only where `env serve` runs: Unix.
     #[cfg_attr(not(unix), allow(dead_code))]
@@ -59,6 +79,33 @@ pub(super) struct RuntimeConfig {
     /// (issue #700). Absent or `null` grants neither: the agent sees no such
     /// tools.
     pub environment_tools: Option<EnvironmentToolsConfig>,
+}
+
+/// Namespace configuration; absence preserves recursive child Stop.
+#[derive(Debug, Deserialize)]
+#[serde(default, deny_unknown_fields, rename_all = "camelCase")]
+pub(super) struct SubagentsConfig {
+    pub stop_children_on_parent_stop: bool,
+    /// How many threads one agent may have at work at once before
+    /// `create_thread` answers `thread_limit_reached`. 0, the default,
+    /// bounds none. Only here: no settings view shows it.
+    pub max_live_threads: u64,
+}
+impl Default for SubagentsConfig {
+    fn default() -> Self {
+        Self {
+            stop_children_on_parent_stop: true,
+            max_live_threads: 0,
+        }
+    }
+}
+impl SubagentsConfig {
+    /// The bound on one agent's threads at work, `None` for none.
+    pub fn live_threads(&self) -> Option<usize> {
+        usize::try_from(self.max_live_threads)
+            .ok()
+            .filter(|limit| *limit > 0)
+    }
 }
 
 /// Where the agent may run commands, and which.
@@ -440,6 +487,24 @@ impl RuntimeConfig {
             hosts.push(destination);
         }
         Ok(hosts)
+    }
+
+    /// The saved default device: a paired environment's `peer:` name or an
+    /// SSH host `sshHosts` names. A default that names neither (a host
+    /// since taken out of `sshHosts` by hand) is warned of and read as this
+    /// machine, as a default that is not offered is at creation: it never
+    /// stops the gateway starting.
+    pub fn default_environment(&self) -> Option<String> {
+        let name = self.default_environment.as_ref()?;
+        let hosts = self.ssh_hosts().unwrap_or_default();
+        if PeerEnvironment::parse(name).is_ok() || hosts.iter().any(|host| host.as_str() == name) {
+            return Some(name.clone());
+        }
+        tracing::warn!(
+            default = name.as_str(),
+            "defaultEnvironment names neither an SSH host in sshHosts nor a paired environment; new conversations run here"
+        );
+        None
     }
 
     pub fn session(&self) -> Result<SessionSettings, RunError> {

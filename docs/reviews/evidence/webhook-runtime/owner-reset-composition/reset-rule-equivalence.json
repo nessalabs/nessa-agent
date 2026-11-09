@@ -1,0 +1,16 @@
+{
+  "fullFileEquality": {
+    "crates/nessa-server/src/webhooks/infrastructure/outbox/cursor.rs": true,
+    "crates/nessa-server/src/webhooks/infrastructure/outbox/queue.rs": true,
+    "crates/nessa-server/src/webhooks/infrastructure/outbox/store.rs": true,
+    "crates/nessa-server/src/webhooks/infrastructure/outbox/source_reset/owner.rs": true,
+    "crates/nessa-server/src/webhooks/infrastructure/outbox/journal.rs": true,
+    "crates/nessa-server/src/webhooks/infrastructure/outbox/restoration.rs": true,
+    "crates/nessa-server/src/webhooks/infrastructure/outbox/schema.sql": true,
+    "crates/nessa-server/src/product/webhook_reset.rs": false,
+    "crates/nessa-server/src/webhooks/infrastructure/runtime/delivery.rs": true,
+    "crates/nessa-server/src/conversation/infrastructure/record_read/source.rs": true
+  },
+  "productTargetExpiryDerivationUnchanged": true,
+  "newProductDelta": "optional diagnostic and owner-scope constructor extraction; whole-file equality not claimed"
+}

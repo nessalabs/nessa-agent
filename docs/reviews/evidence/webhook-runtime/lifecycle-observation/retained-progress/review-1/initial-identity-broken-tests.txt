@@ -1,0 +1,16 @@
+
+running 1 test
+
+thread 'webhooks::infrastructure::outbox::store::tests::issuance_context_tests::published_initial_identity_excludes_a_second_pending_identity' (170285) panicked at /tmp/nessa-retained-progress-independent-review/crates/nessa-server/src/webhooks/infrastructure/outbox/../../../../tests/webhooks/infrastructure/outbox/issuance_context.rs:273:5:
+assertion `left == right` failed
+  left: Some(Unavailable)
+ right: Some(Invalid)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test webhooks::infrastructure::outbox::store::tests::issuance_context_tests::published_initial_identity_excludes_a_second_pending_identity ... FAILED
+
+failures:
+
+failures:
+    webhooks::infrastructure::outbox::store::tests::issuance_context_tests::published_initial_identity_excludes_a_second_pending_identity
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 132 filtered out; finished in 0.01s

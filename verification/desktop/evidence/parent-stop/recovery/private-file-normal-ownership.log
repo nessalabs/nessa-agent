@@ -1,0 +1,10 @@
+
+ RUN  v3.2.7 /workspace/nessa-agent
+
+ ✓ packages/nessa-client/src/transport/local-credential-source.test.ts (6 tests) 311ms
+ ✓ packages/nessa-client/src/transport/local-gateway-endpoint.test.ts (33 tests) 442ms
+
+ Test Files  2 passed (2)
+      Tests  39 passed (39)
+   Start at  00:04:16
+   Duration  2.73s (transform 890ms, setup 243ms, collect 1.52s, tests 752ms, environment 0ms, prepare 1.01s)

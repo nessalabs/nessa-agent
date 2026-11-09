@@ -11,7 +11,9 @@ use nessa_auth::{
         pairing::{FilePairingState, GatewayTrust, NativeIdentity, NativeTransport, OsEntropy},
     },
     application::{
-        credential_admin::{IssueCredentialOutcome, IssueCredentialRequest},
+        credential_admin::{
+            CredentialIssuePurpose, IssueCredentialOutcome, IssueCredentialRequest,
+        },
         dto::{
             CredentialGrantDto, MembershipInputDto, MembershipRoleDto, MembershipStateDto,
             PrincipalInputDto, PrincipalKindDto, ResourceDto,
@@ -706,6 +708,7 @@ fn member_token(fixture: &Fixture) -> String {
     let IssueCredentialOutcome::Issued { evidence, .. } = fixture
         .registry
         .issue_sync(IssueCredentialRequest {
+            purpose: CredentialIssuePurpose::Product,
             request_id: "member-request".into(),
             issuer_principal_id: "owner".into(),
             credential_id: "member-credential".into(),

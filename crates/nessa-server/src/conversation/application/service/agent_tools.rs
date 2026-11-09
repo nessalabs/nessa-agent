@@ -163,7 +163,7 @@ impl ConversationService {
         Ok(AgentToolSource {
             caller,
             source,
-            execution: execution.as_str().into(),
+            execution,
         })
     }
 }

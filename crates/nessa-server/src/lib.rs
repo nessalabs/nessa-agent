@@ -12,6 +12,7 @@ pub mod conversation;
 pub mod core;
 mod desktop_runtime;
 pub mod device_pairing;
+pub(crate) mod devices;
 pub mod env;
 pub mod env_serve;
 pub mod external_events;
@@ -29,6 +30,8 @@ pub mod server;
 pub(crate) mod settings;
 pub(crate) mod timer;
 pub mod tunnel;
+pub mod voice;
+pub mod webhooks;
 
 pub use core::run;
 

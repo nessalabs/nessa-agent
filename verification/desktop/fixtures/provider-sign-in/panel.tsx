@@ -1,5 +1,6 @@
 /** The floating panel's real transcript, including its typed error-divider replacement. */
 import { useState } from "react"
+import { BoatSignInFailure } from "../../../../src/provider-authentication/model/boat-sign-in"
 import { createRoot } from "react-dom/client"
 import { Provider } from "react-redux"
 import {
@@ -19,9 +20,22 @@ const params = new URLSearchParams(location.search)
 const provider = params.get("provider") === "codex" ? "codex" : "claude"
 const diagnostic = params.get("diagnostic")
 const requiredWorkFailed = params.get("requiredWork") === "failed"
+// `?lease=boat`: the refused run was in a Boat VM (ADR 501).
+const boatLease =
+  params.get("lease") === "boat"
+    ? {
+        lease: {
+          state: "ended" as const,
+          environment: "boat" as const,
+          cause: "closed" as const,
+          droppedEvents: 0,
+        },
+      }
+    : {}
 // The panel keeps its own shape of a note; this transcript has none.
 const wire = {
   ...view("panel-auth", {
+    ...boatLease,
     messages: [
       {
         executionId: "refused",
@@ -80,6 +94,8 @@ let localTabs = emptyLocalTabs()
 const fixture = {
   calls: [] as string[],
   fail: false,
+  /** The stage a Boat sign-in fails at, or none. */
+  boatFail: undefined as "minted" | "saved" | undefined,
   release() {
     resolve?.()
     resolve = undefined
@@ -190,6 +206,17 @@ function PanelTranscript() {
         canSignInToProvider={async () =>
           new URLSearchParams(location.search).get("login") !== "unsupported"
         }
+        boatSignIn={{
+          available: async () =>
+            new URLSearchParams(location.search).get("login") !== "unsupported",
+          signIn: async () => {
+            fixture.calls.push("boat")
+            await new Promise<void>((done) => {
+              resolve = done
+            })
+            if (fixture.boatFail) throw new BoatSignInFailure(fixture.boatFail)
+          },
+        }}
         onProviderSignIn={async (chosen) => {
           fixture.calls.push(chosen)
           await new Promise<void>((done) => {

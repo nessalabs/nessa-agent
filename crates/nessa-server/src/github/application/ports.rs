@@ -3,8 +3,11 @@
 use std::time::Duration;
 
 use async_trait::async_trait;
+use serde_json::Value;
 
-use super::super::domain::{AccessToken, ConnectEnd, GithubAccount, GithubSignIn};
+use super::super::domain::{
+    AccessToken, ConnectEnd, GithubAccount, GithubReadKind, GithubRepository, GithubSignIn,
+};
 
 /// The secret half of a device authorization, sent back with each poll.
 /// `Debug` does not print it.
@@ -60,6 +63,19 @@ pub enum ApiFailure {
     Malformed,
 }
 
+/// A fixed repository read did not produce a usable answer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GithubReadFailure {
+    /// The repository resource does not exist or is not visible to this sign-in.
+    NotFound,
+    /// GitHub refused this sign-in for the operation.
+    Unauthorized,
+    /// GitHub could not be reached, timed out, or was rate-limited.
+    Unreachable,
+    /// A redirect, oversized answer, or malformed JSON was refused.
+    InvalidAnswer,
+}
+
 /// The three calls of a device-flow sign-in, for the Nessa GitHub App the
 /// adapter was built for.
 #[async_trait]
@@ -68,6 +84,13 @@ pub trait GithubApi: Send + Sync {
     async fn poll(&self, device_code: &DeviceCode) -> Result<PollAnswer, ApiFailure>;
     /// The account `token` signs in as.
     async fn account(&self, token: &AccessToken) -> Result<GithubAccount, ApiFailure>;
+    /// One bounded GET beneath the configured GitHub API host and repository.
+    async fn read_repository(
+        &self,
+        token: &AccessToken,
+        repository: &GithubRepository,
+        kind: GithubReadKind,
+    ) -> Result<Value, GithubReadFailure>;
 }
 
 /// The store could not be read or written.
@@ -76,8 +99,13 @@ pub struct StoreUnavailable;
 
 /// Where the one sign-in is kept between runs. Every operation carries the
 /// unlock generation that admitted it; a stale generation is StoreUnavailable.
+/// `discard_plaintext` does not: a leftover file is removed at startup whether
+/// or not the vault is unlocked, and its bytes are not read.
 #[async_trait]
 pub trait GithubTokenStore: Send + Sync {
+    /// Remove a plaintext `sign-in.json` if one is there. Missing is success.
+    /// A delete that does not succeed is [`StoreUnavailable`].
+    async fn discard_plaintext(&self) -> Result<(), StoreUnavailable>;
     async fn load(&self, generation: u64) -> Result<Option<GithubSignIn>, StoreUnavailable>;
     async fn save(&self, generation: u64, sign_in: &GithubSignIn) -> Result<(), StoreUnavailable>;
     /// Within the captured generation, deleting an absent entry succeeds.

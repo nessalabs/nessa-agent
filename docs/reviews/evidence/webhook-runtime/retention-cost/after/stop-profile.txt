@@ -1,0 +1,15 @@
+
+running 1 test
+PROFILE stop-terminal-setup position=1 elapsed_ms=8 vm_steps_approx=200
+PROFILE stop-terminal-setup position=128 elapsed_ms=1499 vm_steps_approx=2566400
+PROFILE stop-terminal-setup position=256 elapsed_ms=3116 vm_steps_approx=10179600
+PROFILE stop-terminal-setup position=512 elapsed_ms=5974 vm_steps_approx=40545000
+PROFILE stop-terminal-setup position=768 elapsed_ms=11026 vm_steps_approx=91095300
+PROFILE stop-terminal-setup position=1024 elapsed_ms=16195 vm_steps_approx=161830500
+PROFILE stop-pending-setup position=1025 elapsed_ms=16206 vm_steps_approx=161936200
+PROFILE stop-pending-setup position=1536 elapsed_ms=19932 vm_steps_approx=225504300
+PROFILE stop-pending-setup position=2048 elapsed_ms=23134 vm_steps_approx=308314700
+PROFILE stop setup_done_ms=23134 vm_steps_approx=308314700
+test webhooks::infrastructure::outbox::store::tests::stop_retention_is_bounded_when_publication_fails ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 85 filtered out; finished in 27.31s

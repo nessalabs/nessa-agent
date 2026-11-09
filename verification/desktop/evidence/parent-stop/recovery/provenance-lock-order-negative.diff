@@ -1,0 +1,14 @@
+diff --git a/crates/nessa-server/src/conversation/application/service/parent_stop.rs b/crates/nessa-server/src/conversation/application/service/parent_stop.rs
+index d370998e6..d79f2e701 100644
+--- a/crates/nessa-server/src/conversation/application/service/parent_stop.rs
++++ b/crates/nessa-server/src/conversation/application/service/parent_stop.rs
+@@ -142,8 +142,8 @@ impl ConversationService {
+             .map_err(MutationFailure::Target)?;
+         let service = self.clone();
+         tokio::spawn(async move {
+-            let admission = service.inner.thread_admission.clone().lock_owned().await;
+             let _service_admission = service.admit().await.map_err(|_| unavailable())?;
++            let admission = service.inner.thread_admission.clone().lock_owned().await;
+             let selection = service
+                 .select_stop(storage.clone(), &id, &caller, base)
+                 .await?;

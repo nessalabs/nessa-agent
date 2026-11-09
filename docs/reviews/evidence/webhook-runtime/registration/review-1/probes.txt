@@ -1,0 +1,6 @@
+
+running 2 tests
+test webhooks::infrastructure::outbox::store::tests::registration_tests::failure_tests::independent_substituted_auth_purpose_and_kind_pass_existing_correlation ... ok
+test webhooks::infrastructure::outbox::store::tests::registration_tests::independent_substituted_reservation_changes_destination_before_auth_and_install ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 84 filtered out; finished in 0.01s

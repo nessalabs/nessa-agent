@@ -1,0 +1,1 @@
+{"old": "[\"bootstrap\", \"admin_issue\", \"device_pairing\", \"surface_provision\", \"owner_recovery\"].contains(principal.issuance)", "new": "[\"bootstrap\", \"admin_issue\", \"webhook_issue\", \"device_pairing\", \"surface_provision\", \"owner_recovery\"].contains(principal.issuance)", "changed_sha256": "b6308d16ae28b4df8035185737f5a743fca1c940e806cd5e735a4573414774eb"}

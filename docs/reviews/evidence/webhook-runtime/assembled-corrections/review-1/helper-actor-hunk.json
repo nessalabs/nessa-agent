@@ -1,0 +1,5 @@
+{
+  "path": "crates/nessa-server/src/webhooks/infrastructure/outbox/registry.rs",
+  "old": "ExpiryObserver::Lifecycle => \"lifecycle\".into(),",
+  "new": "ExpiryObserver::Lifecycle => format!(\"delivery:{}\", uuid::Uuid::nil()),"
+}

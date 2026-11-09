@@ -5,7 +5,6 @@ kind: "statechart"
 status: "mixed"
 summary: "A widget can appear inside a message, as a tab in its chat's right panel, or over the desktop window."
 parent: "desktop-workspace"
-sourceRevision: "33d918afaf8485e67bb956d37c42b8ae9559de36"
 sources:
   - "src/desktop/widgets/application/registry.ts"
   - "src/desktop/widgets/ui/plugin.ts"
@@ -14,7 +13,6 @@ sources:
   - "src/desktop/widgets/ui/inline-widget.tsx"
   - "src/desktop/workspace/adapters/store/widget-hosts.ts"
   - "src/desktop/workspace/ui/chrome/panel-content.tsx"
-  - "src/desktop/workspace/ui/chrome/window-tabs.tsx"
   - "src/desktop/workspace/model/chat-panel.ts"
   - "src/desktop/workspace/application/usecases/chat-panel.ts"
   - "src/desktop/workspace/ui/panes/use-filled-after-first-paint.ts"
@@ -39,7 +37,7 @@ diagramLinks:
 
 # open a widget inline, in the panel, or over the window
 
-A widget can appear inside a message, as a tab in its chat's right panel, or over the desktop window. Opening it chooses one of these places while retaining the conversation it came from. Each chat has its own panel; opening a widget there brings its chat to the front first (its pane focused, or shown in the focused pane) and shows the panel. A widget open already comes to the front where it is. Conversation documents have separate tabs in the window toolbar; a widget never takes a pane.
+A widget can appear inside a message, as a tab in its chat's right panel, or over the desktop window. Opening it chooses one of these places while retaining the conversation it came from. Each chat has its own panel; opening a widget there brings its chat to the front first (its pane focused, or shown in the focused pane) and shows the panel. A widget open already comes to the front where it is. Chats themselves have no tabs, and a widget never takes a pane.
 
 Native widgets and MCP Apps use different content sources. Gateway mode uses server-provided apps; sample mode uses a fixture. See [connection modes](README.md#connection-modes). A view over the window is still inside Nessa, not a separate operating-system window.
 
@@ -72,3 +70,11 @@ stateDiagram-v2
 ## Further reading
 
 [Source](../../../../../src/desktop/widgets/application/registry.ts) · [Related source](../../../../../src/desktop/widgets/ui/plugin.ts) · [Related tests](../../../../../src/desktop/widgets/application/registry.test.ts)
+
+## Model coverage
+
+Disposition: shared owner model. The app mount and per-chat panel own the modeled view lifetime. [desktop-mcp-app-view](mcp-app-view-lifecycle.md) [desktop-workspace-open-resize-expand-and-restore-the-right-panel](open-resize-expand-and-restore-the-right-panel.md)
+
+Excluded: Plugin host-table projection, escape-stack priority and non-app widget availability are pure contracts; window navigation and mount migration remain unmodeled.
+
+Source review scope: owner entry points and relevant regression declarations were inventoried against frozen source `77a6b620af4d94b234294f6d273fd74b3dfb44c7`. Existing source checkpoints are retained where this was a partial review. A model result establishes bounded design safety only. Browser appearance and interaction were not checked.

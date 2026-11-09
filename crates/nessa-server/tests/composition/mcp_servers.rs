@@ -44,7 +44,6 @@ fn agents(servers: Vec<StdioMcpServer>) -> AgentsConfig {
             })
             .collect(),
         stand_ins: Default::default(),
-        open_credentials: Default::default(),
         mcp_stand_ins: Default::default(),
         channel_instructions: None,
         review_deadlines: crate::composition::agent::review_deadlines(),
@@ -1795,7 +1794,11 @@ async fn a_composed_gateways_dropped_context_is_written_by_its_recorder() {
     .unwrap()
     .expect("composed");
     let audit = Arc::new(KeptAudit::default());
-    let ports = super::super::local_auth::mcp_app_ports(&mut composed, audit.clone());
+    let ports = super::super::local_auth::mcp_app_ports(
+        &mut composed,
+        audit.clone(),
+        Arc::new(crate::app_call_test_support::Trusted::default()),
+    );
     let fixture = Fixture::dropping_to(ports.dropped).await;
     fixture
         .update_context(INSTANCE, Some("Showing April"), None)

@@ -12,7 +12,7 @@ use crate::app_call_test_support::{
     caller, Fixture, Hold, INSTANCE, OTHER_INSTANCE, SERVER, UI_TOOL,
 };
 use crate::conversation::application::app_reviews::{
-    ALLOW, APP_REVIEW_DEADLINE, DENY, MAX_HELD_CONTEXTS, MAX_OPEN_APP_REVIEWS,
+    ALLOW, ALLOW_APP, APP_REVIEW_DEADLINE, DENY, MAX_HELD_CONTEXTS, MAX_OPEN_APP_REVIEWS,
 };
 use crate::conversation::application::{
     ContextDrop, ConversationModeRequest, ConversationModeRequestState, ConversationRepository,
@@ -734,6 +734,114 @@ async fn m7_every_message_asks_and_allowing_one_allows_no_other() {
     assert!(!two.is_finished());
     fixture.answer(&second, DENY).await;
     assert_eq!(refused(two.await.unwrap()), McpAppError::ApprovalDenied);
+}
+
+#[tokio::test]
+async fn m7_always_allowing_an_app_sends_its_later_messages_unasked() {
+    use crate::conversation::application::TrustedApps;
+    let fixture = Fixture::new().await;
+    let (task, review) = fixture.held_message(INSTANCE, "first").await;
+    // A message offers to allow the app from now on.
+    assert_eq!(
+        review
+            .options
+            .iter()
+            .map(|option| option.id.as_str())
+            .collect::<Vec<_>>(),
+        [ALLOW, ALLOW_APP, DENY]
+    );
+    fixture.answer(&review, ALLOW_APP).await;
+    task.await.unwrap().unwrap();
+    assert!(fixture.trusted.trusts(SERVER));
+    // The choice is on record apart from the one message's approval.
+    let phases = fixture.audit.phases();
+    let approved = phases
+        .iter()
+        .position(|phase| matches!(phase, McpAppAuditPhase::Approved { .. }))
+        .unwrap();
+    assert!(matches!(
+        &phases[approved + 1],
+        McpAppAuditPhase::AppTrusted { permission_id, kept: true }
+            if *permission_id == review.permission_id
+    ));
+    fixture.idle().await;
+    // Every later message of the app goes without a review, from any mount.
+    fixture
+        .send_message(OTHER_INSTANCE, "second")
+        .await
+        .unwrap();
+    assert!(fixture.app_reviews().await.is_empty());
+    fixture.idle().await;
+    assert_eq!(fixture.provider.executions.lock().unwrap().len(), 3);
+}
+
+#[tokio::test]
+async fn m7c_an_app_untrusted_from_settings_is_asked_about_again() {
+    let fixture = Fixture::new().await;
+    let (task, review) = fixture.held_message(INSTANCE, "first").await;
+    fixture.answer(&review, ALLOW_APP).await;
+    task.await.unwrap().unwrap();
+    fixture.idle().await;
+    assert_eq!(
+        fixture.service.trusted_apps(),
+        Some(vec![SERVER.to_owned()])
+    );
+    let settings = Arc::new(crate::conversation_test_support::RecordingSettingsAudit::default());
+    fixture.service.bind_settings_audit(settings.clone());
+    let person = fixture.caller("revoke");
+    // A revoke that cannot be recorded is refused, and the app stays allowed.
+    settings
+        .failing
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    assert!(matches!(
+        fixture.service.untrust_app(&person, SERVER).await,
+        Err(ConversationError::Audit)
+    ));
+    assert_eq!(
+        fixture.service.trusted_apps(),
+        Some(vec![SERVER.to_owned()])
+    );
+    settings
+        .failing
+        .store(false, std::sync::atomic::Ordering::SeqCst);
+    // Revoked in Settings: the list no longer holds it, and a second revoke
+    // finds nothing to do. Each is on record as the person's.
+    assert!(matches!(
+        fixture.service.untrust_app(&person, SERVER).await,
+        Ok(true)
+    ));
+    assert!(matches!(
+        fixture.service.untrust_app(&person, SERVER).await,
+        Ok(false)
+    ));
+    assert_eq!(fixture.service.trusted_apps(), Some(Vec::new()));
+    {
+        use crate::conversation::application::SettingsOutcome;
+        let applied = |changed| SettingsOutcome::Applied {
+            changed,
+            coordinator: None,
+        };
+        assert_eq!(
+            settings.outcomes(),
+            [
+                SettingsOutcome::Requested,
+                applied(true),
+                SettingsOutcome::Requested,
+                applied(false),
+            ]
+        );
+        let records = settings.records.lock().unwrap();
+        assert!(records.iter().all(|record| record.caller == person
+            && record.change
+                == crate::conversation::application::SettingsChange::AppUntrust {
+                    server: SERVER.to_owned()
+                }));
+    }
+    // Its next message waits for the person again, offering Always allow.
+    let (task, again) = fixture.held_message(OTHER_INSTANCE, "second").await;
+    assert!(again.options.iter().any(|option| option.id == ALLOW_APP));
+    fixture.answer(&again, DENY).await;
+    assert_eq!(refused(task.await.unwrap()), McpAppError::ApprovalDenied);
 }
 
 #[tokio::test]
@@ -3134,11 +3242,16 @@ async fn c15c_a_delete_giving_way_before_its_stop_reached_the_apps_drops_once_as
     // without its apps' end, as `c15_a_delete_drops_what_is_still_held_as_the_deleters`
     // has it — so the delete's stop waits for it, and has ended no app.
     let opening = Arc::new(super::super::Slot {
+        acquisition: Arc::new(
+            crate::conversation::application::service::OpeningResources::default(),
+        ),
         value: tokio::sync::OnceCell::new(),
         ready: Notify::new(),
         started: std::sync::atomic::AtomicBool::new(true),
         stopping: std::sync::atomic::AtomicBool::new(false),
         touched: std::sync::atomic::AtomicU64::new(0),
+        closing: std::sync::atomic::AtomicBool::new(false),
+        closing_changes: tokio::sync::Mutex::new(()),
     });
     let live = fixture
         .service

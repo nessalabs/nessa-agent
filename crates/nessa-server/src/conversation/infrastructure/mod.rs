@@ -5,7 +5,10 @@
 //! `nessa-local-database`), and is the repository, the summaries and the
 //! listing and the reader-scoped catalogue at once. Paired lists acquire
 //! their bounded rows and scoped head in one transaction (L9 in
-//! `docs/design/record-subscriptions.md`). `export_facts` reads that
+//! `docs/design/record-subscriptions.md`). An admission snapshot reads the
+//! row, tombstone, catalogue incarnation and `change_revision` in one
+//! transaction, so another connection's tombstone cannot pair a live row
+//! with the new revision. `export_facts` reads that
 //! database for the export cut: live grants, and grants whose latest journal
 //! row is a revoke.
 //!
@@ -124,6 +127,8 @@ mod scheduled_messages;
 #[cfg(unix)]
 pub(crate) mod ssh_environment;
 mod store;
+#[cfg(test)]
+pub(crate) use store::GrantWritePause;
 mod thread_reports;
 pub use background_tasks::LocalBackgroundTasks;
 #[cfg(unix)]
@@ -163,11 +168,15 @@ pub use creation_audit::DurableConversationCreationAudit;
 
 mod mode_audit;
 pub use mode_audit::DurableConversationModeAudit;
+mod settings_audit;
+pub use settings_audit::DurableSettingsAudit;
 mod drive_tool_audit;
 pub use drive_tool_audit::DurableDriveToolAudit;
 
 mod mcp_app_audit;
 pub use mcp_app_audit::DurableMcpAppAudit;
+mod trusted_apps;
+pub use trusted_apps::DurableTrustedApps;
 
 mod context_drops;
 pub use context_drops::audit_context_drops;
@@ -210,6 +219,8 @@ pub(crate) use record_read::TestReadGate;
 mod agent_tool_audit;
 pub use agent_tool_audit::DurableAgentToolAudit;
 
+mod ownership_audit;
+pub use ownership_audit::DurableOwnershipAudit;
 #[cfg(unix)]
 mod workspaces;
 #[cfg(unix)]
@@ -217,6 +228,12 @@ pub(crate) use workspaces::ThreadWorkspaces;
 
 mod workspace_runtime_config;
 pub(crate) use workspace_runtime_config::BoatRuntimeConfig;
+mod pool_config;
+pub(crate) use pool_config::PoolConfig;
+#[cfg(unix)]
+mod pool_settings;
+#[cfg(unix)]
+pub(crate) use pool_settings::ConfigPoolSettings;
 
 #[cfg(any(unix, test))]
 mod input_files;

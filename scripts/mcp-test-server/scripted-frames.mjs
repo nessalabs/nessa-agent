@@ -91,16 +91,18 @@ export function harnessInfo(agent) {
 }
 
 /**
- * `initialize`'s result: protocol 1, the pinned harness, and `session/resume`,
+ * `initialize`'s result: protocol 1, the pinned harness, `session/resume`,
  * which both pinned harnesses offer and a gateway needs to carry a turn on
- * after it restarts. Nothing else optional is offered.
+ * after it restarts, and image prompts, which both take too, so an image
+ * sent from a window reaches the scenario (`${prompt.images}`). Nothing else
+ * optional is offered.
  */
 export const initializeResult = (agent) => ({
   protocolVersion: 1,
   agentInfo: harnessInfo(agent),
   agentCapabilities: {
     loadSession: false,
-    promptCapabilities: {},
+    promptCapabilities: { image: true },
     sessionCapabilities: { resume: {} },
   },
   authMethods: [],

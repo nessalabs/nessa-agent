@@ -94,6 +94,7 @@ impl Namespace {
             })
             .unwrap();
         AuthenticateSession {
+            policy: &nessa_auth::adapters::cedar::CedarPolicyEvaluator::new().unwrap(),
             verifier: registry.as_ref(),
             access: registry.as_ref(),
             clock: &SystemClock,

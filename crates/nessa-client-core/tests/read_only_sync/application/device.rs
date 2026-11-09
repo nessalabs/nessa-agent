@@ -377,6 +377,7 @@ fn published_pinned_classifier_preserves_phase_receiver_and_epoch() {
         credential: CredentialId::new("credential").unwrap(),
         receiver: ResourceId::new("receiver").unwrap(),
         access_epoch: 7,
+        tunnel_secret: nessa_protocol::tunnel::TunnelSecret::new([9; 32]),
     };
     assert_eq!(
         PinnedStatus::from_native(&active),
@@ -391,6 +392,7 @@ fn published_pinned_classifier_preserves_phase_receiver_and_epoch() {
         receiver: ResourceId::new("r".repeat(nessa_sync::replication::domain::MAX_ID_BYTES + 1))
             .unwrap(),
         access_epoch: 7,
+        tunnel_secret: nessa_protocol::tunnel::TunnelSecret::new([9; 32]),
     };
     assert_eq!(PinnedStatus::from_native(&oversized), None);
     let terminal = NativePairingStatus::Terminal {

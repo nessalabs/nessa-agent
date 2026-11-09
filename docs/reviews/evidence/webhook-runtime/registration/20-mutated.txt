@@ -1,0 +1,18 @@
+
+running 1 test
+test webhooks::infrastructure::outbox::store::tests::registration_tests::replayed_current_revocation_and_expiry_do_not_install_reserved_destination ... FAILED
+
+failures:
+
+---- webhooks::infrastructure::outbox::store::tests::registration_tests::replayed_current_revocation_and_expiry_do_not_install_reserved_destination stdout ----
+
+thread 'webhooks::infrastructure::outbox::store::tests::registration_tests::replayed_current_revocation_and_expiry_do_not_install_reserved_destination' (83086) panicked at /tmp/nessa-registration-probes/crates/nessa-server/src/webhooks/infrastructure/outbox/../../../../tests/webhooks/infrastructure/outbox/registration.rs:340:9:
+assertion failed: matches!(f.command(&f.store).execute(f.proposed()).await,
+    Err(RegistrationFailure::Stopped))
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    webhooks::infrastructure::outbox::store::tests::registration_tests::replayed_current_revocation_and_expiry_do_not_install_reserved_destination
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 83 filtered out; finished in 0.01s

@@ -65,7 +65,7 @@ use nessa_protocol::product::generated::{
 use nessa_protocol::product_contract::generated::{ConversationErrorCode, RecordReadErrorCode};
 use nessa_protocol::product_contract::ConnectionOutcome;
 use nessa_protocol::relay::{host_port, RelayAddress, RelayRefusal, DIRECT_HEAD_START};
-use nessa_protocol::tunnel::TunnelAddress;
+use nessa_protocol::tunnel::{TunnelAddress, TunnelSecret};
 use nessa_sync::replication::{
     application::{StoreError, SyncError},
     catalogue::{
@@ -73,7 +73,8 @@ use nessa_sync::replication::{
     },
     domain::{Id, Limits, Scope},
 };
-use relay::{connect_any, race, relay_leg, RelayRoute};
+pub(crate) use relay::race;
+use relay::{connect_any, relay_leg, RelayRoute};
 use std::cell::Cell;
 use std::io::{Read, Result as IoResult, Write};
 use std::net::{Shutdown, SocketAddr, TcpStream};
@@ -402,31 +403,54 @@ impl Cancellation for Stopping {
 /// Neither route connected in time.
 pub fn dial_native(
     address: SocketAddr,
-    tunnel: Option<&TunnelAddress>,
+    tunnel: Option<(&TunnelAddress, &TunnelSecret)>,
     timeout: Duration,
 ) -> IoResult<TcpStream> {
-    let Some(tunnel) = tunnel.cloned() else {
+    let Some((tunnel, secret)) = tunnel else {
         return TcpStream::connect_timeout(&address, timeout);
     };
+    let tunnel = tunnel.clone();
+    let secret = *secret;
     // The direct leg keeps the typed address, so an IPv6 scope id survives;
     // a `host:port` string would lose it.
     race(
         move |left| TcpStream::connect_timeout(&address, left),
-        move |left| crate::tunnel::dial(&tunnel, left),
+        move |left| crate::tunnel::dial(&tunnel, &secret, left),
         timeout,
         DIRECT_HEAD_START,
         &|| false,
     )
 }
+static INSTALLED_TUNNEL_SECRET: Mutex<Option<TunnelSecret>> = Mutex::new(None);
+
+/// Remember `secret` for [`dial_gateway`]'s tunnel leg.
+///
+/// An environment process installs the secret it saved when its pairing
+/// became active. The dial that carries the tunnel address cannot take the
+/// secret as a parameter: that source is part of the lease-protocol
+/// fingerprint the published worker is pinned to.
+pub fn install_tunnel_secret(secret: Option<TunnelSecret>) {
+    *INSTALLED_TUNNEL_SECRET
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner) = secret;
+}
+
+fn installed_tunnel_secret() -> Option<TunnelSecret> {
+    *INSTALLED_TUNNEL_SECRET
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+}
+
 /// Connect to the gateway at `address` (`host:port`, each address it
 /// resolves to tried in turn) within `timeout`, the same way a retained read
 /// does: direct, then, with a `relay`, through that relay for the gateway
-/// whose key is the pin beside it (`docs/design/auth/relay.md`, "Direct, then relay"),
-/// and with a `tunnel`, through the gateway's web tunnel
-/// (`docs/design/auth/tunnel.md`); with both, those two at once. What
-/// connects is a plain stream; the caller's pinned TLS decides whether the
-/// gateway is the one it paired with. A paired environment dials its
-/// gateway with it.
+/// whose key is the pin beside it (`docs/design/auth/relay.md`, "Direct, then relay").
+/// A `tunnel` is dialed when [`install_tunnel_secret`] has put this
+/// process's paired secret in place: the web tunnel admits only a request
+/// that carries it. A product session sends its own secret and does not use
+/// this dial. What connects is a plain stream; the caller's pinned TLS
+/// decides whether the gateway is the one it paired with. A paired
+/// environment dials its gateway with it.
 ///
 /// # Errors
 /// `address` is not `host:port`, or the pin beside a relay is not a key
@@ -468,16 +492,20 @@ pub fn dial_gateway(
         }
         None => None,
     };
-    let tunnel = tunnel.cloned();
+    // The environment dial cannot grow a parameter: its source is part of
+    // the lease-protocol fingerprint the published worker is pinned to.
+    // `env dial` installs the secret it saved at approval, and this uses it.
+    let tunnel = tunnel.cloned().zip(installed_tunnel_secret());
     let beyond: Box<dyn FnOnce(Duration) -> IoResult<TcpStream> + Send> = match (route, tunnel) {
         (None, None) => return connect_any(address, deadline),
         (Some(route), None) => Box::new(move |left| relay_leg(&route, left)),
-        (None, Some(tunnel)) => Box::new(move |left| crate::tunnel::dial(&tunnel, left)),
-        // Both are beyond the local network: neither is preferred.
-        (Some(route), Some(tunnel)) => Box::new(move |left| {
+        (None, Some((tunnel, secret))) => {
+            Box::new(move |left| crate::tunnel::dial(&tunnel, &secret, left))
+        }
+        (Some(route), Some((tunnel, secret))) => Box::new(move |left| {
             race(
                 move |left| relay_leg(&route, left),
-                move |left| crate::tunnel::dial(&tunnel, left),
+                move |left| crate::tunnel::dial(&tunnel, &secret, left),
                 left,
                 Duration::ZERO,
                 &|| false,

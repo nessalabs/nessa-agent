@@ -31,6 +31,8 @@ export function prepareMacosRuntime({
     out,
     executables,
     requestedTarget,
+    // Boat VMs run Linux: a local build carries that `nessa` too.
+    hostBuilds: true,
     prepareNode({ executable, out: runtime }) {
       return prepareBundledNode({
         arch,

@@ -1,7 +1,9 @@
 //! macOS host: accessory app, native frost, WKWebView pin, AppKit live resize,
 //! the desktop window's traffic lights.
 
+mod claude_sign_in;
 mod live_resize;
+mod minted;
 mod overlay;
 mod provider_login;
 mod traffic_lights;
@@ -111,6 +113,21 @@ impl Host for Macos {
         // decision — and so the window — while a cold browser starts. Left
         // unwaited it would be a zombie per click, for the life of a menu bar
         // app that runs for days.
+        thread::spawn(move || {
+            let _ = child.wait();
+        });
+        Ok(())
+    }
+
+    fn open_file(&self, path: &std::path::Path) -> Result<(), String> {
+        // `-t`: the person's default text editor, whatever app claims `.json`
+        // (often a viewer that cannot save).
+        let mut child = Command::new("/usr/bin/open")
+            .arg("-t")
+            .arg(path)
+            .spawn()
+            .map_err(|error| error.to_string())?;
+        // Reaped on a thread of its own, as a link's opener is.
         thread::spawn(move || {
             let _ = child.wait();
         });

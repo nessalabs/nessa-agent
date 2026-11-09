@@ -7,6 +7,8 @@
 //! their agents work in, is a [`Channel`].
 mod channel;
 mod conversation_deletion;
+mod pool_preference;
+mod settings_scope;
 mod share_access;
 mod tool_call;
 mod vm_lifetime;
@@ -27,8 +29,10 @@ pub use share_access::{
 };
 pub use tool_call::{ToolCall, ToolSource};
 pub use workspace_window::{
-    PaneContent, PanePlace, WidgetRef, WindowArrangement, WindowColumn, WindowPane, WindowRefusal,
-    WindowShowing, WorkspaceWindow,
+    PaneContent, PanePlace, WidgetRef, WindowArrangement, WindowColumn, WindowPane, WindowPanel,
+    WindowRefusal, WindowShowing, WorkspaceWindow, MAX_PANEL_TABS,
 };
 
-pub use vm_lifetime::{VmLifetime, VmLifetimeScope, VmLifetimeSettings};
+pub use pool_preference::{PoolPreference, PoolRefusal, PoolSettings, MAX_POOL_ENTRIES};
+pub use settings_scope::SettingsScope;
+pub use vm_lifetime::{VmLifetime, VmLifetimeSettings};

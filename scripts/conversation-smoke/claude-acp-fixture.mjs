@@ -232,6 +232,20 @@ async function receive(message) {
       return
     }
     if (expectedExecutionId === "execution-cancel") return
+    if (expectedExecutionId.startsWith("measure-stream-")) {
+      const long = expectedExecutionId.endsWith("-long")
+      const chunks = long ? 20 : 6
+      const piece = long ? `${"delta ".repeat(30)}` : "token "
+      for (let i = 0; i < chunks; i++) {
+        update(providerSessionId, {
+          sessionUpdate: "agent_message_chunk",
+          content: { type: "text", text: `${piece}${i} ` },
+        })
+        await new Promise((resolve) => setTimeout(resolve, 30))
+      }
+      finishPending("end_turn")
+      return
+    }
     finishPending("end_turn")
     return
   }

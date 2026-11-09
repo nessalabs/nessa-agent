@@ -1,4 +1,5 @@
 use super::operational_limits::OperationalLimits;
+use super::turn_timing::TurnTimings;
 use crate::agent_install::application::AgentInstallations;
 use crate::agents::application::{AgentProbe, SharedAgentReadiness};
 use crate::agents::infrastructure::NativeHooksPreferences;
@@ -20,6 +21,7 @@ use crate::mcp_servers::{
     infrastructure::ResourceTicketStore,
 };
 use crate::peer_gateways::infrastructure::PeerCommands;
+use crate::webhooks::infrastructure::WebhookRuntime;
 use axum::extract::FromRef;
 use nessa_auth::{
     application::{
@@ -116,6 +118,9 @@ pub struct ProductRouteState {
     pub(crate) verifier: Arc<dyn CredentialVerifier>,
     pub(crate) access: Arc<dyn AccessReader>,
     pub(crate) clock: Arc<dyn Clock>,
+    /// Send-to-first-token samples written under the log directory. Quiet
+    /// until composition points it at that file. Nothing leaves the machine.
+    pub(crate) local_timings: Arc<TurnTimings>,
     pub(crate) policy: Arc<dyn PolicyEvaluator>,
     pub(crate) owner_phone_purpose: Arc<dyn OwnerPhonePurposeSource>,
     pub(crate) owner_phone_policy: Arc<dyn OwnerPhonePolicyEvaluator>,
@@ -161,6 +166,7 @@ pub struct ProductRouteState {
     /// composed, and then that route answers every ticket `404`.
     pub(crate) resource_tickets: Option<(Arc<ResourceTicketStore>, Arc<dyn McpAppAudit>)>,
     pub(crate) admin: Option<Arc<dyn CredentialAdmin>>,
+    pub(crate) webhooks: Option<Arc<WebhookRuntime>>,
     /// Reconciles the deletion inventory after `conversation.unshare`.
     /// Absent, the grant is still revoked.
     pub(crate) fence_capture: Option<Arc<dyn FenceCapture>>,
@@ -185,9 +191,26 @@ pub struct ProductRouteState {
     /// The web tunnel this run serves (`pairing.tunnel`, `server.reach`).
     /// `None` when it runs none.
     pub(crate) tunnel: Option<crate::tunnel::application::TunnelView>,
+    /// Paired devices' tunnel secrets. `None` when this gateway does not pair devices.
+    pub(crate) tunnel_secrets:
+        Option<std::sync::Arc<dyn crate::tunnel::application::DeviceTunnelSecrets>>,
+    /// The hub's devices (`devices.list`). `None` answers
+    /// `devices_unavailable`.
+    pub(crate) devices: Option<Arc<crate::devices::application::Devices>>,
+    /// Suggesting and connecting SSH hosts and choosing the default device
+    /// (`devices.sshHosts`, `devices.connectSsh`, `devices.setDefault`), and
+    /// the default the catalog names. `None` — not Unix — answers
+    /// `devices_unavailable`.
+    pub(crate) device_setup: Option<Arc<crate::devices::application::DeviceSetup>>,
+    /// Moves each time the default device is saved: the catalog's
+    /// subscribers read it again.
+    pub(crate) default_device: Option<watch::Receiver<Option<String>>>,
     /// The GitHub sign-in (`github.*`). `None` — no agents run here —
     /// answers `github_not_configured`.
     pub(crate) github: Option<Arc<super::GithubRoutes>>,
+    /// The voice key and calls (`voice.*`). `None` answers
+    /// `voice_not_configured`.
+    pub(crate) voice: Option<Arc<crate::voice::application::VoiceCalls>>,
     /// Shared vault; each socket attaches a distinct non-owning lease.
     pub(crate) vault: Option<Arc<super::VaultRoutes>>,
     #[cfg(unix)]
@@ -318,18 +341,25 @@ impl ProductRouteState {
             verifier: dependencies.verifier,
             access: dependencies.access,
             clock: dependencies.clock,
+            local_timings: Arc::new(TurnTimings::quiet()),
             policy: dependencies.policy,
             owner_phone_purpose: dependencies.owner_phone_purpose,
             owner_phone_policy: dependencies.owner_phone_policy,
             owner_phone_receivers: dependencies.owner_phone_receivers,
             admin: None,
+            webhooks: None,
             fence_capture: None,
             mcp_server_settings: None,
             mcp_authorization: None,
             pairing: None,
             native_linking: None,
             tunnel: None,
+            tunnel_secrets: None,
+            devices: None,
+            device_setup: None,
+            default_device: None,
             github: None,
+            voice: None,
             vault: None,
             vault_lease: None,
             #[cfg(unix)]
@@ -367,6 +397,14 @@ impl ProductRouteState {
         self
     }
 
+    pub(crate) fn with_local_timings(
+        mut self,
+        store: Arc<dyn super::turn_timing::FirstTokenStore>,
+    ) -> Self {
+        self.local_timings = Arc::new(TurnTimings::recording(store));
+        self
+    }
+
     pub fn with_settings(mut self, settings: SessionSettings) -> Self {
         self.settings = settings;
         self
@@ -381,6 +419,13 @@ impl ProductRouteState {
         self.upload_begins = Arc::new(Semaphore::new(limits.upload_begins()));
         self.deletions = Arc::new(Semaphore::new(limits.deletions()));
         self.limits = limits;
+        self
+    }
+
+    /// Bind the concrete retained webhook/ordinary credential command owner.
+    pub fn with_webhooks(mut self, runtime: Arc<WebhookRuntime>) -> Self {
+        self.admin = Some(runtime.clone());
+        self.webhooks = Some(runtime);
         self
     }
 
@@ -449,9 +494,45 @@ impl ProductRouteState {
         self
     }
 
+    /// Register the tunnel secrets issued at pairing.
+    pub(crate) fn with_tunnel_secrets(
+        mut self,
+        secrets: std::sync::Arc<dyn crate::tunnel::application::DeviceTunnelSecrets>,
+    ) -> Self {
+        self.tunnel_secrets = Some(secrets);
+        self
+    }
+
+    /// Set the hub's machines up from Devices, and offer the default device
+    /// `default` holds in the catalog.
+    #[cfg_attr(not(unix), allow(dead_code))]
+    pub(crate) fn with_device_setup(
+        mut self,
+        setup: Arc<crate::devices::application::DeviceSetup>,
+        default: watch::Receiver<Option<String>>,
+    ) -> Self {
+        self.device_setup = Some(setup);
+        self.default_device = Some(default);
+        self
+    }
+
+    pub(crate) fn with_devices(
+        mut self,
+        devices: Arc<crate::devices::application::Devices>,
+    ) -> Self {
+        self.devices = Some(devices);
+        self
+    }
+
     /// Register the GitHub sign-in the github methods answer for.
     pub fn with_github(mut self, github: Arc<super::GithubRoutes>) -> Self {
         self.github = Some(github);
+        self
+    }
+
+    /// Register the voice key and calls the voice methods answer for.
+    pub fn with_voice(mut self, voice: Arc<crate::voice::application::VoiceCalls>) -> Self {
+        self.voice = Some(voice);
         self
     }
 
@@ -589,12 +670,21 @@ impl ProductRouteState {
             .as_array()
             .map(|places| places.iter().filter_map(Value::as_str).collect())
             .unwrap_or_default();
+        // The default device, while it is one of those places.
+        let default = self
+            .default_device
+            .as_ref()
+            .and_then(|default| default.borrow().clone())
+            .filter(|default| places.contains(&default.as_str()));
         let command_hosts = self
             .conversations
             .as_ref()
             .map(|service| service.owner_command_hosts(places))
             .unwrap_or_default();
         catalog["commandHosts"] = Value::from(command_hosts);
+        if let Some(default) = default {
+            catalog["defaultEnvironment"] = Value::from(default);
+        }
         // The stored hooks choice, read now. The composed catalog's own copy
         // is never shown.
         let selection = self
@@ -610,6 +700,14 @@ impl ProductRouteState {
     /// seen as of now; `None` on a gateway that pairs no environments.
     pub(crate) fn agents_catalog_changes(&self) -> Option<watch::Receiver<u64>> {
         let mut changes = self.connected_environments.as_ref()?.changes.clone();
+        changes.mark_unchanged();
+        Some(changes)
+    }
+
+    /// A wake-up each time the default device is saved, seen as of now;
+    /// `None` where Devices cannot set one.
+    pub(crate) fn default_device_changes(&self) -> Option<watch::Receiver<Option<String>>> {
+        let mut changes = self.default_device.clone()?;
         changes.mark_unchanged();
         Some(changes)
     }

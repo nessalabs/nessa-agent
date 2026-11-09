@@ -39,6 +39,7 @@ struct SavedState {
     snapshot: Option<SessionSnapshot>,
     writes: usize,
     fail_write: Option<usize>,
+    lose_write_ack: Option<usize>,
     fail_queue: Option<QueueMutation>,
     panic_queue: Option<QueueMutation>,
     fail_scheduling: Option<(String, InvocationStage)>,
@@ -323,7 +324,13 @@ impl SessionStorageLease for MemoryStore {
                     panic!("provider settlement save panic, committed={commit_first}");
                 }
             }
-            state.publish(binding, snapshot, units, digest)
+            let receipt = state.publish(binding, snapshot, units, digest)?;
+            if state.lose_write_ack == Some(state.writes) {
+                return Err(StorageError::Io(
+                    "fixture committed write acknowledgement lost".into(),
+                ));
+            }
+            Ok(receipt)
         })
     }
     fn erase(&self) -> StorageFuture<'_, ()> {
@@ -359,7 +366,8 @@ async fn snapshot_fixture_keeps_exact_receipt_prefix_and_reset_capability() {
             .unwrap(),
         receipt
     );
-    let context = ProviderContext::Recorded(ExecutionSessionId::new("extended-context").unwrap());
+    let context =
+        ProviderContext::recorded_after(ExecutionSessionId::new("extended-context").unwrap(), 0);
     let changed_context = SessionChange::ProviderContext {
         before: ProviderContext::Absent,
         after: context,
@@ -453,6 +461,10 @@ impl MemoryStorage {
     }
     pub(super) fn fail_scheduling(&self, id: &str, stage: InvocationStage) {
         self.0.lock().unwrap().fail_scheduling = Some((id.into(), stage));
+    }
+    pub(super) fn lose_next_ack(&self) {
+        let mut state = self.0.lock().unwrap();
+        state.lose_write_ack = Some(state.writes + 1);
     }
     pub(super) fn fail_next(&self) {
         let mut state = self.0.lock().unwrap();
@@ -1106,10 +1118,14 @@ async fn unfinished_saved_invocations_are_retained_without_automatic_replay() {
         queue_history: Vec::new(),
         id: SessionId::new("conversation").unwrap(),
         provider: provider.identity(),
-        provider_context: ProviderContext::Recorded(
+        provider_context: ProviderContext::recorded_after(
             ExecutionSessionId::new("saved-context").unwrap(),
+            0,
         ),
         invocations: vec![InvocationRecord {
+            decline: None,
+            cancellation_delivery: None,
+            resumed_from: None,
             target_event_offset: None,
             provider_report: None,
             local_cancellation: None,
@@ -1238,10 +1254,14 @@ async fn restored_unresolved_admission_is_never_redispatched_by_retry() {
             queue_history,
             id: SessionId::new("conversation").unwrap(),
             provider: provider.identity(),
-            provider_context: ProviderContext::Recorded(
+            provider_context: ProviderContext::recorded_after(
                 ExecutionSessionId::new("saved-context").unwrap(),
+                0,
             ),
             invocations: vec![InvocationRecord {
+                decline: None,
+                cancellation_delivery: None,
+                resumed_from: None,
                 target_event_offset: None,
                 provider_report: None,
                 local_cancellation: None,

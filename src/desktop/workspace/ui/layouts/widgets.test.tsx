@@ -193,12 +193,12 @@ describe("a card in a message", () => {
     // Its chat is the one the panel is for: no way back to it is drawn.
     expect(shownPanel.querySelector("nav")?.textContent).toBe("Sample trail")
     expect(caret()).toBe(bodyOf(shownPanel))
-    // The panel's widget tabs are distinct from the window's conversation tabs.
+    // The panel's tabs are the only ones: none for the chats.
     expect(
       [...host.querySelectorAll('[role="tablist"]')].filter(
         (list) => !list.closest("#workspace-panel"),
       ),
-    ).toHaveLength(1)
+    ).toEqual([])
   })
 })
 

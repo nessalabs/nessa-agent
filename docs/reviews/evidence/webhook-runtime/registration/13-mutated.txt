@@ -1,0 +1,19 @@
+
+running 1 test
+test webhooks::infrastructure::outbox::store::tests::registration_tests::installed_intent_contradictions_reject_before_live_or_restored_publication ... FAILED
+
+failures:
+
+---- webhooks::infrastructure::outbox::store::tests::registration_tests::installed_intent_contradictions_reject_before_live_or_restored_publication stdout ----
+
+thread 'webhooks::infrastructure::outbox::store::tests::registration_tests::installed_intent_contradictions_reject_before_live_or_restored_publication' (82520) panicked at /tmp/nessa-registration-probes/crates/nessa-server/src/webhooks/infrastructure/outbox/../../../../tests/webhooks/infrastructure/outbox/registration.rs:458:13:
+assertion `left == right` failed: issuer
+  left: Ok(())
+ right: Err(Invalid)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    webhooks::infrastructure::outbox::store::tests::registration_tests::installed_intent_contradictions_reject_before_live_or_restored_publication
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 83 filtered out; finished in 0.02s

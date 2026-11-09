@@ -13,9 +13,9 @@ use serde_json::Value;
 use super::app::GithubApp;
 use crate::agent_install::infrastructure::https_archives::install_tls_backend;
 use crate::github::application::{
-    ApiFailure, DeviceAuthorization, DeviceCode, GithubApi, PollAnswer,
+    ApiFailure, DeviceAuthorization, DeviceCode, GithubApi, GithubReadFailure, PollAnswer,
 };
-use crate::github::domain::{AccessToken, GithubAccount};
+use crate::github::domain::{AccessToken, GithubAccount, GithubReadKind, GithubRepository};
 
 /// Shorter than [`CALL_TIMEOUT`], so a connect that never completes fails
 /// as itself.
@@ -131,6 +131,40 @@ impl GithubApi for GithubHttps {
             .header("X-GitHub-Api-Version", "2022-11-28")
             .bearer_auth(token.expose());
         account(&self.send(request).await?)
+    }
+
+    async fn read_repository(
+        &self,
+        token: &AccessToken,
+        repository: &GithubRepository,
+        kind: GithubReadKind,
+    ) -> Result<Value, GithubReadFailure> {
+        let path = repository
+            .path(kind)
+            .map_err(|_| GithubReadFailure::InvalidAnswer)?;
+        let url = self.app.at(&self.app.api_url, &path);
+        let request = self
+            .client
+            .get(url)
+            .header(reqwest::header::ACCEPT, "application/vnd.github+json")
+            .header("X-GitHub-Api-Version", "2022-11-28")
+            .bearer_auth(token.expose());
+        let answer = self.send(request).await.map_err(|failure| match failure {
+            ApiFailure::Unreachable => GithubReadFailure::Unreachable,
+            ApiFailure::Malformed => GithubReadFailure::InvalidAnswer,
+            ApiFailure::Rejected | ApiFailure::Unauthorized => GithubReadFailure::Unauthorized,
+        })?;
+        repository_answer(&answer)
+    }
+}
+
+fn repository_answer(answer: &Answer) -> Result<Value, GithubReadFailure> {
+    match answer.status {
+        200 => serde_json::from_slice(&answer.body).map_err(|_| GithubReadFailure::InvalidAnswer),
+        401 | 403 => Err(GithubReadFailure::Unauthorized),
+        404 => Err(GithubReadFailure::NotFound),
+        429 | 500..=599 => Err(GithubReadFailure::Unreachable),
+        _ => Err(GithubReadFailure::InvalidAnswer),
     }
 }
 
@@ -374,6 +408,31 @@ mod tests {
                        "expires_in": 899}),
             )),
             Err(ApiFailure::Malformed)
+        );
+    }
+
+    #[test]
+    fn repository_reads_refuse_redirects_errors_and_malformed_answers() {
+        assert_eq!(
+            repository_answer(&answer(200, json!({"id":7}))),
+            Ok(json!({"id":7}))
+        );
+        for (status, failure) in [
+            (302, GithubReadFailure::InvalidAnswer),
+            (401, GithubReadFailure::Unauthorized),
+            (403, GithubReadFailure::Unauthorized),
+            (404, GithubReadFailure::NotFound),
+            (429, GithubReadFailure::Unreachable),
+            (502, GithubReadFailure::Unreachable),
+        ] {
+            assert_eq!(repository_answer(&answer(status, json!({}))), Err(failure));
+        }
+        assert_eq!(
+            repository_answer(&Answer {
+                status: 200,
+                body: b"not JSON".to_vec()
+            }),
+            Err(GithubReadFailure::InvalidAnswer)
         );
     }
 }

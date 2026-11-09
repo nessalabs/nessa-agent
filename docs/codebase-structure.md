@@ -59,7 +59,8 @@ src/                      composition root (`main.tsx`, `store.ts`)
   diagnostics/            development page-console forwarding
 src-tauri/src/
   diagnostics.rs          debug-only page-to-terminal diagnostic bridge
-  host_log.rs             desktop startup log (`{data}/logs/host.log`)
+  host_log.rs             desktop startup log (`{data}/logs/host.log`) and the
+                          launch-to-gateway-ready samples beside it
   host_refusal.rs         typed startup refusals shared with the page
   host_refusal/copy.rs    startup copy consumed by refusals and the load document
   links/policy.rs         navigation decisions; links.rs owns the opener/plugin
@@ -268,7 +269,6 @@ against a private scripted gateway.
   `pane-item.ts`, a session or a widget, with the one codec to split panes'
   opaque key), `application/` (the
   `WorkspaceSource` port and pure use cases over the workspace's state, including
-  the open conversation document tabs in `usecases/session-tabs.ts` and
   each chat's right-panel tabs in `usecases/chat-panel.ts`),
   `adapters/` (the Redux slice, commands — one list in `store/commands.ts`,
   implemented for the index, the panes, and the session in
@@ -500,10 +500,10 @@ own current lifecycle and API contracts.
 | `domain/common/value_objects/` | Shared validated dates, URLs, and token limits. |
 | `domain/model_metadata/`, `domain/effective_capabilities/` | Model catalog invariants and immutable admission capabilities. |
 | `domain/agent_execution/` | Sessions, execution ordering, tools, permissions, prompts, and the subagent lifetime graph; DDD roles beneath each feature. |
-| `application/agent_execution/agents/` | Public Agent, scheduling, submission retry recovery, and one lifecycle owner for work generations, active work, and shutdown. An installed owned lifetime seals descendant admission; `Agent::close` stays attachment-only. |
+| `application/agent_execution/agents/` | Public Agent, scheduling, submission retry recovery, and one lifecycle owner for work generations, active work, and shutdown. Resumption saves `InvocationRecord::resumed_from` atomically with admitted successor input; persistence validates its preceding resumable source and exact binding through that same resumption owner before publication or restoration. The retained admission fact is independent of current eligibility; observation, submission retry following and live/historical owed supersession consume the canonical-link decision. Ordinary input never supplies that owner fact; `conformance/resumption/canonical_admission.rs` exercises actual caller-created collisions and restoration. An installed owned lifetime seals descendant admission; `Agent::close` stays attachment-only. |
 | `application/agent_execution/subagents/` | Ownership coordinator for admitted child attempts, retained cleanup owners and tree drains. `publication.rs` owns audit eligibility and durable projection through the write fence; `root.rs` owns admission through ID delivery and unclaimed-result reconciliation. Domain graph and actual Agent gates own lifecycle and runnable admission. Stage-specific publication semantics live in the [ADR329 audit-eligibility table](adr/todo/329-subagents.md#sdk-audit-eligibility-and-owned-root-delivery-628). `supervision.rs` contains injected effect phases after Ready capture; first-owner drain generations and bounded debt follow the [owned settlement table](adr/todo/329-subagents.md#owned-settlement-and-supervision-625-646-649). |
 | `application/agent_execution/providers/`, `hooks/` | Injected execution ports, operation capabilities, and typed invocation callbacks. |
-| `application/agent_execution/sessions/` | Local session identity, exclusive storage lease, backend-issued load/save bindings and immutable semantic units in `storage/save.rs`, retained attachment resources, snapshot evidence mapped through domain history rules, which apps a message may name (`app_sources.rs`: an MCP tool call of an earlier turn, asked at admission and of restored history), where a steered message stands in its target turn (`steering_position.rs`: target and offset taken at admission and read from saved history in one place), the validated committed transcript state/fold and retained allocation accounting, and the injected streaming commit clock port. |
+| `application/agent_execution/sessions/` | Local session identity, exclusive storage lease, backend-issued load/save bindings and immutable semantic units in `storage/save.rs`, retained attachment resources, snapshot evidence mapped through domain history rules, agreement between an agent turn's initiation and message sender (`authorship.rs`, at admission, incremental input folding and restoration), which apps a message may name (`app_sources.rs`: an MCP tool call of an earlier turn, asked at admission and of restored history), where a steered message stands in its target turn (`steering_position.rs`: target and offset taken at admission and read from saved history in one place), the validated committed transcript state/fold and retained allocation accounting, and the injected streaming commit clock port. |
 | `application/agent_execution/executions/`, `permissions/`, `tools/` | Domain coordination, weak permission authority carriers, attributed decisions, and observation/review projections. |
 | `infrastructure/acp/`, `claude_acp/`, `codex_acp/`, `opencode_acp/` | Shared transport lifecycle, and one module per provider for its own configuration and tool translation. Verification shared by more than one provider moves up into `acp/`, as ordered session configuration did once Codex and Opencode both needed it. |
 | `infrastructure/session_storage/` | Memory snapshots, SQLite semantic record persistence, shared unpublished-unit/completion lineage codec in `save_group.rs`, explicit evidence serialization, physical source identity/construction, shared framing validation and bounded terminal-discovery progress for sync-engine, chunked semantic checkpoints, shared read/write admission and shutdown ownership, the Tokio streaming commit clock adapter, and the ownership snapshot file `ownership.sqlite3`: `nessa-local-storage::physical_operation` owns physical admission and captured cleanup, with an independent Worker per adapter; sibling `ownership/tests.rs` holds queue, cancellation, poison and runtime watchdog regressions; `ownership/settlement.rs` owns the strict typed close-proof/Completion codec and `ownership/tests/settlement.rs` its real reopen and contradiction cases. |
@@ -831,6 +831,12 @@ audit boundary concerns the new unpaired `review.notice` decision.
 | Board or shared visibility changes during audit acknowledgement | Publisher discards the candidate and filters the current board/shared state before admission | `review_notice_reselects_after_shared_changes_during_audit` |
 | Every tentative selection changes before acknowledgement completes | At most three passes, then a typed temporary-unavailable close; no stale snapshot or unbounded retry | `review_notice_continuous_change_has_bounded_selection_attempts` |
 | Admitted snapshot waits for UI capacity, then authority changes | Already admitted snapshot may finish; pending version then produces a fresh audited replacement | `review_authority_updates_survive_waiting_publication` |
+| Tombstone commits on another connection during the admission read, then membership becomes Admin | The read's transaction keeps the live row with its old revision; token validation rejects it; the deleted row is not published | `a_tombstone_on_another_connection_during_the_admission_read_does_not_publish_to_a_new_admin` |
+| Deletion between the metadata read and the authority read, board still waiting | Live metadata is not combined with the new Admin role | `deletion_between_metadata_and_authority_does_not_publish_to_a_promoted_admin` |
+| Deletion after Cedar, before audit acknowledgement | The recorded decision stays the pre-deletion allow; the candidate is not admitted | `deletion_after_cedar_before_audit_ack_drops_admission_and_keeps_the_decision` |
+| Visibility changes while token validation waits | The board check after that wait drops the in-flight candidate | `visibility_change_during_token_validation_drops_the_in_flight_candidate` |
+| Catalogue incarnation replaced and the revision is reused | Token validation refuses the old incarnation; the deleted row is not published | `replaced_incarnation_with_a_reused_revision_does_not_publish_deleted_metadata` |
+| Deletion after the frame is admitted, while UI capacity waits | The admitted notice may still be delivered | `deletion_after_admission_still_delivers_the_admitted_notice` |
 | Sink fails, panics, or the injected deadline passes | Typed audit failure prevents the snapshot and closes through the independent control lane; cleanup still runs | `review_notice_audit_failure_closes_without_disclosure` |
 | Audit fails while the control lane is full | Publisher completion reaches the connection owner through its retained join handle; close admission may fail, but the owner always stops receiving and tears down | `review_notice_audit_failure_with_full_control_lane_ends_connection` |
 | Publisher terminates unexpectedly | Connection owner observes completion, requests temporary-unavailable closure and tears down instead of retaining a silent live connection | `review_notice_publisher_panic_ends_connection` |
@@ -1007,7 +1013,10 @@ switch contract, and `infrastructure/store/agent_switches.rs` for its metadata
 journal. SDK `application/agent_execution/sessions/handoffs.rs` owns handoff
 identity, folding, and carried-history assembly; domain
 `agent_execution/prompts/value_objects/carried_history.rs` owns bounded carried
-values. The [handoff design](design/conversation-handoffs.md)
+values, including typed agent origin for copied inputs. Snapshot `agent_source.rs`
+shares source serialization between initiation and carried history. Public origin
+rejection tests live in `tests/infrastructure/session_storage/authorship.rs`.
+The [handoff design](design/conversation-handoffs.md)
 maps these owners to their regressions; usage-limit invalidation belongs to
 the existing scheduler owner before an applied switch is committed.
 
@@ -1648,6 +1657,55 @@ in one catch-all file. New MCP shell code is the small Rust example; the desktop
 gateway context demonstrates an application port with native adapters. Older SDK
 paths remain current until the coordinated TODO updates all consumers.
 
+## Outbound webhook foundation
+
+The outbound [webhook foundation](design/webhook-delivery-implementation.md)
+lives under `crates/nessa-server/src/webhooks`: immutable delivery and destination
+values in `domain/value_objects`, message/transport ports in `application`, and
+JSON, HMAC, DNS and HTTPS in `infrastructure`. Tests use the same layer names
+under `tests/webhooks`. `application/admission.rs` combines current credential
+effect holds, principal grant revision holds, checked conversation metadata and
+the existing conversation Cedar evaluator. Credential mutation fences live in
+the auth registry; principal/resource fences remain in the grant store.
+`application/outbox.rs` publishes the persistence port and limits.
+`infrastructure/outbox` owns the private database: `store` owns the lifetime lock
+and bounded physical operations; `schema` publishes and validates every owned SQLite definition against its one SQL schema; `stored` validates restored
+identity and scope; `cursor` decodes complete cursor values for startup and live
+reads; `audit` owns closed typed historical records and validates transitions
+through the domain owner; `codec` owns the current serialized values; `capacity` owns
+accounting; `queue` advances source cursor and delivery together; `journal` owns
+state/audit commits, source-change context and retirement; `publication` writes
+immutable audit files and exact acknowledgements; `restoration` exhaustively
+correlates every audit variant with retained facts and owns delivery-history
+validation before effects; `retirement` retains bounded secret-free original
+identity/stop facts and the exact retirement audit identity through lost
+acknowledgement; `source_reset` owns immutable original reset facts and first-capture
+membership (`source_reset/store.rs`) and bounded reference retention; `registry`
+persists installation target facts. `infrastructure/outbox/stop.rs` is the single
+bounded retained stop codec shared by live, retired and audit state.
+`application/registration_stop.rs` consumes the actual held Auth fact and derives
+the lifecycle projection; it grants no delivery permission and is not a command
+supervisor. Auth owns retained revocation decoding separately from its
+current-credential binding. `application/registration.rs` asks the
+existing auth owner to issue and correlates the returned credential/transition,
+then installs under a current credential hold. `infrastructure/outbox/intents.rs`
+retains bounded immutable private proposal/configuration facts across uncertain
+auth and installation acknowledgements; they supply no permission verdict.
+The installed registration references that original intent, and transactional
+retirement deletes the private configuration together with the registration. Tests remain in
+`tests/webhooks/infrastructure/outbox.rs`, with shared reset ownership cases in
+`tests/webhooks/infrastructure/outbox/source_reset.rs`.
+`composition/webhooks.rs` loads private registration configuration;
+`infrastructure/runtime.rs` owns public issue/revoke/grant commands and shutdown.
+`runtime/delivery.rs` composes canonical principal reads, contiguous durable
+queueing, fresh dispatch admission and signed HTTPS. `composition/root.rs` starts
+that worker after fallible startup and joins it through product cleanup.
+`tests/webhooks/infrastructure/product{,_delivery}.rs` exercises public product
+commands with disposable authorities and an isolated TLS recipient. Whole-feature
+review, source-matched platform CI, browser and conversation stress qualification
+remain incomplete; mounted fixtures alone do not establish readiness. The outbox
+does not supply permission or open a listener.
+
 ## Browser sessions
 
 `crates/nessa-server/src/browser_session/` owns browser sign-in: `application/`
@@ -2216,6 +2274,11 @@ The `nessa-server` crate builds the `nessa` executable. `cli/entrypoint/` parses
 commands, `cli/application/` coordinates token requests through its gateway port,
 and `cli/infrastructure/` implements the bounded local WebSocket adapter.
 `composition/cli.rs` wires the adapter, clock, identities and stdout/stderr.
+`nessa doctor` adds `timings` from `core/local_timings.rs`, read from the log
+directory on this machine and not sent. The gateway appends first-token samples
+through `product/turn_timing.rs`.
+`scripts/measure-subscription-bytes.mjs` counts `conversation.view` bytes for
+one streamed turn over a local proxy shaped like a slow link.
 `install-agent` is parsed here too — its agent name is read into `AgentName` at
 this edge, so nothing further in holds a name it still has to doubt — and
 `composition/install_command.rs` runs it on a blocking thread, because the work
@@ -2589,8 +2652,11 @@ actual private scope locks through physical calls and captures until drain.
 Its original prepare/restore/recovery calls use that same parent admission;
 close capture preserves native-confirmed physical release independently of a
 historical failure. `swift/NativeProductWorker.swift` dispatches the actual product
-child with separately admitted Ready, event and submission lanes. Native tickets
-settle on an independent wait lane; their captures retain native count/byte
+child. Ready and events each admit one waiter and refuse a second as busy.
+`swift/ProductSubmitLane.swift` runs one submission hand-off at a time and keeps
+later submissions waiting in arrival order until that hand-off returns; it does
+not refuse them and it does not wait for the reply. Native tickets
+settle on an independent concurrent wait lane; their captures retain native count/byte
 permits, original UInt64 identity and typed settlement. Synchronous close wakes
 native I/O before physical drain joins those captures. Neither wrapper allocates
 transport IDs, implements request deadlines or copies private device keys.
@@ -2610,11 +2676,63 @@ admission evidence and its audit port; `infrastructure/agent_tool_audit.rs`
 persists it. The built-in collection in relay composition keeps these tools
 independent of optional environment commands. See the [ordering and ownership
 contract](design/agent-thread-tools.md). The fifth, `read_window`, reads the
-windows `product/workspace.rs` holds for each connection in
+windows `product/workspace.rs` holds for each connection — panes and the
+focused chat's right panel — in
 `application/workspace_windows.rs` (domain shape in
 `domain/value_objects/workspace_window.rs`), through
 `service/workspace_windows.rs`; see [the window an agent
 shares](design/agent-window.md).
+
+Gateway parent/child Stop orchestration lives in
+`conversation/application/service/owned_threads.rs` (ordinary empty-child
+preparation), `parent_stop.rs` (durable exact target selection, supervision and confirmed
+Stop history reconciliation after process loss),
+and `thread_report_admission.rs` (validated admitted delivery chains through SDK
+canonical successors, exact Stop receipt facts, and person admission delivery fences).
+Stop checks the existing person Submit receipts across each complete chain before
+selecting its current execution; report settlement consumes that same chain view.
+They reuse the SDK ownership graph and existing command receipts.
+Creation recovery observes principal-scoped receipts through the same joined
+command reader, then holds the original command lease while the coordinator
+records verified pre-initialization absence. `owned_recovery.rs` exercises the
+actual Accepted/Attempted crash prefixes and rejected discovery evidence.
+SDK recovery/quota boundaries live under
+`nessa-sdk/tests/application/agent_execution/subagents/capacity/preparation_recovery.rs`.
+`conversation/infrastructure/ownership_audit.rs` persists coordinator transition
+evidence through the ordinary durable audit owner. Namespace
+`composition/runtime_config.rs` owns `subagents.stopChildrenOnParentStop` and
+`subagents.maxLiveThreads` (the live thread cap `owned_threads.rs` checks under
+the thread admission lock; see [Worker pool preferences](design/worker-pool-preferences.md)).
+The pool order lives in `conversation/infrastructure/pool_config.rs` (config.json
+`pool`), is saved by `pool_settings.rs` and read by `application/placement.rs`.
+The real coordinator/SQLite regressions live in `tests/conversation/parent_stop.rs`;
+`tests/conversation/parent_stop/confirmed_recovery.rs` kills a process between
+native cancel acknowledgement and turn settlement, retaining exact command authority.
+It also rejects the final decline write or loses its acknowledgement through real
+SQLite, then checks retry, settlement and reopening. `resumption.rs` flushes the
+existing session owner's retained evidence before recovery completes or its durable
+unfinished mark clears. `conformance/resumption/cleanup_proof_panics.rs` exercises
+retirement save construction, poll and drop faults for start, abandonment and
+Authorized-close through that same writer. `lifecycle_cleanup_proof.rs` polls the
+new evidence boundary behind an admitted proof writer before any audit effect.
+`conformance/close_reports/owned_root.rs` keeps bare SDK roots Closing until the
+same provider's actual executable-use release receipt, independently of audit;
+its late-receipt matrix covers Final/Suspend without inventing child capacity.
+`conversation/leases/cleanup_counts.rs` checks each actual backend cleanup identity
+across late End acknowledgement and a later opening, including duplicate/missing
+cleanup counterexamples. The SDK session manager distinguishes an applied scheduling
+decision from its persistence acknowledgement; the decline owner audits that actual
+decision and retains independent persistence and audit failures.
+`verification/desktop/scripts/parent-stop.mjs` exercises the ordinary Stop button.
+
+`nessa-server/src/composition/github_tools.rs` serves fixed repository, issue
+and pull request GETs as a separate built-in MCP server. It uses the same live
+source-turn admission before `github/application/connections.rs` reads the
+current sign-in. `github/domain/repository.rs` owns validated path segments
+and operations; `github/infrastructure/api.rs` fixes the GitHub host, request
+deadline, redirect policy and body bound. Provider opens and managed shell
+commands receive no Nessa GitHub credentials. See the [GitHub sign-in and
+broker contract](design/github-connect.md).
 
 ## Background tasks
 

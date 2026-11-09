@@ -3,9 +3,10 @@ id: desktop-mcp-integration-management
 title: Manage MCP integrations
 kind: statechart
 status: implemented
-summary: Settings reads stored MCP servers, submits revision-bound changes and rereads uncertain outcomes; inspection has its own request owner.
+summary: Settings reads stored MCP servers, submits revision-bound changes and
+  rereads uncertain outcomes; inspection has its own request owner.
 parent: desktop-workspace
-sourceRevision: "7f434845423686cdd01a17300c47d10d46911f50"
+sourceRevision: "54eada082563badb344bf0fb23c85c318f024b2a"
 sources:
   - src/desktop/settings/model/mcp-servers.ts
   - src/desktop/settings/model/mcp-servers.test.ts
@@ -13,6 +14,7 @@ sources:
   - src/desktop/settings/adapters/mcp-servers-gateway.test.ts
   - src/desktop/settings/ui/integrations-tab.tsx
   - src/desktop/settings/ui/integrations-tab.test.tsx
+  - src-tauri/src/gateway_config.rs
 diagramLinks: {}
 diagramDetails:
   - diagram: 0
@@ -27,11 +29,27 @@ diagramDetails:
   - diagram: 1
     node: Inspecting
     section: Inspection and retirement
+model:
+  spec: tla/services/desktop/workspace/manage-mcp-integrations.tla
+  config: tla/services/desktop/workspace/manage-mcp-integrations.cfg
+modelCheck:
+  sourceRevision: "54eada082563badb344bf0fb23c85c318f024b2a"
+  checker: tlc-1.7.4
+  date: 2026-11-03T03:27:53.202Z
+  config: tla/services/desktop/workspace/manage-mcp-integrations.cfg
+  modelDigest: 24236c4ced1feb49005655651917a82a78f04f81442187ea43be311fc9213c62
+  states: 11
+  held:
+    - PendingIdentity
+    - CompletionIdentity
+    - SlotMeaning
+    - NoFuturePublication
+  broke: []
+  unchecked: []
 ---
-
 # Manage MCP integrations
 
-Settings → Connections → Integrations manages the gateway's stored MCP server configuration. Add, edit, enable, remove, remote authorization and inspection are separate actions from opening an MCP App inside a conversation. A sample window without a gateway shows a pending entry rather than pretending to save configuration.
+Settings → Connections → MCP servers manages the gateway's stored MCP server configuration. Add, edit, enable, remove, remote authorization and inspection are separate actions from opening an MCP App inside a conversation. A sample window without a gateway shows a pending entry rather than pretending to save configuration.
 
 The desktop reducer owns the current administrative request, correlated by sequence number. The gateway owns configuration validity and authorization. The chart follows that request and its list evidence; an edit form, consent link and inspection can coexist with it.
 
@@ -57,7 +75,7 @@ stateDiagram-v2
 
 A successful list supplies management access and the revision a later write must name. Local write admission requires that evidence, a connected transport and no pending administrative request. The gateway still decides who may manage and whether a proposed configuration is valid. A false local guard leaves the request unsent.
 
-Add and Edit retain a draft; Save additionally requires the form's published bounds and kept-value requirements to be satisfied. Managed rows cannot be edited or toggled. Duplicate names form a read-only group because the gateway targets by name; removal confirms the first matching stored row. An oversized list exposes removal by a typed name at the refusal's revision, rather than inventing a partial list. Stored secret values are not listed: keeping one is an explicit null value in the save contract, with launch-change restrictions enforced by the form model and gateway.
+Each server is one row with its switch and a ⋯ menu; Add, Edit, Show Tools and Remove each open a dialog. Add and Edit retain a draft; a stored server's command and arguments are named but not edited in the window: Edit's "Open config.json" asks the desktop host to open the gateway's own config file (macOS and Linux app only). Save additionally requires the form's published bounds and kept-value requirements to be satisfied. Managed rows cannot be edited or toggled. Duplicate names form a read-only group because the gateway targets by name; removal confirms the first matching stored row. An oversized list exposes removal by a typed name at the refusal's revision, rather than inventing a partial list. Stored secret values are not listed: a stored variable rests as "Stored" until Replace, and keeping one is an explicit null value in the save contract. A replaced value left empty holds Save until a value is typed or Keep restores the stored one, so a save never blanks a stored value. Launch-change restrictions are enforced by the form model and gateway.
 
 ## Write outcomes and recovery
 
@@ -86,3 +104,15 @@ A running inspection cannot be dismissed through Close in this reducer. Its sequ
 ## Evidence and execution limits
 
 [Reducer cases](../../../../../src/desktop/settings/model/mcp-servers.test.ts) cover administrative ordering, revisions, kept values, duplicate names and outcomes. [Gateway tests](../../../../../src/desktop/settings/adapters/mcp-servers-gateway.test.ts) cover typed translation; [rendered-tab tests](../../../../../src/desktop/settings/ui/integrations-tab.test.tsx) cover controls and focus. This documents implemented behavior; it does not add a new settings regression suite or establish live remote-consent/native-process behavior. The gateway-backed MCP Apps pass exercises a different journey and is not management E2E evidence.
+
+## Bounded rule model
+
+Two request sequences model the reducer request slot and refusal of late responses. List, save, remove and authorize share sequencing, not backend semantics. Duplicate-name groups, revision conflicts, OAuth, inspection concurrency, form parsing and stored configuration are source contracts outside this bound. The model checks design safety, not the implementation. It asserts no liveness and abstracts transport timing into nondeterministic completion order. Regression sources are evidence of intended behavior; this documentation change does not claim their execution.
+
+## Model coverage
+
+Disposition: direct model. The bounded rule model section names the modeled owner slice and finite abstraction.
+
+Excluded: All exclusions stated in the owning Bounded rule model section remain outside verification.
+
+Source review scope: owner entry points and relevant regression declarations were inventoried against frozen source `77a6b620af4d94b234294f6d273fd74b3dfb44c7`. Existing source checkpoints are retained where this was a partial review. A model result establishes bounded design safety only. Browser appearance and interaction were not checked.

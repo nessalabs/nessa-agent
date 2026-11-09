@@ -260,6 +260,96 @@ const REVIEW_HTML = `<!doctype html>
 </html>
 `
 
+/** The MCP Apps resource the `talk_board` tool declares as its UI: a voice app's host needs. */
+export const TALK_URI = "ui://nessa-test/talk.html"
+
+/**
+ * The talk app: what a voice app such as Huddle asks of its host, without
+ * the voice. Its resource asks for the microphone (`_meta.ui.permissions`).
+ * Its `panel` button asks to be shown fullscreen, which a host shows in the
+ * chat's panel; its `send` button sends `ui/message` with the text of its
+ * `#text` field. `#sent` says `pending` until the host answers, then `ok`
+ * or `error: <message>`. Its state and display mode are on its body
+ * (`data-talk-state`, `data-talk-mode`), for a browser to read.
+ */
+const TALK_HTML = `<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Talk board</title>
+<style>body { margin: 0; padding: 12px; font: 13px/1.4 system-ui, sans-serif; } output { display: block; min-height: 1.4em; }</style>
+</head>
+<body data-talk-state="loading">
+<h1 style="font-size:14px;margin:0 0 8px">Talk board (nessa-test)</h1>
+<input id="text" aria-label="Message">
+<button data-talk="send">Send</button>
+<button data-talk="panel">Open in panel</button>
+<output id="sent"></output>
+<script>
+(function () {
+  var parentWindow = window.parent;
+  var body = document.body;
+  var next = 1;
+  var waiting = {};
+  function post(message) { parentWindow.postMessage(message, "*"); }
+  function ask(method, params) {
+    var id = next++;
+    post({ jsonrpc: "2.0", id: id, method: method, params: params });
+    return new Promise(function (resolve) { waiting[id] = resolve; });
+  }
+  function tell(method, params) { post({ jsonrpc: "2.0", method: method, params: params }); }
+  window.addEventListener("message", function (event) {
+    if (event.source !== parentWindow) return;
+    var message = event.data;
+    if (!message || message.jsonrpc !== "2.0") return;
+    if (message.id !== undefined && !message.method) {
+      // Only the asks this app made, by the ids it gave them.
+      if (!Object.prototype.hasOwnProperty.call(waiting, message.id)) return;
+      var resolve = waiting[message.id];
+      delete waiting[message.id];
+      resolve(message);
+      return;
+    }
+    if (message.method === "ui/notifications/host-context-changed" && message.params.displayMode)
+      body.setAttribute("data-talk-mode", message.params.displayMode);
+    if (message.method === "ui/resource-teardown") post({ jsonrpc: "2.0", id: message.id, result: {} });
+  });
+  function reportSize() {
+    tell("ui/notifications/size-changed", {
+      width: document.documentElement.scrollWidth,
+      height: document.documentElement.scrollHeight
+    });
+  }
+  ask("ui/initialize", {
+    appInfo: { name: "Talk board", version: "1.0.0" },
+    appCapabilities: { availableDisplayModes: ["inline", "fullscreen"] },
+    protocolVersion: "2026-01-26"
+  }).then(function (answer) {
+    if (answer.error) { body.setAttribute("data-talk-state", "refused"); return; }
+    body.setAttribute("data-talk-mode", answer.result.hostContext && answer.result.hostContext.displayMode || "inline");
+    body.setAttribute("data-talk-state", "live");
+    tell("ui/notifications/initialized", {});
+    reportSize();
+    new ResizeObserver(reportSize).observe(body);
+  });
+  document.querySelector('[data-talk="panel"]').addEventListener("click", function () {
+    ask("ui/request-display-mode", { mode: "fullscreen" });
+  });
+  document.querySelector('[data-talk="send"]').addEventListener("click", function () {
+    var sent = document.getElementById("sent");
+    sent.textContent = "pending";
+    ask("ui/message", {
+      role: "user",
+      content: [{ type: "text", text: document.getElementById("text").value }]
+    }).then(function (message) {
+      sent.textContent = message.error ? "error: " + message.error.message
+        : message.result && message.result.isError ? "error: isError" : "ok";
+    });
+  });
+})();
+</script>
+</body>
+</html>
+`
+
 const ROWS = [
   { id: 1, name: "alpha", value: 10 },
   { id: 2, name: "beta", value: 20 },
@@ -356,6 +446,14 @@ export const TOOLS = {
       structuredContent: { rows: ROWS.map(({ id }) => id) },
     }),
   },
+  talk_board: {
+    description:
+      "Show a board to talk over. Its UI is an MCP App that asks for the microphone. Takes no arguments.",
+    inputSchema: object({}),
+    annotations: { readOnlyHint: true },
+    _meta: { ui: { resourceUri: TALK_URI } },
+    call: () => ({ content: [{ type: "text", text: "A board to talk over." }] }),
+  },
   // Only an app may call it, and it says it destroys: a host asks the person
   // first. It deletes nothing; its answer is fixed.
   [APP_CALLS.destructive]: {
@@ -398,6 +496,17 @@ const RESOURCES = {
     mimeType: APP_MIME_TYPE,
     text: REVIEW_HTML,
     _meta: { ui: { csp: { connectDomains: [], resourceDomains: [] } } },
+  },
+  [TALK_URI]: {
+    name: "talk",
+    mimeType: APP_MIME_TYPE,
+    text: TALK_HTML,
+    _meta: {
+      ui: {
+        csp: { connectDomains: [], resourceDomains: [] },
+        permissions: { microphone: {} },
+      },
+    },
   },
 }
 

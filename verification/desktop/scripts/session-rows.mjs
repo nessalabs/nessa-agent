@@ -6,6 +6,8 @@
  * uncovers Archive and Delete as Mail's rows do, while a mouse drag stays the
  * drag to a pane and a right-click stays the row's menu.
  */
+import { settledOffset } from "./lib/swipe-geometry.mjs"
+import { sessionRowMenuMatches } from "./lib/session-row-menu.mjs"
 import { mkdirSync } from "node:fs"
 import { join } from "node:path"
 import { openPage, need, withEngines } from "./lib/browser.mjs"
@@ -22,7 +24,7 @@ await main(
 Checks, per engine:
   hover     away from a row its time shows and its buttons do not; under the
             pointer Archive and More take the time's place, 26 px each
-  more      More lists Rename, Pin, Archive and Delete…, and the row keeps its
+  more      More lists Rename, Pin, Fork, Archive and Delete…, and the row keeps its
             buttons while it is open; Rename edits the title in place and ↩
             keeps it
   delete    Delete… asks first; Cancel deletes nothing and the menu opens
@@ -71,10 +73,7 @@ Checks, per engine:
         const failures = []
         await openMore(page, row)
         const words = await page.locator(css.menuItem).allInnerTexts()
-        // Share… is there for a session the window may share.
-        const asked = words.filter((word) => word !== "Share…").join("|")
-        // A pinned row offers Unpin in Pin's place.
-        if (!/^Rename\|(Pin|Unpin)\|Fork\|Archive\|Delete…$/.test(asked))
+        if (!sessionRowMenuMatches(words))
           failures.push(`the menu read ${JSON.stringify(words)}`)
         if ((await row.getAttribute("data-actions")) !== "true")
           failures.push("the row let its buttons go while its menu was open")
@@ -362,44 +361,6 @@ function contentLeft(wrapper) {
       element.firstElementChild.getBoundingClientRect().left -
       element.getBoundingClientRect().left,
   )
-}
-
-/**
- * How far the open row's content has slid from where it rested closed
- * (`closed`, from `contentLeft`), and the tray's width, once it holds still.
- */
-async function settledOffset(wrapper, closed) {
-  const deadline = Date.now() + 3_000
-  let last = null
-  for (;;) {
-    const now = await wrapper.evaluate((element, from) => {
-      const content = element.firstElementChild
-      const tray = element.querySelector('[data-slot="workspace-swipe-row-actions"]')
-      return {
-        offset:
-          content.getBoundingClientRect().left -
-          element.getBoundingClientRect().left -
-          from,
-        // The open tray's width as SwipeRow states it: the tray itself spans
-        // the row, so a full swipe's leading action can stretch across it.
-        tray:
-          parseFloat(
-            getComputedStyle(
-              tray?.querySelector('[data-slot="workspace-swipe-row-action"]') ?? element,
-            ).getPropertyValue("--nessa-swipe-open"),
-          ) ||
-          (tray?.getBoundingClientRect().width ?? 0),
-      }
-    }, closed)
-    if (last && now.offset === last.offset && now.tray === last.tray && now.offset !== 0)
-      return now
-    if (Date.now() > deadline)
-      throw new Error(
-        `the open row never held still (${now.offset} px, tray ${now.tray} px)`,
-      )
-    last = now
-    await new Promise((resolve) => setTimeout(resolve, 50))
-  }
 }
 
 /** The label's text once it reads `want`, or what it reads at the deadline. */

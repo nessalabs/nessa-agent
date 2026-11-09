@@ -25,6 +25,9 @@
 //! one live read path a client follows a conversation, its list or the agent
 //! catalog by. Its frames share the socket's one writer and its one event
 //! numbering (`event_sequence`) with permission review notices.
+//!
+//! `turn_timing` notes, on this machine only, how long a send waited for the
+//! first reply text. `nessa doctor` reads that file; nothing is sent.
 
 mod attachment;
 pub(crate) mod catalogue_read;
@@ -40,6 +43,8 @@ mod refusal_causes;
 mod socket;
 mod state;
 mod subscription;
+pub(crate) mod turn_timing;
+mod webhook_reset;
 pub(crate) mod wire;
 mod workspace;
 
@@ -53,12 +58,15 @@ pub use state::{InvalidSessionSettings, ProductDependencies, ProductRouteState, 
 mod boat;
 mod channel;
 mod conversation;
+mod device_setup;
 mod github;
 mod mcp_apps;
 pub(crate) mod mcp_servers;
 mod native;
 mod pairing;
 mod peers;
+mod pool;
+mod voice;
 
 pub use github::GithubRoutes;
 pub use native::{DeviceCredentials, NativeSessions};
@@ -71,5 +79,6 @@ pub(crate) use conversation::dispatch as dispatch_conversation;
 #[cfg(test)]
 pub(crate) use socket::HostProductFixture;
 
+mod trusted_apps;
 mod vault;
 pub use vault::VaultRoutes;

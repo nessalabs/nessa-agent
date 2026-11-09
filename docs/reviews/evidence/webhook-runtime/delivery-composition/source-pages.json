@@ -1,0 +1,52 @@
+[
+  {
+    "page": "docs/state/services/gateway/webhook-admission.md",
+    "old": "fc713591785970b8eca5ec20ad819024bf131cb0",
+    "current": "365f769078a3d2298340952ba519edc515468332",
+    "sources": 26,
+    "changed": [
+      "crates/nessa-server/src/conversation/application/share_grants.rs",
+      "crates/nessa-server/src/conversation/infrastructure/store.rs",
+      "crates/nessa-server/src/conversation/infrastructure/store/share_grants.rs",
+      "crates/nessa-server/src/webhooks/application/admission.rs",
+      "crates/nessa-server/src/webhooks/infrastructure/outbox/registry.rs",
+      "crates/nessa-server/src/webhooks/infrastructure/runtime.rs",
+      "crates/nessa-server/src/webhooks/infrastructure/runtime/delivery.rs",
+      "crates/nessa-server/tests/webhooks/infrastructure/product.rs",
+      "crates/nessa-server/tests/webhooks/infrastructure/product_delivery.rs"
+    ],
+    "diagramBytesUnchanged": true
+  },
+  {
+    "page": "docs/state/services/gateway/webhook-issuance.md",
+    "old": "fc713591785970b8eca5ec20ad819024bf131cb0",
+    "current": "365f769078a3d2298340952ba519edc515468332",
+    "sources": 38,
+    "changed": [
+      "crates/nessa-server/src/webhooks/infrastructure/runtime.rs",
+      "crates/nessa-server/src/webhooks/infrastructure/runtime/delivery.rs",
+      "crates/nessa-server/tests/webhooks/infrastructure/product.rs",
+      "crates/nessa-server/tests/webhooks/infrastructure/product_delivery.rs"
+    ],
+    "diagramBytesUnchanged": true
+  },
+  {
+    "page": "docs/state/services/gateway/webhook-outbox.md",
+    "old": "fc713591785970b8eca5ec20ad819024bf131cb0",
+    "current": "365f769078a3d2298340952ba519edc515468332",
+    "sources": 51,
+    "changed": [
+      "crates/nessa-server/src/webhooks/application/outbox.rs",
+      "crates/nessa-server/src/webhooks/infrastructure/outbox/audit.rs",
+      "crates/nessa-server/src/webhooks/infrastructure/outbox/journal.rs",
+      "crates/nessa-server/src/webhooks/infrastructure/outbox/registry.rs",
+      "crates/nessa-server/src/webhooks/infrastructure/outbox/restoration.rs",
+      "crates/nessa-server/src/webhooks/infrastructure/outbox/restoration/progress.rs",
+      "crates/nessa-server/src/webhooks/infrastructure/outbox/retirement.rs",
+      "crates/nessa-server/src/webhooks/infrastructure/outbox/store.rs",
+      "crates/nessa-server/src/webhooks/infrastructure/runtime/delivery.rs",
+      "crates/nessa-server/tests/webhooks/infrastructure/product_delivery.rs"
+    ],
+    "diagramBytesUnchanged": true
+  }
+]

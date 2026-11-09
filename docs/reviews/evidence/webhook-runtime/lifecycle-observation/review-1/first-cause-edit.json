@@ -1,0 +1,6 @@
+{
+  "file": "crates/nessa-server/src/webhooks/domain/value_objects/registration_lifecycle.rs",
+  "old": "RegistrationPhase::ExpiryObserved => self.finish_observed(),",
+  "new": "RegistrationPhase::ExpiryObserved => self.changed(RegistrationPhase::Stopped, StopObservation::new(StopReason::Revoked { initiator }, at_ms)),",
+  "originalSha256": "6e89308e2dbbaadf5d54beaece6eb7a53adbadec4c64ead3ce475f8b810767db"
+}

@@ -13,6 +13,14 @@
 //! before another command can reorder the remainder; it is not provider dispatch.
 //!
 //! SessionManager owns local session identity, saved evidence, and the storage lease.
+//! InvocationRecord.decline retains original preparation and audit acknowledgement;
+//! the same semantic writer/validator and checkpoint codec own both. No empty
+//! owed-work observation can acknowledge that separate receipt.
+//! Hosts can use [`SessionManager::prepare_for_lease_record`] to record a refused
+//! lease before an Agent exists. This shares the evidence preparation owner while
+//! preserving saved provider identity and queue state. Ordinary Agent preparation
+//! still owns provider restoration; both intents flush retained writes before
+//! reloading the history.
 //! Explicit model/configuration controls retain before/after settings and their
 //! original actor through semantic records. `model_change` is the last model
 //! operation's recovery evidence; `current_configuration` is the latest setting
@@ -31,6 +39,10 @@
 //! ```
 //! Arrows show coordination and retained evidence. Provider-private execution
 //! state stays with the provider; snapshots never replay prompts automatically.
+//! ProviderContext retains the native ID and admission watermark in one value.
+//! Fresh publication excludes only the already-terminal invocation prefix;
+//! pending admissions count even when they precede attachment completion.
+//! Semantic changes and checkpoints validate this same boundary.
 //! CommittedTranscript -> records::continuation -> reversible records transitions
 //!                     -> validation::observations + retention::intervals
 //!                     -> existing domain history/queue and live controller limits
@@ -67,6 +79,7 @@
 //! evidence.
 
 mod app_sources;
+mod authorship;
 pub use app_sources::UnknownApp;
 mod artifacts;
 pub(crate) mod attachment;
@@ -115,11 +128,11 @@ pub use notes::{
     NoteRetirement, NoteRetirementReason, NoteState, NoteText, NoteValueError,
 };
 pub use storage::{
-    CommittedSession, InvocationCancellationEvent, InvocationRecord, InvocationSchedulingEvent,
-    ProviderContext, QueueHistoryRecord, SessionChange, SessionLoad, SessionLoadState,
-    SessionSaveBackend, SessionSaveGeneration, SessionSaveReceipt, SessionSaveUnit,
-    SessionSnapshot, SessionStorage, SessionStorageLease, StorageError, StorageFuture,
-    StorageShutdownFailure, SubmissionAcknowledgement, UnreadablePart,
+    CancellationDecision, CommittedSession, DeclineDecision, InvocationCancellationEvent,
+    InvocationRecord, InvocationSchedulingEvent, ProviderContext, QueueHistoryRecord,
+    SessionChange, SessionLoad, SessionLoadState, SessionSaveBackend, SessionSaveGeneration,
+    SessionSaveReceipt, SessionSaveUnit, SessionSnapshot, SessionStorage, SessionStorageLease,
+    StorageError, StorageFuture, StorageShutdownFailure, SubmissionAcknowledgement, UnreadablePart,
 };
 
 pub(crate) use transcript::CommittedTransactionState;

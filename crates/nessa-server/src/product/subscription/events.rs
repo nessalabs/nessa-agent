@@ -197,7 +197,11 @@ pub(super) async fn run(run: Run) {
             replied = true;
         }
         events.retain(|event| kinds.is_empty() || kinds.iter().any(|kind| kind == event.kind));
-        if last.as_deref() != Some(&cursor) {
+        // A page whose events all stay unpublished (streamed text, or kinds
+        // not asked for) sends nothing until the head: a long reply would
+        // otherwise send an empty frame per page, and a follower takes an
+        // empty frame as a hint that it has caught up.
+        if last.as_deref() != Some(&cursor) && (idle || !events.is_empty()) {
             let payload = frame(&id, &cursor, events);
             let encoded = EventFrame::push(
                 product_event::CONVERSATION_EVENTS,

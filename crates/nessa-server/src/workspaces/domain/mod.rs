@@ -6,5 +6,5 @@ pub(crate) use environment::{
     ObservedEnvironment,
 };
 pub(crate) use workspace::{
-    Assignment, BoatConnection, CleanupOutcome, Failure, RefusalDisposition,
+    Assignment, BoatConnection, ClaudeSignIn, CleanupOutcome, Failure, RefusalDisposition,
 };

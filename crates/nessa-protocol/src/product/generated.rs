@@ -633,6 +633,8 @@ pub struct ConversationMessage {
     pub files: Vec<LinkedFile>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub app: Option<ConversationMessageApp>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<ConversationAgentSource>,
     pub status: ConversationMessageStatus,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
@@ -647,6 +649,8 @@ pub struct ConversationMessage {
     pub parts: Vec<ConversationPart>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub steering_offset: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub starts_at: Option<ConversationPartPosition>,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -659,7 +663,15 @@ pub struct ConversationPending {
     pub files: Vec<LinkedFile>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub app: Option<ConversationMessageApp>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<ConversationAgentSource>,
     pub mode: ConversationPendingMode,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationAgentSource {
+    pub conversation_id: String,
+    pub execution_id: String,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -788,6 +800,7 @@ pub struct ConversationView {
     pub capabilities: ConversationCapabilities,
     pub lifecycle: ConversationLifecycle,
     pub truncated: bool,
+    pub earlier: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub interaction_view_error: Option<String>,
     pub queue_complete: bool,
@@ -854,6 +867,37 @@ pub struct ConversationPeekResult {
     pub conversation_id: String,
     #[serde(deserialize_with = "Option::deserialize")]
     pub execution_id: Option<String>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationPartPosition {
+    pub part: u64,
+    pub byte: u64,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationPoint {
+    pub execution_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub at: Option<ConversationPartPosition>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationReadEarlierParams {
+    pub conversation_id: String,
+    pub before: ConversationPoint,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub after: Option<ConversationPoint>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationEarlier {
+    pub conversation_id: String,
+    pub messages: Vec<ConversationMessage>,
+    pub tools: Vec<ConversationTool>,
+    pub handoffs: Vec<ConversationHandoff>,
+    pub more: bool,
+    pub truncated: bool,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -1635,6 +1679,23 @@ pub struct McpServersAuthorizeResult {
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AppsTrustedResult {
+    pub servers: Vec<String>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AppsUntrustParams {
+    pub request_id: String,
+    pub server: String,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AppsUntrustResult {
+    pub request_id: String,
+    pub applied: bool,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct McpServersRevokeParams {
     pub revision: String,
     pub id: String,
@@ -2033,6 +2094,8 @@ pub struct AgentsSetNativeHooksResult {
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AgentsListResult {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_environment: Option<String>,
     pub agents: Vec<AgentOption>,
     pub environments: Vec<String>,
     pub command_hosts: Vec<String>,
@@ -2587,6 +2650,155 @@ pub struct PairingTunnelResult {
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DeviceMachine {
+    pub hostname: String,
+    pub os: String,
+    pub os_version: String,
+    pub arch: String,
+    pub cpus: u64,
+    pub cpu_permille: u64,
+    pub memory_total_bytes: u64,
+    pub memory_used_bytes: u64,
+    pub disk_total_bytes: u64,
+    pub disk_used_bytes: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub disks: Option<Vec<DeviceDisk>>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DeviceDisk {
+    pub mount: String,
+    pub total_bytes: u64,
+    pub used_bytes: u64,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DeviceWorker {
+    pub environment: String,
+    pub state: String,
+    pub agents: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub machine: Option<DeviceMachine>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_seen_ms: Option<u64>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DevicesListResult {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_environment: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ssh_hosts: Option<Vec<DeviceSshHost>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hub: Option<DeviceMachine>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub listening: Option<String>,
+    pub workers: Vec<DeviceWorker>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next: Option<String>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DeviceSshHost {
+    pub host: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub port: Option<u64>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DevicesSshHostsResult {
+    pub suggested: Vec<DeviceSshHost>,
+    pub connecting: Vec<DeviceSshConnect>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DeviceSshConnect {
+    pub host: String,
+    pub state: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refusal: Option<String>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DevicesConnectSshParams {
+    pub host: String,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DevicesConnectSshResult {
+    pub connecting: DeviceSshConnect,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DevicesSetDefaultParams {
+    #[serde(deserialize_with = "Option::deserialize")]
+    pub environment: Option<String>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DevicesSetDefaultResult {
+    #[serde(deserialize_with = "Option::deserialize")]
+    pub default_environment: Option<String>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DevicesListParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub after: Option<String>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PoolPreference {
+    pub order: Vec<String>,
+    pub excluded: Vec<String>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DevicesPoolParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub channel_id: Option<String>,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+pub enum DevicesPoolSelection {
+    #[serde(rename = "default")]
+    Default,
+    #[serde(rename = "custom")]
+    Custom,
+}
+impl DevicesPoolSelection {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Default => "default",
+            Self::Custom => "custom",
+        }
+    }
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DevicesSetPoolParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub channel_id: Option<String>,
+    pub mode: DevicesPoolSelection,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preference: Option<PoolPreference>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DevicesPool {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub channel_id: Option<String>,
+    pub default_preference: PoolPreference,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub channel_override: Option<PoolPreference>,
+    pub busy_cpu_percent: u64,
+    pub busy_memory_percent: u64,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ServerReachResult {
     #[serde(deserialize_with = "Option::deserialize")]
     pub tunnel: Option<String>,
@@ -3080,12 +3292,15 @@ pub enum ConversationNoteAuthorKind {
     Owner,
     #[serde(rename = "grant")]
     Grant,
+    #[serde(rename = "agent")]
+    Agent,
 }
 impl ConversationNoteAuthorKind {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Owner => "owner",
             Self::Grant => "grant",
+            Self::Agent => "agent",
         }
     }
 }
@@ -3094,6 +3309,8 @@ impl ConversationNoteAuthorKind {
 pub struct ConversationNoteAuthor {
     pub kind: ConversationNoteAuthorKind,
     pub surface: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<ConversationAgentSource>,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -3122,6 +3339,8 @@ pub struct ConversationHandoffAgent {
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ConversationCarriedTurn {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<ConversationAgentSource>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub said: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -3425,6 +3644,14 @@ pub struct WorkspaceColumn {
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkspacePanel {
+    pub open: bool,
+    pub tabs: Vec<WorkspaceWidget>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub front: Option<WorkspaceWidget>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct WorkspaceWindow {
     pub arrangement: WorkspaceArrangement,
     pub sidebar: bool,
@@ -3432,6 +3659,7 @@ pub struct WorkspaceWindow {
     pub showing: WorkspaceShowing,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub widget: Option<WorkspaceWidget>,
+    pub panel: WorkspacePanel,
     pub columns: Vec<WorkspaceColumn>,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
@@ -3521,6 +3749,19 @@ pub struct ChannelCreateResult {
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ChannelSetPlacementParams {
+    pub request_id: String,
+    pub channel_id: String,
+    pub coordinator_placement: String,
+    pub thread_placement: String,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ChannelSetPlacementResult {
+    pub channel: Channel,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ChannelListParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub after: Option<String>,
@@ -3570,6 +3811,23 @@ impl VaultState {
 pub struct VaultStatus {
     pub state: VaultState,
 }
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+pub enum VaultPassphraseChangeState {
+    #[serde(rename = "locked")]
+    Locked,
+}
+impl VaultPassphraseChangeState {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Locked => "locked",
+        }
+    }
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct VaultPassphraseChangeStatus {
+    pub state: VaultPassphraseChangeState,
+}
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct VaultPassphraseParams {
@@ -3579,6 +3837,8 @@ pub struct VaultPassphraseParams {
 pub enum VaultErrorCode {
     #[serde(rename = "vault_unavailable")]
     VaultUnavailable,
+    #[serde(rename = "vault_forbidden")]
+    VaultForbidden,
     #[serde(rename = "vault_locked")]
     VaultLocked,
     #[serde(rename = "vault_passphrase_policy")]
@@ -3601,11 +3861,22 @@ pub enum VaultErrorCode {
     VaultAuditUnavailable,
     #[serde(rename = "vault_migration_unavailable")]
     VaultMigrationUnavailable,
+    #[serde(rename = "vault_change_unchanged")]
+    VaultChangeUnchanged,
+    #[serde(rename = "vault_change_unchanged_audit_unavailable")]
+    VaultChangeUnchangedAuditUnavailable,
+    #[serde(rename = "vault_change_not_confirmed")]
+    VaultChangeNotConfirmed,
+    #[serde(rename = "vault_change_not_confirmed_audit_unavailable")]
+    VaultChangeNotConfirmedAuditUnavailable,
+    #[serde(rename = "vault_changed_audit_unavailable")]
+    VaultChangedAuditUnavailable,
 }
 impl VaultErrorCode {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::VaultUnavailable => "vault_unavailable",
+            Self::VaultForbidden => "vault_forbidden",
             Self::VaultLocked => "vault_locked",
             Self::VaultPassphrasePolicy => "vault_passphrase_policy",
             Self::VaultWrongPassphrase => "vault_wrong_passphrase",
@@ -3617,12 +3888,26 @@ impl VaultErrorCode {
             Self::VaultCapacity => "vault_capacity",
             Self::VaultAuditUnavailable => "vault_audit_unavailable",
             Self::VaultMigrationUnavailable => "vault_migration_unavailable",
+            Self::VaultChangeUnchanged => "vault_change_unchanged",
+            Self::VaultChangeUnchangedAuditUnavailable => {
+                "vault_change_unchanged_audit_unavailable"
+            }
+            Self::VaultChangeNotConfirmed => "vault_change_not_confirmed",
+            Self::VaultChangeNotConfirmedAuditUnavailable => {
+                "vault_change_not_confirmed_audit_unavailable"
+            }
+            Self::VaultChangedAuditUnavailable => "vault_changed_audit_unavailable",
         }
     }
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct BoatSaveParams {
+    pub token: String,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BoatClaudeSignInParams {
     pub token: String,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
@@ -3737,6 +4022,126 @@ pub struct BoatRuntimeSettings {
     pub channel_override: Option<BoatVmLifetime>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub channel_id: Option<String>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationWebhookCursorParams {
+    pub conversation_id: String,
+    pub credential_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub include_source_head: Option<bool>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationWebhookResetParams {
+    pub conversation_id: String,
+    pub credential_id: String,
+    pub request_id: String,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationWebhookCursorResult {
+    pub scope: RecordScope,
+    pub position: String,
+    pub reset_required: bool,
+    #[serde(deserialize_with = "Option::deserialize")]
+    pub request_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observed_source_head: Option<ConversationRecordsHeadResult>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationWebhookResetResult {
+    pub request_id: String,
+    pub receipt_id: String,
+    pub scope: RecordScope,
+    pub position: String,
+    pub applied_at_ms: u64,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct VoiceStatus {
+    pub key_saved: bool,
+    pub model: String,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct VoiceSaveKeyParams {
+    pub key: String,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct VoiceStartCallParams {
+    pub conversation_id: String,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+pub enum VoiceTransport {
+    #[serde(rename = "webrtc")]
+    Webrtc,
+    #[serde(rename = "scripted")]
+    Scripted,
+}
+impl VoiceTransport {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Webrtc => "webrtc",
+            Self::Scripted => "scripted",
+        }
+    }
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+pub enum VoiceToolName {
+    #[serde(rename = "send_to_agent")]
+    SendToAgent,
+    #[serde(rename = "stop_agent")]
+    StopAgent,
+}
+impl VoiceToolName {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::SendToAgent => "send_to_agent",
+            Self::StopAgent => "stop_agent",
+        }
+    }
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct VoiceCall {
+    pub transport: VoiceTransport,
+    pub call_url: String,
+    pub client_secret: String,
+    pub expires_at: u64,
+    pub model: String,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+pub enum VoiceErrorCode {
+    #[serde(rename = "voice_not_configured")]
+    VoiceNotConfigured,
+    #[serde(rename = "voice_key_missing")]
+    VoiceKeyMissing,
+    #[serde(rename = "voice_key_rejected")]
+    VoiceKeyRejected,
+    #[serde(rename = "voice_unreachable")]
+    VoiceUnreachable,
+    #[serde(rename = "voice_storage_unavailable")]
+    VoiceStorageUnavailable,
+    #[serde(rename = "voice_audit_unavailable")]
+    VoiceAuditUnavailable,
+    #[serde(rename = "vault_locked")]
+    VaultLocked,
+}
+impl VoiceErrorCode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::VoiceNotConfigured => "voice_not_configured",
+            Self::VoiceKeyMissing => "voice_key_missing",
+            Self::VoiceKeyRejected => "voice_key_rejected",
+            Self::VoiceUnreachable => "voice_unreachable",
+            Self::VoiceStorageUnavailable => "voice_storage_unavailable",
+            Self::VoiceAuditUnavailable => "voice_audit_unavailable",
+            Self::VaultLocked => "vault_locked",
+        }
+    }
 }
 pub const MAX_PEERS: usize = 64;
 pub const MAX_CONNECTION_CONVERSATION_SUBSCRIPTIONS: usize = 8;
@@ -3872,6 +4277,8 @@ pub mod product_method {
     pub const MCP_SERVERS_INSPECT: &str = "mcpServers.inspect";
     pub const MCP_SERVERS_AUTHORIZE: &str = "mcpServers.authorize";
     pub const MCP_SERVERS_REVOKE: &str = "mcpServers.revoke";
+    pub const APPS_TRUSTED: &str = "apps.trusted";
+    pub const APPS_UNTRUST: &str = "apps.untrust";
     pub const PHONE_ENDPOINT: &str = "phone.endpoint";
     pub const PHONE_AUTHORIZE: &str = "phone.authorize";
     pub const PHONE_STATUS: &str = "phone.status";
@@ -3887,6 +4294,10 @@ pub mod product_method {
     pub const GITHUB_LIVE_EVENTS: &str = "github.liveEvents";
     pub const GITHUB_STATUS: &str = "github.status";
     pub const GITHUB_CONNECT: &str = "github.connect";
+    pub const DEVICES_LIST: &str = "devices.list";
+    pub const DEVICES_SSH_HOSTS: &str = "devices.sshHosts";
+    pub const DEVICES_CONNECT_SSH: &str = "devices.connectSsh";
+    pub const DEVICES_SET_DEFAULT: &str = "devices.setDefault";
     pub const GITHUB_CANCEL: &str = "github.cancel";
     pub const GITHUB_DISCONNECT: &str = "github.disconnect";
     pub const PEER_ENROLL: &str = "peer.enroll";
@@ -3904,7 +4315,9 @@ pub mod product_method {
     pub const WORKSPACE_PUBLISH: &str = "workspace.publish";
     pub const CHANNEL_CREATE: &str = "channel.create";
     pub const CHANNEL_LIST: &str = "channel.list";
+    pub const CHANNEL_SET_PLACEMENT: &str = "channel.setPlacement";
     pub const CONVERSATION_SUBSCRIBE_EVENTS: &str = "conversation.subscribeEvents";
+    pub const CONVERSATION_READ_EARLIER: &str = "conversation.readEarlier";
     pub const CONVERSATION_PEEK: &str = "conversation.peek";
     pub const CONVERSATION_SET_MODEL: &str = "conversation.setModel";
     pub const CONVERSATION_SWITCH_AGENT: &str = "conversation.switchAgent";
@@ -3912,12 +4325,22 @@ pub mod product_method {
     pub const VAULT_STATUS: &str = "vault.status";
     pub const VAULT_SETUP: &str = "vault.setup";
     pub const VAULT_UNLOCK: &str = "vault.unlock";
+    pub const VAULT_CHANGE_PASSPHRASE: &str = "vault.changePassphrase";
     pub const VAULT_LOCK: &str = "vault.lock";
     pub const BOAT_STATUS: &str = "boat.status";
     pub const BOAT_SAVE: &str = "boat.save";
+    pub const BOAT_SAVE_CLAUDE_SIGN_IN: &str = "boat.saveClaudeSignIn";
     pub const BOAT_DISCONNECT: &str = "boat.disconnect";
+    pub const DEVICES_POOL: &str = "devices.pool";
+    pub const DEVICES_SET_POOL: &str = "devices.setPool";
     pub const BOAT_RUNTIME_SETTINGS: &str = "boat.runtimeSettings";
     pub const BOAT_SET_RUNTIME_SETTINGS: &str = "boat.setRuntimeSettings";
+    pub const CONVERSATION_WEBHOOK_CURSOR: &str = "conversation.webhook.cursor";
+    pub const CONVERSATION_WEBHOOK_RESET: &str = "conversation.webhook.reset";
+    pub const VOICE_STATUS: &str = "voice.status";
+    pub const VOICE_SAVE_KEY: &str = "voice.saveKey";
+    pub const VOICE_FORGET_KEY: &str = "voice.forgetKey";
+    pub const VOICE_START_CALL: &str = "voice.startCall";
 }
 pub mod product_event {
     pub const SESSION_CHALLENGE: &str = "session.challenge";
@@ -4108,7 +4531,7 @@ pub fn wire_shape_product_session_ready(value: &Value) -> bool {
         }) && object.get("methods").is_some_and(|field| {
             let _ = field;
             field.as_array().is_some_and(|items| {
-                items.len() <= 101
+                items.len() <= 119
                     && items.iter().all(|item| {
                         let _ = item;
                         item.is_string()
@@ -4188,6 +4611,8 @@ pub const PRODUCT_READY_METHODS: &[&str] = &[
     "mcpServers.inspect",
     "mcpServers.authorize",
     "mcpServers.revoke",
+    "apps.trusted",
+    "apps.untrust",
     "phone.endpoint",
     "phone.authorize",
     "phone.status",
@@ -4203,6 +4628,10 @@ pub const PRODUCT_READY_METHODS: &[&str] = &[
     "github.liveEvents",
     "github.status",
     "github.connect",
+    "devices.list",
+    "devices.sshHosts",
+    "devices.connectSsh",
+    "devices.setDefault",
     "github.cancel",
     "github.disconnect",
     "peer.enroll",
@@ -4220,7 +4649,9 @@ pub const PRODUCT_READY_METHODS: &[&str] = &[
     "workspace.publish",
     "channel.create",
     "channel.list",
+    "channel.setPlacement",
     "conversation.subscribeEvents",
+    "conversation.readEarlier",
     "conversation.peek",
     "conversation.setModel",
     "conversation.switchAgent",
@@ -4228,12 +4659,22 @@ pub const PRODUCT_READY_METHODS: &[&str] = &[
     "vault.status",
     "vault.setup",
     "vault.unlock",
+    "vault.changePassphrase",
     "vault.lock",
     "boat.status",
     "boat.save",
+    "boat.saveClaudeSignIn",
     "boat.disconnect",
+    "devices.pool",
+    "devices.setPool",
     "boat.runtimeSettings",
     "boat.setRuntimeSettings",
+    "conversation.webhook.cursor",
+    "conversation.webhook.reset",
+    "voice.status",
+    "voice.saveKey",
+    "voice.forgetKey",
+    "voice.startCall",
 ];
 /// The grant Cedar is asked for before this method is dispatched.
 ///
@@ -4252,7 +4693,8 @@ pub fn action_for_method(method: &str) -> Option<&'static str> {
         | "agents.subscribe"
         | "agents.unsubscribe"
         | "agents.installOptions"
-        | "phone.endpoint" => Some("server.read"),
+        | "phone.endpoint"
+        | "devices.list" => Some("server.read"),
         "credential.issue"
         | "credential.list"
         | "credential.revoke"
@@ -4264,6 +4706,8 @@ pub fn action_for_method(method: &str) -> Option<&'static str> {
         | "mcpServers.inspect"
         | "mcpServers.authorize"
         | "mcpServers.revoke"
+        | "apps.trusted"
+        | "apps.untrust"
         | "phone.authorize"
         | "phone.status"
         | "pairing.create"
@@ -4278,6 +4722,9 @@ pub fn action_for_method(method: &str) -> Option<&'static str> {
         | "github.liveEvents"
         | "github.status"
         | "github.connect"
+        | "devices.sshHosts"
+        | "devices.connectSsh"
+        | "devices.setDefault"
         | "github.cancel"
         | "github.disconnect"
         | "peer.enroll"
@@ -4290,12 +4737,21 @@ pub fn action_for_method(method: &str) -> Option<&'static str> {
         | "vault.status"
         | "vault.setup"
         | "vault.unlock"
+        | "vault.changePassphrase"
         | "vault.lock"
         | "boat.status"
         | "boat.save"
+        | "boat.saveClaudeSignIn"
         | "boat.disconnect"
+        | "devices.pool"
+        | "devices.setPool"
         | "boat.runtimeSettings"
-        | "boat.setRuntimeSettings" => Some("credential.manage"),
+        | "boat.setRuntimeSettings"
+        | "conversation.webhook.cursor"
+        | "conversation.webhook.reset"
+        | "voice.status"
+        | "voice.saveKey"
+        | "voice.forgetKey" => Some("credential.manage"),
         "conversation.create"
         | "conversation.read"
         | "conversation.list"
@@ -4335,11 +4791,14 @@ pub fn action_for_method(method: &str) -> Option<&'static str> {
         | "workspace.publish"
         | "channel.create"
         | "channel.list"
+        | "channel.setPlacement"
         | "conversation.subscribeEvents"
+        | "conversation.readEarlier"
         | "conversation.peek"
         | "conversation.setModel"
         | "conversation.switchAgent"
-        | "conversation.fork" => Some("conversation.write"),
+        | "conversation.fork"
+        | "voice.startCall" => Some("conversation.write"),
         "conversation.recordsHead"
         | "conversation.recordsPage"
         | "artifact.read"

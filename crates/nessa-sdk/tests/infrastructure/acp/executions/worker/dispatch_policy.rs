@@ -53,8 +53,14 @@ async fn worker_projection_after_reload(
         queue_history: Vec::new(),
         id: session_id.clone(),
         provider: ProviderIdentity::new("fixture", "model", "workspace").unwrap(),
-        provider_context: ProviderContext::Recorded(ExecutionSessionId::new("context").unwrap()),
+        provider_context: ProviderContext::recorded_after(
+            ExecutionSessionId::new("context").unwrap(),
+            0,
+        ),
         invocations: vec![InvocationRecord {
+            decline: None,
+            cancellation_delivery: None,
+            resumed_from: None,
             target_event_offset: None,
             submission: SubmissionMode::Immediate,
             request: request(),

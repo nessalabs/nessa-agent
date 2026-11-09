@@ -1,0 +1,15 @@
+{"case": "head_generation", "exitCode": 101, "caught": true, "seconds": 111.88, "log": "/tmp/nessa-896-reset-mutation-head_generation.log", "sourceRestored": true}
+{"case": "queue_generation", "exitCode": 101, "caught": true, "seconds": 112.78, "log": "/tmp/nessa-896-reset-mutation-queue_generation.log", "sourceRestored": true}
+{"case": "admission_generation", "exitCode": 101, "caught": true, "seconds": 111.39, "log": "/tmp/nessa-896-reset-mutation-admission_generation.log", "sourceRestored": true}
+{"case": "replay_resolution", "exitCode": 101, "caught": true, "seconds": 110.48, "log": "/tmp/nessa-896-reset-mutation-replay_resolution.log", "sourceRestored": true}
+{"case": "receipt_retention", "exitCode": 101, "caught": true, "seconds": 111.89, "log": "/tmp/nessa-896-reset-mutation-receipt_retention.log", "sourceRestored": true}
+{"case": "authority_expiry", "exitCode": 101, "caught": true, "seconds": 109.48, "log": "/tmp/nessa-896-reset-mutation-authority_expiry.log", "sourceRestored": true}
+{"case": "target_expiry", "exitCode": 101, "caught": true, "seconds": 110.62, "log": "/tmp/nessa-896-reset-mutation-target_expiry.log", "sourceRestored": true}
+{"case": "owed_checkpoint", "exitCode": 101, "caught": true, "seconds": 110.61, "log": "/tmp/nessa-896-reset-mutation-owed_checkpoint.log", "sourceRestored": true}
+{"case": "receipt_proof", "exitCode": 101, "caught": true, "seconds": 111.59, "log": "/tmp/nessa-896-reset-mutation-receipt_proof.log", "sourceRestored": true}
+{"case": "actor_identity", "exitCode": 101, "caught": true, "seconds": 111.74, "log": "/tmp/nessa-896-reset-mutation-actor_identity.log", "sourceRestored": true}
+{"case": "malformed_index_guard", "exitCode": 101, "caught": true, "seconds": 110.41, "log": "/tmp/nessa-896-reset-mutation-malformed_index_guard.log", "sourceRestored": true}
+{"case": "identity_pause", "exitCode": 101, "caught": true, "seconds": 111.46, "log": "/tmp/nessa-896-reset-mutation-identity_pause.log", "sourceRestored": true}
+{"case": "identity_classification", "exitCode": 101, "caught": true, "seconds": 112.55, "log": "/tmp/nessa-896-reset-mutation-identity_classification.log", "sourceRestored": true}
+{"check": "restored_webhooks", "exitCode": 0, "seconds": 123.89, "log": "/tmp/nessa-896-reset-restored_webhooks.log"}
+{"check": "required_clippy", "exitCode": 0, "seconds": 69.16, "log": "/tmp/nessa-896-reset-required_clippy.log"}

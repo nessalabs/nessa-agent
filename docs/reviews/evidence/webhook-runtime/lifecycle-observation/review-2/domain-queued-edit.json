@@ -1,0 +1,8 @@
+{
+  "name": "domain-queued",
+  "path": "/tmp/nessa-expiry-context-final-review/crates/nessa-server/src/webhooks/domain/value_objects/registration_lifecycle.rs",
+  "before": "556b147588f1630d7e38aa279df5fb20e94bd2a7c546f7831abfbfa8352aeef2",
+  "after": "de185277aa9b47b5172d6294b3a282f241fc62cae56ca85e475ea95b147065b3",
+  "removed": "            RegistrationPhase::Stopped => false,",
+  "replacement": "            RegistrationPhase::Stopped => true,"
+}

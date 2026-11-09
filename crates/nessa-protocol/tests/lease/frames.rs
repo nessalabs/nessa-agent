@@ -3,8 +3,9 @@
 use super::{
     decode, encode, fingerprint, read_hello, ArtifactReadRefusal, Cleanup, Collection,
     CollectionRefusal, CommandEnd, Data, EndingCause, FetchOutcome, FetchRefusal, FromEnvironment,
-    GrantRefusal, GrantedTerms, Hello, PublishRefusal, Sandbox, StagedArtifact, ToEnvironment,
-    MAX_DATA_BYTES, MAX_FRAME_BYTES,
+    GrantRefusal, GrantedTerms, Hello, MachineDisk, MachineReport, PublishRefusal, Sandbox,
+    StagedArtifact, ToEnvironment, MAX_DATA_BYTES, MAX_FRAME_BYTES, MAX_MACHINE_DISKS,
+    MAX_MACHINE_FIGURE, MAX_MACHINE_TEXT_BYTES,
 };
 use crate::pairing::FrameReader;
 use std::collections::BTreeMap;
@@ -699,4 +700,83 @@ fn a_protocols_fingerprint_follows_every_byte_of_its_sources_but_line_endings() 
     assert_ne!(fingerprint(&[b"frame", b"smeaning"]), named);
     assert_ne!(fingerprint(&[b"frames"]), fingerprint(&[b"frames", b""]));
     assert_eq!(fingerprint(&[b"a\r\nb\r\n"]), fingerprint(&[b"a\nb\n"]));
+}
+
+/// A machine report is sent outside any lease, and its text and figures are
+/// bounded: a report past them is not one to show.
+#[test]
+fn a_machine_report_names_no_lease_and_is_bounded() {
+    let report = MachineReport {
+        hostname: "build-box".into(),
+        os: "linux".into(),
+        os_version: "24.04".into(),
+        arch: "x86_64".into(),
+        cpus: 8,
+        cpu_permille: 610,
+        memory_total_bytes: 32,
+        memory_used_bytes: 8,
+        disk_total_bytes: 100,
+        disk_used_bytes: 40,
+        disks: vec![MachineDisk {
+            mount: "/".into(),
+            total_bytes: 100,
+            used_bytes: 40,
+        }],
+    };
+    let frame = FromEnvironment::Machine {
+        report: report.clone(),
+    };
+    let decoded: FromEnvironment = decode(&body(&encode(&frame).unwrap())).unwrap();
+    assert_eq!(decoded.lease(), None);
+    assert_eq!(decoded, frame);
+    assert!(report.is_bounded());
+    let long = "é".repeat(MAX_MACHINE_TEXT_BYTES);
+    let cut = MachineReport::bounded(&long);
+    assert!(cut.len() <= MAX_MACHINE_TEXT_BYTES && long.starts_with(&cut));
+    for over in [
+        MachineReport {
+            hostname: long,
+            ..report.clone()
+        },
+        MachineReport {
+            cpu_permille: 1_001,
+            ..report.clone()
+        },
+        MachineReport {
+            memory_used_bytes: 33,
+            ..report.clone()
+        },
+        MachineReport {
+            disk_used_bytes: 101,
+            ..report.clone()
+        },
+        MachineReport {
+            memory_total_bytes: MAX_MACHINE_FIGURE + 1,
+            ..report.clone()
+        },
+        MachineReport {
+            disk_total_bytes: MAX_MACHINE_FIGURE + 1,
+            ..report.clone()
+        },
+        MachineReport {
+            disks: vec![report.disks[0].clone(); MAX_MACHINE_DISKS + 1],
+            ..report.clone()
+        },
+        MachineReport {
+            disks: vec![MachineDisk {
+                used_bytes: 101,
+                ..report.disks[0].clone()
+            }],
+            ..report.clone()
+        },
+        MachineReport {
+            disks: vec![MachineDisk {
+                mount: "m".repeat(MAX_MACHINE_TEXT_BYTES + 1),
+                ..report.disks[0].clone()
+            }],
+            ..report
+        },
+    ] {
+        assert!(!over.is_bounded());
+    }
 }

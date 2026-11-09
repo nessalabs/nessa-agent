@@ -33,7 +33,7 @@
 //! ahead of the message and not part of what it says.
 //!
 //! ```text
-//! CarriedTurn(said, reply)* --> CarriedHistory --> UserMessage (what goes with it)
+//! CarriedTurn(said, reply, agent origin)* --> CarriedHistory --> UserMessage (what goes with it)
 //! ```
 //!
 //! The earlier turns a native session has not seen, after a fork or an agent

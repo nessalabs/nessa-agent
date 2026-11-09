@@ -12,6 +12,13 @@ use nessa_auth::{
         CredentialGrantDto, MembershipInputDto, MembershipRoleDto, MembershipStateDto,
         OrganizationInputDto, PrincipalInputDto, PrincipalKindDto, ResourceDto,
     },
+    application::ports::AccessAdmission,
+    domain::CredentialId,
+};
+use std::{
+    future::Future,
+    task::{Context, Poll, Waker},
+    time::Duration,
 };
 
 /// A configuration naming both agents, with no file on disk for either.
@@ -191,6 +198,58 @@ fn namespace_with_registry() -> (tempfile::TempDir, std::path::PathBuf, LocalCre
 }
 
 struct StartupClock;
+
+#[tokio::test]
+async fn product_revoke_waits_for_effect_hold_and_survives_observer_loss() {
+    let (_directory, _namespace, store) = namespace_with_registry();
+    let store = Arc::new(store);
+    let id = CredentialId::new("credential").unwrap();
+    let hold = store.hold(&id).await.unwrap();
+    let admin = Arc::new(LocalAdmin {
+        store: store.clone(),
+        inventory: None,
+    });
+    let task = tokio::spawn(async move {
+        admin
+            .revoke(RevokeCredentialRequest {
+                request_id: "held-revoke".into(),
+                issuer_principal_id: "owner".into(),
+                credential_id: "credential".into(),
+                revoked_at: SystemClock.unix_seconds(),
+            })
+            .await
+    });
+    // Tokio's fair lock queues a later reader behind the physical revoke
+    // writer. Observe that ordering before cancelling the socket observer;
+    // merely yielding would allow a late worker to pass the old try-write path.
+    tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            let mut probe = std::pin::pin!(store.hold(&id));
+            match probe.as_mut().poll(&mut Context::from_waker(Waker::noop())) {
+                Poll::Pending => break,
+                Poll::Ready(Ok(read)) => drop(read),
+                Poll::Ready(Err(_)) => panic!("the credential authority became unavailable"),
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    assert!(!task.is_finished());
+    task.abort();
+    assert!(task.await.unwrap_err().is_cancelled());
+    drop(hold);
+    assert!(
+        tokio::time::timeout(Duration::from_secs(2), store.hold(&id))
+            .await
+            .unwrap()
+            .unwrap()
+            .snapshot
+            .credential
+            .revoked_at()
+            .is_some()
+    );
+}
 
 impl ServerClock for StartupClock {
     fn elapsed_ms(&self) -> u64 {

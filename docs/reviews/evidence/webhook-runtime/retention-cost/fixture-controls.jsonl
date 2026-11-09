@@ -1,0 +1,4 @@
+{"name": "omit_same_commit_trim", "test": "retention_is_bounded", "exit": 101, "caught": true, "seconds": 33.31, "original_sha256": "518e1cf487c6c6186ba2e836f502e031130d99fb1167f3896aba1ce6d366c2dc"}
+{"name": "skip_source_invalidation", "test": "bulk_reset_retention_is_bounded_in_the_commit", "exit": 101, "caught": true, "seconds": 36.98, "original_sha256": "518e1cf487c6c6186ba2e836f502e031130d99fb1167f3896aba1ce6d366c2dc"}
+{"name": "wrong_fixture_terminal_fact", "test": "acknowledged_fixture_matches_real_public_history_and_durable_projections", "exit": 101, "caught": true, "seconds": 35.0, "original_sha256": "680678ff225797e5eae788596c5773f96b10477c95754e07df4c7dd0ae7153cf"}
+{"name": "valid_fixture_payload_substitution", "exit": 101, "caught": true, "original_sha256": "068477c05a5832f73e99965de1ea8b2872f490174bf96ab3e0411b75f3b0cd22"}

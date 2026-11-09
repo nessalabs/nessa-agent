@@ -9,6 +9,7 @@
  * window for every change.
  */
 import type { ChatPanel } from "../../model/chat-panel"
+import type { DraftImage } from "../../model/draft-images"
 import { canChange, formHeld, waitingOn } from "../../application/usecases/sharing"
 import { createSelector } from "@reduxjs/toolkit"
 import {
@@ -64,7 +65,8 @@ import {
   type WorkspaceState,
 } from "../../application/workspace-state"
 import { canClosePane } from "../../application/usecases/panes"
-import type { WidgetRef } from "../../../widgets/model/widget-ref"
+import { paneItemKey, widgetItem } from "../../model/pane-item"
+import { sameWidget, type WidgetRef } from "../../../widgets/model/widget-ref"
 
 type Root = { workspace: WorkspaceState }
 
@@ -83,7 +85,6 @@ export const selectSessionListChosen = (state: Root) =>
 /** How many columns of panes there are; the side columns are fitted around them. */
 export const selectColumnCount = (state: Root) =>
   state.workspace.panes?.columns.length ?? 1
-export const selectSessionTabs = (state: Root) => state.workspace.sessionTabs
 /** Which pane is where, ignoring sizes: motion's shape, painted with the boxes. */
 export const selectPaneShape = (state: Root): string => {
   const layout = state.workspace.panes
@@ -171,6 +172,14 @@ export const selectOutbox = (state: Root, sessionId: string): readonly Message[]
 /** What is typed in a session's composer and not sent. */
 export const selectComposerText = (state: Root, sessionId: string): string =>
   entry(state.workspace.composerText, sessionId) ?? ""
+
+const noImages: readonly DraftImage[] = []
+
+/** The images put on a session's next message and not sent. */
+export const selectComposerImages = (
+  state: Root,
+  sessionId: string,
+): readonly DraftImage[] => entry(state.workspace.composerImages, sessionId) ?? noImages
 
 /** The model a session's next message is sent with: chosen in its composer, else its own. */
 export const selectNextModel = (state: Root, sessionId: string): ModelRef | undefined =>
@@ -281,6 +290,17 @@ export const selectPaneSession = (state: Root, pane: PaneKey): string | null => 
 /** Chat `sessionId`'s right panel: its widgets as tabs; none while it has none. */
 export const selectChatPanel = (state: Root, sessionId: string): ChatPanel | null =>
   entry(state.workspace.panels, sessionId) ?? null
+
+/**
+ * Whether `widget` lives outside its message: in the window, or opened into
+ * a panel while the window runs (`panelled`, kept after its tab closes). Its
+ * card in a message is then a row leading there.
+ */
+export const selectWidgetOpenElsewhere = (state: Root, widget: WidgetRef): boolean => {
+  const shown = windowWidget(state.workspace.content)
+  if (shown && sameWidget(shown, widget)) return true
+  return state.workspace.panelled.includes(paneItemKey(widgetItem(widget)))
+}
 
 /** How many times something asked the window to show the right panel. */
 export const selectPanelAsked = (state: Root): number => state.workspace.panelAsked

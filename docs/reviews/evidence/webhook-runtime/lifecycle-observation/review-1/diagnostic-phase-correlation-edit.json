@@ -1,0 +1,6 @@
+{
+  "file": "crates/nessa-server/src/webhooks/infrastructure/outbox/restoration.rs",
+  "old": "                audit::Cause::CredentialExpiryObserved => {",
+  "new": "                audit::Cause::CredentialExpiryObserved => {\n                    if !matches!(live.as_ref().map(|r| r.lifecycle.phase()), Some(crate::webhooks::domain::RegistrationPhase::ExpiryObserved)) { return Err(OutboxError::Invalid); }",
+  "originalSha256": "d59053056afd153a160d71533411d8924fe4358ed7904a8c03e7ca9456b11d47"
+}

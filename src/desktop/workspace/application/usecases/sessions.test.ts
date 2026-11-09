@@ -8,7 +8,6 @@ import {
   type WorkspaceState,
 } from "../workspace-state"
 import { createDraft, openSession } from "./panes"
-import { closeSessionTab } from "./session-tabs"
 import {
   approvalAnswering,
   approvalFailed,
@@ -492,11 +491,7 @@ describe("what the person changes", () => {
     })
     const chosen = chooseModel(refused, { sessionId: "new", model: astra })
     expect(chosen).toBe(refused)
-    const typed = composerTextChanged(chosen, {
-      sessionId: "new",
-      text: "Keep this thought",
-    })
-    const discarded = unsentDiscarded(typed, { sessionId: "new", messageId: "m1" })
+    const discarded = unsentDiscarded(chosen, { sessionId: "new", messageId: "m1" })
     expect(discarded.sessions.new).toBeUndefined()
     expect(discarded.chosenModels).toEqual({})
     expect(discarded.drafts.new).toEqual({
@@ -508,11 +503,9 @@ describe("what the person changes", () => {
       chooseModel(discarded, { sessionId: "new", model: astra }).drafts.new.model,
     ).toEqual(astra)
     expect(shown(discarded)).toEqual(["new"])
-    expect(discarded.sessionTabs).toContain("new")
-    expect(discarded.composerText.new).toBe("Keep this thought")
   })
 
-  it("keeps a refused first-send home in its hidden tab until that tab closes", () => {
+  it("lets a session the source never began go from the lists when no pane shows it", () => {
     const drafted = createDraft(loaded(), { draftId: "new" })
     const sent = messageSent(drafted, {
       initiator: "person",
@@ -527,12 +520,7 @@ describe("what the person changes", () => {
     const elsewhere = openSession(refused, { sessionId: "a" })
     const discarded = unsentDiscarded(elsewhere, { sessionId: "new", messageId: "m1" })
     expect(discarded.sessions.new).toBeUndefined()
-    expect(discarded.drafts.new).toBeDefined()
-    expect(discarded.sessionTabs).toContain("new")
-    expect(shown(discarded)).toEqual(["a"])
-    const closed = closeSessionTab(discarded, { sessionId: "new", draftId: "unused" })
-    expect(closed.drafts.new).toBeUndefined()
-    expect(closed.sessionTabs).not.toContain("new")
+    expect(discarded.drafts).toEqual({})
   })
 
   it("releases a refused first send when its channel has disappeared", () => {
@@ -556,28 +544,7 @@ describe("what the person changes", () => {
     const discarded = unsentDiscarded(resynced, { sessionId: "new", messageId: "m1" })
     expect(discarded.sessions.new).toBeUndefined()
     expect(discarded.drafts.new).toBeUndefined()
-    expect(discarded.sessionTabs).not.toContain("new")
     expect(discarded.panes).toBeNull()
-  })
-
-  it("forgets an unconfirmed session after its failed message and tab are gone", () => {
-    const drafted = createDraft(loaded(), { draftId: "new" })
-    const sent = messageSent(drafted, {
-      initiator: "person",
-      sessionId: "new",
-      message: message("m1", "hi"),
-    })
-    const refused = sendFailed(sent, {
-      sessionId: "new",
-      messageId: "m1",
-      reason: "unavailable",
-    })
-    const elsewhere = openSession(refused, { sessionId: "a" })
-    const closed = closeSessionTab(elsewhere, { sessionId: "new", draftId: "unused" })
-    const discarded = unsentDiscarded(closed, { sessionId: "new", messageId: "m1" })
-    expect(discarded.sessions.new).toBeUndefined()
-    expect(discarded.drafts.new).toBeUndefined()
-    expect(discarded.sessionTabs).not.toContain("new")
   })
 
   it("keeps a session the source has spoken of listed when its refused message goes", () => {
@@ -643,7 +610,7 @@ describe("what is typed and not sent", () => {
     expect(byPerson.composerText.a).toBeUndefined()
   })
 
-  it("goes with a removed session, and stays with a draft document when hidden", () => {
+  it("goes with its session removed, and stays with a new session another chat took the pane of", () => {
     const typed = composerTextChanged(loadedState(), { sessionId: "a", text: "x" })
     const removed = sessionRemoved(typed, {
       sessionId: "a",

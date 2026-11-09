@@ -23,9 +23,63 @@
           "type": "integer",
           "minimum": 0,
           "description": "Time since server startup in milliseconds."
+        },
+        "webhook": {
+          "$ref": "#/$defs/WebhookStatus",
+          "description": "Read-only namespace webhook status when configured. No recipient, credential or conversation identifiers are disclosed."
         }
       },
       "description": "Gateway health response from client.server.health(). On product connections, access is authorized by the server."
+    },
+    "WebhookStatus": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "pendingOutcome",
+        "nativeMutations"
+      ],
+      "properties": {
+        "pendingOutcome": {
+          "$ref": "#/$defs/WebhookPendingOutcome"
+        },
+        "nativeMutations": {
+          "$ref": "#/$defs/WebhookNativeMutations"
+        },
+        "lastRefusal": {
+          "$ref": "#/$defs/WebhookRefusal",
+          "description": "Most recent non-attempt refusal in this process; it can remain after progress and is not current authority or a delivery outcome."
+        }
+      }
+    },
+    "WebhookPendingOutcome": {
+      "type": "string",
+      "enum": [
+        "none",
+        "unposted",
+        "response"
+      ],
+      "description": "Retained local settlement work; response does not itself confirm durable publication."
+    },
+    "WebhookNativeMutations": {
+      "type": "string",
+      "enum": [
+        "available",
+        "temporarily-unavailable",
+        "stopped"
+      ],
+      "description": "Native webhook mutation admission. A retained attempt excludes native mutations through consumed settlement acknowledgement; canonical revoke and unshare are independent."
+    },
+    "WebhookRefusal": {
+      "type": "string",
+      "enum": [
+        "preparation-busy",
+        "preparation-unavailable",
+        "preparation-timed-out",
+        "destination-refused",
+        "admission-unavailable",
+        "source-unavailable"
+      ],
+      "description": "A refusal before a transport attempt; it neither consumes an attempt nor means revocation."
     }
   }
 }

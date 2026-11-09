@@ -84,10 +84,18 @@ holding the dev port, `just start` names the owner instead of killing it.
 
 That is the whole setup from a clone. `just start` (and `just server` on its
 own) runs `nessa server --provision-local`, which creates the dev namespace's
-owner credential at `$HOME/.nessa/owner.token` and the panel's own credential at
-`$HOME/.nessa/dev/auth/surfaces/nessa-panel.token` when they are absent. It never
+owner credential at `$HOME/.nessa/owner.token`, the panel's credential at
+`$HOME/.nessa/dev/auth/surfaces/nessa-panel.token`, and the MCP credential at
+`$HOME/.nessa/dev/auth/surfaces/nessa-mcp.token` when they are absent. It never
 replaces credentials that already exist, so restarting the server does not
 invalidate a token you are using. No signup, no account.
+
+`nessa call METHOD --params JSON` sends one gateway method on that signed-in
+session and prints the handler's JSON. `nessa mcp` serves the same methods as
+MCP tools, using the `nessa-mcp` credential. That credential's default grants
+are `server.read`, `conversation.read`, and `conversation.write`. Cedar on the
+gateway still decides each call. The catalog and the methods it leaves out are
+described in [protocol/README.md](protocol/README.md).
 
 **Credentials are not enough to chat, so the same loop also names an agent.**
 A packaged install gets one from its bundle; a checkout has to say where its own

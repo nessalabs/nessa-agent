@@ -1,0 +1,18 @@
+{
+  "page": "gateway-webhook-issuance",
+  "rendererRevision": "c0bc0627611b100ab71a96cc6fe2fb65f1a014d8",
+  "sourceRevision": "8e9f8c93277f4654f15632c89503d37be6d8a2e8",
+  "browser": "151.0.7922.173",
+  "diagrams": [
+    {
+      "state": "rendered",
+      "svgs": 4,
+      "rect": {
+        "width": 1136,
+        "height": 844
+      },
+      "text": "Guards and effectsIn DetailsFit94%#mmd-1{font-family:\"Geist Variable\",Geist,ui-sans-serif,system-ui,sans-serif;font-size"
+    }
+  ],
+  "pageErrors": []
+}

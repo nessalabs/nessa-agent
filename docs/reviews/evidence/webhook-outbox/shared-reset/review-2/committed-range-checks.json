@@ -1,0 +1,23 @@
+[
+  {
+    "base": "43a9094623af1b2aac6b0c3211e1b93573941377",
+    "head": "546de7af208bdb621bd2bfddc585a7ff10dbac23",
+    "exitCode": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "base": "0f6bea1e904267e86cd0ec3ee8a858c75371cec1",
+    "head": "546de7af208bdb621bd2bfddc585a7ff10dbac23",
+    "exitCode": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "base": "6c38915d5201de4cac54500ec4b5ad5e5f34229e",
+    "head": "546de7af208bdb621bd2bfddc585a7ff10dbac23",
+    "exitCode": 0,
+    "stdout": "",
+    "stderr": ""
+  }
+]

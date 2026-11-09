@@ -53,7 +53,7 @@ pub struct OwnershipGraph {
 pub struct SpawnAdmission {
     /// Child lifetime minted for this attempt.
     pub child_lifetime: AgentLifetimeId,
-    /// Child session minted for this attempt.
+    /// Child session reserved for this attempt.
     pub child_session: SessionId,
     /// Immutable binding, including the parent and the request id.
     pub binding: SpawnBinding,
@@ -417,6 +417,12 @@ impl OwnershipGraph {
             || self.child_request.contains_key(&admission.child_lifetime)
         {
             return Err(OwnershipError::Contradictory);
+        }
+        if self.lifetimes.values().any(|existing| {
+            existing.row.session_id == admission.child_session
+                && existing.row.state != LifetimeState::Closed
+        }) {
+            return Err(OwnershipError::LifetimeStillOpen);
         }
         if !admission.live_room {
             return Err(OwnershipError::NoRoom);
@@ -848,7 +854,13 @@ impl OwnershipGraph {
     pub fn restore(snapshot: OwnershipSnapshot) -> Self {
         let mut graph = Self::new();
         let mut refusal = None;
+        let mut active_sessions = BTreeSet::new();
         for row in snapshot.lifetimes {
+            if row.state != LifetimeState::Closed
+                && !active_sessions.insert(row.session_id.as_str().to_owned())
+            {
+                note_refusal(&mut refusal, OwnershipError::Contradictory);
+            }
             if graph.lifetimes.contains_key(&row.lifetime_id) {
                 note_refusal(&mut refusal, OwnershipError::Contradictory);
                 continue;
@@ -884,7 +896,12 @@ impl OwnershipGraph {
                 }
                 Some(_) => {}
             }
-            if !graph.lifetimes.contains_key(&row.child_lifetime) {
+            if graph
+                .lifetimes
+                .get(&row.child_lifetime)
+                .map(|child| &child.row.session_id)
+                != Some(&row.child_session)
+            {
                 note_refusal(&mut refusal, OwnershipError::Contradictory);
             }
             graph
@@ -1201,6 +1218,7 @@ fn legal_advance(current: &SpawnProgress, next: &SpawnProgress) -> bool {
     match (current, next) {
         (SpawnProgress::Reserved, SpawnProgress::Prepared)
         | (SpawnProgress::Prepared, SpawnProgress::Attached)
+        | (SpawnProgress::Attached, SpawnProgress::Ready)
         | (SpawnProgress::Attached, SpawnProgress::TaskAdmitted { .. }) => true,
         (
             SpawnProgress::TaskAdmitted { receipt },
@@ -1209,11 +1227,17 @@ fn legal_advance(current: &SpawnProgress, next: &SpawnProgress) -> bool {
             },
         ) => receipt == known,
         (
-            SpawnProgress::Reserved | SpawnProgress::Prepared | SpawnProgress::Attached,
+            SpawnProgress::Reserved
+            | SpawnProgress::Prepared
+            | SpawnProgress::Attached
+            | SpawnProgress::Ready,
             SpawnProgress::Unconfirmed { known },
         ) => known == &current.known(),
         (
-            SpawnProgress::Reserved | SpawnProgress::Prepared | SpawnProgress::Attached,
+            SpawnProgress::Reserved
+            | SpawnProgress::Prepared
+            | SpawnProgress::Attached
+            | SpawnProgress::Ready,
             SpawnProgress::Draining { known },
         ) => known == &current.known(),
         (
@@ -1281,6 +1305,7 @@ fn meaning_of(progress: &SpawnProgress) -> OwnershipMeaning {
         SpawnProgress::Reserved => OwnershipMeaning::Reserved,
         SpawnProgress::Prepared => OwnershipMeaning::Prepared,
         SpawnProgress::Attached => OwnershipMeaning::Attached,
+        SpawnProgress::Ready => OwnershipMeaning::Ready,
         SpawnProgress::TaskAdmitted { .. } => OwnershipMeaning::TaskAdmitted,
         SpawnProgress::Unconfirmed { .. } => OwnershipMeaning::Unconfirmed,
         SpawnProgress::Draining { .. } => OwnershipMeaning::Draining,

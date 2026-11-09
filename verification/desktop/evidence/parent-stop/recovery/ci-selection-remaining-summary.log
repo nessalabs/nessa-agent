@@ -1,0 +1,27 @@
+Supplemental completion of 24 unstarted binaries from the same exact eight-package CI compile selection.
+Exit: 0
+Original CI runner remains failed; no failing test was skipped or relabeled.
+nessa-server nessa-backup-verify: 0 passed; 0 failed; 0 ignored
+nessa-device-client nessa_device_client: 108 passed; 0 failed; 0 ignored
+nessa-vault lifecycle: 10 passed; 0 failed; 0 ignored
+nessa-vault audit: 2 passed; 0 failed; 0 ignored
+nessa-vault encrypted_file: 4 passed; 0 failed; 0 ignored
+nessa-vault nessa_vault: 0 passed; 0 failed; 0 ignored
+nessa-client-core nessa_client_core: 483 passed; 0 failed; 0 ignored
+nessa-protocol phone_wire: 2 passed; 0 failed; 0 ignored
+nessa-protocol owner_phone_consent_wire: 4 passed; 0 failed; 0 ignored
+nessa-protocol nessa_protocol: 198 passed; 0 failed; 0 ignored
+nessa-auth native_transport_failure_order: 3 passed; 0 failed; 0 ignored
+nessa-auth native_transport_key_update: 1 passed; 0 failed; 0 ignored
+nessa-auth origin: 5 passed; 0 failed; 0 ignored
+nessa-auth owner_phone_consent_admission: 3 passed; 0 failed; 0 ignored
+nessa-auth owner_phone_device_proof: 2 passed; 0 failed; 0 ignored
+nessa-auth owner_phone_record: 3 passed; 0 failed; 0 ignored
+nessa-auth pairing_domain: 41 passed; 0 failed; 0 ignored
+nessa-auth revocation: 8 passed; 0 failed; 0 ignored
+nessa-auth cedar_flow: 4 passed; 0 failed; 0 ignored
+nessa-auth nessa_auth: 216 passed; 0 failed; 0 ignored
+nessa-local-storage windows_replacement: 0 passed; 0 failed; 0 ignored
+nessa-local-storage windows_protected_directory: 0 passed; 0 failed; 0 ignored
+nessa-local-storage retained_directory: 39 passed; 0 failed; 0 ignored
+nessa-local-storage nessa_local_storage: 41 passed; 0 failed; 1 ignored

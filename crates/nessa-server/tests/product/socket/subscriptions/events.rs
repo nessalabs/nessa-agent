@@ -80,6 +80,39 @@ async fn future_event_subscription_filters_without_replaying_old_turns() {
     client.close().await;
 }
 
+/// A long streamed reply fills several source pages with text no frame
+/// carries. Those pages send nothing: a follower takes an empty frame as a
+/// sign it has caught up, so the first frame of a replay is the turn's end.
+#[tokio::test]
+async fn pages_of_unpublished_text_send_no_frame_before_the_head() {
+    use nessa_sdk::application::agent_execution::executions::ExecutionUpdate;
+    use nessa_sdk::domain::agent_execution::executions::MessageChunk;
+    let fixture = SubscriptionFixture::new().await;
+    // Several 16-event source pages of nothing but streamed text.
+    fixture.provider.execution_updates.lock().unwrap().extend(
+        (0..64).map(|chunk| ExecutionUpdate::Message(MessageChunk::text(format!("w{chunk} ")))),
+    );
+    fixture.turn("long").await;
+    fixture.turn_settled("long").await;
+    let mut client = fixture.connect();
+    let id = subscribe(
+        &mut client,
+        &fixture.id,
+        json!({"replay":true, "kinds":["turn.ended"]}),
+    )
+    .await;
+    let frames = client
+        .until(&id, |frame| {
+            frame["payload"]["events"]
+                .as_array()
+                .is_some_and(|events| !events.is_empty())
+        })
+        .await;
+    assert_eq!(frames.len(), 1, "empty frames before the turn's end: {frames:?}");
+    assert_eq!(frames[0]["payload"]["events"][0]["kind"], "turn.ended");
+    client.close().await;
+}
+
 /// E4: malformed cursors refuse before semantic delivery; no state replacement.
 #[tokio::test]
 async fn invalid_event_cursor_is_a_typed_refusal() {

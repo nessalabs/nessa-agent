@@ -51,6 +51,7 @@ function view() {
       },
     ],
     truncated: false,
+    earlier: false,
     queueComplete: true,
     transcriptState: "complete",
     artifacts: [],
@@ -213,7 +214,17 @@ describe("conversation view agreement", () => {
       handoffId: "h-fork",
       kind: "fork",
       atMs: 5,
-      turns: [{ said: "Plan a trip", reply: "Lisbon" }, {}],
+      turns: [
+        {
+          said: "Plan a trip",
+          reply: "Lisbon",
+          agent: {
+            conversationId: "8b547a4b-6974-49a4-b878-d13a9c031f16",
+            executionId: "source-turn",
+          },
+        },
+        {},
+      ],
       omittedTurns: 3,
     }
     expect(
@@ -242,6 +253,21 @@ describe("conversation view agreement", () => {
       { ...forked, omittedTurns: -1 },
       { ...forked, omittedTurns: 1.5 },
       { ...forked, turns: [{ said: "" }] },
+      {
+        ...forked,
+        turns: [
+          { said: "agent", agent: { conversationId: "not-a-uuid", executionId: "e" } },
+        ],
+      },
+      {
+        ...forked,
+        turns: [
+          {
+            said: "agent",
+            agent: { conversationId: "8b547a4b-6974-49a4-b878-d13a9c031f16" },
+          },
+        ],
+      },
       { ...forked, extra: true },
     ])
       expect(() =>
@@ -659,6 +685,58 @@ describe("conversation view agreement", () => {
         () => conversationView(invalid, "conversation"),
         JSON.stringify(app),
       ).toThrow()
+    }
+  })
+
+  it("correlates an agent's waiting input with its saved turn and note origin", () => {
+    const origin = {
+      conversationId: "00000000-0000-4000-8000-000000000001",
+      executionId: "source-turn",
+    }
+    const value = view() as Omit<
+      ReturnType<typeof view>,
+      "messages" | "pending" | "notes"
+    > & {
+      messages: Record<string, unknown>[]
+      pending: Record<string, unknown>[]
+      notes: Record<string, unknown>[]
+    }
+    value.messages[0]!.agent = origin
+    value.pending[0]!.agent = origin
+    value.notes.push({
+      messageId: "note-1",
+      text: "agent note",
+      acceptedAtMs: 1,
+      delivery: "record_only",
+      deliveryState: "recorded",
+      author: { kind: "agent", surface: "panel", agent: origin },
+    })
+    expect(conversationView(value, "conversation").messages[0]!.agent).toEqual(origin)
+    for (const change of [
+      (copy: typeof value) => {
+        copy.pending[0]!.agent = { ...origin, executionId: "other" }
+      },
+      (copy: typeof value) => {
+        delete copy.pending[0]!.agent
+      },
+      (copy: typeof value) => {
+        copy.messages[0]!.app = {
+          executionId: "running",
+          toolId: "tool",
+          server: "s",
+          tool: "t",
+        }
+      },
+      (copy: typeof value) => {
+        copy.notes[0]!.author = { kind: "owner", surface: "panel", agent: origin }
+      },
+      (copy: typeof value) => {
+        copy.notes[0]!.author = { kind: "agent", surface: "panel" }
+      },
+    ]) {
+      const copy = structuredClone(value)
+      change(copy)
+      expect(() => conversationView(copy, "conversation")).toThrow()
     }
   })
 
@@ -1397,6 +1475,40 @@ it("accepts required work beside a usage limit on a failed turn", () => {
       "conversation",
     ),
   ).toThrow(/required-work failure/)
+})
+
+it("accepts a joined reply, a long message and many calls up to the frame's own bound", () => {
+  // Streamed chunks join into one part and nothing caps a reply's text, so a
+  // part, a message and a turn's calls are bounded by the frame alone.
+  const sample = view()
+  const reply = "w".repeat(50_000)
+  const long = {
+    ...sample,
+    // The view's tool states are bounded; calls past them mark it truncated.
+    truncated: true,
+    messages: [
+      {
+        ...sample.messages[1],
+        userText: "u".repeat(40_000),
+        parts: [
+          { offset: 0, kind: "text", text: reply, toolId: "", noticeId: "" },
+          ...Array.from({ length: 600 }, (_, index) => ({
+            offset: index + 1,
+            kind: "tool",
+            text: "",
+            toolId: `tool-${index}`,
+            noticeId: "",
+          })),
+        ],
+      },
+    ],
+    pending: [],
+    tools: [],
+  }
+  const read = conversationView(long, "conversation").messages[0]!
+  expect(read.parts[0]?.text).toBe(reply)
+  expect(read.parts).toHaveLength(601)
+  expect(read.userText).toHaveLength(40_000)
 })
 
 it("accepts the inclusive reset bound the schema publishes", () => {

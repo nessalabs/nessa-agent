@@ -1,0 +1,9 @@
+warning: unused import: `RegistrationPhase`
+  --> /tmp/nessa-expiry-context-final-review/crates/nessa-server/src/webhooks/infrastructure/outbox/restoration.rs:12:21
+   |
+12 |     domain::{Phase, RegistrationPhase},
+   |                     ^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: 1 warning emitted

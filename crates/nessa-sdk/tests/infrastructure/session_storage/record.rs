@@ -238,6 +238,39 @@ async fn failed_discard_releases_its_reservation_without_resetting_history() {
 }
 
 #[tokio::test]
+async fn sqlite_refuses_invalid_resume_origin_before_publishing_input() {
+    let directory = tempfile::tempdir().unwrap();
+    let storage = RecordStorage::new(directory.path().join("sessions")).unwrap();
+    let id = SessionId::new("invalid-resume-origin").unwrap();
+    let lease = storage.open(id.clone()).await.unwrap();
+    let (opening, _) = opened(&id);
+    lease
+        .save_changes(
+            lease.load().await.unwrap().binding().clone(),
+            vec![SessionSaveUnit::new(vec![opening]).unwrap()],
+        )
+        .await
+        .unwrap();
+    let before = storage.read_committed(id.clone()).await.unwrap().unwrap();
+    let mut input = input_record("ordinary-input", 8);
+    input.resumed_from = Some(input.request.execution_id.clone());
+    let change = SessionChange::InputAccepted(Box::new(input));
+    let result = lease
+        .save_changes(
+            lease.load().await.unwrap().binding().clone(),
+            vec![SessionSaveUnit::new(vec![change]).unwrap()],
+        )
+        .await;
+    assert!(
+        matches!(result, Err(StorageError::Corrupt(_))),
+        "an impossible origin must not become published input"
+    );
+    let after = storage.read_committed(id).await.unwrap().unwrap();
+    assert_eq!(after.position(), before.position());
+    assert!(after.snapshot().unwrap().invocations.is_empty());
+}
+
+#[tokio::test]
 async fn record_watch_stays_clean_after_unit_seal_until_original_completion_retry() {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().join("sessions");
@@ -359,7 +392,7 @@ async fn load_binds_fresh_reopened_and_reset_writers_to_actual_stream_progress()
     assert_eq!(restored_binding.generation(), 1);
     let context = SessionChange::ProviderContext {
         before: ProviderContext::Absent,
-        after: ProviderContext::Recorded(ExecutionSessionId::new("remote").unwrap()),
+        after: ProviderContext::recorded_after(ExecutionSessionId::new("remote").unwrap(), 0),
     };
     let SessionSaveBackend::Record {
         stream,
@@ -598,13 +631,17 @@ async fn late_invalid_unit_never_appends_valid_prefix() {
     let binding = initial_receipt.next().clone();
     let context = SessionChange::ProviderContext {
         before: ProviderContext::Absent,
-        after: ProviderContext::Recorded(ExecutionSessionId::new("valid-prefix-context").unwrap()),
+        after: ProviderContext::recorded_after(
+            ExecutionSessionId::new("valid-prefix-context").unwrap(),
+            0,
+        ),
     };
     let candidate = SessionSnapshot {
         model_change: None,
         current_configuration: None,
-        provider_context: ProviderContext::Recorded(
+        provider_context: ProviderContext::recorded_after(
             ExecutionSessionId::new("valid-prefix-context").unwrap(),
+            0,
         ),
         ..initial.clone()
     };

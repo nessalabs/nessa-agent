@@ -321,6 +321,48 @@ async fn rl3_the_newest_proved_serve_connection_takes_the_key_and_the_first_is_c
     ));
 }
 
+/// A lookup queued for the registration that replaced another survives the
+/// old registration's cleanup. That cleanup can run after the new lookup is
+/// already in the table.
+#[tokio::test]
+async fn a_reconnected_gateway_keeps_a_lookup_queued_for_the_new_registration() {
+    let fixture = fixture(small());
+    let gateway = identity(1);
+    let key = gateway.public_key();
+    let mut first = fixture.register(&gateway).await;
+    let old = fixture
+        .relay
+        .lock()
+        .registrations
+        .get(&key)
+        .expect("the first registration")
+        .id;
+    let mut second = fixture.register(&gateway).await;
+    closed(&mut first).await;
+    let mut phone = fixture.open();
+    send(&mut phone, RelayFrame::Lookup { key }).await;
+    assert!(
+        matches!(receive(&mut phone).await, RelayFrame::Challenge { .. }),
+        "the live registration took the lookup"
+    );
+    // The first task has exited. Run its cleanup again, as it does when it
+    // loses the race and exits after this lookup was queued.
+    drop(super::Registered {
+        relay: &fixture.relay,
+        key,
+        id: old,
+    });
+    send(&mut phone, RelayFrame::Seal { mac: [0; 32] }).await;
+    let RelayFrame::Admit { token, .. } = receive(&mut second).await else {
+        panic!("the new registration was not asked the lookup");
+    };
+    send(&mut second, RelayFrame::Allow { token }).await;
+    assert!(
+        matches!(receive(&mut phone).await, RelayFrame::Located { .. }),
+        "the lookup was not dropped with the old registration"
+    );
+}
+
 #[tokio::test]
 async fn rl5_an_accept_naming_no_waiting_reader_is_closed_and_the_reader_still_joins() {
     let fixture = fixture(small());

@@ -3,12 +3,13 @@
 mod assignments;
 mod boat;
 mod boat_admission;
+mod boat_receipt_diagnostics;
 mod runtime;
 mod settings;
 mod ssh;
 pub(crate) use assignments::FileAssignments;
 pub(crate) use boat::BoatProvider;
-pub(crate) use settings::VaultSettings;
+pub(crate) use settings::{VaultClaudeSignIns, VaultSettings};
 
 mod release;
 pub(crate) use release::worker_image;

@@ -229,7 +229,7 @@ fn an_alpha_v1_database_is_refused_without_migrating_its_rows() {
         LocalConversationStore::open(&path),
         Err(nessa_local_database::OpenError::Version {
             found: 1,
-            expected: 9
+            expected: 10
         })
     ));
     let old_row: String = raw(&path)
@@ -256,7 +256,7 @@ fn an_alpha_v2_database_is_refused_without_erasing_ownership() {
         LocalConversationStore::open(&path),
         Err(nessa_local_database::OpenError::Version {
             found: 2,
-            expected: 9
+            expected: 10
         })
     ));
     let retained: String = raw(&path)
@@ -2925,7 +2925,7 @@ fn a_version_4_database_is_refused_without_erasing_its_grants() {
         LocalConversationStore::open(&path),
         Err(nessa_local_database::OpenError::Version {
             found: 4,
-            expected: 9
+            expected: 10
         })
     ));
     let kept: String = raw(&path)
@@ -2962,7 +2962,7 @@ fn a_version_5_database_is_refused_without_erasing_its_grants() {
         LocalConversationStore::open(&path),
         Err(nessa_local_database::OpenError::Version {
             found: 5,
-            expected: 9
+            expected: 10
         })
     ));
     let kept: String = raw(&path)
@@ -3078,6 +3078,60 @@ async fn a_grant_is_keyed_by_principal_and_may_name_no_receiver() {
     assert_eq!(listed.len(), 1);
     assert_eq!(listed[0].principal_id, principal);
     assert_eq!(listed[0].receiver_id, None);
+
+    let epoch = stored.policy_revision.unwrap();
+    let hold = opened
+        .store
+        .hold_principal_revision(&id, &principal, epoch)
+        .await
+        .unwrap();
+    let mut revoke = opened.store.change(ShareGrantChange {
+        transition: ShareGrantTransition::Revoke,
+        conversation_id: id.clone(),
+        principal_id: Some(principal.clone()),
+        receiver_id: None,
+        credential_id: CredentialId::new("webhook-credential").unwrap(),
+        expected_policy_revision: None,
+        initiator: caller("revoke-webhook"),
+        at_ms: 8,
+    });
+    assert!(matches!(
+        revoke
+            .as_mut()
+            .poll(&mut Context::from_waker(Waker::noop())),
+        Poll::Pending
+    ));
+    drop(hold);
+    assert!(revoke.await.unwrap().applied);
+    assert!(matches!(
+        opened
+            .store
+            .hold_principal_revision(&id, &principal, epoch)
+            .await,
+        Err(ConversationError::Revoked)
+    ));
+    let renewed = opened
+        .store
+        .change(ShareGrantChange {
+            transition: ShareGrantTransition::Grant(ShareAccess::read()),
+            conversation_id: id.clone(),
+            principal_id: Some(principal.clone()),
+            receiver_id: None,
+            credential_id: CredentialId::new("webhook-credential").unwrap(),
+            expected_policy_revision: None,
+            initiator: caller("renew-webhook"),
+            at_ms: 9,
+        })
+        .await
+        .unwrap();
+    assert!(renewed.policy_revision.unwrap() > epoch);
+    assert!(matches!(
+        opened
+            .store
+            .hold_principal_revision(&id, &principal, epoch)
+            .await,
+        Err(ConversationError::Revoked)
+    ));
 
     assert!(grant(&opened.store, &id, "phone").await);
     assert!(opened
@@ -3975,6 +4029,47 @@ async fn a_paired_list_reads_its_head_and_rows_from_one_snapshot() {
     .unwrap();
     assert!(next.head.unwrap().revision > before.revision);
     assert_eq!(next.conversations[0].summary.updated_at_ms(), 2);
+}
+
+/// A second connection's tombstone, committed after the row is read and
+/// before the revision, stays out of that admission snapshot.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_admission_read_keeps_the_row_and_revision_from_one_snapshot() {
+    let Opened {
+        _directory,
+        path,
+        store,
+    } = opened();
+    let store = Arc::new(store);
+    let id = new_id();
+    store.create(owned(&id)).await.unwrap();
+    let before = store.load_admission_snapshot(&id).await.unwrap().unwrap();
+    let writer = LocalConversationStore::open(&path).unwrap();
+    raw(&path)
+        .execute_batch("PRAGMA journal_mode = WAL;")
+        .unwrap();
+    let entered = Arc::new(std::sync::Barrier::new(2));
+    let resume = Arc::new(std::sync::Barrier::new(2));
+    store.pause_admission_snapshot(entered.clone(), resume.clone());
+    let reading = store.clone();
+    let reading_id = id.clone();
+    let pending = tokio::spawn(async move { reading.load_admission_snapshot(&reading_id).await });
+    tokio::task::spawn_blocking(move || entered.wait())
+        .await
+        .unwrap();
+    writer
+        .record_deletion(&id, deletion("admission"))
+        .await
+        .unwrap();
+    tokio::task::spawn_blocking(move || resume.wait())
+        .await
+        .unwrap();
+    let during = pending.await.unwrap().unwrap().unwrap();
+    assert!(during.conversation().deletion().is_none());
+    assert_eq!(during.token(), before.token());
+    let after = store.load_admission_snapshot(&id).await.unwrap().unwrap();
+    assert!(after.conversation().deletion().is_some());
+    assert_ne!(after.token(), before.token());
 }
 
 /// Once a receiver loses a grant, subsequent replacements for that principal

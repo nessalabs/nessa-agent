@@ -24,8 +24,8 @@ pub use opaque::{
 pub use opaque_ke::rand;
 pub use opaque_ke::rand::{CryptoRng, RngCore};
 pub use tls::{
-    relay_key, verify_relay_proof, GatewayTrust, NativeIdentity, NativeTransport,
-    RELAY_PROOF_CONTEXT,
+    relay_key, verify_relay_proof, verify_tunnel_origin, GatewayTrust, NativeIdentity,
+    NativeTransport, RELAY_PROOF_CONTEXT, TUNNEL_ORIGIN_CONTEXT,
 };
 /// Maximum raw enrollment cryptographic message consumed by these adapters.
 /// Native framing independently validates the encoded envelope, including JSON

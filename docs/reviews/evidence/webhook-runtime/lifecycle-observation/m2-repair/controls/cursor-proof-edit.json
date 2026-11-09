@@ -1,0 +1,6 @@
+{
+  "before": "SELECT EXISTS(SELECT 1 FROM cursors WHERE registration=?1)",
+  "after": "SELECT 0",
+  "originalSHA256": "414539bc2d69209ae414ae483c1309b26a6893763b3cc3e51205882f7d3f24fa",
+  "mutatedSHA256": "26c8e14b3e8958b110706b9a9011322eb6bdc73560f55c26f719283f2f0bff41"
+}

@@ -1,0 +1,6 @@
+{
+  "before": "EXISTS(SELECT 1 FROM deliveries WHERE registration=?1)\";",
+  "after": "EXISTS(SELECT 1 FROM deliveries WHERE registration=?1) OR EXISTS(SELECT 1 FROM source_reset_facts WHERE registration=?1)\";",
+  "originalSHA256": "414539bc2d69209ae414ae483c1309b26a6893763b3cc3e51205882f7d3f24fa",
+  "changedSHA256": "ff7be2f997d2c0655a38cf7ce87e71c24a293c89d4c4f5e546b9a363d807e29c"
+}

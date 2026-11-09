@@ -1,0 +1,7 @@
+{
+  "path": "/tmp/nessa-retained-progress-independent-review/crates/nessa-server/src/webhooks/infrastructure/outbox/schema.sql",
+  "before": "PRAGMA user_version = 1;",
+  "after": "PRAGMA user_version = 1;\nCREATE TABLE unclassified_progress(id TEXT);",
+  "sourceSHA256": "6dd6989dc4997ef970bd4ec66147b2b3f41f9c69924cf53fa18b59939ac0fa24",
+  "mutatedSHA256": "d175dd5eb697875a76d6ab9cd718db846b4d3e81c886703766ce1ade31ac003c"
+}

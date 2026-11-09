@@ -1,0 +1,17 @@
+✔ help, invalid combinations and absent renderer report honest statuses (125.613292ms)
+✔ canonical catalog accepts no-model pages and rejects missing models (189.451958ms)
+﹣ actual TLC detects ticket reactivation and cleanup reopening without audit (0.107042ms) # SKIP
+✔ links elsewhere do not disguise an unmapped feature as formal coverage (0.512917ms)
+✔ shared coverage resolves an explicit owning page and does not count as a formal pass (0.495834ms)
+✔ indexes, contracts and external boundaries remain distinct from checked models (0.204875ms)
+✔ an exclusion mentioning external providers does not conceal an unmodeled local owner (0.135708ms)
+✔ having child pages cannot disguise an unmodeled lifecycle owner as an index (0.075583ms)
+✔ probe command fails clearly on bare Node when its renderer is absent (43.859375ms)
+ℹ tests 9
+ℹ suites 0
+ℹ pass 8
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 1
+ℹ todo 0
+ℹ duration_ms 347.751542

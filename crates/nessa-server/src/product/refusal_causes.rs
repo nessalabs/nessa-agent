@@ -88,6 +88,11 @@ fn conversation(out: &mut String, error: &ConversationError) {
             conversation(group.cause("release"), release);
             return group.end();
         }
+        E::ChildCreationRefused(inner) => {
+            let mut group = Group::new(out, "child-creation-refused");
+            conversation(group.cause(""), inner);
+            return group.end();
+        }
         E::NotFound => "not-found",
         E::ChannelNotFound => "channel-not-found",
         E::Deleted => "deleted",
@@ -117,6 +122,7 @@ fn conversation(out: &mut String, error: &ConversationError) {
         E::ModelChangeNotApplied => "model-change-not-applied",
         E::ModelChangeUncertain => "model-change-uncertain",
         E::Capacity => "capacity",
+        E::ThreadLimit => "thread-limit",
         E::Unavailable => "unavailable",
         E::Metadata => "metadata",
         E::CatalogueIdentityChanged => "catalogue-identity-changed",
@@ -475,6 +481,23 @@ mod tests {
             refusal_causes(&error),
             "admission-evidence(audit: audit, storage: storage-busy)"
         );
+    }
+
+    #[test]
+    fn a_child_creation_refusal_keeps_nested_static_causes() {
+        let error = ConversationError::ChildCreationRefused(Box::new(
+            ConversationError::ChildCreationRefused(Box::new(ConversationError::Storage(
+                StorageError::Busy,
+            ))),
+        ));
+        assert_eq!(
+            refusal_causes(&error),
+            "child-creation-refused(child-creation-refused(storage-busy))"
+        );
+        let error = ConversationError::ChildCreationRefused(Box::new(ConversationError::Agent(
+            AgentError::Transport("/home/someone/private-socket".into()),
+        )));
+        assert_eq!(refusal_causes(&error), "child-creation-refused(socket)");
     }
 
     #[test]

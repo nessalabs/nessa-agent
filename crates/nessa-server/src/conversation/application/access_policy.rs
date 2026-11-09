@@ -79,6 +79,13 @@ pub enum AccessSubject<'a> {
     /// The holder of a share grant, by its receiver, with no session: a note
     /// it left being delivered later.
     GrantHolder { receiver: &'a str },
+    /// Outbound-only registered principal. Registration ownership is an
+    /// authoritative fact; there is no receiver and no owner fallback.
+    WebhookReader {
+        organization: &'a OrganizationId,
+        principal: &'a PrincipalId,
+        registration_owner: &'a PrincipalId,
+    },
 }
 
 /// What the subject asks to do. Each is one Cedar action of the same name

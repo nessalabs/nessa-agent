@@ -34,6 +34,7 @@ import {
   findComposerModel,
 } from "../../../ui/catalogue-model-picker"
 import { DesktopIcon } from "../../../ui/icons"
+import { BoatTokenForm, useBoatConnection } from "../../../settings/ui/boat-row"
 import type { ChannelCreation } from "../../application/workspace-state"
 import {
   addChannelResources,
@@ -408,7 +409,14 @@ function Answer({ step, draft }: { step: ChannelStep; draft: ChannelDraft }) {
       return (
         <span>
           Main agent: <em>{draft.coordinatorPlacement === "boat" ? "Boat" : "Local"}</em>{" "}
-          · New threads: <em>{draft.threadPlacement === "boat" ? "Boat" : "Local"}</em>
+          · New threads:{" "}
+          <em>
+            {draft.threadPlacement === "boat"
+              ? "Boat"
+              : draft.threadPlacement === "pool"
+                ? "Any computer"
+                : "Local"}
+          </em>
         </span>
       )
     case "folder":
@@ -638,6 +646,10 @@ function ResourcesAnswer({ flow }: { flow: ChannelCreation }) {
 function PlacementAnswer({ flow }: { flow: ChannelCreation }) {
   const dispatch = useWorkspaceDispatch()
   const onKeyDown = useReturnAnswers()
+  // Boat is offered only once it is connected: a channel placed there before
+  // would refuse every message. Connecting it is offered right here.
+  const boat = useBoatConnection()
+  const boatReady = boat.status?.state === "connected"
   return (
     <div
       className="new-channel-placement"
@@ -659,12 +671,22 @@ function PlacementAnswer({ flow }: { flow: ChannelCreation }) {
             disabled={flow.creating}
             onChange={(event) => {
               const value = event.target.value
-              if (value === "local" || value === "boat")
+              if (
+                value === "local" ||
+                value === "boat" ||
+                (value === "pool" && key === "threadPlacement")
+              )
                 dispatch(draftChannel({ change: { [key]: value } }))
             }}
           >
             <option value="local">Local</option>
-            <option value="boat">Boat</option>
+            <option value="boat" disabled={!boatReady}>
+              {boatReady ? "Boat" : "Boat (not connected)"}
+            </option>
+            {/* Only threads spread over computers: the main agent stays put. */}
+            {key === "threadPlacement" ? (
+              <option value="pool">Any computer</option>
+            ) : null}
           </select>
         </label>
       ))}
@@ -674,6 +696,12 @@ function PlacementAnswer({ flow }: { flow: ChannelCreation }) {
         channels use your default Boat VM lifetime; change it in channel settings to
         override.
       </p>
+      {boatReady || boat.unread ? null : (
+        <div className="settings-boat" data-boat-connect>
+          <BoatTokenForm connection={boat} />
+          {boat.error && <p role="alert">{boat.error}</p>}
+        </div>
+      )}
     </div>
   )
 }

@@ -59,3 +59,11 @@ The recorded revision covers drag admission, displayed-target commitment, layout
 [Source](../../../../../src/desktop/workspace/adapters/dom/split-panes-drag.ts) · [Related source](../../../../../src/desktop/split-panes/adapters/dom/drag.ts) · [Related tests](../../../../../src/desktop/split-panes/adapters/dom/drag.test.tsx)
 
 [Material resource ownership](../../../../design/pane-frame-budget.md)
+
+## Model coverage
+
+Disposition: shared owner model. The same pane owner admits unique content and selects focus. [desktop-workspace-open-split-resize-and-close-panes](open-split-resize-and-close-panes.md)
+
+Excluded: Pointer geometry, drop previews, column limits and move/swap interleavings are outside the two-pane bound.
+
+Source review scope: owner entry points and relevant regression declarations were inventoried against frozen source `77a6b620af4d94b234294f6d273fd74b3dfb44c7`. Existing source checkpoints are retained where this was a partial review. A model result establishes bounded design safety only. Browser appearance and interaction were not checked.

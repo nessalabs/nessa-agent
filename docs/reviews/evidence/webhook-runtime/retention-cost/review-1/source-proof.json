@@ -1,0 +1,13 @@
+{
+  "terminal_retention_is_bounded": {
+    "identical": true,
+    "sha256": "1d316c32ec4a10b8b6a5a4ffc43ecc2a3dd4db6d0d4565dc8f41c9a0525ea713"
+  },
+  "stop_retention_is_bounded_when_publication_fails": {
+    "identical": true,
+    "sha256": "b531e2d10d2da24e13ddcefd75961dcf3b054b1debe45b6573b421391038a78f"
+  },
+  "bounds_and_application_port_identical": true,
+  "source_to_candidate_only_docs": true,
+  "clean_checkout": true
+}

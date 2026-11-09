@@ -1,4 +1,6 @@
+import { createAppsApi, type AppsApi } from "./apps-api.js"
 import { createBoatApi, type BoatApi } from "./boat-api.js"
+import { createDevicesApi, type DevicesApi } from "./devices-api.js"
 import { createSubscriptionApi, type SubscriptionApi } from "./subscription-api.js"
 import type { ProductSessionReady } from "../protocol/product-types.js"
 import type { ManagedSession, ConnectionState } from "../application/managed-session.js"
@@ -19,6 +21,7 @@ import { createChannelApi, type ChannelApi } from "./channel-api.js"
 import { createCredentialApi, type CredentialApi } from "./credential-api.js"
 import { createVaultApi, type VaultApi } from "./vault-api.js"
 import { createGithubApi, type GithubApi } from "./github-api.js"
+import { createVoiceApi, type VoiceApi } from "./voice-api.js"
 import { createPairingApi, type PairingApi } from "./pairing-api.js"
 import { createAuthApi, type AuthApi } from "./auth-api.js"
 import { createCatalogueReadApi, type CatalogueReadApi } from "./catalogue-read-api.js"
@@ -84,6 +87,8 @@ export class NessaClient {
 
   /** Encrypted Boat connection setup for cloud workspaces. */
   readonly boat: BoatApi
+  /** The hub's devices: its own machine and the workers paired to it. */
+  readonly devices: DevicesApi
   /** Authorized gateway health. */
   readonly server: ServerApi
   /** Authorized agent conversations, live views, and lifecycle controls. */
@@ -102,12 +107,16 @@ export class NessaClient {
   readonly mcpApps: McpAppsApi
   /** The gateway's stored MCP servers: list, save, remove, and inspect one. */
   readonly mcpServers: McpServersApi
+  /** The apps the person always allows, and a way to stop allowing one. */
+  readonly apps: AppsApi
   /** Issue, list, and revoke scoped product credentials, subject to server authorization. */
   readonly credentials: CredentialApi
   /** Owner pairing: create a one-use code, and approve, deny or cancel an invitation. */
   readonly pairing: PairingApi
   /** The gateway's GitHub sign-in: read it, start it, cancel it, or forget it. */
   readonly github: GithubApi
+  /** The gateway's realtime voice key, and the voice calls it starts. */
+  readonly voice: VoiceApi
   /** Connection-owned local vault controls; no secret-read API. */
   readonly vault: VaultApi
   /** Fetch a fresh snapshot of the authenticated product identity and restrictions. */
@@ -128,6 +137,7 @@ export class NessaClient {
   ) {
     this.server = createServerApi(wire)
     this.boat = createBoatApi(wire)
+    this.devices = createDevicesApi(wire)
     this.conversation = createConversationApi(wire, newRequestId)
     this.threadCommands = createThreadCommands(this.conversation, newRequestId, wire)
     this.records = createRecordReadApi(wire)
@@ -137,9 +147,11 @@ export class NessaClient {
     this.attachments = createAttachmentApi(wire, upload, newRequestId, httpTimer)
     this.mcpApps = createMcpAppsApi(wire, resources, newRequestId, httpTimer)
     this.mcpServers = createMcpServersApi(wire)
+    this.apps = createAppsApi(wire)
     this.credentials = createCredentialApi(wire, newRequestId)
     this.pairing = createPairingApi(wire)
     this.github = createGithubApi(wire)
+    this.voice = createVoiceApi(wire)
     this.vault = createVaultApi(wire)
     this.auth = createAuthApi(wire)
     this.workspace = createWorkspaceApi(wire)

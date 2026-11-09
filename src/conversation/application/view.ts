@@ -1,6 +1,7 @@
 import type {
   ApprovalMode,
   ApprovalModeChoice,
+  AgentSource,
   ConversationCapabilities,
   ConversationLease,
   ConversationRuntime,
@@ -67,6 +68,7 @@ export type ConversationView = {
     steeringOffset?: number
     parts: AgentPart[]
     userText: string
+    agent?: AgentSource
     /** Images sent with this turn, by reference. The view never carries bytes. */
     attachments: ImageReference[]
     /** Files this turn pointed the agent at, by path. */
@@ -86,6 +88,7 @@ export type ConversationView = {
   pending: {
     executionId: string
     text: string
+    agent?: AgentSource
     attachments: ImageReference[]
     files: LinkedFile[]
     uploads?: UploadedFileReference[]

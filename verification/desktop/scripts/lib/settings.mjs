@@ -1,5 +1,5 @@
 /**
- * Settings › Connections › Integrations, as the checks reach and measure it:
+ * Settings › Connections › MCP servers, as the checks reach and measure it:
  * `responsive.mjs` (`integrations-narrow`, on whatever the page shows) and
  * `mcp-servers-gateway.mjs` (`narrow`, with servers listed, the form and the
  * inspection open, over a real gateway) hold the same fit contract.
@@ -9,13 +9,13 @@ import { CannotRun } from "./cli.mjs"
 import { css, keys, names } from "./selectors.mjs"
 import { frames, settled } from "./workspace.mjs"
 
-/** Opens Settings on Connections › Integrations, and waits for its card. */
+/** Opens Settings on Connections › MCP servers, and waits for its card. */
 export async function openIntegrations(page) {
   if (!(await page.$(css.settings))) await page.keyboard.press(keys.settings)
   await need(page, css.settings, "Settings")
   await page.locator(css.settingsCategory, { hasText: names.connections }).click()
   await page.locator(css.settingsTab, { hasText: names.integrations }).click()
-  await need(page, css.mcpGroup, "Integrations' MCP servers")
+  await need(page, css.mcpGroup, "the MCP servers card")
   await settled(page)
 }
 
@@ -56,7 +56,8 @@ export async function integrationsFit(page, widths) {
         const missing = [
           !settings && sel.settings,
           !panel && sel.panel,
-          ...none(panel, `${sel.card}, ${sel.groupHeading}`),
+          // A tab whose one group is named as the tab shows no heading.
+          ...none(panel, sel.card),
           ...none(settings, sel.scrollers),
         ].filter(Boolean)
         if (missing.length > 0) return { missing }
@@ -94,6 +95,8 @@ export async function integrationsFit(page, widths) {
         // wider than its field is cut off where it is read).
         const field = (each) => each.tagName === "TEXTAREA" || each.tagName === "INPUT"
         const overflowing = [...panel.querySelectorAll("*")]
+          // Clipped by design: a heading kept for screen readers only.
+          .filter((each) => getComputedStyle(each).clipPath === "none")
           .filter((each) => each.scrollWidth > each.clientWidth + 1)
           .filter((each) => field(each) || getComputedStyle(each).overflowX !== "visible")
           .map(

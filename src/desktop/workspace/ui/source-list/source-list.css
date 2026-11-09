@@ -21,15 +21,26 @@
   width: calc(var(--workspace-sidebar-width) + var(--desktop-gutter));
   flex: none;
   flex-direction: column;
-  /* A wash rather than a framed pane, continuous with the window's light. */
+  /* A material, not a card: one tone lighter (dark) or darker (light) than the
+     window, full height and up behind the traffic lights, with the window's
+     light washing its top. Its edge is a hairline that fades in below the
+     titlebar, so nothing rules across the window's top row. */
   --sidebar-wash: radial-gradient(
-    ellipse 70% 70% at 50% 20%,
-    color-mix(in oklab, var(--desktop-light-high) 30%, transparent),
-    transparent 70%
+    ellipse 90% 60% at 30% 0%,
+    color-mix(in oklab, var(--desktop-light-high) 26%, transparent),
+    transparent 75%
   );
-  padding-top: var(--desktop-titlebar-height);
-  margin: 0 0 var(--desktop-gutter) var(--desktop-gutter);
-  background: var(--sidebar-wash);
+  padding: var(--desktop-titlebar-height) 0 var(--desktop-gutter) var(--desktop-gutter);
+  margin: 0;
+  background:
+    linear-gradient(
+        to bottom,
+        transparent calc(var(--desktop-titlebar-height) * 0.5),
+        var(--desktop-rim) calc(var(--desktop-titlebar-height) + 40px)
+      )
+      right top / 1px 100% no-repeat,
+    var(--sidebar-wash),
+    var(--desktop-sidebar-material);
   overflow: hidden;
   -webkit-user-select: none;
   user-select: none;
@@ -211,9 +222,24 @@
   pointer-events: none;
 }
 
+/*
+ * A row's actions take clicks only while shown: under the pointer or keyboard
+ * focus, or always under a coarse pointer, where the kit keeps them shown.
+ */
 .workspace-sidebar .workspace-row-actions {
   display: inline-flex;
+}
+
+.workspace-sidebar
+  [data-slot="sidebar-menu-item-row"]:is(:hover, :has(:focus-visible))
+  .workspace-row-actions {
   pointer-events: auto;
+}
+
+@media not ((hover: hover) and (pointer: fine)) {
+  .workspace-sidebar .workspace-row-actions {
+    pointer-events: auto;
+  }
 }
 
 .workspace-sidebar [data-slot="sidebar-menu-item-badge"] {
@@ -247,12 +273,26 @@
   padding-right: calc(16px + var(--workspace-row-decoration-width));
 }
 
-/* The action slot is independent of the count or glyph already at the end. */
+/*
+ * A row's actions show under the pointer or keyboard focus, in the cell of
+ * its count or running glyph (the kit swaps one for the other), so the label leaves room for the
+ * wider of the two, and does not move as they swap.
+ */
 .workspace-sidebar
   :where([data-slot="sidebar-menu-item-row"] > [data-size])[data-row-actions] {
   padding-right: calc(
-    16px + var(--workspace-row-decoration-width, 0px) + var(--desktop-control-size)
+    16px + max(var(--workspace-row-decoration-width, 0px), var(--desktop-control-size))
   );
+}
+
+/* A coarse pointer has nothing to reveal on: the kit lays both side by side. */
+@media not ((hover: hover) and (pointer: fine)) {
+  .workspace-sidebar
+    :where([data-slot="sidebar-menu-item-row"] > [data-size])[data-row-actions] {
+    padding-right: calc(
+      16px + var(--workspace-row-decoration-width, 0px) + var(--desktop-control-size)
+    );
+  }
 }
 
 .workspace-row-icon {

@@ -1,0 +1,5 @@
+
+running 1 test
+test webhooks::infrastructure::outbox::store::tests::lifecycle_context_tests::stopped_cannot_retain_queued_work_after_observation_audit_was_trimmed ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 116 filtered out; finished in 0.02s

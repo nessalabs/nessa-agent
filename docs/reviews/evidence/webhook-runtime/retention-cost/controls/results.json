@@ -1,0 +1,56 @@
+[
+  {
+    "rule": "old-ranking",
+    "caught": true,
+    "restored": true,
+    "byte_identical": true
+  },
+  {
+    "rule": "old-history-scan",
+    "caught": true,
+    "restored": true,
+    "byte_identical": true
+  },
+  {
+    "rule": "owed-retention",
+    "caught": true,
+    "restored": true,
+    "byte_identical": true
+  },
+  {
+    "rule": "delivery-history-retire",
+    "caught": true,
+    "restored": true,
+    "byte_identical": true
+  },
+  {
+    "rule": "published-only-retire",
+    "caught": true,
+    "restored": true,
+    "byte_identical": true
+  },
+  {
+    "rule": "terminal-only-retire",
+    "caught": true,
+    "restored": true,
+    "byte_identical": true
+  },
+  {
+    "rule": "materialized-cutoff",
+    "caught": true,
+    "restored": true,
+    "byte_identical": true
+  },
+  {
+    "rule": "terminal-index",
+    "caught": true,
+    "restored": true,
+    "byte_identical": true
+  },
+  {
+    "rule": "registration-index",
+    "caught": true,
+    "restored": true,
+    "byte_identical": true
+  }
+]

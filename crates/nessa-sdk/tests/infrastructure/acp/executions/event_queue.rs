@@ -1,4 +1,7 @@
 use super::*;
+use crate::application::agent_execution::sessions::{
+    MessageCommitClock, MessageCommitSleep, SessionManager,
+};
 use crate::application::agent_execution::{
     executions::{ExecutionAuditRecord, ExecutionController, ExecutionUpdate},
     permissions::{ActionContext, CancellationOrigin},
@@ -14,6 +17,8 @@ use crate::domain::agent_execution::{
     sessions::ExecutionSessionId,
     tools::{ToolCallId, ToolCallUpdate, ToolContent, ToolKind, ToolStatus},
 };
+use crate::infrastructure::session_storage::{InMemoryStorage, RuntimeMessageCommitClock};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 fn text_event() -> ExecutionEvent {
     let mut text = String::with_capacity(1024);
@@ -26,6 +31,21 @@ fn text_event() -> ExecutionEvent {
 fn budget(bytes: usize) -> EventQueueBudget {
     EventQueueBudget {
         permits: Arc::new(Semaphore::new(bytes)),
+        clock: Arc::new(RuntimeMessageCommitClock::new()),
+    }
+}
+
+/// A clock a test moves. Queue time is whatever it says at `try_send`.
+struct SubstitutedClock(AtomicU64);
+impl MessageCommitClock for SubstitutedClock {
+    fn now(&self) -> std::time::Duration {
+        std::time::Duration::from_millis(self.0.load(Ordering::Relaxed))
+    }
+    fn sleep_until(&self, _: std::time::Duration) -> MessageCommitSleep {
+        Box::pin(std::future::pending())
+    }
+    fn unix_milliseconds(&self) -> u64 {
+        self.0.load(Ordering::Relaxed)
     }
 }
 
@@ -201,4 +221,53 @@ fn review_snapshots_charge_accumulated_observations_and_cancellation_evidence() 
         records.as_slice(),
         [ExecutionAuditRecord::SessionClosed(_)]
     ));
+}
+
+/// A full queue waits while its consumer takes events, until the headroom is
+/// free, and stops waiting once the consumer takes nothing for a while.
+#[tokio::test(start_paused = true)]
+async fn room_waits_for_a_moving_consumer_and_gives_up_on_a_stopped_one() {
+    let budget = budget(MAX_QUEUED_BYTES);
+    let (sender, mut receiver) = budget.channel(HEADROOM * 2);
+    for _ in 0..HEADROOM * 2 {
+        assert_eq!(sender.try_send(text_event()), Ok(()));
+    }
+    let patience = std::time::Duration::from_secs(1);
+    let consumer = tokio::spawn(async move {
+        for _ in 0..HEADROOM {
+            tokio::time::sleep(patience / 2).await;
+            receiver.recv().await.unwrap();
+        }
+        receiver
+    });
+    let started = tokio::time::Instant::now();
+    sender.room(0, || tokio::time::sleep(patience)).await;
+    assert_eq!(sender.sender.capacity(), HEADROOM);
+    assert!(started.elapsed() >= patience / 2 * HEADROOM as u32);
+    let _receiver = consumer.await.unwrap();
+    // The consumer has stopped: one patience, then the wait ends unfilled.
+    assert_eq!(sender.try_send(text_event()), Ok(()));
+    let started = tokio::time::Instant::now();
+    sender.room(0, || tokio::time::sleep(patience)).await;
+    assert_eq!(started.elapsed(), patience);
+    assert_eq!(sender.sender.capacity(), HEADROOM - 1);
+}
+
+/// The stamp is the queue's clock at `try_send`. Moving that clock before the
+/// consumer reads, and before the session accepts the report, leaves the
+/// earlier time in place.
+#[tokio::test]
+async fn a_substituted_clock_keeps_the_enqueue_time_after_it_moves() {
+    let clock = Arc::new(SubstitutedClock(AtomicU64::new(1_000)));
+    let budget = EventQueueBudget::with_clock(clock.clone());
+    let (sender, mut receiver) = budget.channel(8);
+    assert_eq!(sender.try_send(text_event()), Ok(()));
+    clock.0.store(5_000, Ordering::Relaxed);
+    let queued = receiver.recv().await.unwrap();
+    assert!(queued.session_arrival());
+    assert_eq!(queued.observed_at_ms(), Some(1_000));
+    let manager = SessionManager::open(None, Arc::new(InMemoryStorage::new()), clock)
+        .await
+        .unwrap();
+    assert_eq!(manager.observed(queued).observed_at_ms(), Some(1_000));
 }

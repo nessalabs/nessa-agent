@@ -6,7 +6,9 @@
  * rules of #419 (S), MCP Apps (#384) and an app's review (#436, P). The D
  * rows are the desktop rows of `docs/design/record-subscriptions.md`.
  */
+import { createHash } from "node:crypto"
 import {
+  NessaAttachmentError,
   NessaConnectionClosedError,
   NessaCredentialUnavailableError,
   RetryableConnectError,
@@ -46,7 +48,7 @@ import {
 } from "./gateway-source"
 
 const { a: conversationA, b: conversationB, s: conversationS } = gatewayConversationIds
-const timing = { callMs: 5_000, retryMs: 1_000 }
+const timing = { callMs: 5_000, workspaceCallMs: 20_000, retryMs: 1_000 }
 const model = { provider: "anthropic", modelId: "claude-opus-5" }
 
 /** A clock and timers the test moves by hand. */
@@ -86,12 +88,21 @@ const flush = async () => {
   for (let i = 0; i < 20; i++) await Promise.resolve()
 }
 
+/** Images read back from data URLs, named by their SHA-256 as the window's Web Crypto would. */
+const testImageBytes = {
+  bytes: async (url: string) => (await fetch(url)).blob(),
+  digest: async (bytes: Blob) =>
+    `sha256:${createHash("sha256")
+      .update(new Uint8Array(await bytes.arrayBuffer()))
+      .digest("hex")}`,
+}
+
 function started(
   gateway: FakeGateway = fakeGateway(),
   connect: () => Promise<FakeGateway["client"]> = () => Promise.resolve(gateway.client),
 ) {
   const { clock, advance } = manualClock()
-  const source = gatewaySource({ connect, clock, timing })
+  const source = gatewaySource({ connect, clock, timing, imageBytes: testImageBytes })
   const updates: WorkspaceUpdate[] = []
   const follow = () => source.subscribe((update) => updates.push(update))
   return { gateway, source, updates, follow, advance }
@@ -2413,6 +2424,74 @@ describe("writes", () => {
     ])
   })
 
+  it("W1: a first message's images go into its conversation before the message, which names what it holds", async () => {
+    const { gateway, source } = started()
+    const bytes = new Uint8Array([1, 2, 3])
+    // Any URL the window can read the bytes back from; the window's own is an object URL.
+    const url = `data:image/png;base64,${Buffer.from(bytes).toString("base64")}`
+    await source.send({
+      sessionId: conversationS,
+      messageId: "m",
+      text: "",
+      images: [{ id: "i", name: "shot.png", mimeType: "image/png", size: 3, url }],
+      model: { provider: "openai", modelId: "gpt-5" },
+      initiator: "person",
+      start: { channelId: "gateway-conversations", title: "Image" },
+    })
+    const digest = `sha256:${createHash("sha256").update(bytes).digest("hex")}`
+    expect(gateway.calls.map((call) => call.method)).toEqual([
+      "create",
+      "attachmentBegin",
+      "attachmentUpload",
+      "send",
+      "subscribe",
+    ])
+    expect(gateway.calls[1].args).toEqual([
+      conversationS,
+      { digest, mimeType: "image/png", size: 3 },
+    ])
+    expect(gateway.calls.find((call) => call.method === "send")?.args).toEqual([
+      conversationS,
+      "",
+      [{ digest, mimeType: "image/png", size: 3 }],
+      [],
+      { executionId: "m", requestId: expect.any(String) },
+    ])
+  })
+
+  it("W1: an image the gateway refuses refuses the message, in the upload's words, and sends nothing", async () => {
+    const { gateway, source } = started()
+    gateway.views.set(conversationS, view(conversationS))
+    gateway.once("attachmentBegin", () =>
+      Promise.reject(
+        new NessaAttachmentError(
+          "begin_refused",
+          undefined,
+          undefined,
+          "image_input_unsupported",
+        ),
+      ),
+    )
+    const url = "data:image/png;base64,AQ=="
+    await expect(
+      source.send({
+        sessionId: conversationS,
+        messageId: "m",
+        text: "Look",
+        images: [{ id: "i", name: "shot.png", mimeType: "image/png", size: 1, url }],
+        model,
+        initiator: "person",
+      }),
+    ).rejects.toMatchObject({
+      reason: "not-supported",
+      diagnostic: {
+        message: "This agent's model doesn't take images.",
+        code: "image-input-unsupported",
+      },
+    })
+    expect(gateway.count("send")).toBe(0)
+  })
+
   it("W1: a first message in a channel of the person's opens its conversation there", async () => {
     const { gateway, source } = started()
     await gateway.client.channels.create({
@@ -3394,6 +3473,136 @@ describe("writes", () => {
     expect(gateway.count("send")).toBe(0)
   })
 
+  it("C6: a message into a conversation on a workspace waits the workspace budget, and says so to the client", async () => {
+    const { gateway, source, advance } = started()
+    gateway.rows.set(conversationA, row(conversationA))
+    gateway.views.set(
+      conversationA,
+      view(conversationA, {
+        lease: {
+          state: "ended",
+          revision: 2,
+          environment: "boat",
+          sandbox: "harness_default",
+          cause: "closed",
+          cleanup: "confirmed",
+          droppedEvents: 0,
+        },
+      }),
+    )
+    await source.index()
+    await source.transcript(conversationA)
+    const waking = deferred<unknown>()
+    gateway.once("send", () => waking.promise)
+    const sending = source
+      .send({
+        sessionId: conversationA,
+        messageId: "m",
+        text: "Hi",
+        model,
+        initiator: "person",
+      })
+      .catch((error: unknown) => error)
+    // Past the ordinary budget, the workspace is still being woken: still on its way.
+    await advance(timing.callMs)
+    expect(await Promise.race([sending, Promise.resolve("pending")])).toBe("pending")
+    expect(gateway.calls.find((call) => call.method === "send")?.args.at(-1)).toEqual({
+      waitsOnWorkspace: true,
+    })
+    waking.resolve({
+      conversationId: conversationA,
+      executionId: "m",
+      disposition: "queued",
+      requestId: "r",
+    })
+    await flush()
+    expect(await sending).not.toBeInstanceOf(Error)
+  })
+
+  it("C6: a first message in a channel waits the workspace budget while its workspace is made", async () => {
+    const { gateway, source, advance } = started()
+    const made = deferred<unknown>()
+    gateway.once("create", () => made.promise)
+    const sending = source
+      .send({
+        sessionId: conversationS,
+        messageId: "m",
+        text: "Hi",
+        model,
+        initiator: "person",
+        start: { channelId: "ch_aaaaaaaaaa", title: "Hi" },
+      })
+      .catch((error: unknown) => error)
+    await advance(timing.callMs)
+    expect(await Promise.race([sending, Promise.resolve("pending")])).toBe("pending")
+    made.resolve({ conversationId: conversationS })
+    await flush()
+    expect(await sending).not.toBeInstanceOf(Error)
+    expect(gateway.calls.find((call) => call.method === "send")?.args.at(-1)).toEqual({
+      waitsOnWorkspace: true,
+    })
+  })
+
+  it("C6: a message into a conversation that runs here keeps the ordinary budget", async () => {
+    const { gateway, source, advance } = started()
+    gateway.rows.set(conversationA, row(conversationA))
+    gateway.views.set(
+      conversationA,
+      view(conversationA, {
+        lease: {
+          state: "ended",
+          revision: 2,
+          environment: "here",
+          sandbox: "harness_default",
+          cause: "closed",
+          cleanup: "confirmed",
+          droppedEvents: 0,
+        },
+      }),
+    )
+    await source.index()
+    await source.transcript(conversationA)
+    gateway.once("send", () => new Promise(() => {}))
+    const sending = source
+      .send({
+        sessionId: conversationA,
+        messageId: "m",
+        text: "Hi",
+        model,
+        initiator: "person",
+      })
+      .catch((error: unknown) => error)
+    await advance(timing.callMs)
+    expect(await sending).toMatchObject({ reason: "unavailable" })
+    expect(gateway.calls.find((call) => call.method === "send")?.args).toHaveLength(5)
+  })
+
+  it("C6: a first message in a channel gets the whole workspace budget for its send after a slow create", async () => {
+    const { gateway, source, advance } = started()
+    const made = deferred<unknown>()
+    gateway.once("create", () => made.promise)
+    const taken = deferred<unknown>()
+    gateway.once("send", () => taken.promise)
+    const sending = source
+      .send({
+        sessionId: conversationS,
+        messageId: "m",
+        text: "Hi",
+        model,
+        initiator: "person",
+        start: { channelId: "ch_aaaaaaaaaa", title: "Hi" },
+      })
+      .catch((error: unknown) => error)
+    await advance(timing.workspaceCallMs - 1)
+    made.resolve({ conversationId: conversationS })
+    await flush()
+    await advance(timing.workspaceCallMs - 1)
+    expect(await Promise.race([sending, Promise.resolve("pending")])).toBe("pending")
+    // A send the gateway never answers still settles, on its own budget.
+    await advance(1)
+    expect(await sending).toMatchObject({ reason: "unavailable" })
+  })
+
   it("C6: a message whose create answered after its call settled is not sent", async () => {
     const { gateway, source, advance } = started()
     const created = deferred<unknown>()
@@ -4148,6 +4357,111 @@ it("PS16: captures immutable workspace intent before creation can await", async 
   expect(gateway.live(conversationB)).toBe(0)
 })
 
+it("PS16: a message with images keeps its words, its images and its conversation while creation awaits", async () => {
+  const { gateway, source } = started()
+  const created = deferred<void>()
+  gateway.once("create", (normal) => created.promise.then(normal))
+  const image = {
+    id: "i",
+    name: "shot.png",
+    mimeType: "image/png",
+    size: 1,
+    url: "data:image/png;base64,AQ==",
+  }
+  const message = {
+    sessionId: conversationS as string,
+    messageId: "original-turn",
+    text: "original",
+    images: [image],
+    model: { ...model },
+    initiator: "person" as const,
+    start: { channelId: "gateway-conversations", title: "original" },
+  }
+  const sending = source.send(message)
+  await flush()
+  expect(gateway.count("create")).toBe(1)
+  message.sessionId = conversationB
+  message.messageId = "other-turn"
+  message.text = "edited"
+  image.mimeType = "image/gif"
+  message.images = []
+  created.resolve()
+  await sending
+  await flush()
+  const digest = `sha256:${createHash("sha256")
+    .update(new Uint8Array([1]))
+    .digest("hex")}`
+  expect(gateway.calls.find((call) => call.method === "attachmentBegin")?.args).toEqual([
+    conversationS,
+    { digest, mimeType: "image/png", size: 1 },
+  ])
+  expect(gateway.calls.find((call) => call.method === "send")?.args).toEqual([
+    conversationS,
+    "original",
+    [{ digest, mimeType: "image/png", size: 1 }],
+    [],
+    { executionId: "original-turn", requestId: expect.any(String) },
+  ])
+  expect(gateway.live(conversationB)).toBe(0)
+})
+
+it("takes no upload ticket for an image whose call ended while its bytes were hashed", async () => {
+  const gateway = fakeGateway()
+  gateway.views.set(conversationS, view(conversationS))
+  const { clock, advance } = manualClock()
+  const hashed = deferred<string>()
+  const source = gatewaySource({
+    connect: () => Promise.resolve(gateway.client),
+    clock,
+    timing,
+    imageBytes: { bytes: testImageBytes.bytes, digest: () => hashed.promise },
+  })
+  const sending = source.send({
+    sessionId: conversationS,
+    messageId: "m",
+    text: "Look",
+    images: [
+      {
+        id: "i",
+        name: "a.png",
+        mimeType: "image/png",
+        size: 1,
+        url: "data:image/png;base64,AQ==",
+      },
+    ],
+    model,
+    initiator: "person",
+  })
+  const refused = expect(sending).rejects.toMatchObject({ reason: "unavailable" })
+  await advance(timing.callMs + 1)
+  await refused
+  hashed.resolve(`sha256:${"1".repeat(64)}`)
+  await flush()
+  expect(gateway.count("attachmentBegin")).toBe(0)
+  expect(gateway.count("send")).toBe(0)
+})
+
+it("refuses a message with images, sending nothing, when composition gave no way to read them", async () => {
+  const gateway = fakeGateway()
+  const { clock } = manualClock()
+  const source = gatewaySource({
+    connect: () => Promise.resolve(gateway.client),
+    clock,
+    timing,
+  })
+  await expect(
+    source.send({
+      sessionId: conversationS,
+      messageId: "m",
+      text: "Look",
+      images: [{ id: "i", name: "a.png", mimeType: "image/png", size: 1, url: "data:," }],
+      model,
+      initiator: "person",
+    }),
+  ).rejects.toMatchObject({ reason: "not-supported" })
+  expect(gateway.calls).toEqual([])
+})
+
 it("keeps input attachments when a fresh desktop source reopens a retained conversation", async () => {
   const gateway = fakeGateway()
   const image = { digest: "a".repeat(64), mimeType: "image/png" as const, size: 2048 }
@@ -4191,4 +4505,220 @@ it("keeps input attachments when a fresh desktop source reopens a retained conve
   } finally {
     stopReopened()
   }
+})
+
+describe("earlier turns", () => {
+  const done = (id: string, text: string) => ({
+    ...running(id),
+    userText: `asked ${id}`,
+    status: "completed" as const,
+    parts: [{ offset: 0, kind: "text" as const, text, toolId: "", noticeId: "" }],
+  })
+  const ids = (updates: readonly WorkspaceUpdate[]) =>
+    transcriptsOf(updates, conversationA)
+      .at(-1)
+      ?.messages.filter((message) => message.role === "agent")
+      .map((message) => messageText(message))
+
+  it("reads the turns before the view's first a page at a time, and draws them in front", async () => {
+    const { gateway, source, updates, follow } = started()
+    gateway.earlier.set(conversationA, [
+      done("t1", "one"),
+      done("t2", "two"),
+      done("t3", "three"),
+    ])
+    gateway.views.set(
+      conversationA,
+      view(conversationA, {
+        revision: "1",
+        earlier: true,
+        messages: [done("t4", "four")],
+      }),
+    )
+    follow()
+    await source.transcript(conversationA)
+    await flush()
+    expect(transcriptsOf(updates, conversationA).at(-1)?.history?.earlier).toBe(true)
+    expect(ids(updates)).toEqual(["four"])
+    await source.loadEarlier?.(conversationA)
+    await flush()
+    expect(ids(updates)).toEqual(["two", "three", "four"])
+    expect(transcriptsOf(updates, conversationA).at(-1)?.history?.earlier).toBe(true)
+    await source.loadEarlier?.(conversationA)
+    await flush()
+    expect(ids(updates)).toEqual(["one", "two", "three", "four"])
+    expect(transcriptsOf(updates, conversationA).at(-1)?.history).toBeUndefined()
+    // Nothing more to read: nothing is asked.
+    const asked = gateway.calls.filter((call) => call.method === "readEarlier").length
+    await source.loadEarlier?.(conversationA)
+    expect(gateway.calls.filter((call) => call.method === "readEarlier")).toHaveLength(
+      asked,
+    )
+  })
+
+  it("reads the gap when the view moves on past the turns read", async () => {
+    const { gateway, source, updates, follow } = started()
+    gateway.earlier.set(conversationA, [done("t1", "one"), done("t2", "two")])
+    gateway.views.set(
+      conversationA,
+      view(conversationA, {
+        revision: "1",
+        earlier: true,
+        messages: [done("t3", "three")],
+      }),
+    )
+    follow()
+    await source.transcript(conversationA)
+    await flush()
+    await source.loadEarlier?.(conversationA)
+    await flush()
+    expect(ids(updates)).toEqual(["one", "two", "three"])
+    // Two more turns came; the view now starts at the fourth.
+    gateway.earlier.set(conversationA, [
+      done("t1", "one"),
+      done("t2", "two"),
+      done("t3", "three"),
+    ])
+    gateway.views.set(
+      conversationA,
+      view(conversationA, {
+        revision: "2",
+        earlier: true,
+        messages: [done("t4", "four"), done("t5", "five")],
+      }),
+    )
+    gateway.publish(conversationA)
+    await flush()
+    await flush()
+    expect(ids(updates)).toEqual(["one", "two", "three", "four", "five"])
+  })
+
+  it("lets what was read go when the gateway says its point is not in the history", async () => {
+    const restore = quiet()
+    try {
+      const { gateway, source, updates, follow } = started()
+      gateway.views.set(
+        conversationA,
+        view(conversationA, {
+          revision: "1",
+          earlier: true,
+          messages: [done("t4", "four")],
+        }),
+      )
+      follow()
+      await source.transcript(conversationA)
+      await flush()
+      gateway.once("readEarlier", async () => {
+        throw rpcCode("invalid_request")
+      })
+      expect(await source.loadEarlier?.(conversationA)).toBe(false)
+      await flush()
+      expect(ids(updates)).toEqual(["four"])
+      // Turns it will not read are said to be left out, and not asked for again.
+      const history = transcriptsOf(updates, conversationA).at(-1)?.history
+      expect(history).toMatchObject({ omitted: true })
+      expect(history?.earlier).toBeUndefined()
+      const asked = gateway.calls.filter((call) => call.method === "readEarlier").length
+      expect(await source.loadEarlier?.(conversationA)).toBe(false)
+      expect(gateway.calls.filter((call) => call.method === "readEarlier")).toHaveLength(
+        asked,
+      )
+    } finally {
+      restore.mockRestore()
+    }
+  })
+
+  it("joins what the last frame drew when a streaming turn moves the view on, reading nothing", async () => {
+    const { gateway, source, updates, follow } = started()
+    gateway.earlier.set(conversationA, [done("t1", "one")])
+    gateway.views.set(
+      conversationA,
+      view(conversationA, {
+        revision: "1",
+        earlier: true,
+        messages: [done("t2", "two"), { ...done("t3", "abcdef"), status: "running" }],
+      }),
+    )
+    follow()
+    await source.transcript(conversationA)
+    await flush()
+    await source.loadEarlier?.(conversationA)
+    await flush()
+    const asked = gateway.calls.filter((call) => call.method === "readEarlier").length
+    // The reply grew; the view now starts partway through it.
+    gateway.views.set(
+      conversationA,
+      view(conversationA, {
+        revision: "2",
+        earlier: true,
+        messages: [
+          {
+            ...done("t3", "defgh"),
+            userText: "",
+            status: "running",
+            startsAt: { part: 0, byte: 3 },
+          },
+        ],
+      }),
+    )
+    gateway.publish(conversationA)
+    await flush()
+    await flush()
+    expect(ids(updates)).toEqual(["one", "two", "abcdefgh"])
+    expect(gateway.calls.filter((call) => call.method === "readEarlier")).toHaveLength(
+      asked,
+    )
+  })
+
+  it("asks for a stretch that failed twice only when the next frame comes", async () => {
+    const restore = quiet()
+    vi.useFakeTimers()
+    try {
+      const { gateway, source, updates, follow } = started()
+      gateway.earlier.set(conversationA, [done("t1", "one"), done("t2", "two")])
+      gateway.views.set(
+        conversationA,
+        view(conversationA, {
+          revision: "1",
+          earlier: true,
+          messages: [done("t3", "three")],
+        }),
+      )
+      follow()
+      await source.transcript(conversationA)
+      await flush()
+      await source.loadEarlier?.(conversationA)
+      await flush()
+      const reads = () =>
+        gateway.calls.filter((call) => call.method === "readEarlier").length
+      const before = reads()
+      for (let each = 0; each < 10; each++)
+        gateway.once("readEarlier", async () => {
+          throw rpcCode("unavailable")
+        })
+      // The view moves on past a turn no frame drew: that stretch is read.
+      gateway.views.set(
+        conversationA,
+        view(conversationA, {
+          revision: "2",
+          earlier: true,
+          messages: [done("t5", "five")],
+        }),
+      )
+      gateway.publish(conversationA)
+      await flush()
+      await vi.advanceTimersByTimeAsync(2_000)
+      await flush()
+      expect(reads()).toBe(before + 2)
+      expect(transcriptsOf(updates, conversationA).at(-1)?.history).toMatchObject({
+        omitted: true,
+      })
+      await vi.advanceTimersByTimeAsync(20_000)
+      await flush()
+      expect(reads()).toBe(before + 2)
+    } finally {
+      vi.useRealTimers()
+      restore.mockRestore()
+    }
+  })
 })

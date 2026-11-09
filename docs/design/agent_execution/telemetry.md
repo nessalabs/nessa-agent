@@ -120,7 +120,9 @@ Facts that matter for the design:
 - Shell: `console.warn/error` with a `[nessa]` prefix; a dev-only bridge
   forwards warn/error to the terminal (`src-tauri/src/diagnostics.rs`,
   `src/diagnostics/dev-console.ts`). The shell has no timing of its own.
-  Host startup durations are the `nessa.timing` lines in `host.log`.
+  Host startup durations are the `nessa.timing` lines in `host.log`. The last
+  few launch-to-gateway-ready and message-to-first-token samples are also files
+  beside that log. `nessa doctor` reads them. They stay on the machine.
 - No "open logs", no support bundle, no diagnostics export in the tray or
   settings.
 

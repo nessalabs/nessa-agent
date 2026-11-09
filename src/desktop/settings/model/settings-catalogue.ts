@@ -63,8 +63,16 @@ export const settingsCategories = [
     label: "Connections",
     tabs: [
       { id: "agents", label: "Agents", keywords: "claude code codex opencode installed" },
-      { id: "accounts", label: "Accounts", keywords: "sign in github login" },
-      { id: "integrations", label: "Integrations", keywords: "mcp servers tools" },
+      {
+        id: "accounts",
+        label: "Accounts",
+        keywords: "sign in github login voice openai",
+      },
+      {
+        id: "integrations",
+        label: "MCP servers",
+        keywords: "mcp servers tools integrations",
+      },
       {
         id: "devices",
         label: "Linked devices",
@@ -348,13 +356,28 @@ export const settingsEntries = [
     keywords: "git repository sign in connect app",
   },
   {
+    id: "voice",
+    tab: "accounts",
+    label: "Voice",
+    detail:
+      "Talk to your agents from the composer. Uses your OpenAI key, kept in Nessa's vault.",
+    keywords: "voice talk speak microphone openai realtime key",
+  },
+  {
     id: "boat",
     tab: "accounts",
     label: "Boat",
     detail: "Cloud workspaces using your connected agent subscriptions.",
     keywords: "cloud vm compute workspace token chatgpt claude",
   },
-  // Connections › Integrations
+  {
+    id: "vault-passphrase",
+    tab: "accounts",
+    label: "Vault passphrase",
+    detail: "Protect saved credentials on this gateway.",
+    keywords: "change password security encryption unlock",
+  },
+  // Connections › MCP servers
   {
     id: "mcp-servers",
     tab: "integrations",
@@ -391,6 +414,14 @@ export const settingsEntries = [
     detail:
       "A tool you always allow or always deny in one project. Revoke one to be asked again.",
     keywords: "allow deny permission rule revoke project",
+  },
+  {
+    id: "trusted-apps",
+    tab: "access",
+    label: "Apps you always allow",
+    detail:
+      "Apps you answered Always allow send messages as you without asking. Revoke one to be asked again.",
+    keywords: "app mcp always allow trust revoke message",
   },
   {
     id: "review-notices",

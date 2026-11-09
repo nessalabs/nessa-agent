@@ -68,6 +68,9 @@ pub struct HealthResult {
     pub runtime_status: RuntimeStatus,
     /// Time since server startup in milliseconds.
     pub uptime_ms: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Read-only namespace webhook status when configured. No recipient, credential or conversation identifiers are disclosed.
+    pub webhook: Option<WebhookStatus>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
@@ -177,6 +180,52 @@ pub enum SurfaceKind {
     Desktop,
     #[serde(rename = "cli")]
     Cli,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+pub enum WebhookNativeMutations {
+    #[serde(rename = "available")]
+    Available,
+    #[serde(rename = "temporarily-unavailable")]
+    TemporarilyUnavailable,
+    #[serde(rename = "stopped")]
+    Stopped,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+pub enum WebhookPendingOutcome {
+    #[serde(rename = "none")]
+    None,
+    #[serde(rename = "unposted")]
+    Unposted,
+    #[serde(rename = "response")]
+    Response,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+pub enum WebhookRefusal {
+    #[serde(rename = "preparation-busy")]
+    PreparationBusy,
+    #[serde(rename = "preparation-unavailable")]
+    PreparationUnavailable,
+    #[serde(rename = "preparation-timed-out")]
+    PreparationTimedOut,
+    #[serde(rename = "destination-refused")]
+    DestinationRefused,
+    #[serde(rename = "admission-unavailable")]
+    AdmissionUnavailable,
+    #[serde(rename = "source-unavailable")]
+    SourceUnavailable,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WebhookStatus {
+    pub pending_outcome: WebhookPendingOutcome,
+    pub native_mutations: WebhookNativeMutations,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Most recent non-attempt refusal in this process; it can remain after progress and is not current authority or a delivery outcome.
+    pub last_refusal: Option<WebhookRefusal>,
 }
 pub fn wire_shape_gateway_error(value: &Value) -> bool {
     value.as_object().is_some_and(|object| {

@@ -1,7 +1,8 @@
 /**
  * What the window shows, as the person's agents are told it (`read_window`
  * on the gateway): the arrangement, which side columns are drawn, what fills
- * the content region, and the panes left to right, each column top to
+ * the content region, the focused chat's right panel, and the panes left to
+ * right, each column top to
  * bottom, each with its share of the room and what it shows. Built from the
  * window's own state (`application/usecases/window.ts`); the window is the
  * one authority for it, so the gateway keeps whatever it last said.
@@ -34,6 +35,16 @@ export interface ShownColumn {
   readonly panes: readonly ShownPane[]
 }
 
+/** The focused chat's right panel, as the person's agents are told it. */
+export interface ShownPanel {
+  /** Whether the panel is drawn. Closed, its tabs are not on screen. */
+  readonly open: boolean
+  /** That chat's tabs, in the order they were opened. Empty when it has none. */
+  readonly tabs: readonly WidgetRef[]
+  /** The tab in front: one of `tabs`, or none when there are none. */
+  readonly front: WidgetRef | null
+}
+
 export interface ShownWindow {
   readonly arrangement: WindowArrangement
   /** Whether the sidebar is drawn. */
@@ -44,6 +55,8 @@ export interface ShownWindow {
     | { readonly kind: "panes" }
     | { readonly kind: "agents" }
     | { readonly kind: "widget"; readonly widget: WidgetRef }
+  /** The focused chat's right panel. Another chat's is said when that chat is focused. */
+  readonly panel: ShownPanel
   readonly columns: readonly ShownColumn[]
 }
 

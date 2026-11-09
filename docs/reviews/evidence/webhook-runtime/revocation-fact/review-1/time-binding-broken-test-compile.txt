@@ -1,0 +1,9 @@
+warning: unused import: `future::Future`
+   --> /tmp/nessa-revocation-independent-review/auth/tests/revocation.rs:562:15
+    |
+562 |     use std::{future::Future,task::{Context,Poll,Waker}};
+    |               ^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: 1 warning emitted

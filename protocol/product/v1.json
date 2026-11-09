@@ -218,7 +218,7 @@
         "methods": {
           "type": "array",
           "items": { "type": "string" },
-          "maxItems": 101,
+          "maxItems": 119,
           "description": "Registered product methods; permission is checked for every command."
         }
       },
@@ -922,12 +922,7 @@
           "description": "Original filename, at most 255 UTF-8 bytes. No separators or control characters; not a destination path."
         }
       },
-      "required": [
-        "digest",
-        "mimeType",
-        "size",
-        "name"
-      ]
+      "required": ["digest", "mimeType", "size", "name"]
     },
     "LinkedFile": {
       "type": "object",
@@ -1216,9 +1211,9 @@
         "userText": {
           "type": "string",
           "minLength": 0,
-          "maxLength": 32768,
-          "x-utf8MaxBytes": 32768,
-          "description": "User input text; empty for a message of images alone."
+          "maxLength": 65536,
+          "x-utf8MaxBytes": 65536,
+          "description": "User input text, whole; empty for a message of images alone. Its only bound is the frame's."
         },
         "attachments": {
           "type": "array",
@@ -1242,6 +1237,10 @@
         "app": {
           "$ref": "#/$defs/ConversationMessageApp",
           "description": "The app that wrote this turn on the person's behalf; absent when the person wrote it."
+        },
+        "agent": {
+          "$ref": "#/$defs/ConversationAgentSource",
+          "description": "The verified source turn whose agent wrote this input; absent for a person or app."
         },
         "status": {
           "$ref": "#/$defs/ConversationMessageStatus",
@@ -1275,7 +1274,7 @@
         },
         "parts": {
           "type": "array",
-          "maxItems": 512,
+          "maxItems": 4096,
           "items": { "$ref": "#/$defs/ConversationPart" },
           "description": "Provider observations in execution order; offsets address the retained SDK event sequence."
         },
@@ -1284,6 +1283,10 @@
           "minimum": 0,
           "maximum": 9007199254740991,
           "description": "Target event count when steering was admitted locally; does not imply provider consumption timing."
+        },
+        "startsAt": {
+          "$ref": "#/$defs/ConversationPartPosition",
+          "description": "Where the first listed part starts in the whole turn, when the view begins partway through it. The person's message and the parts before it are read with conversation.readEarlier. Absent when the turn is listed from its start."
         }
       },
       "required": ["executionId", "userText", "attachments", "files", "status", "parts"]
@@ -1330,12 +1333,38 @@
           "$ref": "#/$defs/ConversationMessageApp",
           "description": "The app that wrote this waiting input on the person's behalf; absent when the person wrote it."
         },
+        "agent": {
+          "$ref": "#/$defs/ConversationAgentSource",
+          "description": "The verified source turn whose agent wrote this waiting input."
+        },
         "mode": {
           "$ref": "#/$defs/ConversationPendingMode",
           "description": "Queue or steering admission."
         }
       },
       "required": ["executionId", "text", "attachments", "files", "mode"]
+    },
+    "ConversationAgentSource": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "The source conversation and turn whose agent wrote a message or note. Origin does not grant owner authority.",
+      "properties": {
+        "conversationId": {
+          "type": "string",
+          "minLength": 36,
+          "maxLength": 36,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "description": "Canonical ID of the conversation in which the sending agent ran."
+        },
+        "executionId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "ID of the source turn or the child turn a report concerns."
+        }
+      },
+      "required": ["conversationId", "executionId"]
     },
     "ConversationMessageApp": {
       "type": "object",
@@ -1815,7 +1844,11 @@
         },
         "truncated": {
           "type": "boolean",
-          "description": "Some history, text or whole interactions were omitted to bound this response; interactionViewError explains omitted actionable units."
+          "description": "Something no read gives back was omitted to bound this response: a gap between the turns listed, notes, artifacts, or whole interactions; interactionViewError explains omitted actionable units. Older turns that only come before the first one listed are earlier instead."
+        },
+        "earlier": {
+          "type": "boolean",
+          "description": "Turns, or the start of the first turn listed, came before what this view lists. They are read with conversation.readEarlier, before the first message's start."
         },
         "interactionViewError": {
           "type": "string",
@@ -1934,6 +1967,7 @@
         "capabilities",
         "lifecycle",
         "truncated",
+        "earlier",
         "queueComplete",
         "transcriptState",
         "title",
@@ -2039,7 +2073,7 @@
           "minLength": 1,
           "maxLength": 253,
           "x-utf8MaxBytes": 253,
-          "description": "Where this conversation's agent runs for its whole life: one of the environments agents.list returns, an SSH destination, a paired environment's peer: name, or peer:any, any worker of the gateway's pool, which the gateway chooses each time the agent is opened. Omitted runs it on the gateway's own machine. Ignored when the conversation already exists, which keeps the environment it was created with."
+          "description": "Where this conversation's agent runs for its whole life: one of the environments agents.list returns, an SSH destination, a paired environment's peer: name, peer:any, any worker of the gateway's pool, which the gateway chooses each time the agent is opened, or here, the gateway's own machine. Omitted, with no channel (or the default channel), runs it on the default device (devices.setDefault) while that is offered, else on the gateway's own machine; a child conversation an agent starts never takes the default. Ignored when the conversation already exists, which keeps the environment it was created with."
         },
         "channelId": {
           "type": "string",
@@ -2081,6 +2115,109 @@
         "executionId": { "type": ["string", "null"], "minLength": 1, "maxLength": 256 }
       },
       "required": ["conversationId", "executionId"]
+    },
+    "ConversationPartPosition": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "A place in a turn: the part, counted from the turn's first, and the byte within that part's text.",
+      "properties": {
+        "part": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4294967295,
+          "description": "The part, counted from the turn's first part."
+        },
+        "byte": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4294967295,
+          "description": "The UTF-8 byte within that part's text where the place falls; 0 at the part's start."
+        }
+      },
+      "required": ["part", "byte"]
+    },
+    "ConversationPoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "A place in a conversation's history: the start of a turn, before the person's message, when at is absent; otherwise a place among the turn's parts, after the person's message.",
+      "properties": {
+        "executionId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "The turn the point is in."
+        },
+        "at": {
+          "$ref": "#/$defs/ConversationPartPosition",
+          "description": "A place among the turn's parts, after the person's message; absent for the turn's start, before it."
+        }
+      },
+      "required": ["executionId"]
+    },
+    "ConversationReadEarlierParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Read what came before a point in the conversation's history: the turns nearest it that fit one frame. With after, only what comes after that point, to fill a gap between two points.",
+      "properties": {
+        "conversationId": {
+          "type": "string",
+          "minLength": 36,
+          "maxLength": 36,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "description": "Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization."
+        },
+        "before": {
+          "$ref": "#/$defs/ConversationPoint",
+          "description": "Where what is read ends: the first point the reader already holds."
+        },
+        "after": {
+          "$ref": "#/$defs/ConversationPoint",
+          "description": "Where what is read starts, when the reader holds what comes before it; absent to read back toward the first turn."
+        }
+      },
+      "required": ["conversationId", "before"]
+    },
+    "ConversationEarlier": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "What came before a point, oldest first, ending where the point is. The first message starts partway through its turn when it carries startsAt.",
+      "properties": {
+        "conversationId": {
+          "type": "string",
+          "minLength": 36,
+          "maxLength": 36,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "description": "Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization."
+        },
+        "messages": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/ConversationMessage" },
+          "maxItems": 128,
+          "description": "The turns before the point, oldest first; the first may start partway (startsAt) and the last may end partway, where the point falls."
+        },
+        "tools": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/ConversationTool" },
+          "maxItems": 128,
+          "description": "The calls the messages made."
+        },
+        "handoffs": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/ConversationHandoff" },
+          "maxItems": 256,
+          "description": "The fork the conversation began as, with its copied turns, on the page that reaches the start; empty otherwise."
+        },
+        "more": {
+          "type": "boolean",
+          "description": "Something comes before the first message's start (after the after point, when one was given)."
+        },
+        "truncated": {
+          "type": "boolean",
+          "description": "The page left out something no read gives back, as a view's truncated says."
+        }
+      },
+      "required": ["conversationId", "messages", "tools", "handoffs", "more", "truncated"]
     },
     "ConversationReadParams": {
       "type": "object",
@@ -3407,9 +3544,9 @@
         },
         "text": {
           "type": "string",
-          "maxLength": 32768,
-          "x-utf8MaxBytes": 32768,
-          "description": "Exact text fragment for text, thought, or local notice observations; empty for a tool call."
+          "maxLength": 65536,
+          "x-utf8MaxBytes": 65536,
+          "description": "Exact text for text, thought, or local notice observations; empty for a tool call. Adjacent streamed chunks of one kind are joined into one part, so its only bound is the frame's."
         },
         "toolId": {
           "type": "string",
@@ -4045,6 +4182,63 @@
         }
       },
       "required": ["status"]
+    },
+    "AppsTrustedResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "The apps the person always allows (apps.trusted): every MCP server whose app was answered \"Always allow this app\", in name order. An app listed here sends messages as the person without a review.",
+      "properties": {
+        "servers": {
+          "type": "array",
+          "maxItems": 256,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256,
+            "x-utf8MaxBytes": 256,
+            "description": "The MCP server whose app it is, by its configured name."
+          }
+        }
+      },
+      "required": ["servers"]
+    },
+    "AppsUntrustParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Stop always allowing one app (apps.untrust): its next message is reviewed again.",
+      "properties": {
+        "requestId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "Stable action identifier retained for retries of one logical command."
+        },
+        "server": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "The MCP server whose app it is, by its configured name."
+        }
+      },
+      "required": ["requestId", "server"]
+    },
+    "AppsUntrustResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "What apps.untrust did. applied is false when the app was not always allowed.",
+      "properties": {
+        "requestId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "Stable action identifier retained for retries of one logical command."
+        },
+        "applied": { "type": "boolean" }
+      },
+      "required": ["requestId", "applied"]
     },
     "McpServersRevokeParams": {
       "type": "object",
@@ -4885,6 +5079,13 @@
       "additionalProperties": false,
       "description": "Configured agents and their model-specific choices.",
       "properties": {
+        "defaultEnvironment": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 253,
+          "x-utf8MaxBytes": 253,
+          "description": "Of environments, the one a new conversation runs on when it names none: the default device saved with devices.setDefault, while it is one of environments. Absent: this gateway's own machine. agents.subscribe reads it again each time the default changes."
+        },
         "agents": {
           "type": "array",
           "items": { "$ref": "#/$defs/AgentOption" },
@@ -6262,6 +6463,452 @@
       },
       "required": ["enabled", "mode", "hasToken", "ingress", "status"]
     },
+    "DeviceMachine": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "What one machine reports about itself: its name, system and how busy it is. A worker sends it over its lease connection (the lease protocol's Machine frame); the hub reads its own.",
+      "required": [
+        "hostname",
+        "os",
+        "osVersion",
+        "arch",
+        "cpus",
+        "cpuPermille",
+        "memoryTotalBytes",
+        "memoryUsedBytes",
+        "diskTotalBytes",
+        "diskUsedBytes"
+      ],
+      "properties": {
+        "hostname": {
+          "type": "string",
+          "maxLength": 128,
+          "description": "The machine's own name for itself; empty when it has none."
+        },
+        "os": {
+          "type": "string",
+          "maxLength": 128,
+          "description": "The operating system family: macos, linux, windows, …"
+        },
+        "osVersion": {
+          "type": "string",
+          "maxLength": 128,
+          "description": "The system's version, e.g. 15.4 or 24.04; empty when unknown."
+        },
+        "arch": {
+          "type": "string",
+          "maxLength": 128,
+          "description": "The processor architecture: aarch64, x86_64, …"
+        },
+        "cpus": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4294967295,
+          "description": "Logical processors."
+        },
+        "cpuPermille": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000,
+          "description": "Processor use across all of them, in thousandths."
+        },
+        "memoryTotalBytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991,
+          "description": "Memory installed."
+        },
+        "memoryUsedBytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991,
+          "description": "Memory in use; never more than memoryTotalBytes."
+        },
+        "diskTotalBytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991,
+          "description": "Size of every disk in disks together."
+        },
+        "diskUsedBytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991,
+          "description": "Space used on them together; never more than diskTotalBytes."
+        },
+        "disks": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/DeviceDisk" },
+          "maxItems": 16,
+          "description": "Each local disk, once however many volumes share it, the root first. Absent or empty when none could be read."
+        }
+      }
+    },
+    "DeviceDisk": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "One local disk of a machine.",
+      "required": ["mount", "totalBytes", "usedBytes"],
+      "properties": {
+        "mount": {
+          "type": "string",
+          "maxLength": 128,
+          "description": "Where it is mounted, e.g. / or /Volumes/Archive."
+        },
+        "totalBytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991,
+          "description": "Its size."
+        },
+        "usedBytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991,
+          "description": "Space used on it; never more than totalBytes."
+        }
+      }
+    },
+    "DeviceWorker": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "A paired environment (`nessa env serve`) that has served this gateway.",
+      "required": ["environment", "state", "agents"],
+      "properties": {
+        "environment": {
+          "type": "string",
+          "pattern": "^peer:[0-9a-f]{64}$",
+          "maxLength": 69,
+          "description": "Its environment name, peer: and its key in hex: what a conversation's placement names."
+        },
+        "state": {
+          "type": "string",
+          "enum": ["online", "draining", "offline"],
+          "description": "online: its connection serves leases and takes new work. draining: it serves the leases it holds and takes no new ones. offline: no connection serves leases now."
+        },
+        "agents": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4294967295,
+          "description": "Agent leases its connection carries now; 0 offline."
+        },
+        "machine": {
+          "$ref": "#/$defs/DeviceMachine",
+          "description": "Its latest report: live while online, the last one saved while offline. Absent before it first reported."
+        },
+        "lastSeenMs": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991,
+          "description": "Unix milliseconds it last reported, saved at most every few minutes; absent before it first reported."
+        }
+      }
+    },
+    "DevicesListResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Result of devices.list: this gateway's own machine (the hub) and one page of the paired environments that work for it.",
+      "required": ["workers"],
+      "properties": {
+        "defaultEnvironment": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 253,
+          "x-utf8MaxBytes": 253,
+          "description": "The device a new conversation runs on when it names no environment and no channel: an SSH destination config.json names, or a paired environment's peer: name. Absent: this gateway's own machine (the hub). Saved with devices.setDefault. On the first page only. A paired environment that is not connected when a conversation is created leaves that conversation on the hub."
+        },
+        "sshHosts": {
+          "type": "array",
+          "maxItems": 16,
+          "items": { "$ref": "#/$defs/DeviceSshHost" },
+          "description": "The SSH hosts conversations may run on, as config.json names them, each with what the gateway's ~/.ssh/config resolves it to. On the first page only."
+        },
+        "hub": {
+          "$ref": "#/$defs/DeviceMachine",
+          "description": "The machine this gateway runs on, on the first page (one asked with no after); absent on later pages and when it cannot be read."
+        },
+        "listening": {
+          "type": "string",
+          "maxLength": 64,
+          "description": "Where this gateway's native listener, which workers dial, is bound: host:port, [v6]:port for IPv6. Absent while native linking is off. A loopback host means only this machine can reach it."
+        },
+        "workers": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/DeviceWorker" },
+          "maxItems": 64,
+          "description": "One page of the workers connected now or seen before and still paired, at most 64, in the order of their environment names, each after the page's after."
+        },
+        "next": {
+          "type": "string",
+          "pattern": "^peer:[0-9a-f]{64}$",
+          "maxLength": 69,
+          "description": "The last worker listed, when more follow: ask again with it as after for the next page. Absent on the last page."
+        }
+      }
+    },
+    "DeviceSshHost": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "An SSH host as the gateway's OpenSSH configuration names it.",
+      "properties": {
+        "host": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 253,
+          "x-utf8MaxBytes": 253,
+          "description": "The destination as ssh is given it: an alias in ~/.ssh/config, or user@host."
+        },
+        "hostName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 253,
+          "x-utf8MaxBytes": 253,
+          "description": "Where it connects, when the configuration sets HostName."
+        },
+        "user": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 253,
+          "x-utf8MaxBytes": 253,
+          "description": "The account it signs in as, when the configuration sets User."
+        },
+        "port": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535,
+          "description": "Its port, when the configuration sets one."
+        }
+      },
+      "required": ["host"]
+    },
+    "DevicesSshHostsResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Result of devices.sshHosts: the machines the gateway's ~/.ssh/config names that conversations could run on, and the connections under way.",
+      "properties": {
+        "suggested": {
+          "type": "array",
+          "maxItems": 32,
+          "items": { "$ref": "#/$defs/DeviceSshHost" },
+          "description": "Every host the configuration names plainly (not a pattern), in its order, at most 32: less those config.json already names, any that is not an SSH destination, and git servers (user git, a known forge such as github.com or gitlab.com, or a host name beginning git., gitlab., gitea. or forgejo.), which answer git and run no shell. Options are resolved as ssh resolves them: the first value any matching Host block gives; Match blocks are not read. Include is followed, from ~/.ssh, at most 32 files and 256 KiB."
+        },
+        "connecting": {
+          "type": "array",
+          "maxItems": 16,
+          "items": { "$ref": "#/$defs/DeviceSshConnect" },
+          "description": "Each host devices.connectSsh is setting up now, or set up or failed to since the gateway started."
+        }
+      },
+      "required": ["suggested", "connecting"]
+    },
+    "DeviceSshConnect": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Where one devices.connectSsh stands.",
+      "properties": {
+        "host": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 253,
+          "x-utf8MaxBytes": 253,
+          "description": "The destination being connected."
+        },
+        "state": {
+          "type": "string",
+          "enum": ["installing", "restarting", "connected", "failed"],
+          "description": "installing: the gateway is asking the host whether this build is there and, if not, sending it. restarting: it is installed and saved in config.json's sshHosts, and the gateway is starting again to serve it; once it answers, the host is in devices.list's sshHosts. connected: it is installed, and this gateway already serves it. failed: see refusal; nothing was saved."
+        },
+        "refusal": {
+          "type": "string",
+          "enum": [
+            "environment_unreachable",
+            "environment_platform_unsupported",
+            "environment_install_failed",
+            "environment_version_mismatch",
+            "devices_host_limit",
+            "devices_busy",
+            "devices_unavailable"
+          ],
+          "description": "Why it failed, present exactly when state is failed. The environment_ codes are a lease's own (ConversationLease.refusal). devices_host_limit: config.json already names 16 SSH hosts, or 16 connections are under way. devices_busy: config.json is held by another change, or the gateway is already restarting. devices_unavailable: config.json or its audit could not be written."
+        }
+      },
+      "required": ["host", "state"]
+    },
+    "DevicesConnectSshParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Set a machine up for conversations to run on over SSH: the gateway installs this build there, as a conversation's first lease would, then adds it to config.json's sshHosts and starts again in place to serve it. Answered at once; devices.sshHosts says how it goes. Asking again for a host being set up changes nothing. The install and the change are audited under one operation.",
+      "properties": {
+        "host": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 253,
+          "x-utf8MaxBytes": 253,
+          "description": "An SSH destination: an alias in the gateway's ~/.ssh/config, or user@host. Letters, digits, ., _, - and @, beginning with a letter or digit, and never here."
+        }
+      },
+      "required": ["host"]
+    },
+    "DevicesConnectSshResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Result of devices.connectSsh.",
+      "properties": {
+        "connecting": {
+          "$ref": "#/$defs/DeviceSshConnect",
+          "description": "Where it stands now."
+        }
+      },
+      "required": ["connecting"]
+    },
+    "DevicesSetDefaultParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Choose the device new conversations run on when they name no environment and no channel: from this gateway's surfaces and from a phone alike. Saved in config.json as defaultEnvironment and applied at once, without a restart. Each change is audited.",
+      "properties": {
+        "environment": {
+          "type": ["string", "null"],
+          "minLength": 1,
+          "maxLength": 253,
+          "x-utf8MaxBytes": 253,
+          "description": "An SSH destination config.json names, a paired environment's peer: name (peer: and its key in lowercase hex), or null for this gateway's own machine. Anything else is refused devices_not_a_device."
+        }
+      },
+      "required": ["environment"]
+    },
+    "DevicesSetDefaultResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Result of devices.setDefault.",
+      "properties": {
+        "defaultEnvironment": {
+          "type": ["string", "null"],
+          "maxLength": 253,
+          "description": "The saved default: null for this gateway's own machine."
+        }
+      },
+      "required": ["defaultEnvironment"]
+    },
+    "DevicesListParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "after": {
+          "type": "string",
+          "pattern": "^peer:[0-9a-f]{64}$",
+          "maxLength": 69,
+          "description": "Absent on the first page. Later pages echo the previous page's next."
+        }
+      },
+      "required": [],
+      "description": "Which page of the hub's workers to list."
+    },
+    "PoolPreference": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Which paired computers new work goes to first, and which it never goes to. Every computer named in neither list is in the pool, after the ordered ones, the one with the fewest agents first. No computer is named twice, in one list or both.",
+      "required": ["order", "excluded"],
+      "properties": {
+        "order": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {
+            "type": "string",
+            "pattern": "^peer:[0-9a-f]{64}$",
+            "maxLength": 69
+          },
+          "description": "First choice first: a new thread goes to the first of these that serves, is not draining and is not busy."
+        },
+        "excluded": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {
+            "type": "string",
+            "pattern": "^peer:[0-9a-f]{64}$",
+            "maxLength": 69
+          },
+          "description": "Computers left out of the pool: no new work goes to them, and a thread bound to one moves off it when its agent next opens."
+        }
+      }
+    },
+    "DevicesPoolParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "channelId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "Stored channel identity; omitted reads the Nessa default. The synthetic default channel follows the default."
+        }
+      },
+      "required": [],
+      "description": "Read the pool's default preference and one channel's override from one configuration read."
+    },
+    "DevicesPoolSelection": {
+      "type": "string",
+      "enum": ["default", "custom"],
+      "description": "default: a channel inherits the Nessa default (its override is removed), or the Nessa default is emptied: every computer in, none first. custom: save preference."
+    },
+    "DevicesSetPoolParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "channelId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "Stored channel identity; omitted saves the Nessa default."
+        },
+        "mode": {
+          "$ref": "#/$defs/DevicesPoolSelection",
+          "description": "default forbids preference; custom requires it."
+        },
+        "preference": {
+          "$ref": "#/$defs/PoolPreference",
+          "description": "Present only in custom mode."
+        }
+      },
+      "required": ["mode"],
+      "description": "Save the pool's Nessa default or one channel's own preference in config.json. Applies to the next agent opened on the pool; a thread already running stays where it is. Read again after an uncertain response; calls are not replayed."
+    },
+    "DevicesPool": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["defaultPreference", "busyCpuPercent", "busyMemoryPercent"],
+      "properties": {
+        "channelId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "The stored channel read or saved; omitted for the Nessa default."
+        },
+        "defaultPreference": {
+          "$ref": "#/$defs/PoolPreference",
+          "description": "The Nessa default, which every channel without its own follows."
+        },
+        "channelOverride": {
+          "$ref": "#/$defs/PoolPreference",
+          "description": "The channel's own preference; omitted when it follows the default."
+        },
+        "busyCpuPercent": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100,
+          "description": "Processor use at which a computer is busy: passed over for new work while another is not (config.json pool.busyCpuPercent)."
+        },
+        "busyMemoryPercent": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100,
+          "description": "Memory use at which a computer is busy (config.json pool.busyMemoryPercent)."
+        }
+      },
+      "description": "The pool's preferences: the Nessa default, a channel's override, and when a computer is busy. With every computer busy a new pool thread runs in Boat when it is connected."
+    },
     "ServerReachResult": {
       "type": "object",
       "additionalProperties": false,
@@ -6852,8 +7499,8 @@
     },
     "ConversationNoteAuthorKind": {
       "type": "string",
-      "enum": ["owner", "grant"],
-      "description": "owner: the conversation's owner left it. grant: someone the conversation is shared with left it, under their grant."
+      "enum": ["owner", "grant", "agent"],
+      "description": "owner: the conversation's owner. grant: a share grant holder. agent: another turn's agent."
     },
     "ConversationNoteAuthor": {
       "type": "object",
@@ -6870,6 +7517,10 @@
           "maxLength": 256,
           "x-utf8MaxBytes": 256,
           "description": "The verified surface it was left from."
+        },
+        "agent": {
+          "$ref": "#/$defs/ConversationAgentSource",
+          "description": "The verified source turn when kind is agent."
         }
       },
       "required": ["kind", "surface"]
@@ -6954,6 +7605,7 @@
       "additionalProperties": false,
       "description": "One turn a fork copied, as the new conversation's agent was given it: what was said, and the agent's final reply. Text only.",
       "properties": {
+        "agent": { "$ref": "#/$defs/ConversationAgentSource" },
         "said": {
           "type": "string",
           "minLength": 1,
@@ -7697,7 +8349,7 @@
     "WorkspaceWidget": {
       "type": "object",
       "additionalProperties": false,
-      "description": "A widget a pane or the window shows, by the plugin that draws it and its id within that plugin.",
+      "description": "A widget the panel, a pane, or the window shows, by the plugin that draws it and its id within that plugin.",
       "properties": {
         "plugin": {
           "type": "string",
@@ -7787,10 +8439,33 @@
       },
       "required": ["widthPercent", "panes"]
     },
+    "WorkspacePanel": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "The focused chat's right panel. Other chats' panels are not here; focusing that chat is what publishes them. open is whether this panel is drawn. tabs are that chat's, in the order they were opened, and front is the one in front: present exactly when tabs is not empty, and one of them.",
+      "properties": {
+        "open": {
+          "type": "boolean",
+          "description": "Whether the panel is drawn beside the panes. Closed, its tabs are not on screen; they are still this chat's."
+        },
+        "tabs": {
+          "type": "array",
+          "minItems": 0,
+          "maxItems": 16,
+          "items": { "$ref": "#/$defs/WorkspaceWidget" },
+          "description": "The focused chat's panel tabs, in the order they were opened. Empty when that chat has none. At most 16, the domain's MAX_PANEL_TABS."
+        },
+        "front": {
+          "$ref": "#/$defs/WorkspaceWidget",
+          "description": "The tab in front. Present exactly when tabs is not empty, and one of them."
+        }
+      },
+      "required": ["open", "tabs"]
+    },
     "WorkspaceWindow": {
       "type": "object",
       "additionalProperties": false,
-      "description": "What one desktop window shows now: its arrangement, which side columns are drawn, what fills its content region, and its panes left to right, each column top to bottom. It names conversations by id only; their titles and agents are the gateway's to say.",
+      "description": "What one desktop window shows now: its arrangement, which side columns are drawn, what fills its content region, the focused chat's right panel, and its panes left to right, each column top to bottom. It names conversations by id only; their titles and agents are the gateway's to say.",
       "properties": {
         "arrangement": {
           "$ref": "#/$defs/WorkspaceArrangement",
@@ -7812,6 +8487,10 @@
           "$ref": "#/$defs/WorkspaceWidget",
           "description": "The widget drawn over the panes, when showing is widget."
         },
+        "panel": {
+          "$ref": "#/$defs/WorkspacePanel",
+          "description": "The focused chat's right panel: whether it is drawn, its tabs, and the tab in front."
+        },
         "columns": {
           "type": "array",
           "minItems": 1,
@@ -7820,7 +8499,7 @@
           "description": "The panes' columns, left to right."
         }
       },
-      "required": ["arrangement", "sidebar", "sessionList", "showing", "columns"]
+      "required": ["arrangement", "sidebar", "sessionList", "showing", "panel", "columns"]
     },
     "ChannelErrorCode": {
       "type": "string",
@@ -7900,8 +8579,8 @@
         },
         "threadPlacement": {
           "type": "string",
-          "enum": ["local", "boat"],
-          "description": "Where new worker-thread workspaces run. Boat allocates one VM per thread."
+          "enum": ["local", "boat", "pool"],
+          "description": "Where new worker-thread workspaces run. Boat allocates one VM per thread. Pool runs each thread on a paired computer, the first in the pool's order that is not busy, with Boat as overflow (devices.pool)."
         },
         "coordinatorConversationId": {
           "type": ["string", "null"],
@@ -7990,8 +8669,8 @@
         },
         "threadPlacement": {
           "type": "string",
-          "enum": ["local", "boat"],
-          "description": "Where new worker-thread workspaces run. Boat allocates one VM per thread."
+          "enum": ["local", "boat", "pool"],
+          "description": "Where new worker-thread workspaces run. Boat allocates one VM per thread. Pool runs each thread on a paired computer, the first in the pool's order that is not busy, with Boat as overflow (devices.pool)."
         }
       },
       "required": ["requestId", "name", "agent", "model"]
@@ -8000,6 +8679,45 @@
       "type": "object",
       "additionalProperties": false,
       "description": "The channel channel.create made, or made earlier under the same requestId.",
+      "properties": { "channel": { "$ref": "#/$defs/Channel" } },
+      "required": ["channel"]
+    },
+    "ChannelSetPlacementParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Change where a made channel's agents run (channel.setPlacement). Threads already made keep running where they started; threads made from now on run in threadPlacement. Moving the main agent names a fresh main conversation (coordinatorConversationId) that starts in the new place; the old one stays in the channel as an ordinary thread. The default channel has no run location to change and is refused forbidden, as is a channel the caller may not change.",
+      "properties": {
+        "requestId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "Stable action identifier retained for retries of one logical command."
+        },
+        "channelId": {
+          "type": "string",
+          "minLength": 13,
+          "maxLength": 13,
+          "pattern": "^ch_[a-z2-7]{10}$",
+          "description": "The made channel to change."
+        },
+        "coordinatorPlacement": {
+          "type": "string",
+          "enum": ["local", "boat"],
+          "description": "Where the channel's main agent runs from now on."
+        },
+        "threadPlacement": {
+          "type": "string",
+          "enum": ["local", "boat", "pool"],
+          "description": "Where threads made in the channel from now on run: pool runs each on a paired computer (devices.pool)."
+        }
+      },
+      "required": ["requestId", "channelId", "coordinatorPlacement", "threadPlacement"]
+    },
+    "ChannelSetPlacementResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "The channel as channel.setPlacement left it.",
       "properties": { "channel": { "$ref": "#/$defs/Channel" } },
       "required": ["channel"]
     },
@@ -8104,6 +8822,23 @@
       },
       "required": ["state"]
     },
+    "VaultPassphraseChangeState": {
+      "description": "A confirmed passphrase change seals the vault; explicitly unlock again with the new phrase.",
+      "type": "string",
+      "enum": ["locked"]
+    },
+    "VaultPassphraseChangeStatus": {
+      "description": "Confirmed passphrase replacement. Its complete success payload is locked; this does not confirm audit-failed or unknown publication outcomes.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "state": {
+          "$ref": "#/$defs/VaultPassphraseChangeState",
+          "description": "The vault is sealed after a confirmed passphrase change; explicitly unlock with the new phrase before protected use."
+        }
+      },
+      "required": ["state"]
+    },
     "VaultPassphraseParams": {
       "description": "Transient passphrase proof for creating or unlocking the local vault. Mutations must never be automatically replayed.",
       "type": "object",
@@ -8120,6 +8855,7 @@
       "type": "string",
       "enum": [
         "vault_unavailable",
+        "vault_forbidden",
         "vault_locked",
         "vault_passphrase_policy",
         "vault_wrong_passphrase",
@@ -8130,7 +8866,12 @@
         "vault_already_configured",
         "vault_capacity",
         "vault_audit_unavailable",
-        "vault_migration_unavailable"
+        "vault_migration_unavailable",
+        "vault_change_unchanged",
+        "vault_change_unchanged_audit_unavailable",
+        "vault_change_not_confirmed",
+        "vault_change_not_confirmed_audit_unavailable",
+        "vault_changed_audit_unavailable"
       ],
       "description": "Redacted local-vault failures. Wrong passphrase can also mean damaged authenticated ciphertext; no failure resets the vault."
     },
@@ -8147,6 +8888,20 @@
       },
       "required": ["token"],
       "description": "Connect a user-owned Boat account. The gateway validates the token and its release worker image, configures its dedicated agent environment, then encrypts the token in the unlocked vault. Does not authenticate a model subscription."
+    },
+    "BoatClaudeSignInParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "token": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096,
+          "description": "Long-lived Claude token that `claude setup-token` minted on the owner's machine. Never returned or logged."
+        }
+      },
+      "required": ["token"],
+      "description": "Keep the owner's Claude sign-in for Boat VMs in the unlocked vault, replacing any saved one. Boat gives VMs made from Nessa's image none of the owner's own logins, so Claude in a Boat VM runs with this. Refused as invalid_request unless it is a setup-token token."
     },
     "BoatErrorCode": {
       "description": "Typed Boat connection refusals. Worker unavailable requires a matching Nessa release image; environment blocks credentials requires allowing connected agents in the dedicated Boat environment. Provisioning and cleanup uncertainty require reconciliation, not automatic replacement. No code or diagnostic contains credential values.",
@@ -8277,6 +9032,236 @@
       },
       "required": ["defaultLifetime"],
       "description": "Non-secret settings. An omitted override inherits the default; explicit never remains unlimited when the default changes. Initial default is no automatic stop; provider/account limits still apply."
+    },
+    "ConversationWebhookCursorParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Read the owner-only registered webhook checkpoint. Performs no canonical record I/O or delivery control.",
+      "properties": {
+        "conversationId": {
+          "type": "string",
+          "minLength": 36,
+          "maxLength": 36,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "description": "Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization."
+        },
+        "credentialId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "description": "The actual registered webhook target credential owned by this conversation owner; this is not a paired-device selector."
+        },
+        "includeSourceHead": {
+          "type": "boolean",
+          "description": "Explicitly request a separately observed canonical Head under current owner read authority. Omitted/false performs no canonical admission or physical Head I/O. This does not reconcile or mutate the native checkpoint."
+        }
+      },
+      "required": ["conversationId", "credentialId"]
+    },
+    "ConversationWebhookResetParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Reset only a frozen webhook checkpoint. requestId is its server-issued frozen capture UUID. Fresh owner authorization applies on replay; no caller-supplied scope or offset is accepted.",
+      "properties": {
+        "conversationId": {
+          "type": "string",
+          "minLength": 36,
+          "maxLength": 36,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "description": "Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization."
+        },
+        "credentialId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "description": "The actual registered webhook target credential owned by this conversation owner; this is not a paired-device selector."
+        },
+        "requestId": {
+          "type": "string",
+          "minLength": 36,
+          "maxLength": 36,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "description": "The frozen capture UUID returned by the owner cursor query. Explicit retries retain this exact identity."
+        }
+      },
+      "required": ["conversationId", "credentialId", "requestId"]
+    },
+    "ConversationWebhookCursorResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Current native scoped checkpoint, without reconciliation or publication. An explicitly requested observedSourceHead is read afterward under current owner authority; compare complete scopes before positions. requestId is available only while reset-required. Neither observation grants receiver or send authority.",
+      "properties": {
+        "scope": {
+          "$ref": "#/$defs/RecordScope",
+          "description": "Complete scope/incarnation bound to the native checkpoint; its presence grants no read or delivery authority."
+        },
+        "position": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,19})$",
+          "maxLength": 20,
+          "description": "Canonical unsigned decimal position committed in this native scope."
+        },
+        "resetRequired": {
+          "type": "boolean",
+          "description": "Whether fresh source capture requires an explicit owner reset for this frozen generation."
+        },
+        "requestId": {
+          "type": ["string", "null"],
+          "minLength": 36,
+          "maxLength": 36,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "description": "Frozen capture UUID when resetRequired is true; null otherwise. Not a caller-selected rewind identity."
+        },
+        "observedSourceHead": {
+          "$ref": "#/$defs/ConversationRecordsHeadResult",
+          "description": "Present only when explicitly requested and successfully read. Observed after the native checkpoint; these are separate non-atomic observations. Not a delivery, reset, publication or current-at-commit acknowledgement."
+        }
+      },
+      "required": ["scope", "position", "resetRequired", "requestId"]
+    },
+    "ConversationWebhookResetResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Immutable result: reset applied for this explicitly observed scope at position zero. Does not promise current-at-commit, resumed delivery or current resetRequired status. Same request replays this result without another rewind.",
+      "properties": {
+        "requestId": {
+          "type": "string",
+          "minLength": 36,
+          "maxLength": 36,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "description": "Original frozen capture request UUID; matching replay returns the same selection without another rewind."
+        },
+        "receiptId": {
+          "type": "string",
+          "minLength": 36,
+          "maxLength": 36,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "description": "Immutable native selection and audit receipt UUID for this applied reset."
+        },
+        "scope": {
+          "$ref": "#/$defs/RecordScope",
+          "description": "Complete server-observed incarnation selected by this reset. It need not remain current when the native commit completes."
+        },
+        "position": {
+          "type": "string",
+          "const": "0",
+          "description": "Scoped checkpoint selected by the reset, always zero in the returned observed incarnation."
+        },
+        "appliedAtMs": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991,
+          "description": "Original native selection observation time in Unix milliseconds, retained unchanged on replay."
+        }
+      },
+      "required": ["requestId", "receiptId", "scope", "position", "appliedAtMs"]
+    },
+    "VoiceStatus": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Result of voice.status, voice.saveKey and voice.forgetKey: whether the gateway holds a realtime voice key. The key itself is never returned.",
+      "properties": {
+        "keySaved": {
+          "type": "boolean",
+          "description": "Whether a key is saved in the gateway's vault."
+        },
+        "model": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "description": "The realtime model a call runs."
+        }
+      },
+      "required": ["keySaved", "model"]
+    },
+    "VoiceSaveKeyParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Save the realtime voice provider's API key in the gateway's vault, replacing any saved one (voice.saveKey).",
+      "properties": {
+        "key": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "^[!-~]+$",
+          "description": "The key: printable ASCII with no spaces."
+        }
+      },
+      "required": ["key"]
+    },
+    "VoiceStartCallParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Start a voice call about one conversation (voice.startCall): the gateway mints a short-lived client secret with its saved key.",
+      "properties": {
+        "conversationId": {
+          "type": "string",
+          "minLength": 36,
+          "maxLength": 36,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "description": "The conversation the call talks to."
+        }
+      },
+      "required": ["conversationId"]
+    },
+    "VoiceTransport": {
+      "type": "string",
+      "enum": ["webrtc", "scripted"],
+      "description": "How the window connects a call. webrtc: OpenAI's realtime calls over WebRTC, with the microphone and spoken audio. scripted: a WebSocket carrying the same realtime events and no audio, served by a scripted provider the gateway was started with (the stress check's fake)."
+    },
+    "VoiceToolName": {
+      "type": "string",
+      "enum": ["send_to_agent", "stop_agent"],
+      "description": "The functions a voice call may call. send_to_agent: send what the person asked, in their own transcribed words, to the conversation as a message. stop_agent: stop the agent's running turn, as the Stop button does."
+    },
+    "VoiceCall": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Result of voice.startCall: how to connect one call. The secret is good for one connection before expiresAt; what the call is told and may call was fixed when it was minted.",
+      "properties": {
+        "transport": {
+          "$ref": "#/$defs/VoiceTransport",
+          "description": "How to connect."
+        },
+        "callUrl": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048,
+          "description": "Where to connect: the WebRTC offer's address, or the scripted provider's WebSocket."
+        },
+        "clientSecret": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096,
+          "description": "The short-lived secret the connection presents. Never the saved key."
+        },
+        "expiresAt": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991,
+          "description": "Unix milliseconds after which the secret connects nothing."
+        },
+        "model": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "description": "The realtime model the call runs."
+        }
+      },
+      "required": ["transport", "callUrl", "clientSecret", "expiresAt", "model"]
+    },
+    "VoiceErrorCode": {
+      "type": "string",
+      "enum": [
+        "voice_not_configured",
+        "voice_key_missing",
+        "voice_key_rejected",
+        "voice_unreachable",
+        "voice_storage_unavailable",
+        "voice_audit_unavailable",
+        "vault_locked"
+      ],
+      "description": "Why the gateway refused a voice method. voice_not_configured: this gateway has no voice provider. voice_key_missing: no key is saved. voice_key_rejected: the provider refused the saved key. voice_unreachable: the provider could not be reached or answered something unreadable. voice_storage_unavailable: the vault could not save or delete the key; what was saved still is. voice_audit_unavailable: the change could not be recorded, so nothing changed and no call started. vault_locked: unlock Nessa first."
     }
   }
 }

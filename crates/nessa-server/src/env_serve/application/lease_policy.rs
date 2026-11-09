@@ -1,5 +1,5 @@
 //! The one question the lease policy answers: may this peer, with what this
-//! host grants it, lease this agent or run a command?
+//! host grants it, lease this agent, run a command, or update this build?
 //!
 //! ```text
 //! grants::admit_agent / admit_command
@@ -24,6 +24,8 @@ pub(crate) enum LeaseAsk<'a> {
     Agent(&'a str),
     /// A command lease.
     Command,
+    /// Its gateway's build, run in place of this host's own.
+    Update,
 }
 
 /// The facts a lease is decided on.

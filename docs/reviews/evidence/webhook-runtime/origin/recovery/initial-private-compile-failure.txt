@@ -1,0 +1,14 @@
+error[E0382]: borrow of partially moved value: `f`
+   --> /tmp/nessa-origin-recovery-controls/crates/nessa-server/src/webhooks/infrastructure/outbox/../../../../tests/webhooks/infrastructure/outbox/registration_origin.rs:214:24
+    |
+181 |         drop(f.auth);
+    |              ------ value partially moved here
+...
+214 |             assert_eq!(f.count("registrations"), 0);
+    |                        ^ value borrowed here after partial move
+    |
+    = note: partial move occurs because `f.auth` has type `nessa_auth::adapters::local::LocalCredentialStore`, which does not implement the `Copy` trait
+
+error: aborting due to 1 previous error
+
+For more information about this error, try `rustc --explain E0382`.

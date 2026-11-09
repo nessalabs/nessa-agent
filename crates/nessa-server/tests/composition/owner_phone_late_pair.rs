@@ -160,6 +160,7 @@ async fn signed_owner_phone_lost_observer_retains_late_pair_and_first_expiry_unt
             ),
             key_store: keys.clone(),
             identity,
+            tunnel_secrets: Arc::new(crate::tunnel::application::MemoryDeviceSecrets::new()),
         })
         .unwrap(),
     );

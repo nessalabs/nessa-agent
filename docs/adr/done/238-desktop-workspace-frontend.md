@@ -246,7 +246,8 @@ Nonempty drafts, including whitespace, still use measured lines. These changes
 remove eager reads but do not establish the whole desktop's frame budget.
 
 **A new session's home takes its pane's shape** (`ui/panes/conversation.css`,
-issue #285). In a pane at least 640px each way the home is the window's own:
+issue #285). In a pane at least 640px wide, with at least 640px below its
+title row, the home is the window's own:
 the scene, "Working late?" and the composer's card. In a smaller pane — split
 beside or below another, or in a short window — it takes a conversation's
 shape: the header shrinks to a band across the top of the pane — the
@@ -261,8 +262,10 @@ either shape, reaches up behind the pane's title row to the window's top
 edge, in every pane — in the window's corner too, behind the window's
 controls, as a conversation's band does (the safe area below). The greeting follows the hour of the window's clock
 (`model/greeting.ts`): good morning, afternoon or evening, and "Working
-late?" only from 10pm to 5am. The pane's own size decides, by the container query the pane
-already is (`workspace-pane`), never the window's. It is one composer in both
+late?" only from 10pm to 5am. The pane's width and the height of the room below its title row decide, by
+the container query that room is (`workspace-pane-body`), never the window's.
+The pane's box runs up behind the title row, so that row is not room the
+scene can use. It is one composer in both
 shapes: the home holds it in the dock's box (`Home`'s `composerClassName`),
 and the dock's rules, and a title's type, ask for a `workspace-docked`
 container around them, which a conversation always is and a home only while

@@ -12,5 +12,6 @@ pub(crate) use aggregates::HistoricalToolUndo;
 pub use aggregates::{ExecutionSession, SessionClosureResult};
 pub use value_objects::{
     AttachmentCause, ExecutionFinish, ExecutionSessionId, ProviderContext,
-    ProviderContextEvidenceError, SessionClosure, SessionId,
+    ProviderContextAdmissionError, ProviderContextEvidenceError, ProviderContextRecord,
+    SessionClosure, SessionId,
 };

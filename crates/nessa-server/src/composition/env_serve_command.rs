@@ -20,11 +20,12 @@
 use super::{agent::launch_environment, runtime_config::RuntimeConfig};
 use crate::{
     core::RunError,
+    devices::{application::MachineProbe, infrastructure::SystemMachine},
     env::{Environment, LEASE_PROTOCOL, VERSION},
     env_serve::{
         application::{
-            refuse, serve, ArtifactInbox, CommandRunner, HarnessLauncher, LeasePolicyEvaluator,
-            Runners, ServeTimings, Serving,
+            admit_update, refuse, serve, ArtifactInbox, CommandRunner, HarnessLauncher,
+            LeasePolicyEvaluator, Runners, ServeEnd, ServeTimings, Serving,
         },
         domain::Peer,
         infrastructure::{
@@ -98,6 +99,8 @@ pub(super) struct Composed {
     sockets: std::path::PathBuf,
     lock: ServeLock,
     timer: Arc<dyn Timer>,
+    /// This machine, reported to each gateway it serves.
+    machine: Arc<dyn MachineProbe>,
 }
 
 impl Composed {
@@ -109,7 +112,8 @@ impl Composed {
         input: R,
         output: W,
         drain: watch::Receiver<bool>,
-    ) where
+    ) -> ServeEnd
+    where
         R: AsyncRead + Unpin + Send + 'static,
         W: AsyncWrite + Unpin + Send + 'static,
     {
@@ -126,6 +130,7 @@ impl Composed {
                 peer,
                 grants: self.grants.clone(),
                 policy: self.policy.clone(),
+                machine: Some(self.machine.clone()),
             },
             Runners {
                 harnesses: self.launcher.clone(),
@@ -140,7 +145,13 @@ impl Composed {
             self.timer.clone(),
             drain,
         )
-        .await;
+        .await
+    }
+
+    /// Whether this host's owner lets `peer` replace this build with its
+    /// gateway's, as the lease policy decides over the grant it holds now.
+    pub(super) fn may_update(&self, peer: &Peer) -> bool {
+        admit_update(self.grants.as_ref(), self.policy.as_ref(), peer).is_ok()
     }
 
     /// Stop serving on this host: what is left of commands is swept, the
@@ -229,6 +240,7 @@ pub(super) async fn compose() -> Result<Composed, (Unavailability, RunError)> {
         sockets,
         lock,
         timer: Arc::new(TokioTimer::new()),
+        machine: Arc::new(SystemMachine::new(auth.clone())),
     })
 }
 

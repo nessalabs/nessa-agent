@@ -429,3 +429,20 @@ The browser renders SVG directly from fenced Mermaid in Markdown. This atlas is
 for documentation; it does not dispatch tools, derive production guards from
 English, or replace Rust/TypeScript domain code. Executable state definitions
 would be a separate explicit design decision with an owner and regression proof.
+
+## Optional executable rule models
+
+Nessa Docs now accepts linked `.tla`/`.cfg` files under `docs/state/tla/` and
+checker-written `modelCheck` evidence. Follow its canonical
+[optional model format](https://github.com/nessalabs/nessa-docs/blob/main/skills/nessa-docs/references/format.md#optional-rule-model)
+for paths, unique page ownership, steps and stale-result semantics. Keep each
+model's abstraction, source mapping and exclusions beside its chart. Do not
+hand-author a passing result or treat TLC as execution evidence for the program.
+
+Use the [repository commands](../../scripts/state-docs/README.md) to validate the
+catalog and run models through the same service as the browser and MCP. Install
+is explicit; saving results is explicit; unfinished or unavailable checks fail
+the model command. Pages without a model continue to validate without Java.
+Safety invariants need failure probes; progress properties additionally need
+stated fairness and environmental assumptions. Existing models deliberately make
+no progress claim.

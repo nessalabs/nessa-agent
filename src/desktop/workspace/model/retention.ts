@@ -18,8 +18,6 @@ export const retention = {
   unshownConversations: 8,
   /** Conversations the open overview shows that are read and kept, at most. */
   overviewConversations: 24,
-  /** Conversations the session list's waiting rows ask about that are read and kept, at most. */
-  listConversations: 12,
   /** Removals remembered. */
   removals: 256,
 } as const

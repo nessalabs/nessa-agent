@@ -29,6 +29,10 @@ test("every wave has its width, restarts are placed by their number, and every a
     list.map((_, index) => index + 1),
   )
   assert.equal(describe(list).split("\n").length, list.length)
+  assert.ok(
+    list.some((action) => action.kind === "send" && action.ask === "parentStop"),
+    "seed 4 includes owned descendants among concurrent sends and stops",
+  )
 })
 
 test("a bad number is refused, from a flag or the environment", () => {

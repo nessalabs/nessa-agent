@@ -1,0 +1,8 @@
+{"stage":"auth.session","ok":true,"principalId":"surface:nessa-panel","actions":["server.read","conversation.read","conversation.write","credential.manage"]}
+{"stage":"credential.issue","ok":true,"secretUnavailable":true}
+{"stage":"conversation.create","ok":true}
+{"stage":"scripted canonical setup turn","ok":true}
+{"stage":"conversation.share","ok":true}
+{"stage":"conversation.webhook.cursor","ok":true}
+{"stage":"owner observed source Head and independent no-attempt rows","ok":true,"queued":25,"attempted":0}
+{"stage":"owned cleanup","stopped":true}

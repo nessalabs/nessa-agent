@@ -1621,6 +1621,25 @@ describe("provider recovery ownership", () => {
     ).toBe("The turn could not complete all required work.")
   })
 
+  it("offers Authenticate for Claude refused in a Boat VM, and this computer's sign-in elsewhere", async () => {
+    for (const [environment, label] of [
+      ["boat", "Authenticate"],
+      ["here", "Sign in to Claude"],
+      ["ssh", "Sign in to Claude"],
+    ] as const) {
+      await shown(fakeSource(), {
+        ...emptyTranscript("b"),
+        revision: 1,
+        authenticationRefusal: "m1",
+        latestInputId: "m1",
+        agent: "claude",
+        lease: { state: "ended", environment, cause: "closed" },
+        messages: [conversation.messages[0]],
+      })
+      expect(host.querySelector(".provider-sign-in button")?.textContent).toBe(label)
+    }
+  })
+
   it("retires recovery while a newer user-only message is sending or failed", async () => {
     const source = fakeSource()
     source.hold("send")
@@ -1924,6 +1943,12 @@ it("pins after observed layout, respects scrolling away, and rejects late delive
     height = 900
     await act(async () => deliver?.([], {} as ResizeObserver))
     expect(scroller.scrollTop).toBe(900)
+    // The scroll position moves before its listener. Growth in that gap stays
+    // where the reader went.
+    scroller.scrollTop = 0
+    height = 1100
+    await act(async () => deliver?.([], {} as ResizeObserver))
+    expect(scroller.scrollTop).toBe(0)
     await act(async () => root.unmount())
     removed = true
     scroller.scrollTop = 10

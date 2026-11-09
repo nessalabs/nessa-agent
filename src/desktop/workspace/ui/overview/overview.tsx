@@ -17,7 +17,7 @@ import { EmptyState } from "@nessa-ui/react/empty-state"
 import { flushSync } from "react-dom"
 import { reducedMotion } from "../../../adapters/motion-preference"
 import { useNow } from "../../../../clock"
-import { focusAfterPaint } from "../../adapters/dom/focus"
+import { focusAfterPaint, performanceFocusClock } from "../../adapters/dom/focus"
 import { isMac } from "../../../adapters/platform"
 import { matchesChord } from "../../../model/keyboard"
 import {
@@ -295,6 +295,7 @@ export function AgentsOverview({
           ? column
           : column.querySelector<HTMLElement>(`[data-overview-item="${CSS.escape(id)}"]`)
       },
+      performanceFocusClock,
       () => {
         if (cancelLand.current !== cancel) return
         cancelLand.current = null

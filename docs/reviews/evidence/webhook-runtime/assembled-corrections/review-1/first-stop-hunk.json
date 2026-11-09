@@ -1,0 +1,5 @@
+{
+  "path": "crates/nessa-server/src/webhooks/infrastructure/outbox/registry.rs",
+  "old": "if saved.stop.is_some() { return Ok(()); }",
+  "new": "if false { return Ok(()); }"
+}

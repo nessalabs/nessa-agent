@@ -1,0 +1,94 @@
+{
+  "qualificationSource": "37611fac240304fffb8dd69fae101ff5f1ac664d",
+  "runtimeSource": "c790639702213d79bad32aaa148e2744ca7a9d1d",
+  "reviewedSource": "8fb396b1625b13ae4c80555de5e46057ccba7980",
+  "main": "919079a7b13f3e4e8600cc7584b097641f8992c7",
+  "mainIntegration": "0b9ba81a0b0a9057e3f161b9c85443a6d1d5f0a4",
+  "ui": "dac8ff435525ad91cb95365fce80bb768a58b582",
+  "frontend": {
+    "command": "pnpm frontend:check",
+    "exitCode": 0,
+    "pnpm": "11.9.0",
+    "node": "v24.19.0",
+    "just": "1.59.0",
+    "context": {
+      "uid": 1000,
+      "rootUid": 0,
+      "tmpUid": 0,
+      "description": "Native filesystem metadata; actor remains unprivileged. Production ownership checks and test assertions unchanged."
+    },
+    "scriptTests": {
+      "tests": 458,
+      "passed": 456,
+      "skipped": 2,
+      "failed": 0
+    },
+    "desktopHelpers": {
+      "passed": 408,
+      "failed": 0
+    },
+    "architecture": {
+      "passed": 108,
+      "checker": "passed"
+    },
+    "protocolControls": {
+      "passed": 61
+    },
+    "unit": {
+      "files": 408,
+      "passed": 5324,
+      "failed": 0
+    },
+    "productionBuild": "passed, 15.80 seconds"
+  },
+  "preservedFailures": [
+    {
+      "source": "8fb396b1625b13ae4c80555de5e46057ccba7980",
+      "stage": "format",
+      "finding": "R3.2, closed at37611"
+    },
+    {
+      "source": "37611fac240304fffb8dd69fae101ff5f1ac664d",
+      "stage": "scripts:test",
+      "failed": 2,
+      "reason": "Missing just; repository-pinned1.59.0 restored, focused6/6 passed"
+    },
+    {
+      "source": "37611fac240304fffb8dd69fae101ff5f1ac664d",
+      "stage": "sandbox unit",
+      "passed": 5322,
+      "failed": 2,
+      "reason": "Unchanged private-file fixtures correctly refused sandbox root/tmp UID65534. Same two fixtures passed against native metadata before full native pipeline passed."
+    }
+  ],
+  "independentReview": {
+    "round": 3,
+    "originalReportSha256": "5ef96d4034f94ca55a898df45f6e8f5ee173c8a2f8f3efea5e1b1eb1d5e91d34",
+    "originalDisposition": "changes required: minorR3.1 and nitR3.2; no blocker/major confirmed in inspected scope",
+    "closureSha256": "cdcd7367d4c8b5e69e191ebd4ef145457fcc52518f8a434ae180563797d2e2de",
+    "closureSource": "37611fac240304fffb8dd69fae101ff5f1ac664d",
+    "openFindings": [],
+    "focusedControlsPassed": 13,
+    "newFullReviewRound": false
+  },
+  "notRun": [
+    "Exact published-head remote/platform CI",
+    "Canonical Chromium153.0.8010.12 and WebKit26.6 product qualification",
+    "Browser webhook stress default1 and raised3",
+    "Full default stress including linking/pool discovery",
+    "Required chaos acceptance"
+  ],
+  "browserPreparation": {
+    "playwright": "1.63.0",
+    "expectedChromiumRevision": "1243, absent",
+    "expectedWebKitRevision": "2359, absent",
+    "installedSystemChromium": "151.0.7922.173, not substituted or launched",
+    "cachedDockerImages": 0,
+    "existingNetworks": [
+      "bridge, internal=false",
+      "host, internal=false",
+      "none, null driver"
+    ],
+    "isolationFinding": "Existing process-cleanup --network=none fixture is not a qualified multicast discovery browser environment. No network created or changed."
+  }
+}

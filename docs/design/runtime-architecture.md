@@ -856,6 +856,17 @@ that platform needs it, and keeps it under its digest; a kept copy that no
 longer measures is downloaded again. A draft release serves no downloads,
 so this works once the release is published.
 
+**Local builds carry the Linux build.** A Boat VM runs Linux x86_64, so a
+Mac app built locally needs that build too, and no release exists for it.
+A local macOS build (`scripts/desktop/prepare-runtime.mjs`) cross-builds
+the Linux `nessa` from the same checkout with cargo-zigbuild (glibc 2.35, as
+the release's Ubuntu 22.04), compiles the gateway with its pin and
+`NESSA_HOST_BUILDS_FROM=bundled`, and ships the file in
+`runtime/host-builds/`. `bundled` means that folder beside the gateway's own
+executable; the file is read with the same length bound and digest check as
+a download. A release's own pins skip this; `NESSA_SKIP_HOST_BUILDS=1`
+builds an app that cannot start Boat chats, said in the build output.
+
 **Verified on hosts.** The host commands run on both CI systems (Linux and
 macOS) with their own `sh`, `uname`, digest tool, `mktemp`, `find` and
 `mv`, through each login shell the runner has (macOS: bash, zsh, tcsh),
@@ -900,6 +911,31 @@ credential) is the one way in, and the connection is outbound from their
 side so nothing inbound ever opens on a machine that is not yours. A relay
 is the fallback, and it forwards TLS it cannot open because the gateway's
 key was pinned at pairing.
+
+**Keeping every transport on one protocol.** A gateway speaks only its own
+lease protocol, so every update of the gateway that changes it would strand
+the machines serving it. Each transport gets the gateway's build its own way.
+Over SSH the gateway installs it (above), and a cloud VM gets it over its own
+SSH connection (ADR 1160). A paired machine dials in, so the gateway cannot
+start anything there; instead it answers a hello on another protocol with
+`VersionRefused{protocol}` and nothing else, and the machine decides.
+
+```text
+paired machine ── Hello{P'} ──▶ gateway ── VersionRefused{P} ──▶ machine (connection ends)
+machine: does its owner let this gateway run commands here? no ──▶ logs it, keeps dialing
+machine ── UpdateWanted{os, arch, libc} ──▶ gateway (a new connection, first frame)
+gateway ── Update{digest, size, P}, UpdatePart…, UpdateEnd ──▶ machine
+machine: size, SHA-256 and `env protocol` == P? ──▶ environment/builds/<digest>/nessa
+  ──▶ exec it with the same arguments; later starts of the old build exec it too
+```
+
+These frames (`nessa_protocol::build_update`) are the one part of the
+contract that never changes shape, so a machine and a gateway of any two
+builds can still agree on how to bring one to the other. The machine's owner
+decides through the same lease policy that decides its leases
+(`build.update`, allowed with commands only): a gateway that may run any
+command there could replace the build anyway, and one allowed only agents,
+whose harnesses may be sandboxed, never gets a build run outside them.
 
 ## Connecting to a dev environment
 

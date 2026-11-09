@@ -3,8 +3,8 @@ use super::{wire_view, ConversationModelChangeEffect, ProductRouteState};
 use crate::agents_test_support::StubAgentProbe;
 use crate::conversation::application::{
     ConversationError, ConversationFuture, PlanToken, PreferenceReading, RecordedPreference,
-    ScheduleActor, ScheduleDraft, ScheduleSettlement, ScheduledMessage, ScheduledMessageStore,
-    SelectionChange, SelectionRequest,
+    ScheduleActor, ScheduleDraft, ScheduleSettlement, ScheduledCommandEvidence, ScheduledMessage,
+    ScheduledMessageStore, SelectionChange, SelectionRequest,
 };
 use crate::conversation::domain::ContinuationCause;
 use crate::conversation_test_support::mode_fixture;
@@ -201,6 +201,7 @@ async fn wire_control_budget(
             required_work_failed: None,
             parts: Vec::new(),
             steering_offset: None,
+            starts_at: None,
             event_count: 0,
             retained_text: 0,
             execution_id: format!("turn-{index}"),
@@ -208,6 +209,7 @@ async fn wire_control_budget(
             attachments: Vec::new(),
             files: Vec::new(),
             app: None,
+            agent: None,
             steering_target: None,
             status: ConversationMessageStatus::Completed,
             error: None,
@@ -415,6 +417,7 @@ fn limit_message(execution_id: &str) -> ConversationMessage {
         }),
         parts: Vec::new(),
         steering_offset: None,
+        starts_at: None,
         event_count: 0,
         retained_text: 0,
         execution_id: execution_id.into(),
@@ -422,6 +425,7 @@ fn limit_message(execution_id: &str) -> ConversationMessage {
         attachments: Vec::new(),
         files: Vec::new(),
         app: None,
+        agent: None,
         steering_target: None,
         status: ConversationMessageStatus::Failed,
         error: None,
@@ -530,6 +534,28 @@ fn schedule_unavailable<'a, T: Send + 'static>() -> ConversationFuture<'a, T> {
 }
 
 impl ScheduledMessageStore for ScheduleReads {
+    fn command_evidence(
+        &self,
+        conversation: &str,
+        execution: &str,
+    ) -> ConversationFuture<'_, Option<ScheduledCommandEvidence>> {
+        if self.fail_open {
+            return schedule_unavailable();
+        }
+        let result = match self
+            .open_row
+            .clone()
+            .filter(|row| row.conversation == conversation && row.execution_id == execution)
+        {
+            Some(row) => row
+                .command_evidence
+                .map(Some)
+                .ok_or(ConversationError::Unavailable),
+            None => Ok(None),
+        };
+        Box::pin(async move { result })
+    }
+
     fn invalidated_selection(&self, _: &str) -> ConversationFuture<'_, Option<SelectionChange>> {
         schedule_unavailable()
     }

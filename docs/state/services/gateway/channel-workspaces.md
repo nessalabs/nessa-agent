@@ -4,7 +4,8 @@ title: Channel workspaces
 kind: statechart
 status: implemented
 sourceRevision: "5b2bd93bc5eb0c983614329f0ba8e602ba83d095"
-summary: A channel independently places its main agent and new threads on Local or Boat and can override the default Boat VM lifetime.
+summary: A channel independently places its main agent and new threads on Local
+  or Boat and can override the default Boat VM lifetime.
 parent: gateway
 sources:
   - crates/nessa-server/src/conversation/application/placement.rs
@@ -41,9 +42,27 @@ sources:
   - src/desktop/settings/ui/boat-row.tsx
   - src/desktop/settings/ui/boat-runtime-control.tsx
   - src/desktop/workspace/ui/channel-settings/channel-settings.tsx
+  - crates/nessa-server/src/workspaces/infrastructure/runtime.rs
+  - src/provider-authentication/model/boat-sign-in.ts
+  - src-tauri/src/platform/macos/claude_sign_in.rs
 diagramLinks: {}
+model:
+  spec: tla/services/gateway/BoatAssignment.tla
+  config: tla/services/gateway/BoatAssignment.cfg
+modelCheck:
+  sourceRevision: "5b2bd93bc5eb0c983614329f0ba8e602ba83d095"
+  checker: tlc-1.7.4
+  date: 2026-11-03T03:28:15.088Z
+  config: tla/services/gateway/BoatAssignment.cfg
+  modelDigest: 52b91a34108496c685fd0488dc2443a7cab48a270019ed343b8f27cc9b37b637
+  states: 6
+  held:
+    - OneTarget
+    - VerifyBeforeAuthority
+    - RefusalIsTerminal
+  broke: []
+  unchecked: []
 ---
-
 # Channel workspaces
 
 This page reviews the alpha placement, allocation and main-chat lifecycle. It
@@ -76,6 +95,14 @@ injection. Unknown credential/access configuration refuses. Current settings are
 checked at creation and reconnection, with a concrete VM receipt check before
 any workspace SDK, harness, SSH or MCP authority.
 
+A fresh creation acknowledgement can arrive while the snapshot is still starting
+and inherited credentials are being removed. Nessa polls that new VM for at most
+90 seconds, then rechecks the environment and complete security receipt. A ready
+VM with a pending credential wipe still refuses. This wait runs no workspace,
+SSH, MCP or agent command and does not restart an idempotent replay. A timeout
+preserves the named VM and the original rollback disposition; it does not prove
+cleanup or authorize another allocation.
+
 Creation checks again after Boat's name-based create; the provider does not offer
 a version selector, so provider/privileged mutation during that operation remains
 a trust boundary. A mismatch durably records Refused with the actual target and
@@ -92,6 +119,21 @@ second resource. An observer disappearing does not cancel the allocation task's
 receipt publication. Closing or deleting chat history preserves workspace files
 and VM identity. Users manage VM stop/delete in Boat. No automatic stop is the
 initial Nessa default; alpha has no idle parking or active TTL renewal.
+
+## Claude sign-in in Boat VMs
+
+Boat gives a VM made from the pinned image share code none of the owner's
+logins, so Claude in it is refused until a sign-in is supplied (ADR 501, #1246).
+**Authenticate** on the refusal card has the desktop host run `claude
+setup-token` in the background and hands its token to `boat.saveClaudeSignIn`.
+The gateway keeps it in the vault entry `boat.claude-sign-in`, beside the
+connection, and `boat.disconnect` clears both. Every serve of a Boat VM reads
+it afresh and writes it as the first line of `env serve`'s standard input,
+which the VM's shell exports as `CLAUDE_CODE_OAUTH_TOKEN` before `env serve`
+starts; an empty line, sent when none is saved or the vault cannot be read,
+sets nothing. A serve keeps what it started with, so after each save or
+clear every Boat conversation's connection that nothing uses is let go, and
+its next lease is served again.
 
 ## VM lifetime settings
 
@@ -179,10 +221,16 @@ newer worker, and its header displays Local or Boat.
 Allocation and encrypted-vault tests are in `tests/workspaces`. Channel migrations
 and replacement history are exercised against real SQLite. The opt-in real
 provider workflow and its limits are described in
-[workspace verification](../../../../scripts/workspaces/README.md). The existing
-backup omission of channel-owned data is tracked in
-[issue 1161](https://github.com/nessalabs/nessa-agent/issues/1161); allocation receipts
-and environment audit files are included in the EnvironmentAudit inventory.
+[workspace verification](../../../../scripts/workspaces/README.md). Channel
+settings, conversation membership, and the coordinator replacement journal are
+the channel store at `conversations/channels.sqlite3`. The export cut pins that
+file as the `channels` store. Membership stays in `channel_conversations`; it
+is not inferred from a conversation name and it is not copied into an
+allocation receipt. Allocation receipts and environment audit files stay in
+the EnvironmentAudit inventory. Applying the channel snapshot back onto a
+live namespace is separate from this export. The page-wide source checkpoint
+is unchanged: this paragraph records the export only, and placement,
+restoration, and lifetime were not re-reviewed.
 
 An untouched Claude native session is not persisted until its first prompt. SDK
 attachment asks the provider with the saved ID and whether any invocation was
@@ -208,3 +256,13 @@ provider-side inspection still links the VM to the durable intent if both local
 stores are unavailable. No automatic replacement is authorized. Recovery audit
 files use the existing private, timestamped EnvironmentAudit store and backup
 inventory; their thread ID links the original conversation creation/lease actor.
+
+This correction reviews only fresh-allocation readiness and the corresponding
+ADR 1160 sequence. The page-wide source checkpoint is retained; the other
+placement, restoration and lifetime paths were not re-reviewed here.
+
+## Bounded rule model
+
+Owns durable provisioning intent, single VM target, reconnect verification and terminal refusal. Uncertain creation cannot allocate again. Local placement, TTL settings, credential posture fields, SSH leases, rollback acknowledgement and main-chat replacement remain separate unmodeled contracts. This finite abstraction checks safety only. It does not execute or verify the implementation, promise eventual completion, or qualify external effects. Existing source checkpoints and historical test receipts retain their earlier scope. The scoped model review inspected `crates/nessa-server/src/workspaces/domain/workspace.rs`, `crates/nessa-server/src/workspaces/application/workspaces.rs`.
+
+The newer [channel run-location control](../desktop/workspace/change-channel-run-location.md) describes moving an existing channel, main creation locking and committed-but-unconfirmed audit outcomes. [Pool ordering](../desktop/workspace/choose-worker-pool-order.md) describes Any computer and cloud overflow. These source-only task guides do not extend this page’s allocation model.

@@ -90,12 +90,15 @@ pub fn error_code(error: &ConversationError) -> ConversationErrorCode {
             ConversationErrorCode::ApprovalModeUnavailable
         }
         ConversationError::RequestConflict => ConversationErrorCode::ApprovalRequestConflict,
+        ConversationError::ChildCreationRefused(cause) => error_code(cause),
         ConversationError::TurnRunning => ConversationErrorCode::TurnRunning,
         ConversationError::ModelChangeNotApplied => ConversationErrorCode::ModelChangeNotApplied,
         ConversationError::ModelChangeUncertain => ConversationErrorCode::ModelChangeUncertain,
         ConversationError::ApprovalModeNotApplied => ConversationErrorCode::ApprovalModeNotApplied,
         ConversationError::ApprovalModeUncertain => ConversationErrorCode::ApprovalModeUncertain,
-        ConversationError::Capacity => ConversationErrorCode::ConversationCapacity,
+        ConversationError::Capacity | ConversationError::ThreadLimit => {
+            ConversationErrorCode::ConversationCapacity
+        }
         ConversationError::Unavailable
         | ConversationError::Retirement(_)
         | ConversationError::RetirementAdmission { .. } => {

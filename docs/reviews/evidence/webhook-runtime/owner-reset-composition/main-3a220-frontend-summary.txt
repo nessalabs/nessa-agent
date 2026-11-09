@@ -1,0 +1,32 @@
+Source: c5cd751f4a7c75c9a2e9966436eada47de87bddd plus the independently
+reviewed linked-device test SHA256 f63c259e9b5252b4648fc301932d54c42822412ebf123d9e2e6153a812a3c226.
+Main: 3a22008c606d6867d02f4bd242ff27944726aa3f
+UI: 39e617600ad36fd9c7a1f41691aca239af25b495
+Command: pnpm frontend:check
+Tooling: pnpm11.9.0; just1.59.0; installed Cargo/Rustup explicitly in PATH;
+native filesystem ownership; task-specific pnpm store; incremental compilation off.
+Exit code: 0
+
+Formatting, ESLint and lint-rule checks passed.
+Scripts: 456 passed, 0 failed, 2 skipped (458).
+Desktop helper controls: 408 passed, 0 failed.
+Architecture: 108 passed, 0 failed, plus checker.
+Protocol: 61 passed, 0 failed.
+Public SDK/client docs and TypeScript checks passed.
+UI: 5306 passed, 0 failed, across 409 files.
+Production build: succeeded in15.17s; ordinary chunk-size warning retained.
+
+The source-equivalent old/current UI commits have identical tree
+a8fcbefd13e2c67aced329897d705d4ed0d1f4d2. The pin remains current main's
+exact commit; no UI source was altered. The linked-device focus test alone
+changes its observation wait, with unchanged production and assertions.
+
+Earlier outcomes are preserved in linked-focus-qualification.md: the first
+invocation omitted Cargo from PATH and stopped in scripts; the next reached
+5305 passing UI tests and one asynchronous row-focus assertion failure. This
+corrected complete pass does not erase either outcome or establish Windows,
+real-browser, focused webhook count-three, or new-head CI acceptance.
+
+Only tests, CI qualification and documentation change after the reviewed
+production checkpoint. No domain state transition or statechart changes, so
+the existing production sourceRevision checkpoint remains valid and unchanged.

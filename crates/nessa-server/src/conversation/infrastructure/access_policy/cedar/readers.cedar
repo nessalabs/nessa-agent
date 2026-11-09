@@ -27,6 +27,25 @@ when {
 };
 
 // A grant that includes read reads the conversation it names, until it is deleted.
+@id("webhook.read")
+permit (
+    principal is NessaConversation::WebhookReader,
+    action == NessaConversation::Action::"conversation.read",
+    resource is NessaConversation::Conversation
+)
+when {
+    principal.organization == resource.organization &&
+    principal.registrationOwner == resource.owner &&
+    !resource.deleted &&
+    context has capabilities && context.capabilities.contains("read") &&
+    context has target &&
+    context.target.grants.contains({
+        action: "conversation.read",
+        organization: context.target.gateway.organization,
+        resource: context.target.gateway.resource
+    })
+};
+
 @id("grant.read")
 permit (
     principal is NessaConversation::Reader,

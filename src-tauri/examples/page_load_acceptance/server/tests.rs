@@ -110,11 +110,13 @@ fn incomplete_and_oversized_headers_cannot_receive_a_control_page() {
             serve(&mut stream, &AtomicBool::new(false))
         });
         let mut client = TcpStream::connect(address).unwrap();
-        client.write_all(&request).unwrap();
-        client.shutdown(std::net::Shutdown::Write).unwrap();
+        // Darwin returns EINVAL for a receive timeout once the peer has
+        // already reset the socket. Set it before the request is finished.
         client
             .set_read_timeout(Some(Duration::from_secs(2)))
             .unwrap();
+        client.write_all(&request).unwrap();
+        client.shutdown(std::net::Shutdown::Write).unwrap();
         let mut response = String::new();
         client.read_to_string(&mut response).unwrap();
         assert_eq!(worker.join().unwrap().unwrap_err().kind(), kind);

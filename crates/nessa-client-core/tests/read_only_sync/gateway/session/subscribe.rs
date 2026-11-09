@@ -37,6 +37,7 @@ fn blank(text: &str) -> ConversationView {
             attachments: Vec::new(),
             files: Vec::new(),
             app: None,
+            agent: None,
             status: ConversationMessageStatus::Completed,
             error: None,
             authentication_required: None,
@@ -45,8 +46,10 @@ fn blank(text: &str) -> ConversationView {
             steering_target: None,
             parts: Vec::new(),
             steering_offset: None,
+            starts_at: None,
         }],
         pending: Vec::new(),
+        earlier: false,
         permissions: Vec::new(),
         tools: Vec::new(),
         capabilities: ConversationCapabilities {

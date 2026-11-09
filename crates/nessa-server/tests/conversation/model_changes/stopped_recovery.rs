@@ -107,6 +107,44 @@ async fn a_recovered_model_change_cancels_the_open_continuation() {
     prepared.service.shutdown().await.unwrap();
 }
 
+/// A model change left pending by a failed cleanup does not refuse a later
+/// mode change as `model_change_uncertain`: the mode change settles it
+/// first, as a send would, and is judged against the model it applied.
+#[tokio::test]
+async fn a_mode_change_settles_a_stranded_model_change_first() {
+    let PreparedStop {
+        service,
+        provider,
+        id,
+        actor,
+        directory: _directory,
+    } = prepare_stopped(Control::Model).await;
+    let mode_caller = ConversationCaller {
+        action_id: "mode-after-stranded-model".into(),
+        ..actor
+    };
+    // The test catalogue's second model takes Ask only: the refusal names
+    // the mode, judged against the model the recovery applied, not the
+    // stranded model change.
+    let refused = tokio::time::timeout(
+        Duration::from_secs(5),
+        service.set_approval_mode(id.clone(), mode_caller, ConversationApprovalMode::Auto),
+    )
+    .await
+    .unwrap();
+    assert!(
+        matches!(refused, Err(ConversationError::ApprovalModeUnavailable)),
+        "{refused:?}"
+    );
+    let view = service.read(id.clone(), caller()).await.unwrap();
+    assert!(view.model_change.is_none());
+    let selection = view.selection.unwrap();
+    assert_eq!(selection.model, "second-model");
+    assert_eq!(selection.approval_mode, ConversationApprovalMode::Ask);
+    assert_eq!(provider.model_updates.lock().unwrap().len(), 1);
+    service.shutdown().await.unwrap();
+}
+
 async fn stopped_acknowledgement(control: Control) {
     let prepared = prepare_stopped(control).await;
     let PreparedStop {

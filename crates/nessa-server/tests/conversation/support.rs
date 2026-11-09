@@ -192,6 +192,12 @@ pub(crate) enum ModeReadbackFault {
 #[derive(Default)]
 pub(crate) struct MemoryRepository {
     pub(crate) records: Mutex<HashMap<ConversationId, Conversation>>,
+    /// Conversations whose agent closed its thread (`close_thread`).
+    pub(crate) closed_threads: Mutex<std::collections::HashSet<ConversationId>>,
+    /// Taken by `open_thread` after its write, so a test can hold the
+    /// opening there; `thread_opened` is told once the write is done.
+    pub(crate) open_thread_gate: tokio::sync::Mutex<()>,
+    pub(crate) thread_opened: tokio::sync::Notify,
     /// While set, whether a conversation's mode needs verifying cannot be
     /// read: a submission is refused before the agent sees it.
     pub(crate) verification_unreadable: AtomicBool,
@@ -240,6 +246,10 @@ pub(crate) struct MemoryRepository {
     pub(crate) refuse_settling: AtomicBool,
     /// Refuse to keep what a deletion read of its history.
     pub(crate) refuse_keeping_the_read: AtomicBool,
+    /// Catalogue incarnation captured with each admission snapshot.
+    pub(crate) catalogue_incarnation: Mutex<String>,
+    /// Monotonic row revision. A first tombstone advances it.
+    pub(crate) change_revisions: Mutex<HashMap<ConversationId, u64>>,
 }
 
 pub(crate) struct AcceptingModeAudit;
@@ -693,6 +703,22 @@ impl ConversationRepository for MemoryRepository {
             }
         })
     }
+    fn close_thread(&self, id: &ConversationId) -> ConversationFuture<'_, ()> {
+        self.closed_threads.lock().unwrap().insert(id.clone());
+        Box::pin(async { Ok(()) })
+    }
+    fn open_thread(&self, id: &ConversationId) -> ConversationFuture<'_, ()> {
+        self.closed_threads.lock().unwrap().remove(id);
+        self.thread_opened.notify_one();
+        Box::pin(async move {
+            drop(self.open_thread_gate.lock().await);
+            Ok(())
+        })
+    }
+    fn thread_closed(&self, id: &ConversationId) -> ConversationFuture<'_, bool> {
+        let closed = self.closed_threads.lock().unwrap().contains(id);
+        Box::pin(async move { Ok(closed) })
+    }
     fn requires_mode_verification(&self, id: &ConversationId) -> ConversationFuture<'_, bool> {
         if self.verification_unreadable.load(Ordering::SeqCst) {
             return Box::pin(async { Err(ConversationError::Metadata) });
@@ -832,11 +858,48 @@ impl ConversationRepository for MemoryRepository {
         })
     }
     fn load(&self, id: &ConversationId) -> ConversationFuture<'_, Option<Conversation>> {
-        let value = self.records.lock().unwrap().get(id).cloned();
-        let value = self.mode_loaded_reply.lock().unwrap().take().or(value);
+        let snapshot = self.load_admission_snapshot(id);
+        Box::pin(async move {
+            snapshot
+                .await
+                .map(|found| found.map(|snapshot| snapshot.into_conversation()))
+        })
+    }
+    fn load_admission_snapshot(
+        &self,
+        id: &ConversationId,
+    ) -> ConversationFuture<
+        '_,
+        Option<crate::conversation::application::ConversationAdmissionSnapshot>,
+    > {
+        use crate::conversation::application::{
+            ConversationAdmissionSnapshot, ConversationAdmissionToken,
+        };
+        // Row and revision under one lock, in the same order as
+        // `record_deletion`, so a tombstone cannot change only one of them.
+        let (stored, incarnation, change_revision) = {
+            let records = self.records.lock().unwrap();
+            let stored = records.get(id).cloned();
+            let incarnation = self.catalogue_incarnation.lock().unwrap().clone();
+            let change_revision = self
+                .change_revisions
+                .lock()
+                .unwrap()
+                .get(id)
+                .copied()
+                .unwrap_or(0);
+            (stored, incarnation, change_revision)
+        };
+        let value = self.mode_loaded_reply.lock().unwrap().take().or(stored);
+        let id = id.clone();
         let value = match self.metadata_load_failure.lock().unwrap().take() {
             Some(error) => Err(error),
-            None => Ok(value),
+            None => Ok(value.map(|conversation| {
+                ConversationAdmissionSnapshot::new(
+                    conversation,
+                    ConversationAdmissionToken::new(incarnation, id, change_revision),
+                )
+            })),
         };
         let gate = self.metadata_load_gate.lock().unwrap().take();
         Box::pin(async move {
@@ -927,12 +990,20 @@ impl ConversationRepository for MemoryRepository {
                 Err(ConversationError::Metadata)
             }
             // Only persists what the domain says the deletion becomes.
-            Some(conversation) => conversation
-                .deleted(deletion)
-                .map_err(|_| ConversationError::Metadata)
-                .inspect(|deleted| {
-                    records.insert(id.clone(), deleted.clone());
-                }),
+            Some(conversation) => {
+                let first_tombstone = conversation.deletion().is_none();
+                conversation
+                    .deleted(deletion)
+                    .map_err(|_| ConversationError::Metadata)
+                    .inspect(|deleted| {
+                        records.insert(id.clone(), deleted.clone());
+                        if first_tombstone {
+                            let mut revisions = self.change_revisions.lock().unwrap();
+                            let next = revisions.get(id).copied().unwrap_or(0).saturating_add(1);
+                            revisions.insert(id.clone(), next);
+                        }
+                    })
+            }
         };
         Box::pin(async move { result })
     }
@@ -1313,6 +1384,9 @@ pub(crate) struct ProviderFactory {
     pub(crate) authority_override:
         Mutex<Option<Result<Option<PermissionAuthority>, PermissionAuthorityError>>>,
     pub(crate) close_calls: AtomicUsize,
+    /// Minted per actual backend instance, independent of a restored session ID.
+    pub(crate) opened_backend_ids: Mutex<Vec<Uuid>>,
+    pub(crate) closed_backend_ids: Mutex<Vec<Uuid>>,
     /// Counts turn cancels. Session close does not increment this.
     pub(crate) cancel_calls: AtomicUsize,
     pub(crate) cancel_turns: Mutex<Vec<String>>,
@@ -1961,10 +2035,17 @@ impl AgentProvider for Provider {
                 .push((session_id.clone(), restore));
             let controller = ExecutionController::new(session_id.clone());
             let authority = controller.permission_authority_source();
+            let instance_id = Uuid::new_v4();
+            self.factory
+                .opened_backend_ids
+                .lock()
+                .unwrap()
+                .push(instance_id);
             Ok(OpenedProviderSession {
                 session: ProviderSession::new(
                     session_id,
                     Arc::new(Backend {
+                        instance_id,
                         factory: self.factory.clone(),
                         sender: Mutex::new(Some(sender)),
                         controller: Mutex::new(controller),
@@ -2004,6 +2085,7 @@ impl ExecutionEventStream for Events {
     }
 }
 struct Backend {
+    instance_id: Uuid,
     controller: Mutex<ExecutionController>,
     authority: PermissionAuthoritySource,
     factory: Arc<ProviderFactory>,
@@ -2470,6 +2552,11 @@ impl ProviderSessionBackend for Backend {
     fn close(&self, request: SessionCloseRequest) -> CleanupFuture<'_> {
         Box::pin(async move {
             self.factory.close_calls.fetch_add(1, Ordering::SeqCst);
+            self.factory
+                .closed_backend_ids
+                .lock()
+                .unwrap()
+                .push(self.instance_id);
             self.factory.close_requests.lock().unwrap().push(request);
             let now = self.factory.closing_now.fetch_add(1, Ordering::SeqCst) + 1;
             self.factory.most_closing.fetch_max(now, Ordering::SeqCst);
@@ -2775,3 +2862,38 @@ pub(crate) fn unrooted(text: &str) -> &str {
 #[cfg(unix)]
 #[path = "channel_lookup_fixture.rs"]
 pub(crate) mod channel_lookup;
+
+/// Keeps every settings record; refuses each one once `failing` is set.
+#[derive(Default)]
+pub(crate) struct RecordingSettingsAudit {
+    pub(crate) records: Mutex<Vec<crate::conversation::application::SettingsAuditRecord>>,
+    pub(crate) failing: AtomicBool,
+}
+impl RecordingSettingsAudit {
+    pub(crate) fn outcomes(&self) -> Vec<crate::conversation::application::SettingsOutcome> {
+        self.records
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|record| record.outcome.clone())
+            .collect()
+    }
+}
+impl crate::conversation::application::SettingsAudit for RecordingSettingsAudit {
+    fn record(
+        &self,
+        record: crate::conversation::application::SettingsAuditRecord,
+    ) -> ConversationFuture<'_, ()> {
+        let failing = self.failing.load(std::sync::atomic::Ordering::SeqCst);
+        if !failing {
+            self.records.lock().unwrap().push(record);
+        }
+        Box::pin(async move {
+            if failing {
+                Err(crate::conversation::application::ConversationError::Audit)
+            } else {
+                Ok(())
+            }
+        })
+    }
+}

@@ -1,0 +1,20 @@
+import { spawnSync } from 'node:child_process'
+import { readFileSync } from 'node:fs'
+import { testExecutables } from '/workspace/nessa-agent/scripts/cargo-test-parallel.mjs'
+const packages = ['nessa-local-storage', 'nessa-auth', 'nessa-server', 'nessa-protocol', 'nessa-client-core', 'nessa-device-client', 'nessa-sdk', 'nessa-vault']
+const build = spawnSync('cargo', ['test', '--locked', '--no-run', '--message-format=json', ...packages.flatMap(p => ['-p',p])], {cwd:'/workspace/nessa-agent',encoding:'utf8',maxBuffer:128*1024*1024})
+if (build.status !== 0) { process.stderr.write(build.stderr); process.exit(build.status ?? 1) }
+const tasks = testExecutables(build.stdout)
+const started = new Set([...readFileSync('/tmp/nessa-981-evidence/ci-selection-rust.log','utf8').matchAll(/^starting (.+)$/gm)].map(m=>m[1]))
+const remaining = tasks.filter(t=>!started.has(t.label))
+if (tasks.length !== 38 || started.size !== 14 || remaining.length !== 24) throw new Error(`Unexpected selection: ${tasks.length} total, ${started.size} started, ${remaining.length} remaining`)
+console.log(`Supplemental completion: ${remaining.length} previously unstarted binaries from the same exact eight-package feature selection. Original runner result remains failed.`)
+let failed = 0
+for (const task of remaining) {
+  console.log(`starting supplemental ${task.label}`)
+  const result = spawnSync(task.executable, [], {cwd:'/workspace/nessa-agent',stdio:'inherit'})
+  console.log(`finished supplemental ${task.label}: exit ${result.status}; signal ${result.signal}`)
+  if (result.status !== 0) failed++
+}
+console.log(`Supplemental result: ${remaining.length-failed} binaries passed; ${failed} failed`)
+process.exit(failed ? 1 : 0)

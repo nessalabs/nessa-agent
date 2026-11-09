@@ -1,0 +1,11 @@
+{
+  "head": "ecbb440ead06e4c3d60ca89c445eb30f19bdf727",
+  "checkout_clean": true,
+  "full_base_diff_check": true,
+  "source_unchanged_since_round1": true,
+  "copied_source_files": 113,
+  "intentional_private_test_extension": [
+    "crates/nessa-auth/src/adapters/cedar/evaluator_tests.rs"
+  ],
+  "production_mutations_byte_restored": true
+}

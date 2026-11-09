@@ -243,6 +243,22 @@
           "additionalAttributes": false
         }
       },
+      "WebhookReader": {
+        "shape": {
+          "type": "Record",
+          "attributes": {
+            "organization": {
+              "type": "String",
+              "required": true
+            },
+            "registrationOwner": {
+              "type": "String",
+              "required": true
+            }
+          },
+          "additionalAttributes": false
+        }
+      },
       "Channel": {
         "shape": {
           "type": "Record",
@@ -265,7 +281,8 @@
         "appliesTo": {
           "principalTypes": [
             "Person",
-            "Reader"
+            "Reader",
+            "WebhookReader"
           ],
           "resourceTypes": [
             "Conversation"
@@ -279,7 +296,8 @@
         "appliesTo": {
           "principalTypes": [
             "Person",
-            "Reader"
+            "Reader",
+            "WebhookReader"
           ],
           "resourceTypes": [
             "Conversation"
@@ -293,7 +311,8 @@
         "appliesTo": {
           "principalTypes": [
             "Person",
-            "Reader"
+            "Reader",
+            "WebhookReader"
           ],
           "resourceTypes": [
             "Conversation"
@@ -307,7 +326,8 @@
         "appliesTo": {
           "principalTypes": [
             "Person",
-            "Reader"
+            "Reader",
+            "WebhookReader"
           ],
           "resourceTypes": [
             "Catalogue"
@@ -321,7 +341,8 @@
         "appliesTo": {
           "principalTypes": [
             "Person",
-            "Reader"
+            "Reader",
+            "WebhookReader"
           ],
           "resourceTypes": [
             "Conversation"
@@ -334,7 +355,8 @@
       "catalogue.entry": {
         "appliesTo": {
           "principalTypes": [
-            "Reader"
+            "Reader",
+            "WebhookReader"
           ],
           "resourceTypes": [
             "Conversation"
@@ -347,7 +369,8 @@
       "conversation.comment": {
         "appliesTo": {
           "principalTypes": [
-            "Reader"
+            "Reader",
+            "WebhookReader"
           ],
           "resourceTypes": [
             "Conversation"
@@ -360,7 +383,8 @@
       "conversation.drive": {
         "appliesTo": {
           "principalTypes": [
-            "Reader"
+            "Reader",
+            "WebhookReader"
           ],
           "resourceTypes": [
             "Conversation"
@@ -373,7 +397,8 @@
       "conversation.write": {
         "appliesTo": {
           "principalTypes": [
-            "Reader"
+            "Reader",
+            "WebhookReader"
           ],
           "resourceTypes": [
             "Catalogue"
@@ -387,7 +412,8 @@
         "appliesTo": {
           "principalTypes": [
             "Person",
-            "Reader"
+            "Reader",
+            "WebhookReader"
           ],
           "resourceTypes": [
             "Conversation"
@@ -401,7 +427,8 @@
         "appliesTo": {
           "principalTypes": [
             "Person",
-            "Reader"
+            "Reader",
+            "WebhookReader"
           ],
           "resourceTypes": [
             "Conversation"
@@ -415,7 +442,8 @@
         "appliesTo": {
           "principalTypes": [
             "Person",
-            "Reader"
+            "Reader",
+            "WebhookReader"
           ],
           "resourceTypes": [
             "Conversation"
@@ -429,7 +457,8 @@
         "appliesTo": {
           "principalTypes": [
             "Person",
-            "Reader"
+            "Reader",
+            "WebhookReader"
           ],
           "resourceTypes": [
             "Conversation"
@@ -442,7 +471,8 @@
       "note.deliver": {
         "appliesTo": {
           "principalTypes": [
-            "GrantHolder"
+            "GrantHolder",
+            "WebhookReader"
           ],
           "resourceTypes": [
             "Conversation"
@@ -455,7 +485,8 @@
       "review.notice": {
         "appliesTo": {
           "principalTypes": [
-            "ReviewRecipient"
+            "ReviewRecipient",
+            "WebhookReader"
           ],
           "resourceTypes": [
             "Conversation"
@@ -468,7 +499,8 @@
       "conversation.agent_tools": {
         "appliesTo": {
           "principalTypes": [
-            "AgentTurn"
+            "AgentTurn",
+            "WebhookReader"
           ],
           "resourceTypes": [
             "Conversation"
@@ -481,7 +513,8 @@
       "workspace.read": {
         "appliesTo": {
           "principalTypes": [
-            "Person"
+            "Person",
+            "WebhookReader"
           ],
           "resourceTypes": [
             "Workspace"

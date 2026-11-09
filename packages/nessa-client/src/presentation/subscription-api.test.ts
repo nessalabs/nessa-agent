@@ -55,6 +55,7 @@ const view: ConversationView = {
   },
   lifecycle: { phase: "attached" },
   truncated: false,
+  earlier: false,
   queueComplete: true,
   transcriptState: "complete",
 }

@@ -3,16 +3,25 @@
 use super::operation;
 use crate::conversation::application::conversation_session;
 use crate::conversation::application::{
-    RecordReadError, RecordReadFuture, RecordReadLease, RecordReadOperation, RecordReadResponse,
-    RecordReadSource,
+    PrincipalRecordReadSource, PrincipalRecordScope, RecordReadError, RecordReadFuture,
+    RecordReadLease, RecordReadOperation, RecordReadResponse, RecordReadSource,
 };
-use crate::conversation::infrastructure::record_scope_from_identity;
+use crate::conversation::infrastructure::{
+    exact_record_scope,
+    record_scope::{exact_principal_record_scope, principal_scope_from_identity},
+    record_scope_from_identity,
+};
 use crate::core::read_workers::{ReadWorkerError, ReadWorkers};
-use nessa_protocol::conversation::read_scope::{ReadRefusal, ReceiverReadScope};
-use nessa_sdk::{
-    domain::agent_execution::sessions::SessionId, infrastructure::session_storage::RecordStorage,
+use nessa_protocol::conversation::{
+    domain::ConversationId,
+    read_scope::{ReadRefusal, ReceiverReadScope},
 };
-use nessa_sync::replication::domain::Id;
+#[cfg(test)]
+use nessa_sdk::domain::agent_execution::sessions::SessionId;
+use nessa_sdk::infrastructure::session_storage::{
+    NessaRecordSource, RecordStorage, RecordStreamIdentity,
+};
+use nessa_sync::replication::domain::{Id, Scope};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
@@ -21,7 +30,6 @@ use std::sync::{
 use std::sync::{Condvar, Mutex};
 use std::time::{Duration, Instant};
 use tokio::runtime::Handle;
-#[cfg(test)]
 use tokio::sync::Notify;
 
 /// A cold-read budget that cannot be a deadline.
@@ -152,6 +160,34 @@ impl NessaRecordReadSource {
     }
 }
 
+pub(super) enum ReadSelection {
+    Receiver(ReceiverReadScope),
+    Principal(PrincipalRecordScope),
+}
+impl ReadSelection {
+    fn conversation(&self) -> &ConversationId {
+        match self {
+            Self::Receiver(scope) => &scope.conversation_id,
+            Self::Principal(scope) => scope.conversation(),
+        }
+    }
+    pub(super) fn check_opened(
+        &self,
+        source: &NessaRecordSource,
+        observed: &Scope,
+    ) -> Result<(), ReadRefusal> {
+        match self {
+            Self::Receiver(scope) => exact_record_scope(scope, source, observed).map(|_| ()),
+            Self::Principal(scope) => exact_principal_record_scope(scope, source, observed),
+        }
+    }
+    fn scope(&self, identity: &RecordStreamIdentity) -> Result<Scope, ReadRefusal> {
+        match self {
+            Self::Receiver(scope) => record_scope_from_identity(scope, identity),
+            Self::Principal(scope) => principal_scope_from_identity(scope, identity),
+        }
+    }
+}
 impl RecordReadSource for NessaRecordReadSource {
     fn read<'a>(
         &'a self,
@@ -159,9 +195,29 @@ impl RecordReadSource for NessaRecordReadSource {
         operation: RecordReadOperation,
         lease: RecordReadLease,
     ) -> RecordReadFuture<'a, RecordReadResponse> {
+        self.read_selected(ReadSelection::Receiver(admitted), operation, lease)
+    }
+}
+impl PrincipalRecordReadSource for NessaRecordReadSource {
+    fn read_principal<'a>(
+        &'a self,
+        admitted: PrincipalRecordScope,
+        operation: RecordReadOperation,
+        lease: RecordReadLease,
+    ) -> RecordReadFuture<'a, RecordReadResponse> {
+        self.read_selected(ReadSelection::Principal(admitted), operation, lease)
+    }
+}
+impl NessaRecordReadSource {
+    fn read_selected<'a>(
+        &'a self,
+        admitted: ReadSelection,
+        operation: RecordReadOperation,
+        lease: RecordReadLease,
+    ) -> RecordReadFuture<'a, RecordReadResponse> {
         Box::pin(async move {
             self.workers.admit().map_err(worker_error)?;
-            let session = session_id(&admitted)?;
+            let session = conversation_session(admitted.conversation());
             let storage = self.storage.clone();
             let runtime = self.runtime.clone();
             let origin = self.origin.clone();
@@ -175,6 +231,11 @@ impl RecordReadSource for NessaRecordReadSource {
                 let workers = self.workers.clone();
                 Box::new(move || stop.load(Ordering::SeqCst) || workers.is_closed())
             };
+            let budget_elapsed: Arc<dyn Fn() -> bool + Send + Sync> = {
+                let stop = stop.clone();
+                let workers = self.workers.clone();
+                Arc::new(move || stop.load(Ordering::SeqCst) || workers.is_closed())
+            };
             #[cfg(test)]
             let stopped: Box<dyn Fn() -> bool + Send> = match self.between_steps.clone() {
                 Some(hold) => Box::new(move || {
@@ -185,6 +246,9 @@ impl RecordReadSource for NessaRecordReadSource {
             };
             #[cfg(test)]
             let before_identity = self.before_identity.clone();
+            let started = Arc::new(Notify::new());
+            let signal = started.clone();
+            let wake_storage = storage.clone();
             let work = self.workers.run("nessa-record-read", move || {
                 debug_assert!(Handle::try_current().is_err());
                 #[cfg(test)]
@@ -195,17 +259,32 @@ impl RecordReadSource for NessaRecordReadSource {
                     .block_on(storage.record_identity(&session, origin))
                     .map_err(operation::storage_error)?
                     .ok_or(RecordReadError::IdentityChanged)?;
-                let observed = record_scope_from_identity(&admitted, &identity)
+                let observed = admitted
+                    .scope(&identity)
                     .map_err(RecordReadError::Admission)?;
                 if let RecordReadOperation::Page(request) = &operation {
                     if request.scope != observed {
+                        // A valid principal selector can race a physical reset
+                        // between its Head and Page. Preserve receiver refusal
+                        // behavior and reject every other malformed cohort.
+                        if matches!(&admitted, ReadSelection::Principal(_))
+                            && request.scope.receiver() == observed.receiver()
+                            && request.scope.origin() == observed.origin()
+                            && request.scope.stream() == observed.stream()
+                            && request.scope.schema() == observed.schema()
+                            && request.scope.access_epoch() == observed.access_epoch()
+                        {
+                            return Err(RecordReadError::IdentityChanged);
+                        }
                         return Err(RecordReadError::Admission(ReadRefusal::Unverifiable));
                     }
                 }
+                signal.notify_one();
                 let work = operation::ReadWork {
                     operation,
                     steps,
                     stopped,
+                    budget_elapsed,
                 };
                 let result = operation::execute(
                     storage, runtime, session, identity, admitted, observed, work,
@@ -215,20 +294,33 @@ impl RecordReadSource for NessaRecordReadSource {
             let mut work = std::pin::pin!(work);
             // Declared after `work`, so it is dropped first: a dropped waiter
             // publishes `stop` before the worker's answer channel is released.
-            let _waiter = StopWhenDropped(stop.clone());
+            let _waiter = StopWhenDropped {
+                stop: stop.clone(),
+                storage: wake_storage.clone(),
+            };
+            // The budget starts once the worker is about to discover, not
+            // while it is still waiting for a thread or looking up identity.
+            // A read that fails before then finishes on the first branch.
             let finished = tokio::select! {
                 biased;
                 finished = &mut work => finished,
-                () = tokio::time::sleep(self.work_budget) => {
-                    // The worker stops at its next step boundary.
-                    stop.store(true, Ordering::SeqCst);
-                    let finished = work.await;
-                    // The budget won, and the read's own answer is that the
-                    // source is still preparing. A worker failure is not this limit.
-                    if matches!(finished, Ok(Err(RecordReadError::SourcePreparing))) {
-                        crate::core::limit_log::note_limit("record.read_work_budget");
+                _ = started.notified() => {
+                    tokio::select! {
+                        biased;
+                        finished = &mut work => finished,
+                        () = tokio::time::sleep(self.work_budget) => {
+                            // The worker stops at its next step boundary.
+                            stop.store(true, Ordering::SeqCst);
+                            wake_storage.wake_discovery_waiters();
+                            let finished = work.await;
+                            // The budget won, and the read's own answer is that the
+                            // source is still preparing. A worker failure is not this limit.
+                            if matches!(finished, Ok(Err(RecordReadError::SourcePreparing))) {
+                                crate::core::limit_log::note_limit("record.read_work_budget");
+                            }
+                            finished
+                        }
                     }
-                    finished
                 }
             };
             finished.map_err(worker_error)?
@@ -236,12 +328,17 @@ impl RecordReadSource for NessaRecordReadSource {
     }
 }
 
-/// Stops the read's discovery calls once nobody waits for its answer.
-struct StopWhenDropped(Arc<AtomicBool>);
+/// Stops the read's discovery calls once nobody waits for its answer, and
+/// wakes a read blocked on a checked-out discovery entry.
+struct StopWhenDropped {
+    stop: Arc<AtomicBool>,
+    storage: Arc<RecordStorage>,
+}
 
 impl Drop for StopWhenDropped {
     fn drop(&mut self) {
-        self.0.store(true, Ordering::SeqCst);
+        self.stop.store(true, Ordering::SeqCst);
+        self.storage.wake_discovery_waiters();
     }
 }
 
@@ -250,10 +347,6 @@ fn worker_error(error: ReadWorkerError) -> RecordReadError {
         ReadWorkerError::Unavailable => RecordReadError::TemporarilyUnavailable,
         ReadWorkerError::WorkerPanicked => RecordReadError::WorkerPanicked,
     }
-}
-
-fn session_id(admitted: &ReceiverReadScope) -> Result<SessionId, RecordReadError> {
-    Ok(conversation_session(&admitted.conversation_id))
 }
 
 #[cfg(test)]

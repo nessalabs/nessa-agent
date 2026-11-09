@@ -69,6 +69,20 @@ impl Host for Linux {
         });
         Ok(())
     }
+
+    fn open_file(&self, path: &std::path::Path) -> Result<(), String> {
+        // The app registered for the file's type (application/json): an
+        // editor or a viewer, as the person set it.
+        let mut child = Command::new("xdg-open")
+            .arg(path)
+            .spawn()
+            .map_err(|error| error.to_string())?;
+        // Reaped on a thread of its own, as a link's opener is.
+        thread::spawn(move || {
+            let _ = child.wait();
+        });
+        Ok(())
+    }
 }
 
 pub use provider_login::LinuxProviderLogin;

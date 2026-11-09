@@ -11,8 +11,9 @@ beforeEach(() => {
   ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 })
 
-it("shows retained input metadata without reading or offering unavailable bytes", async () => {
-  const read = vi.fn(async () => new Blob())
+it("shows retained input metadata, reading back only the image the conversation holds", async () => {
+  // Still on its way: the tile is its labelled placeholder meanwhile.
+  const read = vi.fn(() => new Promise<Blob>(() => {}))
   const save = vi.fn(async () => "cancelled" as const)
   const transcript = transcriptFrom(
     view("original", {
@@ -49,7 +50,12 @@ it("shows retained input metadata without reading or offering unavailable bytes"
     ])
     expect(host.textContent).toContain("Inspect this [report].")
     expect(host.querySelector("img, button")).toBeNull()
-    expect(read).not.toHaveBeenCalled()
+    expect(read).toHaveBeenCalledTimes(1)
+    expect(read.mock.calls[0]).toEqual([
+      "original",
+      { digest: "a".repeat(64), mimeType: "image/png", size: 2048 },
+      expect.anything(),
+    ])
     expect(save).not.toHaveBeenCalled()
   } finally {
     await act(async () => root.unmount())

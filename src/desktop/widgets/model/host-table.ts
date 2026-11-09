@@ -39,14 +39,20 @@ export function hostDraws(
   place: WidgetPlace,
   answer: WidgetAnswer,
   offered: OfferedPlaces,
+  openElsewhere = false,
 ): HostDraws {
   const closes = closesIn(place)
   if (!answer.registered) return { kind: "line", text: hostLines.unshowable, closes }
   const { state } = answer
   switch (state.kind) {
     case "ready":
+      // One live view of an app: open elsewhere (`openElsewhere`, which the
+      // inline host asks only for apps), its card in the message is the row
+      // that leads there, not a second running copy.
       if (place === "inline")
-        return offered.inline ? { kind: "view" } : { kind: "row", title: state.title }
+        return offered.inline && !openElsewhere
+          ? { kind: "view" }
+          : { kind: "row", title: state.title }
       // Every plugin has a panel view; a window it does not offer is never
       // offered, and asked for all the same, it says so.
       return place === "panel" || offered.window

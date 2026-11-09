@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 import { panesOf } from "../../../split-panes/model/pane-layout"
 import { roomyGrid, shownBy, testIndex } from "../../testing"
+import { paneItemKey, widgetItem } from "../../model/pane-item"
 import { initialWorkspace, type WorkspaceState } from "../workspace-state"
 import { closePanelTab, openWidgetInPanel, showPanelTab } from "./chat-panel"
 import { openBeside } from "./panes"
@@ -50,6 +51,22 @@ describe("opening a widget in its chat's panel", () => {
       a: { tabs: [run], front: run },
       d: { tabs: [notes], front: notes },
     })
+  })
+
+  it("gives an app one tab per chat, its latest call's, and keeps each call it opened as living there", () => {
+    const first = { plugin: "mcp:huddle", id: "call-1" }
+    const second = { plugin: "mcp:huddle", id: "call-2" }
+    const opened = [first, run, second].reduce(
+      (state, widget) => openWidgetInPanel(state, { widget, origin: "a" }),
+      loaded(),
+    )
+    expect(opened.panels.a).toEqual({ tabs: [second, run], front: second })
+    // A native widget is not held there; both calls are, after their tabs close.
+    expect(opened.panelled).toEqual(
+      [first, second].map((widget) => paneItemKey(widgetItem(widget))),
+    )
+    const closed = closePanelTab(opened, { sessionId: "a", widget: second })
+    expect(closed.panelled).toEqual(opened.panelled)
   })
 
   it("does nothing for a chat the window does not have, or with no chat in front", () => {

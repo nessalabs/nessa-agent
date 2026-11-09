@@ -7,6 +7,7 @@ import {
 import { ChannelCreationError } from "../../application/ports"
 import { channelRules, emptyDraft } from "../../model/channel-draft"
 import { channelGateway } from "./channel-gateway"
+import { gatewayChannel } from "./gateway-views"
 
 const model = { provider: "openai", modelId: "gpt-5.6-terra" }
 
@@ -98,5 +99,44 @@ describe("the flow's bounds", () => {
   it("are the ones the client publishes from the protocol", () => {
     const { maxChannels: _, ...asked } = publishedRules
     expect(channelRules).toEqual(asked)
+  })
+
+  it("changes a made channel's run location and answers the index's channel", async () => {
+    const setPlacement = vi.fn().mockResolvedValue({
+      ...made,
+      coordinatorPlacement: "boat",
+      coordinatorConversationId: "fresh-main",
+    })
+    const source = channelGateway({
+      connected: async () => ({ channels: { create: vi.fn(), setPlacement } }),
+    })
+    const channel = await source.setPlacement?.(
+      made.channelId,
+      { coordinatorPlacement: "boat", threadPlacement: "local" },
+      "req-place",
+    )
+    expect(setPlacement).toHaveBeenCalledWith({
+      requestId: "req-place",
+      channelId: made.channelId,
+      coordinatorPlacement: "boat",
+      threadPlacement: "local",
+    })
+    expect(channel?.coordinatorPlacement).toBe("boat")
+    expect(channel?.coordinatorConversationId).toBe("fresh-main")
+  })
+
+  it("refuses to place the default channel without asking", async () => {
+    const setPlacement = vi.fn()
+    const source = channelGateway({
+      connected: async () => ({ channels: { create: vi.fn(), setPlacement } }),
+    })
+    await expect(
+      source.setPlacement?.(
+        gatewayChannel.id,
+        { coordinatorPlacement: "boat", threadPlacement: "boat" },
+        "r",
+      ),
+    ).rejects.toMatchObject({ reason: "forbidden" })
+    expect(setPlacement).not.toHaveBeenCalled()
   })
 })

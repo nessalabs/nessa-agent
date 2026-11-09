@@ -607,6 +607,17 @@ export async function onPathsDragged(handlers: {
   return () => stops.forEach((stop) => stop())
 }
 
+/**
+ * Opens the local gateway's `config.json` in the person's text editor. The
+ * host names the file from its own service namespace; nothing here names a
+ * path. Rejects with the host's sentence when it can't, and outside Tauri.
+ */
+export async function openGatewayConfig(): Promise<void> {
+  if (!inTauri) throw new Error("This window has no app to open the file with.")
+  const { invoke } = await import("@tauri-apps/api/core")
+  await invoke("open_gateway_config")
+}
+
 /** The person's home folder, to write paths under it from `~`; `null` outside Tauri. */
 export async function homeFolder(): Promise<string | null> {
   if (!inTauri) return null
@@ -1330,6 +1341,25 @@ export async function signInToProvider(provider: "claude" | "codex"): Promise<vo
   await invoke("sign_in_to_provider", { provider })
 }
 
+/** Mints a Claude sign-in for Boat VMs in the background and answers its token,
+ * for the gateway's vault only (ADR 501). Rejects when the person did not finish. */
+export async function mintClaudeSignIn(): Promise<string> {
+  if (!inTauri) throw new Error("Claude sign-in requires the native desktop host.")
+  const { invoke } = await import("@tauri-apps/api/core")
+  return await invoke<string>("mint_claude_sign_in")
+}
+
+/** Whether this host can mint a Claude sign-in for Boat. */
+export async function claudeSignInMintAvailable(): Promise<boolean> {
+  if (!inTauri) return false
+  try {
+    const { invoke } = await import("@tauri-apps/api/core")
+    return await invoke<boolean>("claude_sign_in_mint_available")
+  } catch {
+    return false
+  }
+}
+
 /** Native composition owns login availability; unreachable hosts offer no action. */
 export async function providerLoginAvailable(): Promise<boolean> {
   if (!inTauri) return false
@@ -1355,7 +1385,7 @@ export async function writeClipboardText(text: string): Promise<void> {
 /** Transient local-vault input; the native host retains one app-owned connection.
  * Browser composition uses the gateway adapter instead of invoking this seam. */
 export async function vaultCommand(request: {
-  operation: "status" | "setup" | "unlock" | "lock"
+  operation: "status" | "setup" | "unlock" | "lock" | "changePassphrase"
   passphrase?: string
 }): Promise<unknown> {
   if (!inTauri) return undefined

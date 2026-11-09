@@ -53,6 +53,8 @@ pub(crate) enum CallerWaiter {
     QueueRemoval(ExecutionId),
     /// `Agent::close` of this session's Agent.
     Close(SessionId),
+    /// Historical decline receipt, including its original durable decision.
+    Decline(SessionId),
     /// `Agent::set_effort_level` on this session's Agent.
     EffortLevelChange(SessionId),
     /// `Agent::set_model` on this session.
@@ -72,6 +74,7 @@ pub(crate) enum CallerWaiter {
 impl fmt::Display for CallerWaiter {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Decline(id) => write!(formatter, "decline receipt {}", id.as_str()),
             Self::Receipt(id) => write!(formatter, "queued receipt {}", id.as_str()),
             Self::Events(session) => {
                 write!(formatter, "event stream of session {}", session.as_str())
