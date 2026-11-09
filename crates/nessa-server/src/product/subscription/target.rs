@@ -205,6 +205,8 @@ pub(super) struct Sources {
     environments: Option<watch::Receiver<u64>>,
     /// The native hooks choice's commands, for the agent catalog.
     hooks: Option<watch::Receiver<u64>>,
+    /// The default device, saved from Devices, for the agent catalog.
+    default_device: Option<watch::Receiver<Option<String>>>,
 }
 
 pub(super) enum Wake {
@@ -233,6 +235,7 @@ impl Sources {
                 live: None,
                 environments: None,
                 hooks: None,
+                default_device: None,
             },
             Target::View { conversation, .. } => Self {
                 records: Some(records()?.watch(conversation).map_err(closed)?),
@@ -245,6 +248,7 @@ impl Sources {
                 ),
                 environments: None,
                 hooks: None,
+                default_device: None,
             },
             Target::List { .. } => {
                 let owner = caller(session, String::new());
@@ -264,17 +268,20 @@ impl Sources {
                     live: None,
                     environments: None,
                     hooks: None,
+                    default_device: None,
                 }
             }
-            // Only the paired environments and the native hooks choice
-            // change the catalog after startup; a gateway with neither has
-            // no source, and the catalog's first frame is its last (row AC1).
+            // Only the paired environments, the native hooks choice and the
+            // default device change the catalog after startup; a gateway with
+            // none of them has no source, and the catalog's first frame is
+            // its last (row AC1).
             Target::Agents => Self {
                 records: None,
                 catalogue: None,
                 live: None,
                 environments: state.agents_catalog_changes(),
                 hooks: state.native_hooks_changes(),
+                default_device: state.default_device_changes(),
             },
         })
     }
@@ -327,7 +334,17 @@ impl Sources {
                 None => std::future::pending().await,
             }
         };
+        let default_device = async {
+            match self.default_device.as_mut() {
+                Some(default) => default.changed().await,
+                None => std::future::pending().await,
+            }
+        };
         tokio::select! {
+            changed = default_device => match changed {
+                Ok(()) => Wake::Changed,
+                Err(_) => Wake::Closed,
+            },
             state = records => match state {
                 ChangeWatchState::Dirty => Wake::Changed,
                 ChangeWatchState::Closed => Wake::Closed,
@@ -1326,6 +1343,7 @@ mod tests {
             live: Some(receiver),
             environments: None,
             hooks: None,
+            default_device: None,
         };
         assert!(!sources.drain().await, "nothing waiting");
         live.send(1).unwrap();
@@ -1356,6 +1374,7 @@ mod tests {
             live: None,
             environments: None,
             hooks: None,
+            default_device: None,
         };
         drop(changes);
         assert!(matches!(sources.changed().await, Wake::Closed));

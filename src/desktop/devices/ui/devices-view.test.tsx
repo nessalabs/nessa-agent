@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import type { DeviceSshConnect } from "../model/devices"
 import type { BoatGateway } from "../../settings/adapters/boat-gateway"
 import { BoatProvider } from "../../settings/ui/boat-row"
 import { act, StrictMode } from "react"
@@ -80,6 +81,8 @@ const listed: DevicesRead = {
   ],
   listening: "0.0.0.0:47650",
   more: false,
+  sshHosts: [],
+  defaultEnvironment: null,
 }
 
 function pairing(phase: WorkerPairing["phase"], claimed = false): WorkerPairing {
@@ -131,6 +134,15 @@ function fakeGateway(overrides: Partial<DevicesGateway> = {}) {
     ),
     cancel: async () => (calls.push("cancel"), { ok: true, value: pairing("terminal") }),
     reach: async () => (calls.push("reach"), { ok: true, value: "restarting" }),
+    sshHosts: async () => ({ ok: true, value: { suggested: [], connecting: [] } }),
+    connectSsh: async (host) => (
+      calls.push(`connect ${host}`),
+      { ok: true, value: { host, state: "installing" } }
+    ),
+    setDefault: async (environment) => (
+      calls.push(`default ${environment ?? "hub"}`),
+      { ok: true, value: environment }
+    ),
     ...overrides,
   }
   return { gateway, calls }
@@ -205,15 +217,20 @@ it("shows every device in one list, each saying what it is, with Add device last
   const { host, root } = await mount(fakeGateway().gateway)
   const list = host.querySelector("[data-devices-list]")
   expect(
-    [...(list?.children ?? [])].map(
-      (tile) =>
-        tile.getAttribute("data-devices-worker")?.slice(0, 2) ??
-        (tile.hasAttribute("data-devices-cloud")
-          ? "cloud"
-          : tile.hasAttribute("data-devices-linked")
-            ? "phone"
-            : tile.getAttribute("data-devices-action")),
-    ),
+    [...(list?.children ?? [])]
+      .map(
+        // A tile with a star is held beside it.
+        (child) => child.querySelector(":scope > .devices-tile") ?? child,
+      )
+      .map(
+        (tile) =>
+          tile.getAttribute("data-devices-worker")?.slice(0, 2) ??
+          (tile.hasAttribute("data-devices-cloud")
+            ? "cloud"
+            : tile.hasAttribute("data-devices-linked")
+              ? "phone"
+              : tile.getAttribute("data-devices-action")),
+      ),
   ).toEqual(["ab", "cd", "cloud", "phone", "add-tile"])
   expect(text(host, "[data-devices-cloud] .devices-tile-body .devices-muted")).toBe(
     "Cloud VMs",
@@ -616,6 +633,142 @@ it("writes the address each route dials", () => {
   expect(hubAddress("Saurav’s Mac Studio", "tailscale")).toBe("sauravs-mac-studio:47650")
   expect(hubAddress("studio.local", "network")).toBe("studio.local:47650")
   expect(commands("h:1", "C")).toEqual(["nessa env enroll h:1 C", "nessa env dial h:1"])
+})
+
+it("stars the hub, a computer or an SSH host as where new chats run", async () => {
+  let saved: string | null = "box"
+  const { gateway, calls } = fakeGateway({
+    list: async () => ({
+      ok: true,
+      value: {
+        ...listed,
+        sshHosts: [{ host: "box", hostName: "10.0.0.5", user: "ada", port: 2222 }],
+        defaultEnvironment: saved,
+      },
+    }),
+    setDefault: async (environment) => {
+      calls.push(`default ${environment ?? "hub"}`)
+      saved = environment
+      return { ok: true, value: environment }
+    },
+  })
+  const { host, root } = await mount(gateway)
+  const tile = host.querySelector('[data-devices-ssh="box"]')
+  expect(text(host, '[data-devices-ssh="box"] .devices-tile-name')).toBe("10.0.0.5")
+  // The alias where a phone's card says what app it is.
+  expect(text(host, '[data-devices-ssh="box"] .devices-tile-body > .devices-muted')).toBe(
+    "SSH · box",
+  )
+  expect(text(host, '[data-devices-ssh="box"] .devices-tile-foot')).toBe(
+    "ada@10.0.0.5:2222",
+  )
+  expect(tile?.closest(".devices-tile-holder")).not.toBeNull()
+  const chosen = () =>
+    [...host.querySelectorAll("[data-devices-default][data-chosen]")].map((star) =>
+      star.getAttribute("data-devices-default"),
+    )
+  expect(chosen()).toEqual(["box"])
+  // Phones and the cloud are not places a chat runs: no star.
+  expect(host.querySelector("[data-devices-linked] [data-devices-default]")).toBeNull()
+  expect(host.querySelectorAll("[data-devices-default]")).toHaveLength(4)
+  await act(async () =>
+    (host.querySelector('[data-devices-default="hub"]') as HTMLElement).click(),
+  )
+  expect(calls).toContain("default hub")
+  expect(
+    host.querySelector('[data-devices-default="hub"]')?.getAttribute("aria-label"),
+  ).toBe("Studio is where new chats run")
+  await act(async () => root.unmount())
+})
+
+it("says when a star could not be saved, and draws none on a hub that sets no machines up", async () => {
+  const { gateway } = fakeGateway({
+    setDefault: async () => ({ ok: false }),
+  })
+  const { host, root } = await mount(gateway)
+  await act(async () =>
+    (
+      host.querySelector("[data-devices-default]:not([data-chosen])") as HTMLElement
+    ).click(),
+  )
+  expect(host.querySelector("[data-devices-default-failed]")?.textContent).toBe(
+    "Couldn't change where new chats run. Try again.",
+  )
+  await act(async () => root.unmount())
+  const { defaultEnvironment: _, ...without } = listed
+  const older = await mount(
+    fakeGateway({ list: async () => ({ ok: true, value: without }) }).gateway,
+  )
+  expect(older.host.querySelectorAll("[data-devices-default]")).toHaveLength(0)
+  await act(async () => older.root.unmount())
+})
+
+it("suggests the SSH config's machines, with Connect, and says how setting one up goes", async () => {
+  let connecting: DeviceSshConnect[] = []
+  const { gateway, calls } = fakeGateway({
+    sshHosts: async () => ({
+      ok: true,
+      value: {
+        suggested: [
+          { host: "devbox", hostName: "devbox.lan", user: "ada" },
+          { host: "orb" },
+        ],
+        connecting,
+      },
+    }),
+    // As the gateway does: the host is under way from its answer on.
+    connectSsh: async (host) => {
+      calls.push(`connect ${host}`)
+      connecting = [{ host, state: "installing" }]
+      return { ok: true, value: { host, state: "installing" } }
+    },
+  })
+  const { host, root } = await mount(gateway)
+  expect(text(host, "#devices-suggestions-title")).toBe("From your SSH config")
+  const pill = () => host.querySelector('[data-devices-suggested="devbox"]')
+  expect(pill()?.textContent).toContain("ada@devbox.lan")
+  await act(async () =>
+    (pill()?.querySelector('[data-devices-action="connect"]') as HTMLElement).click(),
+  )
+  expect(calls).toContain("connect devbox")
+  expect(pill()?.getAttribute("data-state")).toBe("installing")
+  expect(text(host, '[data-devices-suggested="devbox"] [role="status"]')).toBe(
+    "Installing Nessa",
+  )
+  // Nothing to press while it installs.
+  expect(pill()?.querySelector('[data-devices-action="connect"]')).toBeNull()
+  connecting = [{ host: "devbox", state: "failed", refusal: "environment_unreachable" }]
+  await act(async () => vi.advanceTimersByTime(5_000))
+  await act(async () => {})
+  expect(text(host, '[data-devices-suggested="devbox"] [role="status"]')).toBe(
+    "Couldn't reach it over SSH",
+  )
+  expect(text(host, '[data-devices-suggested="devbox"] [data-devices-action]')).toBe(
+    "Try again",
+  )
+  await act(async () => root.unmount())
+})
+
+it("forgets a pressed Connect once a read after its answer no longer names it", async () => {
+  // A gateway that restarted keeps no record of the connection it was making.
+  const { gateway, calls } = fakeGateway({
+    sshHosts: async () => ({
+      ok: true,
+      value: { suggested: [{ host: "devbox" }], connecting: [] },
+    }),
+  })
+  const { host, root } = await mount(gateway)
+  const pill = () => host.querySelector('[data-devices-suggested="devbox"]')
+  await act(async () =>
+    (pill()?.querySelector('[data-devices-action="connect"]') as HTMLElement).click(),
+  )
+  await act(async () => {})
+  expect(calls).toContain("connect devbox")
+  expect(pill()?.getAttribute("data-state")).toBe("idle")
+  expect(text(host, '[data-devices-suggested="devbox"] [data-devices-action]')).toBe(
+    "Connect",
+  )
+  await act(async () => root.unmount())
 })
 
 it("orders the computers new threads go to, and leaves one out", async () => {
