@@ -54,11 +54,17 @@ impl SecretStore for MemorySecret {
 struct Recording {
     records: Mutex<Vec<LoginRecord>>,
     refuses: Mutex<bool>,
+    /// Refuses only the outcome records (a change made), keeping requests.
+    refuses_outcomes: Mutex<bool>,
 }
 
 impl LoginAudit for Recording {
     fn record(&self, record: &LoginRecord) -> Result<(), AuditUnavailable> {
-        if *self.refuses.lock().unwrap() {
+        let outcome = matches!(
+            record.event,
+            LoginEvent::Saved { .. } | LoginEvent::Removed { .. } | LoginEvent::Switched { .. }
+        );
+        if *self.refuses.lock().unwrap() || (outcome && *self.refuses_outcomes.lock().unwrap()) {
             return Err(AuditUnavailable);
         }
         self.records.lock().unwrap().push(record.clone());
@@ -312,37 +318,46 @@ async fn a_login_is_handed_only_where_the_policy_allows() {
     fixture.audit.records.lock().unwrap().clear();
     let agent = AgentId::Claude;
     assert_eq!(
-        sent(fixture.service.login_for(&ssh(), agent)),
+        sent(fixture.service.login_for(&ssh(), agent, "lease-1")),
         Some("sk-ant-oat-secret".to_owned())
     );
     assert_eq!(
-        sent(fixture.service.login_for(&EnvironmentRef::Boat, agent)),
+        sent(
+            fixture
+                .service
+                .login_for(&EnvironmentRef::Boat, agent, "lease-1")
+        ),
         Some("sk-ant-oat-secret".to_owned())
     );
     assert_eq!(
-        fixture.service.login_for(&EnvironmentRef::Here, agent),
+        fixture
+            .service
+            .login_for(&EnvironmentRef::Here, agent, "lease-1"),
         None
     );
     let paired = EnvironmentRef::Peer(peer(3));
-    assert_eq!(fixture.service.login_for(&paired, agent), None);
+    assert_eq!(fixture.service.login_for(&paired, agent, "lease-1"), None);
     fixture
         .service
         .set_device(caller(), peer(3), true)
         .await
         .unwrap();
     assert_eq!(
-        sent(fixture.service.login_for(&paired, agent)),
+        sent(fixture.service.login_for(&paired, agent, "lease-1")),
         Some("sk-ant-oat-secret".to_owned())
     );
     // Another paired machine stays off.
     assert_eq!(
         fixture
             .service
-            .login_for(&EnvironmentRef::Peer(peer(4)), agent),
+            .login_for(&EnvironmentRef::Peer(peer(4)), agent, "lease-1"),
         None
     );
     // An agent with none saved is handed none, and nothing is recorded.
-    assert_eq!(fixture.service.login_for(&ssh(), AgentId::Codex), None);
+    assert_eq!(
+        fixture.service.login_for(&ssh(), AgentId::Codex, "lease-1"),
+        None
+    );
     let handed: Vec<_> = fixture
         .audit
         .events()
@@ -354,29 +369,35 @@ async fn a_login_is_handed_only_where_the_policy_allows() {
         [
             LoginEvent::Sent {
                 environment: "studio".into(),
-                agent
+                agent,
+                lease: "lease-1".into(),
             },
             LoginEvent::Sent {
                 environment: "boat:thread".into(),
-                agent
+                agent,
+                lease: "lease-1".into(),
             },
             LoginEvent::NotSent {
                 environment: "here".into(),
                 agent,
+                lease: "lease-1".into(),
                 why: Withheld::NotAllowed
             },
             LoginEvent::NotSent {
                 environment: peer(3).name(),
                 agent,
+                lease: "lease-1".into(),
                 why: Withheld::NotAllowed
             },
             LoginEvent::Sent {
                 environment: peer(3).name(),
-                agent
+                agent,
+                lease: "lease-1".into(),
             },
             LoginEvent::NotSent {
                 environment: peer(4).name(),
                 agent,
+                lease: "lease-1".into(),
                 why: Withheld::NotAllowed
             },
         ]
@@ -405,7 +426,10 @@ async fn nothing_is_handed_when_any_step_cannot_answer() {
         .await
         .unwrap();
     *fixture.logins[&AgentId::Codex].locked.lock().unwrap() = true;
-    assert_eq!(fixture.service.login_for(&ssh(), AgentId::Codex), None);
+    assert_eq!(
+        fixture.service.login_for(&ssh(), AgentId::Codex, "lease-1"),
+        None
+    );
     assert!(matches!(
         fixture.audit.events().last(),
         Some(LoginEvent::NotSent {
@@ -418,24 +442,36 @@ async fn nothing_is_handed_when_any_step_cannot_answer() {
     assert_eq!(
         fixture
             .service
-            .login_for(&EnvironmentRef::Peer(peer(1)), AgentId::Codex),
+            .login_for(&EnvironmentRef::Peer(peer(1)), AgentId::Codex, "lease-1"),
         None
     );
     *fixture.devices.locked.lock().unwrap() = false;
     *fixture.logins[&AgentId::Codex].value.lock().unwrap() = Some(b"two words".to_vec());
-    assert_eq!(fixture.service.login_for(&ssh(), AgentId::Codex), None);
+    assert_eq!(
+        fixture.service.login_for(&ssh(), AgentId::Codex, "lease-1"),
+        None
+    );
     *fixture.logins[&AgentId::Codex].value.lock().unwrap() = Some(b"sk-key".to_vec());
     *fixture.audit.refuses.lock().unwrap() = true;
-    assert_eq!(fixture.service.login_for(&ssh(), AgentId::Codex), None);
+    assert_eq!(
+        fixture.service.login_for(&ssh(), AgentId::Codex, "lease-1"),
+        None
+    );
 
     let unavailable = fixture_with(Arc::new(Unavailable));
     *unavailable.logins[&AgentId::Codex].value.lock().unwrap() = Some(b"sk-key".to_vec());
-    assert_eq!(unavailable.service.login_for(&ssh(), AgentId::Codex), None);
+    assert_eq!(
+        unavailable
+            .service
+            .login_for(&ssh(), AgentId::Codex, "lease-1"),
+        None
+    );
     assert_eq!(
         unavailable.audit.events(),
         [LoginEvent::NotSent {
             environment: "studio".into(),
             agent: AgentId::Codex,
+            lease: "lease-1".into(),
             why: Withheld::Unavailable
         }]
     );
@@ -510,6 +546,7 @@ fn the_durable_audit_writes_one_file_per_phase_and_never_a_login() {
             event: LoginEvent::NotSent {
                 environment: peer(1).name(),
                 agent: AgentId::Opencode,
+                lease: "lease-1".into(),
                 why: Withheld::Locked,
             },
         })
@@ -527,6 +564,8 @@ fn the_durable_audit_writes_one_file_per_phase_and_never_a_login() {
     assert_eq!(withheld["cause"], "lease_granted");
     assert_eq!(withheld["initiator"]["kind"], "gateway");
     assert_eq!(withheld["details"]["reason"], "vault_locked");
+    // The lease that asked, so the handoff is traced to it.
+    assert_eq!(withheld["details"]["lease"], "lease-1");
     assert_eq!(audit.record(&requested), Err(AuditUnavailable));
 }
 
@@ -541,7 +580,7 @@ async fn an_unreadable_switch_list_is_all_off_and_can_be_written_again() {
     assert_eq!(
         fixture
             .service
-            .login_for(&EnvironmentRef::Peer(peer(1)), AgentId::Claude),
+            .login_for(&EnvironmentRef::Peer(peer(1)), AgentId::Claude, "lease-1"),
         None
     );
     let status = fixture
@@ -576,4 +615,30 @@ async fn each_saved_or_removed_login_is_told_and_nothing_else_is() {
         *told.lock().unwrap(),
         [AgentId::Claude, AgentId::Codex, AgentId::Claude]
     );
+}
+
+/// A change whose outcome cannot be recorded still stands: it is answered
+/// as made but unrecorded, never as refused, and the status shows it.
+#[tokio::test]
+async fn a_change_made_but_not_recorded_is_not_called_refused() {
+    let fixture = fixture();
+    *fixture.audit.refuses_outcomes.lock().unwrap() = true;
+    assert_eq!(
+        fixture
+            .service
+            .save(caller(), AgentId::Claude, login("first"))
+            .await,
+        Err(LoginsError::ChangeUnrecorded)
+    );
+    assert!(fixture.service.status().unwrap().saved[&AgentId::Claude]);
+    assert_eq!(
+        fixture.service.set_device(caller(), peer(2), true).await,
+        Err(LoginsError::ChangeUnrecorded)
+    );
+    assert_eq!(fixture.service.status().unwrap().devices_on, [peer(2)]);
+    assert_eq!(
+        fixture.service.remove(caller(), AgentId::Claude).await,
+        Err(LoginsError::ChangeUnrecorded)
+    );
+    assert!(!fixture.service.status().unwrap().saved[&AgentId::Claude]);
 }

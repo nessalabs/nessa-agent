@@ -26,6 +26,8 @@ const refusals: Record<LoginsRefusal, string> = {
     "Couldn’t read or change the saved logins. Try again.",
   [LoginsRefusalCode.LoginsAuditUnavailable]:
     "Couldn’t keep a record of this, so nothing changed. Try again.",
+  [LoginsRefusalCode.LoginsChangeUnrecorded]:
+    "Changed, but Nessa couldn’t keep a record of it.",
   [LoginsRefusalCode.LoginsTooManyDevices]:
     "Too many computers use your saved logins. Turn one off first.",
   [LoginsRefusalCode.VaultLocked]: "Unlock Nessa to change saved logins.",

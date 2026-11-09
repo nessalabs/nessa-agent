@@ -59,12 +59,18 @@ pub enum LoginEvent {
     SwitchFailed { peer: PeerEnvironment, on: bool },
     /// The switch is as asked now.
     Switched { peer: PeerEnvironment, on: bool },
-    /// A harness of `agent` on `environment` is started with its login.
-    Sent { environment: String, agent: AgentId },
+    /// A harness of `agent` on `environment` is started with its login,
+    /// under `lease`: the lease's own records name who started it.
+    Sent {
+        environment: String,
+        agent: AgentId,
+        lease: String,
+    },
     /// A harness of `agent` on `environment` is started without one.
     NotSent {
         environment: String,
         agent: AgentId,
+        lease: String,
         why: Withheld,
     },
 }
@@ -74,7 +80,8 @@ pub enum LoginEvent {
 pub struct LoginRecord {
     pub operation_id: String,
     /// `None` for a login handed out at a lease, which nobody asked for by
-    /// hand: the lease's own records name who started it.
+    /// hand: the event names the lease, whose own records name who started
+    /// it.
     pub caller: Option<LoginCaller>,
     pub event: LoginEvent,
 }
@@ -105,7 +112,11 @@ pub trait LoginPolicyEvaluator: Send + Sync {
 pub enum LoginsError {
     VaultLocked,
     StorageUnavailable,
+    /// The change could not be recorded before it was made, so it was not.
     AuditUnavailable,
+    /// The change was made, but its outcome could not be recorded. What
+    /// is saved now is the change: read the status again.
+    ChangeUnrecorded,
     TooManyDevices,
 }
 
@@ -205,6 +216,24 @@ impl SavedLoginsService {
             .map_err(|AuditUnavailable| LoginsError::AuditUnavailable)
     }
 
+    /// The outcome's record, once the change was made: one that cannot be
+    /// kept is [`LoginsError::ChangeUnrecorded`], never a refusal, since
+    /// the change stands.
+    fn record_outcome(
+        &self,
+        operation_id: &str,
+        caller: &LoginCaller,
+        event: LoginEvent,
+    ) -> Result<(), LoginsError> {
+        self.record(operation_id, Some(caller), event).map_err(|_| {
+            tracing::error!(
+                operation_id,
+                "a saved-login change was made but not recorded"
+            );
+            LoginsError::ChangeUnrecorded
+        })
+    }
+
     /// A failure's record, once the change was refused: the failure is what
     /// the caller hears, and a record of it that cannot be kept is logged.
     fn record_failure(&self, operation_id: &str, caller: &LoginCaller, event: LoginEvent) {
@@ -248,7 +277,7 @@ impl SavedLoginsService {
         }
         (self.changed)(agent);
         // Made but not recorded is never answered as a success.
-        self.record(&operation_id, Some(&caller), LoginEvent::Saved { agent })?;
+        self.record_outcome(&operation_id, &caller, LoginEvent::Saved { agent })?;
         self.status()
     }
 
@@ -275,7 +304,7 @@ impl SavedLoginsService {
             return Err(store_error(problem));
         }
         (self.changed)(agent);
-        self.record(&operation_id, Some(&caller), LoginEvent::Removed { agent })?;
+        self.record_outcome(&operation_id, &caller, LoginEvent::Removed { agent })?;
         self.status()
     }
 
@@ -309,11 +338,7 @@ impl SavedLoginsService {
             );
             return Err(store_error(problem));
         }
-        self.record(
-            &operation_id,
-            Some(&caller),
-            LoginEvent::Switched { peer, on },
-        )?;
+        self.record_outcome(&operation_id, &caller, LoginEvent::Switched { peer, on })?;
         self.status()
     }
 
@@ -322,7 +347,12 @@ impl SavedLoginsService {
     /// receive it. Recorded either way, except when none is saved: there is
     /// nothing to hand or withhold. A login whose handing cannot be
     /// recorded is not handed.
-    pub fn login_for(&self, environment: &EnvironmentRef, agent: AgentId) -> Option<Login> {
+    pub fn login_for(
+        &self,
+        environment: &EnvironmentRef,
+        agent: AgentId,
+        lease: &str,
+    ) -> Option<Login> {
         let operation_id = Uuid::new_v4().to_string();
         let name = environment.name();
         let withheld = |why: Withheld| {
@@ -332,6 +362,7 @@ impl SavedLoginsService {
                 LoginEvent::NotSent {
                     environment: name.clone(),
                     agent,
+                    lease: lease.to_owned(),
                     why,
                 },
             );
@@ -367,6 +398,7 @@ impl SavedLoginsService {
             LoginEvent::Sent {
                 environment: name.clone(),
                 agent,
+                lease: lease.to_owned(),
             },
         )
         .ok()

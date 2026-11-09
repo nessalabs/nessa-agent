@@ -88,6 +88,12 @@ function useSavedLogins() {
       }
       const outcome = await work(gateway, current)
       take(outcome)
+      if (outcome.kind === "refused") {
+        // A refusal can follow a change that was made (its record could
+        // not be kept): show how things stand, keeping why.
+        const after = await gateway.read()
+        if (after.kind === "read") setLogins(after.logins)
+      }
       return outcome.kind === "read"
     } finally {
       setBusy(false)

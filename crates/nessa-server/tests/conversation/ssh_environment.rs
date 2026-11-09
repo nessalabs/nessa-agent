@@ -4462,18 +4462,22 @@ async fn a_saved_login_is_asked_for_and_sent_only_where_the_host_takes_one() {
     }
     #[derive(Default)]
     struct Saved {
-        asked: Mutex<Vec<(String, nessa_protocol::agents::AgentId)>>,
+        asked: Mutex<Vec<(String, nessa_protocol::agents::AgentId, String)>>,
     }
     impl super::SavedLogins for Saved {
         fn login<'a>(
             &'a self,
             environment: &'a EnvironmentRef,
             agent: nessa_protocol::agents::AgentId,
+            lease: &'a str,
         ) -> crate::conversation::application::EnvironmentFuture<
             'a,
             Option<nessa_protocol::lease::Login>,
         > {
-            self.asked.lock().unwrap().push((environment.name(), agent));
+            self.asked
+                .lock()
+                .unwrap()
+                .push((environment.name(), agent, lease.to_owned()));
             Box::pin(async {
                 Some(nessa_protocol::lease::Login::new("sk-ant-oat-x".into()).unwrap())
             })
@@ -4490,10 +4494,11 @@ async fn a_saved_login_is_asked_for_and_sent_only_where_the_host_takes_one() {
         environment(connector.clone(), Arc::new(Audit::default())).with_logins(saved.clone());
     async fn start(
         environment: &SshEnvironment,
+        lease: &LeaseId,
     ) -> crate::conversation::application::EnvironmentLease {
         let (binding, host) = binding(true);
         let opened = environment
-            .open(&lease(), &terms("claude"), binding)
+            .open(lease, &terms("claude"), binding)
             .await
             .unwrap_or_else(|_| panic!("granted"));
         let host = host.lock().unwrap().clone().unwrap();
@@ -4508,10 +4513,16 @@ async fn a_saved_login_is_asked_for_and_sent_only_where_the_host_takes_one() {
         opened
     }
     // SSH with no entry takes the owner's saved logins.
-    let _first = start(&environment).await;
+    // The lease that asks is named, so its handoff is recorded with it.
+    let first = lease();
+    let _first = start(&environment, &first).await;
     assert_eq!(
         *saved.asked.lock().unwrap(),
-        [("devbox".to_owned(), nessa_protocol::agents::AgentId::Claude)]
+        [(
+            "devbox".to_owned(),
+            nessa_protocol::agents::AgentId::Claude,
+            first.as_str().to_owned()
+        )]
     );
     assert_eq!(
         *launcher.logins.lock().unwrap(),
@@ -4520,7 +4531,7 @@ async fn a_saved_login_is_asked_for_and_sent_only_where_the_host_takes_one() {
     // The host's owner takes them back: the next lease asks for none and
     // its harness starts with none.
     *connector.grants.0.lock().unwrap() = Some(PeerGrant::everything().without_logins());
-    let _second = start(&environment).await;
+    let _second = start(&environment, &lease()).await;
     assert_eq!(saved.asked.lock().unwrap().len(), 1);
     assert_eq!(
         *launcher.logins.lock().unwrap(),

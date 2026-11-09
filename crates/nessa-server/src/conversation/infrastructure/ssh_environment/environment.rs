@@ -711,7 +711,9 @@ impl Environment for SshEnvironment {
             if terms.takes_login {
                 let saved = match (&self.inner.logins, AgentId::parse(work.agent())) {
                     (Some(logins), Some(agent)) => {
-                        logins.login(&self.inner.environment(), agent).await
+                        logins
+                            .login(&self.inner.environment(), agent, lease.as_str())
+                            .await
                     }
                     _ => None,
                 };

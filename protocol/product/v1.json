@@ -9246,10 +9246,11 @@
         "logins_not_configured",
         "logins_storage_unavailable",
         "logins_audit_unavailable",
+        "logins_change_unrecorded",
         "logins_too_many_devices",
         "vault_locked"
       ],
-      "description": "Why the gateway refused a logins method. logins_not_configured: this gateway keeps no saved logins. logins_storage_unavailable: the vault could not read or change them; what was saved still is. logins_audit_unavailable: the change could not be recorded, so nothing changed. logins_too_many_devices: more paired machines are switched on than a list holds. vault_locked: unlock Nessa first."
+      "description": "Why the gateway refused a logins method. logins_not_configured: this gateway keeps no saved logins. logins_storage_unavailable: the vault could not read or change them; what was saved still is. logins_audit_unavailable: the change could not be recorded before it was made, so nothing changed. logins_change_unrecorded: the change was made but its outcome could not be recorded; read logins.status for how things stand. logins_too_many_devices: more paired machines are switched on than a list holds. vault_locked: unlock Nessa first."
     },
     "VoiceStatus": {
       "type": "object",

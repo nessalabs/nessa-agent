@@ -5,7 +5,7 @@
 //! open(lease) ──▶ Grant ──▶ Granted{terms}
 //!   terms.takesLogin? (the host's owner's grant, never this gateway's choice)
 //!     no  ──▶ every Start under the lease carries none
-//!     yes ──▶ SavedLogins::login(environment, agent)
+//!     yes ──▶ SavedLogins::login(environment, agent, lease)
 //!               the policy: may this environment receive logins? (Cedar)
 //!               no ──▶ none
 //!               yes ──▶ the vault's saved login for the agent, if one is saved
@@ -23,11 +23,14 @@ use nessa_sdk::domain::agent_execution::leases::EnvironmentRef;
 
 /// The saved login a harness of `agent` started on `environment` is given,
 /// when the policy lets that environment receive one and one is saved.
-/// Implemented in composition over the vault and the policy.
+/// `lease` is recorded with the answer, so each handoff is traced to the
+/// lease that asked. Implemented in composition over the vault and the
+/// policy.
 pub(crate) trait SavedLogins: Send + Sync {
     fn login<'a>(
         &'a self,
         environment: &'a EnvironmentRef,
         agent: AgentId,
+        lease: &'a str,
     ) -> EnvironmentFuture<'a, Option<Login>>;
 }

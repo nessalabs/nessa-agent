@@ -207,3 +207,33 @@ it("turns an unread switch from how it stands once read", async () => {
   expect(calls).toEqual([["setDevice", peer, false]])
   expect(fact().getAttribute("data-device-logins")).toBe("off")
 })
+
+it("shows how things stand after a change that was made but not recorded", async () => {
+  const { gateway } = fake()
+  const unrecorded: SavedLoginsGateway = {
+    ...gateway,
+    // The switch changes, but the gateway answers that its record could not be kept.
+    setDevice: async (environment, on) => {
+      await gateway.setDevice(environment, on)
+      return {
+        kind: "refused",
+        sentence: "Changed, but Nessa couldn’t keep a record of it.",
+      }
+    },
+  }
+  await act(async () =>
+    root.render(
+      <SavedLoginsProvider gateway={unrecorded}>
+        <dl>
+          <DeviceLoginsSwitch environment={peer} />
+        </dl>
+      </SavedLoginsProvider>,
+    ),
+  )
+  const fact = () => need(host.querySelector("[data-device-logins]"))
+  await act(async () =>
+    need(fact().querySelector<HTMLButtonElement>('[role="switch"]')).click(),
+  )
+  expect(fact().getAttribute("data-device-logins")).toBe("on")
+  expect(host.textContent).toContain("Changed, but Nessa couldn’t keep a record of it.")
+})

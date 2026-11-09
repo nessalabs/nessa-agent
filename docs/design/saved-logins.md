@@ -12,7 +12,11 @@ removing a login, or turning a switch off, applies to agents opened after
 it: the login is read once when an agent's lease opens, and an agent already
 open keeps the one it opened with until it closes (an idle agent parks after
 `agentIdleSeconds`, so it reopens with the new answer). The `sent` record is
-written when the lease opens with the login, before the harness starts.
+written when the lease opens with the login, before the harness starts. Each `sent`
+or `withheld` record names the lease that asked, whose own records name who
+started it. A save, removal or switch whose outcome cannot be recorded
+after it was made answers `logins_change_unrecorded`, not a refusal: the
+change stands, and Settings reads the status again.
 
 Three yeses are needed before a login reaches a machine, each owned by one
 place:

@@ -68,19 +68,29 @@ pub(super) fn stored(record: &LoginRecord) -> (&'static str, Value) {
             "login_device_switch",
             json!({ "environment": peer.name(), "on": on }),
         ),
-        LoginEvent::Sent { environment, agent } => (
+        LoginEvent::Sent {
+            environment,
+            agent,
+            lease,
+        } => (
             "sent",
             "login_handed",
-            json!({ "environment": environment, "agent": agent.name() }),
+            json!({ "environment": environment, "agent": agent.name(), "lease": lease }),
         ),
         LoginEvent::NotSent {
             environment,
             agent,
+            lease,
             why,
         } => (
             "withheld",
             "login_handed",
-            json!({ "environment": environment, "agent": agent.name(), "reason": withheld(*why) }),
+            json!({
+                "environment": environment,
+                "agent": agent.name(),
+                "lease": lease,
+                "reason": withheld(*why),
+            }),
         ),
     };
     let (cause, initiator) = match &record.caller {
@@ -93,8 +103,8 @@ pub(super) fn stored(record: &LoginRecord) -> (&'static str, Value) {
                 "credentialId": caller.credential_id,
             }),
         ),
-        // A login handed out at a lease: the lease's own records name who
-        // started it.
+        // A login handed out at a lease: the event names the lease, whose
+        // own records name who started it.
         None => ("lease_granted", json!({ "kind": "gateway" })),
     };
     (

@@ -116,6 +116,7 @@ fn code(error: LoginsError) -> LoginsErrorCode {
         LoginsError::VaultLocked => LoginsErrorCode::VaultLocked,
         LoginsError::StorageUnavailable => LoginsErrorCode::LoginsStorageUnavailable,
         LoginsError::AuditUnavailable => LoginsErrorCode::LoginsAuditUnavailable,
+        LoginsError::ChangeUnrecorded => LoginsErrorCode::LoginsChangeUnrecorded,
         LoginsError::TooManyDevices => LoginsErrorCode::LoginsTooManyDevices,
     }
 }

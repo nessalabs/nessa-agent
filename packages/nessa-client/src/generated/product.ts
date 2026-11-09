@@ -3746,11 +3746,12 @@ export interface LoginsSetDeviceParams {
   /** Whether its agents may be handed the saved logins. */
   on: boolean
 }
-/** Why the gateway refused a logins method. logins_not_configured: this gateway keeps no saved logins. logins_storage_unavailable: the vault could not read or change them; what was saved still is. logins_audit_unavailable: the change could not be recorded, so nothing changed. logins_too_many_devices: more paired machines are switched on than a list holds. vault_locked: unlock Nessa first. */
+/** Why the gateway refused a logins method. logins_not_configured: this gateway keeps no saved logins. logins_storage_unavailable: the vault could not read or change them; what was saved still is. logins_audit_unavailable: the change could not be recorded before it was made, so nothing changed. logins_change_unrecorded: the change was made but its outcome could not be recorded; read logins.status for how things stand. logins_too_many_devices: more paired machines are switched on than a list holds. vault_locked: unlock Nessa first. */
 export const LoginsErrorCode = {
   LoginsNotConfigured: "logins_not_configured",
   LoginsStorageUnavailable: "logins_storage_unavailable",
   LoginsAuditUnavailable: "logins_audit_unavailable",
+  LoginsChangeUnrecorded: "logins_change_unrecorded",
   LoginsTooManyDevices: "logins_too_many_devices",
   VaultLocked: "vault_locked",
 } as const

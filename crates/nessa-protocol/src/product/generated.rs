@@ -4113,6 +4113,8 @@ pub enum LoginsErrorCode {
     LoginsStorageUnavailable,
     #[serde(rename = "logins_audit_unavailable")]
     LoginsAuditUnavailable,
+    #[serde(rename = "logins_change_unrecorded")]
+    LoginsChangeUnrecorded,
     #[serde(rename = "logins_too_many_devices")]
     LoginsTooManyDevices,
     #[serde(rename = "vault_locked")]
@@ -4124,6 +4126,7 @@ impl LoginsErrorCode {
             Self::LoginsNotConfigured => "logins_not_configured",
             Self::LoginsStorageUnavailable => "logins_storage_unavailable",
             Self::LoginsAuditUnavailable => "logins_audit_unavailable",
+            Self::LoginsChangeUnrecorded => "logins_change_unrecorded",
             Self::LoginsTooManyDevices => "logins_too_many_devices",
             Self::VaultLocked => "vault_locked",
         }

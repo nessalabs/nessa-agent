@@ -7,7 +7,7 @@
 // main's c1804c100ef10b8e. The image id stays the published worker until a
 // rebuilt image is published for this hash; a worker dialing in on the older
 // protocol takes this gateway's build.
-const PROTOCOL: &str = "3456a50ee4d6fd60";
+const PROTOCOL: &str = "8fecc63b9efcecde";
 const IMAGE: &str = "bsh_KC74wkwmxzdt57Y9MxwBdSJlBa75Lfjz0BvFC-6SuS4";
 pub(crate) fn worker_image() -> Option<&'static str> {
     (crate::env::LEASE_PROTOCOL == PROTOCOL).then_some(IMAGE)

@@ -53,13 +53,15 @@ impl crate::conversation::infrastructure::ssh_environment::SavedLogins for Servi
         &'a self,
         environment: &'a nessa_sdk::domain::agent_execution::leases::EnvironmentRef,
         agent: AgentId,
+        lease: &'a str,
     ) -> crate::conversation::application::EnvironmentFuture<'a, Option<nessa_protocol::lease::Login>>
     {
         let service = self.0.clone();
         let environment = environment.clone();
+        let lease = lease.to_owned();
         Box::pin(async move {
             // The vault read and the audit write block: off the executor.
-            tokio::task::spawn_blocking(move || service.login_for(&environment, agent))
+            tokio::task::spawn_blocking(move || service.login_for(&environment, agent, &lease))
                 .await
                 .ok()
                 .flatten()

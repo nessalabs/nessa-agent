@@ -6,7 +6,7 @@
 //! logins.status/save/remove ──▶ SavedLoginsService ──▶ SecretStore (vault entry login.<agent>)
 //! logins.setDevice          ──▶ SavedLoginsService ──▶ SecretStore (vault entry login.devices)
 //!                                     └──▶ LoginAudit (requested, then outcome; never a login)
-//! a lease granted takesLogin ──▶ SavedLoginsService::login_for(environment, agent)
+//! a lease granted takesLogin ──▶ SavedLoginsService::login_for(environment, agent, lease)
 //!   ──▶ LoginPolicyEvaluator (Cedar: may this environment receive logins?)
 //!   ──▶ the vault's saved login for the agent ──▶ LoginAudit (sent, or withheld and why)
 //! ```
