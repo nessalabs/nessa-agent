@@ -68,9 +68,16 @@ fn a_host_signed_in_with_the_agent_s_own_file_keeps_it() {
         own_sign_in_files(AgentId::Claude, &home),
         [PathBuf::from("/home/me/.claude/.credentials.json")]
     );
+    // OpenCode's auth.json is not a sign-in this launch's harness reads.
+    assert!(own_sign_in_files(AgentId::Opencode, &home).is_empty());
     assert_eq!(
-        own_sign_in_files(AgentId::Opencode, &home),
-        [PathBuf::from("/home/me/.local/share/opencode/auth.json")]
+        login_to_set(AgentId::Opencode, Some(&login), &home, |_| true),
+        Some(("OPENCODE_API_KEY", "sk-ant-oat-x"))
+    );
+    let own_key = BTreeMap::from([(OsString::from("OPENCODE_API_KEY"), OsString::from("mine"))]);
+    assert_eq!(
+        login_to_set(AgentId::Opencode, Some(&login), &own_key, |_| true),
+        None
     );
     let pointed = BTreeMap::from([
         (OsString::from("HOME"), OsString::from("/home/me")),

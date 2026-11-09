@@ -29,13 +29,15 @@ with), permits a paired machine only while its "Use my saved logins here"
 switch is on (vault entry `login.devices`), and forbids this gateway's own
 machine. A machine with its own sign-in for an agent keeps it: the host
 wins. Its own sign-in is any of the agent's login variables in the
-harness's environment, or the file the agent's own login command writes
-there (Claude Code's `.credentials.json` in `CLAUDE_CONFIG_DIR` or
-`~/.claude`, Codex's `auth.json` in `CODEX_HOME` or `~/.codex`, OpenCode's
-`auth.json` under `~/.local/share/opencode`). A Claude Code sign-in kept
-only in a Mac's keychain is not seen, so such a Mac is handed the saved
-login unless its owner runs `nessa env ungrant --logins` (or
-`--peer ssh --logins`) there.
+harness's environment, or a sign-in file that harness will read (Claude
+Code's `.credentials.json` in `CLAUDE_CONFIG_DIR` or `~/.claude`, Codex's
+`auth.json` in `CODEX_HOME` or `~/.codex`). OpenCode's `auth.json` is not
+one of those files: a lease starts OpenCode in a private data directory
+so the process cannot read the caller's file, and the only credential it
+accepts is `OPENCODE_API_KEY` already in the harness environment. A
+Claude Code sign-in kept only in a Mac's keychain is not seen, so such a
+Mac is handed the saved login unless its owner runs
+`nessa env ungrant --logins` (or `--peer ssh --logins`) there.
 
 Boat's **Authenticate** (`boat.saveClaudeSignIn`) saves through Saved
 logins, recorded like a save from Settings, so the Claude row in Saved

@@ -155,7 +155,7 @@ impl HarnessLauncher for ConfiguredLauncher {
 /// variable the agent reads its login from, only where the host has no
 /// sign-in of its own for that agent. The host's own wins, whether it is
 /// one of the agent's login variables in the `configured` environment or
-/// the agent's own sign-in file where that environment points it
+/// a sign-in file the harness this launch starts will actually read
 /// ([`own_sign_in_files`]), which `exists` is asked about. A sign-in kept
 /// only in the macOS keychain is not seen.
 pub(crate) fn login_to_set<'a>(
@@ -177,12 +177,19 @@ pub(crate) fn login_to_set<'a>(
     }
 }
 
-/// Where `agent` keeps a sign-in its own login command wrote, under the
-/// environment the harness is started with: Claude Code's
-/// `.credentials.json` (in `CLAUDE_CONFIG_DIR`, else `~/.claude`), Codex's
-/// `auth.json` (in `CODEX_HOME`, else `~/.codex`), and OpenCode's
-/// `auth.json` (in `$XDG_DATA_HOME/opencode`, else
-/// `~/.local/share/opencode`). None where neither is set.
+/// Where `agent` keeps a sign-in the harness this launch starts will
+/// read, under the environment it is started with: Claude Code's
+/// `.credentials.json` (in `CLAUDE_CONFIG_DIR`, else `~/.claude`) and
+/// Codex's `auth.json` (in `CODEX_HOME`, else `~/.codex`). None where
+/// neither directory is set.
+///
+/// OpenCode's `auth.json` is not one of these. A lease starts OpenCode
+/// through [`OpencodeAcpProvider::start_on_host`], which gives the process
+/// a private data directory so it cannot read the caller's file. The only
+/// credential that process accepts is `OPENCODE_API_KEY` in the harness
+/// environment, which [`login_variables`] already counts. Treating the
+/// file as the host's sign-in would withhold the saved login and leave
+/// the harness with neither.
 pub(crate) fn own_sign_in_files(
     agent: AgentId,
     configured: &BTreeMap<OsString, OsString>,
@@ -206,15 +213,14 @@ pub(crate) fn own_sign_in_files(
             .map(|directory| directory.join(file))
     };
     match agent {
-        AgentId::Claude => under("CLAUDE_CONFIG_DIR", &[".claude"], ".credentials.json"),
-        AgentId::Codex => under("CODEX_HOME", &[".codex"], "auth.json"),
-        AgentId::Opencode => get("XDG_DATA_HOME")
-            .map(|data| data.join("opencode"))
-            .or_else(|| home.as_ref().map(|home| home.join(".local/share/opencode")))
-            .map(|directory| directory.join("auth.json")),
+        AgentId::Claude => under("CLAUDE_CONFIG_DIR", &[".claude"], ".credentials.json")
+            .into_iter()
+            .collect(),
+        AgentId::Codex => under("CODEX_HOME", &[".codex"], "auth.json")
+            .into_iter()
+            .collect(),
+        AgentId::Opencode => Vec::new(),
     }
-    .into_iter()
-    .collect()
 }
 
 /// What `execvp` searches when `PATH` is unset.

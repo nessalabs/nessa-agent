@@ -378,10 +378,12 @@ this machine in Devices. It goes in the agent's login variable
 (`CLAUDE_CODE_OAUTH_TOKEN`, or `ANTHROPIC_API_KEY` for an Anthropic API key;
 `CODEX_API_KEY`; `OPENCODE_API_KEY`) only when
 this machine has no sign-in of its own for that agent: none of its login
-variables, and no sign-in file from the agent's own login command
-(`~/.claude/.credentials.json`, `~/.codex/auth.json`,
-`~/.local/share/opencode/auth.json`). A Claude sign-in kept only in a Mac's
-keychain is not seen. Nothing is written to disk here. `ungrant --logins` takes it back.
+variables, and no sign-in file the harness will read
+(`~/.claude/.credentials.json`, `~/.codex/auth.json`). OpenCode is started
+in a private data directory, so `~/.local/share/opencode/auth.json` is not
+that sign-in; `OPENCODE_API_KEY` in the harness environment is. A Claude
+sign-in kept only in a Mac's keychain is not seen. Nothing is written to
+disk here. `ungrant --logins` takes it back.
 
 `--peer ssh` changes what a gateway reaching this machine over SSH gets
 instead. SSH takes saved logins without an entry. Without an entry, SSH keeps everything the machine's `config.json`
