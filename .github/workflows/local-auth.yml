@@ -55,8 +55,15 @@ jobs:
         env:
           VERSION: 1.7.12
         run: |
-          curl -fsSL "https://github.com/rhysd/actionlint/releases/download/v${VERSION}/actionlint_${VERSION}_linux_amd64.tar.gz" \
-            | tar -xz -C /usr/local/bin actionlint
+          set -euo pipefail
+          # GitHub's release host answers 504 often enough that one attempt
+          # fails the job before actionlint runs. Retry the download; the
+          # check itself is unchanged.
+          url="https://github.com/rhysd/actionlint/releases/download/v${VERSION}/actionlint_${VERSION}_linux_amd64.tar.gz"
+          archive="$(mktemp)"
+          curl -fsSL --retry 8 --retry-all-errors --retry-delay 5 -o "$archive" "$url"
+          tar -xz -C /usr/local/bin -f "$archive" actionlint
+          rm -f "$archive"
       - run: actionlint
 
   # Everything below this is `rustc`, and a change that edits prose cannot make
