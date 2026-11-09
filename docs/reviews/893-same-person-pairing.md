@@ -5,7 +5,8 @@ Base: `19d631ebd34c6ece0062cbd0edbbd5e269d54c1d`.
 Initial source checkpoint: `a3dd63839d52a616560cc70eca470f6a82dbb86f`.
 Qualification test checkpoint: `d1fba5c8ae89e8b646545e4f0817324e984a38c3`;
 runtime code is unchanged from the initial checkpoint.
-The later documentation commit records these receipts; it does not change the source.
+Documentation-only commits record these receipts. Subsequent sections pin the
+qualification and status-projection source checkpoints separately.
 
 ## Scope and ownership
 
@@ -423,3 +424,96 @@ bootstrap Human/default CLI output versus separately provisioned Integration
 principals. It ran diff hygiene only; parent execution receipts, full lifecycle
 implementation and browser/platform execution remained outside this narrow
 review. The earlier full implementation reviews retain their original scope.
+
+## Desktop investigation and canonical status projection
+
+The [desktop completion handoff](893-desktop-handoff.md) records the independently
+reviewed identity/provenance gap and current #1282 ownership at
+`9bd3e7c2477684b75867fb7249eaa34453376509`. Its Shared UI ownership is an
+integration constraint, not a blanket stop on filenames. The existing
+Integration actor doubles as invitation owner throughout admission, staging,
+receiver ownership and terminal audit, so substituting another Human is not a
+safe lookup patch. Provenance revoke/expiry/recovery semantics for pending
+invitations and active links need a contract. Settings creates OwnerPhone;
+Add Computer eagerly creates an Environment worker; no PeerRead creation UI
+exists. Those flows cannot be silently converted. No UI/harness or provenance
+authority was changed by this investigation.
+
+One independent prerequisite was safely available: read back the choice from the
+canonical invitation. Source checkpoint
+`311ad40ca846a09689e6ccaea29c2cebdcfe758e` adds optional `samePerson` to the existing
+owner-status schema/generated types and one existing projection. All create,
+read, pending, approve, cancel and deny paths use it. Both peer choices are
+explicit; Device and OwnerPhone replies omit it. Legacy absence remains unknown.
+The shared TypeScript decoder preserves false and rejects malformed/non-peer
+fields without caching a local request choice. The field is historical consent,
+not a committed person id, eligibility grant or read-admission fact. No storage,
+credential class, policy, epoch, lock or lifecycle transition changed.
+
+Before implementation, the new client regressions failed at runtime because the
+choice was dropped and malformed fields ignored; the real route failed
+`Null != false`. Logs: `/tmp/893-projection-{client,route}-before.log`.
+After repair: full native enrollment **140 passed**, including non-peer omission
+and owner-side status after restart; full client **1,094 passed** under host
+ownership; final owner-route **16 passed**, including explicit Environment false
+and true; focused client **12 passed**. An initial broad client run in the
+restricted sandbox failed only the two unchanged private-file setup checks;
+the host-owned rerun passed. Those files/assertions were not changed.
+
+The full frontend aggregate passed **451 files / 5,744 tests**, plus **44 webhook
+tests** and build, with its existing warnings. Protocol checks (72), client and
+root typechecks, SDK docs, formatting and all-target Clippy across the nine
+packages passed. Final minor test-only class/Environment coverage refinements
+were checked again with owner routes, client tests, focused Clippy and formatting.
+Receipts: `/tmp/893-projection-{native,client-host,owner-final,client-final,
+protocol,frontend,clippy,native-clippy-final,fmt-final,format-final,sdk-docs}.log`.
+
+A 21st deliberate mutation replaces the optional-field presence check with a
+truthiness check. It drops false (and skips malformed falsy values), causing
+assertion failures; restoration passes. `/tmp/893-projection-probe.json` and
+`/tmp/893-projection-false-{mutated,restored}.log` preserve both outcomes. No mutant
+remains. The original 20 lifecycle controls retain their earlier checkpoints.
+
+A fresh read-only incremental protocol review of `987b1c22` → `311ad40c` found no
+findings. It checked all status paths, class/choice agreement, legacy absence,
+stateless decoding, non-peer omission and the separation of consent from
+committed link/admission. It independently ran the focused client suite (12
+passed; `/tmp/893-incremental-pairing-review-client.log`), without edits or Cargo.
+Rust/browser execution and the broader original implementation remain separate
+verification scopes. A separate read-only handoff review corrected two wording
+issues: the future sequence now branches consistently between relation and
+reauthentication paths, retaining whichever actor actually authenticated; and
+removal prose names the actual revoking principal/local operator or expiry,
+not only the original invitation owner. No runtime code changed for those
+corrections.
+
+Production qualification at source `311ad40c` passed:
+
+| Check | Chromium | WebKit |
+| --- | --- | --- |
+| resize-observers | pass | pass |
+| mcp-apps-gateway | not run: dev server only | not run: dev server only |
+| gateway-window | pass | pass |
+| scripted-scenarios | pass | pass |
+| parent-stop | pass | pass |
+
+Scripted verdict: **pass**, relevant log lines: none. The same production-mode
+command as above used evidence `/workspace/scratch/893-scripted-projection`;
+summary: `pr-summary.md`, log: `/tmp/893-scripted-projection.log`. A final WebKit
+sidebar fitted screenshot was visually inspected. Selected stress explicitly
+used `--layout columns --engine chromium,webkit --only linking,pairedCatalogue
+--linkings 2 --pairedCatalogues 3` and held **14/14**, including both linking
+attempts, three catalogue cycles, background/at-rest/follower/console checks.
+Receipts: `/tmp/893-stress-projection.log` and
+`/workspace/scratch/893-stress-projection/result.json`. Browser commands ran
+sequentially with Cargo under the same disclosed task-local init/library setup.
+
+No true-choice desktop browser acceptance is claimed: there is no implemented
+Human-proof flow or choice control. The earlier sidebar stress setup failure
+remains a documented boundary; it was not rerun or changed here. The new scoped
+state page checkpoint, source paths and local links were validated; its chart
+is unchanged and no new formal-model receipt is claimed.
+
+Current exact-head CI results are recorded in the PR, because publishing a new
+documentation receipt would create another head. Prior-head results are never
+relabelled as the projection's CI qualification. No merge or deployment occurred.

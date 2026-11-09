@@ -5,9 +5,11 @@ kind: flow
 status: implemented
 parent: gateway
 summary: An immutable invitation choice adds credential-bound attribution after activation, without granting access.
-sourceRevision: "d1fba5c8ae89e8b646545e4f0817324e984a38c3"
+sourceRevision: "311ad40ca846a09689e6ccaea29c2cebdcfe758e"
 sources:
   - crates/nessa-server/src/product/pairing.rs
+  - packages/nessa-client/src/protocol/pairing-validate.ts
+  - packages/nessa-client/src/presentation/pairing-api.test.ts
   - crates/nessa-server/src/composition/local_auth.rs
   - protocol/product/v1.json
   - crates/nessa-server/src/composition/auth_command.rs
@@ -67,15 +69,28 @@ that the saved invitation names the authoritative Human. It also checks that a
 provisioned admin Integration is refused without changing invitations/revision.
 The caller label never supplies the person identity.
 
+Create, pending, status, approval and terminal replies expose the canonical
+`samePerson` choice for peer invitations, including false. It survives an owner
+restart. Non-peer replies omit it; absence on a legacy response remains unknown,
+not an inferred false. This is historical consent, never evidence that a person
+link committed or a read is authorized.
+
 This completes the API choice; the desktop pairing flow still sends the default
 false choice and has no control for true. Completing that flow requires an
-explicit, authoritative relation between its Integration principal and the
-Human owner, then a creation-only choice control and browser coverage of that
+authoritative Human-proof path: an explicit panel attribution relation or a
+specified Human reauthentication flow in the existing authority, then a
+creation-only choice control and browser coverage of that
 immutable choice, admission after link commit, refusal without a share, and
 cleanup/retry. Inferring a person from SurfaceProvision issuance history, copying
 the owner token into the panel, or using owner-phone consent would change a
 separate contract. Those changes are not implemented here. #1282's current UI
-audit owns the overlapping desktop surfaces, so integration follows that audit.
+audit owns changes in the overlapping desktop surfaces. Settings currently
+creates OwnerPhone invitations; Add Computer creates Environment workers and
+eagerly makes a code before a choice. No PeerRead gateway creation UI was found.
+The [desktop completion handoff](../../../reviews/893-desktop-handoff.md) gives
+the exact actor/provenance decisions, ownership boundaries and integration/test
+sequence. Shared filenames alone do not prohibit independent hunks; the missing
+Human-proof contract is the primary dependency.
 
 ## Choice, activation and recovery
 
@@ -111,8 +126,9 @@ stateDiagram-v2
 ## Removal retains its cause
 
 Credential revocation or enrollment cancellation commits in the credential
-registry first. Removal then uses the original owner or expiry initiator and
-cause, including live retries and restart. The domain record retains its
+registry first. Removal then uses the original revoking principal or local
+operator, or the expiry initiator and cause, including live retries and restart.
+The domain record retains its
 original terminal event through history replay: cancellation must match its
 Explicit revocation and command time, independent revocation must match its
 exact original transition, and a pre-Active cancellation cannot supply an issued
