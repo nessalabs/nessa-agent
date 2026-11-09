@@ -2497,6 +2497,8 @@ export interface PairingReceiver {
 }
 /** An owner's view of one enrollment. This is historical enrollment, not read authority: every later read is authorized again. */
 export interface PairingOwnerStatus {
+  /** The immutable choice saved on a peer-gateway invitation, including false. Omitted for other enrollment classes and by older gateways; absence is unknown, not an inferred false choice. This is historical consent, not proof that a person link has committed or that a read is authorized. */
+  samePerson?: boolean
   /** Random identity of the invitation, as its bytes. */
   invitationId: number[]
   /** Identity of the immutable consent the invitation carries. */

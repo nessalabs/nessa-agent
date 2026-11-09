@@ -264,6 +264,7 @@ async fn owner_route_creates_an_environment_invitation() {
         owner.ok("pairing.create", json!({"enrollee": "environment"}))
     });
     assert_eq!(created["status"]["class"], "peer-gateway-environment-serve");
+    assert_eq!(created["status"]["samePerson"], false);
     assert_eq!(
         created["status"]["grant"],
         json!({"action": "environment.serve", "resource": {"organizationId": "org", "id": "gateway"}})
@@ -278,6 +279,20 @@ async fn owner_route_creates_an_environment_invitation() {
             .class(),
         ConsentClass::PeerEnvironment
     );
+    blocking(|| {
+        let mut owner = ProductClient::connect(address, &token);
+        owner.ok("pairing.cancel", json!({"invitationId": id}));
+        let chosen = owner.ok(
+            "pairing.create",
+            json!({"enrollee":"environment","samePerson":true}),
+        );
+        assert_eq!(chosen["status"]["samePerson"], true);
+        let read = owner.ok(
+            "pairing.status",
+            json!({"invitationId":invitation(&chosen["status"])}),
+        );
+        assert_eq!(read["samePerson"], true);
+    });
 }
 
 /// Row O2: a lost create answer keeps its slot; pending finds it without its
@@ -884,6 +899,7 @@ async fn same_person_choice_requires_an_authoritative_human_not_an_admin_surface
     blocking(|| {
         let mut surface = ProductClient::connect(address, &token);
         let plain = surface.ok("pairing.create", json!({"enrollee":"gateway"}));
+        assert_eq!(plain["status"]["samePerson"], false);
         let id = invitation(&plain["status"]);
         assert!(!fixture
             .registry
@@ -893,7 +909,8 @@ async fn same_person_choice_requires_an_authoritative_human_not_an_admin_surface
             .unwrap()
             .intent()
             .same_person());
-        surface.ok("pairing.cancel", json!({"invitationId":id}));
+        let ended = surface.ok("pairing.cancel", json!({"invitationId":id}));
+        assert_eq!(ended["samePerson"], false);
     });
     let before = fixture.registry.pending_pairings().unwrap();
     let revision = fixture.registry.identity().unwrap().revision;
@@ -927,6 +944,18 @@ async fn same_person_choice_requires_an_authoritative_human_not_an_admin_surface
             json!({"enrollee":"gateway","samePerson":true}),
         )
         .unwrap();
+        assert_eq!(human["status"]["samePerson"], true);
+        let id = invitation(&human["status"]);
+        let read = nessa_server::cli::application::invoke(
+            &mut cli,
+            "pairing.status",
+            json!({"invitationId":id}),
+        )
+        .unwrap();
+        assert_eq!(read["samePerson"], true);
+        let pending =
+            nessa_server::cli::application::invoke(&mut cli, "pairing.pending", json!({})).unwrap();
+        assert_eq!(pending["items"][0]["samePerson"], true);
         let record = fixture
             .registry
             .read_pairing(InvitationId::new(
@@ -941,6 +970,36 @@ async fn same_person_choice_requires_an_authoritative_human_not_an_admin_surface
                 .unwrap(),
             Some(nessa_auth::domain::PrincipalKind::Human)
         );
+        let ended = nessa_server::cli::application::invoke(
+            &mut cli,
+            "pairing.cancel",
+            json!({"invitationId":id}),
+        )
+        .unwrap();
+        assert_eq!(ended["samePerson"], true);
     });
     fixture.gateway.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn non_peer_owner_status_does_not_advertise_a_gateway_choice() {
+    for (enrollee, fixture) in [
+        ("device", Fixture::new().await),
+        ("ownerPhone", Fixture::phone_owner().await),
+    ] {
+        let address = serve(&fixture, true).await;
+        blocking(|| {
+            let mut owner = ProductClient::connect(address, &fixture.owner_token);
+            let created = owner.ok("pairing.create", json!({"enrollee":enrollee}));
+            assert!(created["status"].get("samePerson").is_none());
+            let id = invitation(&created["status"]);
+            let read = owner.ok("pairing.status", json!({"invitationId":id}));
+            assert!(read.get("samePerson").is_none());
+            let pending = owner.ok("pairing.pending", json!({}));
+            assert!(pending["items"][0].get("samePerson").is_none());
+            let ended = owner.ok("pairing.cancel", json!({"invitationId":id}));
+            assert!(ended.get("samePerson").is_none());
+        });
+        fixture.gateway.shutdown().await;
+    }
 }

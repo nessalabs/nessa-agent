@@ -61,6 +61,67 @@ describe("client.pairing", () => {
     expect(created.status.class).toBe("peer-gateway-conversation-read")
   })
 
+  it("retains the canonical peer choice on every owner-status response", async () => {
+    for (const choice of [false, true]) {
+      for (const consentClass of [
+        "peer-gateway-conversation-read",
+        "peer-gateway-environment-serve",
+      ]) {
+        const saved = { ...status, class: consentClass, samePerson: choice }
+        const { api } = session((method) => {
+          if (method === "pairing.create") return { code: "ABCD-2345", status: saved }
+          if (method === "pairing.pending") return { items: [saved] }
+          if (method === "pairing.approve") return { status: saved }
+          return saved
+        })
+        const enrollee =
+          consentClass === "peer-gateway-environment-serve"
+            ? PairingEnrollee.Environment
+            : PairingEnrollee.Gateway
+        expect((await api.create({ enrollee })).status).toMatchObject({
+          samePerson: choice,
+        })
+        expect((await api.pending()).items[0]).toMatchObject({ samePerson: choice })
+        expect(await api.status(invitationId)).toMatchObject({ samePerson: choice })
+        expect((await api.approve(invitationId, deviceKey)).status).toMatchObject({
+          samePerson: choice,
+        })
+        expect(await api.cancel(invitationId)).toMatchObject({ samePerson: choice })
+        expect(await api.deny(invitationId)).toMatchObject({ samePerson: choice })
+      }
+    }
+  })
+
+  it("keeps an absent legacy choice unknown and refuses malformed or non-peer choices", async () => {
+    const legacy = session(() => ({ ...status, class: "peer-gateway-conversation-read" }))
+    expect(await legacy.api.status(invitationId)).not.toHaveProperty("samePerson")
+    for (const value of [null, "false", 0, {}]) {
+      const malformed = session(() => ({
+        ...status,
+        class: "peer-gateway-conversation-read",
+        samePerson: value,
+      }))
+      await expect(malformed.api.status(invitationId)).rejects.toBeInstanceOf(
+        NessaPairingError,
+      )
+    }
+    for (const consentClass of [
+      "gateway-conversation-read",
+      "gateway-owner-conversation-read-write",
+    ]) {
+      for (const value of [false, true]) {
+        const nonPeer = session(() => ({
+          ...status,
+          class: consentClass,
+          samePerson: value,
+        }))
+        await expect(nonPeer.api.status(invitationId)).rejects.toBeInstanceOf(
+          NessaPairingError,
+        )
+      }
+    }
+  })
+
   it("names an environment as the enrollee when asked", async () => {
     const { api, calls } = session(() => ({
       code: "ABCD-2345",

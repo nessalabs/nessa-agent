@@ -156,6 +156,11 @@ pub(super) fn owner_status(record: &PairingRecord) -> PairingOwnerStatus {
     let intent = record.intent();
     let grant = intent.grant();
     PairingOwnerStatus {
+        same_person: matches!(
+            intent.class(),
+            ConsentClass::PeerRead | ConsentClass::PeerEnvironment
+        )
+        .then_some(intent.same_person()),
         invitation_id: *record.id().bytes(),
         consent_id: *intent.id().bytes(),
         generation: intent.generation(),

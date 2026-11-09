@@ -187,7 +187,7 @@ async fn two_composed_gateways_retain_the_choice_through_peer_activation_and_res
     let server = tokio::task::block_in_place(|| owner_gateway.start());
     let peer_server = tokio::task::block_in_place(|| peer.start());
     let peer_directory = namespace(&peer).join("peer-gateways");
-    let (credential, person, principal) = tokio::task::block_in_place(|| {
+    let (credential, person, principal, id) = tokio::task::block_in_place(|| {
         let mut owner = owner_gateway.owner();
         let mut peer_owner = peer.owner();
         let person = owner.ok("auth.session", json!({}))["principalId"]
@@ -198,6 +198,8 @@ async fn two_composed_gateways_retain_the_choice_through_peer_activation_and_res
             "pairing.create",
             json!({"enrollee":"gateway","samePerson":true}),
         );
+        assert_eq!(created["status"]["samePerson"], true);
+        let id = invitation(&created["status"]);
         peer_owner.ok(
             "peer.enroll",
             json!({"address":owner_gateway.native.unwrap().to_string(),"code":created["code"]}),
@@ -208,6 +210,7 @@ async fn two_composed_gateways_retain_the_choice_through_peer_activation_and_res
         );
         let approved = owner.ok("pairing.approve", json!({"invitationId":invitation(&created["status"]),"deviceKey":status["claimedDeviceKey"]}));
         assert_eq!(approved["status"]["phase"], "active", "{approved}");
+        assert_eq!(approved["status"]["samePerson"], true);
         assert!(approved.get("activationStopped").is_none(), "{approved}");
         let credential = approved["status"]["credentialId"]
             .as_str()
@@ -235,7 +238,7 @@ async fn two_composed_gateways_retain_the_choice_through_peer_activation_and_res
             );
             std::thread::sleep(Duration::from_millis(50));
         }
-        (credential, person, principal)
+        (credential, person, principal, id)
     });
     let record_path = std::fs::read_dir(&peer_directory)
         .unwrap()
@@ -268,5 +271,15 @@ async fn two_composed_gateways_retain_the_choice_through_peer_activation_and_res
     assert_eq!(restored["samePerson"], true);
     assert_eq!(restored["credential"]["credentialId"], credential);
     assert!(tokio::task::block_in_place(|| peer_server.stop()).success());
+    assert!(tokio::task::block_in_place(|| server.stop()).success());
+    let server = tokio::task::block_in_place(|| owner_gateway.start());
+    tokio::task::block_in_place(|| {
+        let status = owner_gateway
+            .owner()
+            .ok("pairing.status", json!({"invitationId":id}));
+        assert_eq!(status["phase"], "active");
+        assert_eq!(status["samePerson"], true);
+        assert_eq!(status["credentialId"], credential);
+    });
     assert!(tokio::task::block_in_place(|| server.stop()).success());
 }
