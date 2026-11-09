@@ -511,6 +511,7 @@ export function transcriptFrom(
       at: seen(input),
       parts: inputParts(turn.userText, turn.attachments, turn.files, turn.uploads),
       ...writtenBy(turn.app, turn.agent),
+      ...(turn.retried ? { retried: true as const } : {}),
     }
     const parts: Part[] = []
     // The provider message the last text part came from, while text is last.

@@ -627,6 +627,8 @@ pub struct ConversationUsageLimit {
 pub struct ConversationMessage {
     pub execution_id: String,
     pub user_text: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retried: Option<bool>,
     pub attachments: Vec<ImageAttachment>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub uploads: Option<Vec<UploadedFileAttachment>>,

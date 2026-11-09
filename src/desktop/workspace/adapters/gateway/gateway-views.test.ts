@@ -213,6 +213,26 @@ describe("a conversation view as a transcript", () => {
     ])
   })
 
+  it("marks the person's message the gateway sent again, and only that one", () => {
+    const transcript = transcriptFrom(
+      view("c", {
+        messages: [
+          turn({ executionId: "e1", userText: "Refactor the parser" }),
+          turn({ executionId: "e2", userText: "Refactor the parser", retried: true }),
+        ],
+      }),
+      1,
+      at,
+      GATEWAY_NOW_MS,
+    )
+    const inputs = transcript.messages.filter(
+      (message) => "role" in message && message.role === "user",
+    )
+    expect(
+      inputs.map((message) => ("retried" in message ? message.retried : undefined)),
+    ).toEqual([undefined, true])
+  })
+
   it("never gives two messages one id, whatever the execution ids", () => {
     const transcript = transcriptFrom(
       view("c", {

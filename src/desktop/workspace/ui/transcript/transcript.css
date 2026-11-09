@@ -186,6 +186,14 @@
   overflow-wrap: anywhere;
 }
 
+/* The person's message, sent again after a restart or a failure: one quiet
+   word under it, at its edge. */
+.workspace-message-retried {
+  margin: 4px 4px 0 0;
+  color: var(--desktop-muted);
+  font-size: var(--desktop-text-footnote);
+}
+
 /* How the gateway said a turn ended. The diagnostic is its own words. */
 .workspace-turn-terminal {
   display: flex;

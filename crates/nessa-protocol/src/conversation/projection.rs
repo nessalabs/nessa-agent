@@ -23,7 +23,7 @@ use nessa_sdk::application::agent_execution::permissions::{
     ApprovalRuleReference, CancellationOrigin, DeclinedReview, PermissionCancellation,
 };
 use nessa_sdk::application::agent_execution::{
-    agents::{AgentError, UsageLimit, UsageLimitProvider, UsageLimitRecovery},
+    agents::{resumed_request, AgentError, UsageLimit, UsageLimitProvider, UsageLimitRecovery},
     executions::{ExecutionEvent, ExecutionUpdate, SubmissionMode},
     sessions::{
         CommittedSession, CommittedStatus, CurrentLease, CurrentLeaseState, InvocationRecord,
@@ -1215,6 +1215,7 @@ impl Projection {
             retained_text: 0,
             execution_id: id.into(),
             user_text: String::new(),
+            retried: None,
             attachments: Vec::new(),
             files: Vec::new(),
             uploads: Vec::new(),
@@ -1845,10 +1846,16 @@ impl Projection {
             record.request.user_message.sender(),
             MessageSender::Internal
         );
+        // A successor turn's text opens with a notice for the model; the
+        // person sees their own words, marked as sent again.
+        let resumed = resumed_request(record);
+        self.view.messages[index].retried = resumed.is_some().then_some(true);
         self.view.messages[index].user_text = if internal {
             String::new()
         } else {
-            record.request.user_message.text_str().to_owned()
+            resumed
+                .unwrap_or_else(|| record.request.user_message.text_str())
+                .to_owned()
         };
         self.view.messages[index].attachments = record
             .request

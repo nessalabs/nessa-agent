@@ -1636,6 +1636,7 @@ async fn overfull(fixture: &Fixture) -> ConversationView {
             authentication_required: None,
             usage_limit: None,
             user_text: "y".repeat(8_000),
+            retried: None,
             ..message.clone()
         })
         .collect();

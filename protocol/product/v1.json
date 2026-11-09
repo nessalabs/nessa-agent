@@ -1215,6 +1215,10 @@
           "x-utf8MaxBytes": 65536,
           "description": "User input text, whole; empty for a message of images alone. Its only bound is the frame's."
         },
+        "retried": {
+          "type": "boolean",
+          "description": "Sent again for the person after a restart or a failure cut its first try short. userText is still the person's own words, never the notice the agent was given. Absent for a first try."
+        },
         "attachments": {
           "type": "array",
           "maxItems": 10,

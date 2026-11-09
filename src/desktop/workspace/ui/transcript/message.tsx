@@ -170,6 +170,11 @@ export const Message = memo(function Message({
             <LocalImages images={message.localImages} />
           ) : null}
         </div>
+        {message.retried ? (
+          <p className="workspace-message-retried" data-retried="">
+            Retried
+          </p>
+        ) : null}
         {message.terminal ? <TurnTerminalMark terminal={message.terminal} /> : null}
       </div>
     )

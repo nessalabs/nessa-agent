@@ -2227,6 +2227,7 @@ fn a_bounded_view_keeps_every_question_and_review_it_lists() {
         .map(|_| crate::conversation::view::ConversationMessage {
             uploads: Vec::new(),
             user_text: "y".repeat(8_000),
+            retried: None,
             ..message.clone()
         })
         .collect();
