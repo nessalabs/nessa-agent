@@ -254,7 +254,8 @@ const READ_BYTES: usize = 8192;
 
 /// The plain text of `text`'s opening: [`READ_BYTES`] of it, from where the
 /// first line with anything visible once its marks are dropped begins to say
-/// it — after its heading, quote, or list markers.
+/// it — after its heading, quote, or list markers, and past any table or
+/// fenced code block before it.
 ///
 /// The one rule a title and a preview are both read by. Finding that line is
 /// linear in the text and bounded: a line with nothing but whitespace and
@@ -265,9 +266,22 @@ const READ_BYTES: usize = 8192;
 fn opening(text: &str) -> String {
     let mut read = 0;
     let mut at = 0;
+    // The opening starts outside a code block, so `plain_text` reads it from
+    // the same state: a block or a table before it is passed over whole.
+    let mut fenced = false;
     for line in text.split_inclusive('\n') {
         let content = line.strip_suffix('\n').unwrap_or(line);
         let content = content.strip_suffix('\r').unwrap_or(content);
+        let trimmed = content.trim_start();
+        if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
+            fenced = !fenced;
+            at += line.len();
+            continue;
+        }
+        if fenced || is_table_row(trimmed) {
+            at += line.len();
+            continue;
+        }
         let said = without_line_markers(content);
         if said.chars().any(|c| !(c.is_whitespace() || c.is_control())) {
             let start = at + (content.len() - said.len());
@@ -305,15 +319,38 @@ fn one_line(value: &str) -> String {
 }
 
 /// `text` with the Markdown marks a reader would not see dropped, line by
-/// line. Nothing here spans lines, so neither does anything it drops.
+/// line, and the lines that only make sense rendered left out whole: a
+/// table's rows and a fenced code block, fences and all. Folded onto one
+/// line they read as `| Option | Price | --- |`, so a preview keeps the prose
+/// around them (`a_preview_leaves_out_tables_and_code`).
 fn plain_text(text: &str) -> String {
     let mut plain = String::with_capacity(text.len());
+    let mut fenced = false;
     for line in text.lines() {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
+            fenced = !fenced;
+            continue;
+        }
+        if fenced || is_table_row(trimmed) {
+            continue;
+        }
         let chars: Vec<char> = without_line_markers(line).chars().collect();
         plain_inline(&chars, &mut plain);
         plain.push('\n');
     }
     plain
+}
+
+/// A Markdown table's row or its delimiter row: it starts with a pipe, or
+/// is made only of pipes, dashes, colons and spaces with a pipe among them.
+fn is_table_row(line: &str) -> bool {
+    line.starts_with('|')
+        || (line.contains('|')
+            && line.contains('-')
+            && line
+                .chars()
+                .all(|c| matches!(c, '|' | '-' | ':' | ' ' | '\t')))
 }
 
 /// A line without its heading, quote, or list markers, after at most three

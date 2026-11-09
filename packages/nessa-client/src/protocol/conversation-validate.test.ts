@@ -125,6 +125,24 @@ function view() {
 }
 
 describe("conversation view agreement", () => {
+  it("keeps a message's retried mark, and refuses one that is not true", () => {
+    const base = view() as { messages: Record<string, unknown>[] }
+    const retried = { ...base.messages[0], retried: true }
+    expect(
+      conversationView({ ...base, messages: [retried, base.messages[1]] }, "conversation")
+        .messages[0].retried,
+    ).toBe(true)
+    expect(() =>
+      conversationView(
+        {
+          ...base,
+          messages: [{ ...base.messages[0], retried: false }, base.messages[1]],
+        },
+        "conversation",
+      ),
+    ).toThrow("Conversation retried mark is not true")
+  })
+
   it("accepts a tool with no recorded hooks choice and refuses an unknown one", () => {
     const base = view() as { tools: Record<string, unknown>[] }
     const { nativeHooks: _, ...unmarked } = base.tools[0]

@@ -194,9 +194,10 @@
     max-width: 752px;
     flex: none;
     margin: 0 auto;
-    padding: 0 16px 16px;
+    /* One gutter in every pane, narrow or wide (`--workspace-dock-gutter`). */
+    padding: 0 var(--workspace-dock-gutter) var(--workspace-dock-gutter);
     padding-left: max(
-      16px,
+      var(--workspace-dock-gutter),
       var(--workspace-corner-mark, 0px) - max(0px, (100cqw - 752px) / 2)
     );
   }
@@ -363,13 +364,6 @@
       .workspace-dock
       .desktop-composer {
       animation: workspace-composer-grow var(--desktop-base) var(--desktop-out) both;
-    }
-  }
-
-  /* A narrow pane reads closer to its edges. */
-  @container workspace-pane (max-width: 420px) {
-    .workspace-dock {
-      padding-inline: 8px;
     }
   }
 }

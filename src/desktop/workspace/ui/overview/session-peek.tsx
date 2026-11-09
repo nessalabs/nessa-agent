@@ -143,22 +143,18 @@ export const SessionPeek = memo(function SessionPeek({
         <div className="agents-peek-now">
           <p className="agents-peek-state" data-status={summary.status}>
             <StatusGlyph status={waiting ? "needs-you" : summary.status} idle />
-            <span>
+            {/* One line: the state, or while it works what it is doing. */}
+            <span className="agents-truncate" title={line ?? undefined}>
               {waiting
                 ? "Waiting for you"
                 : summary.status === "running"
-                  ? "Working"
+                  ? (line ?? "Working")
                   : "Finished"}
             </span>
             <time dateTime={new Date(summary.updatedAt).toISOString()}>
               {sessionTime(summary.updatedAt, now)}
             </time>
           </p>
-          {line !== null ? (
-            <p className="agents-peek-summary agents-truncate" title={line}>
-              {line}
-            </p>
-          ) : null}
         </div>
 
         {peek && (peek.asked || peek.since.length > 0 || running) ? (
@@ -170,22 +166,6 @@ export const SessionPeek = memo(function SessionPeek({
           >
             {peek.asked ? (
               <Message sessionId={sessionId} message={peek.asked} isNew={false} />
-            ) : null}
-            {peek.earlier ? (
-              <p className="agents-peek-earlier">
-                Earlier in this turn
-                {" · "}
-                <button
-                  type="button"
-                  className="workspace-link-button"
-                  {...tooltip("Open Session", {
-                    shortcut: labelOf(overviewKeys, "open"),
-                  })}
-                  onClick={() => onOpen(sessionId)}
-                >
-                  Open
-                </button>
-              </p>
             ) : null}
             {peek.since.map((message) => (
               <Message

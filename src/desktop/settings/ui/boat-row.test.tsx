@@ -23,8 +23,15 @@ const connected: BoatStatus = {
   environment: "nessa",
   image: "fixture-image",
 }
+/** The row's own button, by name. */
+const button = (name: string) =>
+  [...document.querySelectorAll("button")].find((each) => each.textContent === name)
+/** Connect… opens the dialog the token is pasted in. */
+async function ask() {
+  await act(async () => button("Connect…")?.click())
+}
 const field = () => {
-  const input = host.querySelector("input")
+  const input = document.querySelector<HTMLInputElement>("[data-boat-dialog] input")
   if (!input) throw new Error("missing token field")
   return input
 }
@@ -41,8 +48,8 @@ async function enter(token: string) {
 }
 async function submit() {
   await act(async () => {
-    host
-      .querySelector("form")
+    document
+      .querySelector("[data-boat-dialog] form")
       ?.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }))
   })
 }
@@ -73,15 +80,18 @@ it("clears a saved token and ignores an older status read, then disconnects", as
       </BoatProvider>,
     ),
   )
+  // One word of state and one button; the field is only in the dialog.
+  expect(host.querySelector("input")).toBeNull()
+  await ask()
   expect(field().type).toBe("password")
   await enter("  fixture-token  ")
   await submit()
   expect(calls).toEqual(["fixture-token"])
-  expect(field().value).toBe("")
+  // Saved, the dialog closes and the row says so.
+  expect(document.querySelector("[data-boat-dialog]")).toBeNull()
+  expect(host.querySelector('[data-setting="boat"]')?.textContent).toContain("Connected")
   await act(async () => finishRead({ state: "disconnected" }))
-  const disconnect = [...host.querySelectorAll("button")].find(
-    (button) => button.textContent === "Disconnect",
-  )
+  const disconnect = button("Disconnect")
   expect(disconnect).toBeDefined()
   await act(async () => disconnect?.click())
   expect(calls).toEqual(["fixture-token", "disconnect"])
@@ -105,23 +115,25 @@ it("reports a rejected save without claiming a connection", async () => {
       </BoatProvider>,
     ),
   )
+  expect(host.querySelector('[data-setting="boat"]')?.textContent).toContain(
+    "Not connected",
+  )
+  await ask()
   await enter("fixture-token")
   await submit()
-  expect(host.querySelector('[role="alert"]')?.textContent).toContain(
-    "could not be connected",
-  )
+  // The dialog stays open and says why.
   expect(
-    [...host.querySelectorAll("button")].some(
-      (button) => button.textContent === "Disconnect",
-    ),
+    document.querySelector('[data-boat-dialog] [role="alert"]')?.textContent,
+  ).toContain("could not be connected")
+  expect(button("Disconnect")).toBeUndefined()
+  expect(
+    document
+      .querySelector('[data-boat-dialog] button[type="submit"]')
+      ?.hasAttribute("disabled"),
   ).toBe(false)
-  expect(host.querySelector('button[type="submit"]')?.hasAttribute("disabled")).toBe(
-    false,
-  )
 })
 
 it("rests without a connected gateway", async () => {
   await act(async () => root.render(<BoatRow />))
-  expect(field().disabled).toBe(true)
-  expect(host.querySelector('button[type="submit"]')?.hasAttribute("disabled")).toBe(true)
+  expect(button("Connect…")?.hasAttribute("disabled")).toBe(true)
 })

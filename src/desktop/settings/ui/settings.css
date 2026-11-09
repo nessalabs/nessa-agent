@@ -32,10 +32,13 @@
     var(--foreground) 35%
   );
   /* --settings-sidebar-w is set by the view, from `model/settings-sidebar.ts`. */
-  --settings-column: 620px;
+  --settings-column: var(--desktop-page-width);
   /* The least room either side of the column. */
   --settings-margin: 32px;
-  --settings-column-w: min(var(--settings-column), 100% - 2 * var(--settings-margin));
+  /* Measured against the page (`.settings-content`, a size container), so the
+     bar's title and the scrolling column agree even where the column is
+     narrowed and the scroller reserves its scrollbar gutters. */
+  --settings-column-w: min(var(--settings-column), 100cqw - 2 * var(--settings-margin));
   /* How a page arrives: quick, and only confirming what is already there. */
   --settings-arrive: 220ms;
 }
@@ -136,7 +139,7 @@
   height: 16px;
 }
 
-/* The way back while the sidebar, and its "nessa Agent", is away. */
+/* The way back while the sidebar, and its "nessa Studio", is away. */
 .settings[data-sidebar="open"] .settings-titlebar-back {
   opacity: 0;
   transform: translateX(-4px);
@@ -160,34 +163,38 @@
   width: 0;
 }
 
+/*
+ * The same flat material as the app's sidebar (`.workspace-sidebar`): full
+ * height to the window's edges, up behind the traffic lights, its edge a
+ * hairline that fades in below the titlebar. Not a card.
+ */
 .settings-glass {
   position: absolute;
-  top: var(--desktop-gutter);
-  bottom: var(--desktop-gutter);
-  left: var(--desktop-gutter);
+  top: 0;
+  bottom: 0;
+  left: 0;
   display: flex;
-  width: calc(var(--settings-sidebar-w) - var(--desktop-gutter));
+  width: var(--settings-sidebar-w);
   flex-direction: column;
-  padding-top: calc(var(--desktop-titlebar-height) - var(--desktop-gutter));
-  border-radius: var(--desktop-radius);
-  background: var(--desktop-pane-fill);
-  backdrop-filter: blur(28px) saturate(170%);
-  -webkit-backdrop-filter: blur(28px) saturate(170%);
-  box-shadow:
-    inset 0 0 0 1px color-mix(in oklab, var(--foreground) 6%, transparent),
-    inset 0 1px 0 color-mix(in oklab, var(--foreground) 5%, transparent),
-    0 12px 40px -14px rgb(0 0 0 / 50%);
+  /* The app sidebar's own insets, so its rows and "nessa" sit where the app's do. */
+  padding: var(--desktop-titlebar-height) 0 var(--desktop-gutter) var(--desktop-gutter);
+  background:
+    linear-gradient(
+        to bottom,
+        transparent calc(var(--desktop-titlebar-height) * 0.5),
+        var(--desktop-rim) calc(var(--desktop-titlebar-height) + 40px)
+      )
+      right top / 1px 100% no-repeat,
+    radial-gradient(
+      ellipse 90% 60% at 30% 0%,
+      color-mix(in oklab, var(--desktop-light-high) 26%, transparent),
+      transparent 75%
+    ),
+    var(--desktop-sidebar-material);
   overflow: hidden;
   transition:
     transform var(--desktop-slow) var(--desktop-out),
     opacity var(--desktop-slow) var(--desktop-out);
-}
-
-html:not(.dark) .settings-glass {
-  box-shadow:
-    inset 0 0 0 1px color-mix(in oklab, var(--foreground) 7%, transparent),
-    inset 0 1px 0 rgb(255 255 255 / 60%),
-    0 12px 32px -16px rgb(0 0 0 / 20%);
 }
 
 .settings[data-sidebar="closed"] .settings-glass {
@@ -379,6 +386,7 @@ html:not(.dark) .settings-glass {
 
 .settings-content {
   position: relative;
+  container-type: inline-size;
   display: flex;
   min-width: 0;
   min-height: 0;
@@ -398,12 +406,12 @@ html:not(.dark) .settings-glass {
   height: var(--desktop-titlebar-height);
   flex: none;
   align-items: center;
-  padding-inline: calc((100% - var(--settings-column-w)) / 2);
+  padding-inline: calc((100cqw - var(--settings-column-w)) / 2);
 }
 
 .settings[data-sidebar="closed"] .settings-bar {
   padding-left: max(
-    calc((100% - var(--settings-column-w)) / 2),
+    calc((100cqw - var(--settings-column-w)) / 2),
     var(--desktop-titlebar-safe-start)
   );
 }
@@ -467,26 +475,8 @@ html:not(.dark) .settings-glass {
 /* ——— Masthead ——— */
 
 .settings-masthead {
-  padding-top: clamp(16px, 5vh - 8px, 40px);
+  padding-top: var(--desktop-page-top);
   animation: settings-arrive var(--settings-arrive) var(--desktop-out);
-}
-
-.settings-title {
-  margin: 0;
-  font-size: 28px;
-  font-weight: 600;
-  line-height: 1.15;
-  letter-spacing: -0.025em;
-  text-wrap: balance;
-}
-
-.settings-dek {
-  margin: 10px 0 0;
-  max-width: 46ch;
-  color: var(--desktop-muted);
-  font-size: var(--desktop-text-read);
-  line-height: 1.45;
-  letter-spacing: -0.01em;
 }
 
 /*
@@ -599,7 +589,9 @@ html:not(.dark) .settings-glass {
   white-space: nowrap;
 }
 
-:is(.settings, .settings-surface) [data-slot="settings-group-card"],
+:is(.settings, .settings-surface)
+  [data-settings-surface="card"]
+  > [data-slot="settings-group-card"],
 :is(.settings, .settings-surface) .settings-card {
   overflow: hidden;
   border: 0;
@@ -608,7 +600,10 @@ html:not(.dark) .settings-glass {
   box-shadow: inset 0 0 0 1px var(--settings-hairline);
 }
 
-html:not(.dark) :is(.settings, .settings-surface) [data-slot="settings-group-card"],
+html:not(.dark)
+  :is(.settings, .settings-surface)
+  [data-settings-surface="card"]
+  > [data-slot="settings-group-card"],
 html:not(.dark) :is(.settings, .settings-surface) .settings-card {
   background: color-mix(in oklab, var(--background) 70%, white);
   box-shadow:
@@ -648,6 +643,33 @@ html:not(.dark) :is(.settings, .settings-surface) .settings-card {
   gap: 16px;
 }
 
+/*
+ * A flat group (the kit's `surface="flat"`, every group on a Settings page)
+ * is rows on the page: their words, its heading and its footnote line up
+ * with the page's title, and the hairlines run the column's full width.
+ */
+:is(.settings, .settings-surface) [data-settings-surface="flat"] .settings-row {
+  padding-inline: 0;
+}
+
+:is(.settings, .settings-surface)
+  [data-settings-surface="flat"]
+  > :is(
+    [data-slot="settings-group-title"],
+    [data-slot="settings-group-footnote"],
+    [data-slot="settings-group-reason"]
+  ) {
+  padding-inline: 0;
+}
+
+.settings
+  [data-settings-surface="flat"]
+  > [data-slot="settings-group-card"]
+  > :not(.settings-notices:empty)
+  + .settings-row::before {
+  left: 0;
+}
+
 /* Hairlines between rows, starting where the words do, as a list's rules do. */
 :is(.settings, .settings-surface)
   [data-slot="settings-group-card"]
@@ -684,6 +706,11 @@ html:not(.dark) :is(.settings, .settings-surface) .settings-card {
   color: var(--desktop-muted);
   font-size: var(--desktop-text-footnote);
   line-height: 1.4;
+}
+
+/* An empty list's one line ("None yet"): muted, as a detail is. */
+:is(.settings, .settings-surface) .settings-row-quiet [data-slot="settings-row-label"] {
+  color: var(--desktop-muted);
 }
 
 /* Where a search landed: a soft wash in the theme's light that fades away. */
@@ -1611,4 +1638,19 @@ html:not(.dark) :is(.settings, .settings-surface) .settings-card {
   display: flex;
   flex-direction: column;
   margin-block-end: 12px;
+}
+
+/* Auto-stop is its own row, wrapped for its checks: it takes a row's hairline. */
+.settings [data-slot="settings-group-card"] > * + .settings-boat-runtime {
+  position: relative;
+}
+
+.settings [data-slot="settings-group-card"] > * + .settings-boat-runtime::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  right: 0;
+  left: 0;
+  height: 1px;
+  background: var(--settings-hairline);
 }

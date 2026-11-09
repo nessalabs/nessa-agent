@@ -25,6 +25,7 @@ import {
 import { Button } from "@nessa-ui/react/button"
 import { Kbd } from "@nessa-ui/react/kbd"
 import { LoadingText } from "@nessa-ui/react/loading-text"
+import { PageHeader } from "@nessa-ui/react/page-header"
 import { StatusLabel } from "@nessa-ui/react/status-label"
 import { isMac } from "../../../adapters/platform"
 import { inModal } from "../../../adapters/modal"
@@ -178,26 +179,25 @@ function NewChannel({ flow }: { flow: ChannelCreation }) {
       aria-label="New channel"
       data-dropping={dropping || undefined}
     >
-      <div className="new-channel-band" aria-hidden="true" />
-      <div className="new-channel-rule" aria-hidden="true" />
       <div className="new-channel-scroll">
         <div className="new-channel-column">
-          <header className="new-channel-head">
-            <h2>New channel</h2>
-            <p>
-              {steps.length} quick questions · click a ✓ line to change it · Esc to cancel
-            </p>
-            <Button
-              className="new-channel-close"
-              variant="plain"
-              size="icon-sm"
-              shape="pill"
-              aria-label="Cancel new channel"
-              onClick={() => dispatch(closeChannelCreation())}
-            >
-              <DesktopIcon name="close" />
-            </Button>
-          </header>
+          <PageHeader
+            className="new-channel-head"
+            title="New channel"
+            level={2}
+            actions={
+              <Button
+                className="new-channel-close"
+                variant="plain"
+                size="icon-sm"
+                shape="pill"
+                aria-label="Cancel new channel"
+                onClick={() => dispatch(closeChannelCreation())}
+              >
+                <DesktopIcon name="close" />
+              </Button>
+            }
+          />
           {steps.map((step) =>
             step === asking ? (
               <Asked key={step} step={step} flow={flow} failure={failedHere} />

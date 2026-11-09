@@ -13,8 +13,8 @@ import type { Approval, ApprovalOption, Part } from "../../model/transcript"
  */
 export const sampleApprovalOptions: readonly ApprovalOption[] = [
   { id: "deny", label: "Deny", choice: "deny" },
-  { id: "always", label: "Always Allow", choice: "always" },
-  { id: "once", label: "Allow Once", choice: "once" },
+  { id: "always", label: "Always allow in this project", choice: "always" },
+  { id: "once", label: "Allow once", choice: "once" },
 ]
 
 export const models = {

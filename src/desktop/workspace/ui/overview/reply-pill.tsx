@@ -46,8 +46,8 @@ export function sizeReplyPill(textarea: HTMLTextAreaElement, draft: string): voi
 
 /**
  * A reply to a session, written where its peek is, without opening it: one
- * line that grows to four, and the send button — the pane composer's
- * pieces, pared to a pill. Its draft is the session's own
+ * line that grows to four, and the send button — the pane's composer in its
+ * compact size (`data-size="compact"`), so it reads as the same composer. Its draft is the session's own
  * (`setComposerText`), so it is the same text the pane's composer shows, and
  * sending is the workspace's `sendMessage`, as from the pane, which empties
  * it. The reply streams into the peek above; the caret stays with the
@@ -98,7 +98,8 @@ export function ReplyPill({
     <div className="agents-reply" data-reply-for={sessionId}>
       <WorkspaceSendFailure sessionId={sessionId} />
       <form
-        className="agents-reply-pill"
+        className="desktop-composer agents-reply-pill"
+        data-size="compact"
         data-sending={sending || undefined}
         onSubmit={(event) => {
           event.preventDefault()

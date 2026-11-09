@@ -216,6 +216,12 @@ export interface TurnMessage {
    */
   readonly waiting?: true
   /**
+   * Set on the person's message when the gateway sent it again after a
+   * restart or a failure cut its first try short. Its text is still the
+   * person's own words.
+   */
+  readonly retried?: true
+  /**
    * How this turn ended, when the gateway said it ended other than by
    * finishing. On the agent's reply when there is one, otherwise on the
    * input, so a turn that said nothing still shows it.

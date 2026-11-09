@@ -54,9 +54,20 @@ export interface RealtimeTransport {
 /** Every transport the gateway may name, so one it adds is a type error here. */
 export type RealtimeTransports = Readonly<Record<VoiceTransport, RealtimeTransport>>
 
+/** What fixes a refused call where it was refused. */
+export type VoiceFix = "key" | "unlock"
+
 /** Why the gateway started no call, said to the person. */
 export class VoiceStartRefused extends Error {
-  constructor(readonly sentence: string) {
+  /**
+   * `fix`: what the person can do right there to start it — save an
+   * OpenAI key (none is saved, or OpenAI refused the one that is), or
+   * unlock Nessa's vault — so the notice offers it in place.
+   */
+  constructor(
+    readonly sentence: string,
+    readonly fix: VoiceFix | null = null,
+  ) {
     super(sentence)
     this.name = "VoiceStartRefused"
   }

@@ -18,7 +18,7 @@ type ThreadPlace = Place | "pool"
  * Where a made channel's agents run, changed after it was made. Each choice
  * saves as it is made. Threads already made keep running where they
  * started; moving the main agent starts a fresh main chat there, and the old
- * one stays in the channel as a thread, so the row says so.
+ * one stays in the channel as a thread.
  */
 export function ChannelPlacementControl({ channelId }: { channelId: string }) {
   const dispatch = useWorkspaceDispatch()
@@ -33,13 +33,13 @@ export function ChannelPlacementControl({ channelId }: { channelId: string }) {
     { id: "local", label: "This Mac" },
     {
       id: "boat",
-      label: boatReady ? "Boat" : "Boat (not connected)",
+      label: "Boat",
       disabled: !boatReady,
     },
   ]
   // Only threads spread over computers: the main agent stays put.
   const threadPlaces: readonly { id: ThreadPlace; label: string; disabled?: boolean }[] =
-    [...places, { id: "pool", label: "Any computer" }]
+    [...places, { id: "pool", label: "Any" }]
   const placement: ChannelPlacement = {
     coordinatorPlacement: channel.coordinatorPlacement ?? "local",
     threadPlacement: channel.threadPlacement ?? "local",
@@ -77,34 +77,33 @@ export function ChannelPlacementControl({ channelId }: { channelId: string }) {
       data-thread-placement={placement.threadPlacement}
       className="settings-channel-placement"
     >
+      {/* Each setting stacks its name over its control, so neither is squeezed
+          in a narrow dialog. */}
       <ItemRow
         label="Main agent runs on"
-        detail="Moving it starts a fresh main chat there. The current one stays here as a thread."
+        detail={boatReady ? undefined : "Connect Boat to run agents there."}
         data-placement-row="coordinator"
         unavailable={saving}
-        control={
-          <Segmented<Place>
-            label="Main agent runs on"
-            value={placement.coordinatorPlacement}
-            options={places}
-            onChange={(next) => change({ coordinatorPlacement: next })}
-          />
-        }
-      />
+      >
+        <Segmented<Place>
+          label="Main agent runs on"
+          value={placement.coordinatorPlacement}
+          options={places}
+          onChange={(next) => change({ coordinatorPlacement: next })}
+        />
+      </ItemRow>
       <ItemRow
         label="New threads run on"
-        detail="Threads already started keep running where they are."
         data-placement-row="threads"
         unavailable={saving}
-        control={
-          <Segmented<ThreadPlace>
-            label="New threads run on"
-            value={placement.threadPlacement}
-            options={threadPlaces}
-            onChange={(next) => change({ threadPlacement: next })}
-          />
-        }
-      />
+      >
+        <Segmented<ThreadPlace>
+          label="New threads run on"
+          value={placement.threadPlacement}
+          options={threadPlaces}
+          onChange={(next) => change({ threadPlacement: next })}
+        />
+      </ItemRow>
       {failed ? (
         <p role="alert" className="settings-boat-note">
           {failed}

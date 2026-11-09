@@ -5,7 +5,7 @@ import "./identity.css"
 
 /**
  * The window's name, "nessa Studio", as the one control every layout puts at
- * its sidebar's foot to open Settings — and, in Settings, "‹ nessa Agent" in
+ * its sidebar's foot to open Settings — and, in Settings, "‹ nessa Studio" in
  * the same place, the way back. One pill of the corner controls' size,
  * filled under the pointer, its product word quieter until then.
  * `shared-controls.mjs` (`identity`) measures it in each place.
@@ -49,7 +49,7 @@ export function IdentityButton({
 
 /**
  * The row that holds the name at a sidebar's foot — the one owner of where
- * "nessa Studio" and "‹ nessa Agent" stand, in every layout and in Settings,
+ * "nessa Studio" and "‹ nessa Studio" stand, in every layout and in Settings,
  * so switching between them moves nothing: nessa's mark, then the pill.
  * `className` is a hook for the surface that places it.
  */

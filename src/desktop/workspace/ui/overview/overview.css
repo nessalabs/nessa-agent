@@ -141,21 +141,12 @@
   max-width: 640px;
   flex: none;
   margin: 0 auto;
-  padding: 24px 28px 12px;
+  padding: var(--desktop-page-top) 28px 12px;
 }
 
 .agents-overview[data-split] .agents-overview-header {
   max-width: 560px;
-  padding: 24px 20px 12px 28px;
-}
-
-.agents-overview-header h1 {
-  margin: 0;
-  color: var(--foreground);
-  font-size: var(--desktop-text-display);
-  font-weight: 600;
-  letter-spacing: -0.015em;
-  line-height: 1.2;
+  padding: var(--desktop-page-top) 20px 12px 28px;
 }
 
 .agents-overview-header .agents-overview-counts {
@@ -231,13 +222,6 @@
   background: var(--desktop-press);
 }
 
-.agents-overview-title {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-}
-
 /* What is listed, at the right end of the title's row: a quiet chip, like the composer's. */
 .agents-filter {
   display: inline-flex;
@@ -271,6 +255,19 @@
 
 .agents-overview-group {
   margin-top: 36px;
+}
+
+/* The first group starts right under the header: the header's own space is the gap. */
+.agents-overview-group:first-child {
+  margin-top: 0;
+}
+
+/* While the list loads, a quiet word where its first row will be. */
+.agents-overview-loading {
+  display: block;
+  margin: 0 2px;
+  color: var(--desktop-muted);
+  font-size: var(--desktop-text-body);
 }
 
 .agents-overview-group h2 {
@@ -698,14 +695,6 @@ html:not(.dark) .agents-request {
   font-variant-numeric: tabular-nums;
 }
 
-/* Under the words beside the glyph, not under the glyph. */
-.agents-peek-summary {
-  margin: 0 0 0 var(--agents-peek-glyph, 20px);
-  color: var(--desktop-muted);
-  font-size: var(--desktop-text-footnote);
-  line-height: 1.45;
-}
-
 /*
  * The turn's story, as its pane tells it but a step smaller: the person's
  * bubble, then the agent's steps and words in order, then what it is doing.
@@ -729,28 +718,17 @@ html:not(.dark) .agents-request {
   margin: 0;
   font-size: var(--desktop-text-body);
 }
-
 /* Where the story begins after the person's message, when the turn holds more above. */
-.agents-peek-earlier {
-  margin: 0;
-  color: var(--desktop-faint);
-  font-size: var(--desktop-text-footnote);
-}
-
-/* The request in full: the one warm thing in the peek, as in a pane. */
+/* The same card as the chat's (`.workspace-approval`): its fill, edge and corner. */
 .agents-peek-ask {
   display: grid;
   gap: 10px;
   padding: 14px;
-  border-radius: var(--desktop-radius-md);
-  background:
-    radial-gradient(
-      120% 80% at 0% 0%,
-      color-mix(in oklab, var(--desktop-needs) 8%, transparent),
-      transparent 70%
-    ),
-    color-mix(in oklab, var(--foreground) 3%, transparent);
-  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--desktop-needs) 20%, transparent);
+  border-radius: var(--desktop-radius-lg);
+  background: color-mix(in oklab, var(--foreground) 4%, transparent);
+  box-shadow:
+    inset 0 0 0 0.5px color-mix(in oklab, var(--foreground) 14%, transparent),
+    inset 0 1px 0 color-mix(in oklab, var(--foreground) 6%, transparent);
 }
 
 .agents-peek-reason,
@@ -844,7 +822,7 @@ html:not(.dark) .agents-request {
   box-shadow: inset 0 0 0 1.5px var(--desktop-focus-ring);
 }
 
-/* ——— Replying from the peek: a pill, the composer pared down ——— */
+/* ——— Replying from the peek: the composer in its compact size ——— */
 
 .agents-reply {
   display: grid;
@@ -889,56 +867,7 @@ html:not(.dark) .agents-request {
   flex: none;
 }
 
-.agents-reply-pill {
-  display: flex;
-  align-items: flex-end;
-  gap: 6px;
-  padding: 5px 5px 5px 14px;
-  border-radius: 18px;
-  background: color-mix(in oklab, var(--background) 62%, transparent);
-  -webkit-backdrop-filter: blur(16px);
-  backdrop-filter: blur(16px);
-  box-shadow: inset 0 0 0 1px var(--desktop-rim);
-  transition:
-    background-color var(--desktop-base) ease,
-    box-shadow var(--desktop-base) ease;
-}
-
-.agents-reply-pill:focus-within {
-  background: color-mix(in oklab, var(--background) 50%, transparent);
-  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--foreground) 12%, transparent);
-}
-
-.agents-reply-pill textarea {
-  flex: 1;
-  min-width: 0;
-  min-height: 26px;
-  padding: 4px 0;
-  border: 0;
-  outline: none;
-  resize: none;
-  background: transparent;
-  color: var(--foreground);
-  font: inherit;
-  font-size: var(--desktop-text-body);
-  line-height: 18px;
-}
-
-.agents-reply-pill textarea::placeholder {
-  color: var(--desktop-faint);
-}
-
-.agents-reply-send.desktop-send {
-  width: 26px;
-  height: 26px;
-  flex: none;
-}
-
-.agents-reply-send svg {
-  width: 14px;
-  height: 14px;
-}
-
+/* The composer's compact size (`.desktop-composer[data-size="compact"]`, styles.css). */
 .agents-reply-pill[data-sending] .agents-reply-send {
   opacity: 0.5;
 }

@@ -30,7 +30,7 @@ import {
  * plugin draws for the session (`SessionAccessories`), then its "…" menu
  * and ×. At the top of a conversation the heading below already says it all,
  * so the name shows only once the heading has scrolled away; a new session's
- * home speaks for itself. With one pane the bar moves the window; with more
+ * home speaks for itself when alone, and says "New session" beside others. With one pane the bar moves the window; with more
  * it carries the pane to another place. The × keeps its room when there is
  * nothing to close, so the menu never moves.
  */
@@ -73,7 +73,10 @@ export const PaneHeader = memo(function PaneHeader({
       : undefined
   })
   const title = session?.title ?? "New session"
-  const shown = titleShown && session !== undefined
+  // A conversation names itself once its heading scrolls away. A new
+  // session's home is its own greeting alone, but beside other panes every
+  // pane says what it is, so it reads "New session".
+  const shown = session !== undefined ? titleShown : multi
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>

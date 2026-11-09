@@ -255,6 +255,11 @@ pub struct ConversationMessage {
     pub retained_text: usize,
     pub execution_id: String,
     pub user_text: String,
+    /// Sent again after a restart or a failure cut its first try short.
+    /// `user_text` is still the person's own words: the notice the agent was
+    /// given is never shown as theirs.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub retried: Option<bool>,
     pub attachments: Vec<ConversationAttachment>,
     pub files: Vec<ConversationLinkedFile>,
     #[serde(skip_serializing_if = "Vec::is_empty")]

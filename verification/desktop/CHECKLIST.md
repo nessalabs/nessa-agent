@@ -1393,12 +1393,12 @@ it is redesigned on its own branch.
   commit no row was either component, and unread weighed 560, 600 or 650 by
   list.
 - [ ] **The window's name is one control in every place (#657).** "nessa
-  Studio" at the workspace's foot and "‹ nessa Agent"
+  Studio" at the workspace's foot and "‹ nessa Studio"
   at Settings' are `ui/identity.tsx`: a pill the corner controls' size and
   radius, "nessa" and its word in `--desktop-muted`, named, filled with
   `--desktop-hover` under the pointer; Settings' row stands where the
   window's does. _Check:_ `shared-controls.mjs` (`identity`, per engine and
-  layout; "‹ nessa Agent" measured inside Settings, over the inert window
+  layout; "‹ nessa Studio" measured inside Settings, over the inert window
   that keeps its own). Rule:
   `ui/identity.css`. Sampling waits for its finite hover transition through
   `waitUntilSettled`, retaining the exact fill assertion. Browser measurement

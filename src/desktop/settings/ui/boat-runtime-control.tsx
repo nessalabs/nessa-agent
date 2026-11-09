@@ -1,11 +1,12 @@
 import { Button } from "@nessa-ui/react/button"
-import { useEffect, useId, useRef, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import type {
   BoatRuntimeSetParams,
   BoatRuntimeSettings,
   BoatVmLifetime,
 } from "@nessa/client"
 import type { BoatGateway } from "../adapters/boat-gateway"
+import { ItemRow, Segmented } from "./settings-controls"
 
 const durations = [3600, 14_400, 28_800, 86_400] as const
 function label(lifetime: BoatVmLifetime): string {
@@ -15,6 +16,12 @@ function label(lifetime: BoatVmLifetime): string {
   return seconds % 3600 === 0
     ? `${seconds / 3600} ${seconds === 3600 ? "hour" : "hours"}`
     : `${seconds} seconds`
+}
+/** The same length, as a choice's short label: "2h", "90s". */
+function short(lifetime: BoatVmLifetime): string {
+  if (lifetime.mode === "never") return "Never"
+  const seconds = lifetime.seconds ?? 0
+  return seconds % 3600 === 0 ? `${seconds / 3600}h` : `${seconds}s`
 }
 function key(lifetime: BoatVmLifetime | undefined): string {
   return lifetime === undefined
@@ -31,7 +38,6 @@ export function BoatRuntimeControl({
   channelId?: string
   gateway?: Pick<BoatGateway, "runtimeSettings" | "setRuntimeSettings">
 }) {
-  const id = useId()
   const revision = useRef(0)
   const savePending = useRef(false)
   const [settings, setSettings] = useState<BoatRuntimeSettings>()
@@ -103,61 +109,57 @@ export function BoatRuntimeControl({
     }
   }
   // A choice saves as it is made: there is no draft to keep or discard.
+  const options: { id: string; label: string }[] = [
+    ...(channelId !== undefined ? [{ id: "default", label: "Default" }] : []),
+    { id: "never", label: "Never" },
+    ...durations.map((seconds) => ({ id: String(seconds), label: `${seconds / 3600}h` })),
+  ]
+  // A saved length the choices do not offer (set elsewhere) is offered too.
+  if (settings && saved !== undefined && !options.some((option) => option.id === saved))
+    options.push({
+      id: saved,
+      label: short(
+        channelId === undefined
+          ? settings.defaultLifetime
+          : (settings.channelOverride ?? settings.defaultLifetime),
+      ),
+    })
+  const status = settings
+    ? selection === "default"
+      ? `Default: ${label(settings.defaultLifetime)}`
+      : selection === "never"
+        ? "VMs keep billing until you stop them in Boat."
+        : undefined
+    : gateway
+      ? error
+        ? undefined
+        : "Loading…"
+      : "Connect a gateway"
   return (
     <div
       role="group"
       data-boat-runtime-settings={channelId ?? "global"}
+      data-selection={selection || undefined}
       aria-label="Boat VM runtime settings"
       className="settings-boat-runtime"
     >
-      <label htmlFor={id}>Auto-stop VMs</label>
-      <select
-        id={id}
-        className="settings-input settings-boat-select"
-        value={selection}
-        disabled={!gateway || !settings || busy}
-        onChange={(event) => {
-          setSelection(event.target.value)
-          void submit(event.target.value)
-        }}
+      <ItemRow
+        label="Auto-stop VMs"
+        detail={status}
+        unavailable={!gateway || !settings || busy}
       >
-        {!settings && (
-          <option value="">
-            {gateway ? (error ? "Unavailable" : "Loading…") : "Connect a gateway"}
-          </option>
-        )}
-        {channelId !== undefined && (
-          <option value="default">
-            Use Nessa default{settings ? ` (${label(settings.defaultLifetime)})` : ""}
-          </option>
-        )}
-        <option value="never">Never</option>
-        {durations.map((seconds) => (
-          <option key={seconds} value={String(seconds)}>
-            After {seconds / 3600} {seconds === 3600 ? "hour" : "hours"}
-          </option>
-        ))}
-        {settings &&
-          saved !== "default" &&
-          saved !== "never" &&
-          !durations.some((value) => String(value) === saved) && (
-            <option value={saved}>
-              After{" "}
-              {label(
-                channelId === undefined
-                  ? settings.defaultLifetime
-                  : (settings.channelOverride ?? settings.defaultLifetime),
-              )}
-            </option>
-          )}
-      </select>
-      {selection === "never" && (
-        <p className="settings-boat-note">
-          VMs keep billing until you stop them in Boat.
-        </p>
-      )}
+        <Segmented
+          label="Auto-stop VMs"
+          value={selection}
+          options={options}
+          onChange={(next) => {
+            setSelection(next)
+            void submit(next)
+          }}
+        />
+      </ItemRow>
       {error && (
-        <p role="alert">
+        <p role="alert" className="settings-boat-note">
           {error}{" "}
           <Button
             className="settings-button"

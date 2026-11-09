@@ -448,9 +448,24 @@ describe("the agents overview", () => {
     expect(card("second")?.getAttribute("aria-label")).toMatch(
       /\. The \u2068a\uFFFD\uFFFDb\u2069 app wants to run \u2068c\uFFFD\uFFFD\uFFFDd \{\}\u2069\.$/,
     )
-    const command = card("second")?.querySelector<HTMLElement>(".agents-request-command")
-    expect(command?.querySelector("bdi")?.textContent).toBe("c\uFFFD\uFFFD\uFFFDd {}")
-    expect(command?.title).toBe("c\uFFFD\uFFFD\uFFFDd {}")
+    // An app's row says who asks for what on its second line (the gateway's
+    // title, which names the tool and the server); the tool name alone would
+    // say less, so there is no command line under it.
+    expect(card("second")?.querySelector(".agents-request-command")).toBeNull()
+    expect(card("second")?.querySelector(".agents-request-why")?.textContent).toBe(
+      "Why second.",
+    )
+    expect(card("second")?.textContent).not.toMatch(bidiControls)
+  })
+
+  it("an agent's row is its title and its command: the command says what is asked", async () => {
+    await mount()
+    await open()
+    const row = card("first")
+    expect(row?.querySelector(".agents-request-command bdi")?.textContent).toBe(
+      "security import build.p12",
+    )
+    expect(row?.querySelector(".agents-request-why")).toBeNull()
   })
 
   it("E2-1 (#390): a row for an app's message shows an override in its server's name as U+FFFD", async () => {
@@ -976,7 +991,7 @@ describe("the agents overview", () => {
     await act(async () => card("first")?.click())
     await act(async () => settle(10))
     const peek = host.querySelector(".agents-inline-peek")
-    const allow = button(peek, "Allow Once")
+    const allow = button(peek, "Allow once")
     allow?.focus()
     await act(async () => {
       allow?.click()
@@ -1389,19 +1404,21 @@ describe("the peek tells the turn's story", () => {
     ])
   })
 
-  it("says what is going on in the source's own line, and nothing where the source says nothing", async () => {
+  it("says in one line what a working session is doing, in the source's own words", async () => {
     await mount()
     await open()
     await act(async () => row("run")?.click())
     await act(async () => settle(10))
-    expect(host.querySelector(".agents-peek-summary")?.textContent).toBe(
-      "Running the pane tests after laying them out as fractions",
-    )
+    const state = () =>
+      host.querySelector(".agents-peek-state > .agents-truncate")?.textContent
+    expect(state()).toBe("Running the pane tests after laying them out as fractions")
+    // One status line, with no second line under it.
+    expect(host.querySelectorAll(".agents-peek-now > p")).toHaveLength(1)
     await act(async () => row("run")?.click())
     await act(async () => card("first")?.click())
     await act(async () => settle(10))
     expect(host.querySelector(".agents-inline-peek")).not.toBeNull()
-    expect(host.querySelector(".agents-peek-summary")).toBeNull()
+    expect(host.querySelectorAll(".agents-peek-now > p")).toHaveLength(1)
   })
 
   it("draws no line where the source's line is only whitespace", async () => {
@@ -1418,7 +1435,9 @@ describe("the peek tells the turn's story", () => {
     await act(async () => row("run")?.click())
     await act(async () => settle(10))
     expect(host.querySelector(".agents-inline-peek")).not.toBeNull()
-    expect(host.querySelector(".agents-peek-summary")).toBeNull()
+    expect(host.querySelector(".agents-peek-state > .agents-truncate")?.textContent).toBe(
+      "Working",
+    )
   })
 })
 
@@ -1451,8 +1470,8 @@ describe("the peek's story is bounded, and scrolls from the keyboard beneath its
     })
   }
 
-  it("draws the turn's latest parts after the person's message, says there is more above, and opens the session from there", async () => {
-    const { source, store } = await mount()
+  it("draws the turn's latest parts after the person's message, with no line about what is above", async () => {
+    const { source } = await mount()
     longTurn(source)
     await open()
     await act(async () => row("run")?.click())
@@ -1467,19 +1486,8 @@ describe("the peek's story is bounded, and scrolls from the keyboard beneath its
     expect(steps.length + folded.reduce((sum, count) => sum + count, 0)).toBe(peekParts)
     expect(steps.at(-1)?.textContent).toContain("Readfile-3-9.ts")
     expect(story?.children[0].getAttribute("data-role")).toBe("user")
-    const earlier = story?.children[1]
-    expect(earlier?.textContent).toBe("Earlier in this turn · Open")
-    await act(async () => button(earlier ?? null, "Open")?.click())
-    expect(selectFocusedSessionId(store.getState())).toBe("run")
-    expect(selectOverviewOpen(store.getState())).toBe(false)
-  })
-
-  it("says nothing of more above a turn that fits", async () => {
-    await mount()
-    await open()
-    await act(async () => row("run")?.click())
-    await act(async () => settle(10))
-    expect(host.querySelector(".agents-peek-earlier")).toBeNull()
+    // The header's Open opens the whole session; the story says nothing more.
+    expect(story?.textContent).not.toContain("Earlier in this turn")
   })
 
   it("takes the keyboard beneath a row, and keeps the keys that scroll it rather than walking the list", async () => {

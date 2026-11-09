@@ -401,8 +401,36 @@
   max-width: 100%;
 }
 
-/* Deny is the quiet answer at every width; what allows carries the weight. */
-.workspace-approval-actions .workspace-approval-deny {
+/* Deny, and the menu of every other answer beside it. */
+.workspace-approval-refuse {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+}
+
+.workspace-approval-actions .workspace-approval-others {
+  flex: none;
+  width: 28px;
+  height: 28px;
+  min-height: 28px;
+  padding: 0;
+  background: transparent;
+}
+
+.workspace-approval-actions .workspace-approval-others:hover {
+  background: var(--desktop-hover-strong);
+}
+
+.workspace-approval-others svg {
+  width: 14px;
+  height: 14px;
+}
+
+/* Deny, and the other answers beside it, are the quiet ones at every width;
+   what allows carries the weight. */
+.workspace-approval-actions .workspace-approval-deny,
+.workspace-approval-actions .workspace-approval-others {
   background: transparent;
   color: var(--desktop-muted) !important;
 }
@@ -496,8 +524,7 @@
     border-radius: 4px var(--desktop-radius-pill) var(--desktop-radius-pill) 4px;
   }
 
-  .workspace-approval-actions .workspace-approval-deny {
-    margin-left: 0;
+  .workspace-approval-refuse {
     align-self: flex-start;
   }
 }

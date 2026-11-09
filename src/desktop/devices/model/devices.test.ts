@@ -5,7 +5,6 @@ import {
   bytes,
   hubCard,
   sortWorkers,
-  summary,
   workerCard,
 } from "./devices"
 
@@ -92,20 +91,13 @@ describe("devices model", () => {
     expect(sortWorkers(cards).map((card) => card.name)).toEqual(["z", "a"])
   })
 
-  it("says sizes, times and the summary plainly", () => {
+  it("says sizes and times plainly", () => {
     expect(bytes(512 * 1024 ** 2)).toBe("512 MB")
     expect(bytes(1.5 * 1024 * GB)).toBe("1.5 TB")
     expect(ago(0, 30_000)).toBe("just now")
     expect(ago(0, 5 * 60_000)).toBe("5 min ago")
     expect(ago(0, 2 * 3_600_000)).toBe("2 h ago")
     expect(ago(0, 72 * 3_600_000)).toBe("3 days ago")
-    expect(summary("Studio", [])).toBe(
-      "Studio is your hub. Add a computer to run agents on it too.",
-    )
-    const one = workerCard({ environment, state: "online", agents: 4, machine })
-    expect(summary("Studio", [one])).toBe(
-      "Studio is your hub. 1 of 1 computer online, 4 agents on them.",
-    )
   })
 
   it("names each volume of a serving computer with more than one", () => {
