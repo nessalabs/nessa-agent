@@ -9,7 +9,7 @@ import { createRoot, type Root } from "react-dom/client"
 import { Provider } from "react-redux"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { chordEvent } from "../../model/keyboard"
-import { settingsCategories, setting, settingsEntries } from "../model/settings-catalogue"
+import { settingsCategories } from "../model/settings-catalogue"
 import { settingsTabPages } from "./settings-tabs"
 import { SettingsHost } from "./settings-view"
 import { testStore } from "../../workspace/testing"
@@ -187,9 +187,7 @@ describe("Advanced", () => {
     await act(async () => setOpen(true))
     await act(async () => navItem("Advanced")?.click())
     expect(document.querySelector("#settings-heading")?.textContent).toBe("Advanced")
-    expect(document.querySelector(".settings-dek")?.textContent).toBe(
-      "Early features to try, and first-run setup to replay.",
-    )
+    expect(document.querySelector(".settings-dek")).toBeNull()
     // Experimental first, beside Setup.
     expect(tabNames()).toEqual(["Experimental", "Setup"])
     // Each preview is a switch, off until turned on.
@@ -209,13 +207,6 @@ describe("Advanced", () => {
     await act(async () => subagents?.click())
     expect(subagents?.getAttribute("aria-checked")).toBe("false")
   })
-
-  it("has taken Experimental out of General", async () => {
-    await mount()
-    await act(async () => setOpen(true))
-    await act(async () => navItem("General")?.click())
-    expect(tabNames()).not.toContain("Experimental")
-  })
 })
 
 describe("Privacy & Permissions", () => {
@@ -231,7 +222,7 @@ describe("Privacy & Permissions", () => {
     expect(
       document.querySelector('[role="tab"][aria-selected="true"]')?.textContent,
     ).toBe("Access")
-    for (const id of ["default-access", "remembered-rules", "review-notices"])
+    for (const id of ["remembered-rules", "review-notices"])
       expect(document.querySelector(`[data-setting="${id}"]`), id).not.toBeNull()
     for (const id of ["claude-native-hooks", "codex-native-hooks"])
       expect(document.querySelector(`[data-setting="${id}"]`), id).toBeNull()
@@ -246,7 +237,7 @@ describe("Privacy & Permissions", () => {
       expect(row?.hasAttribute("data-disabled"), id).toBe(true)
       expect(row?.querySelector('[role="switch"]'), id).toBeNull()
     }
-    expect(document.querySelector('[data-setting="default-access"]')).toBeNull()
+    expect(document.querySelector('[data-setting="remembered-rules"]')).toBeNull()
     expect(document.querySelector("#settings-panel")?.textContent).toContain(
       "Hooks can approve, deny, or change a tool call and its result without Nessa asking",
     )
@@ -254,7 +245,7 @@ describe("Privacy & Permissions", () => {
 })
 
 describe("what Settings offers", () => {
-  it("disables every control a setting not available yet shows, and says so once for its group", async () => {
+  it("offers no control that would do nothing", async () => {
     const tabs = settingsCategories.flatMap((category) =>
       category.tabs.map((tab) => tab.id),
     )
@@ -268,35 +259,8 @@ describe("what Settings offers", () => {
         </Provider>,
       ),
     )
-    const pending = settingsEntries.filter((entry) => setting(entry.id).pending)
-    expect(pending.length).toBeGreaterThan(0)
-    for (const entry of pending) {
-      const row = host.querySelector(`[data-setting="${entry.id}"]`)
-      expect(row, entry.id).not.toBeNull()
-      expect(row?.querySelectorAll("button:not(:disabled)").length, entry.id).toBe(0)
-      // Said on the row, or once for its group — never on a row whose group says it.
-      const group = row?.closest(".settings-group")
-      const said = [...(group?.querySelectorAll(".settings-unavailable") ?? [])]
-      // A setting that is a whole card of its own is its group: its note is the group's.
-      const onRow =
-        row !== group && (row?.textContent?.includes("Not available yet") ?? false)
-      expect(said.length + (onRow ? 1 : 0), entry.id).toBe(1)
-      // And whoever reads its controls hears why they rest.
-      if (said.length === 1)
-        for (const control of row?.querySelectorAll<HTMLElement>(
-          "[role=switch], [data-slot=segmented-control], .settings-button",
-        ) ?? [])
-          expect(control.getAttribute("aria-describedby") ?? "", entry.id).toContain(
-            said[0].id,
-          )
-    }
-    // A group none of whose settings is available yet says so once, not on every row.
-    const general = host
-      .querySelector('[data-setting="open-at-login"]')
-      ?.closest(".settings-group")
-    expect(general?.textContent?.match(/Not available yet/g)).toHaveLength(1)
-    // And every other control can be used. A row not available yet is the
-    // kit's disabled row (`data-disabled`); a whole card, the app's `data-pending`.
+    // Every control can be used, outside a layout it does not apply in (the
+    // kit's disabled row, `data-disabled`) or a card with no gateway (`data-pending`).
     const available = [
       ...host.querySelectorAll("[data-setting]:not([data-pending], [data-disabled])"),
     ]

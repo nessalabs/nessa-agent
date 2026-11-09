@@ -480,15 +480,6 @@ html:not(.dark) .settings-glass {
   text-wrap: balance;
 }
 
-.settings-dek {
-  margin: 10px 0 0;
-  max-width: 46ch;
-  color: var(--desktop-muted);
-  font-size: var(--desktop-text-read);
-  line-height: 1.45;
-  letter-spacing: -0.01em;
-}
-
 /*
  * The page's tabs, under the title: words in the muted ink, and a soft pill
  * under the chosen one that glides between them once placed.

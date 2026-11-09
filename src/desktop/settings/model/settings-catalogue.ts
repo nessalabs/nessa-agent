@@ -4,9 +4,10 @@
  * This table is the one owner of every name and description Settings shows
  * and of what its search can find; `ui/` beside it only lays them out.
  *
- * Every word here is on screen, so each earns its place: a category's `dek`
- * only where its name alone would leave someone unsure what it holds, and a
- * setting's `detail` only where its label would.
+ * Every word here is on screen, so each earns its place: a page's title has
+ * no line under it, and a setting has a `detail` only where its label alone
+ * would leave someone unsure. A setting not built yet is not listed: alpha
+ * shows nothing that only looks as if it works.
  *
  * ```text
  * category (sidebar) ──▶ tab (strip under the title) ──▶ setting (a row)
@@ -18,20 +19,6 @@
 import type { WorkspaceLayoutId } from "../../model/workspace-layout"
 
 export const settingsCategories = [
-  {
-    id: "general",
-    label: "General",
-    tabs: [
-      // Named for what it holds, not "General" again under General.
-      {
-        id: "general",
-        label: "Startup",
-        keywords: "general login menu bar window launch",
-      },
-      { id: "notifications", label: "Notifications", keywords: "alerts sound banner" },
-      { id: "updates", label: "Updates", keywords: "version release channel beta" },
-    ],
-  },
   {
     id: "appearance",
     label: "Appearance",
@@ -51,18 +38,9 @@ export const settingsCategories = [
     ],
   },
   {
-    id: "models",
-    label: "Models",
-    tabs: [
-      { id: "defaults", label: "Defaults", keywords: "model thinking fast" },
-      { id: "providers", label: "Providers", keywords: "anthropic openai google api" },
-    ],
-  },
-  {
     id: "connections",
     label: "Connections",
     tabs: [
-      { id: "agents", label: "Agents", keywords: "claude code codex opencode installed" },
       {
         id: "accounts",
         label: "Accounts",
@@ -90,17 +68,13 @@ export const settingsCategories = [
         keywords: "permissions approval ask shield",
       },
       { id: "native-hooks", label: "Native hooks", keywords: "claude codex startup" },
-      { id: "data", label: "Data", keywords: "history crash reports storage" },
     ],
   },
   {
     // The home of previews of features not settled yet, and of first-run
-    // setup for whoever wants to see it again. The subagents preview is on
-    // offer; with none on offer the page says so, and shows no control that
-    // would do nothing.
+    // setup for whoever wants to see it again.
     id: "advanced",
     label: "Advanced",
-    dek: "Early features to try, and first-run setup to replay.",
     tabs: [
       {
         id: "experimental",
@@ -122,8 +96,6 @@ export const settingsCategories = [
 ] as const satisfies readonly {
   id: string
   label: string
-  /** One short line under the title, only where the name alone does not say what the category is for. */
-  dek?: string
   tabs: readonly [SettingsTabShape, ...SettingsTabShape[]]
 }[]
 
@@ -146,12 +118,6 @@ interface SettingShape {
   /** Words a person might search for that the label and detail do not say. */
   keywords?: string
   /**
-   * Shown, but not available yet: what it changes lives outside the window
-   * — the host, the gateway, an account — and is not attached. Its control is
-   * disabled and says so; none may look as if it works.
-   */
-  pending?: true
-  /**
    * The workspace layouts it applies in — what it changes is drawn only
    * there. In any other its control is disabled and its row says where it
    * applies, so it never looks as if it works where it does nothing.
@@ -160,68 +126,6 @@ interface SettingShape {
 }
 
 export const settingsEntries = [
-  // General › General
-  {
-    id: "open-at-login",
-    pending: true,
-    tab: "general",
-    label: "Open at login",
-    keywords: "startup launch",
-  },
-  {
-    id: "menu-bar",
-    pending: true,
-    tab: "general",
-    label: "Show in menu bar",
-    keywords: "tray status panel",
-  },
-  {
-    id: "window-opens-to",
-    pending: true,
-    tab: "general",
-    label: "Open to",
-    keywords: "home last session start",
-  },
-  // General › Notifications
-  {
-    id: "notify-needs-you",
-    pending: true,
-    tab: "notifications",
-    label: "When a session needs you",
-    detail: "An approval or a question is waiting.",
-    keywords: "alert approval",
-  },
-  {
-    id: "notify-finished",
-    pending: true,
-    tab: "notifications",
-    label: "When a long turn finishes",
-    detail: "Only for turns that ran longer than a minute.",
-    keywords: "done complete",
-  },
-  {
-    id: "notify-sound",
-    pending: true,
-    tab: "notifications",
-    label: "Play a sound",
-    keywords: "chime audio",
-  },
-  // General › Updates
-  {
-    id: "update-automatically",
-    pending: true,
-    tab: "updates",
-    label: "Check for updates automatically",
-    keywords: "auto upgrade",
-  },
-  {
-    id: "update-channel",
-    pending: true,
-    tab: "updates",
-    label: "Release channel",
-    detail: "Beta builds arrive a week or two earlier.",
-    keywords: "beta stable",
-  },
   // Appearance › Theme
   {
     id: "theme-colour",
@@ -288,13 +192,6 @@ export const settingsEntries = [
   },
   // Workspace › Sessions
   {
-    id: "keep-sessions",
-    pending: true,
-    tab: "sessions",
-    label: "Keep finished sessions",
-    keywords: "archive delete history",
-  },
-  {
     id: "running-first",
     tab: "sessions",
     layouts: ["columns"],
@@ -307,45 +204,6 @@ export const settingsEntries = [
     tab: "keyboard",
     label: "Shortcuts",
     keywords: "keys hotkeys",
-  },
-  // Models › Defaults
-  {
-    id: "default-model",
-    pending: true,
-    tab: "defaults",
-    label: "Model",
-    keywords: "claude opus sonnet gpt",
-  },
-  {
-    id: "default-thinking",
-    pending: true,
-    tab: "defaults",
-    label: "Thinking",
-    keywords: "reasoning effort",
-  },
-  {
-    id: "fast-mode",
-    pending: true,
-    tab: "defaults",
-    label: "Fast mode",
-    detail: "Faster replies on models that offer it.",
-    keywords: "speed",
-  },
-  // Models › Providers
-  {
-    id: "providers",
-    pending: true,
-    tab: "providers",
-    label: "Providers",
-    keywords: "anthropic openai google api key",
-  },
-  // Connections › Agents
-  {
-    id: "agents",
-    pending: true,
-    tab: "agents",
-    label: "Agents",
-    keywords: "claude code codex opencode",
   },
   // Connections › Accounts
   {
@@ -393,21 +251,6 @@ export const settingsEntries = [
   },
   // Privacy & Permissions › Access
   {
-    id: "default-access",
-    pending: true,
-    tab: "access",
-    label: "By default, agents may",
-    keywords: "access permission ask edit full",
-  },
-  {
-    id: "remember-approvals",
-    pending: true,
-    tab: "access",
-    label: "Remember approvals for a session",
-    detail: "A command you allow once is allowed again in the same session.",
-    keywords: "allow",
-  },
-  {
     id: "remembered-rules",
     tab: "access",
     label: "Remembered rules",
@@ -448,23 +291,6 @@ export const settingsEntries = [
       "Hooks can approve, deny, or change a tool call and its result without Nessa asking, and can run commands when the agent starts. Applies the next time each conversation's agent starts.",
     keywords: "native hooks codex",
   },
-  // Privacy & Permissions › Data
-  {
-    id: "crash-reports",
-    pending: true,
-    tab: "data",
-    label: "Share crash reports",
-    detail: "Only the report; never your files or conversations.",
-    keywords: "diagnostics telemetry",
-  },
-  {
-    id: "session-history",
-    pending: true,
-    tab: "data",
-    label: "Session history",
-    detail: "Kept on this Mac, in Nessa's data folder.",
-    keywords: "storage finder clear",
-  },
   // Advanced › Experimental
   {
     id: "subagents-preview",
@@ -473,7 +299,6 @@ export const settingsEntries = [
     detail: "A panel of the agents a conversation put to work.",
     keywords: "delegation children agents panel",
   },
-  // About
   // Advanced › Experimental
   {
     id: "side-rail",
@@ -549,17 +374,11 @@ export function tabsOf(category: SettingsCategoryId): readonly SettingsTab[] {
 /**
  * Whether a category's page shows its tabs across the top: only when it has
  * more than one. A strip of one tab is a name with nothing to choose; the
- * page's title (and its dek, where it has one) already says what is there.
+ * page's title already says what is there.
  * Search names the tab in its trail by the same rule.
  */
 export function showsTabs(category: SettingsCategoryId): boolean {
   return settingsCategory(category).tabs.length > 1
-}
-
-/** The one line under a category's title, where it has one. */
-export function dekOf(category: SettingsCategoryId): string | undefined {
-  const entry = settingsCategory(category)
-  return "dek" in entry ? entry.dek : undefined
 }
 
 /**

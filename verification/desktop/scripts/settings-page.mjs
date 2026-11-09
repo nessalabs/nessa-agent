@@ -32,13 +32,7 @@ const sizes = [
  * scrolling at 1000 × 700: each category's first tab, but Connections and
  * Advanced (a list of agents, and nothing yet).
  */
-const aboveTheFold = [
-  "General",
-  "Appearance",
-  "Workspace",
-  "Models",
-  "Privacy & Permissions",
-]
+const aboveTheFold = ["Appearance", "Workspace", "Privacy & Permissions"]
 
 /** The longest page, which scrolls at every size: Workspace › Keyboard. */
 const longPage = { category: "Workspace", tab: "Keyboard" }
@@ -255,7 +249,7 @@ const checks = {
   arrive: async (page, { browser, url }) => {
     const failures = []
     const measure = async (target) => {
-      await show(target, "Models")
+      await show(target, "Appearance")
       await target.locator(css.settingsCategory, { hasText: "Workspace" }).first().click()
       return target.evaluate(
         (sel) =>
@@ -298,7 +292,7 @@ const checks = {
   search: async (page) => {
     const failures = []
     await page.setViewportSize(sizes[1])
-    await show(page, "General")
+    await show(page, "Appearance")
     const field = page.locator(css.settingsSearch)
     await field.fill("drifting light")
     await page.keyboard.press("Enter")
@@ -445,7 +439,7 @@ const checks = {
       ["claude-native-hooks", "Claude Code hooks"],
       ["codex-native-hooks", "Codex hooks"],
     ]) {
-      await show(page, "General")
+      await show(page, "Appearance")
       const field = page.locator(css.settingsSearch)
       await field.fill(label)
       await page.keyboard.press("Enter")

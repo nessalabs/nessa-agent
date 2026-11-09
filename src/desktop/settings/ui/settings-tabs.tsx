@@ -2,15 +2,14 @@ import { BoatRow } from "./boat-row"
 import { VaultPassphraseControl } from "../../../vault"
 import { useState, type ComponentType } from "react"
 import { hasNativeHost, replayOnboarding } from "../../../host"
-import { AgentMark } from "../../../onboarding/ui/agent-mark"
 import { useIconFamilyPreference } from "../../adapters/icon-family-preference"
 import { useTintFromPicture } from "../../adapters/header-image"
 import { useThemePreference } from "../../adapters/theme-preference"
-import { agentForProvider, composerProviders } from "../../model/composer-options"
 import { iconFamilies } from "../../model/icon-family"
 import { chordLabel } from "../../model/keyboard"
 import { isMac } from "../../adapters/platform"
 import type { SettingsTabId } from "../model/settings-catalogue"
+import { version as appVersion } from "../../../../package.json"
 import { desktopThemes } from "../../model/theme"
 import { workspaceLayouts, type WorkspaceLayoutId } from "../../model/workspace-layout"
 import { useWorkspaceLayoutPreference } from "../../adapters/workspace-layout-preference"
@@ -43,13 +42,11 @@ import {
   Choices,
   Group,
   ItemRow,
-  PendingAction,
   Row,
   RowAction,
   Segmented,
   SettingGroup,
   Toggle,
-  usePrototype,
 } from "./settings-controls"
 import { GithubRow } from "./github-row"
 import { VoiceKeyRow } from "./voice-key-row"
@@ -60,12 +57,11 @@ import { PermissionRuleRows, TrustedAppRows } from "./permission-rule-rows"
 import { ReviewNoticeRows } from "./review-notice-rows"
 
 /**
- * What each tab shows. Every setting the window owns is real and
- * remembered: theme, icons, tint, the picture in conversations, greeting,
- * motion, drifting light, layout, the subagents preview,
- * the session list, ⌘-click, running first. What lives outside the window —
- * the host, the gateway, an account — is marked not available yet in the
- * catalogue (`pending`), and its row says so with its control disabled.
+ * What each tab shows. Every setting shown is real and remembered: theme,
+ * icons, tint, the picture in conversations, greeting, motion, drifting
+ * light, layout, the subagents preview, the session list, ⌘-click, running
+ * first. A setting not built yet is not in the catalogue at all, so nothing
+ * here looks as if it works when it does nothing.
  * Integrations is the gateway's stored MCP servers where the window has a
  * gateway, and pending where it has none (`integrations-tab.tsx`).
  * Linked devices pairs and revokes where the window has a gateway, and is
@@ -74,97 +70,20 @@ import { ReviewNoticeRows } from "./review-notice-rows"
  * and rests those rows where it has none (`native-hooks-rows.tsx`).
  */
 export const settingsTabPages: Record<SettingsTabId, ComponentType> = {
-  general: GeneralTab,
-  notifications: NotificationsTab,
-  updates: UpdatesTab,
   theme: ThemeTab,
   header: HeaderTab,
   motion: MotionTab,
   layout: LayoutTab,
   sessions: SessionsTab,
   keyboard: KeyboardTab,
-  defaults: DefaultsTab,
-  providers: ProvidersTab,
-  agents: AgentsTab,
   accounts: AccountsTab,
   integrations: IntegrationsTab,
   devices: LinkedDevicesTab,
   access: AccessTab,
   "native-hooks": NativeHooksRows,
-  data: DataTab,
   experimental: ExperimentalTab,
   setup: SetupTab,
   about: AboutTab,
-}
-
-/* ——— General ——— */
-
-function GeneralTab() {
-  const [launch, setLaunch] = usePrototype(true)
-  const [menuBar, setMenuBar] = usePrototype(true)
-  const [open, setOpen] = usePrototype<"home" | "last">("last")
-  return (
-    <Group>
-      <Row id="open-at-login">
-        <Toggle checked={launch} onChange={setLaunch} />
-      </Row>
-      <Row id="menu-bar">
-        <Toggle checked={menuBar} onChange={setMenuBar} />
-      </Row>
-      <Row id="window-opens-to">
-        <Segmented
-          value={open}
-          onChange={setOpen}
-          options={[
-            { id: "home", label: "Home" },
-            { id: "last", label: "Last session" },
-          ]}
-        />
-      </Row>
-    </Group>
-  )
-}
-
-function NotificationsTab() {
-  const [needsYou, setNeedsYou] = usePrototype(true)
-  const [finished, setFinished] = usePrototype(false)
-  const [sound, setSound] = usePrototype(false)
-  return (
-    <Group note="Only while the window is in the background or closed.">
-      <Row id="notify-needs-you">
-        <Toggle checked={needsYou} onChange={setNeedsYou} />
-      </Row>
-      <Row id="notify-finished">
-        <Toggle checked={finished} onChange={setFinished} />
-      </Row>
-      <Row id="notify-sound">
-        <Toggle checked={sound} onChange={setSound} />
-      </Row>
-    </Group>
-  )
-}
-
-function UpdatesTab() {
-  const [automatic, setAutomatic] = usePrototype(true)
-  const [channel, setChannel] = usePrototype<"stable" | "beta">("stable")
-  // No row claims Nessa is up to date: nothing here has checked.
-  return (
-    <Group>
-      <Row id="update-automatically">
-        <Toggle checked={automatic} onChange={setAutomatic} />
-      </Row>
-      <Row id="update-channel">
-        <Segmented
-          value={channel}
-          onChange={setChannel}
-          options={[
-            { id: "stable", label: "Stable" },
-            { id: "beta", label: "Beta" },
-          ]}
-        />
-      </Row>
-    </Group>
-  )
 }
 
 /* ——— Appearance ——— */
@@ -327,21 +246,9 @@ function LayoutTab() {
 }
 
 function SessionsTab() {
-  const [keep, setKeep] = usePrototype<"week" | "month" | "always">("month")
   const [runningFirst, setRunningFirst] = useRunningFirstPreference()
   return (
-    <Group note="Pinned sessions are always kept.">
-      <Row id="keep-sessions">
-        <Segmented
-          value={keep}
-          onChange={setKeep}
-          options={[
-            { id: "week", label: "A week" },
-            { id: "month", label: "A month" },
-            { id: "always", label: "Always" },
-          ]}
-        />
-      </Row>
+    <Group>
       <Row id="running-first">
         <Toggle
           checked={runningFirst === "on"}
@@ -384,106 +291,7 @@ function KeyboardTab() {
   )
 }
 
-/* ——— Models ——— */
-
-function DefaultsTab() {
-  const [model, setModel] = usePrototype<"opus" | "sonnet" | "gpt">("opus")
-  const [thinking, setThinking] = usePrototype<"low" | "medium" | "high" | "max">(
-    "medium",
-  )
-  const [fast, setFast] = usePrototype(false)
-  return (
-    <Group>
-      <Row id="default-model">
-        <Segmented
-          value={model}
-          onChange={setModel}
-          options={[
-            { id: "opus", label: "Claude Opus 5" },
-            { id: "sonnet", label: "Sonnet 5" },
-            { id: "gpt", label: "GPT-6 Astra" },
-          ]}
-        />
-      </Row>
-      <Row id="default-thinking">
-        <Segmented
-          value={thinking}
-          onChange={setThinking}
-          options={[
-            { id: "low", label: "Low" },
-            { id: "medium", label: "Medium" },
-            { id: "high", label: "High" },
-            { id: "max", label: "Max" },
-          ]}
-        />
-      </Row>
-      <Row id="fast-mode">
-        <Toggle checked={fast} onChange={setFast} />
-      </Row>
-    </Group>
-  )
-}
-
-function ProvidersTab() {
-  return (
-    <SettingGroup
-      id="providers"
-      note="Models come from the agents on this Mac; a provider without one needs its own key."
-    >
-      {composerProviders.map((provider) => {
-        const agent = agentForProvider(provider.id)
-        const count = provider.models.length
-        return (
-          <ItemRow
-            key={provider.id}
-            label={provider.label}
-            detail={`${count} ${count === 1 ? "model" : "models"}${agent ? "" : " · needs an API key"}`}
-            leading={
-              <span className="settings-tile">
-                {agent ? (
-                  <AgentMark id={agent} name={provider.label} />
-                ) : (
-                  provider.label.charAt(0)
-                )}
-              </span>
-            }
-            control={agent ? null : <PendingAction>Add key…</PendingAction>}
-          />
-        )
-      })}
-    </SettingGroup>
-  )
-}
-
 /* ——— Connections ——— */
-
-function AgentsTab() {
-  // Which agents are installed, and at what version, the host will say; until
-  // then each is named, and none is claimed.
-  const agents = [
-    { id: "claude", name: "Claude Code" },
-    { id: "codex", name: "Codex" },
-    { id: "opencode", name: "OpenCode" },
-  ] as const
-  return (
-    <SettingGroup
-      id="agents"
-      note="Nessa runs the agents already on this Mac; it doesn't install its own copies."
-    >
-      {agents.map((agent) => (
-        <ItemRow
-          key={agent.id}
-          label={agent.name}
-          leading={
-            <span className="settings-tile">
-              <AgentMark id={agent.id} name={agent.name} />
-            </span>
-          }
-        />
-      ))}
-    </SettingGroup>
-  )
-}
 
 function AccountsTab() {
   return (
@@ -501,44 +309,12 @@ function AccountsTab() {
 /* ——— Privacy & Permissions ——— */
 
 function AccessTab() {
-  const [access, setAccess] = usePrototype<"ask" | "edits" | "full">("ask")
-  const [remember, setRemember] = usePrototype(true)
   return (
     <>
-      <Group note="Each session can change this from the shield in its composer.">
-        <Row id="default-access">
-          <Segmented
-            value={access}
-            onChange={setAccess}
-            options={[
-              { id: "ask", label: "Ask first" },
-              { id: "edits", label: "Edit files" },
-              { id: "full", label: "Full access" },
-            ]}
-          />
-        </Row>
-        <Row id="remember-approvals">
-          <Toggle checked={remember} onChange={setRemember} />
-        </Row>
-      </Group>
       <PermissionRuleRows />
       <TrustedAppRows />
       <ReviewNoticeRows />
     </>
-  )
-}
-
-function DataTab() {
-  const [crashes, setCrashes] = usePrototype(false)
-  return (
-    <Group>
-      <Row id="crash-reports">
-        <Toggle checked={crashes} onChange={setCrashes} />
-      </Row>
-      <Row id="session-history">
-        <PendingAction>Show in Finder</PendingAction>
-      </Row>
-    </Group>
   )
 }
 
@@ -607,7 +383,7 @@ function AboutTab() {
       </p>
       <Group>
         <Row id="version">
-          <span className="settings-value">0.1.0 (prototype)</span>
+          <span className="settings-value">{appVersion}</span>
         </Row>
       </Group>
     </>

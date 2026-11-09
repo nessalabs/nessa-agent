@@ -17,7 +17,6 @@ import { EdgePeekStrip } from "../../ui/edge-peek-strip"
 import { HistoryButtons } from "../../ui/history-buttons"
 import { settingsSidebar } from "../model/settings-sidebar"
 import {
-  dekOf,
   settingsCategories,
   settingsCategory,
   settingsResultKey,
@@ -35,10 +34,8 @@ import { tooltip } from "../../ui/tooltip"
 
 /** Each category's icon in the sidebar, for every category the catalogue has. */
 const categoryIcons: Record<SettingsCategoryId, DesktopIconRole> = {
-  general: "preferences",
   appearance: "appearance",
   workspace: "workspace",
-  models: "model",
   connections: "connections",
   privacy: "privacy",
   advanced: "advanced",
@@ -302,7 +299,6 @@ function SettingsPage({
     <div className="settings-column settings-page">
       <SettingsMasthead
         title={settingsCategory(category).label}
-        dek={dekOf(category)}
         headingId="settings-heading"
       >
         {tabs ? <SettingsTabStrip tabs={tabs} selected={tab} onSelect={onTab} /> : null}

@@ -1,14 +1,10 @@
 import {
-  Children,
   createContext,
-  isValidElement,
   useContext,
   useId,
   useRef,
-  useState,
   type KeyboardEvent as ReactKeyboardEvent,
   type KeyboardEventHandler,
-  type ReactElement,
   type ReactNode,
 } from "react"
 import { useControlLabel } from "@nessa-ui/react/lib/control-label"
@@ -29,12 +25,12 @@ import type { DesktopIconRole } from "../../ui/icons"
  * The pieces every Settings tab is built from, over the UI kit's settings
  * group and row (`@nessa-ui/react/settings-group`), its switch and its
  * segmented control. What is Settings' own is the wiring to the catalogue:
- * a row's name and description, whether it is available yet, the setting a
- * search just landed on, and saying once — not on every row — that a group
- * is not available yet.
+ * a row's name and description, the setting a search just landed on, and
+ * saying once — not on every row — that a group is not available in this
+ * window (one with no gateway).
  *
  * ```text
- *   Group ─────── a card of rows; says "Not available yet" once when none is
+ *   Group ─────── a card of rows
  *     │
  *     ├── Row ─── one catalogued setting: name, description and control
  *     └── ItemRow  something listed rather than catalogued (an agent, a key)
@@ -53,8 +49,8 @@ export const FoundSetting = createContext<SettingId | null>(null)
 const RowDescription = createContext<string | undefined>(undefined)
 
 /**
- * Whether the enclosing row's setting is available. One that is not
- * (`pending` in the catalogue) disables every control in its row.
+ * Whether the enclosing row's setting is available. One that is not (a
+ * group with no gateway to change it) disables every control in its row.
  */
 const RowAvailable = createContext(true)
 
@@ -71,21 +67,6 @@ const notYet = "Not available yet"
 function describedBy(...ids: (string | undefined)[]): string | undefined {
   const present = [...new Set(ids.filter(Boolean))]
   return present.length > 0 ? present.join(" ") : undefined
-}
-
-/**
- * The catalogued settings a group's rows show, read from its `Row`s. A group
- * whose rows are every one a catalogued setting not available yet says so
- * once, under its card.
- */
-function rowsOf(children: ReactNode): SettingId[] | undefined {
-  const elements = Children.toArray(children).filter(isValidElement)
-  const rows = elements.filter(
-    (element): element is ReactElement<{ id: SettingId }> => element.type === Row,
-  )
-  return rows.length > 0 && rows.length === elements.length
-    ? rows.map((row) => row.props.id)
-    : undefined
 }
 
 /** The footnote under a card: the note that it is not available yet, then the group's own. */
@@ -118,27 +99,17 @@ export function Group({
   note?: string
   children: ReactNode
 }) {
-  const noteId = useId()
-  const rows = rowsOf(children)
-  const resting = rows?.every((id) => setting(id).pending === true) ?? false
   return (
-    <SettingsGroup
-      className="settings-group"
-      title={title}
-      data-pending={resting || undefined}
-      footnote={footnoteOf(resting ? noteId : undefined, note)}
-    >
-      <GroupNote.Provider value={resting ? noteId : undefined}>
-        {children}
-      </GroupNote.Provider>
+    <SettingsGroup className="settings-group" title={title} footnote={note}>
+      {children}
     </SettingsGroup>
   )
 }
 
 /**
  * A row for one catalogued setting: its name and description come from the
- * catalogue, and so does whether it is available yet, and in which layout
- * it applies — elsewhere its control is disabled and the row says where.
+ * catalogue, and so does in which layout it applies — elsewhere its control
+ * is disabled and the row says where.
  */
 /** Where a setting applies, said on its row in any other layout: "Three columns only". */
 function appliesIn(layouts: readonly WorkspaceLayoutId[]): string {
@@ -150,28 +121,18 @@ function appliesIn(layouts: readonly WorkspaceLayoutId[]): string {
 export function Row({ id, children }: { id: SettingId; children?: ReactNode }) {
   const entry = setting(id)
   const found = useContext(FoundSetting) === id
-  const groupNote = useContext(GroupNote)
   const [layout] = useWorkspaceLayoutPreference()
   const elsewhere =
     entry.layouts !== undefined && !entry.layouts.includes(layout)
       ? appliesIn(entry.layouts)
       : undefined
-  const pending = entry.pending === true
-  // Why its control rests, said on the row unless its group says it once.
-  const reason =
-    pending && groupNote === undefined
-      ? notYet
-      : elsewhere !== undefined
-        ? elsewhere
-        : undefined
   return (
     <ItemRow
       label={entry.label}
-      detail={reason ?? entry.detail}
+      detail={elsewhere ?? entry.detail}
       setting={id}
       found={found}
-      unavailable={pending || elsewhere !== undefined}
-      describedBy={pending ? groupNote : undefined}
+      unavailable={elsewhere !== undefined}
       control={children}
     />
   )
@@ -271,7 +232,7 @@ export function SettingGroup({
   const nameId = useId()
   const noteId = useId()
   const entry = setting(id)
-  const available = entry.pending !== true && pending !== true
+  const available = pending !== true
   return (
     <SettingsGroup
       className="settings-group"
@@ -566,9 +527,4 @@ export function RowLink({
       {children}
     </a>
   )
-}
-
-/** Local, unsaved state for settings that only show their shape for now. */
-export function usePrototype<T>(initial: T) {
-  return useState<T>(initial)
 }
