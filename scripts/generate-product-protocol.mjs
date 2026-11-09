@@ -192,26 +192,33 @@ const mcpServerRules = {}
   }
 }
 
-// How many paired machines may be switched on to receive saved logins,
-// owned by the gateway's logins domain: the schema's bound must equal it, or
-// generation fails, so the service and a client admit the same lists.
-{
-  const source = readFileSync(
-    resolve(root, "crates/nessa-server/src/logins/domain.rs"),
-    "utf8",
-  )
+// A saved login's bounds, each owned by Rust: how many paired machines may be
+// switched on to receive saved logins (the gateway's logins domain) and the
+// most bytes of a login (the lease protocol's Login, which logins.save and a
+// lease handoff both decode). The schema's bound must equal each, or
+// generation fails, so the service and a client admit the same values.
+for (const [file, constant, published, name] of [
+  [
+    "crates/nessa-server/src/logins/domain.rs",
+    "MAX_SWITCHED_ON",
+    schema.$defs.LoginsStatus.properties.devicesOn.maxItems,
+    "LoginsStatus.devicesOn.maxItems",
+  ],
+  [
+    "crates/nessa-protocol/src/lease.rs",
+    "MAX_LOGIN_BYTES",
+    schema.$defs.LoginsSaveParams.properties.login.maxLength,
+    "LoginsSaveParams.login.maxLength",
+  ],
+]) {
+  const source = readFileSync(resolve(root, file), "utf8")
   const owned = Number(
     source
-      .match(/pub const MAX_SWITCHED_ON: usize = ([0-9_]+);/)?.[1]
-      .replaceAll("_", ""),
+      .match(new RegExp(`pub const ${constant}: usize = ([0-9_]+);`))?.[1]
+      ?.replaceAll("_", ""),
   )
-  if (
-    !Number.isSafeInteger(owned) ||
-    schema.$defs.LoginsStatus.properties.devicesOn.maxItems !== owned
-  )
-    throw new Error(
-      "LoginsStatus.devicesOn.maxItems drifted from the gateway's MAX_SWITCHED_ON",
-    )
+  if (!Number.isSafeInteger(owned) || published !== owned)
+    throw new Error(`${name} drifted from the Rust owner's ${constant}`)
 }
 
 // A channel's bounds, owned by the gateway's channel value objects and

@@ -81,6 +81,7 @@ function fixture(run) {
       "crates/nessa-server/src/conversation/domain/value_objects/channel.rs",
       "crates/nessa-server/src/conversation/domain/value_objects/vm_lifetime.rs",
       "crates/nessa-server/src/logins/domain.rs",
+      "crates/nessa-protocol/src/lease.rs",
       "crates/nessa-sdk/src/domain/agent_execution/permissions/value_objects/review_limits.rs",
       "crates/nessa-sdk/src/domain/agent_execution/questions/value_objects/question.rs",
       "crates/nessa-protocol/src/protocol/encode.rs",
@@ -455,7 +456,7 @@ test("a saved-login device bound changed on one side alone refuses to publish", 
     )
     assert.match(
       result.stderr,
-      /devicesOn.maxItems drifted from the gateway's MAX_SWITCHED_ON/,
+      /devicesOn.maxItems drifted from the Rust owner's MAX_SWITCHED_ON/,
     )
     writeFileSync(source, before)
     edit(path, "protocol/product/v1.json", (schema) => {
@@ -465,6 +466,35 @@ test("a saved-login device bound changed on one side alone refuses to publish", 
       generate(path, "generate-product-protocol"),
     )
     assert.match(retyped.stderr, /devicesOn.maxItems drifted/)
+  }))
+
+// The login length bound is the lease protocol's: one changed on either
+// side alone publishes nothing.
+test("a saved-login length bound changed on one side alone refuses to publish", () =>
+  fixture((path) => {
+    const source = join(path, "crates/nessa-protocol/src/lease.rs")
+    const before = readFileSync(source, "utf8")
+    const after = before.replace(
+      "pub const MAX_LOGIN_BYTES: usize = 4096;",
+      "pub const MAX_LOGIN_BYTES: usize = 4095;",
+    )
+    assert.notEqual(after, before)
+    writeFileSync(source, after)
+    const result = unchanged(path, ["protocol/product/v1.json", ...productOutputs], () =>
+      generate(path, "generate-product-protocol"),
+    )
+    assert.match(
+      result.stderr,
+      /login.maxLength drifted from the Rust owner's MAX_LOGIN_BYTES/,
+    )
+    writeFileSync(source, before)
+    edit(path, "protocol/product/v1.json", (schema) => {
+      schema.$defs.LoginsSaveParams.properties.login.maxLength += 1
+    })
+    const retyped = unchanged(path, ["protocol/product/v1.json", ...productOutputs], () =>
+      generate(path, "generate-product-protocol"),
+    )
+    assert.match(retyped.stderr, /login.maxLength drifted/)
   }))
 
 test("MCP server rules with an unknown field refuse to publish", () =>
