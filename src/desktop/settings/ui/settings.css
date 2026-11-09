@@ -677,6 +677,11 @@ html:not(.dark) :is(.settings, .settings-surface) .settings-card {
   line-height: 1.4;
 }
 
+/* An empty list's one line ("None yet"): muted, as a detail is. */
+:is(.settings, .settings-surface) .settings-row-quiet [data-slot="settings-row-label"] {
+  color: var(--desktop-muted);
+}
+
 /* Where a search landed: a soft wash in the theme's light that fades away. */
 .settings-row[data-found],
 .settings-group[data-found] [data-slot="settings-group-card"] {

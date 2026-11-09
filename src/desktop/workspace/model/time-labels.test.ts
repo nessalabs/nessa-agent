@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { elapsed, sessionTime, startedLabel } from "./time-labels"
+import { elapsed, sessionTime } from "./time-labels"
 
 // Local times, so the day boundaries are the reader's own whatever the zone.
 const at = (day: number, hour: number, minute = 0) =>
@@ -28,15 +28,6 @@ describe("a session's time", () => {
 
   it("treats a time in the future as now", () => {
     expect(sessionTime(now + 60_000, now)).toBe("now")
-  })
-})
-
-describe("when a conversation started", () => {
-  it("reads as a phrase, capitalised when it leads", () => {
-    expect(startedLabel(now, now)).toBe("Started just now")
-    expect(startedLabel(at(27, 20, 38), now)).toBe("Started 22m ago")
-    expect(startedLabel(at(26, 8), now)).toBe("Started yesterday")
-    expect(startedLabel(at(21, 10), now)).toBe("Started Mon")
   })
 })
 

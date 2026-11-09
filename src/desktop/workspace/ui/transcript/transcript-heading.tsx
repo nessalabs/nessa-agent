@@ -5,8 +5,6 @@ import { useWorkspaceDispatch, useWorkspaceSelector } from "../../adapters/store
 import { selectChannel } from "../../adapters/store/selectors"
 import { useRememberedSession } from "../../adapters/store/remembered-session"
 import { revealSession } from "../../adapters/store/commands"
-import { useNow } from "../../../../clock"
-import { startedLabel } from "../../model/time-labels"
 import { useListedChannel, useWorkspaceFrame } from "../workspace-frame"
 import { tooltip } from "../../../ui/tooltip"
 
@@ -44,11 +42,13 @@ export function leaseNote(lease: TranscriptLease): string | undefined {
 }
 
 /**
- * A conversation's heading: its title, its channel, when it began, where its
- * agent runs and its lease, set lightly at the top of the transcript and
- * scrolling away with it. The
- * channel is left out when the session list beside already names it, and
- * reveals the session in the sidebar when chosen.
+ * A conversation's heading: its title, set lightly at the top of the
+ * transcript and scrolling away with it. A line under it says only what is
+ * not the usual: its channel when the session list beside does not already
+ * name it (chosen, it reveals the session in the sidebar), where its agent
+ * runs when that is not this computer, and its lease when it is not simply
+ * running. The shield and the pane menu say the rest, so a session on this
+ * computer, running as it should, has no line at all.
  */
 export function TranscriptHeading({
   sessionId,
@@ -66,7 +66,6 @@ export function TranscriptHeading({
     session ? selectChannel(state, session.channelId) : undefined,
   )
   const listed = useListedChannel()
-  const now = useNow(60_000)
   if (!session) return null
   const showChannel = channel !== undefined && channel.id !== listed
   const placement =
@@ -75,42 +74,49 @@ export function TranscriptHeading({
       : channel.coordinatorConversationId === sessionId
         ? channel.coordinatorPlacement
         : channel.threadPlacement
-  const place = placeNote(lease, placement)
-  const note = lease && leaseNote(lease)
+  const where = lease?.environment ?? placement
+  const place =
+    where === "here" || where === "local" ? undefined : placeNote(lease, placement)
+  const note = lease && lease.state !== "live" ? leaseNote(lease) : undefined
+  const said = [
+    showChannel ? (
+      <button
+        key="channel"
+        type="button"
+        className="workspace-heading-channel"
+        {...tooltip("Show in Sidebar")}
+        onClick={() => {
+          dispatch(revealSession({ sessionId }))
+          frame.showRow(sessionId)
+        }}
+      >
+        #{channel.name}
+      </button>
+    ) : null,
+    place ? (
+      <span key="place" data-workspace-place={where}>
+        {place}
+      </span>
+    ) : null,
+    note ? <span key="note">{note}</span> : null,
+  ].filter((each) => each !== null)
   return (
     <div className="workspace-heading">
       <h2 ref={titleRef}>{session.title}</h2>
-      <p>
-        {showChannel ? (
-          <>
-            <button
-              type="button"
-              className="workspace-heading-channel"
-              {...tooltip("Show in Sidebar")}
-              onClick={() => {
-                dispatch(revealSession({ sessionId }))
-                frame.showRow(sessionId)
-              }}
-            >
-              #{channel.name}
-            </button>
-            <span aria-hidden="true"> · </span>
-          </>
-        ) : null}
-        {startedLabel(session.startedAt, now)}
-        {place ? (
-          <>
-            <span aria-hidden="true"> · </span>
-            <span data-workspace-place={lease?.environment ?? placement}>{place}</span>
-          </>
-        ) : null}
-        {note ? (
-          <>
-            <span aria-hidden="true"> · </span>
-            <span>{note}</span>
-          </>
-        ) : null}
-      </p>
+      {said.length > 0 ? (
+        <p>
+          {said.flatMap((each, index) =>
+            index === 0
+              ? [each]
+              : [
+                  <span key={`dot-${index}`} aria-hidden="true">
+                    {" · "}
+                  </span>,
+                  each,
+                ],
+          )}
+        </p>
+      ) : null}
     </div>
   )
 }

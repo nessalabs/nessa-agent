@@ -1,7 +1,6 @@
 /**
  * Times as the workspace says them: "now", "4m", "3h", "Yesterday", "Mon",
- * "Sep 19" beside a session; "Started 22m ago" under a heading; "39s" beside
- * what an agent is doing. `now` is always passed in: nothing here reads a clock.
+ * "Sep 19" beside a session; "39s" beside what an agent is doing. `now` is always passed in: nothing here reads a clock.
  */
 
 const minute = 60_000
@@ -27,23 +26,6 @@ export function sessionTime(at: number, now: number): string {
   if (days === 1) return "Yesterday"
   if (days < 7) return weekday.format(at)
   return monthDay.format(at)
-}
-
-/**
- * Under a conversation's heading: when it began. One casing in every layout —
- * a segment of its own, whether or not a channel comes before it.
- */
-export function startedLabel(at: number, now: number): string {
-  const when = sessionTime(at, now)
-  const phrase =
-    when === "now"
-      ? "just now"
-      : /^\d+[mh]$/.test(when)
-        ? `${when} ago`
-        : when === "Yesterday"
-          ? "yesterday"
-          : when
-  return `Started ${phrase}`
 }
 
 /** Beside what an agent is doing: how long it has been at it. */

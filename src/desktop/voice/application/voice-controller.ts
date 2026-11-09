@@ -52,6 +52,8 @@ export interface VoiceSnapshot {
   readonly notice: string | null
   /** V18: why an open call that has heard nothing may not hear the person. */
   readonly hint: string | null
+  /** A failed call that saving an OpenAI key would fix, so the notice offers it. */
+  readonly needsKey: boolean
 }
 
 /** What `send_to_agent` and `stop_agent` answer the voice. */
@@ -74,6 +76,7 @@ const idle: VoiceSnapshot = {
   speakerOn: true,
   notice: null,
   hint: null,
+  needsKey: false,
 }
 
 /** V18: how long an open call waits for the person's voice before it looks why not. */
@@ -236,6 +239,7 @@ export class VoiceController {
           error instanceof VoiceStartRefused
             ? error.sentence
             : "Couldn’t start the call.",
+          error instanceof VoiceStartRefused && error.needsKey,
         )
       return
     }
@@ -396,11 +400,17 @@ export class VoiceController {
     call.connection = null
   }
 
-  private fail(notice: string): void {
+  private fail(notice: string, needsKey = false): void {
     const call = this.call
     if (call) this.release(call)
     this.call = null
-    this.set({ ...idle, phase: "failed", notice, sessionId: call?.sessionId ?? null })
+    this.set({
+      ...idle,
+      phase: "failed",
+      notice,
+      needsKey,
+      sessionId: call?.sessionId ?? null,
+    })
   }
 
   private set(next: VoiceSnapshot): void {

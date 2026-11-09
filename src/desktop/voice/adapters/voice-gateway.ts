@@ -20,10 +20,8 @@ export interface VoiceClient {
 
 const refusals: Record<VoiceRefusal, string> = {
   [VoiceRefusalCode.VoiceNotConfigured]: "Voice isn’t available on this gateway.",
-  [VoiceRefusalCode.VoiceKeyMissing]:
-    "Add your OpenAI key in Settings › Connections › Voice to talk to your agents.",
-  [VoiceRefusalCode.VoiceKeyRejected]:
-    "OpenAI refused the saved key. Check it in Settings › Connections › Voice.",
+  [VoiceRefusalCode.VoiceKeyMissing]: "Add an OpenAI key to talk to your agents.",
+  [VoiceRefusalCode.VoiceKeyRejected]: "OpenAI refused the saved key.",
   [VoiceRefusalCode.VoiceUnreachable]:
     "Couldn’t reach OpenAI. Check the connection and try again.",
   [VoiceRefusalCode.VoiceStorageUnavailable]:
@@ -49,6 +47,15 @@ export function voiceRefusalSentence(error: unknown): string {
     : unanswered
 }
 
+/** Whether a refusal is fixed by saving an OpenAI key. */
+function needsKey(error: unknown): boolean {
+  return (
+    error instanceof NessaVoiceError &&
+    (error.refusal === VoiceRefusalCode.VoiceKeyMissing ||
+      error.refusal === VoiceRefusalCode.VoiceKeyRejected)
+  )
+}
+
 /** The gateway side of a call, over the window's client. */
 export function voiceGateway(connected: () => Promise<VoiceClient>): VoiceGateway {
   return {
@@ -56,7 +63,7 @@ export function voiceGateway(connected: () => Promise<VoiceClient>): VoiceGatewa
       try {
         return await (await connected()).voice.startCall(conversationId)
       } catch (error) {
-        throw new VoiceStartRefused(voiceRefusalSentence(error))
+        throw new VoiceStartRefused(voiceRefusalSentence(error), needsKey(error))
       }
     },
   }

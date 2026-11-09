@@ -412,7 +412,7 @@ const checks = {
     const note = await page.$eval("#settings-panel", (panel) => panel.textContent ?? "")
     if (
       !note.includes(
-        "Hooks can approve, deny, or change a tool call and its result without Nessa asking, and can run commands when the agent starts.",
+        "Hooks can approve or change tool calls without asking. Turn on only for projects you trust.",
       )
     )
       failures.push("the page does not say what hooks can do")
@@ -497,7 +497,7 @@ const checks = {
     const note = await page.$eval("#settings-panel", (panel) => panel.textContent ?? "")
     if (
       !note.includes(
-        "Hooks can approve, deny, or change a tool call and its result without Nessa asking, and can run commands when the agent starts.",
+        "Hooks can approve or change tool calls without asking. Turn on only for projects you trust.",
       )
     )
       failures.push("the page does not say what hooks can do")

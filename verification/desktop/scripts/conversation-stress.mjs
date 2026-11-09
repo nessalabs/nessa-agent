@@ -192,8 +192,10 @@ import {
  *               Disconnect. A source-authorized gateway tool reads a fixed
  *               repository with the connected token. The audit holds each
  *               sign-in step and no token
- *   voice       an OpenAI key is saved in Settings › Connections › Accounts
- *               against a fake realtime provider on this machine: the key
+ *   voice       Talk with no key saved fails with an Add key button beside
+ *               the notice; the key is saved through its dialog (Settings
+ *               then says it is saved, with no key field), against a fake
+ *               realtime provider on this machine: the key
  *               is never logged or audited, only the gateway asks the
  *               provider for a call. Talk opens a call above the composer
  *               (the orb, "Listening", and the speaker, microphone and End
@@ -1314,15 +1316,14 @@ async function seenTurns(run, conversationId) {
 
 /**
  * The newest turn the gateway sent again on behalf of the one sent as `text`:
- * a message held behind a failure is stopped with it and sent again, as a
- * notice and then the original text.
+ * a message held behind a failure is stopped with it and sent again. The
+ * agent is given a notice before the text; the view keeps the person's own
+ * words and marks the turn `retried`.
  */
 function carried(view, seen, text) {
   return view.messages.findLast(
     (each) =>
-      !seen.has(each.executionId) &&
-      each.userText !== text &&
-      each.userText.endsWith(text),
+      !seen.has(each.executionId) && each.retried === true && each.userText === text,
   )
 }
 
@@ -2025,18 +2026,20 @@ async function talkInChannel(run, step, channel, failures, notes, attached = [])
   for (const path of run.stack.agent === "claude" ? attached : [])
     if (!reply.includes(path))
       failures.push(`the agent in ${channel.name} was not told of ${path}`)
-  // The chat says where its agent runs: a local channel's, on this computer.
-  const place = run.page.locator(
-    `${css.focusedPane} .workspace-heading [data-workspace-place]`,
-  )
-  const placed = await waitFor(
+  // A local channel's chat runs on this computer, the usual place, so its
+  // heading says nothing under the title: no start time, place or lease
+  // (UI audit #6). The pane menu and the shield say those.
+  const heading = run.page.locator(`${css.focusedPane} .workspace-heading`)
+  const quiet = await waitFor(
     async () =>
-      (await place.count()) === 1 && (await place.innerText()) === "This computer",
+      (await heading.count()) === 1 &&
+      (await heading.locator("p").count()) === 0 &&
+      (await heading.locator("[data-workspace-place]").count()) === 0,
     10_000,
   )
-  if (!placed)
+  if (!quiet)
     failures.push(
-      `the chat in ${channel.name} does not say it runs on this computer: ${(await place.count()) ? await place.innerText() : "nothing"}`,
+      `the chat in ${channel.name} says more than its title: ${(await heading.count()) ? await heading.innerText() : "no heading"}`,
     )
 }
 
@@ -2844,8 +2847,9 @@ const steps = {
       sendBy,
     )
     const { turn } = await settled(run, run.main.id, seen, text, "completed", failures)
-    // A reply carried on behind a failure echoes its notice first.
-    const echoed = turn && turn.userText !== text ? turn.userText.slice(0, 40) : text
+    // A reply carried on behind a failure echoes the notice the agent was
+    // given first; the person's own message is the text they sent.
+    const echoed = turn?.retried ? "[" : text
     await expectShown(run.page, `${SAYS.echo}${echoed}`, failures)
     if ((await run.page.locator(css.sendFailure).count()) > 0)
       failures.push("the composer shows a send failure")
@@ -3195,8 +3199,8 @@ const steps = {
       )
     if (settledTurn.turn.error)
       failures.push(`a usage limit kept a diagnostic: ${settledTurn.turn.error}`)
-    const early = "Your last turn on this request ended early"
-    if ((await pageText(run.page)).includes(early))
+    const after = await run.client.conversation.read(run.main.id)
+    if (after.messages.some((each) => each.retried && each.userText === text))
       failures.push("a usage limit resumed the turn")
     await expectShown(run.page, "Usage limit reached", failures)
     await expectShown(run.page, "Reset time unknown", failures)
@@ -3403,8 +3407,8 @@ const steps = {
           return view.messages.find(
             (each) =>
               !seen.has(each.executionId) &&
-              each.userText !== text &&
-              each.userText.endsWith(text) &&
+              each.retried === true &&
+              each.userText === text &&
               each.status === "completed",
           )
         }, 90_000)
@@ -3419,14 +3423,27 @@ const steps = {
           )
           return
         }
-        if (!/restarted/i.test(resumed.userText))
-          failures.push("the resumed turn does not say Nessa restarted")
+        // The window shows the person's own words, marked Retried, and never
+        // the notice written for the agent as theirs (UI audit #2).
         const resumedInWindow = await waitFor(async () => {
           const text = await pageText(run.page)
           return (
-            text.includes(fold(resumed.userText)) && text.includes(fold(SAYS.resumed))
+            text.includes(fold(resumed.userText)) &&
+            text.includes(fold(SAYS.resumed)) &&
+            (await run.page.locator('[data-role="user"] [data-retried]').count()) > 0
           )
         }, 60_000)
+        const notices = await run.page
+          .locator('[data-role="user"] .workspace-bubble')
+          .allInnerTexts()
+        if (
+          notices.some((said) =>
+            /^\[(Nessa restarted|Your last turn|This message did not reach)/.test(said),
+          )
+        )
+          failures.push(
+            "the window shows the agent's resume notice as the person's message",
+          )
         if (!resumedInWindow)
           failures.push(
             "the window does not show the current resumed turn and its completion",
@@ -3846,30 +3863,66 @@ const steps = {
             .catch(() => {})
         : undefined
     const row = run.page.locator('[data-setting="voice"]')
+    const pane = dock(run.page)
+    const talk = pane.getByRole("button", { name: "Talk", exact: true })
     await run.exclusive(async () => {
-      const needsUnlock = (await run.client.vault.status()).state === "locked"
-      await openAccounts(run.page)
-      if (needsUnlock) await run.page.locator('[data-vault-dialog="unlock"]').waitFor()
-      await unlockVault(run.page, { expectedContainer: "[data-settings-layers]" })
-      await row.locator('[data-voice-key="input"]').fill(realtime.key)
-      await row.locator('[data-voice-key="save"]').click()
+      // With no key saved, the refused call offers to add one where it was
+      // refused, instead of sending the person to Settings.
+      await talk.click({ timeout: 10_000 })
+      const notice = run.page.locator('.voice-dock[data-phase="failed"]')
+      const add = notice.locator('[data-voice-key="add"]')
+      if (
+        !(await add.waitFor({ timeout: 15_000 }).then(
+          () => true,
+          () => false,
+        ))
+      ) {
+        failures.push("a call refused for want of a key does not offer to add one")
+        return
+      }
+      if (/Settings ›/.test((await notice.textContent()) ?? ""))
+        failures.push("the missing-key notice still sends the person to Settings")
+      await shot("key-missing")
+      await add.click()
+      const asked = run.page.locator('[data-voice-key="dialog"]')
+      await asked.locator('[data-voice-key="input"]').fill(realtime.key)
+      await asked.locator('[data-voice-key="save"]').click()
+      const unlocking = run.page.locator('[data-vault-dialog="unlock"]')
+      await waitFor(
+        async () => (await unlocking.isVisible()) || !(await asked.isVisible()),
+        15_000,
+      )
       await unlockVault(run.page)
-      const saved = await row
-        .locator('[data-voice-key="saved"]')
+      if (
+        !(await asked.waitFor({ state: "hidden", timeout: 15_000 }).then(
+          () => true,
+          () => false,
+        ))
+      )
+        failures.push("the key dialog stayed open after Save")
+      if (
+        !(await notice.waitFor({ state: "hidden", timeout: 5_000 }).then(
+          () => true,
+          () => false,
+        ))
+      )
+        failures.push("the missing-key notice stayed after the key was saved")
+      // Settings says the key is saved, in one word, with no field to type in.
+      await openAccounts(run.page)
+      const saved = await run.page
+        .locator('[data-setting="voice"][data-voice-key="saved"]')
         .waitFor({ timeout: 15_000 })
         .then(() => true)
         .catch(() => false)
       if (!saved) failures.push("the voice row does not say the key is saved")
       else await shot("key-saved")
-      if ((await row.locator('[data-voice-key="input"]').inputValue()) !== "")
-        failures.push("the voice row kept the key in its field after saving")
+      if ((await row.locator("input").count()) !== 0)
+        failures.push("the voice row shows a key field instead of one button")
       await closeSettings(run.page)
     })
     if (failures.length) return
     if (!(await run.client.voice.status()).keySaved)
       failures.push("the gateway does not report the voice key saved")
-    const pane = dock(run.page)
-    const talk = pane.getByRole("button", { name: "Talk", exact: true })
     const end = pane.getByRole("button", { name: "End call", exact: true })
     const orb = run.page.locator(".voice-dock .voice-orb")
     const phase = () =>
@@ -7147,6 +7200,16 @@ const steps = {
     const expected = `${SAYS.table}${text}\n\n${TABLE_LINES.map((line) => `${line}\n`).join("")}`
     if (said.trimEnd() !== expected.trimEnd())
       failures.push(`the table answer came back as ${JSON.stringify(said.slice(0, 120))}`)
+    // The list previews the answer as prose: a table's pipes and dashes are
+    // left out (UI audit #3).
+    const listed = await waitFor(async () => {
+      const { conversations } = await run.client.conversation.list({})
+      return conversations.find((each) => each.conversationId === run.main.id)
+    }, 10_000)
+    if (listed?.preview !== `${SAYS.table}${text}`.trim())
+      failures.push(
+        `the list previews the table answer as ${JSON.stringify(listed?.preview)}`,
+      )
     // The window draws both tables in the agent's message, and draws them
     // whole: no word split across lines, the narrow table inside the reply,
     // the wide one scrolling in its own panel with its hidden side faded.

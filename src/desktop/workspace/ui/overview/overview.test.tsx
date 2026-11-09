@@ -976,7 +976,7 @@ describe("the agents overview", () => {
     await act(async () => card("first")?.click())
     await act(async () => settle(10))
     const peek = host.querySelector(".agents-inline-peek")
-    const allow = button(peek, "Allow Once")
+    const allow = button(peek, "Allow once")
     allow?.focus()
     await act(async () => {
       allow?.click()

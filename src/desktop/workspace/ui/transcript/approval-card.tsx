@@ -94,7 +94,9 @@ export const ApprovalCard = memo(function ApprovalCard({
         </div>
         {approval.deadline ? <DeadlineRing deadline={approval.deadline} /> : null}
       </div>
-      {repeatsCommand(approval, gist) ? null : (
+      {/* The agent's own title for a command says again what the trace above
+          and the command below say; an app's says what it will do for it. */}
+      {approval.origin.kind === "agent" || repeatsCommand(approval, gist) ? null : (
         <p className="workspace-approval-reason">
           <Saying said={approvalReason(approval)} />
         </p>
@@ -286,17 +288,9 @@ function ApprovalScript({ command, gist }: { command: string; gist: CommandGist 
         </div>
         <CopyCommand command={command} />
       </div>
-      {gist.tool || (gist.script !== undefined && gist.fields.length > 0) || folds ? (
+      {(gist.script !== undefined && gist.fields.length > 0) || folds ? (
         <div className="workspace-approval-meta-row">
           <dl className="workspace-approval-meta">
-            {gist.tool ? (
-              <div>
-                <dt>Tool</dt>
-                <dd>
-                  <bdi>{shownName(gist.tool)}</bdi>
-                </dd>
-              </div>
-            ) : null}
             {gist.script !== undefined
               ? gist.fields.map(([name, value]) => (
                   <div key={name}>

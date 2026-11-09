@@ -5,6 +5,7 @@
  */
 import { useCallback, useEffect } from "react"
 import { StatusLabel } from "@nessa-ui/react/status-label"
+import { VoiceKeyButton } from "../../settings/ui/voice-key-row"
 import type { VoiceSnapshot } from "../application/voice-controller"
 import { useVoiceController, useVoiceSnapshot } from "./voice-context"
 import { VoiceOrb } from "./voice-orb"
@@ -48,6 +49,14 @@ export function VoiceDock({ sessionId }: { sessionId: string }) {
         <StatusLabel role="status" tone="warning" className="voice-notice">
           {snapshot.notice}
         </StatusLabel>
+        {snapshot.needsKey ? (
+          <VoiceKeyButton
+            className="voice-notice-dismiss"
+            onSaved={() => controller.dismiss()}
+          >
+            Add key
+          </VoiceKeyButton>
+        ) : null}
         <button
           type="button"
           className="voice-notice-dismiss"

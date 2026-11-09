@@ -279,17 +279,15 @@ export const settingsEntries = [
     id: "claude-native-hooks",
     tab: "native-hooks",
     label: "Claude Code hooks",
-    detail:
-      "Hooks can approve, deny, or change a tool call and its result without Nessa asking, and can run commands when the agent starts. Applies the next time each conversation's agent starts. This also applies the repo's .claude settings, including its allow rules and startup hooks, so turn it on only for projects you trust.",
-    keywords: "native hooks claude",
+    // Said once under the group (`native-hooks-rows.tsx`), not on each row.
+    keywords:
+      "native hooks claude approve deny change tool call startup .claude settings allow rules trust",
   },
   {
     id: "codex-native-hooks",
     tab: "native-hooks",
     label: "Codex hooks",
-    detail:
-      "Hooks can approve, deny, or change a tool call and its result without Nessa asking, and can run commands when the agent starts. Applies the next time each conversation's agent starts.",
-    keywords: "native hooks codex",
+    keywords: "native hooks codex approve deny change tool call startup trust",
   },
   // Advanced › Experimental
   {

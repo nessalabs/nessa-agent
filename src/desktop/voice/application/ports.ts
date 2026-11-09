@@ -56,7 +56,14 @@ export type RealtimeTransports = Readonly<Record<VoiceTransport, RealtimeTranspo
 
 /** Why the gateway started no call, said to the person. */
 export class VoiceStartRefused extends Error {
-  constructor(readonly sentence: string) {
+  /**
+   * `needsKey`: the call needs an OpenAI key saved (none is, or OpenAI
+   * refused the one that is), so the notice can offer to add one in place.
+   */
+  constructor(
+    readonly sentence: string,
+    readonly needsKey = false,
+  ) {
     super(sentence)
     this.name = "VoiceStartRefused"
   }

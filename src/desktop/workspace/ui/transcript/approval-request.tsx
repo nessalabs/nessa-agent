@@ -5,15 +5,18 @@
  * A label wraps inside its button, and options that do not fit the row
  * continue on the next, so a long or numerous review stays inside the card.
  *
- * The buttons are the review's options (`Approval.options`), each in the
- * review's own words. Deny stays at the left; what allows sits at the right.
- * When the review also offers always, the width arranges those two:
+ * The buttons are the review's options (`Approval.options`). Three are
+ * drawn, each named by what it does in a word or two — Deny, Always allow,
+ * Allow once — with the review's own words as its tooltip; any other the
+ * review offers (Always deny, a second always) is in the ⋯ menu beside Deny,
+ * in the review's own words. Deny stays at the left; what allows sits at
+ * the right. When the review also offers always, the width arranges those:
  *
  * | the answers' width | arrangement                                              |
  * | ------------------ | -------------------------------------------------------- |
- * | 380px or more      | Deny at the left; Always Allow and Allow Once at the right |
- * | 280–380px          | Deny left, allows right; "Always Allow" says its first word  |
- * | under 280px        | Allow Once across the width, Always Allow in its menu;    |
+ * | 380px or more      | Deny at the left; Always allow and Allow once at the right |
+ * | 280–380px          | Deny left, allows right; "Always allow" says its first word  |
+ * | under 280px        | Allow once across the width, Always allow in its menu;    |
  * |                    | Deny, quiet, at the left beneath                     |
  *
  * A review that does not offer always has no such button and no menu.
@@ -73,7 +76,8 @@ export function approvalHead(
 ): Said {
   const { origin } = approval
   const asker = approvalAsker(origin, agent)
-  if (origin.kind === "agent") return [...asker, " wants to run a command"]
+  // The command is drawn right under it, so the head does not say "a command".
+  if (origin.kind === "agent") return [...asker, " wants to run"]
   return approval.ask === "message"
     ? [...asker, " wants to send a message as you"]
     : [...asker, " wants to run ", named(origin.tool)]
@@ -119,6 +123,16 @@ export function approvalReason(approval: Pick<Approval, "origin" | "reason">): S
   return approval.origin.kind === "app"
     ? naming(approval.reason, [approval.origin.tool, approval.origin.server])
     : [approval.reason]
+}
+
+/**
+ * What the card's three buttons say, whatever the review words them: the
+ * review's own words are each button's tooltip. Sentence case, a word or two.
+ */
+export const answerNames: Readonly<Record<ApprovalChoice, string>> = {
+  deny: "Deny",
+  always: "Always allow",
+  once: "Allow once",
 }
 
 /** The first word of a label, shown when the card is too narrow for the whole. */
@@ -306,7 +320,7 @@ export function ApprovalActions({
               {...tips.deny}
               onClick={answer(refuse)}
             >
-              <span>{refuse.label}</span>
+              <span>{answerNames.deny}</span>
             </button>
           ) : null}
           {allow ? (
@@ -321,7 +335,7 @@ export function ApprovalActions({
                 {...tips[allow.choice]}
                 onClick={answer(allow)}
               >
-                <span>{allow.label}</span>
+                <span>{answerNames[allow.choice]}</span>
               </button>
               {more}
             </div>
@@ -333,6 +347,14 @@ export function ApprovalActions({
       </div>
     )
   }
+  // The three drawn: the first refusal, the first always that allows, and
+  // the first once. Every other answer is in the menu beside Deny.
+  const refuse = denies[0]
+  const allowAlways = always[0]
+  const allowOnce = once[0]
+  const others = options.filter(
+    (option) => option !== refuse && option !== allowAlways && option !== allowOnce,
+  )
   return (
     <div
       className="workspace-approval-answers"
@@ -344,55 +366,82 @@ export function ApprovalActions({
       }}
     >
       <div className="workspace-approval-actions">
-        {denies.map((option) => (
-          <button
-            key={option.id}
-            type="button"
-            className="workspace-button workspace-approval-deny"
-            data-answer={option.choice}
-            disabled={disabled}
-            {...tips.deny}
-            onClick={answer(option)}
-          >
-            {option.label}
-          </button>
-        ))}
-        {always.length > 0 || once.length > 0 ? (
+        <div className="workspace-approval-refuse">
+          {refuse ? (
+            <button
+              type="button"
+              className="workspace-button workspace-approval-deny"
+              data-answer={refuse.choice}
+              disabled={disabled}
+              title={refuse.label}
+              {...tips.deny}
+              onClick={answer(refuse)}
+            >
+              {answerNames.deny}
+            </button>
+          ) : null}
+          {others.length > 0 ? (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <button
+                  type="button"
+                  className="workspace-button workspace-approval-others"
+                  aria-label="More Answers"
+                  disabled={disabled}
+                >
+                  <DesktopIcon name="moreHorizontal" />
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start">
+                {others.map((option) => (
+                  <MenuItem
+                    key={option.id}
+                    data-answer={option.choice}
+                    onSelect={answer(option)}
+                  >
+                    {option.label}
+                  </MenuItem>
+                ))}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          ) : null}
+        </div>
+        {allowAlways || allowOnce ? (
           <div className="workspace-approval-allow">
-            {always.map((option) => (
+            {allowAlways ? (
               <button
-                key={option.id}
                 type="button"
                 className="workspace-button workspace-approval-always"
-                aria-label={option.label}
-                data-answer={option.choice}
+                aria-label={answerNames.always}
+                title={allowAlways.label}
+                data-answer={allowAlways.choice}
                 disabled={disabled}
                 {...tips.always}
-                onClick={answer(option)}
+                onClick={answer(allowAlways)}
               >
                 <span className="workspace-approval-long" aria-hidden="true">
-                  {option.label}
+                  {answerNames.always}
                 </span>
                 <span className="workspace-approval-short" aria-hidden="true">
-                  {shortOf(option.label)}
+                  {shortOf(answerNames.always)}
                 </span>
               </button>
-            ))}
-            {once.map((option) => (
+            ) : null}
+            {allowOnce ? (
               <button
-                key={option.id}
                 type="button"
                 className="workspace-button workspace-approval-once"
-                data-answer={option.choice}
+                data-answer={allowOnce.choice}
                 data-primary
                 disabled={disabled}
+                title={allowOnce.label}
                 {...tips.once}
-                onClick={answer(option)}
+                onClick={answer(allowOnce)}
               >
-                {option.label}
+                {answerNames.once}
               </button>
-            ))}
-            {always.length > 0 ? (
+            ) : null}
+            {allowAlways ? (
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <button
@@ -406,11 +455,7 @@ export function ApprovalActions({
                   </button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end">
-                  {always.map((option) => (
-                    <MenuItem key={option.id} onSelect={answer(option)}>
-                      {option.label}
-                    </MenuItem>
-                  ))}
+                  <MenuItem onSelect={answer(allowAlways)}>{answerNames.always}</MenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>
             ) : null}

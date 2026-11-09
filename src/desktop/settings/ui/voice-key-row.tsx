@@ -1,8 +1,8 @@
 /**
  * Settings › Connections › Accounts › Voice: the OpenAI key voice calls are
  * minted with. The gateway keeps it in its vault and never gives it back;
- * the row says only whether one is saved, and offers to save, replace or
- * remove it.
+ * the row says only whether one is saved, and offers to add it (in a
+ * dialog) or remove it.
  */
 import {
   createContext,
@@ -12,6 +12,7 @@ import {
   useState,
   type ReactNode,
 } from "react"
+import { Dialog } from "@nessa-ui/react/dialog"
 import type { VoiceKeyGateway, VoiceKeyOutcome } from "../../voice/adapters/voice-gateway"
 import { useVaultUnlock } from "../../../vault"
 import { setting } from "../model/settings-catalogue"
@@ -29,14 +30,128 @@ export function VoiceKeyProvider({
   return <VoiceKeyContext.Provider value={gateway}>{children}</VoiceKeyContext.Provider>
 }
 
+/**
+ * The key, asked for in a dialog: its field, Save, and what went wrong. The
+ * one place the key is typed, from Settings' row and from a call that
+ * found no key (`VoiceKeyButton`).
+ */
+export function VoiceKeyDialog({ onClose }: { onClose: (saved: boolean) => void }) {
+  const gateway = useContext(VoiceKeyContext)
+  const ensure = useVaultUnlock()
+  const keyId = useId()
+  const [key, setKey] = useState("")
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const save = async (typed: string) => {
+    if (!gateway || busy) return
+    setBusy(true)
+    try {
+      if (!(await ensure())) {
+        setError("Unlock Nessa to save the key.")
+        return
+      }
+      const outcome = await gateway.save(typed)
+      if (outcome.kind === "read") onClose(outcome.keySaved)
+      else setError(outcome.sentence)
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <Dialog
+      open
+      size="sm"
+      data-voice-key="dialog"
+      onOpenChange={(open) => {
+        if (!open) onClose(false)
+      }}
+      title="OpenAI API key"
+    >
+      <form
+        className="settings-surface settings-key-form"
+        onSubmit={(event) => {
+          event.preventDefault()
+          const typed = key.trim()
+          if (typed) void save(typed)
+        }}
+      >
+        <div className="settings-boat-fields">
+          <input
+            id={keyId}
+            aria-label="OpenAI API key"
+            className="settings-input"
+            type="password"
+            autoComplete="off"
+            spellCheck={false}
+            placeholder="sk-…"
+            value={key}
+            onChange={(event) => setKey(event.target.value)}
+            disabled={busy || !gateway}
+            data-voice-key="input"
+          />
+          <button
+            className="settings-button"
+            type="submit"
+            disabled={!key.trim() || busy || !gateway}
+            data-voice-key="save"
+          >
+            {busy ? "Saving…" : "Save"}
+          </button>
+        </div>
+        {error && (
+          <p role="alert" className="settings-boat-note">
+            {error}
+          </p>
+        )}
+      </form>
+    </Dialog>
+  )
+}
+
+/**
+ * A button that asks for the key where its lack was found, then says when
+ * it is saved: a call refused for want of a key offers it beside the
+ * refusal, instead of sending the person to Settings.
+ */
+export function VoiceKeyButton({
+  children,
+  onSaved,
+  className = "settings-button",
+}: {
+  children: ReactNode
+  onSaved?: () => void
+  className?: string
+}) {
+  const [open, setOpen] = useState(false)
+  return (
+    <>
+      <button
+        type="button"
+        className={className}
+        data-voice-key="add"
+        onClick={() => setOpen(true)}
+      >
+        {children}
+      </button>
+      {open ? (
+        <VoiceKeyDialog
+          onClose={(saved) => {
+            setOpen(false)
+            if (saved) onSaved?.()
+          }}
+        />
+      ) : null}
+    </>
+  )
+}
+
 export function VoiceKeyRow() {
   const gateway = useContext(VoiceKeyContext)
   const ensure = useVaultUnlock()
   const entry = setting("voice")
   const found = useContext(FoundSetting) === "voice"
-  const keyId = useId()
   const [saved, setSaved] = useState<boolean | undefined>(undefined)
-  const [key, setKey] = useState("")
+  const [asking, setAsking] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -55,77 +170,56 @@ export function VoiceKeyRow() {
     }
   }, [gateway])
 
-  const act = async (work: (gateway: VoiceKeyGateway) => Promise<VoiceKeyOutcome>) => {
+  const forget = async () => {
     if (!gateway || busy) return
     setBusy(true)
     try {
       if (!(await ensure())) {
-        setError("Unlock Nessa to change the voice key.")
+        setError("Unlock Nessa to remove the key.")
         return
       }
-      const outcome = await work(gateway)
-      take(outcome)
-      if (outcome.kind === "read") setKey("")
+      take(await gateway.forget())
     } finally {
       setBusy(false)
     }
   }
 
+  // One word of state, and one button: the key is typed in a dialog.
   return (
-    <ItemRow
-      unavailable={!gateway}
-      setting="voice"
-      found={found}
-      label={entry.label}
-      detail={entry.detail}
-      control={
-        saved ? (
-          <span className="settings-boat-status" role="status" data-voice-key="saved">
-            Key saved{" "}
-            <RowAction
-              disabled={busy}
-              onClick={() => void act((gateway) => gateway.forget())}
-            >
+    <>
+      <ItemRow
+        unavailable={!gateway}
+        setting="voice"
+        found={found}
+        label={entry.label}
+        detail={
+          error ??
+          (saved === undefined ? undefined : saved ? "Connected" : "Not connected")
+        }
+        data-voice-key={saved ? "saved" : undefined}
+        control={
+          saved ? (
+            <RowAction disabled={busy} onClick={() => void forget()}>
               Remove
             </RowAction>
-          </span>
-        ) : undefined
-      }
-    >
-      <div className="settings-boat">
-        <form
-          onSubmit={(event) => {
-            event.preventDefault()
-            const typed = key.trim()
-            if (typed) void act((gateway) => gateway.save(typed))
+          ) : (
+            <RowAction disabled={busy} onClick={() => setAsking(true)}>
+              Connect…
+            </RowAction>
+          )
+        }
+      />
+      {asking ? (
+        <VoiceKeyDialog
+          onClose={(next) => {
+            setAsking(false)
+            if (next) {
+              setSaved(true)
+              setError(null)
+            }
           }}
-        >
-          <label htmlFor={keyId}>OpenAI API key</label>
-          <div className="settings-boat-fields">
-            <input
-              id={keyId}
-              className="settings-input settings-input-mono"
-              type="password"
-              autoComplete="off"
-              spellCheck={false}
-              placeholder="sk-…"
-              value={key}
-              onChange={(event) => setKey(event.target.value)}
-              disabled={busy || !gateway}
-              data-voice-key="input"
-            />
-            <button
-              className="settings-button"
-              type="submit"
-              disabled={!key.trim() || busy || !gateway}
-              data-voice-key="save"
-            >
-              {busy ? "Saving…" : saved ? "Replace key" : "Save key"}
-            </button>
-          </div>
-        </form>
-        {error && <p role="alert">{error}</p>}
-      </div>
-    </ItemRow>
+        />
+      ) : null}
+    </>
   )
 }

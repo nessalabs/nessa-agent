@@ -239,7 +239,7 @@ describe("Privacy & Permissions", () => {
     }
     expect(document.querySelector('[data-setting="remembered-rules"]')).toBeNull()
     expect(document.querySelector("#settings-panel")?.textContent).toContain(
-      "Hooks can approve, deny, or change a tool call and its result without Nessa asking",
+      "Hooks can approve or change tool calls without asking",
     )
   })
 })

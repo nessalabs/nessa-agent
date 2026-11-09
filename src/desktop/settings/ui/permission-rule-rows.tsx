@@ -123,23 +123,19 @@ export function PermissionRuleRows() {
     })
   }
   const entry = setting("remembered-rules")
+  // The group's title names the list, so a row says only its state.
   const resting =
     phase.kind === "absent"
-      ? "Not available in this window."
+      ? "Not available in this window"
       : phase.kind === "reading"
-        ? "Reading remembered rules."
+        ? "Loading"
         : phase.kind === "unread"
-          ? "Could not read remembered rules."
+          ? "Couldn’t read rules"
           : undefined
   return (
-    <Group title={entry.label} note={entry.detail}>
+    <Group title={entry.label}>
       {resting !== undefined ? (
-        <ItemRow
-          setting="remembered-rules"
-          label={entry.label}
-          detail={resting}
-          unavailable
-        />
+        <ItemRow setting="remembered-rules" label={resting} unavailable />
       ) : null}
       {phase.kind === "ready" && phase.failed ? (
         <ItemRow
@@ -150,8 +146,8 @@ export function PermissionRuleRows() {
       {phase.kind === "ready" && phase.rules.length === 0 ? (
         <ItemRow
           setting="remembered-rules"
-          label={entry.label}
-          detail="Rules you save from a review appear here."
+          label="None yet"
+          className="settings-row-quiet"
         />
       ) : null}
       {phase.kind === "ready" && phase.rules.length > 0 ? (
@@ -432,16 +428,11 @@ export function TrustedAppRows() {
   }
   const entry = setting("trusted-apps")
   return (
-    <Group title={entry.label} note={entry.detail}>
+    <Group title={entry.label}>
       {phase.kind === "reading" || phase.kind === "unread" ? (
         <ItemRow
           setting="trusted-apps"
-          label={entry.label}
-          detail={
-            phase.kind === "reading"
-              ? "Reading apps."
-              : "Could not read the apps you allow."
-          }
+          label={phase.kind === "reading" ? "Loading" : "Couldn’t read apps"}
           unavailable
         />
       ) : null}
@@ -449,11 +440,7 @@ export function TrustedAppRows() {
         <ItemRow label="Could not revoke that app." detail="Try again in a moment." />
       ) : null}
       {phase.kind === "ready" && phase.servers.length === 0 ? (
-        <ItemRow
-          setting="trusted-apps"
-          label={entry.label}
-          detail="Apps you answer Always allow appear here."
-        />
+        <ItemRow setting="trusted-apps" label="None yet" className="settings-row-quiet" />
       ) : null}
       {phase.kind === "ready"
         ? phase.servers.map((server, index) => (
@@ -461,7 +448,6 @@ export function TrustedAppRows() {
               key={server}
               setting={index === 0 ? "trusted-apps" : undefined}
               label={server}
-              detail="Sends messages as you without asking."
               data-trusted-app={server}
               control={
                 <button
