@@ -88,7 +88,6 @@ pub(super) fn service(default: Arc<Workspaces>) -> Arc<Workspaces> {
         Arc::new(FileAssignments(fixture.root.join("assignments"))),
         Arc::new(Audit),
         Arc::new(Config),
-        Arc::new(Config),
     ))
 }
 pub(super) fn environments(
@@ -140,18 +139,6 @@ impl Settings for Config {
         Ok(1)
     }
     async fn save(&self, _: u64, _: BoatConnection) -> Result<(), Failure> {
-        unreachable!()
-    }
-    async fn clear(&self) -> Result<(), Failure> {
-        unreachable!()
-    }
-}
-#[async_trait::async_trait]
-impl ClaudeSignIns for Config {
-    async fn read(&self) -> Result<Option<ClaudeSignIn>, Failure> {
-        Ok(None)
-    }
-    async fn save(&self, _: ClaudeSignIn) -> Result<(), Failure> {
         unreachable!()
     }
     async fn clear(&self) -> Result<(), Failure> {
