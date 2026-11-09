@@ -5,6 +5,10 @@ use super::*;
 use crate::conversation::application::{
     ConversationModelApplication, ConversationModelRequest, ConversationModelRequestState,
 };
+use crate::conversation::domain::{
+    Channel, ChannelDefaults, ChannelExecution, ChannelFolder, ChannelId, ChannelName,
+    ChannelNotes, ChannelParts, ChannelPath, ChannelResources,
+};
 use crate::conversation::{
     application::{
         AttachmentReleaseCause, ConversationAccessPolicyEvaluator, ConversationCreation,
@@ -14,7 +18,8 @@ use crate::conversation::{
     },
     infrastructure::{
         DurableConversationCreationAudit, DurableConversationDeletionAudit,
-        DurableConversationFileLinkAudit, DurableExecutionAudit, LocalConversationStore,
+        DurableConversationFileLinkAudit, DurableExecutionAudit, LocalChannelFolders,
+        LocalChannelStore, LocalConversationStore,
     },
 };
 use crate::conversation_test_support::{
@@ -181,6 +186,7 @@ fn service_admitted_by(
     }
     ConversationService::new(
         ConversationDependencies {
+            input_files: None,
             access_policy: policy,
             agents: only(Arc::new(Provider::new(provider))),
             storage,
@@ -266,6 +272,7 @@ fn stranger(action: &str) -> ConversationCaller {
 }
 fn text(value: &str) -> SubmittedMessage {
     SubmittedMessage {
+        uploads: Vec::new(),
         text: value.into(),
         ..SubmittedMessage::default()
     }
@@ -275,7 +282,10 @@ fn session(id: &ConversationId) -> SessionId {
 }
 /// A conversation with one completed turn: saved history and a summary.
 async fn talked_in(fixture: &Deleting) -> ConversationId {
-    let id = new_id();
+    talked_in_as(fixture, new_id()).await
+}
+
+async fn talked_in_as(fixture: &Deleting, id: ConversationId) -> ConversationId {
     fixture
         .service
         .create(
@@ -796,6 +806,15 @@ impl ConversationRepository for Unfenceable {
     fn load(&self, id: &ConversationId) -> ConversationFuture<'_, Option<Conversation>> {
         self.0.load(id)
     }
+    fn load_admission_snapshot(
+        &self,
+        id: &ConversationId,
+    ) -> ConversationFuture<
+        '_,
+        Option<crate::conversation::application::ConversationAdmissionSnapshot>,
+    > {
+        self.0.load_admission_snapshot(id)
+    }
     fn unfinished_deletions(&self) -> ConversationFuture<'_, UnfinishedDeletions> {
         self.0.unfinished_deletions()
     }
@@ -825,6 +844,15 @@ impl ConversationRepository for Unfenceable {
     }
     fn requires_mode_verification(&self, id: &ConversationId) -> ConversationFuture<'_, bool> {
         self.0.requires_mode_verification(id)
+    }
+    fn close_thread(&self, id: &ConversationId) -> ConversationFuture<'_, ()> {
+        self.0.close_thread(id)
+    }
+    fn open_thread(&self, id: &ConversationId) -> ConversationFuture<'_, ()> {
+        self.0.open_thread(id)
+    }
+    fn thread_closed(&self, id: &ConversationId) -> ConversationFuture<'_, bool> {
+        self.0.thread_closed(id)
     }
     fn observe_mode_application(
         &self,
@@ -881,6 +909,7 @@ fn service_with(
 ) -> ConversationService {
     ConversationService::new(
         ConversationDependencies {
+            input_files: None,
             access_policy: crate::conversation_test_support::access_policy(),
             agents: only(Arc::new(Provider::new(fixture.provider.clone()))),
             storage,
@@ -1013,6 +1042,15 @@ impl ConversationRepository for Faulty {
             None => self.repository.load(id),
         }
     }
+    fn load_admission_snapshot(
+        &self,
+        id: &ConversationId,
+    ) -> ConversationFuture<
+        '_,
+        Option<crate::conversation::application::ConversationAdmissionSnapshot>,
+    > {
+        self.repository.load_admission_snapshot(id)
+    }
     fn unfinished_deletions(&self) -> ConversationFuture<'_, UnfinishedDeletions> {
         self.repository.unfinished_deletions()
     }
@@ -1042,6 +1080,15 @@ impl ConversationRepository for Faulty {
     }
     fn requires_mode_verification(&self, id: &ConversationId) -> ConversationFuture<'_, bool> {
         self.repository.requires_mode_verification(id)
+    }
+    fn close_thread(&self, id: &ConversationId) -> ConversationFuture<'_, ()> {
+        self.repository.close_thread(id)
+    }
+    fn open_thread(&self, id: &ConversationId) -> ConversationFuture<'_, ()> {
+        self.repository.open_thread(id)
+    }
+    fn thread_closed(&self, id: &ConversationId) -> ConversationFuture<'_, bool> {
+        self.repository.thread_closed(id)
     }
     fn observe_mode_application(
         &self,
@@ -1538,6 +1585,7 @@ async fn a_history_that_cannot_be_opened_at_all_is_left_not_carried_on() {
     fixture.service.shutdown().await.unwrap();
     let service = ConversationService::new(
         ConversationDependencies {
+            input_files: None,
             access_policy: crate::conversation_test_support::access_policy(),
             agents: only(Arc::new(Provider::new(fixture.provider.clone()))),
             storage: Arc::new(Unopenable),
@@ -2192,6 +2240,15 @@ impl ConversationRepository for PausingRepository {
             found
         })
     }
+    fn load_admission_snapshot(
+        &self,
+        id: &ConversationId,
+    ) -> ConversationFuture<
+        '_,
+        Option<crate::conversation::application::ConversationAdmissionSnapshot>,
+    > {
+        self.inner.load_admission_snapshot(id)
+    }
     fn unfinished_deletions(&self) -> ConversationFuture<'_, UnfinishedDeletions> {
         self.inner.unfinished_deletions()
     }
@@ -2221,6 +2278,15 @@ impl ConversationRepository for PausingRepository {
     }
     fn requires_mode_verification(&self, id: &ConversationId) -> ConversationFuture<'_, bool> {
         self.inner.requires_mode_verification(id)
+    }
+    fn close_thread(&self, id: &ConversationId) -> ConversationFuture<'_, ()> {
+        self.inner.close_thread(id)
+    }
+    fn open_thread(&self, id: &ConversationId) -> ConversationFuture<'_, ()> {
+        self.inner.open_thread(id)
+    }
+    fn thread_closed(&self, id: &ConversationId) -> ConversationFuture<'_, bool> {
+        self.inner.thread_closed(id)
     }
     fn observe_mode_application(
         &self,
@@ -2261,6 +2327,7 @@ async fn a_create_racing_a_delete_cannot_republish_it() {
     let summaries = Arc::new(MemorySummaries::default());
     let service = ConversationService::new(
         ConversationDependencies {
+            input_files: None,
             access_policy: crate::conversation_test_support::access_policy(),
             agents: only(Arc::new(Provider::new(provider.clone()))),
             storage: storage.clone(),
@@ -2382,6 +2449,7 @@ async fn deleting_on_the_local_stores_erases_what_it_owns_and_leaves_every_audit
         HashMap::from([(
             AgentId::Claude,
             ConversationAgent {
+                workspace: None,
                 provider: Arc::new(Provider::new(provider.clone())),
                 execution_audit: Arc::new(
                     DurableExecutionAudit::new(root.join("audit"), clock.clone()).unwrap(),
@@ -2405,6 +2473,7 @@ async fn deleting_on_the_local_stores_erases_what_it_owns_and_leaves_every_audit
     let storage = Arc::new(RecordStorage::new(root.join("sessions")).unwrap());
     let service = ConversationService::new(
         ConversationDependencies {
+            input_files: None,
             access_policy: crate::conversation_test_support::access_policy(),
             agents,
             storage: storage.clone(),
@@ -2465,6 +2534,7 @@ async fn deleting_on_the_local_stores_erases_what_it_owns_and_leaves_every_audit
             caller("send-1"),
             "turn-1".into(),
             SubmittedMessage {
+                uploads: Vec::new(),
                 text: "read this".into(),
                 images: Vec::new(),
                 files: vec![SubmittedFile {
@@ -3100,6 +3170,7 @@ async fn a_history_that_names_another_session_is_refused_and_nothing_is_erased()
     provider_sessions.register(AgentId::Claude, store.clone());
     let service = ConversationService::new(
         ConversationDependencies {
+            input_files: None,
             access_policy: crate::conversation_test_support::access_policy(),
             agents: only(Arc::new(Provider::new(provider))),
             storage: Arc::new(Misfiled {
@@ -3251,6 +3322,7 @@ async fn deleting_a_conversation_that_never_opened_creates_no_history_lock() {
     let storage = Arc::new(RecordStorage::new(root.join("sessions")).unwrap());
     let service = ConversationService::new(
         ConversationDependencies {
+            input_files: None,
             access_policy: crate::conversation_test_support::access_policy(),
             agents: only(Arc::new(Provider::new(
                 Arc::new(ProviderFactory::default()),
@@ -3358,6 +3430,7 @@ async fn an_unmarked_chat_cannot_be_read_and_can_be_deleted() {
     storage.initialize().await.unwrap();
     let service = ConversationService::new(
         ConversationDependencies {
+            input_files: None,
             access_policy: crate::conversation_test_support::access_policy(),
             agents: only(Arc::new(Provider::new(
                 Arc::new(ProviderFactory::default()),
@@ -3552,6 +3625,7 @@ async fn a_turn_saved_with_its_grants_role_closes_only_its_own_chat() {
         storage.initialize().await.unwrap();
         let service = ConversationService::new(
             ConversationDependencies {
+                input_files: None,
                 access_policy: crate::conversation_test_support::access_policy(),
                 agents: only(Arc::new(Provider::new(
                     Arc::new(ProviderFactory::default()),
@@ -3653,6 +3727,7 @@ async fn an_unreadable_chat_stays_until_its_deletion_is_recorded() {
     let audit = Arc::new(RecordingDeletionAudit::default());
     let service = ConversationService::new(
         ConversationDependencies {
+            input_files: None,
             access_policy: crate::conversation_test_support::access_policy(),
             agents: only(Arc::new(Provider::new(
                 Arc::new(ProviderFactory::default()),
@@ -4066,6 +4141,7 @@ async fn a_reopen_racing_a_delete_is_not_recorded_after_the_deletion() {
     let deletions = Arc::new(RecordingDeletionAudit::default());
     let service = ConversationService::new(
         ConversationDependencies {
+            input_files: None,
             access_policy: crate::conversation_test_support::access_policy(),
             agents: only(Arc::new(Provider::new(
                 Arc::new(ProviderFactory::default()),
@@ -4217,6 +4293,7 @@ async fn a_delete_spends_the_stop_and_lease_budgets_it_is_given() {
     let fixture = deleting();
     let service = ConversationService::new(
         ConversationDependencies {
+            input_files: None,
             access_policy: crate::conversation_test_support::access_policy(),
             agents: only(Arc::new(Provider::new(fixture.provider.clone()))),
             storage: fixture.storage.clone(),
@@ -4295,6 +4372,7 @@ fn over_with(
     provider_sessions.register(AgentId::Claude, eraser);
     ConversationService::new(
         ConversationDependencies {
+            input_files: None,
             access_policy: crate::conversation_test_support::access_policy(),
             agents: only(Arc::new(Provider::new(fixture.provider.clone()))),
             storage: fixture.storage.clone(),
@@ -5724,4 +5802,184 @@ async fn a_deletion_asks_the_inventory_after_the_fence() {
         Ok(true)
     ));
     assert!(asked.0.load(Ordering::SeqCst));
+}
+
+fn bind_deletion_channels(
+    service: &ConversationService,
+    store: Arc<LocalChannelStore>,
+    root: &Path,
+) {
+    service.bind_channels(
+        store,
+        Arc::new(LocalChannelFolders::with_system(root, None, vec![]).unwrap()),
+    );
+}
+
+async fn coordinator_channel(
+    fixture: &Deleting,
+    root: &Path,
+) -> (Arc<LocalChannelStore>, Channel, ConversationId) {
+    let private = root.join("conversations");
+    nessa_local_storage::create_directory(&private).unwrap();
+    let store = Arc::new(LocalChannelStore::open(&private.join("channels.sqlite3")).unwrap());
+    let channel = Channel::new(
+        ChannelId::from_random([7; 10]),
+        caller("channel").organization_id,
+        caller("channel").principal_id,
+        ChannelParts {
+            execution: ChannelExecution::default(),
+            name: ChannelName::new("Main deletion").unwrap(),
+            folder: ChannelFolder {
+                path: ChannelPath::new(root.to_path_buf()).unwrap(),
+                made: false,
+            },
+            defaults: ChannelDefaults {
+                agent: AgentId::Claude,
+                model: ConversationModelId::new("claude-sonnet-5").unwrap(),
+                mode: ConversationApprovalMode::Ask,
+            },
+            notes: ChannelNotes::new("").unwrap(),
+            resources: ChannelResources::new(vec![]).unwrap(),
+        },
+        "main-deletion".into(),
+        NOW,
+    )
+    .unwrap();
+    store.create(channel.clone()).await.unwrap();
+    bind_deletion_channels(&fixture.service, store.clone(), root);
+    let main = talked_in_as(fixture, channel.coordinator_id()).await;
+    store.place(&main, channel.id()).await.unwrap();
+    (store, channel, main)
+}
+
+#[tokio::test]
+async fn a_failed_coordinator_retirement_keeps_deletion_unfinished_until_channel_commit() {
+    let fixture = deleting();
+    let directory = tempfile::tempdir().unwrap();
+    let (store, channel, main) = coordinator_channel(&fixture, directory.path()).await;
+    // Inject an actual ChannelStore::forget transaction failure after history
+    // erasure. The intent, membership and current coordinator must all survive.
+    let database = nessa_local_database::rusqlite::Connection::open(
+        directory.path().join("conversations/channels.sqlite3"),
+    )
+    .unwrap();
+    database.execute_batch(
+        "CREATE TRIGGER refuse_coordinator_retirement BEFORE INSERT ON channel_coordinator_replacements BEGIN SELECT RAISE(ABORT, 'injected retirement failure'); END;",
+    ).unwrap();
+    let failures = incomplete(
+        fixture
+            .service
+            .delete(main.clone(), caller("delete-main"))
+            .await,
+    );
+    assert!(matches!(
+        failures.summary,
+        Some(ConversationError::Metadata)
+    ));
+    assert!(failures.history.is_none());
+    assert!(!tombstone(&fixture, &main).erased());
+    assert!(history(&fixture.storage, &main).await.is_none());
+    assert_eq!(
+        store
+            .get(channel.id())
+            .await
+            .unwrap()
+            .unwrap()
+            .coordinator_id(),
+        main
+    );
+    assert_eq!(
+        store.channel_of(&main).await.unwrap(),
+        Some(channel.id().clone())
+    );
+
+    database
+        .execute_batch("DROP TRIGGER refuse_coordinator_retirement")
+        .unwrap();
+    fixture
+        .service
+        .delete(main.clone(), caller("retry-main"))
+        .await
+        .unwrap();
+    let finished = tombstone(&fixture, &main);
+    assert!(finished.erased());
+    assert_eq!(finished.request(), "delete-main");
+    let replacement = store
+        .get(channel.id())
+        .await
+        .unwrap()
+        .unwrap()
+        .coordinator_id();
+    assert_ne!(replacement, main);
+    assert_eq!(store.channel_of(&main).await.unwrap(), None);
+    fixture
+        .service
+        .delete(main, caller("repeat-main"))
+        .await
+        .unwrap();
+    assert_eq!(
+        store
+            .get(channel.id())
+            .await
+            .unwrap()
+            .unwrap()
+            .coordinator_id(),
+        replacement
+    );
+    fixture.service.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn an_unconfirmed_history_erasure_does_not_retire_its_coordinator() {
+    let fixture = deleting();
+    let directory = tempfile::tempdir().unwrap();
+    let (store, channel, main) = coordinator_channel(&fixture, directory.path()).await;
+    fixture.service.shutdown().await.unwrap();
+    let storage = Arc::new(CleanupReplyFailsOnce {
+        storage: fixture.storage.clone(),
+        fail_first: Arc::new(AtomicBool::new(true)),
+    });
+    let service = service_with(&fixture, fixture.repository.clone(), storage.clone());
+    bind_deletion_channels(&service, store.clone(), directory.path());
+    let failures = incomplete(service.delete(main.clone(), caller("delete-main")).await);
+    assert!(matches!(
+        failures.history,
+        Some(ConversationError::Storage(StorageError::Io(_)))
+    ));
+    assert!(!tombstone(&fixture, &main).erased());
+    assert_eq!(
+        store
+            .get(channel.id())
+            .await
+            .unwrap()
+            .unwrap()
+            .coordinator_id(),
+        main
+    );
+    assert_eq!(
+        store.channel_of(&main).await.unwrap(),
+        Some(channel.id().clone())
+    );
+    service.shutdown().await.unwrap();
+
+    let restarted = service_with(&fixture, fixture.repository.clone(), storage);
+    bind_deletion_channels(&restarted, store.clone(), directory.path());
+    restarted
+        .delete(main.clone(), caller("retry-main"))
+        .await
+        .unwrap();
+    let finished = tombstone(&fixture, &main);
+    assert!(finished.erased());
+    assert_eq!(finished.request(), "delete-main");
+    assert_ne!(
+        store
+            .get(channel.id())
+            .await
+            .unwrap()
+            .unwrap()
+            .coordinator_id(),
+        main
+    );
+    assert_eq!(store.channel_of(&main).await.unwrap(), None);
+    restarted.shutdown().await.unwrap();
 }

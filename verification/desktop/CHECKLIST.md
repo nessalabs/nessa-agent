@@ -31,6 +31,37 @@ Opt-in. Not part of `run-all`. The contract is
 
 ## Alpha startup and stress
 
+- [ ] **An agent-authored thread report names its agent and keeps that origin.**
+  The saved report source matches the child conversation and watched turn, and
+  the window shows “Agent report from” with the child's chat pill. An ordinary
+  message that imitates the report heading cannot acquire that line. Forking
+  through the session row keeps the source in the saved copy, report pill and
+  first model's carried history.
+  _Check:_ `conversation-stress.mjs` (`delegate`) and
+  `src/desktop/workspace/ui/transcript/chat-pill.test.tsx`.
+
+- [ ] **Follower reference replay reaches its captured head.** After background
+  turns settle, the verifier replays to a checkpoint candidate, closes that
+  source, and captures the default event subscription's current committed head.
+  Exact opaque cursor equality proves convergence; otherwise it resumes strictly
+  after the applied candidate, preserving every ordered event through idle parking.
+  Quiet, an intermediate empty batch, and a matching event count do not prove
+  completion. Capture and replay share the existing 60-second overall deadline;
+  stalled or ended streams fail, and closure is requested for every source;
+  the client's abort gate owns late opens and close acknowledgements. Ordered event identity
+  and count assertions remain unchanged.
+  _Check:_ `lib/stress-followers.test.mjs` includes late, missing, empty, terminal,
+  shared-deadline and late-open controls; `conversation-stress.mjs` uses it.
+
+- [ ] **Native paired catalogue stress uses the actual protected product child.**
+  `conversation-stress.mjs` runs `native_paired_catalogue_stress` while its window,
+  background conversations and followers remain active. `--pairedCatalogues` is
+  the cycle count (default 1; raise it with the other load knobs). Hidden rows
+  exceed the list bound. Replacement, restore, revoke, archive and reconnect
+  preserve the independent granted-identity oracle; hidden activity and a former
+  receiver's later replacement stay quiet. This native check runs once per
+  browser engine; it does not claim that a browser itself holds native credentials.
+
 Opt-in. Not part of `run-all`. It does not change the frame budget and it
 does not replace `workspace-load.mjs`.
 
@@ -94,6 +125,15 @@ production build at 4× CPU throttling.
   maxima for display. A 50.1 ms frame fails when that table shows 50; an exact
   50 ms frame and a 49.6 ms frame pass.
   _Check:_ `lib/perf.test.mjs` (`frame budget`).
+- [ ] **A base comparison labels a row only when its interval excludes zero.**
+  `--base <url>` alternates a fresh base page and a fresh head page, pair by
+  pair, on the same host. The difference is the head run's longest frame minus
+  the base run's. The median of those differences carries a 95% bootstrap
+  interval. The row is a regression when the whole interval is above zero, a
+  win when it is below, and no change when zero is inside it, including on an
+  endpoint. That label does not fail the row. The 50 ms budget still does, on
+  the head runs. The JSON keeps every raw head run, as before, and the base runs.
+  _Check:_ `lib/compare.test.mjs`.
 - [ ] **Style-and-layout time is a duration on the performance clock** (#369). The
   sample shifts `start`, `renderStart`, and `styleAndLayoutStart` together
   onto the interaction. A zero phase start means that phase did not run, so
@@ -135,6 +175,12 @@ controls — text, icons, images, code, or decorative art — in any frame.
   _Check:_ `columns.mjs --only titlebar-row` for the page;
   `cargo test -p nessa-app --no-default-features --test traffic_lights` for the
   buttons in a real AppKit window (macOS) and the row height the two share.
+- [ ] **The pane root stays unscrolled after a long conversation, reviews and
+  a split.** Its transcript owns scrolling; the pane clips instead of retaining
+  a scroll offset that can move its header above the titlebar (#1184).
+  _Check:_ `columns.mjs --only pane-clipping` focuses an overflowing fixture
+  with the pane's real styles; `conversation-stress.mjs` (`window`, full seeded
+  sequence) records its offset and header geometry beside the list and panes alone.
 - [ ] **Column titles sit inline after the controls when they fit, below when
   they do not**, and an inline title never overlaps a titlebar control.
   _ADR 238 › The titlebar's safe area_ (`titlePlacement`).
@@ -174,6 +220,9 @@ and WebKit, both layouts, 1440 × 900 and 1000 × 700:
   (`sweep-across-zones`, one-way).
 - [ ] **Zones are direction-aware**: a sideways sweep near a tall, narrow
   pane's top reaches its side, never above or below. _Check:_ `drag.mjs` (`sideways-top`).
+  The receipt separates pointer event time, delivery time and DOM observation.
+  Missing observations inside the model's 150 ms rest window fail the check;
+  late announcements do not prove a decision made while moving.
 - [ ] **A zone holds at its boundary** (another must win by 12px): ±6px
   jitter does not flicker it. _Check:_ `drag.mjs` (`boundary-jitter`).
 - [ ] **The zone settles at rest**: approached fast, then still for 300 ms, a
@@ -220,6 +269,13 @@ and WebKit, both layouts, 1440 × 900 and 1000 × 700:
   lifts cancels nothing). _Check:_ unit tests `split-panes/model/drag.test.ts`,
   `split-panes/adapters/dom/drag.test.tsx`,
   `workspace/adapters/dom/split-panes-drag.test.tsx`.
+- [ ] **A compact card never acquires pane-preview glass.** Cancel and drop,
+  with full or reduced motion, neither set the pressing marker nor pulse the
+  blur-restoration marker, including the four deferred release frames. The
+  displayed swap commits on drop; cancel preserves order; both remove drag
+  residue. _Check:_ `drag.mjs` (`compact-glass-release`, Chromium and WebKit),
+  `split-panes/adapters/dom/drag.test.tsx`; resource ownership in
+  [`pane frame budget`](../../docs/design/pane-frame-budget.md).
 - [ ] **Only the primary button carries**: the right button joining the left
   mid-drag ends the drag; nothing is carried after it and its release drops
   nothing. _Check:_ `drag.mjs` (`chord-right-button`).
@@ -273,7 +329,7 @@ _ADR 238 › One fit rule for every change of layout_.
   field and a row's highlight are as far from what is on their left — the
   sidebar's card, or with the sidebar away the window's edge — as from the
   panes on their right. _Check:_ `responsive.mjs --only list-gutter`
-  (Chromium and WebKit, sidebar open and closed).
+  (Chromium and WebKit, sidebar open and closed, including reserved scrollbars).
 - [ ] **Side columns fold first for room, and come back when there is room.**
   _ADR 238 › Side columns_ table. _Check:_ `safe-area.mjs --only resize-breakpoints`
   exercises it; watch with `--headed`.
@@ -333,13 +389,35 @@ Experimental turns it on; the rail stands beside the workspace in
   below the controls on every host. The toggle stays at the bottom-left control
   edge, including when both side columns are closed, and a folded rail has a
   reserved slot beside "nessa Studio" in the
-  sidebar footer. _Check:_ `columns.mjs --only shell-chrome,rail-corner` (Chromium and
+  sidebar footer. With the sidebar shown, Agents draws "nessa Studio" clear of
+  the toggle. Devices leaves that corner empty, and the toggle does not move.
+  _Check:_ `columns.mjs --only shell-chrome,rail-corner` (Chromium and
   WebKit, both layouts; coding standards gate 17).
 - [ ] **Under an item's full view the workspace takes no keys**: ⌘B, ⌘0 and
-  ⌥⌘S change nothing behind it. Its opaque view covers the workspace cards and
-  chat controls all the way to the top edge. One top sidebar toggle folds and
-  reopens the rail in Notes, Calendar, Browser and Files.
+  ⌥⌘S change nothing behind it. Its opaque view covers the workspace from the
+  rail's edge to the window's other edges, top included. The titlebar stays
+  above that view: its free room is the window's drag region, and its one
+  control folds and reopens the rail. A point just below the titlebar lands
+  in the view, not on a workspace card or chat control.
   _Check:_ `columns.mjs --only rail-view-inert`.
+- [ ] **Devices keeps its corner and titlebar for the window**: no "nessa
+  Studio" in the bottom-left corner (its cards run under it), and a press in
+  the titlebar's free room lands on a `data-tauri-drag-region`, so a drag
+  moves the window and a double-click zooms it, as over a chat. _Check:_
+  `conversation-stress` step `devices` (Chromium and WebKit, `local-auth.yml`).
+- [ ] **A chat says where its agent runs**: the heading names This computer,
+  Boat workspace, an SSH host or a paired machine, from the lease once there
+  is one and from the channel's placement before. _Check:_
+  `conversation-stress` step `channel` (a local channel's chat says This
+  computer) and `transcript-heading.test.ts`.
+- [ ] **Devices adds and manages each kind in place**: one grid of every
+  device; Add device offers computer, phone and cloud; Add a phone draws
+  Settings' pairing rows as cards and its code modal on top, giving focus
+  back on Escape; Boat's page says Connected, Not connected, Locked or
+  Unavailable with its one action (Unlock or a live token field); Boat is
+  drawn as a boat on its tile and page, floating only while connected; the reach
+  button sits in the code's card. _Check:_ `conversation-stress` step
+  `devices` (Chromium and WebKit, `local-auth.yml`).
 - [ ] **An item's view opens empty, and a slow load shows only text**: no
   loader before 3 s; still loading at 3 s, the kit's `LoadingText` sweeps
   "Loading Files" with no panel or border around it. _Check:_
@@ -363,10 +441,18 @@ _ADR 238 › Focus follows the focused pane_; keys in
 
 - [ ] **The caret lands in the focused pane's composer** after ⌘N, ⇧⌘N,
   ⌘\\ and a pick, ⇧⌘\\, ⌘1–4, ⇧⌘] and ⇧⌘[, and ⌘W. _Check:_ `focus.mjs` (`focus-panes`).
+  Wait for the command's expected pane membership, destination, focus mark and
+  composer together, with finite motion finished, within the existing 3 s
+  settlement budget. The old pane's caret cannot complete a new-pane command.
+- [ ] **A fast display still lands the caret after a split.** Frames every
+  8ms, the flight still on its own 340ms clock: ⇧⌘N and ⇧⌘\\ leave the caret
+  in the new pane's composer. A search of thirty frames ends inside that
+  flight. _Check:_ `focus.mjs` (`focus-fast-frames`).
 - [ ] **Closing ⌘K without a pick, or Settings, gives focus back** to what
   opened it. _Check:_ `focus.mjs` (`focus-panes`).
 - [ ] **Replacing a workspace layout retires queued focus settlement**: deliver
-  held callbacks after the old workspace unmounts; they enqueue zero new frame
+  all held callbacks after the old workspace unmounts (at least one must have
+  been queued); they enqueue zero new frame
   work, and the current layout still focuses its composer. _Check:_ `focus.mjs`
   (`focus-retired-layout`); [frame lifetime](../../docs/design/ui-workspace-load.md#focus-frame-lifetime-730), #730.
 - [ ] **Keys during incremental overview rendering use the mounted prefix.**
@@ -376,7 +462,8 @@ _ADR 238 › Focus follows the focused pane_; keys in
 - [ ] **Bound workspace keys stay consumed while their actions are unavailable.**
   With the quick switcher open, ⌘N and ⌘W prevent the native default, leave the
   panes unchanged, and retain the switcher. An unbound key remains unconsumed;
-  closing the switcher restores ordinary split commands.
+  closing the switcher restores ordinary split commands, observed by the exact
+  additional pane within the existing 3 s pane-count budget.
   _Check:_ `focus.mjs` (`focus-bound-keys`), [workspace shortcuts](../../docs/design/workspace-shortcuts.md).
 - [ ] **A burst of keys leaves a working window**: no error, a focused pane.
   _Check:_ `focus.mjs` (`focus-mash`).
@@ -399,6 +486,11 @@ Header and group measurements wait for the published `data-overview-listed`
 marker, including a reopened list; finite motion finishing does not mean its
 deferred rows have all mounted. The sampling order is in
 [UI workspace load](../../docs/design/ui-workspace-load.md#verification-sampling-order).
+
+- [ ] **Complete-list drawing has its own result**, independent of focus on a
+  mounted prefix: `focus.mjs` (`focus-overview-complete-list`) still requires the
+  published marker within 2,000 ms. Focus/navigation waits for a focused mounted
+  row (and a mounted successor before Down), without requiring later rows.
 
 _ADR 238 › What fills the content region_ (the overview is workspace state).
 
@@ -603,7 +695,9 @@ on.
 
 - [ ] **The card opens a tab in the chat's right panel, no pane**, the list in activity
   order with a closed child called closed, and a child opens on its
-  transcript. Focus stays in the panel. _Check:_ `subagents.mjs --only panel`.
+  transcript. Focus stays in the panel. Expanded, the widget starts below the
+  shared window toolbar and covers retained panes with the theme background.
+  _Check:_ `subagents.mjs --only panel`.
 - [ ] **The transcript follows a new line while it is at the end, and stays
   put when scrolled up.** _Check:_ `subagents.mjs --only panel`.
 - [ ] **Escape steps back to the list.** In the panel a second Escape changes
@@ -777,6 +871,9 @@ in its sandbox". Every row of the bridge's design table is a jsdom test
   higher than the wait: the card counts down from the gateway's `serverNowMs`,
   not the window's clock (ADR 141 › What a person sees). Chromium
   and WebKit. The fixture is `fixtures/approval-deadline/`, dev server only.
+  The fixture's expired view carries the deadline notice source and the same
+  permission identity, as the gateway projection does; an untyped notice is
+  refused by the actual client (`lib/approval-deadline-state.test.mjs`).
   _Check:_ `approval-deadline.mjs`. The card's own widths stay
   `responsive.mjs --only approval-card` at 280 and 340 px.
 - [ ] **A clock snapshot is stable across React's consecutive reads even when
@@ -843,10 +940,13 @@ in its sandbox". Every row of the bridge's design table is a jsdom test
   `approval-request.tsx`; the `sendMessage` routing in `dependencies.ts`.)
   The real gateway's message path in a browser is #550.
   _Check:_ `app-review.mjs --only message,message-card,message-overview,message-label,message-bidi --shots <dir>`.
-- [ ] **An established conversation changes model through its existing picker,
-  within the same provider.** The source-confirmed model remains shown while
-  the correlated control and authoritative source recovery settle;
-  refusal/recovery is explicit. An unsent draft,
+- [ ] **An established conversation stages its next model through its existing
+  picker, within the same provider.** The picker shows the staged choice
+  immediately; the source keeps running its confirmed model until the next
+  Send or Retry applies the choice. Picking the source's current model again
+  before sending takes the choice back. A message goes only after authoritative
+  source recovery confirms the target. A definite refusal drops the choice;
+  uncertainty keeps it for the next send to check again. An unsent draft,
   original review and Stop survive the control. No automatic native retry.
   _Check:_ model command/adapter tests; `conversation-stress.mjs`'s actual-window
   model step (default `--modelSwitches 1`, raised `--modelSwitches 6`), both
@@ -886,7 +986,8 @@ in its sandbox". Every row of the bridge's design table is a jsdom test
   against the menus and chips beside it.
 - [ ] **Send from a new session arrives in its transcript.** _Check:_ `smoke.mjs` (`send`).
 - [ ] **A new session's home takes its pane's shape.** In a pane under 640px
-  either way its composer docks at the foot as the conversation's beside it
+  wide, or whose room below the title row is under 640px tall, its composer
+  docks at the foot as the conversation's beside it
   (same distance from the foot, inset and height, ± 1.5 px), with the
   greeting on and turned off; the header stays as a band from the top of the
   pane (72–150px of picture or scene) with its Customize control — in the
@@ -905,13 +1006,17 @@ in its sandbox". Every row of the bridge's design table is a jsdom test
   session that is not the last pane drops the draft and its composer text
   at once and keeps the box. On the next frame that box still shows the
   home, labelled New session, with the unsent text. After the box goes,
-  the pane count is what it was before the split.
+  the pane count is what it was before the split. The check makes room for the
+  second readable pane before splitting; in columns layout it hides the session
+  list. Refusal of a split with no room remains the command's contract.
   _Check:_ `columns.mjs --only draft-held`.
 - [ ] **A removed session keeps its unsent reply until the box goes.** The
   source taking an established session out of two panes drops its composer
   text at once and keeps the box. On the next frame that box still shows
   the reply. After the box goes, the pane count is what it was before the
-  split. _Check:_ `columns.mjs --only reply-held`.
+  split. The check reclaims side-column room before typing into the two-pane fixture
+  and reveals the session rows before removing it, including at 760px.
+  _Check:_ `columns.mjs --only reply-held`.
 - [ ] **A message still on its way stays until that box goes.** The source
   removing the session drops the outbox at once, including a send it
   refused. The box still shows that message and the send failure until
@@ -925,7 +1030,8 @@ in its sandbox". Every row of the bridge's design table is a jsdom test
 - [ ] **Stop stays until that box goes while a turn was running.** The
   source removing the session drops the transcript at once. The box still
   shows the turn and Stop, rather than Send, until the box itself goes.
-  _Check:_ `columns.mjs --only stop-held`. The layout test removes a
+  _Check:_ `columns.mjs --only stop-held`; the fixture reveals the session rows
+  again if opening beside folded them away. The layout test removes a
   session whose conversation was showing a running turn.
 - [ ] **A model change stays until that box goes.** The source removing
   the session drops the choice and the transcript's model control at
@@ -971,6 +1077,19 @@ in its sandbox". Every row of the bridge's design table is a jsdom test
 
 ## Settings
 
+- [ ] **Live GitHub events are opt-in on the existing account.**
+  `github-live-events.mjs` drives the real gateway through Settings in Chromium
+  and WebKit: initially off, device sign-in, enable, reload, disable, provider
+  refusal without optimistic switch state, retry and disconnect. It asserts one
+  repository before disconnect and zero after, refused sign-out when cleanup audit
+  fails, concurrent enable/sign-out, and a visible switch at least
+  24 × 16 CSS pixels. The separate live row stays at most 100 CSS pixels high at
+  1000px width. Its help popup has five bullets, fits 600px and 1000px windows,
+  and Escape returns focus to the help button while Settings stays open.
+  The loopback GitHub is a provider substitute; cloud
+  authorization and private payload delivery are checked separately.
+
+
 _ADR 238 › Decision_ (Settings is a typed catalogue; modal; its sidebar folds below a page's 420px).
 
 ### Linked devices
@@ -1015,12 +1134,19 @@ phone's scanner is not this screen.
   _Check:_ by hand.
 - [ ] **Advanced › Experimental is the home of previews**: Advanced sits just
   before About with its flask in both icon families; one line under its
-  title says what it is for, and with one tab there is no tab strip; it
+  title says what it is for. Its tab strip follows the catalogue's visibility
+  and order, including Experimental and Setup; a single-tab category has no strip. It
   offers each preview as one switch — the subagents preview (on unless
   turned off) and the side rail (off until turned on); General has no Experimental tab; search finds it as "advanced",
   "experimental", "labs" or "preview". _Check:_ `smoke.mjs` (`settings`);
-  unit tests `settings-view.test.tsx`, `settings-catalogue.test.ts`,
+  helper `settings-tabs.test.mjs`; unit tests `settings-view.test.tsx`, `settings-catalogue.test.ts`,
   `icon-provider.test.tsx`; the flask by eye in both families.
+- [ ] **Advanced › Setup distinguishes the native app from a browser.** The
+  native app offers Replay; a browser offers the app-only hint without a button
+  that cannot work. Visiting the tab does not replay setup; Settings' Back
+  returns to the panes. _Check:_ `smoke.mjs` (`settings`, browser fallback);
+  `setup-tab.test.tsx` (native Replay, pending/refused and browser cases);
+  conversation stress (`onboarding`, the native-host replay sequence).
 - [ ] **A page's title stands clear of the window's controls**: at 1440 × 900,
   1000 × 700, 760 × 700 and 600 × 700 (sidebar folded) every category's
   title starts at least 16px below the titlebar row; at 1000 × 700 every row
@@ -1077,50 +1203,61 @@ phone's scanner is not this screen.
   composed `GithubAvatar`; without one, or when it fails, the login's initial.
   Choose repositories and Disconnect are icon buttons that take "Connected"'s
   place under the pointer or keyboard focus, and take no pointer while hidden;
-  Shift+Tab and Tab move between them. They show at all times while an action
-  is in flight or after one failed, and on touch-capable screens.
+  Reverse and forward Tab move between them (Option+Tab in macOS WebKit to
+  include links). They show at all times while an action is in flight or after
+  one failed, and on touch-capable screens.
   _Check:_ `conversation-stress.mjs` (`github`); unit tests
   `github-row.test.tsx`, `github-avatar.test.tsx`.
+- [ ] **The GitHub sign-in stays out of agent and managed-shell environments.**
+  After Connect, both report no Nessa `GH_TOKEN` or git credential helper,
+  while a source-authorized `nessa-github.read_repository` returns the requested
+  repository. Disconnect removes the saved sign-in; a later agent still has no
+  Nessa credential. _Check:_ `conversation-stress.mjs` (`github`, default and
+  raised count), `crates/nessa-mcp/src/main.rs`'s command environment test, and
+  `crates/nessa-server/tests/github/mod.rs`'s read/disconnect tests.
 
-### Integrations: the gateway's MCP servers
+### MCP servers: the gateway's MCP servers
 
 #391 PR 3's design (the issue's comments of its state table, rows U1–U31,
 U32–U43 from its review, U44–U50 for a list too large to show, and S1–S8,
 G1–G9 and F8–F12 for the secret field and names stored more than once):
-Settings › Connections › Integrations manages the gateway's stored MCP
-servers over `client.mcpServers`. Every row is a test of
+Settings › Connections › MCP servers manages the gateway's stored MCP
+servers over `client.mcpServers`. Each server is one row (tile, name, a short
+line, its switch, a ⋯ menu with Edit…, Show Tools… and Remove…); each of
+those opens a dialog. Every row is a test of
 `settings/model/mcp-servers.test.ts`, `settings/ui/integrations-tab.test.tsx`
 or the script below. Gate 13: the window shows no limit the protocol does not
 publish, and refuses nothing the gateway would judge.
 
-- [ ] **With no gateway, Integrations is pending** — the sample preview,
+- [ ] **With no gateway, MCP servers is pending** — the sample preview,
   whose workspace is the in-memory one (U1); the app window and the
   `?gateway` preview have one. _Check:_ unit test `integrations-tab.test.tsx`.
 - [ ] **Each write is the gateway's, and the list is what is shown** (gate 16):
-  added with a variable, one row, its switch on, "1 variable", and the
+  added with a variable, one row, its switch on, "Local · 1 variable", and the
   variable's value nowhere in the page — markup or field — after the save
   (U7, U8, U31); inspected, seen running — the test server slow to start
   (`--initialize-delay-ms`), so the running state is read, not raced — with
-  Inspect and Close resting, then `show_chart` badged UI and `app_delete_row`
+  Done resting and no corner close, then `show_chart` badged UI and `app_delete_row`
   destructive, complete (U22, U23); the switch
-  rests while its save is in flight and shows the new list's state (U12);
-  renamed, one row, its variable kept, the stored value "Stored value kept"
-  (U10, U11); given another command, the gateway refusing a kept value under
-  it, the value asked for again, why said, and Save held until it is typed,
-  then saved with the row showing the new command (U33); a conflict made by
+  and the row's ⋯ rest while its save is in flight and show the new list's
+  state (U12); renamed, one row, its variable kept, at rest as "Stored" (U10,
+  U11); the command is named in the edit dialog, not a field (it is changed in
+  config.json); the gateway refuses a kept value under another command, and in
+  the window a variable added asks for the stored value again, says why, and
+  holds Save until it is typed, then "Local · 2 variables" (U33); a conflict made by
   another writer first is refused, said, the list reloaded, what was typed
   kept and what was not refilled from the reload (U15, U42); removal asked first, nothing
   sent until confirmed, then the row gone (U13, U14), and an inspection
-  running as its server is removed says the server is gone; Inspect rests
+  running as its server is removed says the server is gone; the row's ⋯ rests
   while a write is in flight (U21). Each write is exactly
   one `mcpServers` request and one list after it. _Check:_
   `mcp-servers-gateway.mjs --only empty,add,inspect,toggle,rename,relaunch,conflict,remove`
   (needs the gateway built and an agent's harness installed).
 - [ ] **Focus follows what opens and closes** — Add and Edit put it on the
-  form's first field; Remove on the confirm's Cancel, which its sentence
-  describes; Inspect on the panel's heading; Cancel, Escape, Save and Close
-  put it back on the row's button that opened the part, or on Add (a save's
-  once the list after it is read). Escape closes the form and the confirm,
+  form's first field; Remove and Show Tools inside their dialog; Cancel,
+  Escape, Save and Done put it back on the row's ⋯ (a rename's, on the row
+  under its new name, once the list after it is read), or on Add when the
+  row is gone. Escape closes the form and the confirm,
   and never Settings. _Check:_ `mcp-servers-gateway.mjs --only focus`
   (`document.activeElement` after each); unit tests `integrations-tab.test.tsx`
   (`focus`).
@@ -1131,16 +1268,17 @@ publish, and refuses nothing the gateway would judge.
   Add (F11, F12). A variable's value is a password field, so a typed value is
   in no accessibility tree; a paste with line breaks is held and never drawn,
   "Pasted value: N lines", a trailing line break pointed out and trimmed only
-  when asked, Clear to drop it (S3–S6). A stored value not edited is kept; edited
-  to empty, it is cleared, said so, with "Keep stored value" (S1, S2, Codex
-  P1). _Check:_ `mcp-servers-gateway.mjs --only secret` (the accessibility
+  when asked, Clear to drop it (S3–S6). A stored value rests as "Stored" until
+  Replace; Replace left untouched keeps it; typed and then erased, Save is
+  held, said so, until a value is typed or Keep is pressed. A save never
+  blanks a stored value (S1, S2, Codex P1). _Check:_ `mcp-servers-gateway.mjs --only secret` (the accessibility
   tree over CDP in Chromium, the ARIA snapshot in WebKit); unit tests
   `mcp-servers.test.ts`, `integrations-tab.test.tsx`.
 - [ ] **A name stored more than once is one read-only group** — config.json
   edited to store three servers under one name: "3 servers share this name",
-  each read-only with no Edit, Inspect or switch, and one action "Remove the
-  first server named …", asked first in those words; each removal takes the
-  first stored, focus staying on the group while it lasts, then on the row
+  each read-only with no Edit, Show Tools or switch, and one ⋯ action "Remove
+  the first server named …", asked first in those words; each removal takes the
+  first stored, focus staying on the group's ⋯ while it lasts, then on the row
   left (G3–G6). _Check:_ `mcp-servers-gateway.mjs --only duplicate-names`;
   unit tests (G1–G9).
 - [ ] **What the gateway says is read out** — the notices, each field's
@@ -1167,6 +1305,14 @@ publish, and refuses nothing the gateway would judge.
   typed kept, no notice, nothing listed again and config.json unchanged (U48).
   _Check:_ `mcp-servers-gateway.mjs --only too-large,save-too-large`; unit
   tests `mcp-servers.test.ts`, `integrations-tab.test.tsx` (U46, U47, U49, U50).
+- [ ] **Edit opens config.json in the person's app** — the edit dialog's
+  "Open config.json" asks the host for the gateway's own config.json (the page
+  names no path); the host opens it only when it is a regular file, never
+  through a link. The button is there in the app on macOS and Linux, and absent
+  in a browser and on Windows, which have no opener. A refusal is said under
+  Command. _Check:_ unit tests `integrations-tab.test.tsx` ("Open config.json",
+  "no host"); `src-tauri/src/gateway_config.rs` tests. The OS openers
+  (`open -t`, `xdg-open`) are owner-run.
 - [ ] **A credential without `credential.manage` sees "Only an administrator
   can manage MCP servers", no control, and sends no `mcpServers` request**
   (U2). _Check:_ `mcp-servers-gateway.mjs --only non-admin`.
@@ -1237,7 +1383,10 @@ it is redesigned on its own branch.
   with `--desktop-hover`, a chosen row with `--desktop-selected`, and an
   unread title weighs `--desktop-unread-weight`; a kit row's name says the
   count or glyph the kit lays beside it, which stays silent, and pointed at
-  that glyph the row keeps its fill; a switcher result, whose choice
+  that glyph the row keeps its fill and receives its click. A channel's settings
+  action receives its own click, with the label clear of the trailing band;
+  its presence does not make the decorative count or glyph intercept the row.
+  A switcher result, whose choice
   follows the pointer, draws no hover of its own. _Check:_ `shared-controls.mjs`
   (`rows`, per engine and layout: on load, in the overview, with the switcher
   open). Rules: `ui/list-row.css`, `source-list.css` › Rows. At the base
@@ -1339,7 +1488,9 @@ _ADR 238 › Decision_, last paragraph ("Motion animates transform and opacity o
   system's), and script motion follows. _Check:_ `safe-area.mjs --reduced-motion`
   and by hand; with less motion, a drag moves only the copy: `drag.mjs`
   (`reduced-motion`), and `drag.mjs --reduced-motion` for every drag check
-  with the system's reduced motion on.
+  with the system's reduced motion on. The reduced-motion landing recorder
+  retains every frame through the expected committed order, within the existing
+  3 s settlement budget; intermediate geometry and final residue still fail.
 
 ## Themes, zoom and sizes
 
@@ -1542,6 +1693,18 @@ says why where the conversations would be.
   and preserve the30-second discovery deadline and three-client/24-create load.
   _Check:_ `lib/stress-conversation.test.mjs` and both-engine default and raised
   `conversation-stress.mjs` runs (#1026).
+- [ ] **An unused new Claude context survives a cold restart after old history.**
+  In a dedicated channel coordinator selected as Claude through the real UI,
+  retain a completed exchange, change its native fingerprint, then restart again
+  before any new input. Fresh outer audit identities and focused native request
+  traces prove publication and zero new admission; the missing unused ID is
+  replaced rather than resumed. The next UI Send completes exactly once while
+  that pane retains the old prompt/reply, with no prompt replay. The fixture
+  limits native-history checks to this canonical workspace. Restore the isolated
+  baseline configuration with an actual restart before later steps.
+  _Check:_ `conversation-stress.mjs`'s `drift` step (`drifts`, default and raised
+  count), Chromium and WebKit; `lib/stress-native-context.test.mjs` and the
+  scripted agent's focused native-history transport tests (#1164).
 - [ ] **Stress restart errors belong to the planned gateway outage.** Install
   socket observation before navigation. Only exact owned `/session` refusal/reset
   console occurrences during the action, corroborated by actual socket errors,
@@ -1552,6 +1715,14 @@ says why where the conversations would be.
   pattern is installed. Recovery requires the current successor userText and its
   completion together in one existing60-second window poll. _Check:_ `lib/stress-restart.test.mjs` and the default
   and raised `conversation-stress.mjs` runs in Chromium and WebKit (#1024).
+  A metadata-upgrade Send first requires a successful workspace subscription
+  acknowledgement on this page's replacement live socket. Gateway health,
+  another Node client, a challenge or authentication alone cannot substitute.
+  Recovery and the click share the original10-second Send-click budget;
+  stalled recovery fails without submitting or retrying a message. This
+  readiness proof never grants a console exemption: later frames on the same
+  socket cannot erase a later console error. _Check:_ the same helper controls
+  and the controlled upgrade recovery regression.
   The current WebKit SIGKILL probe records the exact reset dialect
   "The network connection was lost." on both the owned socket and console
   inside this scope, followed by a distinct receiving connection. That exact
@@ -1674,19 +1845,35 @@ says why where the conversations would be.
   load run. The table itself is nessa_ui's `MessageMarkdown` / `Table`
   (`edgeFade`), with its own story checks.
 
-- [ ] **A run of tool calls draws each call on one time axis, and an instant
-  call is a dot.**
+- [ ] **A run of tool calls draws each call on one time axis, an instant
+  call is a dot, and a long name is cut before the bar.**
   _Check:_ `conversation-stress.mjs`'s `trace` step (knob `traces`): the
   scripted agent makes three calls, one failing. The window folds them into
   "Ran 3 tools", which opens to one row per call with its status. Each bar
   starts within 3% of the axis where its call started, is at least as wide as
   it is tall (a call of a few milliseconds is a round dot, never a hairline),
-  and ends no more than 0.5 px past the axis. A call's card shows its input.
+  and ends no more than 0.5 px past the axis. One call is announced under a
+  title far longer than its column, as a harness names a web search: every
+  row's name ends before its bar's track starts, and the long one is cut
+  with an ellipsis while still holding its whole title. A call's card shows
+  its input.
   While the run is still at work (the agent holds after its last call), the
   trace alone says so: its line reads "Working", open or folded, the call at
   work is named once in its run, and no live row repeats it below
   (`shownActivity` in `model/transcript.ts`). Chromium in the PR job; WebKit with the stress load run. The trace itself is
-  nessa_ui's `ToolTrace`, with its own story checks (`Instant`).
+  nessa_ui's `ToolTrace`, with its own story checks (`Instant`, `LongLabel`).
+
+- [ ] **The transcript can be read compact: only what was said, with no tool
+  runs, and one quiet line while the agent works.**
+  _Check:_ `conversation-stress.mjs`'s `transcriptView` step (knob
+  `transcriptViews`): Compact is chosen under Transcript in the pane's "…"
+  menu, then the scripted agent makes the `trace` turn's calls. While it
+  works, the transcript draws no tool run and exactly one live row, which
+  reads "Working" and names none of the calls. Once it ends, the reply shows,
+  no run does, and the gateway's view still keeps every call. After a reload
+  the transcript is still compact (the choice is remembered in the webview's
+  storage, one for every pane); choosing Detailed draws the turn's run folded
+  as "Ran 3 tools". The views are `model/transcript-view.ts`.
 
 ### Onboarding readiness recovery
 
@@ -1957,7 +2144,8 @@ the same view. One turn failed before it replied, one was cancelled after a
 partial reply, one was left unresolved with no diagnostic, and one is still
 running and asking three questions. The view also carries the gateway's
 notice that a review was left out. The script runs in Chromium and WebKit
-and is dev-only in run-all.
+and is dev-only in run-all. Question actions target the conversation pane;
+the final removal checks still cover the entire desktop, including Needs you.
 
 - [ ] **A failed, cancelled, or unresolved turn stays visible, with the
   gateway's status and diagnostic apart from a message that was not sent.**
@@ -1973,6 +2161,32 @@ and is dev-only in run-all.
   lists one, drops it on both surfaces.** _Check:_ `--only cleared`. Choosing
   Staging and Answer drops the first question. Skip drops the second. A frame
   that no longer lists the third drops it on the desktop and the panel.
+
+## Tool disclosure scroll
+
+`tool-disclosure.mjs` opens the sample conversations `split-panes` and
+`retry-budget` in the desktop window. The rule is
+`watchToolDisclosure` in `src/desktop/workspace/ui/transcript/tool-disclosure.ts`
+and the state table in `docs/design/transcript-tool-disclosure-scroll.md`.
+Chromium and WebKit, both layouts, at 1280×720, so the sample
+conversation overflows while its tool header is still on screen at the end.
+
+- [ ] **Opening or closing a tool run at the end of the transcript keeps
+  that header's top within 1px and grows the distance from the end.**
+  The same header stays within 1px when the reader is at the top.
+  _Check:_ `tool-disclosure.mjs --only group-end,group-away`. Anchoring is
+  off during the motion. The shot `waterfall-open-<engine>-<layout>.png`
+  is that open run: the header's bar, each call's duration bar, and the
+  0s–30s axis, with the header still in view. `waterfall-call-<engine>.png`
+  is a call's details open under its row. Closing may move the header down
+  only by the browser's clamp, and only as far as `scrollTop` decreases.
+- [ ] **Opening a call's row at the end keeps that row's top within 1px.**
+  _Check:_ `--only step-end`.
+- [ ] **Showing the calls folded above a long run keeps that row's top
+  within 1px.** _Check:_ `--only earlier` (`retry-budget`).
+- [ ] **A growth while the reader is back at the end leaves them within
+  24px of it.** _Check:_ `--only follow`. This is after a disclosure, so
+  the hold has already let go.
 
 ## Transcript notes
 
@@ -2074,26 +2288,16 @@ the table in `docs/design/read-grants.md` › "Dialog state and order".
   _Check:_ `empty`. "No linked devices yet." and Link a Device, no Done and no
   Share; the link closes the dialog and opens Settings on Linked devices.
 
-## Session list: pinned first, request cards (#1084)
+## Session list: pinned first, waiting rows (#1084)
 
 - [ ] **In three columns the sidebar lists channels only; a channel's pinned
   sessions lead its list under "Pinned", each listed once.** _Check:_
   `columns.mjs` (`channels-alone`); Sessions in sidebar still discloses a
   channel's sessions.
-- [ ] **Each waiting row the list asks about is a request card, answered from
-  the list.** It reads the command as the transcript card does
-  (`approvalGist`), offers the review's refusal and primary allow on one row,
-  every other answer in the menu beside them.
-  It allows only a request it shows whole, by a rule over the request
-  (`allowableFromList`): nothing in the tool's input but the command, at
-  most three lines and 180 characters; any other offers its refusals and
-  Review in Chat. _Check:_ `columns.mjs` (`list-request`: Allow moves
-  the row out of Needs you; `list-request-claude`: Claude's five-answer shell
-  review at the list's narrowest, read as the transcript reads it, answers
-  that fit their words, under 260px); `conversation-stress.mjs`
-  (`listAnswer`); unit tests `list-request.test.tsx` (only what is drawn is
-  asked: never a pinned row, a row the search hides, or a folded list's; the
-  bound of 12; a card's controls keep their keys).
+- [ ] **A waiting row in Needs you is a plain session row.** No answer
+  buttons or question forms are drawn in the list; clicking the row opens the
+  chat, where the review or question is answered, and the answered row leaves
+  Needs you. _Check:_ `conversation-stress.mjs` (`waitingRow`).
 
 ## The window never scrolls sideways (#1084)
 
@@ -2161,7 +2365,11 @@ surfaces use.
 
 ## User attachments in desktop reads — #682
 
-`user-attachments.mjs` drives the production gateway projection and desktop message renderer at 360, 600 and 1440 pixels in Chromium and WebKit. Committed, pending and serialized/reopened image-only, linked-file-only and mixed inputs retain the exact image encoding/size and linked path, a labelled attachment list and adjacent text. The reference placeholders show no preview or action when bytes are unavailable and fit the surface within 1 pixel of overflow. Reloading the fixture preserves the same metadata. The mapper and browser regressions hold this contract; agent-published file reads/saves remain covered separately by `published-files.mjs`.
+`user-attachments.mjs` drives the production gateway projection and desktop message renderer at 360, 600 and 1440 pixels in Chromium and WebKit. Committed, pending and serialized/reopened image-only, linked-file-only, uploaded-file-only and mixed inputs retain the exact image encoding/size, linked path, and original uploaded-file name, a labelled attachment list and adjacent text. The reference placeholders show no preview or action when bytes are unavailable and fit the surface within 1 pixel of overflow. Reloading the fixture preserves the same metadata. The mapper and browser regressions hold this contract; agent-published file reads/saves remain covered separately by `published-files.mjs`.
+
+The conversation stress `inputFiles` step runs the production Swift phone model through both its prepared-command journal and persistent outbox while background conversations run. It sends PDF, ZIP and text, retries through the same product path and identity, and checks placed bytes, saved references, one turn per identity and visible names. Build `PhoneSyncVerification` in the companion nessa-ios repository and set `NESSA_PHONE_FILES_VERIFIER` to its absolute executable path. Raise `--inputFiles` to repeat it. A missing verifier fails before starting a gateway.
+
+The iOS repository's `phone-files-stress` macOS workflow owns default and raised phone runs against pinned public gateway source, alongside its private Swift product. The gateway's Ubuntu core and nightly jobs explicitly use `--inputFiles 0`; those jobs alone do not verify phone sending. For the full companion check, run `node <nessa-ios>/scripts/verify-phone-files-stress.mjs <gateway-root> <evidence-directory>` with the verifier environment set.
 
 ## Compact send recovery (#914)
 
@@ -2218,6 +2426,46 @@ rejected acknowledgement. SDK ACP tests cover remembered allow and deny, exact
 logical attribution and the mapped provider wire option. Service tests keep a
 second review pending and require live publication after success or consumption
 with a typed failure.
+
+- [ ] **Stopping a parent cancels owned child and grandchild turns by default** (#329).
+  `parent-stop.mjs` creates them through the actual source-bound `nessa-agents`
+  tools and clicks the window composer's ordinary Stop button. Chromium and
+  WebKit assert one cancelled parent turn, cancelled descendants, an unrelated
+  turn still running with its queued report-watch turn preserved, and no new parent turn during a 1500 ms report-delivery
+  observation, then a later person command releases the retained child report.
+  A second isolated gateway sets
+  `subagents.stopChildrenOnParentStop:false` and asserts the descendants remain
+  running. This runs in `pnpm test:e2e:scripted`; the Rust Stop/report tests own
+  controlled races and restart coverage.
+  The repeated `conversation-stress.mjs` step also observes the selected native
+  session's ACP prompts: withdrawing an older queued report can publish empty
+  cancelled history, but a further provider prompt fails even if it produces
+  no output. Missing or damaged recording evidence fails the check.
+
+- [ ] **Stress review answers keep their exact command ACK.** The window sends
+  the intended conversation/execution/review/permission/option, and its matching
+  command receives `applied: true`. Expiry or a lost ACK cannot become success
+  merely because the card disappears. Provider completion remains checked by
+  the existing final transcript and at-rest checks. _Check:_
+  `lib/stress-review-answers.test.mjs` and `conversation-stress.mjs` in Chromium
+  and WebKit; [ordering controls](../../docs/design/stress-review-answers.md).
+
+- [ ] **Stress fixtures match their named access scenario.** `full` keeps the
+  original successful access-change assertions on a model advertising all three
+  modes. `ask-only` clicks Full and requires its exact unavailable refusal,
+  retained Ask selection and shield, no new turn or elevated provider command,
+  and a real review on the following permission turn. Incompatible model/scenario
+  pairs fail setup without fallback. Run defaults and raised counts for each
+  applicable profile; label the model and scenario in the evidence.
+
+- [ ] **Layout observations follow actual geometry.** A swipe settles only after
+  its finite geometry animations finish, within the original three-second bound;
+  repeated pixels during a paused width transition are not settlement. Filled
+  conversation slivers remain in 220–520 px panes; the short-home cutoff does not
+  hide them. Removal checks reveal and reacquire the visible session row after a
+  fold, then retain their next-frame reply and Stop assertions. _Check:_
+  `session-rows.mjs`, `responsive.mjs --only list-gutter`, and
+  `columns.mjs --only content-visible,reply-held,stop-held --sizes 760x700`.
 
 ### One header per chat; tabs only in the right panel
 
@@ -2282,3 +2530,55 @@ _Check:_ `settings-action-owners.mjs` (both engines), component regressions in
 
 _Check:_ `conversation-stress.mjs` step `menuPanel` (knob `menuPanels`), in
 Chromium within the default run and alone in WebKit in CI (`local-auth.yml`).
+
+## Local vault
+
+`vault.mjs` exercises setup strength and confirmation, wrong passphrase refusal,
+transient input clearing, concise help, reload without re-unlock, and pipe EOF
+locking through the actual gateway and native child. Check keyboard focus and
+Later/Escape leave ordinary workspace use available. GitHub protected actions
+still require backend admission after a canceled dialog.
+
+The conversation stress notice and launch reloads check the current vault state.
+After an earlier gateway restart has sealed it, they wait for the unlock dialog,
+enter the disposable passphrase through the UI, and verify unlocked state before
+continuing ordinary clicks. Review-notice identity, delivery and at-rest automatic
+denial checks still apply. The minimized sequence is seed 2 with one pool step
+and one notice step; pool precedes notice, whose page reload used to leave the
+vault dialog blocking the main conversation click.
+
+## Boat VM lifetime settings
+
+- [ ] The global default saves from Settings → Connections → Accounts without a
+  Boat token. A saved channel's gear opens its settings in both layouts. A new
+  channel inherits the global lifetime; picking a choice saves it at once (no
+  Save button); an explicit Never overrides
+  it, and Use Nessa default removes only that override. Invalid, null-scope and
+  contradictory commands leave the default unchanged. _Check:_
+  `boat-runtime-settings.mjs` in Chromium/WebKit, columns/sidebar, against a real
+  gateway; the same shared check runs in the conversation stress `channel` step.
+- [ ] The dialog's controls remain usable by keyboard and Escape closes it.
+  It says nothing beyond "Auto-stop VMs" and the choice, except under Never,
+  which adds that VMs keep billing until stopped in Boat. _Check:_ manual
+  screenshot/focus review and the settings control's rendered tests.
+
+
+## Background tasks
+
+- The conversation stress `background` step starts a real local command through
+  the MCP relay. Its original waterfall row stays running after the calling turn
+  finishes, then settles with the command's actual output. Exactly one internal
+  continuation reaches the conversation and no synthetic user bubble appears.
+- Check the running and completed row in Chromium and WebKit. Ordinary foreground
+  tools still settle when their calling turn ends. No separate task list is added.
+
+
+### Vault passphrase hardening
+
+- New setup refuses short/common/repeated input while an existing twelve-character
+  vault remains unlockable; the vault script drives the real native pipe.
+- Passphrase change seals, rejects the old phrase, accepts the new phrase and
+  retains explicit recovery guidance after a lost response without replay.
+- The conversation stress `passphrases` step changes through Settings, verifies
+  Locked, explicitly unlocks, restores its disposable phrase and sends a reply.
+  Run default1 and raised3. `vault.mjs`, `conversation-stress.mjs` own these checks.

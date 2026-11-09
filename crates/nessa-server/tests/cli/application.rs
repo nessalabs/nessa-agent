@@ -1,6 +1,7 @@
 use crate::cli::application::{
-    issue_token, BrowserToken, CliError, Gateway, GatewayIdentity, TokenRequest, MAX_SAFE_TIMESTAMP,
+    issue_token, BrowserToken, CliError, Gateway, GatewayCallError, GatewayIdentity, TokenRequest,
 };
+use nessa_client_core::local_product::MAX_SAFE_TIMESTAMP;
 struct Fake {
     identity: GatewayIdentity,
     requests: Vec<TokenRequest>,
@@ -12,6 +13,13 @@ impl Gateway for Fake {
     }
     fn health(&mut self) -> Result<(), CliError> {
         Ok(())
+    }
+    fn call(
+        &mut self,
+        _method: &str,
+        _params: serde_json::Value,
+    ) -> Result<serde_json::Value, GatewayCallError> {
+        Err(GatewayCallError::Transport(CliError::Protocol))
     }
     fn issue(&mut self, request: TokenRequest) -> Result<BrowserToken, CliError> {
         self.requests.push(request);

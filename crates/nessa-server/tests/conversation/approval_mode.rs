@@ -777,6 +777,7 @@ async fn terminal_unconfirmed_cleanup_keeps_admission_closed_until_confirmed_clo
                 caller(),
                 "after-uncertain-retirement".into(),
                 SubmittedMessage {
+                    uploads: Vec::new(),
                     text: "not admitted".into(),
                     ..SubmittedMessage::default()
                 },
@@ -1483,6 +1484,7 @@ async fn a_message_after_a_failed_turn_runs_at_the_mode_chosen_live() {
         ObservationFailureCause::ExecutionFailed,
     ));
     let message = |text: &str| SubmittedMessage {
+        uploads: Vec::new(),
         text: text.into(),
         ..SubmittedMessage::default()
     };
@@ -1596,6 +1598,7 @@ async fn messages_sent_while_a_failed_turn_settles_are_not_refused_for_the_mode(
     let (release, gate) = oneshot::channel();
     *provider.execution_gate.lock().unwrap() = Some(gate);
     let message = |text: &str| SubmittedMessage {
+        uploads: Vec::new(),
         text: text.into(),
         ..SubmittedMessage::default()
     };
@@ -1700,6 +1703,7 @@ async fn an_agent_that_recovers_by_itself_keeps_the_mode_chosen_live() {
             })),
         )));
     let message = |text: &str| SubmittedMessage {
+        uploads: Vec::new(),
         text: text.into(),
         ..SubmittedMessage::default()
     };
@@ -1822,6 +1826,7 @@ async fn an_answer_to_an_agent_that_let_its_process_go_is_stale() {
             caller(),
             "only".into(),
             SubmittedMessage {
+                uploads: Vec::new(),
                 text: "The only turn".into(),
                 ..SubmittedMessage::default()
             },
@@ -2048,6 +2053,7 @@ async fn cold_preset_preserves_durable_owner(saved_model: bool, restart: bool) {
             caller(),
             "after-cold-preset".into(),
             SubmittedMessage {
+                uploads: Vec::new(),
                 text: "after cold preset".into(),
                 ..SubmittedMessage::default()
             },

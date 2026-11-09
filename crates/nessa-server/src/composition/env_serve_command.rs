@@ -20,11 +20,12 @@
 use super::{agent::launch_environment, runtime_config::RuntimeConfig};
 use crate::{
     core::RunError,
+    devices::{application::MachineProbe, infrastructure::SystemMachine},
     env::{Environment, LEASE_PROTOCOL, VERSION},
     env_serve::{
         application::{
-            refuse, serve, ArtifactInbox, CommandRunner, HarnessLauncher, LeasePolicyEvaluator,
-            Runners, ServeTimings, Serving,
+            admit_update, refuse, serve, ArtifactInbox, CommandRunner, HarnessLauncher,
+            LeasePolicyEvaluator, Runners, ServeEnd, ServeTimings, Serving,
         },
         domain::Peer,
         infrastructure::{
@@ -34,10 +35,7 @@ use crate::{
     },
     timer::{Timer, TokioTimer},
 };
-use nessa_protocol::{
-    agents::AgentId,
-    lease::{Hello, Unavailability},
-};
+use nessa_protocol::lease::{Hello, Unavailability};
 use shepherd::{ProcessSupervisor, SupervisorBuilder};
 use std::{collections::HashMap, path::Path, sync::Arc, time::Duration};
 use tokio::{
@@ -101,6 +99,8 @@ pub(super) struct Composed {
     sockets: std::path::PathBuf,
     lock: ServeLock,
     timer: Arc<dyn Timer>,
+    /// This machine, reported to each gateway it serves.
+    machine: Arc<dyn MachineProbe>,
 }
 
 impl Composed {
@@ -112,7 +112,8 @@ impl Composed {
         input: R,
         output: W,
         drain: watch::Receiver<bool>,
-    ) where
+    ) -> ServeEnd
+    where
         R: AsyncRead + Unpin + Send + 'static,
         W: AsyncWrite + Unpin + Send + 'static,
     {
@@ -129,6 +130,7 @@ impl Composed {
                 peer,
                 grants: self.grants.clone(),
                 policy: self.policy.clone(),
+                machine: Some(self.machine.clone()),
             },
             Runners {
                 harnesses: self.launcher.clone(),
@@ -143,7 +145,13 @@ impl Composed {
             self.timer.clone(),
             drain,
         )
-        .await;
+        .await
+    }
+
+    /// Whether this host's owner lets `peer` replace this build with its
+    /// gateway's, as the lease policy decides over the grant it holds now.
+    pub(super) fn may_update(&self, peer: &Peer) -> bool {
+        admit_update(self.grants.as_ref(), self.policy.as_ref(), peer).is_ok()
     }
 
     /// Stop serving on this host: what is left of commands is swept, the
@@ -168,7 +176,15 @@ pub(super) async fn compose() -> Result<Composed, (Unavailability, RunError)> {
     let auth = Environment::auth_directory_from_system()
         .map_err(|error| not_configured(RunError::Agent(error.to_string())))?;
     let config = RuntimeConfig::load(&auth).map_err(not_configured)?;
-    let launcher = launcher(&config).map_err(not_configured)?;
+    let mut launcher = launcher(&config).map_err(not_configured)?;
+    let environment = auth.join("environment");
+    let opencode_database = environment.join("opencode-sessions.sqlite");
+    nessa_local_storage::create_directory(&environment)
+        .map_err(|error| not_configured(RunError::Agent(error.to_string())))?;
+    launcher.opencode_database(opencode_database);
+    // One Codex home for this host. Threads stay under its `sessions/`;
+    // the credential store in that home is ephemeral.
+    launcher.codex_sessions(environment.join("codex"));
     let policy = CedarLeasePolicy::new().map_err(|error| not_configured(RunError::Agent(error)))?;
     let commands = config.env_serve.commands.then(|| {
         let supervisor = SupervisorBuilder::new().build();
@@ -228,6 +244,7 @@ pub(super) async fn compose() -> Result<Composed, (Unavailability, RunError)> {
         sockets,
         lock,
         timer: Arc::new(TokioTimer::new()),
+        machine: Arc::new(SystemMachine::new(auth.clone())),
     })
 }
 
@@ -256,9 +273,6 @@ fn launcher(config: &RuntimeConfig) -> Result<ConfiguredLauncher, RunError> {
     let workspace = absolute(&agents.workspace)?;
     let mut specs = HashMap::new();
     for (agent, runtime) in agents.agents() {
-        if agent == AgentId::Opencode {
-            continue;
-        }
         let executable = runtime.command.executable();
         if !executable.is_absolute() {
             return Err(RunError::Agent(format!(

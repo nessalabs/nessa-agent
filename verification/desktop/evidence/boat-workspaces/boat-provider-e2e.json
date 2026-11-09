@@ -1,0 +1,96 @@
+{
+  "reviewedSourceRevision": "ec87466224be10085fc1183af8668727d581d3c9",
+  "gatewayBinarySha256": "f910c001228d8799fbe177c0be971f03a6b077289d6ef57207992d0f8b795a76",
+  "worker": {
+    "sourceRevision": "00efca5ef94d1a43635989f521daca91558353ea",
+    "leaseProtocol": "b698f20053f8bb7c",
+    "nessaSha256": "bd83ce27d670741d9b378762f68c928563c249b73a0103bc587ed8a4cc73e089",
+    "workspaceSdkRevision": "33b8382d72657d176baca19797d8d146803f3d89",
+    "supervisorSha256": "afe8510ce3f9fce707a14b221d28ea68a0a8298c983443eee1dbe14a77cd90d6"
+  },
+  "checks": [
+    {
+      "name": "token validated and encrypted"
+    },
+    {
+      "name": "Local creates no cloud VM"
+    },
+    {
+      "name": "two threads use distinct saved VMs",
+      "main": "ec8e7061-877e-544f-adaa-7093a30262c1",
+      "worker": "4a3f2129-bd28-458e-94ba-0b8f8cd71a2d",
+      "workerVm": "bx_x7vbuwhy"
+    },
+    {
+      "name": "subscription inference writes workspace file"
+    },
+    {
+      "name": "restart and VM resume retain identity and workspace files"
+    },
+    {
+      "name": "cold main subscription starts after gateway restart"
+    },
+    {
+      "name": "cloud subscription reads approved local log through existing MCP",
+      "reader": "09c88433-de2c-4440-b1ab-e49469fe76f2"
+    },
+    {
+      "name": "removal plus session close revokes the old local connection"
+    },
+    {
+      "name": "coordinator dispatches real child on another VM",
+      "thread": "46076572-17ca-9621-abb5-27801f10c622",
+      "vm": "bx_rap4mdwe"
+    },
+    {
+      "name": "missing VM fails without replacement or Local fallback",
+      "vm": "bx_x7vbuwhy",
+      "operation": "bdop_b039a12022794703b0630f206f27daf2"
+    },
+    {
+      "name": "PASS"
+    }
+  ],
+  "cleanup": [
+    {
+      "thread": "4a3f2129-bd28-458e-94ba-0b8f8cd71a2d",
+      "result": "close unconfirmed"
+    },
+    {
+      "vm": "bx_mg4q4ea5",
+      "thread": "ec8e7061-877e-544f-adaa-7093a30262c1",
+      "state": "confirmed absent",
+      "operation": "bdop_c1713fb6947243c5a754640e878e92c1"
+    },
+    {
+      "vm": "bx_x7vbuwhy",
+      "thread": "4a3f2129-bd28-458e-94ba-0b8f8cd71a2d",
+      "state": "confirmed absent",
+      "operation": "bdop_b039a12022794703b0630f206f27daf2"
+    },
+    {
+      "vm": "bx_bc64xyut",
+      "thread": "09c88433-de2c-4440-b1ab-e49469fe76f2",
+      "state": "confirmed absent",
+      "operation": "bdop_9236845ee3d04cc2884592e826993416"
+    },
+    {
+      "vm": "bx_rap4mdwe",
+      "thread": "46076572-17ca-9621-abb5-27801f10c622",
+      "state": "confirmed absent",
+      "operation": "bdop_ab20700ad77b482d8d1efa9f3133cba8"
+    }
+  ],
+  "providerCorrelation": [
+    {
+      "vm": "bx_znvns9wg",
+      "thread": "17a6d655-7dc8-5dec-ad52-daa01575d4b9",
+      "providerCorrelation": "matched"
+    },
+    {
+      "vm": "bx_2b2se4bf",
+      "thread": "949ff2b3-820c-4ad9-b632-5b6b26b922d8",
+      "providerCorrelation": "matched"
+    }
+  ]
+}

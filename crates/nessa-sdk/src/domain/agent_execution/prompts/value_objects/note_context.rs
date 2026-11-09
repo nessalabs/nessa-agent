@@ -10,6 +10,8 @@ pub enum NoteAuthor {
     Owner,
     /// Someone the conversation is shared with left it, under their grant.
     Grant,
+    /// An agent in another turn left it.
+    Agent,
 }
 
 /// One note someone left in the conversation, as the model is given it with

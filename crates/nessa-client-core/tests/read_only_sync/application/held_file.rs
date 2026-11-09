@@ -5,8 +5,9 @@ use super::*;
 use crate::read_only_sync::domain::HELD_FILE_RANGE_BYTES;
 use nessa_protocol::conversation::domain::ConversationId;
 use nessa_sdk::domain::common::value_objects::{MediaType, Sha256Digest};
-use std::cell::RefCell;
 use std::collections::VecDeque;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 
 const RANGE: usize = HELD_FILE_RANGE_BYTES as usize;
 
@@ -63,16 +64,17 @@ impl HeldFileSource for Source {
 }
 
 #[derive(Default)]
-struct Pauses(RefCell<Vec<Duration>>);
+struct Pauses(Mutex<Vec<Duration>>);
 impl Pause for Pauses {
-    fn pause(&self, delay: Duration) {
-        self.0.borrow_mut().push(delay);
+    fn pause(&self, delay: Duration, _: &dyn Fn() -> bool) {
+        self.0.lock().expect("pause record").push(delay);
     }
 }
 impl Pauses {
     fn millis(&self) -> Vec<u64> {
         self.0
-            .borrow()
+            .lock()
+            .expect("pause record")
             .iter()
             .map(|delay| delay.as_millis() as u64)
             .collect()
@@ -96,6 +98,8 @@ struct Part {
     /// Bytes another writer adds to the part after each of ours.
     foreign: Vec<u8>,
     output_appears: bool,
+    /// Set when the part is re-read, so a deadline can arrive during the hash.
+    end_during_read: Option<Arc<AtomicBool>>,
 }
 impl Part {
     fn holding(bytes: &[u8]) -> Self {
@@ -142,6 +146,9 @@ impl FetchFiles for Part {
     }
     fn read_part(&mut self, visit: &mut dyn FnMut(&[u8])) -> Result<u64, FileStep> {
         self.step(FileStep::Read)?;
+        if let Some(end) = &self.end_during_read {
+            end.store(true, Ordering::SeqCst);
+        }
         Ok(pieces(&self.bytes, visit))
     }
     fn restart(&mut self) -> Result<(), FileStep> {
@@ -157,12 +164,24 @@ impl FetchFiles for Part {
         Ok(())
     }
     fn keep(&mut self) -> Result<(), KeepRefusal> {
+        self.sync_held()?;
+        self.link_held()?;
+        self.retire_held()
+    }
+    fn sync_held(&mut self) -> Result<(), KeepRefusal> {
+        self.step(FileStep::Sync).map_err(KeepRefusal::File)
+    }
+    fn link_held(&mut self) -> Result<(), KeepRefusal> {
         if self.output_appears {
             return Err(KeepRefusal::OutputExists);
         }
         self.step(FileStep::Link).map_err(KeepRefusal::File)?;
         self.kept = Some(std::mem::take(&mut self.bytes));
         Ok(())
+    }
+    fn retire_held(&mut self) -> Result<(), KeepRefusal> {
+        self.step(FileStep::SyncDirectory)
+            .map_err(|step| KeepRefusal::Published { step })
     }
     fn discard(&mut self) -> Result<(), FileStep> {
         self.step(FileStep::Remove)?;
@@ -185,7 +204,7 @@ fn ranges_are_asked_in_order_and_the_whole_is_kept_once_verified() {
     let mut source = Source::serving(&bytes);
     let pauses = Pauses::default();
     let mut part = Part::default();
-    let progress = fetch_held_file(&mut source, &pauses, &mut part, &file).unwrap();
+    let progress = fetch_held_file(&mut source, &pauses, &mut part, &file, &|| false).unwrap();
     assert_eq!(
         source.asked,
         [
@@ -213,7 +232,8 @@ fn a_kept_part_is_resumed_from_its_length_and_hashed_with_the_rest() {
     let file = named(&bytes);
     let mut source = Source::serving(&bytes);
     let mut part = Part::holding(&bytes[..RANGE + 10]);
-    let progress = fetch_held_file(&mut source, &Pauses::default(), &mut part, &file).unwrap();
+    let progress =
+        fetch_held_file(&mut source, &Pauses::default(), &mut part, &file, &|| false).unwrap();
     // What is left is less than one range: the last, short one.
     assert_eq!(source.asked, [(RANGE as u64 + 10, HELD_FILE_RANGE_BYTES)]);
     assert_eq!(progress.resumed_from, RANGE as u64 + 10);
@@ -229,8 +249,14 @@ fn a_complete_part_still_asks_the_gateway_for_its_last_range() {
     let bytes = content(2 * RANGE + 5);
     let mut source = Source::serving(&bytes);
     let mut part = Part::holding(&bytes);
-    let progress =
-        fetch_held_file(&mut source, &Pauses::default(), &mut part, &named(&bytes)).unwrap();
+    let progress = fetch_held_file(
+        &mut source,
+        &Pauses::default(),
+        &mut part,
+        &named(&bytes),
+        &|| false,
+    )
+    .unwrap();
     assert_eq!(source.asked, [(2 * RANGE as u64, HELD_FILE_RANGE_BYTES)]);
     assert_eq!(
         (progress.resumed_from, progress.reached, progress.ranges),
@@ -265,8 +291,14 @@ fn a_complete_part_the_gateway_refuses_or_misanswers_keeps_nothing() {
     ] {
         let mut source = Source::serving(&bytes).then(answer);
         let mut part = Part::holding(&bytes);
-        let failure = fetch_held_file(&mut source, &Pauses::default(), &mut part, &named(&bytes))
-            .unwrap_err();
+        let failure = fetch_held_file(
+            &mut source,
+            &Pauses::default(),
+            &mut part,
+            &named(&bytes),
+            &|| false,
+        )
+        .unwrap_err();
         assert_eq!(failure.cause, cause);
         assert_eq!(source.asked.len(), 1);
         assert_eq!(failure.progress.ranges, 0);
@@ -282,8 +314,14 @@ fn a_part_longer_than_the_file_is_started_again() {
     let bytes = content(100);
     let mut source = Source::serving(&bytes);
     let mut part = Part::holding(&content(101));
-    let progress =
-        fetch_held_file(&mut source, &Pauses::default(), &mut part, &named(&bytes)).unwrap();
+    let progress = fetch_held_file(
+        &mut source,
+        &Pauses::default(),
+        &mut part,
+        &named(&bytes),
+        &|| false,
+    )
+    .unwrap();
     assert!(part.restarted);
     assert_eq!(source.asked, [(0, HELD_FILE_RANGE_BYTES)]);
     assert_eq!(progress.resumed_from, 0);
@@ -300,6 +338,7 @@ fn bytes_that_are_not_the_named_digest_discard_the_part_and_keep_nothing() {
         &Pauses::default(),
         &mut part,
         &file,
+        &|| false,
     )
     .unwrap_err();
     assert_eq!(
@@ -327,6 +366,7 @@ fn a_resumed_part_of_other_bytes_fails_the_digest_and_is_discarded() {
         &Pauses::default(),
         &mut part,
         &named(&bytes),
+        &|| false,
     )
     .unwrap_err();
     assert_eq!(
@@ -351,6 +391,7 @@ fn a_part_that_cannot_be_removed_is_emptied_and_both_outcomes_are_typed() {
         &Pauses::default(),
         &mut part,
         &named_as(&bytes, [0; 32]),
+        &|| false,
     )
     .unwrap_err();
     assert_eq!(
@@ -372,6 +413,7 @@ fn a_part_that_cannot_be_removed_is_emptied_and_both_outcomes_are_typed() {
         &Pauses::default(),
         &mut part,
         &named_as(&bytes, [0; 32]),
+        &|| false,
     )
     .unwrap_err();
     assert_eq!(
@@ -383,6 +425,30 @@ fn a_part_that_cannot_be_removed_is_emptied_and_both_outcomes_are_typed() {
             }
         }
     );
+    assert_eq!(part.kept, None);
+}
+
+#[test]
+fn a_deadline_during_a_mismatched_reread_is_not_an_integrity_failure() {
+    let bytes = content(8);
+    let end = Arc::new(AtomicBool::new(false));
+    let mut part = Part {
+        foreign: vec![0xee],
+        end_during_read: Some(Arc::clone(&end)),
+        ..Part::default()
+    };
+    let failure = fetch_held_file(
+        &mut Source::serving(&bytes),
+        &Pauses::default(),
+        &mut part,
+        &named(&bytes),
+        &|| end.load(Ordering::SeqCst),
+    )
+    .unwrap_err();
+    assert_eq!(failure.cause, FetchCause::Gateway(GatewayError::Cancelled));
+    assert!(!part.discarded);
+    assert!(!part.restarted);
+    assert!(!part.bytes.is_empty());
     assert_eq!(part.kept, None);
 }
 
@@ -400,6 +466,7 @@ fn bytes_another_writer_added_to_the_part_fail_the_check_and_nothing_is_kept() {
         &Pauses::default(),
         &mut part,
         &named(&bytes),
+        &|| false,
     )
     .unwrap_err();
     assert_eq!(
@@ -424,6 +491,7 @@ fn an_output_that_appears_during_the_fetch_is_never_replaced() {
         &Pauses::default(),
         &mut part,
         &named(&bytes),
+        &|| false,
     )
     .unwrap_err();
     assert_eq!(failure.cause, FetchCause::OutputExists);
@@ -493,7 +561,8 @@ fn a_busy_range_is_asked_again_after_each_pause_then_read_on() {
         .then(busy_answer());
     let pauses = Pauses::default();
     let mut part = Part::default();
-    let progress = fetch_held_file(&mut source, &pauses, &mut part, &named(&bytes)).unwrap();
+    let progress =
+        fetch_held_file(&mut source, &pauses, &mut part, &named(&bytes), &|| false).unwrap();
     assert_eq!(pauses.millis(), [250, 500]);
     assert_eq!(progress.busy_retries, 2);
     assert_eq!(
@@ -525,7 +594,7 @@ fn each_range_has_its_own_retries() {
     }
     let pauses = Pauses::default();
     let mut part = Part::default();
-    fetch_held_file(&mut source, &pauses, &mut part, &named(&bytes)).unwrap();
+    fetch_held_file(&mut source, &pauses, &mut part, &named(&bytes), &|| false).unwrap();
     assert_eq!(pauses.millis(), [250, 500, 1000, 250, 500, 1000]);
     assert_eq!(part.kept.as_deref(), Some(&bytes[..]));
 }
@@ -542,7 +611,8 @@ fn a_range_busy_past_the_bound_fails_typed_and_keeps_the_part() {
     }
     let pauses = Pauses::default();
     let mut part = Part::default();
-    let failure = fetch_held_file(&mut source, &pauses, &mut part, &named(&bytes)).unwrap_err();
+    let failure =
+        fetch_held_file(&mut source, &pauses, &mut part, &named(&bytes), &|| false).unwrap_err();
     assert_eq!(
         failure.cause,
         FetchCause::Gateway(busy_answer().unwrap_err())
@@ -573,7 +643,8 @@ fn refusals_other_than_busy_fail_at_once_and_keep_the_part() {
         let mut source = Source::serving(&bytes).then(Err(cause));
         let pauses = Pauses::default();
         let mut part = Part::holding(&bytes[..4]);
-        let failure = fetch_held_file(&mut source, &pauses, &mut part, &named(&bytes)).unwrap_err();
+        let failure = fetch_held_file(&mut source, &pauses, &mut part, &named(&bytes), &|| false)
+            .unwrap_err();
         assert_eq!(failure.cause, FetchCause::Gateway(cause));
         assert_eq!(source.asked.len(), 1, "{cause:?}");
         assert!(pauses.millis().is_empty());
@@ -609,6 +680,7 @@ fn an_answer_that_is_not_the_range_asked_is_kept_nowhere() {
             &Pauses::default(),
             &mut part,
             &named(&bytes),
+            &|| false,
         )
         .unwrap_err();
         assert_eq!(failure.cause, FetchCause::WrongRange);
@@ -634,6 +706,7 @@ fn part_file_failures_are_typed_by_their_step() {
             &Pauses::default(),
             &mut part,
             &named(&bytes),
+            &|| false,
         )
         .unwrap_err();
         assert_eq!(failure.cause, FetchCause::File(step));
@@ -648,7 +721,28 @@ fn part_file_failures_are_typed_by_their_step() {
         &Pauses::default(),
         &mut part,
         &named(&bytes),
+        &|| false,
     )
     .unwrap_err();
     assert_eq!(failure.cause, FetchCause::File(FileStep::Restart));
+}
+
+#[test]
+fn a_busy_pause_that_has_ended_asks_no_further_range() {
+    use std::cell::Cell;
+    let bytes = content(10);
+    let mut source = Source::serving(&bytes).then(busy_answer());
+    let pauses = Pauses::default();
+    let mut part = Part::default();
+    let checks = Cell::new(0u32);
+    let failure = fetch_held_file(&mut source, &pauses, &mut part, &named(&bytes), &|| {
+        let seen = checks.get();
+        checks.set(seen + 1);
+        seen >= 1
+    })
+    .unwrap_err();
+    assert_eq!(failure.cause, FetchCause::Gateway(GatewayError::Cancelled));
+    assert_eq!(pauses.millis(), [250]);
+    assert_eq!(source.asked.len(), 1);
+    assert!(part.kept.is_none());
 }

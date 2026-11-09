@@ -31,3 +31,9 @@ stateDiagram-v2
 ## Further reading
 
 [Source](../../../../crates/nessa-gateway-endpoint/src/infrastructure/file.rs)
+
+## Model coverage
+
+Shared owner model: [storage-publication](../storage/storage-publication.md). Origin-bound reservation, rename, and separate directory acknowledgement with retained identity.
+
+Advertisement completeness is a precondition; live endpoint identity matching belongs to endpoint-discovery. This relationship applies only to the stated scope, not every step of this journey. This scoped mapping retains earlier source checkpoints and is not executed implementation-test evidence.

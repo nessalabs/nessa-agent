@@ -1,0 +1,176 @@
+[
+  {
+    "mutation": "audit_read_validation",
+    "test": "malformed_owed_audit",
+    "exitCode": 101,
+    "caught": true
+  },
+  {
+    "mutation": "audit_write_validation",
+    "test": "malformed_owed_audit",
+    "exitCode": 101,
+    "caught": true
+  },
+  {
+    "mutation": "closed_audit_fields",
+    "test": "malformed_owed_audit",
+    "exitCode": 101,
+    "caught": true
+  },
+  {
+    "mutation": "delivery_transition",
+    "test": "impossible_typed_delivery",
+    "exitCode": 101,
+    "caught": true
+  },
+  {
+    "mutation": "initial_queued",
+    "test": "impossible_typed_delivery",
+    "exitCode": 101,
+    "caught": true
+  },
+  {
+    "mutation": "principal",
+    "test": "malformed_owed_audit",
+    "exitCode": 101,
+    "caught": true
+  },
+  {
+    "mutation": "credential",
+    "test": "malformed_owed_audit",
+    "exitCode": 101,
+    "caught": true
+  },
+  {
+    "mutation": "organization",
+    "test": "malformed_owed_audit",
+    "exitCode": 101,
+    "caught": true
+  },
+  {
+    "mutation": "owner",
+    "test": "malformed_owed_audit",
+    "exitCode": 101,
+    "caught": true
+  },
+  {
+    "mutation": "delivery_actor",
+    "test": "typed_delivery_actors",
+    "exitCode": 101,
+    "caught": true
+  },
+  {
+    "mutation": "restart_actor",
+    "test": "typed_delivery_actors",
+    "exitCode": 101,
+    "caught": true
+  },
+  {
+    "mutation": "issue_actor",
+    "test": "registration_audit_lifecycle",
+    "exitCode": 101,
+    "caught": true
+  },
+  {
+    "mutation": "epoch_projection",
+    "test": "malformed_owed_audit",
+    "exitCode": 101,
+    "caught": true
+  },
+  {
+    "mutation": "attempt_projection",
+    "test": "malformed_owed_audit",
+    "exitCode": 101,
+    "caught": true
+  },
+  {
+    "mutation": "stamp_projection",
+    "test": "malformed_owed_audit",
+    "exitCode": 101,
+    "caught": true
+  },
+  {
+    "mutation": "after_projection",
+    "test": "malformed_owed_audit",
+    "exitCode": 101,
+    "caught": true
+  },
+  {
+    "mutation": "closed_snapshot",
+    "test": "malformed_owed_audit",
+    "exitCode": 101,
+    "caught": true
+  },
+  {
+    "mutation": "closed_scope",
+    "test": "cursor_audit_restores",
+    "exitCode": 101,
+    "caught": true
+  },
+  {
+    "mutation": "stop_time_bound",
+    "test": "registration_audit_lifecycle",
+    "exitCode": 101,
+    "caught": true
+  },
+  {
+    "mutation": "cursor_position_type",
+    "test": "cursor_restore_and_live_duplicate",
+    "exitCode": 101,
+    "caught": true
+  },
+  {
+    "mutation": "cursor_position_range",
+    "test": "cursor_restore_and_live_duplicate",
+    "exitCode": 101,
+    "caught": true
+  },
+  {
+    "mutation": "cursor_reset",
+    "test": "cursor_restore_and_live_duplicate",
+    "exitCode": 101,
+    "caught": true
+  },
+  {
+    "mutation": "cursor_restore_owner",
+    "test": "cursor_restore_and_live_duplicate",
+    "exitCode": 101,
+    "caught": true
+  },
+  {
+    "mutation": "history_chain",
+    "test": "retained_audit_chain",
+    "exitCode": 101,
+    "caught": true
+  },
+  {
+    "mutation": "history_latest",
+    "test": "retained_audit_chain",
+    "exitCode": 101,
+    "caught": true
+  },
+  {
+    "mutation": "source_context_actor",
+    "test": "late_retry_keeps_source_refusal",
+    "exitCode": 101,
+    "caught": true
+  },
+  {
+    "mutation": "source_context_chain",
+    "test": "retained_audit_chain",
+    "exitCode": 101,
+    "caught": true
+  },
+  {
+    "mutation": "cursor_transition",
+    "test": "cursor_audit_restores",
+    "exitCode": 101,
+    "caught": true
+  },
+  {
+    "mutation": "cursor_same_source",
+    "test": "cursor_audit_restores",
+    "exitCode": 101,
+    "caught": true
+  }
+]

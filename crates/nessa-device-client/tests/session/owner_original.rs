@@ -100,12 +100,14 @@ impl RngCore for ReservedEntropy {
         self.try_fill_bytes(bytes).unwrap();
     }
     fn try_fill_bytes(&mut self, bytes: &mut [u8]) -> Result<(), EntropyError> {
-        assert_eq!(
-            &fs::read(&self.path).unwrap()[..4],
-            b"NSOR",
-            "actual durable reservation precedes entropy"
-        );
-        self.counts.entropy.fetch_add(1, Ordering::SeqCst);
+        let prior = self.counts.entropy.fetch_add(1, Ordering::SeqCst);
+        if prior > 0 {
+            assert_eq!(
+                &fs::read(&self.path).unwrap()[..4],
+                b"NSOR",
+                "actual durable reservation precedes enrollment entropy"
+            );
+        }
         bytes.fill(7);
         Ok(())
     }
@@ -119,10 +121,13 @@ fn parent(root: &Path, state: Arc<dyn NativePrivateState>, counts: Arc<Counts>) 
             counts,
             path: root.join("private/owner-phone-original"),
         }),
+        files: Arc::new(OsCacheFiles),
+        artifacts: Arc::new(DiskArtifactFiles),
         path: root.join("private/cache.sqlite"),
         address: "127.0.0.1:9".parse().unwrap(),
         wall: Arc::new(Wall),
         clock: Arc::new(Monotonic::new()),
+        pause: Arc::new(ThreadPause),
         runtime: Builder::new_current_thread().enable_all().build().unwrap(),
         product: ProductDependencies::default(),
     })
@@ -236,10 +241,11 @@ fn parent_prepares_after_actual_reservation_and_revalidates_restoration_without_
             OwnerPhonePreparationError::Missing
         ))
     ));
-    assert_eq!(counts.factory.load(Ordering::SeqCst), 0);
-    let proof = parent.prepare_owner_original(reservation()).unwrap();
     assert_eq!(counts.factory.load(Ordering::SeqCst), 1);
     assert_eq!(counts.entropy.load(Ordering::SeqCst), 1);
+    let proof = parent.prepare_owner_original(reservation()).unwrap();
+    assert_eq!(counts.factory.load(Ordering::SeqCst), 2);
+    assert_eq!(counts.entropy.load(Ordering::SeqCst), 2);
     for restore in [true, false] {
         let replay = if restore {
             parent.restore_owner_original(&reservation())
@@ -251,8 +257,8 @@ fn parent_prepares_after_actual_reservation_and_revalidates_restoration_without_
         assert_eq!(replay.signature(), proof.signature());
         assert_eq!(replay.digest(), proof.digest());
     }
-    assert_eq!(counts.factory.load(Ordering::SeqCst), 1);
-    assert_eq!(counts.entropy.load(Ordering::SeqCst), 1);
+    assert_eq!(counts.factory.load(Ordering::SeqCst), 2);
+    assert_eq!(counts.entropy.load(Ordering::SeqCst), 2);
     assert_eq!(counts.network.load(Ordering::SeqCst), 0);
     verify_owner_phone_request(proof.original().clone(), proof.signature()).unwrap();
     parent.close().unwrap();
@@ -260,7 +266,7 @@ fn parent_prepares_after_actual_reservation_and_revalidates_restoration_without_
         parent.restore_owner_original(&reservation()),
         Err(SessionPreparationFailure::Session(SessionFailure::Closed))
     ));
-    assert_eq!(counts.factory.load(Ordering::SeqCst), 1);
+    assert_eq!(counts.factory.load(Ordering::SeqCst), 2);
 }
 #[test]
 fn admitted_preparation_keeps_private_lease_through_close_and_preserves_late_fact_or_failure() {
@@ -353,7 +359,7 @@ fn admitted_preparation(after_release: Duration) {
         let state = FilePairingState::open(root.path(), Path::new("private")).unwrap();
         assert!(state.load_original().unwrap().unwrap().key().is_some());
         assert_eq!(counts.network.load(Ordering::SeqCst), 0);
-        assert_eq!(counts.entropy.load(Ordering::SeqCst), 1);
+        assert_eq!(counts.entropy.load(Ordering::SeqCst), 2);
     }
 }
 

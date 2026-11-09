@@ -12,7 +12,11 @@ export function shownNote(note: ConversationView["notes"][number]): Note {
   return {
     id: note.messageId,
     text: note.text,
-    author: { kind: note.author.kind, surface: note.author.surface },
+    author: {
+      kind: note.author.kind,
+      surface: note.author.surface,
+      ...(note.author.agent ? { agent: note.author.agent } : {}),
+    },
     deliveryState: note.deliveryState,
     ...(note.retiredReason === undefined ? {} : { retiredReason: note.retiredReason }),
     ...(note.afterExecutionId === undefined

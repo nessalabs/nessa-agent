@@ -18,5 +18,5 @@ pub use builders::SystemPromptBuilder;
 pub use value_objects::{
     AppModelContext, CarriedHistory, CarriedTurn, ImageReference, LinkedFile, McpAppSource,
     MessageSender, NoteAuthor, NoteContext, PromptContribution, PromptContributionView,
-    PromptSource, PromptSourceKind, PromptText, SystemPrompt, UserMessage,
+    PromptSource, PromptSourceKind, PromptText, SystemPrompt, UploadedFileReference, UserMessage,
 };

@@ -36,25 +36,6 @@ export interface SessionView {
   readonly query?: string
 }
 
-/**
- * The sessions the session list asks the person about from its rows: the
- * view's, as its search lists them, in its "Needs you" group — so a pinned
- * one, listed under Pinned, is not asked there — newest first. The one rule
- * for what the list draws as request cards and what the window answers from
- * them (`listAskIds`, `workspace-state.ts`).
- */
-export function waitingInList(
-  sessions: readonly SessionSummary[],
-  view: SessionView,
-): SessionSummary[] {
-  const listed = sessions.filter(
-    (session) => inView(session, view) && matchesSearch(session, view.query ?? ""),
-  )
-  return [
-    ...(groupByStatus(listed).find((group) => group.id === "needs-you")?.sessions ?? []),
-  ]
-}
-
 export function inView(session: SessionSummary, view: SessionView): boolean {
   return session.channelId === view.channelId
 }
@@ -112,18 +93,6 @@ export function matchesSearch(session: SessionSummary, query: string): boolean {
   return `${session.title} ${session.preview} ${modelName(session.model)} ${agentName(agentOf(session.model))}`
     .toLowerCase()
     .includes(wanted)
-}
-
-/** The session most worth opening: one waiting on the person, then one running, then the newest. */
-export function mostPressing(
-  sessions: readonly SessionSummary[],
-): SessionSummary | undefined {
-  const newest = [...sessions].sort(byRecency)
-  return (
-    newest.find((session) => session.status === "needs-you") ??
-    newest.find((session) => session.status === "running") ??
-    newest[0]
-  )
 }
 
 /** How many sessions a channel discloses in the sidebar before "Show all". */

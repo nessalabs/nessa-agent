@@ -1,0 +1,70 @@
+{
+  "sourceRevision": "29af2efb974ddb90a95c8921c4192a3603684af8",
+  "leaseProtocol": "066217f7701b98b9",
+  "image": "bsh_cQ5cYJX64ZJth3NRQsovUo0R8WODUOV_3PXw3shYLuU",
+  "snapshot": "nessa-worker-066217f7-29af2ef-linux-x64",
+  "nessaSha256": "e2c9d38b652ee798bca1de09e9b539233aa0c205b79c7880604e9553f885f825",
+  "nessaBytes": 137379272,
+  "supervisorSha256": "afe8510ce3f9fce707a14b221d28ea68a0a8298c983443eee1dbe14a77cd90d6",
+  "cleanClone": {
+    "protocolMatched": true,
+    "checksumMatched": true,
+    "buildSourceAbsent": true,
+    "knownPersonalCredentialPathsAbsent": true
+  },
+  "ownedVMsDeleted": [
+    {
+      "id": "bx_6hw3y8sy",
+      "confirmedAbsent": true,
+      "queryExit": 1
+    },
+    {
+      "id": "bx_vzzp3h5a",
+      "confirmedAbsent": true,
+      "queryExit": 1
+    },
+    {
+      "id": "bx_h3w97dpc",
+      "confirmedAbsent": true,
+      "queryExit": 1
+    }
+  ],
+  "deletionOperations": [
+    {
+      "attemptCount": 1,
+      "completedAt": "2026-10-27T19:46:32.709Z",
+      "expectedBy": null,
+      "id": "bdop_eb19989057a0496091cac91e76b9787e",
+      "kind": "sandbox",
+      "reason": "explicit",
+      "requestedAt": "2026-10-27T19:46:29.068Z",
+      "stage": "completed",
+      "status": "completed",
+      "targetId": "bx_h3w97dpc"
+    },
+    {
+      "attemptCount": 1,
+      "completedAt": "2026-10-27T19:46:31.606Z",
+      "expectedBy": null,
+      "id": "bdop_b729f478f70d4ab8acbe988a3e26ab1d",
+      "kind": "sandbox",
+      "reason": "explicit",
+      "requestedAt": "2026-10-27T19:46:28.455Z",
+      "stage": "completed",
+      "status": "completed",
+      "targetId": "bx_vzzp3h5a"
+    },
+    {
+      "attemptCount": 1,
+      "completedAt": "2026-10-27T19:43:47.549Z",
+      "expectedBy": null,
+      "id": "bdop_6150cd04723249e4b3f47d21cddc447e",
+      "kind": "sandbox",
+      "reason": "explicit",
+      "requestedAt": "2026-10-27T19:43:42.098Z",
+      "stage": "completed",
+      "status": "completed",
+      "targetId": "bx_6hw3y8sy"
+    }
+  ]
+}

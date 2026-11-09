@@ -1,0 +1,98 @@
+[
+  {
+    "index": 0,
+    "file": "application/registration.rs",
+    "rule": ".resolve(&proposed)",
+    "test": "substituted_reservation_is_rejected",
+    "caught": true,
+    "restored": true
+  },
+  {
+    "index": 1,
+    "file": "infrastructure/outbox/intents.rs",
+    "rule": "return saved.resolve(&proposed);",
+    "test": "conflicting_config_and_caller_inputs",
+    "caught": true,
+    "restored": true
+  },
+  {
+    "index": 2,
+    "file": "application/registration.rs",
+    "rule": "selected.id = self.id;",
+    "test": "registration_commits_real_auth",
+    "caught": true,
+    "restored": true
+  },
+  {
+    "index": 3,
+    "file": "application/registration.rs",
+    "rule": "selected.issue.credential_id = self.issue.credential_id.clone();",
+    "test": "registration_commits_real_auth",
+    "caught": true,
+    "restored": true
+  },
+  {
+    "index": 4,
+    "file": "application/registration.rs",
+    "rule": "selected.issue.issued_at = self.issue.issued_at;",
+    "test": "registration_commits_real_auth",
+    "caught": true,
+    "restored": true
+  },
+  {
+    "index": 5,
+    "file": "application/registration.rs",
+    "rule": "selected.observed_at_ms = self.observed_at_ms;",
+    "test": "registration_commits_real_auth",
+    "caught": true,
+    "restored": true
+  },
+  {
+    "index": 6,
+    "file": "application/registration.rs",
+    "rule": "self.issue == other.issue",
+    "test": "substituted_reservation_is_rejected",
+    "caught": true,
+    "restored": true
+  },
+  {
+    "index": 7,
+    "file": "application/registration.rs",
+    "rule": "self.config.destination == other.config.destination",
+    "test": "substituted_reservation_is_rejected",
+    "caught": true,
+    "restored": true
+  },
+  {
+    "index": 8,
+    "file": "application/registration.rs",
+    "rule": "self.observed_at_ms == other.observed_at_ms",
+    "test": "installation_requires_the_retained_original_intent",
+    "caught": true,
+    "restored": true
+  },
+  {
+    "index": 9,
+    "file": "application/registration.rs",
+    "rule": "&& bool::from(\n                self.config\n                    .key\n                    .expose_bytes()\n                    .ct_eq(other.config.key.expose_bytes()),\n            )",
+    "test": "substituted_reservation_is_rejected",
+    "caught": true,
+    "restored": true
+  },
+  {
+    "index": 10,
+    "file": "infrastructure/outbox/intents.rs",
+    "rule": "let intent = row.map_err(super::cursor::row_error)?.checked()?;",
+    "test": "transient_intent_scan_interruption",
+    "caught": true,
+    "restored": true
+  },
+  {
+    "index": 11,
+    "file": "application/registration.rs",
+    "rule": "self.registration()?;",
+    "test": "substituted_reservation_is_rejected",
+    "caught": true,
+    "restored": true
+  }
+]

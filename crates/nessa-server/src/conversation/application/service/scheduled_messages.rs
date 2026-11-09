@@ -45,7 +45,7 @@ use super::{
 use crate::conversation::application::usage_limit_policy::{
     UsageLimitPreferenceDecision, UsageLimitPreferenceFacts, UsageLimitPreferencePolicyEvaluator,
 };
-use crate::conversation::application::ConversationFuture;
+use crate::conversation::application::{ConversationFuture, Reader};
 use crate::conversation::domain::{ContinuationCause, ContinuationPlan};
 use nessa_auth::application::ports::Clock;
 use nessa_sdk::application::agent_execution::commands::{
@@ -171,6 +171,7 @@ impl ScheduledCommandEvidence {
         let fingerprint = super::mutation::submission_fingerprint(
             execution,
             &super::SubmittedMessage {
+                uploads: Vec::new(),
                 text: prompt.into(),
                 ..Default::default()
             },
@@ -200,7 +201,7 @@ impl ScheduledCommandEvidence {
         &self.fingerprint
     }
 
-    fn binding(
+    pub(super) fn binding(
         &self,
         id: &ConversationId,
         execution: &str,
@@ -451,6 +452,15 @@ pub trait ScheduledMessageStore: Send + Sync {
     ) -> ConversationFuture<'_, bool>;
     /// The open row for one conversation, if it is scheduled or delivering.
     fn open(&self, conversation: &str) -> ConversationFuture<'_, Option<ScheduledMessage>>;
+    /// Read immutable automatic-command evidence for this exact conversation
+    /// and execution across all statuses, including deletion-scrubbed rows.
+    /// Absence or a row that never crossed submission returns `None`.
+    /// Missing required or malformed evidence is a typed failure, not absence.
+    fn command_evidence(
+        &self,
+        conversation: &str,
+        execution: &str,
+    ) -> ConversationFuture<'_, Option<ScheduledCommandEvidence>>;
     /// Insert the row, or move its due time when it is still open, only while
     /// the draft's token is current: the preference revision is still enabled,
     /// and the history generation, agent, and model are still the ones stored.
@@ -1644,6 +1654,7 @@ impl ConversationService {
             principal,
             prompt,
         ) = if let Some(invocation) = observed_invocation {
+            let agent_authored = matches!(invocation.initiation.initiator(), Initiator::Agent(_));
             let (initiation, grant_id, policy_revision, tools_checked) =
                 initiation_fields(&invocation.initiation);
             (
@@ -1654,10 +1665,12 @@ impl ConversationService {
                 policy_revision,
                 tools_checked,
                 invocation.actor.principal_id().to_owned(),
-                Some(continuation_prompt(
-                    invocation.request.user_message.text_str(),
-                    self.inner.limits.max_input_bytes,
-                )),
+                (!agent_authored).then(|| {
+                    continuation_prompt(
+                        invocation.request.user_message.text_str(),
+                        self.inner.limits.max_input_bytes,
+                    )
+                }),
             )
         } else {
             (
@@ -1709,7 +1722,13 @@ impl ConversationService {
                 let page = self
                     .inner
                     .listing
-                    .observe(&organization, &principal, false, cursor.clone())
+                    .observe(
+                        &organization,
+                        &principal,
+                        false,
+                        cursor.clone(),
+                        &Reader::Owner,
+                    )
                     .await?;
                 let complete = page.complete;
                 let next = page.cursor;
@@ -1881,12 +1900,15 @@ impl ConversationService {
         {
             return DeliveredStep::Held;
         }
-        // Shared with model/agent changes; transferred to the supervised enqueue.
+        // Match person/report admission order before taking the selection lock.
+        // The same permit retains all guards through the detached enqueue.
+        let threads = self.inner.thread_admission.clone().lock_owned().await;
         let admission = self.inner.admission.clone().read_owned().await;
         if self.inner.retirement.get().is_some() {
             return DeliveredStep::Held;
         }
         let selection = Arc::new(SubmissionPermit {
+            _threads: threads,
             _admission: admission,
             _selection: self.inner.mode_changes.lock(&id).await,
         });
@@ -2133,11 +2155,14 @@ impl ConversationService {
                 false,
                 row.execution_id.clone(),
                 super::SubmittedMessage {
+                    uploads: Vec::new(),
                     text: row.prompt.clone(),
                     ..Default::default()
                 },
                 super::SubmissionMode::Queue,
+                false,
                 Some(selection),
+                None,
             )
             .await
         {
@@ -2686,6 +2711,9 @@ pub(crate) fn continuation_initiation(
     if row.initiation == "owner" {
         return Ok(Initiation::owner());
     }
+    if row.initiation != "grant" {
+        return Err(ConversationError::InvalidInput);
+    }
     let grant = GrantInitiator::new(
         row.grant_id.clone().unwrap_or_default(),
         row.policy_revision.unwrap_or(0),
@@ -2710,6 +2738,7 @@ fn scheduled_submit_binding(
         &schedule_caller(row)?,
         &row.execution_id,
         &super::SubmittedMessage {
+            uploads: Vec::new(),
             text: row.prompt.clone(),
             ..Default::default()
         },
@@ -2765,6 +2794,7 @@ pub(crate) fn initiation_fields(
             Some(grant.policy_revision()),
             initiation.tools() == ToolChecking::Checked,
         ),
+        Initiator::Agent(_) => ("agent".into(), None, None, false),
     }
 }
 

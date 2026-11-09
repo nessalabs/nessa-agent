@@ -1,0 +1,17 @@
+
+running 1 test
+test webhooks::infrastructure::outbox::store::tests::cleanup_tests::registration_cleanup_does_not_visit_published_delivery_history ... FAILED
+
+failures:
+
+---- webhooks::infrastructure::outbox::store::tests::cleanup_tests::registration_cleanup_does_not_visit_published_delivery_history stdout ----
+
+thread 'webhooks::infrastructure::outbox::store::tests::cleanup_tests::registration_cleanup_does_not_visit_published_delivery_history' (132515) panicked at /tmp/nessa-retention-cost-controls/crates/nessa-server/src/webhooks/infrastructure/outbox/../../../../tests/webhooks/infrastructure/outbox/cleanup.rs:106:13:
+published history changed cleanup work: 2063 -> 131087
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    webhooks::infrastructure::outbox::store::tests::cleanup_tests::registration_cleanup_does_not_visit_published_delivery_history
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 89 filtered out; finished in 0.09s

@@ -1,0 +1,38 @@
+compile 0
+test webhooks::infrastructure::outbox::tests::restored_rows_are_checked_before_projection_cleanup ... ok
+test webhooks::infrastructure::outbox::tests::restored_registration_facts_are_checked_before_effects ... ok
+test webhooks::infrastructure::outbox::tests::retired_historical_actor_survives_lost_publication_ack_and_restart ... ok
+test webhooks::infrastructure::outbox::tests::retained_audit_chain_correlates_checkpoint_target_and_current_state ... ok
+test webhooks::infrastructure::outbox::tests::sending_capture_can_precede_its_observation_audit_on_restore ... ok
+test webhooks::infrastructure::outbox::tests::retirement_evidence_uses_retained_original_facts_after_private_row_deletion ... ok
+test webhooks::infrastructure::outbox::tests::settled_source_context_must_match_the_enclosing_delivery ... ok
+test webhooks::infrastructure::outbox::tests::source_change_requires_explicit_reset ... ok
+test webhooks::infrastructure::outbox::tests::source_reset_tests::a_capture_without_a_reset_cannot_be_inserted_or_recovered ... ok
+test webhooks::infrastructure::outbox::tests::source_reset_tests::capture_storage_failure_remains_unavailable_instead_of_conflict ... ok
+test webhooks::infrastructure::outbox::tests::source_reset_tests::a_reset_may_capture_older_logical_epochs_of_the_same_physical_source ... ok
+test webhooks::infrastructure::outbox::tests::source_reset_tests::cursor_capacity_refuses_new_chat_without_partial_queue_or_reset ... ok
+test webhooks::infrastructure::outbox::tests::source_reset_tests::failed_capture_rolls_back_fact_members_cursor_and_evidence ... ok
+test webhooks::infrastructure::outbox::tests::source_reset_tests::history_cannot_claim_reset_before_the_original_capture_state ... ok
+test webhooks::infrastructure::outbox::tests::source_reset_tests::first_reset_survives_later_cursor_deletion_replacement_and_restart ... ok
+test webhooks::infrastructure::outbox::tests::source_reset_tests::missing_or_replaced_immutable_guards_are_not_the_current_schema ... ok
+test webhooks::infrastructure::outbox::tests::source_reset_tests::immediate_source_refusal_uses_original_reset_actor_time_and_identity ... ok
+test webhooks::infrastructure::outbox::tests::source_reset_tests::oversized_fact_is_not_materialized_before_typed_decoding ... ok
+test webhooks::infrastructure::outbox::tests::source_reset_tests::missing_references_and_reference_accounting_refuse_restore_before_effects ... ok
+test webhooks::infrastructure::outbox::tests::source_reset_tests::reset_fact_decoder_rejects_noncanonical_or_invalid_original_values ... ok
+test webhooks::infrastructure::outbox::tests::source_reset_tests::owed_selection_work_does_not_grow_with_published_history ... ok
+test webhooks::infrastructure::outbox::tests::source_reset_tests::reset_metadata_substitutions_reject_before_recovery_publication ... ok
+test webhooks::infrastructure::outbox::tests::source_reset_tests::reset_references_release_with_retirement_and_lost_ack_recovery ... ok
+test webhooks::infrastructure::outbox::tests::source_reset_tests::sending_and_cursor_share_original_immutable_reset_and_membership ... ok
+test webhooks::infrastructure::outbox::tests::stop_preserves_inflight_observation_and_cause ... ok
+test webhooks::infrastructure::outbox::tests::source_reset_tests::reset_factory_count_capacity_does_not_insert_a_partial_fact ... ok
+test webhooks::infrastructure::outbox::tests::cursor_cas_and_queue_limit_preserve_predecessor ... ok
+test webhooks::infrastructure::outbox::tests::transition_cas_rejects_lost_ack_repost ... ok
+test webhooks::infrastructure::outbox::tests::typed_delivery_actors_are_correlated_to_saved_cause ... ok
+test webhooks::infrastructure::outbox::tests::bulk_reset_retention_is_bounded_in_the_commit ... ok
+test webhooks::infrastructure::outbox::tests::stop_retention_is_bounded_when_publication_fails ... ok
+test webhooks::infrastructure::outbox::tests::terminal_retention_is_bounded ... ok
+
+test result: ok. 67 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 47.54s
+
+
+baseline 0

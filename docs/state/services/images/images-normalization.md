@@ -1,7 +1,7 @@
 ---
 id: images-normalization
 title: Normalization pipeline
-kind: operation
+kind: contract
 status: implemented
 summary: "The image library checks the bytes, handles orientation and fits the image to the requested limits."
 parent: images
@@ -35,3 +35,9 @@ stateDiagram-v2
 ## Further reading
 
 [Source](../../../../crates/nessa-images/src/normalize.rs) · [Related source](../../../../crates/nessa-images/src/lib.rs)
+
+## Model coverage
+
+Pure contract: a bounded, stateless byte transformation returns original or normalized bytes or a refusal.
+
+The flowchart orders computation, not a retained runtime lifecycle. Codec correctness and platform decoder availability require their own tests. This relationship applies only to the stated scope, not every step of this journey. This scoped mapping retains earlier source checkpoints and is not executed implementation-test evidence.

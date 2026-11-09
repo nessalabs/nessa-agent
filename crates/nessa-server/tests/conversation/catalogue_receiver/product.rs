@@ -132,6 +132,7 @@ impl Owners {
                 MembershipRole::Member,
                 MembershipStatus::Active,
             );
+            current.origin = test_product_origin(&current.credential);
             snapshots.insert(credential.clone(), current);
             if device != "phone" {
                 continue;
@@ -316,6 +317,7 @@ async fn gateway_child() {
     *provider.execution_gate.lock().unwrap() = Some(execution_gate);
     let service = ConversationService::new(
         ConversationDependencies {
+ input_files: None,
             access_policy: crate::conversation_test_support::access_policy(),
             agents: conversation_support::only(Arc::new(Provider::new(provider.clone()))),
             storage: Arc::new(InMemoryStorage::new()),

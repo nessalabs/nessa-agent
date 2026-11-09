@@ -120,6 +120,7 @@ async fn owner_phone_creation_in_a_channel_is_judged_by_the_channels_preset() {
     };
     let agent = nessa_protocol::agents::AgentId::Claude;
     let channel = |mode| ChannelRequest {
+        execution: crate::conversation::domain::ChannelExecution::default(),
         name: ChannelName::new("design-review").unwrap(),
         folder: None,
         defaults: ChannelDefaults {

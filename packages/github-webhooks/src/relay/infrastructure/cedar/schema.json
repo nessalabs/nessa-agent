@@ -1,0 +1,64 @@
+{
+  "Relay": {
+    "entityTypes": {
+      "User": {
+        "shape": {
+          "type": "Record",
+          "attributes": {
+            "repositories": {
+              "type": "Set",
+              "element": {
+                "type": "Entity",
+                "name": "Repository"
+              }
+            },
+            "oauthScopes": {
+              "type": "Set",
+              "element": {
+                "type": "String"
+              }
+            },
+            "appRepositories": {
+              "type": "Set",
+              "element": {
+                "type": "Entity",
+                "name": "Repository"
+              }
+            },
+            "installationPermissions": {
+              "type": "Set",
+              "element": {
+                "type": "String"
+              }
+            },
+            "installationActive": {
+              "type": "Boolean"
+            }
+          }
+        }
+      },
+      "Repository": {
+        "shape": {
+          "type": "Record",
+          "attributes": {
+            "isPrivate": {
+              "type": "Boolean"
+            }
+          }
+        }
+      }
+    },
+    "actions": {
+      "read": {
+        "appliesTo": {
+          "principalTypes": ["User"],
+          "resourceTypes": ["Repository"],
+          "context": {
+            "type": "Record",
+            "attributes": {}
+          }
+        }
+      }
+    }
+  }
+}

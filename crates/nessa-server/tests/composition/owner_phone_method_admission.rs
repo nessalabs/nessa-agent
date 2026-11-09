@@ -177,6 +177,28 @@ async fn ordinary_native_request_asks_method_once_and_denial_has_zero_handler_ef
             vec!["agents.install".to_owned()]
         );
         assert_eq!(health.0.load(Ordering::SeqCst), 1);
+        // The phone's card reads what a review or question asks before it is
+        // answered: the method policy admits both reads, as it does the answers.
+        for (method, key) in [
+            ("conversation.permissionReview", "review"),
+            ("conversation.questionReview", "question"),
+        ] {
+            policy.methods.lock().unwrap().clear();
+            let read = probe.call(
+                method,
+                json!({
+                    "conversationId": "00000000-0000-4000-8000-000000000001",
+                    key: "0".repeat(32),
+                    "offset": 0,
+                    "maxBytes": 1024,
+                }),
+            );
+            assert_ne!(read["error"]["code"], "forbidden", "{method}: {read}");
+            assert_eq!(
+                policy.methods.lock().unwrap().clone(),
+                vec![method.to_owned()]
+            );
+        }
     });
     assert!(
         std::fs::read(&path).unwrap() == bytes,

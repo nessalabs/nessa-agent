@@ -1,0 +1,10 @@
+starting a dev server of its own on port 34373…
+warmed 1296 modules in 7024 ms
+ok    default [chromium columns]
+ok    console [chromium columns]
+starting a dev server of its own on port 39093…
+warmed 1296 modules in 6749 ms
+ok    override [chromium columns]
+ok    console [chromium columns]
+wrote /tmp/nessa-981-evidence/quiet-parent-stop.json
+parent-stop: 4/4 held

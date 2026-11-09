@@ -16,6 +16,49 @@ use std::io;
     rename_all_fields = "camelCase"
 )]
 pub(crate) enum EnvironmentEvent {
+    /// A provider returned a VM, but its authoritative receipt could not be saved.
+    /// The thread joins the initiating conversation's creation/lease evidence.
+    WorkspaceReceiptSaveFailed {
+        thread: String,
+        vm: String,
+        disposition: String,
+    },
+    /// A concrete target was refused before workspace commands or grants.
+    WorkspaceAdmissionRefused {
+        thread: String,
+        vm: String,
+        environment_id: String,
+        environment_version_id: String,
+        environment_version: u32,
+        cause: String,
+        disposition: String,
+        observed_environment: Option<String>,
+        observed_version: Option<u32>,
+    },
+    /// Rollback observation after receipt-save failure; false means erasure is unconfirmed.
+    WorkspaceRollbackObserved {
+        thread: String,
+        vm: String,
+        confirmed: bool,
+    },
+    /// A thread's VM is about to be stopped, its disk kept, because its
+    /// agent's lease ended for `cause` (`idle` or `closed`): the thread
+    /// joins it to that lease's end.
+    WorkspaceStopRequested {
+        thread: String,
+        vm: String,
+        cause: String,
+    },
+    /// What the provider answered that stop. Accepted, the VM archives
+    /// after it: this does not say it has finished. A `failure` (its kind)
+    /// means it may still run.
+    WorkspaceStopAnswered {
+        thread: String,
+        vm: String,
+        cause: String,
+        accepted: bool,
+        failure: Option<String>,
+    },
     /// A host answered with this lease protocol's hello.
     Connected { host: String, workspace: String },
     /// A host answered with another lease protocol's hello, or none: refused.
@@ -96,6 +139,24 @@ pub(crate) enum EnvironmentEvent {
     InstallRefused {
         host: String,
         lease: String,
+        reason: InstallRefusal,
+        seen: Option<String>,
+    },
+    /// A paired host whose hello named another protocol asked for this
+    /// build, for `platform`, and is sent the build whose SHA-256 is
+    /// `digest`. Whether it keeps and runs it is the host's.
+    UpdateStarted {
+        host: String,
+        platform: String,
+        digest: String,
+    },
+    /// Every byte of that build was sent.
+    UpdateSent { host: String, digest: String },
+    /// A paired host asked for this build and was sent none, or not all of
+    /// it: `seen` as for [`Self::InstallRefused`], or what cut the send short.
+    UpdateRefused {
+        host: String,
+        platform: String,
         reason: InstallRefusal,
         seen: Option<String>,
     },

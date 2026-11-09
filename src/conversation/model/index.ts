@@ -5,6 +5,8 @@ export {
   conversationHistoryEmpty,
   conversationSelectionOpen,
   linksFilesHere,
+  chosenEnvironment,
+  HERE,
   type AssistantTurn,
   type BusyConversation,
   type AgentFeatures,
@@ -45,6 +47,8 @@ export {
   type ImageRefusal,
   type LinkedFile,
   type LinkedFileReferencePart,
+  type UploadedFileReference,
+  type UploadedFileReferencePart,
   type StoredImageType,
   type UploadFailure,
   type UploadState,
@@ -104,3 +108,4 @@ export {
   usageLimitOnClientClock,
   type UsageLimitNotice,
 } from "./usage-limit"
+export type { AgentSource } from "./authorship"

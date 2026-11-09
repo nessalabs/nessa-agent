@@ -1,0 +1,27 @@
+Run: https://github.com/nessalabs/nessa-agent/actions/runs/40257115915
+Job: 121361629393 (Windows server library)
+PR head: 4914f5e7bc41982c7a62d4b0d31c859cf83ea1f0
+Actual checkout: aa316c59dd4d69b48685b922e9fc0a055e97961a
+Actual main parent: aef11ea3b3d0c96f8c96fd9509f5657c58693780
+
+2026-10-26T02:25:55.1699042Z thread 'composition::read_only_online_tests::native_session::native_session_keeps_paired_records_offline_reopens_and_purges_on_terminal' panicked at tests/composition/read_only_online/native_session.rs:222:5
+2026-10-26T02:25:55.1700060Z assertion failed: refresh.read().unwrap().result().as_ref().unwrap().complete
+2026-10-26T02:50:34.5173725Z test result: FAILED. 3394 passed; 1 failed; 9 ignored; finished in 1707.50s
+2026-10-26T02:50:34.5553230Z nessa_server-d633359ee5b5052e.exe exited with 101
+
+This was an assertion failure, not a timeout. All three original full-boundary
+retention controls and the late-response full-boundary control passed:
+02:44:54 bulk_reset_retention_is_bounded_in_the_commit
+02:47:27 late_response_acknowledgement_keeps_the_actual_full_retention_boundary
+02:49:37 terminal_retention_is_bounded
+02:50:34 stop_retention_is_bounded_when_publication_fails
+
+The lifecycle test uses the production monotonic clock and requires completion
+of a real paired read. The retained reader explicitly permits incomplete progress
+on its five-second logical budget. Adjacent native refusal and budget tests already
+inject ManualClock and use a separate failing 30-second watchdog. The observed
+failure does not establish which physical operation consumed the budget; no
+specific disk, network, or scheduling cause is claimed. The proposed test-only
+correction uses that existing clock/watchdog boundary for the lifecycle reads,
+preserving completion, offline reopen, actual retained facts and terminal purge
+assertions. Production budget and explicit expiry controls remain unchanged.

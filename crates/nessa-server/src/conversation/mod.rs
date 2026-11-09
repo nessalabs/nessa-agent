@@ -2,25 +2,24 @@
 //! `application -> domain` enforces access; `infrastructure -> application` stores metadata.
 //! The SDK owns execution, queueing, permissions, and provider cleanup.
 //!
-//! A message carries images by reference and points at every other file by
-//! absolute path. The two are checked in opposite ways, because they travel in
-//! opposite ways:
+//! Images and uploaded files retain their original stored references. Linked
+//! files instead name paths already present in the execution workspace:
 //!
 //! ```text
-//!   submit ──images──▶ ConversationAttachments::holds   (does this conversation
-//!          │                                             own these bytes?)
-//!          └──files───▶ LinkedFile::new                  (can this path be said?)
-//!                              │
-//!                              └──▶ ConversationFileLinkAudit  (who pointed the
-//!                                     agent here — before admission)
+//!   submit ──stored references──▶ ConversationAttachments::holds
+//!          │                       (does this conversation own these bytes?)
+//!          └─linked file paths──▶ ConversationFileLinkAudit::record
+//!                                  (who named which path, and when?)
+//!   dispatch ──uploaded files──▶ lease-bound input resolver
+//!                                  (verified placement and outcome evidence)
 //! ```
 //!
-//! Arrows are calls, in the order `submit` makes them. An image has an upload
-//! behind it, so there is ownership to verify and a hold to release on close. A
-//! path has nothing behind it: nothing was uploaded, nothing is held, and
-//! nothing here opens the file — so what the gateway keeps instead is evidence
-//! of who pointed the agent at it. See
-//! [ADR 0013](../../../../docs/adr/done/0013-files-by-path-not-by-payload.md).
+//! Stored references keep their holds through accepted input and recovery.
+//! Prepared paths belong only to the execution copy, never the saved input.
+//! A linked path has no upload behind it; naming one records sender evidence
+//! without opening it. See [ADR 0013](../../../../docs/adr/done/0013-files-by-path-not-by-payload.md)
+//! for linked paths, and [phone uploads](../../../../docs/design/phone-file-uploads.md)
+//! for stored-file delivery.
 //!
 //! A list of conversations is read beside all of that rather than through it:
 //! ownership records say whose each conversation is, a separate summary store

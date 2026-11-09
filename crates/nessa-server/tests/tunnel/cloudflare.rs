@@ -1,0 +1,571 @@
+//! The Cloudflare provider without Cloudflare: the pins, the checked
+//! install, what it runs, and how it reads a ready tunnel's address.
+use super::*;
+use crate::agent_install::application::SourceFailure;
+use crate::tunnel::application::TunnelToken;
+
+/// Serves the bytes it was given for any URL.
+struct Serving(Vec<u8>);
+impl ArchiveSource for Serving {
+    fn download(
+        &self,
+        _url: &str,
+        at_most: u64,
+        staged: &mut StagedArchive,
+    ) -> Result<(), SourceFailure> {
+        if self.0.len() as u64 > at_most {
+            return Err(SourceFailure::TooLarge(at_most));
+        }
+        std::io::Write::write_all(staged.file_mut(), &self.0)
+            .map_err(|error| SourceFailure::Unreachable(error.to_string()))
+    }
+}
+
+fn sha256(bytes: &[u8]) -> String {
+    Sha256::digest(bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+const PROGRAM_BYTES: &[u8] = b"#!/bin/sh\nexit 0\n";
+
+fn a_build(packaging: Packaging, archive: &[u8]) -> PinnedBuild {
+    PinnedBuild {
+        operating_system: "linux".into(),
+        architecture: "x86_64".into(),
+        url: "https://example.invalid/cloudflared".into(),
+        packaging,
+        archive_bytes: archive.len() as u64,
+        archive_digest: sha256(archive),
+        program_bytes: PROGRAM_BYTES.len() as u64,
+        program_digest: sha256(PROGRAM_BYTES),
+        version: "test".into(),
+    }
+}
+
+fn tgz(member: &str, bytes: &[u8]) -> Vec<u8> {
+    let mut archive = tar::Builder::new(flate2::write::GzEncoder::new(
+        Vec::new(),
+        flate2::Compression::fast(),
+    ));
+    let mut header = tar::Header::new_gnu();
+    header.set_size(bytes.len() as u64);
+    header.set_mode(0o755);
+    header.set_cksum();
+    archive.append_data(&mut header, member, bytes).unwrap();
+    archive.into_inner().unwrap().finish().unwrap()
+}
+
+#[test]
+fn every_supported_platform_has_a_pin_and_others_have_none() {
+    for (system, architecture) in [
+        ("macos", "aarch64"),
+        ("macos", "x86_64"),
+        ("linux", "x86_64"),
+        ("linux", "aarch64"),
+    ] {
+        let build = PinnedBuild::for_platform(system, architecture).expect("pinned");
+        assert!(build
+            .url
+            .starts_with("https://github.com/cloudflare/cloudflared/releases/download/"));
+        assert!(build.url.contains(&build.version));
+        assert_eq!(build.archive_digest.len(), 64);
+        assert_eq!(build.program_digest.len(), 64);
+    }
+    assert!(PinnedBuild::for_platform("windows", "x86_64").is_none());
+}
+
+#[test]
+fn a_pinned_program_is_installed_runnable_and_kept() {
+    use std::os::unix::fs::PermissionsExt;
+    let directory = tempfile::tempdir().unwrap();
+    let build = a_build(Packaging::Program, PROGRAM_BYTES);
+    let program = install(directory.path(), &build, &Serving(PROGRAM_BYTES.to_vec())).unwrap();
+    assert_eq!(std::fs::read(&program).unwrap(), PROGRAM_BYTES);
+    assert_eq!(
+        std::fs::metadata(&program).unwrap().permissions().mode() & 0o777,
+        0o700
+    );
+    // Already there and matching: nothing is fetched.
+    let refusing = Serving(b"anything else".to_vec());
+    assert_eq!(
+        install(directory.path(), &build, &refusing).unwrap(),
+        program
+    );
+}
+
+#[test]
+fn a_program_from_its_archive_is_installed() {
+    let directory = tempfile::tempdir().unwrap();
+    let archive = tgz("cloudflared", PROGRAM_BYTES);
+    let build = a_build(Packaging::Tgz, &archive);
+    let program = install(directory.path(), &build, &Serving(archive)).unwrap();
+    assert_eq!(std::fs::read(program).unwrap(), PROGRAM_BYTES);
+}
+
+#[test]
+fn nothing_that_does_not_match_its_pin_is_made_runnable() {
+    let directory = tempfile::tempdir().unwrap();
+    // A download that is not the pinned archive.
+    let pinned = a_build(Packaging::Program, PROGRAM_BYTES);
+    assert_eq!(
+        install(
+            directory.path(),
+            &pinned,
+            &Serving(b"#!/bin/sh\nexit 1\n".to_vec())
+        ),
+        Err(TunnelFailure::Unavailable("unverified"))
+    );
+    assert!(!installed(directory.path(), &pinned).exists());
+    // The pinned archive, holding no program by that name.
+    let archive = tgz("elsewhere", PROGRAM_BYTES);
+    let build = a_build(Packaging::Tgz, &archive);
+    assert_eq!(
+        install(directory.path(), &build, &Serving(archive)),
+        Err(TunnelFailure::Unavailable("unverified"))
+    );
+    // The pinned archive, holding a program that is not the pinned one.
+    let archive = tgz("cloudflared", b"#!/bin/sh\nexit 2\n");
+    let build = a_build(Packaging::Tgz, &archive);
+    assert_eq!(
+        install(directory.path(), &build, &Serving(archive)),
+        Err(TunnelFailure::Unavailable("unverified"))
+    );
+    assert!(!installed(directory.path(), &build).exists());
+}
+
+#[test]
+fn a_kept_program_that_no_longer_matches_is_fetched_again() {
+    let directory = tempfile::tempdir().unwrap();
+    let build = a_build(Packaging::Program, PROGRAM_BYTES);
+    let program = install(directory.path(), &build, &Serving(PROGRAM_BYTES.to_vec())).unwrap();
+    std::fs::write(&program, b"changed").unwrap();
+    install(directory.path(), &build, &Serving(PROGRAM_BYTES.to_vec())).unwrap();
+    assert_eq!(std::fs::read(program).unwrap(), PROGRAM_BYTES);
+}
+
+#[test]
+fn a_quick_answer_names_an_https_address_or_a_loopback_stand_in() {
+    let address = |body: &str, stand_in: bool| {
+        quick_address(body.as_bytes(), stand_in).map(|address| address.as_str().to_owned())
+    };
+    assert_eq!(
+        address(r#"{"hostname":"a-b-c.trycloudflare.com"}"#, false).as_deref(),
+        Some("https://a-b-c.trycloudflare.com")
+    );
+    // Whatever answers the metrics port names only a quick tunnel's address.
+    for refused in [
+        r#"{"hostname":"https://evil.example"}"#,
+        r#"{"hostname":"evil.example"}"#,
+        r#"{"hostname":"http://127.0.0.1:5"}"#,
+        r#"{"hostname":".trycloudflare.com"}"#,
+        r#"{"hostname":"a.b.trycloudflare.com"}"#,
+        r#"{"hostname":"a/b.trycloudflare.com"}"#,
+    ] {
+        assert_eq!(address(refused, false), None, "{refused}");
+    }
+    assert_eq!(
+        address(r#"{"hostname":"http://127.0.0.1:5"}"#, true).as_deref(),
+        Some("http://127.0.0.1:5")
+    );
+    assert_eq!(address(r#"{"hostname":"http://example.com"}"#, true), None);
+    assert_eq!(address(r#"{"hostname":""}"#, true), None);
+    assert_eq!(address("not json", true), None);
+}
+
+#[test]
+fn an_answer_is_its_status_and_body() {
+    assert_eq!(
+        parse_answer(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok"),
+        Some((200, b"ok".to_vec()))
+    );
+    assert_eq!(
+        parse_answer(b"HTTP/1.1 503 Not Ready\r\n\r\n"),
+        Some((503, vec![]))
+    );
+    assert_eq!(parse_answer(b"garbage"), None);
+}
+
+/// A kept-program record that answers as it is told.
+enum Kept {
+    Nothing,
+    Unreadable,
+    Left(LeftRunning),
+}
+
+#[async_trait]
+impl KeptTunnel for Kept {
+    async fn left_running(&self) -> Result<Option<LeftRunning>, KeptLookupFailed> {
+        match self {
+            Self::Nothing => Ok(None),
+            Self::Unreadable => Err(KeptLookupFailed),
+            Self::Left(left) => Ok(Some(left.clone())),
+        }
+    }
+}
+
+fn service_with(
+    directory: &Path,
+    program: Program,
+    tunnel: CloudflareTunnel,
+    kept: Arc<dyn KeptTunnel>,
+) -> (CloudflareService, LaunchRefusal) {
+    let refused = LaunchRefusal::default();
+    let service = CloudflareService::new(
+        TunnelFiles::new(directory),
+        program,
+        Arc::new(|| Some(Box::new(Serving(vec![])) as Box<dyn ArchiveSource>)),
+        tunnel,
+        "127.0.0.1:47651".parse().unwrap(),
+        kept,
+        refused.clone(),
+    );
+    (service, refused)
+}
+
+fn service(directory: &Path, tunnel: CloudflareTunnel) -> CloudflareService {
+    service_with(
+        directory,
+        Program::Given("/bin/true".into()),
+        tunnel,
+        Arc::new(Kept::Nothing),
+    )
+    .0
+}
+
+fn no_record() -> ServiceInstance {
+    ServiceInstance {
+        os_pid: 0,
+        adopted: false,
+        output: None,
+        record: None,
+    }
+}
+
+/// A record left by a last run is reused only when it is exactly this
+/// launch, never once a launch of this run has run, and one that cannot be
+/// read takes back nothing.
+#[tokio::test]
+async fn a_launch_takes_back_only_the_identical_kept_program() {
+    let directory = tempfile::tempdir().unwrap();
+    let recorded = service(directory.path(), CloudflareTunnel::Quick)
+        // Below the range the OS hands out, so no free port is ever it.
+        .launch_on(1_023)
+        .unwrap();
+    let left = |launch: &ServiceLaunch| LeftRunning {
+        args: args(launch),
+        started_as: StartedAs::of(launch),
+    };
+    let with = |tunnel: CloudflareTunnel, kept: Kept| {
+        service_with(
+            directory.path(),
+            Program::Given("/bin/true".into()),
+            tunnel,
+            Arc::new(kept),
+        )
+        .0
+    };
+
+    let same = with(CloudflareTunnel::Quick, Kept::Left(left(&recorded)));
+    assert_eq!(same.launch_spec().await.unwrap(), recorded);
+    // A launch that did not start (a failed claim, say) keeps asking.
+    assert_eq!(same.launch_spec().await.unwrap(), recorded);
+    same.ready(&no_record()).await.unwrap();
+    assert_ne!(same.launch_spec().await.unwrap(), recorded);
+
+    // The same port, started as something else: not taken back.
+    let other = recorded.clone().revision("token other");
+    let changed = with(CloudflareTunnel::Quick, Kept::Left(left(&other)));
+    assert_ne!(
+        metrics_port_in(&args(&changed.launch_spec().await.unwrap())),
+        Some(1_023)
+    );
+    let named = with(named("token"), Kept::Left(left(&recorded)));
+    assert_ne!(
+        metrics_port_in(&args(&named.launch_spec().await.unwrap())),
+        Some(1_023)
+    );
+    // A record naming no metrics port, or one that cannot be read.
+    let portless = LeftRunning {
+        args: vec!["tunnel".into()],
+        started_as: StartedAs::of(&recorded),
+    };
+    for kept in [Kept::Left(portless), Kept::Unreadable] {
+        let launch = with(CloudflareTunnel::Quick, kept)
+            .launch_spec()
+            .await
+            .unwrap();
+        assert!(metrics_port_in(&args(&launch)).is_some());
+        assert_ne!(launch, recorded);
+    }
+}
+
+/// A refused launch's reason is recorded for the status to read, never its
+/// wording, and a launch that goes ahead empties it.
+#[tokio::test]
+async fn a_refused_launch_records_its_reason() {
+    let directory = tempfile::tempdir().unwrap();
+    let missing = directory.path().join("missing");
+    for program in [Program::Unsupported, Program::Given(missing)] {
+        let (service, refused) = service_with(
+            directory.path(),
+            program,
+            CloudflareTunnel::Quick,
+            Arc::new(Kept::Nothing),
+        );
+        assert!(service.launch().await.is_err());
+        assert_eq!(
+            *refused.lock().unwrap(),
+            Some(TunnelFailure::Unavailable("unsupported"))
+        );
+    }
+    // Any file will do: the launch is only made, never run.
+    let present = directory.path().join("present");
+    std::fs::write(&present, b"").unwrap();
+    let (service, refused) = service_with(
+        directory.path(),
+        Program::Given(present),
+        CloudflareTunnel::Quick,
+        Arc::new(Kept::Nothing),
+    );
+    *refused.lock().unwrap() = Some(TunnelFailure::Unavailable("download"));
+    service.launch().await.unwrap();
+    assert_eq!(*refused.lock().unwrap(), None);
+}
+
+fn named(token: &str) -> CloudflareTunnel {
+    CloudflareTunnel::Named {
+        address: TunnelAddress::try_from("https://gateway.example.com".to_owned()).unwrap(),
+        token: TunnelToken::new(token.into()).unwrap(),
+    }
+}
+
+fn args(launch: &ServiceLaunch) -> Vec<String> {
+    launch
+        .spec
+        .args
+        .iter()
+        .map(|arg| arg.to_str().unwrap().to_owned())
+        .collect()
+}
+
+#[tokio::test]
+async fn a_quick_tunnel_forwards_to_the_ingress_and_reports_on_loopback() {
+    let directory = tempfile::tempdir().unwrap();
+    let launch = service(directory.path(), CloudflareTunnel::Quick)
+        .launch_spec()
+        .await
+        .unwrap();
+    let args = args(&launch);
+    assert_eq!(
+        &args[..5],
+        [
+            "tunnel",
+            "--no-autoupdate",
+            "--loglevel",
+            "warn",
+            "--metrics"
+        ]
+    );
+    assert!(args[5].starts_with("127.0.0.1:"));
+    assert_eq!(&args[6..], ["--url", "http://127.0.0.1:47651"]);
+    let home = directory.path().join("tunnel");
+    assert_eq!(
+        launch.spec.env,
+        EnvPolicy::Clear(vec![("HOME".into(), home.clone().into())])
+    );
+    assert_eq!(launch.spec.cwd.as_deref(), Some(home.as_path()));
+    assert_eq!(launch.log, Some(home.join("cloudflared.log")));
+    assert_eq!(launch.revision, None);
+}
+
+#[tokio::test]
+async fn a_named_tunnel_reads_its_token_from_the_file_never_the_command_line() {
+    let directory = tempfile::tempdir().unwrap();
+    let launch = service(directory.path(), named("secret-token"))
+        .launch_spec()
+        .await
+        .unwrap();
+    let args = args(&launch);
+    let token_file = directory.path().join("tunnel").join("token");
+    assert_eq!(
+        &args[6..],
+        ["run", "--token-file", token_file.to_str().unwrap()]
+    );
+    assert!(args.iter().all(|arg| !arg.contains("secret-token")));
+    let revision = launch.revision.unwrap();
+    assert!(!revision.contains("secret-token"));
+    // Another token in the same file is another program.
+    let other = service(directory.path(), named("other-token"))
+        .launch_spec()
+        .await
+        .unwrap();
+    assert_ne!(other.revision.unwrap(), revision);
+}
+
+/// Ends a kept program's group when dropped, so a failed assertion leaves
+/// nothing running. Disarmed once the test has seen it end, so a group id
+/// another test's program has since taken is never signalled.
+struct EndsGroup(Option<u32>);
+impl EndsGroup {
+    fn ended(mut self) {
+        self.0 = None;
+    }
+}
+impl Drop for EndsGroup {
+    fn drop(&mut self) {
+        if let Some(pid) = self.0 {
+            // SAFETY: kill takes plain integers; the group is the test's
+            // own kept program, still running.
+            unsafe {
+                libc::kill(-(pid as libc::pid_t), libc::SIGKILL);
+            }
+        }
+    }
+}
+
+/// Until a launch of this run has run, a launch that is exactly the kept
+/// program's own reports on its port, so shepherd takes it back; a
+/// different launch, or any after one has run, takes a port free now.
+#[tokio::test]
+async fn a_launch_reports_on_the_kept_programs_port_only_when_it_is_that_launch() {
+    use std::os::unix::fs::PermissionsExt;
+    let directory = tempfile::tempdir().unwrap();
+    let files = TunnelFiles::new(directory.path());
+    std::fs::create_dir_all(files.directory()).unwrap();
+    let program = directory.path().join("stand-in");
+    std::fs::write(&program, b"#!/bin/sh\nexec sleep 60\n").unwrap();
+    std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let kept = shepherd::kept_processes(files.kept_directory(), "test").unwrap();
+    let name = shepherd::KeptName::new("cloudflared").unwrap();
+    let with_kept = |tunnel: CloudflareTunnel| {
+        CloudflareService::new(
+            files.clone(),
+            Program::Given(program.clone()),
+            Arc::new(|| Some(Box::new(Serving(vec![])) as Box<dyn ArchiveSource>)),
+            tunnel,
+            "127.0.0.1:47651".parse().unwrap(),
+            Arc::new(ShepherdKept::new(kept.clone(), name.clone())),
+            LaunchRefusal::default(),
+        )
+    };
+    // Nothing kept: a free port.
+    let nothing = with_kept(CloudflareTunnel::Quick)
+        .launch_spec()
+        .await
+        .unwrap();
+    assert!(metrics_port_in(&args(&nothing)).is_some());
+
+    // A last run's quick tunnel, left running on `port`.
+    let held = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = held.local_addr().unwrap().port();
+    let recorded = with_kept(CloudflareTunnel::Quick).launch_on(port).unwrap();
+    let mut spec = shepherd::KeptSpec::new(name.clone(), recorded.spec.clone())
+        .log(files.directory().join("cloudflared.log"));
+    spec.revision = recorded.revision.clone();
+    let left = kept.start(spec).await.unwrap();
+    let ends = EndsGroup(Some(left.os_pid()));
+    left.release();
+
+    // Another tunnel never reuses its port.
+    let other = with_kept(named("token")).launch_spec().await.unwrap();
+    assert_ne!(metrics_port_in(&args(&other)), Some(port));
+
+    let service = with_kept(CloudflareTunnel::Quick);
+    assert_eq!(service.launch_spec().await.unwrap(), recorded);
+    // A launch that did not start (a failed claim, say) keeps asking.
+    assert_eq!(service.launch_spec().await.unwrap(), recorded);
+    service
+        .ready(&ServiceInstance {
+            os_pid: 0,
+            adopted: false,
+            output: None,
+            record: None,
+        })
+        .await
+        .unwrap();
+    let after = service.launch_spec().await.unwrap();
+    assert_ne!(metrics_port_in(&args(&after)), Some(port));
+
+    let left = kept.adopt(&name).await.unwrap().unwrap();
+    let ended = left.terminate(shepherd::TerminateOptions::default()).await;
+    assert!(ended.outcome.is_verified());
+    ends.ended();
+}
+
+/// A metrics server answering `/ready` with `ready` and `/quicktunnel` with
+/// `hostname`, for as many requests as come.
+async fn metrics(ready: u16, hostname: &'static str) -> u16 {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        loop {
+            let Ok((mut stream, _)) = listener.accept().await else {
+                return;
+            };
+            let mut request = vec![0; 1024];
+            let read = stream.read(&mut request).await.unwrap_or(0);
+            let request = String::from_utf8_lossy(&request[..read]).into_owned();
+            let (status, body) = if request.starts_with("GET /ready ") {
+                (ready, String::new())
+            } else {
+                (200, format!(r#"{{"hostname":"{hostname}"}}"#))
+            };
+            let _ = stream
+                .write_all(
+                    format!(
+                        "HTTP/1.1 {status} X\r\nContent-Length: {}\r\n\r\n{body}",
+                        body.len()
+                    )
+                    .as_bytes(),
+                )
+                .await;
+        }
+    });
+    port
+}
+
+fn launched_on(port: u16) -> Vec<String> {
+    vec![
+        "tunnel".into(),
+        "--metrics".into(),
+        format!("127.0.0.1:{port}"),
+    ]
+}
+
+#[tokio::test]
+async fn a_taken_back_quick_tunnel_is_asked_on_its_own_metrics_port() {
+    let directory = tempfile::tempdir().unwrap();
+    let service = service(directory.path(), CloudflareTunnel::Quick);
+    let port = metrics(200, "q.trycloudflare.com").await;
+    assert_eq!(
+        service
+            .address(&launched_on(port))
+            .await
+            .map(|address| address.as_str().to_owned())
+            .as_deref(),
+        Some("https://q.trycloudflare.com")
+    );
+}
+
+#[tokio::test]
+async fn a_tunnel_not_ready_reports_nothing_and_a_named_one_its_own_address() {
+    let directory = tempfile::tempdir().unwrap();
+    let quick = service(directory.path(), CloudflareTunnel::Quick);
+    let not_ready = launched_on(metrics(503, "q.trycloudflare.com").await);
+    assert!(quick.address(&not_ready).await.is_none());
+    let named = service(directory.path(), named("token"));
+    let ready = launched_on(metrics(200, "ignored.example").await);
+    assert_eq!(
+        named
+            .address(&ready)
+            .await
+            .map(|address| address.as_str().to_owned())
+            .as_deref(),
+        Some("https://gateway.example.com")
+    );
+    // A launch naming no loopback metrics port is never asked.
+    let elsewhere = vec!["--metrics".to_owned(), "10.0.0.1:80".to_owned()];
+    assert!(quick.address(&elsewhere).await.is_none());
+}

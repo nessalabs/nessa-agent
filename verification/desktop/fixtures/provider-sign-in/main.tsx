@@ -1,4 +1,5 @@
 import { WorkspaceSendFailure } from "../../../../src/desktop/workspace/ui/send-failure"
+import { BoatSignInFailure } from "../../../../src/provider-authentication/model/boat-sign-in"
 /** The real transcript over typed auth-required evidence and a controllable login port. */
 import { createRef } from "react"
 import { createRoot } from "react-dom/client"
@@ -28,6 +29,18 @@ const provider =
   new URLSearchParams(window.location.search).get("provider") === "codex"
     ? "codex"
     : "claude"
+// `?lease=boat`: the refused run was in a Boat VM (ADR 501).
+const boatLease =
+  new URLSearchParams(window.location.search).get("lease") === "boat"
+    ? {
+        lease: {
+          state: "ended" as const,
+          environment: "boat" as const,
+          cause: "closed" as const,
+          droppedEvents: 0,
+        },
+      }
+    : {}
 const index = testIndex()
 const source = fakeSource({
   ...index,
@@ -44,6 +57,7 @@ source.transcripts.set(
   "b",
   transcriptFrom(
     view("b", {
+      ...boatLease,
       runtime: {
         agent: provider,
         model: "unknown-catalogue-model",
@@ -201,6 +215,8 @@ let resolve: (() => void) | undefined
 const fixture = {
   calls: [] as string[],
   fail: false,
+  /** The stage a Boat sign-in fails at, or none. */
+  boatFail: undefined as "minted" | "saved" | undefined,
   release() {
     resolve?.()
     resolve = undefined
@@ -256,6 +272,17 @@ const dependencies = createDesktopDependencies({
   workspace: source,
   providerLoginAvailable: async () =>
     new URLSearchParams(location.search).get("login") !== "unsupported",
+  boatClaudeSignIn: {
+    available: async () =>
+      new URLSearchParams(location.search).get("login") !== "unsupported",
+    signIn: async () => {
+      fixture.calls.push("boat")
+      await new Promise<void>((done) => {
+        resolve = done
+      })
+      if (fixture.boatFail) throw new BoatSignInFailure(fixture.boatFail)
+    },
+  },
   signInToProvider: async (chosen) => {
     fixture.calls.push(chosen)
     await new Promise<void>((done) => {

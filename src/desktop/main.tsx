@@ -1,3 +1,7 @@
+import { BoatProvider } from "./settings/ui/boat-row"
+import { DevicesProvider } from "./devices"
+import { VaultProvider, nativeVault } from "../vault"
+import { hasNativeHost } from "../host"
 import { nativeAgentApiKeys } from "../onboarding/adapters/agent-api-key"
 import { AgentSetupProvider } from "../onboarding"
 import { assignedAgentReadiness } from "../onboarding/adapters/agents"
@@ -10,6 +14,8 @@ import {
   chooseChannelFolder,
   chooseChannelResources,
   homeFolder,
+  openGatewayConfig,
+  onPathsDragged,
   host,
   loadAssignedGatewayEndpoint,
   onReviewNoticeOpened,
@@ -18,6 +24,8 @@ import {
   sandboxSchemeRegistered,
   signInToProvider,
   providerLoginAvailable,
+  mintClaudeSignIn,
+  claudeSignInMintAvailable,
   saveFile,
   writeClipboardText,
 } from "../host"
@@ -39,6 +47,8 @@ import {
   McpServersProvider,
   NativeHooksProvider,
   PermissionRulesProvider,
+  SavedLoginsProvider,
+  VoiceKeyProvider,
 } from "./settings"
 import { makeDesktopStore } from "./store"
 import { DesktopIconFamilyProvider } from "./ui/icons"
@@ -46,12 +56,19 @@ import { DesktopWindow } from "./ui/desktop-window"
 import { platformFor, sandboxFor, WidgetRegistryProvider } from "./widgets"
 import { SubagentsProvider } from "./subagents"
 import {
+  scriptedTransport,
+  storeConversations,
+  VoiceController,
+  VoiceProvider,
+  webrtcTransport,
+} from "./voice"
+import {
   bindConversationTitles,
   bindNoticeAccess,
   openReviewEvent,
   showWaitingReviews,
 } from "./workspace/adapters/gateway/review-notices"
-import { followWorkspace, loadWorkspace } from "./workspace"
+import { followWorkspace, loadWorkspace, type PathPicker } from "./workspace"
 
 import "@fontsource-variable/geist"
 import "@fontsource-variable/geist-mono"
@@ -128,18 +145,34 @@ if (nativeNotices) {
 // The system's pickers for a new channel's paths, in the app on macOS and
 // Windows. Linux has no picker of its own yet, and a browser none at all, so
 // there a channel's folder is made for it and it takes no resources.
-const channelPaths =
+const channelPaths: PathPicker | undefined =
   backend === "host" && (host.kind === "macos" || host.kind === "other")
     ? {
         home: homeFolder,
         folder: chooseChannelFolder,
         resources: chooseChannelResources,
+        drops: (watch) => {
+          // Listening is asked for, and answers later: a watch stopped before
+          // then stops the listener as soon as it is there.
+          let stop: (() => void) | null = null
+          let stopped = false
+          void onPathsDragged(watch).then(
+            (unlisten) => (stopped ? unlisten() : (stop = unlisten)),
+            (error: unknown) => console.warn("Dropped files will not be heard", error),
+          )
+          return () => {
+            stopped = true
+            stop?.()
+          }
+        },
       }
     : undefined
 const dependencies = createDesktopDependencies({
+  vault: hasNativeHost() ? nativeVault : undefined,
   signInToProvider,
   paths: channelPaths,
   providerLoginAvailable,
+  mintClaudeSignIn: { available: claudeSignInMintAvailable, mint: mintClaudeSignIn },
   gateway,
   reviewNotices: nativeNotices ? { sync: syncReviewNotices } : undefined,
   workspace: seeded?.workspace,
@@ -168,6 +201,19 @@ bindConversationTitles((conversationId) => {
   const title = sessions[conversationId].title.trim()
   return title.length > 0 ? title : null
 })
+// The window's voice call: the gateway mints it and names how to connect,
+// from every transport it may name; the conversation is the store's.
+const voice = dependencies.voice
+  ? new VoiceController({
+      gateway: dependencies.voice,
+      transports: { webrtc: webrtcTransport(), scripted: scriptedTransport() },
+      conversations: storeConversations(store),
+      timers: {
+        setTimeout: (run, ms) => window.setTimeout(run, ms),
+        clearTimeout: (handle) => window.clearTimeout(handle as number),
+      },
+    })
+  : undefined
 store.dispatch(followWorkspace())
 void store.dispatch(loadWorkspace())
 
@@ -177,44 +223,72 @@ if (!container) throw new Error("missing #root")
 createRoot(container).render(
   <React.StrictMode>
     <StartupMounted />
-    <AgentSetupProvider source={agentSetup}>
-      <Provider store={store}>
-        <WidgetRegistryProvider registry={dependencies.widgets}>
-          <ClockProvider now={dependencies.now}>
-            <SubagentsProvider source={dependencies.subagents}>
-              {/* Every icon in the window resolves through the family chosen in Settings. */}
-              <DesktopIconFamilyProvider>
-                <McpServersProvider gateway={dependencies.mcpServers}>
-                  <LinkedDevicesProvider gateway={dependencies.linkedDevices}>
-                    <ClipboardProvider write={writeClipboardText}>
-                      <SiteIconProvider render={faviconSiteIcon}>
-                        <HeldFilesProvider read={dependencies.heldFiles} save={saveFile}>
-                          <NativeHooksProvider gateway={dependencies.nativeHooks}>
-                            <PermissionRulesProvider
-                              gateway={dependencies.permissionRules}
+    <VaultProvider source={dependencies.vault} autoUnlock={hasNativeHost()}>
+      <AgentSetupProvider source={agentSetup}>
+        <Provider store={store}>
+          <WidgetRegistryProvider registry={dependencies.widgets}>
+            <ClockProvider now={dependencies.now}>
+              <SubagentsProvider source={dependencies.subagents}>
+                {/* Every icon in the window resolves through the family chosen in Settings. */}
+                <DesktopIconFamilyProvider>
+                  <McpServersProvider
+                    gateway={dependencies.mcpServers}
+                    // The app's own gateway is on this computer: its config
+                    // file can be opened here, where the host has an opener
+                    // (macOS, Linux). A browser's may be anywhere.
+                    openConfig={
+                      backend === "host" &&
+                      (host.kind === "macos" || host.kind === "linux")
+                        ? openGatewayConfig
+                        : undefined
+                    }
+                  >
+                    <LinkedDevicesProvider gateway={dependencies.linkedDevices}>
+                      <DevicesProvider gateway={dependencies.devices}>
+                        <ClipboardProvider write={writeClipboardText}>
+                          <SiteIconProvider render={faviconSiteIcon}>
+                            <HeldFilesProvider
+                              read={dependencies.heldFiles}
+                              save={saveFile}
                             >
-                              <GithubProvider
-                                gateway={dependencies.github}
-                                avatar={githubAvatar}
-                              >
-                                <DesktopWindow
-                                  hostKind={host.kind}
-                                  browserSurface={host.kind === "browser"}
-                                  inspectable={import.meta.env.DEV}
-                                />
-                              </GithubProvider>
-                            </PermissionRulesProvider>
-                          </NativeHooksProvider>
-                        </HeldFilesProvider>
-                      </SiteIconProvider>
-                    </ClipboardProvider>
-                  </LinkedDevicesProvider>
-                </McpServersProvider>
-              </DesktopIconFamilyProvider>
-            </SubagentsProvider>
-          </ClockProvider>
-        </WidgetRegistryProvider>
-      </Provider>
-    </AgentSetupProvider>
+                              <NativeHooksProvider gateway={dependencies.nativeHooks}>
+                                <PermissionRulesProvider
+                                  gateway={dependencies.permissionRules}
+                                >
+                                  <BoatProvider gateway={dependencies.boat}>
+                                    <GithubProvider
+                                      gateway={dependencies.github}
+                                      avatar={githubAvatar}
+                                    >
+                                      <VoiceKeyProvider gateway={dependencies.voiceKey}>
+                                        <SavedLoginsProvider
+                                          gateway={dependencies.savedLogins}
+                                        >
+                                          <VoiceProvider controller={voice}>
+                                            <DesktopWindow
+                                              hostKind={host.kind}
+                                              browserSurface={host.kind === "browser"}
+                                              inspectable={import.meta.env.DEV}
+                                            />
+                                          </VoiceProvider>
+                                        </SavedLoginsProvider>
+                                      </VoiceKeyProvider>
+                                    </GithubProvider>
+                                  </BoatProvider>
+                                </PermissionRulesProvider>
+                              </NativeHooksProvider>
+                            </HeldFilesProvider>
+                          </SiteIconProvider>
+                        </ClipboardProvider>
+                      </DevicesProvider>
+                    </LinkedDevicesProvider>
+                  </McpServersProvider>
+                </DesktopIconFamilyProvider>
+              </SubagentsProvider>
+            </ClockProvider>
+          </WidgetRegistryProvider>
+        </Provider>
+      </AgentSetupProvider>
+    </VaultProvider>
   </React.StrictMode>,
 )

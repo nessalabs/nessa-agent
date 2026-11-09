@@ -246,7 +246,7 @@ impl CommandHosts {
                 return Err(ToolPolicyError::MalformedHost);
             }
             match EnvironmentRef::named(&host) {
-                Ok(EnvironmentRef::Ssh(_) | EnvironmentRef::Peer(_)) => {}
+                Ok(EnvironmentRef::Ssh(_) | EnvironmentRef::Peer(_) | EnvironmentRef::Boat) => {}
                 _ => return Err(ToolPolicyError::MalformedHost),
             }
             if !named.insert(host) {

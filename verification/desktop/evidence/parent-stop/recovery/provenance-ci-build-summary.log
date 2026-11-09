@@ -1,0 +1,9 @@
+Source50bef867; exact eight-package selection; CARGO_INCREMENTAL=0/CARGO_BUILD_JOBS=1; exit0; 38 test binaries.
+   Compiling nessa-vault v0.1.0 (/workspace/nessa-agent/crates/nessa-vault)
+   Compiling nessa-client-core v0.1.0 (/workspace/nessa-agent/crates/nessa-client-core)
+   Compiling nessa-server v0.1.0 (/workspace/nessa-agent/crates/nessa-server)
+   Compiling nessa-images v0.1.0 (/workspace/nessa-agent/crates/nessa-images)
+   Compiling nessa-gateway-endpoint v0.1.0 (/workspace/nessa-agent/crates/nessa-gateway-endpoint)
+   Compiling nessa-agent-credentials v0.1.0 (/workspace/nessa-agent/crates/nessa-agent-credentials)
+   Compiling nessa-device-client v0.1.0 (/workspace/nessa-agent/crates/nessa-device-client)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 16m 28s

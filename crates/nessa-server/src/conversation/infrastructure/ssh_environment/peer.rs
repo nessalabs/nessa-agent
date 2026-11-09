@@ -46,11 +46,14 @@ use super::{
     audit::EnvironmentAudit,
     connector::{ArtifactTransport, LeaseConnection},
     environment::{SshEnvironment, SshTimings},
+    logins::SavedLogins,
+    peer_update::PeerUpdates,
 };
 use crate::conversation::application::{
-    Environment, EnvironmentFuture, OrganizationBudgets, PairedEnvironments, WorkerLoad,
+    Environment, EnvironmentFuture, MachineUse, OrganizationBudgets, PairedEnvironments, WorkerLoad,
 };
 use nessa_auth::application::{pairing::DeviceConnectionProof, ports::AccessError};
+use nessa_protocol::lease::MachineReport;
 use nessa_sdk::domain::agent_execution::leases::PeerEnvironment;
 use std::{
     collections::BTreeMap,
@@ -72,6 +75,21 @@ pub(crate) trait ServingCredentials: Send + Sync {
     ) -> EnvironmentFuture<'a, Result<bool, AccessError>>;
 }
 
+/// Told what a paired environment's machine reports while its connection
+/// serves, and when that connection ends, with the last report it sent.
+/// Implemented in composition.
+pub(crate) trait Sightings: Send + Sync {
+    fn reported(&self, peer: PeerEnvironment, machine: &MachineReport);
+    fn left(&self, peer: PeerEnvironment, machine: MachineReport);
+}
+
+/// One paired environment as [`PeerEnvironments::workers`] reads it.
+pub(crate) struct PeerWorker {
+    pub(crate) peer: PeerEnvironment,
+    pub(crate) load: Option<WorkerLoad>,
+    pub(crate) machine: Option<MachineReport>,
+}
+
 /// This gateway's paired environments, one per key, made when it first
 /// dials in.
 pub(crate) struct PeerEnvironments {
@@ -85,6 +103,11 @@ pub(crate) struct PeerEnvironments {
     /// environment moves it as its connection is admitted, ends, or is
     /// revoked.
     connections: watch::Sender<u64>,
+    sightings: Option<Arc<dyn Sightings>>,
+    /// Told to each connection whose host speaks another protocol.
+    updates: Option<Arc<PeerUpdates>>,
+    /// Asked for each lease's saved login; `None` hands none.
+    logins: Option<Arc<dyn SavedLogins>>,
 }
 
 impl PeerEnvironments {
@@ -101,7 +124,46 @@ impl PeerEnvironments {
             budgets,
             peers: Mutex::new(BTreeMap::new()),
             connections: watch::Sender::new(0),
+            sightings: None,
+            updates: None,
+            logins: None,
         }
+    }
+
+    /// Ask `logins` for the saved login of each lease a paired machine
+    /// grants `takesLogin`.
+    pub(crate) fn with_logins(mut self, logins: Arc<dyn SavedLogins>) -> Self {
+        self.logins = Some(logins);
+        self
+    }
+
+    fn made(&self, peer: PeerEnvironment) -> SshEnvironment {
+        let environment = SshEnvironment::peer(
+            peer,
+            self.credentials.clone(),
+            self.audit.clone(),
+            self.timings,
+            self.connections.clone(),
+            self.budgets.clone(),
+        );
+        match &self.logins {
+            Some(logins) => environment.with_logins(logins.clone()),
+            None => environment,
+        }
+    }
+
+    /// Tell a host that dials in with another protocol's build which one
+    /// this gateway speaks, and send it this build when it asks.
+    pub(crate) fn with_updates(mut self, updates: Arc<PeerUpdates>) -> Self {
+        self.updates = Some(updates);
+        self
+    }
+
+    /// Tell `sightings` each machine report a connection carries, and when
+    /// a connection that reported ends.
+    pub(crate) fn with_sightings(mut self, sightings: Arc<dyn Sightings>) -> Self {
+        self.sightings = Some(sightings);
+        self
     }
 
     /// Wakes each time which paired environments are connected may have
@@ -130,14 +192,45 @@ impl PeerEnvironments {
         to_environment: Box<dyn AsyncWrite + Send + Unpin>,
         keep: Box<dyn Send>,
     ) {
-        let environment = self.peer(PeerEnvironment::new(*proof.key().bytes()));
+        let peer = PeerEnvironment::new(*proof.key().bytes());
+        let environment = self.peer(peer);
         let connection = LeaseConnection {
+            mcp_relay: None,
             from_environment,
             to_environment,
             keep,
             artifacts: ArtifactTransport::Frames,
+            updates: self.updates.clone(),
         };
-        environment.serve(proof, connection).await;
+        let reported = |machine: MachineReport| {
+            if let Some(sightings) = &self.sightings {
+                sightings.reported(peer, &machine);
+            }
+        };
+        // A revoked key's worker is forgotten, not seen leaving: saved as
+        // of its end, it would outlive the forgetting.
+        let left = environment.serve(proof, connection, &reported).await;
+        if let (true, Some(sightings), Some(machine)) =
+            (left, &self.sightings, environment.machine())
+        {
+            sightings.left(peer, machine);
+        }
+    }
+
+    /// Every paired environment that has dialed in since this gateway
+    /// started, as it stands now: what its connection carries (`None` with
+    /// none that serves leases) and the latest report its machine sent.
+    pub(crate) fn workers(&self) -> Vec<PeerWorker> {
+        self.peers
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .iter()
+            .map(|(peer, environment)| PeerWorker {
+                peer: *peer,
+                load: environment.load(),
+                machine: environment.machine(),
+            })
+            .collect()
     }
 
     fn peer(&self, peer: PeerEnvironment) -> Arc<SshEnvironment> {
@@ -145,16 +238,7 @@ impl PeerEnvironments {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .entry(peer)
-            .or_insert_with(|| {
-                Arc::new(SshEnvironment::peer(
-                    peer,
-                    self.credentials.clone(),
-                    self.audit.clone(),
-                    self.timings,
-                    self.connections.clone(),
-                    self.budgets.clone(),
-                ))
-            })
+            .or_insert_with(|| Arc::new(self.made(peer)))
             .clone()
     }
 }
@@ -172,14 +256,7 @@ impl PairedEnvironments for PeerEnvironments {
             .cloned();
         match known {
             Some(environment) => environment,
-            None => Arc::new(SshEnvironment::peer(
-                *peer,
-                self.credentials.clone(),
-                self.audit.clone(),
-                self.timings,
-                self.connections.clone(),
-                self.budgets.clone(),
-            )),
+            None => Arc::new(self.made(*peer)),
         }
     }
 
@@ -192,6 +269,19 @@ impl PairedEnvironments for PeerEnvironments {
             .collect()
     }
 
+    fn machine_use(&self, peer: &PeerEnvironment) -> Option<MachineUse> {
+        let machine = self
+            .peers
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(peer)
+            .and_then(|environment| environment.machine())?;
+        Some(MachineUse {
+            cpu_permille: machine.cpu_permille.min(1000),
+            memory_permille: permille(machine.memory_used_bytes, machine.memory_total_bytes),
+        })
+    }
+
     fn connected(&self) -> Vec<PeerEnvironment> {
         self.peers
             .lock()
@@ -201,4 +291,13 @@ impl PairedEnvironments for PeerEnvironments {
             .map(|(peer, _)| *peer)
             .collect()
     }
+}
+
+/// `used` of `total`, in tenths of a percent, 0 to 1000; 0 of nothing.
+fn permille(used: u64, total: u64) -> u32 {
+    if total == 0 {
+        return 0;
+    }
+    let share = u128::from(used.min(total)) * 1000 / u128::from(total);
+    u32::try_from(share).unwrap_or(1000)
 }

@@ -1,0 +1,17 @@
+Source69351af72cbd73179f7f8765424251ecf4a20b99; process-local022
+test webhooks::infrastructure::outbox::store::tests::bulk_reset_retention_is_bounded_in_the_commit ... ok
+test webhooks::infrastructure::outbox::store::tests::terminal_retention_is_bounded ... ok
+test webhooks::infrastructure::product_tests::delivery::owner_query::default_and_false_cursor_skip_head_admission_and_capacity_while_requested_head_refuses_exhaustion ... ok
+test webhooks::infrastructure::product_tests::delivery::owner_query::default_checkpoint_needs_no_canonical_read_grant_but_requested_head_does ... ok
+test webhooks::infrastructure::product_tests::delivery::owner_query::owner_diagnostic_refuses_foreign_and_unauthorized_inputs_before_head_then_reports_read_failures_explicitly ... ok
+test webhooks::infrastructure::product_tests::delivery::owner_query::requested_head_rechecks_target_expiry_after_physical_observation ... ok
+test webhooks::infrastructure::product_tests::delivery::owner_query::source_replacement_after_native_snapshot_returns_distinct_observed_head_without_freezing_or_advancing ... ok
+test webhooks::infrastructure::product_tests::delivery::owner_reset::public_owner_reset_selects_canonical_incarnation_replays_and_delivers_only_granted_chat ... ok
+test webhooks::infrastructure::outbox::store::tests::stop_retention_is_bounded_when_publication_fails ... ok
+test webhooks::infrastructure::product_tests::delivery::owner_query::requested_head_deadline_returns_explicit_refusal_but_shutdown_retains_physical_ownership ... ok
+test result: ok. 295 passed; 0 failed; 0 ignored; 0 measured; 3841 filtered out; finished in 19.15s
+
+Required seven-package all-target Clippy -D warnings; exit0:
+warning: `nessa-server` (lib) generated 1 warning
+warning: `nessa-server` (lib test) generated 1 warning (1 duplicate)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1m 02s

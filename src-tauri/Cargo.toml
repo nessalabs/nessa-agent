@@ -15,6 +15,7 @@ json-patch = "3"
 serde_json = "1"
 
 [dependencies]
+zeroize = { version = "=1.9.0", features = ["serde"] }
 nessa-local-storage = { path = "../crates/nessa-local-storage" }
 nessa-gateway-endpoint = { path = "../crates/nessa-gateway-endpoint" }
 nessa-agent-credentials = { path = "../crates/nessa-agent-credentials" }
@@ -34,7 +35,7 @@ getrandom = "0.3"
 # alone: a filesystem call that never returns needs a deadline, and a deadline
 # needs a timer the async runtime is already driving. Nothing new is compiled
 # into the binary.
-tokio = { version = "1", features = ["time"] }
+tokio = { version = "1", features = ["rt", "time"] }
 # Startup lines have to outlive a Finder launch, which keeps no stderr.
 # `tracing` is the record; `tracing-appender` is the file it lands in.
 tracing = "0.1"

@@ -10,10 +10,13 @@ import { Provider } from "react-redux"
 import { afterEach, beforeEach, expect, it, vi } from "vitest"
 import { ClockProvider } from "../../../../clock"
 import {
+  arrangementShown,
   followWorkspace,
   loadWorkspace,
   renameStarted,
 } from "../../adapters/store/commands"
+import { onScreen } from "../../application/workspace-state"
+import { emptyTranscript } from "../../model/transcript"
 import { selectFocusedSessionId, selectSession } from "../../adapters/store/selectors"
 import { fakeSource, settle, testStore } from "../../testing"
 import { DeleteSessionHost } from "../session-row-actions"
@@ -103,6 +106,65 @@ it("draws the search, the captions and the rows with the kit", async () => {
   expect(row?.className).toContain("desktop-list-row")
   const selected = host.querySelector("[data-selected=true]")
   expect(selected?.className).toContain("workspace-session")
+})
+
+it("a waiting session in Needs you is a plain row: what it asks is answered in its chat", async () => {
+  const source = fakeSource()
+  source.transcripts.set("b", {
+    ...emptyTranscript("b"),
+    revision: 1,
+    approvals: [
+      {
+        id: "first",
+        command: "rm -rf dist",
+        reason: "Runs it.",
+        origin: { kind: "agent" },
+        options: [
+          { id: "deny", label: "Deny", choice: "deny" },
+          { id: "once", label: "Allow Once", choice: "once" },
+        ],
+        ask: "tool",
+      },
+    ],
+    questions: [
+      {
+        executionId: "e1",
+        questionId: "scope",
+        message: "How should I proceed?",
+        questions: [
+          {
+            key: "scope",
+            prompt: "Scope",
+            multiSelect: false,
+            freeText: true,
+            required: true,
+            options: ["Fix it", "File it", "Raise it", "Verify first"].map((label) => ({
+              value: label,
+              label,
+            })),
+          },
+        ],
+      },
+    ],
+  })
+  const store = await shown(source)
+  await act(async () => {
+    store.dispatch(arrangementShown({ arrangement: "columns" }))
+    await settle()
+  })
+  const group = host.querySelector('[data-list-group="needs-you"]')
+  const row = group?.querySelector('[data-session-row="b"]')
+  expect(row?.getAttribute("role")).toBe("option")
+  expect(group?.getAttribute("role")).toBe("listbox")
+  // Nothing of the request is drawn in the list: no answers, no form.
+  const controls = [...(group?.querySelectorAll("button, input, textarea") ?? [])].filter(
+    (control) => !control.closest("[data-session-row]"),
+  )
+  expect(controls).toEqual([])
+  expect(group?.textContent).not.toContain("How should I proceed?")
+  expect(group?.textContent).not.toContain("rm -rf dist")
+  // Not in a pane, it is not on screen: nothing answers it from the list.
+  expect(onScreen(store.getState().workspace, "b")).toBe(false)
 })
 
 it("an unread session wears StatusGlyph's point", async () => {

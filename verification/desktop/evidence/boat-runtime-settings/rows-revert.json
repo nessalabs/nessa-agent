@@ -1,0 +1,84 @@
+{
+  "check": "shared-controls",
+  "ok": false,
+  "started": "2026-10-27T19:49:19.778Z",
+  "finished": "2026-10-27T19:49:53.033Z",
+  "target": {
+    "url": "http://127.0.0.1:62573/desktop.html",
+    "mode": "prod"
+  },
+  "results": [
+    {
+      "name": "rows",
+      "engine": "chromium",
+      "layout": "columns",
+      "failures": [
+        "a kit row pointed at by its count is rgba(0, 0, 0, 0), not oklab(0.985 0 0 / 0.05)",
+        "the row's decorative count intercepts its click",
+        "a kit row pointed at by its glyph is rgba(0, 0, 0, 0), not oklab(0.985 0 0 / 0.05)",
+        "the row's decorative glyph intercepts its click"
+      ],
+      "measured": {
+        "scale": {
+          "hover": "oklab(0.985 0 0 / 0.05)",
+          "press": "oklab(0.985 0 0 / 0.11)",
+          "selected": "oklab(0.985 0 0 / 0.085)",
+          "unread": "600"
+        },
+        "hover": {
+          "kit row under its count": "rgba(0, 0, 0, 0)",
+          "kit row under its glyph": "rgba(0, 0, 0, 0)",
+          "sidebar row": "oklab(0.985 0 0 / 0.05)",
+          "pinned session": "oklab(0.985 0 0 / 0.05)",
+          "session list row": "oklab(0.985 0 0 / 0.05)",
+          "overview row": "oklab(0.985 0 0 / 0.05)",
+          "switcher row left by the keys": "rgba(0, 0, 0, 0)"
+        },
+        "actions": [
+          {
+            "labelClear": true,
+            "reachable": true
+          },
+          {
+            "labelClear": true,
+            "reachable": true
+          },
+          {
+            "labelClear": true,
+            "reachable": true
+          },
+          {
+            "labelClear": true,
+            "reachable": true
+          },
+          {
+            "labelClear": true,
+            "reachable": true
+          },
+          {
+            "labelClear": true,
+            "reachable": true
+          },
+          {
+            "labelClear": true,
+            "reachable": true
+          },
+          {
+            "labelClear": true,
+            "reachable": true
+          },
+          {
+            "labelClear": true,
+            "reachable": true
+          },
+          {
+            "labelClear": true,
+            "reachable": true
+          }
+        ],
+        "rows": 79
+      },
+      "ok": false
+    }
+  ]
+}

@@ -5,7 +5,7 @@ use super::usage_limit::UsageLimit;
 use crate::application::agent_execution::agents::{AttachmentFailureCode, AttachmentPhase};
 use crate::application::agent_execution::hooks::HookFailure;
 use crate::application::agent_execution::{
-    providers::{CloseOutcome, ImageInputRefusal, UserImageError},
+    providers::{CloseOutcome, ImageInputRefusal, UserFileError, UserImageError},
     sessions::{StorageError, UnknownApp},
 };
 use crate::domain::agent_execution::executions::{ExecutionOutcome, SchedulingError};
@@ -267,6 +267,8 @@ pub enum AgentError {
     /// An image the message refers to could not be supplied intact, so the
     /// message was not dispatched. Nothing is sent without it.
     UserImage(UserImageError),
+    /// A stored message file could not be prepared in the execution environment.
+    UserFile(UserFileError),
     /// The message's images were refused for what they are or for who would
     /// receive them, without reading a byte. Admission answers this before the
     /// message is accepted, so nothing was saved, queued, or sent; an adapter
@@ -433,6 +435,7 @@ impl AgentError {
             | Self::RefusedAfterSave
             | Self::AfterSaveUnavailable
             | Self::UnknownApp(_)
+            | Self::UserFile(_)
             | Self::UserImage(_)
             | Self::ImageInputRefused(_)
             | Self::MessageTooLarge { .. }

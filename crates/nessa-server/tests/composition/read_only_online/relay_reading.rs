@@ -7,6 +7,12 @@
 //!        ── Connect{K} ──▶ relay ── Incoming ──▶ gateway ── Accept ──▶ relay
 //!        ◀───────────── Joined, then the gateway's own TLS ─────────────▶
 //! ```
+//! `completion` owns the finite multi-pass fixture allowance; the cache owns
+//! every catalogue/record continuation checkpoint. Tampered reads stay single-shot.
+#[path = "relay_reading/completion.rs"]
+mod completion;
+#[path = "relay_reading/transport.rs"]
+mod transport;
 use super::fixtures::Gateway;
 use crate::device_pairing::infrastructure::RELAY_CAPACITY;
 use nessa_auth::{
@@ -143,6 +149,16 @@ impl Device {
         address: SocketAddr,
         relay: Option<&RelayAddress>,
     ) -> Result<ReadReport, ReadFailure> {
+        self.read_for(cache, address, relay, Duration::from_secs(5), 8)
+    }
+    fn read_for(
+        &self,
+        cache: &mut RetainedCache,
+        address: SocketAddr,
+        relay: Option<&RelayAddress>,
+        budget: Duration,
+        max_withdrawn: usize,
+    ) -> Result<ReadReport, ReadFailure> {
         cache.read(
             ReaderAccess {
                 role: ReaderRole::DeviceOwner,
@@ -156,8 +172,8 @@ impl Device {
                 client_id: "relay-reading-test",
             },
             &ReadStop::new(),
-            Duration::from_secs(5),
-            8,
+            budget,
+            max_withdrawn,
             &mut Vec::new(),
         )
     }
@@ -227,23 +243,49 @@ fn a_relayed_read_is_the_same_session_as_a_direct_one() {
     let directory = tempfile::tempdir().unwrap();
     let (_gateway, device) = Device::start(directory.path(), "");
     let relay = device.relay();
+    device.wait_registered();
 
     let mut relayed = device.cache("relayed.sqlite3");
+    // Force one committed-catalogue partial inside the same total allowance.
+    // Later calls use the cache's saved checkpoints, never a new cache/cursor.
+    let mut catalogue = None;
     let started = Instant::now();
-    let report = device.read_once_registered(&mut relayed, &relay).unwrap();
+    let report = completion::finish(|budget| {
+        let first = catalogue.is_none();
+        let report = device.read_for(
+            &mut relayed,
+            REFUSED,
+            Some(&relay),
+            budget,
+            if first { 0 } else { 8 },
+        )?;
+        if first {
+            assert!(report.moved && !report.complete);
+            let saved = relayed.conversation_ids(&device.receiver).unwrap();
+            assert!(saved.len() >= 2);
+            catalogue = Some(saved);
+        }
+        Ok(report)
+    })
+    .unwrap();
     assert!(
         report.complete,
         "first relayed read after {:?}: {report:?}",
         started.elapsed()
     );
     assert!(report.conversations >= 2);
+    assert_eq!(
+        relayed.conversation_ids(&device.receiver).unwrap(),
+        catalogue.unwrap()
+    );
 
     let mut direct = device.cache("direct.sqlite3");
     assert!(
-        device
-            .read(&mut direct, device.address, None)
-            .unwrap()
-            .complete
+        completion::finish(|budget| {
+            device.read_for(&mut direct, device.address, None, budget, 8)
+        })
+        .unwrap()
+        .complete
     );
     assert_eq!(
         relayed.conversation_ids(&device.receiver).unwrap(),
@@ -318,7 +360,7 @@ enum Tamper {
 
 /// Copy `from` into `to` until either ends, counting each chunk into
 /// `chunks`, then close `to` for writing.
-fn forward(mut from: TcpStream, mut to: TcpStream, chunks: Arc<AtomicUsize>) {
+fn forward(mut from: transport::Stream, mut to: transport::Stream, chunks: Arc<AtomicUsize>) {
     let mut buffer = [0; 16 * 1024];
     while let Ok(read) = from.read(&mut buffer) {
         if read == 0 {
@@ -339,14 +381,24 @@ fn forward(mut from: TcpStream, mut to: TcpStream, chunks: Arc<AtomicUsize>) {
 /// whether it saw `Joined` and did what `tamper` says, so a read that fails
 /// for any other reason fails the test.
 fn tampering_relay(upstream: RelayAddress, tamper: Tamper) -> (RelayAddress, JoinHandle<bool>) {
+    tampering_relay_for(upstream, tamper, Duration::from_secs(5))
+}
+
+fn tampering_relay_for(
+    upstream: RelayAddress,
+    tamper: Tamper,
+    budget: Duration,
+) -> (RelayAddress, JoinHandle<bool>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let address = RelayAddress::try_from(listener.local_addr().unwrap().to_string()).unwrap();
+    let deadline = Instant::now() + budget;
     let relaying = thread::spawn(move || {
-        let Ok((mut reader, _)) = listener.accept() else {
+        let Ok(mut reader) = transport::Stream::accept(&listener, deadline) else {
             return false;
         };
         let tampered = (|| {
-            let mut gateway = TcpStream::connect(upstream.as_str()).ok()?;
+            let mut gateway =
+                transport::Stream::connect(upstream.as_str().parse().ok()?, deadline).ok()?;
             let mut connect = [0; 35];
             reader.read_exact(&mut connect).ok()?;
             gateway.write_all(&connect).ok()?;
@@ -422,20 +474,37 @@ fn tampering_relay(upstream: RelayAddress, tamper: Tamper) -> (RelayAddress, Joi
     (address, relaying)
 }
 
+#[test]
+fn a_proxy_whose_reader_never_connects_expires_before_joining() {
+    let unused = TcpListener::bind("127.0.0.1:0").unwrap();
+    for budget in [Duration::ZERO, Duration::from_millis(30)] {
+        let upstream = RelayAddress::try_from(unused.local_addr().unwrap().to_string()).unwrap();
+        let (_address, relaying) = tampering_relay_for(upstream, Tamper::Nothing, budget);
+        assert!(!relaying.join().unwrap(), "no session was relayed");
+        let (_address, relaying) = impostor_relay_for(unused.local_addr().unwrap(), budget);
+        assert!(!relaying.join().unwrap(), "no impostor session was relayed");
+    }
+}
+
 /// A relay that joins its one reader to `impostor` itself, a gateway with
 /// its own key, rather than to the gateway the reader asked for. It answers
 /// whether it joined the reader and passed on the impostor's bytes.
 fn impostor_relay(impostor: SocketAddr) -> (RelayAddress, JoinHandle<bool>) {
+    impostor_relay_for(impostor, Duration::from_secs(5))
+}
+
+fn impostor_relay_for(impostor: SocketAddr, budget: Duration) -> (RelayAddress, JoinHandle<bool>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let address = RelayAddress::try_from(listener.local_addr().unwrap().to_string()).unwrap();
+    let deadline = Instant::now() + budget;
     let relaying = thread::spawn(move || {
-        let Ok((mut reader, _)) = listener.accept() else {
+        let Ok(mut reader) = transport::Stream::accept(&listener, deadline) else {
             return false;
         };
         let answered = (|| {
             let mut connect = [0; 35];
             reader.read_exact(&mut connect).ok()?;
-            let gateway = TcpStream::connect(impostor).ok()?;
+            let gateway = transport::Stream::connect(impostor, deadline).ok()?;
             reader.write_all(&RelayFrame::Joined.encode()).ok()?;
             let copying = {
                 let (from, to) = (reader.try_clone().ok()?, gateway.try_clone().ok()?);
@@ -474,14 +543,16 @@ fn a_relay_that_tampers_with_the_session_is_unreachable_and_saves_nothing() {
     // The same relay in front, passing everything through, serves the read:
     // what fails below fails for what it does to the bytes.
     let mut control = device.cache("control.sqlite3");
-    let (faithful, relaying) = tampering_relay(relay.clone(), Tamper::Nothing);
     assert!(
-        device
-            .read(&mut control, REFUSED, Some(&faithful))
-            .unwrap()
-            .complete
+        completion::finish(|budget| {
+            let (faithful, relaying) = tampering_relay_for(relay.clone(), Tamper::Nothing, budget);
+            let read = device.read_for(&mut control, REFUSED, Some(&faithful), budget, 8);
+            assert!(relaying.join().unwrap(), "the control relayed the session");
+            read
+        })
+        .unwrap()
+        .complete
     );
-    assert!(relaying.join().unwrap(), "the control relayed the session");
     for tamper in [
         Tamper::Alter,
         Tamper::Drop,
@@ -515,10 +586,11 @@ fn a_relay_that_tampers_with_the_session_is_unreachable_and_saves_nothing() {
     // The real relay still serves the reader.
     let mut cache = device.cache("after.sqlite3");
     assert!(
-        device
-            .read(&mut cache, REFUSED, Some(&relay))
-            .unwrap()
-            .complete
+        completion::finish(|budget| {
+            device.read_for(&mut cache, REFUSED, Some(&relay), budget, 8)
+        })
+        .unwrap()
+        .complete
     );
 }
 

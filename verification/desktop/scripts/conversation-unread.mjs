@@ -47,6 +47,7 @@ const sessionReady = {
   grants: [grant("conversation.read")],
   methods: [
     "server.health",
+    "channel.list",
     "conversation.subscribe",
     "conversation.subscribeList",
     "conversation.unsubscribe",
@@ -104,6 +105,10 @@ function unreadGateway(seen) {
       }
       if (frame.method === "server.health") {
         send({ ok: true, payload: { ok: true, runtimeStatus: "ready", uptimeMs: 1 } })
+        return
+      }
+      if (frame.method === "channel.list") {
+        send({ ok: true, payload: { channels: [], complete: true } })
         return
       }
       if (frame.method === "conversation.subscribeList") {

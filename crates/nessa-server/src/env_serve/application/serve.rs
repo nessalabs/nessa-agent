@@ -110,16 +110,18 @@
 //! reading a ledger that does not hold it yet.
 use super::artifacts::{ArtifactOutbox, LeaseArtifacts, PublishRequest};
 use super::fetches::{ArtifactInbox, LeaseFetches, NoInbox};
-use super::grants::{admit_agent, admit_command, PeerGrants};
+use super::grants::{admit_agent, admit_command, AgentTerms, PeerGrants};
 use super::lease_policy::LeasePolicyEvaluator;
 use super::wire::{write_frame, FrameStream};
+use crate::devices::application::{read_machine, MachineProbe};
 use crate::env_serve::domain::{NotGranted, Peer};
 use crate::timer::{timeout, within, Moment, Timer};
+use nessa_protocol::build_update::{from_gateway, FromGateway};
 use nessa_protocol::lease::{
     decode, ArtifactReadRefusal, Cleanup, Collection, CommandEnd, Data, EndingCause, FetchOutcome,
-    FetchRefusal, FromEnvironment, GrantRefusal, GrantedTerms, Hello, PublishRefusal, Sandbox,
-    StartFailure, ToEnvironment, Unavailability, KEEPALIVE_INTERVAL, MAX_DATA_BYTES, MAX_STOP_WAIT,
-    SILENCE_LIMIT,
+    FetchRefusal, FromEnvironment, GrantRefusal, GrantedTerms, Hello, Login, PublishRefusal,
+    Sandbox, StartFailure, ToEnvironment, Unavailability, KEEPALIVE_INTERVAL,
+    MACHINE_REPORT_INTERVAL, MAX_DATA_BYTES, MAX_STOP_WAIT, SILENCE_LIMIT,
 };
 use nessa_sdk::application::agent_execution::{
     agents::AgentError,
@@ -152,8 +154,10 @@ pub(crate) trait HarnessLauncher: Send + Sync {
     /// The sandboxes the host can enforce around a harness it starts.
     fn sandboxes(&self) -> SandboxProfiles;
     /// Start `agent`'s harness with `environment`, the binding's variables,
-    /// added to the host's own, and `publish_point`, its lease's, when it
-    /// has one, as this side's own variable.
+    /// added to the host's own, `login`, the gateway's saved login for the
+    /// agent, in that agent's login variable unless the host sets it
+    /// itself, and `publish_point`, its lease's, when it has one, as this
+    /// side's own variable.
     ///
     /// # Errors
     /// The harness could not be started; nothing runs.
@@ -161,6 +165,7 @@ pub(crate) trait HarnessLauncher: Send + Sync {
         &self,
         agent: &str,
         environment: &BTreeMap<String, String>,
+        login: Option<&Login>,
         publish_point: Option<&str>,
     ) -> Result<HarnessProcess, AgentError>;
 }
@@ -485,6 +490,9 @@ pub(crate) struct Serving {
     pub(crate) peer: Peer,
     pub(crate) grants: Arc<dyn PeerGrants>,
     pub(crate) policy: Arc<dyn LeasePolicyEvaluator>,
+    /// What this machine is and how busy, reported to the gateway after the
+    /// hello and every [`MACHINE_REPORT_INTERVAL`]; `None` reports nothing.
+    pub(crate) machine: Option<Arc<dyn MachineProbe>>,
 }
 
 /// Serve one gateway, `serving`'s peer, until its stream ends, then end
@@ -506,15 +514,18 @@ pub(crate) async fn serve<R, W>(
     timings: ServeTimings,
     timer: Arc<dyn Timer>,
     mut drain: watch::Receiver<bool>,
-) where
+) -> ServeEnd
+where
     R: AsyncRead + Unpin + Send + 'static,
     W: AsyncWrite + Unpin + Send + 'static,
 {
+    let mut end = ServeEnd::Ended;
     let Runners {
         harnesses: launcher,
         commands,
     } = runners;
-    let (frames, mut writer) = start_writer(output, timer.clone());
+    let (frames, mut writer) = start_writer(output, timer.clone(), serving.machine.clone());
+    let served_protocol = protocol;
     let _ = frames
         .send(FromEnvironment::Hello {
             build: build.into(),
@@ -612,6 +623,17 @@ pub(crate) async fn serve<R, W>(
         match decode::<ToEnvironment>(&body) {
             Ok(frame) => served.handle(frame),
             Err(error) => {
+                // The gateway speaks another protocol, and said which: it
+                // serves nothing on this connection, which it ends.
+                if let Some(FromGateway::VersionRefused { protocol }) = from_gateway(&body) {
+                    tracing::warn!(
+                        gateway = protocol,
+                        this = served_protocol,
+                        "the gateway speaks another lease protocol"
+                    );
+                    end = ServeEnd::VersionRefused { protocol };
+                    break;
+                }
                 tracing::warn!(%error, "an unreadable lease frame was dropped");
                 served.dropped(None, None, "unreadable");
             }
@@ -631,33 +653,80 @@ pub(crate) async fn serve<R, W>(
     {
         writer.abort();
     }
+    end
+}
+
+/// How serving one gateway ended.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum ServeEnd {
+    /// Its stream ended, it went silent, or every lease drained.
+    Ended,
+    /// It speaks `protocol`, another lease protocol than this build's, and
+    /// served nothing (`nessa_protocol::build_update`).
+    VersionRefused { protocol: String },
 }
 
 fn start_writer<W>(
     mut output: W,
     timer: Arc<dyn Timer>,
+    machine: Option<Arc<dyn MachineProbe>>,
 ) -> (mpsc::Sender<FromEnvironment>, JoinHandle<()>)
 where
     W: AsyncWrite + Unpin + Send + 'static,
 {
     let (sender, mut receiver) = mpsc::channel::<FromEnvironment>(OUTPUT_QUEUE);
     let writer = tokio::spawn(async move {
+        // The machine is reported only after the hello, which is always the
+        // first frame, then whenever a report is due, busy or idle.
+        let mut reported: Option<Moment> = None;
+        let mut started = false;
         loop {
             // Idle for a keepalive interval: the gateway is told this side is
-            // still there, which a network gone silent cannot tell it.
+            // still there, which a network gone silent cannot tell it. A
+            // machine report says so too, and takes its place when one is due.
             let frame = match timeout(&*timer, KEEPALIVE_INTERVAL, receiver.recv()).await {
                 Ok(Some(frame)) => frame,
                 Ok(None) => break,
                 Err(_) => FromEnvironment::Keepalive,
             };
+            let due = |reported: Option<Moment>| {
+                reported.is_none_or(|at| timer.now() >= at + MACHINE_REPORT_INTERVAL)
+            };
+            let frame = match (&frame, &machine) {
+                (FromEnvironment::Keepalive, Some(probe)) if started && due(reported) => {
+                    reported = Some(timer.now());
+                    report(probe).await.unwrap_or(frame)
+                }
+                _ => frame,
+            };
             if let Err(error) = write_frame(&mut output, &frame).await {
                 tracing::warn!(%error, "a lease frame could not be written to the gateway");
                 break;
+            }
+            started = true;
+            let Some(probe) = &machine else { continue };
+            if !due(reported) {
+                continue;
+            }
+            reported = Some(timer.now());
+            if let Some(frame) = report(probe).await {
+                if let Err(error) = write_frame(&mut output, &frame).await {
+                    tracing::warn!(%error, "a lease frame could not be written to the gateway");
+                    break;
+                }
             }
         }
         let _ = output.shutdown().await;
     });
     (sender, writer)
+}
+
+/// The machine as `probe` reads it (`read_machine`): `None` when it cannot
+/// be read in time.
+async fn report(probe: &Arc<dyn MachineProbe>) -> Option<FromEnvironment> {
+    read_machine(probe)
+        .await
+        .map(|report| FromEnvironment::Machine { report })
 }
 
 /// One harness running under a lease.
@@ -712,6 +781,9 @@ struct Held {
     /// When it ends by itself, and how long it was granted for; `None` when
     /// it lasts until ended.
     deadline: Option<(Moment, u64)>,
+    /// Whether its harnesses take the gateway's saved login: the grant's
+    /// answer at admission, which a `Start` carrying a login must match.
+    takes_login: bool,
 }
 
 /// One command lease this connection holds. Its publish point stays open
@@ -819,7 +891,8 @@ impl Served {
                 lease,
                 channel,
                 environment,
-            } => self.start(lease, channel, &environment),
+                login,
+            } => self.start(lease, channel, &environment, login),
             ToEnvironment::Input {
                 lease,
                 channel,
@@ -1217,8 +1290,10 @@ impl Served {
     }
 
     fn grant(&mut self, lease: String, agent: String, sandbox: Sandbox) {
-        // How long the peer's grant lets it last, once admitted.
+        // How long the peer's grant lets it last, and whether it takes the
+        // peer's saved login, once admitted.
         let mut lease_ms = None;
+        let mut takes_login = false;
         let refusal = if LeaseId::new(lease.clone()).is_err() || self.granted.contains(&lease) {
             Some(GrantRefusal::Duplicate)
         } else if let Some(refusal) = self.recorded_before(&lease) {
@@ -1232,7 +1307,10 @@ impl Served {
             Some(GrantRefusal::Draining)
         } else if self
             .admit_agent(&agent)
-            .map(|admitted| lease_ms = admitted)
+            .map(|admitted| {
+                lease_ms = admitted.lease_ms;
+                takes_login = admitted.takes_login;
+            })
             .is_err()
         {
             // First: a peer not granted the agent learns nothing of what
@@ -1285,12 +1363,14 @@ impl Served {
                         fetches,
                         deadline: lease_ms
                             .map(|ms| (self.timer.now() + Duration::from_millis(ms), ms)),
+                        takes_login,
                     },
                 );
                 let terms = GrantedTerms {
                     sandbox,
                     timeout_ms: None,
                     lease_ms,
+                    takes_login,
                 };
                 self.send(FromEnvironment::Granted { lease, terms });
             }
@@ -1313,7 +1393,7 @@ impl Served {
 
     /// Whether the peer may lease `agent` now, and for how long: its grant
     /// read again for every lease, so a change applies from the next one.
-    fn admit_agent(&self, agent: &str) -> Result<Option<u64>, NotGranted> {
+    fn admit_agent(&self, agent: &str) -> Result<AgentTerms, NotGranted> {
         admit_agent(
             self.serving.grants.as_ref(),
             self.serving.policy.as_ref(),
@@ -1347,13 +1427,30 @@ impl Served {
         }
     }
 
-    fn start(&mut self, lease: String, channel: u32, environment: &BTreeMap<String, String>) {
+    fn start(
+        &mut self,
+        lease: String,
+        channel: u32,
+        environment: &BTreeMap<String, String>,
+        login: Option<Login>,
+    ) {
         let free = self.leases.get(&lease).is_some_and(|held| {
             !held.channels.contains_key(&channel) && !held.stopped.contains_key(&channel)
         });
         if !free {
             self.dropped(Some(&lease), Some(channel), "start");
             return self.start_failed(lease, channel, StartFailure::NotGranted);
+        }
+        // A login the lease was not granted to take: refused before anything
+        // is recorded as started, so the host never runs with it.
+        let takes_login = self.leases.get(&lease).is_some_and(|held| held.takes_login);
+        if login.is_some() && !takes_login {
+            tracing::warn!(
+                lease,
+                channel,
+                "a harness start carried a login its grant does not take; nothing started"
+            );
+            return self.start_failed(lease, channel, StartFailure::LoginNotTaken);
         }
         let entry = LedgerEntry::Started {
             lease: lease.clone(),
@@ -1374,10 +1471,12 @@ impl Served {
                 (held.agent.clone(), point)
             })
             .unwrap_or_default();
-        let process = match self
-            .launcher
-            .launch(&agent, environment, publish_point.as_deref())
-        {
+        let process = match self.launcher.launch(
+            &agent,
+            environment,
+            login.as_ref(),
+            publish_point.as_deref(),
+        ) {
             Ok(process) => process,
             Err(error) => {
                 tracing::warn!(lease, channel, %error, "a harness did not start");
@@ -1760,6 +1859,8 @@ impl Served {
                     timeout_ms: Some(work.timeout_ms()),
                     // Its timeout is its deadline: no lease limit applies.
                     lease_ms: None,
+                    // A command runs with no agent's login.
+                    takes_login: false,
                 };
                 self.granted.insert(lease.clone());
                 let artifacts = LeaseArtifacts::open(

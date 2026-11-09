@@ -1,0 +1,1 @@
+[{"rule": "receipt-origin", "caught": true, "restored": true, "byte_identical": true}, {"rule": "product-boundary", "caught": true, "restored": true, "byte_identical": true}, {"rule": "held-actor", "caught": true, "restored": true, "byte_identical": true}, {"rule": "session-cedar", "caught": true, "restored": true, "byte_identical": true}]

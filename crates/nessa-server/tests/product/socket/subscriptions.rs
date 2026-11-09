@@ -34,6 +34,9 @@ const QUIET: Duration = Duration::from_millis(750);
 #[path = "subscriptions/events.rs"]
 mod events;
 
+#[path = "subscriptions/paired_lists.rs"]
+mod paired_lists;
+
 /// A socket whose writes the test can hold: while the gate is shut, a flush
 /// does not finish, so the connection's one writer is stuck on that frame.
 #[derive(Default)]
@@ -287,20 +290,6 @@ impl crate::conversation::application::DriveToolAudit for AcceptingDriveToolAudi
     }
 }
 
-fn conversation_service(
-    storage: &Arc<RecordStorage>,
-    metadata: &Arc<LocalConversationStore>,
-    provider: &Arc<ProviderFactory>,
-) -> Arc<ConversationService> {
-    conversation_service_with_repository(
-        storage,
-        metadata,
-        provider,
-        metadata.clone(),
-        Arc::new(AcceptingModeAudit),
-    )
-}
-
 fn conversation_service_with_repository(
     storage: &Arc<RecordStorage>,
     metadata: &Arc<LocalConversationStore>,
@@ -308,8 +297,29 @@ fn conversation_service_with_repository(
     repository: Arc<dyn ConversationRepository>,
     mode_audit: Arc<dyn ConversationModeAudit>,
 ) -> Arc<ConversationService> {
+    conversation_service_with_summaries(
+        storage,
+        metadata,
+        provider,
+        repository,
+        mode_audit,
+        metadata.clone(),
+        storage.clone(),
+    )
+}
+
+fn conversation_service_with_summaries(
+    storage: &Arc<RecordStorage>,
+    metadata: &Arc<LocalConversationStore>,
+    provider: &Arc<ProviderFactory>,
+    repository: Arc<dyn ConversationRepository>,
+    mode_audit: Arc<dyn ConversationModeAudit>,
+    summaries: Arc<dyn crate::conversation::application::ConversationSummaries>,
+    commands: Arc<dyn nessa_sdk::application::agent_execution::commands::CreationStorage>,
+) -> Arc<ConversationService> {
     let service = ConversationService::new(
         ConversationDependencies {
+ input_files: None,
             access_policy: crate::conversation_test_support::access_policy(),
             // Agents that can change approval mode (row S20).
             agents: mode_agents(
@@ -322,7 +332,7 @@ fn conversation_service_with_repository(
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
             attachments: None,
-            summaries: metadata.clone(),
+            summaries,
             listing: metadata.clone(),
             deletion_audit: Arc::new(AcceptingDeletionAudit),
             provider_sessions: claude_erasers(),
@@ -337,7 +347,7 @@ fn conversation_service_with_repository(
         None,
     )
     .unwrap();
-    service.bind_commands(storage.clone());
+    service.bind_commands(commands);
     // The store is the grant table, as `composition::local_auth` binds it.
     service.bind_note_authors(metadata.clone());
     service.bind_drive_tools(crate::conversation::application::DriveTools {
@@ -409,6 +419,31 @@ fn composed_catalog() -> AgentsListResult {
 
 impl SubscriptionFixture {
     async fn new() -> Self {
+        Self::with_summaries(|metadata| metadata.clone()).await
+    }
+
+    async fn with_summaries(
+        summaries: impl FnOnce(
+            &Arc<LocalConversationStore>,
+        )
+            -> Arc<dyn crate::conversation::application::ConversationSummaries>,
+    ) -> Self {
+        Self::open(summaries, |storage| {
+            storage.clone()
+                as Arc<dyn nessa_sdk::application::agent_execution::commands::CreationStorage>
+        })
+        .await
+    }
+
+    async fn open(
+        summaries: impl FnOnce(
+            &Arc<LocalConversationStore>,
+        )
+            -> Arc<dyn crate::conversation::application::ConversationSummaries>,
+        commands: impl FnOnce(
+            &Arc<RecordStorage>,
+        ) -> Arc<dyn nessa_sdk::application::agent_execution::commands::CreationStorage>,
+    ) -> Self {
         let directory = tempfile::tempdir().unwrap();
         let private = directory.path().join("conversations");
         nessa_local_storage::create_directory(&private).unwrap();
@@ -420,7 +455,15 @@ impl SubscriptionFixture {
         let storage = Arc::new(RecordStorage::new(directory.path().join("records")).unwrap());
         storage.initialize().await.unwrap();
         let provider = Arc::new(ProviderFactory::default());
-        let service = conversation_service(&storage, &metadata, &provider);
+        let service = conversation_service_with_summaries(
+            &storage,
+            &metadata,
+            &provider,
+            metadata.clone(),
+            Arc::new(AcceptingModeAudit),
+            summaries(&metadata),
+            commands(&storage),
+        );
         let (state, authority) = fixture(MembershipRole::Member);
         grants(&authority, &["conversation.write", "server.read"]);
         // A writer that may be held past a delivery timeout without the
@@ -596,9 +639,8 @@ impl SubscriptionFixture {
                     context: ProviderContext::Absent,
                 }
             } else {
-                let after = ProviderContext::Recorded(
-                    ExecutionSessionId::new(Uuid::new_v4().to_string()).unwrap(),
-                );
+                let after = ProviderContext::recorded_after(
+                    ExecutionSessionId::new(Uuid::new_v4().to_string()).unwrap(), 0);
                 let before = std::mem::replace(&mut context, after.clone());
                 SessionChange::ProviderContext { before, after }
             };
@@ -648,9 +690,8 @@ impl SubscriptionFixture {
             }],
             Some(snapshot) => vec![SessionChange::ProviderContext {
                 before: snapshot.provider_context.clone(),
-                after: ProviderContext::Recorded(
-                    ExecutionSessionId::new(Uuid::new_v4().to_string()).unwrap(),
-                ),
+                after: ProviderContext::recorded_after(
+                    ExecutionSessionId::new(Uuid::new_v4().to_string()).unwrap(), 0),
             }],
         };
         writer
@@ -1079,14 +1120,15 @@ async fn one_stalled_socket_delays_no_commit_and_no_other_subscriber() {
     let id = other.subscribe("subscribe", &fixture.id).await;
     other.next().await;
     fixture.stall(&mut stalled).await;
-    let started = Instant::now();
     fixture.turn("turn-1").await;
     fixture.settled_read(1).await;
     other.until(&id, |frame| settled(frame, 1)).await;
+    // Told by order, not by a clock: the stall ends only when the gateway
+    // gives up on that socket after its delivery timeout, ending its task.
+    // Both arrived while it is still stalled, so neither waited on it.
     assert!(
-        started.elapsed() < Duration::from_millis(SUBSCRIPTION_DELIVERY_TIMEOUT_MS / 2),
-        "the commit and the other socket's frame waited on nothing: {:?}",
-        started.elapsed()
+        !stalled.socket.is_finished(),
+        "the commit and the other socket's frame waited for the stalled socket to be dropped"
     );
     stalled.close().await;
     other.close().await;
@@ -1135,6 +1177,7 @@ async fn a_revoked_grant_ends_the_subscription_before_the_next_batch() {
             caller(&fixture.session, "after-revoke".into()),
             "turn-1".into(),
             SubmittedMessage {
+ uploads: Vec::new(),
                 text: "question".into(),
                 ..SubmittedMessage::default()
             },
@@ -1182,6 +1225,7 @@ async fn a_grant_revoked_while_a_batch_waits_for_capacity_ends_it_before_the_rea
             caller(&fixture.session, "while-full".into()),
             "turn-1".into(),
             SubmittedMessage {
+ uploads: Vec::new(),
                 text: "question".into(),
                 ..SubmittedMessage::default()
             },
@@ -2072,7 +2116,7 @@ impl SubscriptionFixture {
     }
 
     /// `conversation.list`, `.observe` and `.subscribeList` all answer
-    /// `forbidden`, so no list row or cursor reaches a device.
+    /// `forbidden`, so no list row or cursor reaches a peer.
     async fn assert_lists_refused(&self) {
         for method in ["conversation.list", "conversation.observe"] {
             let reply = self.call(method, json!({})).await;
@@ -2133,9 +2177,8 @@ async fn a_paired_device_on_the_socket_sees_only_what_it_was_granted() {
         )
         .await;
     assert_eq!(read["error"]["code"], "conversation_not_found", "{read}");
-    // The socket's lists are the owner's: a device lists through its
-    // catalogue, so it is refused them, whatever it was granted.
-    fixture.assert_lists_refused().await;
+    // A device starts with an empty grant-scoped list.
+    assert!(fixture.listed().await.is_empty());
     let shared = fixture
         .call(
             "conversation.shares",
@@ -2166,13 +2209,13 @@ async fn a_paired_device_on_the_socket_sees_only_what_it_was_granted() {
         )
         .await;
     assert_eq!(read["ok"], true, "{read}");
-    fixture.assert_lists_refused().await;
+    assert_eq!(fixture.listed().await.len(), 1);
 }
 
 /// A linked device holds `conversation.read`, the grant pairing mints, and
 /// not `conversation.write`. It follows a conversation that grant shares
 /// with it. An ungranted id is `conversation_not_found`. Its list
-/// subscription stays refused.
+/// subscription uses the same grant scope.
 #[tokio::test]
 async fn a_paired_reader_follows_a_granted_conversation_with_the_read_grant() {
     let fixture = SubscriptionFixture::new().await;
@@ -2203,7 +2246,7 @@ async fn a_paired_reader_follows_a_granted_conversation_with_the_read_grant() {
     let (stopped, _) = client.reply("stop").await;
     assert_eq!(stopped["ok"], true, "{stopped}");
     client.close().await;
-    fixture.assert_lists_refused().await;
+    assert_eq!(fixture.listed().await.len(), 1);
 }
 
 /// Row H8 (`docs/design/auth/peer-gateways.md`): a session whose receiver
@@ -2214,7 +2257,7 @@ async fn a_paired_reader_follows_a_granted_conversation_with_the_read_grant() {
 /// grantor's conversations. Ungranted, both answer `conversation_not_found`.
 /// Granted, a conversation that is not the binding owner's still answers
 /// `conversation_not_found`: a grant reads only its grantor's conversations
-/// (`grant.read`). Its lists are refused, as a device's are. A paired
+/// (`grant.read`). Its lists are refused by the peer catalogue policy. A paired
 /// reader is admitted on `conversation.read` before that share check.
 #[tokio::test]
 async fn a_binding_owned_by_another_principal_reads_only_its_grantors_grants() {
@@ -2740,7 +2783,7 @@ async fn share_answers_its_revision_and_refuses_a_stale_expected_one() {
 
 /// Row J1: a device holding a Comment or a Drive grant reads on the
 /// socket exactly as one holding Read (G12): `conversation.read` and a view
-/// subscription are admitted and the owner's lists are refused.
+/// subscription and grant-scoped lists are admitted.
 #[tokio::test]
 async fn a_comment_or_drive_grant_reads_on_the_socket_as_read_does() {
     use crate::conversation::application::ShareGrantTransition;
@@ -2761,7 +2804,9 @@ async fn a_comment_or_drive_grant_reads_on_the_socket_as_read_does() {
         let mut client = fixture.connect();
         client.subscribe("subscribe", &fixture.id).await;
         client.close().await;
-        fixture.assert_lists_refused().await;
+        let listed = fixture.call("conversation.list", json!({})).await;
+        assert_eq!(listed["ok"], true, "{listed}");
+        assert_eq!(listed["payload"]["conversations"].as_array().unwrap().len(), 1);
         fixture.grant_to(ShareGrantTransition::Revoke).await;
         let read = fixture
             .call(
@@ -2931,6 +2976,7 @@ async fn a_paired_session_writes_only_what_a_drive_grant_admits() {
     use nessa_protocol::product::generated::{action_for_method, PRODUCT_READY_METHODS};
     let own_checks = [
         "conversation.read",
+        "conversation.readEarlier",
         "conversation.peek",
         "conversation.subscribeEvents",
         "conversation.list",
@@ -5574,4 +5620,313 @@ fn a_full_waiting_set_drops_titles_rather_than_outgrow_a_frame() {
     );
     within(&long);
     assert!(long.reviews.iter().all(|review| review.title.is_none()));
+}
+
+/// Holds the settled-mutation save so a test can read the reply first.
+struct SettledSaveGate {
+    inner: Arc<RecordStorage>,
+    started: Arc<std::sync::Mutex<Option<oneshot::Sender<()>>>>,
+    release: Arc<std::sync::Mutex<Option<oneshot::Receiver<()>>>>,
+}
+
+struct SettledSaveLease {
+    original: Arc<dyn nessa_sdk::application::agent_execution::commands::CreationStorageLease>,
+    started: Arc<std::sync::Mutex<Option<oneshot::Sender<()>>>>,
+    release: Arc<std::sync::Mutex<Option<oneshot::Receiver<()>>>>,
+}
+
+impl nessa_sdk::application::agent_execution::commands::CreationStorage for SettledSaveGate {
+    fn open_creation(
+        &self,
+        principal: String,
+        request: String,
+        create: bool,
+    ) -> nessa_sdk::application::agent_execution::commands::CreationFuture<
+        '_,
+        Option<Arc<dyn nessa_sdk::application::agent_execution::commands::CreationStorageLease>>,
+    > {
+        let inner = Arc::clone(&self.inner);
+        let started = Arc::clone(&self.started);
+        let release = Arc::clone(&self.release);
+        Box::pin(async move {
+            Ok(inner
+                .open_creation(principal, request, create)
+                .await?
+                .map(|original| {
+                    Arc::new(SettledSaveLease {
+                        original,
+                        started,
+                        release,
+                    })
+                        as Arc<
+                            dyn nessa_sdk::application::agent_execution::commands::CreationStorageLease,
+                        >
+                }))
+        })
+    }
+
+    fn creations(
+        &self,
+        principal: String,
+    ) -> nessa_sdk::application::agent_execution::commands::CreationFuture<
+        '_,
+        Vec<nessa_sdk::application::agent_execution::commands::CreationReceipt>,
+    > {
+        self.inner.creations(principal)
+    }
+
+    fn mutations(
+        &self,
+        principal: String,
+    ) -> nessa_sdk::application::agent_execution::commands::CreationFuture<
+        '_,
+        Vec<nessa_sdk::application::agent_execution::commands::MutationReceipt>,
+    > {
+        self.inner.mutations(principal)
+    }
+}
+
+impl nessa_sdk::application::agent_execution::commands::CreationStorageLease for SettledSaveLease {
+    fn load(
+        &self,
+        request_id: &str,
+    ) -> nessa_sdk::application::agent_execution::commands::CreationFuture<
+        '_,
+        Option<nessa_sdk::application::agent_execution::commands::CreationReceipt>,
+    > {
+        self.original.load(request_id)
+    }
+
+    fn save(
+        &self,
+        receipt: nessa_sdk::application::agent_execution::commands::CreationReceipt,
+    ) -> nessa_sdk::application::agent_execution::commands::CreationFuture<'_, ()> {
+        self.original.save(receipt)
+    }
+
+    fn load_mutation(
+        &self,
+        request_id: &str,
+    ) -> nessa_sdk::application::agent_execution::commands::CreationFuture<
+        '_,
+        Option<nessa_sdk::application::agent_execution::commands::MutationReceipt>,
+    > {
+        self.original.load_mutation(request_id)
+    }
+
+    fn save_mutation(
+        &self,
+        receipt: nessa_sdk::application::agent_execution::commands::MutationReceipt,
+    ) -> nessa_sdk::application::agent_execution::commands::CreationFuture<'_, ()> {
+        let stage = receipt.stage();
+        let original = Arc::clone(&self.original);
+        let started = Arc::clone(&self.started);
+        let release = Arc::clone(&self.release);
+        Box::pin(async move {
+            if stage == nessa_sdk::application::agent_execution::commands::MutationStage::Settled {
+                let notify = started.lock().expect("save gate").take();
+                let wait = release.lock().expect("save gate").take();
+                if let Some(notify) = notify {
+                    let _ = notify.send(());
+                }
+                if let Some(wait) = wait {
+                    let _ = wait.await;
+                }
+            }
+            original.save_mutation(receipt).await
+        })
+    }
+}
+
+struct TimingSamples(std::sync::Mutex<Vec<u64>>);
+
+impl crate::product::turn_timing::FirstTokenStore for TimingSamples {
+    fn record(
+        &self,
+        elapsed_ms: u64,
+    ) -> Result<(), crate::product::turn_timing::FirstTokenFailure> {
+        self.0.lock().expect("samples").push(elapsed_ms);
+        Ok(())
+    }
+}
+
+struct StepClock(std::sync::atomic::AtomicU64);
+
+impl nessa_auth::application::ports::Clock for StepClock {
+    fn unix_milliseconds(&self) -> u64 {
+        self.0.load(std::sync::atomic::Ordering::SeqCst)
+    }
+}
+
+/// A subscription can read the first reply while the send's mutation save is
+/// still finishing. The sample is the wait from when the send began. Without
+/// the clock being registered at admission, that read finds no clock and
+/// records nothing.
+#[tokio::test]
+async fn first_text_seen_before_send_returns_uses_the_admission_clock() {
+    use std::sync::atomic::Ordering;
+
+    let started = Arc::new(std::sync::Mutex::new(None));
+    let release = Arc::new(std::sync::Mutex::new(None));
+    let started_slot = Arc::clone(&started);
+    let release_slot = Arc::clone(&release);
+    let mut fixture = SubscriptionFixture::open(
+        |metadata| metadata.clone(),
+        move |storage| {
+            Arc::new(SettledSaveGate {
+                inner: Arc::clone(storage),
+                started: started_slot,
+                release: release_slot,
+            })
+        },
+    )
+    .await;
+    let samples = Arc::new(TimingSamples(std::sync::Mutex::new(Vec::new())));
+    // Stay inside the credential's lifetime. The sample is how far this
+    // clock moves between the send and the reply, not a fixed epoch.
+    let began = fixture.state.clock.unix_milliseconds();
+    let clock = Arc::new(StepClock(std::sync::atomic::AtomicU64::new(began)));
+    fixture.state = fixture.state.with_local_timings(samples.clone());
+    fixture.state.clock = clock.clone();
+
+    let (notify, arrived) = oneshot::channel();
+    let (go, resume) = oneshot::channel();
+    *started.lock().expect("save gate") = Some(notify);
+    *release.lock().expect("save gate") = Some(resume);
+
+    let state = fixture.state.clone();
+    let session = fixture.session.clone();
+    let conversation = fixture.id.to_string();
+    let mut sending = tokio::spawn(async move {
+        let frame = RequestFrame::new(
+            "call",
+            "conversation.send",
+            &json!({
+                "conversationId": conversation,
+                "requestId": "send-early-text",
+                "executionId": "early-text",
+                "text": "question early-text",
+                "attachments": [],
+                "files": [],
+            }),
+        )
+        .unwrap();
+        dispatch(&state, &session, frame).await
+    });
+
+    timeout(EXPECTED, async {
+        tokio::select! {
+            result = &mut sending => {
+                let result = result.expect("send task");
+                let text = match &result {
+                    OutgoingMessage::Response(response) => serde_json::to_value(response).unwrap(),
+                    other => serde_json::json!({ "other": format!("{other:?}") }),
+                };
+                panic!("send finished before the settled save: {text}");
+            }
+            arrived = arrived => {
+                arrived.expect("the settled save closed its signal");
+            }
+        }
+    })
+    .await
+    .expect("the settled save did not start");
+
+    let deadline = std::time::Instant::now() + EXPECTED;
+    loop {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the reply was not visible while send was still saving"
+        );
+        let read = timeout(
+            Duration::from_secs(2),
+            fixture.service.read_at(
+                fixture.id.clone(),
+                caller(&fixture.session, "during-save".into()),
+                crate::conversation::application::ReadOpening::LiveOnly,
+            ),
+        )
+        .await;
+        match read {
+            Ok(Ok((view, _)))
+                if view
+                    .messages
+                    .iter()
+                    .any(|message| crate::product::turn_timing::has_reply_text(&message.parts)) =>
+            {
+                break;
+            }
+            Ok(_) => tokio::time::sleep(Duration::from_millis(10)).await,
+            Err(_) => panic!("reading the reply blocked while send was still saving"),
+        }
+    }
+
+    clock.0.store(began + 350, Ordering::SeqCst);
+    timeout(
+        Duration::from_secs(2),
+        crate::product::conversation::read_view(
+            &fixture.state,
+            &fixture.service,
+            &fixture.session,
+            &fixture.id,
+            "observe-early-text",
+            crate::conversation::application::ReadOpening::LiveOnly,
+        ),
+    )
+    .await
+    .expect("observing the reply blocked")
+    .expect("the reply view");
+
+    let sample_deadline = std::time::Instant::now() + Duration::from_secs(2);
+    while samples.0.lock().expect("samples").is_empty() {
+        assert!(
+            std::time::Instant::now() < sample_deadline,
+            "first text was visible before the clock was registered"
+        );
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    assert_eq!(samples.0.lock().expect("samples").as_slice(), &[350]);
+
+    go.send(()).expect("the save was still waiting");
+    let sent = timeout(EXPECTED, sending)
+        .await
+        .expect("send did not finish")
+        .expect("send task");
+    let OutgoingMessage::Response(response) = sent else {
+        panic!("a response");
+    };
+    let sent = serde_json::to_value(response).unwrap();
+    assert_eq!(sent["ok"], true, "{sent}");
+
+    let retried = fixture
+        .call(
+            "conversation.send",
+            json!({
+                "conversationId": fixture.id.to_string(),
+                "requestId": "send-early-text",
+                "executionId": "early-text",
+                "text": "question early-text",
+                "attachments": [],
+                "files": [],
+            }),
+        )
+        .await;
+    assert_eq!(retried["ok"], true, "{retried}");
+    clock.0.store(began + 5_000, Ordering::SeqCst);
+    crate::product::conversation::read_view(
+        &fixture.state,
+        &fixture.service,
+        &fixture.session,
+        &fixture.id,
+        "observe-retry",
+        crate::conversation::application::ReadOpening::LiveOnly,
+    )
+    .await
+    .expect("the retry view");
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert_eq!(
+        samples.0.lock().expect("samples").as_slice(),
+        &[350],
+        "a retry started another clock"
+    );
 }

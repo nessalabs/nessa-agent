@@ -3,9 +3,55 @@
  * the way a phone browses for a gateway taking pairings: one PTR question to
  * 224.0.0.251:5353, then every answer's SRV and TXT records read back.
  * Resolves the instances heard within `ms`, each with its port and TXT
- * values. Nothing beyond Node's own `dgram`.
+ * values. macOS uses its system Bonjour browser; other hosts use `dgram`.
  */
 import dgram from "node:dgram"
+import { execFile } from "node:child_process"
+
+/**
+ * macOS drops raw multicast from unapproved background binaries. Like the
+ * gateway's SystemAnnouncer, browse through mDNSResponder instead. `-Z`
+ * resolves the service to SRV/TXT zone records; the escaped instance is an
+ * opaque key, so names with spaces stay correlated with their own gateway.
+ */
+function systemBrowse(service, ms) {
+  return new Promise((resolve, reject) => {
+    execFile(
+      "/usr/bin/dns-sd",
+      ["-Z", service.replace(/\.local\.?$/, ""), "local."],
+      {
+        timeout: ms,
+        maxBuffer: 1024 * 1024,
+      },
+      (error, stdout) => {
+        // dns-sd browses until stopped. Only our bounded stop is expected;
+        // launch failures and premature exits must not look like an empty LAN.
+        if (!error?.killed || error.signal !== "SIGTERM") {
+          reject(error ?? new Error("dns-sd stopped before the browse deadline"))
+          return
+        }
+        const found = new Map()
+        for (const line of stdout.split("\n")) {
+          const srv = line.match(/^(\S+)\s+SRV\s+\d+\s+\d+\s+(\d+)\s/)
+          if (srv) {
+            const [, instance, port] = srv
+            const entry = found.get(instance) ?? { instance, txt: {} }
+            entry.port = Number(port)
+            found.set(instance, entry)
+          }
+          const txt = line.match(/^(\S+)\s+TXT\s+"gw=([^"\\]+)"\s*$/)
+          if (txt) {
+            const [, instance, gateway] = txt
+            const entry = found.get(instance) ?? { instance, txt: {} }
+            entry.txt.gw = gateway
+            found.set(instance, entry)
+          }
+        }
+        resolve([...found.values()].filter((each) => each.port !== undefined))
+      },
+    )
+  })
+}
 
 /** `name` as DNS labels. */
 function encodeName(name) {
@@ -67,6 +113,7 @@ const SRV = 33
  * network within `ms`: `{ instance, port, txt }` each.
  */
 export function browse(service, ms = 3_000) {
+  if (process.platform === "darwin") return systemBrowse(service, ms)
   return new Promise((resolve) => {
     const found = new Map()
     const socket = dgram.createSocket({ type: "udp4", reuseAddr: true })

@@ -15,7 +15,7 @@
  * and doctests would need a second mechanism. Doctests are not part of
  * `--no-run`'s executable list; they run here with `cargo test --doc` after the
  * binaries, once cargo is no longer writing the target directory. Windows may
- * select server-lib or remaining after the same full build; remaining owns
+ * select server-conversation, server-other or remaining after the same full build; remaining owns
  * doctests. See cargo-test-parallel/README.md for the partition contract.
  *
  * A build that reports no test binaries fails. An empty list is indistinguishable
@@ -31,8 +31,13 @@ import { spawn } from "node:child_process"
 import path from "node:path"
 import { pathToFileURL } from "node:url"
 import { withFailureAnnotations } from "./cargo-test-parallel/diagnostics.mjs"
+import {
+  serverCasePlan,
+  testRegistry,
+  validateFilteredRegistry,
+} from "./cargo-test-parallel/server-cases.mjs"
 
-const PARTITIONS = ["all", "server-lib", "remaining"]
+const PARTITIONS = ["all", "server-conversation", "server-other", "remaining"]
 
 const TEST_KINDS = new Set(["lib", "rlib", "cdylib", "staticlib", "bin", "test"])
 const SKIPPED_KINDS = new Set(["custom-build", "example", "bench"])
@@ -50,7 +55,7 @@ export function parseArgs(argv) {
     (flags.length === 4 && flags[2] !== "--partition")
   )
     throw new Error(
-      "usage: cargo-test-parallel.mjs --concurrency N [--partition all|server-lib|remaining] -- <cargo test args>",
+      "usage: cargo-test-parallel.mjs --concurrency N [--partition all|server-conversation|server-other|remaining] -- <cargo test args>",
     )
   const concurrency = Number(flags[1])
   if (!Number.isInteger(concurrency) || concurrency < 1)
@@ -124,7 +129,7 @@ export function partitionExecutables(executables, metadata) {
       `expected one nessa-server library test executable, found ${serverLib.length}`,
     )
   const remaining = executables.filter((item) => item !== serverLib[0])
-  return { "server-lib": serverLib, remaining }
+  return { server: serverLib, remaining }
 }
 
 /** Compiler diagnostics buried in `cargo --message-format=json` stdout. */
@@ -255,26 +260,53 @@ export async function runParallelCargoTests({
     )
     if (metadataCode !== 0) throw new Error(`cargo metadata exited with ${metadataCode}`)
     const partitions = partitionExecutables(executables, JSON.parse(metadata))
-    selected = partitions[partition]
+    const server = partitions.server[0]
+    async function list(args) {
+      let output = ""
+      const code = await run(server.executable, [...args, "--list"], {
+        cwd,
+        onStdout: (chunk) => {
+          output += chunk
+        },
+        onStderr: (chunk) => stderr.write(chunk),
+      })
+      if (code !== 0) throw new Error(`server libtest registry exited with ${code}`)
+      return output
+    }
+    const plan = serverCasePlan(testRegistry(await list([])))
+    for (const part of ["server-conversation", "server-other", "remaining"])
+      for (const task of plan[part].tasks)
+        validateFilteredRegistry(await list(task.args), task.names)
+    const serverTasks = plan[partition].tasks.map((task) => ({
+      ...server,
+      label: `${server.label} ${task.label}`,
+      args: task.args,
+    }))
+    selected =
+      partition === "remaining" ? [...serverTasks, ...partitions.remaining] : serverTasks
     stderr.write(
-      `partition ${partition}: ${selected.length}/${executables.length} binaries; doctests ${partition === "remaining" ? "included" : "owned by remaining"}\n`,
+      `partition ${partition}: ${plan[partition].names.length} server cases in ${serverTasks.length} executables, ${selected.length - serverTasks.length} other binaries; doctests ${partition === "remaining" ? "included" : "owned by remaining"}\n`,
     )
   }
 
   const executionStarted = Date.now()
-  const failures = await runPool(selected, concurrency, async ({ label, executable }) => {
-    stderr.write(`starting ${label}\n`)
-    const started = Date.now()
-    const prefixed = linePrefix(label, (line) => stdout.write(line))
-    const code = await run(executable, [], {
-      cwd,
-      onStdout: (chunk) => prefixed.push(chunk),
-      onStderr: (chunk) => prefixed.push(chunk),
-    })
-    prefixed.end()
-    stderr.write(`${label} finished in ${secondsSince(started)}s with exit ${code}\n`)
-    if (code !== 0) throw new Error(`${label} exited with ${code}`)
-  })
+  const failures = await runPool(
+    selected,
+    concurrency,
+    async ({ label, executable, args = [] }) => {
+      stderr.write(`starting ${label}\n`)
+      const started = Date.now()
+      const prefixed = linePrefix(label, (line) => stdout.write(line))
+      const code = await run(executable, args, {
+        cwd,
+        onStdout: (chunk) => prefixed.push(chunk),
+        onStderr: (chunk) => prefixed.push(chunk),
+      })
+      prefixed.end()
+      stderr.write(`${label} finished in ${secondsSince(started)}s with exit ${code}\n`)
+      if (code !== 0) throw new Error(`${label} exited with ${code}`)
+    },
+  )
   if (failures.length > 0) {
     throw new Error(failures.map((failure) => failure.message).join("\n"))
   }
@@ -282,7 +314,7 @@ export async function runParallelCargoTests({
     `test execution finished in ${secondsSince(executionStarted)}s with concurrency ${concurrency}\n`,
   )
 
-  if (partition === "server-lib") return
+  if (partition !== "all" && partition !== "remaining") return
 
   const doctests = linePrefix("doctests", (line) => stdout.write(line))
   const doctestCode = await run("cargo", ["test", "--doc", ...cargoArgs], {

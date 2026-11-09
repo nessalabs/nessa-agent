@@ -8,7 +8,7 @@
 //! ("Environment peers").
 use super::local_auth::SystemClock;
 use super::native_pairing::{bind, prepare, start, RunningNative};
-use super::paired_environments::{ListenerEnvironments, RegistryServing};
+use super::paired_environments::{ListenerEnvironments, RegistryPaired, RegistryServing};
 use super::peer_reading_tests::{inputs, owned, uuid, NoAgents, WAIT};
 use super::runtime_config::NativeConfig;
 use crate::app::dependencies::RuntimeDependencies;
@@ -79,6 +79,10 @@ struct Gateway {
     owner: String,
     commands: PairingOwnerCommands,
     peers: Arc<PeerEnvironments>,
+    /// Each connection that ended having reported its machine.
+    departed: Arc<Departed>,
+    /// Which keys the registry says are paired, as `devices.list` asks.
+    paired: RegistryPaired,
     /// Holds the next ask of whether a key serves, once armed.
     gate: Arc<Gate>,
     native: SocketAddr,
@@ -106,6 +110,22 @@ impl ServingCredentials for Gate {
             }
             self.inner.serves(proof).await
         })
+    }
+}
+
+/// Records each report and departure [`PeerEnvironments`] tells of.
+#[derive(Default)]
+struct Departed {
+    reported: std::sync::Mutex<Vec<(PeerEnvironment, nessa_protocol::lease::MachineReport)>>,
+    left: std::sync::Mutex<Vec<(PeerEnvironment, nessa_protocol::lease::MachineReport)>>,
+}
+
+impl crate::conversation::infrastructure::ssh_environment::Sightings for Departed {
+    fn reported(&self, peer: PeerEnvironment, machine: &nessa_protocol::lease::MachineReport) {
+        self.reported.lock().unwrap().push((peer, machine.clone()));
+    }
+    fn left(&self, peer: PeerEnvironment, machine: nessa_protocol::lease::MachineReport) {
+        self.left.lock().unwrap().push((peer, machine));
     }
 }
 
@@ -156,6 +176,7 @@ impl Gateway {
                 listen_address: "127.0.0.1:0".parse().unwrap(),
                 relay,
                 advertised_address: None,
+                tunnel: None,
             },
             inputs(root, &auth, receivers, &gateway, &organization),
         )
@@ -177,12 +198,21 @@ impl Gateway {
             entered: Notify::new(),
             released: Notify::new(),
         });
-        let peers = Arc::new(PeerEnvironments::new(
-            gate.clone(),
-            DurableEnvironmentAudit::new(root.join("environments"), Arc::new(SystemClock)).unwrap(),
-            timings,
-            budgets,
-        ));
+        let departed = Arc::new(Departed::default());
+        let paired = RegistryPaired {
+            store: auth.clone(),
+            audience: AudienceId::new(gateway.clone()).unwrap(),
+        };
+        let peers = Arc::new(
+            PeerEnvironments::new(
+                gate.clone(),
+                DurableEnvironmentAudit::new(root.join("environments"), Arc::new(SystemClock))
+                    .unwrap(),
+                timings,
+                budgets,
+            )
+            .with_sightings(departed.clone()),
+        );
         let prepared = prepared.with_environments(Arc::new(ListenerEnvironments(peers.clone())));
         let state = ProductRouteState::new(
             ResourceId::new(gateway.clone()).unwrap(),
@@ -214,6 +244,8 @@ impl Gateway {
             owner,
             commands,
             peers,
+            departed,
+            paired,
             gate,
             native,
             running: Some(start(bound, failure)),
@@ -342,6 +374,8 @@ struct Host {
     timer: Arc<dyn crate::timer::Timer>,
     /// Asks it to drain, as `env dial`'s signal does.
     drain: Arc<watch::Sender<bool>>,
+    /// What it reports of its machine; nothing unless a test says.
+    machine: Option<Arc<dyn crate::devices::application::MachineProbe>>,
 }
 
 impl Host {
@@ -370,6 +404,7 @@ impl Host {
             ledger_path: workspace.join("leases.jsonl"),
             timer: Arc::new(TokioTimer::new()),
             drain: Arc::new(watch::channel(false).0),
+            machine: None,
             peer: Peer::Gateway { pin },
             grants: Arc::new(FileGrants::new(&workspace)),
             ledger: Arc::new(FileLedger::open(workspace.join("leases.jsonl")).unwrap()),
@@ -414,6 +449,7 @@ impl Host {
                 policy: Arc::new(
                     crate::env_serve::infrastructure::CedarLeasePolicy::new().unwrap(),
                 ),
+                machine: self.machine.clone(),
             },
             Runners {
                 harnesses: self.launcher.clone(),
@@ -480,6 +516,7 @@ async fn a_paired_environment_dials_in_serves_and_stops_at_revocation() {
     let first = dial(
         a.native.to_string(),
         None,
+        None,
         e.identity.clone(),
         e.pin,
         clock(),
@@ -497,6 +534,7 @@ async fn a_paired_environment_dials_in_serves_and_stops_at_revocation() {
     let second = dial(
         a.native.to_string(),
         None,
+        None,
         e.identity.clone(),
         e.pin,
         clock(),
@@ -511,6 +549,8 @@ async fn a_paired_environment_dials_in_serves_and_stops_at_revocation() {
     a.until_connected(e.peer, true).await;
     assert_eq!(a.echo(e.peer, "again").await.unwrap().stdout, b"again");
 
+    use crate::devices::application::PairedKeys;
+    assert!(a.paired.paired().unwrap().contains(&e.peer));
     a.auth
         .revoke_sync(RevokeCredentialRequest {
             request_id: uuid(),
@@ -519,6 +559,8 @@ async fn a_paired_environment_dials_in_serves_and_stops_at_revocation() {
             revoked_at: SystemClock.unix_seconds(),
         })
         .unwrap();
+    // Revoked, its key is no longer paired: Devices forgets it.
+    assert!(!a.paired.paired().unwrap().contains(&e.peer));
     assert_eq!(
         a.echo(e.peer, "revoked").await.unwrap_err(),
         CommandRefusal::Environment(LeaseRefusal::EnvironmentUnreachable)
@@ -530,6 +572,7 @@ async fn a_paired_environment_dials_in_serves_and_stops_at_revocation() {
     a.until_connected(e.peer, false).await;
     let refused = dial(
         a.native.to_string(),
+        None,
         None,
         e.identity.clone(),
         e.pin,
@@ -557,6 +600,7 @@ async fn an_organization_budget_refuses_a_command_past_it_until_one_ends() {
         .await;
     let stream = dial(
         a.native.to_string(),
+        None,
         None,
         e.identity.clone(),
         e.pin,
@@ -613,6 +657,7 @@ async fn a_dialed_gateway_runs_only_what_the_environment_granted_it() {
     let stream = dial(
         a.native.to_string(),
         None,
+        None,
         e.identity.clone(),
         e.pin,
         clock(),
@@ -650,6 +695,7 @@ async fn a_key_paired_to_read_is_refused_at_open_environment() {
     let refused = dial(
         a.native.to_string(),
         None,
+        None,
         reader.identity.clone(),
         reader.pin,
         clock(),
@@ -678,6 +724,7 @@ async fn a_lease_asked_across_a_reconnect_runs_on_the_new_connection() {
     let first = dial(
         a.native.to_string(),
         None,
+        None,
         e.identity.clone(),
         e.pin,
         clock(),
@@ -698,6 +745,7 @@ async fn a_lease_asked_across_a_reconnect_runs_on_the_new_connection() {
         .expect("the lease asks whether the key serves");
     let second = dial(
         a.native.to_string(),
+        None,
         None,
         e.identity.clone(),
         e.pin,
@@ -785,7 +833,7 @@ async fn an_enrolled_environment_waits_for_approval_then_stays_dialed_in() {
                         if n > 0 {
                             let _ = released.wait_for(|go| *go).await;
                         }
-                        dial(native.to_string(), None, identity, pin, clock()).await
+                        dial(native.to_string(), None, None, identity, pin, clock()).await
                     }
                 },
                 move |stream, stopping| {
@@ -912,6 +960,7 @@ async fn a_pin_that_is_not_a_key_is_invalid_input_and_another_key_is_not() {
     let not_a_key = dial(
         a.native.to_string(),
         None,
+        None,
         e.identity.clone(),
         [0; 44],
         clock(),
@@ -923,6 +972,7 @@ async fn a_pin_that_is_not_a_key_is_invalid_input_and_another_key_is_not() {
     let other = e.identity.public_spki();
     let not_the_gateway = dial(
         a.native.to_string(),
+        None,
         None,
         e.identity.clone(),
         other,
@@ -1015,15 +1065,22 @@ async fn an_environment_with_only_a_relay_path_is_approved_and_serves_through_it
     let peer = PeerEnvironment::new(*key.bytes());
 
     // Without the relay the gateway is out of reach.
-    let direct = dial(unreachable.clone(), None, identity.clone(), pin, clock())
-        .await
-        .err()
-        .expect("nothing listens at the direct address");
+    let direct = dial(
+        unreachable.clone(),
+        None,
+        None,
+        identity.clone(),
+        pin,
+        clock(),
+    )
+    .await
+    .err()
+    .expect("nothing listens at the direct address");
     // Refused on Linux, an unusable address on macOS: either way the
     // direct dial's own error, not the relay's.
     assert_ne!(direct.kind(), ErrorKind::InvalidInput);
     assert_eq!(RelayRefusal::carried(&direct), None);
-    let stream = dial(unreachable, Some(relay), identity, pin, clock())
+    let stream = dial(unreachable, Some(relay), None, identity, pin, clock())
         .await
         .unwrap();
     let _serving = serving(&directory.path().join("e"), pin, stream);
@@ -1041,6 +1098,7 @@ async fn an_environment_with_only_a_relay_path_is_approved_and_serves_through_it
         .await;
     let stream = dial(
         a.native.to_string(),
+        None,
         None,
         direct_machine.identity.clone(),
         direct_machine.pin,
@@ -1132,6 +1190,7 @@ async fn a_relay_without_the_gateway_answers_offline_to_an_environments_dial() {
     let offline = dial(
         nowhere(),
         Some(relay().await),
+        None,
         e.identity.clone(),
         e.pin,
         clock(),
@@ -1244,6 +1303,7 @@ async fn a_paired_environment_expires_a_lease_and_both_sides_record_it() {
         .await;
     let stream = dial(
         a.native.to_string(),
+        None,
         None,
         e.identity.clone(),
         e.pin,
@@ -1390,6 +1450,7 @@ async fn k1_a_paired_environment_drains_and_both_sides_record_its_cleanup() {
         .await;
     let stream = dial(
         a.native.to_string(),
+        None,
         None,
         e.identity.clone(),
         e.pin,
@@ -1609,6 +1670,7 @@ async fn an_idle_paired_environment_is_closed_once_revoked() {
     let stream = dial(
         a.native.to_string(),
         None,
+        None,
         e.identity.clone(),
         e.pin,
         clock(),
@@ -1627,6 +1689,7 @@ async fn an_idle_paired_environment_is_closed_once_revoked() {
     assert_eq!(records.len(), 1, "{records:?}");
     let refused = dial(
         a.native.to_string(),
+        None,
         None,
         e.identity.clone(),
         e.pin,
@@ -1663,6 +1726,7 @@ async fn a_paired_environment_revoked_mid_lease_ends_it_on_both_sides_and_closes
         .await;
     let stream = dial(
         a.native.to_string(),
+        None,
         None,
         e.identity.clone(),
         e.pin,
@@ -1794,6 +1858,7 @@ async fn a_paired_environment_revoked_mid_lease_ends_it_on_both_sides_and_closes
     let refused = dial(
         a.native.to_string(),
         None,
+        None,
         e.identity.clone(),
         e.pin,
         clock(),
@@ -1848,6 +1913,7 @@ async fn a_paired_environment_publishes_a_file_and_the_gateway_reads_it_back() {
         .await;
     let stream = dial(
         a.native.to_string(),
+        None,
         None,
         e.identity.clone(),
         e.pin,
@@ -2098,6 +2164,7 @@ async fn connection_changes_are_said_as_a_paired_environment_connects_ends_and_i
     let stream = dial(
         a.native.to_string(),
         None,
+        None,
         e.identity.clone(),
         e.pin,
         clock(),
@@ -2114,6 +2181,7 @@ async fn connection_changes_are_said_as_a_paired_environment_connects_ends_and_i
     let stream = dial(
         a.native.to_string(),
         None,
+        None,
         e.identity.clone(),
         e.pin,
         clock(),
@@ -2129,6 +2197,150 @@ async fn connection_changes_are_said_as_a_paired_environment_connects_ends_and_i
         .await
         .expect("the revoked environment's serving ends")
         .unwrap();
+}
+
+struct BuildBox;
+impl crate::devices::application::MachineProbe for BuildBox {
+    fn read(&self) -> Option<nessa_protocol::lease::MachineReport> {
+        Some(nessa_protocol::lease::MachineReport {
+            hostname: "build-box".into(),
+            os: "linux".into(),
+            os_version: "24.04".into(),
+            arch: "x86_64".into(),
+            cpus: 8,
+            cpu_permille: 610,
+            memory_total_bytes: 32,
+            memory_used_bytes: 8,
+            disk_total_bytes: 100,
+            disk_used_bytes: 40,
+            disks: vec![nessa_protocol::lease::MachineDisk {
+                mount: "/".into(),
+                total_bytes: 100,
+                used_bytes: 40,
+            }],
+        })
+    }
+}
+
+/// A paired environment reports its machine over its lease connection: the
+/// gateway lists it serving with that report, and once the connection ends
+/// it is told the last report, to keep.
+#[tokio::test]
+async fn a_paired_environment_reports_its_machine_and_its_departure_keeps_it() {
+    use crate::devices::application::MachineProbe;
+    let directory = tempfile::tempdir().unwrap();
+    let a = Gateway::start(&directory.path().join("a")).await;
+    let e = a
+        .pair(
+            &directory.path().join("e-state"),
+            ConsentClass::PeerEnvironment,
+        )
+        .await;
+    let stream = dial(
+        a.native.to_string(),
+        None,
+        None,
+        e.identity.clone(),
+        e.pin,
+        clock(),
+    )
+    .await
+    .unwrap();
+    let mut host = Host::open(&directory.path().join("e"), e.pin);
+    host.machine = Some(Arc::new(BuildBox));
+    let (from_gateway, to_gateway) = tokio::io::split(stream);
+    let served = tokio::spawn(async move { host.serve(from_gateway, to_gateway).await });
+    let reported = tokio::time::timeout(WAIT, async {
+        loop {
+            let workers = a.peers.workers();
+            if let Some(worker) = workers.iter().find(|worker| worker.peer == e.peer) {
+                if worker.machine.is_some() {
+                    return (worker.load, worker.machine.clone());
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the machine is reported");
+    assert_eq!(reported.0.map(|load| load.leases), Some(0));
+    assert_eq!(reported.1, BuildBox.read());
+    assert!(a.departed.left.lock().unwrap().is_empty());
+    // The report is told as it arrives, not only once the connection ends.
+    tokio::time::timeout(WAIT, async {
+        while a.departed.reported.lock().unwrap().is_empty() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the report is told");
+    assert_eq!(
+        a.departed.reported.lock().unwrap()[0],
+        (e.peer, BuildBox.read().unwrap())
+    );
+
+    served.abort();
+    tokio::time::timeout(WAIT, async {
+        while a.departed.left.lock().unwrap().is_empty() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the departure is told");
+    assert_eq!(
+        *a.departed.left.lock().unwrap(),
+        vec![(e.peer, BuildBox.read().unwrap())]
+    );
+}
+
+/// A revoked worker is forgotten, not seen leaving: its connection's end
+/// is not told, so no sighting saved as of then outlives the forgetting.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_revoked_paired_environment_is_not_told_as_departing() {
+    let directory = tempfile::tempdir().unwrap();
+    let a = Gateway::start_with(
+        &directory.path().join("a"),
+        SshTimings {
+            keepalive: RECHECK,
+            ..SshTimings::default()
+        },
+    )
+    .await;
+    let e = a
+        .pair(
+            &directory.path().join("e-state"),
+            ConsentClass::PeerEnvironment,
+        )
+        .await;
+    let stream = dial(
+        a.native.to_string(),
+        None,
+        None,
+        e.identity.clone(),
+        e.pin,
+        clock(),
+    )
+    .await
+    .unwrap();
+    let mut host = Host::open(&directory.path().join("e"), e.pin);
+    host.machine = Some(Arc::new(BuildBox));
+    let (from_gateway, to_gateway) = tokio::io::split(stream);
+    let served = tokio::spawn(async move { host.serve(from_gateway, to_gateway).await });
+    tokio::time::timeout(WAIT, async {
+        while a.departed.reported.lock().unwrap().is_empty() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the report is told");
+    a.revoke(&e);
+    let _ = tokio::time::timeout(WAIT, served)
+        .await
+        .expect("the revoked environment's serving ends");
+    a.until_connected(e.peer, false).await;
+    // Room for a departure, were one told.
+    tokio::time::sleep(RECHECK).await;
+    assert!(a.departed.left.lock().unwrap().is_empty());
 }
 
 /// A code file as a container's secret holds it: the display form and a
@@ -2321,6 +2533,7 @@ async fn k3_two_organizations_share_no_lease_workspace_artifact_tool_or_audit() 
     let refused = dial(
         a.native.to_string(),
         None,
+        None,
         x.identity.clone(),
         w.pin,
         clock(),
@@ -2331,6 +2544,7 @@ async fn k3_two_organizations_share_no_lease_workspace_artifact_tool_or_audit() 
     assert_eq!(refused.kind(), ErrorKind::PermissionDenied);
     let not_b = dial(
         a.native.to_string(),
+        None,
         None,
         x.identity.clone(),
         x.pin,
@@ -2371,6 +2585,7 @@ async fn k3_two_organizations_share_no_lease_workspace_artifact_tool_or_audit() 
     for (gateway, machine, host) in [(&a, &w, &w_host), (&b, &x, &x_host)] {
         let stream = dial(
             gateway.native.to_string(),
+            None,
             None,
             machine.identity.clone(),
             machine.pin,

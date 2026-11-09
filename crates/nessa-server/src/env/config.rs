@@ -35,8 +35,15 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const HOST_BUILDS: Option<&str> = option_env!("NESSA_HOST_BUILDS");
 
 /// Where [`HOST_BUILDS`] are published: the release's download address,
-/// under which each is `nessa-<target>`. Set beside them.
+/// under which each is `nessa-<target>`. Set beside them. A local desktop
+/// build sets [`BUNDLED_HOST_BUILDS`] instead: its builds ship inside the
+/// app, beside this executable.
 pub const HOST_BUILDS_FROM: Option<&str> = option_env!("NESSA_HOST_BUILDS_FROM");
+
+/// The [`HOST_BUILDS_FROM`] that names the `host-builds` folder beside this
+/// executable rather than a download address
+/// (`scripts/desktop/prepare-runtime.mjs` puts them there).
+pub const BUNDLED_HOST_BUILDS: &str = "bundled";
 
 /// Name the lease protocol by the sources that define it, listed once: the
 /// names for checking the list, the fingerprint for the hello.
@@ -63,6 +70,7 @@ macro_rules! lease_protocol {
 lease_protocol!(
     "../../../nessa-protocol/src/lease.rs",
     "../../../nessa-protocol/src/pairing/frames.rs",
+    "../../../nessa-protocol/src/build_update.rs",
     "../env_serve/mod.rs",
     "../env_serve/application/mod.rs",
     "../env_serve/application/serve.rs",
@@ -86,13 +94,15 @@ lease_protocol!(
     "../env_serve/infrastructure/inbox.rs",
     "../env_serve/infrastructure/dial.rs",
     "../env_serve/infrastructure/pairing.rs",
+    "../env_serve/infrastructure/self_update.rs",
     "../env_serve/infrastructure/grant_audit.rs",
     "../env_serve/infrastructure/grants.rs",
     "../env_serve/infrastructure/cedar/mod.rs",
     "../env_serve/infrastructure/cedar/evaluator.rs",
     "../env_serve/infrastructure/cedar/schema.json",
     "../env_serve/infrastructure/cedar/policies.cedar",
-    "../timer/runtime.rs",
+    "../devices/application/machine.rs",
+    "../devices/infrastructure/machine.rs",
     "../env_serve/install.rs",
     "../conversation/infrastructure/ssh_environment/link.rs",
     "../conversation/infrastructure/ssh_environment/environment.rs",
@@ -100,6 +110,7 @@ lease_protocol!(
     "../conversation/infrastructure/ssh_environment/sftp.rs",
     "../../../nessa-sdk/src/infrastructure/claude_acp/sessions/binding.rs",
     "../../../nessa-sdk/src/infrastructure/codex_acp/sessions/binding.rs",
+    "../../../nessa-sdk/src/infrastructure/opencode_acp/sessions/binding.rs",
     "../../../nessa-sdk/src/infrastructure/harness_process.rs",
     "../../../nessa-sdk/src/infrastructure/process.rs",
     "../../../nessa-sdk/src/domain/agent_execution/leases/value_objects.rs",

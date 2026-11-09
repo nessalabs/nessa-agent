@@ -226,14 +226,13 @@ impl RetainedCache {
         stop: &Arc<ReadStop>,
         budget: Duration,
     ) -> Result<ConversationFeed, SubscribeError> {
-        let ending = Arc::new(Stopping {
-            stop: stop.clone(),
-            clock: self.clock.clone(),
-            until: self
-                .clock
+        let ending = Arc::new(Stopping::new(
+            stop.clone(),
+            self.clock.clone(),
+            self.clock
                 .elapsed_ms()
                 .saturating_add(u64::try_from(budget.as_millis()).unwrap_or(u64::MAX)),
-        });
+        ));
         let offline = Arc::new(AtomicBool::new(false));
         // A dial that succeeds registers its socket on `stop` before the
         // handshake. Either failure drops that clone with the session.

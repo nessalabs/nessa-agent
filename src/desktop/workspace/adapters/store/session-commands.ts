@@ -7,7 +7,7 @@ import { applyStagedModel, modelChanging } from "./model-commands"
 import {
   atWork,
   messageText,
-  type Message,
+  type TurnMessage,
   type QuestionChoice,
 } from "../../model/transcript"
 import { differentFlight } from "../../application/question-flights"
@@ -20,14 +20,34 @@ import {
 } from "../../application/ports"
 import type { WorkspaceFailureReason } from "../../model/failure"
 import type { ModelRef } from "../../model/workspace-index"
+import {
+  draftImagesRefusal,
+  draftKind,
+  type DraftImage,
+  type DraftImageLimits,
+  type DraftImageRefusal,
+} from "../../model/draft-images"
+import {
+  IMAGE_ATTACHMENT_TYPES,
+  MAX_IMAGE_ATTACHMENT_BYTES,
+  MAX_MESSAGE_IMAGE_BYTES,
+  MAX_MESSAGE_FILES,
+  MAX_MESSAGE_IMAGES,
+  MAX_UPLOAD_BYTES,
+  uploadedFileName,
+  uploadMediaType,
+} from "@nessa/client"
 import { knownToSource } from "../../model/revision"
 import {
   answerOf,
   answering,
+  channelOf,
+  draftOf,
   entry,
   modelForNextTurn,
   onScreen,
   sessionOf,
+  type WorkspaceState,
 } from "../../application/workspace-state"
 import { accessToStart } from "../../application/usecases/access"
 import type { WorkspaceCommand } from "./commands"
@@ -37,11 +57,20 @@ const {
   accessCaptured,
   approvalAnswering,
   approvalFailed,
+  composerImagesAdded,
   messageDelivered,
   messageResent,
   messageSent,
   sendFailed,
 } = workspaceActions
+
+/** Local drafts and unconfirmed sessions still need a channel in the current index. */
+function hasCurrentHome(state: WorkspaceState, sessionId: string): boolean {
+  const draft = draftOf(state, sessionId)
+  const session = sessionOf(state, sessionId)
+  const local = draft ?? (session && !knownToSource(session) ? session : undefined)
+  return !local || Boolean(channelOf(state, local.channelId))
+}
 
 /**
  * Asks the source to take a message already in the outbox. While the source
@@ -51,16 +80,29 @@ const {
  */
 function deliver(
   sessionId: string,
-  message: Message,
+  message: TurnMessage,
   model: ModelRef,
   initiator: Initiator,
 ): WorkspaceCommand<Promise<SendOutcome>> {
   return async (dispatch, getState, { workspace }) => {
-    const session = sessionOf(getState().workspace, sessionId)
+    const state = getState().workspace
+    const session = sessionOf(state, sessionId)
     if (!session) return "not-asked"
-    const access = knownToSource(session)
-      ? undefined
-      : accessToStart(getState().workspace, sessionId)
+    // The index may have removed a local session's channel while the model
+    // step yielded. Check at the effect boundary, not only at command entry.
+    if (!hasCurrentHome(state, sessionId)) {
+      dispatch(
+        sendFailed({
+          sessionId,
+          messageId: message.id,
+          reason: "unavailable",
+          model,
+          diagnostic: { message: "This channel is no longer available." },
+        }),
+      )
+      return "not-asked"
+    }
+    const access = knownToSource(session) ? undefined : accessToStart(state, sessionId)
     // Captured by this message: a pick after it is the newer word, not this one.
     if (access) dispatch(accessCaptured({ sessionId, mode: access }))
     try {
@@ -69,6 +111,7 @@ function deliver(
         initiator,
         messageId: message.id,
         text: messageText(message),
+        ...(message.localImages?.length ? { images: message.localImages } : {}),
         model,
         start: knownToSource(session)
           ? undefined
@@ -121,28 +164,114 @@ export function sendMessage({
   sessionId,
   text,
   initiator,
+  withImages = false,
+  messageId,
 }: {
   sessionId: string
   text: string
+  /**
+   * The message's id, when the caller follows the turn it starts (the turn's
+   * execution id is the message's); otherwise a new one.
+   */
+  messageId?: string
   /** Who sent it, for the source's record: the person at the composer, or an agent. */
   initiator: Initiator
+  /**
+   * Whether the message takes the images on the session's composer: only a
+   * send from the composer that shows them does, so a reply sent from
+   * elsewhere never carries images the person cannot see.
+   */
+  withImages?: boolean
 }): WorkspaceCommand<Promise<SendOutcome>> {
   return async (dispatch, getState, { now, newId }) => {
     const content = text.trim()
-    const model = modelForNextTurn(getState().workspace, sessionId)
-    if (!content || !model || modelChanging(getState().workspace, sessionId))
+    const state = getState().workspace
+    const model = modelForNextTurn(state, sessionId)
+    // The person's send from the composer takes what they pasted with it;
+    // any other message leaves the composer's images where they are.
+    const images =
+      withImages && initiator === "person"
+        ? (entry(state.composerImages, sessionId) ?? [])
+        : []
+    if (
+      (!content && images.length === 0) ||
+      !model ||
+      !hasCurrentHome(state, sessionId) ||
+      modelChanging(state, sessionId)
+    )
       return "not-asked"
-    const message: Message = {
-      id: newId(),
+    const message: TurnMessage = {
+      id: messageId ?? newId(),
       role: "user",
       at: now(),
       parts: [{ kind: "text", text: content }],
+      ...(images.length ? { localImages: images } : {}),
       delivery: { state: "sending" },
     }
     dispatch(messageSent({ sessionId, message, initiator }))
     return dispatch(deliverOnStagedModel(sessionId, message, model, initiator))
   }
 }
+
+/** A message's attachment bounds, as the message contract sets them. */
+export const DRAFT_IMAGE_LIMITS: DraftImageLimits = {
+  images: MAX_MESSAGE_IMAGES,
+  bytes: MAX_IMAGE_ATTACHMENT_BYTES,
+  totalBytes: MAX_MESSAGE_IMAGE_BYTES,
+  types: IMAGE_ATTACHMENT_TYPES,
+  files: MAX_MESSAGE_FILES,
+  fileBytes: MAX_UPLOAD_BYTES,
+}
+
+/**
+ * Puts `files` — pasted into a session's composer or picked with its Attach
+ * button — on its next message: each of the image encodings as an image, any
+ * other file as a file. All of them or none: answers why none were taken, or
+ * `null` once they are on it (or nothing was offered).
+ */
+export function addComposerImages({
+  sessionId,
+  files,
+}: {
+  sessionId: string
+  files: readonly File[]
+}): WorkspaceCommand<DraftImageRefusal | null> {
+  return (dispatch, getState, { newId }) => {
+    if (files.length === 0) return null
+    const offered = files.map((file) => {
+      const mimeType = uploadMediaType(file.type)
+      return { file, mimeType, kind: draftKind(mimeType, DRAFT_IMAGE_LIMITS) }
+    })
+    const held = entry(getState().workspace.composerImages, sessionId) ?? []
+    const refusal = draftImagesRefusal(
+      held,
+      offered.map(({ file, kind, mimeType }) => ({ size: file.size, kind, mimeType })),
+      DRAFT_IMAGE_LIMITS,
+    )
+    if (refusal) return refusal
+    const images: DraftImage[] = offered.map(({ file, mimeType, kind }) => ({
+      id: newId(),
+      kind,
+      // A pasted screenshot can come with no name of its own.
+      name: uploadedFileName(file.name, kind === "image" ? "Pasted image" : "File"),
+      mimeType,
+      size: file.size,
+      url: URL.createObjectURL(file),
+    }))
+    dispatch(composerImagesAdded({ sessionId, images }))
+    // A session the window does not hold took none: nobody will name these.
+    const kept = new Set(
+      (entry(getState().workspace.composerImages, sessionId) ?? []).map(
+        (image) => image.url,
+      ),
+    )
+    for (const image of images) if (!kept.has(image.url)) URL.revokeObjectURL(image.url)
+    return null
+  }
+}
+
+/** Takes one image off a session's next message. */
+export const removeComposerImage = workspaceActions.composerImageRemoved
 
 /**
  * Delivers a message already in the outbox after the model staged in its
@@ -152,7 +281,7 @@ export function sendMessage({
  */
 function deliverOnStagedModel(
   sessionId: string,
-  message: Message,
+  message: TurnMessage,
   model: ModelRef,
   initiator: Initiator,
 ): WorkspaceCommand<Promise<SendOutcome>> {
@@ -192,7 +321,13 @@ export function resendMessage({
       (message) => message.id === messageId && message.delivery?.state === "failed",
     )
     const model = modelForNextTurn(state, sessionId)
-    if (!refused || !model || modelChanging(state, sessionId)) return "not-asked"
+    if (
+      !refused ||
+      !model ||
+      !hasCurrentHome(state, sessionId) ||
+      modelChanging(state, sessionId)
+    )
+      return "not-asked"
     dispatch(messageResent({ sessionId, messageId }))
     return dispatch(deliverOnStagedModel(sessionId, refused, model, initiator))
   }
@@ -204,8 +339,7 @@ export function resendMessage({
  * says why while it shows the session); `unknown` when it is not known to be
  * taken (`outcomeOf`); `answering` already, a first answer on
  * its way; or `not-asked` — the window holds no such approval: the session is
- * not on screen (`onScreen`: in a pane, in the open overview, or as one of
- * the session list's request cards), or its
+ * not on screen (`onScreen`: in a pane or in the open overview), or its
  * conversation has moved on. Nothing is sent
  * then, and the source records nothing, since nothing was asked of it.
  */
@@ -286,6 +420,24 @@ export function retryReview({
 }): WorkspaceCommand {
   return (_dispatch, _getState, { workspace }) =>
     workspace.retryReview?.(sessionId, approvalId)
+}
+
+/**
+ * Reads the turns before the first one a session's transcript shows. A read
+ * that fails is said to the console, and the transcript asks again.
+ * Settles once the read is in the store: true when another may be asked
+ * for, false when it failed or there is none.
+ */
+export function loadEarlier({
+  sessionId,
+}: {
+  sessionId: string
+}): WorkspaceCommand<Promise<boolean>> {
+  return async (_dispatch, _getState, { workspace }) =>
+    (await workspace.loadEarlier?.(sessionId).catch((error: unknown) => {
+      console.warn("Earlier turns were not read", error)
+      return false
+    })) ?? false
 }
 
 /**
@@ -571,6 +723,20 @@ export const signInToProvider =
       throw new Error("Provider sign-in is unavailable on this host.")
     await dependencies.signInToProvider(provider)
   }
+
+/** Mint a Claude sign-in for Boat VMs and have the gateway keep it. Rejects
+ * with the stage that failed (`BoatSignInFailure`). */
+export const signInForBoat =
+  (): WorkspaceCommand<Promise<void>> => async (_dispatch, _getState, dependencies) => {
+    if (!dependencies.boatClaudeSignIn)
+      throw new Error("Boat sign-in is unavailable on this host.")
+    await dependencies.boatClaudeSignIn.signIn()
+  }
+
+/** Whether a Boat sign-in can be offered, without starting one. */
+export const boatSignInAvailable =
+  (): WorkspaceCommand<Promise<boolean>> => async (_dispatch, _getState, dependencies) =>
+    (await dependencies.boatClaudeSignIn?.available()) ?? false
 
 /** Read the injected host's login capability without attempting a launch. */
 export const providerLoginAvailable =

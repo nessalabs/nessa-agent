@@ -1,0 +1,33 @@
+{
+  "id": "11111111-1111-4111-8111-111111111111",
+  "name": "nessa",
+  "isDefault": false,
+  "latestVersionId": "22222222-2222-4222-8222-222222222222",
+  "latestVersionNumber": 2,
+  "safeForThirdParties": false,
+  "passGithub": false,
+  "passSecrets": false,
+  "passSandboxCredentials": false,
+  "passAgentsCredentials": true,
+  "credentialProfileId": null,
+  "proxyAiCredentials": false,
+  "access": { "restricted": false, "members": [] },
+  "effective": {
+    "passSecrets": false,
+    "passGithub": false,
+    "passSandboxCredentials": false,
+    "passAgentsCredentials": true
+  },
+  "envContents": "",
+  "secretFiles": [],
+  "selectedRepositories": [],
+  "safetyAnsweredAt": null,
+  "versions": [
+    {
+      "id": "22222222-2222-4222-8222-222222222222",
+      "versionNumber": 2,
+      "sandboxCount": 0,
+      "createdAt": "2026-10-27T00:00:00Z"
+    }
+  ]
+}

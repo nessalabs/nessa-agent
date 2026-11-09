@@ -1,0 +1,17 @@
+[
+  {
+    "rule": "required-fact",
+    "caught": true,
+    "byteRestored": true
+  },
+  {
+    "rule": "actual-actor",
+    "caught": true,
+    "byteRestored": true
+  },
+  {
+    "rule": "time-binding",
+    "caught": true,
+    "byteRestored": true
+  }
+]

@@ -25,7 +25,8 @@ function pastedDocument(content: MessageContent) {
       if (
         part.type === "file" ||
         part.type === "image-reference" ||
-        part.type === "file-reference"
+        part.type === "file-reference" ||
+        part.type === "uploaded-file-reference"
       )
         return ""
       if (part.type === "text") return part.text

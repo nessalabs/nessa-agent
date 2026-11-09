@@ -32,10 +32,11 @@ import { defaultFilter, listsWaiting, type AgentsFilter } from "../model/overvie
 import { inGroup, type AgentsGroup } from "../model/overview/agents-glance"
 import { drawn, type SideColumn } from "../../model/side-column"
 import type { WindowArrangement } from "../model/shown-window"
-import { waitingInList, type SessionView } from "../model/session-groups"
+import type { SessionView } from "../model/session-groups"
 import { keepShownDrafts, type Draft } from "../model/session-lifecycle"
 import type { ChatPanel } from "../model/chat-panel"
 import { unconfirmed, type Transcript, type TurnMessage } from "../model/transcript"
+import type { DraftImage } from "../model/draft-images"
 import { settledBy, type AccessChoice } from "../model/access"
 import type {
   ShareDraft,
@@ -180,6 +181,13 @@ export interface WorkspaceState {
    * session let go, it goes; an agent's message leaves it as it is.
    */
   readonly composerText: Readonly<Record<string, string>>
+  /**
+   * The images put on a session's next message and not sent, by session or
+   * new session, in the order they were added (`model/draft-images.ts`). Kept
+   * and let go as `composerText` is; the person's send takes them onto the
+   * message.
+   */
+  readonly composerImages: Readonly<Record<string, readonly DraftImage[]>>
   /** Where conversations sit; none until the index arrives. */
   readonly panes: PaneLayout | null
   /**
@@ -188,6 +196,14 @@ export interface WorkspaceState {
    * focused chat's; a chat let go takes its panel with it.
    */
   readonly panels: Readonly<Record<string, ChatPanel>>
+  /**
+   * The MCP App widgets opened into a panel while the window runs, by
+   * `widgetKey`: each lives there, so its card in a message stays the row that
+   * leads back, even after its tab is closed. Without it a closed tab's card
+   * would run the app again, and an app that asks for the panel as it starts
+   * would open its tab again at once.
+   */
+  readonly panelled: readonly string[]
   /**
    * How many times something asked the window to show the right panel — a
    * widget opened into it. The window shows the panel when this changes;
@@ -212,6 +228,11 @@ export interface WorkspaceState {
    * (`usecases/window.ts`) is said only while one is.
    */
   readonly arrangement: WindowArrangement | null
+  /**
+   * Whether the right panel is drawn, as the layout last said
+   * (`panelShown`). False until a layout has said.
+   */
+  readonly panelOpen: boolean
   readonly tree: Tree
   /**
    * Whether a session can be shared from this window: composition gave it a
@@ -281,6 +302,12 @@ export interface ChannelCreation {
   readonly leftOut: number
   /** Whether each resource is a file or a folder, as its picker said, by path. */
   readonly kinds: Readonly<Record<string, ResourceKind>>
+  /**
+   * Drops that landed on the files question and whose paths the host is
+   * still looking at, by the name it gave each. Create waits for them: a
+   * Create sent now would leave out files the person already dropped.
+   */
+  readonly landing: readonly string[]
 }
 
 /**
@@ -413,8 +440,10 @@ export const initialWorkspace: WorkspaceState = {
   modelChoices: {},
   accessChoices: {},
   composerText: {},
+  composerImages: {},
   panes: null,
   panels: {},
+  panelled: [],
   panelAsked: 0,
   view: { channelId: "" },
   content: "panes",
@@ -426,6 +455,7 @@ export const initialWorkspace: WorkspaceState = {
     sessionListWidth: 312,
   },
   arrangement: null,
+  panelOpen: false,
   tree: { collapsedSections: [], expandedChannels: [], showAllChannels: [] },
   shareable: false,
   share: null,
@@ -523,31 +553,13 @@ export function overviewShows(state: WorkspaceState, sessionId: string): boolean
 }
 
 /**
- * The sessions the session list asks the person about from request cards:
- * in three columns, the list drawn and not under the overview, its "Needs
- * you" rows as its search lists them (`waitingInList`), the newest first, at
- * most `retention.listConversations`. The one rule for which rows the list
- * draws as cards, what they answer (`onScreen`), and whose conversations the
- * window reads and keeps for them (`shownIds`).
- */
-export function listAskIds(state: WorkspaceState): string[] {
-  if (state.arrangement !== "columns" || state.content === "agents") return []
-  if (!drawn(state.chrome.sessionList)) return []
-  return waitingInList(listedSessions(state), state.view)
-    .slice(0, retention.listConversations)
-    .map((session) => session.id)
-}
-
-/**
- * On screen: in a pane, in the open overview, or asked about by the session
- * list. Only an approval on screen is answered (`approve`, `deny`), so an
- * agent answers what it has opened.
+ * On screen: in a pane, or in the open overview. Only an approval on screen
+ * is answered (`approve`, `deny`), so an agent answers what it has opened.
  */
 export function onScreen(state: WorkspaceState, sessionId: string): boolean {
   return (
     (state.panes !== null && paneShowingSession(state.panes, sessionId) !== undefined) ||
-    overviewShows(state, sessionId) ||
-    listAskIds(state).includes(sessionId)
+    overviewShows(state, sessionId)
   )
 }
 
@@ -570,15 +582,11 @@ export function overviewShownIds(state: WorkspaceState): string[] {
 
 /**
  * The sessions on screen whose conversations the window keeps whatever
- * their age: the panes' (drafts among them), the overview's and the
- * session list's requests, each bounded.
+ * their age: the panes' (drafts among them) and the overview's, each
+ * bounded.
  */
 export function shownIds(state: WorkspaceState): Set<string> {
-  return new Set([
-    ...paneIds(state.panes),
-    ...overviewShownIds(state),
-    ...listAskIds(state),
-  ])
+  return new Set([...paneIds(state.panes), ...overviewShownIds(state)])
 }
 
 /**
@@ -663,9 +671,16 @@ export function without<T>(
  * (`letGoOfDrafts`). The one place panes change, so no blank draft outlives
  * its pane.
  */
-export function withPanes(state: WorkspaceState, panes: PaneLayout): WorkspaceState {
+export function withPanes(
+  state: WorkspaceState,
+  panes: PaneLayout | null,
+): WorkspaceState {
   if (panes === state.panes) return state
-  const kept = new Set([...paneIds(panes), ...Object.keys(state.composerText)])
+  const kept = new Set([
+    ...paneIds(panes),
+    ...Object.keys(state.composerText),
+    ...Object.keys(state.composerImages),
+  ])
   const drafts = keepShownDrafts(state.drafts, kept)
   const dropped =
     drafts === state.drafts
@@ -686,6 +701,7 @@ export function letGoOfDrafts(
     ...state,
     drafts: gone.reduce(without, state.drafts),
     composerText: gone.reduce(without, state.composerText),
+    composerImages: gone.reduce(without, state.composerImages),
     accessChoices: gone.reduce(without, state.accessChoices),
     panels: gone.reduce(without, state.panels),
   }
@@ -705,7 +721,8 @@ export function keptDraftIn(
       (draft) =>
         draft.channelId === channelId &&
         !shown.has(draft.id) &&
-        Object.hasOwn(state.composerText, draft.id),
+        (Object.hasOwn(state.composerText, draft.id) ||
+          Object.hasOwn(state.composerImages, draft.id)),
     )
     .at(-1)?.id
 }
@@ -773,6 +790,7 @@ export function forgetSession(state: WorkspaceState, sessionId: string): Workspa
     accessChoices: without(state.accessChoices, sessionId),
     modelChoices: without(state.modelChoices, sessionId),
     composerText: without(state.composerText, sessionId),
+    composerImages: without(state.composerImages, sessionId),
     overview:
       state.overview.selected === sessionId
         ? { ...state.overview, selected: null }

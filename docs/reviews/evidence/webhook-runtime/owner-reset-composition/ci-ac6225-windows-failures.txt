@@ -1,0 +1,47 @@
+Original source ac6225d7d0e3ef8be69d7cd31b2e689235324687; run40249699947 job121338743616
+2026-10-26T01:01:30.3390536Z [nessa-server nessa_server] test webhooks::infrastructure::outbox::store::tests::bulk_reset_retention_is_bounded_in_the_commit ... ok
+2026-10-26T01:01:32.2510515Z [nessa-server nessa_server] test webhooks::infrastructure::outbox::store::tests::registration_tests::cancellation_tests::disabled_membership_does_not_restore_install_authority_or_block_canonical_cleanup ... ok
+2026-10-26T01:05:11.7772102Z [nessa-server nessa_server] thread '<unnamed>' (5440) panicked at crates\nessa-server\src\webhooks\infrastructure\..\..\..\tests\webhooks\infrastructure\product_delivery.rs:108:56:
+2026-10-26T01:05:11.7774984Z [nessa-server nessa_server] called `Result::unwrap()` on an `Err` value: Os { code: 10035, kind: WouldBlock, message: "A non-blocking socket operation could not be completed immediately." }
+2026-10-26T01:05:22.8213968Z [nessa-server nessa_server] thread '<unnamed>' (6436) panicked at crates\nessa-server\src\webhooks\infrastructure\..\..\..\tests\webhooks\infrastructure\product_delivery.rs:108:56:
+2026-10-26T01:05:22.8217220Z [nessa-server nessa_server] called `Result::unwrap()` on an `Err` value: Os { code: 10035, kind: WouldBlock, message: "A non-blocking socket operation could not be completed immediately." }
+2026-10-26T01:05:25.5288083Z [nessa-server nessa_server] thread '<unnamed>' (3868) panicked at crates\nessa-server\src\webhooks\infrastructure\..\..\..\tests\webhooks\infrastructure\product_delivery.rs:108:56:
+2026-10-26T01:05:25.5291368Z [nessa-server nessa_server] called `Result::unwrap()` on an `Err` value: Os { code: 10035, kind: WouldBlock, message: "A non-blocking socket operation could not be completed immediately." }
+2026-10-26T01:05:33.8321031Z [nessa-server nessa_server] thread '<unnamed>' (4892) panicked at crates\nessa-server\src\webhooks\infrastructure\..\..\..\tests\webhooks\infrastructure\product_delivery.rs:108:56:
+2026-10-26T01:05:33.8324308Z [nessa-server nessa_server] called `Result::unwrap()` on an `Err` value: Os { code: 10035, kind: WouldBlock, message: "A non-blocking socket operation could not be completed immediately." }
+2026-10-26T01:05:47.7339627Z [nessa-server nessa_server] thread '<unnamed>' (5128) panicked at crates\nessa-server\src\webhooks\infrastructure\..\..\..\tests\webhooks\infrastructure\product_delivery.rs:108:56:
+2026-10-26T01:05:47.7341459Z [nessa-server nessa_server] called `Result::unwrap()` on an `Err` value: Os { code: 10035, kind: WouldBlock, message: "A non-blocking socket operation could not be completed immediately." }
+2026-10-26T01:05:58.1040818Z [nessa-server nessa_server] thread '<unnamed>' (8380) panicked at crates\nessa-server\src\webhooks\infrastructure\..\..\..\tests\webhooks\infrastructure\product_delivery.rs:108:56:
+2026-10-26T01:05:58.1042517Z [nessa-server nessa_server] called `Result::unwrap()` on an `Err` value: Os { code: 10035, kind: WouldBlock, message: "A non-blocking socket operation could not be completed immediately." }
+2026-10-26T01:05:58.3323341Z [nessa-server nessa_server] thread '<unnamed>' (7480) panicked at crates\nessa-server\src\webhooks\infrastructure\..\..\..\tests\webhooks\infrastructure\product_delivery.rs:108:56:
+2026-10-26T01:05:58.3327081Z [nessa-server nessa_server] called `Result::unwrap()` on an `Err` value: Os { code: 10035, kind: WouldBlock, message: "A non-blocking socket operation could not be completed immediately." }
+2026-10-26T01:06:15.3900919Z [nessa-server nessa_server] thread '<unnamed>' (1796) panicked at crates\nessa-server\src\webhooks\infrastructure\..\..\..\tests\webhooks\infrastructure\product_delivery.rs:108:56:
+2026-10-26T01:06:15.3903575Z [nessa-server nessa_server] called `Result::unwrap()` on an `Err` value: Os { code: 10035, kind: WouldBlock, message: "A non-blocking socket operation could not be completed immediately." }
+2026-10-26T01:06:19.9701349Z [nessa-server nessa_server] thread '<unnamed>' (1760) panicked at crates\nessa-server\src\webhooks\infrastructure\..\..\..\tests\webhooks\infrastructure\product_delivery.rs:108:56:
+2026-10-26T01:06:19.9706815Z [nessa-server nessa_server] called `Result::unwrap()` on an `Err` value: Os { code: 10035, kind: WouldBlock, message: "A non-blocking socket operation could not be completed immediately." }
+2026-10-26T01:06:20.5702031Z [nessa-server nessa_server] test webhooks::infrastructure::outbox::store::tests::terminal_retention_is_bounded ... ok
+2026-10-26T01:06:23.2769240Z [nessa-server nessa_server] test webhooks::infrastructure::product_tests::delivery::owner_reset::public_reset_commits_observed_j_after_k_replaces_it_then_fresh_read_refreezes_without_k_post ... ok
+2026-10-26T01:06:25.7143788Z [nessa-server nessa_server] thread '<unnamed>' (3700) panicked at crates\nessa-server\src\webhooks\infrastructure\..\..\..\tests\webhooks\infrastructure\product_delivery.rs:108:56:
+2026-10-26T01:06:25.7146418Z [nessa-server nessa_server] called `Result::unwrap()` on an `Err` value: Os { code: 10035, kind: WouldBlock, message: "A non-blocking socket operation could not be completed immediately." }
+2026-10-26T01:06:26.6310645Z [nessa-server nessa_server] thread '<unnamed>' (7396) panicked at crates\nessa-server\src\webhooks\infrastructure\..\..\..\tests\webhooks\infrastructure\product_delivery.rs:108:56:
+2026-10-26T01:06:26.6313506Z [nessa-server nessa_server] called `Result::unwrap()` on an `Err` value: Os { code: 10035, kind: WouldBlock, message: "A non-blocking socket operation could not be completed immediately." }
+2026-10-26T01:06:28.8164300Z [nessa-server nessa_server] thread '<unnamed>' (496) panicked at crates\nessa-server\src\webhooks\infrastructure\..\..\..\tests\webhooks\infrastructure\product_delivery.rs:108:56:
+2026-10-26T01:06:28.8166632Z [nessa-server nessa_server] called `Result::unwrap()` on an `Err` value: Os { code: 10035, kind: WouldBlock, message: "A non-blocking socket operation could not be completed immediately." }
+2026-10-26T01:06:32.8706634Z [nessa-server nessa_server] thread '<unnamed>' (8940) panicked at crates\nessa-server\src\webhooks\infrastructure\..\..\..\tests\webhooks\infrastructure\product_delivery.rs:108:56:
+2026-10-26T01:06:32.8709691Z [nessa-server nessa_server] called `Result::unwrap()` on an `Err` value: Os { code: 10035, kind: WouldBlock, message: "A non-blocking socket operation could not be completed immediately." }
+2026-10-26T01:06:36.9448488Z [nessa-server nessa_server] thread '<unnamed>' (4252) panicked at crates\nessa-server\src\webhooks\infrastructure\..\..\..\tests\webhooks\infrastructure\product_delivery.rs:108:56:
+2026-10-26T01:06:36.9453370Z [nessa-server nessa_server] called `Result::unwrap()` on an `Err` value: Os { code: 10035, kind: WouldBlock, message: "A non-blocking socket operation could not be completed immediately." }
+2026-10-26T01:06:41.4020453Z [nessa-server nessa_server] thread 'webhooks::infrastructure::runtime::tests::first_worker_panic_seals_before_the_response_observer_is_woken' (3792) panicked at crates\nessa-server\src\webhooks\infrastructure\..\..\..\tests\webhooks\infrastructure\runtime.rs:21:10:
+2026-10-26T01:06:41.4025143Z [nessa-server nessa_server] called `Result::unwrap()` on an `Err` value: Io(Custom { kind: PermissionDenied, error: UnsafeFile })
+2026-10-26T01:06:41.4057237Z [nessa-server nessa_server] thread 'webhooks::infrastructure::runtime::tests::ordinary_capacity_precedes_spawn_and_control_capacity_remains_available' (5344) panicked at crates\nessa-server\src\webhooks\infrastructure\..\..\..\tests\webhooks\infrastructure\runtime.rs:21:10:
+2026-10-26T01:06:41.4059087Z [nessa-server nessa_server] called `Result::unwrap()` on an `Err` value: Io(Custom { kind: PermissionDenied, error: UnsafeFile })
+2026-10-26T01:07:16.2047187Z [nessa-server nessa_server] test webhooks::infrastructure::outbox::store::tests::stop_retention_is_bounded_when_publication_fails ... ok
+2026-10-26T01:07:16.2048520Z [nessa-server nessa_server] 
+2026-10-26T01:07:16.2110173Z [nessa-server nessa_server] test result: FAILED. 3375 passed; 20 failed; 9 ignored; 0 measured; 0 filtered out; finished in 1726.53s
+2026-10-26T01:07:16.2111425Z [nessa-server nessa_server] 
+thread '<unnamed>' (5128) panicked at crates\nessa-server\src\webhooks\infrastructure\..\..\..\tests\webhooks\infrastructure\product_delivery.rs:108:56:
+called `Result::unwrap()` on an `Err` value: Os { code: 10035, kind: WouldBlock, message: "A non-blocking socket operation could not be completed immediately." }
+thread '<unnamed>' (8380) panicked at crates\nessa-server\src\webhooks\infrastructure\..\..\..\tests\webhooks\infrastructure\product_delivery.rs:108:56:
+called `Result::unwrap()` on an `Err` value: Os { code: 10035, kind: WouldBlock, message: "A non-blocking socket operation could not be completed immediately." }
+thread '<unnamed>' (7480) panicked at crates\nessa-server\src\webhooks\infrastructure\..\..\..\tests\webhooks\infrastructure\product_delivery.rs:108:56:
+called `Result::unwrap()` on an `Err` value: Os { code: 10035, kind: WouldBlock, message: "A non-blocking socket operation could not be completed immediately." }

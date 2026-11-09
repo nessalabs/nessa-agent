@@ -21,7 +21,12 @@
 use super::CloseOutcome;
 use crate::application::agent_execution::agents::AgentError;
 use std::{
-    collections::BTreeMap, ffi::OsString, future::Future, path::Path, pin::Pin, sync::Arc,
+    collections::BTreeMap,
+    ffi::OsString,
+    future::Future,
+    path::{Path, PathBuf},
+    pin::Pin,
+    sync::Arc,
     time::Duration,
 };
 use tokio::io::{AsyncRead, AsyncWrite};
@@ -68,8 +73,22 @@ pub struct HarnessProcess {
     pub control: Box<dyn HarnessControl>,
 }
 
+/// A host's explicit mapping from a configured MCP stand-in to its remote
+/// equivalent. Returning no command leaves that server unavailable on this host.
+/// This does not authorize a tool call: the stand-in's scoped grant still does.
+pub trait HarnessMcpRelay: Send + Sync {
+    /// Map a locally configured stand-in without running its local executable.
+    /// Implementations accept only configurations their transport actually serves.
+    fn command(&self, program: &Path, arguments: &[String]) -> Option<(PathBuf, Vec<String>)>;
+}
+
 /// A machine other than this one that a binding can start its harness on.
 pub trait HarnessHost: Send + Sync {
+    /// An explicit transport for this gateway's scoped MCP stand-ins. Hosts
+    /// without one receive no local MCP configuration or stand-in credentials.
+    fn mcp_relay(&self) -> Option<&dyn HarnessMcpRelay> {
+        None
+    }
     /// The directory on the host the harness works in: its working
     /// directory and the agent protocol's session workspace. Absolute.
     fn workspace(&self) -> &Path;

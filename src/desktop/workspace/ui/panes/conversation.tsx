@@ -21,7 +21,9 @@ import {
 import type { ModelRef } from "../../model/workspace-index"
 import { Home } from "../../../ui/home"
 import { Transcript } from "../transcript/transcript"
+import { useComposerVoice, VoiceDock } from "../../../voice"
 import { useComposerAccess } from "./composer-access"
+import { useComposerImages } from "./composer-images"
 import "./conversation.css"
 
 /** The docked composer is always a card; only a home opens into a page. */
@@ -58,7 +60,9 @@ function useComposerActions(sessionId: string) {
   const canChangeModel = useRememberedValue(sessionId, canChangeLive)
   const send = useCallback(
     (text: string) =>
-      void dispatch(sendMessage({ sessionId, text, initiator: "person" })),
+      void dispatch(
+        sendMessage({ sessionId, text, initiator: "person", withImages: true }),
+      ),
     [dispatch, sessionId],
   )
   const changeModel = useCallback(
@@ -109,6 +113,7 @@ export const PaneHome = memo(function PaneHome({
   const { changeModel } = useComposerActions(sessionId)
   const { text, onTextChange } = useComposerText(sessionId)
   const access = useComposerAccess(sessionId)
+  const images = useComposerImages(sessionId)
 
   return (
     <Home
@@ -116,6 +121,7 @@ export const PaneHome = memo(function PaneHome({
       onSend={onSend}
       onModelChange={changeModel}
       access={access}
+      images={images}
       text={text}
       onTextChange={onTextChange}
       // Docked as a conversation's composer is, where the pane is small (`conversation.css`).
@@ -156,11 +162,17 @@ export const Conversation = memo(function Conversation({
         onHeadingVisible={onHeadingVisible}
       />
       <div className="workspace-dock" data-split-keeps="foot">
+        <ConversationVoice sessionId={sessionId} />
         <DockComposer sessionId={sessionId} />
       </div>
     </div>
   )
 })
+
+/** The window's call, above the composer, when it talks to this conversation. */
+function ConversationVoice({ sessionId }: { sessionId: string }) {
+  return <VoiceDock sessionId={sessionId} />
+}
 
 /** The docked composer, showing the model the session's next message is sent with. */
 const DockComposer = memo(function DockComposer({ sessionId }: { sessionId: string }) {
@@ -168,7 +180,9 @@ const DockComposer = memo(function DockComposer({ sessionId }: { sessionId: stri
   const { send, changeModel } = useComposerActions(sessionId)
   const { text, onTextChange } = useComposerText(sessionId)
   const stop = useStop(sessionId)
+  const voice = useComposerVoice(sessionId)
   const access = useComposerAccess(sessionId)
+  const images = useComposerImages(sessionId)
   const modelChoiceLive = useWorkspaceSelector((state) =>
     entry(state.workspace.modelChoices, sessionId),
   )
@@ -225,7 +239,9 @@ const DockComposer = memo(function DockComposer({ sessionId }: { sessionId: stri
         modelNotice={modelNotice}
         onSend={modelBusy ? undefined : send}
         onStop={stop}
+        voice={voice}
         access={access}
+        images={images}
         // In a conversation the field is a reply, and says so in fewer words than the home's question.
         placeholder="Reply…"
       />

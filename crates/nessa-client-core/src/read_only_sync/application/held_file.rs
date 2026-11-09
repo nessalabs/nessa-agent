@@ -12,12 +12,16 @@
 //!   media type, size) --length--> range at that length
 //!   --complete--> the last range asked again all the same: a part never
 //!                 stands in for the gateway saying the file is held now
-//!   --> source.read --busy--> pause, the same range again (bounded)
+//!   --> source.read --busy--> pause; a wait that has ended asks nothing more
 //!                   --answer is the range--> append, next range
 //!                   --anything else--> fail; the part stays for a resume
-//! all ranges --> re-read the part from disk: size and digest
-//!   --match--> keep (sync, link at the output's name only if nothing is
-//!              there, remove the part's name, sync the directory)
+//! all ranges --> the wait has ended: fail; nothing is linked
+//!             --> re-read the part from disk: size and digest
+//!   --match, then the wait has ended--> fail; nothing is linked
+//!   --match--> keep (sync, then link at the output's name only if nothing
+//!              is there). The link is the publication. Removing the part's
+//!              name or syncing the directory can still fail after it, and
+//!              that failure reports the output as published.
 //!   --differ--> discard the part (or empty it), fail; nothing counts as reached
 //! ```
 //! Arrows are calls in order. The source, the pause and the files are ports
@@ -46,28 +50,38 @@ pub(crate) trait HeldFileSource {
     fn read(&mut self, file: &HeldFile, range: HeldRange) -> Result<RangeAnswer, GatewayError>;
 }
 
-/// Waits between retries of a busy range.
-pub(crate) trait Pause {
-    fn pause(&self, delay: Duration);
+/// Waits between retries of a busy range. Callers inject the wait so a test
+/// can refuse to sleep. `ended` is checked by the production wait on each
+/// stop slice, and by the fetch before the range is asked again.
+pub trait Pause: Send + Sync {
+    /// Wait `delay` before the same range is asked again. Return early when
+    /// `ended` is true. A no-op pause records `delay` and ignores `ended`;
+    /// the fetch still asks nothing more once `ended` is true.
+    fn pause(&self, delay: Duration, ended: &dyn Fn() -> bool);
 }
 
 /// The step of the files' lifecycle that failed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum FileStep {
+pub enum FileStep {
+    /// The output or the part could not be opened.
     Open,
     /// Another fetch of the same file holds its part.
     Locked,
+    /// The part or the output could not be read.
     Read,
+    /// The part could not be emptied.
     Restart,
+    /// A range could not be appended to the part.
     Write,
+    /// The part could not be synced before it was linked.
     Sync,
     /// The part could not be linked at the output's name for a reason other
     /// than something being there; a file system without hard links fails
     /// here every time.
     Link,
-    /// The output was linked into place, but its directory could not be
-    /// synced, so it may not survive a crash.
+    /// The directory that holds the output could not be synced.
     SyncDirectory,
+    /// The part's name could not be removed.
     Remove,
     /// The output's name has no room for a part beside it: it names no file,
     /// or the part's name (the output's file name and 70 more bytes) would
@@ -80,7 +94,8 @@ pub(crate) enum FileStep {
 
 /// What is at the output's name before anything is fetched.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum OutputFound {
+pub enum OutputFound {
+    /// Nothing is at the output's name.
     Absent,
     /// Something that cannot be the file, so it was not opened: not a
     /// regular file (a directory, or a link even to nothing, never followed),
@@ -93,11 +108,19 @@ pub(crate) enum OutputFound {
 
 /// Why the part could not be kept under the output's name.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum KeepRefusal {
+pub enum KeepRefusal {
     /// Something appeared at the output's name during the fetch; it is never
     /// replaced.
     OutputExists,
+    /// A local step failed before this keep published the output.
     File(FileStep),
+    /// Cancellation won before the hard link. This keep created no output.
+    Stopped,
+    /// The hard link exists. `step` is the cleanup that then failed.
+    Published {
+        /// The cleanup step that failed after the link.
+        step: FileStep,
+    },
 }
 
 /// The output and the part file it is assembled in. The part is named for
@@ -106,7 +129,7 @@ pub(crate) enum KeepRefusal {
 /// conversation, is never resumed; it is
 /// held exclusively from `open_part` or the first `append` until `keep` or
 /// `discard`, so two fetches never write one part.
-pub(crate) trait FetchFiles {
+pub trait FetchFiles {
     /// What is at the output's name; when it is a regular file of `size`
     /// bytes, every byte of it handed to `visit`.
     fn read_output(
@@ -130,8 +153,18 @@ pub(crate) trait FetchFiles {
     fn append(&mut self, bytes: &[u8]) -> Result<(), FileStep>;
     /// Make the part durable, then give it the output's name only if
     /// nothing is there (`OutputExists` otherwise, whatever is there left as
-    /// it was), and drop the part's own name.
+    /// it was). Once that link exists, a failure to drop the part's name or
+    /// to sync the directory is `Published`: the output is already there.
     fn keep(&mut self) -> Result<(), KeepRefusal>;
+    /// Sync the held part before the link. A failure here has not published
+    /// the output.
+    fn sync_held(&mut self) -> Result<(), KeepRefusal>;
+    /// Hard-link the held part at the output's name. This call is what
+    /// publishes the output.
+    fn link_held(&mut self) -> Result<(), KeepRefusal>;
+    /// Drop the part's name and sync the output's directory. The link
+    /// already exists, so a failure here reports the output as published.
+    fn retire_held(&mut self) -> Result<(), KeepRefusal>;
     /// Remove the part: what it holds is not the file.
     fn discard(&mut self) -> Result<(), FileStep>;
 }
@@ -179,14 +212,19 @@ pub(crate) enum FetchCause {
     Integrity { cleanup: PartCleanup },
     /// Something other than this file is at the output's name.
     OutputExists,
-    /// The local files failed at this step.
+    /// The local files failed at this step, before the output was published.
     File(FileStep),
+    /// The output was linked. `step` failed afterwards.
+    Published { step: FileStep },
 }
 impl FetchCause {
     /// Whether the cause is on this device's files rather than the gateway
     /// or what it sent.
     pub(crate) fn local(self) -> bool {
-        matches!(self, Self::OutputExists | Self::File(_))
+        matches!(
+            self,
+            Self::OutputExists | Self::File(_) | Self::Published { .. }
+        )
     }
 }
 
@@ -231,13 +269,20 @@ pub(crate) fn kept_output(
 /// from the part an earlier run left when it is shorter than the file; one
 /// longer cannot be it and is started again; one already complete still
 /// asks the gateway for its last range, so at least one range is always
-/// asked. Every failure but `Integrity`
-/// leaves the part for a later run to resume.
+/// asked. `ended` cuts a busy wait short and asks no later range. It also
+/// refuses the part's re-read: a deadline that arrives while that re-read
+/// hashes is a cancellation, not an integrity failure, and the part is not
+/// discarded for it. A match already proved is still not linked once
+/// `ended` is true. Every
+/// failure but `Integrity` leaves the part for a later run to resume.
+/// `Published` is past the link: the output is the file, and the part's
+/// name may already be gone.
 pub(crate) fn fetch_held_file(
     source: &mut dyn HeldFileSource,
     pause: &dyn Pause,
     files: &mut dyn FetchFiles,
     file: &HeldFile,
+    ended: &dyn Fn() -> bool,
 ) -> Result<FetchProgress, FetchFailure> {
     let mut progress = FetchProgress::default();
     let fail = |cause, progress| Err(FetchFailure { cause, progress });
@@ -258,7 +303,14 @@ pub(crate) fn fetch_held_file(
         // run's authority to have them: the gateway is asked for the last
         // range again, and anything but that range keeps nothing.
         let range = file.last_range();
-        let answer = match read_range(source, pause, file, range, &mut progress.busy_retries) {
+        let answer = match read_range(
+            source,
+            pause,
+            file,
+            range,
+            &mut progress.busy_retries,
+            ended,
+        ) {
             Ok(answer) => answer,
             Err(error) => return fail(FetchCause::Gateway(error), progress),
         };
@@ -268,7 +320,14 @@ pub(crate) fn fetch_held_file(
         progress.ranges += 1;
     }
     while let Some(range) = file.range_at(progress.reached) {
-        let answer = match read_range(source, pause, file, range, &mut progress.busy_retries) {
+        let answer = match read_range(
+            source,
+            pause,
+            file,
+            range,
+            &mut progress.busy_retries,
+            ended,
+        ) {
             Ok(answer) => answer,
             Err(error) => return fail(FetchCause::Gateway(error), progress),
         };
@@ -281,12 +340,22 @@ pub(crate) fn fetch_held_file(
         progress.reached += range.length();
         progress.ranges += 1;
     }
+    // The last range can land as the budget expires. Verification has not
+    // started, and nothing is linked.
+    if ended() {
+        return fail(FetchCause::Gateway(GatewayError::Cancelled), progress);
+    }
     // What is kept is what is on disk, so that is what is checked.
     let mut hash = Sha256::new();
     let length = match files.read_part(&mut |bytes| hash.update(bytes)) {
         Ok(length) => length,
         Err(step) => return fail(FetchCause::File(step), progress),
     };
+    // The re-read can cross the deadline while it hashes a part that will
+    // not match. That is a cancellation. Integrity cleanup has not started.
+    if ended() {
+        return fail(FetchCause::Gateway(GatewayError::Cancelled), progress);
+    }
     if !is_file(file, length, hash) {
         let cleanup = match files.discard() {
             Ok(()) => PartCleanup::Removed,
@@ -298,10 +367,17 @@ pub(crate) fn fetch_held_file(
         progress.reached = 0;
         return fail(FetchCause::Integrity { cleanup }, progress);
     }
+    // The digest compare can cross the deadline. A match is not
+    // publication; the link is. Do not start that link.
+    if ended() {
+        return fail(FetchCause::Gateway(GatewayError::Cancelled), progress);
+    }
     match files.keep() {
         Ok(()) => Ok(progress),
         Err(KeepRefusal::OutputExists) => fail(FetchCause::OutputExists, progress),
         Err(KeepRefusal::File(step)) => fail(FetchCause::File(step), progress),
+        Err(KeepRefusal::Stopped) => fail(FetchCause::Gateway(GatewayError::Cancelled), progress),
+        Err(KeepRefusal::Published { step }) => fail(FetchCause::Published { step }, progress),
     }
 }
 
@@ -311,22 +387,27 @@ fn is_file(file: &HeldFile, length: u64, hash: Sha256) -> bool {
 }
 
 /// One range, asked again after each of [`BUSY_RETRY_DELAYS_MS`] while the
-/// gateway answers that it is busy.
+/// gateway answers that it is busy. When `ended` is true the range is not
+/// asked again.
 fn read_range(
     source: &mut dyn HeldFileSource,
     pause: &dyn Pause,
     file: &HeldFile,
     range: HeldRange,
     retries: &mut u64,
+    ended: &dyn Fn() -> bool,
 ) -> Result<RangeAnswer, GatewayError> {
     let mut delays = BUSY_RETRY_DELAYS_MS.iter();
     loop {
+        if ended() {
+            return Err(GatewayError::Cancelled);
+        }
         match source.read(file, range) {
             Err(cause) if busy(cause) => {
                 let Some(delay) = delays.next() else {
                     return Err(cause);
                 };
-                pause.pause(Duration::from_millis(*delay));
+                pause.pause(Duration::from_millis(*delay), ended);
                 *retries += 1;
             }
             answer => return answer,

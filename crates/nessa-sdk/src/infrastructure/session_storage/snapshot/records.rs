@@ -20,7 +20,7 @@ use crate::application::agent_execution::{
 };
 use crate::domain::{
     agent_execution::{
-        executions::{ExecutionId, MessageChunk, MessageId, MessageKind},
+        executions::{ExecutionId, Initiator, MessageChunk, MessageId, MessageKind},
         permissions::{
             PermissionEffect, PermissionId, PermissionReviewDeadline, PermissionToolClass,
             RefusalOutcome, ReviewDecline, ReviewDeclineId, ReviewDeclineReason,
@@ -28,13 +28,13 @@ use crate::domain::{
         },
         prompts::{
             AppModelContext as DomainAppModelContext, ImageReference, LinkedFile, McpAppSource,
-            MessageSender, PromptText, UserMessage,
+            MessageSender, PromptText, UploadedFileReference, UserMessage,
         },
         questions::{AgentQuestion, AnswerOption, AnswerShape, Question, QuestionId},
         sessions::ExecutionSessionId,
         tools::{McpTool, ToolCallId},
     },
-    common::value_objects::{ImageMediaType, Sha256Digest},
+    common::value_objects::{ImageMediaType, MediaType, Sha256Digest},
 };
 use serde::{Deserialize, Serialize};
 
@@ -68,6 +68,36 @@ impl Image {
             Sha256Digest::parse(&self.digest).map_err(corrupt)?,
             ImageMediaType::parse(&self.media_type).map_err(corrupt)?,
             self.size,
+        )
+        .map_err(corrupt)
+    }
+}
+/// A durable uploaded input, independent of its eventual placement path.
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct UploadedFile {
+    digest: String,
+    media_type: String,
+    size: u64,
+    name: String,
+}
+impl From<&UploadedFileReference> for UploadedFile {
+    fn from(file: &UploadedFileReference) -> Self {
+        Self {
+            digest: file.digest().to_string(),
+            media_type: file.media_type().as_str().into(),
+            size: file.size(),
+            name: file.name().into(),
+        }
+    }
+}
+impl UploadedFile {
+    fn decode(self) -> Result<UploadedFileReference, StorageError> {
+        UploadedFileReference::new(
+            Sha256Digest::parse(&self.digest).map_err(corrupt)?,
+            MediaType::parse(&self.media_type).map_err(corrupt)?,
+            self.size,
+            self.name,
         )
         .map_err(corrupt)
     }
@@ -171,6 +201,13 @@ impl AppModelContext {
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct Metadata {
+    /// Absence is no resumption evidence; never infer origin from input shape.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) resumed_from: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) decline: Option<SavedDecline>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) cancellation_delivery: Option<SavedCancellation>,
     pub(super) target_event_offset: Option<usize>,
     pub(super) submission: Submission,
     pub(super) execution_id: String,
@@ -179,11 +216,16 @@ pub(super) struct Metadata {
     pub(super) user_images: Vec<Image>,
     /// Empty when a message has no linked files.
     pub(super) user_files: Vec<FileLink>,
+    /// Absent in records written before stored-file input existed means none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(super) user_uploads: Vec<UploadedFile>,
     /// The app that wrote the message on the person's behalf; `null` when
     /// the person did. Required: a record without it is not of this shape
     /// (`deserialize_with` keeps serde from reading its absence as `None`).
     #[serde(deserialize_with = "Option::deserialize")]
     pub(super) user_app: Option<App>,
+    /// Application-generated continuation, never simultaneously an app message.
+    pub(super) user_internal: bool,
     /// What apps gave the model with this message; empty when none did.
     pub(super) user_app_model_context: Vec<AppModelContext>,
     pub(super) estimated_input_tokens: u64,
@@ -254,6 +296,10 @@ pub(super) struct Event<T = String> {
     /// events saved before it was recorded.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) at_ms: Option<u64>,
+    /// The session stamped `at_ms` when it queued the report. Absent means a
+    /// provider time, which the session may replace.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(super) session_arrival: bool,
 }
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -390,9 +436,67 @@ pub(super) enum DeclineDelivery {
     WriteUnconfirmed,
     WriteNotAttempted,
 }
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct SavedDecline {
+    event: super::scheduling::SchedulingEvent,
+    acknowledged: bool,
+}
+impl From<&crate::application::agent_execution::sessions::DeclineDecision> for SavedDecline {
+    fn from(value: &crate::application::agent_execution::sessions::DeclineDecision) -> Self {
+        Self {
+            event: value.event().clone().into(),
+            acknowledged: value.acknowledged(),
+        }
+    }
+}
+impl SavedDecline {
+    pub(super) fn decode(
+        self,
+    ) -> Result<crate::application::agent_execution::sessions::DeclineDecision, StorageError> {
+        Ok(
+            crate::application::agent_execution::sessions::DeclineDecision::new(
+                self.event.decode()?,
+                self.acknowledged,
+            ),
+        )
+    }
+}
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct SavedCancellation {
+    event: super::scheduling::SchedulingEvent,
+    acknowledged: bool,
+}
+impl From<&crate::application::agent_execution::sessions::CancellationDecision>
+    for SavedCancellation
+{
+    fn from(value: &crate::application::agent_execution::sessions::CancellationDecision) -> Self {
+        Self {
+            event: value.event().clone().into(),
+            acknowledged: value.acknowledged(),
+        }
+    }
+}
+impl SavedCancellation {
+    pub(super) fn decode(
+        self,
+    ) -> Result<crate::application::agent_execution::sessions::CancellationDecision, StorageError>
+    {
+        Ok(
+            crate::application::agent_execution::sessions::CancellationDecision::new(
+                self.event.decode()?,
+                self.acknowledged,
+            ),
+        )
+    }
+}
 impl From<&InvocationRecord> for Metadata {
     fn from(value: &InvocationRecord) -> Self {
         Self {
+            resumed_from: value.resumed_from.as_ref().map(|id| id.as_str().into()),
+            decline: value.decline.as_ref().map(Into::into),
+            cancellation_delivery: value.cancellation_delivery.as_ref().map(Into::into),
             target_event_offset: value.target_event_offset,
             submission: value.submission.into(),
             execution_id: value.request.execution_id.as_str().into(),
@@ -404,6 +508,13 @@ impl From<&InvocationRecord> for Metadata {
                 .iter()
                 .map(Into::into)
                 .collect(),
+            user_uploads: value
+                .request
+                .user_message
+                .uploads()
+                .iter()
+                .map(UploadedFile::from)
+                .collect(),
             user_files: value
                 .request
                 .user_message
@@ -412,9 +523,11 @@ impl From<&InvocationRecord> for Metadata {
                 .map(Into::into)
                 .collect(),
             user_app: match value.request.user_message.sender() {
-                MessageSender::Person => None,
+                MessageSender::Person | MessageSender::Internal => None,
                 MessageSender::App(app) => Some(app.into()),
+                MessageSender::Agent(_) => None,
             },
+            user_internal: matches!(value.request.user_message.sender(), MessageSender::Internal),
             user_app_model_context: value
                 .request
                 .user_message
@@ -488,6 +601,7 @@ impl<'a> From<&'a ExecutionEvent> for Event<&'a str> {
             execution_id: event.execution_id().as_str().into(),
             native_hooks: event.native_hooks(),
             at_ms: event.observed_at_ms(),
+            session_arrival: event.session_arrival(),
             update: match event.update() {
                 ExecutionUpdate::Finished(outcome) => Update::Finished((*outcome).into()),
                 ExecutionUpdate::Message(chunk) => match chunk.kind() {
@@ -592,7 +706,29 @@ impl Provider {
 }
 impl Metadata {
     pub(super) fn decode(self) -> Result<InvocationRecord, StorageError> {
+        let initiation = self.initiation.decode()?;
+        // Agent sender origin has one stored owner: the initiation. Internal
+        // input and app messages cannot also claim that agent origin.
+        let sender = match (initiation.initiator(), self.user_internal, self.user_app) {
+            (Initiator::Agent(source), false, None) => MessageSender::Agent(source.clone()),
+            (Initiator::Agent(_), _, _) | (_, true, Some(_)) => {
+                return Err(corrupt("input has two senders"))
+            }
+            (_, false, None) => MessageSender::Person,
+            (_, true, None) => MessageSender::Internal,
+            (_, false, Some(app)) => MessageSender::App(app.decode()?),
+        };
         Ok(InvocationRecord {
+            decline: self.decline.map(SavedDecline::decode).transpose()?,
+            cancellation_delivery: self
+                .cancellation_delivery
+                .map(SavedCancellation::decode)
+                .transpose()?,
+            resumed_from: self
+                .resumed_from
+                .map(ExecutionId::new)
+                .transpose()
+                .map_err(corrupt)?,
             target_event_offset: self.target_event_offset,
             submission: self.submission.into(),
             request: ExecutionRequest {
@@ -613,12 +749,13 @@ impl Metadata {
                         .into_iter()
                         .map(FileLink::decode)
                         .collect::<Result<_, _>>()?,
+                    self.user_uploads
+                        .into_iter()
+                        .map(UploadedFile::decode)
+                        .collect::<Result<_, _>>()?,
                 )
                 .map_err(corrupt)?
-                .sent_by(match self.user_app {
-                    None => MessageSender::Person,
-                    Some(app) => MessageSender::App(app.decode()?),
-                })
+                .sent_by(sender)
                 .with_app_model_context(
                     self.user_app_model_context
                         .into_iter()
@@ -630,7 +767,7 @@ impl Metadata {
                 reserved_output_tokens: self.reserved_output_tokens,
             },
             actor: self.actor.decode()?,
-            initiation: self.initiation.decode()?,
+            initiation,
             notes: self
                 .notes
                 .into_iter()
@@ -843,7 +980,11 @@ impl Event {
             Some(allowed) => event.with_native_hooks(allowed),
             None => event,
         };
+        if self.session_arrival && self.at_ms.is_none() {
+            return Err(corrupt("an arrival stamp needs the queue time"));
+        }
         Ok(match self.at_ms {
+            Some(at_ms) if self.session_arrival => event.stamped_at_arrival(at_ms),
             Some(at_ms) => event.with_observed_at_ms(at_ms),
             None => event,
         })
@@ -969,7 +1110,15 @@ mod borrowed_event_tests {
             .unwrap()
             .contains(r#""at_ms":1700000000123"#));
         assert_eq!(decoded.observed_at_ms(), Some(1_700_000_000_123));
+        assert!(!decoded.session_arrival());
         assert_eq!(decoded, event);
+        let arrived = tool_event().stamped_at_arrival(1_700_000_000_123);
+        let (bytes, decoded) = round_trip(&arrived);
+        let saved = String::from_utf8(bytes).unwrap();
+        assert!(saved.contains(r#""at_ms":1700000000123"#));
+        assert!(saved.contains(r#""session_arrival":true"#));
+        assert!(decoded.session_arrival());
+        assert_eq!(decoded, arrived);
         let (bytes, decoded) = round_trip(&tool_event());
         assert!(!String::from_utf8(bytes).unwrap().contains("at_ms"));
         assert_eq!(decoded.observed_at_ms(), None);

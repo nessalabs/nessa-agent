@@ -103,4 +103,19 @@ describe("noteAuthorLabel", () => {
       { name: "phone" },
     ])
   })
+  it("names an agent's source chat apart from its words", () => {
+    expect(
+      noteAuthorLabel({
+        kind: "agent",
+        surface: "panel",
+        agent: { conversationId: "source-chat", executionId: "source-turn" },
+      }),
+    ).toEqual([
+      "Note left by an agent",
+      " in chat ",
+      { name: "source-chat" },
+      ", from ",
+      { name: "panel" },
+    ])
+  })
 })

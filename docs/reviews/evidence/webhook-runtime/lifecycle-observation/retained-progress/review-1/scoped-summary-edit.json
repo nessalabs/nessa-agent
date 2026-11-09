@@ -1,0 +1,7 @@
+{
+  "path": "/tmp/nessa-retained-progress-independent-review/crates/nessa-server/src/webhooks/infrastructure/outbox/restoration/progress.rs",
+  "before": "FROM audit WHERE registration=?1",
+  "after": "FROM audit WHERE ?1 IS NOT NULL",
+  "sourceSHA256": "b64ddee781249a482655463dad5058e8895806b6cb6288b29c39f263f04b3629",
+  "mutatedSHA256": "cde82c6d90c21b18175730cacd1352be2b6d96cca1f4b6836229757d4a7b9a2c"
+}

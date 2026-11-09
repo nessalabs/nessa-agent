@@ -1,0 +1,72 @@
+Raw attempt: provenance-admission-fixed.log; failed before test execution.
+error[E0061]: this function takes 6 arguments but 5 arguments were supplied
+   --> crates/nessa-server/src/conversation/application/service/thread_report_admission.rs:257:28
+    |
+257 |               let expected = super::mutation::submit_binding(
+    |  ____________________________^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^-
+258 | |                 id,
+259 | |                 &sender,
+260 | |                 record.request.execution_id.as_str(),
+261 | |                 &message,
+262 | |                 mode,
+263 | |             )?;
+    | |_____________- argument #6 of type `std::option::Option<&AgentSource>` is missing
+    |
+note: function defined here
+error[E0277]: the trait bound `nessa_sdk::domain::agent_execution::executions::ExecutionId: From<&str>` is not satisfied
+   --> crates/nessa-server/src/conversation/application/service/../../../../tests/conversation/channels.rs:946:33
+    |
+946 |             execution: "active".into(),
+    |                                 ^^^^ the trait `From<&str>` is not implemented for `nessa_sdk::domain::agent_execution::executions::ExecutionId`
+    |
+    = note: required for `&str` to implement `Into<nessa_sdk::domain::agent_execution::executions::ExecutionId>`
+
+error[E0277]: the trait bound `nessa_sdk::domain::agent_execution::executions::ExecutionId: From<&str>` is not satisfied
+  --> crates/nessa-server/src/conversation/application/service/../../../../tests/conversation/parent_stop.rs:88:30
+   |
+88 |         execution: execution.into(),
+   |                              ^^^^ the trait `From<&str>` is not implemented for `nessa_sdk::domain::agent_execution::executions::ExecutionId`
+   |
+error[E0277]: the trait bound `nessa_sdk::domain::agent_execution::executions::ExecutionId: From<&str>` is not satisfied
+  --> crates/nessa-server/src/conversation/application/service/../../../../tests/conversation/parent_stop.rs:88:30
+   |
+88 |         execution: execution.into(),
+   |                              ^^^^ the trait `From<&str>` is not implemented for `nessa_sdk::domain::agent_execution::executions::ExecutionId`
+   |
+   = note: required for `&str` to implement `Into<nessa_sdk::domain::agent_execution::executions::ExecutionId>`
+
+error[E0308]: mismatched types
+    --> crates/nessa-server/src/conversation/application/service/../../../../tests/conversation/parent_stop.rs:1864:32
+     |
+1864 |                     execution: parent_execution.clone(),
+     |                                ^^^^^^^^^^^^^^^^^^^^^^^^ expected `ExecutionId`, found `String`
+
+error[E0308]: mismatched types
+    --> crates/nessa-server/src/conversation/application/service/../../../../tests/conversation/parent_stop.rs:1864:32
+     |
+1864 |                     execution: parent_execution.clone(),
+     |                                ^^^^^^^^^^^^^^^^^^^^^^^^ expected `ExecutionId`, found `String`
+
+error[E0063]: missing field `source` in initializer of `conversation::application::service::Writer`
+   --> crates/nessa-server/src/conversation/application/service/../../../../tests/conversation/thread_report_registry.rs:374:13
+    |
+374 |             Writer::ThreadReport {
+    |             ^^^^^^^^^^^^^^^^^^^^ missing `source`
+
+warning: constant evaluation is taking a long time
+    --> crates/nessa-protocol/src/lease.rs:1048:9
+error[E0063]: missing field `source` in initializer of `conversation::application::service::Writer`
+   --> crates/nessa-server/src/conversation/application/service/../../../../tests/conversation/thread_report_registry.rs:374:13
+    |
+374 |             Writer::ThreadReport {
+    |             ^^^^^^^^^^^^^^^^^^^^ missing `source`
+
+warning: constant evaluation is taking a long time
+    --> crates/nessa-protocol/src/lease.rs:1048:9
+     |
+1048 | /         while at < source.len() {
+1049 | |             if source[at] != b'\r' {
+1050 | |                 hash = (hash ^ source[at] as u64).wrapping_mul(PRIME);
+...    |
+1053 | |         }
+error: could not compile `nessa-server` (lib test) due to 5 previous errors; 1 warning emitted

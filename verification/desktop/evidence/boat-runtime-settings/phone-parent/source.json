@@ -1,0 +1,15 @@
+{
+  "sourceRevision": "afbeb468ba54528835fbf152046472042ac612ff",
+  "baseRevision": "079798f614e59f28848a27af8121befef5ee0349",
+  "workerProtocol": "b6e4f48aa694ce08",
+  "workerImage": "bsh_1WtCS3oK4SWwNbdpOnBXzFPq_PwIT1aGCwnJSQHWakU",
+  "review": "Fresh combined round 1 clean at all priorities",
+  "backend": {
+    "serverPassed": 4010,
+    "serverExistingIgnored": 16,
+    "exactPackages": "local-storage/auth/server/protocol/client-core/device-client/sdk/vault",
+    "clippy": "same selection, all-targets, -D warnings passed",
+    "gatewayBuild": "passed"
+  },
+  "remaining": "Current-head CI, full desktop/performance and companion Swift contract verification are not claimed complete."
+}

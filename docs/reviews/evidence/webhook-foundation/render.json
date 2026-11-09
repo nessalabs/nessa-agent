@@ -1,0 +1,27 @@
+{
+  "page": "gateway-webhook-foundation",
+  "rendererRevision": "c0bc0627611b100ab71a96cc6fe2fb65f1a014d8",
+  "sourceRevision": "04a421a47711a3c326a7cd4e1ab23bd9cf17f1b8",
+  "browser": "151.0.7922.173",
+  "diagrams": [
+    {
+      "state": "rendered",
+      "svgs": 4,
+      "rect": {
+        "width": 1136,
+        "height": 781.34375
+      },
+      "text": "Delivery value transitionsIn DetailsFit75%#mmd-1{font-family:\"Geist Variable\",Geist,ui-sans-serif,system-ui,sans-serif;f"
+    },
+    {
+      "state": "rendered",
+      "svgs": 4,
+      "rect": {
+        "width": 1136,
+        "height": 844
+      },
+      "text": "Prepared transport callIn DetailsFit92%#mmd-2{font-family:\"Geist Variable\",Geist,ui-sans-serif,system-ui,sans-serif;font"
+    }
+  ],
+  "pageErrors": []
+}

@@ -1,0 +1,20 @@
+[
+  {
+    "rule": "actual-receipt-origin",
+    "caught": true,
+    "restored": true,
+    "identical": true
+  },
+  {
+    "rule": "product-semantics",
+    "caught": true,
+    "restored": true,
+    "identical": true
+  },
+  {
+    "rule": "typed-forwarding",
+    "caught": true,
+    "restored": true,
+    "identical": true
+  }
+]

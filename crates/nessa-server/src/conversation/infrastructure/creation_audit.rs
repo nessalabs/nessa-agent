@@ -1,4 +1,5 @@
 //! Durable conversation-creation evidence, committed before creation is acknowledged.
+use super::audit_diagnostics::{observe_io, unavailable};
 use crate::conversation::application::{
     ConversationCreationAudit, ConversationCreationAuditRecord, ConversationCreationCause,
     ConversationError, ConversationFuture, ConversationOwnershipState,
@@ -17,7 +18,7 @@ pub struct DurableConversationCreationAudit {
 
 impl DurableConversationCreationAudit {
     pub fn new(directory: PathBuf) -> Result<Self, ConversationError> {
-        create_directory(&directory).map_err(|_| ConversationError::Audit)?;
+        creation_io("create_directory", create_directory(&directory))?;
         Ok(Self { directory })
     }
 }
@@ -54,20 +55,21 @@ impl ConversationCreationAudit for DurableConversationCreationAudit {
         let directory = self.directory.clone();
         Box::pin(async move {
             tokio::task::spawn_blocking(move || {
+                let _span = tracing::error_span!("creation_audit", record_id = %id).entered();
                 let destination = directory.join(format!("{id}.json"));
                 if initial {
                     match open(&destination, OpenMode::Read) {
                         Ok(mut file) => {
                             let mut bytes = Vec::new();
-                            Read::by_ref(&mut file)
-                                .take(16_385)
-                                .read_to_end(&mut bytes)
-                                .map_err(|_| ConversationError::Audit)?;
+                            creation_io(
+                                "read_existing",
+                                Read::by_ref(&mut file).take(16_385).read_to_end(&mut bytes),
+                            )?;
                             if bytes.len() > 16_384 {
-                                return Err(ConversationError::Audit);
+                                return Err(failure("existing_record_size"));
                             }
                             let mut stored: serde_json::Value = serde_json::from_slice(&bytes)
-                                .map_err(|_| ConversationError::Audit)?;
+                                .map_err(|_| failure("decode_existing"))?;
                             let mut expected = value.clone();
                             let _ = stored
                                 .as_object_mut()
@@ -76,30 +78,42 @@ impl ConversationCreationAudit for DurableConversationCreationAudit {
                                 .as_object_mut()
                                 .and_then(|value| value.remove("observedAtMs"));
                             if stored != expected {
-                                return Err(ConversationError::Audit);
+                                return Err(failure("existing_record_mismatch"));
                             }
-                            return sync_directory(&directory)
-                                .map_err(|_| ConversationError::Audit);
+                            return creation_io("sync_directory", sync_directory(&directory));
                         }
                         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                        Err(_) => return Err(ConversationError::Audit),
+                        Err(error) => return creation_io("open_existing", Err(error)),
                     }
                 }
-                let mut file =
-                    PrivateTempFile::new_in(&directory).map_err(|_| ConversationError::Audit)?;
-                serde_json::to_writer(file.as_file_mut(), &value)
-                    .map_err(|_| ConversationError::Audit)?;
-                file.as_file_mut()
-                    .write_all(b"\n")
-                    .and_then(|_| file.as_file().sync_all())
-                    .map_err(|_| ConversationError::Audit)?;
-                file.persist(&destination)
-                    .map_err(|_| ConversationError::Audit)?;
-                sync_directory(&directory).map_err(|_| ConversationError::Audit)
+                let mut file = creation_io("create_temp", PrivateTempFile::new_in(&directory))?;
+                serde_json::to_writer(file.as_file_mut(), &value).map_err(encoding_failure)?;
+                creation_io("write_newline", file.as_file_mut().write_all(b"\n"))?;
+                creation_io("sync_file", file.as_file().sync_all())?;
+                creation_io("persist", file.persist(&destination))?;
+                creation_io("sync_directory", sync_directory(&directory))
             })
             .await
-            .map_err(|_| ConversationError::Audit)?
+            .map_err(|_| failure("worker"))?
         })
+    }
+}
+
+fn creation_io<T>(phase: &'static str, result: std::io::Result<T>) -> Result<T, ConversationError> {
+    observe_io("creation", phase, result).map_err(|_| ConversationError::Audit)
+}
+
+fn failure(phase: &'static str) -> ConversationError {
+    unavailable("creation", phase);
+    ConversationError::Audit
+}
+
+fn encoding_failure(error: serde_json::Error) -> ConversationError {
+    if error.is_io() {
+        let _ = observe_io::<()>("creation", "write_record", Err(error.into()));
+        ConversationError::Audit
+    } else {
+        failure("encode")
     }
 }
 

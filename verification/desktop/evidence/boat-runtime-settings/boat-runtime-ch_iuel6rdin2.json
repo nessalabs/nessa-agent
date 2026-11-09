@@ -1,0 +1,30 @@
+{
+  "before": {
+    "defaultLifetime": {
+      "mode": "never"
+    }
+  },
+  "default": {
+    "defaultLifetime": {
+      "mode": "after",
+      "seconds": 14400
+    }
+  },
+  "override": {
+    "defaultLifetime": {
+      "mode": "after",
+      "seconds": 14400
+    },
+    "channelId": "ch_iuel6rdin2",
+    "channelOverride": {
+      "mode": "never"
+    }
+  },
+  "inherited": {
+    "defaultLifetime": {
+      "mode": "after",
+      "seconds": 14400
+    },
+    "channelId": "ch_iuel6rdin2"
+  }
+}

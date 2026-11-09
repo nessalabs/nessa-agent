@@ -10,26 +10,36 @@
 //! sends a host this build does not run on (issue #734).
 //! `peer.rs` is the paired environments (issue #706): the same adapter, over
 //! a connection the host dials into this gateway's native listener.
+//! `logins.rs` asks which saved login a harness started on a host is
+//! given (issue #1260).
 //! Unix only, as its composition (`composition/local_auth.rs`) and the
 //! `nessa env serve` it speaks to are.
 //!
 //! [`Environment`]: crate::conversation::application::Environment
 mod audit;
+pub(crate) use audit::{EnvironmentAudit, EnvironmentEvent};
 mod connector;
+pub(crate) use connector::{ArtifactTransport, LeaseConnection, WorkspaceConnector};
 mod durable_audit;
 mod environment;
 mod install;
 mod link;
+mod logins;
+pub(crate) use logins::SavedLogins;
 mod open_ssh;
 mod peer;
+mod peer_update;
+pub(crate) use peer_update::PeerUpdates;
 mod release;
 mod sftp;
 mod transfer;
 pub(crate) use durable_audit::DurableEnvironmentAudit;
 pub(crate) use environment::{SshEnvironment, SshTimings};
-pub(crate) use install::HostInstaller;
-pub(crate) use open_ssh::OpenSshConnector;
-pub(crate) use peer::{PeerEnvironments, ServingCredentials};
+#[cfg(test)]
+pub(crate) use install::{Build, BuildSource, InstallTimings};
+pub(crate) use install::{HostInstaller, RemoteShell, ShellFuture};
+pub(crate) use open_ssh::{log_stderr, read_tail, OpenSshConnector};
+pub(crate) use peer::{PeerEnvironments, ServingCredentials, Sightings};
 
 #[cfg(test)]
 #[path = "../../../../tests/conversation/ssh_environment.rs"]
@@ -38,3 +48,6 @@ mod tests;
 #[cfg(test)]
 #[path = "../../../../tests/conversation/ssh_artifacts.rs"]
 mod artifact_tests;
+
+#[cfg(test)]
+pub(crate) use tests::preparation_environment;

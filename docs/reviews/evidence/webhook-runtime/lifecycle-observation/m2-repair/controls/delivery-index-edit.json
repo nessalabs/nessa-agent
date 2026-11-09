@@ -1,0 +1,6 @@
+{
+  "before": "FROM deliveries WHERE registration=?1)",
+  "after": "FROM deliveries NOT INDEXED WHERE registration=?1)",
+  "originalSHA256": "414539bc2d69209ae414ae483c1309b26a6893763b3cc3e51205882f7d3f24fa",
+  "mutatedSHA256": "eb170aa3effa34b15e9e48179a576862819f33f905acffe27e542745bae15bea"
+}

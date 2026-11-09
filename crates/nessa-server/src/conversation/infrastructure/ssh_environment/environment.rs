@@ -52,6 +52,7 @@ use super::{
         AdmissionRefused, CommandAnswer, Granted, HostLink, Liveness, Opening, Published,
         StartError,
     },
+    logins::SavedLogins,
     peer::ServingCredentials,
     transfer::{FrameBytes, SftpBytes},
 };
@@ -63,8 +64,10 @@ use crate::conversation::application::{
 };
 use crate::conversation::application::{BudgetPlace, OrganizationBudgets};
 use nessa_auth::application::pairing::DeviceConnectionProof;
+use nessa_protocol::agents::AgentId;
 use nessa_protocol::lease::{
-    self, Cleanup, CommandEnd, GrantRefusal, COMMAND_STOP_WAIT, KEEPALIVE_INTERVAL, SILENCE_LIMIT,
+    self, Cleanup, CommandEnd, GrantRefusal, Login, COMMAND_STOP_WAIT, KEEPALIVE_INTERVAL,
+    SILENCE_LIMIT,
 };
 use nessa_sdk::application::agent_execution::{
     agents::AgentError,
@@ -121,10 +124,16 @@ struct Inner {
     /// opened again once lost, held while connecting, so one is opened at a
     /// time. A paired environment's is [`Reach::Peer`]'s `serving`.
     link: Mutex<Option<Arc<HostLink>>>,
+    /// Where a lease the host grants `takesLogin` asks for its agent's saved
+    /// login; `None` gives every harness none.
+    logins: Option<Arc<dyn SavedLogins>>,
 }
 
 /// How a host's connection is had.
 enum Reach {
+    Workspace {
+        connector: Arc<dyn super::connector::WorkspaceConnector>,
+    },
     /// This gateway runs `ssh` to it.
     Ssh {
         host: SshDestination,
@@ -176,6 +185,35 @@ fn served(serving: &std::sync::Mutex<Option<Served>>) -> Option<Served> {
 }
 
 impl SshEnvironment {
+    /// No opening call, command or lease retains this environment's inner owner.
+    /// The retaining workspace cache also checks that nobody borrows its wrapper.
+    pub(crate) fn unowned(&self) -> bool {
+        Arc::strong_count(&self.inner) == 1
+    }
+
+    /// Let go of a workspace's connection while nothing uses it, so the VM
+    /// behind it may stop; the next lease connects again. In use is a lease
+    /// on it, or anyone else holding it at all: an opening holds the link
+    /// from `link()` until its grant is recorded, and each lease, host and
+    /// command holds it until it ends. A new opening takes the lock this
+    /// holds while it looks. Answers whether nothing is held now; `false`
+    /// for any other reach.
+    pub(crate) async fn let_go(&self) -> bool {
+        if !matches!(self.inner.reach, Reach::Workspace { .. }) {
+            return false;
+        }
+        let mut held = self.inner.link.lock().await;
+        let link = match held.as_ref() {
+            None => return true,
+            Some(link) if !link.holds_nothing() || Arc::strong_count(link) > 1 => return false,
+            Some(_) => held.take().expect("looked at above"),
+        };
+        drop(held);
+        link.close();
+        link.ended().await;
+        true
+    }
+
     pub(crate) fn new(
         host: SshDestination,
         connector: Arc<dyn LeaseConnector>,
@@ -191,6 +229,20 @@ impl SshEnvironment {
             },
             audit,
             timings,
+        )
+    }
+
+    pub(crate) fn workspace(
+        connector: Arc<dyn super::connector::WorkspaceConnector>,
+        audit: Arc<dyn EnvironmentAudit>,
+    ) -> Self {
+        Self::reached(
+            Reach::Workspace { connector },
+            audit,
+            SshTimings {
+                connect: Duration::from_secs(120),
+                ..SshTimings::default()
+            },
         )
     }
 
@@ -224,8 +276,24 @@ impl SshEnvironment {
                 audit,
                 timings,
                 link: Mutex::new(None),
+                logins: None,
             }),
         }
+    }
+
+    /// Ask `logins` for the saved login of each lease the host grants
+    /// `takesLogin`. Only before the environment is shared.
+    /// Composition only: called on an environment nothing else holds yet.
+    pub(crate) fn with_logins(mut self, logins: Arc<dyn SavedLogins>) -> Self {
+        let inner = Arc::get_mut(&mut self.inner);
+        debug_assert!(
+            inner.is_some(),
+            "saved logins are given before the environment is shared"
+        );
+        if let Some(inner) = inner {
+            inner.logins = Some(logins);
+        }
+        self
     }
 
     /// Serve this paired environment's leases over `connection`, which
@@ -237,7 +305,15 @@ impl SshEnvironment {
     /// list changes when the connection is admitted and again when it ends,
     /// and each is said on `connections` once the change is made, so whoever
     /// it wakes reads the list as it is after it.
-    pub(super) async fn serve(&self, proof: DeviceConnectionProof, connection: LeaseConnection) {
+    /// `reported` is told each machine report the connection carries.
+    /// Answers whether the environment served and then left on its own:
+    /// not for a refused hello, nor for a connection whose key was revoked.
+    pub(super) async fn serve(
+        &self,
+        proof: DeviceConnectionProof,
+        connection: LeaseConnection,
+        reported: &(dyn Fn(nessa_protocol::lease::MachineReport) + Send + Sync),
+    ) -> bool {
         let Reach::Peer {
             serving,
             credentials,
@@ -245,7 +321,7 @@ impl SshEnvironment {
             ..
         } = &self.inner.reach
         else {
-            return;
+            return false;
         };
         let opened = HostLink::over(
             &self.inner.name(),
@@ -256,7 +332,7 @@ impl SshEnvironment {
         )
         .await;
         let Ok(link) = opened else {
-            return;
+            return false;
         };
         let proof = Arc::new(proof);
         let replaced = serving
@@ -273,10 +349,20 @@ impl SshEnvironment {
         let ended = link.ended();
         let revoked = self.inner.until_revoked(credentials.as_ref(), &proof);
         let drains = link.drains();
+        let mut machines = link.machines();
         tokio::pin!(ended, revoked, drains);
         let mut draining = false;
+        let mut reporting = true;
         loop {
             tokio::select! {
+                changed = machines.changed(), if reporting => match changed {
+                    Ok(()) => {
+                        if let Some(report) = machines.borrow_and_update().clone() {
+                            reported(report);
+                        }
+                    }
+                    Err(_) => reporting = false,
+                },
                 () = &mut ended => break,
                 () = &mut revoked => {
                     self.inner.revoke(&link);
@@ -292,6 +378,7 @@ impl SshEnvironment {
             }
         }
         moved(connections);
+        !link.revoked()
     }
 
     /// Revoke the connection it holds now, as a paired environment's is
@@ -307,6 +394,16 @@ impl SshEnvironment {
     /// Whether a connection to it serves leases now.
     pub(super) fn is_connected(&self) -> bool {
         self.reachable() == Some(true)
+    }
+
+    /// The latest report the machine behind its current connection sent,
+    /// whether or not that connection serves leases now: `None` with no
+    /// connection, or before one reported.
+    pub(super) fn machine(&self) -> Option<nessa_protocol::lease::MachineReport> {
+        let Reach::Peer { serving, .. } = &self.inner.reach else {
+            return None;
+        };
+        served(serving).and_then(|served| served.link.machine())
     }
 
     /// What a paired environment's connection carries now, read off that
@@ -352,6 +449,7 @@ impl Inner {
     fn environment(&self) -> EnvironmentRef {
         match &self.reach {
             Reach::Ssh { host, .. } => EnvironmentRef::Ssh(host.clone()),
+            Reach::Workspace { .. } => EnvironmentRef::Boat,
             Reach::Peer { peer, .. } => EnvironmentRef::Peer(*peer),
         }
     }
@@ -392,7 +490,34 @@ impl Inner {
     }
 
     async fn link(&self, install: Install<'_>) -> Result<Arc<HostLink>, LeaseRefusal> {
+        if let Reach::Workspace { connector } = &self.reach {
+            let mut held = self.link.lock().await;
+            if let Some(link) = held.as_ref().filter(|link| link.is_open()) {
+                return Ok(link.clone());
+            }
+            let connection = tokio::time::timeout(
+                self.timings.connect,
+                connector.connect(install != Install::Never),
+            )
+            .await
+            .map_err(|_| LeaseRefusal::EnvironmentUnreachable)??;
+            let link = HostLink::over(
+                &self.name(),
+                connection,
+                self.audit.clone(),
+                self.timings.connect,
+                self.liveness(),
+            )
+            .await
+            .map_err(|error| match error {
+                Opening::Refused(reason) => reason,
+                Opening::NotServed => LeaseRefusal::EnvironmentUnreachable,
+            })?;
+            *held = Some(link.clone());
+            return Ok(link);
+        }
         let (host, connector, installer) = match &self.reach {
+            Reach::Workspace { .. } => unreachable!("workspace connection handled above"),
             Reach::Ssh {
                 host,
                 connector,
@@ -555,9 +680,13 @@ impl Environment for SshEnvironment {
             let LeaseWork::Agent(work) = &grant.work;
             let place = self.inner.budget_place(Work::Lease)?;
             let link = self.inner.link(Install::IfAbsent(lease.as_str())).await?;
+            let released = Arc::new(std::sync::OnceLock::new());
+            let login = Arc::new(std::sync::OnceLock::new());
             let host: Arc<dyn HarnessHost> = Arc::new(LeaseHost {
+                released: released.clone(),
                 link: link.clone(),
                 lease: lease.as_str().into(),
+                login: login.clone(),
             });
             let provider = binding.on_host(host.clone()).map_err(|error| {
                 tracing::warn!(agent = work.agent(), %error, "this agent's binding cannot start its harness on a host");
@@ -577,12 +706,26 @@ impl Environment for SshEnvironment {
                     self.inner.timings.answer,
                 )
                 .await?;
+            // Asked only once the host's own grant takes one, and set before
+            // the binding can start anything: the lease is not returned yet.
+            if terms.takes_login {
+                let saved = match (&self.inner.logins, AgentId::parse(work.agent())) {
+                    (Some(logins), Some(agent)) => {
+                        logins
+                            .login(&self.inner.environment(), agent, lease.as_str())
+                            .await
+                    }
+                    _ => None,
+                };
+                let _ = login.set(saved);
+            }
             let workspace = Some(link.workspace().to_string_lossy().into_owned());
             Ok(EnvironmentLease {
                 provider,
                 workspace,
                 granted: granted(terms),
                 hold: Arc::new(SshHold {
+                    released,
                     host,
                     inner: self.inner.clone(),
                     link,
@@ -881,6 +1024,8 @@ fn offer_artifacts(
 
 /// The gateway's side of one lease on a host.
 struct SshHold {
+    /// Actual audited End/account receipt, shared only with this lease's controls.
+    released: Arc<std::sync::OnceLock<CloseOutcome>>,
     host: Arc<dyn HarnessHost>,
     inner: Arc<Inner>,
     link: Arc<HostLink>,
@@ -989,7 +1134,14 @@ impl LeaseHold for SshHold {
                 return LeaseRelease::Unanswered;
             }
             match evidence {
-                Some(cleanup) => LeaseRelease::Released(cleanup),
+                Some(cleanup) => {
+                    let physical = match cleanup {
+                        LeaseCleanup::Confirmed { forced } => CloseOutcome { forced },
+                        LeaseCleanup::NotHeld => CloseOutcome { forced: false },
+                    };
+                    let _ = self.released.set(physical);
+                    LeaseRelease::Released(cleanup)
+                }
                 None => LeaseRelease::Unanswered,
             }
         })
@@ -1007,11 +1159,21 @@ impl Drop for SshHold {
 
 /// The host as a binding sees it, for one lease.
 struct LeaseHost {
+    released: Arc<std::sync::OnceLock<CloseOutcome>>,
     link: Arc<HostLink>,
     lease: String,
+    /// The saved login each harness under the lease is started with, set
+    /// once at its grant; unset or `None` starts it with none.
+    login: Arc<std::sync::OnceLock<Option<Login>>>,
 }
 
 impl HarnessHost for LeaseHost {
+    fn mcp_relay(
+        &self,
+    ) -> Option<&dyn nessa_sdk::application::agent_execution::providers::HarnessMcpRelay> {
+        self.link.mcp_relay()
+    }
+
     fn workspace(&self) -> &Path {
         self.link.workspace()
     }
@@ -1032,7 +1194,11 @@ impl HarnessHost for LeaseHost {
         }
         let started = self
             .link
-            .start(&self.lease, environment)
+            .start(
+                &self.lease,
+                environment,
+                self.login.get().cloned().flatten(),
+            )
             .map_err(|error| match error {
                 StartError::Closed => AgentError::Closed,
                 StartError::Busy => AgentError::Backpressure,
@@ -1044,6 +1210,7 @@ impl HarnessHost for LeaseHost {
             input: Box::new(started.input),
             output: Box::new(started.output),
             control: Box::new(SshControl {
+                released: self.released.clone(),
                 link: self.link.clone(),
                 lease: self.lease.clone(),
                 channel: started.channel,
@@ -1054,6 +1221,7 @@ impl HarnessHost for LeaseHost {
 
 /// How the binding stops its harness on the host.
 struct SshControl {
+    released: Arc<std::sync::OnceLock<CloseOutcome>>,
     link: Arc<HostLink>,
     lease: String,
     channel: u32,
@@ -1062,6 +1230,12 @@ struct SshControl {
 impl HarnessControl for SshControl {
     fn cleanup(&mut self, grace: Duration, kill_timeout: Duration) -> HarnessCleanupFuture<'_> {
         Box::pin(async move {
+            // End may have been acknowledged on a replacement connection. Join
+            // that same lease owner's real receipt even if this control's old
+            // connection is now gone; the SDK still releases its own use guard.
+            if let Some(outcome) = self.released.get() {
+                return Ok(*outcome);
+            }
             match self
                 .link
                 .stop(&self.lease, self.channel, grace, kill_timeout)

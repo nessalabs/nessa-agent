@@ -11,14 +11,26 @@ const shared = JSON.parse(
     ),
     "utf8",
   ),
-) as { cases: { child: string; outcome: string; reply: string | null; header: string }[] }
+) as {
+  cases: {
+    child: string
+    execution: string
+    outcome: string
+    reply: string | null
+    header: string
+  }[]
+}
 
 it("reads the gateway's heading: which thread, and how its turn ended", () => {
   for (const case_ of shared.cases) {
     const text = case_.reply
       ? `${case_.header}\n\nIts reply:\n${case_.reply}`
       : `${case_.header}\n\nThe gateway restarted before the turn finished.`
-    expect(threadReportOf(text)).toEqual({ thread: case_.child, outcome: case_.outcome })
+    expect(threadReportOf(text)).toEqual({
+      thread: case_.child,
+      execution: case_.execution,
+      outcome: case_.outcome,
+    })
   }
 })
 

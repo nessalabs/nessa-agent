@@ -1,0 +1,14 @@
+
+running 1 test
+
+thread 'webhooks::infrastructure::outbox::store::tests::registration_tests::lifecycle_tests::owed_observation_and_retired_stop_refuse_cross_record_substitutions_before_publication' (140430) panicked at /tmp/nessa-lifecycle-frozen/crates/nessa-server/src/webhooks/infrastructure/outbox/../../../../tests/webhooks/infrastructure/outbox/lifecycle.rs:427:17:
+false/initiator: {"kind":"webhook_registration","recordId":"b0e9eef6-33ee-4ad4-befa-e09bd5a9c1de","registration":"15132a01-dd58-4357-94c3-ca64b5f88f5d","credential":"credential-c6ae063f-5912-4849-9989-da154a4e446a","principal":"hook","organization":"org","owner":"owner","before":"delivering","after":"expiry_observed","cause":"credential_expiry_observed","initiator":"owner:other-reader","atMs":100000}
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test webhooks::infrastructure::outbox::store::tests::registration_tests::lifecycle_tests::owed_observation_and_retired_stop_refuse_cross_record_substitutions_before_publication ... FAILED
+
+failures:
+
+failures:
+    webhooks::infrastructure::outbox::store::tests::registration_tests::lifecycle_tests::owed_observation_and_retired_stop_refuse_cross_record_substitutions_before_publication
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 104 filtered out; finished in 0.01s

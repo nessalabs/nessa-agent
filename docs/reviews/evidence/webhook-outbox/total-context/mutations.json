@@ -1,0 +1,226 @@
+[
+  {
+    "index": 0,
+    "file": "restoration.rs",
+    "rule": "if audit::checked_target(credential, principal, organization, owner)? != *target",
+    "test": "registration_issue_evidence_matches_retained_target",
+    "mutationCaught": true,
+    "restoredPassed": true
+  },
+  {
+    "index": 1,
+    "file": "restoration.rs",
+    "rule": "if *at_ms != issued_at",
+    "test": "registration_issue_evidence_matches_retained_target",
+    "mutationCaught": true,
+    "restoredPassed": true
+  },
+  {
+    "index": 2,
+    "file": "restoration.rs",
+    "rule": "if stop != Some(&audit::check_stop(cause, initiator, *at_ms)?)",
+    "test": "registration_stop_evidence_matches_original_stop_and_target",
+    "mutationCaught": true,
+    "restoredPassed": true
+  },
+  {
+    "index": 3,
+    "file": "restoration.rs",
+    "rule": "retired.audit != uuid(record_id)?",
+    "test": "retirement_evidence_uses_retained_original_facts_after_private_row_deletion",
+    "mutationCaught": true,
+    "restoredPassed": true
+  },
+  {
+    "index": 4,
+    "file": "restoration.rs",
+    "rule": "retired.at_ms != *at_ms",
+    "test": "retirement_evidence_uses_retained_original_facts_after_private_row_deletion",
+    "mutationCaught": true,
+    "restoredPassed": true
+  },
+  {
+    "index": 5,
+    "file": "restoration.rs",
+    "rule": "retired.stop\n                            != audit::check_stop(\n                                stop_cause.as_ref().ok_or(OutboxError::Invalid)?,\n                                initiator,\n                                stop_at_ms.ok_or(OutboxError::Invalid)?,\n                            )?",
+    "test": "retirement_evidence_uses_retained_original_facts_after_private_row_deletion",
+    "mutationCaught": true,
+    "restoredPassed": true
+  },
+  {
+    "index": 6,
+    "file": "restoration.rs",
+    "rule": "current.scope != prior_scope.checked()?",
+    "test": "cursor_evidence_matches_complete_original_reset_observation",
+    "mutationCaught": true,
+    "restoredPassed": true
+  },
+  {
+    "index": 7,
+    "file": "restoration.rs",
+    "rule": "current.position != *prior_position",
+    "test": "cursor_evidence_matches_complete_original_reset_observation",
+    "mutationCaught": true,
+    "restoredPassed": true
+  },
+  {
+    "index": 8,
+    "file": "restoration.rs",
+    "rule": "reset.observed_scope != observed_scope.checked()?",
+    "test": "cursor_evidence_matches_complete_original_reset_observation",
+    "mutationCaught": true,
+    "restoredPassed": true
+  },
+  {
+    "index": 9,
+    "file": "restoration.rs",
+    "rule": "reset.stop.initiator != audit::check_reader(initiator, id)?",
+    "test": "cursor_evidence_matches_complete_original_reset_observation",
+    "mutationCaught": true,
+    "restoredPassed": true
+  },
+  {
+    "index": 10,
+    "file": "restoration.rs",
+    "rule": "reset.stop.at_ms != *at_ms",
+    "test": "cursor_evidence_matches_complete_original_reset_observation",
+    "mutationCaught": true,
+    "restoredPassed": true
+  },
+  {
+    "index": 11,
+    "file": "restoration.rs",
+    "rule": "evidence.target != registration.registration.target",
+    "test": "delivery_evidence_matches_enclosing_facts_before_publication",
+    "mutationCaught": true,
+    "restoredPassed": true
+  },
+  {
+    "index": 12,
+    "file": "restoration.rs",
+    "rule": "evidence.scope != saved.scope",
+    "test": "delivery_evidence_matches_enclosing_facts_before_publication",
+    "mutationCaught": true,
+    "restoredPassed": true
+  },
+  {
+    "index": 13,
+    "file": "restoration.rs",
+    "rule": "evidence.position != saved.position",
+    "test": "delivery_evidence_matches_enclosing_facts_before_publication",
+    "mutationCaught": true,
+    "restoredPassed": true
+  },
+  {
+    "index": 14,
+    "file": "publication.rs",
+    "rule": "super::restoration::validate_owed(connection)?;",
+    "test": "complete_owed_batch_is_checked_before_first_publication",
+    "mutationCaught": true,
+    "restoredPassed": true
+  },
+  {
+    "index": 15,
+    "file": "retirement.rs",
+    "rule": "if count > MAX_REGISTRATIONS",
+    "test": "retirement_evidence_uses_retained_original_facts_after_private_row_deletion",
+    "mutationCaught": true,
+    "restoredPassed": true
+  },
+  {
+    "index": 16,
+    "file": "retirement.rs",
+    "rule": "cause: audit::Cause::Drained,",
+    "test": "retirement_evidence_uses_retained_original_facts_after_private_row_deletion",
+    "mutationCaught": true,
+    "restoredPassed": true
+  },
+  {
+    "index": 17,
+    "file": "journal.rs",
+    "rule": "connection.execute(\"DELETE FROM retirements WHERE NOT EXISTS(SELECT 1 FROM audit WHERE audit.registration=retirements.id)\",[]).map_err(unavailable)?;",
+    "test": "retirement_evidence_uses_retained_original_facts_after_private_row_deletion",
+    "mutationCaught": true,
+    "restoredPassed": true
+  },
+  {
+    "index": 18,
+    "file": "schema.sql",
+    "rule": " REFERENCES audit(id) DEFERRABLE INITIALLY DEFERRED",
+    "test": "retirement_evidence_uses_retained_original_facts_after_private_row_deletion",
+    "mutationCaught": true,
+    "restoredPassed": true
+  },
+  {
+    "index": 19,
+    "file": "cursor.rs",
+    "rule": "super::integer(stop.at_ms)?;",
+    "test": "reset_facts_survive_audit_trim_and_decode_completely",
+    "mutationCaught": true,
+    "restoredPassed": true
+  },
+  {
+    "index": 20,
+    "file": "cursor.rs",
+    "rule": "_ => return Err(OutboxError::Invalid),\n        };\n        Ok(Cursor",
+    "test": "reset_facts_survive_audit_trim_and_decode_completely",
+    "mutationCaught": true,
+    "restoredPassed": true
+  },
+  {
+    "index": 21,
+    "file": "restoration.rs",
+    "rule": "{\n            let id = uuid(registration)?;\n            let live = connection\n                .query_row(\n                    &format!(\"{} FROM registrations WHERE id=?1\", registry::SELECT),\n                    [registration],\n                    |r| registry::StoredRegistration::row(r, 0),\n                )\n                .optional()\n                .map_err(unavailable)?\n                .map(registry::StoredRegistration::checked)\n                .transpose()?;\n            let retired = retirement::read(connection, id)?;\n            let (target, stop, issued_at) = match (&live, &retired) {\n                (Some(live), None) => (\n                    &live.registration.target,\n                    live.stop.as_ref(),\n                    live.issued_at_ms,\n                ),\n                (None, Some(retired)) => {\n                    (&retired.target, Some(&retired.stop), retired.issued_at_ms)\n                }\n                _ => return Err(OutboxError::Invalid),\n            };\n            if audit::checked_target(credential, principal, organization, owner)? != *target {\n                return Err(OutboxError::Invalid);\n            }\n            match cause {\n                audit::Cause::CredentialIssue => {\n                    if *at_ms != issued_at {\n                        return Err(OutboxError::Invalid);\n                    }\n                }\n                audit::Cause::CredentialRevoked | audit::Cause::CredentialExpired => {\n                    if stop != Some(&audit::check_stop(cause, initiator, *at_ms)?) {\n                        return Err(OutboxError::Invalid);\n                    }\n                }\n                audit::Cause::Drained => {\n                    let retired = retired.ok_or(OutboxError::Invalid)?;\n                    if retired.audit != uuid(record_id)?\n                        || live.is_some()\n                        || retired.at_ms != *at_ms\n                        || retired.stop\n                            != audit::check_stop(\n                                stop_cause.as_ref().ok_or(OutboxError::Invalid)?,\n                                initiator,\n                                stop_at_ms.ok_or(OutboxError::Invalid)?,\n                            )?\n                    {\n                        return Err(OutboxError::Invalid);\n                    }\n                }\n                _ => return Err(OutboxError::Invalid),\n            }\n        }",
+    "test": "registration_issue_evidence_matches_retained_target",
+    "mutationCaught": true,
+    "restoredPassed": true
+  },
+  {
+    "index": 22,
+    "file": "restoration.rs",
+    "rule": "{\n            let id = uuid(registration)?;\n            let conversation =\n                ConversationId::new(conversation_id).map_err(|_| OutboxError::Invalid)?;\n            let current =\n                cursor::read(connection, id, &conversation)?.ok_or(OutboxError::Invalid)?;\n            let reset = current.reset.ok_or(OutboxError::Invalid)?;\n            if current.scope != prior_scope.checked()?\n                || current.position != *prior_position\n                || reset.observed_scope != observed_scope.checked()?\n                || reset.stop.initiator != audit::check_reader(initiator, id)?\n                || reset.stop.at_ms != *at_ms\n            {\n                return Err(OutboxError::Invalid);\n            }\n        }",
+    "test": "cursor_evidence_matches_complete_original_reset_observation",
+    "mutationCaught": true,
+    "restoredPassed": true
+  },
+  {
+    "index": 23,
+    "file": "restoration.rs",
+    "rule": "{\n            let evidence = record.delivery_evidence()?.ok_or(OutboxError::Invalid)?;\n            let saved =\n                stored::by_id(connection, evidence.after.id())?.ok_or(OutboxError::Invalid)?;\n            let registration = registry::by_id(connection, saved.registration)?;\n            if evidence.registration != saved.registration\n                || evidence.target != registration.registration.target\n                || evidence.conversation != saved.conversation\n                || evidence.scope != saved.scope\n                || evidence.position != saved.position\n                || evidence\n                    .credential_stop\n                    .as_ref()\n                    .is_some_and(|stop| registration.stop.as_ref() != Some(stop))\n            {\n                return Err(OutboxError::Invalid);\n            }\n        }",
+    "test": "delivery_evidence_matches_enclosing_facts_before_publication",
+    "mutationCaught": true,
+    "restoredPassed": true
+  },
+  {
+    "index": 24,
+    "file": "restoration.rs",
+    "rule": "validate_histories(connection, true)",
+    "test": "live_owed_delivery_history_matches_current_before_publication",
+    "mutationCaught": true,
+    "restoredPassed": true
+  },
+  {
+    "index": 25,
+    "file": "restoration.rs",
+    "rule": ".map_or(next.before.is_some(), |prior| !next.follows(prior))",
+    "test": "retained_audit_chain_correlates_checkpoint_target_and_current_state",
+    "mutationCaught": true,
+    "restoredPassed": true
+  },
+  {
+    "index": 26,
+    "file": "restoration.rs",
+    "rule": "last.after != saved.delivery",
+    "test": "retained_audit_chain_correlates_checkpoint_target_and_current_state",
+    "mutationCaught": true,
+    "restoredPassed": true
+  },
+  {
+    "index": 27,
+    "file": "restoration.rs",
+    "rule": "last.source_stop != saved.source_stop",
+    "test": "settled_source_context_must_match_the_enclosing_delivery",
+    "mutationCaught": true,
+    "restoredPassed": true
+  }
+]

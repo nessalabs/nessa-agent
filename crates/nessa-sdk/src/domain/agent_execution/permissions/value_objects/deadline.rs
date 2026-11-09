@@ -303,7 +303,16 @@ impl PermissionDeadlinePolicy {
     /// Read-only reviews are allowed after eight seconds. Every other review
     /// is denied after thirty. See ADR 141 for why those are the defaults.
     pub fn standard() -> Self {
-        Self {
+        Self::standard_waiting(Duration::from_secs(30)).expect("standard other deadline")
+    }
+
+    /// [`Self::standard`], except that a review of the other class waits
+    /// `wait` before it is denied: a host whose person answers from another
+    /// device gives them longer than a desk does. `wait` is refused as
+    /// [`PermissionReviewDeadline::new`] refuses it: zero, or over
+    /// [`MAX_PERMISSION_DEADLINE`].
+    pub fn standard_waiting(wait: Duration) -> Result<Self, ExecutionError> {
+        Ok(Self {
             read_only: PermissionReviewDeadline::new(
                 PermissionToolClass::ReadOnly,
                 Duration::from_secs(8),
@@ -313,12 +322,11 @@ impl PermissionDeadlinePolicy {
             .expect("standard read-only deadline"),
             other: PermissionReviewDeadline::new(
                 PermissionToolClass::Other,
-                Duration::from_secs(30),
+                wait,
                 PermissionEffect::Deny,
                 STANDARD_DENY_REASON,
-            )
-            .expect("standard other deadline"),
-        }
+            )?,
+        })
     }
 
     /// Install the two class deadlines. Each must already name its class, and
@@ -568,6 +576,30 @@ mod tests {
             })
             .collect();
         PermissionOptions::new(choices, &PermissionOfferPolicy::once_only()).unwrap()
+    }
+
+    #[test]
+    fn a_host_may_give_other_reviews_longer_and_keeps_the_read_deadline() {
+        let wait = Duration::from_secs(300);
+        let policy = PermissionDeadlinePolicy::standard_waiting(wait).unwrap();
+        let other = policy.for_class(PermissionToolClass::Other);
+        assert_eq!(other.wait(), wait);
+        assert_eq!(other.effect(), PermissionEffect::Deny);
+        assert_eq!(other.reason(), STANDARD_DENY_REASON);
+        assert_eq!(
+            policy.for_class(PermissionToolClass::ReadOnly),
+            PermissionDeadlinePolicy::standard().for_class(PermissionToolClass::ReadOnly)
+        );
+        assert_eq!(
+            PermissionDeadlinePolicy::standard_waiting(Duration::ZERO),
+            Err(ExecutionError::ZeroPermissionDeadline)
+        );
+        assert_eq!(
+            PermissionDeadlinePolicy::standard_waiting(
+                MAX_PERMISSION_DEADLINE + Duration::from_secs(1)
+            ),
+            Err(ExecutionError::PermissionDeadlineTooLong)
+        );
     }
 
     #[test]

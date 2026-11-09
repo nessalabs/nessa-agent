@@ -1,14 +1,13 @@
-//! The person's GitHub sign-in through the Nessa GitHub App, given to the
-//! agents this gateway starts so they can push and open pull requests as
-//! that person.
+//! The person's GitHub sign-in through the Nessa GitHub App, kept in the
+//! gateway for source-authorized repository operations.
 //!
 //! ```text
 //! github.status/connect/cancel/disconnect ──▶ GithubConnections
 //!                  ├──▶ GithubApi (device code, token poll, /user)
-//!                  ├──▶ GithubTokenStore (one private file, never config.json)
+//!                  ├──▶ GithubTokenStore (app-session encrypted vault entry)
 //!                  ├──▶ GithubAudit (requested, then outcome; no token)
 //!                  └──▶ Timer (poll interval and the code's deadline)
-//! each provider open ──▶ GithubLaunchCredentials ──▶ GithubConnections::token
+//! agent read tool ──▶ GithubConnections ──▶ GithubApi (bounded repo GET)
 //! ```
 //!
 //! Arrows are calls. Sign-in is the device flow: the gateway asks GitHub for

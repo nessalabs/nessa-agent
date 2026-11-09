@@ -7,7 +7,6 @@ import {
   groupByStatus,
   inView,
   matchesSearch,
-  mostPressing,
   statusCounts,
 } from "./session-groups"
 
@@ -100,23 +99,6 @@ describe("views and search", () => {
     expect(matchesSearch(a, "opus")).toBe(true)
     expect(matchesSearch(a, "claude")).toBe(true)
     expect(matchesSearch(a, "codex")).toBe(false)
-  })
-})
-
-describe("the most pressing session", () => {
-  it("is one waiting, then one running, then the newest", () => {
-    expect(
-      mostPressing([
-        session("new", 9),
-        session("run", 2, "running"),
-        session("wait", 1, "needs-you"),
-      ])?.id,
-    ).toBe("wait")
-    expect(mostPressing([session("new", 9), session("run", 2, "running")])?.id).toBe(
-      "run",
-    )
-    expect(mostPressing([session("old", 1), session("new", 9)])?.id).toBe("new")
-    expect(mostPressing([])).toBeUndefined()
   })
 })
 

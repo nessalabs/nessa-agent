@@ -9,6 +9,7 @@
 use super::{
     connection::{NativeConnectionCompletion, NativeConnectionTask},
     NativeConnectionError, NativeConnectionFailure, NativeEnrollmentConnections, RelayPermit,
+    TunnelPermit,
 };
 use nessa_auth::adapters::pairing::{CryptoRng, RngCore};
 use nessa_protocol::pairing::socket::worker_fault;
@@ -37,6 +38,10 @@ pub enum Accepted {
     /// A connection a relay joined, ready for a worker, with the relay
     /// permit it holds in place of a connection permit.
     Relayed(TcpStream, RelayPermit),
+    /// A connection that came through the tunnel, ready for a worker, with
+    /// the tunnel permit it holds in place of a connection permit. Its key
+    /// must hold a credential before anything it sends is read.
+    Tunneled(TcpStream, TunnelPermit),
     /// `accept` itself failed. Whether that ends the run depends on the error.
     AcceptFailed(IoError),
     /// A connection was accepted but could not be prepared for a worker. Only
@@ -170,8 +175,8 @@ impl<A: EnrollmentAccept> NativeEnrollmentListener<A> {
     /// socket is invalid ends the run: `failed` receives its kind while admitted
     /// workers are still running, before the drain, and the error is returned
     /// (`native_listener_stops_on_a_listening_socket_failure`). A failed peer
-    /// does not end service for others. Result handles hold the connection
-    /// or relay permit, so the task set is bounded by those two capacities.
+    /// does not end service for others. Result handles hold the connection,
+    /// relay or tunnel permit, so the task set is bounded by those capacities.
     pub async fn run<R, E, S, F>(mut self, entropy: E, stop: S, failed: F) -> IoResult<()>
     where
         R: RngCore + CryptoRng + Send + 'static,
@@ -207,6 +212,14 @@ impl<A: EnrollmentAccept> NativeEnrollmentListener<A> {
                 Accepted::Relayed(stream, permit) => {
                     dispatch(
                         self.connections.start_relayed(stream, permit, entropy()),
+                        &mut tasks,
+                    );
+                    continue;
+                }
+                // Likewise a tunnel connection.
+                Accepted::Tunneled(stream, permit) => {
+                    dispatch(
+                        self.connections.start_tunneled(stream, permit, entropy()),
                         &mut tasks,
                     );
                     continue;

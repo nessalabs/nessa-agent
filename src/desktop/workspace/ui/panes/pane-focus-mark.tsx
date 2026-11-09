@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useState } from "react"
+import { useLayoutEffect, useState } from "react"
 import type { PaneKey } from "../../../split-panes/model/pane-layout"
 import { HeaderSliver } from "../../../ui/header-art"
 import { focusedPaneAttribute } from "../../adapters/dom/focus"
@@ -23,6 +23,7 @@ function markPane(paneKey: PaneKey, multi: boolean, focused: boolean) {
 export function PaneFocusMark({ paneKey, multi }: { paneKey: PaneKey; multi: boolean }) {
   const store = useWorkspaceStore()
   useLayoutEffect(() => {
+    let active = true
     let frame = 0
     let focused = selectFocusedPaneKey(store.getState()) === paneKey
     // Before this pane's first paint, so the caret finds the mark on that
@@ -34,9 +35,12 @@ export function PaneFocusMark({ paneKey, multi }: { paneKey: PaneKey; multi: boo
       if (next === focused) return
       focused = next
       cancelAnimationFrame(frame)
-      frame = requestAnimationFrame(() => markPane(paneKey, multi, next))
+      frame = requestAnimationFrame(() => {
+        if (active) markPane(paneKey, multi, next)
+      })
     })
     return () => {
+      active = false
       cancelAnimationFrame(frame)
       unsubscribe()
     }
@@ -50,17 +54,24 @@ export function FocusedSliver({ paneKey }: { paneKey: PaneKey }) {
   const [moving, setMoving] = useState(
     () => selectFocusedPaneKey(store.getState()) === paneKey,
   )
-  useEffect(() => {
+  useLayoutEffect(() => {
+    let active = true
     let frame = 0
     let movingNow = selectFocusedPaneKey(store.getState()) === paneKey
+    // A replacement owner starts from its own focus before paint. Later
+    // changes still wait for their requested frame.
+    setMoving(movingNow)
     const unsubscribe = store.subscribe(() => {
       const next = selectFocusedPaneKey(store.getState()) === paneKey
       if (next === movingNow) return
       movingNow = next
       cancelAnimationFrame(frame)
-      frame = requestAnimationFrame(() => setMoving(next))
+      frame = requestAnimationFrame(() => {
+        if (active) setMoving(next)
+      })
     })
     return () => {
+      active = false
       cancelAnimationFrame(frame)
       unsubscribe()
     }

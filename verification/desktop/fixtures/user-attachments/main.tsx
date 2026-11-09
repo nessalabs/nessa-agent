@@ -8,11 +8,18 @@ import "../../../../src/desktop/styles.css"
 import "../../../../src/desktop/workspace/ui/transcript/transcript.css"
 
 const image = { digest: "a".repeat(64), mimeType: "image/png" as const, size: 2048 }
+const upload = {
+  digest: `sha256:${"b".repeat(64)}`,
+  mimeType: "application/pdf",
+  size: 512,
+  name: "meeting notes.pdf",
+}
 const file = { path: "/workspace/quarterly [report].csv" }
 const scenarios = ["committed", "pending", "restored"].flatMap((phase) =>
-  ["image", "file", "mixed"].map((kind) => {
-    const attachments = kind === "file" ? [] : [image]
-    const files = kind === "image" ? [] : [file]
+  ["image", "file", "upload", "mixed"].map((kind) => {
+    const attachments = ["image", "mixed"].includes(kind) ? [image] : []
+    const files = ["file", "mixed"].includes(kind) ? [file] : []
+    const uploads = ["upload", "mixed"].includes(kind) ? [upload] : []
     const text = kind === "mixed" ? "Inspect `this` [report], please." : ""
     const wire = view("original", {
       messages:
@@ -24,13 +31,14 @@ const scenarios = ["committed", "pending", "restored"].flatMap((phase) =>
                 userText: text,
                 attachments,
                 files,
+                uploads,
                 status: "completed",
                 parts: [],
               },
             ],
       pending:
         phase === "pending"
-          ? [{ executionId: "e1", mode: "queued", text, attachments, files }]
+          ? [{ executionId: "e1", mode: "queued", text, attachments, files, uploads }]
           : [],
     })
     const transcript = transcriptFrom(

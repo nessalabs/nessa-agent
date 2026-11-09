@@ -1,0 +1,7 @@
+
+running 3 tests
+test webhooks::infrastructure::outbox::store::tests::independent_probes::independent_multiregistration_differential_cutoff ... ok
+test webhooks::infrastructure::outbox::store::tests::independent_probes::independent_one_retired_registration_does_not_block_other_lost_ack_recovery ... ok
+test webhooks::infrastructure::outbox::store::tests::independent_probes::independent_reference_release_and_rollback_are_atomic ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 90 filtered out; finished in 0.98s

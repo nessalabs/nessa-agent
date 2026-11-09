@@ -73,6 +73,28 @@ fn command_owner_host_the_owner_uses_every_configured_host_and_no_other() {
 }
 
 #[test]
+fn an_agent_turn_is_refused_by_cedar_even_on_an_owner_command_host() {
+    let policy = CommandPolicy::new(names(&["devbox"]), None, Vec::new());
+    let cedar = evaluator(&policy);
+    assert_eq!(
+        cedar
+            .evaluate(CommandInitiator::Agent, host("devbox"))
+            .unwrap(),
+        refused(&["command.agent_host"])
+    );
+    assert_eq!(
+        cedar
+            .evaluate(CommandInitiator::Agent, run("devbox", "ls"))
+            .unwrap(),
+        refused(&["command.agent_host"])
+    );
+    assert_eq!(
+        admit_command(&cedar, CommandInitiator::Agent, "devbox", "ls"),
+        Err(CommandRefusal::EnvironmentNotGranted)
+    );
+}
+
+#[test]
 fn command_grant_host_a_grant_uses_only_configured_hosts_it_names_itself() {
     let policy = CommandPolicy::new(names(&["devbox", "build"]), None, Vec::new());
     let cedar = evaluator(&policy);

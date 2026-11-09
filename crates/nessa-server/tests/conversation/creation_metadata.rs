@@ -46,6 +46,7 @@ impl Fixture {
         let summaries = Arc::new(MemorySummaries::default());
         let service = ConversationService::new(
             ConversationDependencies {
+                input_files: None,
                 access_policy: crate::conversation_test_support::access_policy(),
                 agents: only(Arc::new(Provider::new(provider.clone()))),
                 environment: crate::conversation::infrastructure::in_process_environment().into(),

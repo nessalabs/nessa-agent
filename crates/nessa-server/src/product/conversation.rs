@@ -1,15 +1,16 @@
 //! Authenticated wire commands translate into the server-owned conversation service.
 //! The socket has already checked current access and the conversation action grant.
 use super::{
+    read_access::CatalogueReader,
     socket::{failure, failure_with_details, success},
     state::ProductRouteState,
 };
 use crate::conversation::application::{
-    error_code, rule_principal, ConversationCaller, ConversationError, ConversationService,
-    ListedPermissionRule, PermissionRuleCatalog, PreferenceUpdate, QuestionChoiceInput,
-    ReadOpening, RequestedAgent, RequestedConversation, RuleCatalogError, RuleChange,
-    RulePrincipal, SubmissionMode, SubmittedFile, SubmittedImage, SubmittedMessage,
-    UsageLimitPreferenceFacts, UsageLimitPreferenceGrant,
+    error_code, rule_principal, CatalogueHead, ConversationCaller, ConversationError,
+    ConversationService, ListedPermissionRule, PermissionRuleCatalog, PreferenceUpdate,
+    QuestionChoiceInput, ReadOpening, RequestedAgent, RequestedConversation, RuleCatalogError,
+    RuleChange, RulePrincipal, SubmissionMode, SubmittedFile, SubmittedImage, SubmittedMessage,
+    SubmittedUpload, UsageLimitPreferenceFacts, UsageLimitPreferenceGrant,
 };
 use base64::Engine as _;
 use nessa_auth::application::ports::{AccessError, AccessSnapshot};
@@ -18,7 +19,8 @@ use nessa_auth::domain::{MembershipRole, Resource};
 use nessa_protocol::conversation::projection::CommittedCursor;
 use nessa_protocol::conversation::view::{
     ConversationList, ConversationModelChangeEffect, ConversationObservation,
-    ConversationObservationCursor, ConversationView as ApplicationConversationView,
+    ConversationObservationCursor, ConversationPartPosition, ConversationPoint,
+    ConversationView as ApplicationConversationView,
 };
 use nessa_protocol::product::generated::{
     ApprovalMode as WireApprovalMode, ConversationAnswerParams, ConversationAnswerQuestionParams,
@@ -31,9 +33,9 @@ use nessa_protocol::product::generated::{
     ConversationPermissionReviewParams, ConversationPermissionReviewResult,
     ConversationPermissionRulesParams, ConversationPermissionRulesResult,
     ConversationPermissionSelectionState, ConversationQuestionReviewParams,
-    ConversationQuestionReviewResult, ConversationReadParams, ConversationReceiptParams,
-    ConversationReceiptResult, ConversationRemoveParams, ConversationRenameParams,
-    ConversationReorderParams, ConversationRevokePermissionRuleParams,
+    ConversationQuestionReviewResult, ConversationReadEarlierParams, ConversationReadParams,
+    ConversationReceiptParams, ConversationReceiptResult, ConversationRemoveParams,
+    ConversationRenameParams, ConversationReorderParams, ConversationRevokePermissionRuleParams,
     ConversationRevokePermissionRuleResult, ConversationSendParams,
     ConversationSetApprovalModeParams, ConversationSetApprovalModeResult,
     ConversationSetModelParams, ConversationSetModelResult,
@@ -62,11 +64,13 @@ use nessa_sdk::application::agent_execution::{
         CreationFailure, CreationReceipt, CreationStage, CreationStorageError, MutationFailure,
         MutationOutcome, MutationReceipt, MutationStage,
     },
+    executions::AdmissionNotice,
     permissions::{is_remember_option, PermissionCaller, PermissionSelectionState},
     sessions::{NoteDelivery, NoteRetirementReason, NoteState},
 };
 use nessa_sdk::domain::agent_execution::executions::Initiation;
 use serde_json::{json, Value};
+use std::sync::Arc;
 
 /// `initiation` is who a turn this request starts is saved as started by,
 /// as the request was admitted (`read_access::admit_request`).
@@ -106,6 +110,19 @@ async fn answer(
     ) {
         return Ok(dispatch_permission_rules(state, session, frame).await);
     }
+    // Catalogue refusal precedes service availability (row L12). Retain the
+    // admitted scope for the read rather than resolving the binding again.
+    let list_scope = if matches!(
+        frame.method.as_str(),
+        "conversation.list" | "conversation.observe"
+    ) {
+        match super::read_access::admit_list(state, session).await {
+            Ok(scope) => Some(scope),
+            Err(code) => return Ok(failure(&frame.id, code)),
+        }
+    } else {
+        None
+    };
     // This build runs no conversations at all, which is not the same fact as a
     // caller naming an agent this one is not configured for. Sharing a code
     // between them made the panel tell someone with a working Claude that the
@@ -202,6 +219,20 @@ async fn answer(
                         "executionId": execution,
                     }),
                 ))
+            }
+            "conversation.readEarlier" => {
+                let params = target_params!(ConversationReadEarlierParams);
+                let id = conversation_id(&params.conversation_id)?;
+                if let Err(code) = super::read_access::admit_conversation(state, session, &id).await
+                {
+                    return Ok(failure(&frame.id, code));
+                }
+                let before = point(params.before)?;
+                let after = params.after.map(point).transpose()?;
+                let page = service
+                    .read_earlier(&id, &caller(frame.id.clone()), &before, after.as_ref())
+                    .await?;
+                Ok(success(&frame.id, &page))
             }
             "conversation.read" => {
                 let params = target_params!(ConversationReadParams);
@@ -352,33 +383,33 @@ async fn answer(
             }
             "conversation.list" => {
                 let ConversationListParams { archived } = params!(ConversationListParams);
-                if let Err(code) = super::read_access::admit_list(state, session).await {
-                    return Ok(failure(&frame.id, code));
-                }
-                let listed = read_list(
+                let scope = list_scope.as_ref().ok_or(ConversationError::Metadata)?;
+                let (listed, _) = read_list(
                     state,
                     service,
                     session,
                     archived.unwrap_or(false),
                     &frame.id,
+                    scope,
                 )
                 .await?;
                 Ok(success(&frame.id, &fitted_list(listed, &frame.id)))
             }
             "conversation.observe" => {
                 let params = params!(ConversationObserveParams);
-                if let Err(code) = super::read_access::admit_list(state, session).await {
-                    return Ok(failure(&frame.id, code));
-                }
+                let scope = list_scope.as_ref().ok_or(ConversationError::Metadata)?;
                 let cursor = match params.cursor {
                     Some(cursor) => Some(observation_cursor(cursor)?),
                     None => None,
                 };
                 let observed = service
-                    .observe(
+                    .observe_for(
                         caller(frame.id.clone()),
                         params.archived.unwrap_or(false),
                         cursor,
+                        &scope.reader,
+                        &scope.owner,
+                        scope.policy.as_deref(),
                     )
                     .await;
                 trace_conversation_observe(observed.as_ref().err());
@@ -403,6 +434,21 @@ async fn answer(
                 let id = conversation_id(&params.conversation_id)?;
                 let caller = caller(params.request_id.clone());
                 let execution_id = params.execution_id.clone();
+                // The clock is this moment, before the agent is asked, so the
+                // wait includes getting the turn under way. It is registered
+                // when the turn is freshly queued, before the runner can
+                // publish, because a subscription can read the reply while
+                // the mutation save is still finishing. A steer is not timed.
+                // A retry does not register again.
+                let started_ms = state.clock.unix_milliseconds();
+                let on_admission = (frame.method == "conversation.send").then(|| {
+                    Arc::new(FirstTokenNotice {
+                        timings: Arc::clone(&state.local_timings),
+                        conversation_id: id.to_string(),
+                        execution_id: execution_id.clone(),
+                        started_ms,
+                    }) as Arc<dyn AdmissionNotice>
+                });
                 let store = service.commands().ok_or(ConversationError::Unavailable)?;
                 // Admission still starts an unpaired session as an owner turn.
                 // Whether that turn may offer a remember choice is this
@@ -416,7 +462,7 @@ async fn answer(
                         .await
                         .is_ok();
                 let submitted = service
-                    .submit_command(
+                    .submit_command_notifying(
                         store,
                         id.clone(),
                         caller.clone(),
@@ -425,12 +471,20 @@ async fn answer(
                         execution_id.clone(),
                         submitted_message(&params),
                         mode,
+                        on_admission,
                     )
                     .await
                     .map_err(mutation_failure)?;
+                // `delivery` is present only for the call that enqueued the
+                // turn. A retry of an accepted send leaves it empty. The
+                // clock was registered at that enqueue, or not at all.
                 let receipt = match submitted.delivery {
                     Some(receipt) => receipt,
-                    None => service.current_submission(id, caller, execution_id).await?,
+                    None => {
+                        service
+                            .current_submission(id.clone(), caller, execution_id)
+                            .await?
+                    }
                 };
                 Ok(success(&frame.id, &receipt))
             }
@@ -497,6 +551,7 @@ async fn answer(
                             || params.text.is_some()
                             || params.attachments.is_some()
                             || params.files.is_some()
+                            || params.uploads.is_some()
                         {
                             return Err(ConversationError::InvalidInput);
                         }
@@ -1031,6 +1086,24 @@ fn listed_rule(rule: ListedPermissionRule) -> Option<PermissionRule> {
     })
 }
 
+/// Registers the first-token clock for one freshly queued send.
+///
+/// `admitted` runs on the admission task, before the runner starts. The
+/// clock is the time the send began, not the time the runner was started.
+struct FirstTokenNotice {
+    timings: Arc<super::turn_timing::TurnTimings>,
+    conversation_id: String,
+    execution_id: String,
+    started_ms: u64,
+}
+
+impl AdmissionNotice for FirstTokenNotice {
+    fn admitted(&self) {
+        self.timings
+            .sent(&self.conversation_id, &self.execution_id, self.started_ms);
+    }
+}
+
 /// Who sends a conversation command: the credential's verified identity.
 /// The caller's optional client metadata is deliberately not used to
 /// attribute SDK commands.
@@ -1053,6 +1126,9 @@ pub(super) async fn read_view(
     // caller is sent.
     trace_conversation_read(id, read.as_ref().err());
     let (view, cursor) = read?;
+    state
+        .local_timings
+        .observe(&view, state.clock.unix_milliseconds());
     Ok((wire_view(state, view).await?, cursor))
 }
 
@@ -1064,16 +1140,24 @@ pub(super) async fn read_list(
     session: &AuthenticatedSession,
     archived: bool,
     request_id: &str,
-) -> Result<ConversationListResult, ConversationError> {
+    scope: &CatalogueReader,
+) -> Result<(ConversationListResult, Option<CatalogueHead>), ConversationError> {
     let listed = service
-        .list(caller(session, request_id.to_owned()), archived)
+        .list_for(
+            caller(session, request_id.to_owned()),
+            archived,
+            &scope.reader,
+            &scope.owner,
+            scope.policy.as_deref(),
+        )
         .await;
     // The desktop's index asks this list first. An incomplete list continues
     // as conversation.observe. The subject tells a list from a read.
     trace_conversation_index(listed.as_ref().err());
-    let listed = list_result(listed?);
+    let (listed, head) = listed?;
+    let listed = list_result(listed);
     super::read_access::admit_index_rows(state, session, &listed.conversations).await?;
-    Ok(listed)
+    Ok((listed, head))
 }
 
 fn usage_limit_preference_facts(
@@ -1159,6 +1243,7 @@ fn requested_conversation_from_receipt(
         || params.text.is_some()
         || params.attachments.is_some()
         || params.files.is_some()
+        || params.uploads.is_some()
     {
         return Err(ConversationError::InvalidInput);
     }
@@ -1179,6 +1264,18 @@ fn approval_mode(mode: WireApprovalMode) -> ConversationApprovalMode {
 }
 fn submitted_message(params: &ConversationSendParams) -> SubmittedMessage {
     SubmittedMessage {
+        uploads: params
+            .uploads
+            .as_deref()
+            .unwrap_or_default()
+            .iter()
+            .map(|file| SubmittedUpload {
+                digest: file.digest.clone(),
+                media_type: file.mime_type.clone(),
+                size: file.size,
+                name: file.name.clone(),
+            })
+            .collect(),
         text: params.text.clone(),
         images: params
             .attachments
@@ -1213,6 +1310,18 @@ fn submitted_message_from_receipt(
         return Err(ConversationError::InvalidInput);
     }
     Ok(SubmittedMessage {
+        uploads: params
+            .uploads
+            .as_deref()
+            .unwrap_or_default()
+            .iter()
+            .map(|file| SubmittedUpload {
+                digest: file.digest.clone(),
+                media_type: file.mime_type.clone(),
+                size: file.size,
+                name: file.name.clone(),
+            })
+            .collect(),
         text: params.text.clone().ok_or(ConversationError::InvalidInput)?,
         images: params
             .attachments
@@ -1336,6 +1445,25 @@ fn mutation_failure(failure: MutationFailure<ConversationError>) -> Conversation
 
 pub(super) fn conversation_id(value: &str) -> Result<ConversationId, ConversationError> {
     ConversationId::new(value).map_err(|_| ConversationError::InvalidInput)
+}
+
+/// A point in a conversation's history, as a reader names it.
+fn point(
+    value: nessa_protocol::product::generated::ConversationPoint,
+) -> Result<ConversationPoint, ConversationError> {
+    let place = |value: u64| usize::try_from(value).map_err(|_| ConversationError::InvalidInput);
+    Ok(ConversationPoint {
+        execution_id: value.execution_id,
+        at: value
+            .at
+            .map(|at| {
+                Ok::<_, ConversationError>(ConversationPartPosition {
+                    part: place(at.part)?,
+                    byte: place(at.byte)?,
+                })
+            })
+            .transpose()?,
+    })
 }
 
 /// The authenticated catalog owns display facts and preset descriptions. The

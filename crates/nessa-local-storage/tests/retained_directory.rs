@@ -1257,3 +1257,36 @@ fn shared_service_directory_rejects_symlinks_and_changed_bindings() {
     assert!(PrivateDirectory::open_shared_path(&shared).is_err());
     assert!(nessa_local_storage::create_shared_directory_path(&shared).is_err());
 }
+
+#[cfg(unix)]
+#[test]
+fn selected_shared_root_retains_authority_beneath_a_writable_locator() {
+    let temporary = tempfile::tempdir().unwrap();
+    let public = temporary.path().join("public");
+    std::fs::create_dir(&public).unwrap();
+    std::fs::set_permissions(&public, Permissions::from_mode(0o777)).unwrap();
+    let root = public.join("workspace");
+    std::fs::create_dir(&root).unwrap();
+    std::fs::set_permissions(&root, Permissions::from_mode(0o755)).unwrap();
+    let directory = PrivateDirectory::open_shared_root(&root).unwrap();
+    let mut file = directory.reserve_temp().unwrap();
+    file.as_file_mut().write_all(b"input").unwrap();
+    file.publish_new(OsStr::new("input.txt")).unwrap();
+    assert_eq!(std::fs::read(root.join("input.txt")).unwrap(), b"input");
+    assert_eq!(
+        std::fs::metadata(&root).unwrap().permissions().mode() & 0o777,
+        0o755
+    );
+    directory.verify_binding().unwrap();
+    std::fs::set_permissions(&root, Permissions::from_mode(0o777)).unwrap();
+    assert!(directory.verify_binding().is_err());
+    assert!(PrivateDirectory::open_shared_root(&root).is_err());
+    std::fs::set_permissions(&root, Permissions::from_mode(0o755)).unwrap();
+    let link = public.join("workspace-link");
+    symlink_directory(&root, &link).unwrap();
+    assert!(PrivateDirectory::open_shared_root(&link).is_err());
+    std::fs::rename(&root, public.join("original")).unwrap();
+    std::fs::create_dir(&root).unwrap();
+    std::fs::set_permissions(&root, Permissions::from_mode(0o755)).unwrap();
+    assert!(directory.verify_binding().is_err());
+}

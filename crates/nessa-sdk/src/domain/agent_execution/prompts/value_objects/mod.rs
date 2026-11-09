@@ -33,7 +33,7 @@
 //! ahead of the message and not part of what it says.
 //!
 //! ```text
-//! CarriedTurn(said, reply)* --> CarriedHistory --> UserMessage (what goes with it)
+//! CarriedTurn(said, reply, agent origin)* --> CarriedHistory --> UserMessage (what goes with it)
 //! ```
 //!
 //! The earlier turns a native session has not seen, after a fork or an agent
@@ -55,3 +55,6 @@ pub use note_context::{NoteAuthor, NoteContext};
 
 mod user_message;
 pub use user_message::{ImageReference, LinkedFile, UserMessage};
+
+mod uploaded_file;
+pub use uploaded_file::UploadedFileReference;

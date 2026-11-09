@@ -13,7 +13,7 @@ use super::{
     scheduling::{ActiveInvocation, CloseMode, Scheduler},
 };
 use crate::application::agent_execution::agents::{
-    AgentError, AgentFuture, AgentInitializationError, OwnedLifetime,
+    AgentCloseReport, AgentError, AgentFuture, AgentInitializationError, OwnedLifetime,
 };
 use crate::application::agent_execution::caller_wake::{contain_caller_wake, CallerWaiter};
 use crate::application::agent_execution::executions::{
@@ -43,7 +43,9 @@ use crate::application::agent_execution::sessions::{
 };
 use crate::application::agent_execution::tools::ToolReviewInput;
 use crate::application::agent_execution::traces::{GenAiSpan, LocalTraceStore};
-use crate::domain::agent_execution::executions::{Initiation, Initiator, ToolChecking};
+use crate::domain::agent_execution::executions::{
+    Initiation, Initiator, SchedulingCause, ToolChecking,
+};
 use crate::domain::agent_execution::permissions::{
     CustomPermissionCancellationReason, PendingQuestion, PendingReview, PermissionAuthorityError,
     PermissionCancellationReason, PermissionEffect, PermissionId, PermissionOptionId,
@@ -427,7 +429,7 @@ pub(super) struct Inner {
     pub(super) provider: RwLock<Arc<dyn AgentProvider>>,
     pub(super) traces: Option<Arc<LocalTraceStore>>,
     pub(super) audit: Arc<AuditObserver>,
-    pub(super) manager: SessionManager,
+    pub(super) manager: Arc<SessionManager>,
     pub(super) invocation: Arc<Mutex<()>>,
     hooks: RwLock<Vec<Arc<dyn InvocationHook>>>,
     /// True while a permission-review hook thread has not returned. A later
@@ -436,6 +438,7 @@ pub(super) struct Inner {
     updates: broadcast::Sender<ExecutionEvent>,
     pub(super) reorder: Mutex<()>,
     pub(super) scheduler: Mutex<Scheduler>,
+    pub(super) decline_attempts: super::resumption::DeclineAttempts,
     pub(super) lifecycle: Arc<SessionLifecycle>,
 }
 impl Agent {
@@ -499,16 +502,29 @@ impl Agent {
     pub fn supports_turn_cancel(&self) -> bool {
         self.inner.lifecycle.supports_turn_cancel()
     }
-    /// Cancel `id` only when it is the active execution. A different or finished
-    /// turn, or a provider that cannot cancel one turn, returns
-    /// [`AgentError::Unsupported`] with [`ProviderSessionState::Usable`] and
-    /// sends nothing. This does not close the attachment.
+    /// Cancel `id` only while it is active, without closing the attachment.
+    /// Before native handoff the operation-owned work permit records a local
+    /// `TurnStopped` decision and prevents dispatch; this needs no native cancel
+    /// capability. After handoff the backend must support targeted cancellation.
+    /// A different or finished turn, or unsupported native cancellation, returns
+    /// [`AgentError::Unsupported`] with [`ProviderSessionState::Usable`].
+    /// `a_targeted_stop_during_file_preparation_is_undispatched_cancelled_and_does_not_close_the_session`
+    /// covers immediate and queued preparation and subsequent session reuse.
     pub async fn cancel_turn(&self, id: ExecutionId) -> ProviderOperationResult<()> {
         let waiter = CallerWaiter::TurnCancel(id.clone());
         contain_caller_wake(waiter, self.cancel_active_turn(id)).await
     }
     async fn cancel_active_turn(&self, id: ExecutionId) -> ProviderOperationResult<()> {
-        if !self.turn_is_active(&id) || !self.supports_turn_cancel() {
+        if !self.turn_is_active(&id) {
+            return Err(ProviderOperationFailure::new(
+                AgentError::Unsupported("turn cancel".into()),
+                ProviderSessionState::Usable,
+            ));
+        }
+        if self.inner.lifecycle.cancel_preparing_turn(&id) {
+            return Ok(());
+        }
+        if !self.supports_turn_cancel() {
             return Err(ProviderOperationFailure::new(
                 AgentError::Unsupported("turn cancel".into()),
                 ProviderSessionState::Usable,
@@ -1199,9 +1215,10 @@ impl Agent {
             audit,
             session_manager.message_commit_clock(),
         ));
+        let session_manager = Arc::new(session_manager);
         let lifecycle = SessionLifecycle::new(
             session_manager.attachment(),
-            session_manager.protective_storage_lease(),
+            session_manager.clone(),
             matches!(context, ProviderContext::Recorded(_)),
             session_manager.id().clone(),
             audit.clone(),
@@ -1219,6 +1236,7 @@ impl Agent {
                 permission_hook_running: Arc::new(AtomicBool::new(false)),
                 reorder: Mutex::new(()),
                 scheduler: Mutex::new(Scheduler::new()),
+                decline_attempts: super::resumption::DeclineAttempts::default(),
                 lifecycle,
                 updates,
             }),
@@ -1315,10 +1333,12 @@ impl Agent {
         let (start, wait) = self.inner.lifecycle.start_attachment(authorization)?;
         let agent = self.clone();
         runtime.spawn(async move {
+            // Starting was selected synchronously. Close must join its actual
+            // audit receipt even if it fences provider I/O before this task runs.
             let started = agent
                 .inner
                 .lifecycle
-                .record_attachment_audit(ExecutionAuditRecord::Attachment(start.record))
+                .record_new_attachment_evidence(ExecutionAuditRecord::Attachment(start.record))
                 .await;
             start.started_evidence.send_replace(Some(started.clone()));
             let lifecycle = agent.inner.lifecycle.clone();
@@ -1988,6 +2008,7 @@ impl Agent {
                 &self.inner.lifecycle,
                 input.execution_id.clone(),
                 self.current_provider(),
+                work,
             ) {
                 Ok(active) => active,
                 Err(error) => {
@@ -2145,7 +2166,9 @@ impl Agent {
                 _ = stop_notice.changed(), if !stop_observed => {
                     stop_observed = true;
                     if !work.execution_started() {
-                        result = Some(Err(AgentError::Closed));
+                        result = Some(if work.cancellation().is_some_and(|stop| stop.cause == SchedulingCause::TurnStopped) {
+                            Ok(ExecutionOutcome::Cancelled)
+                        } else { Err(AgentError::Closed) });
                         break;
                     }
                     // Already dispatched: keep draining confirmed provider
@@ -3033,6 +3056,39 @@ impl Agent {
     /// "Caller wakers" in docs/agent_execution/lifecycle.md.
     pub fn suspend(&self, actor: ActionContext) -> AgentFuture<'_, CloseOutcome> {
         Box::pin(async move { self.close_scheduled(actor, CloseMode::Suspend).await })
+    }
+
+    /// Close with this supervised transaction's complete cleanup and scheduling report.
+    ///
+    /// `actor` supplies host-verified cancellation attribution. This shares the
+    /// lifecycle shutdown owner and first cause with [`Self::close`]; dropping
+    /// the caller stops waiting, not cleanup. The Tokio runtime must stay alive.
+    /// The outer error means the supervised transaction did not return a report.
+    /// Inspect the complete resources value, not just its physical outcome:
+    /// executable-use release can remain pending after the process is gone.
+    /// Independent audit, completion and cancellation-save failures remain in
+    /// the report. [`super::AgentCloseReport::into_result`] gives the ordinary
+    /// close result without changing any resource observation.
+    ///
+    /// ```no_run
+    /// # async fn close(agent: &nessa_sdk::Agent) -> Result<(), nessa_sdk::application::agent_execution::agents::AgentError> {
+    /// use nessa_sdk::application::agent_execution::permissions::ActionContext;
+    /// let report = agent.close_report(ActionContext::new("owner", "host", "close")?).await?;
+    /// let resources = report.cleanup().resources();
+    /// let _ = resources;
+    /// report.into_result()?;
+    /// # Ok(()) }
+    /// ```
+    pub fn close_report(&self, actor: ActionContext) -> AgentFuture<'_, AgentCloseReport> {
+        Box::pin(async move { self.close_scheduled_report(actor, CloseMode::Final).await })
+    }
+
+    /// Suspend with this supervised transaction's complete cleanup and scheduling report.
+    /// Attribution, runtime lifetime, caller cancellation and report failures
+    /// follow [`Self::close_report`]. Pending work retains the original suspend
+    /// semantics of [`Self::suspend`]; this adds no shutdown owner or retry.
+    pub fn suspend_report(&self, actor: ActionContext) -> AgentFuture<'_, AgentCloseReport> {
+        Box::pin(async move { self.close_scheduled_report(actor, CloseMode::Suspend).await })
     }
 
     /// Install ownership participation once, before attachment authorization.

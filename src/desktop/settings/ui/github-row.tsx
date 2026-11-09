@@ -1,7 +1,9 @@
+import { useVaultUnlock } from "../../../vault"
 import {
   createContext,
   useContext,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type ReactNode,
@@ -11,7 +13,8 @@ import { PairingCode } from "@nessa-ui/react/pairing-code"
 import type { GithubGateway } from "../adapters/github-gateway"
 import type { GithubOutcome, GithubView } from "../model/github"
 import { setting } from "../model/settings-catalogue"
-import { FoundSetting, ItemRow, RowAction, RowLink } from "./settings-controls"
+import { GithubLiveHelp } from "./github-live-help"
+import { FoundSetting, ItemRow, RowAction, RowLink, Toggle } from "./settings-controls"
 
 /**
  * Settings › Connections › Accounts › GitHub: the gateway's one GitHub
@@ -84,7 +87,26 @@ const revocation =
   "Disconnecting forgets the sign-in on this gateway. To revoke it on GitHub, use Settings › Applications there."
 
 export function GithubRow() {
-  const { gateway, avatar: Avatar } = useContext(GithubContext)
+  const { gateway: source, avatar: Avatar } = useContext(GithubContext)
+  const ensure = useVaultUnlock()
+  const gateway = useMemo(() => {
+    if (!source) return undefined
+    const ask = async (work: () => Promise<GithubOutcome>): Promise<GithubOutcome> => {
+      if (!(await ensure()))
+        return { ok: false, sentence: "Unlock Nessa to access GitHub." }
+      return work()
+    }
+    return {
+      pollMs: source.pollMs,
+      read: () => ask(() => source.read()),
+      connect: () => ask(() => source.connect()),
+      cancel: () => ask(() => source.cancel()),
+      disconnect: () => ask(() => source.disconnect()),
+      liveEvents: (enabled: boolean, acceptGaps?: boolean) =>
+        ask(() => source.liveEvents(enabled, acceptGaps)),
+    }
+  }, [source, ensure])
+
   const found = useContext(FoundSetting) === "github"
   const entry = setting("github")
   const [phase, setPhase] = useState<Phase>({ kind: "reading" })
@@ -237,45 +259,88 @@ export function GithubRow() {
       )
     case "connected":
       return (
-        <ItemRow
-          setting="github"
-          found={found}
-          label={entry.label}
-          leading={<Avatar id={view.accountId} login={view.login} />}
-          detail={
-            <>
-              {failed ?? [`@${view.login}`, view.unrecorded].filter(Boolean).join(" · ")}
-              <span className="sr-only"> {revocation}</span>
-            </>
-          }
-          data-github-state="connected"
-          // An action that failed keeps its buttons out, so trying again is where it was.
-          data-github-settled={failed === undefined && !busy ? "" : undefined}
-          control={
-            // Keyed: the kit's row copies these to name its controls by the row.
-            <span className="settings-github-control">
-              <span key="status" className="settings-github-status">
-                Connected
+        <>
+          <ItemRow
+            setting="github"
+            found={found}
+            label={entry.label}
+            leading={<Avatar id={view.accountId} login={view.login} />}
+            detail={
+              <>
+                {failed ??
+                  [`@${view.login}`, view.unrecorded].filter(Boolean).join(" · ")}
+                <span className="sr-only"> {revocation}</span>
+              </>
+            }
+            data-github-state="connected"
+            // An action that failed keeps its buttons out, so trying again is where it was.
+            data-github-settled={failed === undefined && !busy ? "" : undefined}
+            control={
+              // Keyed: the kit's row copies these to name its controls by the row.
+              <span className="settings-github-control">
+                <span key="status" className="settings-github-status">
+                  Connected
+                </span>
+                <span key="actions" className="settings-github-actions">
+                  <RowLink
+                    href={view.installUrl}
+                    icon="repositories"
+                    data-github-repositories
+                  >
+                    Choose repositories
+                  </RowLink>
+                  <RowAction
+                    disabled={busy}
+                    icon="disconnect"
+                    onClick={() => act((each) => each.disconnect())}
+                  >
+                    Disconnect
+                  </RowAction>
+                </span>
               </span>
-              <span key="actions" className="settings-github-actions">
-                <RowLink
-                  href={view.installUrl}
-                  icon="repositories"
-                  data-github-repositories
-                >
-                  Choose repositories
-                </RowLink>
-                <RowAction
+            }
+          />
+          <ItemRow
+            data-github-live
+            label="Live GitHub events"
+            detail={
+              view.liveEvents
+                ? view.liveEvents.gaps
+                  ? "Some offline history expired. Continue with retained events to resume."
+                  : `PR, issue and CI updates.${view.liveEvents.enabled ? ` ${view.liveEvents.repositories} ${view.liveEvents.repositories === 1 ? "repository" : "repositories"}.` : ""}`
+                : "Not available in this build."
+            }
+            control={
+              <>
+                <GithubLiveHelp
+                  key="help"
+                  refresh={
+                    view.liveEvents?.enabled
+                      ? () => act((each) => each.liveEvents(true))
+                      : undefined
+                  }
                   disabled={busy}
-                  icon="disconnect"
-                  onClick={() => act((each) => each.disconnect())}
-                >
-                  Disconnect
-                </RowAction>
-              </span>
-            </span>
-          }
-        />
+                />
+                <Toggle
+                  key="switch"
+                  label="Enable live GitHub events"
+                  checked={view.liveEvents?.enabled ?? false}
+                  disabled={busy || !view.liveEvents}
+                  onChange={(enabled) => act((each) => each.liveEvents(enabled))}
+                />
+              </>
+            }
+          >
+            {Boolean(view.liveEvents?.gaps) && (
+              <RowAction
+                disabled={busy}
+                onClick={() => act((each) => each.liveEvents(true, true))}
+              >
+                Continue with retained events
+              </RowAction>
+            )}
+          </ItemRow>
+        </>
       )
   }
 }

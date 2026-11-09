@@ -11,6 +11,39 @@ import {
   testExecutables,
 } from "./cargo-test-parallel.mjs"
 
+import {
+  catalogueCases,
+  cataloguePrefix,
+  conversationFilter,
+  serverCasePlan,
+  testRegistry,
+  validateFilteredRegistry,
+} from "./cargo-test-parallel/server-cases.mjs"
+
+const registryOutput = (names) =>
+  names.map((name) => `${name}: test`).join("\n") +
+  `\n\n${names.length} tests, 0 benchmarks\n`
+const ordinaryCases = [
+  "ordinary::ignored",
+  "ordinary::assertion",
+  "conversation::application::case",
+  "product::conversation::case",
+]
+const allServerCases = [...ordinaryCases, ...catalogueCases]
+function filteredServerCases(args) {
+  let filter
+  const skips = []
+  for (let index = 0; index < args.length; index++) {
+    if (args[index] === "--skip") skips.push(args[++index])
+    else if ([conversationFilter, cataloguePrefix].includes(args[index]))
+      filter = args[index]
+  }
+  return allServerCases.filter(
+    (name) =>
+      (!filter || name.includes(filter)) && !skips.some((skip) => name.includes(skip)),
+  )
+}
+
 function artifact({
   manifest = "/repo/crates/nessa-sdk/Cargo.toml",
   kind = ["lib"],
@@ -403,15 +436,15 @@ function splitArtifacts() {
 test("Cargo identity partitions exhaustively and disjointly, including Windows paths and colliding names", () => {
   const all = testExecutables(splitArtifacts())
   const split = partitionExecutables(all, metadata)
-  assert.equal(split["server-lib"].length, 1)
+  assert.equal(split.server.length, 1)
   assert.equal(split.remaining.length, 1)
-  assert.equal(split["server-lib"][0].executable, "C:\\repo\\target\\unpredictable.exe")
-  assert.deepEqual(new Set([...split["server-lib"], ...split.remaining]), new Set(all))
-  assert.ok(split.remaining.every((item) => !split["server-lib"].includes(item)))
+  assert.equal(split.server[0].executable, "C:\\repo\\target\\unpredictable.exe")
+  assert.deepEqual(new Set([...split.server, ...split.remaining]), new Set(all))
+  assert.ok(split.remaining.every((item) => !split.server.includes(item)))
   for (const candidates of [
     [],
     split.remaining,
-    [...all, { ...split["server-lib"][0], executable: "other.exe" }],
+    [...all, { ...split.server[0], executable: "other.exe" }],
   ])
     assert.throws(
       () => partitionExecutables(candidates, metadata),
@@ -440,12 +473,12 @@ test("partition arguments reject misspellings before building", () => {
       "--concurrency",
       "2",
       "--partition",
-      "server-lib",
+      "server-conversation",
       "--",
       "-p",
       "nessa-server",
     ]).partition,
-    "server-lib",
+    "server-conversation",
   )
   assert.throws(
     () =>
@@ -462,8 +495,8 @@ test("partition arguments reject misspellings before building", () => {
   )
 })
 
-test("both split modes build the full selection, and remaining alone owns doctests", async () => {
-  for (const partition of ["server-lib", "remaining"]) {
+test("all three split modes build the full selection, and remaining alone owns doctests", async () => {
+  for (const partition of ["server-conversation", "server-other", "remaining"]) {
     const calls = []
     const io = streams()
     await runParallelCargoTests({
@@ -475,6 +508,9 @@ test("both split modes build the full selection, and remaining alone owns doctes
         calls.push({ command, args })
         if (args.includes("--no-run")) invocation.onStdout(splitArtifacts())
         if (args[0] === "metadata") invocation.onStdout(JSON.stringify(metadata))
+        if (args.includes("--list")) {
+          invocation.onStdout(registryOutput(filteredServerCases(args)))
+        }
         return 0
       },
     })
@@ -488,7 +524,19 @@ test("both split modes build the full selection, and remaining alone owns doctes
       calls.filter((call) => call.args.includes("--doc")).length,
       partition === "remaining" ? 1 : 0,
     )
-    assert.equal(calls.filter((call) => call.command !== "cargo").length, 1)
+    assert.equal(calls.filter((call) => call.args.includes("--list")).length, 4)
+    const executed = calls.filter(
+      (call) => call.command !== "cargo" && !call.args.includes("--list"),
+    )
+    assert.equal(executed.length, partition === "remaining" ? 2 : 1)
+    assert.deepEqual(
+      executed[0].args,
+      partition === "remaining"
+        ? [cataloguePrefix]
+        : partition === "server-conversation"
+          ? [conversationFilter]
+          : ["--skip", conversationFilter, "--skip", cataloguePrefix],
+    )
   }
 })
 
@@ -528,6 +576,98 @@ test("each part of Cargo identity excludes an otherwise matching executable", ()
     { ...server, executable: "binary-target.exe", targetKinds: ["bin"] },
   ]
   const split = partitionExecutables([server, ...nearMatches], metadata)
-  assert.deepEqual(split["server-lib"], [server])
+  assert.deepEqual(split.server, [server])
   assert.deepEqual(split.remaining, nearMatches)
+})
+
+test("server case assignment is exhaustive/disjoint and registry failures cannot turn into green zero tests", () => {
+  const registry = testRegistry(registryOutput(allServerCases))
+  const plan = serverCasePlan(registry)
+  assert.deepEqual(
+    [
+      ...plan["server-conversation"].names,
+      ...plan["server-other"].names,
+      ...plan.remaining.names,
+    ].sort(),
+    registry,
+  )
+  assert.equal(
+    new Set([
+      ...plan["server-conversation"].names,
+      ...plan["server-other"].names,
+      ...plan.remaining.names,
+    ]).size,
+    registry.length,
+  )
+  assert.deepEqual(
+    [...plan["server-conversation"].tasks, ...plan["server-other"].tasks]
+      .flatMap((task) => task.names)
+      .sort(),
+    [...plan["server-conversation"].names, ...plan["server-other"].names].sort(),
+  )
+  assert.deepEqual(plan["server-conversation"].tasks[0].names, [
+    "conversation::application::case",
+    "product::conversation::case",
+  ])
+  for (const invalid of [
+    "",
+    registryOutput(allServerCases).replace(/8 tests/, "9 tests"),
+    registryOutput([...allServerCases, allServerCases[0]]),
+    registryOutput(allServerCases) + "trailing noise",
+    "ordinary: benchmark\n\n0 tests, 1 benchmark",
+  ])
+    assert.throws(() => testRegistry(invalid))
+  for (const names of [
+    ordinaryCases,
+    allServerCases.slice(0, -1),
+    [...allServerCases, `${cataloguePrefix}renamed`],
+    [...catalogueCases, "ordinary::assertion"],
+    [...catalogueCases, "conversation::application::case"],
+  ])
+    assert.throws(() => serverCasePlan(testRegistry(registryOutput(names))))
+  assert.throws(() => serverCasePlan([...catalogueCases].sort()), /no ordinary/)
+
+  for (const names of [[], ordinaryCases, allServerCases])
+    assert.throws(() =>
+      validateFilteredRegistry(registryOutput(names), plan.remaining.names),
+    )
+})
+
+test("registry and actual filter failures prevent all execution and doctests in each split", async () => {
+  for (const partition of ["remaining", "server-conversation", "server-other"])
+    for (const mode of [
+      "exit",
+      "missing-seed",
+      "malformed",
+      "empty-positive",
+      "unfiltered-negative",
+    ]) {
+      const executed = []
+      await assert.rejects(
+        runParallelCargoTests({
+          cargoArgs: packages,
+          concurrency: 2,
+          partition,
+          ...streams(),
+          async run(command, args, io) {
+            if (args.includes("--no-run")) io.onStdout(splitArtifacts())
+            else if (args[0] === "metadata") io.onStdout(JSON.stringify(metadata))
+            else if (args.includes("--list")) {
+              if (mode === "exit") return 1
+              const names =
+                mode === "missing-seed" && args.length === 1
+                  ? allServerCases.slice(0, -1)
+                  : mode === "empty-positive" && args.includes(conversationFilter)
+                    ? []
+                    : mode === "unfiltered-negative" && args.includes("--skip")
+                      ? allServerCases
+                      : filteredServerCases(args)
+              io.onStdout(mode === "malformed" ? "truncated" : registryOutput(names))
+            } else executed.push({ command, args })
+            return 0
+          },
+        }),
+      )
+      assert.deepEqual(executed, [], `${partition} ${mode}`)
+    }
 })

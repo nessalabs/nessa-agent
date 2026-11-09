@@ -18,6 +18,8 @@
 
 use std::{future::Future, ops::Add, pin::Pin, sync::OnceLock, time::Duration};
 
+use nessa_timer::{Moment, Sleep, Timer};
+
 /// A moment on one [`Clock`]'s timeline: how long after that clock's origin.
 /// Moments from different clocks are not comparable.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -71,13 +73,13 @@ pub trait Clock: Send + Sync {
 /// The async runtime's own clock, measured from when this value was made.
 #[derive(Clone, Copy, Debug)]
 pub struct RuntimeClock {
-    origin: tokio::time::Instant,
+    timer: nessa_timer::TokioTimer,
 }
 impl RuntimeClock {
     /// A clock whose origin is now.
     pub fn new() -> Self {
         Self {
-            origin: tokio::time::Instant::now(),
+            timer: nessa_timer::TokioTimer::new(),
         }
     }
 }
@@ -118,21 +120,29 @@ impl Default for RuntimeClock {
 }
 impl Clock for RuntimeClock {
     fn now(&self) -> ClockInstant {
-        ClockInstant(self.origin.elapsed())
+        ClockInstant(self.timer.now().since_origin())
     }
     fn unix_ms_at(&self, at: ClockInstant) -> u64 {
-        match self.origin.checked_add(at.0) {
+        match self.timer.instant_at(Moment::from_origin(at.0)) {
             Some(instant) => process_unix_ms_at(instant.into_std()),
             // Past what the runtime can represent: no wall time reaches it.
             None => u64::MAX,
         }
     }
     fn sleep_until(&self, deadline: ClockInstant) -> ClockSleep {
-        match self.origin.checked_add(deadline.0) {
-            Some(deadline) => Box::pin(tokio::time::sleep_until(deadline)),
-            // Past what the runtime can represent: never reached.
-            None => Box::pin(std::future::pending()),
-        }
+        self.timer.sleep_until(Moment::from_origin(deadline.0))
+    }
+}
+
+struct SharedDeadline<'a>(&'a dyn Clock);
+
+impl Timer for SharedDeadline<'_> {
+    fn now(&self) -> Moment {
+        Moment::from_origin(self.0.now().since_origin())
+    }
+    fn sleep_until(&self, deadline: Moment) -> Sleep {
+        self.0
+            .sleep_until(ClockInstant::from_origin(deadline.since_origin()))
     }
 }
 
@@ -144,10 +154,13 @@ pub(crate) async fn within<T>(
     deadline: ClockInstant,
     operation: impl Future<Output = T>,
 ) -> Option<T> {
-    tokio::select! { biased;
-        finished = operation => Some(finished),
-        () = tokio::task::unconstrained(clock.sleep_until(deadline)) => None,
-    }
+    nessa_timer::within(
+        &SharedDeadline(clock),
+        Moment::from_origin(deadline.since_origin()),
+        operation,
+    )
+    .await
+    .ok()
 }
 
 #[cfg(test)]

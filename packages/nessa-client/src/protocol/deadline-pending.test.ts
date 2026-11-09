@@ -27,6 +27,23 @@ describe("deadlinePendingLine", () => {
     )
   })
 
+  it("counts a wait past a minute in whole minutes", () => {
+    const line = (leftMs: number) =>
+      deadlinePendingLine({ dueAtMs, effect: "deny", stopsTurn: false }, dueAtMs - leftMs)
+    expect(line(300_000)).toBe(
+      "If nobody answers within 5 minutes, this is denied automatically.",
+    )
+    expect(line(240_001)).toBe(
+      "If nobody answers within 5 minutes, this is denied automatically.",
+    )
+    expect(line(61_000)).toBe(
+      "If nobody answers within 2 minutes, this is denied automatically.",
+    )
+    expect(line(60_000)).toBe(
+      "If nobody answers within 60 seconds, this is denied automatically.",
+    )
+  })
+
   it("drops the count once the deadline has passed", () => {
     expect(
       deadlinePendingLine({ dueAtMs, effect: "deny", stopsTurn: false }, dueAtMs),

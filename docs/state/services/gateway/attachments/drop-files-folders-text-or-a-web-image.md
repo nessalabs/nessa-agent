@@ -58,3 +58,7 @@ stateDiagram-v2
 ## Further reading
 
 [Source](../../../../../src-tauri/src/attachments/dropping.rs) · [Related source](../../../../../src-tauri/src/attachments/dragged.rs) · [Related tests](../../../../../src/panel/ui/use-host-drop.test.ts)
+
+## Model coverage
+
+The shared model on [gateway-attachments-wait-for-a-cloud-file-without-attaching-it-to-another-tab](wait-for-a-cloud-file-without-attaching-it-to-another-tab.md) owns this journey's modeled slice. Captured destination and retired-store refusal only; native drop batching, folder traversal limits, web-image fetch policy and read cancellation are excluded. This is scoped design evidence, not whole-journey or implementation verification. The existing source checkpoint is retained.

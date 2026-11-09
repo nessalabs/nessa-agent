@@ -1,8 +1,11 @@
 use super::{
-    ArtifactBytes, ConversationAgentSwitch, ConversationAgentSwitchState, ConversationError,
-    ConversationModelApplication, ConversationModelRequest, ConversationModelRequestState,
+    ArtifactBytes, CatalogueHead, ConversationAgentSwitch, ConversationAgentSwitchState,
+    ConversationError, ConversationModelApplication, ConversationModelRequest,
+    ConversationModelRequestState, Reader,
 };
-use crate::conversation::domain::{Conversation, ConversationDeletion, ProviderSessionErasure};
+use crate::conversation::domain::{
+    Capabilities, Conversation, ConversationDeletion, ProviderSessionErasure,
+};
 use nessa_auth::domain::{OrganizationId, PrincipalId};
 use nessa_protocol::conversation::domain::{
     ConversationApprovalMode, ConversationId, ConversationSummary,
@@ -15,6 +18,64 @@ use std::{future::Future, pin::Pin};
 
 pub type ConversationFuture<'a, T> =
     Pin<Box<dyn Future<Output = Result<T, ConversationError>> + Send + 'a>>;
+
+/// Opaque admission evidence read with the conversation row.
+///
+/// Catalogue incarnation, conversation identity and `change_revision` come
+/// from one store read. A later validation read must match all three. Cedar
+/// does not see this token.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ConversationAdmissionToken {
+    incarnation: String,
+    conversation_id: ConversationId,
+    change_revision: u64,
+}
+
+impl ConversationAdmissionToken {
+    pub(crate) fn new(
+        incarnation: impl Into<String>,
+        conversation_id: ConversationId,
+        change_revision: u64,
+    ) -> Self {
+        Self {
+            incarnation: incarnation.into(),
+            conversation_id,
+            change_revision,
+        }
+    }
+
+    pub(crate) fn conversation_id(&self) -> &ConversationId {
+        &self.conversation_id
+    }
+}
+
+/// Conversation metadata and the admission token from the same store read.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ConversationAdmissionSnapshot {
+    conversation: Conversation,
+    token: ConversationAdmissionToken,
+}
+
+impl ConversationAdmissionSnapshot {
+    pub(crate) fn new(conversation: Conversation, token: ConversationAdmissionToken) -> Self {
+        Self {
+            conversation,
+            token,
+        }
+    }
+
+    pub(crate) fn conversation(&self) -> &Conversation {
+        &self.conversation
+    }
+
+    pub(crate) fn into_conversation(self) -> Conversation {
+        self.conversation
+    }
+
+    pub(crate) fn token(&self) -> &ConversationAdmissionToken {
+        &self.token
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ConversationCreationDisposition {
@@ -202,6 +263,16 @@ pub trait ConversationRepository: Send + Sync {
     /// before records named their agent; [`ConversationError::Metadata`] for
     /// one that cannot be read.
     fn load(&self, id: &ConversationId) -> ConversationFuture<'_, Option<Conversation>>;
+    /// The conversation and its admission token from one read.
+    ///
+    /// Custom stores must take catalogue incarnation, conversation identity
+    /// and the row's monotonic `change_revision` together. A first tombstone
+    /// advances that revision before inventory work. Replacing the catalogue
+    /// changes the incarnation. There is no second policy check here.
+    fn load_admission_snapshot(
+        &self,
+        id: &ConversationId,
+    ) -> ConversationFuture<'_, Option<ConversationAdmissionSnapshot>>;
     /// Create once: Created acknowledges this exact immutable proposal.
     /// Existing returns the retained owner unchanged, including its historical
     /// creation surface, action and time.
@@ -282,6 +353,16 @@ pub trait ConversationRepository: Send + Sync {
     /// Whether a committed choice was made without an open provider session.
     /// A cold owner must verify its attachment before admitting a turn.
     fn requires_mode_verification(&self, id: &ConversationId) -> ConversationFuture<'_, bool>;
+    /// Record that `id`'s agent closed its thread (`close_thread`): every
+    /// opening of it parks its agent once idle, until [`Self::open_thread`].
+    /// Durable before it returns; closing a closed one is not an error.
+    fn close_thread(&self, id: &ConversationId) -> ConversationFuture<'_, ()>;
+    /// A new message opened `id`'s thread again: its close is gone. Durable
+    /// before it returns; one not closed is not an error.
+    fn open_thread(&self, id: &ConversationId) -> ConversationFuture<'_, ()>;
+    /// Whether `id`'s agent closed its thread and no message has opened it
+    /// since.
+    fn thread_closed(&self, id: &ConversationId) -> ConversationFuture<'_, bool>;
     /// Retain the observed provider/deferred outcome before delivering it to
     /// the independent audit sink. Repeated identical observations agree.
     fn observe_mode_application(
@@ -386,7 +467,8 @@ pub struct UnfinishedDeletions {
 /// question, without reading anybody else's conversations
 /// (docs/adr/done/196-conversation-metadata-database.md).
 pub trait ConversationListing: Send + Sync {
-    /// The conversations `organization` and `owner` hold that are not deleted
+    /// The conversations `organization` and `owner` hold, narrowed by `reader`,
+    /// that are not deleted
     /// and have a summary whose archived flag is `archived`: most recently
     /// updated first, then by identity, at most `limit` of them.
     ///
@@ -403,8 +485,9 @@ pub trait ConversationListing: Send + Sync {
         owner: &PrincipalId,
         archived: bool,
         limit: usize,
+        reader: &Reader,
     ) -> ConversationFuture<'_, ListedConversations>;
-    /// One page of the caller's catalogue, creation order, under the same
+    /// One page of the reader-scoped catalogue, creation order, under the same
     /// archived filter as [`Self::list`].
     ///
     /// `cursor` is absent on the first page. A later page echoes the cursor
@@ -425,6 +508,7 @@ pub trait ConversationListing: Send + Sync {
         owner: &PrincipalId,
         archived: bool,
         cursor: Option<ObservationCursor>,
+        reader: &Reader,
     ) -> ConversationFuture<'_, ObservedConversations>;
     /// Every catalogue owner. The usage-limit preference scans these, not the
     /// caller who changed it. An owner id that cannot be read is an error:
@@ -437,7 +521,7 @@ pub trait ConversationListing: Send + Sync {
 pub struct ObservationCursor {
     /// Catalogue database incarnation captured with this pass.
     pub incarnation: String,
-    /// Owner head captured when the pass began.
+    /// Reader-scoped head captured when the pass began.
     pub boundary: u64,
     /// Creation revision of the last descriptor already returned.
     pub creation: u64,
@@ -460,6 +544,9 @@ pub struct ObservedConversations {
 /// What [`ConversationListing::list`] read.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ListedConversations {
+    /// A paired reader's head from the same metadata snapshot as its rows.
+    /// Owner-only substitutes may omit it; a paired read requires it.
+    pub head: Option<CatalogueHead>,
     /// In the order listed.
     pub conversations: Vec<ListedConversation>,
     /// How many rows among the ones asked for could not be read, so are not
@@ -474,6 +561,8 @@ pub struct ListedConversation {
     pub conversation: Conversation,
     /// Its title, last line said, time and archived flag.
     pub summary: ConversationSummary,
+    /// The grant capabilities read with this row, absent for owner reads.
+    pub held: Option<Capabilities>,
 }
 
 /// Keeps what a list of conversations shows about each one: its title, the
@@ -513,6 +602,8 @@ pub struct SubmittedImage {
 /// and a caller that forgets one should not compile.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct SubmittedMessage {
+    /// Non-image uploads held by this conversation.
+    pub uploads: Vec<SubmittedUpload>,
     pub text: String,
     /// Images already uploaded into this conversation, in attachment order.
     pub images: Vec<SubmittedImage>,
@@ -631,6 +722,12 @@ pub enum ConversationFileLinkCause {
 /// sink refuses the submission: an agent given a path with no record of who
 /// pointed it there is the thing this prevents.
 pub trait ConversationFileLinkAudit: Send + Sync {
+    /// Stored-input submission and automatic delivery evidence. An adapter that
+    /// cannot commit this evidence refuses uploaded input rather than faking success.
+    fn record_input(&self, _record: super::InputFileAudit) -> ConversationFuture<'_, ()> {
+        Box::pin(async { Err(ConversationError::Audit) })
+    }
+
     fn record(&self, record: ConversationFileLinkAuditRecord) -> ConversationFuture<'_, ()>;
 }
 
@@ -660,6 +757,16 @@ pub struct AttachmentRelease {
 /// whether *this* conversation holds exactly those bytes, so a digest learned
 /// elsewhere cannot be used to read another owner's upload.
 pub trait ConversationAttachments: Send + Sync {
+    /// Exact held stored input. An adapter without general-file support refuses it.
+    fn holds_file<'a>(
+        &'a self,
+        _organization: &'a OrganizationId,
+        _conversation: &'a ConversationId,
+        _file: &'a nessa_sdk::domain::agent_execution::prompts::UploadedFileReference,
+    ) -> ConversationFuture<'a, bool> {
+        Box::pin(async { Ok(false) })
+    }
+
     /// Whether the configured upload store prepares images for conversations.
     fn offers_images(&self) -> bool;
     /// Whether the conversation holds an upload whose digest, media type, and
@@ -751,4 +858,13 @@ pub enum ArtifactKept {
     Held,
     /// The conversation already held exactly this file; nothing was read.
     AlreadyHeld,
+}
+
+/// Original stored input, before domain validation.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SubmittedUpload {
+    pub digest: String,
+    pub media_type: String,
+    pub size: u64,
+    pub name: String,
 }

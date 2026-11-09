@@ -23,7 +23,12 @@ export interface Channel {
   /** Only its members see it; drawn with a lock. */
   readonly private: boolean
   readonly topic: string
-  /** The folder its agents work in, where the source says. */
+  /** The channel’s current main chat, replaced after confirmed erasure. */
+  readonly coordinatorConversationId?: string
+  readonly coordinatorPlacement?: "local" | "boat"
+  /** `pool`: any paired computer, by the pool's order (Devices › Thread order). */
+  readonly threadPlacement?: "local" | "boat" | "pool"
+  /** The local folder its agents work in, where the source says. */
   readonly folder?: string
   /**
    * What a new session in it starts with, where the channel says; absent,

@@ -517,8 +517,8 @@ impl AccessReader for ShareTarget {
         Box::pin(async move {
             let org = OrganizationId::new("org").unwrap();
             let principal = PrincipalId::new("grantee-read-party").unwrap();
-            Ok(AccessSnapshot {
-                credential: Credential::new(
+            Ok({
+                let credential = Credential::new(
                     credential.clone(),
                     principal.clone(),
                     org.clone(),
@@ -530,15 +530,45 @@ impl AccessReader for ShareTarget {
                         resource(),
                     )],
                 )
-                .unwrap(),
-                membership: Membership::new(
+                .unwrap();
+                let membership = Membership::new(
                     MembershipId::new("member").unwrap(),
                     principal,
                     org,
                     MembershipRole::Member,
                     MembershipStatus::Active,
-                ),
-                revision: 1,
+                );
+                let revision = 1;
+                // This fixture explicitly creates its own original product issuance.
+                let original = nessa_auth::domain::CredentialTransition::new(
+                    credential.id().clone(),
+                    None,
+                    nessa_auth::domain::CredentialLifecycle {
+                        issued_at: credential.issued_at(),
+                        expires_at: credential.expires_at(),
+                        revoked_at: None,
+                    },
+                    nessa_auth::domain::TransitionCause::Issued(
+                        nessa_auth::domain::IssuanceCause::AdminIssue,
+                    ),
+                    nessa_auth::domain::Initiator::LocalOperator,
+                    credential.issued_at(),
+                )
+                .unwrap();
+                let origin = nessa_auth::application::origin::CredentialOrigin::restore(
+                    nessa_auth::application::dto::CredentialTransitionDto::record(
+                        &original, 1, 1, None,
+                    ),
+                    &credential,
+                )
+                .unwrap();
+                AccessSnapshot {
+                    revocation: None,
+                    credential,
+                    membership,
+                    revision,
+                    origin,
+                }
             })
         })
     }

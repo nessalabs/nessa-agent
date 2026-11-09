@@ -12,7 +12,7 @@ impl ProviderSessionBackend for ReturnedEvidence {
     }
     fn execute(
         &self,
-        _: ExecutionRequest,
+        _: ProviderInputFuture,
         _handoff: NativeExecutionHandoff,
     ) -> ProviderExecutionFuture<'_> {
         Box::pin(async move {

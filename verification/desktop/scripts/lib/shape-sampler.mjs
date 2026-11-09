@@ -7,6 +7,7 @@
  * another — a recorder stopped and started again inside one frame cannot
  * both write the next frame (#368).
  */
+import { errors } from "playwright"
 
 /** Starts a recorder. The frames it takes land on `window.__shapes`. */
 export function recordShapeFrames(sel) {
@@ -167,4 +168,39 @@ export function stopShapeFrames() {
 /** The frame taken last, if one has been. */
 export function latestShapeFrame() {
   return window.__shapes.at(-1)
+}
+
+/** Runs in the page: a recorded drop has painted its expected reading order. */
+export function recordedDropReady(expected) {
+  const panes = window.__shapes?.at(-1)?.panes
+  if (!panes || panes.length !== expected.length) return false
+  const keys = panes
+    .slice()
+    .sort((a, b) => Math.round(a.x - b.x) || Math.round(a.y - b.y))
+    .map((pane) => pane.key)
+  return (
+    expected.every((key, index) => keys[index] === key) &&
+    !document
+      .getAnimations()
+      .some(
+        (animation) =>
+          ["running", "pending"].includes(animation.playState) &&
+          animation.effect?.getTiming?.().iterations !== Infinity,
+      )
+  )
+}
+
+/** One existing settlement budget covers the recorded commit and finite motion. */
+export async function recordedDropSettled(page, expected, timeout = 3000) {
+  try {
+    const ready = await page.waitForFunction(recordedDropReady, expected, {
+      timeout,
+      polling: "raf",
+    })
+    await ready.dispose()
+    return true
+  } catch (error) {
+    if (!(error instanceof errors.TimeoutError)) throw error
+    return false
+  }
 }

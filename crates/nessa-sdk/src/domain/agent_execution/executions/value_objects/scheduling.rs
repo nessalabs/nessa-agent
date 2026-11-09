@@ -49,6 +49,8 @@ pub enum SchedulingCause {
     /// detailed error; this cause does not describe provider-session closure.
     /// Provider closure evidence carries its own deadline/loss/cleanup reason.
     RunnerStopped,
+    /// The runtime accepted a targeted stop before native dispatch.
+    TurnStopped,
     /// A verified caller removed pending input before dispatch.
     Withdrawn,
     /// The host stopped the agent for its own shutdown, not to end this work.

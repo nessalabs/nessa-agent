@@ -1,12 +1,14 @@
 //! Process bootstrap and cross-cutting infrastructure.
 //!
 //! Owns everything that applies to the whole binary before any feature runs:
-//! tracing setup, the gateway log's size bound, fatal error reporting, the
+//! tracing setup, Linux process-local dump/inspection protection, the gateway
+//! log's size bound, fatal error reporting, the
 //! tokio runtime wrapper in `bootstrap`, and the trusted-origin predicate every
 //! context shares in `trusted_origin`. `read_workers` owns tracked blocking
 //! source work and retained drain shared by record and catalogue infrastructure.
 //! Source adapters retain authorization and capacity policy; attachment consumers
-//! are integrated separately.
+//! are integrated separately. `local_timings` is the duration files kept in the
+//! log directory; `nessa doctor` reads them and nothing sends them.
 //!
 //! How a run ends is decided in `ending`, out of four facts: what went wrong
 //! (`error`), which number says it (`exit_code`), whether launchd should start
@@ -35,11 +37,14 @@ mod error;
 mod exit_code;
 pub mod launch;
 pub(crate) mod limit_log;
+pub(crate) mod local_timings;
 #[cfg(unix)]
 mod log_file;
 pub mod logging;
 #[cfg(unix)]
 mod open_files;
+#[cfg(target_os = "linux")]
+mod process_memory;
 pub(crate) mod read_workers;
 mod restart;
 #[cfg(unix)]

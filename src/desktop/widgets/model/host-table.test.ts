@@ -32,6 +32,14 @@ describe("ready, its plugin registered", () => {
     })
   })
 
+  it("draws the row inline while the widget is open elsewhere: one live view", () => {
+    expect(hostDraws("inline", ready, everywhere, true)).toEqual({
+      kind: "row",
+      title: "Checkout climb",
+    })
+    expect(hostDraws("panel", ready, everywhere, true)).toEqual({ kind: "view" })
+  })
+
   it("draws a pane always, and says it cannot show a window its plugin does not offer", () => {
     expect(hostDraws("panel", ready, paneOnly)).toEqual({ kind: "view" })
     expect(hostDraws("window", ready, paneOnly)).toEqual({

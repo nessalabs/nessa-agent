@@ -21,6 +21,9 @@
 //! describe whether resource cleanup was confirmed. Operation failures carry explicit
 //! provider session status; execution reports distinguish rejection from observed settlement.
 //! Diagnostic errors never determine admission or resource ownership.
+//! ProviderSession passes validated file preparation as ProviderInputFuture.
+//! The backend polls it under its operation deadline before native handoff;
+//! preparation, image reads and dispatch share that deadline.
 //! ProviderOperationCapabilities flows from the live backend into ProviderSession,
 //! which resolves the private effective OperationCapabilities read by Agent;
 //! model capabilities are owned snapshots of the acknowledged current configuration.
@@ -54,6 +57,7 @@ mod finalized_execution;
 mod harness_host;
 mod identity;
 mod images;
+mod input_files;
 mod native_hooks;
 mod open;
 mod operations;
@@ -75,10 +79,13 @@ pub(crate) use finalized_execution::{
 };
 pub use harness_host::{
     HarnessCleanupFuture, HarnessControl, HarnessHost, HarnessHostIdentity, HarnessLaunch,
-    HarnessProcess,
+    HarnessMcpRelay, HarnessProcess,
 };
 pub use identity::ProviderIdentity;
 pub use images::{ImageInputRefusal, UserImageError, UserImageFuture, UserImageSource};
+pub use input_files::{
+    InputFileFuture, InputFileResolver, PreparedInputFile, ProviderInputFuture, UserFileError,
+};
 pub use native_hooks::NativeHooksSwitch;
 pub(crate) use open::{FailedOpenCauseSource, FailedOpenCleanup};
 pub use open::{

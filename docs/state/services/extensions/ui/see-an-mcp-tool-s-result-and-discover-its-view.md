@@ -49,3 +49,9 @@ stateDiagram-v2
 ## Further reading
 
 [Source](../../../../design/mcp-connections.md) · [Related source](../../../../../crates/nessa-server/src/mcp_servers/mod.rs) · [Related tests](../../../../../crates/nessa-sdk/tests/domain/mcp_apps.rs)
+
+## Model coverage
+
+Disposition: pure contract. Tool UI metadata and originating tool identity are discovery values, not an app mount or approval lifecycle. [MCP App view lifecycle](../../desktop/workspace/mcp-app-view-lifecycle.md) owns the later mounted view and its bounded model.
+
+Excluded: forwarded-result correlation and the projection builder were inventoried but are not checked by a TLA+ model here. Resource consumption, app-session authority and review admission retain their separate owners. The existing source checkpoint is retained because this was a partial review. No browser or application test execution is claimed.

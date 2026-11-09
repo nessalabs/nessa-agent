@@ -67,19 +67,22 @@
 //! lease's end has no evidence, so it is Interrupted. A dropped frame's
 //! record failing is logged only: it records no transition of any lease.
 use super::audit::{EnvironmentAudit, EnvironmentEvent};
-use super::connector::{ArtifactChannels, ArtifactTransport, LeaseConnection, LeaseConnector};
+use super::connector::{ArtifactTransport, LeaseConnection, LeaseConnector};
 use super::transfer::{write_part, WriteFailure};
 use crate::conversation::application::{
-    ArtifactAnswering, BudgetPlace, FetchAsk, FetchFailure, FetchPlaced, PublishFailure,
+    ArtifactAnswering, ArtifactChannels, BudgetPlace, FetchAsk, FetchFailure, FetchPlaced,
+    PublishFailure,
 };
 use crate::env::LEASE_PROTOCOL;
 use crate::env_serve::application::FrameStream;
+use crate::env_serve::install::Platform;
 use futures_util::FutureExt;
+use nessa_protocol::build_update::{self, FromEnvironment::UpdateWanted};
 use nessa_protocol::lease::{
     decode, encode, read_hello, stop_steps, ArtifactReadRefusal, Cleanup, Collection,
     CollectionRefusal, CommandEnd, Data, EndingCause, FetchOutcome, FetchRefusal, FromEnvironment,
-    GrantRefusal, GrantedTerms, PublishRefusal, Sandbox, StagedArtifact, ToEnvironment,
-    Unavailability, COMMAND_STOP_WAIT, MAX_ARTIFACTS_IN_FLIGHT, MAX_DATA_BYTES,
+    GrantRefusal, GrantedTerms, Login, MachineReport, PublishRefusal, Sandbox, StagedArtifact,
+    ToEnvironment, Unavailability, COMMAND_STOP_WAIT, MAX_ARTIFACTS_IN_FLIGHT, MAX_DATA_BYTES,
 };
 use nessa_sdk::domain::agent_execution::leases::{LeaseEndCause, LeaseRefusal, SshDestination};
 use std::{
@@ -268,6 +271,18 @@ struct Routes {
     /// The host said it is stopping (`Draining`), or refused a lease as
     /// draining: it admits nothing new on this connection.
     draining: Drains,
+    /// What the host last said its machine is and how busy
+    /// (`FromEnvironment::Machine`); `None` until it says.
+    machine: Reports,
+}
+
+/// The host's latest machine report, for whoever waits to learn it.
+struct Reports(watch::Sender<Option<MachineReport>>);
+
+impl Default for Reports {
+    fn default() -> Self {
+        Self(watch::channel(None).0)
+    }
 }
 
 /// Whether the host said it is stopping, for whoever waits to learn it.
@@ -329,6 +344,7 @@ pub(crate) struct Granted {
 
 /// One open connection to a host's environment.
 pub(crate) struct HostLink {
+    mcp_relay: Option<Arc<dyn nessa_sdk::application::agent_execution::providers::HarnessMcpRelay>>,
     /// Names the host in the log and the audit: its SSH destination, or a
     /// paired environment's `peer:<key>`.
     host: String,
@@ -406,6 +422,12 @@ impl HostLink {
     ///
     /// # Errors
     /// As [`Self::open`], but for starting the connection.
+    pub(super) fn mcp_relay(
+        &self,
+    ) -> Option<&dyn nessa_sdk::application::agent_execution::providers::HarnessMcpRelay> {
+        self.mcp_relay.as_deref()
+    }
+
     pub(crate) async fn over(
         host: &str,
         connection: LeaseConnection,
@@ -414,6 +436,7 @@ impl HostLink {
         liveness: Liveness,
     ) -> Result<Arc<Self>, Opening> {
         let mut stream = FrameStream::new(connection.from_environment);
+        let mut to_environment = connection.to_environment;
         let first = match tokio::time::timeout(deadline, stream.next()).await {
             Ok(Ok(Some(body))) => body,
             Ok(Ok(None)) => {
@@ -428,6 +451,15 @@ impl HostLink {
                 return Err(LeaseRefusal::EnvironmentUnreachable.into());
             }
         };
+        // A paired host asking for this build instead of serving.
+        if let (Some(updates), Some(UpdateWanted { os, arch, libc })) =
+            (&connection.updates, build_update::from_environment(&first))
+        {
+            updates
+                .send_build(host, Platform { os, arch, libc }, &mut to_environment)
+                .await;
+            return Err(Opening::NotServed);
+        }
         let hello = match read_hello(&first) {
             Some(hello) if hello.protocol == LEASE_PROTOCOL => hello,
             other => {
@@ -441,6 +473,10 @@ impl HostLink {
                     tracing::error!(%error, "an environment's version refusal could not be recorded");
                 }
                 tracing::warn!(host, "the host speaks another lease protocol");
+                // A paired host is told which one, so it can ask for it.
+                if let Some(updates) = &connection.updates {
+                    updates.refuse_version(&mut to_environment).await;
+                }
                 return Err(LeaseRefusal::EnvironmentVersionMismatch.into());
             }
         };
@@ -461,11 +497,7 @@ impl HostLink {
             return Err(LeaseRefusal::EnvironmentUnreachable.into());
         }
         let (frames, outgoing) = mpsc::channel(TO_HOST_QUEUE);
-        tokio::spawn(write_frames(
-            connection.to_environment,
-            outgoing,
-            liveness.keepalive,
-        ));
+        tokio::spawn(write_frames(to_environment, outgoing, liveness.keepalive));
         let routes = Arc::new(Mutex::new(Routes::default()));
         let (ending, ended) = watch::channel(());
         let link = Arc::new(Self {
@@ -474,6 +506,7 @@ impl HostLink {
             frames,
             routes,
             audit,
+            mcp_relay: connection.mcp_relay,
             keep: Mutex::new(connection.keep),
             artifacts: connection.artifacts,
             ended,
@@ -580,6 +613,17 @@ impl HostLink {
         *self.routes().draining.0.borrow()
     }
 
+    /// What the host last said its machine is and how busy, on this
+    /// connection; `None` before it says, or when it never does.
+    pub(crate) fn machine(&self) -> Option<MachineReport> {
+        self.routes().machine.0.borrow().clone()
+    }
+
+    /// Wakes each time the host reports its machine on this connection.
+    pub(crate) fn machines(&self) -> watch::Receiver<Option<MachineReport>> {
+        self.routes().machine.0.subscribe()
+    }
+
     /// Answers once the host said it is stopping on this connection: from
     /// then on it is no longer offered new work.
     pub(crate) async fn drains(&self) {
@@ -600,6 +644,12 @@ impl HostLink {
             .values()
             .filter(|route| !route.command && route.grant.is_none())
             .count()
+    }
+
+    /// Whether no lease of any kind is on this connection: none asked, held,
+    /// ending, nor a command waiting for its end.
+    pub(crate) fn holds_nothing(&self) -> bool {
+        self.routes().leases.is_empty()
     }
 
     /// The host no longer holds a credential to serve this gateway. No lease
@@ -937,7 +987,8 @@ impl HostLink {
         routes.unaudited.remove(lease);
     }
 
-    /// Start a harness under `lease` with the binding's `environment`.
+    /// Start a harness under `lease` with the binding's `environment` and,
+    /// when the lease's grant takes one, the agent's saved `login`.
     /// Answers at once.
     ///
     /// # Errors
@@ -946,6 +997,7 @@ impl HostLink {
         &self,
         lease: &str,
         environment: BTreeMap<String, String>,
+        login: Option<Login>,
     ) -> Result<StartedChannel, StartError> {
         let (output_sender, output_receiver) = mpsc::channel(OUTPUT_QUEUE);
         let (stop, stop_asked) = oneshot::channel();
@@ -980,6 +1032,7 @@ impl HostLink {
                 lease: lease.into(),
                 channel,
                 environment,
+                login,
             };
             // Larger than a frame carries: refused here, before it is queued
             // for every lease's connection.
@@ -1652,6 +1705,12 @@ fn route_frame(routes: &mut Routes, frame: FromEnvironment) -> Routed {
         // Only proof the host is still there: its arrival already reset the
         // demux's silence bound, and nothing waits on it.
         FromEnvironment::Keepalive => Routed::Done,
+        // Shown, never acted on; one out of its bounds is not kept.
+        FromEnvironment::Machine { report } if report.is_bounded() => {
+            routes.machine.0.send_replace(Some(report));
+            Routed::Done
+        }
+        FromEnvironment::Machine { .. } => Routed::Dropped,
         FromEnvironment::Draining => {
             routes.draining.0.send_replace(true);
             Routed::Done
@@ -2097,6 +2156,7 @@ fn frame_name(frame: &FromEnvironment) -> &'static str {
         FromEnvironment::Hello { .. } => "hello",
         FromEnvironment::Unavailable { .. } => "unavailable",
         FromEnvironment::Keepalive => "keepalive",
+        FromEnvironment::Machine { .. } => "machine",
         FromEnvironment::Draining => "draining",
         FromEnvironment::Granted { .. } => "granted",
         FromEnvironment::Refused { .. } => "refused",

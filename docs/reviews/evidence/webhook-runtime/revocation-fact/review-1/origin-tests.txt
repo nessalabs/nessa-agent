@@ -1,0 +1,9 @@
+
+running 5 tests
+test a_valid_revocation_record_is_not_an_original_issuance ... ok
+test original_webhook_origin_survives_revocation_without_synthetic_history ... ok
+test malformed_or_cross_credential_origin_is_refused ... ok
+test webhook_origin_requires_its_actual_principal_command_shape ... ok
+test every_issuance_cause_round_trips_without_purpose_inference ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s

@@ -356,6 +356,22 @@ impl ProcessScope {
         }
     }
 
+    /// A failed spawn with retained private storage still returns a cleanup
+    /// owner to the host. Its output fails immediately; no child exists.
+    pub(crate) fn failed_private_start(failure: ProcessStartFailure) -> Result<Self, AgentError> {
+        let (cause, recovery) = failure.into_parts();
+        let Some(directory) = recovery else {
+            return Err(cause);
+        };
+        let process = HarnessProcess {
+            input: Box::new(tokio::io::sink()),
+            output: Box::new(FailedStartOutput(cause)),
+            control: Box::new(NoStartedChild),
+        };
+        let mut scope = Self::remote(process);
+        scope.retained_directory = Some(directory);
+        Ok(scope)
+    }
     /// The local child's process group, for tests that probe it directly.
     #[cfg(all(test, unix))]
     pub(crate) fn group(&self) -> u32 {
@@ -667,3 +683,24 @@ fn group_exists(_: u32) -> Result<bool, AgentError> {
 #[cfg(all(test, unix))]
 #[path = "../../tests/infrastructure/process.rs"]
 mod tests;
+
+struct FailedStartOutput(AgentError);
+impl AsyncRead for FailedStartOutput {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        _cx: &mut Context<'_>,
+        _buffer: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        Poll::Ready(Err(io::Error::other(self.0.to_string())))
+    }
+}
+struct NoStartedChild;
+impl HarnessControl for NoStartedChild {
+    fn cleanup(
+        &mut self,
+        _grace: Duration,
+        _kill_timeout: Duration,
+    ) -> crate::application::agent_execution::providers::HarnessCleanupFuture<'_> {
+        Box::pin(async { Ok(CloseOutcome { forced: false }) })
+    }
+}

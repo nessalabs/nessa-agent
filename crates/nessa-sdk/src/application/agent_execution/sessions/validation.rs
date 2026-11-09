@@ -7,7 +7,7 @@ use super::{
     InvocationCancellationEvent, InvocationRecord, InvocationSchedulingEvent, ProviderContext,
     SessionSnapshot, StorageError, SubmissionAcknowledgement,
 };
-use crate::application::agent_execution::agents::AgentError;
+use crate::application::agent_execution::agents::{validate_saved_resumption, AgentError};
 use crate::application::agent_execution::executions::{
     limits::{validate_observation_id, ObservationUsage, MAX_RETAINED_OUTPUT_EVENTS},
     ExecutionEvent, ExecutionUpdate,
@@ -29,6 +29,25 @@ use std::cell::Cell;
 #[cfg(test)]
 std::thread_local! {
     pub(crate) static VALIDATION_CALLS: Cell<(usize, usize)> = const { Cell::new((0, 0)) };
+}
+
+/// The retained terminal prefix a fresh context may exclude from its admission.
+/// A known result preceding its final scheduling write is still pending here.
+pub(crate) fn terminal_prefix(invocations: &[InvocationRecord]) -> usize {
+    invocations
+        .iter()
+        .take_while(|record| {
+            record.scheduling.last().map_or_else(
+                || record.result.is_some(),
+                |event| {
+                    matches!(
+                        event.stage,
+                        InvocationStage::Settled | InvocationStage::Cancelled
+                    )
+                },
+            )
+        })
+        .count()
 }
 
 fn corrupt(error: impl Display) -> StorageError {
@@ -63,6 +82,11 @@ impl InvocationContinuation {
         Ok(state)
     }
     pub(super) fn empty(invocation: &InvocationRecord) -> Result<Self, StorageError> {
+        super::authorship::validate_message_author(
+            &invocation.initiation,
+            &invocation.request.user_message,
+        )
+        .map_err(corrupt)?;
         invocation
             .request
             .validate_message_size()
@@ -199,6 +223,13 @@ pub(super) fn continuation(
     if snapshot.invocations.len() > SessionSnapshot::MAX_INVOCATIONS {
         return Err(corrupt("retained invocation history exceeds session limit"));
     }
+    snapshot
+        .provider_context
+        .validate_admission(
+            snapshot.invocations.len(),
+            terminal_prefix(&snapshot.invocations),
+        )
+        .map_err(corrupt)?;
     super::artifacts::validate_saved(snapshot)?;
     super::notes::validate_saved(snapshot)?;
     super::handoffs::validate_saved(snapshot)?;
@@ -236,6 +267,14 @@ pub(super) fn continuation(
     // against those before it, through each one's observation index.
     let mut positions = HashMap::with_capacity(snapshot.invocations.len());
     for invocation in &snapshot.invocations {
+        validate_saved_resumption(
+            invocation,
+            invocation.resumed_from.as_ref().and_then(|source| {
+                positions
+                    .get(source)
+                    .map(|&index: &usize| &snapshot.invocations[index])
+            }),
+        )?;
         // The snapshot holds a steered message's target whole, so the offset
         // bounds which of its calls came before the message.
         let steered = SteeringPosition::saved(invocation)?;
@@ -354,6 +393,12 @@ pub(super) fn validate_observation_identity(event: &ExecutionEvent) -> Result<()
 pub(super) fn invocation_history(
     invocation: &InvocationRecord,
 ) -> Result<InvocationHistory, StorageError> {
+    if let Some(decision) = &invocation.cancellation_delivery {
+        validate_cancellation_delivery(invocation, decision)?;
+    }
+    if let Some(decision) = &invocation.decline {
+        validate_decline(invocation, decision)?;
+    }
     #[cfg(test)]
     VALIDATION_CALLS.with(|calls| {
         let (full, history) = calls.get();
@@ -405,6 +450,54 @@ pub(super) fn invocation_history(
     )?;
     history.validate_checkpoint().map_err(corrupt)?;
     Ok(history)
+}
+
+/// A prepared decline keeps its original edge before and after application.
+pub(super) fn validate_decline(
+    invocation: &InvocationRecord,
+    decision: &super::DeclineDecision,
+) -> Result<(), StorageError> {
+    let event = decision.event();
+    if event.cause != SchedulingCause::NotResumed || event.actor.is_none() {
+        return Err(corrupt(
+            "decline preparation has no attributed NotResumed decision",
+        ));
+    }
+    let applied = invocation.scheduling.last() == Some(event);
+    if decision.acknowledged() && !applied {
+        return Err(corrupt(
+            "decline audit acknowledgement precedes its decision",
+        ));
+    }
+    let prefix = if applied {
+        &invocation.scheduling[..invocation.scheduling.len() - 1]
+    } else {
+        &invocation.scheduling[..]
+    };
+    let preceding = prefix
+        .last()
+        .ok_or_else(|| corrupt("decline has no owed stop"))?;
+    if !crate::application::agent_execution::agents::decline_stop_is_owed(invocation, preceding) {
+        return Err(corrupt("decline preparation does not follow owed work"));
+    }
+    if event.kind != preceding.kind
+        || event.target != preceding.target
+        || event.before != Some(preceding.stage)
+    {
+        return Err(corrupt("decline preparation contradicts its original stop"));
+    }
+    let mut history = InvocationHistory::new(
+        invocation.request.execution_id.clone(),
+        invocation.submission,
+    );
+    for edge in prefix {
+        history
+            .schedule(edge.transition().map_err(corrupt)?)
+            .map_err(corrupt)?;
+    }
+    history
+        .schedule(event.transition().map_err(corrupt)?)
+        .map_err(corrupt)
 }
 
 /// Check one acknowledgement before it can be overwritten by another fact.
@@ -533,3 +626,34 @@ pub(super) fn local_result_transition(
         .map_err(corrupt)?;
     Ok(history.local_outcome())
 }
+
+/// Validate the saved original queued cancellation against its admitted input.
+pub(super) fn validate_cancellation_delivery(
+    invocation: &InvocationRecord,
+    decision: &super::CancellationDecision,
+) -> Result<(), StorageError> {
+    let event = decision.event();
+    let applied = invocation.scheduling.iter().position(|edge| edge == event);
+    let prefix = applied.map_or(&invocation.scheduling[..], |at| {
+        &invocation.scheduling[..at]
+    });
+    let preceding = prefix
+        .last()
+        .ok_or_else(|| corrupt("cancellation preparation has no queued input"))?;
+    if preceding.stage != InvocationStage::Queued
+        || event.kind != preceding.kind
+        || event.target != preceding.target
+        || event.before != Some(InvocationStage::Queued)
+        || event.stage != InvocationStage::Cancelled
+    {
+        return Err(corrupt(
+            "cancellation preparation contradicts its queued input",
+        ));
+    }
+    event.transition().map_err(corrupt)?;
+    Ok(())
+}
+
+#[cfg(test)]
+#[path = "../../../../tests/application/agent_execution/sessions/context_admission.rs"]
+mod context_admission_tests;

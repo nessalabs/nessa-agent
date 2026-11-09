@@ -7,7 +7,7 @@
 use super::audit_observation::{AuditObservationFailure, AUDIT_OBSERVATION_TIMEOUT};
 use super::lifecycle::{SessionLifecycle, WorkGeneration, WorkPermit};
 use super::submissions::{self, Settlement, SubmissionReceipt};
-use super::{Agent, AgentError, AttachmentPhase, AttachmentRequest};
+use super::{Agent, AgentCloseReport, AgentError, AttachmentPhase, AttachmentRequest};
 use crate::application::agent_execution::{
     caller_wake::{contain_caller_wake, CallerWaiter},
     executions::{
@@ -289,10 +289,11 @@ impl<'a> ActiveInvocation<'a> {
         lifecycle: &'a SessionLifecycle,
         id: ExecutionId,
         configured: Arc<dyn AgentProvider>,
+        work: &WorkPermit,
     ) -> Result<Self, AgentError> {
         Ok(Self {
             lifecycle,
-            work_generation: lifecycle.start_execution(id, configured)?,
+            work_generation: lifecycle.start_execution(id, configured, work)?,
         })
     }
 }
@@ -519,6 +520,45 @@ impl Agent {
         })
         .await
     }
+    /// Copy locally owned unfinished execution identities under the scheduler
+    /// boundary, including the dequeue-to-dispatch handoff and the active turn.
+    /// This grants no cancellation authority and never retargets to a later turn.
+    /// A copied execution may finish immediately afterward; exact controls must
+    /// recheck it. Restored work without a local receipt is excluded.
+    pub async fn unsettled_execution_ids(&self) -> Vec<ExecutionId> {
+        let waiter = CallerWaiter::QueuedIds(self.inner.manager.id().clone());
+        contain_caller_wake(waiter, async {
+            let scheduler = self.inner.scheduler.lock().await;
+            let mut ids = self
+                .inner
+                .manager
+                .pick_invocations(|_, record, _| {
+                    (scheduler.has_receipt(&record.request.execution_id)
+                        && record.result.is_none()
+                        && record.scheduling.last().is_some_and(|edge| {
+                            matches!(
+                                edge.stage,
+                                InvocationStage::Queued | InvocationStage::Running
+                            )
+                        }))
+                    .then(|| record.request.execution_id.clone())
+                })
+                .await;
+            for (id, _) in scheduler.queue.pending() {
+                if !ids.contains(&id) {
+                    ids.push(id);
+                }
+            }
+            if let Some(active) = self.inner.lifecycle.active() {
+                if !ids.contains(&active) {
+                    ids.push(active);
+                }
+            }
+            ids
+        })
+        .await
+    }
+
     /// Atomically replace the complete pending order requested by verified `actor`.
     /// Steering retains priority; identities, requests, receipts and kinds remain
     /// unchanged. Membership races, including dispatch or withdrawal while the
@@ -850,9 +890,12 @@ impl Agent {
         let waiter = CallerWaiter::Admission(input.execution_id.clone());
         contain_caller_wake(
             waiter,
-            tokio::spawn(
-                async move { agent.accept_work(input, submitter, kind, candidates).await },
-            ),
+            tokio::spawn(async move {
+                agent
+                    .accept_work(input, submitter, kind, candidates, None)
+                    .await?
+                    .ok_or(AgentError::SubmissionConflict)
+            }),
         )
         .await
         .map_err(|_| AgentError::SubmissionUnresolved)?
@@ -864,12 +907,26 @@ impl Agent {
         submitter: Submitter,
         kind: InvocationKind,
         candidates: NoteCandidates,
-    ) -> Result<QueueAdmission, AgentError> {
+        resumed_from: Option<ExecutionId>,
+    ) -> Result<Option<QueueAdmission>, AgentError> {
         let mut scheduler = self.inner.scheduler.lock().await;
         let mode = match kind {
             InvocationKind::Queued => SubmissionMode::Queued,
             InvocationKind::Steering => SubmissionMode::BoundarySteering,
         };
+        // An ordinary input winning admission after settle_owed is still not
+        // a continuation. Compare the retained owner fact before retry recovery.
+        if let Some(source) = &resumed_from {
+            if self
+                .inner
+                .manager
+                .submission(&input.execution_id)
+                .await
+                .is_some_and(|saved| saved.resumed_from.as_ref() != Some(source))
+            {
+                return Err(AgentError::SubmissionConflict);
+            }
+        }
         if let Some(recovered) = submissions::recover(
             &self.inner.manager,
             &scheduler.receipts,
@@ -880,9 +937,32 @@ impl Agent {
         .await
         {
             return match recovered? {
-                SteeringDelivery::Queued(receipt) => Ok(receipt),
+                SteeringDelivery::Queued(receipt) => Ok(Some(receipt)),
                 SteeringDelivery::Injected { .. } => Err(AgentError::SubmissionConflict),
             };
+        }
+        // A decline that won after source settlement and before this admission
+        // is already persisted. The scheduler lock is the same one decline
+        // holds while it prepares that decision, so this check and the
+        // successor save cannot both succeed.
+        if let Some(source) = &resumed_from {
+            let decided = self
+                .inner
+                .manager
+                .read_invocations(|history| {
+                    history.iter().any(|record| {
+                        &record.request.execution_id == source
+                            && (record.decline.is_some()
+                                || record
+                                    .scheduling
+                                    .iter()
+                                    .any(|edge| edge.cause == SchedulingCause::NotResumed))
+                    })
+                })
+                .await;
+            if decided {
+                return Ok(None);
+            }
         }
         validate_configured_input(&self.capabilities(), &input)?;
         let work = self.inner.lifecycle.accept_waiting_work()?;
@@ -918,6 +998,7 @@ impl Agent {
                     candidates,
                     takes_notes,
                 },
+                resumed_from,
             )
             .await?;
         // The scheduler lock spans validation and persistence, so no admission
@@ -931,6 +1012,7 @@ impl Agent {
         let admission_generation =
             format!("{}:{}", self.inner.instance_id, work.provider_generation());
         let effort_level = self.effort_level();
+        let notice = submitter.admission.clone();
         let receipt =
             Self::accept_pending(&mut scheduler, input, submitter, index, kind, None, work);
         let audit_record = ExecutionAuditRecord::QueueAdmitted(
@@ -980,8 +1062,16 @@ impl Agent {
             *retained = admission.evidence.clone();
         }
         if acknowledged {
+            // Before the runner is spawned, and before this lock is released.
+            // A reader blocked on the conversation can proceed only after that
+            // release, so the notice has already returned by the time a reply
+            // can be observed. A recovered retry returned above and does not
+            // notify again.
+            if let Some(notice) = notice {
+                notice.admitted();
+            }
             self.start_runner(&mut scheduler);
-            return Ok(admission);
+            return Ok(Some(admission));
         }
         let attempt = self.start_shutdown(SessionCloseRequest::ExecutionFailed);
         if let Err(error) = self
@@ -1004,7 +1094,7 @@ impl Agent {
         tokio::spawn(async move {
             let _ = agent.inner.lifecycle.complete_stop(&attempt).await;
         });
-        Ok(admission)
+        Ok(Some(admission))
     }
 
     fn accept_pending(
@@ -1602,6 +1692,7 @@ impl Agent {
                 ),
                 SubmissionMode::Steering,
                 NoteIntake::default(),
+                None,
             )
             .await?;
         let refused = match after_save.as_ref() {
@@ -2271,8 +2362,9 @@ impl Agent {
         cause: SchedulingCause,
         actor: Option<ActionContext>,
     ) -> Result<(), AgentError> {
-        let mut failure = None;
+        let mut aggregate: Option<AgentError> = None;
         for id in ids {
+            let mut failure = None;
             let pending = scheduler.pending.get(&id).expect("admitted queue input");
             // Each waiting owner may have stopped earlier than this drain.
             let first_stop = pending._work.cancellation();
@@ -2280,22 +2372,25 @@ impl Agent {
             let actor = first_stop
                 .as_ref()
                 .map_or_else(|| actor.clone(), |event| event.actor.clone());
-            let audit_record = ExecutionAuditRecord::QueueSettled(
-                QueueSettlementRecord::cancelled(
-                    self.inner.manager.id().clone(),
-                    id.clone(),
-                    pending.kind,
-                    pending.target.clone(),
-                    cause,
-                    pending.submitter.context.clone(),
-                    actor.clone(),
-                )
-                .expect("admitted pending cancellation transition"),
+            let cancellation = event(
+                pending.kind,
+                pending.target.clone(),
+                Some(InvocationStage::Queued),
+                InvocationStage::Cancelled,
+                cause,
+                actor.clone(),
             );
-            let audit = self
-                .record_scheduling_audit(audit_record, "cancelled_queue_settlement")
-                .await
-                .map_err(AuditObservationFailure::into_agent_error);
+            // Save the original input before audit can escape this process.
+            // Necessary cancellation below still proceeds on a rejected save.
+            let prepared = self
+                .inner
+                .manager
+                .prepare_cancellation(pending.index, cancellation)
+                .await;
+            let audit = match prepared {
+                Ok(_) => self.deliver_cancellation_receipt(pending.index).await,
+                Err(error) => Err(AgentError::Storage(error)),
+            };
             if let Err(error) = &audit {
                 failure = Some(match failure.take() {
                     Some(first) => AgentError::MultipleOperationFailures {
@@ -2430,13 +2525,19 @@ impl Agent {
                     None => aggregate,
                 });
             }
+            if let Some(error) = failure {
+                aggregate = Some(match aggregate {
+                    None => error,
+                    Some(first) => first.with_independent_failure(error),
+                });
+            }
             scheduler
                 .pending
                 .remove(&id)
                 .expect("admitted queue input")
                 .publish(result);
         }
-        failure.map_or(Ok(()), Err)
+        aggregate.map_or(Ok(()), Err)
     }
 
     async fn retain_receipt_after_failed_save(
@@ -2471,6 +2572,153 @@ impl Agent {
         actor: ActionContext,
         mode: CloseMode,
     ) -> Result<CloseOutcome, AgentError> {
+        self.close_scheduled_report(actor, mode)
+            .await?
+            .into_result()
+    }
+
+    async fn deliver_cancellation_receipt(&self, index: usize) -> Result<(), AgentError> {
+        let audit = self
+            .inner
+            .manager
+            .with_invocation(index, |record| {
+                let decision = record.cancellation_delivery.as_ref().ok_or_else(|| {
+                    AgentError::Storage(StorageError::Corrupt(
+                        "cancellation preparation is absent".into(),
+                    ))
+                })?;
+                if decision.acknowledged() {
+                    return Ok(None);
+                }
+                let event = decision.event();
+                QueueSettlementRecord::cancelled(
+                    self.inner.manager.id().clone(),
+                    record.request.execution_id.clone(),
+                    event.kind,
+                    event.target.clone(),
+                    event.cause,
+                    record.actor.clone(),
+                    event.actor.clone(),
+                )
+                .map(Some)
+                .map_err(|error| AgentError::InvalidInput(error.to_string()))
+            })
+            .await
+            .map_err(AgentError::Storage)??;
+        let Some(audit) = audit else {
+            return Ok(());
+        };
+        self.record_scheduling_audit(
+            ExecutionAuditRecord::QueueSettled(audit),
+            "prepared_cancelled_queue_settlement",
+        )
+        .await
+        .map_err(AuditObservationFailure::into_agent_error)?;
+        self.inner
+            .manager
+            .acknowledge_cancellation(index, true)
+            .await
+            .map_err(AgentError::Storage)
+    }
+
+    /// Join only saved, original queued-cancellation delivery receipts.
+    /// The existing scheduler serializes competing joins and close transactions.
+    /// This performs no new cancellation decision or provider action. Each unanswered
+    /// receipt gets its own bounded idempotent audit attempt, then a writer ACK.
+    /// Dropping this wait does not acknowledge either owner. Storage or audit
+    /// failures remain visible and retain the same preparation for another join.
+    pub async fn retry_cancelled_receipts(&self) -> Result<(), AgentError> {
+        let _scheduler = self.inner.scheduler.lock().await;
+        self.retry_cancelled_receipts_owned(None).await
+    }
+
+    // The caller holds the existing scheduler owner, including on first close.
+    async fn retry_cancelled_receipts_owned(
+        &self,
+        selected: Option<&HashSet<ExecutionId>>,
+    ) -> Result<(), AgentError> {
+        self.inner
+            .manager
+            .flush_cancellation_receipts()
+            .await
+            .map_err(AgentError::Storage)?;
+        let receipts = self
+            .inner
+            .manager
+            .read_invocations(|records| {
+                records
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, record)| {
+                        record.cancellation_delivery.as_ref().map(|decision| {
+                            (
+                                index,
+                                record.request.execution_id.clone(),
+                                decision.clone(),
+                                record
+                                    .scheduling
+                                    .iter()
+                                    .any(|edge| edge == decision.event()),
+                            )
+                        })
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .await;
+        let mut failure = None;
+        for (index, id, decision, applied) in receipts {
+            if selected.is_some_and(|selected| !selected.contains(&id)) {
+                continue;
+            }
+            let attempt = async {
+                if !decision.acknowledged() {
+                    self.inner
+                        .manager
+                        .prepare_cancellation(index, decision.event().clone())
+                        .await
+                        .map_err(AgentError::Storage)?;
+                    self.deliver_cancellation_receipt(index).await?;
+                }
+                // Process loss can leave an acknowledged preparation before its
+                // local edge. Apply that same decision, without selecting again.
+                if !applied {
+                    self.inner
+                        .manager
+                        .record_scheduling_with_queue(
+                            index,
+                            decision.event().clone(),
+                            Some(QueueMutation::Removed {
+                                id,
+                                cause: match decision.event().cause {
+                                    SchedulingCause::SessionClosed => {
+                                        QueueRemovalCause::SessionClosed
+                                    }
+                                    SchedulingCause::Suspended => QueueRemovalCause::Suspended,
+                                    _ => QueueRemovalCause::RunnerStopped,
+                                },
+                            }),
+                        )
+                        .await
+                        .map_err(AgentError::Storage)?;
+                }
+                Ok::<(), AgentError>(())
+            }
+            .await;
+            if let Err(error) = attempt {
+                failure = Some(match failure {
+                    None => error,
+                    Some(first) => AgentError::with_independent_failure(first, error),
+                });
+            }
+        }
+        failure.map_or(Ok(()), Err)
+    }
+
+    pub(super) async fn close_scheduled_report(
+        &self,
+        actor: ActionContext,
+        mode: CloseMode,
+    ) -> Result<AgentCloseReport, AgentError> {
         let agent = self.clone();
         let waiter = CallerWaiter::Close(self.inner.manager.id().clone());
         contain_caller_wake(
@@ -2487,22 +2735,101 @@ impl Agent {
                     ),
                     _ => (SchedulingCause::RunnerStopped, None),
                 };
+                // Capture a retry only while this scheduler has no in-flight
+                // transaction. A close waiting behind first cancellation joins
+                // its receipt, rather than spending a second audit deadline.
+                let retry_before = match agent.inner.scheduler.try_lock() {
+                    Ok(_owner) => {
+                        agent
+                            .inner
+                            .manager
+                            .read_invocations(|records| {
+                                records
+                                    .iter()
+                                    .filter(|record| {
+                                        record
+                                            .cancellation_delivery
+                                            .as_ref()
+                                            .is_some_and(|receipt| !receipt.acknowledged())
+                                    })
+                                    .map(|record| record.request.execution_id.clone())
+                                    .collect::<HashSet<_>>()
+                            })
+                            .await
+                    }
+                    Err(_) => HashSet::new(),
+                };
                 let mut scheduler = agent.inner.scheduler.lock().await;
-                let saved = agent.cancel_pending(&mut scheduler, cause, actor).await;
+                let cancelling = scheduler.pending.keys().cloned().collect::<HashSet<_>>();
+                let retried = agent
+                    .retry_cancelled_receipts_owned(Some(&retry_before))
+                    .await;
+                let mut saved = super::closing::join_acknowledgements(
+                    retried,
+                    agent.cancel_pending(&mut scheduler, cause, actor).await,
+                );
+                let unjoined = agent
+                    .inner
+                    .manager
+                    .read_invocations(|records| {
+                        records
+                            .iter()
+                            .filter(|record| {
+                                record
+                                    .cancellation_delivery
+                                    .as_ref()
+                                    .is_some_and(|receipt| !receipt.acknowledged())
+                                    && !retry_before.contains(&record.request.execution_id)
+                                    && !cancelling.contains(&record.request.execution_id)
+                            })
+                            .count()
+                    })
+                    .await;
+                for _ in 0..unjoined {
+                    saved = match saved {
+                        Ok(()) => Err(AgentError::AuditFailure),
+                        Err(first) => Err(first.with_independent_failure(AgentError::AuditFailure)),
+                    };
+                }
                 drop(scheduler);
                 let _invocation = agent.inner.invocation.lock().await;
                 agent.inner.manager.await_admission_writes().await;
                 agent.inner.lifecycle.wait_for_work().await;
                 let cleanup = agent.inner.lifecycle.complete_stop(&attempt).await;
-                let cleanup = cleanup.into_result();
-                match saved {
-                    Ok(()) => cleanup,
-                    Err(AgentError::Storage(error)) => Err(AgentError::StorageDuringClose {
-                        error,
-                        cleanup_result: Box::new(cleanup),
-                    }),
-                    Err(error) => Err(error),
+                drop(_invocation);
+                let mut scheduling = saved;
+                if cleanup.is_confirmed()
+                    && cleanup.audit().is_ok()
+                    && cleanup.completion_failure().is_none()
+                {
+                    if let Some(scope) = agent
+                        .inner
+                        .lifecycle
+                        .owned_gate()
+                        .and_then(|gate| gate.cleanup_scope())
+                    {
+                        // The same atomic writer publishes cancellation writes and
+                        // this actual owner's proof together; failed ACK stays retained.
+                        let proof = agent
+                            .inner
+                            .lifecycle
+                            .record_cleanup_proof(&attempt, async {
+                                agent
+                                    .inner
+                                    .manager
+                                    .acknowledge_sdk_cleanup(&scope)
+                                    .await
+                                    .map_err(AgentError::Storage)
+                            })
+                            .await;
+                        scheduling = super::closing::join_acknowledgements(scheduling, proof);
+                    }
                 }
+                // This separate phase cannot block or acknowledge the SDK receipt above.
+                let decline = agent.retry_declined_turns().await;
+                Ok::<_, AgentError>(
+                    AgentCloseReport::new(cleanup, scheduling).with_decline(decline),
+                )
             }),
         )
         .await

@@ -10,12 +10,12 @@ use crate::application::agent_execution::sessions::{
     SessionSnapshot,
 };
 use crate::domain::agent_execution::{
-    executions::{ExecutionId, GrantInitiator, QueueOrderChange},
+    executions::{AgentSource, ExecutionId, GrantInitiator, QueueOrderChange},
     leases::LeaseId,
     permissions::PermissionOption,
     prompts::{
         AppModelContext as DomainAppModelContext, CarriedHistory, CarriedTurn, LinkedFile,
-        McpAppSource, UserMessage,
+        McpAppSource, UploadedFileReference, UserMessage,
     },
     questions::{
         MAX_KEY_BYTES as MAX_QUESTION_KEY_BYTES, MAX_OPTIONS as MAX_QUESTION_OPTIONS,
@@ -64,6 +64,7 @@ pub(super) enum Shape {
     SemanticReport,
     SemanticSettlement,
     SemanticContext,
+    Context,
     SnapshotLease,
     LeaseRecords,
     LeaseRecord,
@@ -87,6 +88,8 @@ pub(super) enum Shape {
     Image,
     Files,
     FileLink,
+    Uploads,
+    UploadedFile,
     App,
     AppModelContexts,
     AppModelContext,
@@ -95,6 +98,7 @@ pub(super) enum Shape {
     Initiation,
     Initiator,
     Grant,
+    Agent,
     Event,
     Update,
     Scheduling,
@@ -152,7 +156,8 @@ impl Shape {
             | Self::Error
             | Self::Initiation
             | Self::Initiator
-            | Self::Grant => KEY_BYTES,
+            | Self::Grant
+            | Self::Agent => KEY_BYTES,
             Self::GroupCheckpoint | Self::SaveIdentity | Self::FixedBytes(_) | Self::Number => 0,
             _ => LARGE_STRING,
         }
@@ -171,7 +176,10 @@ impl Shape {
                 Checkpoint,
                 "receiver" | "origin" | "stream" | "incarnation" | "schema" | "access_epoch",
             ) => Text(256),
-            (Snapshot, "id" | "context") => Text(256),
+            (Snapshot, "id") => Text(256),
+            (Snapshot | SemanticOpened, "context") => Context,
+            (Context, "id") => Text(256),
+            (Context, "admitted_before") => Number,
             (Snapshot, "provider") => Provider,
             (Snapshot, "invocations") => Invocations,
             (Snapshot, "queue_history") => QueueHistory,
@@ -215,6 +223,7 @@ impl Shape {
             (HandoffFork, "history") => Carried,
             (Carried, "turns") => CarriedTurns,
             (CarriedTurn, "said" | "reply") => Text(CarriedTurn::MAX_PART_BYTES),
+            (CarriedTurn, "agent") => Agent,
             (Invocation, "metadata") => Metadata,
             (Invocation, "scheduling") => Scheduling,
             (Invocation, "events") => Events,
@@ -229,7 +238,7 @@ impl Shape {
             (Semantic, "ProviderReport") => SemanticReport,
             (Semantic, "LocalSettlement") => SemanticSettlement,
             (Semantic, "ProviderContext") => SemanticContext,
-            (SemanticOpened, "id" | "context") => Text(256),
+            (SemanticOpened, "id") => Text(256),
             (SemanticOpened, "provider") => Provider,
             (SemanticInput, "metadata") => Metadata,
             (SemanticInput, "scheduling") => Scheduling,
@@ -237,7 +246,7 @@ impl Shape {
             (SemanticScheduling, "event") => Generic,
             (SemanticReceipt, "before" | "after") => Acknowledgement,
             (SemanticSettlement, "before" | "after") => Result,
-            (SemanticContext, "before" | "after") => Text(256),
+            (SemanticContext, "before" | "after") => Context,
             (
                 SemanticReceipt | SemanticStop | SemanticReport | SemanticSettlement,
                 "execution_id",
@@ -250,12 +259,16 @@ impl Shape {
             (Provider, "name" | "model_id") => Text(256),
             (Provider, "context") => Text(4096),
             (Actor, _) => Text(256),
+            (Metadata, "resumed_from") => Text(ExecutionId::MAX_BYTES),
             (Metadata, "initiation") => Initiation,
             (Initiation, "initiator") => Initiator,
             (Initiation, "tools") => Text(KEY_BYTES),
             (Initiator, "Grant") => Grant,
+            (Initiator, "Agent") => Agent,
             (Grant, "grant") => Text(GrantInitiator::MAX_GRANT_BYTES),
             (Grant, "policy_revision") => Number,
+            (Agent, "conversation") => Text(AgentSource::MAX_CONVERSATION_BYTES),
+            (Agent, "execution") => Text(ExecutionId::MAX_BYTES),
             (_, "projection") => FinalizedComponents,
             (FinalizedComponent, "Operation") => Error,
             (FinalizedComponent, "PermissionDeliveryAndAudit") => Generic,
@@ -271,6 +284,10 @@ impl Shape {
             (Metadata, "user_message") => Text(ExecutionRequest::MAX_MESSAGE_BYTES),
             (Metadata, "user_images") => Images,
             (Metadata, "user_files") => Files,
+            (Metadata, "user_uploads") => Uploads,
+            (UploadedFile, "name") => Text(UploadedFileReference::MAX_NAME_BYTES),
+            (UploadedFile, "digest") => Text(DIGEST_BYTES),
+            (UploadedFile, "media_type") => Text(127),
             (Metadata, "user_app") | (AppModelContext, "app") => App,
             (Metadata, "user_app_model_context") => AppModelContexts,
             (App, "execution_id") => Text(ExecutionId::MAX_BYTES),
@@ -368,6 +385,7 @@ impl Shape {
             FixedBytes(_) | Number => false,
             Image => matches!(key, "digest" | "media_type" | "size"),
             FileLink => key == "path",
+            UploadedFile => matches!(key, "digest" | "media_type" | "size" | "name"),
             App => matches!(key, "execution_id" | "tool_id" | "server" | "tool"),
             AppModelContext => matches!(key, "app" | "update" | "text" | "structured_content"),
             McpTool => matches!(key, "server" | "tool"),
@@ -394,13 +412,14 @@ impl Shape {
             HandoffFork => matches!(key, "source" | "history"),
             Carried => matches!(key, "turns" | "omitted"),
             HandoffSwitch => matches!(key, "before" | "after"),
-            CarriedTurn => matches!(key, "said" | "reply"),
+            CarriedTurn => matches!(key, "said" | "reply" | "agent"),
             ProviderError => matches!(key, "code" | "diagnostic"),
             AuthenticationError => key == "diagnostic",
             FailedAcknowledgement => matches!(key, "audit" | "storage"),
             Initiation => matches!(key, "initiator" | "tools"),
-            Initiator => key == "Grant",
+            Initiator => matches!(key, "Grant" | "Agent"),
             Grant => matches!(key, "grant" | "policy_revision"),
+            Agent => matches!(key, "conversation" | "execution"),
             StorageError => matches!(
                 key,
                 "Io" | "Corrupt" | "ChangesRequired" | "Unresolved" | "ShutdownFailures"
@@ -421,6 +440,7 @@ impl Shape {
             Self::Events => Self::Event,
             Self::Images => Self::Image,
             Self::Files => Self::FileLink,
+            Self::Uploads => Self::UploadedFile,
             Self::AppModelContexts => Self::AppModelContext,
             Self::SemanticChanges => Self::Semantic,
             Self::LeaseRecords => Self::LeaseRecord,
@@ -462,7 +482,7 @@ impl Shape {
             // before the excess references are built.
             Self::Images => UserMessage::MAX_IMAGES,
             // The same, for the paths a message points at.
-            Self::Files => UserMessage::MAX_FILES,
+            Self::Files | Self::Uploads => UserMessage::MAX_FILES,
             // And the apps' contexts it carries.
             Self::AppModelContexts => UserMessage::MAX_APP_MODEL_CONTEXTS,
             // Collection slots alone cannot exceed the live 32 MiB tool/review

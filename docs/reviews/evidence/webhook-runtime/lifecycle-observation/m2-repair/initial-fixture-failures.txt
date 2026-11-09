@@ -1,0 +1,26 @@
+
+running 3 tests
+
+thread 'webhooks::infrastructure::outbox::store::tests::issuance_context_tests::genuine_initial_issue_lost_publication_ack_recovers_before_work' (157861) panicked at /tmp/nessa-lifecycle-frozen/crates/nessa-server/src/webhooks/infrastructure/outbox/../../../../tests/webhooks/infrastructure/outbox/issuance_context.rs:190:5:
+assertion `left == right` failed
+  left: 0
+ right: 1
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test webhooks::infrastructure::outbox::store::tests::issuance_context_tests::genuine_initial_issue_lost_publication_ack_recovers_before_work ... FAILED
+
+thread 'webhooks::infrastructure::outbox::store::tests::issuance_context_tests::published_original_issue_remains_valid_with_later_history' (157862) panicked at /tmp/nessa-lifecycle-frozen/crates/nessa-server/src/webhooks/infrastructure/outbox/../../../../tests/webhooks/infrastructure/outbox/issuance_context.rs:157:51:
+called `Result::unwrap()` on an `Err` value: Invalid
+test webhooks::infrastructure::outbox::store::tests::issuance_context_tests::published_original_issue_remains_valid_with_later_history ... FAILED
+
+thread 'webhooks::infrastructure::outbox::store::tests::issuance_context_tests::completed_issue_cannot_be_owed_after_later_retained_work' (157860) panicked at /tmp/nessa-lifecycle-frozen/crates/nessa-server/src/webhooks/infrastructure/outbox/../../../../tests/webhooks/infrastructure/outbox/issuance_context.rs:146:82:
+called `Result::unwrap()` on an `Err` value: Invalid
+test webhooks::infrastructure::outbox::store::tests::issuance_context_tests::completed_issue_cannot_be_owed_after_later_retained_work ... FAILED
+
+failures:
+
+failures:
+    webhooks::infrastructure::outbox::store::tests::issuance_context_tests::completed_issue_cannot_be_owed_after_later_retained_work
+    webhooks::infrastructure::outbox::store::tests::issuance_context_tests::genuine_initial_issue_lost_publication_ack_recovers_before_work
+    webhooks::infrastructure::outbox::store::tests::issuance_context_tests::published_original_issue_remains_valid_with_later_history
+
+test result: FAILED. 0 passed; 3 failed; 0 ignored; 0 measured; 117 filtered out; finished in 0.22s

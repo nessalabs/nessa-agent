@@ -120,6 +120,74 @@ describe("client.pairing", () => {
     )
   })
 
+  it("sets the tunnel with only the fields given; the token is never read back", async () => {
+    const { api, calls } = session(() => ({
+      enabled: true,
+      mode: "named",
+      applies: "restarting",
+    }))
+    expect(
+      await api.setTunnel({
+        enabled: true,
+        mode: "named",
+        hostname: "https://gw.example.com",
+        token: "eyJh",
+      }),
+    ).toEqual({ enabled: true, mode: "named", applies: "restarting" })
+    expect(calls[0]).toEqual({
+      method: "pairing.setTunnel",
+      params: {
+        enabled: true,
+        mode: "named",
+        hostname: "https://gw.example.com",
+        token: "eyJh",
+      },
+    })
+    const odd = session(() => ({ enabled: true, mode: "mesh", applies: "unchanged" }))
+    await expect(odd.api.setTunnel({ enabled: true })).rejects.toBeInstanceOf(
+      NessaPairingError,
+    )
+    const off = session(() => {
+      throw new NessaRpcError("pairing_linking_off", "linking is off")
+    })
+    const error = await off.api
+      .setTunnel({ enabled: true })
+      .catch((cause: unknown) => cause)
+    expect((error as NessaPairingError).refusal).toBe(
+      PairingRefusalCode.PairingLinkingOff,
+    )
+  })
+
+  it("reads the tunnel, believing an address only while it is ready", async () => {
+    const ready = {
+      enabled: true,
+      mode: "quick",
+      hasToken: false,
+      ingress: "127.0.0.1:47651",
+      status: "ready",
+      address: "https://a-b-c.trycloudflare.com",
+    }
+    const { api, calls } = session(() => ready)
+    expect(await api.tunnel()).toEqual(ready)
+    expect(calls).toEqual([{ method: "pairing.tunnel", params: {} }])
+    for (const answer of [
+      { ...ready, status: "starting" },
+      { ...ready, address: undefined },
+      { ...ready, status: "ready", failure: "start" },
+      { ...ready, hasToken: "no" },
+    ]) {
+      const odd = session(() => answer)
+      await expect(odd.api.tunnel()).rejects.toBeInstanceOf(NessaPairingError)
+    }
+    const failed = session(() => ({
+      ...ready,
+      status: "failed",
+      address: undefined,
+      failure: "not_ready",
+    }))
+    expect((await failed.api.tunnel()).failure).toBe("not_ready")
+  })
+
   it("refuses a code this build knows, and leaves an unknown code untyped", async () => {
     const refused = session(() => {
       throw new NessaRpcError(PairingRefusalCode.PairingNotConfigured, "no")

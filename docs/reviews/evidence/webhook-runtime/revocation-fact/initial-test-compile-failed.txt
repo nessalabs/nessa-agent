@@ -1,0 +1,51 @@
+    Blocking waiting for file lock on build directory
+   Compiling nessa-auth v0.1.0 (/workspace/nessa-webhook-revocation/crates/nessa-auth)
+error[E0433]: cannot find `test` in `tokio`
+   --> crates/nessa-auth/tests/revocation.rs:106:10
+    |
+106 | #[tokio::test]
+    |          ^^^^ could not find `test` in `tokio`
+
+error[E0433]: cannot find `test` in `tokio`
+   --> crates/nessa-auth/tests/revocation.rs:146:10
+    |
+146 | #[tokio::test]
+    |          ^^^^ could not find `test` in `tokio`
+
+error[E0433]: cannot find `test` in `tokio`
+   --> crates/nessa-auth/tests/revocation.rs:206:10
+    |
+206 | #[tokio::test]
+    |          ^^^^ could not find `test` in `tokio`
+
+error[E0433]: cannot find `test` in `tokio`
+   --> crates/nessa-auth/tests/revocation.rs:308:10
+    |
+308 | #[tokio::test]
+    |          ^^^^ could not find `test` in `tokio`
+
+error[E0433]: cannot find `test` in `tokio`
+   --> crates/nessa-auth/tests/revocation.rs:327:10
+    |
+327 | #[tokio::test]
+    |          ^^^^ could not find `test` in `tokio`
+
+error[E0599]: no method named `snapshot` found for struct `AccessHold` in the current scope
+   --> crates/nessa-auth/tests/revocation.rs:112:23
+    |
+112 |     assert_eq!(before.snapshot().revocation_fact().unwrap(), None);
+    |                       ^^^^^^^^-- help: remove the arguments
+    |                       |
+    |                       field, not a method
+
+error[E0599]: no method named `snapshot` found for struct `AccessHold` in the current scope
+   --> crates/nessa-auth/tests/revocation.rs:123:24
+    |
+123 |     let current = held.snapshot();
+    |                        ^^^^^^^^-- help: remove the arguments
+    |                        |
+    |                        field, not a method
+
+Some errors have detailed explanations: E0433, E0599.
+For more information about an error, try `rustc --explain E0433`.
+error: could not compile `nessa-auth` (test "revocation") due to 7 previous errors

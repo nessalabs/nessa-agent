@@ -53,6 +53,9 @@ const HOST_EVENTS = {
   attachmentDragging: "nessa://attachment-dragging",
   attachmentReadying: "nessa://attachment-readying",
   attachmentBatch: "nessa://attachment-batch",
+  pathsDragging: "nessa://paths-dragging",
+  pathsDropBegan: "nessa://paths-drop-began",
+  pathsDropped: "nessa://paths-dropped",
   gatewayStartup: "nessa://gateway-startup",
   runtimeCopy: "nessa://runtime-copy",
   reviewNoticeOpened: "nessa://review-notice-opened",
@@ -565,6 +568,54 @@ export async function chooseChannelResources(
   if (!inTauri) return []
   const { invoke } = await import("@tauri-apps/api/core")
   return invoke<string[]>("choose_channel_resources", { folders: kind === "folders" })
+}
+
+/** A file or folder dragged onto the desktop window, as the host names it. */
+export interface DroppedPath {
+  path: string
+  kind: "file" | "folder"
+}
+
+/**
+ * Be told of files and folders dragged onto the desktop window: `dragging`
+ * while a drag carrying paths is over it, `began` the moment a drop lands
+ * (named), and `dropped` with the paths it let go of, under the same name,
+ * once the host has looked at them (which can be a couple of seconds later). The window receives no drop events of its own (the webview's drag and
+ * drop belongs to the host), and a DOM `File` names no path, so this is the
+ * only way the page learns where a dropped file is. Only paths, like the
+ * channel pickers': the gateway checks each again before using it.
+ */
+export async function onPathsDragged(handlers: {
+  dragging: (over: boolean) => void
+  began: (drop: string) => void
+  dropped: (drop: string, paths: DroppedPath[], unread: number) => void
+}): Promise<() => void> {
+  if (!inTauri) return () => {}
+  const { listen } = await import("@tauri-apps/api/event")
+  const stops = await Promise.all([
+    listen<{ dragging: boolean }>(HOST_EVENTS.pathsDragging, ({ payload }) =>
+      handlers.dragging(payload.dragging),
+    ),
+    listen<{ drop: string }>(HOST_EVENTS.pathsDropBegan, ({ payload }) =>
+      handlers.began(payload.drop),
+    ),
+    listen<{ drop: string; paths: DroppedPath[]; unread: number }>(
+      HOST_EVENTS.pathsDropped,
+      ({ payload }) => handlers.dropped(payload.drop, payload.paths, payload.unread),
+    ),
+  ])
+  return () => stops.forEach((stop) => stop())
+}
+
+/**
+ * Opens the local gateway's `config.json` in the person's text editor. The
+ * host names the file from its own service namespace; nothing here names a
+ * path. Rejects with the host's sentence when it can't, and outside Tauri.
+ */
+export async function openGatewayConfig(): Promise<void> {
+  if (!inTauri) throw new Error("This window has no app to open the file with.")
+  const { invoke } = await import("@tauri-apps/api/core")
+  await invoke("open_gateway_config")
 }
 
 /** The person's home folder, to write paths under it from `~`; `null` outside Tauri. */
@@ -1290,6 +1341,25 @@ export async function signInToProvider(provider: "claude" | "codex"): Promise<vo
   await invoke("sign_in_to_provider", { provider })
 }
 
+/** Mints a Claude sign-in for Boat VMs in the background and answers its token,
+ * for the gateway's vault only (ADR 501). Rejects when the person did not finish. */
+export async function mintClaudeSignIn(): Promise<string> {
+  if (!inTauri) throw new Error("Claude sign-in requires the native desktop host.")
+  const { invoke } = await import("@tauri-apps/api/core")
+  return await invoke<string>("mint_claude_sign_in")
+}
+
+/** Whether this host can mint a Claude sign-in for Boat. */
+export async function claudeSignInMintAvailable(): Promise<boolean> {
+  if (!inTauri) return false
+  try {
+    const { invoke } = await import("@tauri-apps/api/core")
+    return await invoke<boolean>("claude_sign_in_mint_available")
+  } catch {
+    return false
+  }
+}
+
 /** Native composition owns login availability; unreachable hosts offer no action. */
 export async function providerLoginAvailable(): Promise<boolean> {
   if (!inTauri) return false
@@ -1310,4 +1380,15 @@ export async function writeClipboardText(text: string): Promise<void> {
   }
   if (!navigator.clipboard?.writeText) throw new Error("Clipboard is unavailable.")
   await navigator.clipboard.writeText(text)
+}
+
+/** Transient local-vault input; the native host retains one app-owned connection.
+ * Browser composition uses the gateway adapter instead of invoking this seam. */
+export async function vaultCommand(request: {
+  operation: "status" | "setup" | "unlock" | "lock" | "changePassphrase"
+  passphrase?: string
+}): Promise<unknown> {
+  if (!inTauri) return undefined
+  const { invoke } = await import("@tauri-apps/api/core")
+  return invoke("vault_command", { request })
 }

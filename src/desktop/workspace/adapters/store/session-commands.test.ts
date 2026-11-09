@@ -1,5 +1,5 @@
 /** The session commands: sending, approvals, and pin, archive, rename, delete. */
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 
 import { emptyTranscript } from "../../model/transcript"
 
@@ -15,6 +15,8 @@ import {
 } from "../../testing"
 
 import {
+  DRAFT_IMAGE_LIMITS,
+  addComposerImages,
   approve,
   archiveSession,
   chooseModel,
@@ -25,10 +27,12 @@ import {
   openBeside,
   openSession,
   pinSession,
+  removeComposerImage,
   resendMessage,
   sendMessage,
   setComposerText,
 } from "./commands"
+import { workspaceActions } from "./slice"
 
 describe("sending", () => {
   it("starts a draft with its first message and asks the source to start it under the same id", async () => {
@@ -53,6 +57,181 @@ describe("sending", () => {
     ).toBe(false)
   })
 
+  it("takes the images and files put on a composer onto the person's message, which may be attachments alone", async () => {
+    const { store, source } = await ready()
+    store.dispatch(newSession())
+    const [draftId] = shown(store)
+    const png = new File([new Uint8Array([1, 2])], "shot.png", { type: "image/png" })
+    const text = new File(["notes"], "notes.txt", { type: "text/plain" })
+    // An image goes as an image, any other file as a file.
+    expect(
+      store.dispatch(addComposerImages({ sessionId: draftId, files: [png, text] })),
+    ).toBe(null)
+    const [image, file] = store.getState().workspace.composerImages[draftId]
+    expect(image).toMatchObject({
+      kind: "image",
+      name: "shot.png",
+      mimeType: "image/png",
+      size: 2,
+    })
+    expect(file).toMatchObject({
+      kind: "file",
+      name: "notes.txt",
+      mimeType: "text/plain",
+      size: 5,
+    })
+    // Past a message's bounds none are taken, and the composer keeps what it had.
+    expect(
+      store.dispatch(
+        addComposerImages({
+          sessionId: draftId,
+          files: Array(DRAFT_IMAGE_LIMITS.images).fill(png),
+        }),
+      ),
+    ).toBe("too-many")
+    // An image no message names is not sent as a file either.
+    const heic = new File([new Uint8Array([1])], "photo.heic", { type: "image/heic" })
+    expect(store.dispatch(addComposerImages({ sessionId: draftId, files: [heic] }))).toBe(
+      "unsupported",
+    )
+    expect(store.getState().workspace.composerImages[draftId]).toEqual([image, file])
+    await store.dispatch(
+      sendMessage({
+        initiator: "person",
+        sessionId: draftId,
+        text: " ",
+        withImages: true,
+      }),
+    )
+    expect(source.calls.find((call) => call[0] === "send")?.[1]).toMatchObject({
+      sessionId: draftId,
+      text: "",
+      images: [image, file],
+      // Attachments alone name the session by what they are.
+      start: { title: "2 attachments" },
+    })
+    expect(store.getState().workspace.composerImages[draftId]).toBeUndefined()
+    expect(outboxOf(store, draftId)[0]).toMatchObject({ localImages: [image, file] })
+  })
+
+  it("stores a file under the name the upload contract publishes", async () => {
+    const { store } = await ready()
+    store.dispatch(newSession())
+    const [draftId] = shown(store)
+    const text = new File(["x"], "a/b\\c\u0007.txt", { type: "text/plain" })
+    expect(store.dispatch(addComposerImages({ sessionId: draftId, files: [text] }))).toBe(
+      null,
+    )
+    expect(store.getState().workspace.composerImages[draftId][0]).toMatchObject({
+      kind: "file",
+      name: "a_b_c_.txt",
+      mimeType: "text/plain",
+    })
+  })
+
+  it("puts a refused message's images, and its words, back in the composer when it is let go", async () => {
+    const { store, source } = await ready()
+    store.dispatch(newSession())
+    const [draftId] = shown(store)
+    const png = new File([new Uint8Array([1])], "shot.png", { type: "image/png" })
+    store.dispatch(addComposerImages({ sessionId: draftId, files: [png] }))
+    const [image] = store.getState().workspace.composerImages[draftId]
+    source.refuse("send", "not-supported")
+    await store.dispatch(
+      sendMessage({
+        initiator: "person",
+        sessionId: draftId,
+        text: "Look",
+        withImages: true,
+      }),
+    )
+    const refused = outboxOf(store, draftId)[0]
+    expect(refused.delivery).toMatchObject({ state: "failed" })
+    store.dispatch(discardUnsent({ sessionId: draftId, messageId: refused.id }))
+    const workspace = store.getState().workspace
+    expect(workspace.composerImages[draftId]).toEqual([image])
+    expect(workspace.composerText[draftId]).toBe("Look")
+  })
+
+  it("lets a pasted image's bytes go only once nothing names it: not on a refusal, but once the conversation holds the message", async () => {
+    const revoke = vi.spyOn(URL, "revokeObjectURL")
+    try {
+      const { store, source } = await ready()
+      store.dispatch(followWorkspace())
+      store.dispatch(openSession({ sessionId: "a" }))
+      await settle()
+      const png = new File([new Uint8Array([1])], "shot.png", { type: "image/png" })
+      store.dispatch(addComposerImages({ sessionId: "a", files: [png] }))
+      const [image] = store.getState().workspace.composerImages.a
+      source.refuse("send", "unavailable")
+      await store.dispatch(
+        sendMessage({
+          initiator: "person",
+          sessionId: "a",
+          text: "See",
+          withImages: true,
+        }),
+      )
+      const [refused] = outboxOf(store, "a")
+      // Refused, then let go: the image goes back to the composer, still alive.
+      store.dispatch(discardUnsent({ sessionId: "a", messageId: refused.id }))
+      expect(store.getState().workspace.composerImages.a).toEqual([image])
+      expect(revoke).not.toHaveBeenCalled()
+      source.refuse("send", undefined)
+      await store.dispatch(
+        sendMessage({
+          initiator: "person",
+          sessionId: "a",
+          text: "See",
+          withImages: true,
+        }),
+      )
+      const [sent] = outboxOf(store, "a")
+      expect(revoke).not.toHaveBeenCalled()
+      // The conversation holds it: nothing names the pasted copy any more.
+      const held = {
+        ...emptyTranscript("a"),
+        revision: 9,
+        messages: [{ ...sent, localImages: undefined, delivery: undefined }],
+      }
+      source.transcripts.set("a", held)
+      source.emit({ kind: "transcript", transcript: held })
+      await settle()
+      expect(outboxOf(store, "a")).toEqual([])
+      expect(revoke.mock.calls).toEqual([[image.url]])
+    } finally {
+      revoke.mockRestore()
+    }
+  })
+
+  it("leaves a composer's images for the person when an agent, or a reply sent elsewhere, sends, and takes one off when asked", async () => {
+    const { store, source } = await ready()
+    store.dispatch(newSession())
+    const [draftId] = shown(store)
+    const png = new File([new Uint8Array([1])], "shot.png", { type: "image/png" })
+    store.dispatch(addComposerImages({ sessionId: draftId, files: [png, png] }))
+    const [first, second] = store.getState().workspace.composerImages[draftId]
+    await store.dispatch(
+      sendMessage({ initiator: "agent", sessionId: draftId, text: "Go." }),
+    )
+    expect(source.calls.find((call) => call[0] === "send")?.[1]).not.toHaveProperty(
+      "images",
+    )
+    expect(store.getState().workspace.composerImages[draftId]).toEqual([first, second])
+    // A person's reply from outside the composer does not carry them unseen.
+    await store.dispatch(
+      sendMessage({ initiator: "person", sessionId: draftId, text: "And this." }),
+    )
+    expect(
+      source.calls.filter((call) => call[0] === "send").at(-1)?.[1],
+    ).not.toHaveProperty("images")
+    expect(store.getState().workspace.composerImages[draftId]).toEqual([first, second])
+    store.dispatch(removeComposerImage({ sessionId: draftId, imageId: first.id }))
+    expect(store.getState().workspace.composerImages[draftId]).toEqual([second])
+    store.dispatch(removeComposerImage({ sessionId: draftId, imageId: second.id }))
+    expect(store.getState().workspace.composerImages).not.toHaveProperty(draftId)
+  })
+
   it("sends nothing blank, and nothing to a session it does not have", async () => {
     const { store, source } = await ready()
     expect(
@@ -66,6 +245,103 @@ describe("sending", () => {
       ),
     ).toBe("not-asked")
     expect(source.calls.some((call) => call[0] === "send")).toBe(false)
+  })
+
+  it("does not send a retained draft after its channel disappears", async () => {
+    const { store, source } = await ready()
+    store.dispatch(newSession())
+    const [draftId] = shown(store)
+    store.dispatch(
+      workspaceActions.indexLoaded({
+        index: { sections: [], channels: [], sessions: [] },
+        draftId: "unused",
+        read: "r",
+      }),
+    )
+    expect(store.getState().workspace.drafts[draftId]).toBeDefined()
+    expect(
+      await store.dispatch(
+        sendMessage({ initiator: "person", sessionId: draftId, text: "hi" }),
+      ),
+    ).toBe("not-asked")
+    expect(source.calls.some((call) => call[0] === "send")).toBe(false)
+  })
+
+  it("does not deliver a staged first send after a resync removes its channel", async () => {
+    const { store, source } = await ready()
+    store.dispatch(newSession())
+    const [draftId] = shown(store)
+    const sending = store.dispatch(
+      sendMessage({ initiator: "person", sessionId: draftId, text: "Keep this" }),
+    )
+    store.dispatch(
+      workspaceActions.indexLoaded({
+        index: { sections: [], channels: [], sessions: [] },
+        draftId: "unused",
+        read: "r",
+      }),
+    )
+    expect(await sending).toBe("not-asked")
+    expect(source.calls.some((call) => call[0] === "send")).toBe(false)
+    expect(outboxOf(store, draftId)[0].delivery).toMatchObject({
+      state: "failed",
+      reason: "unavailable",
+      diagnostic: { message: "This channel is no longer available." },
+    })
+  })
+
+  it("does not deliver a staged retry after a resync removes its channel", async () => {
+    const source = fakeSource()
+    source.refuse("send", "unavailable")
+    const { store } = await ready(source)
+    store.dispatch(newSession())
+    const [draftId] = shown(store)
+    await store.dispatch(
+      sendMessage({ initiator: "person", sessionId: draftId, text: "Keep this" }),
+    )
+    const messageId = outboxOf(store, draftId)[0].id
+    const before = source.calls.filter((call) => call[0] === "send").length
+    source.refuse("send", undefined)
+    const retrying = store.dispatch(
+      resendMessage({ initiator: "person", sessionId: draftId, messageId }),
+    )
+    store.dispatch(
+      workspaceActions.indexLoaded({
+        index: { sections: [], channels: [], sessions: [] },
+        draftId: "unused",
+        read: "r",
+      }),
+    )
+    expect(await retrying).toBe("not-asked")
+    expect(source.calls.filter((call) => call[0] === "send")).toHaveLength(before)
+    expect(outboxOf(store, draftId)[0].delivery).toMatchObject({
+      state: "failed",
+      reason: "unavailable",
+      diagnostic: { message: "This channel is no longer available." },
+    })
+  })
+
+  it("settles a first send already dispatched when its channel is later removed", async () => {
+    const source = fakeSource()
+    source.hold("send")
+    const { store } = await ready(source)
+    store.dispatch(newSession())
+    const [draftId] = shown(store)
+    const sending = store.dispatch(
+      sendMessage({ initiator: "person", sessionId: draftId, text: "Keep this" }),
+    )
+    await settle()
+    expect(source.calls.filter((call) => call[0] === "send")).toHaveLength(1)
+    store.dispatch(
+      workspaceActions.indexLoaded({
+        index: { sections: [], channels: [], sessions: [] },
+        draftId: "unused",
+        read: "r",
+      }),
+    )
+    await source.release("send")
+    expect(await sending).toBe("sent")
+    expect(outboxOf(store, draftId)[0].delivery).toBeUndefined()
   })
 
   it("shows the message as sending until the source takes it", async () => {

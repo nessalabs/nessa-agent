@@ -24,7 +24,10 @@ fn snapshot(invocations: Vec<InvocationRecord>) -> SessionSnapshot {
         current_configuration: None,
         id: SessionId::new("00000000-0000-4000-8000-00000000000c").unwrap(),
         provider: ProviderIdentity::new("gateway-test", "test", "test").unwrap(),
-        provider_context: ProviderContext::Recorded(ExecutionSessionId::new("provider-1").unwrap()),
+        provider_context: ProviderContext::recorded_after(
+            ExecutionSessionId::new("provider-1").unwrap(),
+            0,
+        ),
         invocations,
         queue_history: Vec::new(),
         lease: None,
@@ -48,12 +51,16 @@ fn invocation(
                     .unwrap(),
             ],
             Vec::new(),
+            Vec::new(),
         )
         .unwrap()
     } else {
         UserMessage::text_only(PromptText::new("hello").unwrap())
     };
     InvocationRecord {
+        decline: None,
+        cancellation_delivery: None,
+        resumed_from: None,
         target_event_offset: None,
         submission: SubmissionMode::Queued,
         request: ExecutionRequest {
@@ -103,22 +110,22 @@ fn only_a_turn_that_names_images_and_has_not_settled_holds_its_uploads_back() {
         (false, InvocationStage::Running, None, false),
     ] {
         assert_eq!(
-            awaits_images(Some(&snapshot(vec![invocation(images, stage, result)]))),
+            awaits_uploaded_input(Some(&snapshot(vec![invocation(images, stage, result)]))),
             awaits,
             "{images} {stage:?}"
         );
     }
     // An empty session, and a session of settled turns, hold nothing back.
-    assert!(!awaits_images(Some(&snapshot(Vec::new()))));
-    assert!(!awaits_images(Some(&snapshot(vec![
+    assert!(!awaits_uploaded_input(Some(&snapshot(Vec::new()))));
+    assert!(!awaits_uploaded_input(Some(&snapshot(vec![
         invocation(true, InvocationStage::Settled, None),
         invocation(false, InvocationStage::Queued, None),
     ]))));
     // One unsettled image turn among settled ones is enough.
-    assert!(awaits_images(Some(&snapshot(vec![
+    assert!(awaits_uploaded_input(Some(&snapshot(vec![
         invocation(true, InvocationStage::Settled, None),
         invocation(true, InvocationStage::Queued, None),
     ]))));
     // No snapshot is not knowing there is nothing.
-    assert!(awaits_images(None));
+    assert!(awaits_uploaded_input(None));
 }

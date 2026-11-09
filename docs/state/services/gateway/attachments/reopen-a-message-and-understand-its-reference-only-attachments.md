@@ -4,6 +4,7 @@ title: "Reopen a message and understand its reference-only attachments"
 kind: "flow"
 status: "mixed"
 summary: "A message sent from this window can still display its original local attachments."
+sourceRevision: "ecd37cbac43367272d244dc75484a07e5eec053c"
 parent: "gateway-attachments"
 sources:
   - "src/conversation/model/content.ts"
@@ -20,7 +21,7 @@ diagramLinks: {}
 
 # Reopen a message and understand its reference-only attachments
 
-A message sent from this window can still display its original local attachments. Reopened history contains image references and file paths, rather than all the original bytes.
+A message sent from this window can still display its original local attachments. Reopened history contains image references, local file paths and original uploaded-file references, rather than all the original bytes. Uploaded-file tiles preserve the sender's name; a materialized execution path never replaces that identity.
 
 Nessa does not fetch stored images by their digest in this flow. After reload, another surface's send, or release of the local preview budget, a labelled reference tile is expected. It does not mean the agent never received the image.
 
@@ -41,3 +42,7 @@ stateDiagram-v2
 ## Further reading
 
 [Source](../../../../../src/conversation/model/content.ts) · [Related source](../../../../../src/conversation/ui/message-images.tsx) · [Related tests](../../../../../src/conversation/ui/message-content.test.ts)
+
+## Model coverage
+
+The shared model on [gateway-attachments-preview-or-remove-a-draft-attachment](preview-or-remove-a-draft-attachment.md) owns this journey's modeled slice. Local retained preview ownership only; reopened reference projection is a pure data contract and does not fetch bytes. This is scoped design evidence, not whole-journey or implementation verification. The existing source checkpoint is retained.

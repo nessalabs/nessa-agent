@@ -34,37 +34,97 @@ const isRefusal = (error) =>
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
-/** Each event of `conversationId` from the start, read until nothing comes for `quietMs`. */
-export async function replayEvents(client, conversationId, quietMs = 1_500) {
+/** Replay until its applied checkpoint equals a freshly captured committed head. */
+export async function replayEvents(client, conversationId) {
   const ids = []
-  let last = Date.now()
+  const controller = new AbortController()
+  const { signal } = controller
+  const opened = new Set()
   let ended = null
-  const subscription = await client.subscriptions.events(
-    conversationId,
-    {
-      batch(batch) {
-        for (const event of batch.events) ids.push(event.id)
-        last = Date.now()
-      },
-      ended(end) {
-        ended = end
-      },
-    },
-    { replay: true },
-  )
-  const deadline = Date.now() + 60_000
-  // Quiet counts from the first batch: a replay of a long history can
-  // take longer than the quiet window to start, and nothing read then is
-  // not the same as nothing there.
-  while (
-    !ended &&
-    (ids.length === 0 ? Date.now() - last < 15_000 : Date.now() - last < quietMs) &&
-    Date.now() < deadline
-  )
-    await sleep(100)
-  await subscription.close().catch(() => {})
-  if (ended) throw new Error(`a replay of ${conversationId} ended ${ended.reason}`)
-  return ids
+  let phase = "replay to checkpoint"
+  let timer
+  const deadline = new Promise((_, reject) => {
+    timer = setTimeout(() => {
+      const failure = new Error(
+        `a replay of ${conversationId} did not complete ${phase} within 60000 ms`,
+      )
+      controller.abort(failure)
+      reject(failure)
+    }, 60_000)
+  })
+  const open = async (handlers, options = {}) => {
+    const subscription = await client.subscriptions.events(conversationId, handlers, {
+      ...options,
+      signal,
+    })
+    if (signal.aborted) {
+      void subscription.close().catch(() => {})
+      signal.throwIfAborted()
+    }
+    opened.add(subscription)
+    return subscription
+  }
+  const wait = async (complete) => {
+    while (!complete() && !ended && !signal.aborted) await sleep(100)
+    signal.throwIfAborted()
+    if (ended) throw new Error(`a replay of ${conversationId} ended ${ended.reason}`)
+  }
+  const replay = async () => {
+    let after
+    while (true) {
+      signal.throwIfAborted()
+      phase = "replay to checkpoint"
+      let candidate
+      const subscription = await open(
+        {
+          batch(batch) {
+            if (signal.aborted || candidate !== undefined) return
+            for (const event of batch.events) ids.push(event.id)
+            // Empty is only a candidate, not proof of reaching the current head.
+            if (batch.events.length === 0) candidate = batch.cursor
+          },
+          ended(end) {
+            ended = end
+          },
+        },
+        after === undefined ? { replay: true } : { after },
+      )
+      await wait(() => candidate !== undefined)
+      phase = "replay cleanup"
+      await subscription.close()
+      opened.delete(subscription)
+      signal.throwIfAborted()
+      phase = "head capture"
+      let head
+      // Default Now emits the certified outer-save head. Capture it after the
+      // candidate: idle parking can write even after all turns are at rest.
+      const capture = await open({
+        batch(batch) {
+          head ??= batch.cursor
+        },
+        ended(end) {
+          ended = end
+        },
+      })
+      await wait(() => head !== undefined)
+      phase = "head capture cleanup"
+      await capture.close()
+      opened.delete(capture)
+      if (candidate === head) return ids
+      // Freeze callbacks at the applied candidate and resume strictly after it.
+      // A growing head shares the same overall deadline, never a fresh budget.
+      after = candidate
+    }
+  }
+  try {
+    return await Promise.race([replay(), deadline])
+  } finally {
+    clearTimeout(timer)
+    controller.abort()
+    // The client's abort gate owns late opens and their physical close ACKs.
+    // Do not let a stalled unsubscribe extend this verifier's overall deadline.
+    for (const subscription of opened) void subscription.close().catch(() => {})
+  }
 }
 
 export class Follower {
@@ -142,41 +202,82 @@ export class Follower {
     return true
   }
 
-  ended(what, end, lost) {
+  ended(what, end) {
     if (this.stopping && end.reason === "disconnected") return
     if (end.reason === "lagging") this.counts.lagging += 1
     if (end.reason === "disconnected" || end.reason === "source_closed")
       this.counts.resumed += 1
-    if (!RESUMED.has(end.reason)) {
+    if (!RESUMED.has(end.reason))
       this.fail(`${what} ended ${end.reason}${end.code ? ` (${end.code})` : ""}`)
-      return
-    }
-    lost()
+  }
+
+  /** One opening owns callbacks and its handle, including an end before its answer. */
+  async open(what, held, subscribe, conversationId) {
+    held.lost = false
+    return this.retry(
+      what,
+      async (client) => {
+        const token = {}
+        held.token = token
+        const current = () => held.token === token
+        const ended = (end) => {
+          if (!current()) return
+          held.token = null
+          held.subscription = null
+          held.lost = RESUMED.has(end.reason)
+          if (this.gone(conversationId)) {
+            held.lost = false
+            return
+          }
+          this.ended(what, end)
+        }
+        let subscription
+        try {
+          subscription = await subscribe(client, current, ended)
+        } catch (error) {
+          if (current()) {
+            held.token = null
+            held.lost = true
+          }
+          throw error
+        }
+        if (!current() || this.gone(conversationId)) {
+          if (current()) held.token = null
+          await subscription.close().catch(() => {})
+          return null
+        }
+        held.lost = false
+        held.subscription = subscription
+        return subscription
+      },
+      conversationId,
+    )
   }
 
   async openList() {
-    this.list.lost = false
-    this.list.subscription = await this.retry("the list", (client) =>
+    return this.open("the list", this.list, (client, current, ended) =>
       client.subscriptions.list({
         list: (list) => {
-          this.list.conversations = list.conversations.map((each) => each.conversationId)
+          if (current())
+            this.list.conversations = list.conversations.map(
+              (each) => each.conversationId,
+            )
         },
-        ended: (end) => this.ended("the list", end, () => (this.list.lost = true)),
+        ended,
       }),
     )
   }
 
   async openView() {
-    this.view.lost = false
     const after = this.view.frame?.cursor
-    this.view.subscription = await this.retry("the main view", (client) =>
+    return this.open("the main view", this.view, (client, current, ended) =>
       client.subscriptions.view(
         this.mainId,
         {
           view: (frame) => {
-            this.view.frame = frame
+            if (current()) this.view.frame = frame
           },
-          ended: (end) => this.ended("the main view", end, () => (this.view.lost = true)),
+          ended,
         },
         after ? { after } : {},
       ),
@@ -190,18 +291,15 @@ export class Follower {
       held = { ids: [], seen: new Set(), cursor: null, subscription: null, lost: false }
       this.events.set(conversationId, held)
     }
-    held.lost = false
-    // Only the stream opened last applies events; a stopped one is ignored.
-    const token = {}
-    held.token = token
-    const subscription = await this.retry(
+    return this.open(
       `events of ${conversationId}`,
-      (client) =>
+      held,
+      (client, current, ended) =>
         client.subscriptions.events(
           conversationId,
           {
             batch: (batch) => {
-              if (held.token !== token) return
+              if (!current()) return
               for (const event of batch.events) {
                 if (held.seen.has(event.id))
                   this.fail(`${conversationId}: event ${event.id} came twice`)
@@ -210,21 +308,12 @@ export class Follower {
               }
               held.cursor = batch.cursor
             },
-            ended: (end) => {
-              if (held.token !== token) return
-              if (this.gone(conversationId)) return
-              this.ended(`events of ${conversationId}`, end, () => {
-                held.lost = true
-                held.subscription = null
-              })
-            },
+            ended,
           },
           held.cursor ? { after: held.cursor } : { replay: true },
         ),
       conversationId,
     )
-    held.subscription = subscription
-    return subscription
   }
 
   /** Stop following `conversationId` for a moment, then follow it again from its cursor. */
@@ -246,32 +335,74 @@ export class Follower {
   async probe() {
     // Only with every stream it keeps room for held, so the room it asks
     // past is the connection's real one.
-    if (this.view.lost || [...this.events.values()].some((each) => !each.subscription))
+    if (
+      this.list.lost ||
+      !this.list.subscription ||
+      this.view.lost ||
+      !this.view.subscription ||
+      [...this.events.values()].some((each) => each.lost || !each.subscription)
+    )
       return
     const others = this.list.conversations.filter((id) => id !== this.mainId)
     const room = this.limits.conversationTargets - this.held()
     if (room < 0 || others.length < room + 1) return
+    const client = this.client
+    const originalList = this.list.subscription
+    const originalView = this.view.subscription
+    const originals = [...this.events].map(([id, held]) => ({
+      id,
+      held,
+      subscription: held.subscription,
+    }))
     const opened = []
+    let ended = false
+    // Capacity is measured only while the original physical follows and all
+    // views acquired by this probe remain live. Their loss frees real room.
+    const live = () =>
+      !ended &&
+      this.client === client &&
+      client.connectionState.status === "connected" &&
+      !this.list.lost &&
+      this.list.subscription === originalList &&
+      !this.view.lost &&
+      this.view.subscription === originalView &&
+      this.events.size === originals.length &&
+      originals.every(
+        ({ id, held, subscription }) =>
+          !this.deleted.has(id) &&
+          this.events.get(id) === held &&
+          !held.lost &&
+          held.subscription === subscription,
+      )
     try {
       for (let n = 0; n <= room; n += 1) {
+        if (!live()) return
         try {
           opened.push(
-            await this.client.subscriptions.view(others[n], { view() {}, ended() {} }),
+            await client.subscriptions.view(others[n], {
+              view() {},
+              ended() {
+                ended = true
+              },
+            }),
           )
+          if (!live()) return
           if (n === room)
             this.fail(
               `a subscription past ${this.limits.conversationTargets} was accepted`,
             )
         } catch (error) {
+          if (!live()) return
           // The gateway restarting, this connection dropping, or a
           // conversation the list still names being deleted or its agent
           // being retired, ends the probe: it asks again on a later round,
           // against the list then. A stopping owner refuses current reads
           // as conversation_closed until cleanup is confirmed; the pool
           // step independently requires that conversation to reopen.
+          if (error?.code === "conversation_deleted" && this.deleted.has(others[n]))
+            return
           if (
             error?.code === "temporarily_unavailable" ||
-            error?.code === "conversation_deleted" ||
             error?.code === "conversation_closed" ||
             !isRefusal(error)
           )
@@ -290,14 +421,12 @@ export class Follower {
     }
   }
 
-  /**
-   * The room this follower keeps: one for the main view and one for each
-   * conversation it follows, held or not. A stream the gateway ended keeps
-   * its room until it is followed again, or filling the room in between
-   * would leave it nowhere to go.
-   */
+  /** Live conversation handles; list subscriptions use a separate allowance. */
   held() {
-    return this.events.size + 1
+    return (
+      Number(Boolean(this.view.subscription)) +
+      [...this.events.values()].filter((each) => each.subscription).length
+    )
   }
 
   async run() {
@@ -309,7 +438,8 @@ export class Follower {
           if (held.lost && !this.stopping) await this.follow(conversationId)
         // Fill this connection's room with conversations not followed yet.
         for (const id of this.list.conversations) {
-          if (this.stopping || this.held() >= this.limits.conversationTargets) break
+          if (this.stopping || this.events.size + 1 >= this.limits.conversationTargets)
+            break
           if (!this.events.has(id) && !this.deleted.has(id)) await this.follow(id)
         }
         const followed = [...this.events.keys()]
@@ -329,6 +459,7 @@ export class Follower {
     this.stopping = true
     await this.loop
     this.stopping = false
+    if (this.list.lost || !this.list.subscription) await this.openList()
     if (this.view.lost || !this.view.subscription) await this.openView()
     for (const [conversationId, held] of this.events)
       if (held.lost || !held.subscription) await this.follow(conversationId)

@@ -32,6 +32,8 @@ export type { AttachmentApi } from "./attachment-api.js"
 export type { McpAppsApi } from "./mcp-apps-api.js"
 export type { McpServersApi } from "./mcp-servers-api.js"
 export type { GithubApi } from "./github-api.js"
+export type { VoiceApi } from "./voice-api.js"
+export type { LoginsApi } from "./logins-api.js"
 export type { PairingApi } from "./pairing-api.js"
 export type { ConversationApi } from "./conversation-api.js"
 export {
@@ -57,6 +59,7 @@ export type { RecordReadApi } from "./record-read-api.js"
 export type { AgentsApi } from "./agents-api.js"
 export type { ServerApi } from "./server-api.js"
 export type { WorkspaceApi } from "./workspace-api.js"
+export type { AppsApi } from "./apps-api.js"
 export type { ChannelApi } from "./channel-api.js"
 export { channelRefusal } from "./channel-api.js"
 
@@ -77,3 +80,5 @@ export type {
   ViewSubscriptionHandlers,
   EventSubscriptionHandlers,
 } from "./subscription-api.js"
+
+export type { VaultApi } from "./vault-api.js"

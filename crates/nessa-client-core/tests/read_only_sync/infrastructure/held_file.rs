@@ -203,7 +203,7 @@ fn a_second_fetch_of_one_output_stops_on_the_lock_and_the_first_keeps_the_file()
     }
     struct NoPause;
     impl Pause for NoPause {
-        fn pause(&self, _: Duration) {}
+        fn pause(&self, _: Duration, _: &dyn Fn() -> bool) {}
     }
     let root = tempfile::tempdir().unwrap();
     let out = root.path().join("file.bin");
@@ -213,14 +213,26 @@ fn a_second_fetch_of_one_output_stops_on_the_lock_and_the_first_keeps_the_file()
     let mut first = DiskFiles::new(&out, &file).unwrap();
     first.append(&bytes[..32_768]).unwrap();
     let mut second = DiskFiles::new(&out, &file).unwrap();
-    let failure =
-        fetch_held_file(&mut Serving(bytes.clone()), &NoPause, &mut second, &file).unwrap_err();
+    let failure = fetch_held_file(
+        &mut Serving(bytes.clone()),
+        &NoPause,
+        &mut second,
+        &file,
+        &|| false,
+    )
+    .unwrap_err();
     assert_eq!(failure.cause, FetchCause::File(FileStep::Locked));
     assert!(!out.exists());
     drop(first);
     let mut resumed = DiskFiles::new(&out, &file).unwrap();
-    let progress =
-        fetch_held_file(&mut Serving(bytes.clone()), &NoPause, &mut resumed, &file).unwrap();
+    let progress = fetch_held_file(
+        &mut Serving(bytes.clone()),
+        &NoPause,
+        &mut resumed,
+        &file,
+        &|| false,
+    )
+    .unwrap();
     assert_eq!(progress.resumed_from, 32_768);
     assert_eq!(fs::read(&out).unwrap(), bytes);
     assert!(!part_path(&out, &file).exists());
@@ -243,7 +255,7 @@ fn a_part_of_other_bytes_on_disk_is_discarded_and_no_output_appears() {
     }
     struct NoPause;
     impl Pause for NoPause {
-        fn pause(&self, _: Duration) {}
+        fn pause(&self, _: Duration, _: &dyn Fn() -> bool) {}
     }
     let root = tempfile::tempdir().unwrap();
     let out = root.path().join("file.bin");
@@ -254,6 +266,7 @@ fn a_part_of_other_bytes_on_disk_is_discarded_and_no_output_appears() {
         &NoPause,
         &mut DiskFiles::new(&out, &file).unwrap(),
         &file,
+        &|| false,
     )
     .unwrap_err();
     assert_eq!(
@@ -416,7 +429,7 @@ fn a_part_assembled_for_one_conversation_is_never_used_for_another() {
     }
     struct NoPause;
     impl Pause for NoPause {
-        fn pause(&self, _: Duration) {}
+        fn pause(&self, _: Duration, _: &dyn Fn() -> bool) {}
     }
     let root = tempfile::tempdir().unwrap();
     let out = root.path().join("file.bin");
@@ -451,6 +464,7 @@ fn a_part_assembled_for_one_conversation_is_never_used_for_another() {
         &NoPause,
         &mut DiskFiles::new(&out, &in_b).unwrap(),
         &in_b,
+        &|| false,
     )
     .unwrap();
     assert_eq!(progress.resumed_from, 0);
@@ -458,4 +472,27 @@ fn a_part_assembled_for_one_conversation_is_never_used_for_another() {
     assert_eq!(fs::read(&out).unwrap(), bytes);
     // A's part is still A's, untouched.
     assert_eq!(fs::read(part_path(&out, &in_a)).unwrap(), bytes);
+}
+
+#[test]
+fn a_part_that_cannot_be_removed_after_the_link_leaves_the_output() {
+    let root = tempfile::tempdir().unwrap();
+    let out = root.path().join("file.bin");
+    let bytes = b"kept";
+    let file = held(bytes);
+    let mut files = DiskFiles::new(&out, &file).unwrap();
+    files.append(bytes).unwrap();
+    files.sync_held().unwrap();
+    files.link_held().unwrap();
+    let part = part_path(&out, &file);
+    fs::remove_file(&part).unwrap();
+    fs::create_dir(&part).unwrap();
+    assert_eq!(
+        files.retire_held(),
+        Err(KeepRefusal::Published {
+            step: FileStep::Remove
+        })
+    );
+    assert_eq!(fs::read(&out).unwrap(), bytes);
+    assert!(part.is_dir());
 }

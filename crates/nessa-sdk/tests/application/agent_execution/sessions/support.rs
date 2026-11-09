@@ -64,6 +64,9 @@ pub(super) fn turn(id: &str, message: UserMessage, tools: Vec<ToolCallUpdate>) -
         ExecutionUpdate::Finished(ExecutionOutcome::Completed),
     ));
     InvocationRecord {
+        decline: None,
+        cancellation_delivery: None,
+        resumed_from: None,
         target_event_offset: None,
         submission: SubmissionMode::Immediate,
         request: ExecutionRequest {
@@ -92,7 +95,10 @@ pub(super) fn snapshot(invocations: Vec<InvocationRecord>) -> SessionSnapshot {
         current_configuration: None,
         id: SessionId::new("session").unwrap(),
         provider: ProviderIdentity::new("provider", "model", "").unwrap(),
-        provider_context: ProviderContext::Recorded(ExecutionSessionId::new("provider").unwrap()),
+        provider_context: ProviderContext::recorded_after(
+            ExecutionSessionId::new("provider").unwrap(),
+            0,
+        ),
         invocations,
         queue_history: Vec::new(),
         lease: None,

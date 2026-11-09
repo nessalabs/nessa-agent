@@ -397,3 +397,140 @@ async fn native_listener_serves_relayed_connections_on_their_own_permits() {
     drop(silent);
     fixture.gateway.shutdown().await;
 }
+
+/// Tunnel rows T1 and T3: a connection that came through the tunnel is
+/// served on its own pool of four, and a key holding no credential is
+/// closed right after TLS, before anything it sends is read. Pairing stays
+/// on the local network: even with an invitation open, its Hello is never
+/// answered, while the same Hello over a direct connection is.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_tunneled_key_with_no_credential_is_closed_before_its_first_request() {
+    let fixture = Fixture::new().await;
+    fixture
+        .gateway
+        .create(fixture.session.clone(), ConsentClass::DeviceRead, OsEntropy)
+        .await
+        .unwrap();
+    let pin = fixture.gateway.identity().public_spki();
+    let connections = connections(&fixture);
+    let tunneled: Vec<_> = (0..4)
+        .map(|_| connections.tunnel_permit().expect("a tunnel permit"))
+        .collect();
+    assert!(
+        connections.tunnel_permit().is_none(),
+        "the tunnel pool holds four"
+    );
+    assert!(
+        connections.relay_permit().is_some(),
+        "apart from the relay pool"
+    );
+    let mut tunneled = tunneled.into_iter();
+    let (tunnel_server, tunnel_device) = sockets();
+    let tunnel_answer = device_says_hello(tunnel_device, pin);
+    let (direct_server, direct_device) = sockets();
+    let direct_answer = device_says_hello(direct_device, pin);
+    let (accept, _) = ScriptedAccept::new([
+        Step::Give(Accepted::Tunneled(tunnel_server, tunneled.next().unwrap())),
+        Step::Give(Accepted::Connection(direct_server)),
+    ]);
+    let listener = NativeEnrollmentListener::new(accept, connections.clone());
+    let (stop, stopped) = oneshot::channel::<()>();
+    let running = tokio::spawn(listener.run(
+        OsEntropy::default,
+        async {
+            stopped.await.ok();
+        },
+        |kind| panic!("listener stopped on {kind:?}"),
+    ));
+    assert!(
+        !tokio::time::timeout(WAIT, tunnel_answer)
+            .await
+            .unwrap()
+            .unwrap(),
+        "an unpaired key through the tunnel is never answered"
+    );
+    assert!(
+        tokio::time::timeout(WAIT, direct_answer)
+            .await
+            .unwrap()
+            .unwrap(),
+        "the same Hello on the local network is"
+    );
+    stop.send(()).unwrap();
+    drop(tunneled);
+    tokio::time::timeout(WAIT, running)
+        .await
+        .expect("the drain ends once every tunnel permit is back")
+        .unwrap()
+        .unwrap();
+    fixture.gateway.shutdown().await;
+}
+
+/// Every key may serve: what a paired worker's or phone's key holds.
+struct EveryKeyServes;
+impl nessa_server::device_pairing::infrastructure::EnvironmentPeers for EveryKeyServes {
+    fn admits<'a>(
+        &'a self,
+        _proof: &'a nessa_auth::application::pairing::DeviceConnectionProof,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<
+                    Output = Result<bool, nessa_auth::application::ports::AccessError>,
+                > + Send
+                + 'a,
+        >,
+    > {
+        Box::pin(async { Ok(true) })
+    }
+    fn serve(
+        &self,
+        _stream: nessa_server::device_pairing::infrastructure::TlsStream,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> {
+        Box::pin(async {})
+    }
+}
+
+#[tokio::test]
+async fn a_credentialed_key_through_the_tunnel_cannot_pair() {
+    let fixture = Fixture::new().await;
+    fixture
+        .gateway
+        .create(fixture.session.clone(), ConsentClass::DeviceRead, OsEntropy)
+        .await
+        .unwrap();
+    let pin = fixture.gateway.identity().public_spki();
+    let connections = Arc::new(
+        NativeEnrollmentConnections::new(
+            fixture.gateway.clone(),
+            RuntimeDependencies::default().clock,
+        )
+        .with_environment_peers(Arc::new(EveryKeyServes)),
+    );
+    let permit = connections.tunnel_permit().expect("a tunnel permit");
+    let (tunnel_server, tunnel_device) = sockets();
+    let tunnel_answer = device_says_hello(tunnel_device, pin);
+    let (accept, _) = ScriptedAccept::new([Step::Give(Accepted::Tunneled(tunnel_server, permit))]);
+    let listener = NativeEnrollmentListener::new(accept, connections.clone());
+    let (stop, stopped) = oneshot::channel::<()>();
+    let running = tokio::spawn(listener.run(
+        OsEntropy::default,
+        async {
+            stopped.await.ok();
+        },
+        |kind| panic!("listener stopped on {kind:?}"),
+    ));
+    assert!(
+        !tokio::time::timeout(WAIT, tunnel_answer)
+            .await
+            .unwrap()
+            .unwrap(),
+        "pairing, status and recovery stay on the local network, whatever the key holds"
+    );
+    stop.send(()).unwrap();
+    tokio::time::timeout(WAIT, running)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    fixture.gateway.shutdown().await;
+}

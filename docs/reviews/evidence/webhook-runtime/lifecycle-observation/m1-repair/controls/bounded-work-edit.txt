@@ -1,0 +1,3 @@
+if index == MAX_REGISTRATIONS {
+=>
+if false && index == MAX_REGISTRATIONS {

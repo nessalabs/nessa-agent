@@ -1,0 +1,16 @@
+
+running 1 test
+
+thread 'webhooks::infrastructure::outbox::store::tests::issuance_context_tests::completed_issue_cannot_be_owed_after_later_retained_work' (160763) panicked at /tmp/nessa-lifecycle-frozen/crates/nessa-server/src/webhooks/infrastructure/outbox/../../../../tests/webhooks/infrastructure/outbox/issuance_context.rs:128:13:
+assertion `left == right` failed
+  left: Some(Unavailable)
+ right: Some(Invalid)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test webhooks::infrastructure::outbox::store::tests::issuance_context_tests::completed_issue_cannot_be_owed_after_later_retained_work ... FAILED
+
+failures:
+
+failures:
+    webhooks::infrastructure::outbox::store::tests::issuance_context_tests::completed_issue_cannot_be_owed_after_later_retained_work
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 121 filtered out; finished in 0.01s

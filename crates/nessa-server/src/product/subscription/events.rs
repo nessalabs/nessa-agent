@@ -68,7 +68,7 @@ pub(super) async fn run(run: Run) {
     let Some(service) = service.as_ref() else {
         refuse!("conversations_not_configured");
     };
-    let mut sources = match Sources::register(&state, Some(service), &session, &target) {
+    let mut sources = match Sources::register(&state, Some(service), &session, &target, None) {
         Ok(sources) => sources,
         Err(code) => refuse!(&code),
     };
@@ -197,7 +197,11 @@ pub(super) async fn run(run: Run) {
             replied = true;
         }
         events.retain(|event| kinds.is_empty() || kinds.iter().any(|kind| kind == event.kind));
-        if last.as_deref() != Some(&cursor) {
+        // A page whose events all stay unpublished (streamed text, or kinds
+        // not asked for) sends nothing until the head: a long reply would
+        // otherwise send an empty frame per page, and a follower takes an
+        // empty frame as a hint that it has caught up.
+        if last.as_deref() != Some(&cursor) && (idle || !events.is_empty()) {
             let payload = frame(&id, &cursor, events);
             let encoded = EventFrame::push(
                 product_event::CONVERSATION_EVENTS,
@@ -252,7 +256,7 @@ pub(in crate::product) async fn read_event(
             .acquire_owned()
             .await
             .map_err(|_| "unavailable".to_owned())?;
-        let current = match authorize_batch(state, session, target).await {
+        let (current, _) = match authorize_batch(state, session, target).await {
             Ok(current) => current,
             Err(code) => match backoff(
                 code == ConversationErrorCode::TemporarilyUnavailable.as_str(),
@@ -272,7 +276,7 @@ pub(in crate::product) async fn read_event(
         // E22: source I/O may outlive credential or target authority. Admit the
         // returned data/checkpoint for publication while capacity is still held.
         if matches!(&result, Ok(EventRead::Page(_) | EventRead::Idle(_))) {
-            let current = authorize_batch(state, session, target)
+            let (current, _) = authorize_batch(state, session, target)
                 .await
                 .map_err(str::to_owned)?;
             authorize_event_target(service, &current, conversation, request).await?;

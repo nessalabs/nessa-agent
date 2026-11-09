@@ -305,6 +305,20 @@ impl ReleaseDownload for HttpsReleases {
     }
 }
 
+/// Release builds shipped inside a local desktop app, beside its gateway:
+/// `url` is the file's path. They are read with the same bound as a
+/// download and measured against the same pin, so a file that is not the
+/// pinned build is refused the same way.
+pub(crate) struct BundledReleases;
+
+impl ReleaseDownload for BundledReleases {
+    fn fetch(&self, url: &str, at_most: u64, into: &mut File) -> io::Result<()> {
+        let mut bundled = File::open(url)
+            .map_err(|error| io::Error::new(error.kind(), format!("{url}: {error}")))?;
+        store(&mut bundled, into, at_most)
+    }
+}
+
 /// Move a body into `into`, failing on the read that takes it past `limit`
 /// bytes: the pin's own length, not what the server says it sends.
 pub(super) fn store(body: &mut impl Read, into: &mut impl Write, limit: u64) -> io::Result<()> {

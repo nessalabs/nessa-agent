@@ -81,15 +81,16 @@ function AppAnswer({
 }
 
 const noPlaces: OfferedPlaces = { inline: false, window: false }
-const everyPlace: OfferedPlaces = { inline: true, window: true }
+const appPlaces: OfferedPlaces = { inline: true, window: false }
 
 /**
  * The places beside the panel that a plugin offers a view for; none for one
- * the window lacks, and every one for an app, which draws the same frame in
- * each.
+ * the window lacks. An app has its card in the message and its panel tab,
+ * never the window: an app over the chat area is the chat's own surface
+ * taken by a second copy of what its panel already shows.
  */
 export function offeredBy(plugin: WidgetPlugin | undefined): OfferedPlaces {
   if (plugin === undefined) return noPlaces
-  if (plugin.kind === "app") return everyPlace
+  if (plugin.kind === "app") return appPlaces
   return { inline: Boolean(plugin.views.inline), window: Boolean(plugin.views.window) }
 }

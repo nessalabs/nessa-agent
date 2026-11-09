@@ -1,0 +1,8 @@
+{
+  "sourceRevision": "ee77f0d9c1ccdfb89e9d1465a87336ef8aeea964",
+  "parentRevision": "398d5b084310711453f3ad6bf2a899b5b9e2ea17",
+  "runtime": "newly built gateway and MCP from this source",
+  "result": "18 named checks and final PASS",
+  "cleanup": "all four owned VMs confirmed absent; separate conversation close unconfirmed",
+  "note": "Selected provider receipts only. No credential, account, raw gateway log or temporary token file is included."
+}

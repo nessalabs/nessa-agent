@@ -1,0 +1,42 @@
+[
+  {
+    "rule": "identity",
+    "caught": true,
+    "byteRestored": true
+  },
+  {
+    "rule": "pending",
+    "caught": true,
+    "byteRestored": true
+  },
+  {
+    "rule": "phase",
+    "caught": true,
+    "byteRestored": true
+  },
+  {
+    "rule": "reset",
+    "caught": true,
+    "byteRestored": true
+  },
+  {
+    "rule": "audit-index",
+    "caught": true,
+    "byteRestored": true
+  },
+  {
+    "rule": "cursor-index",
+    "caught": true,
+    "byteRestored": true
+  },
+  {
+    "rule": "delivery-index",
+    "caught": true,
+    "byteRestored": true
+  },
+  {
+    "rule": "scope",
+    "caught": true,
+    "byteRestored": true
+  }
+]

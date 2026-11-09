@@ -27,6 +27,33 @@ test("local-auth integration harness is locked to its declared tools", () => {
   }
 })
 
+test("gateway staging covers canonical source paths consumed by protocol generation fixtures", () => {
+  const workflow = readFileSync(".github/workflows/local-auth.yml", "utf8")
+  const start = workflow.indexOf("      - name: Prepare gateway contract harness")
+  const end = workflow.indexOf("      - run: npm install --ignore-scripts", start)
+  assert.ok(start >= 0 && end > start, "gateway staging boundary is present")
+  const stage = workflow.slice(start, end)
+  const trees = [...stage.matchAll(/shutil\.copytree\('([^']+)'/g)].map(
+    (match) => match[1],
+  )
+  const files = new Set([...stage.matchAll(/'([^'\r\n]+)'/g)].map((match) => match[1]))
+  const inputs = new Set()
+  for (const name of [
+    "scripts/generate-product-protocol.mjs",
+    "scripts/product-protocol/protocol-generation.test.mjs",
+  ])
+    for (const match of readFileSync(name, "utf8").matchAll(
+      /["'](crates\/[^"'\r\n]+\.(?:rs|json))["']/g,
+    ))
+      inputs.add(match[1])
+  assert.ok(inputs.size > 0, "generation declares canonical source inputs")
+  for (const input of inputs)
+    assert.ok(
+      files.has(input) || trees.some((tree) => input.startsWith(`${tree}/`)),
+      `gateway cut is missing ${input}`,
+    )
+})
+
 test("local and CI aggregate the same named frontend and native checks", () => {
   const root = JSON.parse(readFileSync("package.json", "utf8"))
   const workflow = readFileSync(".github/workflows/local-auth.yml", "utf8")
@@ -35,6 +62,10 @@ test("local and CI aggregate the same named frontend and native checks", () => {
     assert.ok(
       root.scripts[script].includes("-p nessa-device-client"),
       `${script} covers native bindings`,
+    )
+    assert.ok(
+      root.scripts[script].includes("-p nessa-vault"),
+      `${script} covers the vault security contract`,
     )
   }
   for (const [aggregate, script, command] of [
@@ -48,7 +79,7 @@ test("local and CI aggregate the same named frontend and native checks", () => {
   }
   assert.match(
     workflow,
-    /cargo fmt -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-client-core -p nessa-device-client -p nessa-sdk -- --check/,
+    /cargo fmt -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-client-core -p nessa-device-client -p nessa-sdk -p nessa-timer -p nessa-vault -- --check/,
   )
   assert.equal(
     root.scripts.architecture,
@@ -60,11 +91,17 @@ test("local and CI aggregate the same named frontend and native checks", () => {
   // limit (#366). The package list is one build; the runner overlaps binaries.
   assert.match(
     workflow,
-    /run: node scripts\/cargo-test-parallel\.mjs --concurrency 2 --partition \$\{\{ matrix\.partition \}\} -- -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-client-core -p nessa-device-client -p nessa-sdk\r?\n\s+timeout-minutes: \d+\r?\n/,
+    /run: node scripts\/cargo-test-parallel\.mjs --concurrency 2 --partition \$\{\{ matrix\.partition \}\} -- -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-client-core -p nessa-device-client -p nessa-sdk -p nessa-timer -p nessa-vault\r?\n\s+timeout-minutes: \d+\r?\n/,
   )
   assert.doesNotMatch(
     workflow,
-    /run: cargo test -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-client-core -p nessa-device-client -p nessa-sdk\b/,
+    /run: cargo test -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-client-core -p nessa-device-client -p nessa-sdk -p nessa-timer -p nessa-vault\b/,
+  )
+  // Both Windows partitions compile the same package graph; the remaining
+  // partition owns dependency crates' tests, including the vault's regressions.
+  assert.match(
+    workflow,
+    /run: node scripts\/cargo-test-parallel\.mjs --concurrency 2 --partition \$\{\{ matrix\.partition \}\} -- -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-client-core -p nessa-device-client -p nessa-sdk -p nessa-timer -p nessa-vault\r?\n/,
   )
   // The coverage gate runs the same SDK tests again, instrumented, in its own job.
   assert.match(
@@ -73,7 +110,7 @@ test("local and CI aggregate the same named frontend and native checks", () => {
   )
   assert.match(
     workflow,
-    /cargo clippy -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-client-core -p nessa-device-client -p nessa-sdk --all-targets -- -D warnings/,
+    /cargo clippy -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-client-core -p nessa-device-client -p nessa-sdk -p nessa-timer -p nessa-vault --all-targets -- -D warnings/,
   )
   // The database opener's privacy checks answer differently on each OS, so
   // they run in the matrix, as `pnpm check` runs them locally.
@@ -143,6 +180,44 @@ test("the existing Linux matrix leg uniquely owns direct runtime assembly", () =
     releaseWorkflow,
     /run: pnpm app:build --target \$\{\{ matrix\.target \}\} \$\{\{ matrix\.bundles && format\('--bundles \{0\}', matrix\.bundles\) \|\| '' \}\}/,
   )
+})
+
+test("native Linux verification matches the release distribution and retains smoke commands", () => {
+  const integration = readFileSync(".github/workflows/local-auth.yml", "utf8")
+  const release = readFileSync(".github/workflows/release.yml", "utf8")
+  for (const newline of ["\n", "\r\n"]) {
+    const checkout = (text) => text.replace(/\r?\n/g, newline)
+    const native = workflowJobs(checkout(integration)).find(
+      ([name]) => name === "local-auth",
+    )?.[1]
+    const shipping = workflowJobs(checkout(release)).find(
+      ([name]) => name === "build",
+    )?.[1]
+    assert.ok(native && shipping, "native verification and release build jobs exist")
+    const linux = shipping.match(
+      /- runner: (ubuntu-\d{2}\.\d{2})\r?\n\s+target: x86_64-unknown-linux-gnu/,
+    )
+    assert.ok(linux, "the Linux release declares an explicit Ubuntu baseline")
+    const matrix = native.match(/matrix:\s+os: \[([^\]]+)\]/)
+    assert.ok(matrix, "native verification declares its platform matrix")
+    assert.deepEqual(
+      matrix[1].split(",").map((name) => name.trim()),
+      ["windows-latest", linux[1], "macos-latest"],
+      "native verification must use the release's Linux distribution",
+    )
+    assert.ok(native.includes(`- os: ${linux[1]}${newline}            partition: all`))
+    assert.ok(
+      native.includes("key: ${{ runner.os == 'Linux' && matrix.os || '' }}"),
+      "Linux Rust cache must distinguish the selected distribution's ABI",
+    )
+    assert.match(
+      native,
+      /run: bash scripts\/desktop\/install-linux-build-deps\.sh webkit2gtk-driver xvfb/,
+    )
+    assert.match(native, /run: node scripts\/check-desktop\.mjs/)
+    assert.match(native, /run: node scripts\/desktop\/prepare\.mjs/)
+    assert.match(native, /run: xvfb-run --auto-servernum pnpm desktop:smoke/)
+  }
 })
 
 test("every Linux build installs the one list of host build dependencies", () => {
@@ -241,18 +316,30 @@ test("apt installs and every CI job are bounded", () => {
   assert.equal(script.match(/apt-get "\$\{apt_options\[@\]\}"/g)?.length, 2)
   // `update` is the command the mirror stalled in, so it is the one that is
   // retried. `install` stays after the loop: one attempt, its own ceiling.
+  // Ubuntu 26.04 names the WebKit driver webkitgtk-webdriver. `apt-cache show`
+  // still exits 0 for the old name, so the install reads the candidate.
   assert.match(
     script,
-    /for attempt in 1 2 3; do\r?\n {2}if sudo DEBIAN_FRONTEND=noninteractive timeout --kill-after=30s 5m apt-get "\$\{apt_options\[@\]\}" update; then\r?\n {4}break\r?\n {2}fi\r?\n {2}if \[ "\$attempt" -eq 3 \]; then\r?\n {4}echo "apt-get update failed on all three attempts" >&2\r?\n {4}exit 1\r?\n {2}fi\r?\n {2}sleep \$\(\(attempt \* 15\)\)\r?\ndone\r?\nsudo DEBIAN_FRONTEND=noninteractive timeout --kill-after=30s 45m apt-get "\$\{apt_options\[@\]\}" install -y \\/,
+    /for attempt in 1 2 3; do\r?\n {2}if sudo DEBIAN_FRONTEND=noninteractive timeout --kill-after=30s 5m apt-get "\$\{apt_options\[@\]\}" update; then\r?\n {4}break\r?\n {2}fi\r?\n {2}if \[ "\$attempt" -eq 3 \]; then\r?\n {4}echo "apt-get update failed on all three attempts" >&2\r?\n {4}exit 1\r?\n {2}fi\r?\n {2}sleep \$\(\(attempt \* 15\)\)\r?\ndone\r?\n/,
+  )
+  assert.match(
+    script,
+    /candidate="\$\(LC_ALL=C apt-cache policy webkit2gtk-driver \| awk '\/\^  Candidate:\/ \{ candidate=\$2 \} END \{ if \(candidate != ""\) print candidate \}'\)"\r?\n {4}if \[ -z "\$candidate" \] \|\| \[ "\$candidate" = "\(none\)" \]; then\r?\n {6}resolved\+=\(webkitgtk-webdriver\)/,
+  )
+  assert.match(
+    script,
+    /sudo DEBIAN_FRONTEND=noninteractive timeout --kill-after=30s 45m apt-get "\$\{apt_options\[@\]\}" install -y \\\r?\n {2}"\$\{resolved\[@\]\}"/,
   )
   // 3×(5m+30s) + 15s + 30s + 45m + 30s. The install step has to cover it.
   const scriptBudget = aptScriptBudgetMinutes(script)
   assert.equal(scriptBudget, 62.75)
 
   // Minutes, from 21 green local-auth runs on 2026-10-07 and the four release
-  // runs that exist. local-auth is 130 because the 65 minute apt step, the
-  // 45 minute Rust test step, and at most 11.3 minutes of everything else
-  // sum past 120. The release build is 120 because 65 + 25.7 does too.
+  // runs that exist. local-auth is 140 because the 65 minute apt step, the
+  // 60 minute Rust test step, and at most 11.3 minutes of everything else
+  // sum past 130. The release build is 120 because 65 + 25.7 does too.
+  // windows-server-tests is 95 because its test step is 90 and setup is at
+  // most 4 minutes. Run 41947356093 was still inside server-other at 70.
   const bounds = {
     "local-auth.yml": {
       workflows: 10,
@@ -260,9 +347,11 @@ test("apt installs and every CI job are bounded", () => {
       "gateway-contract": 45,
       "desktop-release-profile": 45,
       frontend: 30,
-      "conversation-stress": 60,
-      "local-auth": 130,
-      "windows-server-tests": 60,
+      // 90: the browser install may use 45 minutes (run 42079903038 was still
+      // fetching at 30) and the rest of green run 42072698358 took 31.
+      "conversation-stress": 90,
+      "local-auth": 140,
+      "windows-server-tests": 95,
       "sdk-domain-coverage": 60,
       "required-checks": 10,
     },
@@ -317,6 +406,17 @@ test("apt installs and every CI job are bounded", () => {
       assert.ok(stepTimeout < jobTimeout, `${stepTimeout} < ${jobTimeout}`)
     }
   }
+
+  // The stress job's browser install is apt too. Run 42079903038 was still
+  // fetching when a 30 minute step ended. 45 is the moving-install ceiling
+  // above, and it has to finish while the job is still alive.
+  assert.match(localAuth, /Acquire::Retries "3"/)
+  assert.match(localAuth, /Acquire::https::Timeout "30"/)
+  assert.match(
+    localAuth,
+    /pnpm exec playwright install --with-deps chromium webkit\r?\n(?:\s+#.*\r?\n)*\s+timeout-minutes: 45\r?\n/,
+  )
+  assert.ok(45 < bounds["local-auth.yml"]["conversation-stress"])
 })
 
 test("an underscore or uppercase job with no timeout is not absorbed by the previous job", () => {
@@ -364,7 +464,7 @@ test("the existing Windows matrix leg uniquely owns the Task Scheduler model pro
   // following `sdk_coverage` into this body and the proof would still look unique.
   const localAuth = workflowJobs(workflow).find(([name]) => name === "local-auth")?.[1]
   assert.ok(localAuth, "local-auth job")
-  assert.match(localAuth, /matrix:\s+os: \[windows-latest, ubuntu-latest, macos-latest\]/)
+  assert.match(localAuth, /matrix:\s+os: \[[^\]]*\bwindows-latest\b[^\]]*\]/)
   assert.equal(localAuth.split(proof).length - 1, 1)
   assert.match(
     localAuth,
@@ -588,7 +688,7 @@ test("the frontend job owns top-level script and verification-script tests, and 
 
   assert.equal(
     root.scripts["scripts:test"],
-    "node --test scripts/*.test.mjs scripts/mcp-test-server/*.test.mjs scripts/subagent-contracts/*.test.mjs scripts/process-cleanup/*.test.mjs",
+    "node --test scripts/*.test.mjs scripts/mcp-test-server/*.test.mjs scripts/workspaces/*.test.mjs scripts/subagent-contracts/*.test.mjs scripts/process-cleanup/*.test.mjs",
   )
   assert.ok(root.scripts["frontend:check"].includes("pnpm scripts:test"))
   // Every verification-script test under verification/desktop/scripts/lib,

@@ -331,6 +331,7 @@ fn scheduling_cause(cause: SchedulingCause) -> &'static str {
         SchedulingCause::ExecutionFailed => "execution_failed",
         SchedulingCause::SessionClosed => "session_closed",
         SchedulingCause::RunnerStopped => "runner_stopped",
+        SchedulingCause::TurnStopped => "turn_stopped",
         SchedulingCause::Withdrawn => "withdrawn",
         SchedulingCause::Suspended => "suspended",
         SchedulingCause::Interrupted => "interrupted",

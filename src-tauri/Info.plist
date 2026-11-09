@@ -4,5 +4,7 @@
 <dict>
   <key>NSAppleEventsUsageDescription</key>
   <string>Nessa opens Terminal so you can sign in to your agent provider.</string>
+  <key>NSMicrophoneUsageDescription</key>
+  <string>Nessa listens while you talk to your agents, or to an app that you allowed to use the microphone.</string>
 </dict>
 </plist>

@@ -1,0 +1,73 @@
+[
+  {
+    "name": "token validated and encrypted"
+  },
+  {
+    "name": "Local creates no cloud VM"
+  },
+  {
+    "name": "channel override reaches VM creation",
+    "vm": "bx_q6y43uev",
+    "ttlSeconds": 7200,
+    "archiveAfter": "2026-10-27T20:40:36.078Z"
+  },
+  {
+    "name": "channel override reaches VM creation",
+    "vm": "bx_uj9uv78n",
+    "ttlSeconds": 7200,
+    "archiveAfter": "2026-10-27T20:40:51.351Z"
+  },
+  {
+    "name": "two threads use distinct saved VMs",
+    "main": "74a360ed-4e77-5cf5-b2ef-3f27905768f5",
+    "worker": "c7a0905c-a8ad-4a04-8237-f250c4ad2005",
+    "workerVm": "bx_uj9uv78n"
+  },
+  {
+    "name": "subscription inference writes workspace file"
+  },
+  {
+    "name": "explicit unlimited reaches archived VM resume",
+    "vm": "bx_uj9uv78n",
+    "ttlSeconds": null,
+    "archiveAfter": null
+  },
+  {
+    "name": "restart and VM resume retain identity and workspace files"
+  },
+  {
+    "name": "settings edit leaves an active VM deadline unchanged",
+    "vm": "bx_q6y43uev",
+    "ttlSeconds": 7200,
+    "archiveAfter": "2026-10-27T20:40:36.078Z"
+  },
+  {
+    "name": "cold main subscription starts after gateway restart"
+  },
+  {
+    "name": "reset channel inherits global lifetime on creation",
+    "vm": "bx_xaajrxmb",
+    "ttlSeconds": 14400,
+    "archiveAfter": "2026-10-27T22:43:12.526Z"
+  },
+  {
+    "name": "cloud subscription reads approved local log through existing MCP",
+    "reader": "5c2daa26-20ad-440f-9135-bdcb6a55059b"
+  },
+  {
+    "name": "removal plus session close revokes the old local connection"
+  },
+  {
+    "name": "coordinator dispatches real child on another VM",
+    "thread": "2d17ff7d-b1b2-5c03-38dc-d368b495e00a",
+    "vm": "bx_bx6cqn86"
+  },
+  {
+    "name": "missing VM fails without replacement or Local fallback",
+    "vm": "bx_uj9uv78n",
+    "operation": "bdop_482eaa7d7661406484476ec0e38ccab8"
+  },
+  {
+    "name": "PASS"
+  }
+]

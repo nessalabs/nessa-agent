@@ -45,8 +45,9 @@ export type AttachmentBeginning =
       state: "stored"
       /**
        * What the conversation holds them as. It may differ from the description
-       * given, because the gateway normalizes images. Of any media type; see
-       * `asImageAttachment` for whether a message may refer to it.
+       * given, because the gateway normalizes images. `asImageAttachment`
+       * narrows image references; general files add their original name in
+       * `conversation.prepare`'s `uploads` option.
        */
       stored: StoredAttachment
     }

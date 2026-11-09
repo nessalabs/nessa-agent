@@ -1,0 +1,20 @@
+[
+  {
+    "name": "observation-ack",
+    "caught": true,
+    "byteRestored": true,
+    "diagnosticOnly": false
+  },
+  {
+    "name": "first-cause",
+    "caught": true,
+    "byteRestored": true,
+    "diagnosticOnly": false
+  },
+  {
+    "name": "diagnostic-phase-correlation",
+    "caught": true,
+    "byteRestored": true,
+    "diagnosticOnly": true
+  }
+]

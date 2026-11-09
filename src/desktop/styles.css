@@ -83,6 +83,13 @@ body {
     var(--desktop-window-controls-inset) + var(--desktop-titlebar-cluster) + 8px
   );
   --desktop-pane-fill: color-mix(in oklab, var(--foreground) 3.5%, transparent);
+  /* The sidebar's material: one tone lighter (dark) or darker (light) than
+     the window. The side rail stands on it too, so the two read as one. */
+  --desktop-sidebar-material: color-mix(
+    in oklab,
+    var(--foreground) 3.5%,
+    var(--background)
+  );
   --desktop-ease: cubic-bezier(0.32, 0.72, 0, 1);
 
   /*
@@ -1033,7 +1040,7 @@ html:not(.dark) [data-surface] {
 .split-panes-grid[data-split-multi]
   .workspace-pane:not([data-focused])
   .desktop-header[data-sliver] {
-  opacity: 0.3;
+  opacity: 0.24;
 }
 
 @container workspace-pane (max-height: 219px) {
@@ -1247,6 +1254,49 @@ html:not(.dark) [data-surface] {
   color: color-mix(in oklab, var(--foreground) 35%, transparent);
 }
 
+/* Attachments — pasted or picked images and files — a row of tiles above the text, each with its own remove. */
+.desktop-composer-images {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 0 0 10px;
+  padding: 0;
+  list-style: none;
+}
+
+.desktop-composer-image {
+  position: relative;
+  display: inline-flex;
+}
+
+.desktop-composer-image-remove {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  display: inline-flex;
+  width: 20px;
+  height: 20px;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: var(--desktop-radius-pill);
+  padding: 0;
+  background: var(--background);
+  color: var(--foreground);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 30%);
+  cursor: pointer;
+}
+
+.desktop-composer-image-remove svg {
+  width: 12px;
+  height: 12px;
+}
+
+.desktop-composer-image-remove:focus-visible {
+  outline: var(--desktop-focus-outline);
+  outline-offset: 2px;
+}
+
 /* A refused access change, said on its own line above the controls. */
 .desktop-composer-notice {
   display: flex;
@@ -1323,6 +1373,13 @@ html:not(.dark) [data-surface] {
   height: 15px;
   flex-shrink: 0;
   stroke-width: 1.75;
+}
+
+/* Attach files: an icon-only chip, as square as the chip is tall. */
+.desktop-composer-attach {
+  width: 30px;
+  justify-content: center;
+  padding: 0;
 }
 
 .desktop-chip-model > svg:last-child {

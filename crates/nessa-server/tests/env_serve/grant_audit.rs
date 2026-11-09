@@ -84,6 +84,7 @@ fn a_grant_writes_intended_then_written() {
             agents: Some(claude()),
             commands: Some(CommandGrant::new(60_000).unwrap()),
             max_lease: Some(MaxLease::new(3_600_000).unwrap()),
+            logins: false,
         },
     )
     .unwrap();
@@ -204,8 +205,8 @@ fn a_rename_failure_writes_intended_then_not_written() {
         5,
         &Peer::Ssh,
         json!({"op": "ungrant", "commands": true}),
-        json!({"agents": "*", "commands": {"maxTimeoutMs": CommandWork::MAX_TIMEOUT_MS}}),
-        json!({"agents": "*"}),
+        json!({"agents": "*", "commands": {"maxTimeoutMs": CommandWork::MAX_TIMEOUT_MS}, "acceptLogins": true}),
+        json!({"agents": "*", "acceptLogins": true}),
     );
     assert_eq!(
         records(directory.path()),
@@ -311,6 +312,7 @@ fn a_change_that_cannot_be_audited_leaves_the_grants_unchanged() {
             agents: Some(Agents::All),
             commands: None,
             max_lease: None,
+            logins: false,
         },
     )
     .unwrap_err();
@@ -344,6 +346,7 @@ fn a_change_that_cannot_be_audited_leaves_the_grants_unchanged() {
             agents: Some(Agents::All),
             commands: None,
             max_lease: None,
+            logins: false,
         },
     )
     .unwrap();

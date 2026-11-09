@@ -23,12 +23,18 @@ export type GithubApi = {
    * revokes it there; this gateway stops holding and giving out its token.
    */
   disconnect(): Promise<GithubConnection>
+  /** Opt in to the stage relay for the App's selected repositories. Disabling
+   * removes this gateway's local inbox. No agent actions are started. */
+  liveEvents(enabled: boolean, acceptGaps?: boolean): Promise<GithubConnection>
 }
 
 export function createGithubApi(session: RpcRequester): GithubApi {
-  async function call(method: GithubMethod): Promise<GithubConnection> {
+  async function call(
+    method: GithubMethod,
+    params: Record<string, unknown> = {},
+  ): Promise<GithubConnection> {
     try {
-      return githubConnection(await session.request(method, {}))
+      return githubConnection(await session.request(method, params))
     } catch (cause) {
       throw new NessaGithubError(method, cause)
     }
@@ -38,5 +44,7 @@ export function createGithubApi(session: RpcRequester): GithubApi {
     connect: () => call(ProductMethod.GithubConnect),
     cancel: () => call(ProductMethod.GithubCancel),
     disconnect: () => call(ProductMethod.GithubDisconnect),
+    liveEvents: (enabled, acceptGaps = false) =>
+      call(ProductMethod.GithubLiveEvents, { enabled, acceptGaps }),
   }
 }

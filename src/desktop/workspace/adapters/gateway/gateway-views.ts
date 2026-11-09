@@ -21,6 +21,7 @@
  */
 import {
   clientDueAtMs,
+  type ConversationAgentSource,
   type ConversationMessageApp,
   type ImageAttachment,
   type LinkedFile,
@@ -35,6 +36,8 @@ import {
 } from "@nessa/client"
 import {
   referencedContent,
+  type AgentSource,
+  type UploadedFileReference,
   historyExtent,
   placeNotes,
   placePublished,
@@ -119,6 +122,11 @@ export function channelFrom(wire: WireChannel): Channel {
     private: false,
     topic: "",
     folder: wire.folder,
+    ...(wire.coordinatorConversationId
+      ? { coordinatorConversationId: wire.coordinatorConversationId }
+      : {}),
+    coordinatorPlacement: wire.coordinatorPlacement,
+    threadPlacement: wire.threadPlacement,
     ...(model ? { defaults: { model, access: wire.approvalMode } } : {}),
   }
 }
@@ -322,8 +330,14 @@ function publishedPart(artifact: ConversationView["artifacts"][number]): Part {
  * The MCP App that wrote a turn of the person's, by its server and tool, as
  * the view names it (#390); nothing for the person's own.
  */
-function writtenBy(app: ConversationMessageApp | undefined): { app?: MessageApp } {
-  return app ? { app: { server: app.server, tool: app.tool } } : {}
+function writtenBy(
+  app: ConversationMessageApp | undefined,
+  agent: ConversationAgentSource | undefined,
+): { app?: MessageApp; agent?: AgentSource } {
+  return {
+    ...(app ? { app: { server: app.server, tool: app.tool } } : {}),
+    ...(agent ? { agent } : {}),
+  }
 }
 
 /** Input references use the conversation owner's mapping, without reconstructed metadata. */
@@ -331,10 +345,15 @@ function inputParts(
   text: string,
   images: readonly ImageAttachment[],
   files: readonly LinkedFile[],
+  uploads: readonly UploadedFileReference[] = [],
 ): Part[] {
-  const content = referencedContent("", images, files).filter(
-    (part) => part.type === "image-reference" || part.type === "file-reference",
+  const content = referencedContent("", images, files, uploads).filter(
+    (part) =>
+      part.type === "image-reference" ||
+      part.type === "file-reference" ||
+      part.type === "uploaded-file-reference",
   )
+  if (!text && content.length === 0) return []
   return [
     { kind: "text", text },
     ...(content.length ? [{ kind: "attachments" as const, content }] : []),
@@ -434,6 +453,7 @@ export function transcriptFrom(
           role: "user",
           at: seen(id),
           parts: [{ kind: "text", text: turn.said }],
+          agent: turn.agent,
         })
       }
       if (turn.reply !== undefined) {
@@ -489,8 +509,8 @@ export function transcriptFrom(
       id: input,
       role: "user",
       at: seen(input),
-      parts: inputParts(turn.userText, turn.attachments, turn.files),
-      ...writtenBy(turn.app),
+      parts: inputParts(turn.userText, turn.attachments, turn.files, turn.uploads),
+      ...writtenBy(turn.app, turn.agent),
     }
     const parts: Part[] = []
     // The provider message the last text part came from, while text is last.
@@ -553,9 +573,18 @@ export function transcriptFrom(
         // The turn's own status says whether its reply is still being written.
         ...(working ? { working: true as const } : {}),
       }
-      messages.push(user)
+      if (user.parts.length > 0) messages.push(user)
       messages.push(marked ? { ...agent, ...marked } : agent)
-    } else messages.push(marked ? { ...user, ...marked } : user)
+    } else if (user.parts.length > 0)
+      messages.push(marked ? { ...user, ...marked } : user)
+    else if (marked)
+      messages.push({
+        id: replyId(turn.executionId),
+        role: "agent",
+        at: seen(input),
+        parts: [],
+        ...marked,
+      })
     pushUnreadable(unreadable.byExecution.get(turn.executionId) ?? [])
     pushNotes(notes.byExecution.get(turn.executionId) ?? [])
     pushHandoffs(switches.byExecution.get(turn.executionId) ?? [])
@@ -572,14 +601,22 @@ export function transcriptFrom(
     })
   for (const waiting of unlisted) {
     const input = inputId(waiting.executionId)
-    messages.push({
-      id: input,
-      role: "user",
-      at: seen(input),
-      parts: inputParts(waiting.text, waiting.attachments, waiting.files),
-      // Waiting, it is labelled as it will be once it is a turn (D-H).
-      ...writtenBy(waiting.app),
-    })
+    const parts = inputParts(
+      waiting.text,
+      waiting.attachments,
+      waiting.files,
+      waiting.uploads,
+    )
+    if (parts.length > 0)
+      messages.push({
+        id: input,
+        role: "user",
+        at: seen(input),
+        parts,
+        // Waiting, it is labelled as it will be once it is a turn (D-H).
+        ...writtenBy(waiting.app, waiting.agent),
+        waiting: true,
+      })
     pushUnreadable(unreadable.byWaiting.get(waiting.executionId) ?? [])
     pushNotes(notes.byWaiting.get(waiting.executionId) ?? [])
     pushHandoffs(switches.byWaiting.get(waiting.executionId) ?? [])

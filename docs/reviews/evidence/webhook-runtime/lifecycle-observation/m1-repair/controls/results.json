@@ -1,0 +1,32 @@
+[
+  {
+    "control": "owed-phase",
+    "caught": true,
+    "byte_restored": true
+  },
+  {
+    "control": "work-phase",
+    "caught": true,
+    "byte_restored": true
+  },
+  {
+    "control": "queued-owner",
+    "caught": true,
+    "byte_restored": true
+  },
+  {
+    "control": "queue-admission",
+    "caught": true,
+    "byte_restored": true
+  },
+  {
+    "control": "indexed-work",
+    "caught": true,
+    "byte_restored": true
+  },
+  {
+    "control": "bounded-work",
+    "caught": true,
+    "byte_restored": true
+  }
+]

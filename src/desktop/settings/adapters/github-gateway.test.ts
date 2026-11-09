@@ -20,6 +20,7 @@ function over(answer: () => Promise<GithubConnection>) {
     connect: answer,
     cancel: answer,
     disconnect: answer,
+    liveEvents: answer,
   }
   return githubGateway({ connected: () => Promise.resolve({ github }) })
 }

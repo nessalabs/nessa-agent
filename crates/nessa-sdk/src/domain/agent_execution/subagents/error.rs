@@ -53,7 +53,7 @@ pub enum OwnershipError {
     Contradictory,
     /// Restored ownership refused dispatch. History was not rewritten.
     DispatchRefused,
-    /// This session already has an open or closing root lifetime.
+    /// This session already has an open or closing ownership lifetime.
     LifetimeStillOpen,
     /// The spawn request is not an open reservation.
     UnknownSpawn,

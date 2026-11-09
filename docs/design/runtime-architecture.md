@@ -856,6 +856,17 @@ that platform needs it, and keeps it under its digest; a kept copy that no
 longer measures is downloaded again. A draft release serves no downloads,
 so this works once the release is published.
 
+**Local builds carry the Linux build.** A Boat VM runs Linux x86_64, so a
+Mac app built locally needs that build too, and no release exists for it.
+A local macOS build (`scripts/desktop/prepare-runtime.mjs`) cross-builds
+the Linux `nessa` from the same checkout with cargo-zigbuild (glibc 2.35, as
+the release's Ubuntu 22.04), compiles the gateway with its pin and
+`NESSA_HOST_BUILDS_FROM=bundled`, and ships the file in
+`runtime/host-builds/`. `bundled` means that folder beside the gateway's own
+executable; the file is read with the same length bound and digest check as
+a download. A release's own pins skip this; `NESSA_SKIP_HOST_BUILDS=1`
+builds an app that cannot start Boat chats, said in the build output.
+
 **Verified on hosts.** The host commands run on both CI systems (Linux and
 macOS) with their own `sh`, `uname`, digest tool, `mktemp`, `find` and
 `mv`, through each login shell the runner has (macOS: bash, zsh, tcsh),
@@ -900,6 +911,31 @@ credential) is the one way in, and the connection is outbound from their
 side so nothing inbound ever opens on a machine that is not yours. A relay
 is the fallback, and it forwards TLS it cannot open because the gateway's
 key was pinned at pairing.
+
+**Keeping every transport on one protocol.** A gateway speaks only its own
+lease protocol, so every update of the gateway that changes it would strand
+the machines serving it. Each transport gets the gateway's build its own way.
+Over SSH the gateway installs it (above), and a cloud VM gets it over its own
+SSH connection (ADR 1160). A paired machine dials in, so the gateway cannot
+start anything there; instead it answers a hello on another protocol with
+`VersionRefused{protocol}` and nothing else, and the machine decides.
+
+```text
+paired machine ── Hello{P'} ──▶ gateway ── VersionRefused{P} ──▶ machine (connection ends)
+machine: does its owner let this gateway run commands here? no ──▶ logs it, keeps dialing
+machine ── UpdateWanted{os, arch, libc} ──▶ gateway (a new connection, first frame)
+gateway ── Update{digest, size, P}, UpdatePart…, UpdateEnd ──▶ machine
+machine: size, SHA-256 and `env protocol` == P? ──▶ environment/builds/<digest>/nessa
+  ──▶ exec it with the same arguments; later starts of the old build exec it too
+```
+
+These frames (`nessa_protocol::build_update`) are the one part of the
+contract that never changes shape, so a machine and a gateway of any two
+builds can still agree on how to bring one to the other. The machine's owner
+decides through the same lease policy that decides its leases
+(`build.update`, allowed with commands only): a gateway that may run any
+command there could replace the build anyway, and one allowed only agents,
+whose harnesses may be sandboxed, never gets a build run outside them.
 
 ## Connecting to a dev environment
 
@@ -1770,7 +1806,7 @@ locally.
 | Admission and policy | Mandatory `/session` auth, Cedar per operation, verified `ActionContext` into the SDK | Unchanged. Peer and worker principals get grant kinds of their own | Gateway `auth` application | 0010 done; #481 |
 | Turn state and receipts | SDK `Agent` per conversation; creation receipts; `requestId` on every mutation | Unchanged. The same receipt path answers the phone outbox and a desktop outbox | SDK scheduling; gateway `conversation` | 0008; #267, #268 |
 | Records | Semantic records on one event-stream SQLite runtime; bounded head/page reads; replay-to-live view and list subscriptions from the client's cursor, the desktop workspace and the conversation panel off polling (#702) | Read grants checked per batch where subscriptions admit one (`authorize_batch`); the phone on the same subscriptions | SDK `session_storage`; gateway delivery | 0009; E [#702](https://github.com/nessalabs/nessa-agent/issues/702), G |
-| Phone reads | Device client with private cache and finite checkpoint passes; live conversation activity through `conversation.subscribe`, the only live read path since the product-socket watch was deleted (#257). One-use pairing (#264) and authenticated direct reads (#265) done | Grant-scoped list subscription once #724 scopes the catalogue, and the optional relay (#266) | `nessa-client-core`; gateway `device_pairing` | #257, #263, #262, #724 |
+| Phone reads | Device client with private cache and finite checkpoint passes; live conversation activity through `conversation.subscribe`, the only live read path since the product-socket watch was deleted (#257). One-use pairing (#264) and authenticated direct reads (#265) done | Grant-scoped device list subscriptions are supported; CLI catalogue follow and the optional relay (#266) remain separate | `nessa-client-core`; gateway `device_pairing` | #257, #263, #262, #724 |
 | Phone commands | None | Durable intent outbox, receipt lookup before retry, exact-turn Stop | `nessa-client-core`; gateway receipts | #267 |
 | Where agents run | In process only: gateway composes the SDK `Agent` and its ACP binding per conversation; Nessa advertises no ACP client filesystem or terminal | An `Environment` port in the conversation application with the in-process adapter first; a lease recorded for every run | Gateway `conversation` composition | A [#698](https://github.com/nessalabs/nessa-agent/issues/698) |
 | SSH environments | None | `nessa env serve` on the remote host, installed on first use; lease frames over SSH stdio | Gateway environment adapter; `nessa-server` CLI | B [#699](https://github.com/nessalabs/nessa-agent/issues/699), F [#703](https://github.com/nessalabs/nessa-agent/issues/703) |
@@ -2042,10 +2078,12 @@ Named so they are not mistaken for settled:
   announcement reveals.
 - **Which tools a policy can gate, per binding.** The share dialog must
   say it; the answer comes from the #142 declaration and the 0014 survey.
-- **Listener hardening for a tunnel.** What the native handshake must
-  withstand before a public tunnel is recommended rather than merely
-  possible: rate limits per source, invitation-closed behavior, and a
-  measured handshake budget.
+- **Listener hardening for a tunnel.** Answered in
+  [reaching the gateway through a tunnel](auth/tunnel.md#the-edge-before-anything-runs):
+  a tunnel connection whose key holds no credential is closed right after
+  the TLS handshake, so pairing stays on the local network, and tunnel
+  connections take a pool of their own. Rate limits per source stay open:
+  every tunnel connection arrives from `cloudflared` on loopback.
 - **Delegating to an environment.** How a parent names the child's
   environment under ADR 329, and how the child's artifacts are delivered
   as results.

@@ -331,6 +331,10 @@ describe("a conversation view as a transcript", () => {
       ["e1", "Chart the sales"],
       ["e2", "And costs"],
     ])
+    // Only the message the source still holds waiting says so.
+    expect(
+      transcript.messages.map((message) => "waiting" in message && message.waiting),
+    ).toEqual([false, true])
   })
 
   it("ends a turn's reply with the files it published, and puts the rest after the last turn", () => {
@@ -506,7 +510,14 @@ describe("a conversation view as a transcript", () => {
             handoffId: "fork",
             kind: "fork",
             atMs: 1,
-            turns: [{ said: "Plan a trip", reply: "Lisbon" }, { reply: "Only a reply" }],
+            turns: [
+              {
+                said: "Plan a trip",
+                reply: "Lisbon",
+                agent: { conversationId: "source-chat", executionId: "source-turn" },
+              },
+              { reply: "Only a reply" },
+            ],
             omittedTurns: 2,
           },
           {
@@ -532,6 +543,10 @@ describe("a conversation view as a transcript", () => {
       at,
       GATEWAY_NOW_MS,
     )
+    expect(transcript.messages[0]).toMatchObject({
+      role: "user",
+      agent: { conversationId: "source-chat", executionId: "source-turn" },
+    })
     expect(transcript.messages.map((message) => [message.id, message.role])).toEqual([
       [`${handoffId("fork")}/0`, "user"],
       [`${handoffId("fork")}/0/reply`, "agent"],
@@ -1740,4 +1755,25 @@ describe("user attachment references across conversation reads", () => {
       })
     }
   }
+})
+
+it("omits an internal turn's empty input while retaining its assistant reply", () => {
+  const transcript = transcriptFrom(
+    view("c", {
+      messages: [turn({ userText: "", parts: [textPart("Task finished.", 0)] })],
+    }),
+    1,
+    at,
+    100,
+  )
+  expect(transcript.messages.filter((message) => message.role === "user")).toEqual([])
+  expect(
+    transcript.messages.some(
+      (message) =>
+        message.role === "agent" &&
+        message.parts.some(
+          (part) => part.kind === "text" && part.text === "Task finished.",
+        ),
+    ),
+  ).toBe(true)
 })

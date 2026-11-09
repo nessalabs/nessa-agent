@@ -17,7 +17,17 @@ use crate::backup::infrastructure::{
     capture_namespace, jsonl_cut, path_sensitivity, DirectoryPublisher,
     DirectoryVerificationSource, FileDeletionLog,
 };
-use crate::conversation::application::ArtifactBudget;
+use crate::conversation::application::{ArtifactBudget, ChannelStore};
+use crate::conversation::domain::{
+    Channel, ChannelDefaults, ChannelExecution, ChannelFolder, ChannelId, ChannelName,
+    ChannelNotes, ChannelParts, ChannelPath, ChannelResources, WorkspacePlacement,
+};
+use crate::conversation::infrastructure::LocalChannelStore;
+use nessa_auth::domain::{OrganizationId, PrincipalId};
+use nessa_protocol::agents::AgentId;
+use nessa_protocol::conversation::domain::{
+    ConversationApprovalMode, ConversationId, ConversationModelId,
+};
 
 #[test]
 fn an_unreadable_jsonl_line_is_named_and_the_rest_are_kept() {
@@ -571,6 +581,227 @@ async fn a_session_database_without_secret_material_is_copied() {
 }
 
 #[tokio::test]
+async fn a_created_channel_is_placed_exported_and_reopened() {
+    let namespace = tempfile::tempdir().unwrap();
+    let root = namespace.path();
+    let private = root.join("conversations");
+    nessa_local_storage::create_directory(&private).unwrap();
+    let store = LocalChannelStore::open(&private.join("channels.sqlite3")).unwrap();
+    let channel = channel_with_settings();
+    store.create(channel.clone()).await.unwrap();
+    let original = channel.coordinator_id();
+    let worker = ConversationId::new(&uuid::Uuid::new_v4().to_string()).unwrap();
+    let unplaced = ConversationId::new(&uuid::Uuid::new_v4().to_string()).unwrap();
+    store.place(&original, channel.id()).await.unwrap();
+    store.place(&worker, channel.id()).await.unwrap();
+    store.forget(&original).await.unwrap();
+    let current = store.get(channel.id()).await.unwrap().unwrap();
+    let generation = current.coordinator_id();
+    assert_ne!(generation, original);
+    drop(store);
+
+    let published = publish_cut(root).await;
+    let cut = published.manifest.manifest().store(StoreKind::Channels);
+    assert!(
+        cut.skipped().is_empty(),
+        "channel store was not pinned: {:?}",
+        cut.skipped()
+    );
+    let body = cut
+        .records()
+        .iter()
+        .find(|record| record.identity() == "channels.sqlite3")
+        .and_then(|record| record.public_bytes())
+        .expect("channels.sqlite3 was not exported");
+    assert!(!published
+        .text
+        .contains(&format!("environment-audit {}", worker)));
+    assert!(!published
+        .text
+        .contains(&format!("canonical-records {worker}")));
+
+    let reopened_root = tempfile::tempdir().unwrap();
+    let reopened_private = reopened_root.path().join("conversations");
+    nessa_local_storage::create_directory(&reopened_private).unwrap();
+    let copy = reopened_private.join("channels.sqlite3");
+    {
+        use std::io::Write;
+        let mut file =
+            nessa_local_storage::open(&copy, nessa_local_storage::OpenMode::CreateNew).unwrap();
+        file.write_all(body).unwrap();
+    }
+    let reopened = LocalChannelStore::open(&copy).unwrap();
+    let again = reopened.get(channel.id()).await.unwrap().unwrap();
+    assert_eq!(again.name(), channel.name());
+    assert_eq!(again.folder(), channel.folder());
+    assert_eq!(again.defaults(), channel.defaults());
+    assert_eq!(again.notes(), channel.notes());
+    assert_eq!(again.resources(), channel.resources());
+    assert_eq!(again.execution(), channel.execution());
+    assert_eq!(again.coordinator_id(), generation);
+    assert_eq!(
+        reopened.channel_of(&worker).await.unwrap(),
+        Some(channel.id().clone())
+    );
+    assert_eq!(reopened.channel_of(&original).await.unwrap(), None);
+    assert_eq!(reopened.channel_of(&unplaced).await.unwrap(), None);
+    let journal = nessa_local_database::rusqlite::Connection::open(&copy).unwrap();
+    let (stored_generation, stored_coordinator): (i64, String) = journal
+        .query_row(
+            "SELECT generation, coordinator FROM channel_coordinator_replacements \
+             WHERE channel = ?1 ORDER BY generation DESC LIMIT 1",
+            [channel.id().as_str()],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(stored_generation, 1);
+    assert_eq!(stored_coordinator, generation.to_string());
+}
+
+#[tokio::test]
+async fn a_channel_file_that_is_not_a_database_is_named_and_the_cut_continues() {
+    let namespace = tempfile::tempdir().unwrap();
+    let root = namespace.path();
+    let private = root.join("conversations");
+    nessa_local_storage::create_directory(&private).unwrap();
+    let marker = b"NOT-A-CHANNEL-DATABASE";
+    fs::write(private.join("channels.sqlite3"), marker).unwrap();
+    let published = publish_cut(root).await;
+    assert!(published
+        .text
+        .contains("skipped channels channels.sqlite3 unreadable"));
+    assert!(!holds(&published.bytes, marker));
+    let cut = published.manifest.manifest().store(StoreKind::Channels);
+    assert!(cut.records().is_empty());
+    assert_eq!(cut.skipped().len(), 1);
+    assert_eq!(cut.skipped()[0].reason(), SkipReason::Unreadable);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_channel_symlink_is_not_followed() {
+    let namespace = tempfile::tempdir().unwrap();
+    let root = namespace.path();
+    let outside = root.join("outside");
+    nessa_local_storage::create_directory(&outside).unwrap();
+    let store = LocalChannelStore::open(&outside.join("channels.sqlite3")).unwrap();
+    let channel = channel_with_settings();
+    let marker = "symlink-target-must-stay-out";
+    let channel = Channel::new(
+        channel.id().clone(),
+        channel.organization().clone(),
+        channel.owner().clone(),
+        ChannelParts {
+            execution: channel.execution(),
+            name: channel.name().clone(),
+            folder: channel.folder().clone(),
+            defaults: channel.defaults().clone(),
+            notes: ChannelNotes::new(marker).unwrap(),
+            resources: channel.resources().clone(),
+        },
+        channel.request_id().into(),
+        channel.created_at_ms(),
+    )
+    .unwrap();
+    store.create(channel).await.unwrap();
+    drop(store);
+    let private = root.join("conversations");
+    nessa_local_storage::create_directory(&private).unwrap();
+    std::os::unix::fs::symlink(
+        outside.join("channels.sqlite3"),
+        private.join("channels.sqlite3"),
+    )
+    .unwrap();
+    let published = publish_cut(root).await;
+    assert!(!holds(&published.bytes, marker.as_bytes()));
+    assert!(published
+        .text
+        .contains("skipped channels channels.sqlite3 unreadable"));
+    let cut = published.manifest.manifest().store(StoreKind::Channels);
+    assert!(cut.records().is_empty());
+    assert_eq!(cut.skipped()[0].reason(), SkipReason::Unreadable);
+}
+
+#[tokio::test]
+async fn a_channel_database_holding_a_private_key_is_not_copied() {
+    let namespace = tempfile::tempdir().unwrap();
+    let root = namespace.path();
+    let private = root.join("conversations");
+    nessa_local_storage::create_directory(&private).unwrap();
+    let store = LocalChannelStore::open(&private.join("channels.sqlite3")).unwrap();
+    let channel = channel_with_settings();
+    let channel = Channel::new(
+        channel.id().clone(),
+        channel.organization().clone(),
+        channel.owner().clone(),
+        ChannelParts {
+            execution: channel.execution(),
+            name: channel.name().clone(),
+            folder: channel.folder().clone(),
+            defaults: channel.defaults().clone(),
+            notes: ChannelNotes::new("-----BEGIN OPENSSH PRIVATE KEY-----\nnot-published").unwrap(),
+            resources: channel.resources().clone(),
+        },
+        channel.request_id().into(),
+        channel.created_at_ms(),
+    )
+    .unwrap();
+    store.create(channel).await.unwrap();
+    drop(store);
+    let published = publish_cut(root).await;
+    assert!(!holds(
+        &published.bytes,
+        b"-----BEGIN OPENSSH PRIVATE KEY-----"
+    ));
+    assert!(!holds(&published.bytes, b"not-published"));
+    assert!(published
+        .text
+        .contains("redacted channels channels.sqlite3"));
+    assert!(published
+        .text
+        .contains("skipped channels channels.sqlite3 secret"));
+    let cut = published.manifest.manifest().store(StoreKind::Channels);
+    assert!(cut.records()[0].public_bytes().is_none());
+}
+
+fn channel_with_settings() -> Channel {
+    let mut bytes = [0u8; 10];
+    bytes[..8].copy_from_slice(b"backupch");
+    let path = |text: &str| {
+        ChannelPath::new(std::path::PathBuf::from(
+            crate::conversation_test_support::absolute(text),
+        ))
+        .unwrap()
+    };
+    Channel::new(
+        ChannelId::from_random(bytes),
+        OrganizationId::new("org").unwrap(),
+        PrincipalId::new("owner").unwrap(),
+        ChannelParts {
+            execution: ChannelExecution {
+                coordinator: WorkspacePlacement::Boat,
+                threads: WorkspacePlacement::Local,
+            },
+            name: ChannelName::new("design").unwrap(),
+            folder: ChannelFolder {
+                path: path("/work/channel"),
+                made: false,
+            },
+            defaults: ChannelDefaults {
+                agent: AgentId::Codex,
+                model: ConversationModelId::new("gpt-5.6-terra").unwrap(),
+                mode: ConversationApprovalMode::Ask,
+            },
+            notes: ChannelNotes::new("keep the folder and the model").unwrap(),
+            resources: ChannelResources::new(vec![path("/work/channel/brief.md")]).unwrap(),
+        },
+        "channel-backup".into(),
+        1_700_000_000_000,
+    )
+    .unwrap()
+}
+
+#[tokio::test]
 async fn a_session_database_holding_a_private_key_is_not_copied() {
     let namespace = tempfile::tempdir().unwrap();
     let root = namespace.path();
@@ -880,6 +1111,60 @@ async fn an_oversized_non_database_session_is_not_read() {
     .unwrap();
     let copied = publish_cut(small_root).await;
     assert!(holds(&copied.bytes, b"tiny-not-sqlite-kept"));
+}
+
+#[tokio::test]
+async fn boat_runtime_backup_keeps_only_validated_preferences_and_preserves_presence() {
+    let namespace = tempfile::tempdir().unwrap();
+    let root = namespace.path();
+    for (section, expected) in [
+        (r#"{}"#, serde_json::json!({"channelAutoStopSeconds":{}})),
+        (
+            r#"{"autoStopSeconds":null}"#,
+            serde_json::json!({"autoStopSeconds":null,"channelAutoStopSeconds":{}}),
+        ),
+        (
+            r#"{"autoStopSeconds":14400}"#,
+            serde_json::json!({"autoStopSeconds":14400,"channelAutoStopSeconds":{}}),
+        ),
+    ] {
+        fs::write(
+            root.join("config.json"),
+            format!(r#"{{"boat":{section},"token":"CONFIG-TOKEN"}}"#),
+        )
+        .unwrap();
+        let published = publish_cut(root).await;
+        let records = published
+            .manifest
+            .manifest()
+            .store(StoreKind::RelayConfiguration);
+        assert_eq!(records.records().len(), 1);
+        assert_eq!(records.records()[0].identity(), "boat-runtime");
+        let bytes = records.records()[0].public_bytes().unwrap();
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(bytes).unwrap(),
+            expected
+        );
+        assert!(!holds(&published.bytes, b"CONFIG-TOKEN"));
+    }
+    for section in [
+        r#"{"autoStopSeconds":0}"#,
+        r#"{"autoStopSeconds":null,"autoStopSeconds":14400}"#,
+        r#"{"token":"BOAT-SECRET"}"#,
+    ] {
+        fs::write(root.join("config.json"), format!(r#"{{"boat":{section}}}"#)).unwrap();
+        let published = publish_cut(root).await;
+        assert!(published
+            .text
+            .contains("skipped relay-configuration boat-runtime unreadable"));
+        assert!(published
+            .manifest
+            .manifest()
+            .store(StoreKind::RelayConfiguration)
+            .records()
+            .is_empty());
+        assert!(!holds(&published.bytes, b"BOAT-SECRET"));
+    }
 }
 
 #[tokio::test]

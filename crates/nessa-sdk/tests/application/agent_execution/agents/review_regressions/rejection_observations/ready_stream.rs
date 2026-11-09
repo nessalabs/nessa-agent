@@ -59,7 +59,7 @@ impl ProviderSessionBackend for ReadyBackend {
     }
     fn execute(
         &self,
-        _: ExecutionRequest,
+        _: ProviderInputFuture,
         _handoff: NativeExecutionHandoff,
     ) -> ProviderExecutionFuture<'_> {
         Box::pin(async {

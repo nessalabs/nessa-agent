@@ -1,10 +1,9 @@
 //! Executable clock adapters. Authentication/cache wall time and socket elapsed time
 //! have separate ports and separate meanings. `ThreadPause` waits between
-//! retries of a busy held-file range.
-use crate::read_only_sync::application::held_file::Pause;
+//! retries of a busy held-file range and returns when that wait has ended.
 use nessa_auth::application::ports::Clock as WallClock;
 use nessa_protocol::clock::Clock;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 pub(super) struct SystemClock;
 impl WallClock for SystemClock {
     fn unix_milliseconds(&self) -> u64 {
@@ -26,9 +25,4 @@ impl Clock for MonotonicClock {
         self.0.elapsed().as_millis().min(u64::MAX as u128) as u64
     }
 }
-pub(super) struct ThreadPause;
-impl Pause for ThreadPause {
-    fn pause(&self, delay: Duration) {
-        std::thread::sleep(delay);
-    }
-}
+pub(super) use crate::retained::ThreadPause;

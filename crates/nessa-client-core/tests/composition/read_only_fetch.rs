@@ -24,7 +24,7 @@ use std::time::Duration;
 
 struct NoPause;
 impl Pause for NoPause {
-    fn pause(&self, _: Duration) {}
+    fn pause(&self, _: Duration, _: &dyn Fn() -> bool) {}
 }
 
 fn bytes() -> Vec<u8> {

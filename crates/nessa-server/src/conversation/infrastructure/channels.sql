@@ -17,10 +17,23 @@ CREATE TABLE channels (
     -- A JSON array of absolute paths, in the order the person gave them.
     resources TEXT NOT NULL,
     created_at INTEGER NOT NULL,
+    coordinator_placement TEXT NOT NULL DEFAULT 'local' CHECK (coordinator_placement IN ('local', 'boat')),
+    thread_placement TEXT NOT NULL DEFAULT 'local' CHECK (thread_placement IN ('local', 'boat', 'pool')),
     UNIQUE (organization_id, owner_id, request_id)
 ) STRICT;
 CREATE TABLE channel_conversations (
     conversation TEXT PRIMARY KEY NOT NULL,
     channel TEXT NOT NULL REFERENCES channels (channel)
 ) STRICT;
-PRAGMA user_version = 1;
+-- A replacement is recorded after its predecessor's conversation was erased,
+-- or when the person moved the channel's main agent to another run location;
+-- a moved predecessor stays in the channel as an ordinary thread.
+CREATE TABLE channel_coordinator_replacements (
+    retired TEXT PRIMARY KEY NOT NULL,
+    channel TEXT NOT NULL REFERENCES channels (channel),
+    coordinator TEXT NOT NULL UNIQUE,
+    generation INTEGER NOT NULL CHECK (generation > 0),
+    cause TEXT NOT NULL CHECK (cause IN ('coordinator_conversation_erased', 'coordinator_moved')),
+    UNIQUE (channel, generation)
+) STRICT;
+PRAGMA user_version = 5;

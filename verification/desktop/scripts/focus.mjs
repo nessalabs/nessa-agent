@@ -19,12 +19,19 @@
  * focus the person took to the page stays there (focus-regroup-*). Focus on the
  * scene's Customize control in a new session's home stays there as the window
  * shortens and the home takes a small pane's shape, its header kept as a
- * band (focus-home-scene).
+ * band (focus-home-scene). Frames every 8ms, with the pane flight still on
+ * its own clock, ⇧⌘N and ⇧⌘\\ still land the caret in the new composer
+ * (focus-fast-frames): a thirty-frame search ends inside that flight.
  */
 import { attempt, CannotRun } from "./lib/cli.mjs"
 import { need, openPage, withCleanup, withEngines } from "./lib/browser.mjs"
 import { main } from "./lib/run.mjs"
 import { keysWhileRowsArrive } from "./lib/overview-keyboard.mjs"
+import {
+  expectedPaneFocus,
+  paneFocusSettled,
+  requirePendingMovement,
+} from "./lib/pane-settlement.mjs"
 import { content, css, keys, names, preferenceEvents, storage } from "./lib/selectors.mjs"
 import {
   contentIs,
@@ -33,8 +40,12 @@ import {
   hideColumns,
   leaveSettings,
   overviewListed,
+  overviewCompleteList,
+  overviewRowReady,
   openPanes,
+  order,
   paneCount,
+  paneCountIs,
   requestCount,
   settled,
   state,
@@ -54,6 +65,7 @@ function paneSteps() {
       "⇧⌘N (new session beside)",
       (p) => p.keyboard.press(keys.newSessionBeside),
       inComposer,
+      "new",
     ],
     [
       "⌘\\ and a pick",
@@ -65,15 +77,16 @@ function paneSteps() {
         await p.keyboard.press(keys.enter)
       },
       inComposer,
+      "new",
     ],
-    ["⇧⌘\\ (split down)", (p) => p.keyboard.press(keys.splitDown), inComposer],
-    ["⌘1", (p) => p.keyboard.press(keys.focusPane(1)), inComposer],
-    ["⌘2", (p) => p.keyboard.press(keys.focusPane(2)), inComposer],
-    ["⌘3", (p) => p.keyboard.press(keys.focusPane(3)), inComposer],
-    ["⌘4", (p) => p.keyboard.press(keys.focusPane(4)), inComposer],
-    ["⇧⌘]", (p) => p.keyboard.press(keys.focusNext), inComposer],
-    ["⇧⌘[", (p) => p.keyboard.press(keys.focusPrevious), inComposer],
-    ["⌘W", (p) => p.keyboard.press(keys.closePane), inComposer],
+    ["⇧⌘\\ (split down)", (p) => p.keyboard.press(keys.splitDown), inComposer, "new"],
+    ["⌘1", (p) => p.keyboard.press(keys.focusPane(1)), inComposer, 0],
+    ["⌘2", (p) => p.keyboard.press(keys.focusPane(2)), inComposer, 1],
+    ["⌘3", (p) => p.keyboard.press(keys.focusPane(3)), inComposer, 2],
+    ["⌘4", (p) => p.keyboard.press(keys.focusPane(4)), inComposer, 3],
+    ["⇧⌘]", (p) => p.keyboard.press(keys.focusNext), inComposer, "next"],
+    ["⇧⌘[", (p) => p.keyboard.press(keys.focusPrevious), inComposer, "previous"],
+    ["⌘W", (p) => p.keyboard.press(keys.closePane), inComposer, "close"],
     [
       "⌘K closed without a pick",
       async (p) => {
@@ -121,7 +134,7 @@ function overviewSteps() {
       "⌘0 opens",
       async (p) => {
         await p.keyboard.press(keys.overview)
-        await onOverviewRow(p)
+        await onOverviewRow(p, true)
       },
       (s) => ((last = s.activeOverviewItem), onItem(s)),
     ],
@@ -192,19 +205,16 @@ async function openInPane(page, title) {
 }
 
 /**
- * The caret lands the frame after the current row is drawn. Rows arrive one
- * a frame, so that is later than the peek's animation (`overview.tsx`).
+ * The current row can take focus before later rows arrive (`overview.test.tsx`).
+ * Down requires a mounted successor; complete-list readiness is reported apart.
  */
-async function onOverviewRow(page) {
-  if (!(await overviewListed(page)))
-    throw new CannotRun("the overview list did not finish drawing")
-  const landed = await until(
-    page,
-    (sel) => document.activeElement?.closest(sel) != null,
-    css.overviewItem,
-    1000,
-  )
-  if (!landed) throw new CannotRun("the keyboard did not land on an overview row")
+async function onOverviewRow(page, next = false) {
+  if (!(await overviewRowReady(page, next)))
+    throw new CannotRun(
+      next
+        ? "the focused overview row and its mounted successor were not ready"
+        : "the keyboard did not land on a mounted overview row",
+    )
 }
 
 /** How many requests the overview lists now: opened, counted, left. */
@@ -371,6 +381,7 @@ async function answerOnceOnCard(page) {
     if (!card) throw new CannotRun("no sample session is still waiting on an approval")
     const composer = page.locator(`${css.focusedPane} ${css.field}`).first()
     await composer.fill("keep these words")
+    let choice = names.allowOnce
     if (answer === "held") {
       // The pick's caret lands in the composer a frame or two after it: let
       // it, then put the keyboard on Allow Once, and hold ↩ only once it is there.
@@ -387,7 +398,16 @@ async function answerOnceOnCard(page) {
       if (!onAllow) throw new CannotRun("the keyboard would not stay on Allow Once")
       for (let i = 0; i < 5; i++) await page.keyboard.down(keys.enter)
       await page.keyboard.up(keys.enter)
-    } else await card.getByRole("button", { name, exact: true }).dblclick()
+    } else {
+      // Providers name their choices. The card marks the semantic answer so
+      // this check still exercises permanent allow when its caption differs.
+      const button =
+        name === names.alwaysAllow
+          ? card.locator(css.approvalAlways).first()
+          : card.getByRole("button", { name, exact: true })
+      choice = (await button.getAttribute("aria-label")) ?? (await button.innerText())
+      await button.dblclick()
+    }
     // Counted in the overview once the answer has had its effect, and for a
     // while after, in case a second one was taken.
     await page.keyboard.press(keys.overview)
@@ -400,7 +420,7 @@ async function answerOnceOnCard(page) {
     await page.keyboard.press(keys.escape)
     await contentIs(page, content.panes)
     const typed = await composer.inputValue().catch(() => "")
-    trail.push({ step: name, before, after, typed })
+    trail.push({ step: name, choice, before, after, typed })
     if (!once)
       failures.push(`${name} on a pane's card answered ${before - after} requests, not 1`)
     if (answer === "held" && typed !== "keep these words")
@@ -433,7 +453,7 @@ async function replyKeepsCaret(page) {
   const trail = []
   await page.keyboard.press(keys.overview)
   await contentIs(page, content.overview)
-  await onOverviewRow(page)
+  await onOverviewRow(page, true)
   const start = (await state(page)).activeOverviewItem
   // ↓ and ⌘R in one breath, then the words at once: the peek may not have followed ↓ yet.
   await page.keyboard.press(keys.down)
@@ -938,9 +958,17 @@ async function firstMessageHandoff(page, reduced = false) {
 /** A retired workspace cannot start a new focus search from its held frame. */
 async function retiredLayout(page, layout) {
   await openPanes(page, 2)
+  // Opening the split can still be handing the caret to its new pane.
+  // Establish that entry point before asking the first pane to take focus.
+  await focusComposer(page)
   await page.keyboard.press(keys.focusPane(1))
-  await settled(page)
-  await frames(page, 4)
+  const initialKeys = await order(page)
+  const initial = await paneFocusSettled(page, {
+    keys: initialKeys,
+    target: initialKeys[0],
+  })
+  if (!initial.converged)
+    throw new CannotRun("the first pane did not take focus before holding its movement")
   const clock = await page.evaluateHandle((workspace) => {
     const previous = document.querySelector(workspace)
     const request = window.requestAnimationFrame
@@ -1005,10 +1033,7 @@ async function retiredLayout(page, layout) {
   try {
     await page.keyboard.press(keys.focusPane(2))
     const captured = await clock.evaluate((owner) => owner.capture())
-    if (captured !== 1)
-      throw new CannotRun(
-        `pane movement queued ${captured} frames; expected its one settlement`,
-      )
+    requirePendingMovement(captured)
     const next = layout === "columns" ? "sidebar" : "columns"
     await page.evaluate(
       ([key, event, value]) => {
@@ -1036,13 +1061,15 @@ async function retiredLayout(page, layout) {
     await clock.evaluate((owner) => owner.restore())
     await clock.dispose()
   }
+  const paneKeys = await order(page)
   await page.keyboard.press(keys.focusPane(1))
-  await settled(page)
-  await frames(page, 3)
+  const settlement = await paneFocusSettled(page, { keys: paneKeys, target: paneKeys[0] })
   const after = await state(page)
   const problem = inComposer(after)
+  if (!settlement.converged)
+    failures.push("replacement focus did not settle in its budget")
   if (problem) failures.push(`replacement: ${problem}`)
-  return { retirement, pending, after, failures }
+  return { retirement, pending, settlement, after, failures }
 }
 
 const meta = {
@@ -1069,6 +1096,7 @@ Steps (each asserts where the caret is afterwards):
   focus-reply (1440 × 900 and 1000 × 700): ↓ then ⌘R at once, and typing at
   once → the caret and every key are in the next row's reply pill; sending,
   which moves that row to Working → the caret stays in that session's pill
+  focus-fast-frames: frames every 8ms, ⇧⌘N and ⇧⌘\\ still put the caret in the new composer
   focus-answers-overview, -card: a held ⌘↩, and two queued ⌘↩ events within 250ms, each answer one request;
   a held ↩ on a pane card's Allow Once, and a double click on Deny and on
   Always Allow, each answer one, and the held ↩ sends nothing typed
@@ -1157,7 +1185,7 @@ async function boundKeys(page) {
     await page.keyboard.press(keys.escape)
     await page.waitForSelector(css.switcherField, { state: "hidden" })
     await page.keyboard.press(keys.newSessionBeside)
-    await settled(page)
+    const ordinaryReady = await paneCountIs(page, original + 1)
     const ordinary = await paneCount(page)
     const records = await page.evaluate(() => window.__boundKeyProof.records)
     return {
@@ -1165,6 +1193,7 @@ async function boundKeys(page) {
       original,
       retained,
       ordinary,
+      ordinaryReady,
       modal,
       failures: [
         ...(["KeyN", "KeyW"].some(
@@ -1178,7 +1207,9 @@ async function boundKeys(page) {
         ...(retained !== original || !modal
           ? ["unavailable command changed the workspace or closed the switcher"]
           : []),
-        ...(ordinary !== original + 1 ? ["ordinary split command stopped working"] : []),
+        ...(!ordinaryReady || ordinary !== original + 1
+          ? ["ordinary split command stopped working within its pane-count budget"]
+          : []),
       ],
     }
   } finally {
@@ -1187,6 +1218,80 @@ async function boundKeys(page) {
       delete window.__boundKeyProof
     })
   }
+}
+
+/** Frames every 8ms. The pane flight stays on the page clock, so thirty frames end inside it. */
+async function fastFrames(page) {
+  await page.evaluate(() => {
+    const queued = new Map()
+    let next = 1
+    const cancelNative = window.cancelAnimationFrame.bind(window)
+    window.requestAnimationFrame = (callback) => {
+      const id = next++
+      const timer = window.setTimeout(() => {
+        queued.delete(id)
+        callback(performance.now())
+      }, 8)
+      queued.set(id, timer)
+      return id
+    }
+    window.cancelAnimationFrame = (id) => {
+      const timer = queued.get(id)
+      if (timer !== undefined) {
+        window.clearTimeout(timer)
+        queued.delete(id)
+      }
+      cancelNative(id)
+    }
+  })
+}
+
+/**
+ * ⇧⌘N and ⇧⌘\\ with those frames: the caret is in the new pane's composer.
+ * The flight's own motion is not the signal here. Replacing the frame clock
+ * can leave a finite animation running in WebKit, and a thirty-frame search
+ * fails by leaving the caret in the pane that was left.
+ */
+async function splitsAtFastFrames(page, layout) {
+  await hideColumns(page, layout)
+  await focusComposer(page)
+  await fastFrames(page)
+  const failures = []
+  const trail = []
+  for (const [label, press] of [
+    ["⇧⌘N (new session beside)", keys.newSessionBeside],
+    ["⇧⌘\\ (split down)", keys.splitDown],
+  ]) {
+    const before = await order(page)
+    await page.keyboard.press(press)
+    const deadline = Date.now() + 3000
+    let after = await state(page)
+    let keys = await order(page)
+    let problem = fastSplitProblem(before, keys, after)
+    while (problem && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 16))
+      after = await state(page)
+      keys = await order(page)
+      problem = fastSplitProblem(before, keys, after)
+    }
+    trail.push({ step: label, ...after, keys, ok: !problem })
+    if (problem) {
+      failures.push(`${label}: ${problem}`)
+      break
+    }
+  }
+  return { trail, failures }
+}
+
+/** The new pane is focused and the caret is in its composer, or why not. */
+function fastSplitProblem(before, keys, after) {
+  const added = keys.filter((key) => !before.includes(key))
+  if (added.length !== 1) return "the split did not add one pane"
+  if (after.focusedPane !== added[0])
+    return (
+      inComposer(after) ?? `focused pane is ${after.focusedPane}, new pane is ${added[0]}`
+    )
+  return inComposer(after)
 }
 
 await main(meta, async ({ options, rep, url }) => {
@@ -1206,21 +1311,61 @@ await main(meta, async ({ options, rep, url }) => {
             await attempt(rep, { name: `focus-${group}`, engine, layout }, async () => {
               const failures = []
               const trail = []
-              for (const [label, act, check] of steps) {
+              const unrun = []
+              for (const [index, [label, act, check, move]] of steps.entries()) {
+                const expected =
+                  group === "panes"
+                    ? expectedPaneFocus(
+                        { keys: await order(page), ...(await state(page)) },
+                        move,
+                      )
+                    : null
                 await act(page)
-                await settled(page)
-                // The caret lands a frame or two after what moved it.
-                await frames(page, 3)
+                let settlement
+                if (expected) settlement = await paneFocusSettled(page, expected)
+                else {
+                  await settled(page)
+                  await frames(page, 3)
+                }
                 const s = await state(page)
-                const problem = check(s)
-                trail.push({ step: label, ...s, ok: !problem })
-                if (problem) failures.push(`${label}: ${problem}`)
+                const problem =
+                  check(s) ??
+                  (settlement && !settlement.converged
+                    ? "expected pane focus did not settle in its budget"
+                    : null)
+                trail.push({ step: label, ...s, expected, settlement, ok: !problem })
+                if (problem) {
+                  failures.push(`${label}: ${problem}`)
+                  unrun.push(...steps.slice(index + 1).map(([name]) => name))
+                  break
+                }
               }
-              return { trail, failures }
+              return { trail, unrun, failures }
             })
 
           await attempt(rep, { name: "focus-overview-arriving", engine, layout }, () =>
             keysWhileRowsArrive(page),
+          )
+
+          await attempt(
+            rep,
+            { name: "focus-overview-complete-list", engine, layout },
+            async () => {
+              const fresh = await openPage(browser, {
+                url,
+                layout,
+                width: 1440,
+                height: 900,
+              })
+              return withCleanup(
+                async () => {
+                  await need(fresh.page, css.composer, "a composer")
+                  await fresh.page.keyboard.press(keys.overview)
+                  return overviewCompleteList(fresh.page)
+                },
+                () => fresh.close(),
+              )
+            },
           )
 
           const mash = Number(options.mash)
@@ -1254,6 +1399,15 @@ await main(meta, async ({ options, rep, url }) => {
         },
         () => opened.close(),
       )
+      await attempt(rep, { name: "focus-fast-frames", engine, layout }, async () => {
+        const fresh = await openPage(browser, { url, layout, width: 1440, height: 900 })
+        try {
+          await need(fresh.page, css.composer, "a composer")
+          return await splitsAtFastFrames(fresh.page, layout)
+        } finally {
+          await fresh.close()
+        }
+      })
       await attempt(rep, { name: "focus-bound-keys", engine, layout }, async () => {
         const fresh = await openPage(browser, { url, layout, width: 1440, height: 900 })
         try {

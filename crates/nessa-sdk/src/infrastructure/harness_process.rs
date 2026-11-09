@@ -53,8 +53,34 @@ impl SupervisedHarness {
         })
     }
 
+    /// Start an isolated harness whose private directory remains owned until
+    /// process-tree cleanup is confirmed, including failed or dropped cleanup.
+    /// The command factory is given the private directory before spawning.
+    ///
+    /// # Errors
+    /// A typed process-start failure; no unowned process is returned.
+    pub fn start_private(
+        command: impl FnOnce(&std::path::Path) -> Command,
+    ) -> Result<HarnessProcess, AgentError> {
+        let mut scope = match ProcessScope::spawn_with_private_directory(command) {
+            Ok((scope, _)) => scope,
+            Err(failure) => ProcessScope::failed_private_start(failure)?,
+        };
+        let input = scope.stdin.take().expect("a private start owns its input");
+        let output = scope
+            .stdout
+            .take()
+            .expect("a private start owns its output");
+        Ok(HarnessProcess {
+            input: Box::new(input),
+            output: Box::new(output),
+            control: Box::new(Self { scope }),
+        })
+    }
     fn spawned(command: Command) -> Result<(Self, ChildStdin, ChildStdout), AgentError> {
-        let mut scope = ProcessScope::spawn(command)?;
+        Ok(Self::from_scope(ProcessScope::spawn(command)?))
+    }
+    fn from_scope(mut scope: ProcessScope) -> (Self, ChildStdin, ChildStdout) {
         let input = match scope.stdin.take() {
             Some(ProcessInput::Local(input)) => input,
             _ => unreachable!("a spawned scope has its child's piped stdin"),
@@ -63,7 +89,7 @@ impl SupervisedHarness {
             Some(ProcessOutput::Local(output)) => output,
             _ => unreachable!("a spawned scope has its child's piped stdout"),
         };
-        Ok((Self { scope }, input, output))
+        (Self { scope }, input, output)
     }
 
     /// Release the process tree: `grace` to leave by itself once its input

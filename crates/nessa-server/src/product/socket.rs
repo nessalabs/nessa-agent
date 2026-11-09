@@ -10,7 +10,8 @@ use crate::browser_session::application::{
 };
 use crate::browser_session::domain::value_objects::RemovalReason;
 use crate::conversation::application::{
-    access_refusal, AccessDecision, RecordReadLease, ReviewNoticeAuditFailure, WindowSlot,
+    access_refusal, AccessDecision, ConversationAdmissionToken, RecordReadLease,
+    ReviewNoticeAuditFailure, WindowSlot,
 };
 #[cfg(test)]
 use crate::conversation_test_support as conversation_support;
@@ -20,8 +21,8 @@ use futures_util::stream::{FuturesUnordered, SplitSink};
 use futures_util::{Sink, SinkExt, Stream, StreamExt};
 use nessa_auth::application::authorization::AuthorizeAction;
 use nessa_auth::application::credential_admin::{
-    CredentialAdminError, IssueCredentialOutcome, IssueCredentialRequest, ListCredentialsRequest,
-    RevokeCredentialOutcome, RevokeCredentialRequest,
+    CredentialAdminError, CredentialIssuePurpose, IssueCredentialOutcome, IssueCredentialRequest,
+    ListCredentialsRequest, RevokeCredentialOutcome, RevokeCredentialRequest,
 };
 use nessa_auth::application::dto::{CredentialGrantDto, MembershipStateDto, ResourceDto};
 use nessa_auth::application::ports::{
@@ -371,6 +372,7 @@ where
             now: state.clock.unix_seconds(),
         };
         let identity = (ResumeSession {
+            policy: state.policy.as_ref(),
             verifier: &verifier,
             access: state.access.as_ref(),
             clock: state.clock.as_ref(),
@@ -402,6 +404,7 @@ where
         .map_err(|_| (frame.id.clone(), "unauthorized"))?;
     let verifier = proof.verifier(socket, state);
     let session = AuthenticateSession {
+        policy: state.policy.as_ref(),
         verifier: verifier.as_ref(),
         access: state.access.as_ref(),
         clock: state.clock.as_ref(),
@@ -427,6 +430,7 @@ where
 fn credential_admin_code(error: CredentialAdminError) -> &'static str {
     match error {
         CredentialAdminError::Conflict => "credential_conflict",
+        CredentialAdminError::OriginRecoveryRequired => "credential_conflict",
         CredentialAdminError::Capacity => "credential_capacity",
         CredentialAdminError::NotFound => "credential_not_found",
         CredentialAdminError::Unavailable => "credential_store_unavailable",
@@ -911,10 +915,15 @@ type RefreshCheck<'a> = Pin<
     >,
 >;
 
-async fn run_authenticated<S>(socket: S, state: ProductRouteState, session: AuthenticatedSession)
-where
+async fn run_authenticated<S>(
+    socket: S,
+    mut state: ProductRouteState,
+    session: AuthenticatedSession,
+) where
     S: Stream<Item = Result<Message, Error>> + Sink<Message> + Unpin + Send + 'static,
 {
+    // This guard belongs to the connection loop, never a cloned request state.
+    let mut vault_session = super::vault::ConnectionVault::attach(&mut state, &session);
     let (sink, mut incoming) = socket.split();
     // The socket's one event numbering, continued by its subscription frames
     // and its review notices in the order the writer sends them.
@@ -1403,6 +1412,9 @@ where
         }
         requests.push(task);
     }
+    if let Some(owner) = vault_session.as_mut() {
+        owner.close();
+    }
     // Dropping the slot unsent lets the writer finish once the lanes drain.
     match close {
         Some(reason) => {
@@ -1476,6 +1488,7 @@ async fn forward_review_notices(
         drop(authority_updates.borrow_and_update());
         let mut visible = Vec::with_capacity(reviews.len());
         let mut selected_revision = None;
+        let mut admitted_tokens: Vec<ConversationAdmissionToken> = Vec::new();
         for review in reviews {
             let selection = super::read_access::may_see_review(&state, &session, &review)
                 .await
@@ -1490,6 +1503,7 @@ async fn forward_review_notices(
                         continue 'snapshots;
                     }
                     selected_revision = Some(revision);
+                    admitted_tokens.push(selection.metadata_token().clone());
                     if matches!(selection.decision(), AccessDecision::Allow { .. }) {
                         visible.push(review);
                     }
@@ -1504,6 +1518,38 @@ async fn forward_review_notices(
             .execute(&session)
             .await
             .map_err(ReviewNoticePublicationFailure::Authority)?;
+            if current.revision != revision {
+                selection_passes += 1;
+                continue 'snapshots;
+            }
+            // The token was read with the row Cedar saw. It still has to name
+            // that row at this authority snapshot. The board is checked after
+            // this await; checking it before would admit a candidate the board
+            // drops while the token read waits.
+            let Some(metadata) = state.review_metadata.as_ref() else {
+                return Err(ReviewNoticePublicationFailure::Audit(
+                    ReviewNoticeAuditFailure::Unavailable,
+                ));
+            };
+            let mut by_conversation = HashMap::new();
+            for token in &admitted_tokens {
+                if by_conversation
+                    .insert(token.conversation_id().clone(), token)
+                    .is_some_and(|earlier| earlier != token)
+                {
+                    selection_passes += 1;
+                    continue 'snapshots;
+                }
+            }
+            for token in by_conversation.values() {
+                let current_token = metadata.admission_current(token).await.map_err(|_| {
+                    ReviewNoticePublicationFailure::Audit(ReviewNoticeAuditFailure::Unavailable)
+                })?;
+                if !current_token {
+                    selection_passes += 1;
+                    continue 'snapshots;
+                }
+            }
             if !board.is_current(generation, visibility) {
                 // A spent counter never matches, so it counts as access moving.
                 let board_moved = current.revision == revision
@@ -1524,10 +1570,6 @@ async fn forward_review_notices(
                 // was shown until its review was denied for want of an answer.
                 let (_, waiting) = board.current();
                 visible.retain(|review| waiting.contains(review));
-            }
-            if current.revision != revision {
-                selection_passes += 1;
-                continue 'snapshots;
             }
         }
         // Stable audited selection admits this candidate. As with other gateway
@@ -1949,13 +1991,22 @@ async fn dispatch_authorized(
         "agents.installOptions" | "agents.install" => {
             super::agent_install::dispatch(state, session, frame).await
         }
+        "conversation.webhook.cursor" | "conversation.webhook.reset" => {
+            super::webhook_reset::dispatch(state, session, frame).await
+        }
         "conversation.share" | "conversation.unshare" | "conversation.shares" => {
             super::read_access::dispatch_share(state, session, frame).await
         }
-        "channel.create" | "channel.list" => super::channel::dispatch(state, session, frame).await,
+        "channel.create" | "channel.list" | "channel.setPlacement" => {
+            super::channel::dispatch(state, session, frame).await
+        }
+        "apps.trusted" | "apps.untrust" => {
+            super::trusted_apps::dispatch(state, session, frame).await
+        }
         method if method.starts_with("conversation.") => {
             super::conversation::dispatch(state, session, frame, initiation).await
         }
+        "attachment.write" => super::attachment::dispatch_write(state, frame).await,
         method if method.starts_with("attachment.") => {
             super::attachment::dispatch(state, session, frame).await
         }
@@ -1966,10 +2017,20 @@ async fn dispatch_authorized(
         method if method.starts_with("mcpServers.") => {
             super::mcp_servers::dispatch(state, session, frame).await
         }
+        method if method.starts_with("boat.") => super::boat::dispatch(state, session, frame).await,
+        method if method.starts_with("vault.") => super::vault::dispatch(state, frame).await,
         method if method.starts_with("github.") => {
             super::github::dispatch(state, session, frame).await
         }
+        method if method.starts_with("logins.") => {
+            super::logins::dispatch(state, session, frame).await
+        }
+        method if method.starts_with("voice.") => {
+            super::voice::dispatch(state, session, frame).await
+        }
         "pairing.setLinking" => super::pairing::set_linking(state, session, frame).await,
+        "pairing.setTunnel" => super::pairing::set_tunnel(state, session, frame).await,
+        "pairing.tunnel" => super::pairing::tunnel(state, frame).await,
         method if method.starts_with("pairing.") => {
             super::pairing::dispatch(state, session, frame).await
         }
@@ -1978,12 +2039,56 @@ async fn dispatch_authorized(
         method if method.starts_with("peer.") => {
             super::peers::dispatch(state, session, frame).await
         }
+        "server.reach" => {
+            if frame.params != json!({}) {
+                return failure(&frame.id, "invalid_request");
+            }
+            let tunnel = state.tunnel.as_ref().and_then(|tunnel| tunnel.address());
+            success(
+                &frame.id,
+                &nessa_protocol::product::generated::ServerReachResult {
+                    tunnel: tunnel.map(String::from),
+                },
+            )
+        }
+        "devices.pool" | "devices.setPool" => super::pool::dispatch(state, session, frame).await,
+        "devices.list" => {
+            let Ok(params) = serde_json::from_value::<
+                nessa_protocol::product::generated::DevicesListParams,
+            >(frame.params.clone()) else {
+                return failure(&frame.id, "invalid_request");
+            };
+            let Ok(after) = params
+                .after
+                .as_deref()
+                .map(nessa_sdk::domain::agent_execution::leases::PeerEnvironment::parse)
+                .transpose()
+            else {
+                return failure(&frame.id, "invalid_request");
+            };
+            let Some(devices) = state.devices.as_ref() else {
+                return failure(&frame.id, "devices_unavailable");
+            };
+            let mut list = device_list(devices.list(after).await);
+            // The hosts this run serves and the default ride on the first page.
+            if after.is_none() {
+                list = super::device_setup::listed(state.device_setup.as_ref(), list).await;
+            }
+            fitted_devices(&frame.id, list)
+        }
+        "devices.sshHosts" | "devices.connectSsh" | "devices.setDefault" => {
+            super::device_setup::dispatch(state, session, frame).await
+        }
         "server.health" => {
             if frame.params != json!({}) {
                 return failure(&frame.id, "invalid_request");
             }
-            health_check_message(&frame.id, state.uptime_clock.elapsed_ms())
-                .unwrap_or_else(|_| failure(&frame.id, "internal_error"))
+            health_check_message(
+                &frame.id,
+                state.uptime_clock.elapsed_ms(),
+                state.webhooks.as_ref().map(|runtime| runtime.status()),
+            )
+            .unwrap_or_else(|_| failure(&frame.id, "internal_error"))
         }
         "credential.issue" => {
             let Some(admin) = state.admin.as_ref() else {
@@ -2014,6 +2119,7 @@ async fn dispatch_authorized(
             let credential_id = format!("credential-{}", Uuid::new_v4());
             let outcome = admin
                 .issue(IssueCredentialRequest {
+                    purpose: CredentialIssuePurpose::Product,
                     request_id: params.request_id,
                     issuer_principal_id: context.principal_id().as_str().to_owned(),
                     credential_id,
@@ -2108,13 +2214,25 @@ async fn dispatch_authorized(
                 })
                 .await
             {
-                Ok(RevokeCredentialOutcome { revision, .. }) => success(
-                    &frame.id,
-                    &CredentialRevokeResult {
-                        credential_id: params.credential_id,
-                        revision,
-                    },
-                ),
+                Ok(RevokeCredentialOutcome { revision, .. }) => {
+                    if let Some(secrets) = state.tunnel_secrets.as_ref() {
+                        if let Err(error) = secrets.revoke(
+                            &params.credential_id,
+                            crate::tunnel::application::SecretRevocation::CredentialRevoked,
+                            session.context().principal_id().as_str(),
+                        ) {
+                            tracing::warn!(?error, "the device tunnel secret was not revoked");
+                            return failure(&frame.id, "audit_unavailable");
+                        }
+                    }
+                    success(
+                        &frame.id,
+                        &CredentialRevokeResult {
+                            credential_id: params.credential_id,
+                            revision,
+                        },
+                    )
+                }
                 Err(error) => failure(&frame.id, credential_admin_code(error)),
             }
         }
@@ -2237,6 +2355,7 @@ async fn current_identity_inner(
             now: state.clock.unix_seconds(),
         };
         match (ResumeSession {
+            policy: state.policy.as_ref(),
             verifier: &verifier,
             access: state.access.as_ref(),
             clock: state.clock.as_ref(),
@@ -2476,6 +2595,95 @@ async fn close_session<S: Sink<Message> + Unpin>(
 #[cfg(test)]
 pub(crate) use tests::host_fixture::HostProductFixture;
 
+/// `list` answered for `request_id` in one frame of at most
+/// [`MAX_PAYLOAD_BYTES`]. A page whose machines report many disks can run
+/// past it, so workers are dropped from its end until it fits, and `next`
+/// names the last one kept: the next page starts right after it. A page
+/// keeps at least one worker, since every report's text is bounded so that
+/// one always fits (`a_page_of_the_largest_reports_fits_one_frame`).
+fn fitted_devices(
+    request_id: &str,
+    mut list: nessa_protocol::product::generated::DevicesListResult,
+) -> OutgoingMessage {
+    let limit = MAX_PAYLOAD_BYTES as usize;
+    loop {
+        let message = success(request_id, &list);
+        let Some(over) = message
+            .to_wire_text()
+            .ok()
+            .and_then(|text| text.len().checked_sub(limit))
+            .filter(|over| *over > 0)
+        else {
+            return message;
+        };
+        // Drop at least `over` bytes' worth of workers from the end,
+        // measured as each is written, then measure the whole frame again.
+        let mut dropped = 0;
+        while dropped < over && list.workers.len() > 1 {
+            let Some(worker) = list.workers.pop() else {
+                break;
+            };
+            dropped += serde_json::to_vec(&worker).map_or(1, |bytes| bytes.len() + 1);
+        }
+        if dropped == 0 {
+            return message;
+        }
+        list.next = list.workers.last().map(|worker| worker.environment.clone());
+    }
+}
+
+/// `devices.list`'s answer, in the protocol's words.
+fn device_list(
+    list: crate::devices::application::DeviceList,
+) -> nessa_protocol::product::generated::DevicesListResult {
+    use nessa_protocol::product::generated::{
+        DeviceDisk, DeviceMachine, DeviceWorker, DevicesListResult,
+    };
+    let machine = |report: nessa_protocol::lease::MachineReport| DeviceMachine {
+        hostname: report.hostname,
+        os: report.os,
+        os_version: report.os_version,
+        arch: report.arch,
+        cpus: u64::from(report.cpus),
+        cpu_permille: u64::from(report.cpu_permille),
+        memory_total_bytes: report.memory_total_bytes,
+        memory_used_bytes: report.memory_used_bytes,
+        disk_total_bytes: report.disk_total_bytes,
+        disk_used_bytes: report.disk_used_bytes,
+        disks: Some(
+            report
+                .disks
+                .into_iter()
+                .map(|disk| DeviceDisk {
+                    mount: disk.mount,
+                    total_bytes: disk.total_bytes,
+                    used_bytes: disk.used_bytes,
+                })
+                .collect(),
+        ),
+    };
+    DevicesListResult {
+        default_environment: None,
+        ssh_hosts: None,
+        hub: list.hub.map(machine),
+        listening: list.listening.map(|address| address.to_string()),
+        workers: list
+            .workers
+            .into_iter()
+            .map(|worker| DeviceWorker {
+                environment: worker.peer.name(),
+                state: worker.state.as_str().to_owned(),
+                // The schema's bound; no connection carries that many.
+                agents: u64::try_from(worker.agents)
+                    .unwrap_or(u64::MAX)
+                    .min(u64::from(u32::MAX)),
+                machine: worker.machine.map(machine),
+                last_seen_ms: worker.last_seen_ms,
+            })
+            .collect(),
+        next: list.next.map(|peer| peer.name()),
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::super::state::SessionSettings;
@@ -2711,6 +2919,16 @@ mod tests {
     }
     mod review_notice_audit {
         include!("../../tests/product/socket/review_notice_audit.rs");
+    }
+    mod vault_tests {
+        include!("../../tests/product/socket/vault.rs");
+    }
+    mod logins_tests {
+        include!("../../tests/product/socket/logins.rs");
+    }
+
+    mod voice_tests {
+        include!("../../tests/product/socket/voice.rs");
     }
     pub(super) mod host_fixture {
         include!("../../tests/product/socket/host_fixture.rs");
@@ -3707,6 +3925,81 @@ mod tests {
         }
     }
 
+    /// A tombstone committed while metadata is held must not publish on the
+    /// live row captured before that deletion, even when the recipient is Admin.
+    #[tokio::test]
+    async fn deleted_metadata_cannot_publish_with_later_admin_authority() {
+        let (_directory, board) = open_rules();
+        let id = "00000000-0000-4000-8000-00000000000a";
+        board.waiting(&ReviewNotice {
+            conversation_id: id.into(),
+            execution_id: ExecutionId::new("turn").unwrap(),
+            permission_id: PermissionId::new("permission").unwrap(),
+            tool: "Bash".into(),
+        });
+        let repository = repository_of(vec![owned_conversation(id, "owner")]);
+        let (entered, waiting) = oneshot::channel();
+        let (release, released) = oneshot::channel();
+        *repository.metadata_load_gate.lock().unwrap() = Some((entered, released));
+        let (state, _authority) = fixture(MembershipRole::Admin);
+        let state = state.with_passive_read(
+            Arc::new(UnpairedBinding),
+            repository.clone(),
+            Arc::new(GrantedConversation(id.into())),
+            conversation_support::access_policy(),
+        );
+        let session = authenticate(&state).await;
+        let (authority_updates, updates) = watch::channel(session.auth_revision());
+        let (send, mut receive) = mpsc::channel(1);
+        let task = tokio::spawn(forward_review_notices(
+            board,
+            send,
+            Arc::new(Semaphore::new(1)),
+            state,
+            session,
+            updates,
+        ));
+        timeout(Duration::from_secs(2), waiting)
+            .await
+            .unwrap()
+            .unwrap();
+        let deletion = crate::conversation::domain::ConversationDeletion::new(
+            OrganizationId::new("organization").unwrap(),
+            PrincipalId::new("owner").unwrap(),
+            "panel".into(),
+            "delete".into(),
+            2,
+        )
+        .unwrap();
+        repository
+            .record_deletion(&ConversationId::new(id).unwrap(), deletion)
+            .await
+            .unwrap();
+        release.send(()).unwrap();
+        let queued = timeout(Duration::from_secs(2), receive.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        let WireResponse::ReviewWaiting {
+            payload: snapshot, ..
+        } = queued.message
+        else {
+            panic!("expected review snapshot")
+        };
+        assert!(
+            snapshot.reviews.is_empty(),
+            "live metadata captured before deletion must not publish"
+        );
+        drop(authority_updates);
+        assert_eq!(
+            timeout(Duration::from_secs(2), task)
+                .await
+                .unwrap()
+                .unwrap(),
+            Ok(())
+        );
+    }
+
     /// A repository reply is outside data. Its identity is correlated before
     /// either Cedar or the notice publisher consumes its ownership metadata.
     #[tokio::test]
@@ -3913,7 +4206,11 @@ mod tests {
                 .lock()
                 .unwrap_or_else(|error| error.into_inner())
                 .clone();
-            assert_eq!(asked, vec![grant.to_owned()], "{method}");
+            assert_eq!(
+                asked,
+                vec!["session.enter".to_owned(), grant.to_owned()],
+                "{method}"
+            );
         }
     }
 
@@ -4115,6 +4412,23 @@ mod tests {
         }
     }
 
+    /// Original issuance of a newly constructed synthetic product credential.
+    fn test_product_origin(
+        credential: &Credential,
+    ) -> nessa_auth::application::origin::CredentialOrigin {
+        let original = credential
+            .issued(
+                nessa_auth::domain::IssuanceCause::AdminIssue,
+                nessa_auth::domain::Initiator::LocalOperator,
+            )
+            .unwrap();
+        nessa_auth::application::origin::CredentialOrigin::restore(
+            nessa_auth::application::dto::CredentialTransitionDto::record(&original, 1, 1, None),
+            credential,
+        )
+        .unwrap()
+    }
+
     fn snapshot(role: MembershipRole, status: MembershipStatus) -> AccessSnapshot {
         snapshot_with(role, status, &["server.read", "credential.manage"])
     }
@@ -4129,8 +4443,8 @@ mod tests {
             organization.clone(),
             ResourceId::new("gateway-resource").unwrap(),
         );
-        AccessSnapshot {
-            credential: Credential::new(
+        {
+            let credential = Credential::new(
                 CredentialId::new("credential").unwrap(),
                 PrincipalId::new("principal").unwrap(),
                 organization.clone(),
@@ -4142,15 +4456,23 @@ mod tests {
                     .map(|action| Grant::new(Action::new(*action).unwrap(), resource.clone()))
                     .collect(),
             )
-            .unwrap(),
-            membership: Membership::new(
+            .unwrap();
+            let membership = Membership::new(
                 MembershipId::new("membership").unwrap(),
                 PrincipalId::new("principal").unwrap(),
                 organization,
                 role,
                 status,
-            ),
-            revision: 1,
+            );
+            let revision = 1;
+            let origin = test_product_origin(&credential);
+            AccessSnapshot {
+                revocation: None,
+                credential,
+                membership,
+                revision,
+                origin,
+            }
         }
     }
 
@@ -4203,6 +4525,7 @@ mod tests {
 
     async fn authenticate(state: &ProductRouteState) -> AuthenticatedSession {
         AuthenticateSession {
+            policy: state.policy.as_ref(),
             verifier: state.verifier.as_ref(),
             access: state.access.as_ref(),
             clock: state.clock.as_ref(),
@@ -4261,6 +4584,10 @@ mod tests {
     async fn administration_reports_typed_rejections_from_a_substitute_adapter() {
         for (error, code) in [
             (CredentialAdminError::Conflict, "credential_conflict"),
+            (
+                CredentialAdminError::OriginRecoveryRequired,
+                "credential_conflict",
+            ),
             (CredentialAdminError::Capacity, "credential_capacity"),
             (CredentialAdminError::NotFound, "credential_not_found"),
             (
@@ -4525,6 +4852,234 @@ mod tests {
         storage.shutdown().await.unwrap();
     }
 
+    /// Tunnel row T9: `server.reach` names the tunnel's address only while
+    /// it is ready, under `server.read`.
+    #[tokio::test]
+    async fn reach_names_the_tunnel_only_while_it_is_ready() {
+        use crate::tunnel::application::TunnelView;
+        use crate::tunnel::application::{TunnelFailure, TunnelStatus};
+        let (state, _authority) = fixture(MembershipRole::Member);
+        let session = authenticate(&state).await;
+        let reach = |state: &ProductRouteState| {
+            let state = state.clone();
+            let session = session.clone();
+            async move {
+                let OutgoingMessage::Response(answer) =
+                    dispatch(&state, &session, request("1", "server.reach")).await
+                else {
+                    panic!("response expected")
+                };
+                assert!(answer.ok);
+                answer.payload.unwrap()
+            }
+        };
+        assert_eq!(reach(&state).await, json!({ "tunnel": null }));
+        let (status, watching) = watch::channel(TunnelStatus::Starting);
+        let state = state.with_tunnel(TunnelView { status: watching });
+        assert_eq!(reach(&state).await, json!({ "tunnel": null }));
+        let address = nessa_protocol::tunnel::TunnelAddress::try_from(
+            "https://a-b.trycloudflare.com".to_owned(),
+        )
+        .unwrap();
+        status.send_replace(TunnelStatus::Ready(address));
+        assert_eq!(
+            reach(&state).await,
+            json!({ "tunnel": "https://a-b.trycloudflare.com" })
+        );
+        status.send_replace(TunnelStatus::Failed(TunnelFailure::NotReady));
+        assert_eq!(reach(&state).await, json!({ "tunnel": null }));
+    }
+
+    /// A page of the largest reports a worker may send (every text at its
+    /// bound, each byte written as six, and every disk listed) runs past one
+    /// frame; it is cut to fit, keeps at least one worker, and its `next`
+    /// names the last worker kept, so the next page carries on from there.
+    #[test]
+    fn a_page_of_the_largest_reports_fits_one_frame() {
+        use nessa_protocol::lease::{MAX_MACHINE_DISKS, MAX_MACHINE_TEXT_BYTES};
+        use nessa_protocol::product::generated::{
+            DeviceDisk, DeviceMachine, DeviceWorker, DevicesListResult,
+        };
+        let text = "\u{1}".repeat(MAX_MACHINE_TEXT_BYTES);
+        let machine = || DeviceMachine {
+            hostname: text.clone(),
+            os: text.clone(),
+            os_version: text.clone(),
+            arch: text.clone(),
+            cpus: u64::from(u32::MAX),
+            cpu_permille: 1000,
+            memory_total_bytes: nessa_protocol::lease::MAX_MACHINE_FIGURE,
+            memory_used_bytes: nessa_protocol::lease::MAX_MACHINE_FIGURE,
+            disk_total_bytes: nessa_protocol::lease::MAX_MACHINE_FIGURE,
+            disk_used_bytes: nessa_protocol::lease::MAX_MACHINE_FIGURE,
+            disks: Some(
+                (0..MAX_MACHINE_DISKS)
+                    .map(|_| DeviceDisk {
+                        mount: text.clone(),
+                        total_bytes: nessa_protocol::lease::MAX_MACHINE_FIGURE,
+                        used_bytes: nessa_protocol::lease::MAX_MACHINE_FIGURE,
+                    })
+                    .collect(),
+            ),
+        };
+        let names: Vec<String> = (0..crate::devices::application::MAX_LISTED_WORKERS)
+            .map(|index| format!("peer:{index:064x}"))
+            .collect();
+        let page = DevicesListResult {
+            default_environment: None,
+            ssh_hosts: None,
+            hub: Some(machine()),
+            listening: Some("[ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff]:65535".to_owned()),
+            workers: names
+                .iter()
+                .map(|name| DeviceWorker {
+                    environment: name.clone(),
+                    state: "online".to_owned(),
+                    agents: u64::from(u32::MAX),
+                    machine: Some(machine()),
+                    last_seen_ms: Some(u64::MAX),
+                })
+                .collect(),
+            next: names.last().cloned(),
+        };
+        let request_id = "\u{1}".repeat(256);
+        assert!(
+            success(&request_id, &page).to_wire_text().unwrap().len() > MAX_PAYLOAD_BYTES as usize
+        );
+        let message = fitted_devices(&request_id, page);
+        let text = message.to_wire_text().unwrap();
+        assert!(text.len() <= MAX_PAYLOAD_BYTES as usize, "{}", text.len());
+        let OutgoingMessage::Response(answer) = message else {
+            panic!("response expected")
+        };
+        let fitted: DevicesListResult = serde_json::from_value(answer.payload.unwrap()).unwrap();
+        let kept: Vec<&str> = fitted
+            .workers
+            .iter()
+            .map(|worker| worker.environment.as_str())
+            .collect();
+        assert!(!kept.is_empty() && kept.len() < names.len());
+        assert!(kept.iter().zip(&names).all(|(kept, name)| kept == name));
+        assert_eq!(fitted.next.as_deref(), kept.last().copied());
+    }
+
+    /// `devices.list` answers the hub's machine and every worker, in the
+    /// protocol's words, under `server.read`; a gateway that lists no
+    /// devices says so.
+    #[tokio::test]
+    async fn devices_list_names_the_hub_and_its_workers() {
+        use crate::devices::application::{
+            Devices, LiveWorker, LiveWorkers, MachineProbe, PairedKeys, WorkerSightings,
+        };
+        use crate::devices::infrastructure::{FileSightings, SystemWallClock};
+        use nessa_protocol::lease::MachineReport;
+        use nessa_sdk::domain::agent_execution::leases::PeerEnvironment;
+        fn report(hostname: &str) -> MachineReport {
+            MachineReport {
+                hostname: hostname.into(),
+                os: "macos".into(),
+                os_version: "26.1".into(),
+                arch: "aarch64".into(),
+                cpus: 12,
+                cpu_permille: 230,
+                memory_total_bytes: 48,
+                memory_used_bytes: 14,
+                disk_total_bytes: 1000,
+                disk_used_bytes: 400,
+                disks: vec![nessa_protocol::lease::MachineDisk {
+                    mount: "/".into(),
+                    total_bytes: 1000,
+                    used_bytes: 400,
+                }],
+            }
+        }
+        struct Hub;
+        impl MachineProbe for Hub {
+            fn read(&self) -> Option<MachineReport> {
+                Some(report("studio"))
+            }
+        }
+        struct One;
+        impl LiveWorkers for One {
+            fn live(&self) -> Vec<LiveWorker> {
+                vec![LiveWorker {
+                    peer: PeerEnvironment::new([0xab; PeerEnvironment::KEY_BYTES]),
+                    serving: Some((4, false)),
+                    machine: Some(report("build-box")),
+                }]
+            }
+        }
+        struct AllPaired;
+        impl PairedKeys for AllPaired {
+            fn paired(&self) -> Option<std::collections::BTreeSet<PeerEnvironment>> {
+                None
+            }
+        }
+        let (state, _authority) = fixture(MembershipRole::Member);
+        let session = authenticate(&state).await;
+        let OutgoingMessage::Response(refused) =
+            dispatch(&state, &session, request("1", "devices.list")).await
+        else {
+            panic!("response expected")
+        };
+        assert_eq!(refused.error.unwrap().code, "devices_unavailable");
+
+        let directory = tempfile::tempdir().unwrap();
+        let state = state.with_devices(Arc::new(Devices::new(
+            Arc::new(Hub),
+            Some((Arc::new(One), Arc::new(AllPaired))),
+            Arc::new(WorkerSightings::new(
+                Arc::new(FileSightings::new(directory.path().join("workers"))),
+                Arc::new(SystemWallClock),
+            )),
+        )));
+        let OutgoingMessage::Response(answer) =
+            dispatch(&state, &session, request("2", "devices.list")).await
+        else {
+            panic!("response expected")
+        };
+        assert!(answer.ok);
+        let mut payload = answer.payload.unwrap();
+        let seen = payload["workers"][0]["lastSeenMs"].take();
+        assert!(seen.as_u64().is_some_and(|seen| seen > 0), "{seen}");
+        let machine = |hostname: &str| {
+            json!({
+                "hostname": hostname, "os": "macos", "osVersion": "26.1",
+                "arch": "aarch64", "cpus": 12, "cpuPermille": 230,
+                "memoryTotalBytes": 48, "memoryUsedBytes": 14,
+                "diskTotalBytes": 1000, "diskUsedBytes": 400,
+                "disks": [{"mount": "/", "totalBytes": 1000, "usedBytes": 400}],
+            })
+        };
+        assert_eq!(
+            payload,
+            json!({
+                "hub": machine("studio"),
+                "workers": [{
+                    "environment": format!("peer:{}", "ab".repeat(32)),
+                    "state": "online",
+                    "agents": 4,
+                    "machine": machine("build-box"),
+                    "lastSeenMs": null,
+                }],
+            })
+        );
+
+        // A page after the last worker is empty; a malformed `after` is refused.
+        let mut after = request("3", "devices.list");
+        after.params = json!({"after": format!("peer:{}", "ff".repeat(32))});
+        let OutgoingMessage::Response(page) = dispatch(&state, &session, after).await else {
+            panic!("response expected")
+        };
+        assert_eq!(page.payload.unwrap()["workers"], json!([]));
+        let mut bad = request("4", "devices.list");
+        bad.params = json!({"after": "peer:zz"});
+        let OutgoingMessage::Response(refused) = dispatch(&state, &session, bad).await else {
+            panic!("response expected")
+        };
+        assert_eq!(refused.error.unwrap().code, "invalid_request");
+    }
+
     #[tokio::test]
     async fn health_uses_real_cedar_and_current_membership() {
         let (state, authority) = fixture(MembershipRole::Member);
@@ -4546,6 +5101,51 @@ mod tests {
             current_session_error(&state, &session).await,
             Some(AccessError::InactiveMembership)
         );
+    }
+
+    /// `nessa call` and `nessa mcp` prepare this same request. Without
+    /// `server.read`, Cedar refuses it before the health handler runs.
+    #[tokio::test]
+    async fn a_surface_call_without_the_grant_is_forbidden_by_cedar() {
+        let (state, authority) = fixture(MembershipRole::Member);
+        {
+            let mut held = authority.snapshot.lock().unwrap();
+            let organization = held.credential.organization_id().clone();
+            held.credential = Credential::new(
+                CredentialId::new("credential").unwrap(),
+                PrincipalId::new("principal").unwrap(),
+                organization.clone(),
+                AudienceId::new("gateway").unwrap(),
+                100,
+                200,
+                vec![Grant::new(
+                    Action::new("conversation.read").unwrap(),
+                    Resource::new(organization, ResourceId::new("gateway-resource").unwrap()),
+                )],
+            )
+            .unwrap();
+        }
+        let session = authenticate(&state).await;
+        let prepared = crate::cli::application::prepare("server.health", &json!({}))
+            .expect("server.health is a surface method");
+        let mut frame = request("surface", &prepared.method);
+        frame.params = prepared.params;
+        let OutgoingMessage::Response(denied) = dispatch(&state, &session, frame).await else {
+            panic!("response expected")
+        };
+        assert!(!denied.ok);
+        assert_eq!(denied.error.unwrap().code, "forbidden");
+
+        let (state, _) = fixture(MembershipRole::Member);
+        let session = authenticate(&state).await;
+        let prepared = crate::cli::application::prepare("server.health", &json!({})).unwrap();
+        let mut frame = request("surface", &prepared.method);
+        frame.params = prepared.params;
+        let OutgoingMessage::Response(allowed) = dispatch(&state, &session, frame).await else {
+            panic!("response expected")
+        };
+        assert!(allowed.ok);
+        assert_eq!(allowed.payload.unwrap()["uptimeMs"], 42);
     }
 
     #[tokio::test]
@@ -5431,15 +6031,18 @@ mod tests {
     impl PolicyEvaluator for RecordingGrantPolicy {
         fn evaluate(
             &self,
-            _: &AuthContext,
+            context: &AuthContext,
             action: &Action,
-            _: &Resource,
-            _: &AccessSnapshot,
+            resource: &Resource,
+            snapshot: &AccessSnapshot,
         ) -> Result<Decision, AccessError> {
             self.asked
                 .lock()
                 .unwrap_or_else(|error| error.into_inner())
                 .push(action.as_str().to_owned());
+            if action.as_str() == "session.enter" {
+                return CedarPolicyEvaluator::new()?.evaluate(context, action, resource, snapshot);
+            }
             Ok(Decision::Deny)
         }
     }

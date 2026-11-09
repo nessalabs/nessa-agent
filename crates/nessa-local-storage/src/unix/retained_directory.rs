@@ -6,9 +6,8 @@
 //! leaf identity check and effect.
 
 use super::{
-    open_child_directory, open_child_locator_directory, open_root, relative_components,
-    verify_directory_file, verify_identity_candidate, verify_locator_directory_file,
-    verify_shared_directory_file,
+    open_child_directory, open_child_locator_directory, relative_components, verify_directory_file,
+    verify_identity_candidate, verify_locator_directory_file, verify_shared_directory_file,
 };
 use crate::{
     retained_directory::{PrivateDirectoryEntry, PrivateFileIdentity, PrivateFileType},
@@ -66,20 +65,37 @@ fn absolute_components(path: &Path) -> io::Result<Vec<CString>> {
         .collect()
 }
 
+fn retained_root_file(path: &Path, permissions: DirectoryPermissions) -> io::Result<File> {
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_DIRECTORY | libc::O_CLOEXEC)
+        .open(path)?;
+    permissions.verify(&file)?;
+    Ok(file)
+}
+
 impl RetainedDirectory {
     pub fn open_root(root: &Path) -> io::Result<Self> {
+        Self::open_root_with(root, DirectoryPermissions::Private)
+    }
+
+    pub fn open_shared_root(root: &Path) -> io::Result<Self> {
+        Self::open_root_with(root, DirectoryPermissions::Shared)
+    }
+
+    fn open_root_with(root: &Path, permissions: DirectoryPermissions) -> io::Result<Self> {
         let root = root.components().collect::<PathBuf>();
         if !root.is_absolute() {
             return Err(unsafe_file());
         }
-        let root_file = open_root(&root)?;
+        let root_file = retained_root_file(&root, permissions)?;
         let retained = Self {
             root_path: root,
             chain: vec![DirectoryBinding {
                 identity: directory_identity(&root_file)?,
                 file: root_file,
                 name_in_parent: None,
-                permissions: DirectoryPermissions::Private,
+                permissions,
             }],
         };
         retained.verify_binding()?;
@@ -270,16 +286,7 @@ impl RetainedDirectory {
     }
 
     pub fn verify_binding(&self) -> io::Result<()> {
-        let current_root = if matches!(self.chain[0].permissions, DirectoryPermissions::Private) {
-            open_root(&self.root_path)?
-        } else {
-            let root = std::fs::OpenOptions::new()
-                .read(true)
-                .custom_flags(libc::O_NOFOLLOW | libc::O_DIRECTORY | libc::O_CLOEXEC)
-                .open(&self.root_path)?;
-            verify_locator_directory_file(&root)?;
-            root
-        };
+        let current_root = retained_root_file(&self.root_path, self.chain[0].permissions)?;
         if directory_identity(&current_root)? != self.chain[0].identity {
             return Err(unsafe_file());
         }

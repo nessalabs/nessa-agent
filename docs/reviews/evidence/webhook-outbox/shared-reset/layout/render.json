@@ -1,0 +1,27 @@
+{
+  "page": "gateway-webhook-outbox",
+  "rendererRevision": "c0bc0627611b100ab71a96cc6fe2fb65f1a014d8",
+  "sourceRevision": "b3dc0d4688e473fa40bbbeddf00bb9f510130bf1",
+  "browser": "151.0.7922.173",
+  "diagrams": [
+    {
+      "state": "rendered",
+      "svgs": 4,
+      "rect": {
+        "width": 1136,
+        "height": 843.953125
+      },
+      "text": "Acknowledging one durable operationIn DetailsFit96%#mmd-1{font-family:\"Geist Variable\",Geist,ui-sans-serif,system-ui,san"
+    },
+    {
+      "state": "rendered",
+      "svgs": 4,
+      "rect": {
+        "width": 1136,
+        "height": 537
+      },
+      "text": "Source replacement and stoppingIn DetailsFit100%#mmd-2{font-family:\"Geist Variable\",Geist,ui-sans-serif,system-ui,sans-s"
+    }
+  ],
+  "pageErrors": []
+}

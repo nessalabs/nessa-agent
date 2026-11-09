@@ -116,12 +116,14 @@ impl PhoneIntent {
             Some(PromptText::new(text.clone()).map_err(|_| IntentError::Empty)?)
         };
         let references = images.iter().map(|image| image.reference).collect();
-        UserMessage::new(prompt, references, Vec::new()).map_err(|error| match error {
-            ExecutionError::TooManyValues { .. } | ExecutionError::ValueTooLong { .. } => {
-                IntentError::Images
-            }
-            _ => IntentError::Empty,
-        })?;
+        UserMessage::new(prompt, references, Vec::new(), Vec::new()).map_err(
+            |error| match error {
+                ExecutionError::TooManyValues { .. } | ExecutionError::ValueTooLong { .. } => {
+                    IntentError::Images
+                }
+                _ => IntentError::Empty,
+            },
+        )?;
         let intent = Self {
             conversation,
             command,

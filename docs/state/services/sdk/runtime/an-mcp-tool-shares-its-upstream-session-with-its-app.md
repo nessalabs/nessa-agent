@@ -52,3 +52,9 @@ stateDiagram-v2
 ## Further reading
 
 [Source](../../../../../crates/nessa-server/src/composition/mcp_servers.rs) · [Related source](../../../../../crates/nessa-server/src/mcp_servers/infrastructure/grants.rs) · [Related tests](../../../../../crates/nessa-server/tests/mcp_servers/mod.rs)
+
+## Model coverage
+
+Shared owner model: [mcp-sessions](../../mcp/sessions.md). Grant revocation versus upstream registration and retained tool list.
+
+Tool visibility is a contract; app mounting and message delivery have other owners. This relationship applies only to the stated scope, not every step of this journey. This scoped mapping retains earlier source checkpoints and is not executed implementation-test evidence.

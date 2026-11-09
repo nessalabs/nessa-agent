@@ -10,11 +10,15 @@ import {
   PairingLinkingApply,
   PairingOwnerPhase,
   PairingTerminalCause,
+  PairingTunnelMode,
+  PairingTunnelStatus,
   type PairingApproveResult,
   type PairingCreateResult,
   type PairingOwnerStatus,
   type PairingPendingResult,
   type PairingSetLinkingResult,
+  type PairingSetTunnelResult,
+  type PairingTunnelResult,
 } from "../generated/product.js"
 
 const invitationBytes = 16
@@ -181,4 +185,57 @@ export function pairingSetLinkingResult(value: unknown): PairingSetLinkingResult
   const applies = member(PairingLinkingApply, own(item, "applies"))
   if (!applies) invalid("applies")
   return { enabled, applies }
+}
+
+/** The answer to `pairing.setTunnel`. */
+export function pairingSetTunnelResult(value: unknown): PairingSetTunnelResult {
+  const item = record(value)
+  const enabled = own(item, "enabled")
+  if (typeof enabled !== "boolean") invalid("enabled")
+  const mode = member(PairingTunnelMode, own(item, "mode"))
+  if (!mode) invalid("mode")
+  const applies = member(PairingLinkingApply, own(item, "applies"))
+  if (!applies) invalid("applies")
+  return { enabled, mode, applies }
+}
+
+function optionalText(item: Record<string, unknown>, key: string): string | undefined {
+  const value = own(item, key)
+  if (value === undefined) return undefined
+  if (typeof value !== "string" || value === "") invalid(key)
+  return value
+}
+
+/**
+ * The answer to `pairing.tunnel`. An address is believed only while the
+ * tunnel is ready, and a failure only while it failed, as the schema says.
+ */
+export function pairingTunnelResult(value: unknown): PairingTunnelResult {
+  const item = record(value)
+  const enabled = own(item, "enabled")
+  if (typeof enabled !== "boolean") invalid("enabled")
+  const mode = member(PairingTunnelMode, own(item, "mode"))
+  if (!mode) invalid("mode")
+  const hasToken = own(item, "hasToken")
+  if (typeof hasToken !== "boolean") invalid("hasToken")
+  const ingress = own(item, "ingress")
+  if (typeof ingress !== "string" || ingress === "") invalid("ingress")
+  const status = member(PairingTunnelStatus, own(item, "status"))
+  if (!status) invalid("status")
+  const hostname = optionalText(item, "hostname")
+  const address = optionalText(item, "address")
+  const failure = optionalText(item, "failure")
+  if ((address !== undefined) !== (status === PairingTunnelStatus.Ready))
+    invalid("address")
+  if (failure !== undefined && status !== PairingTunnelStatus.Failed) invalid("failure")
+  return {
+    enabled,
+    mode,
+    hasToken,
+    ingress,
+    status,
+    ...(hostname !== undefined ? { hostname } : {}),
+    ...(address !== undefined ? { address } : {}),
+    ...(failure !== undefined ? { failure } : {}),
+  }
 }

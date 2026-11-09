@@ -10,7 +10,7 @@ use crate::{
         application::{
             ConversationAccessPolicyEvaluator, ConversationFuture, ConversationListing,
             ConversationRepository, ConversationSummaries, ListedConversation, ListedConversations,
-            ObservationCursor, ObservedConversations,
+            ObservationCursor, ObservedConversations, Reader,
         },
         domain::{Conversation, ConversationDeletion},
         infrastructure::LocalConversationStore,
@@ -87,6 +87,7 @@ fn listing(limits: ConversationLimits) -> Listing {
     let summaries = Arc::new(MemorySummaries::default());
     let service = ConversationService::new(
         ConversationDependencies {
+            input_files: None,
             access_policy: crate::conversation_test_support::access_policy(),
             agents: only(Arc::new(Provider::new(provider.clone()))),
             storage: Arc::new(CountingStorage::default()),
@@ -146,6 +147,7 @@ fn stored(limits: ConversationLimits) -> Stored {
     let storage = Arc::new(CountingStorage::default());
     let service = ConversationService::new(
         ConversationDependencies {
+            input_files: None,
             access_policy: crate::conversation_test_support::access_policy(),
             agents: only(Arc::new(Provider::new(provider.clone()))),
             storage: storage.clone(),
@@ -308,6 +310,7 @@ fn ids(entries: &[ConversationListEntry]) -> Vec<String> {
 }
 fn message(text: &str) -> SubmittedMessage {
     SubmittedMessage {
+        uploads: Vec::new(),
         text: text.into(),
         ..SubmittedMessage::default()
     }
@@ -788,6 +791,7 @@ async fn a_message_of_files_alone_is_titled_by_its_first_file() {
             owner(),
             "files".into(),
             SubmittedMessage {
+                uploads: Vec::new(),
                 text: " ".into(),
                 images: Vec::new(),
                 files: vec![
@@ -1347,6 +1351,7 @@ impl ConversationListing for AskedLimit {
         _: &PrincipalId,
         _: bool,
         limit: usize,
+        _: &Reader,
     ) -> ConversationFuture<'_, ListedConversations> {
         self.0.lock().unwrap().push(limit);
         Box::pin(async { Ok(ListedConversations::default()) })
@@ -1357,6 +1362,7 @@ impl ConversationListing for AskedLimit {
         _: &PrincipalId,
         _: bool,
         _: Option<ObservationCursor>,
+        _: &Reader,
     ) -> ConversationFuture<'_, ObservedConversations> {
         Box::pin(async {
             Ok(ObservedConversations {
@@ -1376,6 +1382,7 @@ async fn a_list_asks_for_one_row_past_its_bound_and_no_more() {
     let asked = Arc::new(AskedLimit::default());
     let service = ConversationService::new(
         ConversationDependencies {
+            input_files: None,
             access_policy: crate::conversation_test_support::access_policy(),
             agents: only(Arc::new(Provider::new(
                 Arc::new(ProviderFactory::default()),
@@ -1420,10 +1427,12 @@ impl ConversationListing for Answering {
         _: &PrincipalId,
         _: bool,
         _: usize,
+        _: &Reader,
     ) -> ConversationFuture<'_, ListedConversations> {
         let conversations = self.0.clone();
         Box::pin(async move {
             Ok(ListedConversations {
+                head: None,
                 conversations,
                 unreadable: 0,
             })
@@ -1435,6 +1444,7 @@ impl ConversationListing for Answering {
         _: &PrincipalId,
         _: bool,
         cursor: Option<ObservationCursor>,
+        _: &Reader,
     ) -> ConversationFuture<'_, ObservedConversations> {
         let conversations = if cursor.is_some() {
             Vec::new()
@@ -1495,12 +1505,14 @@ fn answering(
     let answered = rows
         .iter()
         .map(|conversation| ListedConversation {
+            held: None,
             conversation: conversation.clone(),
             summary: summary.clone(),
         })
         .collect();
     ConversationService::new(
         ConversationDependencies {
+            input_files: None,
             access_policy: policy,
             agents: only(Arc::new(Provider::new(
                 Arc::new(ProviderFactory::default()),

@@ -92,7 +92,35 @@ geometry share one layout.
 | Carrying | `pointerup` on a shown zone | The copy flies to the box `paneBox` already computed. No pane layout is committed. |
 | Painted | The next frame | The drop commits in state. The grid is still on its last boxes. The room is read before the unmark dirties the tree. A side column folded for the new count is painted on this frame. The spare fold was recorded in the commit; the page did not restyle it there. |
 | Gliding | The frame after that | The copy has let go. A column title that changed rows glides. The grid is still on its last boxes. |
-| Drawn | The frame after that | The grid paints the new boxes. The grain comes back the frame after that paint, and the composer's blur the frame after the grain. |
+| Drawn | The frame after that | The grid paints the new boxes. For a pane preview, the grain comes back the frame after that paint, and the composer's blur the frame after the grain. A compact card never held these materials, so it schedules no restoration pulse. |
+
+Glass release follows the acquisition owned by the drag's options:
+
+| Preview | Carrying | Cancel or committed drop |
+| --- | --- | --- |
+| Pane preview | Holds glass while live panes preview another shape | Restores grain and composer blur in their separate frames. |
+| Compact card (`previewPanes=false`) | Leaves live pane materials unchanged | Does not set the glass-release mark, including in reduced motion. |
+
+`drag.test.tsx` observes every release-mark write, not just its final absence,
+for cancel and drop in both motion modes. This prevents a transient pulse from
+passing unnoticed. It also retains the full-preview restoration controls.
+
+The sidebar's row geometry uses `data-sidebar-row`, published from the
+existing box-frame `sidebarOpen` read. `FoldMark` writes `data-sidebar` on
+frame 2; the row marker changes with the pane boxes on frame 3. A spare
+hold retains a row only when `data-sidebar-row="open"`: a sidebar that was
+already closed must not re-enter the row merely because a swap is waiting.
+`layouts.test.tsx` checks the closed and folding paths against the actual
+sidebar stylesheet; browser reduced-motion geometry remains a separate gate.
+
+| Sidebar row before the change | Event | Row while boxes wait |
+| --- | --- | --- |
+| Closed | Swap or split | Stays out of the row; a peek remains an overlay. |
+| Open | Fold for a new arrangement | Stays in the row until the new boxes paint. |
+| Open | Arrangement keeps the sidebar open | Stays in the row. |
+| Retained through a fold | Replacing arrangement before boxes | Keeps the painted row until the replacement boxes paint. |
+| Either | Arrangement reverses before its callback | No late change to row geometry. |
+| Either | Same-pane resize | Existing immediate pane painting is unchanged. |
 
 A content height of 0 leaves the scene unready. The next positive height
 starts the measured row.
@@ -160,6 +188,20 @@ starts the measured row.
 Conversation bodies stay in layout through measuring, flying, and reflow.
 The product flight stays zero-duration. A nonzero flight may still read
 geometry; that read is not on the product path these issues measure.
+
+The session-list body's measure stays held through the list frame. The
+header's safe inset follows the painted sidebar position instead: once the
+sidebar leaves the row, the list meets the window edge and its native controls,
+even if the body is still held. The `session-list.css` header selector ignores
+`data-list-held` while retaining `data-spare-held`; `list-measure-hold.test.tsx`
+drives the actual hold through both fold and same-column close orderings.
+
+| Header inset ordering | Expected paint and regression |
+| --- | --- |
+| A pane change folds an open sidebar | Before the boxes, the spare hold keeps the sidebar in the row; after the boxes, the header takes the safe inset while the body stays held |
+| Sidebar already closed, then a stacked pane closes | Keep the header inset on every held frame; a list-body hold cannot authorize controls in the native corner |
+| Sidebar retained in the row during its fold animation | Keep the existing header measure until the spare hold ends; body timing and transition durations stay unchanged |
+| A shape change reverses before the hold frame | Cancel the queued mark; no held attribute after the gate ends (`layouts.test.tsx`) |
 
 ## Frames
 

@@ -1,0 +1,16 @@
+
+running 1 test
+
+thread 'webhooks::infrastructure::outbox::store::tests::lifecycle_context_tests::stopped_cannot_retain_queued_work_after_observation_audit_was_trimmed' (148897) panicked at /tmp/nessa-lifecycle-frozen/crates/nessa-server/src/webhooks/infrastructure/outbox/../../../../tests/webhooks/infrastructure/outbox/lifecycle_context.rs:113:5:
+assertion `left == right` failed
+  left: None
+ right: Some(Invalid)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test webhooks::infrastructure::outbox::store::tests::lifecycle_context_tests::stopped_cannot_retain_queued_work_after_observation_audit_was_trimmed ... FAILED
+
+failures:
+
+failures:
+    webhooks::infrastructure::outbox::store::tests::lifecycle_context_tests::stopped_cannot_retain_queued_work_after_observation_audit_was_trimmed
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 116 filtered out; finished in 0.01s

@@ -1,0 +1,84 @@
+{
+  "sourceRevision": "3ca093d002c6788ff9af6ef786cc1dc88e7fa97c",
+  "base": "8ee1eb2e8e6f41628a9595b383c3bb89f519d6f2",
+  "verification": "macOS arm64; Node 22.16.0; Workers Free; remote D1 WNAM",
+  "workerBundleSha256": "b18a092ce0c92694dbfded772ccd2324913e7aa08b5722735b27859ca49a6628",
+  "bundleCopiedBackFromEditorAndMatched": true,
+  "localTests": {
+    "passed": 16,
+    "failed": 0
+  },
+  "rootRunnerSample": {
+    "passed": 6,
+    "failed": 0
+  },
+  "checks": [
+    "package TypeScript",
+    "targeted ESLint",
+    "targeted Prettier",
+    "git diff --check"
+  ],
+  "mutationProbes": [
+    "invalid signatures",
+    "capacity",
+    "duplicate delivery",
+    "conflicting ID",
+    "body bound",
+    "await persistence",
+    "preserve signed raw UTF-8 bytes"
+  ],
+  "mutationOutcomes": "Each mutation was verified applied, rejected by a behavioral test, restored, then the full package suite passed.",
+  "remoteEndpoint": "https://nessa-github-webhooks.saurav-panthee.workers.dev/github/webhook",
+  "synthetic": {
+    "delivery_id": "a6a5a53b-3ed0-46dd-8212-2dbad4e6f85c",
+    "new": {
+      "status": 202,
+      "body": "{\"result\":\"stored\"}"
+    },
+    "duplicate": {
+      "status": 200,
+      "body": "{\"result\":\"duplicate\"}"
+    },
+    "conflict": {
+      "status": 409,
+      "body": "{\"result\":\"conflict\"}"
+    },
+    "unsigned": {
+      "status": 401,
+      "body": "{\"result\":\"invalid_signature\"}"
+    }
+  },
+  "githubPing": {
+    "id": "39bab46a-d05b-11f1-9d2e-c910672cafb6",
+    "status": 202,
+    "elapsedSeconds": 0.35,
+    "d1ReceiptConfirmed": true
+  },
+  "subscriptions": [
+    "check_run",
+    "check_suite",
+    "issue_comment",
+    "issues",
+    "pull_request",
+    "pull_request_review",
+    "pull_request_review_comment",
+    "workflow_job",
+    "workflow_run"
+  ],
+  "review": "Implementer self-review only; independent review is pending. No claim of a fresh-reviewer gate pass.",
+  "limits": [
+    "No desktop/user event-read API",
+    "No automatic redelivery",
+    "No auto-eviction",
+    "Full application suite not run: desktop/gateway code unchanged; runner configuration sample and standalone suite were run",
+    "Docs catalog validates with warnings: local renderer does not yet recognize sourceRevision; visual docs rendering not checked"
+  ],
+  "githubRedelivery": {
+    "status": 200,
+    "elapsedSeconds": 0.3,
+    "sameDeliveryId": true,
+    "result": "duplicate"
+  },
+  "liveSignedBomRefusal": 400,
+  "dashboardVersionPrefix": "ef639458"
+}

@@ -26,7 +26,7 @@ pub use saved::{
 };
 pub use session::{
     EnrollmentConnector, EnrollmentEntropy, EnrollmentEntropyFactory, FollowedConversation,
-    LocalEnrollment, LocalIssuedEnrollment, NativeSession, SessionCloseObservation, SessionFailure,
-    SessionFollow, SessionPreparationFailure, SessionProduct, SessionRead, SessionRefresh,
-    SessionStatus,
+    LocalEnrollment, LocalIssuedEnrollment, NativeSession, SessionArtifact,
+    SessionCloseObservation, SessionFailure, SessionFollow, SessionPreparationFailure,
+    SessionProduct, SessionRead, SessionRefresh, SessionStatus,
 };

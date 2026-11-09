@@ -38,6 +38,9 @@ on:
       stops:
         description: Turns stopped with the composer's Stop.
         default: "8"
+      parentstops:
+        description: Parent turns stopped with owned children and grandchildren running.
+        default: "4"
       fails:
         description: Turns that fail, each followed by another message.
         default: "6"
@@ -79,12 +82,15 @@ jobs:
       STRESS_EVIDENCE: ${{ github.workspace }}-stress-evidence
       # A scheduled run has no inputs; each falls back to the same default
       # the dispatch form shows.
+      # The iOS macOS workflow owns real Swift phone stress.
+      NESSA_STRESS_INPUTFILES: "0"
       NESSA_STRESS_ROUNDS: ${{ inputs.rounds || '80' }}
       NESSA_STRESS_PARALLEL: ${{ inputs.parallel || '12' }}
       NESSA_STRESS_TURNS: ${{ inputs.turns || '8' }}
       NESSA_STRESS_ASIDES: ${{ inputs.asides || '8' }}
       NESSA_STRESS_SWITCHES: ${{ inputs.switches || '12' }}
       NESSA_STRESS_STOPS: ${{ inputs.stops || '8' }}
+      NESSA_STRESS_PARENTSTOPS: ${{ inputs.parentstops || '4' }}
       NESSA_STRESS_FAILS: ${{ inputs.fails || '6' }}
       NESSA_STRESS_REVIEWS: ${{ inputs.reviews || '64' }}
       NESSA_STRESS_LARGE: ${{ inputs.large || '3' }}
@@ -101,6 +107,7 @@ jobs:
       NESSA_CHAOS_SHRINK: "20"
     steps:
       - uses: actions/checkout@v4
+      - uses: ./.github/actions/secret-service
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:

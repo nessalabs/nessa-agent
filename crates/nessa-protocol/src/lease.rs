@@ -25,6 +25,7 @@
 //! gateway ── Account{lease} ──▶ environment ── Accounted{cleanup} ──▶ gateway
 //! gateway ── Keepalive ──▶ environment   (every KEEPALIVE_INTERVAL, always)
 //! environment ── Keepalive ──▶ gateway   (when idle KEEPALIVE_INTERVAL)
+//! environment ── Machine{report} ──▶ gateway   (after Hello, then every MACHINE_REPORT_INTERVAL)
 //! environment ── Published{lease, artifact, request: None, file} ──▶ gateway   (no bytes)
 //!   gateway ── sftp read of the file's outbox path ──▶ environment   (the artifact channel)
 //!   or, on a connection with nothing beside it (a paired one):
@@ -212,6 +213,88 @@ impl<'de> Deserialize<'de> for Data {
     }
 }
 
+/// A saved login the gateway hands one harness at its start: the agent's
+/// own sign-in, read from the gateway's vault. Never printed: its `Debug`
+/// says only that it is there, and it is never written to an audit.
+///
+/// The variable it is put in is the agent's ([`login_variables`]), never
+/// one the gateway names, so a login can only ever be that agent's.
+#[derive(Clone, PartialEq, Eq)]
+pub struct Login(zeroize::Zeroizing<String>);
+
+/// The most bytes of a [`Login`].
+pub const MAX_LOGIN_BYTES: usize = 4096;
+
+/// A value no [`Login`] can be: empty, longer than [`MAX_LOGIN_BYTES`], or
+/// holding anything but visible ASCII.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct InvalidLogin;
+
+impl Login {
+    /// `value`, when a login can hold it.
+    ///
+    /// # Errors
+    /// [`InvalidLogin`].
+    pub fn new(value: String) -> Result<Self, InvalidLogin> {
+        if value.is_empty()
+            || value.len() > MAX_LOGIN_BYTES
+            || !value.bytes().all(|byte| byte.is_ascii_graphic())
+        {
+            return Err(InvalidLogin);
+        }
+        Ok(Self(zeroize::Zeroizing::new(value)))
+    }
+
+    /// The login itself, for the one launch that is given it.
+    #[must_use]
+    pub fn expose(&self) -> &str {
+        self.0.as_str()
+    }
+}
+
+impl std::fmt::Debug for Login {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("Login(redacted)")
+    }
+}
+
+impl Serialize for Login {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.0.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for Login {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Self::new(String::deserialize(deserializer)?)
+            .map_err(|_| serde::de::Error::custom("not a login"))
+    }
+}
+
+/// The variables an agent's harness reads a login from. A [`Login`] is put
+/// only in the one [`login_variable`] names for it; a host that sets any of
+/// them itself has its own login, and a gateway's is not used.
+#[must_use]
+pub fn login_variables(agent: crate::agents::AgentId) -> &'static [&'static str] {
+    match agent {
+        crate::agents::AgentId::Claude => &["CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY"],
+        crate::agents::AgentId::Codex => &["CODEX_API_KEY", "OPENAI_API_KEY"],
+        crate::agents::AgentId::Opencode => &["OPENCODE_API_KEY"],
+    }
+}
+
+/// The one variable `login` is put in for `agent`: the first of
+/// [`login_variables`], except an Anthropic API key (`sk-ant-api…`), which
+/// Claude Code reads from `ANTHROPIC_API_KEY` and refuses as an OAuth token.
+#[must_use]
+pub fn login_variable(agent: crate::agents::AgentId, login: &Login) -> &'static str {
+    let variables = login_variables(agent);
+    match agent {
+        crate::agents::AgentId::Claude if login.expose().starts_with("sk-ant-api") => variables[1],
+        _ => variables[0],
+    }
+}
+
 /// What releasing a harness, or everything a lease started, took, as the
 /// environment saw it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -321,6 +404,11 @@ pub struct GrantedTerms {
     /// harness's lease, and `None` when it may last until ended.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lease_ms: Option<u64>,
+    /// Whether the environment takes this gateway's saved login for a
+    /// harness it starts under the lease ([`ToEnvironment::Start`]'s
+    /// `login`): its owner's grant, never the gateway's choice. Always
+    /// false for a command lease.
+    pub takes_login: bool,
 }
 
 /// Why an environment is ending a lease the gateway did not ask it to end.
@@ -377,6 +465,9 @@ pub enum StartFailure {
     /// The environment could not record the start in its own audit, so it
     /// started nothing.
     AuditUnavailable,
+    /// The start carried a login, and the lease was not granted to take
+    /// one ([`GrantedTerms::takes_login`]): nothing started.
+    LoginNotTaken,
 }
 
 /// One file an environment staged for the gateway to collect: what it is,
@@ -575,6 +666,11 @@ pub enum ToEnvironment {
         channel: u32,
         /// Binding-owned variables.
         environment: BTreeMap<String, String>,
+        /// The gateway's saved login for the lease's agent, put in that
+        /// agent's first [`login_variables`]; only when the lease was granted
+        /// `takes_login`, and the host's own configuration still wins.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        login: Option<Login>,
     },
     /// Bytes for the harness's standard input.
     Input {
@@ -719,6 +815,99 @@ pub enum ToEnvironment {
     },
 }
 
+/// How often an environment says what its machine is doing, busy or idle
+/// ([`FromEnvironment::Machine`]).
+pub const MACHINE_REPORT_INTERVAL: Duration = Duration::from_secs(15);
+
+/// The most bytes of a [`MachineReport`]'s host name or operating system
+/// version; a longer one is cut by its sender at a character boundary.
+pub const MAX_MACHINE_TEXT_BYTES: usize = 128;
+
+/// The largest byte figure a [`MachineReport`] may carry: the largest whole
+/// number a JSON reader keeps exactly (2^53 − 1), so the figure reaches the
+/// person as it was sent. The product schema's `DeviceMachine` holds the same.
+pub const MAX_MACHINE_FIGURE: u64 = (1 << 53) - 1;
+
+/// A machine as its environment describes it: what it is, and how busy it
+/// is at the moment it was read. Every figure is the sender's word, shown to
+/// the person and never used to decide anything.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MachineReport {
+    /// The machine's host name, at most [`MAX_MACHINE_TEXT_BYTES`].
+    pub hostname: String,
+    /// `macos`, `linux`, `windows` or another `std::env::consts::OS`.
+    pub os: String,
+    /// The operating system's version, at most [`MAX_MACHINE_TEXT_BYTES`];
+    /// empty when not known.
+    pub os_version: String,
+    /// `std::env::consts::ARCH`: `aarch64`, `x86_64` …
+    pub arch: String,
+    /// Logical processors.
+    pub cpus: u32,
+    /// Processor use across all of them, in tenths of a percent, 0 to 1000.
+    pub cpu_permille: u32,
+    /// Memory installed, in bytes.
+    pub memory_total_bytes: u64,
+    /// Memory in use, in bytes.
+    pub memory_used_bytes: u64,
+    /// Size of every disk in [`Self::disks`] together, in bytes.
+    pub disk_total_bytes: u64,
+    /// Bytes in use on them together.
+    pub disk_used_bytes: u64,
+    /// Each local disk, at most [`MAX_MACHINE_DISKS`]: one entry per disk,
+    /// however many volumes share it.
+    #[serde(default)]
+    pub disks: Vec<MachineDisk>,
+}
+
+/// The most disks a [`MachineReport`] lists; a machine with more lists the
+/// first of them.
+pub const MAX_MACHINE_DISKS: usize = 16;
+
+/// One local disk of a [`MachineReport`].
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MachineDisk {
+    /// Where it is mounted, at most [`MAX_MACHINE_TEXT_BYTES`].
+    pub mount: String,
+    /// Its size, in bytes.
+    pub total_bytes: u64,
+    /// Bytes in use on it.
+    pub used_bytes: u64,
+}
+
+impl MachineReport {
+    /// `text` cut to [`MAX_MACHINE_TEXT_BYTES`] at a character boundary.
+    pub fn bounded(text: &str) -> String {
+        let mut end = text.len().min(MAX_MACHINE_TEXT_BYTES);
+        while !text.is_char_boundary(end) {
+            end -= 1;
+        }
+        text[..end].to_owned()
+    }
+
+    /// Whether every field is within its bound and each used figure within
+    /// its total. A report that is not is dropped by its reader.
+    pub fn is_bounded(&self) -> bool {
+        self.hostname.len() <= MAX_MACHINE_TEXT_BYTES
+            && self.os.len() <= MAX_MACHINE_TEXT_BYTES
+            && self.os_version.len() <= MAX_MACHINE_TEXT_BYTES
+            && self.arch.len() <= MAX_MACHINE_TEXT_BYTES
+            && self.cpu_permille <= 1000
+            && self.memory_total_bytes <= MAX_MACHINE_FIGURE
+            && self.disk_total_bytes <= MAX_MACHINE_FIGURE
+            && self.memory_used_bytes <= self.memory_total_bytes
+            && self.disk_used_bytes <= self.disk_total_bytes
+            && self.disks.len() <= MAX_MACHINE_DISKS
+            && self.disks.iter().all(|disk| {
+                disk.mount.len() <= MAX_MACHINE_TEXT_BYTES
+                    && disk.total_bytes <= MAX_MACHINE_FIGURE
+                    && disk.used_bytes <= disk.total_bytes
+            })
+    }
+}
+
 /// What an environment sends a gateway after its [`Hello`].
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(
@@ -740,6 +929,14 @@ pub enum FromEnvironment {
     /// Nothing else to say: the environment is still there. Sent when its
     /// side was idle for [`KEEPALIVE_INTERVAL`].
     Keepalive,
+    /// What the machine is and how busy it is now: sent once after the
+    /// hello and again every [`MACHINE_REPORT_INTERVAL`], busy or idle, so
+    /// the gateway can show its devices. It also says the environment is
+    /// still there, as [`Self::Keepalive`] does.
+    Machine {
+        /// See [`MachineReport`].
+        report: MachineReport,
+    },
     /// The environment is stopping: it admits no lease from now on, and
     /// ends each it holds with [`EndingCause::Drained`]. Said once, before
     /// any of those endings, so the gateway sends new work elsewhere rather
@@ -917,9 +1114,11 @@ impl FromEnvironment {
     /// The lease the frame names, if it names one.
     pub fn lease(&self) -> Option<&str> {
         match self {
-            Self::Hello { .. } | Self::Unavailable { .. } | Self::Keepalive | Self::Draining => {
-                None
-            }
+            Self::Hello { .. }
+            | Self::Unavailable { .. }
+            | Self::Keepalive
+            | Self::Draining
+            | Self::Machine { .. } => None,
             Self::Granted { lease, .. }
             | Self::Refused { lease, .. }
             | Self::StartFailed { lease, .. }

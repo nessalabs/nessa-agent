@@ -51,6 +51,7 @@ function view() {
       },
     ],
     truncated: false,
+    earlier: false,
     queueComplete: true,
     transcriptState: "complete",
     artifacts: [],
@@ -213,7 +214,17 @@ describe("conversation view agreement", () => {
       handoffId: "h-fork",
       kind: "fork",
       atMs: 5,
-      turns: [{ said: "Plan a trip", reply: "Lisbon" }, {}],
+      turns: [
+        {
+          said: "Plan a trip",
+          reply: "Lisbon",
+          agent: {
+            conversationId: "8b547a4b-6974-49a4-b878-d13a9c031f16",
+            executionId: "source-turn",
+          },
+        },
+        {},
+      ],
       omittedTurns: 3,
     }
     expect(
@@ -242,6 +253,21 @@ describe("conversation view agreement", () => {
       { ...forked, omittedTurns: -1 },
       { ...forked, omittedTurns: 1.5 },
       { ...forked, turns: [{ said: "" }] },
+      {
+        ...forked,
+        turns: [
+          { said: "agent", agent: { conversationId: "not-a-uuid", executionId: "e" } },
+        ],
+      },
+      {
+        ...forked,
+        turns: [
+          {
+            said: "agent",
+            agent: { conversationId: "8b547a4b-6974-49a4-b878-d13a9c031f16" },
+          },
+        ],
+      },
       { ...forked, extra: true },
     ])
       expect(() =>
@@ -311,6 +337,23 @@ describe("conversation view agreement", () => {
     expect(parsed.capabilities.agentFeatures.incomingElicitation).toBe(
       "supported_with_correlated_round_trip",
     )
+  })
+
+  it("retains a background task association and rejects malformed identities", () => {
+    const value = view()
+    Object.assign(value.tools[0]!, { backgroundTaskId: "background-1" })
+    expect(conversationView(value, "conversation").tools[0]?.backgroundTaskId).toBe(
+      "background-1",
+    )
+    for (const invalid of [
+      "",
+      "contains space",
+      "a".repeat(bounds.maxBackgroundTaskIdBytes + 1),
+      null,
+    ]) {
+      Object.assign(value.tools[0]!, { backgroundTaskId: invalid })
+      expect(() => conversationView(value, "conversation")).toThrow()
+    }
   })
 
   it("accepts complete matching pending and tool evidence", () => {
@@ -642,6 +685,58 @@ describe("conversation view agreement", () => {
         () => conversationView(invalid, "conversation"),
         JSON.stringify(app),
       ).toThrow()
+    }
+  })
+
+  it("correlates an agent's waiting input with its saved turn and note origin", () => {
+    const origin = {
+      conversationId: "00000000-0000-4000-8000-000000000001",
+      executionId: "source-turn",
+    }
+    const value = view() as Omit<
+      ReturnType<typeof view>,
+      "messages" | "pending" | "notes"
+    > & {
+      messages: Record<string, unknown>[]
+      pending: Record<string, unknown>[]
+      notes: Record<string, unknown>[]
+    }
+    value.messages[0]!.agent = origin
+    value.pending[0]!.agent = origin
+    value.notes.push({
+      messageId: "note-1",
+      text: "agent note",
+      acceptedAtMs: 1,
+      delivery: "record_only",
+      deliveryState: "recorded",
+      author: { kind: "agent", surface: "panel", agent: origin },
+    })
+    expect(conversationView(value, "conversation").messages[0]!.agent).toEqual(origin)
+    for (const change of [
+      (copy: typeof value) => {
+        copy.pending[0]!.agent = { ...origin, executionId: "other" }
+      },
+      (copy: typeof value) => {
+        delete copy.pending[0]!.agent
+      },
+      (copy: typeof value) => {
+        copy.messages[0]!.app = {
+          executionId: "running",
+          toolId: "tool",
+          server: "s",
+          tool: "t",
+        }
+      },
+      (copy: typeof value) => {
+        copy.notes[0]!.author = { kind: "owner", surface: "panel", agent: origin }
+      },
+      (copy: typeof value) => {
+        copy.notes[0]!.author = { kind: "agent", surface: "panel" }
+      },
+    ]) {
+      const copy = structuredClone(value)
+      change(copy)
+      expect(() => conversationView(copy, "conversation")).toThrow()
     }
   })
 
@@ -1382,6 +1477,40 @@ it("accepts required work beside a usage limit on a failed turn", () => {
   ).toThrow(/required-work failure/)
 })
 
+it("accepts a joined reply, a long message and many calls up to the frame's own bound", () => {
+  // Streamed chunks join into one part and nothing caps a reply's text, so a
+  // part, a message and a turn's calls are bounded by the frame alone.
+  const sample = view()
+  const reply = "w".repeat(50_000)
+  const long = {
+    ...sample,
+    // The view's tool states are bounded; calls past them mark it truncated.
+    truncated: true,
+    messages: [
+      {
+        ...sample.messages[1],
+        userText: "u".repeat(40_000),
+        parts: [
+          { offset: 0, kind: "text", text: reply, toolId: "", noticeId: "" },
+          ...Array.from({ length: 600 }, (_, index) => ({
+            offset: index + 1,
+            kind: "tool",
+            text: "",
+            toolId: `tool-${index}`,
+            noticeId: "",
+          })),
+        ],
+      },
+    ],
+    pending: [],
+    tools: [],
+  }
+  const read = conversationView(long, "conversation").messages[0]!
+  expect(read.parts[0]?.text).toBe(reply)
+  expect(read.parts).toHaveLength(601)
+  expect(read.userText).toHaveLength(40_000)
+})
+
 it("accepts the inclusive reset bound the schema publishes", () => {
   const sample = view()
   const limited = (resetsAtMs: number) => ({
@@ -1760,4 +1889,50 @@ describe("a share's policy revision", () => {
       minPolicyRevision,
     )
   })
+})
+
+it("correlates pending uploaded input across every original fact and ignores JSON key order", () => {
+  const file = {
+    digest: `sha256:${"a".repeat(64)}`,
+    mimeType: "application/pdf",
+    size: 12,
+    name: "report.pdf",
+  }
+  const value = view()
+  Object.assign(value.messages[0]!, { userText: "", uploads: [file] })
+  Object.assign(value.pending[0]!, {
+    text: "",
+    uploads: [
+      { name: file.name, size: file.size, mimeType: file.mimeType, digest: file.digest },
+    ],
+  })
+  expect(() => conversationView(value, "conversation")).not.toThrow()
+  for (const replacement of [
+    { name: "other.pdf" },
+    { size: 13 },
+    { mimeType: "text/plain" },
+    { digest: `sha256:${"b".repeat(64)}` },
+  ]) {
+    const changed = structuredClone(value)
+    Object.assign(changed.pending[0]!, { uploads: [{ ...file, ...replacement }] })
+    expect(() => conversationView(changed, "conversation")).toThrow(
+      "Pending execution contradicts",
+    )
+  }
+  const bad = structuredClone(value)
+  Object.assign(bad.messages[0]!, { uploads: [{ ...file, name: "../escape" }] })
+  expect(() => conversationView(bad, "conversation")).toThrow("filename")
+})
+
+it("keeps a non-whitespace Unicode filename accepted by phone and SDK", () => {
+  const value = view()
+  Object.assign(value.messages[0]!, {
+    uploads: [{ digest: DIGEST, mimeType: "text/plain", size: 1, name: "\uFEFF" }],
+  })
+  Object.assign(value.pending[0]!, {
+    uploads: [{ digest: DIGEST, mimeType: "text/plain", size: 1, name: "\uFEFF" }],
+  })
+  expect(conversationView(value, "conversation").messages[0]?.uploads?.[0]?.name).toBe(
+    "\uFEFF",
+  )
 })

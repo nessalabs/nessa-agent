@@ -77,6 +77,10 @@ impl RetainedDeviceReader {
             access_epoch,
         }))
     }
+    /// The receiver this binding was selected for.
+    pub fn receiver(&self) -> &str {
+        &self.receiver
+    }
     /// Select the existing owner catalogue using the retained exact binding.
     pub fn access<'a>(&'a self, address: SocketAddr, client_id: &'a str) -> ReaderAccess<'a> {
         ReaderAccess {

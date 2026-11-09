@@ -1,7 +1,21 @@
 import { NessaRpcError, type ConnectionState, type WorkspaceWindow } from "@nessa/client"
 import { afterEach, describe, expect, it, vi } from "vitest"
+import { panesOf } from "../../../split-panes/model/pane-layout"
+import {
+  closePanelTab,
+  openWidgetInPanel,
+  showPanelTab,
+} from "../../application/usecases/chat-panel"
+import { focusPane, openBeside } from "../../application/usecases/panes"
+import { indexLoaded } from "../../application/usecases/updates"
+import {
+  arrangementShown,
+  panelShown,
+  shownWindow,
+} from "../../application/usecases/window"
+import { initialWorkspace } from "../../application/workspace-state"
 import type { ShownWindow } from "../../model/shown-window"
-import { settle } from "../../testing"
+import { roomyGrid, shownBy, settle, testIndex } from "../../testing"
 import { windowPublisher, type WindowPublishClient } from "./window-publisher"
 
 const WINDOW = "7d9f2a4e-1b3c-4d5e-8f60-718293a4b5c6"
@@ -12,6 +26,7 @@ const window = (sessionId: string): ShownWindow => ({
   sidebar: true,
   sessionList: false,
   showing: { kind: "panes" },
+  panel: { open: false, tabs: [], front: null },
   columns: [
     {
       widthPercent: 100,
@@ -87,6 +102,7 @@ describe("publishing what the window shows", () => {
           sidebar: true,
           sessionList: false,
           showing: "panes",
+          panel: { open: false, tabs: [] },
           columns: [
             {
               widthPercent: 100,
@@ -102,6 +118,72 @@ describe("publishing what the window shows", () => {
         },
       },
     ])
+  })
+
+  it("says the focused chat's panel through each of its states", async () => {
+    const subagents = { plugin: "subagents", id: "chat" }
+    const app = { plugin: "mcp:huddle", id: "call-1" }
+    const notes = { plugin: "subagents", id: "other" }
+    const loaded = arrangementShown(
+      indexLoaded(initialWorkspace, { index: testIndex(), draftId: "unused", read: "r" }),
+      { arrangement: "columns" },
+    )
+    const opened = panelShown(
+      openWidgetInPanel(openWidgetInPanel(loaded, { widget: subagents }), {
+        widget: app,
+      }),
+      { open: true },
+    )
+    const fake = fakeClient()
+    const { publisher } = publisherOver(fake)
+    const say = async (state: typeof opened) => {
+      publisher.publish(shownWindow(state))
+      await settle()
+      await fake.answer()
+      return fake.sent.at(-1)?.window?.panel
+    }
+    expect(await say(panelShown(opened, { open: false }))).toEqual({
+      open: false,
+      tabs: [
+        { plugin: "subagents", id: "chat" },
+        { plugin: "mcp:huddle", id: "call-1" },
+      ],
+      front: { plugin: "mcp:huddle", id: "call-1" },
+    })
+    expect(await say(opened)).toEqual({
+      open: true,
+      tabs: [
+        { plugin: "subagents", id: "chat" },
+        { plugin: "mcp:huddle", id: "call-1" },
+      ],
+      front: { plugin: "mcp:huddle", id: "call-1" },
+    })
+    expect(
+      await say(showPanelTab(opened, { sessionId: "a", widget: subagents })),
+    ).toEqual({
+      open: true,
+      tabs: [
+        { plugin: "subagents", id: "chat" },
+        { plugin: "mcp:huddle", id: "call-1" },
+      ],
+      front: { plugin: "subagents", id: "chat" },
+    })
+    const beside = openBeside(opened, { sessionId: "b", room: roomyGrid })
+    const theirs = openWidgetInPanel(beside, { widget: notes, origin: "b" })
+    expect(await say(theirs)).toEqual({
+      open: true,
+      tabs: [{ plugin: "subagents", id: "other" }],
+      front: { plugin: "subagents", id: "other" },
+    })
+    const back = focusPane(
+      theirs,
+      panesOf(theirs.panes!).find((pane) => shownBy(pane) === "a")!.key,
+    )
+    const none = closePanelTab(
+      closePanelTab(back, { sessionId: "a", widget: subagents }),
+      { sessionId: "a", widget: app },
+    )
+    expect(await say(none)).toEqual({ open: true, tabs: [] })
   })
 
   it("says a session that is not a conversation as a draft, and nothing as a withdrawal", async () => {

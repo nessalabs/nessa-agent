@@ -31,6 +31,7 @@ use tauri::{AppHandle, Emitter, State, WebviewWindow};
 
 pub(super) struct HostGatewayStartupEvents {
     app: AppHandle,
+    launch_timings: std::sync::Arc<dyn crate::host_log::LaunchTimingStore>,
     #[cfg(any(target_os = "macos", test))]
     copy: RetainedRuntimeCopy,
 }
@@ -110,7 +111,7 @@ impl GatewayStartupEvents for HostGatewayStartupEvents {
     }
 
     fn publish(&self, startup: &ApplicationStartup) {
-        log_startup_phase(startup);
+        log_startup_phase(startup, &self.launch_timings);
         let payload = payload(startup);
         for (label, _) in BUNDLED_WINDOWS {
             if let Err(error) = self.app.emit_to(label, GATEWAY_STARTUP, &payload) {
@@ -125,7 +126,10 @@ impl GatewayStartupEvents for HostGatewayStartupEvents {
     }
 }
 
-fn log_startup_phase(startup: &ApplicationStartup) {
+fn log_startup_phase(
+    startup: &ApplicationStartup,
+    launch_timings: &std::sync::Arc<dyn crate::host_log::LaunchTimingStore>,
+) {
     let revision = startup.revision();
     match startup.phase() {
         GatewayStartupPhase::Starting(step) => {
@@ -136,7 +140,7 @@ fn log_startup_phase(startup: &ApplicationStartup) {
                 "gateway startup step"
             );
         }
-        GatewayStartupPhase::Ready => crate::host_log::gateway_ready(),
+        GatewayStartupPhase::Ready => crate::host_log::gateway_ready(Arc::clone(launch_timings)),
         GatewayStartupPhase::Failed(error) => {
             tracing::error!(
                 target: "nessa.launch",
@@ -148,9 +152,13 @@ fn log_startup_phase(startup: &ApplicationStartup) {
     }
 }
 
-pub fn startup_events(app: &AppHandle) -> Arc<dyn GatewayStartupEvents> {
+pub fn startup_events(
+    app: &AppHandle,
+    launch_timings: Arc<dyn crate::host_log::LaunchTimingStore>,
+) -> Arc<dyn GatewayStartupEvents> {
     Arc::new(HostGatewayStartupEvents {
         app: app.clone(),
+        launch_timings,
         #[cfg(any(target_os = "macos", test))]
         copy: RetainedRuntimeCopy::default(),
     })

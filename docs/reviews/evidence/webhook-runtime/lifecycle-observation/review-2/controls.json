@@ -1,0 +1,20 @@
+[
+  {
+    "name": "owed-phase",
+    "caught": true,
+    "byteRestored": true,
+    "restoredPass": true
+  },
+  {
+    "name": "work-phase",
+    "caught": true,
+    "byteRestored": true,
+    "restoredPass": true
+  },
+  {
+    "name": "domain-queued",
+    "caught": true,
+    "byteRestored": true,
+    "restoredPass": true
+  }
+]

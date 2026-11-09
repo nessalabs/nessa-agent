@@ -1,0 +1,22 @@
+{
+  "sourceRevision": "611b5a87ae3e0256f50e72b16bc4a1e4cc5e4d49",
+  "baseRevision": "0e1f44def810c8b91439000f52986869cb0cdfc2",
+  "unchanged_boundary_tests": {
+    "terminal_retention_is_bounded": {
+      "identical": true,
+      "sha256": "1d316c32ec4a10b8b6a5a4ffc43ecc2a3dd4db6d0d4565dc8f41c9a0525ea713"
+    },
+    "stop_retention_is_bounded_when_publication_fails": {
+      "identical": true,
+      "sha256": "b531e2d10d2da24e13ddcefd75961dcf3b054b1debe45b6573b421391038a78f"
+    }
+  },
+  "production_bounds_unchanged": true,
+  "scoped_files": [
+    "crates/nessa-server/src/webhooks/infrastructure/outbox/journal.rs",
+    "crates/nessa-server/src/webhooks/infrastructure/outbox/schema.sql",
+    "crates/nessa-server/tests/webhooks/infrastructure/outbox.rs",
+    "crates/nessa-server/tests/webhooks/infrastructure/outbox/cleanup.rs",
+    "docs/design/webhook-delivery-implementation.md"
+  ]
+}

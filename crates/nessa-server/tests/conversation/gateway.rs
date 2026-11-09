@@ -87,8 +87,8 @@ mod gateway {
                 ),
             ));
         }
-        AccessSnapshot {
-            credential: Credential::new(
+        {
+ let credential = Credential::new(
                 CredentialId::new(credential).unwrap(),
                 principal.clone(),
                 organization.clone(),
@@ -97,16 +97,25 @@ mod gateway {
                 200,
                 grants,
             )
-            .unwrap(),
-            membership: Membership::new(
+            .unwrap();
+ let membership = Membership::new(
                 MembershipId::new(format!("member-{}", principal.as_str())).unwrap(),
                 principal,
                 organization,
                 MembershipRole::Member,
                 MembershipStatus::Active,
-            ),
-            revision: 1,
-        }
+            );
+ let revision = 1;
+ // This fixture explicitly creates its own original product issuance.
+ let original = nessa_auth::domain::CredentialTransition::new(
+ credential.id().clone(), None,
+ nessa_auth::domain::CredentialLifecycle { issued_at: credential.issued_at(), expires_at: credential.expires_at(), revoked_at: None },
+ nessa_auth::domain::TransitionCause::Issued(nessa_auth::domain::IssuanceCause::AdminIssue),
+ nessa_auth::domain::Initiator::LocalOperator, credential.issued_at()).unwrap();
+ let origin = nessa_auth::application::origin::CredentialOrigin::restore(
+ nessa_auth::application::dto::CredentialTransitionDto::record(&original, 1, 1, None), &credential).unwrap();
+ AccessSnapshot { revocation: None, credential, membership, revision, origin }
+}
     }
     pub(super) fn chat_state() -> ProductRouteState {
         let (mut state, _) = fixture(MembershipRole::Member);
@@ -155,6 +164,7 @@ mod gateway {
         credential: &str,
     ) -> AuthenticatedSession {
         AuthenticateSession {
+policy: &nessa_auth::adapters::cedar::CedarPolicyEvaluator::new().unwrap(),
             verifier: state.verifier.as_ref(),
             access: state.access.as_ref(),
             clock: state.clock.as_ref(),
@@ -551,6 +561,7 @@ mod gateway {
         let (_, provider, repository, storage) = chat_fixture();
         let service = crate::conversation::application::ConversationService::new(
             crate::conversation::application::ConversationDependencies {
+ input_files: None,
                 access_policy: crate::conversation_test_support::access_policy(),
                 agents: conversation_support::only(Arc::new(conversation_support::Provider::new(
                     provider,

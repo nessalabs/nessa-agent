@@ -1,0 +1,118 @@
+✔ a stable full connection proves its capacity (1.469401ms)
+✔ a stable connection accepting an extra view fails (22.468357ms)
+✖ an original event ending invalidates the probe (1.370081ms)
+✖ replacing an original event invalidates the probe (6.458218ms)
+✖ removing an original event invalidates the probe (0.436107ms)
+✖ the original main view ending invalidates the probe (0.314143ms)
+✖ an acquired view ending invalidates the probe (0.436056ms)
+ℹ tests 7
+ℹ suites 0
+ℹ pass 2
+ℹ fail 5
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 122.304247
+
+✖ failing tests:
+
+test at verification/desktop/scripts/lib/stress-followers.test.mjs:71:3
+✖ an original event ending invalidates the probe (1.370081ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:
+  + actual - expected
+  
+  + [
+  +   'follower 0 at 2026-10-20T05:14:51.096Z: a subscription past 2 was accepted'
+  + ]
+  - []
+  
+      at TestContext.<anonymous> (file:///workspace/nessa-agent/verification/desktop/scripts/lib/stress-followers.test.mjs:74:12)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: [ 'follower 0 at 2026-10-20T05:14:51.096Z: a subscription past 2 was accepted' ],
+    expected: [],
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }
+
+test at verification/desktop/scripts/lib/stress-followers.test.mjs:71:3
+✖ replacing an original event invalidates the probe (6.458218ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:
+  + actual - expected
+  
+  + [
+  +   'follower 0 at 2026-10-20T05:14:51.097Z: a subscription past 2 was accepted'
+  + ]
+  - []
+  
+      at TestContext.<anonymous> (file:///workspace/nessa-agent/verification/desktop/scripts/lib/stress-followers.test.mjs:74:12)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: [ 'follower 0 at 2026-10-20T05:14:51.097Z: a subscription past 2 was accepted' ],
+    expected: [],
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }
+
+test at verification/desktop/scripts/lib/stress-followers.test.mjs:71:3
+✖ removing an original event invalidates the probe (0.436107ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:
+  + actual - expected
+  
+  + [
+  +   'follower 0 at 2026-10-20T05:14:51.104Z: a subscription past 2 was accepted'
+  + ]
+  - []
+  
+      at TestContext.<anonymous> (file:///workspace/nessa-agent/verification/desktop/scripts/lib/stress-followers.test.mjs:74:12)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: [ 'follower 0 at 2026-10-20T05:14:51.104Z: a subscription past 2 was accepted' ],
+    expected: [],
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }
+
+test at verification/desktop/scripts/lib/stress-followers.test.mjs:71:3
+✖ the original main view ending invalidates the probe (0.314143ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:
+  + actual - expected
+  
+  + [
+  +   'follower 0 at 2026-10-20T05:14:51.104Z: a subscription past 2 was accepted'
+  + ]
+  - []
+  
+      at TestContext.<anonymous> (file:///workspace/nessa-agent/verification/desktop/scripts/lib/stress-followers.test.mjs:74:12)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: [ 'follower 0 at 2026-10-20T05:14:51.104Z: a subscription past 2 was accepted' ],
+    expected: [],
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }
+
+test at verification/desktop/scripts/lib/stress-followers.test.mjs:80:1
+✖ an acquired view ending invalidates the probe (0.436056ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  1 !== 0
+  
+      at TestContext.<anonymous> (file:///workspace/nessa-agent/verification/desktop/scripts/lib/stress-followers.test.mjs:92:10)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 1,
+    expected: 0,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }

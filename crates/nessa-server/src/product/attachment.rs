@@ -1,20 +1,23 @@
-//! `attachment.begin` translates into the attachment service, and
-//! `artifact.read` into its held reads. The socket has already checked
-//! current access and the method's grant: `conversation.write` to upload,
-//! `conversation.read` to read back.
+//! `attachment.begin` translates into the attachment service,
+//! `attachment.write` into its uploads in pieces, and `artifact.read` into its
+//! held reads. The socket has already checked current access and the method's
+//! grant: `conversation.write` to upload, `conversation.read` to read back.
 use super::{
     socket::{failure, success},
     state::ProductRouteState,
 };
 use crate::attachments::application::{
-    AttachmentCaller, BeginError, BeginOutcome, BeginUpload, HeldReadError,
+    AttachmentCaller, BeginError, BeginOutcome, BeginUpload, HeldReadError, UploadError,
+    UploadRejection,
 };
 use crate::attachments::domain::{Attachment, MediaType};
+use crate::attachments::entrypoint::socket::{PieceError, PieceOutcome, MAX_PIECE_BYTES};
 use base64::{engine::general_purpose::STANDARD, Engine};
 use nessa_auth::application::session::AuthenticatedSession;
 use nessa_protocol::conversation::domain::ConversationId;
 use nessa_protocol::product::generated::{
     ArtifactReadParams, ArtifactReadResult, AttachmentBeginParams, AttachmentBeginResult,
+    AttachmentWriteParams, AttachmentWriteResult,
 };
 use nessa_protocol::product_contract::generated::ConversationErrorCode;
 use nessa_protocol::protocol::{OutgoingMessage, RequestFrame};
@@ -81,6 +84,100 @@ pub(super) async fn dispatch(
     match outcome {
         Ok(outcome) => success(&frame.id, &begin_result(request_id, outcome)),
         Err(error) => failure(&frame.id, error_code(error).as_str()),
+    }
+}
+
+/// `attachment.write`: one piece of an upload, for a surface that cannot
+/// reach `PUT /attachments`.
+///
+/// As on that route, the ticket is the whole authority: `attachment.begin`
+/// decided who may upload what into which conversation, and this learns only
+/// what the ticket says. A piece that cannot be read ends nothing; every
+/// refusal past that ends its upload.
+pub(super) async fn dispatch_write(
+    state: &ProductRouteState,
+    frame: RequestFrame,
+) -> OutgoingMessage {
+    let Some(attachments) = state.attachments.as_ref() else {
+        return failure(
+            &frame.id,
+            ConversationErrorCode::ConversationsNotConfigured.as_str(),
+        );
+    };
+    let Some((params, bytes)) = serde_json::from_value::<AttachmentWriteParams>(frame.params)
+        .ok()
+        .and_then(|params| {
+            let bytes = STANDARD.decode(&params.data).ok()?;
+            (bytes.len() <= MAX_PIECE_BYTES && (params.last || !bytes.is_empty()))
+                .then_some((params, bytes))
+        })
+    else {
+        return failure(&frame.id, ConversationErrorCode::InvalidRequest.as_str());
+    };
+    let received = params.offset + bytes.len() as u64;
+    match state
+        .socket_uploads
+        .write(
+            attachments,
+            &params.ticket,
+            params.offset,
+            bytes,
+            params.last,
+        )
+        .await
+    {
+        Ok(PieceOutcome::Taken { received }) => success(
+            &frame.id,
+            &AttachmentWriteResult {
+                received,
+                digest: None,
+                mime_type: None,
+                size: None,
+            },
+        ),
+        Ok(PieceOutcome::Stored(stored)) => success(
+            &frame.id,
+            &AttachmentWriteResult {
+                received,
+                digest: Some(stored.digest().to_string()),
+                mime_type: Some(stored.media_type().as_str().to_owned()),
+                size: Some(stored.size()),
+            },
+        ),
+        Err(error) => failure(&frame.id, piece_error_code(error).as_str()),
+    }
+}
+
+/// The session's word for each refusal of a piece. The HTTP route's words for
+/// the same facts are its own; these are the product's.
+fn piece_error_code(error: PieceError) -> ConversationErrorCode {
+    match error {
+        PieceError::TicketInvalid => ConversationErrorCode::UploadTicketInvalid,
+        PieceError::OutOfOrder => ConversationErrorCode::UploadFailed,
+        PieceError::Busy => ConversationErrorCode::TemporarilyUnavailable,
+        PieceError::Upload(error) => match error {
+            UploadError::TicketInvalid | UploadError::TicketExpired { .. } => {
+                ConversationErrorCode::UploadTicketInvalid
+            }
+            UploadError::Busy => ConversationErrorCode::TemporarilyUnavailable,
+            UploadError::AuditUnavailable => ConversationErrorCode::AuditUnavailable,
+            UploadError::NotKept => ConversationErrorCode::UploadFailed,
+            UploadError::Rejected { reason, .. } => match reason {
+                UploadRejection::SizeMismatch
+                | UploadRejection::DigestMismatch
+                | UploadRejection::UploadInterrupted
+                | UploadRejection::UploadTimeout
+                | UploadRejection::Unresolved => ConversationErrorCode::UploadFailed,
+                UploadRejection::ImageInputUnsupported => {
+                    ConversationErrorCode::ImageInputUnsupported
+                }
+                UploadRejection::UnsupportedImage => ConversationErrorCode::UnsupportedImage,
+                UploadRejection::ImageTooLarge => ConversationErrorCode::ImageTooLarge,
+                UploadRejection::StorageUnavailable | UploadRejection::NormalizationFailed => {
+                    ConversationErrorCode::AttachmentStorageUnavailable
+                }
+            },
+        },
     }
 }
 

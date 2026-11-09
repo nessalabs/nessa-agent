@@ -103,10 +103,11 @@ access policy (`ConversationAccessPolicyEvaluator`, answered by Cedar in
   found. So a device cannot tell an ungranted id from one that does not
   exist.
 - **A device lists through its catalogue**, which the store narrows to its
-  grants. The socket's lists (`conversation.list`, `.observe`,
-  `.subscribeList`) are the owner's own and are refused to a device
-  (`forbidden`), rather than read whole and filtered: a filtered list could
-  come back as empty pages, and its cursor would name the last ungranted row.
+  grants before bounds or observation cursors. Socket lists (`conversation.list`,
+  `.observe`, `.subscribeList`) ask `grant.list`, and every returned candidate
+  asks the current read policy. A list's scoped head and rows share a metadata
+  snapshot; an incomplete subscription uses that head rather than an owner-wide
+  wake counter. A peer gateway's list remains refused.
 
 Telling a device from the owner means resolving the session's receiver binding
 on every socket read and subscription batch, for the owner's surfaces too, on
@@ -121,7 +122,7 @@ Every read path asks it:
 | A device's `conversation.recordsHead` and `recordsPage` | `AdmitPassiveRead::execute` → `conversation.read` |
 | A device's catalogue head, manifest and resolve | the store's head, page and resolve, narrowed in SQL (the head over granted rows and the reader's own grant changes); each entry admitted by `catalogue.entry` |
 | `conversation.read` and every view subscription batch (`subscription::authorize_batch`) | `product::read_access::admit_conversation` → `PairedAccess::admit(conversation.read)` |
-| `conversation.list`, `conversation.observe`, every list subscription batch (`subscription::authorize_batch`) | `product::read_access::admit_list`: the owner's surfaces only |
+| `conversation.list`, `conversation.observe`, every list subscription batch (`subscription::authorize_batch`) | `product::read_access::admit_list`: owner surfaces or a paired device admitted by `grant.list`, with the device's catalogue narrowed to its grants; peer gateways are refused |
 
 The catalogue is narrowed in SQL rather than filtered after the read, because
 a filtered page must still be a whole page: a page of 200 rows that loses 199
@@ -153,9 +154,8 @@ sequenceDiagram
 ```
 
 A device learns that its catalogue changed by reading its catalogue head,
-which moves only with its granted rows and its own grant changes. A list
-subscription for a device waits on #724; until then a device's subscriptions
-follow one conversation each.
+which moves only with its granted rows and its own grant changes, or by following
+`conversation.subscribeList`. A view subscription still follows one conversation.
 
 ## Revisions
 
@@ -200,7 +200,7 @@ is another capability set or its constraints
 | Transition | Who causes it | Audit evidence | What subscribers see |
 | --- | --- | --- | --- |
 | Grant | The owner calls `conversation.share`. Cedar has allowed `owner.share`, and `grant.comment` and `grant.drive` when the set includes them. | One journal row: capabilities `none` then the set, the principal, receiver, and credential, and the initiator, surface, and request. The grant epoch is that row's sequence. The conversation's catalogue revision moves. | The owner's list subscriptions wake. The new receiver's head moves and its next pass includes the conversation. `conversation.shares` lists the grant. |
-| Re-target | The owner calls `conversation.share` for another device of the same principal, with the same capability set and constraints. | One journal row: capabilities before equal after, the new receiver and credential, the same principal, and the initiator. The epoch stays. The catalogue revision moves. | The owner's list subscriptions wake. The new receiver's pass includes the conversation. The old receiver's head moves and the conversation leaves its pages. Export fences the old receiver. The deletion inventory is reconciled after the share commits. |
+| Re-target | The owner calls `conversation.share` for another device of the same principal, with the same capability set and constraints. | One journal row: capabilities before equal after, the new receiver and credential, the same principal, and the initiator. The epoch stays. The catalogue revision moves. | The owner's list subscriptions wake. The new receiver's pass includes the conversation. The old receiver's head moves and the conversation leaves its pages. Only the immediately preceding journal row with a held grant identifies the receiver losing access: subsequent replacements and a new grant after a revoke do not move an earlier receiver's head (row J35). Export fences the old receiver. The deletion inventory is reconciled after the share commits. |
 | Epoch bump | The owner calls `conversation.share` with a different capability set or constraints, for the same receiver and credential. | One journal row: capabilities and constraints before and after, the same receiver. The epoch becomes that row's sequence. The catalogue revision stays. | No list subscription wakes, and device heads stay. `conversation.shares` shows the new epoch. The next drive turn is admitted at that epoch. |
 | Revoke | The owner calls `conversation.unshare`. The grant is found by credential. | One journal row: the capability set then `none`, the receiver the row held, and the initiator. The grant row is deleted. The catalogue revision moves. | The owner's list subscriptions wake. The receiver's head moves and the conversation leaves its pages. The deletion inventory is reconciled and fences that receiver. |
 | Backup capture | After an applied share, or any unshare, `ShareConversation` asks the deletion inventory. Export reads the journal. | A revocation fact for each receiver whose latest row is a revoke, and for each receiver the grant moved off, naming the capabilities they held and that journal sequence. A capture that fails after a revoke is logged and the revoke stays (`a_failed_inventory_capture_leaves_the_revoke`). | The deletion log gains or drops those fences. A later capture that no longer names a receiver drops its fence. List subscriptions are not this path. |
@@ -913,12 +913,10 @@ row's tests are named by the row: the transitions in
 
 ## Known limits
 
-- **A device has no list subscription yet** (#724). It polls its catalogue
-  head, which is the latest revision among its granted rows and its own grant
-  changes ([peer gateways](auth/peer-gateways.md), row H9), still numbered by
-  the owner's catalogue. A device paired before that change needs one explicit
-  catalogue reset (see the peer gateways Known limits). A peer gateway polls
-  the same head.
+- **Previously inflated checkpoints can exceed the scoped head.** The retained
+  client reports its existing `ResetRequired` outcome. This slice performs no
+  automatic cache purge, cursor reset or compatibility migration. A peer gateway
+  still polls its grant-scoped catalogue head rather than following a list.
 - **Unpairing is `credential.revoke`, which leaves the binding active.** Reads
   stop because the credential no longer authenticates, but `conversation.share`
   still accepts that credential and writes a grant no one can use.
@@ -993,7 +991,7 @@ otherwise.
 | G9 | Share twice; unshare what is not granted | `applied: false`; no revision; journaled with before equal to after, so a retry replays it | `a_repeated_share_or_unshare_changes_nothing` |
 | G10 | A grant and a revoke that change something | One journal row each: before, after, initiator, surface, request, revision | `every_grant_change_is_journaled_with_its_initiator` |
 | G11 | The owner's own surface (no receiver binding), or a gateway that pairs nothing | Reads, lists and subscribes as before; a receiver lookup that cannot be verified is retried as a read slot is, so it does not end a subscription | the existing subscription and conversation suites, which compose no receiver binding; `an_owner_surface_reads_everything_it_owns`; `an_owner_subscription_outlasts_one_failed_receiver_lookup` |
-| G12 | A socket session with a receiver binding | `conversation.read` and a view subscribe of an ungranted id answer `conversation_not_found`, a granted one is read; `conversation.list`, `.observe`, `.subscribeList` and the share commands answer `forbidden` | `a_paired_device_on_the_socket_sees_only_what_it_was_granted` |
+| G12 | A socket session with a receiver binding | `conversation.read` and a view subscribe of an ungranted id answer `conversation_not_found`, a granted one is read; a device's lists are grant-scoped and the share commands remain `forbidden`; a peer's lists remain refused | `a_paired_device_on_the_socket_sees_only_what_it_was_granted`; L6–L9 in [record subscriptions](record-subscriptions.md) |
 | G13 | A device's view subscription; the grant is revoked between batches | Ended `refused` with `conversation_not_found` before the next read | `a_revoke_ends_a_device_subscription_before_its_next_batch` |
 | G14 | A device unpaired (its binding inactive), whatever it was granted | Socket reads refused `unauthorized`; passive reads as before | `an_unpaired_device_reads_nothing_whatever_it_was_granted` |
 | G15 | Removed with the records watch (#257); a device follows a conversation through a view subscription, which row G13 covers | | |
@@ -1010,6 +1008,7 @@ otherwise.
 | J32 | Share comment or drive with a principal that is not signed in as the binding owner, a gateway or any other | Refused `capabilities_refused`; `details.policies` names the Cedar policy ids, empty when no permit matched; the row unchanged and nothing journaled. The share does not match a gateway prefix | `a_gateway_is_refused_comment_and_drive_and_the_grant_is_unchanged` |
 | J33 | A device holding drive sends on that conversation, and the same command names another | Admitted on the granted conversation; `conversation_not_found` on the other | `a_drive_grant_drives_only_the_conversation_it_names` |
 | J34 | A gateway holding read; the same gateway holding a hand-built comment set; a device holding only read, signed in as the binding owner | The gateway reads and is `NotPermitted` comment and drive; the device is `NotPermitted` comment and drive | `paired_peer_gateway_never_comments_or_drives`, `a_hand_built_comment_grant_for_a_gateway_is_denied_by_cedar`, `grant_comment_and_drive_need_their_capability` (`tests/conversation/access_policy.rs`, `tests/conversation/store.rs`) |
+| J35 | One principal's grant moves R1→R2→R3, including a no-op between replacements; R1 is revoked and the principal is granted through R2; R1 is later granted again | R1's head moves on its own removal and stays there during later activity it no longer sees. R2 and R3 observe their own replacement. A revoke is no held grant for the next replacement to remove. A later grant back to R1 moves its head and returns the row again | `a_replaced_receivers_head_stops_at_its_own_replacement`, `a_revoked_receivers_head_does_not_follow_a_later_grant` (`tests/conversation/store.rs`) |
 | J10 | One page of `conversation.shares`: the page size of grants, each a Drive grant with the largest policy (both pattern lists full, 16 hosts of 253 bytes), every text at its longest, a cursor, and the catalogue revision at the largest safe integer | Fits one frame (`MAX_PAYLOAD_BYTES`); the schema states the page size, the grant cap, the host bounds the domain enforces, and the revision bound. A later page resumes after the cursor and names the same revision | `a_full_page_of_largest_grants_fits_one_frame`, `a_shares_page_resumes_after_its_cursor`, `the_schema_states_the_share_bounds_the_domain_enforces` (`tests/product/read_access.rs`); `shares_returns_one_page_and_refuses_a_page_size_past_its_bound` |
 | J11 | A paired session with pairing's `conversation.read` and a Drive grant sends, steers, stops, answers, cancels, or asks a receipt, naming the granted conversation; then naming another of the owner's | Admitted, and its message starts a turn there; the other is `conversation_not_found` | `a_drive_grant_drives_only_the_conversation_it_names` |
 | J12 | A paired session, holding `conversation.write` and a Drive grant, calls any other method whose grant is `conversation.write`; or, holding a Read or Comment grant, a Drive command; or a party signed in as a principal other than its grantor, as a peer is, holding Drive, a Drive command | `forbidden` | `a_paired_session_writes_only_what_a_drive_grant_admits` |

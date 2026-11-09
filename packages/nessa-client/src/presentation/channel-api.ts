@@ -6,6 +6,7 @@ import type {
   Channel,
   ChannelCreateParams,
   ChannelListResult,
+  ChannelSetPlacementParams,
 } from "../generated/product.js"
 
 /**
@@ -30,6 +31,13 @@ export type ChannelApi = {
    * always true on what it returns.
    */
   list(): Promise<ChannelListResult>
+  /**
+   * Change where a made channel's agents run. Threads already made keep
+   * running where they started. Moving the main agent answers a fresh
+   * `coordinatorConversationId`: the next main-agent chat starts there, and
+   * the old one stays in the channel as an ordinary thread.
+   */
+  setPlacement(params: ChannelSetPlacementParams): Promise<Channel>
 }
 
 export function createChannelApi(session: RpcRequester): ChannelApi {
@@ -39,6 +47,12 @@ export function createChannelApi(session: RpcRequester): ChannelApi {
       if (!isRecord(answer) || !onlyKeys(answer, ["channel"]))
         throw new Error("Invalid channel create response")
       return channel(answer.channel, "Invalid channel create response")
+    },
+    setPlacement: async (params) => {
+      const answer = await session.request(ProductMethod.ChannelSetPlacement, params)
+      if (!isRecord(answer) || !onlyKeys(answer, ["channel"]))
+        throw new Error("Invalid channel placement response")
+      return channel(answer.channel, "Invalid channel placement response")
     },
     list: async () => {
       const channels: Channel[] = []
@@ -109,6 +123,9 @@ const CHANNEL_KEYS = [
   "model",
   "approvalMode",
   "createdAtMs",
+  "coordinatorConversationId",
+  "coordinatorPlacement",
+  "threadPlacement",
 ] as const
 const MODES = new Set<string>(["ask", "auto", "full"])
 const CHANNEL_ID = /^(default|ch_[a-z2-7]{10})$/
@@ -118,6 +135,9 @@ function channel(value: unknown, invalid: string): Channel {
   if (!isRecord(value) || !onlyKeys(value, CHANNEL_KEYS)) throw new Error(invalid)
   const nullableText = (field: unknown) => field === null || typeof field === "string"
   if (
+    !nullableText(value.coordinatorConversationId) ||
+    (value.coordinatorPlacement !== "local" && value.coordinatorPlacement !== "boat") ||
+    (value.threadPlacement !== "local" && value.threadPlacement !== "boat") ||
     typeof value.channelId !== "string" ||
     !CHANNEL_ID.test(value.channelId) ||
     typeof value.name !== "string" ||
@@ -140,6 +160,9 @@ function channel(value: unknown, invalid: string): Channel {
     model: value.model as string | null,
     approvalMode: value.approvalMode as ApprovalMode,
     createdAtMs: value.createdAtMs as number,
+    coordinatorConversationId: value.coordinatorConversationId as string | null,
+    coordinatorPlacement: value.coordinatorPlacement as "local" | "boat",
+    threadPlacement: value.threadPlacement as "local" | "boat",
   }
 }
 

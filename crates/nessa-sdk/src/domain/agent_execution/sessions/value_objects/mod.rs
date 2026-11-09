@@ -7,7 +7,10 @@
 //!
 //! Arrows mean identity construction, aggregate ownership, and once-only evidence emission.
 mod attachment;
-pub use attachment::{AttachmentCause, ProviderContext, ProviderContextEvidenceError};
+pub use attachment::{
+    AttachmentCause, ProviderContext, ProviderContextAdmissionError, ProviderContextEvidenceError,
+    ProviderContextRecord,
+};
 
 mod identity;
 pub use identity::{ExecutionSessionId, SessionId};

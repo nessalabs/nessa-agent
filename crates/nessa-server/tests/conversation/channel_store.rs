@@ -27,6 +27,7 @@ fn made(request_id: &str, name: &str, at: u64) -> Channel {
         OrganizationId::new("org").unwrap(),
         PrincipalId::new("owner").unwrap(),
         ChannelParts {
+            execution: crate::conversation::domain::ChannelExecution::default(),
             name: ChannelName::new(name).unwrap(),
             folder: ChannelFolder {
                 path: path(&absolute("/work/repo")),
@@ -265,4 +266,241 @@ fn this_systems_folders_are_refused() {
             "{refused}"
         );
     }
+}
+
+#[tokio::test]
+async fn erasing_a_coordinator_rotates_once_and_survives_reopen() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = store(directory.path());
+    let original = made("main-life", "design", 1);
+    let first = original.coordinator_id();
+    let worker = conversation();
+    store.create(original.clone()).await.unwrap();
+    store.place(&first, original.id()).await.unwrap();
+    store.place(&worker, original.id()).await.unwrap();
+    store.forget(&worker).await.unwrap();
+    assert_eq!(
+        store
+            .get(original.id())
+            .await
+            .unwrap()
+            .unwrap()
+            .coordinator_id(),
+        first
+    );
+    let (one, two) = tokio::join!(store.forget(&first), store.forget(&first));
+    one.unwrap();
+    two.unwrap();
+    let next = store
+        .get(original.id())
+        .await
+        .unwrap()
+        .unwrap()
+        .coordinator_id();
+    assert_ne!(next, first);
+    assert_eq!(store.channel_of(&first).await.unwrap(), None);
+    // A retry of creation must answer the current generation, too.
+    assert_eq!(
+        store
+            .create(original.clone())
+            .await
+            .unwrap()
+            .coordinator_id(),
+        next
+    );
+    drop(store);
+    let reopened =
+        LocalChannelStore::open(&directory.path().join("conversations/channels.sqlite3")).unwrap();
+    let channel = reopened.get(original.id()).await.unwrap().unwrap();
+    assert_eq!(channel.coordinator_id(), next);
+    reopened.place(&next, channel.id()).await.unwrap();
+    reopened.forget(&next).await.unwrap();
+    let third = reopened
+        .get(channel.id())
+        .await
+        .unwrap()
+        .unwrap()
+        .coordinator_id();
+    assert_ne!(third, first);
+    assert_ne!(third, next);
+}
+
+#[tokio::test]
+async fn older_channel_schemas_upgrade_without_relocating_existing_work() {
+    for version in [1, 2, 3, 4] {
+        let directory = tempfile::tempdir().unwrap();
+        let private = directory.path().join("conversations");
+        nessa_local_storage::create_directory(&private).unwrap();
+        let path = private.join("channels.sqlite3");
+        // Start from the actual old schema, rather than a second handwritten one.
+        let current = DEFINITION;
+        let tables = current[..current.find("-- A replacement is recorded").unwrap()].to_owned();
+        // Before the pool (v4), a thread could not run on "any computer".
+        let tables = if version < 4 {
+            tables.replace(", 'pool')", ")")
+        } else {
+            tables
+        };
+        // Before a main agent could move (v5), only an erasure retired one.
+        let replacements = current[current.find("-- A replacement is recorded").unwrap()
+            ..current.find("PRAGMA user_version").unwrap()]
+            .replace(
+                "cause IN ('coordinator_conversation_erased', 'coordinator_moved')",
+                "cause = 'coordinator_conversation_erased'",
+            );
+        let old = if version >= 3 {
+            format!("{tables}{replacements}")
+        } else if version == 1 {
+            tables
+                .lines()
+                .filter(|line| {
+                    !line.trim_start().starts_with("coordinator_placement")
+                        && !line.trim_start().starts_with("thread_placement")
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        } else {
+            tables
+        };
+        drop(
+            nessa_local_storage::open(&path, nessa_local_storage::OpenMode::OpenOrCreate).unwrap(),
+        );
+        let connection = Connection::open(&path).unwrap();
+        connection
+            .execute_batch(&format!("{old}\nPRAGMA user_version = {version};"))
+            .unwrap();
+        let kept = made("migration", "old channel", 1);
+        connection.execute("INSERT INTO channels (channel, organization_id, owner_id, request_id, name, folder, folder_made, agent, model, mode, notes, resources, created_at) VALUES (?1, 'org', 'owner', 'migration', 'old channel', ?2, 0, 'codex', 'gpt-5.6-terra', 'full', '', '[]', 1)", params![kept.id().as_str(), absolute("/work/repo")]).unwrap();
+        let main = kept.coordinator_id();
+        connection
+            .execute(
+                "INSERT INTO channel_conversations VALUES (?1, ?2)",
+                params![main.to_string(), kept.id().as_str()],
+            )
+            .unwrap();
+        drop(connection);
+        let store = LocalChannelStore::open(&path).unwrap();
+        let restored = store.get(kept.id()).await.unwrap().unwrap();
+        assert_eq!(
+            restored.execution(),
+            crate::conversation::domain::ChannelExecution::default()
+        );
+        assert_eq!(restored.coordinator_id(), main);
+        assert_eq!(
+            store.channel_of(&main).await.unwrap(),
+            Some(kept.id().clone())
+        );
+        // Every older file takes threads on the pool once upgraded.
+        let pooled = LocalChannelStore::open(&path).unwrap();
+        drop(pooled);
+        let check = Connection::open(&path).unwrap();
+        check
+            .execute(
+                "UPDATE channels SET thread_placement = 'pool' WHERE channel = ?1",
+                params![kept.id().as_str()],
+            )
+            .unwrap();
+        let violations: i64 = check
+            .query_row("SELECT COUNT(*) FROM pragma_foreign_key_check", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(violations, 0, "version {version}");
+        drop(check);
+        let store = LocalChannelStore::open(&path).unwrap();
+        assert_eq!(
+            store
+                .get(kept.id())
+                .await
+                .unwrap()
+                .unwrap()
+                .execution()
+                .threads,
+            crate::conversation::domain::WorkspacePlacement::Pool
+        );
+        store.forget(&main).await.unwrap();
+        assert_ne!(
+            store
+                .get(kept.id())
+                .await
+                .unwrap()
+                .unwrap()
+                .coordinator_id(),
+            main
+        );
+    }
+}
+
+#[tokio::test]
+async fn moving_the_main_agent_names_a_fresh_main_chat_and_keeps_the_old_one_in_the_channel() {
+    use crate::conversation::domain::{ChannelExecution, WorkspacePlacement};
+    let directory = tempfile::tempdir().unwrap();
+    let store = store(directory.path());
+    let original = made("moves", "design", 1);
+    let first = original.coordinator_id();
+    store.create(original.clone()).await.unwrap();
+    store.place(&first, original.id()).await.unwrap();
+    // Only new threads move: the main chat stays the same one.
+    let threads = ChannelExecution {
+        coordinator: WorkspacePlacement::Local,
+        threads: WorkspacePlacement::Boat,
+    };
+    let changed = store
+        .set_execution(original.id(), threads)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(changed.execution(), threads);
+    assert_eq!(changed.coordinator_id(), first);
+    // The main agent moves: a fresh main chat, the old one still in the channel.
+    let both = ChannelExecution {
+        coordinator: WorkspacePlacement::Boat,
+        threads: WorkspacePlacement::Boat,
+    };
+    let moved = store
+        .set_execution(original.id(), both)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_ne!(moved.coordinator_id(), first);
+    assert_eq!(
+        store.channel_of(&first).await.unwrap(),
+        Some(original.id().clone())
+    );
+    // Forgetting the old main chat, now a thread, retires nothing more.
+    store.forget(&first).await.unwrap();
+    drop(store);
+    let reopened =
+        LocalChannelStore::open(&directory.path().join("conversations/channels.sqlite3")).unwrap();
+    let kept = reopened.get(original.id()).await.unwrap().unwrap();
+    assert_eq!(kept.execution(), both);
+    assert_eq!(kept.coordinator_id(), moved.coordinator_id());
+    // Once the Boat main chat was made, moving back names yet another one.
+    reopened
+        .place(&moved.coordinator_id(), original.id())
+        .await
+        .unwrap();
+    let back = reopened
+        .set_execution(original.id(), ChannelExecution::default())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_ne!(back.coordinator_id(), moved.coordinator_id());
+    assert_ne!(back.coordinator_id(), first);
+    // A main chat never made keeps its id when the main agent moves.
+    let fresh = made("unused", "quiet", 1);
+    reopened.create(fresh.clone()).await.unwrap();
+    let kept_id = reopened
+        .set_execution(fresh.id(), both)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(kept_id.coordinator_id(), fresh.coordinator_id());
+    assert_eq!(kept_id.execution(), both);
+    let missing = made("absent", "none", 1);
+    assert!(reopened
+        .set_execution(missing.id(), both)
+        .await
+        .unwrap()
+        .is_none());
 }

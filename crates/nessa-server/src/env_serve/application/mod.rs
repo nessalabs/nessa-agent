@@ -34,15 +34,15 @@ pub(crate) use fetches::{
     ArtifactInbox, Destination, FetchedFile, FileIdentity, PlacedFile, Placement,
 };
 pub(crate) use grants::{
-    change_grant, Applied, ChangeFailed, GrantAudit, GrantChange, GrantOutcome, GrantStore,
-    PeerGrants,
+    admit_update, change_grant, Applied, ChangeFailed, GrantAudit, GrantChange, GrantOutcome,
+    GrantStore, PeerGrants,
 };
 pub(crate) use lease_policy::{Denial, LeaseAsk, LeaseDecision, LeaseFacts, LeasePolicyEvaluator};
 pub(crate) use redial::{redial, stop_past_deadline, Backoff};
 pub(crate) use serve::{
     refuse, serve, CommandRan, CommandRunner, CommandStop, HarnessLauncher, LeaseLedger,
-    LedgerEntry, Runners, ServeTimings, Serving,
+    LedgerEntry, Runners, ServeEnd, ServeTimings, Serving,
 };
 #[cfg(test)]
 pub(crate) use serve::{Asked, EndCause};
-pub(crate) use wire::FrameStream;
+pub(crate) use wire::{write_frame, FrameStream};

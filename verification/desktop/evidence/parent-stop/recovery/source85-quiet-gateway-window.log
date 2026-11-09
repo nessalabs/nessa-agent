@@ -1,0 +1,13 @@
+building production into /tmp/nessa-desktop-verify-YrJCtP…
+previewing production at http://127.0.0.1:38543/desktop.html
+conversation ready in 1382 ms
+ok    setup
+ok    handshake [chromium columns]
+ok    lists [chromium columns]
+ok    opens [chromium columns]
+ok    live [chromium columns]
+ok    handshakes [chromium columns]
+ok    console [chromium columns]
+chromium columns: 3123 ms
+wrote /tmp/nessa-981-evidence/quiet-gateway-window.json
+gateway-window: 7/7 held

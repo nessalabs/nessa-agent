@@ -1,0 +1,7 @@
+$ git rev-parse HEAD
+ee0d8eff159d96eeb70161f1c3ad774ae16da558
+$ git branch --show-current
+codex/896-webhook-composition
+$ git status --porcelain
+$ git diff --name-only 946bbc864..ee0d8eff -- crates
+$ git diff --check 97d5c099..ee0d8eff

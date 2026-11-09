@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest"
 import {
   emptyTranscript,
   groupSteps,
+  runSettled,
   inlineRuns,
   messageText,
   sameWords,
@@ -205,4 +206,25 @@ describe("messages the person sent", () => {
       { kind: "files", files: [parts[3]] },
     ])
   })
+})
+
+it("keeps a background waterfall live independently of the turn and settles its recorded outcome", () => {
+  const background = {
+    kind: "step",
+    step: "run",
+    label: "Build",
+    status: "running",
+    backgroundTaskId: "build",
+  } as const
+  expect(runSettled([background], true, false)).toBe(false)
+  expect(runSettled([background], false, false)).toBe(false)
+  expect(runSettled([{ ...background, status: "completed" }], true, false)).toBe(true)
+  expect(runSettled([{ ...background, status: "failed" }], true, false)).toBe(true)
+  expect(
+    runSettled(
+      [{ kind: "step", step: "run", label: "ordinary", status: "running" }],
+      true,
+      false,
+    ),
+  ).toBe(true)
 })

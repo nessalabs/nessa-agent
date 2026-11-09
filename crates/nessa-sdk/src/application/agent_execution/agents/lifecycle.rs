@@ -22,8 +22,7 @@ use crate::application::agent_execution::{
         ProviderOpenControl, ProviderOperationFailure, ProviderSessionState, SessionCloseRequest,
     },
     sessions::{
-        attachment::AttachmentLease, AttachedProvider, InvocationCancellationEvent,
-        SessionStorageLease,
+        attachment::AttachmentLease, AttachedProvider, InvocationCancellationEvent, SessionManager,
     },
 };
 use crate::domain::agent_execution::{
@@ -167,6 +166,7 @@ struct OwnedWork {
 }
 #[derive(Clone)]
 pub(super) struct ActiveExecution {
+    work: u64,
     work_generation: WorkGeneration,
     pub(super) id: ExecutionId,
     pub(super) configured: Arc<dyn AgentProvider>,
@@ -253,7 +253,7 @@ pub(super) struct SessionLifecycle {
     stop: watch::Sender<()>,
     changed: watch::Sender<()>,
     attachment: Arc<AttachmentLease>,
-    _lease: Arc<dyn SessionStorageLease>,
+    manager: Arc<SessionManager>,
     session_id: SessionId,
     audit: Arc<AuditObserver>,
     owned: OnceLock<OwnedSlot>,
@@ -381,7 +381,7 @@ impl Drop for WorkPermit {
 impl SessionLifecycle {
     pub(super) fn new(
         attachment: Arc<AttachmentLease>,
-        lease: Arc<dyn SessionStorageLease>,
+        manager: Arc<SessionManager>,
         recorded_context: bool,
         session_id: SessionId,
         audit: Arc<AuditObserver>,
@@ -423,7 +423,7 @@ impl SessionLifecycle {
             stop: watch::channel(()).0,
             changed: watch::channel(()).0,
             attachment,
-            _lease: lease,
+            manager,
             session_id,
             audit,
             owned: OnceLock::new(),
@@ -778,7 +778,7 @@ impl SessionLifecycle {
         };
         runtime.spawn(async move {
             let outcome = owner
-                .record_attachment_audit(ExecutionAuditRecord::Attachment(record))
+                .record_new_attachment_evidence(ExecutionAuditRecord::Attachment(record))
                 .await;
             let mut state = owner.state.lock().expect("session lifecycle");
             if state.attachment_generation == generation
@@ -854,7 +854,7 @@ impl SessionLifecycle {
             && matches!(state.work_status, WorkStatus::Open)
             && matches!(state.attachment, AttachmentState::Attached { generation: current, .. } if current == generation)
     }
-    pub(super) async fn run_attachment<T, E>(
+    pub(super) async fn run_attachment_transition<T, E>(
         &self,
         generation: u64,
         operation: impl Future<Output = Result<T, E>>,
@@ -866,13 +866,61 @@ impl SessionLifecycle {
         if !self.attachment_current(generation) {
             return Err(AgentError::Closed.into());
         }
-        #[cfg(test)]
+        operation.await
+    }
+    async fn retire_cleanup_proof(&self) -> Result<(), AgentError> {
+        if let Some(scope) = self.owned_gate().and_then(|gate| gate.cleanup_scope()) {
+            self.manager
+                .retire_sdk_cleanup(&scope)
+                .await
+                .map_err(AgentError::Storage)?;
+        }
+        Ok(())
+    }
+    pub(super) async fn record_new_attachment_evidence(
+        &self,
+        record: ExecutionAuditRecord,
+    ) -> Result<(), AgentError> {
         {
+            let _transition = self.resource_transition.lock().await;
+            self.retire_cleanup_proof().await?;
+        }
+        // The actual audit receipt is independent of physical resource release.
+        self.record_attachment_audit(record).await
+    }
+    pub(super) async fn run_attachment<T, E>(
+        &self,
+        generation: u64,
+        operation: impl Future<Output = Result<T, E>>,
+    ) -> Result<T, E>
+    where
+        E: From<AgentError>,
+    {
+        #[cfg(test)]
+        let operation = async {
             let pause = self.preparation_pause.lock().unwrap().take();
             if let Some((entered, release)) = pause {
                 let _ = entered.send(());
                 let _ = release.await;
             }
+            operation.await
+        };
+        self.run_attachment_transition(generation, operation).await
+    }
+    // The same resource fence orders durable proof publication against a
+    // replacement's acknowledged retirement before its first external effect.
+    pub(super) async fn record_cleanup_proof(
+        &self,
+        ticket: &CloseAttempt,
+        operation: impl Future<Output = Result<(), AgentError>>,
+    ) -> Result<(), AgentError> {
+        let _transition = self.resource_transition.lock().await;
+        let current = {
+            let state = self.state.lock().expect("session lifecycle");
+            (state.provider_generation.0, state.attachment_generation)
+        };
+        if current != (ticket.provider_generation, ticket.attachment_generation) {
+            return Err(AgentError::AttachmentAuthorizationStale);
         }
         operation.await
     }
@@ -1250,6 +1298,7 @@ impl SessionLifecycle {
         &self,
         id: ExecutionId,
         configured: Arc<dyn AgentProvider>,
+        work: &WorkPermit,
     ) -> Result<WorkGeneration, AgentError> {
         let mut state = self.state.lock().expect("session lifecycle");
         if !matches!(state.work_status, WorkStatus::Open) {
@@ -1257,11 +1306,34 @@ impl SessionLifecycle {
         }
         let work_generation = state.work_generation;
         state.active = Some(ActiveExecution {
+            work: work.id,
             work_generation,
             id,
             configured,
         });
         Ok(work_generation)
+    }
+    /// The work owner arbitrates Stop against native_handoff under one lock.
+    pub(super) fn cancel_preparing_turn(&self, id: &ExecutionId) -> bool {
+        let mut state = self.state.lock().expect("session lifecycle");
+        let Some(active) = state.active.as_ref().filter(|active| &active.id == id) else {
+            return false;
+        };
+        let work_id = active.work;
+        let Some(work) = state.work.get_mut(&work_id) else {
+            return false;
+        };
+        if !matches!(work.phase, WorkPhase::Active) {
+            return false;
+        }
+        if work.cancellation.borrow().is_none() {
+            work.cancellation
+                .send_replace(Some(InvocationCancellationEvent {
+                    cause: SchedulingCause::TurnStopped,
+                    actor: None,
+                }));
+        }
+        true
     }
     pub(super) fn finish_execution(&self, work_generation: WorkGeneration) {
         let mut state = self.state.lock().expect("session lifecycle");
@@ -1430,6 +1502,8 @@ impl SessionLifecycle {
                         prior.request.clone(),
                         report.clone(),
                         prior.evidence.clone(),
+                        state.provider_generation.0,
+                        state.attachment_generation,
                     );
                     ticket.folded_evidence = prior.folded_evidence;
                     let recovery = match &state.work_status {
@@ -1479,6 +1553,8 @@ impl SessionLifecycle {
                         SessionCloseRequest::ExecutionFailed,
                         report.clone(),
                         state.attachment_evidence.clone(),
+                        state.provider_generation.0,
+                        state.attachment_generation,
                     );
                     state.work_status = WorkStatus::Blocked(Stop {
                         ticket,
@@ -1514,6 +1590,8 @@ impl SessionLifecycle {
                 SessionCloseRequest::ExecutionFailed,
                 report,
                 state.attachment_evidence.clone(),
+                state.provider_generation.0,
+                state.attachment_generation,
             );
             state.work_generation.0 += 1;
             state.work_status = WorkStatus::Blocked(Stop {
@@ -1749,7 +1827,7 @@ impl SessionLifecycle {
                 let owner = self.clone();
                 tokio::spawn(async move {
                     let outcome = owner
-                        .record_attachment_audit(ExecutionAuditRecord::Attachment(record))
+                        .record_new_attachment_evidence(ExecutionAuditRecord::Attachment(record))
                         .await;
                     if let Err(error) = &outcome {
                         owner.retain_attachment_evidence_failure(
@@ -1802,6 +1880,8 @@ impl SessionLifecycle {
         let ticket = CloseAttempt {
             id: stop_id,
             attempt_id,
+            provider_generation: state.provider_generation.0,
+            attachment_generation: state.attachment_generation,
             request: first_request,
             physical: physical.clone(),
             result,
@@ -1951,10 +2031,7 @@ impl SessionLifecycle {
         if self.lifetime_sealed() {
             if let Some(slot) = self.owned.get() {
                 slot.gate
-                    .note_attachment(
-                        cleanup.physical_outcome().is_some(),
-                        cleanup.audit().is_ok(),
-                    )
+                    .note_attachment(cleanup.is_confirmed(), cleanup.audit().is_ok())
                     .await;
             }
         }
@@ -2157,3 +2234,7 @@ impl SessionLifecycle {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "../../../../tests/application/agent_execution/agents/lifecycle_cleanup_proof.rs"]
+mod cleanup_proof_tests;

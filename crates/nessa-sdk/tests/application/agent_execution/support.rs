@@ -51,10 +51,13 @@ impl ProviderSessionBackend for RecordingSession {
     }
     fn execute(
         &self,
-        _input: ExecutionRequest,
+        input: ProviderInputFuture,
         handoff: NativeExecutionHandoff,
     ) -> ProviderExecutionFuture<'_> {
         Box::pin(async move {
+            if let Err(error) = input.await {
+                return ProviderExecutionReply::Rejected(error);
+            }
             if let Err(error) = handoff() {
                 return ProviderExecutionReply::Rejected(error);
             }
@@ -115,10 +118,13 @@ impl ProviderSessionBackend for OfflineSession {
     }
     fn execute(
         &self,
-        _input: ExecutionRequest,
+        input: ProviderInputFuture,
         handoff: NativeExecutionHandoff,
     ) -> ProviderExecutionFuture<'_> {
         Box::pin(async move {
+            if let Err(error) = input.await {
+                return ProviderExecutionReply::Rejected(error);
+            }
             if let Err(error) = handoff() {
                 return ProviderExecutionReply::Rejected(error);
             }
@@ -271,7 +277,7 @@ impl ProviderSessionBackend for InMemoryPermissionBackend {
     }
     fn execute(
         &self,
-        _: ExecutionRequest,
+        _: ProviderInputFuture,
         _handoff: NativeExecutionHandoff,
     ) -> ProviderExecutionFuture<'_> {
         Box::pin(async move {

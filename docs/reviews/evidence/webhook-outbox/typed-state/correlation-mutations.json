@@ -1,0 +1,62 @@
+[
+  {
+    "mutation": "settled_missing_source",
+    "test": "settled_source_context",
+    "exitCode": 101,
+    "caught": true
+  },
+  {
+    "mutation": "sending_capture_control",
+    "test": "sending_capture_can_precede",
+    "exitCode": 101,
+    "caught": true
+  },
+  {
+    "mutation": "canonical_stop_fact",
+    "test": "owed_credential_stop_evidence",
+    "exitCode": 101,
+    "caught": true
+  },
+  {
+    "mutation": "stop_actor_projection",
+    "test": "owed_credential_stop_evidence",
+    "exitCode": 101,
+    "caught": true
+  },
+  {
+    "mutation": "stop_cause_projection",
+    "test": "owed_credential_stop_evidence",
+    "exitCode": 101,
+    "caught": true
+  },
+  {
+    "mutation": "required_stop_fact",
+    "test": "owed_credential_stop_evidence",
+    "exitCode": 101,
+    "caught": true
+  },
+  {
+    "mutation": "closed_stop_context",
+    "test": "owed_credential_stop_evidence",
+    "exitCode": 101,
+    "caught": true
+  },
+  {
+    "mutation": "stop_fact_on_other_cause",
+    "test": "malformed_owed_audit",
+    "exitCode": 101,
+    "caught": true
+  },
+  {
+    "mutation": "original_stop_actor",
+    "test": "owed_credential_stop_evidence",
+    "exitCode": 101,
+    "caught": true
+  },
+  {
+    "mutation": "original_stop_time",
+    "test": "owed_credential_stop_evidence",
+    "exitCode": 101,
+    "caught": true
+  }
+]

@@ -10,7 +10,7 @@ use nessa_protocol::agents::AgentId;
 use nessa_protocol::conversation::domain::{ConversationApprovalMode, ConversationModelId};
 use nessa_sdk::application::agent_execution::permissions::ActionContext;
 use nessa_sdk::application::agent_execution::sessions::{NoteDelivery, NoteId, NoteText};
-use nessa_sdk::domain::agent_execution::executions::GrantInitiator;
+use nessa_sdk::domain::agent_execution::executions::{AgentSource, ExecutionId, GrantInitiator};
 use std::sync::Mutex;
 
 /// Grants answered from a script, counting each read.
@@ -131,6 +131,16 @@ async fn a_note_is_allowed_while_its_author_holds_comment_and_revoked_once_it_do
     let grants = Scripted(Mutex::new(Vec::new()));
     let notes = vec![
         note("owner", Initiator::Owner),
+        note(
+            "agent",
+            Initiator::Agent(
+                AgentSource::new(
+                    "00000000-0000-4000-8000-000000000002",
+                    ExecutionId::new("source-turn").unwrap(),
+                )
+                .unwrap(),
+            ),
+        ),
         // Left under another revision than the grant holds now: still the
         // same grant, and a policy change keeps its note.
         note("comment", by("commenter", 1)),
@@ -150,7 +160,7 @@ async fn a_note_is_allowed_while_its_author_holds_comment_and_revoked_once_it_do
     .await;
     assert_eq!(
         candidates.authorized,
-        ids(&["owner", "comment", "drive", "comment-again"])
+        ids(&["owner", "agent", "comment", "drive", "comment-again"])
     );
     // An unreadable grant is neither: its note waits.
     assert_eq!(candidates.revoked, ids(&["read", "gone"]));

@@ -1,0 +1,14 @@
+{
+  "reviewedSource": "e213c1ccb370ced51a9f4ea794cd58441a0717c1",
+  "providerBackendSource": "f7a2a1f73beb55257bfee9866b0aed615ac9e66e",
+  "backendCratesUnchangedAtReviewedSource": true,
+  "paneCssSource": "0a3fe97cbd3c019a210fe098dea4059835ec1b3c",
+  "paneClippingVerifierSource": "589bfa0835ec8a8f50def4cd3a170c8bac2217a9",
+  "runtimeSettingsMatrixSource": "e213c1ccb370ced51a9f4ea794cd58441a0717c1",
+  "localReviewBase": "3494d2aa873e831a8d551b21aaa2a5def0ab2088",
+  "laterParentInspected": "31237ca42b287b3d87d6fc4516531d73377b2526",
+  "workerProtocol": "066217f7701b98b9",
+  "workerImage": "bsh_cQ5cYJX64ZJth3NRQsovUo0R8WODUOV_3PXw3shYLuU",
+  "ci": "Pending final-head synthetic-merge verification; see PR1174 for later results.",
+  "broadDesktop": "Running at reviewedSource; no pass claim."
+}

@@ -30,6 +30,7 @@
     "phase": "attached"
   },
   "truncated": false,
+  "earlier": false,
   "queueComplete": true,
   "transcriptState": "complete",
   "runtime": {

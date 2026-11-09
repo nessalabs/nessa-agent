@@ -133,6 +133,13 @@ impl ConfigJson {
             .map_err(|_| StoreError::Unavailable)
     }
 
+    /// Whether `document` would pass [`Self::publish`]'s check, for a
+    /// caller that has a step of its own to take only if it will.
+    pub fn check(&self, document: &Map<String, Value>) -> Result<(), StoreError> {
+        let bytes = self.serialised(&Value::Object(document.clone()))?;
+        self.checked(&bytes)
+    }
+
     /// `document` as it is written, with its closing newline: pretty-printed,
     /// or compact when only that fits the bound. The bound is on the bytes
     /// written, so a remove can always shrink the file

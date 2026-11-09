@@ -1,0 +1,194 @@
+{
+  "check": "shared-controls",
+  "ok": true,
+  "started": "2026-10-27T19:47:58.945Z",
+  "finished": "2026-10-27T19:49:02.872Z",
+  "target": {
+    "url": "http://127.0.0.1:62310/desktop.html",
+    "mode": "prod"
+  },
+  "results": [
+    {
+      "name": "rows",
+      "engine": "chromium",
+      "layout": "columns",
+      "failures": [],
+      "measured": {
+        "scale": {
+          "hover": "oklab(0.985 0 0 / 0.05)",
+          "press": "oklab(0.985 0 0 / 0.11)",
+          "selected": "oklab(0.985 0 0 / 0.085)",
+          "unread": "600"
+        },
+        "hover": {
+          "kit row under its count": "oklab(0.985 0 0 / 0.05)",
+          "kit row under its glyph": "oklab(0.985 0 0 / 0.05)",
+          "sidebar row": "oklab(0.985 0 0 / 0.05)",
+          "pinned session": "oklab(0.985 0 0 / 0.05)",
+          "session list row": "oklab(0.985 0 0 / 0.05)",
+          "overview row": "oklab(0.985 0 0 / 0.05)",
+          "switcher row left by the keys": "rgba(0, 0, 0, 0)"
+        },
+        "actions": [
+          {
+            "labelClear": true,
+            "reachable": true
+          },
+          {
+            "labelClear": true,
+            "reachable": true
+          },
+          {
+            "labelClear": true,
+            "reachable": true
+          },
+          {
+            "labelClear": true,
+            "reachable": true
+          },
+          {
+            "labelClear": true,
+            "reachable": true
+          },
+          {
+            "labelClear": true,
+            "reachable": true
+          },
+          {
+            "labelClear": true,
+            "reachable": true
+          },
+          {
+            "labelClear": true,
+            "reachable": true
+          },
+          {
+            "labelClear": true,
+            "reachable": true
+          },
+          {
+            "labelClear": true,
+            "reachable": true
+          }
+        ],
+        "rows": 79
+      },
+      "ok": true
+    },
+    {
+      "name": "rows",
+      "engine": "chromium",
+      "layout": "sidebar",
+      "failures": [],
+      "measured": {
+        "scale": {
+          "hover": "oklab(0.985 0 0 / 0.05)",
+          "press": "oklab(0.985 0 0 / 0.11)",
+          "selected": "oklab(0.985 0 0 / 0.085)",
+          "unread": "600"
+        },
+        "hover": {
+          "kit row under its count": "oklab(0.985 0 0 / 0.05)",
+          "kit row under its glyph": "none on this layout",
+          "channel row": "oklab(0.985 0 0 / 0.05)",
+          "branch session": "oklab(0.985 0 0 / 0.05)",
+          "overview row": "oklab(0.985 0 0 / 0.05)",
+          "switcher row left by the keys": "rgba(0, 0, 0, 0)"
+        },
+        "rows": 103
+      },
+      "ok": true
+    },
+    {
+      "name": "rows",
+      "engine": "webkit",
+      "layout": "columns",
+      "failures": [],
+      "measured": {
+        "scale": {
+          "hover": "oklab(0.985 0 0 / 0.05)",
+          "press": "oklab(0.985 0 0 / 0.11)",
+          "selected": "oklab(0.985 0 0 / 0.085)",
+          "unread": "600"
+        },
+        "hover": {
+          "kit row under its count": "oklab(0.985 0 0 / 0.05)",
+          "kit row under its glyph": "oklab(0.985 0 0 / 0.05)",
+          "sidebar row": "oklab(0.985 0 0 / 0.05)",
+          "pinned session": "oklab(0.985 0 0 / 0.05)",
+          "session list row": "oklab(0.985 0 0 / 0.05)",
+          "overview row": "oklab(0.985 0 0 / 0.05)",
+          "switcher row left by the keys": "rgba(0, 0, 0, 0)"
+        },
+        "actions": [
+          {
+            "labelClear": true,
+            "reachable": true
+          },
+          {
+            "labelClear": true,
+            "reachable": true
+          },
+          {
+            "labelClear": true,
+            "reachable": true
+          },
+          {
+            "labelClear": true,
+            "reachable": true
+          },
+          {
+            "labelClear": true,
+            "reachable": true
+          },
+          {
+            "labelClear": true,
+            "reachable": true
+          },
+          {
+            "labelClear": true,
+            "reachable": true
+          },
+          {
+            "labelClear": true,
+            "reachable": true
+          },
+          {
+            "labelClear": true,
+            "reachable": true
+          },
+          {
+            "labelClear": true,
+            "reachable": true
+          }
+        ],
+        "rows": 79
+      },
+      "ok": true
+    },
+    {
+      "name": "rows",
+      "engine": "webkit",
+      "layout": "sidebar",
+      "failures": [],
+      "measured": {
+        "scale": {
+          "hover": "oklab(0.985 0 0 / 0.05)",
+          "press": "oklab(0.985 0 0 / 0.11)",
+          "selected": "oklab(0.985 0 0 / 0.085)",
+          "unread": "600"
+        },
+        "hover": {
+          "kit row under its count": "oklab(0.985 0 0 / 0.05)",
+          "kit row under its glyph": "none on this layout",
+          "channel row": "oklab(0.985 0 0 / 0.05)",
+          "branch session": "oklab(0.985 0 0 / 0.05)",
+          "overview row": "oklab(0.985 0 0 / 0.05)",
+          "switcher row left by the keys": "rgba(0, 0, 0, 0)"
+        },
+        "rows": 103
+      },
+      "ok": true
+    }
+  ]
+}

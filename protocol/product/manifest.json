@@ -14,6 +14,10 @@
       "params": null,
       "grant": "server.read"
     },
+    "server.reach": {
+      "params": null,
+      "grant": "server.read"
+    },
     "credential.issue": {
       "params": "CredentialIssueParams",
       "grant": "credential.manage"
@@ -130,6 +134,10 @@
       "params": "AttachmentBeginParams",
       "grant": "conversation.write"
     },
+    "attachment.write": {
+      "params": "AttachmentWriteParams",
+      "grant": "conversation.write"
+    },
     "agents.list": {
       "params": null,
       "grant": "server.read"
@@ -218,6 +226,14 @@
       "params": "McpServersRevokeParams",
       "grant": "credential.manage"
     },
+    "apps.trusted": {
+      "params": null,
+      "grant": "credential.manage"
+    },
+    "apps.untrust": {
+      "params": "AppsUntrustParams",
+      "grant": "credential.manage"
+    },
     "phone.endpoint": {
       "params": "PhoneEndpointParams",
       "grant": "server.read"
@@ -258,12 +274,40 @@
       "params": "PairingSetLinkingParams",
       "grant": "credential.manage"
     },
+    "pairing.setTunnel": {
+      "params": "PairingSetTunnelParams",
+      "grant": "credential.manage"
+    },
+    "pairing.tunnel": {
+      "params": null,
+      "grant": "credential.manage"
+    },
+    "github.liveEvents": {
+      "params": "GithubLiveEventsParams",
+      "grant": "credential.manage"
+    },
     "github.status": {
       "params": null,
       "grant": "credential.manage"
     },
     "github.connect": {
       "params": null,
+      "grant": "credential.manage"
+    },
+    "devices.list": {
+      "params": "DevicesListParams",
+      "grant": "server.read"
+    },
+    "devices.sshHosts": {
+      "params": null,
+      "grant": "credential.manage"
+    },
+    "devices.connectSsh": {
+      "params": "DevicesConnectSshParams",
+      "grant": "credential.manage"
+    },
+    "devices.setDefault": {
+      "params": "DevicesSetDefaultParams",
       "grant": "credential.manage"
     },
     "github.cancel": {
@@ -334,8 +378,16 @@
       "params": "ChannelListParams",
       "grant": "conversation.write"
     },
+    "channel.setPlacement": {
+      "params": "ChannelSetPlacementParams",
+      "grant": "conversation.write"
+    },
     "conversation.subscribeEvents": {
       "params": "ConversationSubscribeEventsParams",
+      "grant": "conversation.write"
+    },
+    "conversation.readEarlier": {
+      "params": "ConversationReadEarlierParams",
       "grant": "conversation.write"
     },
     "conversation.peek": {
@@ -352,6 +404,98 @@
     },
     "conversation.fork": {
       "params": "ConversationForkParams",
+      "grant": "conversation.write"
+    },
+    "vault.status": {
+      "params": null,
+      "grant": "credential.manage"
+    },
+    "vault.setup": {
+      "params": "VaultPassphraseParams",
+      "grant": "credential.manage"
+    },
+    "vault.unlock": {
+      "params": "VaultPassphraseParams",
+      "grant": "credential.manage"
+    },
+    "vault.changePassphrase": {
+      "params": "VaultPassphraseParams",
+      "grant": "credential.manage"
+    },
+    "vault.lock": {
+      "params": null,
+      "grant": "credential.manage"
+    },
+    "boat.status": {
+      "params": null,
+      "grant": "credential.manage"
+    },
+    "boat.save": {
+      "params": "BoatSaveParams",
+      "grant": "credential.manage"
+    },
+    "boat.saveClaudeSignIn": {
+      "params": "BoatClaudeSignInParams",
+      "grant": "credential.manage"
+    },
+    "boat.disconnect": {
+      "params": null,
+      "grant": "credential.manage"
+    },
+    "devices.pool": {
+      "params": "DevicesPoolParams",
+      "grant": "credential.manage"
+    },
+    "devices.setPool": {
+      "params": "DevicesSetPoolParams",
+      "grant": "credential.manage"
+    },
+    "boat.runtimeSettings": {
+      "params": "BoatRuntimeReadParams",
+      "grant": "credential.manage"
+    },
+    "boat.setRuntimeSettings": {
+      "params": "BoatRuntimeSetParams",
+      "grant": "credential.manage"
+    },
+    "conversation.webhook.cursor": {
+      "params": "ConversationWebhookCursorParams",
+      "grant": "credential.manage"
+    },
+    "conversation.webhook.reset": {
+      "params": "ConversationWebhookResetParams",
+      "grant": "credential.manage"
+    },
+    "logins.status": {
+      "params": null,
+      "grant": "credential.manage"
+    },
+    "logins.save": {
+      "params": "LoginsSaveParams",
+      "grant": "credential.manage"
+    },
+    "logins.remove": {
+      "params": "LoginsRemoveParams",
+      "grant": "credential.manage"
+    },
+    "logins.setDevice": {
+      "params": "LoginsSetDeviceParams",
+      "grant": "credential.manage"
+    },
+    "voice.status": {
+      "params": null,
+      "grant": "credential.manage"
+    },
+    "voice.saveKey": {
+      "params": "VoiceSaveKeyParams",
+      "grant": "credential.manage"
+    },
+    "voice.forgetKey": {
+      "params": null,
+      "grant": "credential.manage"
+    },
+    "voice.startCall": {
+      "params": "VoiceStartCallParams",
       "grant": "conversation.write"
     }
   },

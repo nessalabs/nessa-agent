@@ -4,7 +4,7 @@ import { createDependencies } from "./dependencies"
 import { scenarioEffects } from "../conversation/adapters/scenario/effects"
 import { makeStore } from "../store"
 import { sendDraft } from "../conversation/adapters/store/slice"
-import { sha256Digest } from "../panel/adapters/sha256"
+import { sha256Digest } from "../conversation/adapters/browser/sha256"
 import { loadEnvironment } from "../env/environment"
 
 const { invoke } = vi.hoisted(() => ({ invoke: vi.fn() }))

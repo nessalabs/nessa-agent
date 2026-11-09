@@ -39,6 +39,10 @@ export { MessageImages } from "./ui/message-images"
 export { PublishedFiles } from "./ui/published-files"
 export { heldFileReader } from "./adapters/gateway/held-files"
 export { shownNote } from "./adapters/gateway/notes"
+// Staging an image into a conversation: every surface that sends one uploads it here.
+export { stageFile, stageImage } from "./adapters/gateway/stage-image"
+export { sha256Digest } from "./adapters/browser/sha256"
+export { AttachmentStagingError } from "./application/ports"
 export { monotonicWallClock } from "./adapters/browser/wall-clock"
 export {
   HeldFileReadError,
@@ -62,6 +66,7 @@ export {
   placeNotes,
   placePublished,
   type HistoryExtent,
+  type AgentSource,
   type Note,
   type UsageLimitNotice,
   type HeldFile,
@@ -79,6 +84,8 @@ export {
   type ImageReference,
   type ImageReferencePart,
   type LinkedFileReferencePart,
+  type UploadedFileReference,
+  type UploadedFileReferencePart,
   type UploadFailure,
   MAX_ATTACHMENT_BYTES,
   MAX_DRAFT_ATTACHMENT_BYTES,
@@ -88,6 +95,8 @@ export {
   linkablePath,
   linkedFile,
   linksFilesHere,
+  chosenEnvironment,
+  HERE,
   previewableImage,
   validDraftAttachments,
 } from "./model"

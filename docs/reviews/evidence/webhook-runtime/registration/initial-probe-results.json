@@ -1,0 +1,162 @@
+[
+  {
+    "index": 0,
+    "file": "application/registration.rs",
+    "rule": "proposed.issue.purpose = CredentialIssuePurpose::Webhook;",
+    "test": "registration_commits_real_auth",
+    "caught": true,
+    "restored": true
+  },
+  {
+    "index": 1,
+    "file": "application/registration.rs",
+    "rule": "proposed.issue.issued_at = proposed.observed_at_ms / 1000;",
+    "test": "registration_commits_real_auth",
+    "caught": true,
+    "restored": true
+  },
+  {
+    "index": 2,
+    "file": "application/registration.rs",
+    "rule": "if self.issue.issued_at != self.observed_at_ms / 1000",
+    "test": "installed_intent_contradictions",
+    "caught": true,
+    "restored": true
+  },
+  {
+    "index": 3,
+    "file": "application/registration.rs",
+    "rule": "!matches_request(&intent.issue, metadata)",
+    "test": "coherent_auth_result",
+    "caught": false,
+    "restored": true
+  },
+  {
+    "index": 4,
+    "file": "application/registration.rs",
+    "rule": "transitions[0].correlation.as_deref() != Some(&intent.issue.request_id)",
+    "test": "contradictory_auth_reply",
+    "caught": true,
+    "restored": true
+  },
+  {
+    "index": 5,
+    "file": "application/registration.rs",
+    "rule": "CredentialTransition::try_from(transitions[0].clone()).as_ref() != Ok(&expected)",
+    "test": "contradictory_auth_reply",
+    "caught": true,
+    "restored": true
+  },
+  {
+    "index": 6,
+    "file": "application/registration.rs",
+    "rule": "if !hold.snapshot.membership.is_active()",
+    "test": "unavailable_or_substituted_current_authority",
+    "caught": false,
+    "restored": true
+  },
+  {
+    "index": 7,
+    "file": "application/registration.rs",
+    "rule": "if hold.snapshot.credential != credential || hold.snapshot.membership != membership",
+    "test": "unavailable_or_substituted_current_authority",
+    "caught": true,
+    "restored": true
+  },
+  {
+    "index": 8,
+    "file": "infrastructure/outbox/intents.rs",
+    "rule": "if count>=MAX_REGISTRATIONS as i64",
+    "test": "intent_count_and_byte_capacity",
+    "caught": true,
+    "restored": true
+  },
+  {
+    "index": 9,
+    "file": "infrastructure/outbox/intents.rs",
+    "rule": "if issue.len()>ISSUE_BYTES",
+    "test": "intent_count_and_byte_capacity",
+    "caught": true,
+    "restored": true
+  },
+  {
+    "index": 10,
+    "file": "infrastructure/outbox/intents.rs",
+    "rule": "if same_intent(&saved,&proposed)",
+    "test": "conflicting_config_and_caller_inputs",
+    "caught": true,
+    "restored": true
+  },
+  {
+    "index": 11,
+    "file": "infrastructure/outbox/intents.rs",
+    "rule": "if !same_intent(&saved, &intent)",
+    "test": "conflicting_config_and_caller_inputs",
+    "caught": false,
+    "restored": true
+  },
+  {
+    "index": 12,
+    "file": "infrastructure/outbox/intents.rs",
+    "rule": "if installed {",
+    "test": "registration_commits_real_auth",
+    "caught": true,
+    "restored": true
+  },
+  {
+    "index": 13,
+    "file": "infrastructure/outbox/intents.rs",
+    "rule": "if !same_registration(&registration.registration, &intent.registration()?)",
+    "test": "installed_intent_contradictions",
+    "caught": true,
+    "restored": true
+  },
+  {
+    "index": 14,
+    "file": "infrastructure/outbox/intents.rs",
+    "rule": "registration.issued_at_ms != intent.observed_at_ms",
+    "test": "installed_intent_contradictions",
+    "caught": true,
+    "restored": true
+  },
+  {
+    "index": 15,
+    "file": "infrastructure/outbox/intents.rs",
+    "rule": "check_row_bytes(row, 6, ROW_BYTES)?;",
+    "test": "oversized_borrowed_row",
+    "caught": true,
+    "restored": true
+  },
+  {
+    "index": 16,
+    "file": "infrastructure/outbox/schema.rs",
+    "rule": "check_row_bytes(row, 4, 2 * SCHEMA.len())?;",
+    "test": "schema_text_is_bounded",
+    "caught": true,
+    "restored": true
+  },
+  {
+    "index": 17,
+    "file": "infrastructure/outbox/schema.rs",
+    "rule": "if definitions(connection, expected.len() as i64 + 1)? != expected",
+    "test": "registration_schema_guards",
+    "caught": true,
+    "restored": true
+  },
+  {
+    "index": 18,
+    "file": "infrastructure/outbox/schema.sql",
+    "rule": "CREATE TRIGGER registration_intent_immutable BEFORE UPDATE ON registration_intents\nBEGIN SELECT RAISE(ABORT,'immutable registration intent'); END;",
+    "test": "registration_commits_real_auth",
+    "caught": true,
+    "restored": true
+  },
+  {
+    "index": 19,
+    "file": "infrastructure/outbox/schema.sql",
+    "rule": "CREATE TRIGGER registration_intent_retire AFTER DELETE ON registrations\nBEGIN DELETE FROM registration_intents WHERE id=OLD.id; END;",
+    "test": "registration_retirement_removes_private_intent",
+    "caught": true,
+    "restored": true
+  }
+]

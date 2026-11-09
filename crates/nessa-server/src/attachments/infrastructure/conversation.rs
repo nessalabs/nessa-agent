@@ -47,6 +47,24 @@ impl ConversationHolds {
     }
 }
 impl ConversationAttachments for ConversationHolds {
+    fn holds_file<'a>(
+        &'a self,
+        organization: &'a OrganizationId,
+        conversation: &'a ConversationId,
+        file: &'a nessa_sdk::domain::agent_execution::prompts::UploadedFileReference,
+    ) -> ConversationFuture<'a, bool> {
+        Box::pin(async move {
+            let media = MediaType::parse(file.media_type().as_str())
+                .map_err(|_| ConversationError::InvalidInput)?;
+            let attachment = Attachment::new(file.digest(), media, file.size())
+                .map_err(|_| ConversationError::InvalidInput)?;
+            self.service
+                .holds(organization, conversation, &attachment)
+                .await
+                .map_err(|_| ConversationError::Unavailable)
+        })
+    }
+
     fn offers_images(&self) -> bool {
         self.service.offers_images()
     }

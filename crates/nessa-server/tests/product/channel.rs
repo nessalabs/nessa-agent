@@ -58,6 +58,7 @@ fn stored(n: u8, notes: &str) -> Channel {
         OrganizationId::new("org").unwrap(),
         PrincipalId::new("person").unwrap(),
         crate::conversation::domain::ChannelParts {
+            execution: crate::conversation::domain::ChannelExecution::default(),
             name: ChannelName::new(&format!("channel-{n}")).unwrap(),
             folder: crate::conversation::domain::ChannelFolder {
                 path: ChannelPath::new(PathBuf::from(absolute(&format!("/data/channels/{n}"))))
@@ -93,7 +94,8 @@ fn a_list_starts_with_the_default_channel_and_lists_no_notes() {
         json!({
             "channelId": "default", "name": "Conversations", "folder": absolute("/work/default"),
             "folderMade": false, "agent": null, "model": null, "approvalMode": "ask",
-            "createdAtMs": 0
+            "createdAtMs": 0,
+            "coordinatorPlacement": "local", "threadPlacement": "local", "coordinatorConversationId": null
         })
     );
     assert_eq!(wire["channels"][1]["agent"], "claude");
@@ -121,6 +123,7 @@ fn long(index: u16) -> Channel {
         OrganizationId::new("org").unwrap(),
         PrincipalId::new("person").unwrap(),
         crate::conversation::domain::ChannelParts {
+            execution: crate::conversation::domain::ChannelExecution::default(),
             name: ChannelName::new(&format!("channel-{index}")).unwrap(),
             folder: crate::conversation::domain::ChannelFolder {
                 path: ChannelPath::new(PathBuf::from(absolute(&format!("/{}", "f".repeat(4000)))))
@@ -216,4 +219,34 @@ fn each_refusal_has_its_own_code() {
     ] {
         assert_eq!(code(refused("r", error)), expected);
     }
+}
+
+#[test]
+fn a_placement_change_names_a_channel_and_two_known_places() {
+    let (params, channel, execution) = placement_request(json!({
+        "requestId": "r", "channelId": "ch_aaaaaaaaaa",
+        "coordinatorPlacement": "boat", "threadPlacement": "local"
+    }))
+    .unwrap();
+    assert_eq!(params.request_id, "r");
+    assert_eq!(channel.as_str(), "ch_aaaaaaaaaa");
+    assert_eq!(execution.coordinator, WorkspacePlacement::Boat);
+    assert_eq!(execution.threads, WorkspacePlacement::Local);
+    for refused in [
+        json!({"requestId": "r", "channelId": "nope", "coordinatorPlacement": "boat", "threadPlacement": "boat"}),
+        json!({"requestId": "r", "channelId": "ch_aaaaaaaaaa", "coordinatorPlacement": "moon", "threadPlacement": "boat"}),
+        json!({"requestId": "r", "channelId": "ch_aaaaaaaaaa", "coordinatorPlacement": "boat"}),
+        json!({"requestId": "r", "channelId": "ch_aaaaaaaaaa", "coordinatorPlacement": "boat", "threadPlacement": "Boat"}),
+        json!({"requestId": "r", "channelId": "ch_aaaaaaaaaa", "coordinatorPlacement": "pool", "threadPlacement": "pool"}),
+    ] {
+        assert!(placement_request(refused.clone()).is_none(), "{refused}");
+    }
+}
+
+#[test]
+fn a_placement_change_asks_to_write_to_conversations() {
+    assert_eq!(
+        nessa_protocol::product::generated::action_for_method("channel.setPlacement"),
+        Some("conversation.write")
+    );
 }

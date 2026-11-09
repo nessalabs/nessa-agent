@@ -119,6 +119,7 @@
       "phase": "attached"
     },
     "truncated": false,
+    "earlier": false,
     "queueComplete": true,
     "transcriptState": "complete",
     "artifacts": [
@@ -192,6 +193,40 @@
   "ConversationPeekResult": {
     "conversationId": "00000000-0000-4000-8000-000000000001",
     "executionId": null
+  },
+  "ConversationPartPosition": {
+    "part": 2,
+    "byte": 120
+  },
+  "ConversationPoint": {
+    "executionId": "execution-1",
+    "at": {
+      "part": 0,
+      "byte": 0
+    }
+  },
+  "ConversationReadEarlierParams": {
+    "conversationId": "00000000-0000-4000-8000-000000000001",
+    "before": {
+      "executionId": "execution-2"
+    }
+  },
+  "ConversationEarlier": {
+    "conversationId": "00000000-0000-4000-8000-000000000001",
+    "messages": [
+      {
+        "executionId": "execution-1",
+        "userText": "Prepare a deployment",
+        "attachments": [],
+        "files": [],
+        "status": "completed",
+        "parts": []
+      }
+    ],
+    "tools": [],
+    "handoffs": [],
+    "more": false,
+    "truncated": false
   },
   "ConversationReadParams": {
     "conversationId": "00000000-0000-4000-8000-000000000001"
@@ -920,6 +955,14 @@
       "sidebar": true,
       "sessionList": true,
       "showing": "panes",
+      "panel": {
+        "open": true,
+        "tabs": [
+          { "plugin": "subagents", "id": "4f3c8a7e-1b2d-4c5e-8f90-a1b2c3d4e5f6" },
+          { "plugin": "mcp:huddle", "id": "call-1" }
+        ],
+        "front": { "plugin": "mcp:huddle", "id": "call-1" }
+      },
       "columns": [
         {
           "widthPercent": 50,

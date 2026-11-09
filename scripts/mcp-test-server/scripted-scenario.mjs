@@ -23,6 +23,8 @@
  * | waiting | outcome cancelled, no branch, or the turn is cancelled | stop `cancelled` |
  * | waiting | an answer that is not a selection or a cancellation | the turn fails |
  * | running | fail | the turn fails; chunks and calls already sent stay sent |
+ * | running | usage-limit | the selected harness's terminal usage-limit RPC error; no successful completion |
+ * | running | auth-required | ACP's `-32000` Authentication required, as a signed-out harness answers; no successful completion |
  * | running | pause | waits `ms`, or until `session/cancel`, then the next step |
  * | running | wait-cancel | waiting for `session/cancel` |
  * | waiting for cancel | `session/cancel` | stop `cancelled` |
@@ -41,7 +43,9 @@
  * first text block holds) is kept under that name for the rest of the turn, and a result that is an error fails the turn. A string anywhere
  * in a later step's arguments or text that is `${name.path}` is replaced by
  * that saved value's field, so one call can name what an earlier call made.
- * `${prompt.text}` is the prompt the turn answers; `${session.cwd}` and
+ * `${prompt.text}` is the prompt the turn answers, and `${prompt.images}` the
+ * images it carried (`promptImages`), `${prompt.files}` the files linked to
+ * it, read where the agent runs (`promptFiles`); `${session.cwd}` and
  * `${session.systemPrompt}` are the folder the session was opened in and the
  * system prompt it was given (Claude's `_meta.systemPrompt`; empty for a
  * harness that takes none). With `times`, the same
@@ -49,7 +53,9 @@
  * `save` then keeps every result in order, an error's `structuredContent`
  * included (a call the server refused outright is saved as
  * `{ error: "call_refused", message }`), and an error does not fail the
- * turn, so a check can count how many were refused.
+ * turn, so a check can count how many were refused. With `title`, the call
+ * is announced under that title instead of the tool's name, as a harness
+ * names a call in its own words.
  *
  * A permission offers two answers, the two the window can give: allow once
  * and deny once. A withdrawn review is the third answer, `cancelled`, not
@@ -58,7 +64,14 @@
  * call announced for the review is the branch's tool call. When the branch
  * does not complete it, that call is failed, and a tool step after the
  * review is a new call.
+ *
+ * `version-review` uses that same decision owner for one fixed native command,
+ * `node --version`. It has no caller-supplied command or MCP wrapper. The process
+ * runs it only after an allow and completes the original call before its branch.
  */
+import { closeSync, openSync, readSync } from "node:fs"
+import { fileURLToPath } from "node:url"
+
 import { SERVER } from "./local-gateway.mjs"
 import { CLAUDE_CALL_ID } from "./scripted-frames.mjs"
 
@@ -68,21 +81,35 @@ export const ALLOW_ONCE = "allow-once"
 export const DENY_ONCE = "deny-once"
 
 const ANSWERS = [ALLOW_ONCE, DENY_ONCE, "cancelled"]
-const KINDS = ["text", "permission", "tool", "pause", "fail", "wait-cancel", "end"]
+const KINDS = [
+  "text",
+  "permission",
+  "version-review",
+  "tool",
+  "pause",
+  "fail",
+  "usage-limit",
+  "auth-required",
+  "wait-cancel",
+  "end",
+]
 const BRANCH_KINDS = ["text", "tool", "pause", "fail", "end"]
 
 const FIELDS = {
   text: ["do", "chunks"],
   permission: ["do", "tool", "arguments", "title", "on"],
+  "version-review": ["do", "on"],
   tool: ["do", "tool", "arguments"],
   pause: ["do", "ms"],
   fail: ["do", "message"],
+  "usage-limit": ["do"],
+  "auth-required": ["do"],
   "wait-cancel": ["do"],
   end: ["do"],
 }
 
 /** Fields a step may leave out. */
-const OPTIONAL = { tool: ["server", "save", "times"] }
+const OPTIONAL = { tool: ["server", "save", "times", "title"] }
 
 /** The modes, by harness, in which the harness asks for nothing. */
 export const FULL_ACCESS = { claude: "bypassPermissions", codex: "agent-full-access" }
@@ -141,7 +168,7 @@ function parseSteps(steps, branch) {
   if (!Array.isArray(steps) || steps.length === 0) throw new Error("a step list is empty")
   const parsed = steps.map((step) => parseStep(step, branch))
   const terminal = parsed.findIndex((step) =>
-    ["fail", "wait-cancel", "end"].includes(step.do),
+    ["fail", "usage-limit", "auth-required", "wait-cancel", "end"].includes(step.do),
   )
   if (terminal !== -1 && terminal !== parsed.length - 1)
     throw new Error(`steps follow ${parsed[terminal].do}, which ends the turn`)
@@ -150,7 +177,9 @@ function parseSteps(steps, branch) {
 
 function parseStep(step, branch) {
   if (!plain(step) || typeof step.do !== "string" || !KINDS.includes(step.do))
-    throw new Error("a step's do is text, permission, tool, fail, wait-cancel, or end")
+    throw new Error(
+      "a step's do is text, permission, version-review, tool, fail, usage-limit, auth-required, wait-cancel, or end",
+    )
   if (branch && !BRANCH_KINDS.includes(step.do))
     throw new Error(`a permission answer cannot ${step.do}`)
   const allowed = FIELDS[step.do]
@@ -179,6 +208,7 @@ function parseStep(step, branch) {
         ...(Object.hasOwn(step, "server") ? { server: toolName(step.server) } : {}),
         ...(Object.hasOwn(step, "save") ? { save: toolName(step.save) } : {}),
         ...(Object.hasOwn(step, "times") ? { times: timesOf(step.times) } : {}),
+        ...(Object.hasOwn(step, "title") ? { title: titleOf(step.title) } : {}),
       }
     case "pause":
       if (!Number.isInteger(step.ms) || step.ms < 0 || step.ms > MAX_PAUSE_MS)
@@ -196,6 +226,8 @@ function parseStep(step, branch) {
         title: titleOf(step.title),
         on: answers(step.on),
       }
+    case "version-review":
+      return { do: "version-review", on: answers(step.on) }
     default:
       return { do: step.do }
   }
@@ -222,7 +254,7 @@ function argumentsOf(value) {
 
 function titleOf(title) {
   if (typeof title !== "string" || title.trim() === "")
-    throw new Error("a permission needs a title")
+    throw new Error("a title is a non-empty string")
   return title
 }
 
@@ -248,6 +280,58 @@ export function promptText(prompt) {
     )
     .map((block) => block.text)
     .join("")
+}
+
+/**
+ * The images in a prompt, as one line a turn can say: each image block's
+ * media type and the length of the bytes it carries, in order, or "none". A
+ * check reads it back to know the agent was handed exactly what was sent.
+ */
+export function promptImages(prompt) {
+  const images = Array.isArray(prompt)
+    ? prompt.filter((block) => plain(block) && block.type === "image")
+    : []
+  if (images.length === 0) return "none"
+  return images
+    .map(
+      (block) =>
+        `${block.mimeType} ${typeof block.data === "string" ? Buffer.from(block.data, "base64").length : 0} bytes`,
+    )
+    .join(", ")
+}
+
+/** How much of each linked file `promptFiles` reads back. */
+const FILE_HEAD_BYTES = 256
+
+/**
+ * The files linked to a prompt, as one line a turn can say: each
+ * `resource_link`'s name, then what the agent finds at its `file:` URI on the
+ * machine it runs on — the first bytes, as text — or `missing` when nothing
+ * is there; "none" when no file is linked. A check reads it back to know the
+ * file was placed where the agent works, with the bytes that were sent.
+ */
+export function promptFiles(prompt) {
+  const links = Array.isArray(prompt)
+    ? prompt.filter((block) => plain(block) && block.type === "resource_link")
+    : []
+  if (links.length === 0) return "none"
+  return links
+    .map((block) => `${block.name} = ${JSON.stringify(fileHead(block.uri))}`)
+    .join(", ")
+}
+
+function fileHead(uri) {
+  let fd
+  try {
+    fd = openSync(fileURLToPath(String(uri)), "r")
+    const buffer = Buffer.alloc(FILE_HEAD_BYTES)
+    const read = readSync(fd, buffer, 0, FILE_HEAD_BYTES, 0)
+    return buffer.subarray(0, read).toString("utf8")
+  } catch {
+    return "missing"
+  } finally {
+    if (fd !== undefined) closeSync(fd)
+  }
 }
 
 /**
@@ -347,6 +431,23 @@ export function permissionCall(
   }
 }
 
+/** A distinct native command, not an MCP call with its wrapper hidden. */
+export function versionReviewCall(agent, id) {
+  if (agent !== "codex") throw new Error("the native version review requires Codex")
+  const toolCall = {
+    toolCallId: id,
+    title: "Node version",
+    kind: "execute",
+    status: "pending",
+    rawInput: { command: "node --version" },
+    name: "exec_command",
+  }
+  return {
+    update: { sessionUpdate: "tool_call", ...toolCall },
+    request: (sessionId) => ({ sessionId, toolCall, options: OPTIONS }),
+  }
+}
+
 /** A `tools/call` for the stand-in. Claude names the ACP call id; Codex names none. */
 export function mcpArguments(agent, { id, tool, arguments: args }) {
   return {
@@ -385,7 +486,8 @@ export function completedUpdate(id, result) {
  * `requestPermission(params)`, `callTool(args, server)`, `messageId()`, `toolId()`,
  * `openCall(tool)`, `rememberCall(tool, id)`, `clearCall(tool)`, `agent`,
  * `sessionId`, and optionally `mode()`, the session's current mode, and
- * `untilCancelledOr(ms)`, which a pause waits on.
+ * `untilCancelledOr(ms)`, which a pause waits on. The fixed `version-review`
+ * additionally uses `runVersion()`; it never sends that native command to MCP.
  */
 export async function runSteps(steps, ctx) {
   ctx.saved ??= new Map()
@@ -395,6 +497,31 @@ export async function runSteps(steps, ctx) {
     if (outcome) return outcome
   }
   return { stopReason: "end_turn" }
+}
+
+/** ACP protocol 1's reserved refusal, which a signed-out harness answers a prompt with. */
+export class ScriptedAuthenticationRequired extends Error {
+  code = -32000
+  constructor() {
+    super("Authentication required")
+  }
+}
+
+/** The pinned harness's terminal limit frame; generic failures keep no such data. */
+export class ScriptedUsageLimitError extends Error {
+  constructor(agent) {
+    switch (agent) {
+      case "claude":
+        super("You've hit your weekly limit")
+        break
+      case "codex":
+        super("Usage limit exceeded")
+        this.data = { codexErrorInfo: "usageLimitExceeded" }
+        break
+      default:
+        throw new Error(`no scripted usage-limit frame for ${agent}`)
+    }
+  }
 }
 
 async function runStep(step, ctx) {
@@ -420,14 +547,32 @@ async function runStep(step, ctx) {
         ? callMany(step, ctx)
         : callTool(step, ctx, ctx.openCall(step.tool))
     case "permission":
+    case "version-review":
       return ask(step, ctx)
-    case "pause":
+    case "pause": {
+      // Sleep only after the gateway has queued the updates already written.
+      // The receipt time of the previous call is that queue, so the sleep is
+      // the gap a later read of those times measures.
+      if (ctx.accepted) {
+        try {
+          await ctx.accepted()
+        } catch (error) {
+          if (ctx.cancelled()) return { stopReason: "cancelled" }
+          return { fail: error.message }
+        }
+      }
+      if (ctx.cancelled()) return { stopReason: "cancelled" }
       await (ctx.untilCancelledOr
         ? ctx.untilCancelledOr(step.ms)
         : new Promise((resolve) => setTimeout(resolve, step.ms)))
       return ctx.cancelled() ? { stopReason: "cancelled" } : null
+    }
     case "fail":
       return { fail: step.message }
+    case "usage-limit":
+      throw new ScriptedUsageLimitError(ctx.agent)
+    case "auth-required":
+      throw new ScriptedAuthenticationRequired()
     case "wait-cancel":
       await ctx.untilCancelled()
       return { stopReason: "cancelled" }
@@ -489,7 +634,7 @@ async function callTool(step, ctx, existing) {
     const announced = permissionCall(ctx.agent, {
       id,
       tool: step.tool,
-      title: step.tool,
+      title: step.title ?? step.tool,
       arguments: args,
       server: step.server,
     })
@@ -543,7 +688,7 @@ async function callMany(step, ctx) {
       permissionCall(ctx.agent, {
         id,
         tool: step.tool,
-        title: step.tool,
+        title: step.title ?? step.tool,
         arguments: args,
         server: step.server,
       }).update,
@@ -580,25 +725,29 @@ async function callMany(step, ctx) {
 
 async function ask(step, ctx) {
   const id = ctx.toolId()
-  const call = permissionCall(ctx.agent, {
-    id,
-    tool: step.tool,
-    title: step.title,
-    arguments: step.arguments,
-  })
+  const native = step.do === "version-review"
+  const tool = native ? "native-node-version" : step.tool
+  const call = native
+    ? versionReviewCall(ctx.agent, id)
+    : permissionCall(ctx.agent, {
+        id,
+        tool: step.tool,
+        title: step.title,
+        arguments: step.arguments,
+      })
   ctx.update(call.update)
-  ctx.rememberCall(step.tool, id)
+  ctx.rememberCall(tool, id)
   const unattended = ctx.mode?.() === FULL_ACCESS[ctx.agent]
   // The branch did not complete the announced call. Fail it before a later
   // step can reuse its id, and leave a cancelled turn's call alone.
   const abandon = () => {
-    if (ctx.cancelled() || ctx.openCall(step.tool) !== id) return
+    if (ctx.cancelled() || ctx.openCall(tool) !== id) return
     ctx.update({
       sessionUpdate: "tool_call_update",
       toolCallId: id,
       status: "failed",
     })
-    ctx.clearCall(step.tool)
+    ctx.clearCall(tool)
   }
   let result
   if (unattended) result = { outcome: { outcome: "selected", optionId: ALLOW_ONCE } }
@@ -615,6 +764,22 @@ async function ask(step, ctx) {
   if (decision.kind === "fail") {
     abandon()
     return { fail: decision.message }
+  }
+  if (
+    native &&
+    result.outcome?.outcome === "selected" &&
+    result.outcome.optionId === ALLOW_ONCE
+  ) {
+    if (ctx.cancelled()) return { stopReason: "cancelled" }
+    try {
+      const version = await ctx.runVersion()
+      if (ctx.cancelled()) return { stopReason: "cancelled" }
+      ctx.update(completedUpdate(id, version))
+      ctx.clearCall(tool)
+    } catch (error) {
+      abandon()
+      return { fail: error.message }
+    }
   }
   let outcome = null
   for (const branch of decision.steps) {

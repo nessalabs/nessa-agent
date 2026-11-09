@@ -17,6 +17,8 @@ import {
   createSubscriptionGate,
   subscriptionLimits,
   viewEntryBounds,
+  type BoatVmLifetime,
+  type BoatRuntimeSettings,
   type Channel as WireChannel,
   type ChannelCreateParams,
   type ConnectionState,
@@ -46,7 +48,9 @@ import type { WindowPublishClient } from "./window-publisher"
  * those. A window fake still has to answer, because the window's client
  * requires them.
  */
-export type FakeGatewayClient = GatewayClient &
+export type FakeGatewayClient = {
+  readonly boat: import("@nessa/client").BoatApi
+} & GatewayClient &
   WindowPublishClient & {
     readonly conversation: GatewayClient["conversation"] &
       SharingClient["conversation"] &
@@ -62,6 +66,9 @@ const defaultChannel: WireChannel = {
   agent: null,
   model: null,
   approvalMode: "ask",
+  coordinatorConversationId: null,
+  coordinatorPlacement: "local",
+  threadPlacement: "local",
   createdAtMs: 0,
 }
 
@@ -82,6 +89,8 @@ type Method =
   | "unsubscribe"
   | "observe"
   | "create"
+  | "attachmentBegin"
+  | "attachmentUpload"
   | "send"
   | "answer"
   | "answerQuestion"
@@ -95,6 +104,7 @@ type Method =
   | "switchAgent"
   | "fork"
   | "read"
+  | "readEarlier"
   | "archive"
   | "rename"
   | "delete"
@@ -346,6 +356,7 @@ export function view(
     },
     lifecycle: { phase: "attached" },
     truncated: false,
+    earlier: false,
     queueComplete: true,
     transcriptState: "complete",
     title: null,
@@ -364,6 +375,11 @@ export interface FakeGateway {
   readonly windows: { revision: number; window: WorkspaceWindow | undefined }[]
   readonly rows: Map<string, ConversationSummary>
   readonly views: Map<string, ConversationView>
+  /**
+   * Each conversation's turns before the first its view lists, oldest
+   * first, whole. `readEarlier` answers two at a time, nearest the point.
+   */
+  readonly earlier: Map<string, readonly ConversationView["messages"][number][]>
   /**
    * The execution each conversation's peek says is active, which a stop
    * names. Apart from the views on purpose: a view's message can still say
@@ -452,10 +468,22 @@ export function fakeGateway(
     readonly now?: () => number
   } = {},
 ): FakeGateway {
+  let defaultLifetime: BoatVmLifetime = { mode: "never" }
+  const lifetimeOverrides = new Map<string, BoatVmLifetime>()
+  const runtimeSettings = (channelId?: string): BoatRuntimeSettings => {
+    const override =
+      channelId === undefined ? undefined : lifetimeOverrides.get(channelId)
+    return {
+      ...{ defaultLifetime },
+      ...(channelId === undefined ? {} : { channelId }),
+      ...(override === undefined ? {} : { channelOverride: override }),
+    }
+  }
   const calls: FakeGateway["calls"] = []
   const windows: FakeGateway["windows"] = []
   const rows = new Map<string, ConversationSummary>()
   const views = new Map<string, ConversationView>()
+  const earlier: FakeGateway["earlier"] = new Map()
   const active = new Map<string, string>()
   const reviews = new Map<string, ConversationPermission>()
   const channels: FakeGateway["channels"] = []
@@ -590,6 +618,27 @@ export function fakeGateway(
       }
   }
   const client: FakeGatewayClient = {
+    boat: {
+      runtimeSettings: async (params) => runtimeSettings(params?.channelId),
+      setRuntimeSettings: async (params) => {
+        const lifetime: BoatVmLifetime =
+          params.mode === "after"
+            ? { mode: "after", seconds: params.seconds }
+            : { mode: "never" }
+        if (params.channelId === undefined) defaultLifetime = lifetime
+        else if (params.mode === "default") lifetimeOverrides.delete(params.channelId)
+        else lifetimeOverrides.set(params.channelId, lifetime)
+        return runtimeSettings(params.channelId)
+      },
+      status: async () => ({ state: "disconnected" as const }),
+      save: async () => {
+        throw new Error("Boat provisioning is unavailable in this fixture")
+      },
+      saveClaudeSignIn: async () => {
+        throw new Error("Boat sign-in is unavailable in this fixture")
+      },
+      disconnect: async () => ({ state: "disconnected" as const }),
+    },
     conversation: {
       share: notShared,
       unshare: notShared,
@@ -609,7 +658,7 @@ export function fakeGateway(
             )
           return { conversationId }
         }) as never,
-      submit: (prepared) => {
+      submit: (prepared, options) => {
         preparedSubmissionFields(prepared)
         return answer(
           "send",
@@ -618,7 +667,14 @@ export function fakeGateway(
             prepared.text,
             prepared.attachments,
             prepared.files,
-            { executionId: prepared.executionId, requestId: prepared.requestId },
+            {
+              executionId: prepared.executionId,
+              requestId: prepared.requestId,
+              // Named only when the message carries other files.
+              ...(prepared.uploads.length ? { uploads: prepared.uploads } : {}),
+            },
+            // Recorded only when given, so a plain send's arguments stay as they were.
+            ...(options ? [options] : []),
           ],
           () => ({
             conversationId: prepared.conversationId,
@@ -692,6 +748,26 @@ export function fakeGateway(
               ),
             })
           return { requestId: "withdraw", stage: "accepted" }
+        }) as never,
+      readEarlier: (...args) =>
+        answer("readEarlier", args, () => {
+          const [id, before, after] = args
+          const turns = [...(earlier.get(id) ?? []), ...(views.get(id)?.messages ?? [])]
+          const at = (point: { executionId: string }) =>
+            turns.findIndex((turn) => turn.executionId === point.executionId)
+          const end = at(before)
+          const from = after ? at(after) : 0
+          if (end < 0 || from < 0)
+            throw new NessaRpcError("invalid_request", "No such point")
+          const start = Math.max(from, end - 2)
+          return {
+            conversationId: id,
+            messages: turns.slice(start, end),
+            tools: [],
+            handoffs: [],
+            more: start > from,
+            truncated: false,
+          }
         }) as never,
       // Committed as asked; the view says it from now on.
       read: (id) => answer("read", [id], () => views.get(id) ?? view(id)) as never,
@@ -835,6 +911,9 @@ export function fakeGateway(
             agent: params.agent,
             model: params.model,
             approvalMode: params.approvalMode ?? "ask",
+            coordinatorConversationId: null,
+            coordinatorPlacement: params.coordinatorPlacement ?? "local",
+            threadPlacement: params.threadPlacement ?? "local",
             createdAtMs: channels.length + 1,
           }
           channels.push({ requestId: params.requestId, params, channel })
@@ -874,6 +953,26 @@ export function fakeGateway(
           })
         return { requestId: "stop", stage: "accepted" }
       }) as never,
+    // The conversation keeps every image as it was sent: the gateway's
+    // normalizing is not this fake's to play.
+    attachments: {
+      begin: (conversationId, file, options) =>
+        answer("attachmentBegin", [conversationId, file], () => {
+          if (!views.has(conversationId)) notFound()
+          return {
+            requestId: options?.requestId ?? "begin",
+            state: "upload_required" as const,
+            ticket: `ticket:${file.digest}`,
+            expiresAtMs: Number.MAX_SAFE_INTEGER,
+          }
+        }) as never,
+      upload: (ticket, file) =>
+        answer("attachmentUpload", [ticket, file], () => ({
+          digest: ticket.slice("ticket:".length),
+          mimeType: file.mimeType,
+          size: file.bytes.size,
+        })) as never,
+    },
     subscriptions: {
       view: (conversationId, handlers, { signal, ...options } = {}) =>
         gated(`view:${conversationId}`, signal, () => {
@@ -945,6 +1044,7 @@ export function fakeGateway(
     windows,
     rows,
     views,
+    earlier,
     active,
     reviews,
     channels,

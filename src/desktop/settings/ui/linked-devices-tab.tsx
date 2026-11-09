@@ -47,6 +47,7 @@ import {
   type WaitingDevice,
 } from "../model/linked-devices"
 import { FoundSetting } from "./settings-controls"
+import { TunnelGroup } from "./tunnel-group"
 
 /** The window's pairing gateway, given by composition (`main.tsx`); none without one. */
 const LinkedDevicesContext = createContext<LinkedDevicesGateway | undefined>(undefined)
@@ -287,6 +288,7 @@ function ManagedDevices({
             inDialog={shown?.invitationId ?? null}
           />
           <DevicesGroup state={state} dispatch={dispatch} />
+          {state.switching === null ? <TunnelGroup gateway={gateway} /> : null}
         </>
       ) : null}
       {shown === null ? notice : null}
@@ -467,7 +469,12 @@ function PairingDialog({
       description={sentences.pairingDetail}
       size="lg"
       className="linked-pairing-dialog"
-      onReturnFocus={onReturnFocus}
+      onCloseAutoFocus={(event) => {
+        // Pointer activation in WebKit can leave focus on an unrelated control.
+        // This dialog returns to the pairing row even when that control survives.
+        event.preventDefault()
+        onReturnFocus()
+      }}
     >
       {shown ? (
         <div className="linked-pairing" data-linked-pairing data-state={shown.state}>

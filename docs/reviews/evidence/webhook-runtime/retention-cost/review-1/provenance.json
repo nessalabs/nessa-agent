@@ -1,0 +1,8 @@
+{
+  "source_files": 35,
+  "all_source_copies_equal": true,
+  "auth_source": "/workspace/nessa-webhook-retention/crates/nessa-auth/src/lib.rs",
+  "auth_recompiled": true,
+  "harness": "actual domain Delivery/Destination + application message/outbox/registration + infrastructure outbox; data-only Target stand-in; no full runtime composition",
+  "new_probes": "3245c23679d8b3f3cdc72e1d0e0cd9ca7a07ac43367310a54e9afbee852699f7"
+}

@@ -43,6 +43,8 @@ export default tseslint.config(
       "node_modules",
       "scripts",
       "packages/**/src/generated/**",
+      "packages/github-webhooks/dist/**",
+      "packages/github-webhooks/.wrangler/**",
     ],
   },
   js.configs.recommended,

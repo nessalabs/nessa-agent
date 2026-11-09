@@ -1,0 +1,34 @@
+
+running 30 tests
+test webhooks::infrastructure::outbox::store::tests::registration_tests::failure_tests::actual_original_actor_cannot_be_replaced_by_a_claimed_reply_actor ... ok
+test webhooks::infrastructure::outbox::store::tests::registration_tests::conflicting_config_and_caller_inputs_do_not_rewrite_reserved_command ... ok
+test webhooks::infrastructure::outbox::store::tests::registration_tests::failure_tests::actual_original_command_cannot_be_replaced_by_an_honest_looking_reply ... ok
+test webhooks::infrastructure::outbox::store::tests::registration_tests::failure_tests::coherent_auth_result_for_a_substituted_command_cannot_install_original_intent ... ok
+test webhooks::infrastructure::outbox::store::tests::registration_tests::failure_tests::contradictory_existing_receipt_does_not_discard_the_known_issued_intent ... ok
+test webhooks::infrastructure::outbox::store::tests::registration_tests::failure_tests::ordinary_origin_requires_explicit_recovery_even_if_reply_claims_webhook ... ok
+test webhooks::infrastructure::outbox::store::tests::registration_tests::failure_tests::matching_reply_cannot_turn_a_future_origin_into_current_committed_authority ... ok
+test webhooks::infrastructure::outbox::store::tests::registration_tests::auth_commit_and_uncertain_install_ack_recover_without_another_credential_or_secret ... ok
+test webhooks::infrastructure::outbox::store::tests::registration_tests::failure_tests::transient_intent_scan_interruption_is_unavailable_and_unchanged_state_recovers ... ok
+test webhooks::infrastructure::outbox::store::tests::registration_tests::failure_tests::unavailable_or_substituted_current_authority_cannot_install_or_erase_intent ... ok
+test webhooks::infrastructure::outbox::store::tests::registration_tests::failure_tests::uncertain_auth_commit_keeps_original_intent_and_typed_refusal_discards_only_unissued ... ok
+test webhooks::infrastructure::outbox::store::tests::registration_tests::installation_requires_the_retained_original_intent_before_any_effect ... ok
+test webhooks::infrastructure::outbox::store::tests::registration_tests::failure_tests::substituted_reservation_is_rejected_before_auth_and_installation ... ok
+test webhooks::infrastructure::outbox::store::tests::registration_tests::lifecycle_tests::automatic_expiry_observer_decoding_is_closed_and_canonical ... ok
+test webhooks::infrastructure::outbox::store::tests::registration_tests::lifecycle_tests::delivery_expiry_observation_keeps_the_actual_queued_identity ... ok
+test webhooks::infrastructure::outbox::store::tests::registration_tests::lifecycle_tests::first_lifecycle_stop_survives_later_observer_and_sending_recovery ... ok
+test webhooks::infrastructure::outbox::store::tests::registration_tests::failure_tests::contradictory_auth_reply_installs_nothing_and_preserves_original_retry ... ok
+test webhooks::infrastructure::outbox::store::tests::registration_tests::lifecycle_tests::lifecycle_expiry_before_a_delivery_retains_original_observer_through_lost_ack_and_restore ... ok
+test webhooks::infrastructure::outbox::store::tests::registration_tests::origin_tests::actual_webhook_origin_refuses_bearer_and_resumed_product_entry_after_restart ... ok
+test webhooks::infrastructure::outbox::store::tests::registration_tests::origin_tests::ambiguous_historical_admin_origin_is_preserved_and_requires_recovery ... ok
+test webhooks::infrastructure::outbox::store::tests::registration_tests::origin_tests::historical_product_actor_and_absent_command_correlation_are_not_rewritten ... ok
+test webhooks::infrastructure::outbox::store::tests::registration_tests::origin_tests::bearer_never_enters_registration_result_database_or_audit_and_replay_is_identical ... ok
+test webhooks::infrastructure::outbox::store::tests::registration_tests::installed_intent_contradictions_reject_before_live_or_restored_publication ... ok
+test webhooks::infrastructure::outbox::store::tests::registration_tests::registration_commits_real_auth_and_replays_original_config_after_restart ... ok
+test webhooks::infrastructure::outbox::store::tests::registration_tests::origin_tests::retiring_private_configuration_cannot_restore_product_session_authority ... ok
+test webhooks::infrastructure::outbox::store::tests::registration_tests::registration_retirement_removes_private_intent_even_when_audit_ack_is_lost ... ok
+test webhooks::infrastructure::outbox::store::tests::registration_tests::replayed_current_revocation_and_expiry_do_not_install_reserved_destination ... ok
+test webhooks::infrastructure::outbox::store::tests::registration_tests::unrelated_ordinary_receipt_cannot_install_a_webhook_or_leave_an_intent ... ok
+test webhooks::infrastructure::outbox::store::tests::registration_tests::origin_tests::restored_webhook_origin_cannot_carry_product_write_or_malformed_history ... ok
+test webhooks::infrastructure::outbox::store::tests::registration_tests::intent_count_and_byte_capacity_refuse_without_partial_insert ... ok
+
+test result: ok. 30 passed; 0 failed; 0 ignored; 0 measured; 70 filtered out; finished in 0.65s

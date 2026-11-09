@@ -10,7 +10,7 @@ use crate::conversation::application::{
 use crate::conversation::infrastructure::LocalConversationStore;
 use crate::conversation_test_support::{
     only, AcceptingCreationAudit, AcceptingDeletionAudit, AcceptingModeAudit, MemorySummaries,
-    Provider, ProviderFactory, RecordingFileLinkAudit, TestClock, Unlisted, DELETION_BUDGETS,
+    Provider, ProviderFactory, RecordingFileLinkAudit, TestClock, DELETION_BUDGETS,
 };
 use nessa_auth::domain::{OrganizationId, PrincipalId};
 use nessa_protocol::conversation::domain::ConversationId;
@@ -102,16 +102,17 @@ fn service(
 ) -> Arc<ConversationService> {
     let service = ConversationService::new(
         ConversationDependencies {
+            input_files: None,
             access_policy: crate::conversation_test_support::access_policy(),
             agents: only(Arc::new(Provider::new(provider))),
             storage,
-            metadata,
+            metadata: metadata.clone(),
             mode_audit: Arc::new(AcceptingModeAudit),
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
             attachments: None,
             summaries: Arc::new(MemorySummaries::default()),
-            listing: Arc::new(Unlisted),
+            listing: metadata,
             deletion_audit: Arc::new(AcceptingDeletionAudit),
             provider_sessions: ProviderSessionErasers::default(),
             deletion_budgets: DELETION_BUDGETS,
@@ -197,6 +198,7 @@ pub(super) async fn serve(
             caller("first-input"),
             "first".into(),
             SubmittedMessage {
+                uploads: Vec::new(),
                 text: "First accepted input".into(),
                 ..SubmittedMessage::default()
             },
@@ -211,6 +213,7 @@ pub(super) async fn serve(
             caller("second-input"),
             "second".into(),
             SubmittedMessage {
+                uploads: Vec::new(),
                 text: "Second queued input".into(),
                 ..SubmittedMessage::default()
             },
@@ -282,7 +285,9 @@ pub(super) async fn serve(
                     .unwrap();
                 provider.request_permission.store(0, Ordering::SeqCst);
                 release.take().unwrap().send(()).unwrap();
+                heads.trace("producer_wait_started", None);
                 wait_until_settled(&producer).await;
+                heads.trace("producer_settled", None);
                 let terminal_view = service
                     .read(id.clone(), caller("capture-terminal"))
                     .await
@@ -297,6 +302,7 @@ pub(super) async fn serve(
                     Some(&checkpoint),
                 )
                 .await;
+                heads.trace("producer_oracle_captured", None);
                 assert_eq!(
                     provider.executions.lock().unwrap().as_slice(),
                     &["first", "second"]

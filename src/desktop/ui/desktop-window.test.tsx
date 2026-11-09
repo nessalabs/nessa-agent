@@ -25,6 +25,7 @@ beforeEach(() => {
   }
   Object.assign(globalThis, { ResizeObserver: Observer, IntersectionObserver: Observer })
   Element.prototype.scrollTo ??= () => {}
+  Element.prototype.scrollIntoView ??= () => {}
   window.matchMedia ??= ((query: string) => ({
     matches: false,
     media: query,

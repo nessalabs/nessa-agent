@@ -139,6 +139,7 @@ impl AgentProvider for RetainedOpenProvider {
 
 fn agent(factory: Arc<ProviderFactory>, model: &'static str) -> ConversationAgent {
     ConversationAgent {
+        workspace: None,
         provider: Arc::new(IdentifiedProvider {
             inner: Provider::new(factory),
             model,
@@ -253,6 +254,7 @@ async fn uncertain_cleanup_retains_the_lane_without_starting_a_waiting_fingerpri
         calls: AtomicUsize::new(0),
     });
     let first = ConversationAgent {
+        workspace: None,
         provider: Arc::new(RetainedOpenProvider {
             inner: IdentifiedProvider {
                 inner: Provider::new(first_factory),

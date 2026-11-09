@@ -27,6 +27,7 @@ import type {
 import type { EdgeMove } from "../../../split-panes"
 import type { PaneRoom } from "../../../split-panes/model/pane-sizing"
 import type { Transcript, TurnMessage } from "../../model/transcript"
+import type { DraftImage } from "../../model/draft-images"
 import type {
   Initiator,
   WorkspaceDependencies,
@@ -184,6 +185,8 @@ const workspaceSlice = createSlice({
       state,
       { payload }: Payload<{ arrangement: WindowArrangement | null }>,
     ) => window.arrangementShown(state, payload),
+    panelShown: (state, { payload }: Payload<{ open: boolean }>) =>
+      window.panelShown(state, payload),
     toggleSidebar: (state, { payload }: Payload<{ open?: boolean } | undefined>) =>
       navigation.toggleSidebar(state, payload ?? {}),
     toggleSessionList: (state, { payload }: Payload<{ open?: boolean } | undefined>) =>
@@ -355,6 +358,14 @@ const workspaceSlice = createSlice({
       sessions.sessionRead(state, payload),
     setComposerText: (state, { payload }: Payload<{ sessionId: string; text: string }>) =>
       sessions.composerTextChanged(state, payload),
+    composerImagesAdded: (
+      state,
+      { payload }: Payload<{ sessionId: string; images: readonly DraftImage[] }>,
+    ) => sessions.composerImagesAdded(state, payload),
+    composerImageRemoved: (
+      state,
+      { payload }: Payload<{ sessionId: string; imageId: string }>,
+    ) => sessions.composerImageRemoved(state, payload),
 
     // A row's edits in place
     renameStarted: (state, { payload }: Payload<{ sessionId: string }>) =>
@@ -422,12 +433,27 @@ const workspaceSlice = createSlice({
       state,
       {
         payload,
-      }: Payload<{ opening: string; paths: readonly string[]; kind: ResourceKind }>,
+      }: Payload<{
+        opening: string
+        added: readonly { readonly path: string; readonly kind: ResourceKind }[]
+      }>,
     ) => channelCreation.channelResourcesAdded(state, payload),
     channelResourceRemoved: (
       state,
       { payload }: Payload<{ opening: string; path: string }>,
     ) => channelCreation.channelResourceRemoved(state, payload),
+    channelDropLanded: (state, { payload }: Payload<{ opening: string; drop: string }>) =>
+      channelCreation.channelDropLanded(state, payload),
+    channelDropSettled: (
+      state,
+      {
+        payload,
+      }: Payload<{
+        drop: string
+        added: readonly { readonly path: string; readonly kind: ResourceKind }[]
+        unread: number
+      }>,
+    ) => channelCreation.channelDropSettled(state, payload),
     channelStepAsked: (
       state,
       { payload }: Payload<{ opening: string; step: ChannelStep }>,
@@ -450,6 +476,23 @@ const workspaceSlice = createSlice({
       state,
       { payload }: Payload<{ opening: string; channel: Channel; draftId: string }>,
     ) => channelCreation.channelMade(state, payload),
+    // A channel's settings changed: the index keeps its section and the rest
+    // of what the window knows of it, and takes where its agents run now.
+    channelPlaced: (state, { payload }: Payload<{ channel: Channel }>) => ({
+      ...state,
+      channels: state.channels.map((each) =>
+        each.id === payload.channel.id
+          ? {
+              ...each,
+              coordinatorPlacement: payload.channel.coordinatorPlacement,
+              threadPlacement: payload.channel.threadPlacement,
+              ...(payload.channel.coordinatorConversationId
+                ? { coordinatorConversationId: payload.channel.coordinatorConversationId }
+                : {}),
+            }
+          : each,
+      ),
+    }),
   },
 })
 

@@ -1,3 +1,5 @@
+import { useWorkspaceSelector } from "../../adapters/store/hooks"
+import { selectChannel, selectDraft, selectSession } from "../../adapters/store/selectors"
 import { memo, useCallback, useEffect, useState } from "react"
 import {
   ContextMenu,
@@ -59,6 +61,17 @@ export const PaneHeader = memo(function PaneHeader({
     return () => window.clearTimeout(timer)
   }, [refusal])
   const session = useRememberedSession(sessionId)
+  const mainLocation = useWorkspaceSelector((state) => {
+    const channelId =
+      selectSession(state, sessionId)?.channelId ??
+      selectDraft(state, sessionId)?.channelId
+    const channel = channelId ? selectChannel(state, channelId) : undefined
+    return channel?.coordinatorConversationId === sessionId
+      ? channel.coordinatorPlacement === "boat"
+        ? "Boat"
+        : "Local"
+      : undefined
+  })
   const title = session?.title ?? "New session"
   const shown = titleShown && session !== undefined
   return (
@@ -82,6 +95,11 @@ export const PaneHeader = memo(function PaneHeader({
           }
           accessories={
             <>
+              {mainLocation ? (
+                <span className="workspace-pane-main-agent">
+                  Main agent · {mainLocation}
+                </span>
+              ) : null}
               <SessionAccessories sessionId={sessionId} />
               {refusal ? (
                 <span className="workspace-pane-refusal" role="status">

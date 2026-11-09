@@ -4,7 +4,11 @@ version.workspace = true
 edition.workspace = true
 publish = false
 
+[features]
+encryption = ["rusqlite/bundled-sqlcipher-vendored-openssl", "dep:zeroize"]
+
 [dependencies]
+zeroize = { version = "=1.9.0", optional = true }
 nessa-local-storage = { path = "../nessa-local-storage" }
 # `backup` and `serialize` copy an export read snapshot into memory after
 # admission has been released. The copy is not a file in the temp directory.

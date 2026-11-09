@@ -1,0 +1,8 @@
+{
+  "fixture_sha256": "fd14bd68bd8292ed7c0048066100c9c0332151338b0219669d903885d57569f1",
+  "fixture_identical": true,
+  "source_matches": {
+    "crates/nessa-server/src/webhooks/infrastructure/outbox/journal.rs": "9d6a7bdba5fdad5ee57ecf900313422d76742093910ebac4429a2d0f505afdb9",
+    "crates/nessa-server/src/webhooks/infrastructure/outbox/schema.sql": "b2b2de225b0ed22323dfd4503193833e0e626ea9d9683d631712b6c07fbe1ec8"
+  }
+}

@@ -196,7 +196,7 @@ pub(super) fn prepare(endpoint: Endpoint, limits: ProductLimits) -> ProductSessi
         endpoint.pin,
         "credential".into(),
         "phone-instance".into(),
-        Arc::new(LocalProductConnector),
+        Arc::new(LocalProductConnector::default()),
         Arc::new(Time(Instant::now())),
         Arc::new(ThreadProductWake::default()),
         limits,
@@ -265,7 +265,7 @@ struct CleanupConnector {
 }
 impl ProductConnector for CleanupConnector {
     fn connect(&self, address: SocketAddr, timeout: Duration) -> IoResult<ConnectedProduct> {
-        let connected = LocalProductConnector.connect(address, timeout)?;
+        let connected = LocalProductConnector::default().connect(address, timeout)?;
         Ok(ConnectedProduct {
             stream: Box::new(Cleanup {
                 inner: connected.stream,

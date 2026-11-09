@@ -12,7 +12,9 @@ use crate::conversation::application::{
 };
 use crate::device_pairing::infrastructure::PairingRuntimeError;
 use crate::mcp_servers::application::Unfinished;
-use nessa_auth::application::pairing::PairingWorkerFault;
+use nessa_auth::application::{
+    credential_admin::CredentialAdminError, pairing::PairingWorkerFault,
+};
 use std::error::Error;
 use std::fmt::{Debug, Display, Formatter, Result as FmtResult};
 
@@ -111,7 +113,7 @@ pub enum NativeShutdownFailure {
 /// still pending, or ended without reporting.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ShutdownStage {
-    /// A reader or review-audit drain outcome is still unknown.
+    /// A webhook, reader or review-audit drain outcome is still unknown.
     Drains,
     /// Every drain outcome is known; conversation cleanup's is still unknown.
     Conversations,
@@ -138,6 +140,8 @@ impl Display for ShutdownStage {
 #[derive(Debug, Default)]
 pub struct ShutdownReport {
     readers: ReaderDrain,
+    webhooks: Outcome<CredentialAdminError>,
+    webhook_deadline_exceeded: bool,
     review_audit: Outcome<ReviewNoticeAuditFailure>,
     /// Absent conversations are recorded as `Ok`: successful no-work evidence.
     conversations: Outcome<ConversationError>,
@@ -149,6 +153,14 @@ pub struct ShutdownReport {
     native: Outcome<NativeShutdownFailure>,
 }
 impl ShutdownReport {
+    /// The retained webhook runtime owner.
+    pub fn webhooks(&self) -> &Outcome<CredentialAdminError> {
+        &self.webhooks
+    }
+    /// Whether the shared drain deadline passed before this owner returned.
+    pub fn webhook_deadline_exceeded(&self) -> bool {
+        self.webhook_deadline_exceeded
+    }
     /// The two passive readers' drains.
     pub fn readers(&self) -> &ReaderDrain {
         &self.readers
@@ -175,7 +187,7 @@ impl ShutdownReport {
     }
     /// The first owner, in cleanup order, whose outcome is still unknown.
     pub fn stage(&self) -> ShutdownStage {
-        if !self.readers.complete() || !self.review_audit.is_known() {
+        if !self.readers.complete() || !self.review_audit.is_known() || !self.webhooks.is_known() {
             ShutdownStage::Drains
         } else if !self.conversations.is_known() {
             ShutdownStage::Conversations
@@ -191,11 +203,16 @@ impl ShutdownReport {
     /// never confirmed, so only a `Complete` report can be.
     pub fn confirmed(&self) -> bool {
         self.readers.confirmed()
+            && self.webhooks.is_ok()
+            && !self.webhook_deadline_exceeded
             && self.review_audit.is_ok()
             && self.conversations.is_ok()
             && self.held_reads.is_none()
             && self.servers.is_ok()
             && self.native.is_ok()
+    }
+    pub(crate) fn observe_webhooks(&mut self, result: Result<(), CredentialAdminError>) {
+        self.webhooks.observe(result);
     }
     pub(crate) fn observe_record(&mut self, result: Result<(), RecordReadError>) {
         self.readers.record.observe(result);
@@ -224,6 +241,9 @@ impl ShutdownReport {
     /// drains still unknown now, so a drain that already returned is not
     /// relabelled as a timeout.
     pub(crate) fn observe_drain_deadline(&mut self) {
+        if !self.webhooks.is_known() {
+            self.webhook_deadline_exceeded = true;
+        }
         if !self.readers.complete() {
             self.readers.deadline_exceeded = true;
             tracing::error!("passive reader shutdown exceeded deadline; retaining runtime until physical work ends");
@@ -254,6 +274,10 @@ impl Display for ShutdownReport {
             }
         };
         write!(f, "stage reached: {stage}")?;
+        write_outcome(f, "webhooks", &self.webhooks, "pending")?;
+        if self.webhook_deadline_exceeded {
+            f.write_str("; webhooks exceeded deadline")?;
+        }
         write_outcome(f, "record reader", &self.readers.record, "pending")?;
         write_outcome(f, "catalogue reader", &self.readers.catalogue, "pending")?;
         if self.readers.deadline_exceeded {
@@ -317,6 +341,7 @@ mod tests {
             report.observe_drain_deadline();
             return report;
         }
+        report.observe_webhooks(Ok(()));
         report.observe_record(Ok(()));
         report.observe_catalogue(Err(CatalogueReadError::WorkerPanicked));
         report.observe_review_audit(Ok(()));
@@ -344,23 +369,23 @@ mod tests {
         let cases = [
             (
                 ShutdownStage::Drains,
-                "stage reached: drains; record reader pending; catalogue reader failed WorkerPanicked; readers exceeded deadline; review audit pending; conversations not started; MCP stop not started; native drain not started",
+                "stage reached: drains; webhooks pending; webhooks exceeded deadline; record reader pending; catalogue reader failed WorkerPanicked; readers exceeded deadline; review audit pending; conversations not started; MCP stop not started; native drain not started",
             ),
             (
                 ShutdownStage::Conversations,
-                "stage reached: conversations; record reader ok; catalogue reader failed WorkerPanicked; review audit ok; conversations pending; MCP stop not started; native drain not started",
+                "stage reached: conversations; webhooks ok; record reader ok; catalogue reader failed WorkerPanicked; review audit ok; conversations pending; MCP stop not started; native drain not started",
             ),
             (
                 ShutdownStage::Servers,
-                "stage reached: MCP stop; record reader ok; catalogue reader failed WorkerPanicked; review audit ok; conversations failed Audit; MCP stop pending; native drain not started",
+                "stage reached: MCP stop; webhooks ok; record reader ok; catalogue reader failed WorkerPanicked; review audit ok; conversations failed Audit; MCP stop pending; native drain not started",
             ),
             (
                 ShutdownStage::Native,
-                "stage reached: native drain; record reader ok; catalogue reader failed WorkerPanicked; review audit ok; conversations failed Audit; MCP stop ok; native drain pending",
+                "stage reached: native drain; webhooks ok; record reader ok; catalogue reader failed WorkerPanicked; review audit ok; conversations failed Audit; MCP stop ok; native drain pending",
             ),
             (
                 ShutdownStage::Complete,
-                "stage reached: complete; record reader ok; catalogue reader failed WorkerPanicked; review audit ok; conversations failed Audit; MCP stop ok; native drain failed ListenerFault(Panic)",
+                "stage reached: complete; webhooks ok; record reader ok; catalogue reader failed WorkerPanicked; review audit ok; conversations failed Audit; MCP stop ok; native drain failed ListenerFault(Panic)",
             ),
         ];
         for (stage, line) in cases {
@@ -378,6 +403,7 @@ mod tests {
         let mut report = ShutdownReport::default();
         assert_eq!(report.stage(), ShutdownStage::Drains);
         assert!(!report.confirmed());
+        report.observe_webhooks(Ok(()));
         report.observe_record(Ok(()));
         report.observe_catalogue(Ok(()));
         report.observe_review_audit(Ok(()));
@@ -399,6 +425,7 @@ mod tests {
     #[test]
     fn a_failed_held_read_drain_is_not_a_confirmed_shutdown() {
         let mut report = ShutdownReport::default();
+        report.observe_webhooks(Ok(()));
         report.observe_record(Ok(()));
         report.observe_catalogue(Ok(()));
         report.observe_review_audit(Ok(()));
@@ -408,6 +435,7 @@ mod tests {
         report.observe_native(Ok(()));
         assert!(report.confirmed(), "a drained one is success");
         let mut report = ShutdownReport::default();
+        report.observe_webhooks(Ok(()));
         report.observe_record(Ok(()));
         report.observe_catalogue(Ok(()));
         report.observe_review_audit(Ok(()));
@@ -422,7 +450,7 @@ mod tests {
         );
         assert_eq!(
             report.into_result().unwrap_err().to_string(),
-            "stage reached: complete; record reader ok; catalogue reader ok; review audit ok; conversations ok; held reads failed WorkerPanicked; MCP stop ok; native drain ok"
+            "stage reached: complete; webhooks ok; record reader ok; catalogue reader ok; review audit ok; conversations ok; held reads failed WorkerPanicked; MCP stop ok; native drain ok"
         );
     }
 
@@ -433,5 +461,37 @@ mod tests {
         let mut report = ShutdownReport::default();
         report.observe_review_audit(Ok(()));
         report.observe_review_audit(Err(ReviewNoticeAuditFailure::TimedOut));
+    }
+
+    #[test]
+    fn webhook_failure_unknown_and_late_success_each_prevent_false_confirmation() {
+        for outcome in [
+            None,
+            Some(Err(CredentialAdminError::Unavailable)),
+            Some(Ok(())),
+        ] {
+            let mut report = ShutdownReport::default();
+            report.observe_record(Ok(()));
+            report.observe_catalogue(Ok(()));
+            report.observe_review_audit(Ok(()));
+            report.observe_conversations(Ok(()));
+            report.observe_servers(Ok(()));
+            report.observe_native(Ok(()));
+            assert_eq!(report.stage(), ShutdownStage::Drains);
+            assert!(
+                !report.confirmed(),
+                "unobserved webhook cleanup is not success"
+            );
+            report.observe_drain_deadline();
+            if let Some(outcome) = outcome {
+                report.observe_webhooks(outcome);
+            }
+            assert!(report.webhook_deadline_exceeded());
+            assert!(
+                !report.confirmed(),
+                "failure, unknown or late completion cannot confirm"
+            );
+            assert!(report.to_string().contains("webhooks exceeded deadline"));
+        }
     }
 }

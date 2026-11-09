@@ -50,7 +50,7 @@ use std::net::{SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::io::{stdin, AsyncBufReadExt, BufReader};
 use tokio::runtime::Handle;
 
@@ -81,14 +81,35 @@ pub(super) struct HeadHold {
     count: AtomicUsize,
     held: AtomicUsize,
     release: tokio::sync::Notify,
+    observed: AtomicUsize,
+    began: OnceLock<Instant>,
+}
+/// Receipt of this fixture's wait lifetime; Drop alone names no timeout cause.
+struct HeadWait<'a> {
+    owner: &'a HeadHold,
+    read: usize,
+}
+impl Drop for HeadWait<'_> {
+    fn drop(&mut self) {
+        self.owner.trace("head_wait_dropped", Some(self.read));
+    }
 }
 impl HeadHold {
+    /// Local observation order and elapsed time, without request payloads.
+    pub(super) fn trace(&self, event: &str, read: Option<usize>) {
+        let sequence = self.observed.fetch_add(1, Ordering::SeqCst) + 1;
+        let elapsed = self.began.get_or_init(Instant::now).elapsed();
+        eprintln!("record fixture semantic seq={sequence} elapsed_us={} event={event} head={read:?} held={}", elapsed.as_micros(), self.held.load(Ordering::SeqCst));
+    }
+
     /// Hold the next head read while the semantic producer settles.
     pub(super) fn hold_next(&self) {
         self.held
             .store(self.count.load(Ordering::SeqCst) + 1, Ordering::SeqCst);
+        self.trace("hold_armed", None);
     }
     pub(super) fn release(&self) {
+        self.trace("release_notified", None);
         self.release.notify_one();
     }
     /// Hold the second head read from now: a `follow`'s discovery reads the
@@ -108,6 +129,9 @@ impl RecordReadSource for GatedRead {
         let page = matches!(&operation, RecordReadOperation::Page(_));
         Box::pin(async move {
             let head = (!page).then(|| self.heads.count.fetch_add(1, Ordering::SeqCst) + 1);
+            if !page && self.mode == "semantic" {
+                self.heads.trace("head_entered", head);
+            }
             // Source latency exercises the real socket phase owner (B1), not a
             // fabricated timeout reply. Successful reads still use SDK storage.
             match (self.mode.as_str(), head) {
@@ -118,7 +142,17 @@ impl RecordReadSource for GatedRead {
                 ("live" | "semantic", Some(count))
                     if count == self.heads.held.load(Ordering::SeqCst) =>
                 {
-                    self.heads.release.notified().await
+                    let receipt = (self.mode == "semantic").then(|| {
+                        self.heads.trace("head_wait_started", Some(count));
+                        HeadWait {
+                            owner: &self.heads,
+                            read: count,
+                        }
+                    });
+                    self.heads.release.notified().await;
+                    if receipt.is_some() {
+                        self.heads.trace("head_release_observed", Some(count));
+                    }
                 }
                 ("timeout-head", Some(1)) => std::future::pending::<()>().await,
                 ("budget-head", Some(1)) => {
@@ -142,6 +176,9 @@ impl RecordReadSource for GatedRead {
             }
             let started = std::time::Instant::now();
             let response = self.source.read(admitted, operation, lease).await;
+            if !page && self.mode == "semantic" {
+                self.heads.trace("head_source_returned", head);
+            }
             if let Err(error) = &response {
                 eprintln!(
                     "record fixture page={page} head={head:?} after {:?}: {error:?}",
@@ -187,8 +224,9 @@ impl RecordReadSource for GatedRead {
                         .0
                         .unwrap();
                     let before = snapshot.provider_context.clone();
-                    snapshot.provider_context = ProviderContext::Recorded(
+                    snapshot.provider_context = ProviderContext::recorded_after(
                         ExecutionSessionId::new("later-source-context").unwrap(),
+                        0,
                     );
                     let after = snapshot.provider_context.clone();
                     lease
@@ -308,6 +346,7 @@ async fn gateway_child() {
             listen_address: address,
             relay,
             advertised_address: None,
+            tunnel: None,
         },
         NativeInputs {
             namespace: root.to_path_buf(),
@@ -347,7 +386,7 @@ async fn gateway_child() {
     // `conversations_not_configured`.
     let semantic =
         (mode == "semantic").then(|| super::semantic::prepare(storage.clone(), metadata.clone()));
-    let follows = matches!(mode.as_str(), "live" | "preparing-head")
+    let follows = matches!(mode.as_str(), "live" | "preparing-head" | "catalogue")
         .then(|| super::semantic::reader(storage.clone(), metadata.clone()));
     let mut state = ProductRouteState::new(
         ResourceId::new(gateway.clone()).unwrap(),
@@ -406,6 +445,23 @@ async fn gateway_child() {
             .with_conversations(corpus.service.clone())
             .with_agents_catalog(super::semantic::catalog());
     }
+    // `NESSA_TUNNEL_PROGRAM`: the web tunnel is on, quick, with that program
+    // standing in for cloudflared, as the stress check runs it.
+    #[cfg(unix)]
+    let prepared = match std::env::var_os("NESSA_TUNNEL_PROGRAM") {
+        Some(_) => prepared.with_tunnel(crate::composition::tunnel::prepare(
+            root,
+            &crate::composition::runtime_config::TunnelConfig {
+                ingress: std::net::TcpListener::bind("127.0.0.1:0")
+                    .unwrap()
+                    .local_addr()
+                    .unwrap(),
+                mode: crate::tunnel::application::TunnelMode::Quick,
+                hostname: None,
+            },
+        )),
+        None => prepared,
+    };
     let bound = bind(prepared, RuntimeDependencies::default().clock, state)
         .await
         .unwrap();
@@ -419,6 +475,7 @@ async fn gateway_child() {
         // First start: pair this test's device through the real listener.
         Some(evidence) => {
             let session = AuthenticateSession {
+                policy: &nessa_auth::adapters::cedar::CedarPolicyEvaluator::new().unwrap(),
                 verifier: auth.as_ref(),
                 access: auth.as_ref(),
                 clock: &SystemClock,
@@ -527,14 +584,18 @@ async fn gateway_child() {
                     context: context.clone(),
                 }];
                 for index in 0..300 {
-                    let next = ProviderContext::Recorded(
+                    let next = ProviderContext::recorded_after(
                         ExecutionSessionId::new(format!("{index:05}{}", "x".repeat(240))).unwrap(),
+                        0,
                     );
                     changes.push(SessionChange::ProviderContext {
                         before: context,
                         after: next.clone(),
                     });
                     context = next;
+                }
+                if mode == "phone-files" {
+                    changes.push(stored_phone_file(&setup.owner));
                 }
                 lease
                     .save_changes(
@@ -546,6 +607,10 @@ async fn gateway_child() {
             }
             drop(lease);
         }
+    }
+    if mode == "catalogue" {
+        super::catalogue::serve(&setup, metadata).await;
+        return;
     }
     if mode == "live" {
         tokio::spawn(live_control(
@@ -609,8 +674,9 @@ async fn live_control(
                 let binding = loaded.binding().clone();
                 let mut snapshot = loaded.into_published(&conversation).unwrap().0.unwrap();
                 let before = snapshot.provider_context.clone();
-                snapshot.provider_context = ProviderContext::Recorded(
+                snapshot.provider_context = ProviderContext::recorded_after(
                     ExecutionSessionId::new(format!("live-commit-{commits}")).unwrap(),
+                    0,
                 );
                 let after = snapshot.provider_context.clone();
                 lease
@@ -782,4 +848,52 @@ pub(super) async fn share_with_devices(
         .unwrap();
         assert!(receipt.applied);
     }
+}
+
+/// Stored metadata for the native reader; this fixture claims no file delivery.
+fn stored_phone_file(owner: &str) -> SessionChange {
+    use nessa_sdk::application::agent_execution::{
+        executions::{ExecutionRequest, SubmissionMode},
+        permissions::ActionContext,
+        sessions::{InvocationRecord, SubmissionAcknowledgement},
+    };
+    use nessa_sdk::domain::{
+        agent_execution::{
+            executions::{ExecutionId, Initiation},
+            prompts::{UploadedFileReference, UserMessage},
+        },
+        common::value_objects::{MediaType, Sha256Digest},
+    };
+    let reference = UploadedFileReference::new(
+        Sha256Digest::from_bytes([7; 32]),
+        MediaType::parse("application/pdf").unwrap(),
+        12,
+        "native-report.pdf".into(),
+    )
+    .unwrap();
+    SessionChange::InputAccepted(Box::new(InvocationRecord {
+        target_event_offset: None,
+        resumed_from: None,
+        decline: None,
+        cancellation_delivery: None,
+        submission: SubmissionMode::Immediate,
+        request: ExecutionRequest {
+            execution_id: ExecutionId::new("phone-file").unwrap(),
+            user_message: UserMessage::new(None, vec![], vec![], vec![reference]).unwrap(),
+            estimated_input_tokens: 1,
+            reserved_output_tokens: 1,
+        },
+        actor: ActionContext::new(owner, "native-fixture", "phone-file").unwrap(),
+        initiation: Initiation::owner(),
+        notes: vec![],
+        handoff: None,
+        acknowledgement: SubmissionAcknowledgement::Pending,
+        events: vec![],
+        scheduling: vec![],
+        cancellation: None,
+        provider_report: None,
+        local_cancellation: None,
+        local_outcome: None,
+        result: None,
+    }))
 }

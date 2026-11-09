@@ -226,6 +226,7 @@ fn original_projection_rejects_other_valid_owner_bootstrap_credential() {
     };
     let other = ready(
         AuthenticateSession {
+            policy: &crate::adapters::cedar::CedarPolicyEvaluator::new().unwrap(),
             verifier: f.store.as_ref(),
             access: f.store.as_ref(),
             clock: &Time,

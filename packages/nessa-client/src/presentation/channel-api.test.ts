@@ -11,6 +11,9 @@ const made: Channel = {
   agent: "codex",
   model: "gpt-5.6-terra",
   approvalMode: "auto",
+  coordinatorPlacement: "local",
+  threadPlacement: "local",
+  coordinatorConversationId: null,
   createdAtMs: 1000,
 }
 
@@ -22,6 +25,9 @@ const conversations: Channel = {
   agent: null,
   model: null,
   approvalMode: "ask",
+  coordinatorPlacement: "local",
+  threadPlacement: "local",
+  coordinatorConversationId: null,
   createdAtMs: 0,
 }
 

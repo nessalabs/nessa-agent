@@ -1,0 +1,32 @@
+[
+  {
+    "name": "cutoff-off-by-one",
+    "mutation_failed": true,
+    "restored_passed": true,
+    "source_restored_sha256": "9d6a7bdba5fdad5ee57ecf900313422d76742093910ebac4429a2d0f505afdb9"
+  },
+  {
+    "name": "cross-registration-cutoff",
+    "mutation_failed": true,
+    "restored_passed": true,
+    "source_restored_sha256": "9d6a7bdba5fdad5ee57ecf900313422d76742093910ebac4429a2d0f505afdb9"
+  },
+  {
+    "name": "owed-deletion",
+    "mutation_failed": true,
+    "restored_passed": true,
+    "source_restored_sha256": "9d6a7bdba5fdad5ee57ecf900313422d76742093910ebac4429a2d0f505afdb9"
+  },
+  {
+    "name": "audit-trigger-missing",
+    "mutation_failed": true,
+    "restored_passed": true,
+    "source_restored_sha256": "b2b2de225b0ed22323dfd4503193833e0e626ea9d9683d631712b6c07fbe1ec8"
+  },
+  {
+    "name": "cutoff-recomputed",
+    "mutation_failed": true,
+    "restored_passed": true,
+    "source_restored_sha256": "9d6a7bdba5fdad5ee57ecf900313422d76742093910ebac4429a2d0f505afdb9"
+  }
+]

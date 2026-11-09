@@ -1,0 +1,1 @@
+{"old": "if request.purpose == CredentialIssuePurpose::Webhook {\n                let credential = domain_credential(&metadata)?;", "new": "if true {\n                let credential = domain_credential(&metadata)?;", "changed_sha256": "1da566b1092805941f91bd0a2d2f7c602742ce24b7523946e0b09bf4996e4aa7"}

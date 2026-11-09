@@ -23,6 +23,8 @@ struct EchoLauncher {
     launched: Mutex<Vec<BTreeMap<String, String>>>,
     /// The publish point each launch was given.
     points: Mutex<Vec<Option<String>>>,
+    /// The saved login each launch was given.
+    logins: Mutex<Vec<Option<String>>>,
     slow: Mutex<Duration>,
     deaf: AtomicBool,
     leisurely: AtomicBool,
@@ -69,9 +71,14 @@ impl HarnessLauncher for EchoLauncher {
         &self,
         _agent: &str,
         environment: &BTreeMap<String, String>,
+        login: Option<&nessa_protocol::lease::Login>,
         publish_point: Option<&str>,
     ) -> Result<HarnessProcess, AgentError> {
         self.launched.lock().unwrap().push(environment.clone());
+        self.logins
+            .lock()
+            .unwrap()
+            .push(login.map(|login| login.expose().to_owned()));
         self.points
             .lock()
             .unwrap()
@@ -298,6 +305,8 @@ fn harness_terms() -> GrantedTerms {
         sandbox: Sandbox::HarnessDefault,
         timeout_ms: None,
         lease_ms: None,
+        // Every peer the tests grant may be handed a saved login.
+        takes_login: true,
     }
 }
 
@@ -306,6 +315,7 @@ fn command_terms(timeout_ms: u64) -> GrantedTerms {
         sandbox: Sandbox::None,
         timeout_ms: Some(timeout_ms),
         lease_ms: None,
+        takes_login: false,
     }
 }
 
@@ -319,7 +329,7 @@ fn real_time() -> Arc<dyn Timer> {
 struct Gateway {
     frames: FrameStream<ReadHalf<DuplexStream>>,
     writer: WriteHalf<DuplexStream>,
-    served: JoinHandle<()>,
+    served: JoinHandle<ServeEnd>,
     ledger: Arc<MemoryLedger>,
     stopped: Arc<AtomicUsize>,
     launcher: Arc<EchoLauncher>,
@@ -418,6 +428,31 @@ impl Gateway {
         runs_commands: bool,
         timer: Arc<dyn Timer>,
     ) -> Self {
+        Self::reporting(
+            buffer,
+            peer,
+            grants,
+            ledger,
+            outbox,
+            inbox,
+            runs_commands,
+            timer,
+            None,
+        )
+    }
+    /// [`Self::through`], reporting this machine as `machine` reads it.
+    #[allow(clippy::too_many_arguments, reason = "a test harness's one builder")]
+    fn reporting(
+        buffer: usize,
+        peer: Peer,
+        grants: Arc<MemoryGrants>,
+        ledger: Arc<MemoryLedger>,
+        outbox: Arc<dyn ArtifactOutbox>,
+        inbox: Option<Arc<dyn ArtifactInbox>>,
+        runs_commands: bool,
+        timer: Arc<dyn Timer>,
+        machine: Option<Arc<dyn crate::devices::application::MachineProbe>>,
+    ) -> Self {
         let (gateway, environment) = duplex(buffer);
         let (environment_in, environment_out) = split(environment);
         let stopped = Arc::new(AtomicUsize::new(0));
@@ -425,6 +460,7 @@ impl Gateway {
             stopped: stopped.clone(),
             launched: Mutex::new(Vec::new()),
             points: Mutex::new(Vec::new()),
+            logins: Mutex::new(Vec::new()),
             slow: Mutex::new(Duration::ZERO),
             deaf: AtomicBool::new(false),
             leisurely: AtomicBool::new(false),
@@ -443,6 +479,7 @@ impl Gateway {
                 policy: Arc::new(
                     crate::env_serve::infrastructure::CedarLeasePolicy::new().unwrap(),
                 ),
+                machine,
             },
             Runners {
                 harnesses: launcher.clone(),
@@ -520,6 +557,115 @@ fn hello() -> FromEnvironment {
     }
 }
 
+/// A gateway that speaks another lease protocol says which, in a frame every
+/// build reads alike: serving ends with it, and so the host can fetch that
+/// gateway's build. A lease frame this build cannot read is only dropped.
+#[tokio::test]
+async fn a_gateway_on_another_protocol_ends_serving_with_the_protocol_it_named() {
+    let mut gateway = Gateway::start();
+    assert_eq!(gateway.next().await, hello());
+    gateway
+        .writer
+        .write_all(
+            &nessa_protocol::build_update::encode(
+                &nessa_protocol::build_update::FromGateway::VersionRefused {
+                    protocol: "theirs".into(),
+                },
+            )
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    let end = tokio::time::timeout(Duration::from_secs(10), &mut gateway.served)
+        .await
+        .expect("serving ended")
+        .unwrap();
+    assert_eq!(
+        end,
+        ServeEnd::VersionRefused {
+            protocol: "theirs".into()
+        }
+    );
+}
+
+/// A saved login reaches the harness only on a lease whose grant takes
+/// one: a start carrying one on any other lease is refused and nothing runs.
+#[tokio::test]
+async fn a_saved_login_reaches_the_harness_only_where_the_grant_takes_one() {
+    let grants = MemoryGrants::none();
+    grants.set(DIALED, Some(claude_only()));
+    let mut gateway = Gateway::for_peer(
+        DIALED,
+        grants.clone(),
+        Arc::new(MemoryLedger::default()),
+        Arc::new(NoOutbox),
+        false,
+        real_time(),
+    );
+    assert_eq!(gateway.next().await, hello());
+    gateway.granted(LEASE).await;
+    gateway
+        .send(ToEnvironment::Start {
+            lease: LEASE.into(),
+            channel: 1,
+            environment: BTreeMap::new(),
+            login: Some(nessa_protocol::lease::Login::new("sk-ant-oat-x".into()).unwrap()),
+        })
+        .await;
+    gateway
+        .send(ToEnvironment::Input {
+            lease: LEASE.into(),
+            channel: 1,
+            data: Data(b"ping\n".to_vec()),
+        })
+        .await;
+    assert!(matches!(
+        gateway.next().await,
+        FromEnvironment::Output { .. }
+    ));
+    assert_eq!(
+        *gateway.launcher.logins.lock().unwrap(),
+        [Some("sk-ant-oat-x".to_owned())]
+    );
+    // The owner takes logins back: the next lease is granted without, and a
+    // login sent with its start anyway runs nothing.
+    grants.set(DIALED, Some(claude_only().without_logins()));
+    gateway
+        .send(ToEnvironment::Grant {
+            lease: "next".into(),
+            agent: "claude".into(),
+            sandbox: Sandbox::HarnessDefault,
+        })
+        .await;
+    assert_eq!(
+        gateway.next().await,
+        FromEnvironment::Granted {
+            lease: "next".into(),
+            terms: GrantedTerms {
+                takes_login: false,
+                ..harness_terms()
+            },
+        }
+    );
+    gateway
+        .send(ToEnvironment::Start {
+            lease: "next".into(),
+            channel: 1,
+            environment: BTreeMap::new(),
+            login: Some(nessa_protocol::lease::Login::new("sk-ant-oat-x".into()).unwrap()),
+        })
+        .await;
+    assert_eq!(
+        gateway.next().await,
+        FromEnvironment::StartFailed {
+            lease: "next".into(),
+            channel: 1,
+            reason: StartFailure::LoginNotTaken,
+        }
+    );
+    assert_eq!(gateway.launcher.logins.lock().unwrap().len(), 1);
+}
+
 /// Gate 1 and 2: a lease runs a harness whose bytes are carried both ways
 /// under its lease and channel; its end stops the harness and is recorded
 /// with what that took before it is answered.
@@ -533,6 +679,7 @@ async fn a_lease_runs_a_harness_and_its_end_is_answered_with_recorded_cleanup() 
             lease: LEASE.into(),
             channel: 1,
             environment: BTreeMap::from([("ANTHROPIC_MODEL".into(), "m".into())]),
+            login: None,
         })
         .await;
     gateway
@@ -620,6 +767,7 @@ async fn frames_naming_nothing_held_are_dropped_with_evidence() {
             lease: "other".into(),
             channel: 1,
             environment: BTreeMap::new(),
+            login: None,
         })
         .await;
     assert_eq!(
@@ -692,6 +840,7 @@ async fn the_gateway_gone_ends_every_lease_as_lost_with_recorded_cleanup() {
             lease: LEASE.into(),
             channel: 7,
             environment: BTreeMap::new(),
+            login: None,
         })
         .await;
     let Gateway {
@@ -868,6 +1017,7 @@ fn claude_only() -> PeerGrant {
         Agents::Named([AgentName::new("claude").unwrap()].into()),
         None,
     )
+    .with_logins()
 }
 
 /// Row I4: a dialed gateway the owner granted nothing is refused every
@@ -912,6 +1062,7 @@ async fn i4_a_dialed_gateway_without_a_grant_is_refused_and_nothing_runs() {
             lease: LEASE.into(),
             channel: 1,
             environment: BTreeMap::new(),
+            login: None,
         })
         .await;
     assert_eq!(
@@ -1078,6 +1229,7 @@ async fn i6_an_ungrant_applies_to_the_next_lease_and_running_leases_stay() {
             lease: LEASE.into(),
             channel: 1,
             environment: BTreeMap::new(),
+            login: None,
         })
         .await;
     gateway
@@ -1298,6 +1450,7 @@ async fn a_stop_is_answered_with_the_harness_cleanup() {
             lease: LEASE.into(),
             channel: 1,
             environment: BTreeMap::new(),
+            login: None,
         })
         .await;
     for channel in [1, 2] {
@@ -1351,6 +1504,7 @@ async fn a_stop_is_answered_with_the_harness_cleanup() {
             lease: LEASE.into(),
             channel: 1,
             environment: BTreeMap::new(),
+            login: None,
         })
         .await;
     assert_eq!(
@@ -1377,6 +1531,7 @@ async fn a_stop_asked_twice_while_stopping_answers_the_same_cleanup() {
             lease: LEASE.into(),
             channel: 1,
             environment: BTreeMap::new(),
+            login: None,
         })
         .await;
     for _ in 0..2 {
@@ -1500,6 +1655,108 @@ async fn keepalives_keep_a_quiet_gateway_served() {
     );
 }
 
+struct FixedMachine;
+impl crate::devices::application::MachineProbe for FixedMachine {
+    fn read(&self) -> Option<nessa_protocol::lease::MachineReport> {
+        Some(nessa_protocol::lease::MachineReport {
+            hostname: "build-box".into(),
+            os: "linux".into(),
+            os_version: "24.04".into(),
+            arch: "x86_64".into(),
+            cpus: 8,
+            cpu_permille: 610,
+            memory_total_bytes: 32,
+            memory_used_bytes: 8,
+            disk_total_bytes: 100,
+            disk_used_bytes: 40,
+            disks: vec![nessa_protocol::lease::MachineDisk {
+                mount: "/".into(),
+                total_bytes: 100,
+                used_bytes: 40,
+            }],
+        })
+    }
+}
+
+/// A host with a machine to report says what it is right after its hello,
+/// then once each report interval, in place of the keepalive a quiet link
+/// would carry; a frame sent in between is not followed by another report.
+#[tokio::test]
+async fn the_machine_is_reported_after_the_hello_and_each_interval() {
+    let timer = Arc::new(ManualTimer::default());
+    let mut gateway = Gateway::reporting(
+        1 << 20,
+        Peer::Ssh,
+        MemoryGrants::none(),
+        Arc::new(MemoryLedger::default()),
+        Arc::new(NoOutbox),
+        None,
+        true,
+        timer.clone(),
+        Some(Arc::new(FixedMachine)),
+    );
+    assert_eq!(gateway.frame().await, hello());
+    let report = FixedMachine.read_report();
+    assert_eq!(gateway.frame().await, report);
+    // A frame before the interval has passed is answered alone.
+    let before = timer.waits().len();
+    gateway.granted(LEASE).await;
+    // Quiet for the interval: the report goes in place of the keepalive.
+    let quiet = timer
+        .started(|index, wait| {
+            index >= before && wait.deadline == wait.started + KEEPALIVE_INTERVAL
+        })
+        .await;
+    timer.advance_to(quiet.deadline);
+    assert_eq!(gateway.frame().await, report);
+}
+
+/// A machine whose read never comes back in time, as a disk that hangs.
+struct StuckMachine;
+impl crate::devices::application::MachineProbe for StuckMachine {
+    fn read(&self) -> Option<nessa_protocol::lease::MachineReport> {
+        std::thread::sleep(
+            crate::devices::application::MACHINE_READ_LIMIT + Duration::from_secs(1),
+        );
+        None
+    }
+}
+
+/// A read that hangs is given up after its limit: the writer goes on, and
+/// a lease is answered, with no report sent.
+#[tokio::test]
+async fn a_machine_read_that_hangs_holds_the_writer_no_longer_than_its_limit() {
+    let timer = Arc::new(ManualTimer::default());
+    let mut gateway = Gateway::reporting(
+        1 << 20,
+        Peer::Ssh,
+        MemoryGrants::none(),
+        Arc::new(MemoryLedger::default()),
+        Arc::new(NoOutbox),
+        None,
+        true,
+        timer.clone(),
+        Some(Arc::new(StuckMachine)),
+    );
+    assert_eq!(gateway.frame().await, hello());
+    let started = std::time::Instant::now();
+    gateway.granted(LEASE).await;
+    let waited = started.elapsed();
+    assert!(
+        waited < crate::devices::application::MACHINE_READ_LIMIT * 2,
+        "the lease waited {waited:?} behind the read"
+    );
+}
+
+impl FixedMachine {
+    fn read_report(&self) -> FromEnvironment {
+        use crate::devices::application::MachineProbe;
+        FromEnvironment::Machine {
+            report: self.read().unwrap(),
+        }
+    }
+}
+
 /// What a lease's own end is still recording is that end's to answer: an
 /// account, or a second end, asked meanwhile waits for it rather than
 /// reading the ledger before the end is in it.
@@ -1514,6 +1771,7 @@ async fn an_account_asked_while_the_lease_is_ending_answers_that_end() {
             lease: LEASE.into(),
             channel: 1,
             environment: BTreeMap::new(),
+            login: None,
         })
         .await;
     gateway
@@ -1640,6 +1898,7 @@ async fn input_a_harness_does_not_read_stops_it_and_says_so() {
             lease: LEASE.into(),
             channel: 1,
             environment: BTreeMap::new(),
+            login: None,
         })
         .await;
     // Far more than the harness's pipe and the input queue hold.
@@ -1707,6 +1966,7 @@ async fn an_unrecorded_input_overflow_stops_the_harness_uncertain() {
             lease: LEASE.into(),
             channel: 1,
             environment: BTreeMap::new(),
+            login: None,
         })
         .await;
     // Started is recorded before its first input is read.
@@ -1774,6 +2034,7 @@ async fn a_stop_starts_its_grace_after_the_harness_has_its_input() {
             lease: LEASE.into(),
             channel: 1,
             environment: BTreeMap::new(),
+            login: None,
         })
         .await;
     // Ten reads' worth: about 200 ms for the harness to take in, then 300 ms
@@ -2001,6 +2262,7 @@ impl Gateway {
             lease: lease.into(),
             channel: 1,
             environment: BTreeMap::new(),
+            login: None,
         })
         .await;
         self.settled().await;
@@ -4413,6 +4675,7 @@ fn expiring_through(
         Peer::Ssh,
         Some(
             PeerGrant::everything()
+                .with_logins()
                 .with_max_lease(MaxLease::new(MAX_LEASE.as_millis() as u64).unwrap()),
         ),
     );
@@ -4453,6 +4716,7 @@ impl Gateway {
             lease: lease.into(),
             channel: 1,
             environment: BTreeMap::new(),
+            login: None,
         })
         .await;
         self.settled().await;
@@ -4646,6 +4910,7 @@ async fn a_lease_with_no_max_never_expires() {
             lease: LEASE.into(),
             channel: 1,
             environment: BTreeMap::new(),
+            login: None,
         })
         .await;
     gateway.settled().await;
@@ -4824,6 +5089,7 @@ async fn a_gateway_sending_without_pause_cannot_put_off_an_expiry() {
                 if late.load(Ordering::SeqCst) && !started {
                     started = true;
                     let start = ToEnvironment::Start {
+                        login: None,
                         lease: LEASE.into(),
                         channel: 2,
                         environment: BTreeMap::new(),
@@ -5024,6 +5290,7 @@ impl Gateway {
             lease: lease.into(),
             channel: 1,
             environment: BTreeMap::new(),
+            login: None,
         })
         .await;
         self.settled().await;
@@ -5260,7 +5527,7 @@ async fn quiet(timer: &ManualTimer) {
 /// since its start.
 async fn granted_unread(timer: &Arc<ManualTimer>, lease_ms: u64) -> Gateway {
     let grants = MemoryGrants::none();
-    grants.set(Peer::Ssh, Some(PeerGrant::everything()));
+    grants.set(Peer::Ssh, Some(PeerGrant::everything().with_logins()));
     let mut gateway = Gateway::through(
         512,
         Peer::Ssh,
@@ -5284,7 +5551,11 @@ async fn granted_unread(timer: &Arc<ManualTimer>, lease_ms: u64) -> Gateway {
     quiet(timer).await;
     grants.set(
         Peer::Ssh,
-        Some(PeerGrant::everything().with_max_lease(MaxLease::new(lease_ms).unwrap())),
+        Some(
+            PeerGrant::everything()
+                .with_logins()
+                .with_max_lease(MaxLease::new(lease_ms).unwrap()),
+        ),
     );
     gateway
         .send(ToEnvironment::Grant {
@@ -5455,7 +5726,7 @@ async fn a_fetch_under_way_when_its_lease_expires_is_answered_lease_ended() {
 /// A dialed gateway granted everything, served on the runtime's clock.
 fn revocable(ledger: Arc<MemoryLedger>) -> Gateway {
     let grants = MemoryGrants::none();
-    grants.set(DIALED, Some(PeerGrant::everything()));
+    grants.set(DIALED, Some(PeerGrant::everything().with_logins()));
     Gateway::for_peer(
         DIALED,
         grants,
@@ -5655,7 +5926,7 @@ async fn a_revocation_after_an_expiry_ends_the_lease_once_as_expired() {
 async fn a_command_whose_end_is_recorded_is_not_revoked_while_its_ran_waits_for_room() {
     let timer = Arc::new(ManualTimer::default());
     let grants = MemoryGrants::none();
-    grants.set(DIALED, Some(PeerGrant::everything()));
+    grants.set(DIALED, Some(PeerGrant::everything().with_logins()));
     let ledger = Arc::new(MemoryLedger::default());
     let mut gateway = Gateway::through(
         4096,
@@ -5765,7 +6036,7 @@ async fn a_command_whose_end_is_recorded_is_not_revoked_while_its_ran_waits_for_
 async fn a_command_stopped_for_a_revocation_never_holds_serving_open_once_the_gateway_is_gone() {
     let timer = Arc::new(ManualTimer::default());
     let grants = MemoryGrants::none();
-    grants.set(DIALED, Some(PeerGrant::everything()));
+    grants.set(DIALED, Some(PeerGrant::everything().with_logins()));
     let ledger = Arc::new(MemoryLedger::default());
     let mut gateway = Gateway::through(
         4096,

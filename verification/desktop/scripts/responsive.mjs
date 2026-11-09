@@ -12,7 +12,7 @@
  *                   below it where it does not ("The titlebar's safe area"): an
  *                   inline title never overlaps a titlebar control
  *   settings-fold   Settings' sidebar folds for room below a page of 420px
- *   integrations-narrow Settings › Integrations at 800 and 390px: nothing
+ *   integrations-narrow Settings › MCP servers at 800 and 390px: nothing
  *                   outside its card, no sideways scroll, the fold held, and
  *                   under a 420px page a server row's actions under its text
  *                   (`lib/settings.mjs`; with servers listed, the form and the
@@ -47,8 +47,9 @@
  *                   window's controls; Use Night Scene takes it back,
  *                   and a file that is not an image is refused with why, in
  *                   that pane's header (issue #320)
- *   home-shape      a new session's home in a pane smaller than 640px either
- *                   way takes a conversation's shape: its composer docked at
+ *   home-shape      a new session's home in a pane under 640px wide, or whose
+ *                   room below the title row is under 640px tall, takes a
+ *                   conversation's shape: its composer docked at
  *                   the foot as the conversation's beside it is, with the
  *                   greeting on and off, the header kept as a band across
  *                   the top with its Customize control, "Working late?" under
@@ -2472,6 +2473,7 @@ checks["overview-edge"] = async ({ page, engine, options }) => {
           shadow: style.boxShadow,
           border: style.borderLeftWidth + style.borderRightWidth,
           glow: Number(glow.opacity),
+          hovered: e.matches(":hover"),
           valuenow: Number(e.getAttribute("aria-valuenow")),
           valuemin: Number(e.getAttribute("aria-valuemin")),
           valuemax: Number(e.getAttribute("aria-valuemax")),
@@ -2504,9 +2506,12 @@ checks["overview-edge"] = async ({ page, engine, options }) => {
   const y = box.y + box.height / 2
   // Hovered: the glow.
   await page.mouse.move(x, y)
-  await page.waitForTimeout(250)
+  // Observe completion, as for the other geometry checks; a wall-clock sleep
+  // does not advance a throttled compositor by the same number of milliseconds.
+  await settled(page)
   const hovered = await read()
   await shot(options, page, `overview-edge-hover-${engine}`)
+  if (!hovered.hovered) failures.push("the edge is not under the pointer")
   if (hovered.glow < 0.99) failures.push(`hovered, the edge's glow is ${hovered.glow}`)
   // Dragged 120px right: the boundary follows.
   await page.mouse.down()

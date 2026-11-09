@@ -258,3 +258,50 @@ fn a_body_is_stored_up_to_its_bound() {
     assert_eq!(into, b"12345");
     assert!(store(&mut &b"123456"[..], &mut Vec::new(), 5).is_err());
 }
+
+/// A local desktop build reads its release builds from the folder its app
+/// ships beside the gateway: the pinned file is used and kept, one that is
+/// not the pin's bytes, or is longer, or is missing, is refused.
+#[test]
+fn a_bundled_build_is_read_from_beside_the_gateway_and_measured() {
+    let bundled = tempfile::tempdir().unwrap();
+    let cache = tempfile::tempdir().unwrap();
+    let bytes = b"nessa for linux";
+    std::fs::write(bundled.path().join(format!("nessa-{LINUX}")), bytes).unwrap();
+    let from = bundled.path().to_string_lossy().into_owned();
+    let build = ReleaseBuild::new(
+        pinned(bytes),
+        &from,
+        Arc::new(BundledReleases),
+        cache.path().join("host-builds"),
+    );
+    assert_eq!(read(build.open().unwrap()), bytes);
+    assert!(cache
+        .path()
+        .join("host-builds")
+        .join(digest_of(bytes))
+        .is_file());
+
+    let other = tempfile::tempdir().unwrap();
+    let changed = ReleaseBuild::new(
+        pinned(bytes),
+        &from,
+        Arc::new(BundledReleases),
+        other.path().into(),
+    );
+    std::fs::write(
+        bundled.path().join(format!("nessa-{LINUX}")),
+        b"nessa for linuX",
+    )
+    .unwrap();
+    assert_ne!(changed.open().unwrap().digest, digest_of(bytes));
+    std::fs::write(
+        bundled.path().join(format!("nessa-{LINUX}")),
+        b"nessa for linux, longer",
+    )
+    .unwrap();
+    assert!(changed.open().is_err());
+    std::fs::remove_file(bundled.path().join(format!("nessa-{LINUX}"))).unwrap();
+    assert!(changed.open().is_err());
+    assert!(!other.path().join(digest_of(bytes)).exists());
+}

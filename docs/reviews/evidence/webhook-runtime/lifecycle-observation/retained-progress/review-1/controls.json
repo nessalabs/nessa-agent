@@ -1,0 +1,22 @@
+[
+  {
+    "rule": "shared-owner",
+    "caught": true,
+    "restored": true
+  },
+  {
+    "rule": "initial-identity",
+    "caught": true,
+    "restored": true
+  },
+  {
+    "rule": "scoped-summary",
+    "caught": true,
+    "restored": true
+  },
+  {
+    "rule": "schema-inventory",
+    "caught": true,
+    "restored": true
+  }
+]

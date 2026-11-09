@@ -1,0 +1,30 @@
+[
+  {
+    "thread": "9fb29347-03b2-46ff-b0e6-4662f09bfbb9",
+    "result": "close unconfirmed"
+  },
+  {
+    "vm": "bx_rtxc5ufn",
+    "thread": "66903dc9-eded-5c71-8774-2297b3500143",
+    "state": "confirmed absent",
+    "operation": "bdop_52243abc8d964dc8a4c7fdc2aef6bbd7"
+  },
+  {
+    "vm": "bx_764y39tg",
+    "thread": "9fb29347-03b2-46ff-b0e6-4662f09bfbb9",
+    "state": "confirmed absent",
+    "operation": "bdop_152ea3d1f34b453c80229dd1020c57e1"
+  },
+  {
+    "vm": "bx_j76rgcy6",
+    "thread": "b2ba7418-9486-4629-b302-4897de690379",
+    "state": "confirmed absent",
+    "operation": "bdop_a7c7eca73fc24d52a23b43d00371a91b"
+  },
+  {
+    "vm": "bx_ywuzwxq3",
+    "thread": "2ca757d6-2497-063f-0415-4c60ccdd4389",
+    "state": "confirmed absent",
+    "operation": "bdop_a17884e8bb834eeca3c6d9d29d01335e"
+  }
+]

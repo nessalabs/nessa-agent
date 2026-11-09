@@ -24,7 +24,7 @@ import { useEdgePeek, type EdgePeekControls } from "../../adapters/use-edge-peek
 import { useWindowWidth } from "../../adapters/window-width"
 import { chosen, drawn, fitted, type SideColumn } from "../../model/side-column"
 import type { DesktopThemeId } from "../../model/theme"
-import { focusInFront } from "../../workspace"
+import { focusInFront, performanceFocusClock } from "../../workspace"
 import { settingsSidebar, settingsSidebarFits } from "../model/settings-sidebar"
 import {
   firstTabOf,
@@ -164,7 +164,7 @@ export function useSettingsSurface({
     return () => {
       if (opener && opener !== document.body && opener.isConnected)
         opener.focus({ preventScroll: true })
-      else focusInFront()
+      else focusInFront(document, performanceFocusClock)
     }
   }, [])
 

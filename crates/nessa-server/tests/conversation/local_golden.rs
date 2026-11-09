@@ -124,12 +124,20 @@ struct Evidence {
 }
 
 async fn run_local_conversation(root: &Path) -> Evidence {
+    run_local_conversation_while(root, false).await
+}
+
+/// `hold_discovery` checks out this conversation's discovery entry for the
+/// whole turn. The turn does not read through that cache; a wait for it must
+/// not be what keeps the turn from completing.
+async fn run_local_conversation_while(root: &Path, hold_discovery: bool) -> Evidence {
     let provider = Arc::new(ProviderFactory::default());
     let clock: Arc<dyn Clock> = Arc::new(TestClock);
     let agents = ConversationAgents::new(
         HashMap::from([(
             AgentId::Claude,
             ConversationAgent {
+                workspace: None,
                 provider: Arc::new(Provider::new(provider.clone())),
                 execution_audit: Arc::new(
                     DurableExecutionAudit::new(root.join("audit"), clock.clone()).unwrap(),
@@ -153,6 +161,7 @@ async fn run_local_conversation(root: &Path) -> Evidence {
     let storage = Arc::new(RecordStorage::new(root.join("sessions")).unwrap());
     let service = ConversationService::new(
         ConversationDependencies {
+            input_files: None,
             access_policy: crate::conversation_test_support::access_policy(),
             agents,
             storage: storage.clone(),
@@ -204,12 +213,24 @@ async fn run_local_conversation(root: &Path) -> Evidence {
     })
     .await
     .expect("the attachment publishes its context");
+    let _discovery = if hold_discovery {
+        Some(
+            storage
+                .hold_discovery_for_test(&SessionId::new(id.to_string()).unwrap())
+                .await
+                .unwrap()
+                .expect("the conversation stream is checked out"),
+        )
+    } else {
+        None
+    };
     service
         .submit(
             id.clone(),
             caller("send-1"),
             "turn-1".into(),
             SubmittedMessage {
+                uploads: Vec::new(),
                 text: "read this".into(),
                 images: Vec::new(),
                 files: vec![SubmittedFile {
@@ -222,12 +243,22 @@ async fn run_local_conversation(root: &Path) -> Evidence {
         .unwrap();
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {
-            let view = service.read(id.clone(), caller("read")).await.unwrap();
-            if view.messages.iter().any(|message| {
-                message.execution_id == "turn-1"
-                    && message.status == ConversationMessageStatus::Completed
-            }) {
-                break;
+            // Stay off the record database until the provider has the turn,
+            // so a committed read is not holding it while the turn starts.
+            let provider_has_turn = provider
+                .executions
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|execution| execution == "turn-1");
+            if provider_has_turn {
+                let view = service.read(id.clone(), caller("read")).await.unwrap();
+                if view.messages.iter().any(|message| {
+                    message.execution_id == "turn-1"
+                        && message.status == ConversationMessageStatus::Completed
+                }) {
+                    break;
+                }
             }
             tokio::time::sleep(Duration::from_millis(5)).await;
         }
@@ -380,4 +411,17 @@ async fn a_local_conversation_leaves_one_lease_for_its_run_ended_by_its_close() 
         panic!("one issued, closed and ended lease: {:?}", lease.records());
     };
     assert_eq!(actor.request_id(), "close");
+}
+
+/// The turn still completes while its discovery entry stays checked out.
+/// The per-stream wait is not on this path; a local turn that needed the
+/// entry would sit in that wait until this hold dropped, past the deadline.
+#[tokio::test]
+async fn a_local_turn_completes_while_its_discovery_entry_is_held() {
+    let root = tempfile::tempdir().unwrap();
+    let lease = run_local_conversation_while(root.path(), true)
+        .await
+        .lease
+        .expect("the run was leased");
+    assert!(lease.held().is_some(), "the lease was issued");
 }

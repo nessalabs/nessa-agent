@@ -125,12 +125,19 @@ pub enum ConversationError {
     /// The binding has not verified this approval preset for the model.
     ApprovalModeUnavailable,
     RequestConflict,
+    /// The new-child creation owner refused before acquiring the target.
+    /// Retains the original cause without claiming another slot as cleanup.
+    ChildCreationRefused(Box<ConversationError>),
     TurnRunning,
     ModelChangeNotApplied,
     ModelChangeUncertain,
     ApprovalModeNotApplied,
     ApprovalModeUncertain,
     Capacity,
+    /// The agent asking for a new thread already has as many of its threads
+    /// at work as the configuration lets one agent have
+    /// (`subagents.maxLiveThreads`). Its next report frees a place.
+    ThreadLimit,
     Unavailable,
     Metadata,
     /// Catalogue request names another database incarnation.
@@ -209,6 +216,8 @@ pub enum StopFailure {
 /// Otherwise each store was tried and each field says what remains in it.
 #[derive(Clone, Debug, Default)]
 pub struct DeletionFailures {
+    /// Background command cleanup or its durable evidence remains unresolved.
+    pub background_tasks: Option<super::background_tasks::BackgroundTaskError>,
     /// The conversation's agent could not be confirmed stopped.
     pub stop: Option<StopFailure>,
     /// The saved history could not be read or erased: storage failed, or
@@ -258,6 +267,7 @@ impl DeletionFailures {
     /// Whether every part finished.
     pub fn is_empty(&self) -> bool {
         self.stop.is_none()
+            && self.background_tasks.is_none()
             && self.history.is_none()
             && !self.history_leased_elsewhere
             && self.provider.is_none()

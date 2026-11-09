@@ -88,6 +88,11 @@ fn conversation(out: &mut String, error: &ConversationError) {
             conversation(group.cause("release"), release);
             return group.end();
         }
+        E::ChildCreationRefused(inner) => {
+            let mut group = Group::new(out, "child-creation-refused");
+            conversation(group.cause(""), inner);
+            return group.end();
+        }
         E::NotFound => "not-found",
         E::ChannelNotFound => "channel-not-found",
         E::Deleted => "deleted",
@@ -117,6 +122,7 @@ fn conversation(out: &mut String, error: &ConversationError) {
         E::ModelChangeNotApplied => "model-change-not-applied",
         E::ModelChangeUncertain => "model-change-uncertain",
         E::Capacity => "capacity",
+        E::ThreadLimit => "thread-limit",
         E::Unavailable => "unavailable",
         E::Metadata => "metadata",
         E::CatalogueIdentityChanged => "catalogue-identity-changed",
@@ -168,6 +174,7 @@ fn conversation(out: &mut String, error: &ConversationError) {
 
 fn deletion(out: &mut String, failures: &DeletionFailures) {
     let DeletionFailures {
+        background_tasks,
         stop,
         history,
         history_leased_elsewhere,
@@ -182,6 +189,9 @@ fn deletion(out: &mut String, failures: &DeletionFailures) {
         another_attempt,
     } = failures;
     let mut group = Group::new(out, "deletion-incomplete");
+    if let Some(error) = background_tasks {
+        group.cause("background-tasks").push_str(error.code());
+    }
     match stop {
         Some(StopFailure::OverBudget) => group.cause("stop").push_str("over-budget"),
         Some(StopFailure::Failed(error)) => agent(group.cause("stop"), error),
@@ -285,6 +295,7 @@ fn agent(out: &mut String, error: &AgentError) {
         A::RefusedAfterSave => "refused-after-save",
         A::AfterSaveUnavailable => "after-save-unavailable",
         A::UnknownApp(error) => return typed(out, "unknown-app", error),
+        A::UserFile(error) => return typed(out, "user-file", error),
         A::UserImage(error) => return typed(out, "user-image", error),
         A::ImageInputRefused(refusal) => return typed(out, "image-input-refused", refusal),
         A::MessageTooLarge {
@@ -470,6 +481,23 @@ mod tests {
             refusal_causes(&error),
             "admission-evidence(audit: audit, storage: storage-busy)"
         );
+    }
+
+    #[test]
+    fn a_child_creation_refusal_keeps_nested_static_causes() {
+        let error = ConversationError::ChildCreationRefused(Box::new(
+            ConversationError::ChildCreationRefused(Box::new(ConversationError::Storage(
+                StorageError::Busy,
+            ))),
+        ));
+        assert_eq!(
+            refusal_causes(&error),
+            "child-creation-refused(child-creation-refused(storage-busy))"
+        );
+        let error = ConversationError::ChildCreationRefused(Box::new(ConversationError::Agent(
+            AgentError::Transport("/home/someone/private-socket".into()),
+        )));
+        assert_eq!(refusal_causes(&error), "child-creation-refused(socket)");
     }
 
     #[test]

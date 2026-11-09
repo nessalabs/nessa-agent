@@ -167,6 +167,14 @@ async fn every_phase_of_one_request_is_its_own_record() {
             json!({"kind": "approved", "permissionId": "permission-1"}),
         ),
         (
+            McpAppAuditPhase::AppTrusted {
+                permission_id: review(),
+                kept: true,
+            },
+            person_initiator(),
+            json!({"kind": "app_trusted", "permissionId": "permission-1", "kept": true}),
+        ),
+        (
             McpAppAuditPhase::Denied {
                 permission_id: review(),
             },

@@ -59,7 +59,8 @@ src/                      composition root (`main.tsx`, `store.ts`)
   diagnostics/            development page-console forwarding
 src-tauri/src/
   diagnostics.rs          debug-only page-to-terminal diagnostic bridge
-  host_log.rs             desktop startup log (`{data}/logs/host.log`)
+  host_log.rs             desktop startup log (`{data}/logs/host.log`) and the
+                          launch-to-gateway-ready samples beside it
   host_refusal.rs         typed startup refusals shared with the page
   host_refusal/copy.rs    startup copy consumed by refusals and the load document
   links/policy.rs         navigation decisions; links.rs owns the opener/plugin
@@ -73,7 +74,7 @@ src-tauri/src/
     contracts/            what other contexts and the frontend may see
 src-tauri/examples/
   page_load_acceptance/   disposable macOS Tauri lifecycle, deadline and origin controls
-    server/              portable real-socket regressions for its HTTP control fixture
+    server/              bounded HTTP control fixture's portable real-socket, fragmented-request and deadline regressions
 src-tauri/tests/
   page_load_server.rs     runs the fixture regressions in the desktop host suite
 verification/             scripts that drive real browsers against the running app
@@ -385,6 +386,10 @@ against a private scripted gateway.
   import against that direction, in every form of import it reads, and the
   window's composition (`main.tsx`, `dependencies.ts`), which imports them
   all, is outside the rule.
+  A third-party package that runs as a plugin surface or as its own process
+  is planned in [the application framework](design/application-framework.md).
+  The plan is not built. It starts from this widget host and from the MCP App
+  mount, and it reuses the [access grant](design/access-grants.md).
 - Subagents are the desktop window's vertical for the agents a conversation
   puts to work ([ADR 329](adr/todo/329-subagents.md)): `src/desktop/subagents/`
   (its map is `index.ts`) owns the child as the panel shows it
@@ -495,10 +500,10 @@ own current lifecycle and API contracts.
 | `domain/common/value_objects/` | Shared validated dates, URLs, and token limits. |
 | `domain/model_metadata/`, `domain/effective_capabilities/` | Model catalog invariants and immutable admission capabilities. |
 | `domain/agent_execution/` | Sessions, execution ordering, tools, permissions, prompts, and the subagent lifetime graph; DDD roles beneath each feature. |
-| `application/agent_execution/agents/` | Public Agent, scheduling, submission retry recovery, and one lifecycle owner for work generations, active work, and shutdown. An installed owned lifetime seals descendant admission; `Agent::close` stays attachment-only. |
+| `application/agent_execution/agents/` | Public Agent, scheduling, submission retry recovery, and one lifecycle owner for work generations, active work, and shutdown. Resumption saves `InvocationRecord::resumed_from` atomically with admitted successor input; persistence validates its preceding resumable source and exact binding through that same resumption owner before publication or restoration. The retained admission fact is independent of current eligibility; observation, submission retry following and live/historical owed supersession consume the canonical-link decision. Ordinary input never supplies that owner fact; `conformance/resumption/canonical_admission.rs` exercises actual caller-created collisions and restoration. An installed owned lifetime seals descendant admission; `Agent::close` stays attachment-only. |
 | `application/agent_execution/subagents/` | Ownership coordinator for admitted child attempts, retained cleanup owners and tree drains. `publication.rs` owns audit eligibility and durable projection through the write fence; `root.rs` owns admission through ID delivery and unclaimed-result reconciliation. Domain graph and actual Agent gates own lifecycle and runnable admission. Stage-specific publication semantics live in the [ADR329 audit-eligibility table](adr/todo/329-subagents.md#sdk-audit-eligibility-and-owned-root-delivery-628). `supervision.rs` contains injected effect phases after Ready capture; first-owner drain generations and bounded debt follow the [owned settlement table](adr/todo/329-subagents.md#owned-settlement-and-supervision-625-646-649). |
 | `application/agent_execution/providers/`, `hooks/` | Injected execution ports, operation capabilities, and typed invocation callbacks. |
-| `application/agent_execution/sessions/` | Local session identity, exclusive storage lease, backend-issued load/save bindings and immutable semantic units in `storage/save.rs`, retained attachment resources, snapshot evidence mapped through domain history rules, which apps a message may name (`app_sources.rs`: an MCP tool call of an earlier turn, asked at admission and of restored history), where a steered message stands in its target turn (`steering_position.rs`: target and offset taken at admission and read from saved history in one place), the validated committed transcript state/fold and retained allocation accounting, and the injected streaming commit clock port. |
+| `application/agent_execution/sessions/` | Local session identity, exclusive storage lease, backend-issued load/save bindings and immutable semantic units in `storage/save.rs`, retained attachment resources, snapshot evidence mapped through domain history rules, agreement between an agent turn's initiation and message sender (`authorship.rs`, at admission, incremental input folding and restoration), which apps a message may name (`app_sources.rs`: an MCP tool call of an earlier turn, asked at admission and of restored history), where a steered message stands in its target turn (`steering_position.rs`: target and offset taken at admission and read from saved history in one place), the validated committed transcript state/fold and retained allocation accounting, and the injected streaming commit clock port. |
 | `application/agent_execution/executions/`, `permissions/`, `tools/` | Domain coordination, weak permission authority carriers, attributed decisions, and observation/review projections. |
 | `infrastructure/acp/`, `claude_acp/`, `codex_acp/`, `opencode_acp/` | Shared transport lifecycle, and one module per provider for its own configuration and tool translation. Verification shared by more than one provider moves up into `acp/`, as ordered session configuration did once Codex and Opencode both needed it. |
 | `infrastructure/session_storage/` | Memory snapshots, SQLite semantic record persistence, shared unpublished-unit/completion lineage codec in `save_group.rs`, explicit evidence serialization, physical source identity/construction, shared framing validation and bounded terminal-discovery progress for sync-engine, chunked semantic checkpoints, shared read/write admission and shutdown ownership, the Tokio streaming commit clock adapter, and the ownership snapshot file `ownership.sqlite3`: `nessa-local-storage::physical_operation` owns physical admission and captured cleanup, with an independent Worker per adapter; sibling `ownership/tests.rs` holds queue, cancellation, poison and runtime watchdog regressions; `ownership/settlement.rs` owns the strict typed close-proof/Completion codec and `ownership/tests/settlement.rs` its real reopen and contradiction cases. |
@@ -826,6 +831,12 @@ audit boundary concerns the new unpaired `review.notice` decision.
 | Board or shared visibility changes during audit acknowledgement | Publisher discards the candidate and filters the current board/shared state before admission | `review_notice_reselects_after_shared_changes_during_audit` |
 | Every tentative selection changes before acknowledgement completes | At most three passes, then a typed temporary-unavailable close; no stale snapshot or unbounded retry | `review_notice_continuous_change_has_bounded_selection_attempts` |
 | Admitted snapshot waits for UI capacity, then authority changes | Already admitted snapshot may finish; pending version then produces a fresh audited replacement | `review_authority_updates_survive_waiting_publication` |
+| Tombstone commits on another connection during the admission read, then membership becomes Admin | The read's transaction keeps the live row with its old revision; token validation rejects it; the deleted row is not published | `a_tombstone_on_another_connection_during_the_admission_read_does_not_publish_to_a_new_admin` |
+| Deletion between the metadata read and the authority read, board still waiting | Live metadata is not combined with the new Admin role | `deletion_between_metadata_and_authority_does_not_publish_to_a_promoted_admin` |
+| Deletion after Cedar, before audit acknowledgement | The recorded decision stays the pre-deletion allow; the candidate is not admitted | `deletion_after_cedar_before_audit_ack_drops_admission_and_keeps_the_decision` |
+| Visibility changes while token validation waits | The board check after that wait drops the in-flight candidate | `visibility_change_during_token_validation_drops_the_in_flight_candidate` |
+| Catalogue incarnation replaced and the revision is reused | Token validation refuses the old incarnation; the deleted row is not published | `replaced_incarnation_with_a_reused_revision_does_not_publish_deleted_metadata` |
+| Deletion after the frame is admitted, while UI capacity waits | The admitted notice may still be delivered | `deletion_after_admission_still_delivers_the_admitted_notice` |
 | Sink fails, panics, or the injected deadline passes | Typed audit failure prevents the snapshot and closes through the independent control lane; cleanup still runs | `review_notice_audit_failure_closes_without_disclosure` |
 | Audit fails while the control lane is full | Publisher completion reaches the connection owner through its retained join handle; close admission may fail, but the owner always stops receiving and tears down | `review_notice_audit_failure_with_full_control_lane_ends_connection` |
 | Publisher terminates unexpectedly | Connection owner observes completion, requests temporary-unavailable closure and tears down instead of retaining a silent live connection | `review_notice_publisher_panic_ends_connection` |
@@ -1002,14 +1013,17 @@ switch contract, and `infrastructure/store/agent_switches.rs` for its metadata
 journal. SDK `application/agent_execution/sessions/handoffs.rs` owns handoff
 identity, folding, and carried-history assembly; domain
 `agent_execution/prompts/value_objects/carried_history.rs` owns bounded carried
-values. The [handoff design](design/conversation-handoffs.md)
+values, including typed agent origin for copied inputs. Snapshot `agent_source.rs`
+shares source serialization between initiation and carried history. Public origin
+rejection tests live in `tests/infrastructure/session_storage/authorship.rs`.
+The [handoff design](design/conversation-handoffs.md)
 maps these owners to their regressions; usage-limit invalidation belongs to
 the existing scheduler owner before an applied switch is committed.
 
 `conversation/application/metadata_target.rs` correlates existing metadata loads and creation acknowledgements with the requested identity before ownership, selection, grant admission or effects. Created receipts additionally match the admitted full immutable proposal; Existing retains original creator evidence. Current mode intent/terminal/retirement tests live in `tests/conversation/approval_mode.rs`, with unchanged-preset publication/recovery in `tests/conversation/approval_mode/unchanged.rs`; creation receipt tests in `tests/conversation/creation_metadata.rs`. Projection owns selection/runtime replacements and their revision; no display-history or paging API is added.
 
 Named record-read owners: `conversation/application/record_read/read.rs` owns passive read orchestration and its port/types; `conversation/infrastructure/record_read/source.rs` owns tracked read lifecycle, `operation.rs` owns SDK physical execution; `product/record_read/dispatch.rs` owns routing and typed outcome presentation, with `wire.rs` the codec. Their mod.rs files contain module documentation/declarations/reexports. Infrastructure tests live under `tests/conversation/record_read/`.
-`product/subscription/` owns replay-to-live view and list subscriptions on the product socket ([record subscriptions](design/record-subscriptions.md)): `connection.rs` a connection's subscriptions and their limits, `target.rs` one task per subscription — wake sources registered before each read, every batch admitted in `authorize_batch`, read through the same fold as `conversation.read` and `conversation.list`, `lagging` when a frame is not taken in time — and `delivery.rs` the frames the single writer in `socket.rs` takes, one in flight per subscription. `conversation/application/live_changes.rs` wakes a reader on live facts that are not records. The client side is `packages/nessa-client/src/presentation/subscription-api.ts` and `protocol/subscription-validate.ts`; socket tests are `tests/product/socket/subscriptions.rs`. The desktop workspace's gateway source (`src/desktop/workspace/adapters/gateway/gateway-source.ts`) follows these subscriptions and polls nothing.
+`product/subscription/` owns replay-to-live view and list subscriptions on the product socket ([record subscriptions](design/record-subscriptions.md)): `connection.rs` a connection's subscriptions and their limits, `target.rs` one task per subscription — wake sources registered before each read, every batch admitted in `authorize_batch`, read through the same fold as `conversation.read` and `conversation.list`, `lagging` when a frame is not taken in time — and `delivery.rs` the frames the single writer in `socket.rs` takes, one in flight per subscription. `conversation/application/live_changes.rs` wakes a reader on live facts that are not records. The client side is `packages/nessa-client/src/presentation/subscription-api.ts` and `protocol/subscription-validate.ts`; socket tests are `tests/product/socket/subscriptions.rs`, with scoped-list privacy and cancellation tests under `subscriptions/paired_lists.rs`; `paired_lists/stress.rs` owns seeded catalogue histories and `paired_lists/settlement.rs` gates final reply-summary publication to test their completion boundary. The desktop workspace's gateway source (`src/desktop/workspace/adapters/gateway/gateway-source.ts`) follows these subscriptions and polls nothing.
 
 Usage-limit preference commands in the workspace source and classic panel's
 `src/conversation/adapters/gateway/effects.ts` complete after their existing
@@ -1019,7 +1033,7 @@ before reopening. Workspace ordering regressions live in
 
 `product/subscription/events.rs` follows committed semantic events through the same connection and delivery owners. `conversation/application/service/event_read.rs` owns target admission, shared `EventProgress` correlation of reader outputs with their start/prior checkpoint, and the metadata-only projection from the SDK reader; it never opens an Agent. Event consumers share that continuity validator before publishing data or retaining checkpoints. Event subscriptions retain a replay cursor rather than replacing a conversation view. Their socket regressions are `tests/product/socket/subscriptions/events.rs`, with delivery deadline tests in `tests/product/subscription_event_delivery.rs`; shared continuity and projection regressions are `tests/conversation/event_read.rs`.
 
-Share grants ([share grants](design/read-grants.md)): `conversation/domain/value_objects/share_access.rs` is what a grant lets its holder do — a role (Read, Comment, Drive) and, for Drive, a tool policy checked for shape and size; `conversation/application/share_grants.rs` owns whether a reader may read a conversation — a session with a receiver binding is a paired device and reads only what it was granted, whatever the role — and the owner's share commands; `conversation/infrastructure/store/share_grants.rs` keeps the grant table and its journal in the metadata database and states the one SQL predicate the catalogue pages with; `product/read_access.rs` asks it for `conversation.read` and every view subscription batch, refuses the owner's lists to a paired device, and serves `conversation.share`, `.unshare` and `.shares`, mapping a role and policy between the wire and the domain. A Drive turn proceeds only while `hold_revision` still finds that grant at the admitted revision. The permit is that `(conversation, receiver)` pair and is removed when the last one drops. A native steer drops the first permit after the save, compares the revision again, and keeps the second until the provider operation starts, releasing it before the response wait.
+Share grants ([share grants](design/read-grants.md)): `conversation/domain/value_objects/share_access.rs` is what a grant lets its holder do — a role (Read, Comment, Drive) and, for Drive, a tool policy checked for shape and size; `conversation/application/share_grants.rs` owns whether a reader may read a conversation — a session with a receiver binding is a paired device and reads only what it was granted, whatever the role — and the owner's share commands; `conversation/infrastructure/store/share_grants.rs` keeps the grant table and its journal in the metadata database and states the one SQL predicate the catalogue pages with; `product/read_access.rs` asks it for `conversation.read` and every view subscription batch, admits a device's grant-scoped list and observation while preserving peer refusals, and serves `conversation.share`, `.unshare` and `.shares`, mapping a role and policy between the wire and the domain. A Drive turn proceeds only while `hold_revision` still finds that grant at the admitted revision. The permit is that `(conversation, receiver)` pair and is removed when the last one drops. A native steer drops the first permit after the save, compares the revision again, and keeps the second until the provider operation starts, releasing it before the response wait.
 The live slot owns a prepared SDK `Agent` before provider attachment. It captures
 caller-attributed attachment authority, returns create/read/queue commands without
 waiting for runtime readiness, and retains one bounded task that joins readiness
@@ -1027,13 +1041,14 @@ before starting the SDK-owned attachment. The SDK scheduler remains the only que
 on both sides of attachment. Replacement views project its `Waiting` and `Starting`
 phases as `starting`, and retain typed, bounded late attachment failures.
 Tests follow those responsibilities under `crates/nessa-server/tests/conversation/`.
-A message refers to images by digest, never by bytes: the service asks its
+A message retains image and uploaded-file references by digest, never inline
+file bytes: the service asks its
 `ConversationAttachments` port whether this conversation holds each one before it
 accepts the message, and `close` releases what the conversation holds in the
 closer's name, reporting a failed release without hiding a failed agent close.
 The [attachments context](#attachments) implements that port.
-A message may also point at files on this machine by path, which is how anything
-that is not an image travels: nothing is uploaded, so there is no hold to check
+A message may also point at files already on the execution machine by path.
+For these linked files nothing is uploaded, so there is no hold to check
 and no ownership to verify, and the whole of what the gateway checks is that the
 path means the file that was chosen, through the SDK's `LinkedFile` — absolute,
 no control character, no component that a URI would drop or resolve away. It
@@ -1407,7 +1422,10 @@ and reuses a generation only for the complete desired command ([ADR 689](adr/689
   compiling. `verify-linux-bundle.mjs` checks the runtime inside the `.deb` this
   build wrote; it is the Linux counterpart of `verify-macos-bundle.mjs`.
   `install-linux-build-deps.sh` is the one list of Ubuntu packages that CI and
-  the release build against. `release-assets.mjs` names what each release
+  the release build against. Native Linux CI uses the explicit Ubuntu release
+  baseline, with its Rust cache keyed by distribution to avoid reusing binaries
+  built against a newer glibc; `ci-harness.test.mjs` checks that agreement and
+  retains the required native smoke commands. `release-assets.mjs` names what each release
   target publishes and its updater key: one per macOS architecture, and
   `linux-x86_64-deb`. Windows has no preparation.
 - `scripts/desktop/runtime-fingerprint.mjs` identifies that complete prepared tree, including model data and installed ACP dependencies; its adjacent tests cover content, layout, and relocation.
@@ -1639,6 +1657,55 @@ in one catch-all file. New MCP shell code is the small Rust example; the desktop
 gateway context demonstrates an application port with native adapters. Older SDK
 paths remain current until the coordinated TODO updates all consumers.
 
+## Outbound webhook foundation
+
+The outbound [webhook foundation](design/webhook-delivery-implementation.md)
+lives under `crates/nessa-server/src/webhooks`: immutable delivery and destination
+values in `domain/value_objects`, message/transport ports in `application`, and
+JSON, HMAC, DNS and HTTPS in `infrastructure`. Tests use the same layer names
+under `tests/webhooks`. `application/admission.rs` combines current credential
+effect holds, principal grant revision holds, checked conversation metadata and
+the existing conversation Cedar evaluator. Credential mutation fences live in
+the auth registry; principal/resource fences remain in the grant store.
+`application/outbox.rs` publishes the persistence port and limits.
+`infrastructure/outbox` owns the private database: `store` owns the lifetime lock
+and bounded physical operations; `schema` publishes and validates every owned SQLite definition against its one SQL schema; `stored` validates restored
+identity and scope; `cursor` decodes complete cursor values for startup and live
+reads; `audit` owns closed typed historical records and validates transitions
+through the domain owner; `codec` owns the current serialized values; `capacity` owns
+accounting; `queue` advances source cursor and delivery together; `journal` owns
+state/audit commits, source-change context and retirement; `publication` writes
+immutable audit files and exact acknowledgements; `restoration` exhaustively
+correlates every audit variant with retained facts and owns delivery-history
+validation before effects; `retirement` retains bounded secret-free original
+identity/stop facts and the exact retirement audit identity through lost
+acknowledgement; `source_reset` owns immutable original reset facts and first-capture
+membership (`source_reset/store.rs`) and bounded reference retention; `registry`
+persists installation target facts. `infrastructure/outbox/stop.rs` is the single
+bounded retained stop codec shared by live, retired and audit state.
+`application/registration_stop.rs` consumes the actual held Auth fact and derives
+the lifecycle projection; it grants no delivery permission and is not a command
+supervisor. Auth owns retained revocation decoding separately from its
+current-credential binding. `application/registration.rs` asks the
+existing auth owner to issue and correlates the returned credential/transition,
+then installs under a current credential hold. `infrastructure/outbox/intents.rs`
+retains bounded immutable private proposal/configuration facts across uncertain
+auth and installation acknowledgements; they supply no permission verdict.
+The installed registration references that original intent, and transactional
+retirement deletes the private configuration together with the registration. Tests remain in
+`tests/webhooks/infrastructure/outbox.rs`, with shared reset ownership cases in
+`tests/webhooks/infrastructure/outbox/source_reset.rs`.
+`composition/webhooks.rs` loads private registration configuration;
+`infrastructure/runtime.rs` owns public issue/revoke/grant commands and shutdown.
+`runtime/delivery.rs` composes canonical principal reads, contiguous durable
+queueing, fresh dispatch admission and signed HTTPS. `composition/root.rs` starts
+that worker after fallible startup and joins it through product cleanup.
+`tests/webhooks/infrastructure/product{,_delivery}.rs` exercises public product
+commands with disposable authorities and an isolated TLS recipient. Whole-feature
+review, source-matched platform CI, browser and conversation stress qualification
+remain incomplete; mounted fixtures alone do not establish readiness. The outbox
+does not supply permission or open a listener.
+
 ## Browser sessions
 
 `crates/nessa-server/src/browser_session/` owns browser sign-in: `application/`
@@ -1764,6 +1831,24 @@ defines that command's boundary; #324 storage changes remain separately owned.
 oversized-session drill. The plan command does not call those use cases.
 
 ## Attachments
+
+[Phone file uploads](design/phone-file-uploads.md) describes #1149's stored
+references and dispatch boundary. SDK `prompts/value_objects/uploaded_file.rs`
+owns original-file identity and bounds; `providers/input_files.rs` defines the
+resolver port. `ProviderSession` prepares only the delivery copy. The server's
+`conversation/application/input_files.rs` owns lease-scoped orchestration and
+truthful automatic-delivery evidence; `conversation/infrastructure/input_files.rs`
+implements retained local placement. SSH reuses the existing lease fetch/inbox.
+Both phone journals and product views retain original references. SDK lifecycle
+WorkPermit remains the sole authority for preparation cancellation and native handoff.
+
+The phone file-input adapter separates capability dispatch in
+`crates/nessa-server/src/conversation/infrastructure/input_files.rs` from Unix
+retained-handle placement in `input_files/unix.rs`. The selected shared workspace
+root is acquired by `nessa-local-storage::PrivateDirectory::open_shared_root`;
+its locator ancestry stays caller trust, while root ownership and binding remain
+checked. Private delivery-copy tests live in
+`crates/nessa-sdk/tests/domain/agent_execution/uploaded_delivery.rs`.
 
 `crates/nessa-server/src/attachments/` owns the files a conversation uploads so
 its messages can refer to them. `domain/value_objects/` describe a file
@@ -2189,6 +2274,11 @@ The `nessa-server` crate builds the `nessa` executable. `cli/entrypoint/` parses
 commands, `cli/application/` coordinates token requests through its gateway port,
 and `cli/infrastructure/` implements the bounded local WebSocket adapter.
 `composition/cli.rs` wires the adapter, clock, identities and stdout/stderr.
+`nessa doctor` adds `timings` from `core/local_timings.rs`, read from the log
+directory on this machine and not sent. The gateway appends first-token samples
+through `product/turn_timing.rs`.
+`scripts/measure-subscription-bytes.mjs` counts `conversation.view` bytes for
+one streamed turn over a local proxy shaped like a slow link.
 `install-agent` is parsed here too — its agent name is read into `AgentName` at
 this edge, so nothing further in holds a name it still has to doubt — and
 `composition/install_command.rs` runs it on a blocking thread, because the work
@@ -2310,8 +2400,13 @@ scope/progress/generation for consumers to compare. `retained/device.rs` compose
 the existing enrollment worker and purge policy, collecting status/purge effects
 inside physical admission and exposing original durable purge receipts separately.
 The native adapter below provides generated Swift binding and linked library
-execution. Phone repository/enrollment/authority wiring, artifact exports and
-durable deletion remain later ADR 782 slices. `src/outbox/` keeps a typed phone
+execution. `retained/phone.rs` is the phone publication lease and catalogue
+presence: a stamp reads only its lease instance and bound receiver, and a missing catalogue row
+is not a tombstone. `retained/artifact.rs` fetches one held file through the
+existing range owner and reports local integrity separately from a gateway
+confirmation. Busy-range retries wait on an injected pause; `ThreadPause` is
+the operating-system wait, and session composition supplies it. The product iOS application is not in this repository.
+`src/outbox/` keeps a typed phone
 send before `conversation.send` and reads `conversation.receipt` before any
 later send; its ordering is [phone outbox](design/phone-outbox.md). The phone
 application and the desktop saved-tabs caller are later.
@@ -2540,9 +2635,14 @@ watchdog for refusal and budget ordering; the contract is in
 `docs/design/native-session-verification-997.md`. `NativeSession::open_with_clock`
 accepts the protocol clock at composition; `open` keeps the production default.
 Core's `retained/active.rs` validates fresh status against the current immutable
-issued record before product selection. Release Apple packaging is verified;
-the actual phone repository remains unfinished under issue 782. This module does not supply native
-authority from a panel token or an arbitrary saved cache target.
+issued record before product selection. Release Apple packaging is verified.
+`NativeSession` binds a `PhoneLease` to the issued receiver and refuses a
+replaced stamp before a saved read or held-file fetch. A successful purge
+releases the lease even when the status has no observation. Catalogue presence and
+artifact freshness are on that same session. A local match reports the session
+clock. This module does not supply native
+authority from a panel token or an arbitrary saved cache target. Physical-device
+execution remains unverified.
 
 `swift/NativeSessionWorker.swift` is the generated API's dispatch adapter: one
 admission reserved before enqueue, a per-call stop latch and a cancellation-independent
@@ -2552,15 +2652,19 @@ actual private scope locks through physical calls and captures until drain.
 Its original prepare/restore/recovery calls use that same parent admission;
 close capture preserves native-confirmed physical release independently of a
 historical failure. `swift/NativeProductWorker.swift` dispatches the actual product
-child with separately admitted Ready, event and submission lanes. Native tickets
-settle on an independent wait lane; their captures retain native count/byte
+child. Ready and events each admit one waiter and refuse a second as busy.
+`swift/ProductSubmitLane.swift` runs one submission hand-off at a time and keeps
+later submissions waiting in arrival order until that hand-off returns; it does
+not refuse them and it does not wait for the reply. Native tickets
+settle on an independent concurrent wait lane; their captures retain native count/byte
 permits, original UInt64 identity and typed settlement. Synchronous close wakes
 native I/O before physical drain joins those captures. Neither wrapper allocates
 transport IDs, implements request deadlines or copies private device keys.
 `scripts/build-native-device.sh` generates a local Apple Swift package/XCFramework
 from a frozen checkout; generated declarations remain build output, not hand-edited
-source. Nessa iOS embeds a reviewed dynamic package; its production native
-profile/enrollment and retained history repository remain unfinished.
+source. The phone publication lease, catalogue presence and held-file fetch are
+the retained repository this package exports. A product iOS application is not
+in this repository, and physical-device execution remains unverified.
 
 ## Agent thread tools
 
@@ -2572,8 +2676,168 @@ admission evidence and its audit port; `infrastructure/agent_tool_audit.rs`
 persists it. The built-in collection in relay composition keeps these tools
 independent of optional environment commands. See the [ordering and ownership
 contract](design/agent-thread-tools.md). The fifth, `read_window`, reads the
-windows `product/workspace.rs` holds for each connection in
+windows `product/workspace.rs` holds for each connection — panes and the
+focused chat's right panel — in
 `application/workspace_windows.rs` (domain shape in
 `domain/value_objects/workspace_window.rs`), through
 `service/workspace_windows.rs`; see [the window an agent
 shares](design/agent-window.md).
+
+Gateway parent/child Stop orchestration lives in
+`conversation/application/service/owned_threads.rs` (ordinary empty-child
+preparation), `parent_stop.rs` (durable exact target selection, supervision and confirmed
+Stop history reconciliation after process loss),
+and `thread_report_admission.rs` (validated admitted delivery chains through SDK
+canonical successors, exact Stop receipt facts, and person admission delivery fences).
+Stop checks the existing person Submit receipts across each complete chain before
+selecting its current execution; report settlement consumes that same chain view.
+They reuse the SDK ownership graph and existing command receipts.
+Creation recovery observes principal-scoped receipts through the same joined
+command reader, then holds the original command lease while the coordinator
+records verified pre-initialization absence. `owned_recovery.rs` exercises the
+actual Accepted/Attempted crash prefixes and rejected discovery evidence.
+SDK recovery/quota boundaries live under
+`nessa-sdk/tests/application/agent_execution/subagents/capacity/preparation_recovery.rs`.
+`conversation/infrastructure/ownership_audit.rs` persists coordinator transition
+evidence through the ordinary durable audit owner. Namespace
+`composition/runtime_config.rs` owns `subagents.stopChildrenOnParentStop` and
+`subagents.maxLiveThreads` (the live thread cap `owned_threads.rs` checks under
+the thread admission lock; see [Worker pool preferences](design/worker-pool-preferences.md)).
+The pool order lives in `conversation/infrastructure/pool_config.rs` (config.json
+`pool`), is saved by `pool_settings.rs` and read by `application/placement.rs`.
+The real coordinator/SQLite regressions live in `tests/conversation/parent_stop.rs`;
+`tests/conversation/parent_stop/confirmed_recovery.rs` kills a process between
+native cancel acknowledgement and turn settlement, retaining exact command authority.
+It also rejects the final decline write or loses its acknowledgement through real
+SQLite, then checks retry, settlement and reopening. `resumption.rs` flushes the
+existing session owner's retained evidence before recovery completes or its durable
+unfinished mark clears. `conformance/resumption/cleanup_proof_panics.rs` exercises
+retirement save construction, poll and drop faults for start, abandonment and
+Authorized-close through that same writer. `lifecycle_cleanup_proof.rs` polls the
+new evidence boundary behind an admitted proof writer before any audit effect.
+`conformance/close_reports/owned_root.rs` keeps bare SDK roots Closing until the
+same provider's actual executable-use release receipt, independently of audit;
+its late-receipt matrix covers Final/Suspend without inventing child capacity.
+`conversation/leases/cleanup_counts.rs` checks each actual backend cleanup identity
+across late End acknowledgement and a later opening, including duplicate/missing
+cleanup counterexamples. The SDK session manager distinguishes an applied scheduling
+decision from its persistence acknowledgement; the decline owner audits that actual
+decision and retains independent persistence and audit failures.
+`verification/desktop/scripts/parent-stop.mjs` exercises the ordinary Stop button.
+
+`nessa-server/src/composition/github_tools.rs` serves fixed repository, issue
+and pull request GETs as a separate built-in MCP server. It uses the same live
+source-turn admission before `github/application/connections.rs` reads the
+current sign-in. `github/domain/repository.rs` owns validated path segments
+and operations; `github/infrastructure/api.rs` fixes the GitHub host, request
+deadline, redirect policy and body bound. Provider opens and managed shell
+commands receive no Nessa GitHub credentials. See the [GitHub sign-in and
+broker contract](design/github-connect.md).
+
+## Background tasks
+
+`composition/background_tools.rs` exposes source-bound start, status and cancel
+through the existing MCP relay. `conversation/application/service/background_tasks.rs`
+coordinates admission, native-call binding, detached execution and internal
+continuation. Its runner, store and argument-decoder ports live in
+`conversation/application/background_tasks`; immutable lifecycle transitions live
+in `conversation/domain/background_task`. `infrastructure/background_tasks`
+implements transactional current-state/audit persistence and the Shepherd adapter.
+The service decorates existing tool rows; frontend transcript code retains their
+background identity while the turn ends. See [the lifecycle](state/services/gateway/background-tasks.md).
+
+## GitHub webhook ingress and relay
+
+`packages/github-webhooks` owns the hosted receiver and authenticated delivery
+boundary: feature-first `webhooks/` and `relay/`, each with domain, application
+ports and infrastructure. `composition/worker.ts` wires GitHub, Cedar/WASM, D1,
+clock, crypto and hibernating Durable Object adapters. Migrations own the atomic
+inbox, expiry watermarks and bounded audit metadata. Tests run the bundled Worker
+with real local D1 and Durable Objects.
+
+The native `crates/nessa-server/src/github_relay` context mirrors its own feature
+vocabulary: domain identities/order, application catch-up and ports, and
+infrastructure adapters for the existing `GithubConnections` token owner,
+HTTPS/WebSocket and encrypted SQLite. `application/catch_up.rs` obtains the
+existing zeroizing credential for each page request; `transport.rs` owns bounded
+success/refusal bodies and protocol-sized WebSocket frames/messages. `infrastructure/vault.rs` obtains the inbox key through the injected `secrets::VaultSecret`; `github/infrastructure/token_vault.rs` uses a separate vault entry for sign-in. `secrets/keychain.rs` remains the legacy import adapter. `nessa-local-database::encryption` owns SQLCipher and the atomic plaintext upgrade. `application/live_events.rs` coordinates opt-in
+and `infrastructure/selection.rs` commits selection changes and cleanup evidence.
+`product/github.rs` serializes enable/disable with sign-out;
+`settings/ui/github-row.tsx` presents that state. Composition
+owns optional lifecycle and CLI output. Tests under `tests/github_relay` exercise
+real SQLite, failures, competing consumers, identity isolation and reconnect
+fencing. No provider DTO chooses a conversation or actor.
+
+The packaged host retains build-stage ownership. The compiled public stage table
+and shared bounds are `protocol/defaults/github-relays.json` and
+`github-relay-contract.json`; the Worker deployment map supplies isolated configs.
+[The runbook](../packages/github-webhooks/README.md) and
+[ADR 1117](adr/todo/1117-github-relay.md) describe limits and operations.
+
+## Reusable local vault
+
+- `crates/nessa-vault`: domain passphrase/name/secret values; application repository,
+  clock, entropy and audit ports plus lease lifecycle; infrastructure Argon2id,
+  authenticated encrypted file and bounded secret-free audit journal. Its README
+  maps the shared contract and regression tests.
+- `crates/nessa-server/src/vault`: verified legacy import application and OS source
+  adapter. `product/vault.rs` owns authenticated controls and the unique socket
+  close guard. `composition/vault.rs` constructs it independently of providers;
+  `composition/vault_session.rs` owns the bounded anonymous-pipe command bridge.
+- `src-tauri/src/vault`: typed host connection port, retained child adapter and
+  trusted-window command. Host composition injects endpoint and credential ports.
+- `src/vault`: application dialog controller, gateway/native adapters, and UI.
+  No UI or RPC exposes stored secrets. `verification/desktop/scripts/vault.mjs`
+  tests the native lease through the real gateway and browser dialog.
+
+## Channel workspaces
+
+`crates/nessa-server/src/workspaces/` owns Boat connection settings and VM
+allocation receipts: `domain` contains values and failures; `application` orders
+allocation through Settings, Assignments, Provider and RecoveryAudit ports in
+`application/workspaces.rs`; `infrastructure`
+implements encrypted vault settings, private receipt files, Boat/workspace-sdk
+preparation and scoped SSH access. `domain/workspace.rs` owns legal receipt histories. `domain/environment.rs` owns the supported
+credential posture, immutable environment identity and bounded refusal evidence;
+`infrastructure/boat_admission.rs` checks complete current provider state and raw
+VM receipts before SDK authority. `assignments.rs` retains proof and terminal
+refusals in private histories, while old receipts are read only as Unverified.
+Tests live in `tests/workspaces`; real-provider
+verification lives in `scripts/workspaces`, with the single-file local MCP fixture
+under `scripts/mcp-test-server`. Composition maps recovery evidence into the
+existing durable EnvironmentAudit store; failed receipt publication retains its
+VM target independently of the assignment writer and initiating observer.
+
+Ordinary VM lifetime preferences use the existing gateway `config.json`, through
+the `RuntimeSettings` port and the Boat-specific `ConfigBoatRuntimeSettings` adapter
+in `boat_runtime_settings.rs`. The adapter shares
+`ConfigJson` publication and locking with other settings editors; only Boat
+credentials use the vault. Requested/outcome records in `boat-runtime-audit`
+retain the scoped choice and publication result. Runtime settings and their
+audits participate in the existing configuration and environment-audit backup cuts.
+The pure `crates/nessa-server/src/settings/inheritance.rs` rule resolves typed
+choices from broadest to most specific: an absent choice inherits its parent,
+while a present choice wins
+even when its value is explicitly nullable. Storage schema, scope identity,
+authorization and publication remain with each setting's owning feature.
+
+Conversation placement and main-agent identity remain in `conversation`.
+Its platform-neutral placement contract owns the workspace retention bound;
+the operational catalogue and Unix cache consume that same definition.
+Its lifetime values identify the global or channel target and use the shared
+inheritance rule for the current default and channel override. A future parent
+scope supplies another ordered choice when its identity exists; the resolver
+does not invent a project hierarchy. `workspace_runtime_config.rs` reads the pair from
+one document. The shared channel store resolves membership before allocation;
+the Boat adapter applies the selected lifetime on VM creation and archived resume.
+`conversation/infrastructure/workspaces.rs` adapts a workspace stream into the
+existing remote lease environment. `application/artifact_channels.rs` is the port
+for artifact streams. `channels.sql` owns the current schema; its two forward
+migrations preserve Local defaults and add the main replacement journal.
+
+The desktop composes a narrow Boat settings gateway into `BoatRow`; the shared
+`boat-runtime-control` edits the global default there and per-channel overrides
+from `workspace/ui/channel-settings`. Channel draft
+placement is a projection sent to the gateway, and navigation uses the gateway's
+current main conversation ID. See [ADR 1160](adr/todo/1160-boat-workspaces.md) and
+[lifetime settings](adr/todo/1168-boat-vm-lifetime.md).

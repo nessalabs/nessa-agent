@@ -1,0 +1,9 @@
+starting a dev server of its own on port 38347…
+warmed 1296 modules in 6419 ms
+conversation ready: review_rows completed, in 1301 ms
+ok    setup
+ok    context [chromium columns]
+ok    console [chromium columns]
+chromium columns: 7557 ms
+wrote /tmp/nessa-981-evidence/context-isolated.json
+mcp-apps-gateway: 3/3 held

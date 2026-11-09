@@ -88,6 +88,16 @@ export function MessageImages({
           held: { digest: part.digest, mimeType: part.mimeType, size: part.size },
         },
       ]
+    if (part.type === "uploaded-file-reference")
+      return [
+        {
+          key: `${part.digest}:${index}`,
+          label: part.name,
+          title: part.name,
+          src: undefined,
+          file: true,
+        },
+      ]
     // Read back from the gateway: the path is all there ever was.
     if (part.type === "file-reference")
       return [

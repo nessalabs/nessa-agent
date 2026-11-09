@@ -80,6 +80,8 @@ use crate::updater::{self, ReleaseSource};
 /// `&dyn SettingsStore`, which is also what makes it testable.
 #[derive(Clone)]
 pub struct HostDependencies {
+    /// One app-lifetime anonymous-pipe vault connection, shared by all windows.
+    pub vault: Arc<dyn crate::vault::application::VaultConnection>,
     /// Opens provider-owned CLI login flows without reading their credentials.
     pub provider_login: Arc<dyn crate::provider_authentication::ProviderLogin>,
     /// The settings file: the panel's geometry, the quit policy, and whether
@@ -99,6 +101,10 @@ pub struct HostDependencies {
     pub credential: Arc<dyn SurfaceCredentials>,
     /// Health-correlated endpoint source bound to the same service namespace.
     pub endpoint: Arc<GatewayEndpointAccess>,
+    /// The local gateway's `config.json`, which Settings opens for the
+    /// person to edit a server's command by hand; none when the service
+    /// namespace was not usable.
+    pub gateway_config: Option<std::path::PathBuf>,
     /// Where the person chooses files to attach: the operating system's own
     /// file dialog, which the webview has no way of putting on screen itself.
     pub picker: Arc<dyn FilePicker>,
@@ -271,7 +277,20 @@ impl HostDependencies {
                         clock.clone(),
                     ),
                     gateway::infrastructure::login_shell_path(),
-                    gateway::infrastructure::startup_events(app),
+                    gateway::infrastructure::startup_events(
+                        app,
+                        service_namespace
+                            .as_ref()
+                            .map(|namespace| {
+                                Arc::new(crate::host_log::FileLaunchTimings::at(
+                                    namespace
+                                        .log_directory()
+                                        .join(crate::host_log::LAUNCH_TO_GATEWAY_READY_FILE),
+                                ))
+                                    as Arc<dyn crate::host_log::LaunchTimingStore>
+                            })
+                            .unwrap_or_else(|| Arc::new(crate::host_log::UnavailableLaunchTimings)),
+                    ),
                     gateway::infrastructure::reconciliation_ids(),
                     reconciliation_audit,
                     clock,
@@ -281,7 +300,41 @@ impl HostDependencies {
             )))
         };
 
+        let credential = Arc::new(SurfaceCredential::for_namespace(
+            service_namespace.clone(),
+            stage.clone(),
+        ));
+        let gateway_config = service_namespace
+            .as_ref()
+            .map(|namespace| namespace.config_file());
+        let endpoint = Arc::new(GatewayEndpointAccess::new(
+            stage.clone(),
+            gateway_endpoint::infrastructure::endpoint_discovery(service_namespace),
+        ));
+        let vault_binary = if cfg!(debug_assertions) {
+            std::env::var_os("NESSA_VAULT_BINARY")
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(|| {
+                    std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                        .join("../target/debug")
+                        .join(if cfg!(windows) { "nessa.exe" } else { "nessa" })
+                })
+        } else {
+            app.path()
+                .resource_dir()
+                .map_err(|error| StartupRefusal::Resources(error.to_string()))?
+                .join("runtime")
+                .join(if cfg!(windows) { "nessa.exe" } else { "nessa" })
+        };
+        let vault = Arc::new(crate::vault::infrastructure::NativeVault::new(
+            vault_binary,
+            endpoint.clone(),
+            credential.clone(),
+            stage,
+            service_configuration.port(),
+        ));
         Ok(Self {
+            vault,
             provider_login: Arc::new(crate::platform::PlatformProviderLogin),
             settings,
             agent_credentials: Arc::new(LocalAgentCredentialStore::new(
@@ -293,14 +346,9 @@ impl HostDependencies {
             credential_save_ids: Arc::new(RandomCredentialSaveIds),
             credential_save_audit,
             shortcuts: Arc::new(ShortcutsFile::at(config_root)),
-            credential: Arc::new(SurfaceCredential::for_namespace(
-                service_namespace.clone(),
-                stage.clone(),
-            )),
-            endpoint: Arc::new(GatewayEndpointAccess::new(
-                stage,
-                gateway_endpoint::infrastructure::endpoint_discovery(service_namespace),
-            )),
+            credential,
+            endpoint,
+            gateway_config,
             picker: attachments::file_picker(app),
             save_destination: saving::save_destination(app),
             save_sessions: saving::save_sessions(),

@@ -1,0 +1,19 @@
+
+running 1 test
+test webhooks::infrastructure::outbox::store::tests::cleanup_tests::delivery_retirement_removes_only_its_published_audit_and_preserves_owed_rows ... FAILED
+
+failures:
+
+---- webhooks::infrastructure::outbox::store::tests::cleanup_tests::delivery_retirement_removes_only_its_published_audit_and_preserves_owed_rows stdout ----
+
+thread 'webhooks::infrastructure::outbox::store::tests::cleanup_tests::delivery_retirement_removes_only_its_published_audit_and_preserves_owed_rows' (132589) panicked at /tmp/nessa-retention-cost-controls/crates/nessa-server/src/webhooks/infrastructure/outbox/../../../../tests/webhooks/infrastructure/outbox/cleanup.rs:137:5:
+assertion `left == right` failed
+  left: 1
+ right: 0
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    webhooks::infrastructure::outbox::store::tests::cleanup_tests::delivery_retirement_removes_only_its_published_audit_and_preserves_owed_rows
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 89 filtered out; finished in 0.02s

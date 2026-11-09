@@ -1,0 +1,5 @@
+
+running 1 test
+test webhooks::infrastructure::outbox::store::tests::independent_retained_progress_tests::independent_reset_and_sending_proof_is_scoped_away_from_a_new_pending_registration ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 132 filtered out; finished in 0.05s

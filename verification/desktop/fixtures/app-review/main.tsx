@@ -44,6 +44,8 @@ import {
   type AttachmentApi,
   type AuthApi,
   type GithubApi,
+  type VoiceApi,
+  type LoginsApi,
   type ConversationMessage,
   type ConversationPermission,
   type ConversationView,
@@ -318,6 +320,11 @@ const settingsParts = {
   credentials: {} as CredentialApi,
   auth: {} as AuthApi,
   github: {} as GithubApi,
+  voice: {} as VoiceApi,
+  logins: {} as LoginsApi,
+  vault: {} as import("@nessa/client").VaultApi,
+  // The Devices page is not opened here.
+  devices: {} as import("@nessa/client").DevicesApi,
   // Read back only for a file a view names; none here does.
   attachments: {} as AttachmentApi,
   agents: {

@@ -1,0 +1,16 @@
+
+running 1 test
+
+thread 'webhooks::infrastructure::outbox::store::tests::independent_review_probes::probe_reintroduced_owed_issue_after_expiry_observation' (153890) panicked at /tmp/nessa-expiry-context-final-review/probes.rs:90:9:
+assertion `left == right` failed: owed issuance prerequisite contradicts retained ExpiryObserved
+  left: Ok(())
+ right: Err(Invalid)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test webhooks::infrastructure::outbox::store::tests::independent_review_probes::probe_reintroduced_owed_issue_after_expiry_observation ... FAILED
+
+failures:
+
+failures:
+    webhooks::infrastructure::outbox::store::tests::independent_review_probes::probe_reintroduced_owed_issue_after_expiry_observation
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 120 filtered out; finished in 0.01s

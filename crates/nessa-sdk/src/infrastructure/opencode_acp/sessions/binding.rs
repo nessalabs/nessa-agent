@@ -128,6 +128,7 @@ const SESSION_POLICY: &str = r#"{"*":"deny","read":{"*":"allow","*.env":"deny","
 #[derive(Clone)]
 pub struct OpencodeAcpProvider {
     config: AcpConfig,
+    host: Option<Arc<dyn crate::application::agent_execution::providers::HarnessHost>>,
     capabilities: EffectiveCapabilities,
     audit: Arc<dyn ExecutionAudit>,
     /// Deletions this binding started that are still stopping their process.
@@ -267,6 +268,7 @@ impl OpencodeAcpProvider {
         ProviderIdentity::new(PROVIDER_NAME, capabilities.model().model_id(), "")?;
         Ok(Self {
             config,
+            host: None,
             capabilities,
             audit,
             deletions: DeletionCleanups::default(),
@@ -325,15 +327,36 @@ impl OpencodeAcpProvider {
     // what this policy is for — and it is the second thing to solve, with the
     // prompt, before Opencode is given a mode that acts.
 
-    fn launch_command(&self, private_home: &Path) -> Command {
-        let mut command = Command::new(self.config.executable.executable());
+    /// Variables a remote gateway may set. OpenCode model selection travels
+    /// through ACP; launch credentials and policy are owned by the host.
+    pub const LAUNCH_VARIABLES: &'static [&'static str] = &[];
+    /// Start a host-owned command under the same private-home and fixed-plan
+    /// policy as local OpenCode. The host owns executable, credentials and its
+    /// optional session database. The private home survives uncertain cleanup.
+    ///
+    /// # Errors
+    /// Typed process-start failure from the supervised harness boundary.
+    pub fn start_on_host(
+        command: Command,
+    ) -> Result<crate::application::agent_execution::providers::HarnessProcess, AgentError> {
+        crate::infrastructure::harness_process::SupervisedHarness::start_private(move |home| {
+            let mut command = command;
+            let database = command
+                .as_std()
+                .get_envs()
+                .find_map(|(key, value)| {
+                    (key == "OPENCODE_DB").then(|| value.map(std::ffi::OsStr::to_owned))
+                })
+                .flatten();
+            Self::isolate_command(&mut command, home);
+            if let Some(database) = database {
+                command.env("OPENCODE_DB", database);
+            }
+            command
+        })
+    }
+    fn isolate_command(command: &mut Command, private_home: &Path) {
         command
-            .args(self.config.command_arguments())
-            .current_dir(&self.config.workspace)
-            .env_clear()
-            .envs(&self.config.environment)
-            .envs(&self.config.runtime_environment)
-            .envs(&self.config.credential_environment)
             .env_remove("OPENCODE_CONFIG")
             .env_remove("OPENCODE_CONFIG_CONTENT")
             .env_remove("OPENCODE_CONFIG_DIR")
@@ -380,6 +403,17 @@ impl OpencodeAcpProvider {
             // reaches the upgrade path and `acp` never does, so this makes a
             // sentence that is true of the entry point true of the binary.
             .env("OPENCODE_DISABLE_AUTOUPDATE", "1");
+    }
+    fn launch_command(&self, private_home: &Path) -> Command {
+        let mut command = Command::new(self.config.executable.executable());
+        command
+            .args(self.config.command_arguments())
+            .current_dir(&self.config.workspace)
+            .env_clear()
+            .envs(&self.config.environment)
+            .envs(&self.config.runtime_environment)
+            .envs(&self.config.credential_environment);
+        Self::isolate_command(&mut command, private_home);
         if let Some(database) = &self.session_database {
             command.env("OPENCODE_DB", database);
         }
@@ -461,7 +495,9 @@ fn capabilities(
 
 impl AgentProvider for OpencodeAcpProvider {
     fn harness_host_identity(&self) -> HarnessHostIdentity<'_> {
-        HarnessHostIdentity::local()
+        self.host
+            .as_ref()
+            .map_or_else(HarnessHostIdentity::local, HarnessHostIdentity::hosted)
     }
     fn approval_mode(
         &self,
@@ -486,6 +522,20 @@ impl AgentProvider for OpencodeAcpProvider {
         &self.capabilities
     }
 
+    fn on_host(
+        &self,
+        host: Arc<dyn crate::application::agent_execution::providers::HarnessHost>,
+    ) -> Result<Arc<dyn AgentProvider>, AgentError> {
+        let config = self
+            .config
+            .on_host(host.workspace().to_path_buf(), host.mcp_relay());
+        config.validate()?;
+        Ok(Arc::new(Self {
+            config,
+            host: Some(host),
+            ..self.clone()
+        }))
+    }
     fn traces(&self) -> Option<Arc<LocalTraceStore>> {
         Some(self.traces.clone())
     }
@@ -526,6 +576,14 @@ impl OpencodeAcpProvider {
     /// How every connection this provider opens is launched: in a private
     /// home of its own, retained until the process is confirmed stopped.
     pub(super) fn process_factory(&self) -> acp_binding::ProcessFactory {
+        if let Some(host) = &self.host {
+            let host = host.clone();
+            return Arc::new(move || {
+                Ok(ProcessScope::remote(host.start(
+                    crate::application::agent_execution::providers::HarnessLaunch::default(),
+                )?))
+            });
+        }
         let factory = self.clone();
         Arc::new(move || {
             ProcessScope::spawn_with_private_directory(|private_home| {

@@ -26,7 +26,11 @@ export function githubRefusalCode(code: unknown): GithubRefusalCode | undefined 
 
 /** The method a {@link NessaGithubError} answers. */
 export type GithubMethod =
-  "github.status" | "github.connect" | "github.cancel" | "github.disconnect"
+  | "github.status"
+  | "github.connect"
+  | "github.cancel"
+  | "github.disconnect"
+  | "github.liveEvents"
 
 /**
  * A `github.*` method that did not answer with a result.

@@ -7,6 +7,7 @@ import {
   selectChannelActivity,
   selectView,
 } from "../../adapters/store/selectors"
+import { ChannelSettingsButton } from "../channel-settings/channel-settings"
 import { SidebarRow } from "./sidebar-row"
 import { useOverviewQuiet } from "./overview-quiet"
 
@@ -42,6 +43,7 @@ export const ChannelRow = memo(function ChannelRow({ channelId }: { channelId: s
       badge={activity.waiting}
       badgeTone="needs"
       running={activity.running}
+      actions={<ChannelSettingsButton channelId={channel.id} name={channel.name} />}
       onClick={() => dispatch(chooseChannel({ channelId }))}
     />
   )

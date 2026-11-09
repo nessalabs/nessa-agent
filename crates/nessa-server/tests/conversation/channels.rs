@@ -11,6 +11,8 @@ use crate::conversation::domain::{
     ChannelDefaults, ChannelName, ChannelNotes, ChannelRefusal, ProviderSessionErasure,
 };
 use crate::conversation::infrastructure::{LocalChannelStore, LocalConversationStore};
+#[cfg(unix)]
+use crate::conversation_test_support::channel_lookup::ChannelLookup;
 use crate::conversation_test_support::{absolute, unrooted};
 use crate::conversation_test_support::{
     AcceptingCreationAudit, AcceptingDeletionAudit, AcceptingModeAudit, Provider, ProviderFactory,
@@ -43,6 +45,7 @@ impl RecordingSource {
             ConversationApprovalMode::Full => ApprovalMode::Full,
         };
         ConversationAgent {
+            workspace: None,
             provider: Arc::new(
                 Provider::new(self.factory.clone())
                     .with_model(model)
@@ -151,6 +154,7 @@ impl ChannelFolders for TableFolders {
 struct Fixture {
     service: ConversationService,
     source: Arc<RecordingSource>,
+    settings: Arc<crate::conversation_test_support::RecordingSettingsAudit>,
     folders: TableFolders,
     _directory: tempfile::TempDir,
 }
@@ -174,6 +178,7 @@ fn path(text: &str) -> ChannelPath {
 
 fn request(folder: Option<&str>) -> ChannelRequest {
     ChannelRequest {
+        execution: crate::conversation::domain::ChannelExecution::default(),
         name: ChannelName::new("design-review").unwrap(),
         folder: folder.map(path),
         defaults: ChannelDefaults {
@@ -192,6 +197,13 @@ impl Fixture {
     }
 
     fn with_erasers(provider_sessions: ProviderSessionErasers) -> Self {
+        Self::with_channel_store(provider_sessions, None)
+    }
+
+    fn with_channel_store(
+        provider_sessions: ProviderSessionErasers,
+        channel_store: Option<Arc<dyn ChannelStore>>,
+    ) -> Self {
         let directory = tempfile::tempdir().unwrap();
         let root = &directory.path().join("gateway");
         nessa_local_storage::create_directory(root).unwrap();
@@ -213,6 +225,7 @@ impl Fixture {
         .unwrap();
         let service = ConversationService::new(
             ConversationDependencies {
+                input_files: None,
                 access_policy: crate::conversation_test_support::access_policy(),
                 agents,
                 storage: storage.clone(),
@@ -237,12 +250,18 @@ impl Fixture {
         service.bind_commands(storage);
         let folders = TableFolders::default();
         service.bind_channels(
-            Arc::new(LocalChannelStore::open(&root.join("channels.sqlite3")).unwrap()),
+            channel_store.unwrap_or_else(|| {
+                Arc::new(LocalChannelStore::open(&root.join("channels.sqlite3")).unwrap())
+            }),
             Arc::new(folders.clone()),
         );
+        let settings =
+            Arc::new(crate::conversation_test_support::RecordingSettingsAudit::default());
+        service.bind_settings_audit(settings.clone());
         Self {
             service,
             source,
+            settings,
             folders,
             _directory: directory,
         }
@@ -262,6 +281,34 @@ impl Fixture {
     fn asked(&self) -> Vec<Asked> {
         std::mem::take(&mut self.source.asked.lock().unwrap())
     }
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn settings_authorization_refuses_another_channels_valid_owner_facts() {
+    let real = Fixture::new();
+    let found = real.channel("owned-channel", None).await;
+    let id = found.id().clone();
+    let other = ChannelId::from_random([99; 10]);
+    assert_ne!(id, other);
+    let fixture = Fixture::with_channel_store(
+        ProviderSessionErasers::default(),
+        Some(Arc::new(ChannelLookup {
+            channel: Box::new(found),
+        })),
+    );
+    assert!(fixture
+        .service
+        .authorize_channel_settings(&caller("person", "settings"), &id)
+        .await
+        .is_ok());
+    assert!(matches!(
+        fixture
+            .service
+            .authorize_channel_settings(&caller("person", "settings"), &other)
+            .await,
+        Err(ConversationError::Unavailable)
+    ));
 }
 
 #[test]
@@ -415,6 +462,7 @@ async fn a_conversation_in_a_channel_starts_with_its_defaults_in_its_folder() {
             caller("person", "say"),
             "say".to_owned(),
             SubmittedMessage {
+                uploads: Vec::new(),
                 text: "hello".into(),
                 ..SubmittedMessage::default()
             },
@@ -752,6 +800,7 @@ async fn a_deleted_conversation_is_erased_from_its_channels_folder_then_let_go()
             caller("person", "say"),
             "say".to_owned(),
             SubmittedMessage {
+                uploads: Vec::new(),
                 text: "hello".into(),
                 ..SubmittedMessage::default()
             },
@@ -759,7 +808,9 @@ async fn a_deleted_conversation_is_erased_from_its_channels_folder_then_let_go()
         )
         .await
         .unwrap();
-    tokio::time::timeout(std::time::Duration::from_secs(3), async {
+    // This bounds fixture completion, not the product's turn latency. The
+    // Windows CI runner runs two server partitions alongside each other.
+    tokio::time::timeout(std::time::Duration::from_secs(15), async {
         loop {
             let view = fixture
                 .service
@@ -815,4 +866,334 @@ async fn a_person_keeps_at_most_the_channels_the_rules_allow() {
         .create_channel(caller("other", "first"), "first".into(), request(None))
         .await
         .unwrap();
+}
+
+#[tokio::test]
+async fn owned_threads_use_channel_start_without_accepting_caller_overrides() {
+    use crate::conversation::application::AgentToolSource;
+    use crate::conversation::infrastructure::DurableOwnershipAudit;
+    use nessa_sdk::application::agent_execution::commands::CreationFailure;
+    use nessa_sdk::application::agent_execution::subagents::{
+        LiveCapacity, OwnershipCoordinator, OwnershipDependencies,
+    };
+    use nessa_sdk::infrastructure::session_storage::SqliteOwnershipStore;
+    use std::time::Duration;
+
+    for mode in [
+        ConversationApprovalMode::Auto,
+        ConversationApprovalMode::Ask,
+    ] {
+        let fixture = Fixture::new();
+        let root = fixture._directory.path().join("gateway");
+        let ownership = OwnershipCoordinator::new(OwnershipDependencies {
+            store: Arc::new(SqliteOwnershipStore::open(&root.join("ownership.sqlite3")).unwrap()),
+            audit: Arc::new(
+                DurableOwnershipAudit::new(root.join("ownership-audit"), Arc::new(TestClock))
+                    .unwrap(),
+            ),
+            factory: fixture.service.owned_thread_factory(),
+            room: Arc::new(LiveCapacity::new(32)),
+        });
+        ownership.resume().await.unwrap();
+        fixture
+            .service
+            .bind_owned_threads(ownership.clone(), true)
+            .unwrap();
+        let channel = fixture.channel("owned-channel", None).await;
+        let parent = new_id();
+        fixture
+            .service
+            .create(
+                parent.clone(),
+                caller("person", "parent"),
+                RequestedConversation {
+                    channel: Some(channel.id().clone()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        fixture
+            .service
+            .set_approval_mode(parent.clone(), caller("person", "parent-mode"), mode)
+            .await
+            .unwrap();
+        let live = fixture
+            .service
+            .resolve(&parent, &caller("person", "parent"))
+            .await
+            .unwrap();
+        live.join_attachment_owner().await.unwrap();
+        drop(live);
+        let (release, gate) = tokio::sync::oneshot::channel();
+        *fixture.source.factory.execution_gate.lock().unwrap() = Some(gate);
+        let started = fixture.source.factory.execution_started.notified();
+        fixture
+            .service
+            .submit(
+                parent.clone(),
+                caller("person", "active"),
+                "active".into(),
+                SubmittedMessage {
+                    text: "active".into(),
+                    ..Default::default()
+                },
+                SubmissionMode::Queue,
+            )
+            .await
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(60), started)
+            .await
+            .unwrap();
+        let source = |action| AgentToolSource {
+            caller: caller("person", action),
+            source: parent.clone(),
+            execution: nessa_sdk::domain::agent_execution::executions::ExecutionId::new("active")
+                .unwrap(),
+        };
+        let child = new_id();
+        let original = fixture
+            .service
+            .create_owned_thread(
+                source("owned-child"),
+                child.clone(),
+                RequestedConversation::default(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            fixture.service.channel_id_of(&child).await.unwrap(),
+            Some(channel.id().clone())
+        );
+        let record =
+            super::super::load_conversation(fixture.service.inner.metadata.as_ref(), &child)
+                .await
+                .unwrap()
+                .unwrap();
+        assert_eq!(
+            record.approval_mode(),
+            mode,
+            "the channel start owner's current preset survives owned preparation"
+        );
+        let child_lifetime = ownership
+            .child_lifetime_for_session(&super::super::conversation_session(&child))
+            .unwrap();
+        let binding = ownership
+            .spawn_binding_for_lifetime(&child_lifetime)
+            .unwrap();
+        assert_eq!(
+            binding.policy.mode(),
+            mode.as_str(),
+            "the SDK binding and actual ordinary child retain the same preset"
+        );
+        if mode == ConversationApprovalMode::Auto {
+            let opened = fixture
+                .source
+                .factory
+                .open_calls
+                .load(std::sync::atomic::Ordering::SeqCst);
+            fixture
+                .service
+                .set_approval_mode(
+                    parent.clone(),
+                    caller("person", "later-ask"),
+                    ConversationApprovalMode::Ask,
+                )
+                .await
+                .unwrap();
+            let live = fixture
+                .service
+                .resolve(&parent, &caller("person", "inspect-active"))
+                .await
+                .unwrap();
+            assert_eq!(
+                live.agent
+                    .active_execution_id()
+                    .as_ref()
+                    .map(|id| id.as_str()),
+                Some("active"),
+                "the original source execution remains active across the in-place mode change"
+            );
+            drop(live);
+            let replayed = fixture
+                .service
+                .create_owned_thread(
+                    source("owned-child"),
+                    child.clone(),
+                    RequestedConversation::default(),
+                )
+                .await;
+            assert_eq!(
+                replayed.unwrap(),
+                original,
+                "exact replay retains its original Ready receipt after the parent's preset changes"
+            );
+            let retained =
+                super::super::load_conversation(fixture.service.inner.metadata.as_ref(), &child)
+                    .await
+                    .unwrap()
+                    .unwrap();
+            assert_eq!(retained.approval_mode(), ConversationApprovalMode::Auto);
+            assert_eq!(
+                ownership
+                    .spawn_binding_for_lifetime(&child_lifetime)
+                    .unwrap()
+                    .policy
+                    .mode(),
+                "auto"
+            );
+            assert_eq!(
+                fixture
+                    .source
+                    .factory
+                    .open_calls
+                    .load(std::sync::atomic::Ordering::SeqCst),
+                opened,
+                "replay does not prepare the provider again"
+            );
+        }
+        for requested in [
+            RequestedConversation {
+                approval_mode: Some(ConversationApprovalMode::Full),
+                ..Default::default()
+            },
+            RequestedConversation {
+                channel: Some(channel.id().clone()),
+                ..Default::default()
+            },
+        ] {
+            let refused = new_id();
+            let before = fixture
+                .source
+                .factory
+                .open_calls
+                .load(std::sync::atomic::Ordering::SeqCst);
+            assert!(matches!(
+                fixture
+                    .service
+                    .create_owned_thread(source("refused-override"), refused.clone(), requested)
+                    .await,
+                Err(CreationFailure::Target(ConversationError::InvalidInput))
+            ));
+            assert!(super::super::load_conversation(
+                fixture.service.inner.metadata.as_ref(),
+                &refused
+            )
+            .await
+            .unwrap()
+            .is_none());
+            assert_eq!(
+                fixture
+                    .source
+                    .factory
+                    .open_calls
+                    .load(std::sync::atomic::Ordering::SeqCst),
+                before
+            );
+        }
+        drop(release);
+        fixture.service.shutdown().await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn only_the_owner_moves_a_made_channel_and_an_unchanged_one_stays_as_it_is() {
+    use crate::conversation::application::ChannelError;
+    use crate::conversation::domain::{ChannelExecution, WorkspacePlacement};
+    let fixture = Fixture::new();
+    let made = fixture.channel("request-1", None).await;
+    let boat = ChannelExecution {
+        coordinator: WorkspacePlacement::Boat,
+        threads: WorkspacePlacement::Boat,
+    };
+    // The default channel has no run location to change, and neither another
+    // person nor an unknown id learns whether a channel exists.
+    for (who, id) in [
+        ("person", ChannelId::default_channel()),
+        ("other", made.id().clone()),
+        ("person", ChannelId::from_random([9; 10])),
+    ] {
+        assert_eq!(
+            fixture
+                .service
+                .set_channel_execution(&caller(who, "move"), &id, boat)
+                .await,
+            Err(ChannelError::Forbidden),
+            "{who} moved {id:?}"
+        );
+    }
+    // Asking for where it already runs changes nothing, main chat included.
+    let same = fixture
+        .service
+        .set_channel_execution(&caller("person", "move"), made.id(), made.execution())
+        .await
+        .unwrap();
+    assert_eq!(same, made);
+    let moved = fixture
+        .service
+        .set_channel_execution(&caller("person", "move"), made.id(), boat)
+        .await
+        .unwrap();
+    assert_eq!(moved.execution(), boat);
+    assert_eq!(moved.id(), made.id());
+    // Asked and applied are on record as the person's, with both places; a
+    // refused or unchanged move left none.
+    let records = fixture.settings.records.lock().unwrap().clone();
+    assert_eq!(records.len(), 2);
+    assert_eq!(records[0].operation_id, records[1].operation_id);
+    assert_eq!(records[0].caller, caller("person", "move"));
+    assert_eq!(
+        records[0].change,
+        crate::conversation::application::SettingsChange::ChannelPlacement {
+            channel: made.id().clone(),
+            before: made.execution(),
+            after: boat,
+            coordinator: made.coordinator_id(),
+        }
+    );
+    assert_eq!(
+        fixture.settings.outcomes(),
+        [
+            crate::conversation::application::SettingsOutcome::Requested,
+            crate::conversation::application::SettingsOutcome::Applied {
+                changed: true,
+                coordinator: Some(moved.coordinator_id()),
+            },
+        ]
+    );
+}
+
+#[tokio::test]
+async fn a_move_that_cannot_be_recorded_is_refused_and_changes_nothing() {
+    use crate::conversation::application::ChannelError;
+    use crate::conversation::domain::{ChannelExecution, WorkspacePlacement};
+    let fixture = Fixture::new();
+    let made = fixture.channel("request-1", None).await;
+    fixture
+        .settings
+        .failing
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    let boat = ChannelExecution {
+        coordinator: WorkspacePlacement::Boat,
+        threads: WorkspacePlacement::Boat,
+    };
+    assert_eq!(
+        fixture
+            .service
+            .set_channel_execution(&caller("person", "move"), made.id(), boat)
+            .await,
+        Err(ChannelError::Unavailable)
+    );
+    let listed = fixture
+        .service
+        .list_channels(&caller("person", "list"))
+        .await
+        .unwrap();
+    let kept = listed
+        .channels
+        .iter()
+        .find(|each| each.id() == made.id())
+        .unwrap();
+    assert_eq!(kept.execution(), made.execution());
+    assert_eq!(kept.coordinator_id(), made.coordinator_id());
 }

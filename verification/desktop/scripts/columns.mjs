@@ -20,12 +20,18 @@
  *                    right); each pane's picture runs up to the window's top
  *                    edge; and the left pane's composer starts past the
  *                    corner mark when the rail is closed.
+ *   pane-clipping    focusing an overflowing fixture cannot scroll the pane
+ *                    root or move its header; the transcript owns scrolling.
  *   rail-corner      the toggle holds one bottom-left place in the rail's
  *                    column, rail open or closed; with the rail closed it is
- *                    the footer's mark, right before "nessa Studio".
+ *                    the footer's mark, right before "nessa Studio". Agents
+ *                    keeps those words clear of the toggle. Devices leaves
+ *                    that corner empty, and the toggle does not move.
  *   rail-view-inert  under an item's full view the workspace takes no keys:
  *                    ⌘B, ⌘0 and ⌥⌘S change nothing behind it, and coming back
- *                    to Agents finds it as it was left.
+ *                    to Agents finds it as it was left. The view covers the
+ *                    workspace to the window's edges. The titlebar's free
+ *                    room is the window's drag region, not a workspace card.
  *   quiet-composer   three stacked panes: in a short window a pane you are not
  *                    in has a one-line composer, Stop alone while its turn
  *                    runs; going into one grows its composer out of the
@@ -41,7 +47,8 @@
  *                    list, or the panes) and the pane's composer — its left
  *                    edge and its centre — move over several frames, one way,
  *                    to where they rest; with reduced motion they land at once.
- *   split-motion     ⌘D splits the chat in front and ⌘W closes the new pane:
+ *   split-motion     after reclaiming side-column room,
+ *                    ⌘D splits the chat in front and ⌘W closes the new pane:
  *                    each pane's edges and the first composer's centre move
  *                    over several frames, one way, to where they rest; the
  *                    new pane slides in at its size; with reduced motion
@@ -59,52 +66,32 @@
  *
  * Every check but rail-off runs with the rail turned on.
  */
-import { readFile } from "node:fs/promises"
+import { sessionRowForRemoval } from "./lib/session-row-target.mjs"
 import { attempt, CannotRun } from "./lib/cli.mjs"
 import { need, openPage, withEngines } from "./lib/browser.mjs"
 import { main } from "./lib/run.mjs"
+import {
+  agentsStudioMissingFailure,
+  devicesCornerFailures,
+  railViewCoverFailures,
+  studioUnderToggleFailure,
+} from "./lib/rail-view-contract.mjs"
 import { css, keys, names, selectorFor, storage } from "./lib/selectors.mjs"
 import {
   flatSurfaceFailures,
   frames,
+  hideColumns,
   openPanes,
   paneCountIs,
   settled,
 } from "./lib/workspace.mjs"
 
-/**
- * What a card the list may allow (`data-whole`) cuts off: its command, the
- * box around it or its tool line, wider or taller than drawn. A card that
- * allows must show everything it allows.
- */
-const cutOff = (page) =>
-  page.evaluate(() =>
-    [...document.querySelectorAll(".workspace-request-command[data-whole]")].flatMap(
-      (box) => {
-        const card = box.closest(".workspace-request")
-        const parts = [
-          ["command", box.querySelector(".workspace-approval-command")],
-          ["box", box],
-          ["tool", card?.querySelector(".workspace-request-tool")],
-        ]
-        return parts.flatMap(([name, element]) =>
-          element &&
-          (element.scrollWidth > element.clientWidth + 1 ||
-            element.scrollHeight > element.clientHeight + 1)
-            ? [
-                `${card?.getAttribute("aria-label")}: its ${name} is cut off (${element.scrollWidth}x${element.scrollHeight} in ${element.clientWidth}x${element.clientHeight})`,
-              ]
-            : [],
-        )
-      },
-    ),
-  )
+const sessionListChecks = ["waiting-rows"]
 
 const checks = [
+  "pane-clipping",
   "channels-alone",
-  "list-request",
-  "list-request-claude",
-  "list-request-narrow",
+  ...sessionListChecks,
   "quiet-composer",
   "overview-narrow",
   "sidebar-motion",
@@ -141,19 +128,16 @@ Usage: node verification/desktop/scripts/columns.mjs [options]
   --only <list>    Checks, comma-separated: ${checks.join(", ")}
   --sizes <list>   Window sizes (default 1440x900,1000x700,760x700; --quick: the first).
 
+The waiting-rows check requires the columns layout. In sidebar layout it is
+reported as not run because that layout has no separate session list.
+
 Checks, per engine, layout and size:
-  list-request    three columns: a waiting row in Needs you is a card with the
-                  exact command, and Allow from it settles the review — the
-                  row leaves Needs you, its card with it
-  list-request-claude
-                  three columns, the list at its narrowest: Claude's shell
-                  review reads as the transcript card reads it, its two answers
-                  each fit their words, and the card keeps under 260px
-  list-request-narrow
-                  three columns, the list at its narrowest: a command holds the
-                  columns allowableFromList counts on; a card whose command or
-                  tool is not printable ASCII offers no Allow, only Review in
-                  Chat; a long tool name wraps, drawn whole
+  pane-clipping   focusing an overflowing fixture leaves each pane root at
+                  offset zero and its header in place (#1184)
+  waiting-rows    three columns: a waiting row in Needs you is a plain session
+                  row, the same height as any other, with no answers or
+                  question form in the list; clicking it opens the chat, where
+                  the request is shown
   channels-alone  three columns: the sidebar lists channels and no session
                   under them; the chosen channel's pinned sessions lead its
                   list under "Pinned", each listed once. Sessions in sidebar:
@@ -166,9 +150,12 @@ Checks, per engine, layout and size:
                    (columns layout) and the overview leaves the drawn columns in
                    order, none overlapping the next, none past the window's edges
   rail-corner      the bottom-left toggle never moves as the rail or sidebar
-                   toggles; "nessa Studio" stays clear in Agents and a full view
-  rail-view-inert  ⌘B, ⌘0 and ⌥⌘S under a full view change nothing behind it
-  rail-loading     an item's view opens empty; still loading at 3 s it shows
+                   toggles; "nessa Studio" stays clear of it in Agents; Devices
+                   leaves that corner empty
+  rail-view-inert  ⌘B, ⌘0 and ⌥⌘S under a full view change nothing behind it;
+                   the view covers the workspace, and the titlebar's free room
+                   is the window's drag region
+  rail-loading     Devices opens with no loader; still loading at 3 s it shows
                    only the kit's sweeping text, with no panel or border
   titlebar-steady  through a rail toggle the titlebar's controls stay between
                    where they were and where they land, every frame
@@ -296,7 +283,76 @@ async function arrange(page, size, { rail, sidebar }) {
   await rest(page, size)
 }
 
+/** The short gateway request fixture lives behind a sidebar folded at 760px. */
+async function selectGateway(page) {
+  if (!(await page.locator(css.sidebar).isVisible())) {
+    await page.keyboard.press(keys.toggleSidebar)
+    await settled(page)
+  }
+  await page
+    .locator(css.sidebar)
+    .getByRole("button", { name: /^gateway\b/ })
+    .first()
+    .click()
+}
+
+/** Removal is driven from the list, even when a split folded it out of view. */
+async function showSessionRows(page, layout) {
+  const column = layout === "columns" ? css.sessionList : css.sidebar
+  if (!(await page.locator(column).isVisible())) {
+    await page.keyboard.press(
+      layout === "columns" ? keys.toggleSessionList : keys.toggleSidebar,
+    )
+    await settled(page)
+  }
+}
+
 const body = {
+  "pane-clipping": async ({ page }) => {
+    await openPanes(page, 2)
+    await settled(page)
+    const states = []
+    const failures = []
+    for (const pane of await page.locator(css.pane).all()) {
+      const state = await pane.evaluate(async (element, headerSelector) => {
+        const header = element.querySelector(headerSelector)
+        const before = header.getBoundingClientRect().top
+        // Isolate #1184's scroll-container mechanism without replaying the
+        // whole stress history. Only this owned fixture overflows; the pane's
+        // actual stylesheet and the browser's focus scrolling stay untouched.
+        const fixture = document.createElement("button")
+        fixture.textContent = "Pane overflow focus fixture"
+        fixture.style.position = "absolute"
+        fixture.style.top = `${element.clientHeight * 3}px`
+        element.append(fixture)
+        try {
+          const outside =
+            fixture.getBoundingClientRect().top > element.getBoundingClientRect().bottom
+          fixture.focus()
+          await new Promise(requestAnimationFrame)
+          return {
+            outside,
+            focused: document.activeElement === fixture,
+            top: element.scrollTop,
+            left: element.scrollLeft,
+            headerShift: header.getBoundingClientRect().top - before,
+          }
+        } finally {
+          fixture.remove()
+        }
+      }, css.paneHeader)
+      states.push(state)
+      if (!state.outside || !state.focused)
+        failures.push(
+          `the overflowing focus fixture did not run: ${JSON.stringify(state)}`,
+        )
+      if (state.top !== 0 || state.left !== 0 || Math.abs(state.headerShift) > 0.5)
+        failures.push(
+          `focus scrolled the pane root or its header: ${JSON.stringify(state)}`,
+        )
+    }
+    return { states, failures }
+  },
   "chat-layout": async ({ page, size }) => {
     const failures = []
     const states = []
@@ -628,31 +684,25 @@ const body = {
           failures.push(
             `${label}: the toggle is at [${at}], not in the mark slot [${slot}]`,
           )
-        if (studio && studio[0] < at[0] + at[2])
-          failures.push(`${label}: "nessa Studio" at x ${studio[0]} is under the toggle`)
+        failures.push(...studioUnderToggleFailure(label, studio, at))
         if (await squareShown(page))
           failures.push(`${label}: Studio's square is drawn beside the toggle`)
-        // An item's full view puts "nessa Studio" where the sidebar's foot does.
+        // Agents keeps the words. Devices turns the corner off (`studio: false`):
+        // its cards run under it, so the words there would cover the cards.
         if (!now.sidebar) continue
+        failures.push(...agentsStudioMissingFailure(label, studio))
         const roomy =
           (await page.locator(css.sideRailToggle).getAttribute("aria-disabled")) !==
           "true"
         if (!now.rail && !roomy) continue
         if (!now.rail) await setRail(page, true)
-        await page.locator(selectorFor.railItem("notes")).click()
+        await page.locator(selectorFor.railItem("devices")).click()
         if (!now.rail) await setRail(page, false)
         await rest(page, size)
         const inView = await boxOf(page, css.studio)
         const viewToggle = await boxOf(page, css.sideRailToggle)
-        seen.push({ label: `${label}, Notes`, toggle: viewToggle, studio: inView })
-        if (inView?.join() !== studio?.join())
-          failures.push(
-            `${label}: "nessa Studio" is at [${inView}] in a full view, [${studio}] in Agents`,
-          )
-        if (viewToggle?.join() !== toggle.join())
-          failures.push(
-            `${label}, Notes: the toggle is at [${viewToggle}], not [${toggle}]`,
-          )
+        seen.push({ label: `${label}, Devices`, toggle: viewToggle, studio: inView })
+        failures.push(...devicesCornerFailures(label, inView, viewToggle, toggle))
         if (!now.rail) await setRail(page, true)
         await page.locator(selectorFor.railItem("agents")).click()
         if (!now.rail) await setRail(page, false)
@@ -746,175 +796,47 @@ const body = {
     return { short, after, tall, failures }
   },
 
-  "list-request": async ({ page, layout }) => {
-    if (layout !== "columns") throw new CannotRun("only three columns has a session list")
+  "waiting-rows": async ({ page }) => {
     const failures = []
-    // The first card the list may allow from (`allowableFromList`).
-    const allowable = page
-      .locator('[data-list-group="needs-you"] .workspace-request-card')
-      .filter({ has: page.locator('button[data-answer="once"]') })
+    await selectGateway(page)
+    const waiting = page.locator('[data-list-group="needs-you"] [data-session-row]')
+    await waiting
       .first()
-    const card = allowable.locator(".workspace-request")
-    await card.waitFor({ timeout: 10_000 }).catch(() => {})
-    if (!(await card.count())) throw new CannotRun("nothing in Needs you may be allowed")
-    const row = allowable.locator("[data-session-row]").first()
-    const id = await row.getAttribute("data-session-row")
-    const command = (await card.locator(".workspace-approval-command").innerText()).trim()
-    if (!command.startsWith("$")) failures.push(`the card shows no command: "${command}"`)
-    failures.push(...(await cutOff(page)))
-    const allow = card.locator('button[data-answer="once"]')
-    const deny = card.locator('button[data-answer="deny"]')
-    const [a, d] = [await allow.boundingBox(), await deny.boundingBox()]
-    if (!a || !d || Math.abs(a.y - d.y) > 1)
-      failures.push("Deny and Allow do not stand on one row")
-    await allow.click()
-    const left = await page
-      .waitForFunction(
-        (sessionId) =>
-          !document.querySelector(
-            `[data-list-group="needs-you"] [data-session-row="${CSS.escape(sessionId)}"]`,
-          ),
-        id,
-        { timeout: 5_000 },
-      )
-      .then(() => true)
-      .catch(() => false)
-    if (!left) failures.push("after Allow, the row is still in Needs you")
-    return { failures, detail: { id, command } }
-  },
-
-  "list-request-narrow": async ({ page, layout }) => {
-    if (layout !== "columns") throw new CannotRun("only three columns has a session list")
-    const failures = []
-    await page
-      .locator(".workspace-sidebar button, .workspace-sidebar [role='button']", {
-        hasText: /^gateway/,
-      })
-      .first()
-      .click()
-    const edge = page.getByRole("separator", { name: "Resize Session List" })
-    await edge.focus()
-    for (let i = 0; i < 20; i++) await page.keyboard.press("ArrowLeft")
-    const marks = page.locator('[aria-label="Request from Marks wider than the card"]')
-    await marks.waitFor({ timeout: 10_000 }).catch(() => {})
-    if (!(await marks.count())) throw new CannotRun("the wide marks are not in Needs you")
-    await settled(page)
-    // The rule's own count of columns, from the rule's source.
-    const source = await readFile(
-      new URL(
-        "../../../src/desktop/workspace/ui/session-list/list-request.tsx",
-        import.meta.url,
-      ),
-      "utf8",
-    )
-    const columns = Number(/listShownColumns = (\d+)/.exec(source)?.[1])
+      .waitFor({ timeout: 10_000 })
+      .catch(() => {})
+    if (!(await waiting.count())) throw new CannotRun("nothing is in Needs you")
     const seen = await page.evaluate(() => {
-      const cards = [
-        ...document.querySelectorAll('[data-list-group="needs-you"] .workspace-request'),
-      ].filter((card) => card.querySelector(".workspace-approval-command"))
-      const pre = cards[0].querySelector(".workspace-approval-command")
-      const style = getComputedStyle(pre)
-      const probe = document.createElement("span")
-      probe.textContent = "x".repeat(100)
-      probe.style.font = style.font
-      probe.style.whiteSpace = "pre"
-      document.body.append(probe)
-      const ch = probe.getBoundingClientRect().width / 100
-      probe.remove()
-      const inner =
-        pre.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight)
+      const group = document.querySelector('[data-list-group="needs-you"]')
+      const rows = [...document.querySelectorAll(".workspace-list [data-session-row]")]
+      const height = (row) => Math.round(row.getBoundingClientRect().height)
       return {
-        held: Math.floor(inner / ch + 0.01),
-        cards: cards.map((card) => {
-          const words =
-            card.querySelector(".workspace-approval-command").textContent ?? ""
-          const tool = card.querySelector(".workspace-request-tool")
-          return {
-            label: card.getAttribute("aria-label"),
-            ascii: /^[\x20-\x7e\n]*$/.test(words + (tool?.textContent ?? "")),
-            allows: !!card.querySelector(
-              'button[data-answer="once"], button[data-answer="always"]',
-            ),
-            review: [...card.querySelectorAll("button")].some(
-              (button) => button.textContent === "Review in Chat",
-            ),
-            toolLines: tool
-              ? Math.round(
-                  tool.getBoundingClientRect().height /
-                    parseFloat(getComputedStyle(tool).lineHeight),
-                )
-              : 0,
-          }
-        }),
+        role: group?.getAttribute("role"),
+        // Anything in the group that is not a row: a card, a form, an answer.
+        extra: [
+          ...(group?.querySelectorAll("button, input, textarea, [role=radio]") ?? []),
+        ]
+          .filter((control) => !control.closest("[data-session-row]"))
+          .map((control) => control.getAttribute("aria-label") ?? control.textContent),
+        waiting: [...(group?.querySelectorAll("[data-session-row]") ?? [])].map(height),
+        others: rows.filter((row) => !group?.contains(row)).map(height),
       }
     })
-    if (!(seen.held >= columns))
-      failures.push(`a command holds ${seen.held} columns, the rule counts on ${columns}`)
-    for (const card of seen.cards)
-      if (!card.ascii && (card.allows || !card.review))
-        failures.push(
-          `${card.label} is not plain ASCII, yet offers ${card.allows ? "Allow" : "no Review in Chat"}`,
-        )
-    const named = (label) =>
-      seen.cards.find((card) => card.label === `Request from ${label}`)
-    const wide = named("Marks wider than the card")
-    if (!wide || wide.allows || !wide.review)
-      failures.push("the wide marks are not refused from the list, read in the chat")
-    const lab = named("Shell through the lab's tool")
-    if (!lab?.allows) failures.push("the lab's short shell call offers no Allow")
-    if (!(lab?.toolLines > 1))
-      failures.push(`the lab's long tool name takes ${lab?.toolLines} line, not wrapping`)
-    failures.push(...(await cutOff(page)))
-    return { failures, detail: { columns, ...seen } }
-  },
-
-  "list-request-claude": async ({ page, layout }) => {
-    if (layout !== "columns") throw new CannotRun("only three columns has a session list")
-    const failures = []
-    await page
-      .locator(".workspace-sidebar button, .workspace-sidebar [role='button']", {
-        hasText: /^gateway/,
-      })
+    if (seen.role !== "listbox")
+      failures.push(`Needs you is a ${seen.role}, not a listbox`)
+    if (seen.extra.length)
+      failures.push(`Needs you draws controls beside its rows: ${seen.extra.join(", ")}`)
+    const tallest = Math.max(...seen.others, ...seen.waiting.slice(0, 1))
+    if (seen.waiting.some((height) => height > tallest))
+      failures.push(`a waiting row is ${Math.max(...seen.waiting)}px, taller than a row`)
+    // What it asks is in its chat.
+    await waiting.first().click()
+    const asked = await page
+      .locator(".workspace-approval, .workspace-question")
       .first()
-      .click()
-    // The list at its narrowest: its edge moved left until it holds.
-    const edge = page.getByRole("separator", { name: "Resize Session List" })
-    await edge.focus()
-    for (let i = 0; i < 20; i++) await page.keyboard.press("ArrowLeft")
-    const card = page.locator('[aria-label="Request from Reconnect storm after sleep"]')
-    await card.waitFor({ timeout: 10_000 }).catch(() => {})
-    if (!(await card.count()))
-      throw new CannotRun("the Claude review is not in Needs you")
-    await settled(page)
-    const seen = await card.evaluate((element) => ({
-      command: element.querySelector(".workspace-approval-command")?.textContent ?? "",
-      height: element.closest(".workspace-request-card")?.getBoundingClientRect().height,
-      listWidth: document.querySelector(".workspace-list")?.getBoundingClientRect().width,
-      squeezed: [
-        ...element.querySelectorAll(".workspace-approval-actions .workspace-button"),
-      ]
-        .filter((button) => {
-          const words = button.querySelector("span") ?? button
-          return words.scrollWidth > words.clientWidth + 1
-        })
-        .map((button) => button.textContent),
-      answers: [...element.querySelectorAll(".workspace-approval-actions button")].map(
-        (button) => button.getAttribute("aria-label") ?? button.textContent,
-      ),
-    }))
-    if (seen.squeezed.length)
-      failures.push(`answers narrower than their words: ${seen.squeezed}`)
-    failures.push(...(await cutOff(page)))
-    if (!(seen.height < 260)) failures.push(`the card is ${seen.height}px tall`)
-    if (seen.answers.join("|") !== "No|Yes|More Answers")
-      failures.push(`the answers read ${seen.answers.join("|")}`)
-    // The transcript card's own reading of the same command.
-    await page.locator('[data-session-row="reconnect-storm"]').first().click()
-    const pane = page.locator(".workspace-approval .workspace-approval-command").first()
-    await pane.waitFor({ timeout: 10_000 })
-    const transcript = (await pane.textContent()) ?? ""
-    if (transcript.trim() !== seen.command.trim())
-      failures.push(`the card reads "${seen.command}", the transcript "${transcript}"`)
+      .waitFor({ timeout: 10_000 })
+      .then(() => true)
+      .catch(() => false)
+    if (!asked) failures.push("the waiting session's chat shows no request")
     return { failures, detail: seen }
   },
 
@@ -1112,7 +1034,10 @@ const body = {
     return { runs, failures }
   },
 
-  "split-motion": async ({ page }) => {
+  "split-motion": async ({ page, layout }) => {
+    // The split must be admitted before its motion can be measured. Side-column
+    // motion has its own check; leave room for two readable panes at 760px too.
+    await hideColumns(page, layout)
     const failures = []
     const runs = []
     // Each pane's edges, and the composer's centre in the pane that was there.
@@ -1691,7 +1616,7 @@ const body = {
       css.workspaceWindow,
     )
     if (!railDrawn) throw new CannotRun("no room for the side rail at this size")
-    await page.locator(selectorFor.railItem("notes")).focus()
+    await page.locator(selectorFor.railItem("devices")).focus()
     // Narrowed until the rail is the column that gives way (`railFits`).
     const railAt = () =>
       page.evaluate(
@@ -1741,7 +1666,7 @@ const body = {
         [css.workspace, css.overview],
       )
     const before = await state()
-    await page.locator(selectorFor.railItem("notes")).click()
+    await page.locator(selectorFor.railItem("devices")).click()
     await rest(page, size)
     for (const key of [keys.toggleSidebar, keys.overview, keys.toggleSessionList])
       await page.keyboard.press(key)
@@ -1749,18 +1674,42 @@ const body = {
     const under = await state()
     const pluginChrome = await page.evaluate(() => {
       const view = document.querySelector(".rail-view")
+      if (!view) return { view: false }
       const bounds = view.getBoundingClientRect()
-      const hit = document.elementFromPoint(bounds.x + bounds.width / 2, 12)
+      const rail = document.querySelector(".side-rail")?.getBoundingClientRect()
+      const bar = document.querySelector(".workspace-titlebar")?.getBoundingClientRect()
+      const x = bounds.left + bounds.width / 2
+      // y=12 is inside the titlebar. Under a full view that hit is the drag
+      // region, recorded so the verdict can leave it out (`railViewCoverFailures`).
+      const titlebarHit = document.elementFromPoint(x, 12)
+      const contentHit = document.elementFromPoint(x, (bar?.bottom ?? 0) + 8)
+      const workspace = document.querySelector(".workspace")
+      const inside = (element, target) =>
+        element !== null &&
+        target !== null &&
+        (target === element || target.contains(element))
       return {
+        view: true,
         top: bounds.top,
-        coversHeader: view === hit || view.contains(hit),
+        left: bounds.left,
+        right: bounds.right,
+        bottom: bounds.bottom,
+        windowWidth: window.innerWidth,
+        windowHeight: window.innerHeight,
+        railRight: rail?.right ?? 0,
+        coversContent: inside(contentHit, view),
+        hitWorkspace: inside(contentHit, workspace),
+        titlebarHit: {
+          inView: inside(titlebarHit, view),
+          drag: titlebarHit?.closest("[data-tauri-drag-region]") !== null,
+        },
         navigation: [...document.querySelectorAll(".workspace-titlebar button")].map(
           (e) => e.getAttribute("aria-controls"),
         ),
       }
     })
     const pluginToggles = []
-    for (const id of ["notes", "calendar", "browser", "files"]) {
+    for (const id of ["devices"]) {
       await page.locator(selectorFor.railItem(id)).click()
       const topToggle = page.locator(".workspace-titlebar button")
       await topToggle.click()
@@ -1778,19 +1727,14 @@ const body = {
         failures.push(
           `${toggle.id}: top sidebar toggle does not fold and reopen the rail`,
         )
-    if (
-      pluginChrome.top !== 0 ||
-      !pluginChrome.coversHeader ||
-      pluginChrome.navigation.join() !== "side-rail"
-    )
-      failures.push("plugin view exposes the workspace cards or controls above it")
+    failures.push(...railViewCoverFailures(pluginChrome))
     for (const [name, value] of Object.entries(before)) {
       if (under[name] !== value)
-        failures.push(`under Notes, ${name} became ${under[name]} (was ${value})`)
+        failures.push(`under Devices, ${name} became ${under[name]} (was ${value})`)
       if (after[name] !== value)
         failures.push(`back in Agents, ${name} is ${after[name]} (was ${value})`)
     }
-    return { before, under, after, failures }
+    return { before, under, after, pluginChrome, failures }
   },
 
   "rail-loading": async ({ page, size }) => {
@@ -1800,12 +1744,13 @@ const body = {
       css.workspaceWindow,
     )
     if (!railDrawn) throw new CannotRun("no room for the side rail at this size")
-    const loader = () =>
+    const shown = () =>
       page.evaluate(() => {
         const view = document.querySelector(".rail-view")
-        const text = view?.querySelector(".rail-view-loading")
-        if (!view || !text) return { view: view !== null, text: null }
-        // Every box from the text up to the view: none may draw a frame.
+        if (!view) return { view: false }
+        const page = view.querySelector("[data-devices-page]")
+        const text = view.querySelector(".rail-view-loading")
+        // Every box from the loader up to the view: none may draw a frame.
         const framed = []
         for (let el = text; el && el !== view; el = el.parentElement) {
           const style = getComputedStyle(el)
@@ -1815,34 +1760,35 @@ const body = {
           )
             framed.push(el.className || el.tagName)
         }
-        const sweep = text.firstElementChild
         return {
           view: true,
-          text: text.textContent,
-          slot: text.getAttribute("data-slot"),
-          panel: view.querySelector('[data-slot="generating-surface"]') !== null,
+          page: page?.getAttribute("data-devices-page") ?? null,
+          text: text?.textContent ?? null,
+          slot: text?.getAttribute("data-slot") ?? null,
           framed,
-          sweeping: sweep ? sweep.getAnimations().length > 0 : false,
+          sweeping: text?.firstElementChild
+            ? text.firstElementChild.getAnimations().length > 0
+            : false,
           reduced: matchMedia("(prefers-reduced-motion: reduce)").matches,
         }
       })
-    await page.locator(selectorFor.railItem("files")).click()
-    const opened = await loader()
+    await page.locator(selectorFor.railItem("devices")).click()
+    const opened = await shown()
     await page.waitForTimeout(3300)
-    const late = await loader()
-    // Back to Agents, so the sweep stops before the next check.
+    const late = await shown()
+    // Back to Agents, so any sweep stops before the next check.
     await page.locator(selectorFor.railItem("agents")).click()
     const failures = []
-    if (!opened.view) failures.push("choosing Files drew no view")
+    if (!opened.view) failures.push("choosing Devices drew no view")
+    if (opened.page === null) failures.push("the Devices view drew no page")
     if (opened.text !== null)
       failures.push(`the view opened with a loader already: "${opened.text}"`)
-    if (late.text === null) failures.push("no loader 3.3 s after choosing Files")
-    else {
+    // Still loading at 3 s, it says so with the kit's text, unframed.
+    if (late.text !== null) {
       if (late.slot !== "loading-text")
         failures.push(`the loader is ${late.slot}, not the kit's LoadingText`)
-      if (!late.text.includes("Loading Files"))
+      if (!late.text.includes("Loading Devices"))
         failures.push(`the loader reads "${late.text}"`)
-      if (late.panel) failures.push("a generating-surface panel is drawn")
       if (late.framed.length)
         failures.push(`boxes around the text: ${late.framed.join(", ")}`)
       if (!late.reduced && !late.sweeping) failures.push("the text is not sweeping")
@@ -1854,7 +1800,8 @@ const body = {
    * A non-last draft is dropped in the close, and the box stays three
    * frames. The next frame still shows that home and the unsent text.
    */
-  "draft-held": async ({ page }) => {
+  "draft-held": async ({ page, layout }) => {
+    await hideColumns(page, layout)
     const text = "unsent line"
     const before = await page.locator(css.pane).count()
     await page.keyboard.press(keys.newSessionBeside)
@@ -1917,7 +1864,8 @@ const body = {
    * switcher opens beside it can belong to another channel, and the list
    * shows only the channel in view.
    */
-  "reply-held": async ({ page }) => {
+  "reply-held": async ({ page, layout }) => {
+    await hideColumns(page, layout)
     const text = "unsent reply"
     const before = await page.locator(css.pane).count()
     const open = page.locator(css.focusedPane).first()
@@ -1934,16 +1882,6 @@ const body = {
     if (typed !== text) throw new CannotRun(`the composer reads "${typed}"`)
     await settled(page)
     await frames(page, 2)
-    const place = await page.evaluate((title) => {
-      const titled = (item) =>
-        item.querySelector(".desktop-list-row-label")?.textContent === title
-      const rows = [...document.querySelectorAll("[data-session-row]")]
-      const listed = rows.find((item) => item.closest(".workspace-list") && titled(item))
-      const row = listed ?? rows.find(titled)
-      const id = row?.getAttribute("data-session-row")
-      return id ? { id, list: listed === row } : null
-    }, label)
-    if (!place) throw new CannotRun(`no session row titled ${label}`)
     await page.evaluate((pane) => {
       window.__heldReply = null
       window.addEventListener(
@@ -1964,9 +1902,8 @@ const body = {
         true,
       )
     }, css.pane)
-    const row = place.list
-      ? page.locator(`.workspace-list [data-session-row="${place.id}"]`)
-      : page.locator(`[data-session-row="${place.id}"]`).first()
+    await showSessionRows(page, layout)
+    const row = await sessionRowForRemoval(page, label)
     await row.hover()
     const archive = row.locator('[data-session-action="archive"]')
     if ((await archive.count()) > 0) await archive.click()
@@ -1999,23 +1936,12 @@ const body = {
    * pane stays. The box keeps Stop and that turn on the next frame.
    * Send in its place, while the turn is still showing, is the bug.
    */
-  "stop-held": async ({ page }) => {
+  "stop-held": async ({ page, layout }) => {
+    await showSessionRows(page, layout)
     const title = "Split panes for the chat workspace"
     const activity = "Editing workspace-panes.tsx"
     const before = await page.locator(css.pane).count()
-    const place = await page.evaluate((wanted) => {
-      const titled = (item) =>
-        item.querySelector(".desktop-list-row-label")?.textContent === wanted
-      const rows = [...document.querySelectorAll("[data-session-row]")]
-      const listed = rows.find((item) => item.closest(".workspace-list") && titled(item))
-      const row = listed ?? rows.find(titled)
-      const id = row?.getAttribute("data-session-row")
-      return id ? { id, list: listed === row } : null
-    }, title)
-    if (!place) throw new CannotRun(`no session row titled ${title}`)
-    const row = place.list
-      ? page.locator(`.workspace-list [data-session-row="${place.id}"]`)
-      : page.locator(`[data-session-row="${place.id}"]`).first()
+    let row = await sessionRowForRemoval(page, title)
     await row.click()
     await page.waitForFunction(
       ({ pane, turn }) =>
@@ -2065,6 +1991,8 @@ const body = {
         true,
       )
     }, css.pane)
+    await showSessionRows(page, layout)
+    row = await sessionRowForRemoval(page, title)
     await row.hover()
     const archive = row.locator('[data-session-action="archive"]')
     if ((await archive.count()) > 0) await archive.click()
@@ -2108,6 +2036,15 @@ await main(meta, async ({ options, rep, url }) => {
       for (const size of sizes)
         for (const name of only) {
           const base = { engine, layout, size: `${size.width}x${size.height}` }
+          if (layout !== "columns" && sessionListChecks.includes(name)) {
+            rep.add({
+              ...base,
+              name,
+              skipped: "no session list in this layout",
+              failures: [],
+            })
+            continue
+          }
           await attempt(rep, { ...base, name }, async () => {
             const opened = await openPage(browser, {
               url,

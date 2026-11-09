@@ -56,12 +56,21 @@ export function hostBuildPins(files) {
   const extra = Object.keys(files).filter((name) => !expected.includes(name))
   if (extra.length > 0)
     throw new Error(`${extra.join(", ")} is not a release target's host build.`)
-  return RELEASE_TARGETS.map((target) => {
-    const bytes = files[hostBuildName(target)]
-    if (bytes.length === 0) throw new Error(`${hostBuildName(target)} is empty.`)
-    const digest = createHash("sha256").update(bytes).digest("hex")
-    return `${target}=${digest}:${bytes.length}`
-  }).join(",")
+  return RELEASE_TARGETS.map((target) =>
+    hostBuildPin(target, files[hostBuildName(target)]),
+  ).join(",")
+}
+
+/**
+ * One target's pin, `<target>=<sha256>:<bytes>`.
+ *
+ * @param {string} target
+ * @param {Buffer} bytes its `nessa`
+ */
+export function hostBuildPin(target, bytes) {
+  if (bytes.length === 0) throw new Error(`${hostBuildName(target)} is empty.`)
+  const digest = createHash("sha256").update(bytes).digest("hex")
+  return `${target}=${digest}:${bytes.length}`
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) main()

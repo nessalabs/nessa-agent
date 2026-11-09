@@ -1,6 +1,8 @@
+import type { BoatClaudeSignIn } from "../../../provider-authentication/model/boat-sign-in"
 import type { ModelReceipt } from "../model/model-choice"
 import type { ShownWindow } from "../model/shown-window"
 import type { FailureDiagnostic } from "../model/failure"
+import type { DraftImage } from "../model/draft-images"
 /**
  * What the workspace needs from whoever holds the sessions: the one port a
  * backend implements to attach. `adapters/gateway/` implements it over the
@@ -39,7 +41,7 @@ import type {
   WorkspaceIndex,
   SessionSummary,
 } from "../model/workspace-index"
-import type { ChannelDraft, ChannelFailure } from "../model/channel-draft"
+import type { ChannelDraft, ChannelFailure, ResourceKind } from "../model/channel-draft"
 import type { PaneRoom } from "../../split-panes/model/pane-sizing"
 import type { QuestionChoice, Transcript } from "../model/transcript"
 import type { AgentsFilter } from "../model/overview/filter"
@@ -68,6 +70,13 @@ export interface OutgoingMessage {
    */
   readonly messageId: string
   readonly text: string
+  /**
+   * The images the person put on it, in order: the source uploads each into
+   * the conversation, reading it from its object URL, and sends the message
+   * naming what the conversation holds. Uploaded again with each attempt;
+   * one the conversation already holds is not sent twice.
+   */
+  readonly images?: readonly DraftImage[]
   /** The model the turn runs on, chosen in the composer. */
   readonly model: ModelRef
   /**
@@ -177,6 +186,15 @@ export interface WorkspaceSource {
    * after a view leaves it out.
    */
   retryReview?(sessionId: string, approvalId: string): void
+  /**
+   * Reads the turns before the first one the session's transcript shows, as
+   * the person scrolls back to them (`Transcript.history.earlier`): a page
+   * at a time, joined in front of the transcript by its next update. Resolves
+   * once that page is in: true when a read went through and another may be
+   * asked for, false when there is none to ask. A source whose transcripts
+   * are whole leaves it out.
+   */
+  loadEarlier?(sessionId: string): Promise<boolean>
   /**
    * Answers a question the session's agent is waiting on, or declines it
    * (`choices` null). Resolves once the source has taken the answer. The
@@ -392,6 +410,23 @@ export function sharingFailure(error: unknown): SharingFailure {
  */
 export interface ChannelSource {
   create(draft: ChannelDraft, requestId: string): Promise<Channel>
+  /**
+   * Change where a made channel's agents run. Threads already made keep
+   * running where they started; a moved main agent answers a fresh main
+   * conversation id. Absent where channels cannot be changed.
+   */
+  setPlacement?(
+    channelId: string,
+    placement: ChannelPlacement,
+    requestId: string,
+  ): Promise<Channel>
+}
+
+/** Where a channel's main agent and its new threads run. */
+export interface ChannelPlacement {
+  readonly coordinatorPlacement: "local" | "boat"
+  /** `pool`: each new thread on a paired computer, by Devices' order. */
+  readonly threadPlacement: "local" | "boat" | "pool"
 }
 
 /** Why a channel was not made, by kind (`model/channel-draft.ts`), never a sentence. */
@@ -428,6 +463,28 @@ export interface PathPicker {
   folder(): Promise<string | null>
   /** Files, or folders: one kind at a time, as not every system's picker chooses both. */
   resources(kind: "files" | "folders"): Promise<readonly string[]>
+  /**
+   * Files and folders dragged onto the window, as the system names them:
+   * `dragging` while a drag that carries paths is over it, `began` as a drop
+   * lands, and `dropped` with what it let go of, named as `began` was and
+   * possibly seconds later. Answers how to stop watching. Absent where the
+   * window is never told of a drop.
+   */
+  drops?(watch: PathDropWatch): () => void
+}
+
+/** What a watch on dragged paths is told. */
+export interface PathDropWatch {
+  dragging(over: boolean): void
+  began(drop: string): void
+  /** `unread` counts paths past what a channel holds, which were not looked at. */
+  dropped(drop: string, paths: readonly DroppedPath[], unread: number): void
+}
+
+/** One dragged path, and whether it is a file or a folder. */
+export interface DroppedPath {
+  readonly path: string
+  readonly kind: ResourceKind
 }
 
 /**
@@ -440,6 +497,8 @@ export interface WorkspaceDependencies {
   /** Opens the provider login flow; resolution confirms launch, not sign-in. */
   readonly providerLoginAvailable?: () => Promise<boolean>
   readonly signInToProvider?: (provider: "claude" | "codex") => Promise<void>
+  /** Mints and keeps a Claude sign-in for Boat VMs, where the host can. */
+  readonly boatClaudeSignIn?: BoatClaudeSignIn
   readonly workspace: WorkspaceSource
   readonly now: () => number
   readonly newId: () => string

@@ -8,9 +8,7 @@
 mod held_file;
 mod link;
 mod reset;
-#[cfg(test)]
-pub(crate) use held_file::MAX_HELD_FILE_BYTES;
-pub(crate) use held_file::{HeldFile, HeldRange, HELD_FILE_RANGE_BYTES};
+pub(crate) use held_file::{HeldFile, HeldRange, HELD_FILE_RANGE_BYTES, MAX_HELD_FILE_BYTES};
 pub(crate) use link::{
     Admit, Billing, Candidate, Deferral, Interest, LinkSchedule, LinkSpec, Presence, Quote, Route,
     Settle, Subscription,

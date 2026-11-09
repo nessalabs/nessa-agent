@@ -1,0 +1,9 @@
+{
+  "ok": true,
+  "type": "ssh_key.configured",
+  "success": true,
+  "machineIp": "2001:db8::20",
+  "sshUser": "user",
+  "sshEndpoint": "203.0.113.10:19032",
+  "hostKey": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBKL0RdseWm+RXlRf+HIi51RP+ogzLBtvWZWUQKRt/IK"
+}

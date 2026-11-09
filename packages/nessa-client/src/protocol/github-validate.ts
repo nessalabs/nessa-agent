@@ -45,7 +45,15 @@ function whole(value: unknown, what: string): number {
   return value as number
 }
 
-const allowed = new Set(["state", "account", "code", "last", "unrecorded", "installUrl"])
+const allowed = new Set([
+  "state",
+  "account",
+  "code",
+  "last",
+  "unrecorded",
+  "installUrl",
+  "liveEvents",
+])
 
 function account(value: unknown): GithubAccount {
   const item = record(value, "account")
@@ -86,9 +94,22 @@ export function githubConnection(value: unknown): GithubConnection {
   return {
     state,
     installUrl,
+    ...(present("liveEvents") ? { liveEvents: liveEvents(own(item, "liveEvents")) } : {}),
     ...(present("account") ? { account: account(own(item, "account")) } : {}),
     ...(present("code") ? { code: code(own(item, "code")) } : {}),
     ...(last ? { last } : {}),
     ...(present("unrecorded") ? { unrecorded: true as const } : {}),
   }
+}
+
+function liveEvents(value: unknown) {
+  const item = record(value, "liveEvents")
+  if (Object.keys(item).some((key) => !["enabled", "repositories", "gaps"].includes(key)))
+    invalid("liveEvents")
+  const enabled = own(item, "enabled")
+  const repositories = whole(own(item, "repositories"), "live repositories")
+  const gaps = whole(own(item, "gaps"), "live gaps")
+  if (typeof enabled !== "boolean" || gaps > repositories || enabled !== repositories > 0)
+    invalid("liveEvents")
+  return { enabled, repositories, gaps }
 }

@@ -1,0 +1,135 @@
+[
+  {
+    "mutation": "embedded_id",
+    "test": "bulk_refusal_rejects_foreign_state",
+    "exitCode": 101,
+    "caught": true,
+    "timedOut": false
+  },
+  {
+    "mutation": "incarnation",
+    "test": "restored_rows_are_checked",
+    "exitCode": 101,
+    "caught": true,
+    "timedOut": false
+  },
+  {
+    "mutation": "cursor_receiver",
+    "test": "cursor_scope_identity",
+    "exitCode": 101,
+    "caught": true,
+    "timedOut": false
+  },
+  {
+    "mutation": "startup_validation",
+    "test": "restored_rows_are_checked",
+    "exitCode": 101,
+    "caught": true,
+    "timedOut": false
+  },
+  {
+    "mutation": "commit_retention",
+    "test": "stop_retention_is_bounded",
+    "exitCode": 101,
+    "caught": true,
+    "timedOut": false
+  },
+  {
+    "mutation": "commit_accounting",
+    "test": "cursor_cas_and_queue_limit",
+    "exitCode": 101,
+    "caught": true,
+    "timedOut": false
+  },
+  {
+    "mutation": "registration_accounting",
+    "test": "restored_capacity_is_bounded",
+    "exitCode": 101,
+    "caught": true,
+    "timedOut": false
+  },
+  {
+    "mutation": "pending_accounting",
+    "test": "restored_capacity_is_bounded",
+    "exitCode": 101,
+    "caught": true,
+    "timedOut": false
+  },
+  {
+    "mutation": "terminal_accounting",
+    "test": "restored_capacity_is_bounded",
+    "exitCode": 101,
+    "caught": true,
+    "timedOut": false
+  },
+  {
+    "mutation": "retry_bound",
+    "test": "restored_retry_respects_backoff",
+    "exitCode": 101,
+    "caught": true,
+    "timedOut": false
+  },
+  {
+    "mutation": "duplicate_bytes",
+    "test": "conflicting_checkpoint",
+    "exitCode": 101,
+    "caught": true,
+    "timedOut": false
+  },
+  {
+    "mutation": "state_cas",
+    "test": "transition_cas_rejects_lost_ack",
+    "exitCode": 101,
+    "caught": true,
+    "timedOut": false
+  },
+  {
+    "mutation": "projection_shape",
+    "test": "a_file_without_generated",
+    "exitCode": 101,
+    "caught": true,
+    "timedOut": false
+  },
+  {
+    "mutation": "canonical_uuid",
+    "test": "noncanonical_audit_key",
+    "exitCode": 101,
+    "caught": true,
+    "timedOut": false
+  },
+  {
+    "mutation": "canonical_state",
+    "test": "aliased_saved_state",
+    "exitCode": 101,
+    "caught": true,
+    "timedOut": false
+  },
+  {
+    "mutation": "source_stop_capture",
+    "test": "late_retry_keeps_source_refusal",
+    "exitCode": 101,
+    "caught": true,
+    "timedOut": false
+  },
+  {
+    "mutation": "source_stop_cleanup",
+    "test": "late_retry_keeps_source_refusal",
+    "exitCode": 101,
+    "caught": true,
+    "timedOut": false
+  },
+  {
+    "mutation": "physical_permit",
+    "test": "cancelled_observer_keeps_physical",
+    "exitCode": 101,
+    "caught": true,
+    "timedOut": false
+  },
+  {
+    "mutation": "audit_ack",
+    "test": "audit_acknowledgement_is_exact",
+    "exitCode": null,
+    "caught": true,
+    "timedOut": true
+  }
+]

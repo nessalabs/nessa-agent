@@ -1,0 +1,689 @@
+{
+  "check": "conversation-stress",
+  "ok": true,
+  "started": "2026-10-27T21:55:42.232Z",
+  "finished": "2026-10-27T22:00:08.913Z",
+  "target": {
+    "url": "http://127.0.0.1:51850/desktop.html",
+    "mode": "dev"
+  },
+  "results": [
+    {
+      "name": "001 notice",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 2931,
+      "seen": {
+        "index": 1,
+        "kind": "notice"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "002 aside",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 911,
+      "seen": {
+        "index": 2,
+        "kind": "aside"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "003 delete",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 1056,
+      "seen": {
+        "index": 3,
+        "kind": "delete"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "004 rail",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 6546,
+      "seen": {
+        "index": 4,
+        "kind": "rail"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "005 launch",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 3811,
+      "seen": {
+        "index": 5,
+        "kind": "launch"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "006 delegate",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 994,
+      "seen": {
+        "index": 6,
+        "kind": "delegate"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "007 fresh",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 3967,
+      "seen": {
+        "index": 7,
+        "kind": "fresh"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "008 table",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 1558,
+      "seen": {
+        "index": 8,
+        "kind": "table"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "009 panel",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 2078,
+      "seen": {
+        "index": 9,
+        "kind": "panel"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "010 park",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 7826,
+      "seen": {
+        "index": 10,
+        "kind": "park"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "011 channel",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 15794,
+      "seen": {
+        "index": 11,
+        "kind": "channel"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "012 switch",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 3335,
+      "seen": {
+        "index": 12,
+        "kind": "switch",
+        "from": "ask",
+        "to": "auto",
+        "during": true
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "013 permission",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 680,
+      "seen": {
+        "index": 13,
+        "kind": "permission",
+        "answer": "allow",
+        "mode": "auto",
+        "after": "switch"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "014 fail",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 275,
+      "seen": {
+        "index": 14,
+        "kind": "fail"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "015 reply",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 264,
+      "seen": {
+        "index": 15,
+        "kind": "reply",
+        "after": "fail"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "016 reviews",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 8448,
+      "seen": {
+        "index": 16,
+        "kind": "reviews",
+        "answer": "deny",
+        "mode": "auto"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "017 upgrade",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 990,
+      "seen": {
+        "index": 17,
+        "kind": "upgrade"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "018 menu",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 6241,
+      "seen": {
+        "index": 18,
+        "kind": "menu"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "019 watch",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 1926,
+      "seen": {
+        "index": 19,
+        "kind": "watch"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "020 long",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 11894,
+      "seen": {
+        "index": 20,
+        "kind": "long",
+        "turns": 30
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "021 usageLimit",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 1323,
+      "seen": {
+        "index": 21,
+        "kind": "usageLimit"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "022 reply",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 626,
+      "seen": {
+        "index": 22,
+        "kind": "reply",
+        "after": "usageLimit"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "023 linking",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 10148,
+      "seen": {
+        "index": 23,
+        "kind": "linking"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "024 rename",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 1188,
+      "seen": {
+        "index": 24,
+        "kind": "rename"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "025 switch",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 3534,
+      "seen": {
+        "index": 25,
+        "kind": "switch",
+        "from": "auto",
+        "to": "full",
+        "during": true
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "026 permission",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 304,
+      "seen": {
+        "index": 26,
+        "kind": "permission",
+        "answer": "allow",
+        "mode": "full",
+        "after": "switch"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "027 stop",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 934,
+      "seen": {
+        "index": 27,
+        "kind": "stop"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "028 aside",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 974,
+      "seen": {
+        "index": 28,
+        "kind": "aside"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "029 trace",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 10365,
+      "seen": {
+        "index": 29,
+        "kind": "trace"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "030 await",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 3553,
+      "seen": {
+        "index": 30,
+        "kind": "await"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "031 restart",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 958,
+      "seen": {
+        "index": 31,
+        "kind": "restart",
+        "signal": "SIGKILL"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "032 pool",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 18033,
+      "seen": {
+        "index": 32,
+        "kind": "pool"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "033 drift",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 1479,
+      "seen": {
+        "index": 33,
+        "kind": "drift"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "034 tunnel",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 15965,
+      "seen": {
+        "index": 34,
+        "kind": "tunnel"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "035 switch",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 566,
+      "seen": {
+        "index": 35,
+        "kind": "switch",
+        "from": "full",
+        "to": "ask",
+        "during": false
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "036 large",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 774,
+      "seen": {
+        "index": 36,
+        "kind": "large",
+        "answer": "allow",
+        "mode": "ask"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "037 listAnswer",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 736,
+      "seen": {
+        "index": 37,
+        "kind": "listAnswer",
+        "answer": "deny",
+        "mode": "ask"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "038 window",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 3316,
+      "seen": {
+        "index": 38,
+        "kind": "window"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "039 switch",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 572,
+      "seen": {
+        "index": 39,
+        "kind": "switch",
+        "from": "ask",
+        "to": "auto",
+        "during": false
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "040 permission",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 930,
+      "seen": {
+        "index": 40,
+        "kind": "permission",
+        "answer": "deny",
+        "mode": "auto",
+        "after": "switch"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "041 menuPanel",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 4280,
+      "seen": {
+        "index": 41,
+        "kind": "menuPanel"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "042 github",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 16699,
+      "seen": {
+        "index": 42,
+        "kind": "github"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "043 fresh",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 4495,
+      "seen": {
+        "index": 43,
+        "kind": "fresh"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "044 stop",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 445,
+      "seen": {
+        "index": 44,
+        "kind": "stop"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "045 onboarding",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 25143,
+      "seen": {
+        "index": 45,
+        "kind": "onboarding"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "046 pairedCatalogue",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 18544,
+      "seen": {
+        "index": 46,
+        "kind": "pairedCatalogue",
+        "cycles": 1
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "047 switch",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 459,
+      "seen": {
+        "index": 47,
+        "kind": "switch",
+        "from": "auto",
+        "to": "ask",
+        "during": false
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "048 model",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 3898,
+      "seen": {
+        "index": 48,
+        "kind": "model",
+        "answer": "allow",
+        "mode": "ask"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "049 handoff",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 11693,
+      "seen": {
+        "index": 49,
+        "kind": "handoff"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "background",
+      "engine": "chromium",
+      "layout": "columns",
+      "seen": {
+        "conversations": 2,
+        "turns": 3
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "at rest",
+      "engine": "chromium",
+      "layout": "columns",
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "followers",
+      "engine": "chromium",
+      "layout": "columns",
+      "seen": [
+        {
+          "conversations": 7,
+          "churned": 267,
+          "resumed": 101,
+          "lagging": 0,
+          "refusedAsExpected": 48
+        },
+        {
+          "conversations": 7,
+          "churned": 278,
+          "resumed": 100,
+          "lagging": 0,
+          "refusedAsExpected": 43
+        }
+      ],
+      "failures": [],
+      "ok": true
+    },
+    {
+      "engine": "chromium",
+      "layout": "columns",
+      "name": "console",
+      "harmless": [
+        "console.error: WebSocket connection to 'ws://127.0.0.1:51847/session' failed: Error in connection establishment: net::ERR_CONNECTION_REFUSED (http://127.0.0.1:51850/packages/nessa-client/src/composition/root.ts) [owned gateway restart; session reconnected]",
+        "console.error: WebSocket connection to 'ws://127.0.0.1:51847/session' failed: Error in connection establishment: net::ERR_CONNECTION_REFUSED (http://127.0.0.1:51850/packages/nessa-client/src/composition/root.ts) [owned gateway restart; session reconnected]"
+      ],
+      "failures": [],
+      "ok": true
+    }
+  ]
+}

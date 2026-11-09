@@ -1,0 +1,6 @@
+{
+  "file": "crates/nessa-server/src/webhooks/infrastructure/outbox/registry.rs",
+  "old": "            self.observe_expiry(credential.clone(), observed_by.clone(), at_ms)\n                .await?;",
+  "new": "            let _ = observed_by;",
+  "originalSha256": "88db67037e489e392cd391728b30bc3458f1863693cb82d80ecdd5ded6022672"
+}

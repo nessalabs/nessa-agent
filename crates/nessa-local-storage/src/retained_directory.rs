@@ -37,6 +37,20 @@ impl PrivateDirectory {
         })
     }
 
+    /// Retain a caller-selected workspace as the trusted root.
+    ///
+    /// Like [`Self::open_root`], ancestry above `root` is caller trust, including
+    /// publicly writable locators. The final directory must be current-user-owned
+    /// and cannot be a symbolic link or group/other writable. Read/search bits are
+    /// permitted; acquisition creates or repairs nothing. Binding checks retain
+    /// this root's identity and permission contract.
+    #[cfg(unix)]
+    pub fn open_shared_root(root: &Path) -> io::Result<Self> {
+        Ok(Self {
+            inner: platform::RetainedDirectory::open_shared_root(root)?,
+        })
+    }
+
     /// Retain one existing private child and this handle's captured ancestry.
     ///
     /// `name` must be a native single-component name. Acquisition requests

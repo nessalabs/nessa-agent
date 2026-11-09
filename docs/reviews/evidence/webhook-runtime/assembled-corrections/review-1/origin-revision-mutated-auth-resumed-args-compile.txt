@@ -1,0 +1,9 @@
+warning: unused variable: `revision`
+  --> /tmp/nessa-assembled-independent-review/crates/nessa-auth/src/application/origin.rs:62:49
+   |
+62 |     pub fn matches(&self, current: &Credential, revision: u64) -> bool {
+   |                                                 ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_revision`
+   |
+   = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: 1 warning emitted

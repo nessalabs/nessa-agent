@@ -1,11 +1,13 @@
 //! What one desktop window shows: its arrangement, which side columns are
-//! drawn, what fills its content region, and its panes, left to right and
+//! drawn, what fills its content region, the focused chat's right panel, and
+//! its panes, left to right and
 //! each column top to bottom. The window is the one authority for this; the
 //! gateway keeps the latest the window published (`WorkspaceWindows`) so the
 //! person's agents can read the space they share with the person.
 //!
 //! ```text
-//! WorkspaceWindow ─▶ arrangement, sidebar, sessionList, showing
+//! WorkspaceWindow ─▶ arrangement, sidebar, sessionList, showing, panel
+//!       ├─panel─▶ open?, tabs ─▶ [ WidgetRef ], front (one of tabs, or none)
 //!       └─columns─▶ [ WindowColumn { width%, panes ─▶ [ WindowPane { height%, focused, content } ] } ]
 //!                                                   content ─▶ Conversation(id) | Draft | Widget(ref)
 //! ```
@@ -23,6 +25,9 @@ pub const MAX_WINDOW_COLUMNS: usize = 8;
 pub const MAX_COLUMN_PANES: usize = 8;
 /// The longest widget plugin or id, in bytes.
 pub const MAX_WIDGET_ID_BYTES: usize = 256;
+/// The most tabs one chat's panel may publish: past a readable strip.
+/// `WorkspacePanel.tabs` `maxItems` in the product schema is this number.
+pub const MAX_PANEL_TABS: usize = 16;
 
 /// How the window lays out its workspace.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -166,6 +171,61 @@ impl WindowColumn {
     }
 }
 
+/// The focused chat's right panel, as the window published it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WindowPanel {
+    open: bool,
+    tabs: Vec<WidgetRef>,
+    front: Option<WidgetRef>,
+}
+
+impl WindowPanel {
+    /// # Errors
+    /// More than [`MAX_PANEL_TABS`] tabs, a repeated tab, or a front that is
+    /// not exactly one of `tabs` (absent when there are none).
+    pub fn new(
+        open: bool,
+        tabs: Vec<WidgetRef>,
+        front: Option<WidgetRef>,
+    ) -> Result<Self, WindowRefusal> {
+        if tabs.len() > MAX_PANEL_TABS {
+            return Err(WindowRefusal::Panel);
+        }
+        // Each tab is compared with the ones before it. The length check above
+        // keeps that scan within MAX_PANEL_TABS.
+        if tabs
+            .iter()
+            .enumerate()
+            .any(|(index, tab)| tabs[..index].contains(tab))
+        {
+            return Err(WindowRefusal::Panel);
+        }
+        let front_is_a_tab = match &front {
+            None => tabs.is_empty(),
+            Some(front) => tabs.contains(front),
+        };
+        if !front_is_a_tab {
+            return Err(WindowRefusal::Panel);
+        }
+        Ok(Self { open, tabs, front })
+    }
+
+    /// Whether the panel is drawn.
+    pub fn open(&self) -> bool {
+        self.open
+    }
+
+    /// The focused chat's tabs, in the order they were opened.
+    pub fn tabs(&self) -> &[WidgetRef] {
+        &self.tabs
+    }
+
+    /// The tab in front: one of [`Self::tabs`], or none when there are none.
+    pub fn front(&self) -> Option<&WidgetRef> {
+        self.front.as_ref()
+    }
+}
+
 /// Why a published window is not one.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WindowRefusal {
@@ -177,6 +237,8 @@ pub enum WindowRefusal {
     Focus,
     /// A widget with an empty or oversized plugin or id.
     Widget,
+    /// A panel with too many tabs, a repeated tab, or a front that is not one of them.
+    Panel,
 }
 
 /// One window, as it published itself.
@@ -186,6 +248,7 @@ pub struct WorkspaceWindow {
     sidebar: bool,
     session_list: bool,
     showing: WindowShowing,
+    panel: WindowPanel,
     columns: Vec<WindowColumn>,
 }
 
@@ -213,6 +276,7 @@ impl WorkspaceWindow {
         sidebar: bool,
         session_list: bool,
         showing: WindowShowing,
+        panel: WindowPanel,
         columns: Vec<WindowColumn>,
     ) -> Result<Self, WindowRefusal> {
         if columns.is_empty() || columns.len() > MAX_WINDOW_COLUMNS {
@@ -231,6 +295,7 @@ impl WorkspaceWindow {
             sidebar,
             session_list,
             showing,
+            panel,
             columns,
         })
     }
@@ -247,6 +312,10 @@ impl WorkspaceWindow {
     }
     pub fn showing(&self) -> &WindowShowing {
         &self.showing
+    }
+    /// The focused chat's right panel.
+    pub fn panel(&self) -> &WindowPanel {
+        &self.panel
     }
     pub fn columns(&self) -> &[WindowColumn] {
         &self.columns

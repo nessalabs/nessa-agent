@@ -1,0 +1,18 @@
+
+running 1 test
+test webhooks::infrastructure::outbox::store::tests::registration_tests::registration_commits_real_auth_and_replays_original_config_after_restart ... FAILED
+
+failures:
+
+---- webhooks::infrastructure::outbox::store::tests::registration_tests::registration_commits_real_auth_and_replays_original_config_after_restart stdout ----
+
+thread 'webhooks::infrastructure::outbox::store::tests::registration_tests::registration_commits_real_auth_and_replays_original_config_after_restart' (82936) panicked at /tmp/nessa-registration-probes/crates/nessa-server/src/webhooks/infrastructure/outbox/../../../../tests/webhooks/infrastructure/outbox/registration.rs:184:5:
+assertion failed: f.store.owner.connection.lock().unwrap().execute("UPDATE registration_intents SET request='substituted-request'",
+        []).is_err()
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    webhooks::infrastructure::outbox::store::tests::registration_tests::registration_commits_real_auth_and_replays_original_config_after_restart
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 83 filtered out; finished in 0.01s

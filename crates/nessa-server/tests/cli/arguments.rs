@@ -1,6 +1,7 @@
 use crate::agent_install::domain::AgentName;
 use crate::cli::entrypoint::{parse, Command, GrantedAgents, LocalProvisioning, Ungranted};
 use nessa_protocol::relay::RelayAddress;
+use nessa_protocol::tunnel::TunnelAddress;
 fn args(words: &[&str]) -> Vec<String> {
     words.iter().map(|s| (*s).into()).collect()
 }
@@ -214,6 +215,7 @@ fn env_enroll_names_a_gateway_and_a_code_and_env_dial_a_gateway() {
         Command::EnvDial {
             address: "10.0.0.2:7443".into(),
             relay: None,
+            tunnel: None,
             drain_deadline_ms: None,
             enroll_code_file: None,
         }
@@ -230,6 +232,7 @@ fn env_enroll_names_a_gateway_and_a_code_and_env_dial_a_gateway() {
         Command::EnvDial {
             address: "10.0.0.2:7443".into(),
             relay: None,
+            tunnel: None,
             drain_deadline_ms: Some(20_000),
             enroll_code_file: None,
         }
@@ -248,6 +251,7 @@ fn env_enroll_names_a_gateway_and_a_code_and_env_dial_a_gateway() {
         Command::EnvDial {
             address: "gw.example:7443".into(),
             relay: None,
+            tunnel: None,
             drain_deadline_ms: Some(20_000),
             enroll_code_file: Some("/run/secrets/nessa_code".into()),
         }
@@ -266,11 +270,40 @@ fn env_enroll_names_a_gateway_and_a_code_and_env_dial_a_gateway() {
         Command::EnvDial {
             address: "10.0.0.2:7443".into(),
             relay: Some(RelayAddress::try_from("relay.example:7444".to_owned()).unwrap()),
+            tunnel: None,
             drain_deadline_ms: Some(20_000),
             enroll_code_file: None,
         }
     );
+    assert_eq!(
+        parse(&args(&[
+            "env",
+            "dial",
+            "10.0.0.2:7443",
+            "--tunnel",
+            "https://gw.example.com",
+        ]))
+        .unwrap(),
+        Command::EnvDial {
+            address: "10.0.0.2:7443".into(),
+            relay: None,
+            tunnel: Some(TunnelAddress::try_from("https://gw.example.com".to_owned()).unwrap()),
+            drain_deadline_ms: None,
+            enroll_code_file: None,
+        }
+    );
     for refused in [
+        vec!["env", "dial", "gw:1", "--tunnel"],
+        vec!["env", "dial", "gw:1", "--tunnel", "http://gw.example.com"],
+        vec![
+            "env",
+            "dial",
+            "gw:1",
+            "--tunnel",
+            "https://a.example",
+            "--tunnel",
+            "https://b.example",
+        ],
         vec!["env", "enroll"],
         vec!["env", "enroll", "gw:1"],
         vec!["env", "enroll", "gw:1", "CODE", "extra"],
@@ -351,6 +384,7 @@ fn env_grant_names_agents_or_every_agent_and_commands_with_their_longest_run() {
             agents: Some(GrantedAgents::Named(vec!["claude".into(), "codex".into()])),
             max_timeout_ms: None,
             max_lease_ms: None,
+            logins: false,
         }
     );
     assert_eq!(
@@ -370,6 +404,7 @@ fn env_grant_names_agents_or_every_agent_and_commands_with_their_longest_run() {
             agents: Some(GrantedAgents::All),
             max_timeout_ms: Some(600_000),
             max_lease_ms: None,
+            logins: false,
         }
     );
     assert_eq!(
@@ -386,6 +421,7 @@ fn env_grant_names_agents_or_every_agent_and_commands_with_their_longest_run() {
             agents: None,
             max_timeout_ms: Some(90_000),
             max_lease_ms: None,
+            logins: false,
         }
     );
     assert_eq!(
@@ -402,6 +438,7 @@ fn env_grant_names_agents_or_every_agent_and_commands_with_their_longest_run() {
             agents: None,
             max_timeout_ms: Some(3_600_000),
             max_lease_ms: None,
+            logins: false,
         }
     );
     assert_eq!(
@@ -411,6 +448,7 @@ fn env_grant_names_agents_or_every_agent_and_commands_with_their_longest_run() {
             agents: None,
             max_timeout_ms: None,
             max_lease_ms: Some(28_800_000),
+            logins: false,
         }
     );
     assert_eq!(
@@ -428,10 +466,22 @@ fn env_grant_names_agents_or_every_agent_and_commands_with_their_longest_run() {
             agents: Some(GrantedAgents::Named(vec!["claude".into()])),
             max_timeout_ms: None,
             max_lease_ms: Some(1_800_000),
+            logins: false,
+        }
+    );
+    assert_eq!(
+        parse(&args(&["env", "grant", "--logins"])).unwrap(),
+        Command::EnvGrant {
+            peer: None,
+            agents: None,
+            max_timeout_ms: None,
+            max_lease_ms: None,
+            logins: true,
         }
     );
     for refused in [
         vec!["env", "grant"],
+        vec!["env", "grant", "--logins", "--logins"],
         vec!["env", "grant", "--max-lease"],
         vec!["env", "grant", "--max-lease", "0s"],
         vec!["env", "grant", "--max-lease", "8"],
@@ -460,7 +510,7 @@ fn env_grant_names_agents_or_every_agent_and_commands_with_their_longest_run() {
         assert!(parse(&args(&refused)).is_err(), "{refused:?}");
     }
     assert!(crate::cli::entrypoint::HELP.contains(
-        "nessa env grant [--peer ssh|PIN] [--agent NAME... | --all-agents] [--commands --max-timeout 10m] [--max-lease 8h]"
+        "nessa env grant [--peer ssh|PIN] [--agent NAME... | --all-agents] [--commands --max-timeout 10m] [--max-lease 8h] [--logins]"
     ));
 }
 
@@ -478,6 +528,13 @@ fn env_ungrant_takes_one_thing_back_and_env_grants_lists_them() {
         Command::EnvUngrant {
             peer: Some("ssh".into()),
             what: Ungranted::Commands,
+        }
+    );
+    assert_eq!(
+        parse(&args(&["env", "ungrant", "--logins"])).unwrap(),
+        Command::EnvUngrant {
+            peer: None,
+            what: Ungranted::Logins,
         }
     );
     assert_eq!(
@@ -502,6 +559,84 @@ fn env_ungrant_takes_one_thing_back_and_env_grants_lists_them() {
         assert!(parse(&args(&refused)).is_err(), "{refused:?}");
     }
     let help = crate::cli::entrypoint::HELP;
-    assert!(help.contains("nessa env ungrant [--peer ssh|PIN] (--agent NAME | --commands | --all)"));
+    assert!(help.contains(
+        "nessa env ungrant [--peer ssh|PIN] (--agent NAME | --commands | --logins | --all)"
+    ));
     assert!(help.contains("nessa env grants"));
+}
+
+#[test]
+fn github_connection_has_no_user_facing_stage_or_endpoint_override() {
+    assert!(matches!(
+        parse(&args(&["github", "connect", "nessalabs/nessa-agent"])),
+        Ok(Command::GithubConnect {
+            accept_gap: false,
+            ..
+        })
+    ));
+    assert!(matches!(
+        parse(&args(&["github", "events", "nessalabs/nessa-agent"])),
+        Ok(Command::GithubEvents { .. })
+    ));
+    assert!(matches!(
+        parse(&args(&["github", "disconnect", "nessalabs/nessa-agent"])),
+        Ok(Command::GithubDisconnect { .. })
+    ));
+    for extra in ["--stage", "--url", "--accept-gap"] {
+        assert!(parse(&args(&["github", "events", "nessalabs/nessa-agent", extra])).is_err());
+    }
+}
+
+#[test]
+fn github_passphrases_use_stdin_and_never_an_argument_or_stage_override() {
+    for verb in ["connect", "events", "disconnect"] {
+        let args: Vec<String> = ["github", verb, "owner/repo", "--passphrase-stdin"]
+            .into_iter()
+            .map(str::to_owned)
+            .collect();
+        assert!(parse(&args).is_ok());
+        for extra in ["--stage", "private-passphrase", "--passphrase-stdin"] {
+            let mut rejected = args.clone();
+            rejected.push(extra.into());
+            assert!(parse(&rejected).is_err());
+        }
+    }
+}
+
+#[test]
+fn call_and_mcp_take_a_method_or_only_a_credential_file() {
+    let credential = std::env::temp_dir().join("cli.token");
+    let credential = credential.to_str().expect("temp path is unicode");
+    assert_eq!(
+        parse(&args(&[
+            "call",
+            "conversation.list",
+            "--params",
+            "{}",
+            "--credential-file",
+            credential
+        ]))
+        .unwrap(),
+        Command::Call {
+            method: "conversation.list".into(),
+            params: "{}".into(),
+            credential_file: Some(credential.into()),
+        }
+    );
+    assert!(matches!(
+        parse(&args(&["mcp"])).unwrap(),
+        Command::Mcp {
+            credential_file: None
+        }
+    ));
+    for words in [
+        vec!["call"],
+        vec!["call", "conversation.list"],
+        vec!["call", "--params", "{}"],
+        vec!["call", "conversation.list", "--params", "-1"],
+        vec!["mcp", "--credential-file", "relative"],
+        vec!["mcp", "--params", "{}"],
+    ] {
+        assert!(parse(&args(&words)).is_err(), "{words:?}");
+    }
 }

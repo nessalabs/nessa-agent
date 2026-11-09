@@ -21,7 +21,7 @@ use nessa_sdk::application::agent_execution::{
     commands::CreationFailure,
     sessions::{SessionSnapshot, SessionStorage},
 };
-use nessa_sdk::domain::agent_execution::executions::{ExecutionId, Initiation};
+use nessa_sdk::domain::agent_execution::executions::{ExecutionId, Initiation, InvocationStage};
 use nessa_sdk::infrastructure::session_storage::{RecordStorage, RuntimeMessageCommitClock};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -45,12 +45,14 @@ fn id() -> ConversationId {
 }
 fn message(text: &str) -> SubmittedMessage {
     SubmittedMessage {
+        uploads: Vec::new(),
         text: text.into(),
         ..SubmittedMessage::default()
     }
 }
 fn image_message(media_type: &str, size: u64) -> SubmittedMessage {
     SubmittedMessage {
+        uploads: Vec::new(),
         text: "hello".into(),
         images: vec![crate::conversation::application::SubmittedImage {
             digest: "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
@@ -105,6 +107,26 @@ fn fixture_admitted_by(
     Arc<RecordStorage>,
     Arc<LocalConversationStore>,
 ) {
+    fixture_with_sessions(
+        root,
+        provider,
+        environment,
+        policy,
+        ProviderSessionErasers::default(),
+    )
+}
+
+fn fixture_with_sessions(
+    root: &Path,
+    provider: Arc<ProviderFactory>,
+    environment: crate::conversation::application::Environments,
+    policy: Arc<dyn ConversationAccessPolicyEvaluator>,
+    provider_sessions: ProviderSessionErasers,
+) -> (
+    ConversationService,
+    Arc<RecordStorage>,
+    Arc<LocalConversationStore>,
+) {
     nessa_local_storage::create_directory(root).unwrap();
     let storage = Arc::new(RecordStorage::new(root.join("records")).unwrap());
     let metadata = Arc::new(
@@ -114,6 +136,7 @@ fn fixture_admitted_by(
     );
     let service = ConversationService::new(
         ConversationDependencies {
+            input_files: None,
             access_policy: policy,
             agents: only(Arc::new(Provider::new(provider))),
             storage: storage.clone(),
@@ -125,7 +148,7 @@ fn fixture_admitted_by(
             summaries: metadata.clone(),
             listing: metadata.clone(),
             deletion_audit: Arc::new(AcceptingDeletionAudit),
-            provider_sessions: ProviderSessionErasers::default(),
+            provider_sessions,
             deletion_budgets: DELETION_BUDGETS,
             message_commit_clock: Arc::new(RuntimeMessageCommitClock::new()),
             clock: Arc::new(TestClock),
@@ -207,7 +230,27 @@ async fn finish_turn(
                 .any(|id| id == execution);
             if started {
                 let live = service.resolve(target, &caller("create")).await.unwrap();
-                if super::turn_is_final(&live, &turn).await == Some(true) {
+                // Settled is recorded after the after-hook returns. The result
+                // alone is earlier, and a report saved in that gap is not part
+                // of the look armed when the result was saved.
+                let settled = live
+                    .agent
+                    .session_manager()
+                    .snapshot()
+                    .await
+                    .and_then(|snapshot| {
+                        snapshot
+                            .invocations
+                            .into_iter()
+                            .find(|record| record.request.execution_id == turn)
+                    })
+                    .is_some_and(|record| {
+                        matches!(
+                            record.scheduling.last().map(|event| event.stage),
+                            Some(InvocationStage::Settled | InvocationStage::Cancelled)
+                        )
+                    });
+                if settled {
                     break;
                 }
             }
@@ -215,7 +258,7 @@ async fn finish_turn(
         }
     })
     .await
-    .unwrap();
+    .expect("the turn's scheduling did not settle");
 }
 async fn send(service: &ConversationService, target: &ConversationId, execution: &str, text: &str) {
     service
@@ -1414,7 +1457,7 @@ async fn a_submit_linking_a_file_is_refused_on_a_host_before_it_is_staged() {
     service
         .inner
         .environment
-        .place(&target, Some("devbox"))
+        .place(&target, Some("devbox"), None)
         .await
         .unwrap();
     let mut linking = message("read this");
@@ -1554,7 +1597,7 @@ async fn active_execution_ignores_truncated_display_and_opens_no_provider() {
         for index in 0..30 {
             projection.injected(&format!("steering-{index}"), "running-parent");
         }
-        assert!(projection.view().truncated);
+        assert!(projection.view().earlier);
         assert!(!projection
             .view()
             .messages
@@ -1577,6 +1620,8 @@ async fn active_execution_ignores_truncated_display_and_opens_no_provider() {
     service.shutdown().await.unwrap();
 }
 
+#[path = "parent_stop.rs"]
+mod parent_stop;
 /// A turn leaving the queue is for a moment neither queued nor running: it
 /// was selected and is being prepared. A stop that meets it then waits for it
 /// to start, and stops it, instead of answering that the conversation was
@@ -1862,3 +1907,6 @@ async fn a_stop_whose_cancel_meets_the_turn_ending_is_answered_by_its_end() {
     drop(live);
     retire(service, storage, metadata).await;
 }
+
+#[path = "background_tasks.rs"]
+mod background_tasks;

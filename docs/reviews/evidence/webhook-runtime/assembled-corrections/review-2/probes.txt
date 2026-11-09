@@ -1,0 +1,8 @@
+
+running 4 tests
+test webhooks::infrastructure::outbox::store::tests::independent_cost_probes::independent_reference_release_and_rollback_are_atomic ... ok
+test webhooks::infrastructure::outbox::store::tests::registration_tests::independent_combined_probes::independent_expiry_retirement_preserves_auth_origin_and_another_registration_after_lost_ack ... ok
+test webhooks::infrastructure::outbox::store::tests::independent_cost_probes::independent_one_retired_registration_does_not_block_other_lost_ack_recovery ... ok
+test webhooks::infrastructure::outbox::store::tests::independent_cost_probes::independent_multiregistration_differential_cutoff ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 104 filtered out; finished in 1.76s

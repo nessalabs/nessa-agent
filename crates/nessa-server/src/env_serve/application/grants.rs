@@ -41,7 +41,8 @@
 //! may or may not be in force, and the grants themselves say which.
 use super::lease_policy::{Denial, LeaseAsk, LeaseDecision, LeaseFacts, LeasePolicyEvaluator};
 use crate::env_serve::domain::{
-    command_timeout, lease_ms, unwritten, AllAgents, GrantOperation, NotGranted, Peer, PeerGrant,
+    command_timeout, lease_ms, takes_login, unwritten, AllAgents, GrantOperation, NotGranted, Peer,
+    PeerGrant,
 };
 use nessa_auth::application::ports::Clock;
 use std::cell::RefCell;
@@ -57,8 +58,16 @@ pub(crate) trait PeerGrants: Send + Sync {
     fn entry(&self, peer: &Peer) -> Result<Option<PeerGrant>, String>;
 }
 
-/// Whether `peer` may lease `agent`'s harness now, and if so how long the
-/// lease may last: `None` until it is ended.
+/// The terms a harness's lease is admitted on: how long it may last
+/// (`None` until it is ended), and whether its harnesses take the peer's
+/// saved login.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct AgentTerms {
+    pub(crate) lease_ms: Option<u64>,
+    pub(crate) takes_login: bool,
+}
+
+/// Whether `peer` may lease `agent`'s harness now, and if so on what terms.
 ///
 /// # Errors
 /// [`NotGranted`] when the policy refuses it, or the grants could not be
@@ -68,8 +77,11 @@ pub(crate) fn admit_agent(
     policy: &dyn LeasePolicyEvaluator,
     peer: &Peer,
     agent: &str,
-) -> Result<Option<u64>, NotGranted> {
-    admitted(grants, policy, peer, LeaseAsk::Agent(agent)).map(|grant| lease_ms(&grant))
+) -> Result<AgentTerms, NotGranted> {
+    admitted(grants, policy, peer, LeaseAsk::Agent(agent)).map(|grant| AgentTerms {
+        lease_ms: lease_ms(&grant),
+        takes_login: takes_login(&grant),
+    })
 }
 
 /// Whether `peer` may run a command now, and if so the timeout it runs
@@ -93,6 +105,20 @@ pub(crate) fn admit_command(
         );
         NotGranted
     })
+}
+
+/// Whether `peer` may replace this host's build with its own: asked when
+/// its gateway refused this build's protocol and would send its build.
+///
+/// # Errors
+/// [`NotGranted`] when the policy refuses it, or the grants could not be
+/// read.
+pub(crate) fn admit_update(
+    grants: &dyn PeerGrants,
+    policy: &dyn LeasePolicyEvaluator,
+    peer: &Peer,
+) -> Result<(), NotGranted> {
+    admitted(grants, policy, peer, LeaseAsk::Update).map(|_| ())
 }
 
 /// The grant the policy decided over and whose terms an allowed lease

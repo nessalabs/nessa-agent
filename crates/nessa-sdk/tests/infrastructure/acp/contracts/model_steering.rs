@@ -351,6 +351,7 @@ async fn image_handoff(queued: bool, timing: ModelChangeTiming, output: u32, sto
             Some(PromptText::new("admitted A").unwrap()),
             vec![reference(&bytes, ImageMediaType::Png)],
             Vec::new(),
+            Vec::new(),
         )
         .unwrap(),
         ..prompt("image-A")

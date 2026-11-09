@@ -3,7 +3,8 @@ id: runtime-download
 title: Download a tested agent runtime
 kind: statechart
 status: implemented
-summary: An uncertain installation hides download offers until a newer check; replies from checks begun earlier cannot reopen retry.
+summary: An uncertain installation hides download offers until a newer check;
+  replies from checks begun earlier cannot reopen retry.
 parent: host-startup
 sourceRevision: "11e2746f7df088a1bd5ee3b2e579ad8a40b5cbd1"
 sources:
@@ -27,8 +28,22 @@ diagramDetails:
       to: NeedsFreshCheck
       label: Busy or not confirmed / retire earlier reads and hide offers
     section: Uncertain result and fresh evidence
+model:
+  spec: tla/services/host/startup/RuntimeOffer.tla
+  config: tla/services/host/startup/RuntimeOffer.cfg
+modelCheck:
+  sourceRevision: "11e2746f7df088a1bd5ee3b2e579ad8a40b5cbd1"
+  checker: tlc-1.7.4
+  date: 2026-11-03T03:28:31.466Z
+  config: tla/services/host/startup/RuntimeOffer.cfg
+  modelDigest: 2e77586f0f7f0a360098cdc00de81dc1d2a21bf962cf360e14d4bee1fc095cdd
+  states: 24
+  held:
+    - FreshOffers
+    - NoDisposedPublication
+  broke: []
+  unchecked: []
 ---
-
 # Download a tested agent runtime
 
 Setup shows the runtime releases the gateway offers. Choosing Download starts a gateway-owned installation, while the view waits for its outcome. Closing or replacing the view abandons that wait; it does not cancel physical installation.
@@ -74,3 +89,7 @@ Before correction, uncertainty hid offers without retiring pending reads; an old
 ## Further reading
 
 [Owning hook](../../../../../src/onboarding/ui/use-agent-downloads.ts) · [Regression cases](../../../../../src/onboarding/ui/agent-downloads.test.tsx) · [Credential saving](save-provider-credentials-and-download-a-runtime.md)
+
+## Bounded rule model
+
+Owns offer revision invalidation after busy or lost acknowledgement and retired-view refusal. Two read generations bound the fresh-check race. The model does not assert offer visibility is required by the public install callback or claim physical installation stopped on disposal. This finite abstraction checks safety only. It does not execute or verify the implementation, promise eventual completion, or qualify external effects. Existing source checkpoints and historical test receipts retain their earlier scope. The scoped model review inspected `src/onboarding/ui/use-agent-downloads.ts`.

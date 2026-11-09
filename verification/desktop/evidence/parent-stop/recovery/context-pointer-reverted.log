@@ -1,0 +1,11 @@
+starting a dev server of its own on port 41409…
+warmed 1296 modules in 6385 ms
+conversation ready: review_rows completed, in 1309 ms
+ok    setup
+ok    message [chromium columns]
+FAIL  context [chromium columns]
+        - the context update was answered ""
+ok    console [chromium columns]
+chromium columns: 20326 ms
+wrote /tmp/nessa-981-evidence/context-pointer-reverted.json
+mcp-apps-gateway: 3/4 held

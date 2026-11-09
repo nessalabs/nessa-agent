@@ -28,3 +28,12 @@ const marginMs = 10_000
  * answers in seconds.
  */
 export const conversationDeleteTimeoutMs = deletionWorstCaseMs + marginMs
+
+/**
+ * Deadline for a command that may first have to prepare and connect a
+ * workspace: creating a conversation in a channel, or sending into one that
+ * runs away from this machine, whose workspace may be resting or not made
+ * yet. It is that bound plus the existing conservative agent exchange and
+ * cleanup allowance. Neither command is replayed when its answer is lost.
+ */
+export const conversationWorkspaceTimeoutMs = 120_000 + conversationDeleteTimeoutMs

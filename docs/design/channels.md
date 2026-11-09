@@ -80,6 +80,55 @@ A thread an agent starts with `create_thread` is in its starting conversation's
 channel, unless it runs on another host. A channel conversation always runs on
 this machine: a channel with an `environment` is refused.
 
+## Changing where a channel runs
+
+A channel says where its main agent runs and where its threads run
+(`ChannelExecution`: this machine or Boat). Both can change after it is made,
+from the channel's settings dialog (`channel.setPlacement`, Cedar
+`channel.settings` on the channel; the default channel has nothing to change
+and is refused `forbidden`). A conversation's own placement is still written
+once, before it exists, and never moves, so a change only says where new
+conversations go:
+
+- **New threads**: every thread made from then on runs in the new place.
+  Threads already made keep running where they started.
+- **Main agent**: its current main conversation stays where it runs and stays
+  in the channel, as an ordinary thread with its history. The channel names a
+  fresh main conversation (`channel_coordinator_replacements`, cause
+  `coordinator_moved`, in the same write as the new placement), and the next
+  main-agent chat starts in the new place. A main conversation whose creation
+  never began (nothing opened it yet) is not retired: it keeps its id and
+  simply starts in the new place.
+- **Boat** is offered in the dialog only while Boat is connected, as when the
+  channel is made; agents placed there before that could not start.
+- Another window learns of a change when it reads the index again; channel
+  changes are not streamed.
+- Each move is recorded in `conversations/audit/settings` as the caller's,
+  with both placements and the main conversation before and after: a
+  `requested` record before anything changes (unrecorded, the move is
+  refused) and an `outcome` record after (unrecorded, the move answers a
+  failure even though it was applied).
+
+```mermaid
+sequenceDiagram
+    participant Person
+    participant Dialog as Channel settings
+    participant Gateway as Gateway (product/channel.rs)
+    participant Service as ConversationService
+    participant Store as LocalChannelStore
+    Person->>Dialog: Main agent runs on: Boat
+    Dialog->>Gateway: channel.setPlacement {requestId, channelId, coordinatorPlacement, threadPlacement}
+    Gateway->>Service: set_channel_execution(caller, channelId, execution)
+    Service->>Service: channel.settings on the channel (Cedar)
+    Service->>Store: set_execution(channelId, execution)
+    alt the main agent moved and its main conversation was made
+        Store->>Store: retire the main conversation (coordinator_moved), name a fresh one
+    end
+    Store->>Store: UPDATE coordinator_placement, thread_placement (one transaction)
+    Gateway-->>Dialog: {channel} with its coordinatorConversationId
+    Dialog-->>Person: the index takes the channel, and its next main chat opens on Boat
+```
+
 ## Making one in the desktop window
 
 The sidebar's + opens the "New channel" flow over the session list and the
@@ -129,6 +178,37 @@ Windows. Linux has no picker of its own yet, and a browser none at all, so
 there the flow does not ask for a folder or files: the channel works in a
 folder made for it.
 
+### Dropping files and folders
+
+While the flow asks for files, files and folders dragged from the Finder or
+Explorer onto the window are attached as a pick's are. The webview never sees
+the paths: Tauri gives them to the host (`WindowEvent::DragDrop`), and
+`dropped_on_desktop` in `src-tauri/src/channel_paths.rs` tells the page.
+Saying each path's kind takes the filesystem, which a stalled share can hold,
+so a drop arrives in two parts: `nessa://paths-drop-began {drop}` the moment
+the person lets go, then `nessa://paths-dropped {drop, paths, unread}` once
+each path is a file or a folder (at most 2 s each, all at once; no answer is
+a file). The host looks at no more paths than a channel holds
+(`x-channelRules.maxResources`); the rest come back as `unread` and are said
+as not fitting.
+
+The page binds each drop to the flow that was asking when it landed
+(`channelDropLanded`), and holds Create while any drop is `landing`. When its
+paths come (`channelDropSettled`) the drop stops holding Create, and its paths
+are added only if that same flow asks for files at that moment.
+
+| Drop lands while | Before its paths come | When they come | Test (`channel-commands.test.ts`) |
+| --- | --- | --- | --- |
+| another question is asked | — | nothing added | "takes files and folders dropped…" (early) |
+| files are asked | nothing | added; Create free | same test; "counts the paths the host did not look at…" |
+| files are asked | question moves on | nothing added; Create free | same test (moved) |
+| files are asked | question moves on and back | added; Create free | same test (back) |
+| files are asked | flow closes, another opens | nothing added to either | same test (late) |
+| files are asked | Create pressed | Create refused until they come, then sends them | "waits to create while a drop's paths are still coming…" |
+| the window has no drop port (Linux, browser) | — | never watched | "watches nothing where the window is never told of a drop" |
+
+The stress step `channel` drives the same order through the fake host.
+
 ## What comes later
 
 Settings that bound a conversation instead of starting it (inbound and output
@@ -145,7 +225,6 @@ channel. Renaming, moving and deleting channels are not built yet.
 - A channel made by another client with an approval preset other than Ask
   starts its new sessions there, but the desktop composer shows Ask until the
   conversation says otherwise. The desktop flow does not ask for a preset.
-- Dropping files on the flow does not attach them yet; the pickers do.
 - A conversation whose channel folder was removed cannot be opened, not even
   to read its transcript: its agent cannot be built there, and the read is
   refused `model_unavailable`, which names the wrong cause.

@@ -1,0 +1,54 @@
+{
+  "check": "conversation-stress",
+  "ok": false,
+  "started": "2026-10-27T22:17:55.914Z",
+  "finished": "2026-10-27T22:18:13.848Z",
+  "target": {
+    "url": "http://127.0.0.1:57852/desktop.html",
+    "mode": "dev"
+  },
+  "results": [
+    {
+      "name": "001 github",
+      "engine": "webkit",
+      "layout": "columns",
+      "ms": 11600,
+      "seen": {
+        "index": 1,
+        "kind": "github"
+      },
+      "failures": [
+        "Shift+Tab from Disconnect did not reach Choose repositories",
+        "Tab from Choose repositories did not reach Disconnect",
+        "the actions did not show with focus in the row"
+      ],
+      "ok": false
+    },
+    {
+      "name": "background",
+      "engine": "webkit",
+      "layout": "columns",
+      "seen": {
+        "conversations": 0,
+        "turns": 0
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "at rest",
+      "engine": "webkit",
+      "layout": "columns",
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "followers",
+      "engine": "webkit",
+      "layout": "columns",
+      "seen": [],
+      "failures": [],
+      "ok": true
+    }
+  ]
+}

@@ -1,0 +1,23 @@
+
+running 10 tests
+test expiry_has_no_revocation_actor_and_later_fact_does_not_rewrite_issuance ... ok
+test independent_correlation_byte_boundary_and_original_origin_decoder_agree ... ok
+test explicit_fact_is_coherent_held_original_and_survives_cold_restore ... ok
+test historical_revocation_actor_and_absent_correlation_are_not_inferred_from_receipt ... ok
+test independent_later_command_cannot_replace_original_fact_or_journal_identity ... ok
+
+thread 'missing_mismatched_future_and_out_of_order_facts_fail_closed' (157297) panicked at /tmp/nessa-revocation-independent-review/auth/tests/revocation.rs:353:9:
+assertion failed: CredentialRevocation::restore(changed, &snapshot.credential).is_err()
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test independent_pending_revocation_waits_for_existing_hold_then_returns_original_fact ... ok
+test missing_mismatched_future_and_out_of_order_facts_fail_closed ... FAILED
+test both_actual_supersessions_preserve_cause_actor_and_replacement ... ok
+test ordinary_product_keeps_one_time_secret_and_facts_are_secret_free ... ok
+test malformed_actual_revocation_history_rejects_cold_open_without_replacing_bytes ... ok
+
+failures:
+
+failures:
+    missing_mismatched_future_and_out_of_order_facts_fail_closed
+
+test result: FAILED. 9 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s

@@ -66,6 +66,7 @@ fn fetch_failure(cause: FetchCause) -> Value {
         }
         FetchCause::OutputExists => json!({"code":"outputExists"}),
         FetchCause::File(failed) => json!({"code":"file","step":step(failed)}),
+        FetchCause::Published { step: failed } => json!({"code":"linked","step":step(failed)}),
     }
 }
 

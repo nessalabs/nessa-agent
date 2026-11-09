@@ -1,0 +1,46 @@
+.vault-dialog {
+  width: min(360px, calc(100vw - 64px));
+  color: var(--foreground);
+}
+.vault-dialog form {
+  display: grid;
+  gap: 10px;
+}
+.vault-dialog label {
+  font-size: 13px;
+  font-weight: 500;
+}
+.vault-dialog input {
+  width: 100%;
+}
+.vault-hint,
+.vault-details {
+  font-size: 12px;
+  color: var(--muted-foreground);
+  line-height: 1.6;
+}
+.vault-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 8px;
+}
+.vault-help {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  font-size: 13px;
+  margin-right: auto;
+  color: var(--muted-foreground);
+}
+.vault-help:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 3px;
+}
+.vault-details {
+  list-style: disc;
+  padding-left: 18px;
+  margin-top: 14px;
+}

@@ -2,6 +2,7 @@ import type { ModelControl } from "./model-choice"
 import type { ModelRef } from "./workspace-index"
 import type { FailureDiagnostic } from "./failure"
 import type { SessionAccess } from "./access"
+import type { DraftImage } from "./draft-images"
 /**
  * A session's conversation: messages from the person and the agent, what the
  * agent is doing now, and the approvals it is waiting on, if any. The agent's
@@ -14,9 +15,11 @@ import type { WorkspaceFailureReason } from "./failure"
 import type { WidgetRef } from "../../widgets/model/widget-ref"
 import type {
   HistoryExtent,
+  AgentSource,
   Note,
   ImageReferencePart,
   LinkedFileReferencePart,
+  UploadedFileReferencePart,
   UsageLimitNotice,
 } from "../../../conversation"
 
@@ -35,7 +38,9 @@ export type Part =
   /** Sent inputs retain references, distinct from files the agent published. */
   | {
       readonly kind: "attachments"
-      readonly content: readonly (ImageReferencePart | LinkedFileReferencePart)[]
+      readonly content: readonly (
+        ImageReferencePart | LinkedFileReferencePart | UploadedFileReferencePart
+      )[]
     }
   | {
       readonly kind: "step"
@@ -52,6 +57,8 @@ export type Part =
        * `stopped`. Absent where nothing said; read as finished once the turn is.
        */
       readonly status?: StepStatus
+      /** Gateway-owned work whose lifecycle is independent of this turn. */
+      readonly backgroundTaskId?: string
       /** When it started and settled, in Unix milliseconds on this device's clock. */
       readonly startedAtMs?: number
       readonly endedAtMs?: number
@@ -204,6 +211,11 @@ export interface TurnMessage {
    */
   readonly working?: true
   /**
+   * Set on the person's message while the source holds it waiting, not yet
+   * a turn (no agent free for it, say). Absent once it is one.
+   */
+  readonly waiting?: true
+  /**
    * How this turn ended, when the gateway said it ended other than by
    * finishing. On the agent's reply when there is one, otherwise on the
    * input, so a turn that said nothing still shows it.
@@ -229,6 +241,15 @@ export interface TurnMessage {
    * (`ui/message`, #390); absent when the person wrote it.
    */
   readonly app?: MessageApp
+  /** The source turn whose agent wrote this input. */
+  readonly agent?: AgentSource
+  /**
+   * The images the person put on a message sent from this window, while it
+   * waits in the outbox: drawn from the bytes the window holds, and uploaded
+   * with each attempt to send it. Once the conversation holds the message,
+   * its `attachments` part names them by the gateway's reference instead.
+   */
+  readonly localImages?: readonly DraftImage[]
   readonly note?: never
 }
 
@@ -443,7 +464,7 @@ export interface TranscriptLease {
   readonly state: "live" | "ending" | "ended" | "interrupted" | "refused" | "unreadable"
   /** `here` is the gateway's own machine; `ssh` a host reached over SSH;
    * `peer` a paired machine that dials the gateway. */
-  readonly environment?: "here" | "ssh" | "peer"
+  readonly environment?: "here" | "ssh" | "peer" | "boat"
   /** The SSH destination, or the paired machine's `peer:<key>`, exactly when
    * `environment` is `ssh` or `peer`. */
   readonly host?: string
@@ -587,10 +608,15 @@ export function runSettled(
   last: boolean,
   working: boolean,
 ): boolean {
+  const backgroundRunning = steps.some(
+    (step) =>
+      step.backgroundTaskId && (step.status === "pending" || step.status === "running"),
+  )
   return (
-    !working ||
-    (!last &&
-      steps.every((step) => step.status !== "pending" && step.status !== "running"))
+    !backgroundRunning &&
+    (!working ||
+      (!last &&
+        steps.every((step) => step.status !== "pending" && step.status !== "running")))
   )
 }
 

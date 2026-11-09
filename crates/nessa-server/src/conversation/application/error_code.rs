@@ -90,12 +90,15 @@ pub fn error_code(error: &ConversationError) -> ConversationErrorCode {
             ConversationErrorCode::ApprovalModeUnavailable
         }
         ConversationError::RequestConflict => ConversationErrorCode::ApprovalRequestConflict,
+        ConversationError::ChildCreationRefused(cause) => error_code(cause),
         ConversationError::TurnRunning => ConversationErrorCode::TurnRunning,
         ConversationError::ModelChangeNotApplied => ConversationErrorCode::ModelChangeNotApplied,
         ConversationError::ModelChangeUncertain => ConversationErrorCode::ModelChangeUncertain,
         ConversationError::ApprovalModeNotApplied => ConversationErrorCode::ApprovalModeNotApplied,
         ConversationError::ApprovalModeUncertain => ConversationErrorCode::ApprovalModeUncertain,
-        ConversationError::Capacity => ConversationErrorCode::ConversationCapacity,
+        ConversationError::Capacity | ConversationError::ThreadLimit => {
+            ConversationErrorCode::ConversationCapacity
+        }
         ConversationError::Unavailable
         | ConversationError::Retirement(_)
         | ConversationError::RetirementAdmission { .. } => {
@@ -164,7 +167,9 @@ pub fn error_code(error: &ConversationError) -> ConversationErrorCode {
                 ImageInputRefusal::MediaType(_) | ImageInputRefusal::ImageTooLarge { .. },
             )
             | AgentError::MessageTooLarge { .. } => ConversationErrorCode::InvalidRequest,
-            AgentError::UserImage(_) => ConversationErrorCode::AttachmentUnavailable,
+            AgentError::UserImage(_) | AgentError::UserFile(_) => {
+                ConversationErrorCode::AttachmentUnavailable
+            }
             AgentError::AuditFailure => ConversationErrorCode::AuditUnavailable,
             // Startup never reaches the provider with input. This code carries
             // no claim that a later attachment attempt will succeed.
@@ -203,6 +208,7 @@ fn deletion_incomplete(failures: &DeletionFailures) -> ConversationErrorCode {
     // Every field named, so a new one cannot be left out of this decision
     // without failing to compile.
     let DeletionFailures {
+        background_tasks,
         stop,
         history,
         history_leased_elsewhere,
@@ -216,7 +222,8 @@ fn deletion_incomplete(failures: &DeletionFailures) -> ConversationErrorCode {
         interrupted,
         another_attempt,
     } = failures;
-    let evidence_only = stop.is_none()
+    let evidence_only = background_tasks.is_none()
+        && stop.is_none()
         && history.is_none()
         && !history_leased_elsewhere
         && provider.is_none()

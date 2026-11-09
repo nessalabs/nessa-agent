@@ -1,0 +1,16 @@
+
+running 1 test
+
+thread 'webhooks::infrastructure::outbox::store::tests::registration_tests::lifecycle_tests::first_lifecycle_stop_survives_later_observer_and_sending_recovery' (141463) panicked at /tmp/nessa-assembled-independent-review/crates/nessa-server/src/webhooks/infrastructure/outbox/../../../../tests/webhooks/infrastructure/outbox/lifecycle.rs:223:13:
+assertion `left == right` failed
+  left: String("delivery:8bc6da06-4a86-4f7a-86ab-eee5248f2027")
+ right: "lifecycle"
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test webhooks::infrastructure::outbox::store::tests::registration_tests::lifecycle_tests::first_lifecycle_stop_survives_later_observer_and_sending_recovery ... FAILED
+
+failures:
+
+failures:
+    webhooks::infrastructure::outbox::store::tests::registration_tests::lifecycle_tests::first_lifecycle_stop_survives_later_observer_and_sending_recovery
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 107 filtered out; finished in 0.02s

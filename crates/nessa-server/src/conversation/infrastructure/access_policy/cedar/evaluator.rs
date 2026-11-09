@@ -250,6 +250,18 @@ fn subject(subject: &AccessSubject<'_>) -> Result<Entity, Unavailable> {
             receiver,
             [("receiver", string(receiver))],
         ),
+        AccessSubject::WebhookReader {
+            organization,
+            principal,
+            registration_owner,
+        } => entity(
+            "NessaConversation::WebhookReader",
+            principal.as_str(),
+            [
+                ("organization", string(organization.as_str())),
+                ("registrationOwner", string(registration_owner.as_str())),
+            ],
+        ),
     }
 }
 

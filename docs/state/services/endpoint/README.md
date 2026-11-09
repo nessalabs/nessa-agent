@@ -32,3 +32,7 @@ flowchart TB
 
 - [Publication and discovery](endpoint-discovery.md)
 - [Endpoint advertisement publication](endpoint-publication.md)
+
+## Model coverage
+
+Component index. This page groups independent owners; its component arrows are not a lifecycle or a model proof. Open the feature pages for exact checked scope and exclusions.

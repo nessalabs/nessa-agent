@@ -50,6 +50,9 @@ impl DurableGithubAudit {
 
 #[async_trait]
 impl GithubAudit for DurableGithubAudit {
+    fn record_cleanup(&self, record: &GithubAuditRecord) -> Result<(), AuditUnavailable> {
+        self.write(record)
+    }
     async fn record(&self, record: &GithubAuditRecord) -> Result<(), AuditUnavailable> {
         let audit = Self::new(self.directory.clone(), self.clock.clone());
         let record = record.clone();
@@ -107,6 +110,7 @@ fn cause(event: &GithubAuditEvent) -> &'static str {
             EndCause::DeadlinePassed => "deadline_passed",
             EndCause::GithubUnreachable => "github_unreachable",
             EndCause::StoreFailed => "store_failed",
+            EndCause::VaultLocked => "vault_locked",
         },
         GithubAuditEvent::ConnectRequested
         | GithubAuditEvent::ConnectCancelled { .. }

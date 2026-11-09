@@ -109,6 +109,7 @@ async fn send(
             caller("panel", execution),
             execution.into(),
             SubmittedMessage {
+                uploads: Vec::new(),
                 text: text.into(),
                 images: images.iter().map(submitted).collect(),
                 files: Vec::new(),
@@ -286,6 +287,7 @@ async fn a_view_echoes_a_turns_images_while_it_waits_once_it_ran_and_after_a_res
     tokio::task::yield_now().await;
     let restored = ConversationService::new(
         ConversationDependencies {
+            input_files: None,
             access_policy: crate::conversation_test_support::access_policy(),
             agents: only(Arc::new(Provider::new(provider.clone()))),
             storage,
@@ -409,6 +411,7 @@ async fn a_close_that_never_reached_the_agent_keeps_the_uploads_its_queue_may_st
     let repository = Arc::new(MemoryRepository::default());
     let service = ConversationService::new(
         ConversationDependencies {
+            input_files: None,
             access_policy: crate::conversation_test_support::access_policy(),
             agents: only(Arc::new(Provider::new(provider.clone()))),
             storage: Arc::new(InMemoryStorage::new()),

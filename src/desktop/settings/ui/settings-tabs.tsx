@@ -1,3 +1,5 @@
+import { BoatRow } from "./boat-row"
+import { VaultPassphraseControl } from "../../../vault"
 import { useState, type ComponentType } from "react"
 import { hasNativeHost, replayOnboarding } from "../../../host"
 import { AgentMark } from "../../../onboarding/ui/agent-mark"
@@ -50,10 +52,12 @@ import {
   usePrototype,
 } from "./settings-controls"
 import { GithubRow } from "./github-row"
+import { VoiceKeyRow } from "./voice-key-row"
+import { SavedLoginsGroup } from "./saved-logins"
 import { IntegrationsTab } from "./integrations-tab"
 import { LinkedDevicesTab } from "./linked-devices-tab"
 import { NativeHooksRows } from "./native-hooks-rows"
-import { PermissionRuleRows } from "./permission-rule-rows"
+import { PermissionRuleRows, TrustedAppRows } from "./permission-rule-rows"
 import { ReviewNoticeRows } from "./review-notice-rows"
 
 /**
@@ -484,9 +488,17 @@ function AgentsTab() {
 
 function AccountsTab() {
   return (
-    <Group>
-      <GithubRow />
-    </Group>
+    <>
+      <Group>
+        <GithubRow />
+        <VoiceKeyRow />
+        <BoatRow />
+        <Row id="vault-passphrase">
+          <VaultPassphraseControl />
+        </Row>
+      </Group>
+      <SavedLoginsGroup />
+    </>
   )
 }
 
@@ -514,6 +526,7 @@ function AccessTab() {
         </Row>
       </Group>
       <PermissionRuleRows />
+      <TrustedAppRows />
       <ReviewNoticeRows />
     </>
   )

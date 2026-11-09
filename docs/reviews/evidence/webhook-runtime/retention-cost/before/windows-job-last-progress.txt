@@ -1,0 +1,5 @@
+2026-10-23T18:31:22.5245557Z ##[group]Run node scripts/cargo-test-parallel.mjs --concurrency 2 --partition server-lib -- -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-client-core -p nessa-device-client -p nessa-sdk
+2026-10-23T19:02:53.3397682Z [nessa-server nessa_server] test webhooks::infrastructure::outbox::store::tests::stop_retention_is_bounded_when_publication_fails has been running for over 60 seconds
+2026-10-23T19:02:55.1926064Z [nessa-server nessa_server] test webhooks::infrastructure::outbox::store::tests::terminal_retention_is_bounded has been running for over 60 seconds
+2026-10-23T19:04:04.8010696Z [nessa-server nessa_server] test webhooks::infrastructure::outbox::store::tests::typed_delivery_actors_are_correlated_to_saved_cause ... ok
+2026-10-23T19:16:30.4053764Z ##[error]The action 'Run node scripts/cargo-test-parallel.mjs --concurrency 2 --partition server-lib -- -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-client-core -p nessa-device-client -p nessa-sdk' has timed out after 45 minutes.

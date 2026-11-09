@@ -1,0 +1,10 @@
+{
+  "candidate": "3a6b09a6e81ab82c8f8696d708d93bbf64f4a245",
+  "checkout_clean": true,
+  "all_checkout_source_unchanged": true,
+  "all_private_copied_source_restored": true,
+  "private_test_module_additions": [
+    "crates/nessa-server/tests/webhooks/infrastructure/outbox.rs",
+    "crates/nessa-server/tests/webhooks/infrastructure/outbox/registration.rs"
+  ]
+}

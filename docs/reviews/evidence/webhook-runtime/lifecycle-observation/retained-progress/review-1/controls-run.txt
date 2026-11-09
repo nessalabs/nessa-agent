@@ -1,0 +1,4 @@
+shared-owner
+initial-identity
+scoped-summary
+schema-inventory

@@ -2,6 +2,7 @@
 .workspace-window {
   --rail-spring: cubic-bezier(0.34, 1.4, 0.64, 1);
   --rail-gap: 6px;
+  --rail-pill-pad: 4px;
   /*
    * Where the rail's controls stand from the window's edge: on the sidebar's
    * icon column, so the toggle in the closed rail's corner stands under
@@ -51,10 +52,40 @@
 .side-rail[data-open] {
   width: var(--rail-width);
   opacity: 1;
+  /* The sidebar's material, so the rail and the sidebar beside it are one
+     surface with no seam between them. */
+  background: var(--desktop-sidebar-material);
+}
+
+/*
+ * Open, the rail is a floating pill (as Outlook's is): it starts below the
+ * window bar, so nothing of it runs under or around the traffic lights, and
+ * stands clear of the window's edges. It is centred on the items' column
+ * and keeps one `--rail-pill-pad` around them. It runs down to the corner
+ * and holds the toggle with the same pad below it; "nessa Studio" steps out
+ * past its edge (below).
+ */
+.side-rail-pill {
+  position: absolute;
+  top: var(--desktop-titlebar-height);
+  bottom: calc(var(--desktop-gutter) + 13px - var(--rail-pill-pad));
+  left: calc(var(--rail-column) - var(--rail-pill-pad));
+  width: calc(var(--desktop-control-size) + 2 * var(--rail-pill-pad));
+  border-radius: var(--desktop-radius-pill);
+  background: var(--desktop-pane-fill);
+  box-shadow: var(--desktop-card-rim);
+}
+
+/* Beside the open rail the sidebar drops its top wash: the wash is shaped
+   to the sidebar alone and would draw a seam where the two meet. */
+.workspace-window[data-rail="open"] .workspace-sidebar {
+  --sidebar-wash: linear-gradient(transparent, transparent);
 }
 
 .side-rail-items {
   position: relative;
+  /* One pad inside the pill's top, as its sides keep. */
+  margin-top: var(--rail-pill-pad);
   margin-left: var(--rail-column);
   display: flex;
   flex-direction: column;
@@ -125,20 +156,12 @@
 .side-rail-item:hover .g-core {
   animation: rail-pulse 620ms var(--rail-spring);
 }
-.side-rail-item:hover .g-line {
-  animation: rail-write 520ms var(--desktop-ease);
-}
-.side-rail-item:hover .g-ring {
+/* Devices: the phone steps up beside the screen. */
+.side-rail-item:hover .g-phone {
   animation: rail-ring 520ms var(--rail-spring);
 }
-.side-rail-item:hover .g-page {
-  animation: rail-page 520ms var(--rail-spring);
-}
-.side-rail-item:hover .g-globe {
-  animation: rail-spin 700ms var(--desktop-ease);
-}
-.side-rail-item:hover .g-lid {
-  animation: rail-lid 520ms var(--rail-spring);
+.side-rail-item:hover .g-screen {
+  animation: rail-pulse-soft 520ms var(--rail-spring);
 }
 
 @keyframes rail-spark {
@@ -157,16 +180,6 @@
     transform: scale(1.35);
   }
 }
-@keyframes rail-write {
-  0% {
-    stroke-dasharray: 8;
-    stroke-dashoffset: 8;
-  }
-  100% {
-    stroke-dasharray: 8;
-    stroke-dashoffset: 0;
-  }
-}
 @keyframes rail-ring {
   35% {
     transform: translateY(-1.5px);
@@ -175,19 +188,9 @@
     transform: translateY(0.5px);
   }
 }
-@keyframes rail-page {
+@keyframes rail-pulse-soft {
   40% {
-    transform: scaleX(0.7);
-  }
-}
-@keyframes rail-spin {
-  100% {
-    transform: rotate(360deg);
-  }
-}
-@keyframes rail-lid {
-  40% {
-    transform: translateY(-2px) rotate(-4deg);
+    transform: scale(0.94);
   }
 }
 
@@ -256,7 +259,14 @@
   letter-spacing: -0.01em;
   transition:
     opacity var(--desktop-slow) var(--desktop-out),
-    visibility 0s linear 0s;
+    visibility 0s linear 0s,
+    transform var(--desktop-slow) var(--desktop-ease);
+}
+
+/* With the rail open its pill holds the toggle, so the words stand a clear
+   gap past the pill's edge instead of running into it. */
+.workspace-window[data-rail="open"] .side-rail-studio {
+  transform: translateX(calc(var(--rail-pill-pad) + 8px));
 }
 
 .side-rail-studio .desktop-identity-button {
@@ -338,4 +348,14 @@
 :root[data-motion="reduced"] :is(.side-rail, .side-rail-toggle, .rail-view) * {
   animation: none !important;
   transition-duration: 0s !important;
+}
+
+/*
+ * Over the panes the titlebar's free room lets clicks through to the pane
+ * headers under it, which move the window. An item's view has no header
+ * there, so the room takes the press itself: a drag moves the window and a
+ * double-click zooms it, as over a chat.
+ */
+.workspace-window[data-rail-view] .workspace-titlebar-space {
+  pointer-events: auto;
 }

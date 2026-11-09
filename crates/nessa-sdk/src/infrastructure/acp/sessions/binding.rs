@@ -31,17 +31,19 @@ use crate::application::agent_execution::providers::{
     ExecutionReportSource, FailedOpenCauseSource, FailedOpenCleanup, ImageInputRefusal,
     ModelChange, ModelChangeEffect, NativeExecutionHandoff, ObservationFailure,
     ObservationFailureCause, OpenedProviderSession, ProviderCleanup, ProviderExecutionFuture,
-    ProviderExecutionReply, ProviderObservationFuture, ProviderOpenControl, ProviderOpenError,
-    ProviderOpenRequest, ProviderOperationCapabilities, ProviderOperationFailure,
-    ProviderOperationFuture, ProviderOperationResult, ProviderSession, ProviderSessionBackend,
-    ProviderSessionState, ResourceCleanup, SessionCloseRequest, SteeringOutcome,
+    ProviderExecutionReply, ProviderInputFuture, ProviderObservationFuture, ProviderOpenControl,
+    ProviderOpenError, ProviderOpenRequest, ProviderOperationCapabilities,
+    ProviderOperationFailure, ProviderOperationFuture, ProviderOperationResult, ProviderSession,
+    ProviderSessionBackend, ProviderSessionState, ResourceCleanup, SessionCloseRequest,
+    SteeringOutcome,
 };
 use crate::domain::agent_execution::executions::ExecutionId;
 use crate::domain::agent_execution::prompts::UserMessage;
 use crate::domain::agent_execution::sessions::ExecutionSessionId;
 use crate::domain::effective_capabilities::value_objects::EffectiveCapabilities;
-use crate::infrastructure::clock::ClockInstant;
+use crate::infrastructure::clock::{within, ClockInstant};
 use crate::infrastructure::process::{ProcessScope, ProcessStartFailure};
+use crate::infrastructure::session_storage::RuntimeMessageCommitClock;
 use std::{
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
@@ -75,6 +77,11 @@ pub(crate) async fn open<P: AcpProfile + Clone + Sync>(
     traces: Arc<LocalTraceStore>,
 ) -> Result<OpenedProviderSession, ProviderOpenError> {
     let session_key = request.session_key().map(str::to_owned);
+    // The session manager's clock when it opened this attachment. A direct
+    // open names none and keeps the process timeline.
+    let arrival_clock = request
+        .arrival_clock()
+        .unwrap_or_else(|| Arc::new(RuntimeMessageCommitClock::new()));
     let (session, restore, mut open_control) = request.into_parts();
     // This open's MCP servers, read once and kept for as long as the provider
     // session lives — through every restart of its process — so a harness
@@ -99,7 +106,7 @@ pub(crate) async fn open<P: AcpProfile + Clone + Sync>(
     let profile = profile.for_open(&config);
     let (operation_capabilities, _) = watch::channel(ProviderOperationCapabilities::default());
     let factory = WorkerFactory {
-        event_budget: EventQueueBudget::new(),
+        event_budget: EventQueueBudget::with_clock(arrival_clock),
         operation_capabilities,
         permission_authority: PermissionAuthoritySource::default(),
         process,
@@ -978,7 +985,7 @@ impl<P: AcpProfile + Clone + Sync> ProviderSessionBackend for AcpSession<P> {
     }
     fn execute(
         &self,
-        input: ExecutionRequest,
+        input: ProviderInputFuture,
         handoff: NativeExecutionHandoff,
     ) -> ProviderExecutionFuture<'_> {
         Box::pin(async move {
@@ -1003,13 +1010,23 @@ impl<P: AcpProfile + Clone + Sync> ProviderSessionBackend for AcpSession<P> {
             };
             // The generation lock is released: a stalled source must not hold
             // up steering, permission answers, or the next restoration. The
-            // execution's own deadline starts here, before the read, so reading
-            // spends it instead of adding to it.
+            // execution's deadline starts before file preparation; placement,
+            // image reads and dispatch all spend the same budget.
             let execution_timeout = self.factory.config.execution_timeout;
             let clock = &*self.factory.config.clock;
             let deadline = execution_timeout.map(|limit| clock.now() + limit);
-            let limit =
-                execution_timeout.map_or(IMAGE_READ_TIMEOUT, |limit| limit.min(IMAGE_READ_TIMEOUT));
+            let input = match self
+                .prepared_input(input, &commands, closing.clone(), deadline)
+                .await
+            {
+                Ok(input) => input,
+                Err(failure) => return ProviderExecutionReply::Rejected(failure.into_error()),
+            };
+            let limit = deadline.map_or(IMAGE_READ_TIMEOUT, |deadline| {
+                deadline
+                    .saturating_duration_since(clock.now())
+                    .min(IMAGE_READ_TIMEOUT)
+            });
             let images = match self
                 .images(&input.user_message, &commands, closing, limit)
                 .await
@@ -1062,7 +1079,7 @@ impl<P: AcpProfile + Clone + Sync> ProviderSessionBackend for AcpSession<P> {
     fn steer<'a>(
         &'a self,
         target: ExecutionId,
-        input: ExecutionRequest,
+        input: ProviderInputFuture,
         capabilities: &'a EffectiveCapabilities,
         started: &'a (dyn Fn() + Send + Sync),
     ) -> ProviderOperationFuture<'a, SteeringOutcome> {
@@ -1085,7 +1102,13 @@ impl<P: AcpProfile + Clone + Sync> ProviderSessionBackend for AcpSession<P> {
             // The steering deadline starts here, before the read, so the whole
             // call is answered within it rather than within it twice over.
             let deadline = self.factory.config.clock.now() + RESPONSE_TIMEOUT;
-            let limit = IMAGE_READ_TIMEOUT.min(RESPONSE_TIMEOUT);
+            let input = self
+                .prepared_input(input, &commands, closing.clone(), Some(deadline))
+                .await
+                .inspect_err(|_| started())?;
+            let limit = deadline
+                .saturating_duration_since(self.factory.config.clock.now())
+                .min(IMAGE_READ_TIMEOUT);
             let images = self
                 .images(&input.user_message, &commands, closing, limit)
                 .await
@@ -1258,6 +1281,59 @@ impl<P: AcpProfile + Clone + Sync> ProviderSessionBackend for AcpSession<P> {
     }
 }
 impl<P: AcpProfile + Clone> AcpSession<P> {
+    /// Resolve delivery input without extending the owning operation's deadline.
+    /// Physical placement and evidence remain the resolver's responsibility when
+    /// this consumer is dropped on close or expiry.
+    async fn prepared_input(
+        &self,
+        input: ProviderInputFuture,
+        commands: &mpsc::Sender<Command>,
+        mut closing: watch::Receiver<()>,
+        deadline: Option<ClockInstant>,
+    ) -> Result<ExecutionRequest, ProviderOperationFailure> {
+        let clock = &*self.factory.config.clock;
+        let refused = |error| ProviderOperationFailure::new(error, ProviderSessionState::Usable);
+        // A resolver's diagnostic says nothing about the native connection.
+        // Only this backend's close or channel observation can retire it.
+        let context_closed = || {
+            ProviderOperationFailure::new(AgentError::Closed, ProviderSessionState::CleanupRequired)
+        };
+        if closing.has_changed().unwrap_or(true) || commands.is_closed() {
+            return Err(context_closed());
+        }
+        if deadline.is_some_and(|deadline| clock.now() >= deadline) {
+            return Err(refused(AgentError::Deadline));
+        }
+        let preparation = async {
+            tokio::select! { biased;
+                result = input => result.map_err(refused),
+                _ = tokio::task::unconstrained(closing.changed()) => Err(context_closed()),
+                () = tokio::task::unconstrained(commands.closed()) => Err(context_closed()),
+            }
+        };
+        let answer = match deadline {
+            Some(deadline) => within(clock, deadline, preparation)
+                .await
+                .unwrap_or_else(|| Err(refused(AgentError::Deadline))),
+            None => preparation.await,
+        };
+        let context_lost = closing.has_changed().unwrap_or(true) || commands.is_closed();
+        match answer {
+            // Keep a known source failure as the cause, even when independent
+            // close evidence now requires cleanup. Diagnostics never retire it.
+            Err(failure) if context_lost => Err(ProviderOperationFailure::new(
+                failure.into_error(),
+                ProviderSessionState::CleanupRequired,
+            )),
+            Err(failure) => Err(failure),
+            Ok(_) if context_lost => Err(context_closed()),
+            // A ready success cannot authorize dispatch after its budget.
+            Ok(_) if deadline.is_some_and(|deadline| clock.now() >= deadline) => {
+                Err(refused(AgentError::Deadline))
+            }
+            Ok(input) => Ok(input),
+        }
+    }
     /// The image blocks for `message`, read before its command is queued so
     /// the worker never waits on the injected source.
     ///

@@ -1,0 +1,7 @@
+
+running 3 tests
+test webhooks::infrastructure::outbox::tests::independent_registration_issue_target_disagrees_with_retained_fact ... ok
+test webhooks::infrastructure::outbox::tests::independent_registration_stop_actor_disagrees_with_retained_fact ... ok
+test webhooks::infrastructure::outbox::tests::independent_cursor_audit_checkpoint_disagrees_with_retained_fact ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 42 filtered out; finished in 0.01s

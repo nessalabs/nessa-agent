@@ -66,6 +66,7 @@ fn device_session(
     let verifier = store.device_verifier(channel.device_proof());
     ready(
         AuthenticateSession {
+            policy: &crate::adapters::cedar::CedarPolicyEvaluator::new().unwrap(),
             verifier: &verifier,
             access: store,
             clock: &Time,
@@ -160,6 +161,7 @@ fn all_coarse_grants_on_an_ordinary_issued_credential_never_make_owner_phone_pur
     };
     let session = ready(
         AuthenticateSession {
+            policy: &crate::adapters::cedar::CedarPolicyEvaluator::new().unwrap(),
             verifier: f.store.as_ref(),
             access: f.store.as_ref(),
             clock: &Time,

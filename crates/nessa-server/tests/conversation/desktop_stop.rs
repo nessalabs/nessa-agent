@@ -133,6 +133,7 @@ impl Fixture {
         }
         let service = ConversationService::new(
             ConversationDependencies {
+                input_files: None,
                 access_policy: crate::conversation_test_support::access_policy(),
                 // Each approval mode resolves, so a conversation can be in
                 // one other than Ask.
@@ -201,6 +202,7 @@ impl Fixture {
                     caller(&action),
                     action.clone(),
                     SubmittedMessage {
+                        uploads: Vec::new(),
                         text,
                         images: Vec::new(),
                         files: if file {
@@ -764,6 +766,7 @@ async fn desktop_stop_after_reopening(attachment_waits: bool) {
         caller("reopens"),
         "reopens".into(),
         SubmittedMessage {
+            uploads: Vec::new(),
             text: "Reopens".into(),
             images: Vec::new(),
             files: vec![SubmittedFile {
@@ -1096,6 +1099,9 @@ async fn a_failed_opening_holding_its_slot_is_read_by_a_follower_as_its_history(
     fixture.service.inner.conversations.lock().await.insert(
         fixture.id.clone(),
         Arc::new(Slot {
+            acquisition: Arc::new(
+                crate::conversation::application::service::OpeningResources::default(),
+            ),
             value: OnceCell::new_with(Some(Err(OpeningFailure {
                 cause: ConversationError::Unavailable,
                 holds: true,
@@ -1104,6 +1110,8 @@ async fn a_failed_opening_holding_its_slot_is_read_by_a_follower_as_its_history(
             started: AtomicBool::new(true),
             stopping: AtomicBool::new(false),
             touched: std::sync::atomic::AtomicU64::new(0),
+            closing: std::sync::atomic::AtomicBool::new(false),
+            closing_changes: tokio::sync::Mutex::new(()),
         }),
     );
     let (view, cursor) = fixture

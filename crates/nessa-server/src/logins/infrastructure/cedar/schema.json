@@ -1,0 +1,34 @@
+{
+  "NessaLogins": {
+    "entityTypes": {
+      "Machine": {
+        "shape": {
+          "type": "Record",
+          "attributes": {
+            "reach": { "type": "String", "required": true },
+            "switchedOn": { "type": "Boolean", "required": true }
+          },
+          "additionalAttributes": false
+        }
+      },
+      "Login": {
+        "shape": {
+          "type": "Record",
+          "attributes": {
+            "agent": { "type": "String", "required": true }
+          },
+          "additionalAttributes": false
+        }
+      }
+    },
+    "actions": {
+      "login.receive": {
+        "appliesTo": {
+          "principalTypes": ["Machine"],
+          "resourceTypes": ["Login"],
+          "context": { "type": "Record", "attributes": {}, "additionalAttributes": false }
+        }
+      }
+    }
+  }
+}

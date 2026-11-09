@@ -1,0 +1,16 @@
+
+running 1 test
+
+thread 'adapters::cedar::evaluator::tests::independent_entry_origin_crosses_role_and_membership_state' (143787) panicked at /tmp/nessa-assembled-final-review/crates/nessa-auth/src/adapters/cedar/evaluator_tests.rs:505:5:
+assertion `left == right` failed: Member/Active/WebhookIssue
+  left: Allow
+ right: Deny
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test adapters::cedar::evaluator::tests::independent_entry_origin_crosses_role_and_membership_state ... FAILED
+
+failures:
+
+failures:
+    adapters::cedar::evaluator::tests::independent_entry_origin_crosses_role_and_membership_state
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 214 filtered out; finished in 0.00s

@@ -1,0 +1,54 @@
+[
+  {
+    "rule": "revoked-cause",
+    "mutation_detected": true
+  },
+  {
+    "rule": "missing-fact",
+    "mutation_detected": true
+  },
+  {
+    "rule": "sequence-order",
+    "mutation_detected": true
+  },
+  {
+    "rule": "revision-order",
+    "mutation_detected": true
+  },
+  {
+    "rule": "snapshot-revision",
+    "mutation_detected": true
+  },
+  {
+    "rule": "credential-identity",
+    "mutation_detected": true
+  },
+  {
+    "rule": "issuance-time",
+    "mutation_detected": true
+  },
+  {
+    "rule": "expiry-time",
+    "mutation_detected": true
+  },
+  {
+    "rule": "revocation-time",
+    "mutation_detected": true
+  },
+  {
+    "rule": "actual-reader",
+    "mutation_detected": true
+  },
+  {
+    "rule": "journal-sequence",
+    "mutation_detected": true
+  },
+  {
+    "rule": "journal-revision",
+    "mutation_detected": true
+  },
+  {
+    "rule": "journal-correlation",
+    "mutation_detected": true
+  }
+]

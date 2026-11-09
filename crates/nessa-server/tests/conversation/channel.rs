@@ -10,6 +10,7 @@ fn path(text: &str) -> ChannelPath {
 
 fn parts(folder: ChannelFolder) -> ChannelParts {
     ChannelParts {
+        execution: crate::conversation::domain::ChannelExecution::default(),
         name: ChannelName::new("design-review").unwrap(),
         folder,
         defaults: ChannelDefaults {
@@ -159,6 +160,7 @@ fn a_retry_is_the_same_channel_only_when_it_asks_for_the_same_folder() {
         made: true,
     });
     let mut asked = ChannelRequest {
+        execution: crate::conversation::domain::ChannelExecution::default(),
         name: made.name().clone(),
         folder: None,
         defaults: made.defaults().clone(),
@@ -166,6 +168,12 @@ fn a_retry_is_the_same_channel_only_when_it_asks_for_the_same_folder() {
         resources: made.resources().clone(),
     };
     assert!(made.made_of(&asked));
+    // Moved since it was made, a retry of its creation is still the same channel.
+    let moved = made.with_execution(crate::conversation::domain::ChannelExecution {
+        coordinator: crate::conversation::domain::WorkspacePlacement::Boat,
+        threads: crate::conversation::domain::WorkspacePlacement::Boat,
+    });
+    assert!(moved.made_of(&asked));
     asked.defaults.mode = ConversationApprovalMode::Ask;
     assert!(
         !made.made_of(&asked),
@@ -191,7 +199,9 @@ fn agents_are_told_the_name_folder_notes_and_resources() {
         path: path(&absolute("/repo")),
         made: false,
     });
-    let text = made.instructions();
+    let text = made.instructions(false);
+    assert!(!text.contains("On a remote environment"), "{text}");
+    assert!(made.instructions(true).contains("On a remote environment"));
     assert!(text.contains("\"design-review\""), "{text}");
     assert!(
         text.contains(&format!("Its folder is {}.", absolute("/repo"))),

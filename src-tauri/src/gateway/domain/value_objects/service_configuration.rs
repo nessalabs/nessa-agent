@@ -114,7 +114,6 @@ impl ServiceConfiguration {
         &self.data_root
     }
 
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
     pub fn port(&self) -> u16 {
         self.port
     }

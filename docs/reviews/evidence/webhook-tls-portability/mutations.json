@@ -1,0 +1,22 @@
+[
+  {
+    "probe": "disable-certificate-verification",
+    "source": "tests/webhooks/infrastructure/https.rs",
+    "originalSha256": "47bbe46bc2d184407412ebf4b22a6993bb05312935b55c973fae0427b96bb837",
+    "mutationSha256": "8343d21d52962bcc5dac6301ef811d3a4e6941bdfb9b00abff646f297c94b5fc",
+    "mutationVerified": true,
+    "test": "webhooks::infrastructure::https::https_tests::isolated_tls_recipient_rejects_untrusted_ca_and_wrong_hostname",
+    "testExit": 101,
+    "output": "\nrunning 1 test\ntest webhooks::infrastructure::https::https_tests::isolated_tls_recipient_rejects_untrusted_ca_and_wrong_hostname ... FAILED\n\nfailures:\n\n---- webhooks::infrastructure::https::https_tests::isolated_tls_recipient_rejects_untrusted_ca_and_wrong_hostname stdout ----\n\nthread '<unnamed>' (20868) panicked at /tmp/nessa-webhook-tls-probes/src/webhooks/infrastructure/../../../tests/webhooks/infrastructure/https.rs:64:17:\na rejected TLS peer must receive no HTTP bytes\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n\nthread 'webhooks::infrastructure::https::https_tests::isolated_tls_recipient_rejects_untrusted_ca_and_wrong_hostname' (20867) panicked at /tmp/nessa-webhook-tls-probes/src/webhooks/infrastructure/../../../tests/webhooks/infrastructure/https.rs:201:9:\nthe failure must be certificate verification: error sending request for url (https://recipient.test:44923/events)\n\n\nfailures:\n    webhooks::infrastructure::https::https_tests::isolated_tls_recipient_rejects_untrusted_ca_and_wrong_hostname\n\ntest result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 26 filtered out; finished in 0.00s\n\n"
+  },
+  {
+    "probe": "accept-wrong-hostname",
+    "source": "tests/webhooks/infrastructure/fixtures/tls.rs",
+    "originalSha256": "9bd26ff6e8034a867ac4280d169eee185d2bfd733d03c51749ccf6851483d40c",
+    "mutationSha256": "49e434b00e106839e29ce3c9f4396bcab56f64963886a001b4b8f40ae735285e",
+    "mutationVerified": true,
+    "test": "webhooks::infrastructure::https::https_tests::isolated_tls_recipient_rejects_untrusted_ca_and_wrong_hostname",
+    "testExit": 101,
+    "output": "\nrunning 1 test\ntest webhooks::infrastructure::https::https_tests::isolated_tls_recipient_rejects_untrusted_ca_and_wrong_hostname ... FAILED\n\nfailures:\n\n---- webhooks::infrastructure::https::https_tests::isolated_tls_recipient_rejects_untrusted_ca_and_wrong_hostname stdout ----\n\nthread '<unnamed>' (20927) panicked at /tmp/nessa-webhook-tls-probes/src/webhooks/infrastructure/../../../tests/webhooks/infrastructure/https.rs:64:17:\na rejected TLS peer must receive no HTTP bytes\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n\nthread 'webhooks::infrastructure::https::https_tests::isolated_tls_recipient_rejects_untrusted_ca_and_wrong_hostname' (20925) panicked at /tmp/nessa-webhook-tls-probes/src/webhooks/infrastructure/../../../tests/webhooks/infrastructure/https.rs:201:9:\nthe failure must be certificate verification: error sending request for url (https://wrong.test:43245/events)\n\n\nfailures:\n    webhooks::infrastructure::https::https_tests::isolated_tls_recipient_rejects_untrusted_ca_and_wrong_hostname\n\ntest result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 26 filtered out; finished in 0.00s\n\n"
+  }
+]

@@ -193,7 +193,7 @@ const SourceSection = memo(function SourceSection({
             icon="add"
             label={`Add channel to ${name}`}
             tone="faint"
-            {...tooltip("New channel")}
+            {...tooltip(`Add channel to ${name}`)}
             onClick={() => dispatch(openChannelCreation())}
           />
         ) : variant === "channels" ? (

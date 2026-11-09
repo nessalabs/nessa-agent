@@ -1,0 +1,8 @@
+14 restoration.rs caught/restored
+15 restoration.rs caught/restored
+16 restoration.rs caught/restored
+Traceback (most recent call last):
+  File "/tmp/nessa-shared-reset-mutations.py", line 43, in <module>
+    if run.returncode==0:raise RuntimeError(f'uncaught mutation {index}: {file} {old}')
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+RuntimeError: uncaught mutation 17: restoration.rs fact.prior_position != *prior_position

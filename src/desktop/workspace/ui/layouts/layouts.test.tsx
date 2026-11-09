@@ -4,13 +4,18 @@
  * with a `SidebarRegion`, so the keyboard — every key of the shared map —
  * the switcher and the titlebar's controls are the same in both.
  */
+import { readFileSync } from "node:fs"
 import { act } from "react"
 import { createRoot, type Root } from "react-dom/client"
 import { Provider } from "react-redux"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
+import { FoldMark } from "./column-paint"
 import { isMac } from "../../../adapters/platform"
 import { chordEvent } from "../../../model/keyboard"
 import { ClockProvider } from "../../../../clock"
+import { makeDesktopStore } from "../../../store"
+import { createQuestionFlights } from "../../application/question-flights"
+import type { ShownWindow } from "../../model/shown-window"
 import {
   closePane,
   focusPane,
@@ -20,6 +25,8 @@ import {
   openBeside,
   openSession,
   openWidget,
+  closePanelTab,
+  showPanelTab,
   setComposerText,
   showContent,
   toggleSidebar,
@@ -29,7 +36,9 @@ import {
   controlledAnimationFrames,
   fakeSource,
   flushAnimationFrames,
+  keptFilter,
   opus,
+  roomyGrid,
   settle,
   shownBy,
   testStore,
@@ -342,6 +351,89 @@ describe("the right panel, in both layouts", () => {
     expect(store.getState().workspace.chrome.sidebarWidth).toBe(256)
     await key("Resize Sidebar", "ArrowLeft")
     expect(store.getState().workspace.chrome.sidebarWidth).toBe(240)
+    await act(async () => root.unmount())
+  })
+})
+
+describe("the window tells its agents the focused chat's panel", () => {
+  const subagents = { plugin: "subagents", id: "chat" }
+  const app = { plugin: "mcp:huddle", id: "call-1" }
+  const notes = { plugin: "subagents", id: "other" }
+
+  it("publishes closed, open with tabs, the front tab, a chat switch, and the last tab closing", async () => {
+    const told: (ShownWindow | null)[] = []
+    let next = 0
+    const store = makeDesktopStore({
+      workspace: fakeSource(),
+      now: () => 1000,
+      newId: () => `id-${++next}`,
+      measure: () => roomyGrid,
+      overviewFilter: keptFilter(),
+      questionFlights: createQuestionFlights(),
+      windowPublisher: { publish: (window) => told.push(window) },
+    })
+    await store.dispatch(loadWorkspace())
+    await settle()
+    const root = createRoot(host)
+    await act(async () =>
+      root.render(
+        <Provider store={store}>
+          <ClockProvider now={() => 1000}>
+            <ThreeColumns hostKind="browser" browserSurface />
+          </ClockProvider>
+        </Provider>,
+      ),
+    )
+    const panelOf = () => told.at(-1)?.panel
+    const drawn = () => host.querySelector<HTMLElement>("[data-workspace]")?.dataset.panel
+    expect(panelOf()).toEqual({ open: false, tabs: [], front: null })
+    expect(drawn()).toBe("closed")
+
+    await act(async () => {
+      store.dispatch(openWidget({ widget: subagents, place: "panel", origin: "a" }))
+      store.dispatch(openWidget({ widget: app, place: "panel", origin: "a" }))
+    })
+    expect(drawn()).toBe("open")
+    expect(panelOf()).toEqual({ open: true, tabs: [subagents, app], front: app })
+
+    await act(async () => {
+      store.dispatch(showPanelTab({ sessionId: "a", widget: subagents }))
+    })
+    expect(panelOf()?.front).toEqual(subagents)
+    expect(panelOf()?.tabs).toEqual([subagents, app])
+
+    const hide = [...host.querySelectorAll("button")].find((button) =>
+      button.getAttribute("aria-label")?.startsWith("Hide Panel"),
+    )
+    await act(async () => hide?.click())
+    expect(drawn()).toBe("closed")
+    expect(panelOf()).toEqual({ open: false, tabs: [subagents, app], front: subagents })
+
+    const show = [...host.querySelectorAll("button")].find((button) =>
+      button.getAttribute("aria-label")?.startsWith("Show Panel"),
+    )
+    await act(async () => show?.click())
+    expect(panelOf()?.open).toBe(true)
+
+    await act(async () => {
+      store.dispatch(openBeside({ sessionId: "b" }))
+      store.dispatch(openWidget({ widget: notes, place: "panel", origin: "b" }))
+    })
+    expect(panelOf()).toEqual({ open: true, tabs: [notes], front: notes })
+
+    const back = store.getState().workspace.panes
+    const pane = back && panesOf(back).find((each) => shownBy(each) === "a")
+    await act(async () => {
+      if (pane) store.dispatch(focusPane({ pane: pane.key }))
+    })
+    expect(panelOf()?.tabs).toEqual([subagents, app])
+
+    await act(async () => {
+      store.dispatch(closePanelTab({ sessionId: "a", widget: subagents }))
+      store.dispatch(closePanelTab({ sessionId: "a", widget: app }))
+    })
+    expect(panelOf()).toEqual({ open: true, tabs: [], front: null })
+    expect(host.querySelector("#workspace-panel")?.textContent).toBe("Nothing open")
     await act(async () => root.unmount())
   })
 })
@@ -1169,78 +1261,112 @@ describe("a review notice opens its conversation", () => {
 })
 
 describe("a spare sidebar fold paints before the boxes, and the list keeps its measure", () => {
+  let sheet: HTMLStyleElement
+  beforeEach(() => {
+    sheet = document.createElement("style")
+    const path = "../source-list/source-list.css"
+    sheet.textContent = readFileSync(new URL(path, import.meta.url), "utf8")
+    document.head.append(sheet)
+  })
+  afterEach(() => sheet.remove())
   const narrow = { width: 500, height: 800, spare: 240 }
 
-  it("keeps the sidebar's tree through the fold and releases the list measure after the boxes", async () => {
-    const frames = controlledAnimationFrames()
-    const width = window.innerWidth
-    Object.defineProperty(window, "innerWidth", { configurable: true, value: 1000 })
-    const store = testStore(undefined, () => narrow)
-    try {
-      await store.dispatch(loadWorkspace())
-      await settle()
-      const root = createRoot(host)
-      await act(async () =>
-        root.render(
-          <Provider store={store}>
-            <ClockProvider now={() => 1000}>
-              <ThreeColumns hostKind="browser" browserSurface />
-            </ClockProvider>
-          </Provider>,
-        ),
-      )
-      const drain = async () => {
-        for (let frame = 0; frame < 8 && frames.pending() > 0; frame++)
-          await act(async () => frames.runFrame())
+  it.each([false, true])(
+    "keeps the sidebar's tree through the fold and releases the list measure after the boxes (replacement=%s)",
+    async (replace) => {
+      const frames = controlledAnimationFrames()
+      const width = window.innerWidth
+      Object.defineProperty(window, "innerWidth", { configurable: true, value: 1000 })
+      const store = testStore(undefined, () => narrow)
+      try {
+        await store.dispatch(loadWorkspace())
+        await settle()
+        const root = createRoot(host)
+        await act(async () =>
+          root.render(
+            <Provider store={store}>
+              <ClockProvider now={() => 1000}>
+                <ThreeColumns hostKind="browser" browserSurface />
+              </ClockProvider>
+            </Provider>,
+          ),
+        )
+        const drain = async () => {
+          for (let frame = 0; frame < 8 && frames.pending() > 0; frame++)
+            await act(async () => frames.runFrame())
+        }
+        await drain()
+        const sidebar = () => host.querySelector<HTMLElement>(".workspace")
+        const list = () => host.querySelector<HTMLElement>("#workspace-sidebar")
+        const position = () => {
+          const element = list()
+          if (!element) throw new Error("missing painted sidebar")
+          return getComputedStyle(element).position
+        }
+        expect(sidebar()?.getAttribute("data-sidebar")).toBe("open")
+        expect(sidebar()?.hasAttribute("data-folding")).toBe(false)
+        expect(position()).toBe("relative")
+        expect(list()?.hasAttribute("inert")).toBe(false)
+        await act(async () => {
+          store.dispatch(openBeside({ sessionId: "c" }))
+        })
+        expect(store.getState().workspace.chrome.sidebar.folded).toBe(true)
+        expect(sidebar()?.getAttribute("data-sidebar")).toBe("open")
+        expect(list()?.hasAttribute("inert")).toBe(false)
+        expect(
+          host.querySelector(".workspace-window")?.getAttribute("data-sidebar"),
+        ).toBe("open")
+        await act(async () => frames.runFrame())
+        expect(sidebar()?.getAttribute("data-sidebar")).toBe("open")
+        expect(list()?.hasAttribute("inert")).toBe(false)
+        expect(sidebar()?.hasAttribute("data-spare-held")).toBe(true)
+        expect(sidebar()?.hasAttribute("data-list-held")).toBe(true)
+        await act(async () => frames.runFrame())
+        expect(sidebar()?.getAttribute("data-sidebar")).toBe("closed")
+        expect(sidebar()?.hasAttribute("data-folding")).toBe(true)
+        expect(position()).toBe("relative")
+        expect(list()?.hasAttribute("inert")).toBe(false)
+        expect(sidebar()?.hasAttribute("data-spare-held")).toBe(true)
+        expect(sidebar()?.hasAttribute("data-list-held")).toBe(true)
+        expect(
+          host.querySelector(".workspace-window")?.getAttribute("data-sidebar"),
+        ).toBe("closed")
+        if (replace) {
+          await act(async () => {
+            store.dispatch(openBeside({ sessionId: "d" }))
+          })
+          for (let frame = 0; frame < 2; frame++) {
+            await act(async () => frames.runFrame())
+            expect(sidebar()?.getAttribute("data-sidebar")).toBe("closed")
+            expect(sidebar()?.hasAttribute("data-folding")).toBe(true)
+            expect(position()).toBe("relative")
+            expect(sidebar()?.hasAttribute("data-spare-held")).toBe(true)
+          }
+        }
+        await act(async () => frames.runFrame())
+        // The boxes and the folded window land together. The list's measure
+        // is still the one it had.
+        expect(sidebar()?.hasAttribute("data-spare-held")).toBe(false)
+        expect(sidebar()?.hasAttribute("data-folding")).toBe(false)
+        expect(position()).toBe("absolute")
+        expect(list()?.hasAttribute("inert")).toBe(true)
+        expect(sidebar()?.hasAttribute("data-list-held")).toBe(true)
+        await act(async () => frames.runFrame())
+        // Scene text returns on the frame after the boxes. The list's measure
+        // is still the one it had.
+        expect(sidebar()?.hasAttribute("data-spare-held")).toBe(false)
+        expect(list()?.hasAttribute("inert")).toBe(true)
+        expect(sidebar()?.hasAttribute("data-list-held")).toBe(true)
+        await act(async () => frames.runFrame())
+        expect(list()?.hasAttribute("inert")).toBe(true)
+        expect(sidebar()?.hasAttribute("data-list-held")).toBe(false)
+        await act(async () => root.unmount())
+      } finally {
+        frames.restore()
+        Object.defineProperty(window, "innerWidth", { configurable: true, value: width })
       }
-      await drain()
-      const sidebar = () => host.querySelector<HTMLElement>(".workspace")
-      const list = () => host.querySelector<HTMLElement>("#workspace-sidebar")
-      expect(sidebar()?.getAttribute("data-sidebar")).toBe("open")
-      expect(list()?.hasAttribute("inert")).toBe(false)
-      await act(async () => {
-        store.dispatch(openBeside({ sessionId: "c" }))
-      })
-      expect(store.getState().workspace.chrome.sidebar.folded).toBe(true)
-      expect(sidebar()?.getAttribute("data-sidebar")).toBe("open")
-      expect(list()?.hasAttribute("inert")).toBe(false)
-      expect(host.querySelector(".workspace-window")?.getAttribute("data-sidebar")).toBe(
-        "open",
-      )
-      await act(async () => frames.runFrame())
-      expect(sidebar()?.getAttribute("data-sidebar")).toBe("open")
-      expect(list()?.hasAttribute("inert")).toBe(false)
-      expect(sidebar()?.hasAttribute("data-spare-held")).toBe(true)
-      expect(sidebar()?.hasAttribute("data-list-held")).toBe(true)
-      await act(async () => frames.runFrame())
-      expect(sidebar()?.getAttribute("data-sidebar")).toBe("closed")
-      expect(list()?.hasAttribute("inert")).toBe(false)
-      expect(sidebar()?.hasAttribute("data-spare-held")).toBe(true)
-      expect(sidebar()?.hasAttribute("data-list-held")).toBe(true)
-      expect(host.querySelector(".workspace-window")?.getAttribute("data-sidebar")).toBe(
-        "closed",
-      )
-      await act(async () => frames.runFrame())
-      // The boxes and the folded window land together. The list's measure
-      // is still the one it had.
-      expect(sidebar()?.hasAttribute("data-spare-held")).toBe(false)
-      expect(list()?.hasAttribute("inert")).toBe(true)
-      expect(sidebar()?.hasAttribute("data-list-held")).toBe(true)
-      await act(async () => frames.runFrame())
-      // Scene text returns on the frame after the boxes. The list's measure
-      // is still the one it had.
-      expect(sidebar()?.hasAttribute("data-spare-held")).toBe(false)
-      expect(list()?.hasAttribute("inert")).toBe(true)
-      expect(sidebar()?.hasAttribute("data-list-held")).toBe(true)
-      await act(async () => frames.runFrame())
-      expect(list()?.hasAttribute("inert")).toBe(true)
-      expect(sidebar()?.hasAttribute("data-list-held")).toBe(false)
-      await act(async () => root.unmount())
-    } finally {
-      frames.restore()
-      Object.defineProperty(window, "innerWidth", { configurable: true, value: width })
-    }
-  })
+    },
+  )
 
   it("keeps the list measure when a column change reverses after the boxes paint", async () => {
     const frames = controlledAnimationFrames()
@@ -1380,4 +1506,105 @@ describe("a spare sidebar fold paints before the boxes, and the list keeps its m
       frames.restore()
     }
   })
+})
+
+describe("a spare hold retains only the sidebar row already painted", () => {
+  let sheet: HTMLStyleElement
+  beforeEach(() => {
+    sheet = document.createElement("style")
+    const path = "../source-list/source-list.css"
+    sheet.textContent = readFileSync(new URL(path, import.meta.url), "utf8")
+    document.head.append(sheet)
+  })
+  afterEach(() => sheet.remove())
+
+  for (const [name, Layout] of [
+    ["columns", ThreeColumns],
+    ["sidebar", SessionsInSidebar],
+  ] as const)
+    for (const change of ["swap", "split"] as const)
+      for (const peek of [false, true])
+        it(`${name}: a closed sidebar stays outside the row through ${change}${peek ? " with peek" : ""}`, async () => {
+          const frames = controlledAnimationFrames()
+          let root: Root | undefined
+          try {
+            const rendered = await render(Layout)
+            root = rendered.root
+            const { store } = rendered
+            const drain = async () => {
+              for (let frame = 0; frame < 8; frame++)
+                await act(async () => frames.runFrame())
+            }
+            await drain()
+            if (store.getState().workspace.chrome.sidebar.open)
+              await act(async () => {
+                store.dispatch(toggleSidebar({ open: false }))
+              })
+            await drain()
+            const workspace = host.querySelector<HTMLElement>("[data-workspace]")
+            const sidebar = host.querySelector<HTMLElement>(".workspace-sidebar")
+            if (!workspace || !sidebar) throw new Error("missing workspace sidebar")
+            expect(workspace.dataset.sidebar).toBe("closed")
+            expect(workspace.hasAttribute("data-folding")).toBe(false)
+            workspace.toggleAttribute("data-peek", peek)
+            const panes = store.getState().workspace.panes
+            if (!panes) throw new Error("no panes to rearrange")
+            const [first, second] = panesOf(panes)
+            if (!first || !second) throw new Error("swap needs two panes")
+            await act(async () => {
+              if (change === "swap")
+                store.dispatch(
+                  movePane({ pane: first.key, target: second.key, zone: "center" }),
+                )
+              else store.dispatch(newSession({ beside: "right" }))
+            })
+            let held = false
+            for (let frame = 0; frame < 7; frame++) {
+              await act(async () => frames.runFrame())
+              held ||= workspace.hasAttribute("data-spare-held")
+              expect(workspace.hasAttribute("data-folding")).toBe(false)
+              expect(getComputedStyle(sidebar).position, `frame ${frame}`).toBe(
+                "absolute",
+              )
+            }
+            expect(held).toBe(true)
+            expect(workspace.hasAttribute("data-spare-held")).toBe(false)
+            const keys = [...host.querySelectorAll("[data-pane-key]")].map((pane) =>
+              pane.getAttribute("data-pane-key"),
+            )
+            expect(keys).toHaveLength(change === "swap" ? 2 : 3)
+          } finally {
+            if (root) await act(async () => root?.unmount())
+            frames.restore()
+          }
+        })
+})
+
+it("does not acquire a folding row when mounted after the sidebar already closed", async () => {
+  const frames = controlledAnimationFrames()
+  const store = testStore()
+  const workspace = document.createElement("main")
+  workspace.className = "workspace"
+  workspace.toggleAttribute("data-spare-held", true)
+  document.body.append(workspace)
+  let root: Root | undefined
+  try {
+    await store.dispatch(loadWorkspace())
+    await store.dispatch(toggleSidebar({ open: false }))
+    root = createRoot(host)
+    await act(async () =>
+      root?.render(
+        <Provider store={store}>
+          <FoldMark root={{ current: workspace }} />
+        </Provider>,
+      ),
+    )
+    expect(workspace.dataset.sidebar).toBe("closed")
+    expect(workspace.hasAttribute("data-spare-held")).toBe(true)
+    expect(workspace.hasAttribute("data-folding")).toBe(false)
+  } finally {
+    if (root) await act(async () => root?.unmount())
+    workspace.remove()
+    frames.restore()
+  }
 })

@@ -49,6 +49,7 @@ export const {
   deleteAsked,
   deleteClosed,
   arrangementShown,
+  panelShown,
   panelTabShown: showPanelTab,
   panelTabClosed: closePanelTab,
 } = workspaceActions
@@ -78,6 +79,8 @@ export {
   openWidget,
 } from "./pane-commands"
 export {
+  DRAFT_IMAGE_LIMITS,
+  addComposerImages,
   answerQuestion,
   approve,
   archiveSession,
@@ -85,8 +88,12 @@ export {
   deny,
   pinSession,
   providerLoginAvailable,
+  signInForBoat,
+  boatSignInAvailable,
+  removeComposerImage,
   renameSession,
   forkSession,
+  loadEarlier,
   resendMessage,
   retryReview,
   sendMessage,
@@ -120,4 +127,6 @@ export {
   draftChannel,
   openChannelCreation,
   removeChannelResource,
+  setChannelPlacement,
+  watchChannelDrops,
 } from "./channel-commands"

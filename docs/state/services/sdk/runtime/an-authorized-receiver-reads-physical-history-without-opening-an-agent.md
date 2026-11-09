@@ -80,3 +80,11 @@ The [gateway source adapters](../../../../../crates/nessa-client-core/src/read_o
 ## Further reading
 
 [Source](../../../../../crates/nessa-server/src/conversation/application/passive_read.rs) · [Related source](../../../../../crates/nessa-server/src/conversation/application/record_read/read.rs) · [Related tests](../../../../../crates/nessa-server/tests/conversation/passive_read.rs)
+
+## Model coverage
+
+Shared owner model: [sdk-history](../history.md). Only acknowledged physical/semantic history is advertised as committed.
+
+Receiver authorization, framing validation and record-only preparation do not follow the save lifecycle; they are read-side contracts. This relationship applies only to the stated scope, not every step of this journey. This scoped mapping retains earlier source checkpoints and is not executed implementation-test evidence.
+
+The distinct preparation/read-side owner is modeled in [history preparation and restoration](../history-restoration.md). It checks retained flush, complete/aborted tail validation and record-only versus provider-resume authority. Byte framing, erasure and actual provider behavior remain outside that model.

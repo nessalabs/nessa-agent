@@ -21,7 +21,8 @@ pub struct Attachment {
 impl Attachment {
     /// Largest file storage accepts: what the image library will read, so a
     /// camera's raw file fits. The prompt's own image budget is far smaller.
-    pub const MAX_BYTES: u64 = 64 * 1024 * 1024;
+    pub const MAX_BYTES: u64 =
+        nessa_sdk::domain::agent_execution::prompts::UploadedFileReference::MAX_BYTES;
 
     pub fn new(
         digest: Sha256Digest,

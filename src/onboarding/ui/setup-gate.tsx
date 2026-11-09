@@ -195,7 +195,6 @@ export function SetupGate({
   const cover = useCoverScale(shell)
   const picking = showsPicker(shown, onboarding.gatewayStartup)
   const field = setupField(beat)
-  const ripple = useSummonRipple(shown)
 
   if (!onScreen) {
     // A surface that becomes the panel in place does so now.
@@ -249,9 +248,6 @@ export function SetupGate({
           spread={field.spread}
           clear={field.clear}
           x={field.x}
-          ripple={ripple}
-          rippleX={0.73}
-          rippleY={0.5}
         />
         {/* Above the light rather than inside the pane, so the way out does
           not move with the steps. */}
@@ -316,20 +312,4 @@ function useCoverScale(shell: React.RefObject<HTMLElement | null>): number {
     return () => removeEventListener("resize", measure)
   }, [shell])
   return cover
-}
-
-/**
- * A ring of light through the window each time the summon shortcut is seen
- * to work, so the press is answered by the window as well as by the keys.
- * Counted from what the host reported, never from presses.
- */
-function useSummonRipple(state: OnboardingState): number {
-  const [count, setCount] = React.useState(0)
-  const last = React.useRef(state.summon)
-  React.useEffect(() => {
-    if (state.summon === last.current) return
-    last.current = state.summon
-    if (state.step === "summon" && state.summon !== undefined) setCount((n) => n + 1)
-  }, [state.step, state.summon])
-  return count
 }

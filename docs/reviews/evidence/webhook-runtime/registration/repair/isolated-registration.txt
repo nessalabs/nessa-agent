@@ -1,0 +1,27 @@
+
+running 23 tests
+test webhooks::infrastructure::outbox::store::tests::delivery_audit_uses_checked_registration_facts ... ok
+test webhooks::infrastructure::outbox::store::tests::registration_audit_lifecycle_and_actor_are_validated ... ok
+test webhooks::infrastructure::outbox::intents::row_tests::registration_schema_guards_are_checked_before_restoration_effects ... ok
+test webhooks::infrastructure::outbox::store::tests::registration_tests::auth_commit_and_uncertain_install_ack_recover_without_another_credential_or_secret ... ok
+test webhooks::infrastructure::outbox::store::tests::registration_tests::conflicting_config_and_caller_inputs_do_not_rewrite_reserved_command ... ok
+test webhooks::infrastructure::outbox::store::tests::registration_tests::failure_tests::coherent_auth_result_for_a_substituted_command_cannot_install_original_intent ... ok
+test webhooks::infrastructure::outbox::store::tests::registration_issue_evidence_matches_retained_target ... ok
+test webhooks::infrastructure::outbox::store::tests::registration_tests::failure_tests::contradictory_existing_receipt_does_not_discard_the_known_issued_intent ... ok
+test webhooks::infrastructure::outbox::store::tests::registration_stop_evidence_matches_original_stop_and_target ... ok
+test webhooks::infrastructure::outbox::store::tests::registration_tests::failure_tests::transient_intent_scan_interruption_is_unavailable_and_unchanged_state_recovers ... ok
+test webhooks::infrastructure::outbox::store::tests::owed_credential_stop_evidence_matches_original_registration_facts ... ok
+test webhooks::infrastructure::outbox::store::tests::registration_tests::failure_tests::unavailable_or_substituted_current_authority_cannot_install_or_erase_intent ... ok
+test webhooks::infrastructure::outbox::store::tests::registration_tests::failure_tests::contradictory_auth_reply_installs_nothing_and_preserves_original_retry ... ok
+test webhooks::infrastructure::outbox::store::tests::registration_tests::installation_requires_the_retained_original_intent_before_any_effect ... ok
+test webhooks::infrastructure::outbox::store::tests::registration_tests::failure_tests::uncertain_auth_commit_keeps_original_intent_and_typed_refusal_discards_only_unissued ... ok
+test webhooks::infrastructure::outbox::store::tests::registration_tests::registration_commits_real_auth_and_replays_original_config_after_restart ... ok
+test webhooks::infrastructure::outbox::store::tests::registration_tests::failure_tests::substituted_reservation_is_rejected_before_auth_and_installation ... ok
+test webhooks::infrastructure::outbox::store::tests::registration_tests::replayed_current_revocation_and_expiry_do_not_install_reserved_destination ... ok
+test webhooks::infrastructure::outbox::store::tests::registration_tests::unrelated_ordinary_receipt_cannot_install_a_webhook_or_leave_an_intent ... ok
+test webhooks::infrastructure::outbox::store::tests::registration_tests::registration_retirement_removes_private_intent_even_when_audit_ack_is_lost ... ok
+test webhooks::infrastructure::outbox::store::tests::registration_tests::installed_intent_contradictions_reject_before_live_or_restored_publication ... ok
+test webhooks::infrastructure::outbox::store::tests::registration_tests::intent_count_and_byte_capacity_refuse_without_partial_insert ... ok
+test webhooks::infrastructure::outbox::store::tests::restored_registration_facts_are_checked_before_effects ... ok
+
+test result: ok. 23 passed; 0 failed; 0 ignored; 0 measured; 63 filtered out; finished in 0.67s

@@ -1,3 +1,4 @@
+import type { BoatClaudeSignIn } from "../../provider-authentication/model/boat-sign-in"
 import type { AgentInstallations } from "../../onboarding"
 import { ComposerDeliveryMode } from "@nessa-ui/react/composer-queue"
 import type { FollowConversationChoices } from "../adapters/agent-choices"
@@ -34,6 +35,8 @@ import {
   useConversation,
   toEditor,
   linksFilesHere,
+  chosenEnvironment,
+  HERE,
 } from "../../conversation"
 import { host, startResizeFromLeftEdge, type CompositorKind } from "../../host"
 import { useSession } from "../../session"
@@ -115,6 +118,7 @@ export function App({
   agentInstallations,
   onProviderSignIn,
   canSignInToProvider,
+  boatSignIn,
 }: {
   attachmentResources: AttachmentResources
   /**
@@ -136,6 +140,8 @@ export function App({
   followConversationChoices: FollowConversationChoices
   onProviderSignIn?: (provider: "claude" | "codex") => Promise<void>
   canSignInToProvider?: () => Promise<boolean>
+  /** A Claude sign-in minted for Boat VMs, for a refusal from one (ADR 501). */
+  boatSignIn?: BoatClaudeSignIn
   agentInstallations?: AgentInstallations
 }) {
   const scheme = useColorScheme()
@@ -206,7 +212,11 @@ export function App({
       ? choices?.catalog.nativeHooks[nativeHooksAgent]
       : undefined
   const readNativeHooks = React.useCallback(async () => nativeHooksNow, [nativeHooksNow])
-  const attachments = useFileAttachments(chat, attachmentResources)
+  const attachments = useFileAttachments(
+    chat,
+    attachmentResources,
+    choices?.catalog.defaultEnvironment,
+  )
   const uploads = useAttachmentUploads(chat, attachmentResources, digest)
   const folderDrop = useFolderDrop(
     attachments.captureDestination,
@@ -593,6 +603,7 @@ export function App({
                   onOpenPaste={openPaste}
                   onProviderSignIn={onProviderSignIn}
                   canSignInToProvider={canSignInToProvider}
+                  boatSignIn={boatSignIn}
                   onUsageLimitAutoContinue={(enabled) =>
                     chat.setUsageLimitAutoContinue(enabled)
                   }
@@ -815,7 +826,10 @@ export function App({
                 <ComposerTray
                   disabled={attachments.reading}
                   onChoose={attachments.chooseFiles}
-                  linksFiles={linksFilesHere(chat.active)}
+                  linksFiles={linksFilesHere(
+                    chat.active,
+                    choices?.catalog.defaultEnvironment,
+                  )}
                   onSignOut={onSignOut}
                   agentInstallations={agentInstallations}
                   // Where a new conversation runs: offered only when the
@@ -827,14 +841,22 @@ export function App({
                     selectedModel &&
                     choices?.catalog.environments.length
                       ? {
-                          host: selection?.environment,
+                          // Unchosen, it runs on the gateway's default device.
+                          host: chosenEnvironment(
+                            selection,
+                            choices.catalog.defaultEnvironment,
+                          ),
                           hosts: choices.catalog.environments,
                           onChange: (environment) =>
                             chat.setSelection(chat.active.id, {
                               agent: selectedAgent.agent,
                               model: selectedModel.modelId,
                               approvalMode: selectedApprovalMode,
-                              environment,
+                              // This computer, chosen while another device is
+                              // the default, is named outright.
+                              environment:
+                                environment ??
+                                (choices.catalog.defaultEnvironment ? HERE : undefined),
                             }),
                         }
                       : undefined

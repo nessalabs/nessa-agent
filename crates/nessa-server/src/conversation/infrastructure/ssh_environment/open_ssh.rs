@@ -8,10 +8,11 @@
 //! never finds a socket an older `ssh` still holds, and the path stays far
 //! inside a Unix socket's bound (104 bytes on macOS).
 use super::connector::{
-    channel_arguments, master_arguments, ssh_arguments, ArtifactChannel, ArtifactChannels,
-    ArtifactTransport, LeaseConnection, LeaseConnector,
+    channel_arguments, master_arguments, ssh_arguments, ArtifactTransport, LeaseConnection,
+    LeaseConnector,
 };
 use super::install::{RemoteShell, ShellFuture};
+use crate::conversation::application::{ArtifactChannel, ArtifactChannels};
 use nessa_sdk::domain::agent_execution::leases::SshDestination;
 use std::{
     fs::{self, File},
@@ -108,8 +109,8 @@ const MAX_STDERR_LINES: usize = 32;
 const MAX_SHELL_OUTPUT: usize = 4096;
 
 /// Log the first lines of `ssh`'s own standard error.
-fn log_stderr(host: &SshDestination, stderr: impl AsyncRead + Send + Unpin + 'static) {
-    let host = host.as_str().to_owned();
+pub(crate) fn log_stderr(host: &str, stderr: impl AsyncRead + Send + Unpin + 'static) {
+    let host = host.to_owned();
     tokio::spawn(async move {
         let mut lines = BufReader::new(stderr).lines();
         let mut kept = 0;
@@ -142,9 +143,10 @@ impl LeaseConnector for OpenSshConnector {
             .take()
             .ok_or_else(|| io::Error::other("no ssh stdin"))?;
         if let Some(stderr) = child.stderr.take() {
-            log_stderr(host, stderr);
+            log_stderr(host.as_str(), stderr);
         }
         Ok(LeaseConnection {
+            mcp_relay: None,
             from_environment: Box::new(stdout),
             to_environment: Box::new(stdin),
             keep: Box::new(KeptChild(child)),
@@ -152,6 +154,7 @@ impl LeaseConnector for OpenSshConnector {
                 host: host.clone(),
                 control,
             })),
+            updates: None,
         })
     }
 }
@@ -180,7 +183,7 @@ impl ArtifactChannels for Channels {
             .take()
             .ok_or_else(|| io::Error::other("no ssh stdin"))?;
         if let Some(stderr) = child.stderr.take() {
-            log_stderr(&self.host, stderr);
+            log_stderr(self.host.as_str(), stderr);
         }
         Ok(ArtifactChannel {
             from_host: Box::new(stdout),
@@ -213,7 +216,7 @@ impl RemoteShell for OpenSshConnector {
                 .kill_on_drop(true)
                 .spawn()?;
             if let Some(stderr) = child.stderr.take() {
-                log_stderr(host, stderr);
+                log_stderr(host.as_str(), stderr);
             }
             let stdout = child
                 .stdout
@@ -229,7 +232,7 @@ impl RemoteShell for OpenSshConnector {
 /// Reads `stream` to its end, keeping only its last [`MAX_SHELL_OUTPUT`]
 /// bytes: a login shell may say anything first, and the answer is the last
 /// line.
-async fn read_tail(mut stream: impl AsyncRead + Unpin) -> io::Result<Vec<u8>> {
+pub(crate) async fn read_tail(mut stream: impl AsyncRead + Unpin) -> io::Result<Vec<u8>> {
     let mut tail = Vec::new();
     let mut chunk = [0; 1024];
     loop {

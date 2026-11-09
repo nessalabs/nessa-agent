@@ -136,7 +136,12 @@
               var html = params.html
               var policy = params.policy
               var checkWithin = params.checkWithin
+              // The device permissions the host lets the app's frame use:
+              // nothing, or the microphone (`app/model/resource.ts`,
+              // `frameAllow`). Any other spelling is not the host's.
+              var allow = params.allow === undefined ? "" : params.allow
               if (
+                (allow !== "" && allow !== "microphone *") ||
                 typeof html !== "string" ||
                 typeof policy !== "string" ||
                 typeof checkWithin !== "number" ||
@@ -169,6 +174,7 @@
               })
               app = document.createElement("iframe")
               app.setAttribute("sandbox", "allow-scripts")
+              if (allow !== "") app.setAttribute("allow", allow)
               app.setAttribute("title", "App")
               // The reporter's slot comes first in the document, before any
               // of the app's markup: only it is filled.

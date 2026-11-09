@@ -3,7 +3,8 @@ id: auth-admission
 title: Authentication admission and credential receipts
 kind: operation
 status: implemented
-summary: "Before Nessa accepts a sign-in, it checks the proof of identity and the person's current access."
+summary: "Before Nessa accepts a sign-in, it checks the proof of identity and
+  the person's current access."
 parent: auth
 sources:
   - crates/nessa-auth/src/application/session.rs
@@ -25,19 +26,47 @@ diagramDetails:
     node: Refused
     section: Refused admission
   - diagram: 0
-    edge: { from: Verifying, to: Reading, label: 'verified proof / read access snapshot' }
+    edge:
+      {
+        from: Verifying,
+        to: Reading,
+        label: 'verified proof / read access snapshot'
+      }
     section: Reading current access
   - diagram: 0
-    edge: { from: Reading, to: Admitted, label: 'lifetime, audience and membership agree / return context and revision' }
+    edge:
+      {
+        from: Reading,
+        to: Admitted,
+        label: 'lifetime, audience and membership agree / return context and revision'
+      }
     section: Admitted identity and deadline
   - diagram: 0
     edge: { from: Verifying, to: Refused, label: 'verifier failure or invalid proof' }
     section: Verifying proof
   - diagram: 0
-    edge: { from: Reading, to: Refused, label: 'unavailable access, mismatch, expiry or inactive membership' }
+    edge:
+      {
+        from: Reading,
+        to: Refused,
+        label: 'unavailable access, mismatch, expiry or inactive membership'
+      }
     section: Reading current access
+model:
+  spec: tla/services/auth/Access.tla
+  config: tla/services/auth/Access.cfg
+modelCheck:
+  checker: tlc-1.7.4
+  date: 2026-11-03T03:27:39.962Z
+  config: tla/services/auth/Access.cfg
+  modelDigest: 0d7d237eaff914ae0a815d446a37a2e9d6a292a2f7cf9826bf2f4076037ec400
+  states: 11
+  held:
+    - TypeOK
+    - AdmissionNeedsCoherentAccess
+  broke: []
+  unchecked: []
 ---
-
 # Authentication admission and credential receipts
 
 Before Nessa accepts a sign-in, it checks the proof of identity and the person's current access. This chart follows those checks for one request.
@@ -113,3 +142,11 @@ A credential can have been revoked since that first request. A retry can therefo
 ## Further reading
 
 [Source](../../../../crates/nessa-auth/src/application/session.rs) · [Related source](../../../../crates/nessa-auth/src/application/ports.rs)
+
+## Model coverage
+
+Direct model: Proof verification and one coherent access snapshot: binding, membership, lifetime and nonstale revision must all pass before admission.
+
+The finite model checks safety only. Cedar session policy is an external allow/refuse result; this model does not invent permissions or promise later authorization. Revocation after snapshot requires later current-access checks; clocks and proof crypto are abstract predicates. Terminal states may stutter; no eventual completion or implementation proof is claimed.
+
+This is a scoped source review at `77a6b620af4d94b234294f6d273fd74b3dfb44c7`. It adds the stated abstraction and does not refresh all earlier narrative claims. Existing page checkpoints are retained where present; reading regression sources is not a test run.

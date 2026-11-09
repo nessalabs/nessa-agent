@@ -7,6 +7,18 @@ use nessa_sync::replication::domain::{Limits, Scope};
 use std::error::Error;
 use std::fmt::{Display, Formatter, Result as FmtResult};
 
+/// What one conversation's catalogue row and deletion fence store.
+/// A missing row is not a tombstone.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CataloguePresence {
+    /// A non-deleted row is stored, and no fence covers it.
+    Live,
+    /// A deletion fence or a receiver purge covers this conversation.
+    Tombstone,
+    /// No row and no fence.
+    Absent,
+}
+
 /// Immutable limits for one consuming private cache.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct CachePolicy {

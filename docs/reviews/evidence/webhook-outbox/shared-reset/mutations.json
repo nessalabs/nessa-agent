@@ -1,0 +1,218 @@
+[
+  {
+    "index": 0,
+    "file": "schema.sql",
+    "rule": "CREATE TRIGGER source_reset_fact_immutable BEFORE UPDATE OF id,registration,fact ON source_reset_facts\nBEGIN SELECT RAISE(ABORT,'immutable source reset'); END;",
+    "test": "sending_and_cursor_share_original_immutable_reset_and_membership",
+    "mutationCaught": true,
+    "restoredPassed": true
+  },
+  {
+    "index": 1,
+    "file": "schema.sql",
+    "rule": "CREATE TRIGGER source_reset_member_immutable BEFORE UPDATE ON source_reset_members\nBEGIN SELECT RAISE(ABORT,'immutable source capture'); END;",
+    "test": "sending_and_cursor_share_original_immutable_reset_and_membership",
+    "mutationCaught": true,
+    "restoredPassed": true
+  },
+  {
+    "index": 2,
+    "file": "schema.sql",
+    "rule": "CREATE TRIGGER source_reset_member_retention BEFORE DELETE ON source_reset_members\nWHEN EXISTS(SELECT 1 FROM deliveries WHERE id=OLD.delivery)\nBEGIN SELECT RAISE(ABORT,'source capture still owned'); END;",
+    "test": "sending_and_cursor_share_original_immutable_reset_and_membership",
+    "mutationCaught": true,
+    "restoredPassed": true
+  },
+  {
+    "index": 3,
+    "file": "schema.sql",
+    "rule": "WHEN NEW.refs=0",
+    "test": "reset_references_release_with_retirement_and_lost_ack_recovery",
+    "mutationCaught": true,
+    "restoredPassed": true
+  },
+  {
+    "index": 4,
+    "file": "source_reset/retention.rs",
+    "rule": "if definitions(connection, expected.len() as i64 + 1)? != expected",
+    "test": "missing_or_replaced_immutable_guards_are_not_the_current_schema",
+    "mutationCaught": true,
+    "restoredPassed": true
+  },
+  {
+    "index": 5,
+    "file": "source_reset/retention.rs",
+    "rule": "if refs <= 0 || actual != refs",
+    "test": "missing_references_and_reference_accounting_refuse_restore_before_effects",
+    "mutationCaught": true,
+    "restoredPassed": true
+  },
+  {
+    "index": 6,
+    "file": "source_reset/retention.rs",
+    "rule": "if count >= MAX_SOURCE_RESETS as i64",
+    "test": "reset_factory_count_capacity_does_not_insert_a_partial_fact",
+    "mutationCaught": true,
+    "restoredPassed": true
+  },
+  {
+    "index": 7,
+    "file": "capacity.rs",
+    "rule": "if count >= MAX_CURSORS as i64",
+    "test": "cursor_capacity_refuses_new_chat_without_partial_queue_or_reset",
+    "mutationCaught": true,
+    "restoredPassed": true
+  },
+  {
+    "index": 8,
+    "file": "capacity.rs",
+    "rule": "GROUP BY registration HAVING count(*)>?2",
+    "test": "cursor_capacity_refuses_new_chat_without_partial_queue_or_reset",
+    "mutationCaught": true,
+    "restoredPassed": true
+  },
+  {
+    "index": 9,
+    "file": "source_reset/mod.rs",
+    "rule": "CASE WHEN bytes<=?2 THEN fact ELSE NULL END",
+    "test": "oversized_fact_is_not_materialized_before_typed_decoding",
+    "mutationCaught": true,
+    "restoredPassed": true
+  },
+  {
+    "index": 10,
+    "file": "source_reset/fact.rs",
+    "rule": "integer(self.stop.at_ms)?;",
+    "test": "reset_fact_decoder_rejects_noncanonical_or_invalid_original_values",
+    "mutationCaught": true,
+    "restoredPassed": true
+  },
+  {
+    "index": 11,
+    "file": "source_reset/fact.rs",
+    "rule": "integer(self.prior_position)?;",
+    "test": "reset_fact_decoder_rejects_noncanonical_or_invalid_original_values",
+    "mutationCaught": true,
+    "restoredPassed": true
+  },
+  {
+    "index": 12,
+    "file": "source_reset/fact.rs",
+    "rule": "if fact.encode()? != text",
+    "test": "reset_fact_decoder_rejects_noncanonical_or_invalid_original_values",
+    "mutationCaught": true,
+    "restoredPassed": true
+  },
+  {
+    "index": 13,
+    "file": "source_reset/mod.rs",
+    "rule": "fact.id != id",
+    "test": "reset_metadata_substitutions_reject_before_recovery_publication",
+    "mutationCaught": true,
+    "restoredPassed": true
+  },
+  {
+    "index": 14,
+    "file": "restoration.rs",
+    "rule": "fact.stop.initiator.label(fact.registration) != *initiator",
+    "test": "reset_metadata_substitutions_reject_before_recovery_publication",
+    "mutationCaught": true,
+    "restoredPassed": true
+  },
+  {
+    "index": 15,
+    "file": "restoration.rs",
+    "rule": "fact.stop.at_ms != *at_ms",
+    "test": "reset_metadata_substitutions_reject_before_recovery_publication",
+    "mutationCaught": true,
+    "restoredPassed": true
+  },
+  {
+    "index": 16,
+    "file": "restoration.rs",
+    "rule": "fact.observed_scope != observed_scope.checked()?",
+    "test": "reset_metadata_substitutions_reject_before_recovery_publication",
+    "mutationCaught": true,
+    "restoredPassed": true
+  },
+  {
+    "index": 17,
+    "file": "restoration.rs",
+    "rule": "fact.prior_position != *prior_position",
+    "test": "reset_metadata_substitutions_reject_before_recovery_publication",
+    "mutationCaught": true,
+    "restoredPassed": true
+  },
+  {
+    "index": 18,
+    "file": "restoration.rs",
+    "rule": "if next.source_reset.is_some() && !capture_seen",
+    "test": "history_cannot_claim_reset_before_the_original_capture_state",
+    "mutationCaught": true,
+    "restoredPassed": true
+  },
+  {
+    "index": 19,
+    "file": "restoration.rs",
+    "rule": "if *at_ms != capture.fact.stop.at_ms",
+    "test": "immediate_source_refusal_uses_original_reset_actor_time_and_identity",
+    "mutationCaught": true,
+    "restoredPassed": true
+  },
+  {
+    "index": 20,
+    "file": "restoration.rs",
+    "rule": "\"SELECT id,registration,delivery,record,published,source_reset FROM audit WHERE published=0\"",
+    "test": "owed_selection_work_does_not_grow_with_published_history",
+    "mutationCaught": true,
+    "restoredPassed": true
+  },
+  {
+    "index": 21,
+    "file": "source_reset/mod.rs",
+    "rule": "_ => OutboxError::Unavailable,",
+    "test": "capture_storage_failure_remains_unavailable_instead_of_conflict",
+    "mutationCaught": true,
+    "restoredPassed": true
+  },
+  {
+    "index": 22,
+    "file": "source_reset/mod.rs",
+    "rule": "before.id() != current.id()",
+    "test": "missing_references_and_reference_accounting_refuse_restore_before_effects",
+    "mutationCaught": true,
+    "restoredPassed": true
+  },
+  {
+    "index": 23,
+    "file": "source_reset/mod.rs",
+    "rule": "before.epoch() != current.epoch()",
+    "test": "missing_references_and_reference_accounting_refuse_restore_before_effects",
+    "mutationCaught": true,
+    "restoredPassed": true
+  },
+  {
+    "index": 24,
+    "file": "source_reset/mod.rs",
+    "rule": "u64::try_from(prior_position).map_err(invalid)? != position",
+    "test": "missing_references_and_reference_accounting_refuse_restore_before_effects",
+    "mutationCaught": true,
+    "restoredPassed": true
+  },
+  {
+    "index": 25,
+    "file": "source_reset/mod.rs",
+    "rule": "before.attempts() == current.attempts()",
+    "test": "missing_references_and_reference_accounting_refuse_restore_before_effects",
+    "mutationCaught": true,
+    "restoredPassed": true
+  },
+  {
+    "index": 26,
+    "file": "source_reset/mod.rs",
+    "rule": "before.timestamp_ms() == current.timestamp_ms()",
+    "test": "missing_references_and_reference_accounting_refuse_restore_before_effects",
+    "mutationCaught": true,
+    "restoredPassed": true
+  }
+]

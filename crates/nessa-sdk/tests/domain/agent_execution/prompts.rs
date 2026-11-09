@@ -105,7 +105,7 @@ fn a_carried_turn_holds_bounded_text_and_a_clipped_one_keeps_its_start() {
     use nessa_sdk::domain::agent_execution::prompts::CarriedTurn;
     let max = CarriedTurn::MAX_PART_BYTES;
     assert_eq!(
-        CarriedTurn::new(None, Some(" \n")),
+        CarriedTurn::new(None, Some(" \n"), None),
         Err(ExecutionError::EmptyValue("carried turn"))
     );
     for (said, reply, field) in [
@@ -113,27 +113,27 @@ fn a_carried_turn_holds_bounded_text_and_a_clipped_one_keeps_its_start() {
         (None, Some("x".repeat(max + 1)), "carried turn reply"),
     ] {
         assert_eq!(
-            CarriedTurn::new(said.as_deref(), reply.as_deref()),
+            CarriedTurn::new(said.as_deref(), reply.as_deref(), None),
             Err(ExecutionError::ValueTooLong {
                 field,
                 max_bytes: max
             })
         );
     }
-    let turn = CarriedTurn::new(Some("said"), Some("x".repeat(max).as_str())).unwrap();
+    let turn = CarriedTurn::new(Some("said"), Some("x".repeat(max).as_str()), None).unwrap();
     assert_eq!(turn.said(), Some("said"));
     assert_eq!(turn.text_bytes(), 4 + max);
-    let only = CarriedTurn::new(Some(" "), Some("reply")).unwrap();
+    let only = CarriedTurn::new(Some(" "), Some("reply"), None).unwrap();
     assert_eq!((only.said(), only.reply()), (None, Some("reply")));
 
     // "é" is two bytes, so an odd bound falls inside one and steps back.
     let long = format!("a{}", "é".repeat(max));
-    let clipped = CarriedTurn::clipped(Some(&long), Some(" short ")).unwrap();
+    let clipped = CarriedTurn::clipped(Some(&long), Some(" short "), None).unwrap();
     assert_eq!(clipped.said().unwrap().len(), max - 1);
     assert!(long.starts_with(clipped.said().unwrap()));
     assert_eq!(clipped.reply(), Some("short"));
-    assert_eq!(CarriedTurn::clipped(Some(" "), None), None);
-    assert_eq!(CarriedTurn::clipped(None, None), None);
+    assert_eq!(CarriedTurn::clipped(Some(" "), None, None), None);
+    assert_eq!(CarriedTurn::clipped(None, None, None), None);
 }
 
 /// History keeps the newest turns within both bounds and counts the rest;
@@ -147,7 +147,8 @@ fn carried_history_keeps_the_newest_within_its_bounds_and_refuses_more() {
     assert!(!CarriedHistory::newest(1, Vec::new()).is_empty());
 
     // The byte bound stops it before the turn count does.
-    let big = || CarriedTurn::new(Some(&"x".repeat(CarriedTurn::MAX_PART_BYTES)), None).unwrap();
+    let big =
+        || CarriedTurn::new(Some(&"x".repeat(CarriedTurn::MAX_PART_BYTES)), None, None).unwrap();
     let fits = CarriedHistory::MAX_TEXT_BYTES / CarriedTurn::MAX_PART_BYTES;
     let history = CarriedHistory::newest(u32::MAX, (0..fits + 3).map(|_| big()).collect());
     assert_eq!(history.turns().len(), fits);
@@ -155,7 +156,7 @@ fn carried_history_keeps_the_newest_within_its_bounds_and_refuses_more() {
     assert_eq!(history.text_bytes(), CarriedHistory::MAX_TEXT_BYTES);
     assert!(!history.is_empty());
 
-    let small = || CarriedTurn::new(Some("t"), None).unwrap();
+    let small = || CarriedTurn::new(Some("t"), None, None).unwrap();
     assert_eq!(
         CarriedHistory::new(
             (0..=CarriedHistory::MAX_TURNS).map(|_| small()).collect(),
@@ -175,4 +176,36 @@ fn carried_history_keeps_the_newest_within_its_bounds_and_refuses_more() {
     );
     let read = CarriedHistory::new(vec![small()], 7).unwrap();
     assert_eq!((read.turns().len(), read.omitted()), (1, 7));
+}
+
+#[test]
+fn carried_turns_retain_agent_origin_and_account_for_its_identity() {
+    use nessa_sdk::domain::agent_execution::executions::{AgentSource, ExecutionId};
+    let source = AgentSource::new(
+        "8b547a4b-6974-49a4-b878-d13a9c031f16",
+        ExecutionId::new("source").unwrap(),
+    )
+    .unwrap();
+    let agent = CarriedTurn::new(Some("said"), Some("reply"), Some(source.clone())).unwrap();
+    assert_eq!(agent.agent_source(), Some(&source));
+    assert_eq!(
+        agent.payload_bytes(),
+        agent.text_bytes() + source.payload_bytes()
+    );
+    let clipped = CarriedTurn::clipped(
+        Some(&"é".repeat(CarriedTurn::MAX_PART_BYTES)),
+        None,
+        Some(source.clone()),
+    )
+    .unwrap();
+    assert_eq!(clipped.agent_source(), Some(&source));
+    let person = CarriedTurn::new(Some("person"), None, None).unwrap();
+    assert_eq!(person.agent_source(), None);
+    assert_eq!(person.payload_bytes(), person.text_bytes());
+    let history = CarriedHistory::new(vec![person, agent], 0).unwrap();
+    assert_eq!(
+        history.payload_bytes(),
+        history.text_bytes() + source.payload_bytes()
+    );
+    assert_eq!(CarriedHistory::newest(0, history.turns().to_vec()), history);
 }

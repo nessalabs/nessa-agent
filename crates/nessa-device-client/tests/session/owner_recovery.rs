@@ -31,7 +31,7 @@ use nessa_protocol::pairing::{
 use std::{
     fs,
     net::TcpListener,
-    sync::atomic::{AtomicUsize, Ordering},
+    sync::atomic::{AtomicBool, AtomicUsize, Ordering},
     sync::mpsc,
     thread::{self, JoinHandle},
 };
@@ -145,6 +145,12 @@ impl ClientPendingStore for Store {
         }
         self.actual.end_enrollment(expected)
     }
+    fn save_tunnel_secret(&self, secret: &[u8; 32]) -> Result<(), PrivateStateError> {
+        self.actual.save_tunnel_secret(secret)
+    }
+    fn load_tunnel_secret(&self) -> Result<Option<[u8; 32]>, PrivateStateError> {
+        self.actual.load_tunnel_secret()
+    }
 }
 impl OwnerPhoneOriginalStore for Store {
     fn reserve_original(
@@ -227,12 +233,32 @@ impl EnrollmentConnector for Connector {
             .map_err(|error| NativeClientError::Io(error.kind()))
     }
 }
-struct NoEntropy;
+struct NoEntropy(AtomicUsize);
 impl EnrollmentEntropyFactory for NoEntropy {
     fn create(&self) -> Box<dyn EnrollmentEntropy> {
-        panic!("recovery generated entropy");
+        if self.0.fetch_add(1, Ordering::SeqCst) > 0 {
+            panic!("recovery generated entropy");
+        }
+        Box::new(LeaseIdentity)
     }
 }
+struct LeaseIdentity;
+impl RngCore for LeaseIdentity {
+    fn next_u32(&mut self) -> u32 {
+        0
+    }
+    fn next_u64(&mut self) -> u64 {
+        0
+    }
+    fn fill_bytes(&mut self, dest: &mut [u8]) {
+        self.try_fill_bytes(dest).unwrap();
+    }
+    fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), EntropyError> {
+        dest.fill(0);
+        Ok(())
+    }
+}
+impl CryptoRng for LeaseIdentity {}
 struct Fixture {
     root: PrivateFixture,
     listener: TcpListener,
@@ -295,12 +321,15 @@ impl Fixture {
         NativeSession::compose(Dependencies {
             state: self.state.clone(),
             connector,
-            entropy: Arc::new(NoEntropy),
+            entropy: Arc::new(NoEntropy(AtomicUsize::new(0))),
+            files: Arc::new(OsCacheFiles),
+            artifacts: Arc::new(DiskArtifactFiles),
             path: self.root.path().join("private/cache.sqlite"),
             // A different valid configured address must never substitute for the original.
             address: "127.0.0.1:9".parse().unwrap(),
             wall: Arc::new(Wall),
             clock: Arc::new(Monotonic::new()),
+            pause: Arc::new(ThreadPause),
             runtime: Builder::new_current_thread().enable_all().build().unwrap(),
             product: ProductDependencies::default(),
         })
@@ -313,6 +342,9 @@ impl Fixture {
         self.root.path().join("private/owner-phone-original")
     }
     fn peer(&self, replies: Vec<Reply>) -> JoinHandle<()> {
+        self.peer_signaled(replies, Arc::new(AtomicBool::new(false)))
+    }
+    fn peer_signaled(&self, replies: Vec<Reply>, handshake: Arc<AtomicBool>) -> JoinHandle<()> {
         let listener = self.listener.try_clone().unwrap();
         let proof = self.proof.clone();
         thread::spawn(move || {
@@ -330,6 +362,19 @@ impl Fixture {
                     proof.original().device_key()
                 );
                 let mut channel = EnrollmentChannel::new(transport);
+                if matches!(reply, Reply::HoldHandshake) {
+                    handshake.store(true, Ordering::SeqCst);
+                    let _ = channel.receive_envelope();
+                    let _ = channel.receive_envelope();
+                    continue;
+                }
+                if matches!(reply, Reply::DropProduct) {
+                    assert!(matches!(
+                        wire::decode_request(&channel.receive_envelope().unwrap()).unwrap(),
+                        NativePairingRequest::OpenProduct
+                    ));
+                    continue;
+                }
                 if matches!(reply, Reply::ReadRefused) {
                     assert!(matches!(
                         wire::decode_request(&channel.receive_envelope().unwrap()).unwrap(),
@@ -391,6 +436,7 @@ impl Fixture {
                 let status = DevicePairingStatus::Active {
                     record: Box::new(record),
                     access_epoch: u64::MAX,
+                    tunnel_secret: nessa_protocol::tunnel::TunnelSecret::new([9; 32]),
                 };
                 let bytes = match reply {
                     Reply::Active | Reply::WrongDisclosure => {
@@ -429,7 +475,10 @@ impl Fixture {
                             &DevicePairingStatus::Claimed(Box::new(ended)),
                         )
                     }
-                    Reply::Product | Reply::ReadRefused => unreachable!(),
+                    Reply::Product
+                    | Reply::ReadRefused
+                    | Reply::HoldHandshake
+                    | Reply::DropProduct => unreachable!(),
                     Reply::WrongPublic => {
                         wire::encode_owner_phone_recovery(request_id, digest, public, &status)
                     }
@@ -458,6 +507,10 @@ enum Reply {
     Terminal,
     Product,
     ReadRefused,
+    /// Accept the product handshake and hold it until the client stops.
+    HoldHandshake,
+    /// Accept the product open and drop the connection before a session exists.
+    DropProduct,
     WrongDisclosure,
     WrongPublic,
     WrongId,
@@ -622,6 +675,11 @@ fn actual_pinned_recovery_has_no_adoption_then_each_fresh_status_reconciles_orig
             .credential()
             .as_str(),
         "issued"
+    );
+    assert_eq!(
+        fixture.state.actual.load_tunnel_secret().unwrap(),
+        Some([9; 32]),
+        "owner-phone settlement keeps the tunnel secret"
     );
 }
 
@@ -921,6 +979,10 @@ fn terminal_remote_receipt_and_actual_purge_survive_independent_private_removal_
             .as_str(),
         "receiver"
     );
+    assert!(matches!(
+        parent.bind_saved_receiver(),
+        Err(SessionFailure::Fenced(PhoneFence::Purged))
+    ));
     peer.join().unwrap();
 }
 
@@ -929,6 +991,154 @@ impl Drop for ReleaseHeld {
     fn drop(&mut self) {
         self.0.release();
     }
+}
+
+#[test]
+fn an_artifact_dial_failure_keeps_the_initial_status() {
+    let fixture = Fixture::new(Mode::Good);
+    let parent = fixture.parent();
+    let peer = fixture.peer(vec![Reply::Active, Reply::Active, Reply::DropProduct]);
+    captured(parent.status().unwrap());
+    let stamp = parent.publication().unwrap();
+    let conversation = ConversationId::new("00000000-0000-4000-8000-000000000001").unwrap();
+    let output = fixture.root.path().join("private/missing-held.bin");
+    let request = ArtifactRequest::new(
+        &conversation,
+        "sha256:fb8e20fc2e4c3f248c60c39bd652f3c1347298bb977b8b4d5903b85055620603",
+        "application/octet-stream",
+        2,
+        &output,
+    );
+    let admitted = parent
+        .fetch_artifact(&stamp, &request, ReadStop::new())
+        .unwrap();
+    assert!(admitted.initial().is_some());
+    assert!(matches!(
+        admitted.fetched().unwrap().as_ref().unwrap_err(),
+        ReadFailure::Unreachable | ReadFailure::Protocol | ReadFailure::Away
+    ));
+    assert!(admitted.recheck().is_none());
+    peer.join().unwrap();
+}
+
+#[test]
+fn an_artifact_handshake_refusal_rechecks_and_releases_the_lease() {
+    let fixture = Fixture::new(Mode::Good);
+    let parent = fixture.parent();
+    let peer = fixture.peer(vec![
+        Reply::Active,
+        Reply::Active,
+        Reply::ReadRefused,
+        Reply::Terminal,
+    ]);
+    captured(parent.status().unwrap());
+    let stamp = parent.publication().unwrap();
+    let conversation = ConversationId::new("00000000-0000-4000-8000-000000000001").unwrap();
+    let output = fixture.root.path().join("private/missing-held.bin");
+    let request = ArtifactRequest::new(
+        &conversation,
+        "sha256:fb8e20fc2e4c3f248c60c39bd652f3c1347298bb977b8b4d5903b85055620603",
+        "application/octet-stream",
+        2,
+        &output,
+    );
+    let admitted = parent
+        .fetch_artifact(&stamp, &request, ReadStop::new())
+        .unwrap();
+    assert_eq!(
+        admitted.fetched().unwrap().as_ref().unwrap_err(),
+        &ReadFailure::Refused
+    );
+    assert!(admitted.initial().unwrap().purge().is_none());
+    assert!(admitted
+        .recheck()
+        .unwrap()
+        .purge()
+        .and_then(|purge| purge.as_ref().ok())
+        .is_some());
+    assert!(matches!(
+        parent.publication(),
+        Err(SessionFailure::Fenced(PhoneFence::Unbound))
+    ));
+    peer.join().unwrap();
+}
+
+#[test]
+fn a_stop_during_the_artifact_handshake_is_stopped() {
+    let fixture = Fixture::new(Mode::Good);
+    let parent = fixture.parent();
+    let started = Arc::new(AtomicBool::new(false));
+    let peer = fixture.peer_signaled(
+        vec![Reply::Active, Reply::Active, Reply::HoldHandshake],
+        started.clone(),
+    );
+    captured(parent.status().unwrap());
+    let stamp = parent.publication().unwrap();
+    let conversation = ConversationId::new("00000000-0000-4000-8000-000000000001").unwrap();
+    let output = fixture.root.path().join("private/missing-held.bin");
+    let published = output.clone();
+    let stop = ReadStop::new();
+    let stopping = stop.clone();
+    let fetch = thread::spawn(move || {
+        let request = ArtifactRequest::new(
+            &conversation,
+            "sha256:fb8e20fc2e4c3f248c60c39bd652f3c1347298bb977b8b4d5903b85055620603",
+            "application/octet-stream",
+            2,
+            &output,
+        );
+        parent.fetch_artifact(&stamp, &request, stop)
+    });
+    let began = std::time::Instant::now();
+    while !started.load(Ordering::SeqCst) {
+        assert!(
+            began.elapsed() < Duration::from_secs(2),
+            "the artifact handshake did not start"
+        );
+        thread::yield_now();
+    }
+    stopping.stop();
+    assert_eq!(fetch.join().unwrap().unwrap_err(), SessionFailure::Stopped);
+    assert!(!published.exists());
+    peer.join().unwrap();
+}
+
+#[test]
+fn a_terminal_artifact_status_keeps_its_purge() {
+    let fixture = Fixture::new(Mode::Good);
+    let parent = fixture.parent();
+    let peer = fixture.peer(vec![Reply::Active, Reply::Terminal]);
+    captured(parent.status().unwrap());
+    let stamp = parent.publication().unwrap();
+    let conversation = ConversationId::new("00000000-0000-4000-8000-000000000001").unwrap();
+    let output = fixture.root.path().join("private/missing-held.bin");
+    let request = ArtifactRequest::new(
+        &conversation,
+        "sha256:fb8e20fc2e4c3f248c60c39bd652f3c1347298bb977b8b4d5903b85055620603",
+        "application/octet-stream",
+        2,
+        &output,
+    );
+    let admitted = parent
+        .fetch_artifact(&stamp, &request, ReadStop::new())
+        .unwrap();
+    assert!(admitted.fetched().is_none() && admitted.recheck().is_none());
+    let SessionStatus::Owner(Ok(initial)) = admitted.initial().unwrap() else {
+        panic!("terminal owner status");
+    };
+    assert!(matches!(
+        initial.recovery().unwrap().status(),
+        NativePairingStatus::Terminal { .. }
+    ));
+    assert!(initial
+        .purge()
+        .and_then(|purge| purge.as_ref().ok())
+        .is_some());
+    assert!(matches!(
+        parent.publication(),
+        Err(SessionFailure::Fenced(PhoneFence::Unbound))
+    ));
+    peer.join().unwrap();
 }
 
 #[test]

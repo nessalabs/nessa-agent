@@ -54,6 +54,7 @@ async fn conversation() -> (
     let audit = Arc::new(RecordingFileLinkAudit::default());
     let service = ConversationService::new(
         ConversationDependencies {
+            input_files: None,
             access_policy: crate::conversation_test_support::access_policy(),
             agents: only(Arc::new(Provider::new(provider))),
             storage: Arc::new(InMemoryStorage::new()),
@@ -119,6 +120,7 @@ async fn attempt(
             caller("panel", action),
             execution.into(),
             SubmittedMessage {
+                uploads: Vec::new(),
                 text: text.into(),
                 images: Vec::new(),
                 files: paths
@@ -475,6 +477,7 @@ async fn a_second_attempt_at_one_submission_is_not_evidence_against_the_first() 
     provider.image_input.store(false, Ordering::SeqCst);
     let service = ConversationService::new(
         ConversationDependencies {
+            input_files: None,
             access_policy: crate::conversation_test_support::access_policy(),
             agents: only(Arc::new(Provider::new(provider))),
             storage: Arc::new(RefuseFirstInput {

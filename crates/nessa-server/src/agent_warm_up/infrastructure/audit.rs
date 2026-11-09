@@ -137,6 +137,7 @@ fn error(failure: &AgentError) -> Value {
         | AgentError::StorageAfterExecution { .. }
         | AgentError::UnknownApp(_)
         | AgentError::UserImage(_)
+        | AgentError::UserFile(_)
         | AgentError::ImageInputRefused(_)
         | AgentError::MessageTooLarge { .. }
         | AgentError::Busy

@@ -1621,6 +1621,25 @@ describe("provider recovery ownership", () => {
     ).toBe("The turn could not complete all required work.")
   })
 
+  it("offers Authenticate for Claude refused in a Boat VM, and this computer's sign-in elsewhere", async () => {
+    for (const [environment, label] of [
+      ["boat", "Authenticate"],
+      ["here", "Sign in to Claude"],
+      ["ssh", "Sign in to Claude"],
+    ] as const) {
+      await shown(fakeSource(), {
+        ...emptyTranscript("b"),
+        revision: 1,
+        authenticationRefusal: "m1",
+        latestInputId: "m1",
+        agent: "claude",
+        lease: { state: "ended", environment, cause: "closed" },
+        messages: [conversation.messages[0]],
+      })
+      expect(host.querySelector(".provider-sign-in button")?.textContent).toBe(label)
+    }
+  })
+
   it("retires recovery while a newer user-only message is sending or failed", async () => {
     const source = fakeSource()
     source.hold("send")
@@ -1924,6 +1943,12 @@ it("pins after observed layout, respects scrolling away, and rejects late delive
     height = 900
     await act(async () => deliver?.([], {} as ResizeObserver))
     expect(scroller.scrollTop).toBe(900)
+    // The scroll position moves before its listener. Growth in that gap stays
+    // where the reader went.
+    scroller.scrollTop = 0
+    height = 1100
+    await act(async () => deliver?.([], {} as ResizeObserver))
+    expect(scroller.scrollTop).toBe(0)
     await act(async () => root.unmount())
     removed = true
     scroller.scrollTop = 10
@@ -2027,6 +2052,115 @@ it("offers the way back to the latest only half a screen from the end, and retur
     request.mockRestore()
     cancelFrame.mockRestore()
     clock.mockRestore()
+    Object.assign(globalThis, { ResizeObserver: previous })
+  }
+})
+
+it("keeps a clicked tool header's top and still follows a later growth at the end", async () => {
+  let notify: ResizeObserverCallback | null = null
+  class LayoutObserver {
+    constructor(callback: ResizeObserverCallback) {
+      notify = callback
+    }
+    observe() {}
+    disconnect() {}
+  }
+  const previous = globalThis.ResizeObserver
+  Object.assign(globalThis, { ResizeObserver: LayoutObserver })
+  let height = 500
+  const geometry = vi
+    .spyOn(HTMLElement.prototype, "scrollHeight", "get")
+    .mockImplementation(function (this: HTMLElement) {
+      return this.classList.contains("workspace-transcript") ? height : 0
+    })
+  const rect = vi
+    .spyOn(HTMLElement.prototype, "getBoundingClientRect")
+    .mockImplementation(function (this: HTMLElement) {
+      const slot = this.getAttribute("data-slot")
+      const scroller = this.closest(".workspace-transcript")
+      const offset = slot === "tool-trace-line" || slot === "tool-trace-step" ? 180 : 0
+      const top = offset - (scroller instanceof HTMLElement ? scroller.scrollTop : 0)
+      return {
+        x: 0,
+        y: top,
+        top,
+        left: 0,
+        right: 0,
+        bottom: top,
+        width: 0,
+        height: 0,
+        toJSON() {
+          return {}
+        },
+      } as DOMRect
+    })
+  const frames: FrameRequestCallback[] = []
+  vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+    frames.push(callback)
+    return frames.length
+  })
+  vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => {})
+  const flush = async () => {
+    const due = frames.splice(0)
+    await act(async () => {
+      for (const frame of due) frame(0)
+    })
+  }
+  const deliver = async () => {
+    await act(async () =>
+      (notify as ResizeObserverCallback | null)?.([], {} as ResizeObserver),
+    )
+  }
+  try {
+    await shown()
+    const scroller = host.querySelector<HTMLElement>(".workspace-transcript")
+    const line = host.querySelector<HTMLElement>("[data-slot=tool-trace-line]")
+    if (!scroller || !line) throw new Error("no tool header")
+    Object.defineProperty(scroller, "clientHeight", { configurable: true, value: 400 })
+    await deliver()
+    scroller.scrollTop = 100
+    await act(async () => scroller.dispatchEvent(new Event("scroll")))
+    const top = () => line.getBoundingClientRect().top
+    expect(top()).toBe(80)
+
+    await act(async () => line.click())
+    expect(scroller.hasAttribute("data-disclosure-hold")).toBe(true)
+    height = 700
+    await deliver()
+    expect(scroller.scrollTop).toBe(100)
+    expect(top()).toBe(80)
+
+    const row = host.querySelector<HTMLElement>("[data-slot=tool-trace-step]")
+    expect(row).not.toBeNull()
+    const rowTop = () => row?.getBoundingClientRect().top
+    expect(rowTop()).toBe(80)
+    await act(async () => row?.click())
+    height = 860
+    await deliver()
+    expect(scroller.scrollTop).toBe(100)
+    expect(top()).toBe(80)
+    expect(rowTop()).toBe(80)
+
+    await flush()
+    await flush()
+    expect(scroller.hasAttribute("data-disclosure-hold")).toBe(false)
+    height = 900
+    await deliver()
+    expect(scroller.scrollTop).toBe(100)
+    expect(top()).toBe(80)
+
+    scroller.scrollTop = 500
+    await act(async () => scroller.dispatchEvent(new Event("scroll")))
+    height = 1100
+    await deliver()
+    expect(scroller.scrollTop).toBe(1100)
+  } finally {
+    await act(async () => root.unmount())
+    root = createRoot(host)
+    geometry.mockRestore()
+    rect.mockRestore()
+    vi.mocked(window.requestAnimationFrame).mockRestore()
+    vi.mocked(window.cancelAnimationFrame).mockRestore()
     Object.assign(globalThis, { ResizeObserver: previous })
   }
 })

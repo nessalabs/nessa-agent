@@ -43,6 +43,10 @@
                 "type": "Grant"
               },
               "required": true
+            },
+            "issuance": {
+              "type": "String",
+              "required": true
             }
           },
           "additionalAttributes": false
@@ -209,6 +213,21 @@
                 "required": true
               }
             },
+            "additionalAttributes": false
+          }
+        }
+      },
+      "session.enter": {
+        "appliesTo": {
+          "principalTypes": [
+            "Actor"
+          ],
+          "resourceTypes": [
+            "Resource"
+          ],
+          "context": {
+            "type": "Record",
+            "attributes": {},
             "additionalAttributes": false
           }
         }

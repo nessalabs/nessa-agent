@@ -49,6 +49,11 @@
 //! cause. A version no step starts from is refused as above. Nothing reads
 //! an older shape: an upgrade brings the file to the current one first
 //! (docs/adr/todo/202-versioned-local-datasets.md, "Migrations").
+#[cfg(feature = "encryption")]
+mod encryption;
+#[cfg(feature = "encryption")]
+pub use encryption::{open_encrypted, DatabaseKey};
+
 use rusqlite::{Connection, OpenFlags, TransactionBehavior};
 use std::{fmt, io, path::Path};
 
@@ -239,7 +244,12 @@ fn accepted(connection: &Connection, schema: &Schema) -> Result<Accepted, OpenEr
 /// Open the database at `path`, creating it privately and giving it `schema`
 /// when it is absent or empty.
 pub fn open(path: &Path, schema: &Schema) -> Result<Connection, OpenError> {
-    open_mode(path, schema, nessa_local_storage::OpenMode::OpenOrCreate)
+    open_mode(
+        path,
+        schema,
+        nessa_local_storage::OpenMode::OpenOrCreate,
+        None,
+    )
 }
 
 /// Open the database at `path` only when that file is already there.
@@ -248,13 +258,14 @@ pub fn open(path: &Path, schema: &Schema) -> Result<Connection, OpenError> {
 /// nothing is created. An empty file that is already there is given `schema`,
 /// the same way [`open`] does.
 pub fn open_existing(path: &Path, schema: &Schema) -> Result<Connection, OpenError> {
-    open_mode(path, schema, nessa_local_storage::OpenMode::ReadWrite)
+    open_mode(path, schema, nessa_local_storage::OpenMode::ReadWrite, None)
 }
 
 fn open_mode(
     path: &Path,
     schema: &Schema,
     mode: nessa_local_storage::OpenMode,
+    key: Option<&str>,
 ) -> Result<Connection, OpenError> {
     let directory = path
         .parent()
@@ -269,6 +280,12 @@ fn open_mode(
         path,
         OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX,
     )?;
+    #[cfg(feature = "encryption")]
+    if let Some(key) = key {
+        encryption::apply_key(&connection, key)?;
+    }
+    #[cfg(not(feature = "encryption"))]
+    let _ = key;
     connection.pragma_update(None, "foreign_keys", true)?;
     connection.pragma_update(None, "secure_delete", true)?;
     connection.pragma_update(None, "synchronous", "FULL")?;

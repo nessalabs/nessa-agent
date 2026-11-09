@@ -14,8 +14,11 @@ import {
   NessaConversationControlError,
 } from "../application/conversation-mutation-error.js"
 import type { RequestDeadline, RpcRequester } from "../application/session-port.js"
-import { conversationDeleteTimeoutMs } from "../application/agent-budgets.js"
-import { bounds, ProductMethod } from "../generated/product.js"
+import {
+  conversationDeleteTimeoutMs,
+  conversationWorkspaceTimeoutMs,
+} from "../application/agent-budgets.js"
+import { bounds, passiveReadTiming, ProductMethod } from "../generated/product.js"
 import type {
   ConversationCreateResult,
   ConversationListResult,
@@ -25,6 +28,8 @@ import type {
   ConversationObserveCursor,
   ConversationObserveResult,
   ConversationView,
+  ConversationEarlier,
+  ConversationPoint,
   ConversationPermission,
   ConversationQuestion,
   ConversationReceipt,
@@ -40,15 +45,20 @@ import type {
   ConversationShareResult,
   ConversationSharesCursor,
   ConversationSharesResult,
+  ConversationWebhookCursorParams,
+  ConversationWebhookCursorResult,
+  ConversationWebhookResetResult,
   ConversationToolPolicy,
   ApprovalMode,
   PermissionRule,
   ImageAttachment,
   LinkedFile,
+  UploadedFileAttachment,
 } from "../generated/product.js"
 import {
   imageAttachmentsProblem,
   linkedFilesProblem,
+  uploadedFilesProblem,
 } from "../protocol/attachment-validate.js"
 import {
   conversationId,
@@ -58,6 +68,7 @@ import {
   conversationMessageStatus,
   conversationObserve,
   conversationView,
+  conversationEarlier,
   conversationReceipt,
   conversationCommandReceipt,
   conversationMutation,
@@ -75,6 +86,7 @@ import {
   reviewKeyPattern,
 } from "../protocol/conversation-validate.js"
 import { decimal } from "../protocol/passive-read-validate.js"
+import { recordHead, validRecordScope } from "../protocol/record-read-validate.js"
 import {
   permissionFields,
   type PermissionTarget,
@@ -101,9 +113,15 @@ export type ConversationActionOptions = {
 }
 /** Optional IDs and delivery mode, filled by the client preparation wrapper. */
 export type ConversationPrepareOptions = ConversationActionOptions & {
+  /** Original stored inputs. Files are placed where the agent executes. */ uploads?: readonly UploadedFileAttachment[]
   /** Reuse only for the same logical message. */ executionId?: string
   /** Queued by default; steering uses the agent's supported behavior. */ mode?:
     "queued" | "steering"
+}
+/** How a prepared message is submitted. */
+export type ConversationSubmitOptions = {
+  /** The conversation runs away from this machine: its workspace may be woken or made first. */
+  waitsOnWorkspace?: boolean
 }
 /** A share or revoke, built on the grant as it was read. */
 export type ConversationShareOptions = ConversationActionOptions & {
@@ -220,6 +238,19 @@ export type ConversationApi = {
   /** Read current provider lifecycle, output, queue, tools, and complete actionable permission choices. */
   read: (conversationId: string) => Promise<ConversationView>
   /**
+   * Read what came before `before` in the conversation's saved history: the
+   * turns nearest it that fit one frame, oldest first, ending where `before`
+   * is. A view lists them only as `earlier`; its first message's start is
+   * where to read before. With `after`, only what comes after that point, to
+   * fill the gap between two points. A point the gateway's history does not
+   * hold is refused as invalid input. Opens nothing.
+   */
+  readEarlier: (
+    conversationId: string,
+    before: ConversationPoint,
+    after?: ConversationPoint,
+  ) => Promise<ConversationEarlier>
+  /**
    * List the conversations the authenticated caller owns, most recently
    * updated first, at most 500: each with its title, the last thing said in
    * it, when, and whether it is running. Closed conversations are included;
@@ -238,7 +269,8 @@ export type ConversationApi = {
   /** Fill optional identities and capture a complete message before effects.
    * Text is at most 8 KiB UTF-8 and may be blank only beside an image/file.
    * Images are references returned by attachments staging, not original bytes;
-   * files are absolute paths on the gateway's machine. The shared published
+   * files are absolute paths on the gateway's machine. `options.uploads` names
+   * original stored files delivered into the execution environment. The shared published
    * attachment validators own their bounds. Caller lists and entries are copied.
    * Throws TypeError before create or admission when any argument is invalid.
    */
@@ -249,8 +281,17 @@ export type ConversationApi = {
     files?: readonly LinkedFile[],
     options?: ConversationPrepareOptions,
   ) => PreparedSubmission
-  /** Submit the exact immutable message prepared before any asynchronous effects. */
-  submit: (prepared: PreparedSubmission) => Promise<ConversationSubmission>
+  /**
+   * Submit the exact immutable message prepared before any asynchronous effects.
+   * `options.waitsOnWorkspace` says the conversation runs away from this
+   * machine, so its workspace may have to be woken or made before the message
+   * is taken: the request then waits as long as a channel create does
+   * (`conversationWorkspaceTimeoutMs`) rather than the configured timeout.
+   */
+  submit: (
+    prepared: PreparedSubmission,
+    options?: ConversationSubmitOptions,
+  ) => Promise<ConversationSubmission>
   /**
    * Leave a note in this conversation: saved with who left it, it starts and
    * steers no turn. A `record_only` note is only kept; a `next_turn` note
@@ -487,6 +528,27 @@ export type ConversationApi = {
     conversationId: string,
     options: { pageSize: number; cursor?: ConversationSharesCursor },
   ) => Promise<ConversationSharesResult>
+  /** Read the owner's registered webhook checkpoint. Optional source Head follows
+   * the native snapshot as a separate, non-atomic observation; compare the whole
+   * scope before comparing positions. Omitted/false performs no source I/O.
+   * Its requestId is available only while frozen and is the server-issued reset
+   * identity; a scope in this result grants no receiver/read/send authority.
+   */
+  webhookCursor: (
+    conversationId: string,
+    credentialId: string,
+    options?: Omit<ConversationWebhookCursorParams, "conversationId" | "credentialId">,
+  ) => Promise<ConversationWebhookCursorResult>
+  /** Select an observed incarnation for one frozen server-issued capture.
+   * Explicit retries use that same requestId and receive the original receipt;
+   * they do not rewind again. Fresh server authorization applies to every call.
+   * The result is not a current-status or resumed-delivery promise.
+   */
+  resetWebhookCursor: (
+    conversationId: string,
+    credentialId: string,
+    requestId: string,
+  ) => Promise<ConversationWebhookResetResult>
 }
 
 const utf8 = new TextEncoder()
@@ -556,12 +618,17 @@ export type SubmissionInput = {
   readonly text: string
   readonly attachments?: readonly ImageAttachment[]
   readonly files?: readonly LinkedFile[]
+  readonly uploads?: readonly UploadedFileAttachment[]
 }
 declare const preparedSubmission: unique symbol
 /** Process-local immutable message and its captured control target. */
-export type PreparedSubmission = Omit<SubmissionInput, "attachments" | "files"> & {
+export type PreparedSubmission = Omit<
+  SubmissionInput,
+  "attachments" | "files" | "uploads"
+> & {
   readonly attachments: readonly Readonly<ImageAttachment>[]
   readonly files: readonly Readonly<LinkedFile>[]
+  readonly uploads: readonly Readonly<UploadedFileAttachment>[]
   readonly target: ExecutionTarget
   readonly [preparedSubmission]: true
 }
@@ -572,6 +639,7 @@ export function prepareSubmission(input: SubmissionInput): PreparedSubmission {
   const { conversationId, text, mode } = input
   const attachments = input.attachments ?? []
   const linked = input.files ?? []
+  const inputUploads = input.uploads ?? []
   validConversationId(conversationId)
   if (mode !== "queued" && mode !== "steering")
     throw new TypeError("Invalid submission mode")
@@ -594,6 +662,22 @@ export function prepareSubmission(input: SubmissionInput): PreparedSubmission {
     fileCount > bounds.maxMessageFiles
   )
     throw new TypeError("Invalid message files: too many files or not a list")
+  if (
+    !Array.isArray(inputUploads) ||
+    inputUploads.length + fileCount > bounds.maxMessageFiles
+  )
+    throw new TypeError("Invalid message uploads: too many files")
+  const uploads: Readonly<UploadedFileAttachment>[] = []
+  for (let index = 0; index < inputUploads.length; index++) {
+    const item = inputUploads[index]
+    uploads.push(
+      item && typeof item === "object" && !Array.isArray(item)
+        ? Object.freeze({ ...item })
+        : item,
+    )
+  }
+  const uploadProblem = uploadedFilesProblem(uploads)
+  if (uploadProblem) throw new TypeError(`Invalid message uploads: ${uploadProblem}`)
   const images: Readonly<ImageAttachment>[] = []
   const files: Readonly<LinkedFile>[] = []
   for (let index = 0; index < imageCount; index++) {
@@ -617,7 +701,8 @@ export function prepareSubmission(input: SubmissionInput): PreparedSubmission {
   const filesProblem = linkedFilesProblem(files)
   if (filesProblem) throw new TypeError(`Invalid message files: ${filesProblem}`)
   // The copied payload decides whether text may be blank, not a changing source.
-  if (images.length === 0 && files.length === 0) boundedText(text, "Message", 8192)
+  if (images.length === 0 && files.length === 0 && uploads.length === 0)
+    boundedText(text, "Message", 8192)
   else if (typeof text !== "string" || utf8.encode(text).byteLength > 8192)
     throw new TypeError("Message must contain at most 8192 UTF-8 bytes")
   const prepared = Object.freeze({
@@ -628,6 +713,7 @@ export function prepareSubmission(input: SubmissionInput): PreparedSubmission {
     text,
     attachments: Object.freeze(images),
     files: Object.freeze(files),
+    uploads: Object.freeze(uploads),
     target: issueExecutionTarget(conversationId, executionId),
   }) as PreparedSubmission
   preparedValues.add(prepared)
@@ -713,6 +799,7 @@ export function createConversationApi(
       | readonly string[]
       | readonly ImageAttachment[]
       | readonly LinkedFile[]
+      | readonly UploadedFileAttachment[]
       | readonly QuestionChoice[]
       | readonly ConversationQuestionChoice[]
       | ConversationToolPolicy
@@ -847,6 +934,11 @@ export function createConversationApi(
           ...channelId,
         },
         (value) => conversationId(value, id),
+        true,
+        false,
+        options.channelId !== undefined || options.environment === "boat:thread"
+          ? { atLeastMs: conversationWorkspaceTimeoutMs }
+          : undefined,
       )
     },
     setModel: (id, model, options = {}) => {
@@ -942,17 +1034,27 @@ export function createConversationApi(
         }),
         id,
       ),
+    readEarlier: async (id, before, after) =>
+      conversationEarlier(
+        await session.request(ProductMethod.ConversationReadEarlier, {
+          conversationId: validConversationId(id),
+          before,
+          ...(after === undefined ? {} : { after }),
+        }),
+        id,
+      ),
     prepare: (conversationId, text, attachments, files, options = {}) =>
       prepareSubmission({
         conversationId,
         text,
         attachments,
         files,
+        uploads: options.uploads,
         mode: options.mode ?? "queued",
         executionId: options.executionId ?? newId(),
         requestId: options.requestId ?? newId(),
       }),
-    submit: (prepared) => {
+    submit: (prepared, options = {}) => {
       const {
         conversationId,
         executionId,
@@ -961,13 +1063,22 @@ export function createConversationApi(
         attachments,
         files,
         mode,
+        uploads,
         target,
       } = preparedSubmissionFields(prepared)
       return mutate(
         mode === "steering"
           ? ProductMethod.ConversationSteer
           : ProductMethod.ConversationSend,
-        { conversationId, executionId, requestId, text, attachments, files },
+        {
+          conversationId,
+          executionId,
+          requestId,
+          text,
+          attachments,
+          files,
+          ...(uploads.length ? { uploads } : {}),
+        },
         (value) =>
           Object.freeze({
             ...conversationReceipt(value, executionId),
@@ -975,6 +1086,11 @@ export function createConversationApi(
             requestId,
             target,
           }),
+        true,
+        false,
+        options.waitsOnWorkspace === true
+          ? { atLeastMs: conversationWorkspaceTimeoutMs }
+          : undefined,
       )
     },
     message: (id, text, delivery, options = {}) => {
@@ -1184,6 +1300,35 @@ export function createConversationApi(
         (value) => conversationMutation(value, requestId),
       )
     },
+    webhookCursor: async (id, credentialId, options = {}) => {
+      validConversationId(id)
+      boundedText(credentialId, "Credential ID", 256)
+      const includeSourceHead = options.includeSourceHead
+      if (includeSourceHead !== undefined && typeof includeSourceHead !== "boolean")
+        throw new TypeError("includeSourceHead must be boolean")
+      const params = {
+        conversationId: id,
+        credentialId,
+        ...(includeSourceHead === undefined ? {} : { includeSourceHead }),
+      }
+      const value = includeSourceHead
+        ? await session.request(ProductMethod.ConversationWebhookCursor, params, {
+            atLeastMs: passiveReadTiming.minRequestTimeoutMs,
+          })
+        : await session.request(ProductMethod.ConversationWebhookCursor, params)
+      return webhookCursorResult(value, id, includeSourceHead === true)
+    },
+    resetWebhookCursor: (id, credentialId, requestId) => {
+      validConversationId(id)
+      boundedText(credentialId, "Credential ID", 256)
+      if (typeof requestId !== "string" || !conversationIdPattern.test(requestId))
+        throw new TypeError("Reset request ID must be the server-issued canonical UUID")
+      return mutate(
+        ProductMethod.ConversationWebhookReset,
+        { conversationId: id, credentialId, requestId },
+        (value) => webhookResetResult(value, id, requestId),
+      )
+    },
     shares: async (id, options) => {
       const pageSize = sharePageSize(options.pageSize)
       const page = conversationShares(
@@ -1200,4 +1345,58 @@ export function createConversationApi(
       return page
     },
   }
+}
+
+function webhookCursorResult(
+  value: unknown,
+  conversation: string,
+  includeSourceHead: boolean,
+): ConversationWebhookCursorResult {
+  const item = record(value)
+  if (
+    !item ||
+    Object.keys(item).length !== (includeSourceHead ? 5 : 4) ||
+    !validRecordScope(item.scope) ||
+    item.scope.stream !== conversation ||
+    !decimal(item.position) ||
+    typeof item.resetRequired !== "boolean" ||
+    (item.resetRequired
+      ? typeof item.requestId !== "string" || !conversationIdPattern.test(item.requestId)
+      : item.requestId !== null)
+  ) {
+    throw new TypeError("Invalid registered webhook checkpoint")
+  }
+  if (includeSourceHead) {
+    const head = recordHead(item.observedSourceHead)
+    if (
+      head.scope.stream !== conversation ||
+      head.scope.receiver !== item.scope.receiver ||
+      head.scope.accessEpoch !== item.scope.accessEpoch
+    )
+      throw new TypeError("Invalid registered webhook source selector")
+  }
+  return item as unknown as ConversationWebhookCursorResult
+}
+function webhookResetResult(
+  value: unknown,
+  conversation: string,
+  requestId: string,
+): ConversationWebhookResetResult {
+  const item = record(value)
+  if (
+    !item ||
+    Object.keys(item).length !== 5 ||
+    item.requestId !== requestId ||
+    typeof item.receiptId !== "string" ||
+    !conversationIdPattern.test(item.receiptId) ||
+    item.receiptId === requestId ||
+    !validRecordScope(item.scope) ||
+    item.scope.stream !== conversation ||
+    item.position !== "0" ||
+    !Number.isSafeInteger(item.appliedAtMs) ||
+    (item.appliedAtMs as number) < 0
+  ) {
+    throw new TypeError("Invalid observed-incarnation reset receipt")
+  }
+  return item as unknown as ConversationWebhookResetResult
 }

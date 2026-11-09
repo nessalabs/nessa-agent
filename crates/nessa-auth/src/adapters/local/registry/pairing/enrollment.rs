@@ -187,7 +187,7 @@ impl PairingStore for LocalCredentialStore {
                 return Err(PairingStoreError::Domain(PairingError::Ineligible));
             }
             let mut slot = self
-                .registry()
+                .mutation_registry()
                 .map_err(|_| PairingStoreError::Unavailable)?;
             let current = slot.as_ref().ok_or(PairingStoreError::Unavailable)?;
             let now = clock.unix_milliseconds();
@@ -513,7 +513,7 @@ impl PairingStore for LocalCredentialStore {
     ) -> PortFuture<'a, PairingRecord, PairingStoreError> {
         Box::pin(async move {
             let mut slot = self
-                .registry()
+                .mutation_registry()
                 .map_err(|_| PairingStoreError::Unavailable)?;
             let current = slot.as_ref().ok_or(PairingStoreError::Unavailable)?;
             let now = clock.unix_milliseconds();
@@ -635,7 +635,7 @@ impl LocalCredentialStore {
         effect: impl FnOnce(&mut Registry, &PairingTransition) -> Result<(), PairingStoreError>,
     ) -> Result<PairingRecord, PairingStoreError> {
         let mut slot = self
-            .registry()
+            .mutation_registry()
             .map_err(|_| PairingStoreError::Unavailable)?;
         let current = slot.as_ref().ok_or(PairingStoreError::Unavailable)?;
         let now = clock.unix_milliseconds();
@@ -681,7 +681,7 @@ impl LocalCredentialStore {
         operation: impl FnOnce(&PairingRecord, u64) -> Result<Option<PairingTransition>, PairingError>,
     ) -> Result<PairingCommit, PairingStoreError> {
         let mut slot = self
-            .registry()
+            .mutation_registry()
             .map_err(|_| PairingStoreError::Unavailable)?;
         let current = slot.as_ref().ok_or(PairingStoreError::Unavailable)?;
         let index = current

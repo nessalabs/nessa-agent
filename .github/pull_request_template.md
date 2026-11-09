@@ -18,14 +18,18 @@ One small diagram of those parts and how they talk, if it helps.
 What goes wrong, in plain words, from the side of the person using it:
 "you press Send twice and the message appears twice".
 Then the flow near the problem, with a diagram, marking where it breaks.
+Draw the parts a reader knows (the person, the app, the server), not
+functions, and make each arrow a plain sentence.
 Use a technical word only when nothing simpler says it.
+Full guide: the pull-requests skill, "Write it from the reader's side".
 -->
 
 ## The solution
 
 <!--
 What changes, in the same plain words, and the same diagram redrawn for the
-new flow. Then the steps, each naming the commit that does it.
+new flow, over the same parts. Then the steps, each naming the commit that
+does it. A list of files and what each now does belongs in the commits.
 -->
 
 ## How we checked it

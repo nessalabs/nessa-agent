@@ -171,8 +171,8 @@ function repeatsCommand(approval: Approval, gist: CommandGist | undefined): bool
 }
 
 /**
- * The deadline, quietly: the seconds left beside a ring that empties as they
- * run out. In the last ten seconds it says what will happen ("Denies in
+ * The deadline, quietly: the time left (seconds, or minutes:seconds past a
+ * minute) beside a ring that empties as it runs out. In the last ten seconds it says what will happen ("Denies in
  * 6s"). The whole sentence (`deadlinePendingLine`) is its accessible name
  * and its tooltip.
  */
@@ -183,7 +183,9 @@ function DeadlineRing({ deadline }: { deadline: ApprovalDeadline }) {
   const ending = left <= endingSeconds
   const verb = deadline.effect === "allow" ? "Allows" : "Denies"
   const words = !ending
-    ? `${left}s`
+    ? left > 60
+      ? `${Math.floor(left / 60)}:${String(left % 60).padStart(2, "0")}`
+      : `${left}s`
     : left > 0
       ? `${verb} in ${left}s`
       : deadline.effect === "allow"

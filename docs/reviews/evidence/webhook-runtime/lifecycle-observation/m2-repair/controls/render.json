@@ -1,0 +1,28 @@
+{
+  "rendererRevision": "c0bc0627611b100ab71a96cc6fe2fb65f1a014d8",
+  "browser": "151.0.7922.173",
+  "results": [
+    {
+      "id": "gateway-webhook-outbox",
+      "sourceRevision": "efa4020c75347c42c3896f2d77363498aebb0eb6",
+      "diagrams": [
+        {
+          "state": "rendered",
+          "svgs": 4,
+          "text": "Acknowledging one durable operationIn DetailsFit96%#mmd-1{font-family:\"Geist Variable\",Geist,ui-sans"
+        },
+        {
+          "state": "rendered",
+          "svgs": 4,
+          "text": "Source replacement and stoppingIn DetailsFit100%#mmd-2{font-family:\"Geist Variable\",Geist,ui-sans-se"
+        },
+        {
+          "state": "rendered",
+          "svgs": 4,
+          "text": "Expiry observation before stoppingIn DetailsFit100%#mmd-3{font-family:\"Geist Variable\",Geist,ui-sans"
+        }
+      ]
+    }
+  ],
+  "pageErrors": []
+}

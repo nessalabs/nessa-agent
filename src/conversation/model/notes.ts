@@ -1,6 +1,8 @@
+import type { AgentSource } from "./authorship"
+
 /**
- * A note somebody left in a conversation, as its view lists it: the owner, or
- * someone the conversation is shared with under their grant. A note is not a
+ * A note left in a conversation by the owner, a share holder, or an agent.
+ * A note is not a
  * turn and not the person's message, so it is shown apart from both, with
  * who left it and where it stands.
  */
@@ -28,11 +30,13 @@ export type Note = {
   afterExecutionId?: string
 }
 
-/** Who left a note: the owner, or someone it is shared with, and from which surface. */
+/** Who left a note, and from which surface. */
 export type NoteAuthor = {
-  kind: "owner" | "grant"
+  kind: "owner" | "grant" | "agent"
   /** The surface the gateway verified it was left from, a name for people. */
   surface: string
+  /** The source turn for an agent note. */
+  agent?: AgentSource
 }
 
 /** Where each note is shown in a transcript (`placeNotes`). */
@@ -106,6 +110,7 @@ export function placeNotes<N extends Pick<Note, "afterExecutionId">>(
 const noteAuthors: Record<NoteAuthor["kind"], string> = {
   owner: "the owner",
   grant: "someone it is shared with",
+  agent: "an agent",
 }
 
 /**
@@ -116,7 +121,15 @@ const noteAuthors: Record<NoteAuthor["kind"], string> = {
 export function noteAuthorLabel(
   author: NoteAuthor,
 ): readonly (string | { readonly name: string })[] {
-  return [`Note left by ${noteAuthors[author.kind]}, from `, { name: author.surface }]
+  if (!author.agent)
+    return [`Note left by ${noteAuthors[author.kind]}, from `, { name: author.surface }]
+  return [
+    `Note left by ${noteAuthors[author.kind]}`,
+    ` in chat `,
+    { name: author.agent.conversationId },
+    ", from ",
+    { name: author.surface },
+  ]
 }
 
 /** Why a retired note was given to no turn, in the label's words. */

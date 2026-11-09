@@ -2,7 +2,7 @@ import { SelectedAgentSetup } from "../../onboarding/ui/selected-agent-setup"
 import { agentForProvider } from "../model/composer-options"
 import { useState } from "react"
 import { useGreetingPreference } from "../adapters/window-preferences"
-import { Composer, type ComposerAccess } from "./composer"
+import { Composer, type ComposerAccess, type ComposerImages } from "./composer"
 import { HeaderArt } from "./header-art"
 import { greetingAt } from "../model/greeting"
 import { useNow } from "../../clock"
@@ -30,6 +30,7 @@ export function Home({
   onTextChange,
   composerClassName,
   access,
+  images,
 }: {
   /** Sends the first message; without it the composer says chat is not connected. */
   onSend?: (text: string) => void
@@ -44,6 +45,8 @@ export function Home({
   composerClassName?: string
   /** The new session's access, held by the caller; without it the shield is disabled. */
   access?: ComposerAccess
+  /** The images on the first message, held by the caller. */
+  images?: ComposerImages
 }) {
   const [page, setPage] = useState(false)
   const [greeting] = useGreetingPreference()
@@ -75,6 +78,7 @@ export function Home({
               text={text}
               onTextChange={onTextChange}
               access={access}
+              images={images}
             />
           </div>
         </div>

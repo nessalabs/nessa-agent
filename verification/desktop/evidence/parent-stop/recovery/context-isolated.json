@@ -1,0 +1,47 @@
+{
+  "check": "mcp-apps-gateway",
+  "ok": true,
+  "started": "2026-10-30T01:01:30.983Z",
+  "finished": "2026-10-30T01:01:47.582Z",
+  "target": {
+    "url": "http://127.0.0.1:38347/desktop.html",
+    "mode": "dev"
+  },
+  "results": [
+    {
+      "name": "setup",
+      "seen": {
+        "title": "Use the tools of the \"mcptest\" MCP server. If th"
+      },
+      "timings": {
+        "gatewayMs": 366,
+        "devServerMs": 6862,
+        "agentTurnMs": 1301
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "context",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 433,
+      "seen": {
+        "answer": "ok"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "engine": "chromium",
+      "layout": "columns",
+      "name": "console",
+      "harmless": [
+        "requestfailed: http://127.0.0.1:38347/browser/check net::ERR_ABORTED (aborted after a 204 response, #485)",
+        "requestfailed: http://127.0.0.1:38347/mcp-resources net::ERR_ABORTED (aborted after a 200 response, full body, #473)"
+      ],
+      "failures": [],
+      "ok": true
+    }
+  ]
+}

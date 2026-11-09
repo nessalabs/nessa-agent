@@ -10,7 +10,9 @@ use nessa_auth::{
         pairing::{ManualCode, OsEntropy},
     },
     application::{
-        credential_admin::{IssueCredentialOutcome, IssueCredentialRequest},
+        credential_admin::{
+            CredentialIssuePurpose, IssueCredentialOutcome, IssueCredentialRequest,
+        },
         dto::{
             CredentialGrantDto, MembershipInputDto, MembershipRoleDto, MembershipStateDto,
             PrincipalInputDto, PrincipalKindDto, ResourceDto,
@@ -25,12 +27,17 @@ use nessa_auth::{
 use nessa_client_core::pairing::NativeEnrollmentClient;
 use nessa_protocol::agents::AgentId;
 use nessa_protocol::pairing::wire::NativePairingStatus;
+use nessa_protocol::tunnel::TunnelAddress;
 use nessa_server::conversation::application::{FenceCapture, FenceCaptureError};
+use nessa_server::tunnel::application::TunnelMode;
 use nessa_server::{
     agents::application::{AgentProbe, AgentProbeEvidence},
     app::dependencies::RuntimeDependencies,
     device_pairing::{
-        application::{LinkingApply, LinkingCaller, LinkingChange, LinkingError, NativeLinking},
+        application::{
+            LinkingApply, LinkingCaller, LinkingChange, LinkingError, NativeLinking, SavedTunnel,
+            TunnelChange, TunnelRequest,
+        },
         infrastructure::{InvitationEntropy, PairingOwnerCommands},
     },
     product::{ProductDependencies, ProductRouteState},
@@ -52,9 +59,11 @@ impl AgentProbe for NoAgents {
     }
 }
 
-/// What `pairing.setLinking` asked, answering `answer` to each.
+/// What `pairing.setLinking` and `pairing.setTunnel` asked, answering
+/// `answer` to each.
 struct Linking {
     asked: std::sync::Mutex<Vec<(LinkingCaller, bool)>>,
+    tunnels: std::sync::Mutex<Vec<TunnelRequest>>,
     answer: Result<LinkingApply, LinkingError>,
 }
 
@@ -62,6 +71,7 @@ impl Linking {
     fn answering(answer: Result<LinkingApply, LinkingError>) -> Arc<Self> {
         Arc::new(Self {
             asked: std::sync::Mutex::new(Vec::new()),
+            tunnels: std::sync::Mutex::new(Vec::new()),
             answer,
         })
     }
@@ -82,6 +92,37 @@ impl NativeLinking for Linking {
         let answer = self
             .answer
             .map(|applies| LinkingChange { enabled, applies });
+        Box::pin(async move { answer })
+    }
+
+    fn set_tunnel(
+        &self,
+        _caller: LinkingCaller,
+        request: TunnelRequest,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<TunnelChange, LinkingError>> + Send + '_>,
+    > {
+        let answer = self.answer.map(|applies| TunnelChange {
+            enabled: request.enabled,
+            mode: request.mode.unwrap_or(TunnelMode::Quick),
+            applies,
+        });
+        self.tunnels.lock().unwrap().push(request);
+        Box::pin(async move { answer })
+    }
+
+    fn tunnel(
+        &self,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<SavedTunnel, LinkingError>> + Send + '_>,
+    > {
+        let answer = self.answer.map(|_| SavedTunnel {
+            enabled: true,
+            mode: TunnelMode::Named,
+            hostname: Some(TunnelAddress::try_from("https://g.example.com".to_owned()).unwrap()),
+            has_token: true,
+            ingress: "127.0.0.1:47651".parse().unwrap(),
+        });
         Box::pin(async move { answer })
     }
 }
@@ -303,6 +344,7 @@ async fn owner_route_refuses_a_member_before_disclosure() {
     let IssueCredentialOutcome::Issued { evidence, .. } = fixture
         .registry
         .issue_sync(IssueCredentialRequest {
+            purpose: CredentialIssuePurpose::Product,
             request_id: "member-request".into(),
             issuer_principal_id: "owner".into(),
             credential_id: "member-credential".into(),
@@ -355,12 +397,15 @@ async fn owner_route_refuses_a_member_before_disclosure() {
                 json!({"invitationId": id, "deviceKey": vec![7; 32]}),
             ),
             ("pairing.setLinking", json!({"enabled": false})),
+            ("pairing.setTunnel", json!({"enabled": true})),
+            ("pairing.tunnel", json!({})),
         ] {
             assert_eq!(client.refused(method, params), "forbidden", "{method}");
         }
     });
     assert_eq!(fixture.registry.pending_pairings().unwrap(), before);
     assert!(linking.asked().is_empty(), "Cedar refused before the port");
+    assert!(linking.tunnels.lock().unwrap().is_empty());
     let missing = blocking(|| {
         ProductClient::connect(address, &token)
             .refused("pairing.status", json!({"invitationId": vec![9; 16]}))
@@ -737,5 +782,75 @@ impl FenceCapture for FlagCapture {
     async fn capture(&self) -> Result<(), FenceCaptureError> {
         self.asked.store(true, Ordering::SeqCst);
         Err(FenceCaptureError::NotStored)
+    }
+}
+
+/// Tunnel rows T7 and T8 (route side): `pairing.setTunnel` reaches the port
+/// with a checked request, a hostname or token that is not one is refused
+/// before it, each refusal is its own code, and `pairing.tunnel` never
+/// carries the token. With no tunnel running, it is off.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn set_tunnel_reaches_the_port_checked_and_the_saved_tunnel_reads_without_its_token() {
+    let fixture = Fixture::new().await;
+    let token = fixture.owner_token.clone();
+    let linking = Linking::answering(Ok(LinkingApply::Restarting));
+    let address = serve_with(&fixture, false, Some(linking.clone())).await;
+    let (answer, saved) = blocking(|| {
+        let mut owner = ProductClient::connect(address, &token);
+        let answer = owner.ok(
+            "pairing.setTunnel",
+            json!({
+                "enabled": true,
+                "mode": "named",
+                "hostname": "https://g.example.com",
+                "token": "eyJ0b2tlbiI6MX0"
+            }),
+        );
+        for params in [
+            json!({"enabled": true, "hostname": "http://g.example.com"}),
+            json!({"enabled": true, "hostname": "https://g.example.com/path"}),
+            json!({"enabled": true, "token": "has space"}),
+            json!({"enabled": true, "mode": "mesh"}),
+            json!({"enabled": "yes"}),
+        ] {
+            assert_eq!(
+                owner.refused("pairing.setTunnel", params.clone()),
+                "invalid_request",
+                "{params}"
+            );
+        }
+        let saved = owner.ok("pairing.tunnel", json!({}));
+        (answer, saved)
+    });
+    assert_eq!(
+        answer,
+        json!({"enabled": true, "mode": "named", "applies": "restarting"})
+    );
+    let asked = linking.tunnels.lock().unwrap().clone();
+    assert_eq!(asked.len(), 1, "refused requests never reached the port");
+    assert_eq!(asked[0].token.as_ref().unwrap().expose(), "eyJ0b2tlbiI6MX0");
+    assert_eq!(
+        saved,
+        json!({
+            "enabled": true,
+            "mode": "named",
+            "hostname": "https://g.example.com",
+            "hasToken": true,
+            "ingress": "127.0.0.1:47651",
+            "status": "off"
+        })
+    );
+    for (error, code) in [
+        (LinkingError::Busy, "pairing_busy"),
+        (LinkingError::LinkingOff, "pairing_linking_off"),
+        (LinkingError::TunnelIncomplete, "pairing_tunnel_incomplete"),
+        (LinkingError::AddressInUse, "pairing_address_in_use"),
+    ] {
+        let address = serve_with(&fixture, false, Some(Linking::answering(Err(error)))).await;
+        let refused = blocking(|| {
+            ProductClient::connect(address, &token)
+                .refused("pairing.setTunnel", json!({"enabled": true}))
+        });
+        assert_eq!(refused, code);
     }
 }

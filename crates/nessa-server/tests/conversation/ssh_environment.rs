@@ -101,6 +101,7 @@ impl HarnessLauncher for Echo {
         &self,
         _agent: &str,
         _environment: &BTreeMap<String, String>,
+        _login: Option<&nessa_protocol::lease::Login>,
         _publish_point: Option<&str>,
     ) -> Result<HarnessProcess, AgentError> {
         let (input, mut harness_in) = duplex(4096);
@@ -235,6 +236,7 @@ struct Connector {
     grants: Arc<SshGrant>,
     /// Asks every serving host to drain.
     drain: tokio::sync::watch::Sender<bool>,
+    end_pause: Mutex<Option<Arc<PreparationEndPause>>>,
 }
 
 impl Connector {
@@ -266,6 +268,7 @@ impl Connector {
             runner: Mutex::new(None),
             grants: Arc::default(),
             drain: tokio::sync::watch::channel(false).0,
+            end_pause: Mutex::new(None),
         })
     }
     /// Cut every connection both ways, as a network that went away.
@@ -310,6 +313,7 @@ impl LeaseConnector for Connector {
                         policy: Arc::new(
                             crate::env_serve::infrastructure::CedarLeasePolicy::new().unwrap(),
                         ),
+                        machine: None,
                     },
                     Runners {
                         harnesses: self.launcher.clone(),
@@ -348,6 +352,7 @@ impl LeaseConnector for Connector {
                             let granted = encode(&FromEnvironment::Granted {
                                 lease,
                                 terms: WireTerms {
+                                    takes_login: false,
                                     sandbox: Sandbox::HarnessDefault,
                                     timeout_ms: None,
                                     lease_ms: None,
@@ -389,6 +394,7 @@ impl LeaseConnector for Connector {
                                 FromEnvironment::Granted {
                                     lease: lease.clone(),
                                     terms: WireTerms {
+                                        takes_login: false,
                                         sandbox: Sandbox::None,
                                         timeout_ms: Some(timeout_ms),
                                         lease_ms: None,
@@ -429,6 +435,7 @@ impl LeaseConnector for Connector {
                             } => Some(FromEnvironment::Granted {
                                 lease,
                                 terms: WireTerms {
+                                    takes_login: false,
                                     sandbox: Sandbox::None,
                                     timeout_ms: Some(timeout_ms),
                                     lease_ms: None,
@@ -512,6 +519,7 @@ impl LeaseConnector for Connector {
                             } => Some(FromEnvironment::Granted {
                                 lease,
                                 terms: WireTerms {
+                                    takes_login: false,
                                     sandbox: Sandbox::None,
                                     timeout_ms: Some(timeout_ms),
                                     lease_ms: None,
@@ -562,6 +570,7 @@ impl LeaseConnector for Connector {
                                 said.push(FromEnvironment::Granted {
                                     lease: lease.clone(),
                                     terms: WireTerms {
+                                        takes_login: false,
                                         sandbox: Sandbox::HarnessDefault,
                                         timeout_ms: None,
                                         lease_ms: None,
@@ -614,6 +623,7 @@ impl LeaseConnector for Connector {
                                 said.push(FromEnvironment::Granted {
                                     lease: lease.clone(),
                                     terms: WireTerms {
+                                        takes_login: false,
                                         sandbox: Sandbox::HarnessDefault,
                                         timeout_ms: None,
                                         lease_ms: None,
@@ -665,15 +675,20 @@ impl LeaseConnector for Connector {
         let (gateway_end_in, gateway_end_out) = split(gateway_end);
         let (host_end_in, host_end_out) = split(host_end);
         self.relays.lock().unwrap().push((
-            relay(gateway_end_in, host_end_out),
+            match self.end_pause.lock().unwrap().clone() {
+                Some(pause) => relay_preparation_end(gateway_end_in, host_end_out, pause),
+                None => relay(gateway_end_in, host_end_out),
+            },
             relay(host_end_in, gateway_end_out),
         ));
         let (from_environment, to_environment) = split(gateway);
         Ok(LeaseConnection {
+            mcp_relay: None,
             from_environment: Box::new(from_environment),
             to_environment: Box::new(to_environment),
             keep: Box::new(()),
             artifacts: super::connector::ArtifactTransport::Channels(Arc::new(NoChannels)),
+            updates: None,
         })
     }
 }
@@ -681,8 +696,8 @@ impl LeaseConnector for Connector {
 /// An SSH connection whose artifact channels never open: these tests
 /// carry no file.
 struct NoChannels;
-impl super::connector::ArtifactChannels for NoChannels {
-    fn open(&self) -> io::Result<super::connector::ArtifactChannel> {
+impl crate::conversation::application::ArtifactChannels for NoChannels {
+    fn open(&self) -> io::Result<crate::conversation::application::ArtifactChannel> {
         Err(io::Error::other("no artifact channels"))
     }
 }
@@ -1127,6 +1142,7 @@ async fn frames_naming_nothing_held_are_dropped_with_evidence() {
     let granted = serde_json::to_vec(&FromEnvironment::Granted {
         lease: "never-asked".into(),
         terms: WireTerms {
+            takes_login: false,
             sandbox: Sandbox::HarnessDefault,
             timeout_ms: None,
             lease_ms: None,
@@ -1862,6 +1878,7 @@ async fn a_stop_is_waited_for_through_every_step_the_host_takes() {
             &self,
             _agent: &str,
             _environment: &BTreeMap<String, String>,
+            _login: Option<&nessa_protocol::lease::Login>,
             _publish_point: Option<&str>,
         ) -> Result<HarnessProcess, AgentError> {
             let (input, _harness_in) = duplex(64);
@@ -3605,7 +3622,7 @@ async fn a_revoked_link_ends_each_lease_as_revoked_and_closes_once_they_are_ende
         )
         .await
         .unwrap();
-    let mut harness = link.start(id.as_str(), BTreeMap::new()).unwrap();
+    let mut harness = link.start(id.as_str(), BTreeMap::new(), None).unwrap();
     harness.input.write_all(b"ping").await.unwrap();
     assert_eq!(read_some(&mut harness.output).await, b"ping");
     assert!(link.revoke(Duration::from_secs(30)), "this call revoked it");
@@ -3616,7 +3633,7 @@ async fn a_revoked_link_ends_each_lease_as_revoked_and_closes_once_they_are_ende
     // From the moment it is revoked, nothing more is started or published
     // on it: the host is ending every lease.
     assert_eq!(
-        link.start(id.as_str(), BTreeMap::new()).err(),
+        link.start(id.as_str(), BTreeMap::new(), None).err(),
         Some(super::link::StartError::Closed)
     );
     assert_eq!(
@@ -4175,4 +4192,587 @@ async fn model_targets_and_normalization_retain_the_granted_host() {
     );
     assert_eq!(connector.stopped.load(Ordering::SeqCst), 2);
     connector.cut();
+}
+
+/// Control frames still reach the actual environment-role frame loop. Only End
+/// delivery is held; the host's Granted/Ended ledger remains the evidence.
+pub(crate) struct PreparationEndPause {
+    entered: tokio::sync::Notify,
+    requests: AtomicUsize,
+    release: tokio::sync::watch::Sender<bool>,
+    connector: std::sync::Weak<Connector>,
+}
+impl PreparationEndPause {
+    pub(crate) async fn wait_end(&self) {
+        tokio::time::timeout(Duration::from_secs(60), self.entered.notified())
+            .await
+            .unwrap();
+    }
+    pub(crate) fn end_requests(&self) -> usize {
+        self.requests.load(Ordering::SeqCst)
+    }
+    pub(crate) fn release(&self) {
+        self.release.send_replace(true);
+    }
+    pub(crate) fn held(&self) -> usize {
+        let connector = self
+            .connector
+            .upgrade()
+            .expect("environment still owns connector");
+        let rows = connector.ledger.0.lock().unwrap();
+        rows.iter()
+            .filter(|row| match row {
+                LedgerEntry::Granted { lease, .. } => !rows.iter().any(
+                    |row| matches!(row, LedgerEntry::Ended { lease: ended, .. } if ended == lease),
+                ),
+                _ => false,
+            })
+            .count()
+    }
+    pub(crate) fn close(&self) {
+        self.release();
+        if let Some(connector) = self.connector.upgrade() {
+            connector.cut();
+        }
+    }
+}
+fn relay_preparation_end(
+    from: tokio::io::ReadHalf<DuplexStream>,
+    mut to: tokio::io::WriteHalf<DuplexStream>,
+    pause: Arc<PreparationEndPause>,
+) -> JoinHandle<()> {
+    tokio::spawn(async move {
+        let mut stream = FrameStream::new(from);
+        while let Ok(Some(body)) = stream.next().await {
+            let frame: ToEnvironment = decode(&body).unwrap();
+            if matches!(frame, ToEnvironment::End { .. }) {
+                pause.requests.fetch_add(1, Ordering::SeqCst);
+                pause.entered.notify_one();
+                let mut release = pause.release.subscribe();
+                let _ = release.wait_for(|open| *open).await;
+            }
+            if to.write_all(&encode(&frame).unwrap()).await.is_err() {
+                break;
+            }
+        }
+        let _ = to.shutdown().await;
+    })
+}
+pub(crate) fn preparation_environment() -> (Arc<dyn Environment>, Arc<PreparationEndPause>) {
+    let connector = Connector::new(Reach::Serving);
+    let pause = Arc::new(PreparationEndPause {
+        entered: tokio::sync::Notify::new(),
+        requests: AtomicUsize::new(0),
+        release: tokio::sync::watch::channel(false).0,
+        connector: Arc::downgrade(&connector),
+    });
+    *connector.end_pause.lock().unwrap() = Some(pause.clone());
+    (
+        Arc::new(environment(connector, Arc::new(Audit::default()))),
+        pause,
+    )
+}
+
+#[tokio::test]
+async fn confirmed_lease_end_remains_the_harness_cleanup_receipt_after_disconnect() {
+    let connector = Connector::new(Reach::Serving);
+    let environment = environment(connector.clone(), Arc::new(Audit::default()));
+    let (binding, given) = binding(true);
+    let opened = environment
+        .open(&lease(), &terms("claude"), binding)
+        .await
+        .unwrap();
+    let host = given.lock().unwrap().clone().unwrap();
+    let mut process = host.start(HarnessLaunch::default()).unwrap();
+    process.input.write_all(b"before End").await.unwrap();
+    assert_eq!(read_some(process.output.as_mut()).await, b"before End");
+    assert_eq!(
+        opened.hold.end(LeaseEndCause::Closed).await,
+        LeaseRelease::Released(LeaseCleanup::Confirmed { forced: false })
+    );
+    assert_eq!(connector.stopped.load(Ordering::SeqCst), 1);
+    connector.cut();
+    assert_eq!(
+        tokio::time::timeout(
+            Duration::from_secs(5),
+            process
+                .control
+                .cleanup(Duration::from_millis(10), Duration::from_millis(100))
+        )
+        .await
+        .unwrap()
+        .unwrap(),
+        CloseOutcome { forced: false },
+        "the original actual End receipt survives the old connection"
+    );
+    assert_eq!(
+        connector.stopped.load(Ordering::SeqCst),
+        1,
+        "joining End does not clean the native scope again"
+    );
+}
+
+/// The startup table is consumed on both sides of the wire. A client waiting
+/// less than this actual connection bound abandoned a live Boat allocation.
+#[tokio::test(start_paused = true)]
+async fn workspace_connection_deadline_matches_the_published_client_budget() {
+    struct PendingConnector(Arc<tokio::sync::Notify>);
+    impl super::connector::WorkspaceConnector for PendingConnector {
+        fn connect(
+            &self,
+            _: bool,
+        ) -> crate::conversation::application::EnvironmentFuture<
+            '_,
+            Result<LeaseConnection, LeaseRefusal>,
+        > {
+            Box::pin(async move {
+                self.0.notify_one();
+                std::future::pending().await
+            })
+        }
+    }
+    let budgets: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../../protocol/defaults/agent-startup-budgets.json"
+    ))
+    .unwrap();
+    let duration = Duration::from_millis(budgets["workspace"]["connectMs"].as_u64().unwrap());
+    let entered = Arc::new(tokio::sync::Notify::new());
+    let environment = SshEnvironment::workspace(
+        Arc::new(PendingConnector(entered.clone())),
+        Arc::new(Audit::default()),
+    );
+    let opening = tokio::spawn(async move {
+        environment
+            .open(&lease(), &terms("claude"), binding_only())
+            .await
+    });
+    entered.notified().await;
+    tokio::time::advance(duration - Duration::from_millis(1)).await;
+    assert!(
+        !opening.is_finished(),
+        "workspace timed out before its published bound"
+    );
+    tokio::time::advance(Duration::from_millis(1)).await;
+    assert_eq!(
+        opening.await.unwrap().err(),
+        Some(LeaseRefusal::EnvironmentUnreachable)
+    );
+}
+
+/// A workspace's connection is let go only while nothing uses it: not while
+/// a lease is on it, and again once the lease ended and every holder of it
+/// is gone; the next lease connects again.
+#[tokio::test]
+async fn a_workspace_connection_is_let_go_only_while_nothing_uses_it() {
+    // As a VM's runtime does, the connection's owner ends its stream when
+    // it is dropped, so a closed link sees its end.
+    struct Cut(Arc<Connector>);
+    impl Drop for Cut {
+        fn drop(&mut self) {
+            self.0.cut();
+        }
+    }
+    struct Through(Arc<Connector>);
+    impl super::connector::WorkspaceConnector for Through {
+        fn connect(
+            &self,
+            _: bool,
+        ) -> crate::conversation::application::EnvironmentFuture<
+            '_,
+            Result<LeaseConnection, LeaseRefusal>,
+        > {
+            Box::pin(async move {
+                let mut connection =
+                    LeaseConnector::connect(self.0.as_ref(), &devbox(), String::new())
+                        .map_err(|_| LeaseRefusal::EnvironmentUnreachable)?;
+                connection.keep = Box::new((connection.keep, Cut(self.0.clone())));
+                Ok(connection)
+            })
+        }
+    }
+    let connector = Connector::new(Reach::Serving);
+    let environment = SshEnvironment::workspace(
+        Arc::new(Through(connector.clone())),
+        Arc::new(Audit::default()),
+    );
+    assert!(environment.let_go().await, "nothing was connected");
+    let opened = environment
+        .open(&lease(), &terms("claude"), binding_only())
+        .await
+        .unwrap();
+    assert!(!environment.let_go().await, "a lease is on it");
+    assert_eq!(
+        opened.hold.end(LeaseEndCause::Idle).await,
+        LeaseRelease::Released(LeaseCleanup::Confirmed { forced: false })
+    );
+    assert!(
+        !environment.let_go().await,
+        "the ended lease's provider still holds it"
+    );
+    drop(opened);
+    assert!(environment.let_go().await, "nothing uses it now");
+    assert_eq!(connector.connects.load(Ordering::SeqCst), 1);
+    let again = environment
+        .open(&lease(), &terms("claude"), binding_only())
+        .await
+        .unwrap();
+    assert_eq!(
+        connector.connects.load(Ordering::SeqCst),
+        2,
+        "the next lease connects again"
+    );
+    again.hold.end(LeaseEndCause::Closed).await;
+}
+
+/// A saved login reaches the harness only under a lease the host's owner
+/// lets take one: the gateway asks for it then, once per lease, and never
+/// otherwise.
+#[tokio::test]
+async fn a_saved_login_is_asked_for_and_sent_only_where_the_host_takes_one() {
+    struct Remembering {
+        stopped: Arc<AtomicUsize>,
+        logins: Mutex<Vec<Option<String>>>,
+    }
+    impl HarnessLauncher for Remembering {
+        fn workspace(&self) -> &str {
+            "/srv/work"
+        }
+        fn runs(&self, agent: &str) -> bool {
+            agent == "claude"
+        }
+        fn sandboxes(&self) -> SandboxProfiles {
+            SandboxProfiles::HARNESS_DEFAULT
+        }
+        fn launch(
+            &self,
+            agent: &str,
+            environment: &BTreeMap<String, String>,
+            login: Option<&nessa_protocol::lease::Login>,
+            publish_point: Option<&str>,
+        ) -> Result<HarnessProcess, AgentError> {
+            self.logins
+                .lock()
+                .unwrap()
+                .push(login.map(|login| login.expose().to_owned()));
+            Echo {
+                stopped: self.stopped.clone(),
+            }
+            .launch(agent, environment, None, publish_point)
+        }
+    }
+    #[derive(Default)]
+    struct Saved {
+        asked: Mutex<Vec<(String, nessa_protocol::agents::AgentId, String)>>,
+    }
+    impl super::SavedLogins for Saved {
+        fn login<'a>(
+            &'a self,
+            environment: &'a EnvironmentRef,
+            agent: nessa_protocol::agents::AgentId,
+            lease: &'a str,
+        ) -> crate::conversation::application::EnvironmentFuture<
+            'a,
+            Option<nessa_protocol::lease::Login>,
+        > {
+            self.asked
+                .lock()
+                .unwrap()
+                .push((environment.name(), agent, lease.to_owned()));
+            Box::pin(async {
+                Some(nessa_protocol::lease::Login::new("sk-ant-oat-x".into()).unwrap())
+            })
+        }
+    }
+    let stopped = Arc::new(AtomicUsize::new(0));
+    let launcher = Arc::new(Remembering {
+        stopped: stopped.clone(),
+        logins: Mutex::new(Vec::new()),
+    });
+    let connector = Connector::with(Reach::Serving, launcher.clone(), stopped);
+    let saved = Arc::new(Saved::default());
+    let environment =
+        environment(connector.clone(), Arc::new(Audit::default())).with_logins(saved.clone());
+    async fn start(
+        environment: &SshEnvironment,
+        lease: &LeaseId,
+    ) -> crate::conversation::application::EnvironmentLease {
+        let (binding, host) = binding(true);
+        let opened = environment
+            .open(lease, &terms("claude"), binding)
+            .await
+            .unwrap_or_else(|_| panic!("granted"));
+        let host = host.lock().unwrap().clone().unwrap();
+        let HarnessProcess {
+            mut input,
+            mut output,
+            ..
+        } = host.start(HarnessLaunch::default()).unwrap();
+        // Its first bytes back mean the host launched it.
+        input.write_all(b"hi").await.unwrap();
+        assert_eq!(read_some(output.as_mut()).await, b"hi");
+        opened
+    }
+    // SSH with no entry takes the owner's saved logins.
+    // The lease that asks is named, so its handoff is recorded with it.
+    let first = lease();
+    let _first = start(&environment, &first).await;
+    assert_eq!(
+        *saved.asked.lock().unwrap(),
+        [(
+            "devbox".to_owned(),
+            nessa_protocol::agents::AgentId::Claude,
+            first.as_str().to_owned()
+        )]
+    );
+    assert_eq!(
+        *launcher.logins.lock().unwrap(),
+        [Some("sk-ant-oat-x".to_owned())]
+    );
+    // The host's owner takes them back: the next lease asks for none and
+    // its harness starts with none.
+    *connector.grants.0.lock().unwrap() = Some(PeerGrant::everything().without_logins());
+    let _second = start(&environment, &lease()).await;
+    assert_eq!(saved.asked.lock().unwrap().len(), 1);
+    assert_eq!(
+        *launcher.logins.lock().unwrap(),
+        [Some("sk-ant-oat-x".to_owned()), None]
+    );
+}
+
+/// An audit outage withholds the saved login and is logged, and the lease
+/// is still granted: a machine signed in on its own keeps working.
+#[tokio::test(flavor = "current_thread")]
+async fn an_audit_outage_hands_no_login_and_the_lease_stays_granted() {
+    use crate::logins::application::{
+        AuditUnavailable, LoginAudit, LoginRecord, SavedLoginsService,
+    };
+    use crate::logins::infrastructure::cedar::CedarLoginPolicyEvaluator;
+    use crate::secrets::{SecretStore, SecretUnavailable};
+    use nessa_protocol::agents::AgentId;
+    use nessa_protocol::lease::Login;
+    use zeroize::Zeroizing;
+
+    const SECRET: &str = "sk-ant-oat-audit-down";
+
+    #[derive(Clone, Default)]
+    struct Capture(Arc<Mutex<Vec<u8>>>);
+    impl std::io::Write for Capture {
+        fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(buffer);
+            Ok(buffer.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for Capture {
+        type Writer = Self;
+        fn make_writer(&'a self) -> Self {
+            self.clone()
+        }
+    }
+
+    struct Held(Mutex<Option<Vec<u8>>>);
+    impl SecretStore for Held {
+        fn read(&self) -> Result<Option<Zeroizing<Vec<u8>>>, SecretUnavailable> {
+            Ok(self.0.lock().unwrap().clone().map(Zeroizing::new))
+        }
+        fn write(&self, bytes: &[u8]) -> Result<(), SecretUnavailable> {
+            *self.0.lock().unwrap() = Some(bytes.to_vec());
+            Ok(())
+        }
+        fn delete(&self) -> Result<(), SecretUnavailable> {
+            *self.0.lock().unwrap() = None;
+            Ok(())
+        }
+    }
+    struct Deaf;
+    impl LoginAudit for Deaf {
+        fn record(&self, _: &LoginRecord) -> Result<(), AuditUnavailable> {
+            Err(AuditUnavailable)
+        }
+    }
+    struct Through(SavedLoginsService);
+    impl super::SavedLogins for Through {
+        fn login<'a>(
+            &'a self,
+            environment: &'a EnvironmentRef,
+            agent: nessa_protocol::agents::AgentId,
+            lease: &'a str,
+        ) -> crate::conversation::application::EnvironmentFuture<
+            'a,
+            Option<nessa_protocol::lease::Login>,
+        > {
+            // On this thread, so the test's subscriber sees the error.
+            let found = self.0.login_for(environment, agent, lease);
+            Box::pin(async move { found })
+        }
+    }
+    struct Remembering {
+        stopped: Arc<AtomicUsize>,
+        logins: Mutex<Vec<Option<String>>>,
+    }
+    impl HarnessLauncher for Remembering {
+        fn workspace(&self) -> &str {
+            "/srv/work"
+        }
+        fn runs(&self, agent: &str) -> bool {
+            agent == "claude"
+        }
+        fn sandboxes(&self) -> SandboxProfiles {
+            SandboxProfiles::HARNESS_DEFAULT
+        }
+        fn launch(
+            &self,
+            agent: &str,
+            environment: &BTreeMap<String, String>,
+            login: Option<&Login>,
+            publish_point: Option<&str>,
+        ) -> Result<HarnessProcess, AgentError> {
+            self.logins
+                .lock()
+                .unwrap()
+                .push(login.map(|login| login.expose().to_owned()));
+            Echo {
+                stopped: self.stopped.clone(),
+            }
+            .launch(agent, environment, None, publish_point)
+        }
+    }
+
+    let mut stores = BTreeMap::new();
+    for agent in AgentId::ALL {
+        let held = if *agent == AgentId::Claude {
+            Some(SECRET.as_bytes().to_vec())
+        } else {
+            None
+        };
+        stores.insert(
+            *agent,
+            Arc::new(Held(Mutex::new(held))) as Arc<dyn SecretStore>,
+        );
+    }
+    let service = SavedLoginsService::new(
+        stores,
+        Arc::new(Held(Mutex::new(None))),
+        Arc::new(CedarLoginPolicyEvaluator::new().unwrap()),
+        Arc::new(Deaf),
+    );
+    let stopped = Arc::new(AtomicUsize::new(0));
+    let launcher = Arc::new(Remembering {
+        stopped: stopped.clone(),
+        logins: Mutex::new(Vec::new()),
+    });
+    let connector = Connector::with(Reach::Serving, launcher.clone(), stopped);
+    let environment =
+        environment(connector, Arc::new(Audit::default())).with_logins(Arc::new(Through(service)));
+    let captured = Capture::default();
+    let subscriber = tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::ERROR)
+        .with_writer(captured.clone())
+        .with_ansi(false)
+        .finish();
+    let _traced = tracing::subscriber::set_default(subscriber);
+
+    let id = LeaseId::new("lease-audit-down").unwrap();
+    let (binding, host) = binding(true);
+    let opened = environment
+        .open(&id, &terms("claude"), binding)
+        .await
+        .expect("the lease is granted");
+    let host = host
+        .lock()
+        .unwrap()
+        .clone()
+        .expect("the harness was started");
+    let HarnessProcess {
+        mut input,
+        mut output,
+        ..
+    } = host.start(HarnessLaunch::default()).unwrap();
+    input.write_all(b"hi").await.unwrap();
+    assert_eq!(read_some(output.as_mut()).await, b"hi");
+    drop(opened);
+
+    assert_eq!(*launcher.logins.lock().unwrap(), [None]);
+    let log = String::from_utf8(captured.0.lock().unwrap().clone()).unwrap();
+    assert!(
+        log.contains("a saved login was not handed: its handoff could not be recorded"),
+        "{log}"
+    );
+    assert!(log.contains("lease-audit-down"), "{log}");
+    assert!(!log.contains(SECRET), "{log}");
+}
+
+/// After a Claude sign-in change (ADR 501), a conversation's idle workspace
+/// connection is let go, so the next lease is served again with the sign-in
+/// now saved; one with a lease on it is kept.
+#[tokio::test(start_paused = true)]
+async fn a_sign_in_change_lets_go_of_idle_workspace_connections_only() {
+    struct Cut(Arc<Connector>);
+    impl Drop for Cut {
+        fn drop(&mut self) {
+            self.0.cut();
+        }
+    }
+    struct Through(Arc<Connector>);
+    impl super::connector::WorkspaceConnector for Through {
+        fn connect(
+            &self,
+            _: bool,
+        ) -> crate::conversation::application::EnvironmentFuture<
+            '_,
+            Result<LeaseConnection, LeaseRefusal>,
+        > {
+            Box::pin(async move {
+                let mut connection =
+                    LeaseConnector::connect(self.0.as_ref(), &devbox(), String::new())
+                        .map_err(|_| LeaseRefusal::EnvironmentUnreachable)?;
+                connection.keep = Box::new((connection.keep, Cut(self.0.clone())));
+                Ok(connection)
+            })
+        }
+    }
+    let connector = Connector::new(Reach::Serving);
+    let environment = Arc::new(SshEnvironment::workspace(
+        Arc::new(Through(connector.clone())),
+        Arc::new(Audit::default()),
+    ));
+    // The refused turn's lease ends, as a refusal leaves it.
+    let refused = environment
+        .open(&lease(), &terms("claude"), binding_only())
+        .await
+        .unwrap();
+    refused.hold.end(LeaseEndCause::Closed).await;
+    drop(refused);
+    // In use while a lease is on it: kept, after asking again.
+    let held = environment
+        .open(&lease(), &terms("claude"), binding_only())
+        .await
+        .unwrap();
+    crate::conversation::infrastructure::workspaces::let_go_each(vec![environment.clone()]).await;
+    let beside = environment
+        .open(&lease(), &terms("claude"), binding_only())
+        .await
+        .unwrap();
+    assert_eq!(
+        connector.connects.load(Ordering::SeqCst),
+        1,
+        "a connection in use is kept"
+    );
+    for opened in [held, beside] {
+        opened.hold.end(LeaseEndCause::Closed).await;
+    }
+    // Nothing uses it now: let go, and the next lease is served again.
+    crate::conversation::infrastructure::workspaces::let_go_each(vec![environment.clone()]).await;
+    let resent = environment
+        .open(&lease(), &terms("claude"), binding_only())
+        .await
+        .unwrap();
+    assert_eq!(
+        connector.connects.load(Ordering::SeqCst),
+        2,
+        "the next lease after the change is served again"
+    );
+    resent.hold.end(LeaseEndCause::Closed).await;
 }

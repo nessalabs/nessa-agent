@@ -9,6 +9,7 @@ mod composition;
 mod desktop_window;
 mod diagnostics;
 mod gateway;
+mod gateway_config;
 mod gateway_endpoint;
 mod host;
 mod host_log;
@@ -26,6 +27,7 @@ mod saving;
 mod settings;
 mod shortcut;
 mod shortcuts;
+mod vault;
 // Read by the launchd registration alone, which is the macOS gateway adapter:
 // the table it consults says which loopback port a stage's background service
 // gets, and no other platform registers one yet. Gated to match that adapter
@@ -34,6 +36,8 @@ mod shortcuts;
 mod stage_port;
 mod startup;
 mod surface_credential;
+#[cfg(all(test, unix))]
+mod test_executable;
 mod tray;
 mod updater;
 
@@ -121,6 +125,8 @@ fn main() {
             agent_credentials::infrastructure::save_agent_api_key,
             provider_authentication::commands::sign_in_to_provider,
             provider_authentication::commands::provider_login_available,
+            provider_authentication::commands::mint_claude_sign_in,
+            provider_authentication::commands::claude_sign_in_mint_available,
             gateway::infrastructure::gateway_startup,
             gateway::infrastructure::retry_gateway_startup,
             gateway::infrastructure::runtime_copy,
@@ -136,10 +142,12 @@ fn main() {
             channel_paths::choose_channel_folder,
             channel_paths::choose_channel_resources,
             channel_paths::home_folder,
+            gateway_config::open_gateway_config,
             saving::save_file_begin,
             saving::save_file_part,
             saving::save_file_finish,
             saving::save_file_abort,
+            vault::infrastructure::vault_command,
             startup::host_startup,
             startup::restart_nessa,
             startup::quit_nessa,
@@ -319,6 +327,11 @@ fn main() {
             // menu bar item opens it again), hidden with its Dock icon kept
             // (the Dock reopens it), or the app quits (nothing could).
             if window.label() == desktop_window::DESKTOP_WINDOW {
+                // Files and folders dragged onto the window: only the host
+                // learns their paths (`channel_paths::dropped_on_desktop`).
+                if let WindowEvent::DragDrop(drag) = event {
+                    channel_paths::dropped_on_desktop(window.app_handle(), drag);
+                }
                 if let WindowEvent::CloseRequested { api, .. } = event {
                     let tray = window
                         .app_handle()
@@ -371,6 +384,7 @@ fn main() {
                 // One resolution, at the entry point. The decision itself takes
                 // what it needs as parameters and lives below.
                 if let Some(deps) = composition::resolve(app) {
+                    deps.vault.close();
                     // A notice outliving the app would name a review nobody
                     // is told has settled.
                     review_notices::infrastructure::leave_before_exit(app);

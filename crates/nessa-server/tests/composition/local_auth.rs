@@ -12,6 +12,13 @@ use nessa_auth::{
         CredentialGrantDto, MembershipInputDto, MembershipRoleDto, MembershipStateDto,
         OrganizationInputDto, PrincipalInputDto, PrincipalKindDto, ResourceDto,
     },
+    application::ports::AccessAdmission,
+    domain::CredentialId,
+};
+use std::{
+    future::Future,
+    task::{Context, Poll, Waker},
+    time::Duration,
 };
 
 /// A configuration naming both agents, with no file on disk for either.
@@ -191,6 +198,58 @@ fn namespace_with_registry() -> (tempfile::TempDir, std::path::PathBuf, LocalCre
 }
 
 struct StartupClock;
+
+#[tokio::test]
+async fn product_revoke_waits_for_effect_hold_and_survives_observer_loss() {
+    let (_directory, _namespace, store) = namespace_with_registry();
+    let store = Arc::new(store);
+    let id = CredentialId::new("credential").unwrap();
+    let hold = store.hold(&id).await.unwrap();
+    let admin = Arc::new(LocalAdmin {
+        store: store.clone(),
+        inventory: None,
+    });
+    let task = tokio::spawn(async move {
+        admin
+            .revoke(RevokeCredentialRequest {
+                request_id: "held-revoke".into(),
+                issuer_principal_id: "owner".into(),
+                credential_id: "credential".into(),
+                revoked_at: SystemClock.unix_seconds(),
+            })
+            .await
+    });
+    // Tokio's fair lock queues a later reader behind the physical revoke
+    // writer. Observe that ordering before cancelling the socket observer;
+    // merely yielding would allow a late worker to pass the old try-write path.
+    tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            let mut probe = std::pin::pin!(store.hold(&id));
+            match probe.as_mut().poll(&mut Context::from_waker(Waker::noop())) {
+                Poll::Pending => break,
+                Poll::Ready(Ok(read)) => drop(read),
+                Poll::Ready(Err(_)) => panic!("the credential authority became unavailable"),
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    assert!(!task.is_finished());
+    task.abort();
+    assert!(task.await.unwrap_err().is_cancelled());
+    drop(hold);
+    assert!(
+        tokio::time::timeout(Duration::from_secs(2), store.hold(&id))
+            .await
+            .unwrap()
+            .unwrap()
+            .snapshot
+            .credential
+            .revoked_at()
+            .is_some()
+    );
+}
 
 impl ServerClock for StartupClock {
     fn elapsed_ms(&self) -> u64 {
@@ -815,4 +874,120 @@ fn agent_catalog_intersects_model_images_with_the_shared_upload_offer() {
                 .image_input
         );
     }
+}
+
+#[test]
+fn workspace_recovery_records_the_target_and_unconfirmed_cleanup_in_durable_evidence() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("audit");
+    let audit = WorkspaceRecoveryAudit(
+        DurableEnvironmentAudit::new(root.clone(), Arc::new(SystemClock)).unwrap(),
+    );
+    let thread = "d49640a4-fd71-40a4-b3e9-a35e8753db78".to_owned();
+    let vm = "bx_fixture".to_owned();
+    audit
+        .record(&RecoveryEvent::ReceiptSaveFailed {
+            thread: thread.clone(),
+            vm: vm.clone(),
+            disposition: crate::workspaces::domain::RefusalDisposition::RollbackNewVm,
+        })
+        .unwrap();
+    audit
+        .record(&RecoveryEvent::RollbackObserved {
+            thread: thread.clone(),
+            vm: vm.clone(),
+            confirmed: false,
+        })
+        .unwrap();
+    let records: Vec<serde_json::Value> = std::fs::read_dir(&root)
+        .unwrap()
+        .map(|entry| {
+            serde_json::from_slice(&std::fs::read(entry.unwrap().path()).unwrap()).unwrap()
+        })
+        .collect();
+    assert_eq!(records.len(), 2);
+    for value in &records {
+        assert_eq!(value["thread"], thread);
+        assert_eq!(value["vm"], vm);
+        assert!(value["observedAtMs"].is_u64());
+    }
+    assert!(records
+        .iter()
+        .any(|value| value["kind"] == "workspace_receipt_save_failed"));
+    assert!(
+        records
+            .iter()
+            .any(|value| value["kind"] == "workspace_rollback_observed"
+                && value["confirmed"] == false)
+    );
+    // A closed audit store cannot pretend this evidence was delivered.
+    std::fs::remove_dir_all(&root).unwrap();
+    std::fs::write(&root, "blocked").unwrap();
+    assert_eq!(
+        audit.record(&RecoveryEvent::ReceiptSaveFailed {
+            thread,
+            vm,
+            disposition: crate::workspaces::domain::RefusalDisposition::RollbackNewVm
+        }),
+        Err(WorkspaceFailure::Storage)
+    );
+}
+
+#[test]
+fn workspace_admission_refusal_retains_expected_and_observed_identity_in_the_real_audit() {
+    use crate::workspaces::domain::{
+        AdmissionRefusal, AdmissionRejection, EnvironmentIdentity, ObservedEnvironment,
+    };
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("audit");
+    let audit = WorkspaceRecoveryAudit(
+        DurableEnvironmentAudit::new(root.clone(), Arc::new(SystemClock)).unwrap(),
+    );
+    let event = RecoveryEvent::AdmissionRefused {
+        thread: "d49640a4-fd71-40a4-b3e9-a35e8753db78".into(),
+        vm: "bx_fixture".into(),
+        admission: EnvironmentIdentity::new(
+            "11111111-1111-4111-8111-111111111111".into(),
+            "nessa".into(),
+            "22222222-2222-4222-8222-222222222222".into(),
+            2,
+        )
+        .unwrap(),
+        disposition: crate::workspaces::domain::RefusalDisposition::RetainTarget,
+        rejection: AdmissionRejection::new(
+            AdmissionRefusal::WrongVersion,
+            Some(ObservedEnvironment {
+                name: Some("nessa".into()),
+                version: Some(3),
+            }),
+        ),
+    };
+    audit.record(&event).unwrap();
+    let paths = std::fs::read_dir(&root)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .collect::<Vec<_>>();
+    assert_eq!(paths.len(), 1);
+    let value: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&paths[0]).unwrap()).unwrap();
+    assert_eq!(value["kind"], "workspace_admission_refused");
+    assert_eq!(value["vm"], "bx_fixture");
+    assert_eq!(value["thread"], "d49640a4-fd71-40a4-b3e9-a35e8753db78");
+    assert_eq!(
+        value["environmentId"],
+        "11111111-1111-4111-8111-111111111111"
+    );
+    assert_eq!(
+        value["environmentVersionId"],
+        "22222222-2222-4222-8222-222222222222"
+    );
+    assert_eq!(value["environmentVersion"], 2);
+    assert_eq!(value["observedEnvironment"], "nessa");
+    assert_eq!(value["observedVersion"], 3);
+    assert_eq!(value["cause"], "wrong_version");
+    assert_eq!(value["disposition"], "retain_target");
+    assert!(value["observedAtMs"].is_u64());
+    std::fs::remove_dir_all(&root).unwrap();
+    std::fs::write(&root, "blocked").unwrap();
+    assert_eq!(audit.record(&event), Err(WorkspaceFailure::Storage));
 }

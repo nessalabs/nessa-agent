@@ -27,6 +27,7 @@ const genericOutputs = [
 const productOutputs = [
   "crates/nessa-auth/src/domain/pairing/value_objects/wire_values.rs",
   "protocol/product/pairing-values.generated.json",
+  "protocol/product/surface-catalog.generated.json",
   "packages/nessa-client/src/generated/product.ts",
   "crates/nessa-protocol/src/product/generated.rs",
   "crates/nessa-protocol/src/product_contract/generated.rs",
@@ -78,6 +79,9 @@ function fixture(run) {
       "crates/nessa-sdk/src/infrastructure/acp/sessions/config.rs",
       "crates/nessa-sdk/src/infrastructure/mcp/servers.rs",
       "crates/nessa-server/src/conversation/domain/value_objects/channel.rs",
+      "crates/nessa-server/src/conversation/domain/value_objects/vm_lifetime.rs",
+      "crates/nessa-server/src/logins/domain.rs",
+      "crates/nessa-protocol/src/lease.rs",
       "crates/nessa-sdk/src/domain/agent_execution/permissions/value_objects/review_limits.rs",
       "crates/nessa-sdk/src/domain/agent_execution/questions/value_objects/question.rs",
       "crates/nessa-protocol/src/protocol/encode.rs",
@@ -171,6 +175,20 @@ test("a method with no declared grant is refused before any artifact is written"
       generate(path, "generate-product-protocol"),
     )
     assert.match(result.stderr, /mcpServers\.list has no declared grant/)
+  }))
+
+test("a method with no surface entry is refused before any artifact is written", () =>
+  fixture((path) => {
+    edit(path, "protocol/product/manifest.json", (manifest) => {
+      manifest.methods["example.extra"] = { params: null, grant: "server.read" }
+    })
+    const result = unchanged(path, productOutputs, () =>
+      generate(path, "generate-product-protocol"),
+    )
+    assert.match(
+      result.stderr,
+      /example\.extra has no CLI or MCP entry and is not excluded/,
+    )
   }))
 
 test("current supported generators publish complete outputs", () =>
@@ -333,6 +351,44 @@ for (const [rule, file, constant] of [
       assert.match(result.stderr, new RegExp(`x-mcpServerRules.${rule} drifted`))
     }))
 }
+for (const [field, constant, old, replacement] of [
+  ["minimum", "MIN_SECONDS", "1", "2"],
+  ["maximum", "MAX_SECONDS", "4_294_967_295", "4_294_967_294"],
+]) {
+  test(`VM lifetime ${field} changed in its domain owner refuses stale publication`, () =>
+    fixture((path) => {
+      const source = join(
+        path,
+        "crates/nessa-server/src/conversation/domain/value_objects/vm_lifetime.rs",
+      )
+      const before = readFileSync(source, "utf8")
+      const after = before.replace(
+        `const ${constant}: u64 = ${old};`,
+        `const ${constant}: u64 = ${replacement};`,
+      )
+      assert.notEqual(after, before)
+      writeFileSync(source, after)
+      const result = unchanged(
+        path,
+        ["protocol/product/v1.json", ...productOutputs],
+        () => generate(path, "generate-product-protocol"),
+      )
+      assert.match(result.stderr, new RegExp(`VmLifetimeSeconds.${field} drifted`))
+    }))
+  test(`VM lifetime ${field} retyped in the schema refuses before writes`, () =>
+    fixture((path) => {
+      edit(path, "protocol/product/v1.json", (schema) => {
+        schema.$defs.VmLifetimeSeconds[field] -= 1
+      })
+      const result = unchanged(
+        path,
+        ["protocol/product/v1.json", ...productOutputs],
+        () => generate(path, "generate-product-protocol"),
+      )
+      assert.match(result.stderr, new RegExp(`VmLifetimeSeconds.${field} drifted`))
+    }))
+}
+
 test("channel rules publish the gateway's bounds to the client", () =>
   fixture((path) => {
     const result = generate(path, "generate-product-protocol")
@@ -381,6 +437,64 @@ test("a channel rule retyped in the schema alone refuses to publish", () =>
       generate(path, "generate-product-protocol"),
     )
     assert.match(result.stderr, /x-channelRules.maxResources drifted/)
+  }))
+
+// The saved-login device bound is the gateway's: one changed on either
+// side alone publishes nothing.
+test("a saved-login device bound changed on one side alone refuses to publish", () =>
+  fixture((path) => {
+    const source = join(path, "crates/nessa-server/src/logins/domain.rs")
+    const before = readFileSync(source, "utf8")
+    const after = before.replace(
+      "pub const MAX_SWITCHED_ON: usize = 256;",
+      "pub const MAX_SWITCHED_ON: usize = 255;",
+    )
+    assert.notEqual(after, before)
+    writeFileSync(source, after)
+    const result = unchanged(path, ["protocol/product/v1.json", ...productOutputs], () =>
+      generate(path, "generate-product-protocol"),
+    )
+    assert.match(
+      result.stderr,
+      /devicesOn.maxItems drifted from the Rust owner's MAX_SWITCHED_ON/,
+    )
+    writeFileSync(source, before)
+    edit(path, "protocol/product/v1.json", (schema) => {
+      schema.$defs.LoginsStatus.properties.devicesOn.maxItems += 1
+    })
+    const retyped = unchanged(path, ["protocol/product/v1.json", ...productOutputs], () =>
+      generate(path, "generate-product-protocol"),
+    )
+    assert.match(retyped.stderr, /devicesOn.maxItems drifted/)
+  }))
+
+// The login length bound is the lease protocol's: one changed on either
+// side alone publishes nothing.
+test("a saved-login length bound changed on one side alone refuses to publish", () =>
+  fixture((path) => {
+    const source = join(path, "crates/nessa-protocol/src/lease.rs")
+    const before = readFileSync(source, "utf8")
+    const after = before.replace(
+      "pub const MAX_LOGIN_BYTES: usize = 4096;",
+      "pub const MAX_LOGIN_BYTES: usize = 4095;",
+    )
+    assert.notEqual(after, before)
+    writeFileSync(source, after)
+    const result = unchanged(path, ["protocol/product/v1.json", ...productOutputs], () =>
+      generate(path, "generate-product-protocol"),
+    )
+    assert.match(
+      result.stderr,
+      /login.maxLength drifted from the Rust owner's MAX_LOGIN_BYTES/,
+    )
+    writeFileSync(source, before)
+    edit(path, "protocol/product/v1.json", (schema) => {
+      schema.$defs.LoginsSaveParams.properties.login.maxLength += 1
+    })
+    const retyped = unchanged(path, ["protocol/product/v1.json", ...productOutputs], () =>
+      generate(path, "generate-product-protocol"),
+    )
+    assert.match(retyped.stderr, /login.maxLength drifted/)
   }))
 
 test("MCP server rules with an unknown field refuse to publish", () =>

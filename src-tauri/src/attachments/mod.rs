@@ -236,7 +236,11 @@ pub use choosing::{
 pub use content_type::{content_types, ContentTypes};
 pub use dragged::{drag_board, DragBoard};
 pub use dropping::dropped_on_panel;
-pub use files::{chosen_files, ChosenFiles};
+pub use files::{answered_within, chosen_files, ChosenFiles, Kind};
+// What a substitute filesystem answers with, for the desktop window's drops'
+// tests (`channel_paths`).
+#[cfg(test)]
+pub use files::{DirectoryEntries, OnDisk, Stored};
 pub use picker::{file_picker, FilePicker};
 pub use readiness::{readiness, Readiness};
 pub use reading::{

@@ -80,6 +80,8 @@ interface Harness {
   readonly posted: { message: Outgoing; origin: string }[]
   readonly views: AppViewState[]
   readonly opened: OpenPlace[]
+  /** The conversations a `nessa:session/<id>` link brought to the front. */
+  readonly sessions: string[]
   readonly closed: { count: number }
   readonly timers: { ms: number; run: () => void; cancelled: boolean }[]
   /** The app (or anything else on the page) says something. */
@@ -110,6 +112,7 @@ function harness(
   const timers: Harness["timers"] = []
   const views: AppViewState[] = []
   const opened: OpenPlace[] = []
+  const sessions: string[] = []
   const closed = { count: 0 }
   const call: AppCall = {
     ...fixtureCall("session-a"),
@@ -150,6 +153,7 @@ function harness(
     host: {
       open: (place) => void opened.push(place),
       close: () => void closed.count++,
+      openSession: (sessionId) => void sessions.push(sessionId),
     },
     onView: (view) => void views.push(view),
   })
@@ -161,6 +165,7 @@ function harness(
     posted,
     views,
     opened,
+    sessions,
     closed,
     timers,
     transport,
@@ -264,6 +269,55 @@ describe("the handshake", () => {
       (ready as unknown as { params: { checkWithin: number } }).params.checkWithin,
     ).toBe(deadlines.initialize)
     expect(app.posted.every((each) => each.origin === sandbox.origin)).toBe(true)
+  })
+
+  it("lets the app's frame use the microphone only when its resource asks, and says so", async () => {
+    const asking = {
+      ...fixtureServerPort(),
+      readResource: async (_address: unknown, uri: string) => ({
+        kind: "ok" as const,
+        result: {
+          contents: [
+            {
+              uri,
+              mimeType: "text/html;profile=mcp-app",
+              text: fixtureAppHtml,
+              _meta: { ui: { permissions: { microphone: {} } } },
+            },
+          ],
+        },
+      }),
+    }
+    for (const [server, allow, granted] of [
+      [asking, "microphone *", { microphone: {} }],
+      [fixtureServerPort(), "", {}],
+    ] as const) {
+      const app = harness({ server })
+      await flush()
+      app.say({
+        jsonrpc: "2.0",
+        method: "ui/notifications/sandbox-proxy-ready",
+        params: {},
+      })
+      const [ready] = app.take()
+      expect((ready as unknown as { params: { allow: string } }).params.allow).toBe(allow)
+      app.say({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "ui/initialize",
+        params: {
+          protocolVersion: "2026-01-26",
+          appInfo: { name: "t", version: "1" },
+          appCapabilities: {},
+        },
+      })
+      const [answer] = app.take() as unknown as [
+        { result: { hostCapabilities: JsonObject } },
+      ]
+      expect(answer.result.hostCapabilities.sandbox).toMatchObject({
+        permissions: granted,
+      })
+    }
   })
 
   it("L6: answers ui/initialize with the spec's result: version, host, capabilities, context", async () => {
@@ -1653,6 +1707,32 @@ describe("a live app's other requests", () => {
       })),
       { jsonrpc: "2.0", id: 1, result: {} },
       { jsonrpc: "2.0", id: 5, result: { isError: true } },
+    ])
+  })
+
+  it("a nessa:session link opens that conversation in the window, never a browser", async () => {
+    const opened: string[] = []
+    const app = harness({
+      ports: { links: { open: async (url) => (opened.push(url), "done") } },
+    })
+    await live(app)
+    for (const [id, url] of [
+      [1, "nessa:session/conv_42"],
+      [2, "nessa://session/b-7"],
+      [3, "nessa:session/../etc"],
+    ] as const)
+      app.say({ jsonrpc: "2.0", id, method: "ui/open-link", params: { url } })
+    await flush()
+    expect(app.sessions).toEqual(["conv_42", "b-7"])
+    expect(opened).toEqual([])
+    expect(app.take()).toEqual([
+      { jsonrpc: "2.0", id: 1, result: {} },
+      { jsonrpc: "2.0", id: 2, result: {} },
+      {
+        jsonrpc: "2.0",
+        id: 3,
+        error: { code: errorCodes.invalidParams, message: "Invalid URL" },
+      },
     ])
   })
 

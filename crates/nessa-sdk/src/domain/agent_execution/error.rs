@@ -14,6 +14,8 @@ pub enum ExecutionError {
         /// Maximum permitted UTF-8 byte length.
         max_bytes: usize,
     },
+    /// The source conversation is not a canonical lowercase UUID.
+    InvalidAgentSource,
     /// A bounded collection holds more entries than it permits.
     TooManyValues {
         /// Collection whose length was rejected.

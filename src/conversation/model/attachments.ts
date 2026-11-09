@@ -152,6 +152,16 @@ export type ImageReferencePart = { type: "image-reference" } & ImageReference
  * never was — the path is the whole of what the message carried.
  */
 export type LinkedFileReferencePart = { type: "file-reference"; path: string }
+/** Original stored input from another surface, independent of its agent-side path. */
+export type UploadedFileReference = {
+  digest: string
+  mimeType: string
+  size: number
+  name: string
+}
+export type UploadedFileReferencePart = UploadedFileReference & {
+  type: "uploaded-file-reference"
+}
 
 /**
  * Preview budgets: what one window will hold. They bound drafts, not messages.

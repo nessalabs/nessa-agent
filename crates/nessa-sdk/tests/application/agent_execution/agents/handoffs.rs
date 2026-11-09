@@ -150,7 +150,7 @@ async fn a_fork_starts_a_conversation_from_the_turns_it_copied() {
     let storage = MemoryStorage::default();
     let provider = TestProvider::new();
     let copied = CarriedHistory::new(
-        vec![CarriedTurn::new(Some("plot May"), Some("done: may.png")).unwrap()],
+        vec![CarriedTurn::new(Some("plot May"), Some("done: may.png"), None).unwrap()],
         2,
     )
     .unwrap();
@@ -212,7 +212,7 @@ async fn a_fork_is_saved_by_a_later_opening_while_nothing_came_before_it() {
     manager.expect_handoff(HandoffIntent::Fork {
         source: SessionId::new("source").unwrap(),
         history: CarriedHistory::new(
-            vec![CarriedTurn::new(Some("hello"), Some("hi")).unwrap()],
+            vec![CarriedTurn::new(Some("hello"), Some("hi"), None).unwrap()],
             0,
         )
         .unwrap(),
@@ -227,4 +227,67 @@ async fn a_fork_is_saved_by_a_later_opening_while_nothing_came_before_it() {
         vec![(Some("hello"), Some("hi"))]
     );
     agent.close(close_action()).await.unwrap();
+}
+
+#[tokio::test]
+async fn agent_origin_survives_provider_switch_and_a_fork_of_that_history() {
+    use nessa_sdk::domain::agent_execution::{
+        executions::{AgentSource, Initiation},
+        prompts::MessageSender,
+    };
+    let source = AgentSource::new(
+        "8b547a4b-6974-49a4-b878-d13a9c031f16",
+        ExecutionId::new("source-turn").unwrap(),
+    )
+    .unwrap();
+    let storage = MemoryStorage::default();
+    let first = TestProvider::new();
+    let agent = attached_agent(first, storage.manager().await)
+        .await
+        .unwrap();
+    let mut input = request("first");
+    input.user_message = input
+        .user_message
+        .sent_by(MessageSender::Agent(source.clone()));
+    agent
+        .invoke(
+            input,
+            Submitter::new(actor(), Initiation::agent(source.clone())),
+        )
+        .await
+        .unwrap();
+    agent.close(close_action()).await.unwrap();
+    drop(agent);
+    let other = other_provider();
+    let mut manager = storage.manager().await;
+    manager.expect_handoff(HandoffIntent::Switch {
+        actor: asked("switch-origin"),
+        at_ms: 5,
+    });
+    let agent = attached_agent(other.clone(), manager).await.unwrap();
+    invoke(&agent, "second").await.unwrap();
+    let carried = last_history(&other).unwrap();
+    assert_eq!(carried.turns()[0].agent_source(), Some(&source));
+    agent.close(close_action()).await.unwrap();
+    drop(agent);
+    let copied = storage.snapshot().carried_history();
+    assert_eq!(copied.turns()[0].agent_source(), Some(&source));
+    assert_eq!(copied.turns()[1].agent_source(), None);
+    let fork_storage = MemoryStorage::default();
+    let mut manager = fork_storage.manager().await;
+    manager.expect_handoff(HandoffIntent::Fork {
+        source: SessionId::new("source-chat").unwrap(),
+        history: copied.clone(),
+        actor: asked("fork-origin"),
+        at_ms: 9,
+    });
+    let fork = attached_agent(other.clone(), manager).await.unwrap();
+    invoke(&fork, "fork-first").await.unwrap();
+    assert_eq!(last_history(&other), Some(copied.clone()));
+    fork.close(close_action()).await.unwrap();
+    drop(fork);
+    assert_eq!(
+        fork_storage.snapshot().carried_history().turns()[0].agent_source(),
+        Some(&source)
+    );
 }
