@@ -2,7 +2,9 @@
 
 Issue: [#893](https://github.com/nessalabs/nessa-agent/issues/893).
 Base: `19d631ebd34c6ece0062cbd0edbbd5e269d54c1d`.
-Source checkpoint: `a3dd63839d52a616560cc70eca470f6a82dbb86f`.
+Initial source checkpoint: `a3dd63839d52a616560cc70eca470f6a82dbb86f`.
+Qualification test checkpoint: `d1fba5c8ae89e8b646545e4f0817324e984a38c3`;
+runtime code is unchanged from the initial checkpoint.
 The later documentation commit records these receipts; it does not change the source.
 
 ## Scope and ownership
@@ -304,12 +306,13 @@ the coordinating verification below.
 
 ## Failed and unrun boundaries
 
-`pnpm frontend:check` stops at two unchanged Tailwind watcher tests at their
+The initial `pnpm frontend:check` stopped at two unchanged Tailwind watcher tests at their
 existing 30-second deadlines (508 script tests pass, two cancel, two skip).
 Isolated and polling runs fail identically. A detached base worktree at
 `19d631ebd34c6ece0062cbd0edbbd5e269d54c1d`, with byte-identical test/CSS inputs,
-pinned dependencies and Node, reproduces both failures. This remains a failed
-local aggregate gate, not a passing check or a reason to weaken its deadlines.
+pinned dependencies and Node, reproduces both failures. That initial run remains a failed
+receipt; the post-publication readiness repair and new aggregate result are
+recorded below. Its deadlines were not weakened.
 Other frontend stages were run individually; see receipts above.
 
 The raw broad Rust run also encountered eight process-cleanup failures in
@@ -336,3 +339,87 @@ was added. The optional state models retain their historical checkpoints; no
 new model-check receipt or full Nessa Docs application validation is claimed.
 Mermaid previews and frontmatter/source/link checks were performed for the
 scoped documentation.
+
+## Post-publication qualification
+
+PR #1285 initially published head `66be9575d282c80f752f1832fb42035fa3c4748f`.
+Exact-head run [42687213695](https://github.com/nessalabs/nessa-agent/actions/runs/42687213695)
+was inspected directly. Change discovery, workflow validation, gateway-contract, frontend and
+release-profile desktop compilation passed; the remaining jobs were still
+running or queued when this documentation was prepared. Those receipts apply
+to that initial head, not the follow-up head.
+
+### Tailwind fixture race
+
+Task-only copies of the unchanged test logged watcher readiness, the physical
+watched set, actual filesystem events, HMR hooks and socket packets. At the
+backend touch, `getWatched()` contained `crates/server` but not its nested `src`
+or `probe.rs`, and no backend event followed. A diagnostic 500 ms delay allowed
+the complete watched set to appear and all original assertions passed (847 ms).
+This isolated a fixture readiness race rather than a slow Tailwind compilation
+or a backend-triggered full reload. Probe logs are
+`/tmp/893-tailwind-{stage,events,watched,delay}-probe.log`.
+
+The repair waits for the **exact file** in Vite's watched set before each edit.
+Its 5 ms polling is cancellable by the existing test signal and 30-second
+absolute deadline; it does not add a fixed delay, retry an edit, extend a
+deadline, synthesize an event or loosen an assertion. Each edit must still reach
+the actual watch-event hook and produce its own stylesheet update. Backend
+content and dependency-graph exclusion, absence of full reload and production
+compiler assertions are retained. Both tests now pass in under one second
+(`/tmp/893-tailwind-ready-final.log`). No matching open owner was found, and
+#1282 does not change this test file; its CSS hunks remain untouched.
+
+The complete `pnpm frontend:check` then passed at the qualification test tree
+(exit 0), including 510 script passes/two skips, 680 desktop helper passes/two
+skips, 108 architecture and 72 protocol checks, docs/typechecks, all 451 files /
+5,742 frontend tests, 44 webhook tests and the production build. The existing
+50 TypeDoc warnings, React test act warnings and build chunk-size warning remain
+disclosed; none was changed to pass. Full receipt:
+`/tmp/893-frontend-followup.log`. No aggregate pass is inferred from the earlier
+individually passing stages: this is a fresh successful end-to-end command.
+
+### Human owner and the actual CLI
+
+The restriction concerns the authenticated **principal**, not the caller label.
+`composition/auth_command.rs` bootstraps a Human owner; the default owner output
+is `auth/surfaces/nessa-cli.token`. `LocalGateway` labels the session `nessa-cli`
+but retains the credential's principal. `nessa call pairing.create` validates
+`samePerson` against the product schema and passes it unchanged to the gateway.
+A separately provisioned surface is an Integration even if administrative and
+issued by the owner; issuance provenance is not a current acts-for relation.
+
+The existing native Human/Integration route regression now uses real
+`cli::application::invoke` and `LocalGateway` for the positive request, with a
+protected throwaway owner-token file. It passes through the catalog, schema and
+product transport, then inspects the retained Human-owned true invitation.
+The full native suite passed 139/139; formatting and focused native Clippy
+passed. Clippy replayed the dependency's existing long constant-evaluation
+warning. Receipts: `/tmp/893-followup-{native,fmt,clippy}.log`.
+
+The API/owner-CLI behavior is implemented. A complete desktop flow remains
+unimplemented: define an authoritative Human relation for the Integration
+panel, add a creation-only choice control after #1282's UI audit, then qualify
+true/false consent and its read/cleanup boundaries through the browser. This
+branch does not infer that relation, hand the panel an owner token, or change
+#811 phone consent. The scoped state page now makes these boundaries explicit.
+
+### Sidebar stress
+
+Source tracing confirms `sessions-in-sidebar` omits `SessionList`, while the
+unchanged opener and selection check require `.workspace-list`. The runner
+also picks only the first requested layout. Thus the recorded sidebar failure
+precedes every selected feature step. This branch changes neither those files
+nor the UI. #1282's current diff and ownership were checked again at
+`9bd3e7c2477684b75867fb7249eaa34453376509`; the integration sequence above remains
+required. No sidebar pass is claimed.
+
+A read-only independent incremental review of `d1fba5c8a` against initial
+published `66be9575d` found no findings. It checked exact-file readiness versus
+actual HMR/compiler proof, unchanged deadlines/cancellation, real CLI
+catalog/schema/transport versus durable Human invitation identity, and the
+Integration negative case's no-mutation guarantee. It independently traced
+bootstrap Human/default CLI output versus separately provisioned Integration
+principals. It ran diff hygiene only; parent execution receipts, full lifecycle
+implementation and browser/platform execution remained outside this narrow
+review. The earlier full implementation reviews retain their original scope.

@@ -5,11 +5,14 @@ kind: flow
 status: implemented
 parent: gateway
 summary: An immutable invitation choice adds credential-bound attribution after activation, without granting access.
-sourceRevision: "a3dd63839d52a616560cc70eca470f6a82dbb86f"
+sourceRevision: "d1fba5c8ae89e8b646545e4f0817324e984a38c3"
 sources:
   - crates/nessa-server/src/product/pairing.rs
   - crates/nessa-server/src/composition/local_auth.rs
   - protocol/product/v1.json
+  - crates/nessa-server/src/composition/auth_command.rs
+  - crates/nessa-server/src/cli/application/call.rs
+  - crates/nessa-server/src/cli/infrastructure/gateway.rs
   - crates/nessa-auth/src/domain/pairing/value_objects/person_link.rs
   - crates/nessa-auth/src/domain/pairing/value_objects/values.rs
   - crates/nessa-auth/src/application/pairing/person_links.rs
@@ -23,6 +26,7 @@ sources:
   - crates/nessa-server/tests/conversation/grant_database.rs
   - crates/nessa-server/src/peer_gateways/infrastructure/records.rs
   - crates/nessa-server/tests/device_pairing/mounted/same_person.rs
+  - crates/nessa-server/tests/device_pairing/owner_routes.rs
   - crates/nessa-server/tests/peer_gateways/same_person.rs
   - crates/nessa-server/tests/backup/deletion.rs
 diagramLinks: {}
@@ -31,8 +35,10 @@ diagramLinks: {}
 
 An owner creating a gateway invitation can choose that the gateway acts for the
 same person. A true choice requires its authoritative owner principal to be
-Human. Admin desktop or CLI surface principals without a published person
-mapping receive an ineligible refusal; an admin role is not person provenance.
+Human. The normal bootstrap owner credential is Human, including when used by
+`nessa call` as the `nessa-cli` caller. A separately provisioned Integration
+surface is a different principal: an admin role or a CLI/desktop caller label is
+not person provenance. Such a surface receives an ineligible refusal for true.
 Ordinary false-choice pairing is unchanged. After pairing, a granted read reports the gateway principal and
 that person together. The association grants no access: an unshared conversation
 still cannot be read, and comment or drive remain subject to the existing Cedar
@@ -41,6 +47,35 @@ policies. A gateway paired without the choice reports no person.
 For example, the owner's laptop and desktop can each have a separate read grant
 on one conversation. Their shared person does not collapse those grants. Device
 and owner-phone consent retain their own classes and cannot select this choice.
+
+## Supported API and remaining desktop work
+
+The [local auth guide](../../../guides/local-auth.md) explains that
+`auth init --local` creates the Human owner credential and by default writes it
+to `auth/surfaces/nessa-cli.token`. A custom owner output is selected with
+`--credential-file` on online commands. With an already provisioned owner
+credential, the supported API call is:
+
+```sh
+nessa call pairing.create --params '{"enrollee":"gateway","samePerson":true}' \
+  --credential-file /absolute/path/to/owner.token
+```
+
+The native route regression runs this request through the real CLI catalog,
+schema validation and product transport against a throwaway gateway. It checks
+that the saved invitation names the authoritative Human. It also checks that a
+provisioned admin Integration is refused without changing invitations/revision.
+The caller label never supplies the person identity.
+
+This completes the API choice; the desktop pairing flow still sends the default
+false choice and has no control for true. Completing that flow requires an
+explicit, authoritative relation between its Integration principal and the
+Human owner, then a creation-only choice control and browser coverage of that
+immutable choice, admission after link commit, refusal without a share, and
+cleanup/retry. Inferring a person from SurfaceProvision issuance history, copying
+the owner token into the panel, or using owner-phone consent would change a
+separate contract. Those changes are not implemented here. #1282's current UI
+audit owns the overlapping desktop surfaces, so integration follows that audit.
 
 ## Choice, activation and recovery
 
