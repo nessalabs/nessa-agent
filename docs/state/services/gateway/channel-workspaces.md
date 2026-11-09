@@ -130,7 +130,8 @@ The gateway saves it through Saved logins as the Claude login, the vault
 entry `login.claude` that Settings › Saved logins shows and every other
 machine is handed too (#1260), recorded in the logins audit. A `boat.claude-sign-in`
 an earlier build kept is moved there when first read. `boat.disconnect`
-forgets only the connection; the login is removed from Saved logins. Every serve of a Boat VM reads
+forgets only the connection; the saved Claude login stays, and is removed
+only from Settings › Saved logins. Every serve of a Boat VM reads
 it afresh and writes it as the first line of `env serve`'s standard input,
 which the VM's shell exports as `CLAUDE_CODE_OAUTH_TOKEN` before `env serve`
 starts; an empty line, sent when none is saved or the vault cannot be read,

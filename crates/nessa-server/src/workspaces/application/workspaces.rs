@@ -237,9 +237,9 @@ impl Workspaces {
         self.save(BoatConnection::new(token, "nessa".into(), image)?)
             .await
     }
-    /// Forget the Boat connection. The Claude sign-in stays: it is the
-    /// saved Claude login every other machine is handed too, removed from
-    /// Settings › Saved logins.
+    /// Forget the Boat connection. The Claude sign-in stays in Saved
+    /// logins: every other machine is handed it too. It is removed only
+    /// from Settings › Saved logins.
     pub(crate) async fn disconnect(&self) -> Result<(), Failure> {
         self.settings.clear().await
     }
