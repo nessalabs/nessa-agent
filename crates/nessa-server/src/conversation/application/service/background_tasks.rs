@@ -5,8 +5,8 @@ use super::{ConversationError, ConversationService, SubmissionMode, SubmittedMes
 use crate::conversation::application::{
     background_tasks::{
         BackgroundCallMatcher, BackgroundCleanupFailure, BackgroundRecord, BackgroundRunner,
-        BackgroundSource, BackgroundStore, BackgroundTaskError, BACKGROUND_SERVER,
-        BACKGROUND_START,
+        BackgroundSource, BackgroundStore, BackgroundTarget, BackgroundTaskError,
+        BACKGROUND_SERVER, BACKGROUND_START,
     },
     AgentToolRequest, AgentToolSource,
 };
@@ -109,7 +109,7 @@ impl ConversationService {
                 tasks.store.save(record.clone(), Some(previous)).await?;
             }
             if record.lifecycle.delivery() == TaskDelivery::Waiting {
-                self.spawn_background_owner(tasks.clone(), record, false);
+                self.spawn_background_owner(tasks.clone(), record, None);
             }
         }
         tasks.ready.store(true, Ordering::Release);
@@ -179,10 +179,15 @@ impl ConversationService {
                 .live(&conversation)
                 .await
                 .ok_or(BackgroundTaskError::Unavailable)?;
-            let workspace = live
-                .local_workspace
+            let target = live
+                .background_target
                 .clone()
                 .ok_or(BackgroundTaskError::UnsupportedEnvironment)?;
+            let workspace = match &target {
+                BackgroundTarget::Local(workspace) | BackgroundTarget::Vm { workspace, .. } => {
+                    workspace.clone()
+                }
+            };
             let tool_call = service
                 .background_native_call(&source, &task, &command, &stop, &tasks)
                 .await?;
@@ -211,7 +216,7 @@ impl ConversationService {
             };
             tasks.store.save(record.clone(), None).await?;
             // Past the durable admission, caller cancellation is observation loss.
-            service.spawn_background_owner(tasks.clone(), record.clone(), true);
+            service.spawn_background_owner(tasks.clone(), record.clone(), Some(target));
             service
                 .inner
                 .live_changes
@@ -381,7 +386,7 @@ impl ConversationService {
         &self,
         tasks: Arc<BackgroundTasks>,
         record: BackgroundRecord,
-        execute: bool,
+        execute: Option<BackgroundTarget>,
     ) {
         let key = (record.source.conversation.clone(), record.id.clone());
         let (stop, stopped) = watch::channel(record.lifecycle.stop().cloned());
@@ -422,18 +427,14 @@ impl ConversationService {
         &self,
         tasks: &BackgroundTasks,
         mut record: BackgroundRecord,
-        execute: bool,
+        execute: Option<BackgroundTarget>,
         stop: watch::Receiver<Option<TaskStop>>,
         withdrawal: watch::Receiver<bool>,
     ) -> Result<(), BackgroundTaskError> {
-        if execute {
+        if let Some(target) = execute {
             let outcome = tasks
                 .runner
-                .run(
-                    record.command.clone(),
-                    record.source.workspace.clone(),
-                    stop.clone(),
-                )
+                .run(record.command.clone(), target, stop.clone())
                 .await;
             let ended = self
                 .inner

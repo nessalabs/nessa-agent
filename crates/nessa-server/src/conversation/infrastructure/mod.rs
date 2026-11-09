@@ -121,7 +121,7 @@ mod catalogue_changes;
 mod receiver_authority;
 // Only the Unix gateway composes it, and only a Unix host serves it: it is
 // built, tests included, where both ends exist.
-mod background_tasks;
+pub(crate) mod background_tasks;
 mod channels;
 mod scheduled_messages;
 #[cfg(unix)]

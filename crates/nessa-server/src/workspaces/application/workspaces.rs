@@ -39,6 +39,14 @@ pub(crate) enum ServedCopy {
 #[async_trait]
 pub(crate) trait WorkspaceRuntime: Send + Sync {
     async fn serve(&self, copy: ServedCopy) -> Result<WorkspaceStream, Failure>;
+    /// One command session with stdin kept open until cancellation or disconnect.
+    async fn background(&self, _command: String) -> std::io::Result<WorkspaceStream> {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "background sessions unavailable",
+        ))
+    }
+
     /// The lease protocol the image's own copy says it speaks, empty when it
     /// says none; `None` when the VM could not be asked.
     async fn image_protocol(&self) -> Option<String>;
@@ -113,6 +121,11 @@ struct HeldRuntime {
 impl WorkspaceRuntime for HeldRuntime {
     async fn serve(&self, copy: ServedCopy) -> Result<WorkspaceStream, Failure> {
         let mut stream = self.runtime.serve(copy).await?;
+        stream.owner = Box::new((stream.owner, self.in_use.clone()));
+        Ok(stream)
+    }
+    async fn background(&self, command: String) -> std::io::Result<WorkspaceStream> {
+        let mut stream = self.runtime.background(command).await?;
         stream.owner = Box::new((stream.owner, self.in_use.clone()));
         Ok(stream)
     }

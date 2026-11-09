@@ -108,6 +108,24 @@ pub struct TaskOutcome {
 }
 
 impl TaskOutcome {
+    /// No process was started, so there is no scope left to clean up.
+    pub fn not_started() -> Self {
+        TaskOutcome {
+            cause: TaskCause::SpawnFailed,
+            scope: None,
+            process: None,
+            os_pid: None,
+            exit_code: None,
+            signal: None,
+            cleanup_verified: true,
+            stdout: String::new(),
+            stderr: String::new(),
+            omitted_bytes: 0,
+            output_complete: true,
+            error: None,
+        }
+    }
+
     /// Kept output across both streams, before UTF-8 decoding.
     pub const MAX_OUTPUT_BYTES: usize = 16 * 1024;
 

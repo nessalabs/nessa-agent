@@ -5,8 +5,9 @@ use crate::{
     conversation::{
         application::{ChannelStore, ThreadEnvironments},
         infrastructure::{
+            background_tasks::transport::WorkspaceBackgroundTasks,
             ssh_environment::{DurableEnvironmentAudit, EnvironmentAudit, EnvironmentEvent},
-            LocalChannelStore, ThreadWorkspaces,
+            LocalChannelStore, ShepherdBackgroundTasks, ThreadWorkspaces,
         },
     },
     workspaces::{
@@ -1364,7 +1365,7 @@ async fn conversations(
     });
     // A sign-in saved for Boat reaches conversations already connected.
     tokio::spawn(thread_workspaces.clone().follow_claude_sign_ins());
-    let workspace_environments: Arc<dyn ThreadEnvironments> = thread_workspaces;
+    let workspace_environments: Arc<dyn ThreadEnvironments> = thread_workspaces.clone();
     let clock: Arc<dyn Clock> = Arc::new(SystemClock);
     let host = crate::agent_install::infrastructure::host_platform();
     let opencode = EffectiveOpenCodeProfile::decide(
@@ -1794,13 +1795,14 @@ async fn conversations(
             .collect();
     service.bind_background_tasks(
         Arc::new(background_store),
-        Arc::new(
-            crate::conversation::infrastructure::ShepherdBackgroundTasks::new(
+        Arc::new(WorkspaceBackgroundTasks::new(
+            Arc::new(ShepherdBackgroundTasks::new(
                 shepherd::SupervisorBuilder::new().build(),
                 background_environment,
                 Arc::new(shepherd::SystemClock),
-            ),
-        ),
+            )),
+            thread_workspaces,
+        )),
         Arc::new(super::background_tools::Arguments),
         Arc::new(crate::timer::TokioTimer::new()),
     );

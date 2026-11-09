@@ -47,3 +47,5 @@ mod artifact_tests;
 
 #[cfg(test)]
 pub(crate) use tests::preparation_environment;
+
+mod background_command;

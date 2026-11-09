@@ -1,6 +1,8 @@
 //! Shepherd owns each command scope, independent of the provider's lease.
 use crate::conversation::{
-    application::background_tasks::{BackgroundRun, BackgroundRunner, BackgroundTaskError},
+    application::background_tasks::{
+        BackgroundRun, BackgroundRunner, BackgroundTarget, BackgroundTaskError,
+    },
     domain::{BackgroundCommand, TaskCause, TaskOutcome, TaskStop},
 };
 use shepherd::{
@@ -32,24 +34,14 @@ impl BackgroundRunner for ShepherdBackgroundTasks {
     fn run(
         &self,
         command: BackgroundCommand,
-        workspace: String,
+        target: BackgroundTarget,
         mut stop: watch::Receiver<Option<TaskStop>>,
     ) -> BackgroundRun<'_, TaskOutcome> {
         Box::pin(async move {
-            let mut result = TaskOutcome {
-                cause: TaskCause::SpawnFailed,
-                scope: None,
-                process: None,
-                os_pid: None,
-                exit_code: None,
-                signal: None,
-                cleanup_verified: true,
-                stdout: String::new(),
-                stderr: String::new(),
-                omitted_bytes: 0,
-                output_complete: true,
-                error: None,
+            let BackgroundTarget::Local(workspace) = target else {
+                return TaskOutcome::interrupted();
             };
+            let mut result = TaskOutcome::not_started();
             if stop.borrow().is_some() {
                 result.cause = TaskCause::Cancelled;
                 return result;

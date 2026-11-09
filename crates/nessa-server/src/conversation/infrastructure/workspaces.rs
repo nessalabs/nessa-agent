@@ -8,8 +8,11 @@ use crate::{
         ChannelStore, ConversationError, Environment, EnvironmentFuture, ThreadEnvironments,
         WorkspaceRest, MAX_RETAINED_ENVIRONMENTS,
     },
+    conversation::domain::BackgroundCommand,
     env::LEASE_PROTOCOL,
-    workspaces::application::{RestCause, ServedCopy, WorkspaceRuntime, Workspaces},
+    workspaces::application::{
+        RestCause, ServedCopy, WorkspaceRuntime, WorkspaceStream, Workspaces,
+    },
 };
 use futures_util::future::{BoxFuture, FutureExt, Shared};
 use nessa_protocol::conversation::domain::ConversationId;
@@ -156,36 +159,48 @@ impl RemoteShell for VmShell<'_> {
         self.0.run(command, input)
     }
 }
+/// The channel and allocation checks shared by agent and background sessions.
+async fn open_workspace(
+    service: &Workspaces,
+    channels: &dyn ChannelStore,
+    conversation: &ConversationId,
+    provision: bool,
+) -> Result<Arc<dyn WorkspaceRuntime>, LeaseRefusal> {
+    let channel = channels
+        .channel_of(conversation)
+        .await
+        .map_err(|_| LeaseRefusal::EnvironmentUnreachable)?;
+    if let Some(id) = &channel {
+        if channels
+            .get(id)
+            .await
+            .map_err(|_| LeaseRefusal::EnvironmentUnreachable)?
+            .is_none_or(|found| found.id() != id)
+        {
+            return Err(LeaseRefusal::EnvironmentUnreachable);
+        }
+    }
+    service
+        .open(conversation.clone(), provision, channel)
+        .await
+        .map_err(|error| {
+            tracing::warn!(?error, "Boat workspace could not be prepared");
+            LeaseRefusal::EnvironmentUnreachable
+        })
+}
 impl WorkspaceConnector for Connector {
     fn connect(
         &self,
         provision: bool,
     ) -> EnvironmentFuture<'_, Result<LeaseConnection, LeaseRefusal>> {
         Box::pin(async move {
-            let channel = self
-                .channels
-                .channel_of(&self.conversation)
-                .await
-                .map_err(|_| LeaseRefusal::EnvironmentUnreachable)?;
-            if let Some(id) = &channel {
-                if self
-                    .channels
-                    .get(id)
-                    .await
-                    .map_err(|_| LeaseRefusal::EnvironmentUnreachable)?
-                    .is_none_or(|found| found.id() != id)
-                {
-                    return Err(LeaseRefusal::EnvironmentUnreachable);
-                }
-            }
-            let runtime = self
-                .service
-                .open(self.conversation.clone(), provision, channel)
-                .await
-                .map_err(|error| {
-                    tracing::warn!(?error, "Boat workspace could not be prepared");
-                    LeaseRefusal::EnvironmentUnreachable
-                })?;
+            let runtime = open_workspace(
+                self.service.as_ref(),
+                self.channels.as_ref(),
+                &self.conversation,
+                provision,
+            )
+            .await?;
             let copy = self.copies.copy(runtime.clone(), provision).await?;
             let stream = runtime.serve(copy).await.map_err(|error| {
                 tracing::warn!(?error, "Boat environment process could not be started");
@@ -342,3 +357,40 @@ impl ThreadEnvironments for ThreadWorkspaces {
 #[cfg(all(test, unix))]
 #[path = "../../../tests/conversation/workspace_copies.rs"]
 mod tests;
+
+impl ThreadWorkspaces {
+    /// Open only the task's existing VM. The returned stream retains InUse
+    /// through the same HeldRuntime owner as agent streams.
+    pub(super) async fn background(
+        &self,
+        conversation: ConversationId,
+        workspace: &str,
+        command: &BackgroundCommand,
+    ) -> std::io::Result<WorkspaceStream> {
+        let runtime = open_workspace(
+            self.service.as_ref(),
+            self.channels.as_ref(),
+            &conversation,
+            false,
+        )
+        .await
+        .map_err(|_| std::io::Error::other("workspace unavailable"))?;
+        let host = SshDestination::new(format!("boat-{conversation}"))
+            .map_err(|_| std::io::Error::other("invalid workspace identity"))?;
+        self.installer
+            .ensure_on(
+                &VmShell(runtime.as_ref()),
+                &host,
+                &conversation.to_string(),
+                self.audit.as_ref(),
+            )
+            .await
+            .map_err(|_| std::io::Error::other("background build unavailable"))?;
+        let program = self
+            .installer
+            .background_command(workspace, command)
+            .await
+            .map_err(|_| std::io::Error::other("background command unavailable"))?;
+        runtime.background(program).await
+    }
+}

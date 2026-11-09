@@ -43,6 +43,7 @@
 //! `Connected`; the audit keeps the `InstallStarted` with no outcome.
 use super::audit::{EnvironmentAudit, EnvironmentEvent, InstallRefusal};
 use super::release::{pins, prune, BundledReleases, HttpsReleases, ReleaseBuild, ReleaseDownload};
+use crate::conversation::domain::BackgroundCommand;
 use crate::env::{BUNDLED_HOST_BUILDS, HOST_BUILDS, HOST_BUILDS_FROM, LEASE_PROTOCOL};
 use crate::env_serve::install::{
     probe_command, serve_command, upload_command, Platform, Probe, Upload, UploadRefusal,
@@ -383,6 +384,20 @@ impl HostInstaller {
     /// As [`Self::digest`].
     pub(crate) async fn serve_command(&self) -> Result<String, LeaseRefusal> {
         Ok(serve_command(&self.builds().await?))
+    }
+
+    /// Command helper from the same exact build that `ensure_on` installs.
+    pub(crate) async fn background_command(
+        &self,
+        cwd: &str,
+        command: &BackgroundCommand,
+    ) -> Result<String, LeaseRefusal> {
+        Ok(super::background_command::command(
+            &self.builds().await?,
+            cwd,
+            command.timeout_seconds(),
+            command.text(),
+        ))
     }
 
     /// Make sure this build is installed on `host`, for `lease`.

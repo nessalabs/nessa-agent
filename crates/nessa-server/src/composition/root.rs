@@ -67,6 +67,14 @@ impl CompositionRoot {
     /// re-derived from the environment wherever it is needed.
     pub async fn run(command: Command, launch: &Launch) -> Result<(), RunError> {
         match command {
+            #[cfg(unix)]
+            Command::BackgroundRun { cwd, command } => {
+                super::background_command::execute(cwd, command).await
+            }
+            #[cfg(not(unix))]
+            Command::BackgroundRun { .. } => {
+                Err(RunError::Agent("background-run requires Unix".into()))
+            }
             Command::Help => {
                 std::io::stdout().write_all(HELP.as_bytes())?;
                 Ok(())

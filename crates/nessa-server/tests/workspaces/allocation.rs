@@ -136,6 +136,16 @@ impl RuntimeSettings for WrongRuntimeScope {
 struct Runtime;
 #[async_trait]
 impl WorkspaceRuntime for Runtime {
+    async fn background(&self, _: String) -> std::io::Result<WorkspaceStream> {
+        Ok(WorkspaceStream {
+            input: Box::new(tokio::io::sink()),
+            output: Box::new(tokio::io::empty()),
+            owner: Box::new(()),
+            files: None,
+            mcp_relay: None,
+        })
+    }
+
     async fn serve(&self, _: ServedCopy) -> Result<WorkspaceStream, Failure> {
         Err(Failure::Provider)
     }
@@ -1256,4 +1266,21 @@ async fn disconnecting_boat_forgets_its_claude_sign_in() {
     assert!(sign_ins.saved.lock().unwrap().is_none());
     assert_eq!(service.claude_sign_in_changes(), 2);
     assert!(sign_ins.cleared.load(std::sync::atomic::Ordering::SeqCst));
+}
+
+#[tokio::test]
+async fn a_background_stream_holds_the_vm_after_its_runtime_is_dropped() {
+    let (service, _, provider) = fixture();
+    provider.proceed.add_permits(1);
+    let runtime = service.open(id(1), true, None).await.unwrap();
+    let stream = runtime.background("fake command".into()).await.unwrap();
+    drop(runtime);
+    assert_eq!(
+        service.rest(id(1), RestCause::Idle).await.stopped,
+        Ok(false)
+    );
+    assert!(provider.stops.lock().unwrap().is_empty());
+    drop(stream);
+    assert_eq!(service.rest(id(1), RestCause::Idle).await.stopped, Ok(true));
+    assert_eq!(provider.deletes.load(Ordering::SeqCst), 0);
 }
