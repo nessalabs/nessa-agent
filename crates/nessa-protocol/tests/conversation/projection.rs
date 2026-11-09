@@ -45,7 +45,7 @@ use nessa_sdk::application::agent_execution::sessions::{
 use nessa_sdk::application::agent_execution::tools::ToolReviewInput;
 use nessa_sdk::domain::agent_execution::executions::{
     ExecutionId, ExecutionOutcome, Initiation, InvocationKind, InvocationStage, MessageChunk,
-    MessageId, QueueMutation, SchedulingCause,
+    MessageId, QueueMutation, Resumption, SchedulingCause,
 };
 use nessa_sdk::domain::agent_execution::permissions::{
     CustomPermissionCancellationReason, PendingQuestion, PendingReview, PermissionApplicationId,
@@ -1286,6 +1286,33 @@ fn a_restarted_turn_still_in_the_queue_is_queued_then_unresolved() {
     );
     assert!(left.questions.is_empty());
     assert!(left.pending.is_empty());
+}
+
+/// A successor turn still in the queue previews the person's words, as its
+/// message does: the client refuses a pending entry whose text disagrees
+/// with its queued message.
+#[test]
+fn a_queued_retry_previews_the_persons_words() {
+    let mut snapshot = review_snapshot(Vec::new());
+    let successor = Resumption::of(&ExecutionId::new("execution").unwrap())
+        .successor()
+        .unwrap();
+    snapshot.invocations[0].request.execution_id = successor.clone();
+    snapshot.invocations[0].request.user_message = said(
+        "[Nessa restarted before this message reached you, so it is sent again now. \
+Check the current state first: earlier work may have changed it.]\n\nmessage",
+    );
+    let mut projection = opened_on(&snapshot);
+    assert!(projection.replace_committed(
+        &committed("incarnation", 1, 1, 1, Some(&snapshot)),
+        std::slice::from_ref(&successor),
+        None,
+    ));
+    let queued = projection.read();
+    assert_eq!(queued.messages[0].user_text, "message");
+    assert_eq!(queued.messages[0].retried, Some(true));
+    let previews: Vec<_> = queued.pending.iter().map(|p| p.text.as_str()).collect();
+    assert_eq!(previews, ["message"]);
 }
 
 #[test]

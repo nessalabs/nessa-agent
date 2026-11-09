@@ -542,7 +542,9 @@ const NOTICES: [(&str, bool); 4] = [
 /// What a person asked for in `record`: its own text, or for a successor
 /// turn, the original request without the notice written for the model.
 /// A person's view shows this, so the notice never reads as their message
-/// (`a_successor_shows_the_person_their_own_words`). `None` when the turn is
+/// (`a_turn_the_provider_failed_is_sent_again_after_its_backoff`, and
+/// `a_turn_owed_behind_a_pending_mode_change_is_resumed_once_it_settles` for
+/// its queued preview). `None` when the turn is
 /// not a successor: its text is the person's as it is.
 pub fn resumed_request(record: &InvocationRecord) -> Option<&str> {
     if Resumption::of(&record.request.execution_id).attempt() == 0 {

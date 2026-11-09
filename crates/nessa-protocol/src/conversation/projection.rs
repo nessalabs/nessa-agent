@@ -949,11 +949,7 @@ impl Projection {
                     record.request.user_message.sender(),
                     MessageSender::Internal
                 );
-                let text = if internal {
-                    ""
-                } else {
-                    record.request.user_message.text_str()
-                };
+                let text = if internal { "" } else { person_text(record) };
                 let mode = match record.submission {
                     SubmissionMode::Steering | SubmissionMode::BoundarySteering => {
                         ConversationPendingMode::Steering
@@ -1848,14 +1844,11 @@ impl Projection {
         );
         // A successor turn's text opens with a notice for the model; the
         // person sees their own words, marked as sent again.
-        let resumed = resumed_request(record);
-        self.view.messages[index].retried = resumed.is_some().then_some(true);
+        self.view.messages[index].retried = resumed_request(record).is_some().then_some(true);
         self.view.messages[index].user_text = if internal {
             String::new()
         } else {
-            resumed
-                .unwrap_or_else(|| record.request.user_message.text_str())
-                .to_owned()
+            person_text(record).to_owned()
         };
         self.view.messages[index].attachments = record
             .request
@@ -2671,3 +2664,10 @@ mod tool_part_tests;
 #[cfg(test)]
 #[path = "../../tests/conversation/earlier_turns.rs"]
 mod earlier_turn_tests;
+
+/// The words the person sent with a turn: a successor turn's own text opens
+/// with a notice for the model, which is dropped. The queued preview and the
+/// turn's message both read it here, so they never disagree.
+fn person_text(record: &InvocationRecord) -> &str {
+    resumed_request(record).unwrap_or_else(|| record.request.user_message.text_str())
+}
