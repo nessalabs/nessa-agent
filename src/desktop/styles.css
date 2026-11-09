@@ -1286,7 +1286,7 @@ html:not(.dark) [data-surface] {
   color: color-mix(in oklab, var(--foreground) 35%, transparent);
 }
 
-/* Pasted images, a row of tiles above the text, each with its own remove. */
+/* Attachments — pasted or picked images and files — a row of tiles above the text, each with its own remove. */
 .desktop-composer-images {
   display: flex;
   flex-wrap: wrap;
@@ -1405,6 +1405,13 @@ html:not(.dark) [data-surface] {
   height: 15px;
   flex-shrink: 0;
   stroke-width: 1.75;
+}
+
+/* Attach files: an icon-only chip, as square as the chip is tall. */
+.desktop-composer-attach {
+  width: 30px;
+  justify-content: center;
+  padding: 0;
 }
 
 .desktop-chip-model > svg:last-child {

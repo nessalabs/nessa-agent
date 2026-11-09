@@ -192,6 +192,16 @@ import {
  *               Disconnect. A source-authorized gateway tool reads a fixed
  *               repository with the connected token. The audit holds each
  *               sign-in step and no token
+ *   login       an agent's login is pasted into Settings › Connections ›
+ *               Accounts › Saved logins: the row says only "Saved", its
+ *               field is cleared, and the gateway says it is saved. A
+ *               paired worker whose owner lets it take logins
+ *               (`env grant --logins`) starts the agent without the login
+ *               while its "Use my saved logins here" switch in Devices is
+ *               off, and with it in the agent's login variable once it is
+ *               on; the gateway's logs and records never hold the login,
+ *               and its records say it was withheld, then sent. The switch
+ *               and the login are removed again after
  *   voice       Talk while Nessa is locked offers Unlock beside the notice
  *               and then starts the call; with no key saved it fails with
  *               an Add key button beside
@@ -253,6 +263,14 @@ import {
  *               message, the composer lets it go, the conversation holds it
  *               and the agent says it was handed exactly that image; the
  *               person's message draws it, read back from the conversation
+ *   attach      a text file and an image are picked with the composer's
+ *               Attach button: the file shows by its name, the image as its
+ *               picture; sent with the message, the conversation holds the
+ *               image as an image and the file as an upload under its name,
+ *               the agent is handed the image and finds the file's bytes in
+ *               its workspace, and the person's message draws both. The
+ *               window runs under the packaged app's connect-src, so a read
+ *               of the attachments' bytes the app would block fails here too
  *   trace       the agent makes three calls, one failing, then answers: the
  *               gateway's view keeps each call's start and end time and the
  *               input it was made with; the window draws them as one folded
@@ -323,6 +341,7 @@ import {
   streamWord,
   stressScenario,
 } from "../../../scripts/mcp-test-server/scenarios/stress.mjs"
+import { appConnectPolicy, assertPolicyHolds } from "./lib/app-policy.mjs"
 import { appFrame } from "./lib/apps.mjs"
 import { browse } from "./lib/mdns-probe.mjs"
 import { noteLiveMountResourceAbort, openPage, withEngines } from "./lib/browser.mjs"
@@ -422,6 +441,15 @@ const CURRENT_METADATA_VERSION = Number(
  * workers (`POOL` in crates/nessa-server/src/conversation/application/placement.rs).
  */
 const POOL = "peer:any"
+/**
+ * The variable each agent is handed its saved login in on a worker: the
+ * first of `login_variables` (crates/nessa-protocol/src/lease.rs).
+ */
+const LOGIN_VARIABLES = {
+  claude: "CLAUDE_CODE_OAUTH_TOKEN",
+  codex: "CODEX_API_KEY",
+  opencode: "OPENCODE_API_KEY",
+}
 
 const meta = {
   name: "conversation-stress",
@@ -3195,7 +3223,19 @@ const steps = {
       after.messages.find((turn) => turn.executionId === parent.turn.executionId)
         ?.status !== "cancelled"
     )
-      failures.push("a cancellation report restarted the stopped parent")
+      failures.push(
+        `a cancellation report restarted the stopped parent: ${JSON.stringify(
+          after.messages
+            .filter((turn) => !beforeStop.has(turn.executionId))
+            .map((turn) => ({
+              executionId: turn.executionId,
+              status: turn.status,
+              parts: turn.parts?.length ?? 0,
+              text: turn.userText?.slice(0, 80),
+              agent: turn.agent,
+            })),
+        )}`,
+      )
     if (!(await sendShown(run.page)))
       failures.push("a report returned the parent to Stop")
   },
@@ -3867,6 +3907,214 @@ const steps = {
         failures.push("an audit record holds the GitHub token")
     } finally {
       await run.page.unroute(pictures, answer)
+    }
+  },
+
+  async login(run, step, failures) {
+    const agent = run.stack.agent
+    const login = `sk-stress-login-r${step.index}-s${run.knobs.seed}`
+    const shot = (name) =>
+      run.evidence
+        ? run.page
+            .screenshot({ path: join(run.evidence, `login-${name}.png`) })
+            .catch(() => {})
+        : undefined
+    const row = run.page.locator(`[data-saved-login="${agent}"]`)
+    // The login, once saved, is removed again whatever happens after.
+    try {
+      await steps.loginOnWorker(run, step, failures, { agent, login, row, shot })
+    } finally {
+      try {
+        await run.stack.vault.unlock()
+        await run.client.logins.remove(agent)
+      } catch (error) {
+        failures.push(`the saved login could not be removed again: ${error.message}`)
+      }
+    }
+    if (failures.length === 0) await steps.reply(run, step, failures)
+  },
+
+  async loginOnWorker(run, step, failures, { agent, login, row, shot }) {
+    const variable = LOGIN_VARIABLES[agent]
+    const namespace = join(run.stack.gateway.directory, "ci", "instances", INSTANCE)
+    // Saved in Settings, as a person pastes it.
+    await run.exclusive(async () => {
+      const needsUnlock = (await run.client.vault.status()).state === "locked"
+      await openAccounts(run.page)
+      if (needsUnlock) await run.page.locator('[data-vault-dialog="unlock"]').waitFor()
+      await unlockVault(run.page, { expectedContainer: "[data-settings-layers]" })
+      await row.locator(`[data-saved-login-input="${agent}"]`).fill(login)
+      await row.locator(`[data-saved-login-save="${agent}"]`).click()
+      await unlockVault(run.page)
+      const saved = await row
+        .locator('[data-saved-login-state="saved"]')
+        .waitFor({ timeout: 15_000 })
+        .then(() => true)
+        .catch(() => false)
+      if (!saved) failures.push("the saved-login row does not say the login is saved")
+      else await shot("saved")
+      if ((await row.locator(`[data-saved-login-input="${agent}"]`).inputValue()) !== "")
+        failures.push("the saved-login row kept the login in its field after saving")
+      if ((await run.page.locator("[data-settings-layers]").innerText()).includes(login))
+        failures.push("Settings shows the saved login")
+      await closeSettings(run.page)
+    })
+    if (failures.length) return
+    const status = await run.client.logins.status()
+    if (!status.logins.find((each) => each.agent === agent)?.saved)
+      failures.push(`the gateway does not report ${agent}'s login saved`)
+    if (JSON.stringify(status).includes(login))
+      failures.push("logins.status answered with the login")
+    // A worker whose owner lets it take logins, each launch of the agent
+    // there recording what its login variable held, one line each.
+    const linked = await run.exclusive(async () => {
+      await openLinkedDevices(run.page)
+      const on = await switchLinking(run, true, failures)
+      if (on) await closeSettings(run.page)
+      return on
+    })
+    if (!linked) return
+    // Linking restarts the gateway, which locks its vault: unlocked again,
+    // so the switched-off worker is refused by the policy, not the lock.
+    await run.stack.vault.unlock()
+    const launches = join(tmpdir(), `nessa-stress-logins-${randomUUID()}.txt`)
+    writeFileSync(launches, "")
+    const seen = () => readFileSync(launches, "utf8").split("\n").slice(0, -1)
+    let worker
+    let owner
+    try {
+      owner = await connectClient(run.stack.gateway, INSTANCE, "owner")
+      const launch = scriptedLaunch(agent, {
+        scenario: run.stack.scenario,
+        nativeContext: run.stack.nativeContext,
+        model: run.stack.profile.model,
+      })
+      const recording = [
+        "/bin/sh",
+        "-c",
+        `printf '%s\\n' "\${${variable}-}" >> '${launches}'; exec "$@"`,
+        "sh",
+        ...launch.command.argv,
+      ]
+      worker = await startWorker({
+        owner,
+        address: run.nativeAddress,
+        agent,
+        launch: { ...launch, command: { ...launch.command, argv: recording } },
+        label: `login${step.index}`,
+        logins: true,
+        connected: async (name) =>
+          (await offers(run, (environments) => environments.includes(name))).includes(
+            name,
+          ),
+      })
+      const talk = async (label) => {
+        const before = seen().length
+        const conversationId = randomUUID()
+        await run.client.conversation.create({
+          conversationId,
+          agent,
+          environment: worker.name,
+        })
+        const text = prompt(run, STRESS.reply, step, ` login ${label}`)
+        await run.client.conversation.submit(
+          run.client.conversation.prepare(conversationId, text),
+        )
+        const { view } = await settled(
+          run,
+          conversationId,
+          new Set(),
+          text,
+          "completed",
+          failures,
+        )
+        if (view?.lease?.host !== worker.name)
+          failures.push(`its lease runs on ${view?.lease?.host}, not ${worker.name}`)
+        if (failures.length === 0) failures.push(...(await atRest(run, [conversationId])))
+        return seen().slice(before)
+      }
+      // Off: the worker takes logins, but its switch is not on.
+      const off = await talk("off")
+      if (off.length === 0 || off.some((line) => line !== ""))
+        failures.push(
+          `with the switch off the agent's launches held ${JSON.stringify(off.map((line) => `${line.length} bytes`))}`,
+        )
+      if (failures.length) return
+      // On, from the worker's own page in Devices.
+      const id = worker.name.slice("peer:".length)
+      await run.exclusive(async () => {
+        const page = run.page
+        await setSideRail(page, true, failures)
+        if (failures.length) return
+        await page.locator('[data-rail-item="devices"]').click()
+        const tile = page.locator(`[data-devices-worker="${id}"]`)
+        await tile.waitFor({ timeout: 15_000 })
+        await tile.click()
+        const fact = page.locator('[data-devices-page="worker"] [data-device-logins]')
+        await fact.waitFor({ timeout: 5_000 })
+        await fact.getByRole("switch").click()
+        await unlockVault(page)
+        const on = await waitFor(
+          async () => (await fact.getAttribute("data-device-logins")) === "on",
+          15_000,
+        )
+        if (!on) failures.push("the worker's saved-logins switch did not turn on")
+        else await shot("device-on")
+        await page.locator('[data-devices-action="back"]').click()
+        await page.locator('[data-rail-item="agents"]').click()
+        await setSideRail(page, false, failures)
+      })
+      if (failures.length) return
+      if (!(await run.client.logins.status()).devicesOn.includes(worker.name))
+        failures.push("the gateway does not report the worker switched on")
+      const on = await talk("on")
+      if (on.length === 0 || on.some((line) => line !== login))
+        failures.push(
+          `with the switch on the agent's launches held ${JSON.stringify(on.map((line) => (line === login ? "the login" : `${line.length} other bytes`)))}`,
+        )
+      // Withheld and then sent, each recorded, and no record or log holds
+      // the login itself.
+      const audit = join(namespace, "conversations", "audit", "logins")
+      const records = existsSync(audit)
+        ? readdirSync(audit).map((name) => readFileSync(join(audit, name), "utf8"))
+        : []
+      const handed = records
+        .map((text) => JSON.parse(text))
+        .filter((record) => record.details?.environment === worker.name)
+      if (
+        !handed.some(
+          (record) =>
+            record.phase === "withheld" && record.details.reason === "not_allowed",
+        )
+      )
+        failures.push(
+          `no record says the policy withheld the login from the switched-off worker: ${JSON.stringify(handed)}`,
+        )
+      if (!handed.some((record) => record.phase === "sent"))
+        failures.push("no record says the login was sent to the switched-on worker")
+      if (records.some((text) => text.includes(login)))
+        failures.push("a saved-login record holds the login")
+      if (run.stack.gateway.log().includes(login) || worker.log().includes(login))
+        failures.push("a log holds the saved login")
+    } finally {
+      if (worker) {
+        if (run.evidence)
+          writeFileSync(join(run.evidence, `worker-${worker.label}.log`), worker.log())
+        await worker.close()
+      }
+      owner?.close()
+      rmSync(launches, { force: true })
+      // The switch the step turned on is off again.
+      try {
+        await run.stack.vault.unlock()
+        if (worker?.name) await run.client.logins.setDevice(worker.name, false)
+      } catch (error) {
+        failures.push(`the worker's switch could not be turned off: ${error.message}`)
+      }
+      await run.exclusive(async () => {
+        await openLinkedDevices(run.page)
+        if (await switchLinking(run, false, failures)) await closeSettings(run.page)
+      })
     }
   },
 
@@ -7343,6 +7591,103 @@ const steps = {
         path: join(run.evidence, `paste-${run.engine}-${step.index}-sent.png`),
       })
   },
+  async attach(run, step, failures) {
+    // Picked with the composer's Attach button, from the system's picker: a
+    // file no model takes as an image, and an image.
+    const notes = Buffer.from(`notes for step ${step.index}\n`)
+    const attach = dock(run.page).getByRole("button", { name: "Attach files" })
+    const [chooser] = await Promise.all([
+      run.page.waitForEvent("filechooser", { timeout: 5000 }),
+      attach.click(),
+    ]).catch(() => [undefined])
+    if (!chooser) {
+      failures.push("the composer's Attach button opened no file picker")
+      return
+    }
+    if (!chooser.isMultiple()) failures.push("the file picker takes one file, not many")
+    await chooser.setFiles([
+      { name: "notes.txt", mimeType: "text/plain", buffer: notes },
+      { name: "picked.png", mimeType: "image/png", buffer: tinyPng },
+    ])
+    const tiles = dock(run.page).locator(".desktop-composer-image")
+    const fileTile = tiles.filter({ hasText: "notes.txt" })
+    if (
+      !(await waitFor(
+        async () =>
+          (await tiles.count()) === 2 &&
+          (await fileTile.count()) === 1 &&
+          (await fileTile.getAttribute("data-kind")) === "file" &&
+          (await fileTile.locator("img").count()) === 0 &&
+          (await tiles.locator("img").count()) === 1,
+        5000,
+      ))
+    ) {
+      failures.push(
+        `the composer shows ${await tiles.count()} attachments, not notes.txt by its name and the image as its picture`,
+      )
+      return
+    }
+    if (run.evidence)
+      await dock(run.page).screenshot({
+        path: join(run.evidence, `attach-${run.engine}-${step.index}-composer.png`),
+      })
+    const text = prompt(run, STRESS.attach, step)
+    const seen = await send(run, run.main.id, text, failures)
+    if (!(await waitFor(async () => (await tiles.count()) === 0, 5000)))
+      failures.push("the attachments stayed in the composer after Send")
+    const { turn } = await settled(run, run.main.id, seen, text, "completed", failures)
+    if (!turn) return
+    // The conversation holds the image as an image and the file as an
+    // original upload under its own name.
+    const [image, ...moreImages] = turn.attachments ?? []
+    const [upload, ...moreUploads] = turn.uploads ?? []
+    if (!image || moreImages.length || image.mimeType !== "image/png")
+      failures.push(
+        `the attached turn carries ${JSON.stringify(turn.attachments ?? [])}, not one PNG`,
+      )
+    if (
+      !upload ||
+      moreUploads.length ||
+      upload.name !== "notes.txt" ||
+      upload.mimeType !== "text/plain" ||
+      upload.size !== notes.length
+    )
+      failures.push(
+        `the attached turn's uploads are ${JSON.stringify(turn.uploads ?? [])}, not notes.txt of ${notes.length} bytes`,
+      )
+    if (!image || !upload) return
+    // The agent was handed the image, and found the file's very bytes where
+    // its link points: the gateway placed it in the agent's workspace.
+    const said = (turn.parts ?? []).map((part) => part.text ?? "").join("")
+    // The link's name is the placed file's, `nessa-<digest>-notes.txt`, with
+    // its punctuation escaped for the Markdown it is handed in.
+    const placed = new RegExp(
+      `^${escapeRegExp(`${SAYS.attach}${image.mimeType} ${image.size} bytes and `)}nessa\\\\?-[0-9a-f]{64}\\\\?-notes\\\\?\\.txt = ${escapeRegExp(JSON.stringify(notes.toString("utf8")))}${escapeRegExp(` for ${text}`)}$`,
+    )
+    if (!placed.test(said))
+      failures.push(
+        `the agent said ${JSON.stringify(said)}, not the image and notes.txt's bytes`,
+      )
+    // The window draws both on the person's message, read back from the
+    // conversation once it holds the message, the file by its name.
+    const bubble = run.page
+      .locator('.workspace-message[data-role="user"]')
+      .filter({ hasText: text })
+    const held = bubble.locator('ul[aria-label="2 attachments"]:not([data-local-images])')
+    if (
+      !(await waitFor(
+        async () =>
+          (await held.locator("img").count()) === 1 &&
+          (await held.filter({ hasText: "notes.txt" }).count()) === 1,
+        10_000,
+      ))
+    )
+      failures.push("the sent message does not show its image and notes.txt")
+    else if (run.evidence)
+      await bubble.screenshot({
+        path: join(run.evidence, `attach-${run.engine}-${step.index}-sent.png`),
+      })
+  },
   async table(run, step, failures) {
     const text = prompt(run, STRESS.table, step)
     const seen = await send(run, run.main.id, text, failures)
@@ -9901,6 +10246,11 @@ async function startStack(options) {
   }))
 }
 
+/** `text` as a pattern that matches only itself. */
+function escapeRegExp(text) {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+}
+
 await main(
   meta,
   async ({ options, rep, target: stack }) => {
@@ -9918,7 +10268,18 @@ await main(
       let restartConsole
       let reviewAnswers
       let accessRefusals
+      const gateway = new URL(stack.gateway.url)
+      // The packaged window's connect-src, plus the ports only this check
+      // has: its own gateway's, and the fake voice provider the window's
+      // scripted transport calls in place of WebRTC. A read the app's policy
+      // blocks fails here too (`paste`, `attach`).
+      const contentPolicy = appConnectPolicy([
+        gateway.origin,
+        `ws://${gateway.host}`,
+        ...(stack.realtime ? [stack.realtime.socketOrigin] : []),
+      ])
       const opened = await openPage(browser, {
+        contentPolicy,
         preparePage: async (page) => {
           await stack.vault.install(page)
           restartConsole = observeGatewayRestarts(page, stack.endpoint)
@@ -9940,6 +10301,9 @@ await main(
           ],
         ],
       })
+      // The probe's own refusal is the console line it is expected to leave.
+      opened.noteHarmless(/127\.0\.0\.1:9\/policy-probe/)
+      await assertPolicyHolds(opened.page, contentPolicy)
       const run = new Run(stack, opened, knobs, restartConsole)
       run.reviewAnswers = reviewAnswers
       run.reviewAnswerEvidence = []
@@ -9961,6 +10325,8 @@ await main(
         await run.client.conversation.submit(run.client.conversation.prepare(id, first))
         await settled(run, id, new Set(), first, "completed", setup)
         run.main = { id, title: await titleOf(run, id) }
+        // A previous engine's restart can leave the shared gateway vault locked.
+        await unlockRequestedVault(run.client, run.page)
         await openStressConversation(run.page, run.main.id, run.main.title)
         const initial = await readWithReviews(run.client, run.main.id)
         const verifiedProfile = requireStressCapabilities(stack.profile, {

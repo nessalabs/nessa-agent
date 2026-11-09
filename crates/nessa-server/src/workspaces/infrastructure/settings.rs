@@ -1,9 +1,11 @@
-//! Boat connection, and the Claude sign-in made for its VMs, in the existing
-//! encrypted vault. Unlock generation fences validation/write and reads; no
-//! second keychain or plaintext token file.
+//! Boat connection in the existing encrypted vault. Unlock generation
+//! fences validation/write and reads; no second keychain or plaintext token
+//! file. The Claude sign-in is the saved Claude login (`login.claude`,
+//! issue #1260), handed to a VM only on the lease, after that handoff is
+//! recorded.
 use crate::workspaces::{
-    application::{ClaudeSignIns, Settings},
-    domain::{BoatConnection, ClaudeSignIn, Failure},
+    application::Settings,
+    domain::{BoatConnection, Failure},
 };
 use async_trait::async_trait;
 use nessa_vault::{application::Vault, domain::EntryName};
@@ -12,8 +14,6 @@ use std::sync::Arc;
 use zeroize::Zeroizing;
 
 pub(crate) struct VaultSettings(pub(crate) Arc<Vault>);
-/// The Claude sign-in for Boat VMs, in the same vault and fence.
-pub(crate) struct VaultClaudeSignIns(pub(crate) Arc<Vault>);
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Stored {
@@ -29,9 +29,6 @@ struct Borrowed<'a> {
 }
 fn entry() -> EntryName {
     EntryName::new("boat.connection").expect("static vault entry")
-}
-fn claude_entry() -> EntryName {
-    EntryName::new("boat.claude-sign-in").expect("static vault entry")
 }
 fn failed(error: nessa_vault::domain::Failure) -> Failure {
     if error == nessa_vault::domain::Failure::Locked {
@@ -84,49 +81,5 @@ impl Settings for VaultSettings {
         tokio::task::spawn_blocking(move || vault.delete_in(generation, &entry()).map_err(failed))
             .await
             .map_err(|_| Failure::Storage)?
-    }
-}
-#[async_trait]
-impl ClaudeSignIns for VaultClaudeSignIns {
-    async fn read(&self) -> Result<Option<ClaudeSignIn>, Failure> {
-        let generation = self.generation()?;
-        let vault = self.0.clone();
-        tokio::task::spawn_blocking(move || {
-            vault
-                .read_in(generation, &claude_entry())
-                .map_err(failed)?
-                .map(|bytes| {
-                    let token = String::from_utf8(bytes.to_vec()).map_err(|_| Failure::Storage)?;
-                    ClaudeSignIn::new(token).map_err(|_| Failure::Storage)
-                })
-                .transpose()
-        })
-        .await
-        .map_err(|_| Failure::Storage)?
-    }
-    async fn save(&self, sign_in: ClaudeSignIn) -> Result<(), Failure> {
-        let generation = self.generation()?;
-        let vault = self.0.clone();
-        tokio::task::spawn_blocking(move || {
-            vault
-                .write_in(generation, &claude_entry(), sign_in.as_bytes())
-                .map_err(failed)
-        })
-        .await
-        .map_err(|_| Failure::Storage)?
-    }
-    async fn clear(&self) -> Result<(), Failure> {
-        let generation = self.generation()?;
-        let vault = self.0.clone();
-        tokio::task::spawn_blocking(move || {
-            vault.delete_in(generation, &claude_entry()).map_err(failed)
-        })
-        .await
-        .map_err(|_| Failure::Storage)?
-    }
-}
-impl VaultClaudeSignIns {
-    fn generation(&self) -> Result<u64, Failure> {
-        self.0.unlocked_generation().ok_or(Failure::Locked)
     }
 }

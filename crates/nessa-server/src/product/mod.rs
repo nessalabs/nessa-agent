@@ -60,6 +60,7 @@ mod channel;
 mod conversation;
 mod device_setup;
 mod github;
+mod logins;
 mod mcp_apps;
 pub(crate) mod mcp_servers;
 mod native;

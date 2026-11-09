@@ -1,8 +1,8 @@
 //! Boat's adapter uses the real vault's encryption and unlock-generation fence.
 use crate::workspaces::{
-    application::{ClaudeSignIns, Settings},
-    domain::{BoatConnection, ClaudeSignIn, Failure},
-    infrastructure::{VaultClaudeSignIns, VaultSettings},
+    application::Settings,
+    domain::{BoatConnection, Failure},
+    infrastructure::VaultSettings,
 };
 use nessa_vault::{
     application::{Caller, Clock, ObservationClock, Vault},
@@ -76,7 +76,8 @@ async fn tokens_are_encrypted_and_stale_unlocks_cannot_publish_or_clear_the_new_
 }
 
 #[tokio::test]
-async fn a_claude_sign_in_is_encrypted_replaced_and_cleared_in_the_vault() {
+async fn a_claude_sign_in_is_the_saved_claude_login_and_an_older_entry_moves_there() {
+    use nessa_protocol::agents::AgentId;
     let root = tempfile::tempdir().unwrap();
     let vault = Vault::new(
         Arc::new(EncryptedFileVault::new(
@@ -93,25 +94,40 @@ async fn a_claude_sign_in_is_encrypted_replaced_and_cleared_in_the_vault() {
             credential: "fixture-credential".into(),
         },
     );
-    let sign_ins = VaultClaudeSignIns(vault.clone());
-    let token = |value: &str| ClaudeSignIn::new(value.into()).unwrap();
-    assert!(matches!(
-        sign_ins.save(token("sk-ant-oat01-locked")).await,
-        Err(Failure::Locked)
-    ));
+    let login = crate::logins::infrastructure::login_stores(&vault)[&AgentId::Claude].clone();
+    assert_eq!(login.read(), Err(crate::secrets::SecretUnavailable::Locked));
     vault.create(&session.lease(), passphrase(), &[]).unwrap();
-    assert!(sign_ins.read().await.unwrap().is_none());
-    sign_ins.save(token("sk-ant-oat01-first")).await.unwrap();
-    sign_ins.save(token("sk-ant-oat01-second")).await.unwrap();
+    assert!(login.read().unwrap().is_none());
+    // What an earlier build saved for Boat is found, and kept as the saved
+    // Claude login from then on.
+    let older = nessa_vault::domain::EntryName::new("boat.claude-sign-in").unwrap();
+    vault.write(&older, b"sk-ant-oat01-older").unwrap();
+    assert_eq!(
+        login.read().unwrap().unwrap().as_slice(),
+        b"sk-ant-oat01-older"
+    );
+    assert!(vault.read(&older).unwrap().is_none());
+    let claude = crate::logins::domain::login_entry(AgentId::Claude);
+    assert_eq!(
+        vault
+            .read(&claude)
+            .unwrap()
+            .unwrap()
+            .into_zeroizing()
+            .as_slice(),
+        b"sk-ant-oat01-older"
+    );
+    login.write(b"sk-ant-oat01-second").unwrap();
     let encrypted = std::fs::read(root.path().join("vault/entries.enc")).unwrap();
     assert!(!encrypted
         .windows(b"sk-ant-oat01".len())
         .any(|w| w == b"sk-ant-oat01"));
+    // One fact: Saved logins reads what Boat saved, and a removal there is
+    // gone for Boat too.
     assert_eq!(
-        sign_ins.read().await.unwrap().unwrap().as_bytes(),
+        login.read().unwrap().unwrap().as_slice(),
         b"sk-ant-oat01-second"
     );
-    sign_ins.clear().await.unwrap();
-    assert!(sign_ins.read().await.unwrap().is_none());
-    sign_ins.clear().await.unwrap();
+    login.delete().unwrap();
+    assert!(login.read().unwrap().is_none());
 }

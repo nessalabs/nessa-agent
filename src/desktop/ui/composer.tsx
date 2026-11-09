@@ -50,11 +50,12 @@ export interface ComposerAccess {
 }
 
 /**
- * The images on a composer's next message, owned outside
- * (`workspace/ui/panes/composer-images.ts`): shown as tiles above the text,
- * each with a button that takes it off (`onRemove`); a paste of images is
- * offered to `onPaste` (`pastedFiles`), and `notice` says why the last ones
- * offered were not taken.
+ * The images and files on a composer's next message, owned outside
+ * (`workspace/ui/panes/composer-images.ts`): shown as tiles above the text —
+ * an image as its picture, any other file as its name — each with a button
+ * that takes it off (`onRemove`); files pasted (`pastedFiles`) or picked with
+ * the Attach button are offered to `onPaste`, and `notice` says why the last
+ * ones offered were not taken.
  */
 export interface ComposerImages {
   readonly images: readonly DraftImage[]
@@ -195,10 +196,21 @@ export function Composer({
         }}
       >
         {images.length ? (
-          <ul className="desktop-composer-images" aria-label="Images to send">
+          <ul className="desktop-composer-images" aria-label="Attachments to send">
             {images.map((image) => (
-              <li key={image.id} className="desktop-composer-image">
-                <ChatAttachmentTile label={image.name} imageSrc={image.url} />
+              <li
+                key={image.id}
+                className="desktop-composer-image"
+                data-kind={image.kind}
+              >
+                {image.kind === "image" ? (
+                  <ChatAttachmentTile label={image.name} imageSrc={image.url} />
+                ) : (
+                  <ChatAttachmentTile
+                    label={image.name}
+                    icon={<DesktopIcon name="file" />}
+                  />
+                )}
                 <button
                   type="button"
                   className="desktop-composer-image-remove"
@@ -259,6 +271,7 @@ export function Composer({
       ) : null}
       <div className="desktop-composer-row">
         <div className="desktop-composer-controls">
+          {attached ? <AttachButton onFiles={attached.onPaste} /> : null}
           <ProjectMenu />
           <span
             className="desktop-tip-anchor"
@@ -425,5 +438,41 @@ function ProjectMenu() {
         </MenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
+  )
+}
+
+/**
+ * The composer's Attach button: opens the system's file picker and offers
+ * every file picked to `onFiles`, as a paste of them would be. The input is
+ * emptied after each pick, so picking the same file again is a pick too.
+ */
+function AttachButton({ onFiles }: { onFiles: (files: File[]) => void }) {
+  const input = useRef<HTMLInputElement>(null)
+  return (
+    <>
+      <input
+        ref={input}
+        type="file"
+        multiple
+        hidden
+        aria-hidden="true"
+        tabIndex={-1}
+        className="desktop-composer-attach-input"
+        onChange={(event) => {
+          const files = Array.from(event.currentTarget.files ?? [])
+          event.currentTarget.value = ""
+          if (files.length) onFiles(files)
+        }}
+      />
+      <button
+        type="button"
+        className="desktop-chip desktop-composer-attach"
+        aria-label="Attach files"
+        {...tooltip("Attach files", { side: "above" })}
+        onClick={() => input.current?.click()}
+      >
+        <DesktopIcon name="attach" />
+      </button>
+    </>
   )
 }

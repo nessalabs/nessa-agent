@@ -257,6 +257,18 @@ export {
   type VoiceCall,
   type VoiceStatus,
 } from "./generated/product.js"
+export { type LoginsApi } from "./presentation/logins-api.js"
+export {
+  NessaLoginsError,
+  LoginsRefusalCode,
+  type LoginsMethod,
+} from "./application/logins-error.js"
+export {
+  LoginAgent,
+  LoginsErrorCode,
+  type LoginsStatus,
+  type SavedLogin,
+} from "./generated/product.js"
 export { type PairingApi } from "./presentation/pairing-api.js"
 export {
   NessaPairingError,
@@ -328,6 +340,9 @@ export {
   MAX_MESSAGE_IMAGES,
   MAX_UPLOAD_BYTES,
   type StoredAttachment,
+  uploadedFileName,
+  uploadMediaType,
+  validUploadedFileName,
 } from "./protocol/attachment-validate.js"
 export { clientDueAtMs, deadlinePendingLine } from "./protocol/deadline-pending.js"
 export type {
@@ -358,6 +373,7 @@ export type {
   ConversationAttachmentEvidenceFailure,
   ImageAttachment,
   LinkedFile,
+  UploadedFileAttachment,
   ConversationMessage,
   ConversationAgentSource,
   ConversationMessageApp,

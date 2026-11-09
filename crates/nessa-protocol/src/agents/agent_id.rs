@@ -2,7 +2,7 @@
 ///
 /// Only agents Nessa has an adapter for are listed. An agent absent from here
 /// is not one the server has an opinion about — it is one Nessa cannot drive.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum AgentId {
     Claude,
     Codex,

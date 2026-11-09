@@ -57,18 +57,29 @@ describe("sending", () => {
     ).toBe(false)
   })
 
-  it("takes the images pasted into a composer onto the person's message, which may be images alone", async () => {
+  it("takes the images and files put on a composer onto the person's message, which may be attachments alone", async () => {
     const { store, source } = await ready()
     store.dispatch(newSession())
     const [draftId] = shown(store)
     const png = new File([new Uint8Array([1, 2])], "shot.png", { type: "image/png" })
     const text = new File(["notes"], "notes.txt", { type: "text/plain" })
-    // Only the images among what was pasted are taken.
+    // An image goes as an image, any other file as a file.
     expect(
       store.dispatch(addComposerImages({ sessionId: draftId, files: [png, text] })),
     ).toBe(null)
-    const [image] = store.getState().workspace.composerImages[draftId]
-    expect(image).toMatchObject({ name: "shot.png", mimeType: "image/png", size: 2 })
+    const [image, file] = store.getState().workspace.composerImages[draftId]
+    expect(image).toMatchObject({
+      kind: "image",
+      name: "shot.png",
+      mimeType: "image/png",
+      size: 2,
+    })
+    expect(file).toMatchObject({
+      kind: "file",
+      name: "notes.txt",
+      mimeType: "text/plain",
+      size: 5,
+    })
     // Past a message's bounds none are taken, and the composer keeps what it had.
     expect(
       store.dispatch(
@@ -78,7 +89,12 @@ describe("sending", () => {
         }),
       ),
     ).toBe("too-many")
-    expect(store.getState().workspace.composerImages[draftId]).toEqual([image])
+    // An image no message names is not sent as a file either.
+    const heic = new File([new Uint8Array([1])], "photo.heic", { type: "image/heic" })
+    expect(store.dispatch(addComposerImages({ sessionId: draftId, files: [heic] }))).toBe(
+      "unsupported",
+    )
+    expect(store.getState().workspace.composerImages[draftId]).toEqual([image, file])
     await store.dispatch(
       sendMessage({
         initiator: "person",
@@ -90,12 +106,27 @@ describe("sending", () => {
     expect(source.calls.find((call) => call[0] === "send")?.[1]).toMatchObject({
       sessionId: draftId,
       text: "",
-      images: [image],
-      // Images alone name the session by what they are.
-      start: { title: "Image" },
+      images: [image, file],
+      // Attachments alone name the session by what they are.
+      start: { title: "2 attachments" },
     })
     expect(store.getState().workspace.composerImages[draftId]).toBeUndefined()
-    expect(outboxOf(store, draftId)[0]).toMatchObject({ localImages: [image] })
+    expect(outboxOf(store, draftId)[0]).toMatchObject({ localImages: [image, file] })
+  })
+
+  it("stores a file under the name the upload contract publishes", async () => {
+    const { store } = await ready()
+    store.dispatch(newSession())
+    const [draftId] = shown(store)
+    const text = new File(["x"], "a/b\\c\u0007.txt", { type: "text/plain" })
+    expect(store.dispatch(addComposerImages({ sessionId: draftId, files: [text] }))).toBe(
+      null,
+    )
+    expect(store.getState().workspace.composerImages[draftId][0]).toMatchObject({
+      kind: "file",
+      name: "a_b_c_.txt",
+      mimeType: "text/plain",
+    })
   })
 
   it("puts a refused message's images, and its words, back in the composer when it is let go", async () => {

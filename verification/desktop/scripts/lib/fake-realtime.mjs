@@ -156,6 +156,8 @@ export async function startFakeRealtime({ key = FAKE_VOICE_KEY } = {}) {
   const base = `http://127.0.0.1:${port}`
   return {
     key,
+    /** Where the window's scripted transport opens the call, as a CSP source. */
+    socketOrigin: `ws://127.0.0.1:${port}`,
     minted,
     received,
     say,

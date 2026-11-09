@@ -33,6 +33,7 @@ import { useNow } from "../../../clock"
 import { linkedOn, type LinkedDevice } from "../../model/linked-device"
 import { LinkedDevicesTab } from "../../settings/ui/linked-devices-tab"
 import { PageHeader } from "@nessa-ui/react/page-header"
+import { DeviceLoginsSwitch } from "../../settings/ui/saved-logins"
 import { BoatConnectionFields, useBoatConnection } from "../../settings/ui/boat-row"
 import type {
   CloudState,
@@ -975,6 +976,7 @@ function WorkerPage({
                     : "No, it is offline"}
               </dd>
             </div>
+            <DeviceLoginsSwitch environment={worker.environment} />
             <div>
               <dt>Environment</dt>
               <dd className="devices-mono" title={worker.environment}>

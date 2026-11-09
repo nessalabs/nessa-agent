@@ -139,6 +139,9 @@ pub(crate) struct PeerGrant {
     commands: Option<CommandGrant>,
     /// `None`: a harness's lease lasts until it is ended.
     max_lease: Option<MaxLease>,
+    /// Whether a harness this peer starts may be given the peer's saved
+    /// login for its agent ([`takes_login`]).
+    logins: bool,
 }
 
 impl PeerGrant {
@@ -148,6 +151,7 @@ impl PeerGrant {
             agents,
             commands,
             max_lease: None,
+            logins: false,
         }
     }
 
@@ -177,6 +181,26 @@ impl PeerGrant {
 
     pub(crate) fn max_lease(&self) -> Option<MaxLease> {
         self.max_lease
+    }
+
+    pub(crate) fn logins(&self) -> bool {
+        self.logins
+    }
+
+    /// This grant, taking the peer's saved logins for its harnesses.
+    pub(crate) fn with_logins(self) -> Self {
+        Self {
+            logins: true,
+            ..self
+        }
+    }
+
+    /// This grant, taking no login from the peer.
+    pub(crate) fn without_logins(self) -> Self {
+        Self {
+            logins: false,
+            ..self
+        }
     }
 
     /// This grant with its harnesses' leases lasting at most `max_lease`,
@@ -241,16 +265,20 @@ impl PeerGrant {
 pub(crate) enum GrantOperation {
     /// `agents` beside those granted, commands of at most `commands` each
     /// in place of the longest granted before, and harnesses' leases of at
-    /// most `max_lease` each in place of the limit before.
+    /// most `max_lease` each in place of the limit before, and, when
+    /// `logins`, the peer's saved logins taken for its harnesses.
     Grant {
         agents: Option<Agents>,
         commands: Option<CommandGrant>,
         max_lease: Option<MaxLease>,
+        logins: bool,
     },
     /// One agent taken back.
     UngrantAgent(AgentName),
     /// Commands taken back.
     UngrantCommands,
+    /// Saved logins no longer taken.
+    UngrantLogins,
     /// Everything taken back.
     UngrantAll,
 }
@@ -267,7 +295,9 @@ impl GrantOperation {
                 agents,
                 commands,
                 max_lease,
+                logins,
             } => {
+                let grant = if *logins { grant.with_logins() } else { grant };
                 let grant = match agents {
                     Some(agents) => grant.with_agents(agents.clone()),
                     None => grant,
@@ -283,6 +313,7 @@ impl GrantOperation {
             }
             Self::UngrantAgent(agent) => grant.without_agent(agent)?,
             Self::UngrantCommands => grant.without_commands(),
+            Self::UngrantLogins => grant.without_logins(),
             Self::UngrantAll => PeerGrant::nothing(),
         })
     }
@@ -293,13 +324,15 @@ impl GrantOperation {
 pub(crate) struct AllAgents;
 
 /// What a peer with no entry holds: everything the host allows for SSH,
-/// nothing for a dialed gateway. The one statement of a missing entry's
+/// its saved logins included (a gateway that logs in as this account can
+/// already set anything it runs with), and nothing for a dialed gateway.
+/// The one statement of a missing entry's
 /// defaults, as a file's missing fields have theirs: it is what such a peer
 /// is shown as and changed from, the grant the lease policy decides over,
 /// and the terms of its yes. The policy holds no defaults of its own.
 pub(crate) fn unwritten(peer: &Peer) -> PeerGrant {
     match peer {
-        Peer::Ssh => PeerGrant::everything(),
+        Peer::Ssh => PeerGrant::everything().with_logins(),
         Peer::Gateway { .. } => PeerGrant::nothing(),
     }
 }
@@ -312,6 +345,12 @@ pub(crate) struct NotGranted;
 /// until it is ended.
 pub(crate) fn lease_ms(grant: &PeerGrant) -> Option<u64> {
     grant.max_lease.map(MaxLease::ms)
+}
+
+/// Whether a harness admitted under `grant` may be given its gateway's
+/// saved login for its agent: what `Granted`'s `takesLogin` says.
+pub(crate) fn takes_login(grant: &PeerGrant) -> bool {
+    grant.logins
 }
 
 /// The timeout a command asking `timeout_ms` runs with under `grant`: the

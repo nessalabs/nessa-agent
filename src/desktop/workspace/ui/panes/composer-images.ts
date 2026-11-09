@@ -1,7 +1,7 @@
 /**
- * A session's composer images, wired to the workspace (`composerImages`): the
- * tiles show what the store holds, a paste asks `addComposerImages`, and a
- * paste refused is said until the images change.
+ * A session's composer attachments, wired to the workspace
+ * (`composerImages`): the tiles show what the store holds, a paste or a pick
+ * asks `addComposerImages`, and one refused is said until they change.
  */
 import { useCallback, useMemo, useState } from "react"
 import {
@@ -17,7 +17,7 @@ import type { ComposerImages } from "../../../ui/composer"
 
 const mebibytes = (bytes: number) => `${bytes / (1024 * 1024)} MiB`
 
-/** What the composer says of images it did not take. */
+/** What the composer says of attachments it did not take. */
 export function draftImageRefusalCopy(refusal: DraftImageRefusal): string {
   switch (refusal) {
     case "too-many":
@@ -26,6 +26,12 @@ export function draftImageRefusalCopy(refusal: DraftImageRefusal): string {
       return `An image can be ${mebibytes(DRAFT_IMAGE_LIMITS.bytes)} at most.`
     case "too-heavy":
       return `A message’s images can be ${mebibytes(DRAFT_IMAGE_LIMITS.totalBytes)} at most in all.`
+    case "too-many-files":
+      return `A message can carry ${DRAFT_IMAGE_LIMITS.files} files at most.`
+    case "too-heavy-files":
+      return `A message’s files can be ${mebibytes(DRAFT_IMAGE_LIMITS.fileBytes)} at most in all.`
+    case "empty":
+      return "An empty file can’t be sent."
     case "unsupported":
       return `Images can be ${DRAFT_IMAGE_LIMITS.types
         .map((type) => type.replace(/^image\//, "").toUpperCase())
@@ -33,7 +39,7 @@ export function draftImageRefusalCopy(refusal: DraftImageRefusal): string {
   }
 }
 
-/** The images on a session's next message, and what a paste and a remove do. */
+/** The attachments on a session's next message, and what a paste, a pick and a remove do. */
 export function useComposerImages(sessionId: string): ComposerImages {
   const dispatch = useWorkspaceDispatch()
   const live = useWorkspaceSelector((state) => selectComposerImages(state, sessionId))

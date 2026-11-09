@@ -30,6 +30,14 @@ import {
 
 /** How long a drain may take: below the stop grace the step allows it. */
 export const DRAIN_DEADLINE = "20s"
+/** Every variable an agent reads its login from (`login_variables`, lease.rs). */
+const HOST_LOGINS = [
+  "CLAUDE_CODE_OAUTH_TOKEN",
+  "ANTHROPIC_API_KEY",
+  "CODEX_API_KEY",
+  "OPENAI_API_KEY",
+  "OPENCODE_API_KEY",
+]
 /** The instance a worker's data directory holds; its own, never the gateway's. */
 const INSTANCE = "stress-worker"
 
@@ -43,8 +51,11 @@ const hex = (bytes) => bytes.map((byte) => byte.toString(16).padStart(2, "0")).j
  * `agent` as `launch` (`scriptedLaunch`) says. `label` names it in its
  * messages; `connected(name)` resolves whether the gateway came to list the
  * worker named `name` as connected. `tunnel`, `{ address, origin }`, is the
- * direct address and tunnel origin it dials once granted. Resolves once it
- * is approved, granted, and connected.
+ * direct address and tunnel origin it dials once granted. With `logins`,
+ * its owner also lets the gateway hand it saved logins
+ * (`env grant --logins`) and is started signed out, with no login of
+ * its own: a login the machine has wins over one the gateway hands it.
+ * Resolves once it is approved, granted, and connected.
  */
 export async function startWorker({
   owner,
@@ -54,6 +65,7 @@ export async function startWorker({
   label,
   connected,
   tunnel,
+  logins = false,
 }) {
   const directory = mkdtempSync(join(tmpdir(), `nessa-stress-worker-${label}-`))
   const output = []
@@ -89,6 +101,7 @@ export async function startWorker({
       NESSA_DATA_DIR: directory,
       NESSA_INSTANCE: INSTANCE,
     }
+    if (logins) for (const name of HOST_LOGINS) delete env[name]
     const workspace = join(directory, "workspace")
     mkdirSync(workspace)
     const instance = join(directory, "ci", "instances", INSTANCE)
@@ -173,7 +186,8 @@ export async function startWorker({
       throw new Error(
         `worker ${label} stopped ${child.exitCode ?? child.signalCode} before its grant`,
       )
-    const grant = spawnSync(nessa(), ["env", "grant", "--all-agents"], {
+    const words = ["env", "grant", "--all-agents", ...(logins ? ["--logins"] : [])]
+    const grant = spawnSync(nessa(), words, {
       env,
       encoding: "utf8",
     })

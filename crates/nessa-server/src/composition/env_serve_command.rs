@@ -177,10 +177,14 @@ pub(super) async fn compose() -> Result<Composed, (Unavailability, RunError)> {
         .map_err(|error| not_configured(RunError::Agent(error.to_string())))?;
     let config = RuntimeConfig::load(&auth).map_err(not_configured)?;
     let mut launcher = launcher(&config).map_err(not_configured)?;
-    let opencode_database = auth.join("environment").join("opencode-sessions.sqlite");
-    nessa_local_storage::create_directory(&auth.join("environment"))
+    let environment = auth.join("environment");
+    let opencode_database = environment.join("opencode-sessions.sqlite");
+    nessa_local_storage::create_directory(&environment)
         .map_err(|error| not_configured(RunError::Agent(error.to_string())))?;
     launcher.opencode_database(opencode_database);
+    // One Codex home for this host. Threads stay under its `sessions/`;
+    // the credential store in that home is ephemeral.
+    launcher.codex_sessions(environment.join("codex"));
     let policy = CedarLeasePolicy::new().map_err(|error| not_configured(RunError::Agent(error)))?;
     let commands = config.env_serve.commands.then(|| {
         let supervisor = SupervisorBuilder::new().build();

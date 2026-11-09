@@ -126,8 +126,10 @@ fn a_file_this_build_cannot_read_is_refused() {
         "x".repeat(MAX_BYTES as usize)
     );
     for text in [
-        r#"{"schemaVersion":3,"peers":{}}"#,
+        r#"{"schemaVersion":4,"peers":{}}"#,
         r#"{"peers":{}}"#,
+        r#"{"schemaVersion":2,"peers":{"ssh":{"acceptLogins":true}}}"#,
+        r#"{"schemaVersion":3,"peers":{"ssh":{"acceptLogins":"yes"}}}"#,
         r#"{"schemaVersion":1,"peers":{"ssh":{"maxLeaseMs":60000}}}"#,
         r#"{"schemaVersion":2,"peers":{"ssh":{"maxLeaseMs":0}}}"#,
         r#"{"schemaVersion":2,"peers":{"ssh":{"maxLeaseMs":2592000001}}}"#,
@@ -154,10 +156,10 @@ fn a_file_this_build_cannot_read_is_refused() {
         ));
     }
     let version = private_directory();
-    write_private(version.path(), r#"{"schemaVersion":3,"peers":{}}"#);
+    write_private(version.path(), r#"{"schemaVersion":4,"peers":{}}"#);
     let refused = FileGrants::new(version.path()).read().unwrap_err();
     assert!(
-        refused.to_string().contains("schema version 3"),
+        refused.to_string().contains("schema version 4"),
         "{refused}"
     );
     let shared = private_directory();
@@ -176,6 +178,36 @@ fn a_file_this_build_cannot_read_is_refused() {
 /// A lease limit is written as schema version 2, which a build reading only
 /// version 1 refuses rather than serving leases without it; a file with no
 /// limit is still written as version 1, and either version is read.
+/// A grant taking saved logins is written as version 3, and only then: the
+/// file goes back to the earlier version once no grant takes them, so an
+/// earlier build still reads what it can.
+#[test]
+fn logins_are_written_as_version_3_and_only_while_a_grant_takes_them() {
+    let directory = private_directory();
+    let grants = FileGrants::new(directory.path());
+    let written = |directory: &Path| -> serde_json::Value {
+        serde_json::from_str(&std::fs::read_to_string(directory.join(FILE)).unwrap()).unwrap()
+    };
+    let taking = PeerGrant::everything().with_logins();
+    grants
+        .change(&gateway(), |_| Ok::<_, ()>(Some(taking.clone())))
+        .unwrap();
+    let file = written(directory.path());
+    assert_eq!(file["schemaVersion"], 3);
+    assert_eq!(file["peers"][peer_name(&gateway())]["acceptLogins"], true);
+    assert_eq!(grants.entry(&gateway()), Ok(Some(taking)));
+    grants
+        .change(&gateway(), |_| {
+            Ok::<_, ()>(Some(PeerGrant::everything().without_logins()))
+        })
+        .unwrap();
+    let file = written(directory.path());
+    assert_eq!(file["schemaVersion"], 1);
+    assert!(file["peers"][peer_name(&gateway())]
+        .get("acceptLogins")
+        .is_none());
+}
+
 #[test]
 fn max_lease_is_written_as_version_2_and_version_1_still_reads() {
     let directory = private_directory();

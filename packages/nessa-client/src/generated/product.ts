@@ -3708,6 +3708,56 @@ export interface ConversationWebhookResetResult {
   /** Original native selection observation time in Unix milliseconds, retained unchanged on replay. */
   appliedAtMs: number
 }
+/** An agent whose sign-in the gateway can keep as a saved login. */
+export const LoginAgent = {
+  Claude: "claude",
+  Codex: "codex",
+  Opencode: "opencode",
+} as const
+export type LoginAgent = (typeof LoginAgent)[keyof typeof LoginAgent]
+/** Whether one agent has a saved login. The login itself is never returned. */
+export interface SavedLogin {
+  /** The agent. */
+  agent: LoginAgent
+  /** Whether a login is saved in the gateway's vault for it. */
+  saved: boolean
+}
+/** Result of every logins method: which agents have a saved login, and which paired machines are switched on to be handed them when an agent starts there. SSH hosts and Boat workspaces always may be; this gateway's own machine never is. */
+export interface LoginsStatus {
+  /** One entry per agent, in the order claude, codex, opencode. */
+  logins: SavedLogin[]
+  /** The paired machines whose switch is on, by environment name, in name order. */
+  devicesOn: string[]
+}
+/** Save an agent's login in the gateway's vault, replacing any saved one (logins.save). Applies to agents opened after it on a machine that receives logins; an agent already open keeps the login it opened with. */
+export interface LoginsSaveParams {
+  /** The agent the login is for. */
+  agent: LoginAgent
+  /** The login: a Claude setup-token, or the agent's API key. Printable ASCII with no spaces. */
+  login: string
+}
+/** Delete an agent's saved login (logins.remove). Agents already open keep the one they opened with until they close. */
+export interface LoginsRemoveParams {
+  /** The agent. */
+  agent: LoginAgent
+}
+/** Turn a paired machine's "Use my saved logins here" switch on or off (logins.setDevice). Applies to agents opened there after it; an agent already open keeps what it opened with. */
+export interface LoginsSetDeviceParams {
+  /** The paired machine, by its environment name as devices.list gives it. */
+  environment: string
+  /** Whether its agents may be handed the saved logins. */
+  on: boolean
+}
+/** Why the gateway refused a logins method. logins_not_configured: this gateway keeps no saved logins. logins_storage_unavailable: the vault could not read or change them; what was saved still is. logins_audit_unavailable: the change could not be recorded before it was made, so nothing changed. logins_change_unrecorded: the change was made but its outcome could not be recorded; read logins.status for how things stand. logins_too_many_devices: more paired machines are switched on than a list holds. vault_locked: unlock Nessa first. */
+export const LoginsErrorCode = {
+  LoginsNotConfigured: "logins_not_configured",
+  LoginsStorageUnavailable: "logins_storage_unavailable",
+  LoginsAuditUnavailable: "logins_audit_unavailable",
+  LoginsChangeUnrecorded: "logins_change_unrecorded",
+  LoginsTooManyDevices: "logins_too_many_devices",
+  VaultLocked: "vault_locked",
+} as const
+export type LoginsErrorCode = (typeof LoginsErrorCode)[keyof typeof LoginsErrorCode]
 /** Result of voice.status, voice.saveKey and voice.forgetKey: whether the gateway holds a realtime voice key. The key itself is never returned. */
 export interface VoiceStatus {
   /** Whether a key is saved in the gateway's vault. */
@@ -3819,7 +3869,7 @@ export const channelRules = {
 export const bounds = {
   maxOrdinaryResponseBytes: 65536,
   maxRequestFrameBytes: 65536,
-  maxReadyMethods: 119,
+  maxReadyMethods: 123,
   maxAuthCredentialCharacters: 16384,
   maxProductClientIdCharacters: 256,
   maxProductSurfaceInstanceCharacters: 256,
@@ -3832,6 +3882,8 @@ export const bounds = {
   minNativeHooksRequestIdCharacters: 1,
   maxNativeHooksRequestIdBytes: 256,
   maxConfiguredAgents: 3,
+  maxLoginDevicesOn: 256,
+  loginDevicePattern: "^peer:[0-9a-f]{64}$",
   maxToolPolicyPatterns: 16,
   maxToolPatternBytes: 48,
   maxCommandHosts: 16,
@@ -4156,6 +4208,10 @@ export const ProductMethod = {
   BoatSetRuntimeSettings: "boat.setRuntimeSettings",
   ConversationWebhookCursor: "conversation.webhook.cursor",
   ConversationWebhookReset: "conversation.webhook.reset",
+  LoginsStatus: "logins.status",
+  LoginsSave: "logins.save",
+  LoginsRemove: "logins.remove",
+  LoginsSetDevice: "logins.setDevice",
   VoiceStatus: "voice.status",
   VoiceSaveKey: "voice.saveKey",
   VoiceForgetKey: "voice.forgetKey",
@@ -4288,6 +4344,10 @@ export const productReadyMethods = [
   "boat.setRuntimeSettings",
   "conversation.webhook.cursor",
   "conversation.webhook.reset",
+  "logins.status",
+  "logins.save",
+  "logins.remove",
+  "logins.setDevice",
   "voice.status",
   "voice.saveKey",
   "voice.forgetKey",
@@ -4411,6 +4471,10 @@ export const productMethodGrants = {
   "boat.setRuntimeSettings": "credential.manage",
   "conversation.webhook.cursor": "credential.manage",
   "conversation.webhook.reset": "credential.manage",
+  "logins.status": "credential.manage",
+  "logins.save": "credential.manage",
+  "logins.remove": "credential.manage",
+  "logins.setDevice": "credential.manage",
   "voice.status": "credential.manage",
   "voice.saveKey": "credential.manage",
   "voice.forgetKey": "credential.manage",

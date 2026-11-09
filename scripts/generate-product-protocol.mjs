@@ -192,6 +192,35 @@ const mcpServerRules = {}
   }
 }
 
+// A saved login's bounds, each owned by Rust: how many paired machines may be
+// switched on to receive saved logins (the gateway's logins domain) and the
+// most bytes of a login (the lease protocol's Login, which logins.save and a
+// lease handoff both decode). The schema's bound must equal each, or
+// generation fails, so the service and a client admit the same values.
+for (const [file, constant, published, name] of [
+  [
+    "crates/nessa-server/src/logins/domain.rs",
+    "MAX_SWITCHED_ON",
+    schema.$defs.LoginsStatus.properties.devicesOn.maxItems,
+    "LoginsStatus.devicesOn.maxItems",
+  ],
+  [
+    "crates/nessa-protocol/src/lease.rs",
+    "MAX_LOGIN_BYTES",
+    schema.$defs.LoginsSaveParams.properties.login.maxLength,
+    "LoginsSaveParams.login.maxLength",
+  ],
+]) {
+  const source = readFileSync(resolve(root, file), "utf8")
+  const owned = Number(
+    source
+      .match(new RegExp(`pub const ${constant}: usize = ([0-9_]+);`))?.[1]
+      ?.replaceAll("_", ""),
+  )
+  if (!Number.isSafeInteger(owned) || published !== owned)
+    throw new Error(`${name} drifted from the Rust owner's ${constant}`)
+}
+
 // A channel's bounds, owned by the gateway's channel value objects and
 // published as schema data so its prose and a client name the same numbers:
 // each value must equal the constant it names, or generation fails.
@@ -615,6 +644,8 @@ const bounds = {
     schema.$defs.AgentsSetNativeHooksResult.properties.requestId["x-utf8MaxBytes"],
   ]),
   maxConfiguredAgents: schema.$defs.AgentsListResult.properties.agents.maxItems,
+  maxLoginDevicesOn: schema.$defs.LoginsStatus.properties.devicesOn.maxItems,
+  loginDevicePattern: schema.$defs.LoginsStatus.properties.devicesOn.items.pattern,
   // A drive grant's tool policy, as the share dialog budgets it: each list of
   // patterns, and the hosts on their own.
   maxToolPolicyPatterns: agreeing("tool policy allow and deny lengths", [
