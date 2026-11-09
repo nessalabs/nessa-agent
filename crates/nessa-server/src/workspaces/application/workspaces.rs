@@ -3,8 +3,8 @@
 use super::RuntimeSettings;
 use crate::conversation::domain::{ChannelId, SettingsScope};
 use crate::workspaces::domain::{
-    AdmissionRejection, Assignment, BoatConnection, ClaudeSignIn, CleanupOutcome,
-    EnvironmentIdentity, Failure, RefusalDisposition,
+    AdmissionRejection, Assignment, BoatConnection, CleanupOutcome, EnvironmentIdentity, Failure,
+    RefusalDisposition,
 };
 use async_trait::async_trait;
 use futures_util::FutureExt;
@@ -52,12 +52,6 @@ pub(crate) trait Settings: Send + Sync {
     fn generation(&self) -> Result<u64, Failure>;
     async fn save(&self, generation: u64, connection: BoatConnection) -> Result<(), Failure>;
     async fn clear(&self) -> Result<(), Failure>;
-}
-/// The owner's Claude sign-in for Boat VMs, kept beside the connection.
-#[async_trait]
-pub(crate) trait ClaudeSignIns: Send + Sync {
-    /// `None` when none is saved.
-    async fn read(&self) -> Result<Option<ClaudeSignIn>, Failure>;
 }
 #[async_trait]
 pub(crate) trait Assignments: Send + Sync {

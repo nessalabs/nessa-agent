@@ -5,9 +5,9 @@
 //! ```text
 //! launch(agent, binding variables) ──▶ LaunchSpec for agent (host config)
 //!     command = spec.executable spec.args, in workspace,
-//!     environment = accepted binding variables, the gateway's saved login
-//!                   in the agent's login variable, then the host's own (host wins),
-//!                   then the lease's publish point (NESSA_ARTIFACTS), this side's,
+//!     environment = accepted binding variables, then the host's own,
+//!                   then the gateway's saved login where the host has none
+//!                   (host wins), then the lease's publish point (NESSA_ARTIFACTS), this side's,
 //!                   and this build's directory first on the host's PATH
 //!     ──▶ SupervisedHarness::start ──▶ HarnessProcess
 //! ```
@@ -124,13 +124,16 @@ impl HarnessLauncher for ConfiguredLauncher {
             .args(&spec.args)
             .current_dir(&self.workspace)
             .env_clear()
-            .envs(environment);
-        if let Some((variable, login)) =
-            login_to_set(id, login, &spec.environment, |path| path.exists())
-        {
-            command.env(variable, login);
+            .envs(environment)
+            .envs(&spec.environment);
+        // After the host's own environment, so a private Codex home is not
+        // replaced by the host's `CODEX_HOME`. Host-wins already refused
+        // this when the host has a sign-in.
+        if let Some(handed) = login_to_set(id, login, &spec.environment, |path| path.exists()) {
+            for (name, value) in handed {
+                command.env(name, value);
+            }
         }
-        command.envs(&spec.environment);
         if let Some(point) = publish_point {
             command.env(PUBLISH_POINT_VARIABLE, point);
             let this_build = std::env::current_exe().ok();
@@ -151,19 +154,31 @@ impl HarnessLauncher for ConfiguredLauncher {
     }
 }
 
-/// Where the gateway's `login` for `agent` goes, and its value: the
-/// variable the agent reads its login from, only where the host has no
-/// sign-in of its own for that agent. The host's own wins, whether it is
-/// one of the agent's login variables in the `configured` environment or
-/// a sign-in file the harness this launch starts will actually read
+/// The ACP auth request the pinned Codex adapter (`codex-acp` 1.12.0)
+/// runs when Codex requires authentication. `methodId` `api-key` reads
+/// `CODEX_API_KEY`; the key is not copied into this JSON, which the
+/// adapter logs at startup.
+const CODEX_API_KEY_AUTH: &str = r#"{"methodId":"api-key"}"#;
+
+/// Where the gateway's `login` for `agent` goes, only where the host has
+/// no sign-in of its own for that agent. The host's own wins, whether it
+/// is one of the agent's login variables in the `configured` environment
+/// or a sign-in file the harness this launch starts will actually read
 /// ([`own_sign_in_files`]), which `exists` is asked about. A sign-in kept
 /// only in the macOS keychain is not seen.
-pub(crate) fn login_to_set<'a>(
+///
+/// Codex's app-server starts with environment-key authentication off, so
+/// `CODEX_API_KEY` alone does not sign it in. A saved key is also the
+/// adapter's `DEFAULT_AUTH_REQUEST` for the api-key method, and
+/// `CODEX_HOME` is a private directory whose `config.toml` sets
+/// `cli_auth_credentials_store` to `ephemeral`. In Codex 0.154 that store
+/// keeps the key in the process, not in `auth.json`.
+pub(crate) fn login_to_set(
     agent: AgentId,
-    login: Option<&'a Login>,
+    login: Option<&Login>,
     configured: &BTreeMap<OsString, OsString>,
     exists: impl Fn(&Path) -> bool,
-) -> Option<(&'static str, &'a str)> {
+) -> Option<Vec<(String, String)>> {
     let variables = login_variables(agent);
     let host_has_own = variables
         .iter()
@@ -171,10 +186,36 @@ pub(crate) fn login_to_set<'a>(
         || own_sign_in_files(agent, configured)
             .iter()
             .any(|path| exists(path));
-    match (login, host_has_own) {
-        (Some(login), false) => Some((login_variable(agent, login), login.expose())),
-        _ => None,
+    let login = match (login, host_has_own) {
+        (Some(login), false) => login,
+        _ => return None,
+    };
+    let variable = login_variable(agent, login);
+    let mut handed = vec![(variable.to_owned(), login.expose().to_owned())];
+    if agent == AgentId::Codex {
+        let home = private_codex_home()?;
+        handed.push((
+            "DEFAULT_AUTH_REQUEST".to_owned(),
+            CODEX_API_KEY_AUTH.to_owned(),
+        ));
+        handed.push(("CODEX_HOME".to_owned(), home));
     }
+    Some(handed)
+}
+
+/// A directory the saved Codex key's process uses as `CODEX_HOME`, with
+/// the credential store set to memory. `None` when it cannot be made:
+/// the key is then not handed, rather than written into the user's
+/// `auth.json`.
+fn private_codex_home() -> Option<String> {
+    let directory = std::env::temp_dir().join(format!("nessa-codex-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir(&directory).ok()?;
+    std::fs::write(
+        directory.join("config.toml"),
+        "cli_auth_credentials_store = \"ephemeral\"\n",
+    )
+    .ok()?;
+    directory.to_str().map(str::to_owned)
 }
 
 /// Where `agent` keeps a sign-in the harness this launch starts will

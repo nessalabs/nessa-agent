@@ -462,19 +462,6 @@ impl SavedLoginsService {
         agent: AgentId,
         lease: &str,
     ) -> Option<Login> {
-        self.login_for_if(environment, agent, lease, |_| true)
-    }
-
-    /// [`Self::login_for`], for a use that can take only a login `usable`
-    /// accepts: a saved login it does not accept is, for that use, none
-    /// saved, and nothing is recorded.
-    pub fn login_for_if(
-        &self,
-        environment: &EnvironmentRef,
-        agent: AgentId,
-        lease: &str,
-        usable: impl Fn(&Login) -> bool,
-    ) -> Option<Login> {
         let operation_id = Uuid::new_v4().to_string();
         let name = environment.name();
         let withheld = |why: Withheld| {
@@ -499,8 +486,7 @@ impl SavedLoginsService {
             None
         };
         let login = match self.saved(agent) {
-            Ok(Some(login)) if usable(&login) => login,
-            Ok(Some(_)) => return None,
+            Ok(Some(login)) => login,
             Ok(None) => return None,
             Err(LoginsError::VaultLocked) => return withheld(Withheld::Locked),
             Err(_) => return withheld(Withheld::Unavailable),

@@ -1,8 +1,8 @@
 //! Boat connection in the existing encrypted vault. Unlock generation
 //! fences validation/write and reads; no second keychain or plaintext token
-//! file. The Claude sign-in its VMs are served with is the saved Claude
-//! login (`login.claude`, issue #1260), read through the saved logins'
-//! policy and audit (`composition::logins::ServedClaudeSignIns`).
+//! file. The Claude sign-in is the saved Claude login (`login.claude`,
+//! issue #1260), handed to a VM only on the lease, after that handoff is
+//! recorded.
 use crate::workspaces::{
     application::Settings,
     domain::{BoatConnection, Failure},

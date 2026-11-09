@@ -245,9 +245,7 @@ pub(crate) async fn let_go_each(environments: Vec<Arc<SshEnvironment>>) {
         let mut wait = Duration::from_secs(1);
         while !environment.let_go().await {
             if wait > LET_GO_PATIENCE {
-                tracing::warn!(
-                    "a Boat connection is still in use; it keeps the Claude sign-in it was served with"
-                );
+                tracing::warn!("a Boat connection is still in use; it stays open");
                 break;
             }
             tokio::time::sleep(wait).await;

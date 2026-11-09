@@ -54,7 +54,8 @@ const VM_SERVE_ENVIRONMENT: &str =
 impl SshAccess {
     /// `sign_in` goes to the VM as the first line of the serve's input, which
     /// its shell reads before `env serve` starts: never in a command line,
-    /// never on a disk.
+    /// never on a disk. A fresh connection passes none. A saved setup-token
+    /// is the lease hand-off, after that handoff is recorded.
     pub(super) async fn serve(
         self: &Arc<Self>,
         copy: &ServedCopy,
@@ -290,6 +291,14 @@ fn serve_script(program: &str) -> String {
          unset t; exec {program}"
     ))
 }
+/// What a fresh connection exports before `env serve`. Always nothing: a
+/// saved setup-token is handed with the lease, after that handoff is
+/// recorded, and an audit outage hands none.
+pub(super) fn connection_sign_in(saved: Option<&ClaudeSignIn>) -> Option<&ClaudeSignIn> {
+    let _saved = saved;
+    None
+}
+
 /// The line [`serve_script`] reads: the token, or nothing.
 fn sign_in_line(sign_in: Option<&ClaudeSignIn>) -> Zeroizing<Vec<u8>> {
     let token = sign_in.map_or(&[][..], ClaudeSignIn::as_bytes);
@@ -477,6 +486,15 @@ mod tests {
             served(&input),
             "sk-ant-oat01-fixture_A-1|gone|lease frame one\nlease frame two\n"
         );
+    }
+
+    #[test]
+    fn a_saved_setup_token_is_not_exported_when_the_connection_opens() {
+        let sign_in = ClaudeSignIn::new("sk-ant-oat01-fixture_A-1".into()).unwrap();
+        let mut input = sign_in_line(connection_sign_in(Some(&sign_in))).to_vec();
+        assert_eq!(input, b"\n");
+        input.extend_from_slice(b"lease frame\n");
+        assert_eq!(served(&input), "unset|gone|lease frame\n");
     }
 
     #[test]

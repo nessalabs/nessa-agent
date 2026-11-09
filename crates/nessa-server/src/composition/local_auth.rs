@@ -297,12 +297,6 @@ pub(super) async fn product_state(
     // One store per agent's saved login, shared by everything that reads
     // or writes it (issue #1260).
     let login_stores = crate::logins::infrastructure::login_stores(&vault.vault);
-    // Boat's Claude sign-in is the saved Claude login, handed through the
-    // saved logins' policy and audit, which are composed below.
-    #[cfg(unix)]
-    let served_logins = Arc::new(std::sync::OnceLock::new());
-    #[cfg(unix)]
-    let claude_sign_ins = Arc::new(super::logins::ServedClaudeSignIns(served_logins.clone()));
     #[cfg(unix)]
     let workspace_service = Arc::new(
         Workspaces::new(
@@ -319,7 +313,6 @@ pub(super) async fn product_state(
                     libc::geteuid()
                 }),
                 relay_program: std::env::current_exe().map_err(setup_error)?,
-                claude_sign_ins,
             }),
             Arc::new(FileAssignments(namespace.join("boat-workspaces"))),
             Arc::new(WorkspaceRecoveryAudit(workspace_audit.clone())),
@@ -438,8 +431,6 @@ pub(super) async fn product_state(
         Arc::new(|_| {});
     let saved_logins =
         super::logins::compose(namespace, vault.vault.clone(), login_stores, login_changed)?;
-    #[cfg(unix)]
-    let _ = served_logins.set(saved_logins.clone());
     // A leftover plaintext sign-in is removed before agents start, whether or
     // not the vault is unlocked. A failed delete stops startup; the file is
     // not left in place and treated as signed out.

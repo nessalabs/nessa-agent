@@ -54,14 +54,14 @@ Mac is handed the saved login unless its owner runs
 Boat's **Authenticate** (`boat.saveClaudeSignIn`) saves through Saved
 logins, recorded like a save from Settings, so the Claude row in Saved
 logins and Boat's sign-in are one fact in `login.claude`; a `boat.claude-sign-in` entry an earlier build kept is moved
-there when first read. Boat VMs are served with it in their environment, so
-there the host wins with the same login. That serve-time sign-in goes
-through the same Cedar policy and audit as a lease's handoff: it is
-recorded `sent` with lease `boat-serve`, and one whose record cannot be
-kept is not served. A Claude login that is an
+there when first read. A fresh Boat connection does not export it:
+the lease hand-off does, and only after that handoff is recorded, so an
+audit outage hands no token. A Claude login that is an
 Anthropic API key (`sk-ant-api…`) is put in `ANTHROPIC_API_KEY` rather
-than `CLAUDE_CODE_OAUTH_TOKEN`, and Boat does not serve it as its sign-in:
-each lease hands it over instead. A Claude login saved or removed in
+than `CLAUDE_CODE_OAUTH_TOKEN`. A saved Codex key is `CODEX_API_KEY`
+plus the adapter's api-key auth request, in a private `CODEX_HOME`
+whose credential store is ephemeral, because the pinned app-server
+does not treat the variable alone as a sign-in. A Claude login saved or removed in
 Settings lets go of idle Boat connections as Authenticate does, so the next
 lease is served with it. Disconnecting Boat keeps the login.
 
