@@ -129,10 +129,12 @@ this binding does not set one on this machine: that would sign in against
 the operator's own `CODEX_HOME`. A saved login handed to another machine is
 the host's business. The host sets `DEFAULT_AUTH_REQUEST` to
 `{"methodId":"api-key"}` (the key stays in `CODEX_API_KEY`; the adapter logs
-the request) and a private `CODEX_HOME` whose `config.toml` sets
-`cli_auth_credentials_store` to `ephemeral`. Codex 0.154's ephemeral store
-keeps that key in the process. The pinned app-server starts with
-environment-key authentication off, so the variable alone does not sign it in.
+the request) and one durable `CODEX_HOME` for that host. Its `config.toml`
+sets `cli_auth_credentials_store` to `ephemeral`, and Codex keeps threads
+under `sessions/` there, so a later harness can resume them. Codex 0.154's
+ephemeral store keeps the key in the process. The pinned app-server starts
+with environment-key authentication off, so the variable alone does not
+sign it in.
 
 ## Deleting a session
 

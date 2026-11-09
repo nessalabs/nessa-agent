@@ -380,9 +380,11 @@ this machine in Devices. It goes in the agent's login variable
 this machine has no sign-in of its own for that agent: none of its login
 variables, and no sign-in file the harness will read
 (`~/.claude/.credentials.json`, `~/.codex/auth.json`). A saved Codex key
-also selects the adapter's api-key method and a private `CODEX_HOME` whose
-credential store is ephemeral, because the variable alone does not sign
-the pinned Codex in; the key is not written into that directory. OpenCode is started
+also selects the adapter's api-key method and one `CODEX_HOME` for this
+host, whose credential store is ephemeral, because the variable alone does
+not sign the pinned Codex in. The key is not written into that directory.
+Codex keeps its threads there, so a later harness on this host can resume
+them. OpenCode is started
 in a private data directory, so `~/.local/share/opencode/auth.json` is not
 that sign-in; `OPENCODE_API_KEY` in the harness environment is. A Claude
 sign-in kept only in a Mac's keychain is not seen. The login is not written

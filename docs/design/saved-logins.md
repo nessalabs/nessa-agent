@@ -59,9 +59,10 @@ the lease hand-off does, and only after that handoff is recorded, so an
 audit outage hands no token. A Claude login that is an
 Anthropic API key (`sk-ant-api…`) is put in `ANTHROPIC_API_KEY` rather
 than `CLAUDE_CODE_OAUTH_TOKEN`. A saved Codex key is `CODEX_API_KEY`
-plus the adapter's api-key auth request, in a private `CODEX_HOME`
-whose credential store is ephemeral, because the pinned app-server
-does not treat the variable alone as a sign-in. A Claude login saved or removed in
+plus the adapter's api-key auth request, and `CODEX_HOME` is one
+directory for that host. Its credential store is ephemeral, because
+the pinned app-server does not treat the variable alone as a sign-in,
+and its `sessions/` tree stays so the next harness can resume a thread. A Claude login saved or removed in
 Settings lets go of idle Boat connections as Authenticate does, so the next
 lease is served with it. Disconnecting Boat keeps the login.
 

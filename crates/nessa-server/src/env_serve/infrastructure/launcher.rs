@@ -54,6 +54,11 @@ pub(crate) struct LaunchSpec {
 pub(crate) struct ConfiguredLauncher {
     workspace: String,
     agents: HashMap<AgentId, LaunchSpec>,
+    /// Where a saved Codex key's harness keeps native sessions. One directory
+    /// for this host, so a later process can resume a thread the previous
+    /// one stored. `None` hands no Codex login: a fresh directory each
+    /// launch would.
+    codex_sessions: Option<PathBuf>,
 }
 
 impl ConfiguredLauncher {
@@ -64,9 +69,18 @@ impl ConfiguredLauncher {
                 .insert("OPENCODE_DB".into(), path.into_os_string());
         }
     }
+    /// The directory a saved Codex key uses as `CODEX_HOME`. Composition
+    /// gives one path for this host; every launch reuses it.
+    pub(crate) fn codex_sessions(&mut self, path: PathBuf) {
+        self.codex_sessions = Some(path);
+    }
     /// `workspace` is absolute and UTF-8, which composition checks.
     pub(crate) fn new(workspace: String, agents: HashMap<AgentId, LaunchSpec>) -> Self {
-        Self { workspace, agents }
+        Self {
+            workspace,
+            agents,
+            codex_sessions: None,
+        }
     }
 }
 
@@ -129,7 +143,13 @@ impl HarnessLauncher for ConfiguredLauncher {
         // After the host's own environment, so a private Codex home is not
         // replaced by the host's `CODEX_HOME`. Host-wins already refused
         // this when the host has a sign-in.
-        if let Some(handed) = login_to_set(id, login, &spec.environment, |path| path.exists()) {
+        if let Some(handed) = login_to_set(
+            id,
+            login,
+            &spec.environment,
+            |path| path.exists(),
+            self.codex_sessions.as_deref(),
+        ) {
             for (name, value) in handed {
                 command.env(name, value);
             }
@@ -170,14 +190,17 @@ const CODEX_API_KEY_AUTH: &str = r#"{"methodId":"api-key"}"#;
 /// Codex's app-server starts with environment-key authentication off, so
 /// `CODEX_API_KEY` alone does not sign it in. A saved key is also the
 /// adapter's `DEFAULT_AUTH_REQUEST` for the api-key method, and
-/// `CODEX_HOME` is a private directory whose `config.toml` sets
-/// `cli_auth_credentials_store` to `ephemeral`. In Codex 0.154 that store
-/// keeps the key in the process, not in `auth.json`.
+/// `CODEX_HOME` is `codex_sessions`: one directory for this host, whose
+/// `config.toml` sets `cli_auth_credentials_store` to `ephemeral`. Codex
+/// 0.154 keeps that key in the process and its threads under
+/// `sessions/` in that home, so the next harness can resume them. No
+/// directory means no Codex login.
 pub(crate) fn login_to_set(
     agent: AgentId,
     login: Option<&Login>,
     configured: &BTreeMap<OsString, OsString>,
     exists: impl Fn(&Path) -> bool,
+    codex_sessions: Option<&Path>,
 ) -> Option<Vec<(String, String)>> {
     let variables = login_variables(agent);
     let host_has_own = variables
@@ -193,7 +216,7 @@ pub(crate) fn login_to_set(
     let variable = login_variable(agent, login);
     let mut handed = vec![(variable.to_owned(), login.expose().to_owned())];
     if agent == AgentId::Codex {
-        let home = private_codex_home()?;
+        let home = prepare_codex_home(codex_sessions?)?;
         handed.push((
             "DEFAULT_AUTH_REQUEST".to_owned(),
             CODEX_API_KEY_AUTH.to_owned(),
@@ -203,18 +226,40 @@ pub(crate) fn login_to_set(
     Some(handed)
 }
 
-/// A directory the saved Codex key's process uses as `CODEX_HOME`, with
-/// the credential store set to memory. `None` when it cannot be made:
-/// the key is then not handed, rather than written into the user's
-/// `auth.json`.
-fn private_codex_home() -> Option<String> {
-    let directory = std::env::temp_dir().join(format!("nessa-codex-{}", uuid::Uuid::new_v4()));
-    std::fs::create_dir(&directory).ok()?;
-    std::fs::write(
-        directory.join("config.toml"),
-        "cli_auth_credentials_store = \"ephemeral\"\n",
-    )
-    .ok()?;
+/// The one line Codex 0.154 reads as an in-memory credential store.
+const EPHEMERAL_STORE: &str = "cli_auth_credentials_store = \"ephemeral\"";
+
+/// Make `directory` usable as `CODEX_HOME` for a saved key. The directory
+/// stays: Codex writes thread rollouts under `sessions/` there, and a
+/// later harness resumes by that id. `config.toml` keeps every other line
+/// and sets the credential store to ephemeral, so the key is not written
+/// into `auth.json`. `None` when the directory cannot be prepared: the
+/// key is then not handed.
+fn prepare_codex_home(directory: &Path) -> Option<String> {
+    std::fs::create_dir_all(directory).ok()?;
+    let config = directory.join("config.toml");
+    let existing = std::fs::read_to_string(&config).unwrap_or_default();
+    let store_lines = existing
+        .lines()
+        .filter(|line| line.trim_start().starts_with("cli_auth_credentials_store"))
+        .count();
+    let already = store_lines == 1 && existing.lines().any(|line| line.trim() == EPHEMERAL_STORE);
+    if !already {
+        let mut kept: Vec<&str> = existing
+            .lines()
+            .filter(|line| !line.trim_start().starts_with("cli_auth_credentials_store"))
+            .collect();
+        while kept.last().is_some_and(|line| line.is_empty()) {
+            kept.pop();
+        }
+        if !kept.is_empty() {
+            kept.push("");
+        }
+        kept.push(EPHEMERAL_STORE);
+        let mut text = kept.join("\n");
+        text.push('\n');
+        std::fs::write(&config, text).ok()?;
+    }
     directory.to_str().map(str::to_owned)
 }
 
