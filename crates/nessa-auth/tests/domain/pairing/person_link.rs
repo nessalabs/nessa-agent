@@ -1,7 +1,7 @@
 //! Attribution has no credential class or capability of its own.
 use nessa_auth::domain::{
-    pairing::*, AudienceId, Credential, CredentialId, Initiator, MembershipId, OrganizationId,
-    PrincipalId, Resource, ResourceId,
+    pairing::*, AudienceId, Credential, CredentialId, Grant, Initiator, MembershipId,
+    OrganizationId, PrincipalId, Resource, ResourceId,
 };
 
 fn active(choice: bool) -> (PairingRecord, Credential) {
@@ -96,12 +96,9 @@ fn choice_changes_attribution_without_changing_principal_class_or_grants() {
     assert_eq!(change.gateway(), credential.principal_id());
     assert_eq!(change.person().as_str(), "owner");
     assert_eq!(change.credential(), credential.id());
-    assert_eq!(
-        PublicIntent::from_record(&linked, AttemptId::new([9; 16]))
-            .unwrap()
-            .same_person(),
-        true
-    );
+    assert!(PublicIntent::from_record(&linked, AttemptId::new([9; 16]))
+        .unwrap()
+        .same_person());
     assert_eq!(
         PersonLinkChange::from_record(&plain, &plain_credential, None, 1).unwrap(),
         None
@@ -192,14 +189,28 @@ fn unrelated_credential_or_principal_cannot_supply_a_link() {
             "other",
         ),
     ] {
+        let organization = OrganizationId::new(organization).unwrap();
+        // Keep the credential independently valid, including its grants. An
+        // empty grant list would hide a missing identity check behind the
+        // separate grant-comparison refusal.
+        let grants = credential
+            .grants()
+            .iter()
+            .map(|grant| {
+                Grant::new(
+                    grant.action().clone(),
+                    Resource::new(organization.clone(), grant.resource().id().clone()),
+                )
+            })
+            .collect();
         let mismatched = Credential::new(
             CredentialId::new(id).unwrap(),
             PrincipalId::new(principal).unwrap(),
-            OrganizationId::new(organization).unwrap(),
+            organization,
             AudienceId::new(audience).unwrap(),
             1,
             Some(10),
-            vec![],
+            grants,
         )
         .unwrap();
         assert_eq!(
@@ -207,6 +218,20 @@ fn unrelated_credential_or_principal_cannot_supply_a_link() {
             Err(PairingError::Conflict)
         );
     }
+    let no_grants = Credential::new(
+        credential.id().clone(),
+        credential.principal_id().clone(),
+        credential.organization_id().clone(),
+        credential.audience_id().clone(),
+        credential.issued_at(),
+        credential.expires_at(),
+        vec![],
+    )
+    .unwrap();
+    assert_eq!(
+        PersonLinkChange::from_record(&record, &no_grants, None, 2),
+        Err(PairingError::Conflict)
+    );
 }
 
 #[test]

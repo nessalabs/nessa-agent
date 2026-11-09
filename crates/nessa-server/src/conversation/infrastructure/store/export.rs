@@ -56,12 +56,18 @@ impl MetadataSnapshot {
     /// Begin a read transaction. A missing or unreadable file is
     /// [`ConversationError::Metadata`]. The file is not created.
     pub fn open(path: &Path) -> Result<Self, ConversationError> {
+        Self::open_with_grants(path, &super::grant_database::path(path))
+    }
+
+    /// Read the explicitly composed grant file without creating either file.
+    /// The standalone `open` convention is the sibling grant file.
+    pub fn open_with_grants(path: &Path, grants: &Path) -> Result<Self, ConversationError> {
         let connection = Connection::open_with_flags(
             path,
             OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
         )
         .map_err(failed)?;
-        super::grant_database::attach_read_only(&connection, &super::grant_database::path(path))
+        super::grant_database::attach_read_only(&connection, grants)
             .map_err(|_| ConversationError::Metadata)?;
         connection.execute_batch("BEGIN").map_err(failed)?;
         let watermark = watermark(&connection)?;

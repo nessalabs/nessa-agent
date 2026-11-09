@@ -27,7 +27,8 @@ default and access is per conversation.
 
 A grant is one row: the grantee's principal, one resource, a capability
 set, the constraints a drive grant carries, and the grant epoch. The separate,
-versioned `metadata.grants.sqlite3` file keeps `share_grants` and its audit.
+versioned `<namespace>/access-grants/access-grants.sqlite3` file keeps
+`share_grants` and its audit, independently of conversation presence.
 Its subject is the receiver for a paired party, otherwise the principal;
 subject kind, subject id, resource kind and resource id form the unique key.
 Two receivers of the same principal can therefore hold independent grants.

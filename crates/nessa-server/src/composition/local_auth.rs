@@ -336,12 +336,10 @@ pub(super) async fn product_state(
     } else {
         None
     };
-    // Pairing attribution belongs to grants even when no agent or conversation
-    // service is configured. Keep its file independent of metadata startup.
-    if settings.agents.is_none() && settings.native.is_some() {
-        let root = conversation_root(namespace);
-        nessa_local_storage::create_directory(&root).map_err(setup_error)?;
-        let path = root.join("metadata.grants.sqlite3");
+    // Listener configuration cannot suspend credential cleanup. The access
+    // dataset stays open even with no agents and native linking switched off.
+    if settings.agents.is_none() {
+        let path = prepare_access_grants_path(namespace)?;
         let links = crate::conversation::infrastructure::LocalPersonLinks::open(
             &path,
             store.clone(),
@@ -1263,6 +1261,16 @@ pub(super) fn receiver_journal(namespace: &Path) -> std::path::PathBuf {
         .join("receiver-access.sqlite3")
 }
 
+/// Prepare the access dataset independently of conversation and listener state.
+fn prepare_access_grants_path(namespace: &Path) -> Result<std::path::PathBuf, RunError> {
+    let path = crate::conversation::infrastructure::access_grants_path(namespace);
+    let parent = path
+        .parent()
+        .ok_or_else(|| setup_error("invalid grant root"))?;
+    nessa_local_storage::create_directory(parent).map_err(setup_error)?;
+    Ok(path)
+}
+
 /// Where a namespace keeps its conversations. Read by composition and by the
 /// retirement that reports whether they are still there. The receiver journal
 /// is not in this directory.
@@ -1439,8 +1447,9 @@ async fn conversations(
     // Ownership, tombstones and summaries are one database
     // (docs/adr/done/196-conversation-metadata-database.md).
     let metadata_path = root.join("metadata.sqlite3");
+    let grants_path = prepare_access_grants_path(namespace)?;
     let metadata = Arc::new(
-        LocalConversationStore::open(&metadata_path)
+        LocalConversationStore::open_with_grants(&metadata_path, &grants_path)
             .map_err(|cause| match cause {
                 crate::conversation::infrastructure::ConversationStoreOpenError::Metadata(
                     cause,

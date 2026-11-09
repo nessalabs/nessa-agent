@@ -94,9 +94,9 @@ impl GrantGates {
         self: &Arc<Self>,
         kind: String,
         resource: String,
-        principal: String,
+        subject: String,
     ) -> GrantPermit {
-        let key = (kind, resource, principal);
+        let key = (kind, resource, subject);
         let gate = {
             let mut gates = self.gates.lock().unwrap_or_else(PoisonError::into_inner);
             if let Some(existing) = gates.get(&key) {
@@ -685,8 +685,8 @@ impl LocalConversationStore {
         })
     }
 
-    /// The principal a change locks: the live row's, or the one a new grant
-    /// names. `None` when a revoke finds no row and names no principal, so
+    /// The tagged subject a change locks: the live row's, or the one a new
+    /// grant names. `None` when a revoke finds no row and names no subject, so
     /// there is no grant to exclude.
     fn subject_to_lock<'a>(
         &'a self,
@@ -728,10 +728,9 @@ impl LocalConversationStore {
     ) -> ConversationFuture<'_, ShareGrantReceipt> {
         Box::pin(async move {
             let credential = credential.map(|held| Arc::new(Mutex::new(held)));
-            // The principal a hold locks is the live row's, which a revoke
-            // names only by credential. Look it up, lock that grant, and
-            // write. If the row's principal is no longer the one locked, the
-            // attempt writes nothing and tries the principal it found.
+            // A revoke names the live subject only by credential. Look it up,
+            // lock that grant, and write. If its subject differs from the one
+            // locked, write nothing and try again with the current subject.
             for _ in 0..4 {
                 let key = self.subject_to_lock(&change).await?;
                 let permit = match &key {
@@ -757,11 +756,11 @@ impl LocalConversationStore {
                     ChangeAttempt::Retry => continue,
                 }
             }
-            tracing::error!("a share grant change could not lock the principal it writes");
+            tracing::error!("a share grant change could not lock the subject it writes");
             Err(ConversationError::Metadata)
         })
     }
-    /// Write `change` while `expected` is the principal the caller has locked.
+    /// Write `change` while `expected` is the tagged subject the caller locked.
     /// `Retry` when that is not the row this write would touch; nothing is
     /// committed. The connection is taken here, after the grant lock.
     ///
@@ -1033,7 +1032,7 @@ impl LocalConversationStore {
                 // The permit the caller holds is for `expected`. A row that names
                 // another principal, or one that appeared after a revoke looked
                 // and found nothing, is written on the next attempt under that
-                // principal's permit. Nothing is committed here.
+                // subject's permit. Nothing is committed here.
                 let covered = match &expected {
                     Some(locked) => locked == &subject_key(&principal, receiver.as_deref()),
                     None => !row_present,
@@ -1042,7 +1041,7 @@ impl LocalConversationStore {
                     return Ok(ChangeAttempt::Retry);
                 }
                 // Compared in the transaction that writes the change, and only
-                // once this attempt holds that principal's permit, so no other
+                // once this attempt holds that subject's permit, so no other
                 // change of this grant can land between the comparison and the
                 // write (row J30). Not a policy: whether the caller may share was
                 // asked above and before; this keeps the caller from overwriting a
@@ -1244,7 +1243,10 @@ impl LocalConversationStore {
                 }
                 Ok(ChangeAttempt::Applied(receipt))
                 };
-                match links { Some(links) => links.with_current(write), None => write() }
+                match links {
+                    Some(links) => links.with_current(write),
+                    None => write(),
+                }
             })
             .await
             .map_err(|_| ConversationError::Metadata)?

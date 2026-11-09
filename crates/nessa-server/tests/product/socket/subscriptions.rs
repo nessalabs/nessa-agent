@@ -2666,7 +2666,7 @@ fn journal_rows(fixture: &SubscriptionFixture) -> i64 {
         .path()
         .join("conversations/metadata.sqlite3");
     nessa_local_database::rusqlite::Connection::open_with_flags(
-        &path,
+        path.with_extension("grants.sqlite3"),
         nessa_local_database::rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
     )
     .unwrap()
@@ -4062,7 +4062,7 @@ async fn a_share_whose_role_and_policy_do_not_fit_is_refused_and_writes_nothing(
             ._directory
             .path()
             .join("conversations")
-            .join("metadata.sqlite3"),
+            .join("metadata.sqlite3").with_extension("grants.sqlite3"),
     )
     .unwrap()
     .query_row("SELECT COUNT(*) FROM share_grant_changes", [], |row| {

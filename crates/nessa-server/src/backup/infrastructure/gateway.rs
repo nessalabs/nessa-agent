@@ -58,6 +58,7 @@ pub async fn capture_namespace(
 ) -> Result<crate::backup::domain::AuthenticatedManifest, ExportFailure> {
     let facts = Arc::new(FactsCache::new(
         namespace.join("conversations").join("metadata.sqlite3"),
+        crate::conversation::infrastructure::access_grants_path(namespace),
     ));
     let canonical = Arc::new(SessionFiles::new(
         namespace
@@ -277,6 +278,7 @@ pub async fn capture_namespace(
 
 struct FactsCache {
     path: PathBuf,
+    grants_path: PathBuf,
     state: Mutex<FactsState>,
 }
 
@@ -289,9 +291,10 @@ enum FactsState {
 }
 
 impl FactsCache {
-    fn new(path: PathBuf) -> Self {
+    fn new(path: PathBuf, grants_path: PathBuf) -> Self {
         Self {
             path,
+            grants_path,
             state: Mutex::new(FactsState::Cold),
         }
     }
@@ -311,9 +314,11 @@ impl FactsCache {
             return Ok(());
         }
         let path = self.path.clone();
-        let opened = tokio::task::spawn_blocking(move || MetadataSnapshot::open(&path))
-            .await
-            .map_err(|_| ())?;
+        let grants = self.grants_path.clone();
+        let opened =
+            tokio::task::spawn_blocking(move || MetadataSnapshot::open_with_grants(&path, &grants))
+                .await
+                .map_err(|_| ())?;
         let mut guard = self.state.lock().map_err(|_| ())?;
         if !matches!(*guard, FactsState::Cold) {
             return match &*guard {
@@ -1568,7 +1573,10 @@ struct NamespaceFences {
 /// Tombstones, revoked grants, and revoked credentials committed in
 /// `namespace`. Pins the metadata snapshot this read uses.
 pub(crate) async fn read_committed_fences(namespace: &Path) -> Result<Vec<DeletionFence>, ()> {
-    let facts = FactsCache::new(namespace.join("conversations").join("metadata.sqlite3"));
+    let facts = FactsCache::new(
+        namespace.join("conversations").join("metadata.sqlite3"),
+        crate::conversation::infrastructure::access_grants_path(namespace),
+    );
     facts.pin().await?;
     let credentials = CredentialCache::new(
         namespace.join("auth").join("credentials.v1.json"),

@@ -153,13 +153,13 @@ impl PairingPersonLinks for LocalPersonLinks {
                 .iter()
                 .map(|byte| format!("{byte:02x}"))
                 .collect::<String>();
-            if change.links() {
-                // A committed removal is the receipt that this invitation's
-                // choice finished. A later read cannot apply that choice again.
-                let retired: bool = transaction.query_row("SELECT EXISTS(SELECT 1 FROM person_link_changes WHERE credential_id=?1 AND person_after IS NULL)", [change.credential().as_str()], |row| row.get(0)).map_err(unavailable)?;
-                if retired {
-                    continue;
-                }
+            // A removal receipt consumes the choice even when expiry arrived
+            // before insertion. It also makes repeated cleanup idempotent.
+            let retired: bool = transaction.query_row("SELECT EXISTS(SELECT 1 FROM person_link_changes WHERE credential_id=?1 AND person_after IS NULL)", [change.credential().as_str()], |row| row.get(0)).map_err(unavailable)?;
+            if retired {
+                continue;
+            }
+            let before = if change.links() {
                 match existing.as_ref() {
                     Some((person, credential, original))
                         if person == change.person().as_str()
@@ -172,19 +172,23 @@ impl PairingPersonLinks for LocalPersonLinks {
                     None => {}
                 }
                 transaction.execute("INSERT INTO person_links (organization_id,gateway_principal,person_principal,credential_id,invitation) VALUES (?1,?2,?3,?4,?5)", params![change.organization().as_str(),change.gateway().as_str(),change.person().as_str(),change.credential().as_str(),invitation]).map_err(unavailable)?;
+                None
             } else {
-                let Some((person, credential, original)) = existing.as_ref() else {
-                    continue;
-                };
-                // An old credential's cleanup cannot remove a later association.
-                if credential != change.credential().as_str() {
-                    continue;
+                match existing.as_ref() {
+                    Some((person, credential, original))
+                        if credential == change.credential().as_str() =>
+                    {
+                        if person != change.person().as_str() || original != &invitation {
+                            return Err(PersonLinkError::Conflict);
+                        }
+                        transaction.execute("DELETE FROM person_links WHERE organization_id=?1 AND gateway_principal=?2 AND credential_id=?3", params![change.organization().as_str(),change.gateway().as_str(),change.credential().as_str()]).map_err(unavailable)?;
+                        Some(person.as_str())
+                    }
+                    // Do not remove or attribute another credential's link to
+                    // this cleanup. A never-inserted choice still needs a receipt.
+                    Some(_) | None => None,
                 }
-                if person != change.person().as_str() || original != &invitation {
-                    return Err(PersonLinkError::Conflict);
-                }
-                transaction.execute("DELETE FROM person_links WHERE organization_id=?1 AND gateway_principal=?2 AND credential_id=?3", params![change.organization().as_str(),change.gateway().as_str(),change.credential().as_str()]).map_err(unavailable)?;
-            }
+            };
             let cause = match change.cause() {
                 PersonLinkCause::SamePersonChoice => "same_person_choice",
                 PersonLinkCause::CredentialRevoked => "credential_revoked",
@@ -196,7 +200,7 @@ impl PairingPersonLinks for LocalPersonLinks {
                 PersonLinkInitiator::LocalOperator => ("local_operator", None),
                 PersonLinkInitiator::Expiry => ("expiry", None),
             };
-            transaction.execute("INSERT INTO person_link_changes (organization_id,gateway_principal,credential_id,invitation,person_before,person_after,cause,initiator_kind,initiator_id,observed_at_ms) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",params![change.organization().as_str(),change.gateway().as_str(),change.credential().as_str(),invitation,existing.as_ref().map(|(person,_,_)|person.as_str()),change.links().then(||change.person().as_str()),cause,kind,id,i64::try_from(observed).map_err(|_|PersonLinkError::Conflict)?]).map_err(unavailable)?;
+            transaction.execute("INSERT INTO person_link_changes (organization_id,gateway_principal,credential_id,invitation,person_before,person_after,cause,initiator_kind,initiator_id,observed_at_ms) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",params![change.organization().as_str(),change.gateway().as_str(),change.credential().as_str(),invitation,before,change.links().then(||change.person().as_str()),cause,kind,id,i64::try_from(observed).map_err(|_|PersonLinkError::Conflict)?]).map_err(unavailable)?;
         }
         transaction.commit().map_err(unavailable)
     }

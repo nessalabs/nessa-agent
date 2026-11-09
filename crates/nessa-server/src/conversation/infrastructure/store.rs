@@ -3,6 +3,7 @@ mod agent_switches;
 mod cached;
 mod export;
 mod grant_database;
+pub(crate) use grant_database::access_grants_path;
 pub use grant_database::ConversationStoreOpenError;
 mod model_changes;
 mod person_links;
@@ -219,8 +220,18 @@ impl LocalConversationStore {
     /// it whether starting again could help
     /// (docs/adr/todo/202-versioned-local-datasets.md).
     pub fn open(path: &Path) -> Result<Self, ConversationStoreOpenError> {
+        Self::open_with_grants(path, &grant_database::path(path))
+    }
+
+    /// Open composition-selected metadata and grant files. Production injects
+    /// an independent access-grants namespace. `open` uses a sibling grant
+    /// file for standalone stores; both use this one schema implementation.
+    pub fn open_with_grants(
+        path: &Path,
+        grants: &Path,
+    ) -> Result<Self, ConversationStoreOpenError> {
         // Refuse a foreign grant version before opening conversation metadata.
-        let grant_path = grant_database::path(path);
+        let grant_path = grants.to_owned();
         let _grants = grant_database::open(&grant_path).map_err(|cause| {
             ConversationStoreOpenError::Grants {
                 path: grant_path.clone(),

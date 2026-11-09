@@ -506,7 +506,11 @@ async fn ordinary_share(f: &Fixture, receiver: Option<&str>, request: &str) -> S
         .unwrap()
 }
 fn grant_journal_rows(f: &Fixture) -> i64 {
-    let path = f._root.path().join("private/conversations.db");
+    let path = f
+        ._root
+        .path()
+        .join("private/conversations.db")
+        .with_extension("grants.sqlite3");
     assert!(path.is_file());
     Connection::open(path)
         .unwrap()

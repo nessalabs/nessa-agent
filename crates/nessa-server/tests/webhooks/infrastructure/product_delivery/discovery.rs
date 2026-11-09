@@ -183,7 +183,13 @@ async fn malformed_discovery_metadata_still_seals_the_supervisor_without_post() 
     let f = Harness::new().await;
     let (mut client, _) = Client::open(f.address, &f.owner).await;
     let first = issue_share(&f, &mut client).await;
-    let connection = Connection::open(f._root.path().join("private/conversations.db")).unwrap();
+    let connection = Connection::open(
+        f._root
+            .path()
+            .join("private/conversations.db")
+            .with_extension("grants.sqlite3"),
+    )
+    .unwrap();
     connection
         .execute(
             "UPDATE share_grants SET resource_id=?1 WHERE credential_id=?2",

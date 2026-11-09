@@ -5,6 +5,14 @@
 use nessa_local_database::{rusqlite::Connection, OpenError, Schema};
 use std::path::{Path, PathBuf};
 
+/// Production grants are identity/access data, independent of conversation
+/// presence and listener configuration. Retirement inspects `conversations/`.
+pub(crate) fn access_grants_path(namespace: &Path) -> PathBuf {
+    namespace
+        .join("access-grants")
+        .join("access-grants.sqlite3")
+}
+
 pub(super) fn path(metadata: &Path) -> PathBuf {
     metadata.with_extension("grants.sqlite3")
 }

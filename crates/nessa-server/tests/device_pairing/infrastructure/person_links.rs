@@ -757,7 +757,7 @@ async fn a_gateway_with_no_agent_or_conversation_store_can_commit_the_link() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_owed_gateway_link_does_not_interrupt_device_or_owner_phone_activation() {
-    let fixture = Fixture::new().await;
+    let fixture = Fixture::phone_owner().await;
     let (_metadata, path) = grant_store(&fixture);
     raw(&path).execute_batch("CREATE TRIGGER fail_link BEFORE INSERT ON person_links BEGIN SELECT RAISE(ABORT,'unavailable'); END;").unwrap();
     let (id, key) = claim(&fixture, "owed", true, 71).await;
@@ -789,5 +789,246 @@ async fn an_owed_gateway_link_does_not_interrupt_device_or_owner_phone_activatio
     }
     assert_eq!(link_count(&path), 0);
     assert_eq!(audit_count(&path), 0);
+    fixture.gateway.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn attribution_requires_the_exact_granted_credential_and_organization() {
+    let fixture = Fixture::new().await;
+    // Leave the effect source unbound so this adapter test can retain a stale
+    // physical row and prove admission's independent credential/organization join.
+    let root = private_root(fixture.directory.path(), "unbound-grants");
+    let path = root.join("metadata.sqlite3");
+    let metadata = LocalConversationStore::open(&path)
+        .unwrap()
+        .with_access_policy(Arc::new(CedarConversationAccessPolicy::new().unwrap()));
+    let conversation = chat(&fixture);
+    metadata.create(conversation.clone()).await.unwrap();
+    let (id, key) = claim(&fixture, "plain", false, 74).await;
+    let approval = fixture
+        .gateway
+        .approve(&fixture.session, id, key, OsEntropy)
+        .await
+        .unwrap();
+    assert!(approval.stopped.is_none());
+    assert!(
+        metadata
+            .change(share(&fixture, &conversation, &approval.record, "share"))
+            .await
+            .unwrap()
+            .applied
+    );
+    let receiver = approval.record.receiver_binding().unwrap().0.as_str();
+    let before = metadata
+        .held_grant(conversation.id(), receiver)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(before.person.is_none());
+    let connection = raw(&path.with_extension("grants.sqlite3"));
+    let organization = conversation.organization().as_str();
+    let credential = approval.record.credential().unwrap().as_str();
+    for (org, credential, linked) in [
+        (organization, "earlier-credential", false),
+        ("another-organization", credential, false),
+        (organization, credential, true),
+    ] {
+        connection.execute("DELETE FROM person_links", []).unwrap();
+        connection.execute(
+            "INSERT INTO person_links (organization_id,gateway_principal,person_principal,credential_id,invitation) VALUES (?1,?2,'person',?3,'synthetic-invitation')",
+            nessa_local_database::rusqlite::params![org, before.principal_id.as_str(), credential],
+        ).unwrap();
+        let held = metadata
+            .held_grant(conversation.id(), receiver)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(held.principal_id, before.principal_id);
+        assert_eq!(held.policy_revision, before.policy_revision);
+        assert_eq!(held.capabilities, before.capabilities);
+        assert_eq!(
+            held.person,
+            linked.then(|| nessa_auth::domain::PrincipalId::new("person").unwrap())
+        );
+    }
+    fixture.gateway.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn two_devices_of_one_owner_keep_independent_receiver_grants() {
+    let fixture = Fixture::new().await;
+    let (metadata, _path) = grant_store(&fixture);
+    let conversation = chat(&fixture);
+    metadata.create(conversation.clone()).await.unwrap();
+    let mut records = Vec::new();
+    for (name, seed) in [("first-device", 75), ("second-device", 76)] {
+        let (id, key) = claim_class(&fixture, name, ConsentClass::DeviceRead, false, seed).await;
+        let approval = fixture
+            .gateway
+            .approve(&fixture.session, id, key, OsEntropy)
+            .await
+            .unwrap();
+        assert!(approval.stopped.is_none());
+        assert_eq!(
+            approval.record.credential_principal().as_ref(),
+            Some(conversation.owner())
+        );
+        assert!(
+            metadata
+                .change(share(&fixture, &conversation, &approval.record, name))
+                .await
+                .unwrap()
+                .applied
+        );
+        records.push(approval.record);
+    }
+    let first = records[0].receiver_binding().unwrap().0.as_str();
+    let second = records[1].receiver_binding().unwrap().0.as_str();
+    assert_ne!(first, second);
+    let grants = metadata.grants(conversation.id()).await.unwrap();
+    assert_eq!(grants.grants.len(), 2);
+    assert!(grants
+        .grants
+        .iter()
+        .all(|grant| &grant.principal_id == conversation.owner()));
+    let retained = metadata
+        .held_grant(conversation.id(), second)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(retained.person.is_none());
+    let mut revoke = share(&fixture, &conversation, &records[0], "revoke-first");
+    revoke.transition = ShareGrantTransition::Revoke;
+    assert!(metadata.change(revoke).await.unwrap().applied);
+    assert_eq!(
+        metadata.held_grant(conversation.id(), first).await.unwrap(),
+        None
+    );
+    assert_eq!(
+        metadata
+            .held_grant(conversation.id(), second)
+            .await
+            .unwrap(),
+        Some(retained)
+    );
+    assert_eq!(
+        metadata
+            .grants(conversation.id())
+            .await
+            .unwrap()
+            .grants
+            .len(),
+        1
+    );
+    fixture.gateway.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn expiry_before_the_first_link_consumes_the_choice_without_replay() {
+    use nessa_auth::application::pairing::{
+        PairingLinkSource, PairingPersonLinks, PersonLinkError,
+    };
+    use nessa_server::conversation::infrastructure::LocalPersonLinks;
+    let fixture = Fixture::new().await;
+    let (_metadata, _) = grant_store(&fixture);
+    let (id, key) = claim(&fixture, "expired-before-link", true, 52).await;
+    fixture
+        .gateway
+        .approve(&fixture.session, id, key, OsEntropy)
+        .await
+        .unwrap();
+    let mut facts = Vec::new();
+    fixture
+        .registry
+        .with_current_links(&mut |current| {
+            facts = current.to_vec();
+            Ok(())
+        })
+        .unwrap();
+    let original = &facts[0].credential;
+    facts[0].credential = nessa_auth::domain::Credential::new(
+        original.id().clone(),
+        original.principal_id().clone(),
+        original.organization_id().clone(),
+        original.audience_id().clone(),
+        original.issued_at(),
+        Some(111),
+        original.grants().to_vec(),
+    )
+    .unwrap();
+    let source = Arc::new(FiniteSource(facts));
+    let root = private_root(fixture.directory.path(), "expired-unlinked");
+    let path = root.join("grants.sqlite3");
+    fixture.time.set(111_000);
+    let links = LocalPersonLinks::open(&path, source.clone(), fixture.time.clone()).unwrap();
+    raw(&path).execute_batch("CREATE TRIGGER fail_receipt BEFORE INSERT ON person_link_changes BEGIN SELECT RAISE(ABORT,'unavailable'); END;").unwrap();
+    assert_eq!(
+        links.reconcile(&source.0),
+        Err(PersonLinkError::Unavailable)
+    );
+    assert_eq!(link_count(&path), 0);
+    assert_eq!(audit_count(&path), 0);
+    raw(&path)
+        .execute_batch("DROP TRIGGER fail_receipt")
+        .unwrap();
+    links.reconcile(&source.0).unwrap();
+    assert_eq!(link_count(&path), 0);
+    assert_eq!(audit_count(&path), 1);
+    let removed: (Option<String>, Option<String>, String, String) = raw(&path)
+        .query_row(
+            "SELECT person_before,person_after,cause,initiator_kind FROM person_link_changes",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .unwrap();
+    assert_eq!(
+        removed,
+        (None, None, "credential_expired".into(), "expiry".into())
+    );
+    drop(links);
+    fixture.time.set(110_001);
+    let links = LocalPersonLinks::open(&path, source.clone(), fixture.time.clone()).unwrap();
+    links.reconcile(&source.0).unwrap();
+    assert_eq!(
+        link_count(&path),
+        0,
+        "a choice consumed before insertion stays consumed after restart and clock rollback"
+    );
+    assert_eq!(audit_count(&path), 1);
+    // An old source cut can also meet a newer credential's committed link.
+    // Its receipt must describe no removal, and leave that link byte-for-byte.
+    fixture.time.set(111_000);
+    let later_path = root.join("later.sqlite3");
+    let links = LocalPersonLinks::open(&later_path, source.clone(), fixture.time.clone()).unwrap();
+    let credential = &source.0[0].credential;
+    raw(&later_path).execute("INSERT INTO person_links VALUES (?1,?2,'new-person','new-credential','new-invitation')",
+        [credential.organization_id().as_str(),credential.principal_id().as_str()]).unwrap();
+    links.reconcile(&source.0).unwrap();
+    let later: (String, String, String) = raw(&later_path)
+        .query_row(
+            "SELECT person_principal,credential_id,invitation FROM person_links",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!(
+        later,
+        (
+            "new-person".into(),
+            "new-credential".into(),
+            "new-invitation".into()
+        )
+    );
+    let receipt: (String, Option<String>, Option<String>) = raw(&later_path)
+        .query_row(
+            "SELECT credential_id,person_before,person_after FROM person_link_changes",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!(receipt, (credential.id().as_str().to_owned(), None, None));
+    links.reconcile(&source.0).unwrap();
+    assert_eq!(audit_count(&later_path), 1);
+    assert_eq!(link_count(&later_path), 1);
     fixture.gateway.shutdown().await;
 }

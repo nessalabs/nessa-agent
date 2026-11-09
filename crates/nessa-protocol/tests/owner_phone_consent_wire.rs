@@ -2,7 +2,14 @@
 use nessa_protocol::pairing::wire::{decode_reply, NativePairingReply};
 use serde_json::{json, Value};
 fn frame(class: &str, action: &str) -> Value {
-    json!({"kind":"status","status":{"stage":"approved","consent":{"public":{"invitation":vec![1;16],"attempt":vec![2;16],"consent":vec![3;16],"generation":1,"expiryMs":600000,"class":class},"audience":"gateway","organization":"org","resource":"gateway","action":action}}})
+    let mut value = json!({"kind":"status","status":{"stage":"approved","consent":{"public":{"invitation":vec![1;16],"attempt":vec![2;16],"consent":vec![3;16],"generation":1,"expiryMs":600000,"class":class},"audience":"gateway","organization":"org","resource":"gateway","action":action}}});
+    if matches!(
+        class,
+        "peer-gateway-conversation-read" | "peer-gateway-environment-serve"
+    ) {
+        value["status"]["consent"]["public"]["samePerson"] = json!(false);
+    }
+    value
 }
 fn consent(value: &Value) -> nessa_auth::domain::pairing::DisclosedConsent {
     match decode_reply(&serde_json::to_vec(value).unwrap()).unwrap() {
@@ -44,7 +51,7 @@ fn owner_phone_wire_requires_all_canonical_actions_in_order() {
     assert!(decode_reply(&serde_json::to_vec(&forged).unwrap()).is_err());
 }
 #[test]
-fn legacy_wire_stays_single_action_and_never_accepts_widening() {
+fn device_and_peer_wire_stay_single_action_and_never_accept_widening() {
     for (class, action) in [
         ("gateway-conversation-read", "conversation.read"),
         ("peer-gateway-conversation-read", "conversation.read"),
@@ -95,7 +102,7 @@ fn foreign_public_scope_never_correlates_as_the_original_full_consent() {
     }
 }
 #[test]
-fn legacy_protected_encoder_bytes_are_unchanged_for_all_three_classes() {
+fn protected_encoder_keeps_device_bytes_and_adds_only_the_peer_choice() {
     use nessa_auth::domain::{
         pairing::{
             AttemptId, ConsentClass, ConsentIntent, ConsentIntentId, DeviceKey, InvitationId,
@@ -163,7 +170,12 @@ fn legacy_protected_encoder_bytes_are_unchanged_for_all_three_classes() {
         let a = serde_json::to_string(&vec![1; 16]).unwrap();
         let b = serde_json::to_string(&vec![2; 16]).unwrap();
         let c = serde_json::to_string(&vec![3; 16]).unwrap();
-        let expected=format!("{{\"kind\":\"status\",\"status\":{{\"stage\":\"claimed\",\"consent\":{{\"public\":{{\"invitation\":{a},\"attempt\":{b},\"consent\":{c},\"generation\":1,\"expiryMs\":{},\"class\":\"{}\"}},\"audience\":\"gateway\",\"organization\":\"org\",\"resource\":\"gateway\",\"action\":\"{}\"}}}}}}",public.expiry_ms(),class.as_str(),class.grant_action());
+        let choice = if class.is_peer() {
+            ",\"samePerson\":false"
+        } else {
+            ""
+        };
+        let expected=format!("{{\"kind\":\"status\",\"status\":{{\"stage\":\"claimed\",\"consent\":{{\"public\":{{\"invitation\":{a},\"attempt\":{b},\"consent\":{c},\"generation\":1,\"expiryMs\":{},\"class\":\"{}\"{choice}}},\"audience\":\"gateway\",\"organization\":\"org\",\"resource\":\"gateway\",\"action\":\"{}\"}}}}}}",public.expiry_ms(),class.as_str(),class.grant_action());
         assert_eq!(bytes, expected.into_bytes());
     }
 }

@@ -187,10 +187,6 @@ fn rejects_relabelled_public(original: PublicIntent, relabelled: PublicIntent) {
         client_lengths,
     );
     let context = transport.pairing_context(relabelled).unwrap();
-    assert_ne!(
-        context.as_bytes(),
-        transport.pairing_context(original).unwrap().as_bytes()
-    );
     let (attempt, request) = ClientAttempt::start(&mut Entropy, &code).unwrap();
     transport.write_message(&request).unwrap();
     let saved = AtomicBool::new(false);
@@ -204,9 +200,15 @@ fn rejects_relabelled_public(original: PublicIntent, relabelled: PublicIntent) {
             Ok(())
         },
     );
+    server.join().unwrap();
+    // Check the authentication result first: a transcript mutant must fail
+    // here, rather than stop at a byte-comparison assertion before the exchange.
     assert!(finished.is_err());
     assert!(!saved.load(Ordering::SeqCst));
-    server.join().unwrap();
+    assert_ne!(
+        context.as_bytes(),
+        transport.pairing_context(original).unwrap().as_bytes()
+    );
 }
 #[cfg(unix)]
 #[test]

@@ -1838,3 +1838,6 @@ async fn a_slot_names_the_transition_a_status_began_whatever_storage_did() {
     assert_eq!(ending.outcome(), Some(SlotOutcome::NotLanded));
     assert!(active(&dialing.records), "the record is as it was");
 }
+
+#[path = "same_person.rs"]
+mod same_person;
