@@ -615,6 +615,8 @@ const bounds = {
     schema.$defs.AgentsSetNativeHooksResult.properties.requestId["x-utf8MaxBytes"],
   ]),
   maxConfiguredAgents: schema.$defs.AgentsListResult.properties.agents.maxItems,
+  maxLoginDevicesOn: schema.$defs.LoginsStatus.properties.devicesOn.maxItems,
+  loginDevicePattern: schema.$defs.LoginsStatus.properties.devicesOn.items.pattern,
   // A drive grant's tool policy, as the share dialog budgets it: each list of
   // patterns, and the hosts on their own.
   maxToolPolicyPatterns: agreeing("tool policy allow and deny lengths", [

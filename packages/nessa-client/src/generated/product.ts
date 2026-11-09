@@ -3880,6 +3880,8 @@ export const bounds = {
   minNativeHooksRequestIdCharacters: 1,
   maxNativeHooksRequestIdBytes: 256,
   maxConfiguredAgents: 3,
+  maxLoginDevicesOn: 256,
+  loginDevicePattern: "^peer:[0-9a-f]{64}$",
   maxToolPolicyPatterns: 16,
   maxToolPatternBytes: 48,
   maxCommandHosts: 16,

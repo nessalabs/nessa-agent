@@ -2,7 +2,12 @@
  * The answer of every `logins.*` method, held to the schema's shape before
  * anyone believes it.
  */
-import { LoginAgent, type LoginsStatus, type SavedLogin } from "../generated/product.js"
+import {
+  LoginAgent,
+  bounds,
+  type LoginsStatus,
+  type SavedLogin,
+} from "../generated/product.js"
 
 function invalid(what: string): never {
   throw new Error(`logins response has invalid ${what}`)
@@ -25,8 +30,7 @@ const agents: readonly LoginAgent[] = [
   LoginAgent.Codex,
   LoginAgent.Opencode,
 ]
-const peerName = /^peer:[0-9a-f]{64}$/
-const MAX_DEVICES = 256
+const peerName = new RegExp(bounds.loginDevicePattern)
 
 export function loginsStatus(value: unknown): LoginsStatus {
   const item = record(value, ["logins", "devicesOn"])
@@ -40,7 +44,8 @@ export function loginsStatus(value: unknown): LoginsStatus {
     return { agent, saved }
   })
   const devicesOn = own(item, "devicesOn")
-  if (!Array.isArray(devicesOn) || devicesOn.length > MAX_DEVICES) invalid("devicesOn")
+  if (!Array.isArray(devicesOn) || devicesOn.length > bounds.maxLoginDevicesOn)
+    invalid("devicesOn")
   const names: string[] = []
   let last = ""
   for (const name of devicesOn) {
