@@ -1096,10 +1096,12 @@ async fn deleted_conversation_unshare_preserves_webhook_and_departed_receiver_cl
         }
         assert!(f
             .grants
-            .principal_grant(&f.a, &principal)
+            .grants(&f.a)
             .await
             .unwrap()
-            .is_some());
+            .grants
+            .into_iter()
+            .any(|grant| grant.credential_id == credential));
         f.grants
             .record_deletion(
                 &f.a,
@@ -1115,7 +1117,14 @@ async fn deleted_conversation_unshare_preserves_webhook_and_departed_receiver_cl
             .await
             .unwrap();
         let revoked=owner.call("conversation.unshare",json!({"requestId":"revoke-deleted","conversationId":f.a.to_string(),"credentialId":credential.as_str()})).await;
-        let grant = f.grants.principal_grant(&f.a, &principal).await.unwrap();
+        let grant = f
+            .grants
+            .grants(&f.a)
+            .await
+            .unwrap()
+            .grants
+            .into_iter()
+            .find(|grant| grant.credential_id == credential);
         drop(owner);
         f.close().await.unwrap();
         assert_eq!(

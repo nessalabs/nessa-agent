@@ -38,6 +38,22 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::task::{Context, Poll};
 
+/// One target selector for gate acquisition and the transaction. An ordinary
+/// omitted receiver keeps this credential's row; a credential-owned principal
+/// write selects receiver absence. Receiver subjects remain independent.
+fn target_query(columns: &str) -> String {
+    format!(
+        "SELECT {columns} FROM grants.share_grants
+        WHERE resource_kind = '{CONVERSATION}' AND resource_id = ?1
+          AND ((NOT ?5 AND credential_id = ?3)
+            OR (?5 AND ?4 IS NOT NULL AND receiver_id = ?4)
+            OR (?5 AND ?4 IS NULL AND
+                ((NOT ?6 AND credential_id = ?3)
+                  OR (principal_id = ?2 AND receiver_id IS NULL))))
+        ORDER BY (credential_id = ?3) DESC LIMIT 1"
+    )
+}
+
 /// The synchronization key uses the same two subject kinds as the durable row.
 fn subject_key(principal: &str, receiver: Option<&str>) -> String {
     match receiver {
@@ -691,6 +707,7 @@ impl LocalConversationStore {
     fn subject_to_lock<'a>(
         &'a self,
         change: &'a ShareGrantChange,
+        principal_only: bool,
     ) -> ConversationFuture<'a, Option<String>> {
         let id = change.conversation_id.to_string();
         let named = change
@@ -703,14 +720,15 @@ impl LocalConversationStore {
         self.run(move |connection| {
             let found: Option<String> = connection
                 .cached_row(
-                    &format!(
-                        "SELECT subject_kind || ':' || subject_id FROM grants.share_grants
-                         WHERE resource_kind = '{kind}' AND resource_id = ?1
-                           AND ((?5 AND principal_id = ?2 AND receiver_id IS ?4)
-                                OR (NOT ?5 AND credential_id = ?3))",
-                        kind = CONVERSATION,
-                    ),
-                    params![id, named.clone(), credential, &receiver, granting],
+                    &target_query("subject_kind || ':' || subject_id"),
+                    params![
+                        id,
+                        named.clone(),
+                        credential,
+                        &receiver,
+                        granting,
+                        principal_only
+                    ],
                     |row| row.get(0),
                 )
                 .optional()
@@ -732,7 +750,7 @@ impl LocalConversationStore {
             // lock that grant, and write. If its subject differs from the one
             // locked, write nothing and try again with the current subject.
             for _ in 0..4 {
-                let key = self.subject_to_lock(&change).await?;
+                let key = self.subject_to_lock(&change, credential.is_some()).await?;
                 let permit = match &key {
                     Some(principal) => Some(
                         self.grant_gates
@@ -842,6 +860,16 @@ impl LocalConversationStore {
                     principal,
                 )?;
                 let after = wanted(&change.transition);
+                // A principal write cannot reinterpret a paired row, including
+                // an older receiver-absent replay. Check before either outcome.
+                if credential_owner.is_some() {
+                    let receiver_present: bool = transaction.query_row(
+                        "SELECT EXISTS(SELECT 1 FROM grants.share_grants WHERE resource_kind=?1 AND resource_id=?2 AND principal_id=?3 AND receiver_id IS NOT NULL)",
+                        params![CONVERSATION, id, change.principal_id.as_ref().map(PrincipalId::as_str)],
+                        |row| row.get(0),
+                    ).map_err(failed)?;
+                    if receiver_present { return Err(ConversationError::ShareTargetNotPaired); }
+                }
                 // A retried request answers what it answered the first time, so
                 // a share whose reply was lost cannot, retried after a later
                 // unshare, grant again (row G16). That holds for a request that
@@ -945,25 +973,18 @@ impl LocalConversationStore {
                     .principal_id
                     .as_ref()
                     .map(|principal| principal.as_str().to_owned());
-                // A named principal resolves only its own row. Credential and
-                // receiver match when the change names no principal, which is
-                // how a revoke finds the grant.
+                // Resolve the same target used for its permit. An omitted
+                // ordinary receiver keeps that credential's existing receiver.
                 let existing: Option<(String, Option<String>, String, Held, i64)> = transaction
                     .cached_row(
-                        &format!(
-                            "SELECT principal_id, receiver_id, credential_id, capabilities, policy,
-                                    policy_revision
-                             FROM grants.share_grants
-                             WHERE resource_kind = '{CONVERSATION}' AND resource_id = ?1
-                               AND ((?5 AND principal_id = ?2 AND receiver_id IS ?4)
-                                    OR (NOT ?5 AND credential_id = ?3))"
-                        ),
+                        &target_query("principal_id, receiver_id, credential_id, capabilities, policy, policy_revision"),
                         params![
                             id,
                             named_principal,
                             change.credential_id.as_str(),
                             change.receiver_id,
                             matches!(change.transition, ShareGrantTransition::Grant(_)),
+                            credential_owner.is_some(),
                         ],
                         |row| {
                             Ok((
@@ -977,12 +998,16 @@ impl LocalConversationStore {
                     )
                     .optional()
                     .map_err(failed)?;
+                if let Some((principal, _, _, _, _)) = existing.as_ref() {
+                    if change.principal_id.as_ref().is_some_and(|named| named.as_str() != principal) {
+                        return Err(ConversationError::InvalidInput);
+                    }
+                }
                 if matches!(change.transition, ShareGrantTransition::Revoke) {
-                    if let Some((principal, receiver, _, _, _)) = existing.as_ref() {
+                    if let Some((_, receiver, _, _, _)) = existing.as_ref() {
                         // Optional selectors assert the credential's one row;
                         // they are not alternative targets for a revoke.
-                        if change.principal_id.as_ref().is_some_and(|named| named.as_str() != principal)
-                            || change.receiver_id.as_ref().is_some_and(|named| Some(named) != receiver.as_ref())
+                        if change.receiver_id.as_ref().is_some_and(|named| Some(named) != receiver.as_ref())
                         { return Err(ConversationError::InvalidInput); }
                     } else if let Some(receiver) = change.receiver_id.as_ref() {
                         let occupied: bool=transaction.query_row("SELECT EXISTS(SELECT 1 FROM grants.share_grants WHERE resource_kind=?1 AND resource_id=?2 AND receiver_id=?3)", params![CONVERSATION,id,receiver], |row|row.get(0)).map_err(failed)?;

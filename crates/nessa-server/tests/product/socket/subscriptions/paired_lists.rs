@@ -528,7 +528,8 @@ async fn a_paired_list_ends_with_storage_failure_after_its_initial_read() {
         )
         .await
         .unwrap();
-    let preview: String = external
+    let metadata = Connection::open(&path).unwrap();
+    let preview: String = metadata
         .query_row(
             "SELECT preview FROM summaries WHERE conversation_id = ?1",
             [shared.to_string()],

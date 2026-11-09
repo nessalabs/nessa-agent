@@ -562,7 +562,11 @@ mod tests {
     fn a_metadata_directory_that_cannot_be_used_is_still_retried() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("absent").join("metadata.sqlite3");
-        let Err(cause) = LocalConversationStore::open(&path) else {
+        let grants = directory.path().join("grants");
+        nessa_local_storage::create_directory(&grants).unwrap();
+        let Err(cause) =
+            LocalConversationStore::open_with_grants(&path, &grants.join("access-grants.sqlite3"))
+        else {
             panic!("the store opened");
         };
         let crate::conversation::infrastructure::ConversationStoreOpenError::Metadata(cause) =
@@ -571,6 +575,31 @@ mod tests {
             panic!("expected metadata refusal");
         };
         let error = RunError::opening(Dataset::ConversationMetadata, &path, cause);
+        assert!(matches!(error, RunError::Agent(_)), "{error}");
+        assert_eq!(
+            super::super::restart::restart(&error),
+            super::super::restart::Restart::Worthwhile
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_access_grant_directory_that_cannot_be_used_is_still_retried_without_metadata_creation() {
+        let directory = tempfile::tempdir().unwrap();
+        let metadata_root = directory.path().join("metadata");
+        nessa_local_storage::create_directory(&metadata_root).unwrap();
+        let metadata = metadata_root.join("metadata.sqlite3");
+        let grants = directory.path().join("absent/grants.sqlite3");
+        let Err(crate::conversation::infrastructure::ConversationStoreOpenError::Grants {
+            path,
+            cause,
+        }) = LocalConversationStore::open_with_grants(&metadata, &grants)
+        else {
+            panic!("expected grant directory refusal")
+        };
+        assert_eq!(path, grants);
+        assert!(!metadata.exists());
+        let error = RunError::opening(Dataset::AccessGrants, &path, cause);
         assert!(matches!(error, RunError::Agent(_)), "{error}");
         assert_eq!(
             super::super::restart::restart(&error),
