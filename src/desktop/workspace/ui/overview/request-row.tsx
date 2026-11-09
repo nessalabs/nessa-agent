@@ -247,7 +247,9 @@ export const RequestRow = memo(function RequestRow({
                   data-option={option.id}
                   // An Option-click answers the always folded into it.
                   data-options={
-                    foldedAlways && option === onceOptions[0] ? foldedAlways.id : undefined
+                    foldedAlways && option === onceOptions[0]
+                      ? foldedAlways.id
+                      : undefined
                   }
                   data-primary
                   tabIndex={current && answerable ? 0 : -1}
