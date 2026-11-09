@@ -211,7 +211,9 @@ cross-platform. Windows execution must be confirmed by the new exact-head CI.
 Final code checkpoint: `0b93e7c525e1c4720913493772d1006bab2b5225`, integrating
 main `19d631ebd34c6ece0062cbd0edbbd5e269d54c1d`. The
 [42-file byte manifest](followup/verified-sources.json) identifies the frozen
-source and tests; only documentation and evidence changed afterward.
+source and tests. At published head `ff2471f3616dad5d3a89341777c70f19c2893aeb`,
+only documentation and evidence differed from that checkpoint. The subsequent
+Windows-only import correction is recorded below.
 
 | Check | Result |
 | --- | --- |
