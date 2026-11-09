@@ -4539,6 +4539,171 @@ async fn a_saved_login_is_asked_for_and_sent_only_where_the_host_takes_one() {
     );
 }
 
+/// An audit outage withholds the saved login and is logged, and the lease
+/// is still granted: a machine signed in on its own keeps working.
+#[tokio::test(flavor = "current_thread")]
+async fn an_audit_outage_hands_no_login_and_the_lease_stays_granted() {
+    use crate::logins::application::{
+        AuditUnavailable, LoginAudit, LoginRecord, SavedLoginsService,
+    };
+    use crate::logins::infrastructure::cedar::CedarLoginPolicyEvaluator;
+    use crate::secrets::{SecretStore, SecretUnavailable};
+    use nessa_protocol::agents::AgentId;
+    use nessa_protocol::lease::Login;
+    use zeroize::Zeroizing;
+
+    const SECRET: &str = "sk-ant-oat-audit-down";
+
+    #[derive(Clone, Default)]
+    struct Capture(Arc<Mutex<Vec<u8>>>);
+    impl std::io::Write for Capture {
+        fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(buffer);
+            Ok(buffer.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for Capture {
+        type Writer = Self;
+        fn make_writer(&'a self) -> Self {
+            self.clone()
+        }
+    }
+
+    struct Held(Mutex<Option<Vec<u8>>>);
+    impl SecretStore for Held {
+        fn read(&self) -> Result<Option<Zeroizing<Vec<u8>>>, SecretUnavailable> {
+            Ok(self.0.lock().unwrap().clone().map(Zeroizing::new))
+        }
+        fn write(&self, bytes: &[u8]) -> Result<(), SecretUnavailable> {
+            *self.0.lock().unwrap() = Some(bytes.to_vec());
+            Ok(())
+        }
+        fn delete(&self) -> Result<(), SecretUnavailable> {
+            *self.0.lock().unwrap() = None;
+            Ok(())
+        }
+    }
+    struct Deaf;
+    impl LoginAudit for Deaf {
+        fn record(&self, _: &LoginRecord) -> Result<(), AuditUnavailable> {
+            Err(AuditUnavailable)
+        }
+    }
+    struct Through(SavedLoginsService);
+    impl super::SavedLogins for Through {
+        fn login<'a>(
+            &'a self,
+            environment: &'a EnvironmentRef,
+            agent: nessa_protocol::agents::AgentId,
+            lease: &'a str,
+        ) -> crate::conversation::application::EnvironmentFuture<
+            'a,
+            Option<nessa_protocol::lease::Login>,
+        > {
+            // On this thread, so the test's subscriber sees the error.
+            let found = self.0.login_for(environment, agent, lease);
+            Box::pin(async move { found })
+        }
+    }
+    struct Remembering {
+        stopped: Arc<AtomicUsize>,
+        logins: Mutex<Vec<Option<String>>>,
+    }
+    impl HarnessLauncher for Remembering {
+        fn workspace(&self) -> &str {
+            "/srv/work"
+        }
+        fn runs(&self, agent: &str) -> bool {
+            agent == "claude"
+        }
+        fn sandboxes(&self) -> SandboxProfiles {
+            SandboxProfiles::HARNESS_DEFAULT
+        }
+        fn launch(
+            &self,
+            agent: &str,
+            environment: &BTreeMap<String, String>,
+            login: Option<&Login>,
+            publish_point: Option<&str>,
+        ) -> Result<HarnessProcess, AgentError> {
+            self.logins
+                .lock()
+                .unwrap()
+                .push(login.map(|login| login.expose().to_owned()));
+            Echo {
+                stopped: self.stopped.clone(),
+            }
+            .launch(agent, environment, None, publish_point)
+        }
+    }
+
+    let mut stores = BTreeMap::new();
+    for agent in AgentId::ALL {
+        let held = if *agent == AgentId::Claude {
+            Some(SECRET.as_bytes().to_vec())
+        } else {
+            None
+        };
+        stores.insert(
+            *agent,
+            Arc::new(Held(Mutex::new(held))) as Arc<dyn SecretStore>,
+        );
+    }
+    let service = SavedLoginsService::new(
+        stores,
+        Arc::new(Held(Mutex::new(None))),
+        Arc::new(CedarLoginPolicyEvaluator::new().unwrap()),
+        Arc::new(Deaf),
+    );
+    let stopped = Arc::new(AtomicUsize::new(0));
+    let launcher = Arc::new(Remembering {
+        stopped: stopped.clone(),
+        logins: Mutex::new(Vec::new()),
+    });
+    let connector = Connector::with(Reach::Serving, launcher.clone(), stopped);
+    let environment =
+        environment(connector, Arc::new(Audit::default())).with_logins(Arc::new(Through(service)));
+    let captured = Capture::default();
+    let subscriber = tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::ERROR)
+        .with_writer(captured.clone())
+        .with_ansi(false)
+        .finish();
+    let _traced = tracing::subscriber::set_default(subscriber);
+
+    let id = LeaseId::new("lease-audit-down").unwrap();
+    let (binding, host) = binding(true);
+    let opened = environment
+        .open(&id, &terms("claude"), binding)
+        .await
+        .expect("the lease is granted");
+    let host = host
+        .lock()
+        .unwrap()
+        .clone()
+        .expect("the harness was started");
+    let HarnessProcess {
+        mut input,
+        mut output,
+        ..
+    } = host.start(HarnessLaunch::default()).unwrap();
+    input.write_all(b"hi").await.unwrap();
+    assert_eq!(read_some(output.as_mut()).await, b"hi");
+    drop(opened);
+
+    assert_eq!(*launcher.logins.lock().unwrap(), [None]);
+    let log = String::from_utf8(captured.0.lock().unwrap().clone()).unwrap();
+    assert!(
+        log.contains("a saved login was not handed: its handoff could not be recorded"),
+        "{log}"
+    );
+    assert!(log.contains("lease-audit-down"), "{log}");
+    assert!(!log.contains(SECRET), "{log}");
+}
+
 /// After a Claude sign-in change (ADR 501), a conversation's idle workspace
 /// connection is let go, so the next lease is served again with the sign-in
 /// now saved; one with a lease on it is kept.
