@@ -1,8 +1,9 @@
 //! Real conversation/store/provider orchestration with a controlled process port.
 use super::*;
+#[cfg(unix)]
 use crate::conversation::application::service::environment_tools::running_turn;
 #[cfg(unix)]
-use crate::conversation::application::{ThreadEnvironments, WorkspaceRest};
+use crate::conversation::application::{Environments, ThreadEnvironments, WorkspaceRest};
 #[cfg(unix)]
 use crate::conversation::infrastructure::FilePlacements;
 use crate::conversation::{
@@ -12,7 +13,7 @@ use crate::conversation::{
             BackgroundStore, BackgroundTarget, BackgroundTaskError,
         },
         AgentToolAudit, AgentToolAuditRecord, ConversationFuture, Environment,
-        EnvironmentDeclaration, EnvironmentFuture, EnvironmentLease, Environments,
+        EnvironmentDeclaration, EnvironmentFuture, EnvironmentLease,
     },
     domain::{BackgroundCommand, BackgroundTaskId, TaskCause, TaskDelivery, TaskOutcome, TaskStop},
     infrastructure::{in_process_environment, LocalBackgroundTasks},
