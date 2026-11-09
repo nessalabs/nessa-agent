@@ -8,7 +8,11 @@ import { unlockRequestedVault } from "./vault.mjs"
 export async function openAccounts(page) {
   if (!(await page.$(css.settings))) await page.keyboard.press(keys.settings)
   await page.locator(css.settingsCategory, { hasText: names.connections }).click()
-  await page.locator(css.settingsTab, { hasText: names.accounts }).click()
+  // Connections opens on Accounts, whose unlock dialog (a locked vault)
+  // covers the tabs: click the tab only when another one is showing.
+  const tab = page.locator(css.settingsTab, { hasText: names.accounts })
+  await tab.waitFor()
+  if ((await tab.getAttribute("aria-selected")) !== "true") await tab.click()
 }
 
 /** Edit the global default and one saved channel through the actual UI,
