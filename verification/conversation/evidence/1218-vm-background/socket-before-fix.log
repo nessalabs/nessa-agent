@@ -1,0 +1,3 @@
+helper exit: 0 record bytes: 8064
+invalid terminal record: Invalid \uXXXX escape: line 1 column 8063 (char 8062)
+stderr: 

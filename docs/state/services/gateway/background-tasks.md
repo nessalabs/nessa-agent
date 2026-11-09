@@ -3,16 +3,22 @@ id: gateway-background-tasks
 title: Background tasks
 kind: statechart
 status: implemented
-summary: A local command can outlive its calling agent turn and resume that
+summary: A local or cloud command can outlive its calling agent turn and resume that
   conversation with its outcome.
 parent: gateway
-sourceRevision: "138755acfbc78c58c00fa6feaeefe38d170d5f85"
+sourceRevision: "9f10c41087f6602abae76168efd312e8574a4d6c"
 sources:
   - crates/nessa-server/src/conversation/application/service/background_tasks.rs
   - crates/nessa-server/src/conversation/domain/background_task/lifecycle.rs
   - crates/nessa-server/src/conversation/infrastructure/background_tasks/mod.rs
   - crates/nessa-server/src/conversation/infrastructure/background_tasks/runner.rs
   - crates/nessa-server/src/composition/background_tools.rs
+  - crates/nessa-server/src/composition/background_command.rs
+  - crates/nessa-server/src/conversation/infrastructure/background_tasks/io.rs
+  - crates/nessa-server/tests/conversation/background_io.rs
+  - crates/nessa-server/src/conversation/infrastructure/background_tasks/transport.rs
+  - crates/nessa-server/tests/conversation/background_transport.rs
+  - crates/nessa-server/tests/background_run_binary.rs
   - crates/nessa-server/tests/conversation/background_tasks.rs
   - src/desktop/workspace/adapters/gateway/gateway-steps.ts
   - src/desktop/workspace/model/transcript.ts
@@ -46,13 +52,14 @@ modelCheck:
 ---
 # Background tasks
 
-An agent can start a local shell command and continue without waiting for it.
+An agent can start a shell command in its local workspace or cloud VM and continue without waiting for it.
 The existing tool waterfall keeps that call running until the command settles.
 Completion supplies the actual outcome to the same conversation as internal model
 input. The agent's reply is visible; the internal input creates no user bubble.
 
-Normal shell calls remain available. Background tasks currently require a local
-workspace. A remote conversation is refused before any command starts.
+Normal shell calls remain available. Local background commands run on the
+gateway. Cloud commands run in the thread's existing VM. SSH-host and paired
+computer conversations are refused before any background command starts.
 
 ```mermaid
 stateDiagram-v2
@@ -62,7 +69,7 @@ stateDiagram-v2
     Running --> Stopping: explicit cancel, deletion or shutdown
     Running --> Settled: process exit and scope cleanup observed
     Stopping --> Settled: scope cleanup observed
-    Running --> Interrupted: gateway restarted without a saved outcome
+    Running --> Interrupted: gateway restart or VM connection lost without outcome
     Stopping --> Interrupted: gateway restarted without a saved outcome
     Settled --> [*]
     Interrupted --> [*]
@@ -80,10 +87,30 @@ and Codex's MCP envelope. An envelope must name the same server and tool, and
 both forms pass the same command and identity validation before comparison.
 
 Shepherd owns the command scope independently of the provider. Ending the turn
-or parking the provider does not cancel the task. Explicit cancellation, gateway
+does not cancel the task. A running task keeps a cloud conversation from idle
+parking. In the VM, a separate SSH session runs the gateway's verified installed
+`background-run` helper; its stream retains the workspace's `InUse` token, so a
+direct rest also leaves the VM running. The gateway opens only the existing VM,
+with provisioning disabled. The workspace reported by its lease and the
+conversation's immutable placement identify where the saved task ran.
+
+The helper uses the same bounded Shepherd runner as local execution. Its cleared
+account environment contains no forwarded agent logins. A stop byte or stdin EOF
+cancels the scope, and the helper waits for cleanup before sending its terminal
+record. Its stdin descriptor is nonblocking and supports a pipe or socket, so
+an unfinished input read does not hold runtime shutdown open after command exit.
+Output uses the same readiness adapter, so shared stdin/stdout socket flags and
+a full send buffer do not discard part of the terminal record.
+The helper also drains its supervisor before leaving. The gateway validates that record and bounds the bytes read. A lost SSH
+stream without a valid record settles interrupted with cleanup unconfirmed.
+Terminal output travels with the final record; live output updates are not
+published by this background-task API. Explicit cancellation, gateway
 shutdown and conversation deletion stop the owned scope. Cancellation intent,
 physical exit and verified cleanup remain separate evidence. An uncertain cleanup
-cannot become a successful shutdown or deletion.
+cannot become a successful shutdown or deletion. The existing service retains a
+failed owner for joining; unconfirmed cleanup can therefore keep a cloud thread
+from idle rest. Automatic reconciliation of that uncertainty remains outside
+this change, as it is for local tasks.
 
 Each result retains a bounded output tail. The continuation can contain less than
 the retained result when the conversation's input limit is smaller; it says when
@@ -145,8 +172,27 @@ providers, ambiguous admission, cancellation before admission, deletion, orderly
 shutdown, deletion with queued export, and interrupted restart. The conversation stress step uses a real
 Shepherd command with a scripted harness through the production MCP relay and
 checks the existing waterfall and internal continuation in Chromium and WebKit.
-Native remote execution and process adoption after a gateway crash are excluded.
+The fake VM stress regression exercises repeated idle sweeps while a command
+runs, rest after completion, transport interruption settlement, and restart
+without replay. Stream tests run real local Shepherd processes to check EOF
+cleanup, cancellation ordering, timeout, output bounds, and rejected records.
+The workspace regression checks that a background stream retains `InUse` after
+its runtime is dropped. A real CLI pipe test checks the helper and cleared secret
+environment. No paid VM is provisioned by these checks. Real Boat connectivity,
+provider-owned shells outside this API, live output publication, and process
+adoption after a gateway crash are excluded.
 
 ## Bounded rule model
 
 Owns one admitted task's first stop, immutable terminal outcome, interrupted cleanup uncertainty and one-way continuation disposition. Process execution, capacity admission, persistence CAS and delivery deduplication remain separate unmodeled boundaries. This finite abstraction checks safety only. It does not execute or verify the implementation, promise eventual completion, or qualify external effects. Existing source checkpoints and historical test receipts retain their earlier scope. The scoped model review inspected `crates/nessa-server/src/conversation/domain/background_task/lifecycle.rs`.
+
+## Source review checkpoint
+
+Reviewed source `9f10c41087f6602abae76168efd312e8574a4d6c` against the prior checkpoint. This review traced
+admission, task binding, settlement/recovery, VM dispatch, descriptor I/O,
+workspace ownership and their regressions. The unrelated transcript additions
+since that checkpoint do not change background tool-row identity. The existing
+bounded-rule model and its historical `modelCheck` receipt were not refreshed
+or rerun; VM transport and physical cleanup remain outside its stated scope.
+The Markdown references and diagram-detail targets were checked; chart rendering
+was not inspected in a Nessa Docs renderer.

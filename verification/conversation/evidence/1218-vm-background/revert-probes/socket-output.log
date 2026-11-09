@@ -1,0 +1,15 @@
+running 1 test
+
+thread 'background_run_preserves_a_large_record_on_shared_socket_stdio' (32819) panicked at crates/nessa-server/tests/background_run_binary.rs:122:5:
+helper exited before the blocked record was drained
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test background_run_preserves_a_large_record_on_shared_socket_stdio ... FAILED
+
+failures:
+
+failures:
+    background_run_preserves_a_large_record_on_shared_socket_stdio
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.11s
+
+error: test failed, to rerun pass `-p nessa-server --test background_run_binary`

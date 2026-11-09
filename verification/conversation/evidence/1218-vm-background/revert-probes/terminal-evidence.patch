@@ -1,0 +1,23 @@
+--- /workspace/nessa-agent-1218/crates/nessa-server/src/conversation/infrastructure/background_tasks/transport.rs
++++ terminal-evidence
+@@ -6,7 +6,7 @@
+     application::background_tasks::{
+         BackgroundRun, BackgroundRunner, BackgroundTarget, BackgroundTaskError,
+     },
+-    domain::{BackgroundCommand, TaskCause, TaskInitiator, TaskLifecycle, TaskOutcome, TaskStop},
++    domain::{BackgroundCommand, TaskCause, TaskInitiator, TaskOutcome, TaskStop},
+ };
+ use std::{io, sync::Arc, time::Duration};
+ use tokio::{
+@@ -114,11 +114,6 @@
+                     .as_ref()
+                     .is_none_or(|signal| signal.len() <= 128)
+         })
+-        .filter(|outcome| {
+-            TaskLifecycle::admitted(0)
+-                .settle(outcome.clone(), 0)
+-                .is_ok()
+-        })
+         .unwrap_or_else(interrupted)
+ }
+ 

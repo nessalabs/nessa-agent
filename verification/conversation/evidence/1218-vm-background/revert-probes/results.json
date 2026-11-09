@@ -1,0 +1,44 @@
+[
+  {
+    "probe": "vm-admission",
+    "filter": "vm_background_stress",
+    "status": 101,
+    "expected_failure_observed": true,
+    "source_sha256": "1954b57daf8b0ea09627666196a1636f794520d774b556363ae9b1568a6d623f"
+  },
+  {
+    "probe": "vm-in-use",
+    "filter": "a_background_stream_holds_the_vm_after_its_runtime_is_dropped",
+    "status": 101,
+    "expected_failure_observed": true,
+    "source_sha256": "856054f15bb14770f3b7b4822e7754b2df75f4b51899b7f2b9812d9287af8584"
+  },
+  {
+    "probe": "eof-cancellation",
+    "filter": "cancel_keeps_the_reader_pending_until_cleanup_answers",
+    "status": 101,
+    "expected_failure_observed": true,
+    "source_sha256": "5525e8a4f7ce97ea3fdee617c341ef4dcfeb4109156a63afd2ee0495af61a4e5"
+  },
+  {
+    "probe": "terminal-evidence",
+    "filter": "missing_malformed_oversized_and_inconsistent_outcomes_are_interrupted",
+    "status": 101,
+    "expected_failure_observed": true,
+    "source_sha256": "5525e8a4f7ce97ea3fdee617c341ef4dcfeb4109156a63afd2ee0495af61a4e5"
+  },
+  {
+    "probe": "exact-shell-arguments",
+    "filter": "background_arguments_survive_the_login_shell_without_interpretation_or_newline_loss",
+    "status": 101,
+    "expected_failure_observed": true,
+    "source_sha256": "51e534655e6978ebb8070d3c2c8c0e7de7c330eb874f6f99ec81778f66baf2a8"
+  },
+  {
+    "probe": "socket-output",
+    "filter": "background_run_preserves_a_large_record_on_shared_socket_stdio",
+    "status": 101,
+    "expected_failure_observed": true,
+    "source_sha256": "9544964c9f7a435b0cd073967972d4bdbb62457397afc8eca60748462ef73c15"
+  }
+]

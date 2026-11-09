@@ -1,0 +1,15 @@
+running 1 test
+
+thread 'background_run_exits_with_stdin_open_and_clears_agent_secrets' (29535) panicked at crates/nessa-server/tests/background_run_binary.rs:39:13:
+background helper did not finish
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test background_run_exits_with_stdin_open_and_clears_agent_secrets ... FAILED
+
+failures:
+
+failures:
+    background_run_exits_with_stdin_open_and_clears_agent_secrets
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 20.00s
+
+error: test failed, to rerun pass `-p nessa-server --test background_run_binary`

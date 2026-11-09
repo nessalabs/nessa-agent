@@ -1,0 +1,18 @@
+running 1 test
+test conversation::application::service::mutation::tests::background_tasks::vm_background_stress_holds_past_idle_then_rests_and_restart_does_not_replay ... FAILED
+
+failures:
+
+---- conversation::application::service::mutation::tests::background_tasks::vm_background_stress_holds_past_idle_then_rests_and_restart_does_not_replay stdout ----
+
+thread 'conversation::application::service::mutation::tests::background_tasks::vm_background_stress_holds_past_idle_then_rests_and_restart_does_not_replay' (27713) panicked at crates/nessa-server/src/conversation/application/service/../../../../tests/conversation/background_tasks.rs:1052:72:
+called `Result::unwrap()` on an `Err` value: UnsupportedEnvironment
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    conversation::application::service::mutation::tests::background_tasks::vm_background_stress_holds_past_idle_then_rests_and_restart_does_not_replay
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 4787 filtered out; finished in 0.05s
+
+error: test failed, to rerun pass `-p nessa-server --lib`

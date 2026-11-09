@@ -1,0 +1,137 @@
+[
+  {
+    "check": "background",
+    "command": [
+      "cargo",
+      "test",
+      "-p",
+      "nessa-server",
+      "--lib",
+      "background",
+      "--",
+      "--test-threads=4"
+    ],
+    "environment": {},
+    "status": 0,
+    "seconds": 90.64
+  },
+  {
+    "check": "vm-stress-raised",
+    "command": [
+      "cargo",
+      "test",
+      "-p",
+      "nessa-server",
+      "--lib",
+      "vm_background_stress",
+      "--",
+      "--test-threads=1"
+    ],
+    "environment": {
+      "NESSA_VM_BACKGROUND_STRESS_REPEATS": "10"
+    },
+    "status": 0,
+    "seconds": 2.72
+  },
+  {
+    "check": "workspaces",
+    "command": [
+      "cargo",
+      "test",
+      "-p",
+      "nessa-server",
+      "--lib",
+      "workspaces::",
+      "--",
+      "--test-threads=4"
+    ],
+    "environment": {},
+    "status": 0,
+    "seconds": 3.38
+  },
+  {
+    "check": "ssh-environment",
+    "command": [
+      "cargo",
+      "test",
+      "-p",
+      "nessa-server",
+      "--lib",
+      "ssh_environment::",
+      "--",
+      "--test-threads=4"
+    ],
+    "environment": {},
+    "status": 0,
+    "seconds": 11.0
+  },
+  {
+    "check": "cli",
+    "command": [
+      "cargo",
+      "test",
+      "-p",
+      "nessa-server",
+      "--lib",
+      "cli::",
+      "--",
+      "--test-threads=4"
+    ],
+    "environment": {},
+    "status": 0,
+    "seconds": 0.57
+  },
+  {
+    "check": "helper-binary",
+    "command": [
+      "cargo",
+      "test",
+      "-p",
+      "nessa-server",
+      "--test",
+      "background_run_binary"
+    ],
+    "environment": {},
+    "status": 0,
+    "seconds": 33.76
+  },
+  {
+    "check": "clippy",
+    "command": [
+      "cargo",
+      "clippy",
+      "-p",
+      "nessa-server",
+      "--all-targets",
+      "--",
+      "-D",
+      "warnings"
+    ],
+    "environment": {},
+    "status": 0,
+    "seconds": 134.63
+  },
+  {
+    "check": "format",
+    "command": [
+      "cargo",
+      "fmt",
+      "--all",
+      "--",
+      "--check"
+    ],
+    "environment": {},
+    "status": 0,
+    "seconds": 8.05
+  },
+  {
+    "check": "architecture",
+    "command": [
+      "node",
+      "scripts/check-architecture.mjs"
+    ],
+    "environment": {},
+    "status": 0,
+    "seconds": 6.13
+  }
+]

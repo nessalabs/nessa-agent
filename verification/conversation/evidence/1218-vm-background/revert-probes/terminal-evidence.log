@@ -1,0 +1,18 @@
+running 1 test
+test conversation::infrastructure::background_tasks::transport::tests::missing_malformed_oversized_and_inconsistent_outcomes_are_interrupted ... FAILED
+
+failures:
+
+---- conversation::infrastructure::background_tasks::transport::tests::missing_malformed_oversized_and_inconsistent_outcomes_are_interrupted stdout ----
+
+thread 'conversation::infrastructure::background_tasks::transport::tests::missing_malformed_oversized_and_inconsistent_outcomes_are_interrupted' (28680) panicked at crates/nessa-server/src/conversation/infrastructure/background_tasks/../../../../tests/conversation/background_transport.rs:109:9:
+assertion failed: !outcome.cleanup_verified
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    conversation::infrastructure::background_tasks::transport::tests::missing_malformed_oversized_and_inconsistent_outcomes_are_interrupted
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 4787 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p nessa-server --lib`

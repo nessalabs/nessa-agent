@@ -1,0 +1,20 @@
+running 1 test
+test conversation::infrastructure::ssh_environment::background_command::tests::background_arguments_survive_the_login_shell_without_interpretation_or_newline_loss ... FAILED
+
+failures:
+
+---- conversation::infrastructure::ssh_environment::background_command::tests::background_arguments_survive_the_login_shell_without_interpretation_or_newline_loss stdout ----
+
+thread 'conversation::infrastructure::ssh_environment::background_command::tests::background_arguments_survive_the_login_shell_without_interpretation_or_newline_loss' (28969) panicked at crates/nessa-server/src/conversation/infrastructure/ssh_environment/../../../../tests/conversation/background_command.rs:44:5:
+assertion `left == right` failed
+  left: ["background-run", "--cwd", "/tmp/space ' $(touch SHOULD_NOT_EXIST)", "--timeout", "42", "--", "bash", "--noprofile", "--norc", "-c", "printf 'quoted'; echo \"$HOME\"; `false`", "still open"]
+ right: ["background-run", "--cwd", "/tmp/space ' $(touch SHOULD_NOT_EXIST)\n", "--timeout", "42", "--", "bash", "--noprofile", "--norc", "-c", "printf 'quoted'; echo \"$HOME\"; `false`\n\n", "still open"]
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    conversation::infrastructure::ssh_environment::background_command::tests::background_arguments_survive_the_login_shell_without_interpretation_or_newline_loss
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 4787 filtered out; finished in 0.01s
+
+error: test failed, to rerun pass `-p nessa-server --lib`
