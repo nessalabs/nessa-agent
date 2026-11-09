@@ -58,6 +58,13 @@ body {
   --desktop-gutter: 8px;
   --desktop-radius: 14px;
   /*
+   * Every top-level page (Settings, Devices, New channel, Agents) starts the
+   * same way: its `PageHeader` this far below the titlebar row, and a page
+   * of forms no wider than this, centred.
+   */
+  --desktop-page-top: 24px;
+  --desktop-page-width: 720px;
+  /*
    * Corner controls sit the same distance from a pane's top and side edges,
    * and their corners are concentric with the pane's: inner radius is the
    * pane's radius minus that distance. Everything below derives from these.

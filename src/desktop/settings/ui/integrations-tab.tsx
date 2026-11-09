@@ -1008,7 +1008,7 @@ function FormDialog({
         aria-describedby={described("form")}
       >
         <FieldProblem form={form} field="form" id={problems.form} />
-        <SettingsGroup>
+        <SettingsGroup surface="flat">
           <SettingsRow
             label={<label htmlFor={ids.name}>Name</label>}
             control={
@@ -1626,7 +1626,7 @@ function InspectionDialog({
       }
     >
       {inspection.phase === "done" && inspection.result.tools.length > 0 ? (
-        <SettingsGroup className="settings-tools">
+        <SettingsGroup surface="flat" className="settings-tools">
           {/* By place too: a server may list one name twice. */}
           {inspection.result.tools.map((tool, at) => (
             <SettingsRow

@@ -100,7 +100,12 @@ export function Group({
   children: ReactNode
 }) {
   return (
-    <SettingsGroup className="settings-group" title={title} footnote={note}>
+    <SettingsGroup
+      surface="flat"
+      className="settings-group"
+      title={title}
+      footnote={note}
+    >
       {children}
     </SettingsGroup>
   )
@@ -235,6 +240,7 @@ export function SettingGroup({
   const available = pending !== true
   return (
     <SettingsGroup
+      surface="flat"
       className="settings-group"
       data-setting={id}
       data-found={found || undefined}
@@ -460,13 +466,14 @@ export function RowAction({
   onClick,
   disabled,
   icon,
+  ...data
 }: {
   children: ReactNode
   onClick: () => void
   /** Resting for now, such as while the action it started is in flight. */
   disabled?: boolean
   icon?: DesktopIconRole
-}) {
+} & { [data: `data-${string}`]: string | undefined }) {
   const description = useContext(RowDescription)
   const available = useContext(RowAvailable)
   if (icon && typeof children === "string")
@@ -477,6 +484,7 @@ export function RowAction({
         disabled={!available || disabled === true}
         aria-describedby={description}
         onClick={onClick}
+        {...data}
       />
     )
   return (
@@ -486,6 +494,7 @@ export function RowAction({
       disabled={!available || disabled === true}
       aria-describedby={description}
       onClick={onClick}
+      {...data}
     >
       {children}
     </button>

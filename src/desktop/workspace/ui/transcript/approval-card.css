@@ -416,7 +416,6 @@
   min-height: 28px;
   padding: 0;
   background: transparent;
-  color: var(--desktop-muted) !important;
 }
 
 .workspace-approval-actions .workspace-approval-others:hover {
@@ -428,8 +427,10 @@
   height: 14px;
 }
 
-/* Deny is the quiet answer at every width; what allows carries the weight. */
-.workspace-approval-actions .workspace-approval-deny {
+/* Deny, and the other answers beside it, are the quiet ones at every width;
+   what allows carries the weight. */
+.workspace-approval-actions .workspace-approval-deny,
+.workspace-approval-actions .workspace-approval-others {
   background: transparent;
   color: var(--desktop-muted) !important;
 }

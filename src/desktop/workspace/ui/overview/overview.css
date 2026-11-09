@@ -141,21 +141,12 @@
   max-width: 640px;
   flex: none;
   margin: 0 auto;
-  padding: 24px 28px 12px;
+  padding: var(--desktop-page-top) 28px 12px;
 }
 
 .agents-overview[data-split] .agents-overview-header {
   max-width: 560px;
-  padding: 24px 20px 12px 28px;
-}
-
-.agents-overview-header h1 {
-  margin: 0;
-  color: var(--foreground);
-  font-size: var(--desktop-text-display);
-  font-weight: 600;
-  letter-spacing: -0.015em;
-  line-height: 1.2;
+  padding: var(--desktop-page-top) 20px 12px 28px;
 }
 
 .agents-overview-header .agents-overview-counts {
@@ -229,13 +220,6 @@
 .agents-overview-count
   [data-slot="segmented-control-option"][aria-pressed="true"]:focus-visible {
   background: var(--desktop-press);
-}
-
-.agents-overview-title {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
 }
 
 /* What is listed, at the right end of the title's row: a quiet chip, like the composer's. */
@@ -698,14 +682,6 @@ html:not(.dark) .agents-request {
   font-variant-numeric: tabular-nums;
 }
 
-/* Under the words beside the glyph, not under the glyph. */
-.agents-peek-summary {
-  margin: 0 0 0 var(--agents-peek-glyph, 20px);
-  color: var(--desktop-muted);
-  font-size: var(--desktop-text-footnote);
-  line-height: 1.45;
-}
-
 /*
  * The turn's story, as its pane tells it but a step smaller: the person's
  * bubble, then the agent's steps and words in order, then what it is doing.
@@ -729,28 +705,17 @@ html:not(.dark) .agents-request {
   margin: 0;
   font-size: var(--desktop-text-body);
 }
-
 /* Where the story begins after the person's message, when the turn holds more above. */
-.agents-peek-earlier {
-  margin: 0;
-  color: var(--desktop-faint);
-  font-size: var(--desktop-text-footnote);
-}
-
-/* The request in full: the one warm thing in the peek, as in a pane. */
+/* The same card as the chat's (`.workspace-approval`): its fill, edge and corner. */
 .agents-peek-ask {
   display: grid;
   gap: 10px;
   padding: 14px;
-  border-radius: var(--desktop-radius-md);
-  background:
-    radial-gradient(
-      120% 80% at 0% 0%,
-      color-mix(in oklab, var(--desktop-needs) 8%, transparent),
-      transparent 70%
-    ),
-    color-mix(in oklab, var(--foreground) 3%, transparent);
-  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--desktop-needs) 20%, transparent);
+  border-radius: var(--desktop-radius-lg);
+  background: color-mix(in oklab, var(--foreground) 4%, transparent);
+  box-shadow:
+    inset 0 0 0 0.5px color-mix(in oklab, var(--foreground) 14%, transparent),
+    inset 0 1px 0 color-mix(in oklab, var(--foreground) 6%, transparent);
 }
 
 .agents-peek-reason,

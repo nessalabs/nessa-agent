@@ -14,6 +14,7 @@ import {
 } from "@nessa-ui/react/segmented-control"
 import { StatusGlyph } from "../chrome/status-glyph"
 import { EmptyState } from "@nessa-ui/react/empty-state"
+import { PageHeader } from "@nessa-ui/react/page-header"
 import { flushSync } from "react-dom"
 import { reducedMotion } from "../../../adapters/motion-preference"
 import { useNow } from "../../../../clock"
@@ -497,7 +498,7 @@ export function AgentsOverview({
     if (to !== null) flushSync(() => focusItem(to))
   }
 
-  // ⌥ held turns Allow into Always Allow where the review offers it, as ⌥ shows the other choice in a Mac menu.
+  // ⌥ held turns Allow once into Always allow where the review offers it, as ⌥ shows the other choice in a Mac menu.
   const [alt, setAlt] = useState(false)
   useEffect(() => {
     const follow = (event: KeyboardEvent) => setAlt(event.altKey)
@@ -720,10 +721,15 @@ export function AgentsOverview({
           {/* The header stays where it is; only the list under it scrolls. */}
           <div ref={side} className="agents-overview-side">
             <header className="agents-overview-header">
-              <div className="agents-overview-title">
-                <h1>Agents</h1>
-                {drawn > 0 ? <FilterMenu filter={filter} onChange={setFilter} /> : null}
-              </div>
+              <PageHeader
+                className="agents-overview-title"
+                title="Agents"
+                actions={
+                  drawn > 0 ? (
+                    <FilterMenu filter={filter} onChange={setFilter} />
+                  ) : undefined
+                }
+              />
               {drawn > 0 ? (
                 <Counts ready={ready} glance={glance} onToggle={toggleGroup} />
               ) : (

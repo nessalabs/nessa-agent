@@ -120,8 +120,8 @@ export function SettingsLayout(model: SettingsSurfaceModel) {
           <button
             type="button"
             className="settings-titlebar-button settings-titlebar-back"
-            aria-label="Back to nessa Agent"
-            {...tooltip("Back to nessa Agent")}
+            aria-label="Back to nessa Studio"
+            {...tooltip("Back to nessa Studio")}
             tabIndex={sidebarOpen ? -1 : 0}
             aria-hidden={sidebarOpen || undefined}
             onClick={onClose}
@@ -235,9 +235,9 @@ export function SettingsLayout(model: SettingsSurfaceModel) {
             {/* Where "nessa Studio" opened Settings, the way back to the app. */}
             <IdentityRow as="div" mark="none">
               <IdentityButton
-                product="Agent"
+                product="Studio"
                 back
-                label="Back to nessa Agent"
+                label="Back to nessa Studio"
                 onClick={onClose}
               />
             </IdentityRow>

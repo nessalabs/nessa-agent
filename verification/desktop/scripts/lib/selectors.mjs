@@ -156,7 +156,7 @@ export const css = {
   emptyTitle: '[data-slot="empty-state-title"]', // the kit's EmptyState's words
   identityRow: ".desktop-identity", // class: the row holding the identity
   identityProduct: ".desktop-identity-words > span", // class: the identity's word after "nessa"
-  identityButton: ".desktop-identity-button", // class: "nessa Studio" / "‹ nessa Agent" (src/desktop/ui/identity.tsx)
+  identityButton: ".desktop-identity-button", // class: "nessa Studio" / "‹ nessa Studio" (src/desktop/ui/identity.tsx)
   emptyState: '[data-slot="empty-state"]', // the kit's EmptyState
   countBadge: ".workspace-badge", // class: a sidebar row's count, the kit's Badge
   litPoint: '.workspace-status:is([data-status="needs-you"], [data-status="unread"])', // class: StatusGlyph's lit points
@@ -239,10 +239,9 @@ export const css = {
   overviewGroup: ".agents-overview-group", // class: a listed group, labelled by its h2
   peekConversation: ".agents-peek", // class: the whole conversation article, beside the list or inline
   overviewPeek: ".agents-overview-peek", // class: the peek beside the list, which scrolls
-  peekSummary: ".agents-peek-summary", // class: what is going on, in the source's line
+  peekSummary: ".agents-peek-state > .agents-truncate", // class: where it stands in one line: waiting, the source's line of what it is doing, or finished
   peekCommand: ".agents-peek .workspace-approval-command", // class: the command in the peek, beside the list or under the row
   peekStory: ".agents-peek-story", // class: the turn's story, top to bottom
-  peekEarlier: ".agents-peek-earlier", // class: says the turn holds more above what the peek draws
   transcriptStep: '[data-slot="tool-trace-step"]', // kit slot: one call the agent made, a row of a message's trace
   transcriptWorkToggle: '.workspace-work [data-slot="tool-trace-line"]', // a run of calls opens its rows in place
   transcriptWorkEarlier: '.workspace-work [data-slot="tool-trace-earlier"]', // an open run shows the calls folded before its last few
@@ -602,7 +601,7 @@ export const names = {
   chooseHeaderPicture: "Choose Header Picture…",
   useNightScene: "Use Night Scene",
   allowOnce: "Allow once",
-  leaveSettings: "Back to nessa Agent",
+  leaveSettings: "Back to nessa Studio",
   /** Settings' category and tab holding the MCP servers. */
   connections: "Connections",
   integrations: "MCP servers",

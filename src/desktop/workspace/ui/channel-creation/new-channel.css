@@ -1,9 +1,8 @@
 /*
  * The "New channel" flow (`new-channel.tsx`): a layer over the session list
- * and the panes, placed as the Agents overview's is, opaque, with a band of
- * dot grain across its top fading into the page, a dashed rule under it, and
- * one column of questions over a composer bar at its foot. Monochrome: the
- * only colour is the kit's own, in a warning.
+ * and the panes, placed as the Agents overview's is, opaque and flat, with
+ * one column of questions and the composer bar right under the one being
+ * asked. Monochrome: the only colour is the kit's own, in a warning.
  */
 .new-channel {
   position: absolute;
@@ -17,12 +16,7 @@
   overflow: hidden;
   border-radius: var(--desktop-radius);
   margin: var(--desktop-gutter) var(--desktop-gutter) var(--desktop-gutter) 0;
-  background: radial-gradient(
-    120% 80% at 70% 0%,
-    color-mix(in oklab, var(--foreground) 6%, var(--background)) 0%,
-    color-mix(in oklab, var(--foreground) 3%, var(--background)) 55%,
-    var(--background) 100%
-  );
+  background: var(--background);
   color: var(--foreground);
   animation: new-channel-in var(--nessa-motion-duration-normal)
     var(--nessa-motion-easing-standard);
@@ -45,67 +39,24 @@
   }
 }
 
-/* Dot grain, dense at the top and gone by the rule. */
-.new-channel-band {
-  position: absolute;
-  inset: 0 0 auto;
-  height: 120px;
-  pointer-events: none;
-  background-image: radial-gradient(
-    color-mix(in oklab, var(--foreground) 16%, transparent) 0.8px,
-    transparent 0.9px
-  );
-  background-size: 5px 5px;
-  mask-image: linear-gradient(#000 0%, rgb(0 0 0 / 50%) 55%, transparent 100%);
-}
-
-.new-channel-rule {
-  position: absolute;
-  top: 120px;
-  right: 56px;
-  left: 56px;
-  border-top: 1px dashed color-mix(in oklab, var(--foreground) 12%, transparent);
-  pointer-events: none;
-}
-
+/* As tall as the questions, so the composer sits right under the one asked. */
 .new-channel-scroll {
   position: relative;
-  flex: 1;
+  flex: 0 1 auto;
   min-height: 0;
   overflow-y: auto;
-  padding: 150px 24px 24px;
+  padding: calc(
+      var(--desktop-titlebar-height) - var(--desktop-gutter) + var(--desktop-page-top)
+    )
+    24px 18px;
 }
 
 .new-channel-column {
   display: flex;
   flex-direction: column;
   gap: 18px;
-  width: min(760px, 100%);
+  width: min(var(--desktop-page-width), 100%);
   margin: 0 auto;
-}
-
-.new-channel-head {
-  position: relative;
-  padding-right: 36px;
-}
-
-.new-channel-head h2 {
-  margin: 0;
-  font-size: 22px;
-  font-weight: 600;
-  line-height: 1.3;
-}
-
-.new-channel-head p {
-  margin: 6px 0 0;
-  color: var(--desktop-muted);
-  font-size: 13px;
-}
-
-.new-channel-close {
-  position: absolute;
-  top: 0;
-  right: 0;
 }
 
 /* An answered step: one muted line, its answer in full ink. */
@@ -262,7 +213,7 @@
   display: flex;
   flex-direction: column;
   gap: 8px;
-  width: min(760px, calc(100% - 48px));
+  width: min(var(--desktop-page-width), calc(100% - 48px));
   margin: 0 auto 28px;
 }
 

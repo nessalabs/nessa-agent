@@ -325,7 +325,7 @@ function LinkingGroup({
       ? sentences.restartNote
       : undefined
   return (
-    <SettingsGroup footnote={footnote} data-linking-switch>
+    <SettingsGroup surface="flat" footnote={footnote} data-linking-switch>
       <SettingsRow
         label="Native linking"
         detail={detail}
@@ -354,7 +354,7 @@ function PairingGroup({
   const busy = state.pending !== null
   const open = state.code?.invitationId ?? state.hiddenInvitation
   return (
-    <SettingsGroup>
+    <SettingsGroup surface="flat">
       <SettingsRow
         label={sentences.pair}
         detail={
@@ -510,7 +510,7 @@ function PairingDialog({
             />
           </div>
           {waiting.length > 0 ? (
-            <SettingsGroup className="linked-pairing-waiting">
+            <SettingsGroup surface="flat" className="linked-pairing-waiting">
               {waiting.map((device) => (
                 <WaitingRow
                   key={device.invitationId}
@@ -541,7 +541,7 @@ function WaitingGroup({
   const waiting = state.waiting.filter((device) => device.invitationId !== inDialog)
   if (waiting.length === 0) return null
   return (
-    <SettingsGroup title="Waiting for approval">
+    <SettingsGroup surface="flat" title="Waiting for approval">
       {waiting.map((device) => (
         <WaitingRow
           key={device.invitationId}
@@ -618,7 +618,7 @@ function DevicesGroup({
   dispatch: Dispatch
 }) {
   return (
-    <SettingsGroup title="Your devices">
+    <SettingsGroup surface="flat" title="Your devices">
       {state.devices.length === 0 ? (
         <SettingsRow label={sentences.empty} />
       ) : (

@@ -192,7 +192,9 @@ import {
  *               Disconnect. A source-authorized gateway tool reads a fixed
  *               repository with the connected token. The audit holds each
  *               sign-in step and no token
- *   voice       Talk with no key saved fails with an Add key button beside
+ *   voice       Talk while Nessa is locked offers Unlock beside the notice
+ *               and then starts the call; with no key saved it fails with
+ *               an Add key button beside
  *               the notice; the key is saved through its dialog (Settings
  *               then says it is saved, with no key field), against a fake
  *               realtime provider on this machine: the key
@@ -1736,6 +1738,21 @@ async function makeChannel(
   await head.locator(css.channelAdd).click({ timeout: 10_000 })
   const flow = page.locator(css.newChannel)
   if (!(await asking("name"))) return null
+  // One title and no instructions under it; the field sits right under the
+  // question it answers, not at the foot of an empty page.
+  if ((await flow.locator(".new-channel-head p").count()) !== 0)
+    failures.push("the New channel title still has a line of instructions under it")
+  const gap = await page.evaluate((flow) => {
+    const asked = document.querySelector(`${flow} .new-channel-asked`)
+    const composer = document.querySelector(`${flow} .new-channel-composer-row`)
+    return asked && composer
+      ? composer.getBoundingClientRect().top - asked.getBoundingClientRect().bottom
+      : null
+  }, css.newChannel)
+  if (gap === null || gap > 64)
+    failures.push(
+      `the New channel field is ${gap}px below its question, not right under it`,
+    )
   await page.locator(`${css.newChannelField}[data-step="name"]`).fill(name)
   await photograph(`${name}-1-name`)
   await page.keyboard.press(keys.enter)
@@ -3871,6 +3888,21 @@ const steps = {
       await talk.click({ timeout: 10_000 })
       const notice = run.page.locator('.voice-dock[data-phase="failed"]')
       const add = notice.locator('[data-voice-key="add"]')
+      // A locked Nessa (after a restart) offers Unlock in place, and then
+      // starts the call it was asked for.
+      const unlock = notice.locator('[data-voice-fix="unlock"]')
+      await Promise.race([
+        add.waitFor({ timeout: 15_000 }),
+        unlock.waitFor({ timeout: 15_000 }),
+      ]).catch(() => {})
+      if (await unlock.isVisible()) {
+        await shot("locked")
+        await unlock.click()
+        await run.page
+          .locator('[data-vault-dialog="unlock"]')
+          .waitFor({ timeout: 10_000 })
+        await unlockVault(run.page)
+      }
       if (
         !(await add.waitFor({ timeout: 15_000 }).then(
           () => true,
@@ -4957,6 +4989,28 @@ const steps = {
             .getAttribute("data-kind")) !== "boat"
         )
           failures.push("Boat's tile is not drawn as a boat")
+        // One title with nothing under it, one Add device, and Boat's state
+        // said once, in one word.
+        // The kit's PageHeader, in the same place as Settings' title.
+        const header = await page.evaluate(() => {
+          const head = document.querySelector(
+            '[data-devices-page="list"] > [data-slot="page-header"]',
+          )
+          return head
+            ? {
+                next: head.nextElementSibling?.tagName ?? null,
+                size: getComputedStyle(head.querySelector("h1")).fontSize,
+              }
+            : null
+        })
+        if (!header) failures.push("Devices does not start with the page header")
+        else if (header.next === "P")
+          failures.push("the Devices title still has a line under it")
+        if ((await page.locator('[data-devices-action^="add"]').count()) !== 1)
+          failures.push("Devices offers Add device more than once")
+        const boatSays = await list.locator("[data-devices-cloud]").innerText()
+        if (/Offline/.test(boatSays) && /Not connected/.test(boatSays))
+          failures.push(`Boat's tile says its state twice: ${boatSays}`)
         // The `ssh` step's suggestions are a section of their own, under it.
         const headings = await page
           .locator(
@@ -5047,9 +5101,11 @@ const steps = {
               }
             })
             .catch(() => null)
-          if (!card || card.fill === "rgba(0, 0, 0, 0)" || !(card.radius > 0))
+          // Its rows are drawn as Settings draws them: flat on the page, as
+          // rows with hairlines, not a card (the kit's flat SettingsGroup).
+          if (!card || card.fill !== "rgba(0, 0, 0, 0)" || card.radius !== 0)
             failures.push(
-              `Add a phone draws its rows without a card: ${JSON.stringify(card)}`,
+              `Add a phone draws its rows in a card, not flat as Settings does: ${JSON.stringify(card)}`,
             )
           await photograph("phone")
           await pair.click()
@@ -7875,6 +7931,13 @@ async function mcpMenu(page, name, item) {
 async function openLinkedDevices(page) {
   if (!(await page.$(css.settings))) await page.keyboard.press(keys.settings)
   await page.locator(css.settingsCategory, { hasText: names.connections }).click()
+  // Connections opens on Accounts, whose rows read the vault: a locked Nessa
+  // asks to be unlocked before the tabs take a click.
+  await page
+    .locator('[data-vault-dialog="unlock"]')
+    .waitFor({ timeout: 2_000 })
+    .then(() => unlockVault(page))
+    .catch(() => {})
   await page.locator(css.settingsTab, { hasText: names.linkedDevices }).click()
 }
 
@@ -8562,7 +8625,7 @@ async function githubReadAgent(run, step, failures) {
 
 /** Leaves Settings: Esc does not close it; its back control returns to the app. */
 async function closeSettings(page) {
-  await page.getByRole("button", { name: "Back to nessa Agent" }).first().click()
+  await page.getByRole("button", { name: "Back to nessa Studio" }).first().click()
   await page.waitForSelector(css.settings, { state: "detached", timeout: 10_000 })
 }
 
