@@ -28,13 +28,23 @@
 //! needs linking on, and an ingress this run does not hold is bind-checked.
 //! It restarts when the saved tunnel's identity differs from the one this
 //! run serves.
-use super::runtime_config::{TunnelSection, DEFAULT_NATIVE_LISTEN, SUPERSEDED_NATIVE_LISTEN};
+//!
+//! Devices' setup ([`DeviceSettings`]) edits the same file under the same
+//! lock and audit, each its own subject: `devices.connectSsh` adds a host to
+//! `sshHosts` (at most [`MAX_SSH_HOSTS`]) and restarts when this run does
+//! not serve it, since a run reads its hosts once; `devices.setDefault`
+//! saves `defaultEnvironment`, which the running gateway takes at once, so
+//! it never restarts.
+use super::runtime_config::{
+    TunnelSection, DEFAULT_NATIVE_LISTEN, MAX_SSH_HOSTS, SUPERSEDED_NATIVE_LISTEN,
+};
 use crate::core::self_restart::{RestartEnd, RestartReport, SelfRestart};
 use crate::device_pairing::application::{
     LinkingApply, LinkingAudit, LinkingAuditPhase, LinkingAuditRecord, LinkingCaller,
     LinkingChange, LinkingError, LinkingRestart, LinkingSubject, ListenMoved, NativeLinking,
     SavedTunnel, TunnelChange, TunnelReplaced, TunnelRequest, TunnelSnapshot,
 };
+use crate::devices::application::{DeviceSettings, SetupFuture};
 use crate::mcp_servers::application::StoreError;
 use crate::mcp_servers::infrastructure::{ConfigJson, Published};
 use crate::tunnel::application::{
@@ -42,6 +52,7 @@ use crate::tunnel::application::{
     DEFAULT_TUNNEL_INGRESS,
 };
 use crate::tunnel::infrastructure::files::TunnelFiles;
+use nessa_sdk::domain::agent_execution::leases::SshDestination;
 use serde_json::{Map, Value};
 use std::{future::Future, net::SocketAddr, pin::Pin, sync::Arc, time::Duration};
 use tokio::sync::watch;
@@ -65,6 +76,8 @@ pub(super) struct ConfigLinking {
     /// The tunnel this run serves, if any: what a tunnel change is compared
     /// with.
     running_tunnel: watch::Receiver<Option<TunnelSetting>>,
+    /// The SSH hosts this run serves: what an added host is compared with.
+    running_hosts: Vec<SshDestination>,
 }
 
 /// One change.
@@ -72,6 +85,16 @@ pub(super) struct ConfigLinking {
 enum Change {
     Linking(bool),
     Tunnel(TunnelRequest),
+    /// Add an SSH host to `sshHosts` (`devices.connectSsh`).
+    SshHost(SshDestination),
+    /// Save the default device (`devices.setDefault`); `None` is this
+    /// machine. Read at each creation, so it never restarts anything.
+    /// `before` is the one `config.json` held, read under the lock as it
+    /// is replaced, so it is `None` until then.
+    DefaultDevice {
+        to: Option<String>,
+        before: Option<Option<String>>,
+    },
 }
 
 impl Change {
@@ -79,12 +102,21 @@ impl Change {
         match self {
             Self::Linking(_) => LinkingSubject::Linking,
             Self::Tunnel(request) => LinkingSubject::Tunnel { mode: request.mode },
+            Self::SshHost(host) => LinkingSubject::SshHost {
+                host: host.as_str().to_owned(),
+            },
+            Self::DefaultDevice { to, before } => LinkingSubject::DefaultDevice {
+                environment: to.clone(),
+                before: before.clone(),
+            },
         }
     }
     fn enabled(&self) -> bool {
         match self {
             Self::Linking(enabled) => *enabled,
             Self::Tunnel(request) => request.enabled,
+            Self::SshHost(_) => true,
+            Self::DefaultDevice { to, .. } => to.is_some(),
         }
     }
 }
@@ -103,7 +135,14 @@ impl ConfigLinking {
             restart,
             tunnel_files: None,
             running_tunnel: watch::channel(None).1,
+            running_hosts: Vec::new(),
         }
+    }
+
+    /// Add SSH hosts too: `running` are the ones this run serves.
+    pub(super) fn with_ssh_hosts(mut self, running: Vec<SshDestination>) -> Self {
+        self.running_hosts = running;
+        self
     }
 
     /// Change the tunnel too: its token kept in `files`, compared with
@@ -128,6 +167,9 @@ impl ConfigLinking {
         match change {
             Change::Linking(_) => self.running,
             Change::Tunnel(_) => self.running_tunnel.borrow().is_some(),
+            Change::SshHost(host) => self.running_hosts.contains(host),
+            // Read at each creation: whatever is saved is what runs.
+            Change::DefaultDevice { .. } => true,
         }
     }
 
@@ -166,6 +208,8 @@ impl ConfigLinking {
         let saved = match (&lock, change) {
             (Ok(_), Change::Linking(enabled)) => self.save(*enabled).await,
             (Ok(_), Change::Tunnel(request)) => self.save_tunnel(request).await,
+            (Ok(_), Change::SshHost(host)) => self.save_ssh_host(host).await,
+            (Ok(_), Change::DefaultDevice { to, .. }) => self.save_default(to.clone()).await,
             (Err(error), _) => Err(*error),
         };
         let saved = match saved {
@@ -186,8 +230,22 @@ impl ConfigLinking {
             written,
             moved,
             ref tunnel,
+            ref default_before,
             ..
         } = saved;
+        // A default's outcome names the one the file held, read as it was
+        // replaced, never the one this run last published.
+        let read;
+        let change = match (change, default_before) {
+            (Change::DefaultDevice { to, .. }, Some(before)) => {
+                read = Change::DefaultDevice {
+                    to: to.clone(),
+                    before: Some(before.clone()),
+                };
+                &read
+            }
+            _ => change,
+        };
         // Recorded before it is answered or applied: a change whose outcome
         // was not kept is saved, and waits for the next start.
         self.record(
@@ -292,6 +350,7 @@ impl ConfigLinking {
                 moved,
                 mode: None,
                 tunnel: None,
+                default_before: None,
             });
         };
         let config = self.config.clone();
@@ -308,6 +367,100 @@ impl ConfigLinking {
             moved,
             mode: None,
             tunnel: None,
+            default_before: None,
+        })
+    }
+
+    /// Add `host` to `sshHosts`, holding the lock. A host named already is
+    /// left; one past [`MAX_SSH_HOSTS`] is refused. It applies by starting
+    /// again unless this run already serves it.
+    async fn save_ssh_host(&self, host: &SshDestination) -> Result<Saved, LinkingError> {
+        if !self.restart.serving() {
+            return Err(LinkingError::Busy);
+        }
+        let applies = if self.running_hosts.contains(host) {
+            LinkingApply::Unchanged
+        } else {
+            LinkingApply::Restarting
+        };
+        let name = host.as_str().to_owned();
+        self.publish_edit(applies, move |document| {
+            let hosts = document
+                .entry("sshHosts")
+                .or_insert_with(|| Value::Array(Vec::new()))
+                .as_array_mut()
+                .ok_or(LinkingError::Unavailable)?;
+            if hosts
+                .iter()
+                .any(|each| each.as_str() == Some(name.as_str()))
+            {
+                return Ok(false);
+            }
+            if hosts.len() >= MAX_SSH_HOSTS {
+                return Err(LinkingError::HostLimit);
+            }
+            hosts.push(Value::String(name));
+            Ok(true)
+        })
+        .await
+    }
+
+    /// Save `environment` as `defaultEnvironment`, holding the lock; `None`
+    /// removes it. Read at each creation, so nothing restarts.
+    async fn save_default(&self, environment: Option<String>) -> Result<Saved, LinkingError> {
+        let replaced = Arc::new(std::sync::Mutex::new(None));
+        let seen = replaced.clone();
+        let saved = self
+            .publish_edit(LinkingApply::Unchanged, move |document| {
+                let before = document.get("defaultEnvironment").cloned();
+                *seen.lock().unwrap() =
+                    Some(before.as_ref().and_then(Value::as_str).map(str::to_owned));
+                match &environment {
+                    Some(name) => {
+                        document.insert("defaultEnvironment".into(), Value::String(name.clone()));
+                    }
+                    None => {
+                        document.remove("defaultEnvironment");
+                    }
+                }
+                Ok(before != document.get("defaultEnvironment").cloned())
+            })
+            .await?;
+        let default_before = replaced.lock().unwrap().take();
+        Ok(Saved {
+            default_before,
+            ..saved
+        })
+    }
+
+    /// Read `config.json`, apply `edit` (whether it changed the document),
+    /// and publish it when it did, holding the lock.
+    async fn publish_edit(
+        &self,
+        applies: LinkingApply,
+        edit: impl FnOnce(&mut Map<String, Value>) -> Result<bool, LinkingError> + Send + 'static,
+    ) -> Result<Saved, LinkingError> {
+        let config = self.config.clone();
+        let written = tokio::task::spawn_blocking(move || {
+            let mut document = config.document().map_err(refusal)?;
+            if !edit(&mut document)? {
+                return Ok(false);
+            }
+            let published = config.publish(document).map_err(refusal)?;
+            if published == Published::NotDurable {
+                tracing::warn!("config.json saved, but its directory could not be synced");
+            }
+            Ok(true)
+        })
+        .await
+        .map_err(|_| LinkingError::Unavailable)??;
+        Ok(Saved {
+            applies,
+            written,
+            moved: None,
+            mode: None,
+            tunnel: None,
+            default_before: None,
         })
     }
 
@@ -393,6 +546,7 @@ impl ConfigLinking {
             moved: None,
             mode: Some(edited.mode),
             tunnel: Some(edited.replaced),
+            default_before: None,
         })
     }
 
@@ -499,6 +653,132 @@ impl NativeLinking for ConfigLinking {
     }
 }
 
+impl ConfigLinking {
+    /// One change for `caller`, recorded as `operation_id`: requested,
+    /// then saved and applied.
+    async fn apply(
+        &self,
+        operation_id: &str,
+        caller: &LinkingCaller,
+        change: &Change,
+    ) -> Result<LinkingApply, LinkingError> {
+        self.record(operation_id, caller, change, LinkingAuditPhase::Requested)
+            .await?;
+        Ok(self.change(operation_id, caller, change).await?.applies)
+    }
+}
+
+impl ConfigLinking {
+    /// Whether `host` may be added now: refused busy while a restart is
+    /// held or the gateway is stopping, and at the bound unless the file
+    /// already names it.
+    async fn admits_ssh_host(&self, host: &SshDestination) -> Result<(), LinkingError> {
+        if !self.restart.serving() {
+            return Err(LinkingError::Busy);
+        }
+        let _lock = self.config.lock().await.map_err(refusal)?;
+        let config = self.config.clone();
+        let name = host.as_str().to_owned();
+        tokio::task::spawn_blocking(move || {
+            let document = config.document().map_err(refusal)?;
+            let hosts = document
+                .get("sshHosts")
+                .and_then(Value::as_array)
+                .map_or(&[][..], Vec::as_slice);
+            let named = hosts
+                .iter()
+                .any(|each| each.as_str() == Some(name.as_str()));
+            match named || hosts.len() < MAX_SSH_HOSTS {
+                true => Ok(()),
+                false => Err(LinkingError::HostLimit),
+            }
+        })
+        .await
+        .map_err(|_| LinkingError::Unavailable)?
+    }
+}
+
+impl DeviceSettings for ConfigLinking {
+    fn begin_ssh_host(
+        &self,
+        caller: LinkingCaller,
+        operation: String,
+        host: SshDestination,
+    ) -> SetupFuture<'_, Result<(), LinkingError>> {
+        Box::pin(async move {
+            let change = Change::SshHost(host.clone());
+            self.record(&operation, &caller, &change, LinkingAuditPhase::Requested)
+                .await?;
+            if let Err(error) = self.admits_ssh_host(&host).await {
+                self.record(
+                    &operation,
+                    &caller,
+                    &change,
+                    LinkingAuditPhase::Refused(error),
+                )
+                .await?;
+                return Err(error);
+            }
+            Ok(())
+        })
+    }
+
+    fn ssh_host_not_installed(
+        &self,
+        caller: LinkingCaller,
+        operation: String,
+        host: SshDestination,
+    ) -> SetupFuture<'_, Result<(), LinkingError>> {
+        Box::pin(async move {
+            self.record(
+                &operation,
+                &caller,
+                &Change::SshHost(host),
+                LinkingAuditPhase::Refused(LinkingError::InstallFailed),
+            )
+            .await
+        })
+    }
+
+    fn add_ssh_host(
+        &self,
+        caller: LinkingCaller,
+        operation: String,
+        host: SshDestination,
+    ) -> SetupFuture<'_, Result<LinkingApply, LinkingError>> {
+        Box::pin(async move {
+            // Asked for in `begin_ssh_host`, under the same operation.
+            let applies = self
+                .change(&operation, &caller, &Change::SshHost(host.clone()))
+                .await?
+                .applies;
+            tracing::info!(host = host.as_str(), ?applies, principal = %caller.principal_id, "an SSH host was added from Devices");
+            Ok(applies)
+        })
+    }
+
+    fn set_default(
+        &self,
+        caller: LinkingCaller,
+        environment: Option<String>,
+    ) -> SetupFuture<'_, Result<(), LinkingError>> {
+        Box::pin(async move {
+            let operation = uuid::Uuid::new_v4().to_string();
+            self.apply(
+                &operation,
+                &caller,
+                &Change::DefaultDevice {
+                    to: environment.clone(),
+                    before: None,
+                },
+            )
+            .await?;
+            tracing::info!(?environment, principal = %caller.principal_id, "the default device changed from Devices");
+            Ok(())
+        })
+    }
+}
+
 /// What a store refusal means for a change: busy stays busy; anything else
 /// is a file that could not be read, checked or written.
 fn refusal(error: StoreError) -> LinkingError {
@@ -527,6 +807,9 @@ struct Saved {
     mode: Option<TunnelMode>,
     /// A tunnel change's setting before and after, for its audit record.
     tunnel: Option<TunnelReplaced>,
+    /// A default change's saved default as the file held it, for its audit
+    /// record: `Some(None)` when it named none.
+    default_before: Option<Option<String>>,
 }
 
 /// What a tunnel edit makes of `config.json`.
@@ -796,6 +1079,8 @@ mod tests {
     #[derive(Default)]
     struct Audit {
         records: Mutex<Vec<LinkingAuditPhase>>,
+        /// Each kept record's subject, beside its phase.
+        subjects: Mutex<Vec<LinkingSubject>>,
         refuse: Option<fn(&LinkingAuditPhase) -> bool>,
     }
     impl LinkingAudit for Audit {
@@ -805,6 +1090,7 @@ mod tests {
             }
             assert_eq!(record.caller, caller());
             self.records.lock().unwrap().push(record.phase.clone());
+            self.subjects.lock().unwrap().push(record.subject.clone());
             Ok(())
         }
     }
@@ -879,6 +1165,144 @@ mod tests {
 
     fn off_at(address: &str) -> String {
         format!(r#"{{"native":{{"enabled":false,"listenAddress":"{address}"}}}}"#)
+    }
+
+    fn ssh_hosts(files: &Files) -> Value {
+        let bytes = files.bytes.lock().unwrap().clone().unwrap();
+        serde_json::from_slice::<Value>(&bytes).unwrap()["sshHosts"].clone()
+    }
+
+    #[tokio::test]
+    async fn an_ssh_host_is_asked_for_before_its_install_and_saved_after() {
+        let files = files(Some(r#"{"sshHosts":["old"]}"#));
+        let linking = linking(files.clone(), false);
+        let box_host = SshDestination::new("box").unwrap();
+        let settings: &dyn DeviceSettings = &linking.linking;
+        settings
+            .begin_ssh_host(caller(), "op".into(), box_host.clone())
+            .await
+            .unwrap();
+        assert_eq!(linking.records(), [LinkingAuditPhase::Requested]);
+        assert_eq!(
+            ssh_hosts(&files),
+            serde_json::json!(["old"]),
+            "nothing saved yet"
+        );
+        let applies = settings
+            .add_ssh_host(caller(), "op".into(), box_host)
+            .await
+            .unwrap();
+        assert_eq!(applies, LinkingApply::Restarting);
+        assert_eq!(ssh_hosts(&files), serde_json::json!(["old", "box"]));
+        // One Requested for the whole operation, then its outcome.
+        assert_eq!(linking.records().len(), 2);
+        assert!(matches!(
+            linking.records()[1],
+            LinkingAuditPhase::Applied { .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn an_ssh_host_is_refused_before_its_install_while_restarting_or_full() {
+        let full: Vec<String> = (0..MAX_SSH_HOSTS)
+            .map(|index| format!("h{index}"))
+            .collect();
+        let files = files(Some(&serde_json::json!({ "sshHosts": full }).to_string()));
+        let linking = linking(files.clone(), false);
+        let settings: &dyn DeviceSettings = &linking.linking;
+        let new = SshDestination::new("box").unwrap();
+        assert_eq!(
+            settings
+                .begin_ssh_host(caller(), "a".into(), new.clone())
+                .await,
+            Err(LinkingError::HostLimit)
+        );
+        // One already named is not over the bound.
+        settings
+            .begin_ssh_host(caller(), "b".into(), SshDestination::new("h0").unwrap())
+            .await
+            .unwrap();
+        linking.restart.stop();
+        assert_eq!(
+            settings
+                .begin_ssh_host(caller(), "c".into(), new.clone())
+                .await,
+            Err(LinkingError::Busy)
+        );
+        settings
+            .ssh_host_not_installed(caller(), "d".into(), new)
+            .await
+            .unwrap();
+        assert_eq!(
+            linking.records(),
+            [
+                LinkingAuditPhase::Requested,
+                LinkingAuditPhase::Refused(LinkingError::HostLimit),
+                LinkingAuditPhase::Requested,
+                LinkingAuditPhase::Requested,
+                LinkingAuditPhase::Refused(LinkingError::Busy),
+                LinkingAuditPhase::Refused(LinkingError::InstallFailed),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_default_device_is_saved_without_a_restart_and_removed_by_none() {
+        let files = files(Some(r#"{"sshHosts":["box"]}"#));
+        let linking = linking(files.clone(), false);
+        let settings: &dyn DeviceSettings = &linking.linking;
+        let saved = |files: &Files| {
+            let bytes = files.bytes.lock().unwrap().clone().unwrap();
+            serde_json::from_slice::<Value>(&bytes).unwrap()["defaultEnvironment"].clone()
+        };
+        settings
+            .set_default(caller(), Some("box".into()))
+            .await
+            .unwrap();
+        assert_eq!(saved(&files), "box");
+        settings.set_default(caller(), None).await.unwrap();
+        assert_eq!(saved(&files), Value::Null);
+        assert!(linking.restart.serving(), "nothing restarts");
+        let default = |environment: Option<&str>, before: Option<Option<&str>>| {
+            LinkingSubject::DefaultDevice {
+                environment: environment.map(str::to_owned),
+                before: before.map(|before| before.map(str::to_owned)),
+            }
+        };
+        // Asked for with what it replaced unknown; applied naming what
+        // the file held.
+        assert_eq!(
+            *linking.audit.subjects.lock().unwrap(),
+            [
+                default(Some("box"), None),
+                default(Some("box"), Some(None)),
+                default(None, None),
+                default(None, Some(Some("box"))),
+            ]
+        );
+    }
+
+    /// A default saved whose outcome was not recorded is still in the file:
+    /// the next change names it as the one replaced, since `before` is read
+    /// from the file, never from what this run last published.
+    #[tokio::test]
+    async fn a_default_names_the_one_the_file_held_as_it_replaces_it() {
+        let files = files(Some(
+            r#"{"sshHosts":["box","other"],"defaultEnvironment":"box"}"#,
+        ));
+        let linking = linking(files.clone(), false);
+        let settings: &dyn DeviceSettings = &linking.linking;
+        settings
+            .set_default(caller(), Some("other".into()))
+            .await
+            .unwrap();
+        assert_eq!(
+            linking.audit.subjects.lock().unwrap().last(),
+            Some(&LinkingSubject::DefaultDevice {
+                environment: Some("other".into()),
+                before: Some(Some("box".into())),
+            })
+        );
     }
 
     #[tokio::test]

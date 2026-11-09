@@ -253,6 +253,10 @@ fn linking_refusal(error: crate::device_pairing::application::LinkingError) -> P
         LinkingError::AuditUnavailable => PairingErrorCode::PairingAuditUnavailable,
         LinkingError::LinkingOff => PairingErrorCode::PairingLinkingOff,
         LinkingError::TunnelIncomplete => PairingErrorCode::PairingTunnelIncomplete,
+        // Only an SSH host's change meets the bound; no pairing method makes one.
+        LinkingError::HostLimit | LinkingError::InstallFailed => {
+            PairingErrorCode::PairingUnavailable
+        }
     }
 }
 
@@ -367,7 +371,7 @@ pub(super) async fn tunnel(state: &ProductRouteState, frame: RequestFrame) -> Ou
 }
 
 /// The authenticated caller, as the linking audit names it.
-fn linking_caller(
+pub(super) fn linking_caller(
     session: &AuthenticatedSession,
 ) -> crate::device_pairing::application::LinkingCaller {
     let context = session.context();

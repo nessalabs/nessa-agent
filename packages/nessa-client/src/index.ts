@@ -524,8 +524,11 @@ export type { DevicesApi } from "./presentation/devices-api.js"
 export type {
   DeviceDisk,
   DeviceMachine,
+  DeviceSshConnect,
+  DeviceSshHost,
   DeviceWorker,
   DevicesListResult,
+  DevicesSshHostsResult,
   DevicesPool,
   PoolPreference,
 } from "./generated/product.js"

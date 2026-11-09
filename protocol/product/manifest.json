@@ -298,6 +298,18 @@
       "params": "DevicesListParams",
       "grant": "server.read"
     },
+    "devices.sshHosts": {
+      "params": null,
+      "grant": "credential.manage"
+    },
+    "devices.connectSsh": {
+      "params": "DevicesConnectSshParams",
+      "grant": "credential.manage"
+    },
+    "devices.setDefault": {
+      "params": "DevicesSetDefaultParams",
+      "grant": "credential.manage"
+    },
     "github.cancel": {
       "params": null,
       "grant": "credential.manage"

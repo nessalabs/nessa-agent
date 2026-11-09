@@ -823,7 +823,7 @@ export interface ConversationCreateParams {
   model?: string
   /** Initial preset, default ask; ignored on reopen. */
   approvalMode?: ApprovalMode
-  /** Where this conversation's agent runs for its whole life: one of the environments agents.list returns, an SSH destination, a paired environment's peer: name, or peer:any, any worker of the gateway's pool, which the gateway chooses each time the agent is opened. Omitted runs it on the gateway's own machine. Ignored when the conversation already exists, which keeps the environment it was created with. */
+  /** Where this conversation's agent runs for its whole life: one of the environments agents.list returns, an SSH destination, a paired environment's peer: name, peer:any, any worker of the gateway's pool, which the gateway chooses each time the agent is opened, or here, the gateway's own machine. Omitted, with no channel (or the default channel), runs it on the default device (devices.setDefault) while that is offered, else on the gateway's own machine; a child conversation an agent starts never takes the default. Ignored when the conversation already exists, which keeps the environment it was created with. */
   environment?: string
   /** The channel the conversation is in for its whole life, one channel.list returns: its agent works in that channel's folder and is told the channel's notes and resources. Omitted, or default, is the default channel, whose folder is the gateway's configured workspace. A channel other than default runs on the gateway's own machine, so it is refused invalid_request beside an environment. channel_not_found when the caller has no such channel. Ignored when the conversation already exists, which stays in the channel it was created in. */
   channelId?: string
@@ -2043,6 +2043,8 @@ export interface AgentsSetNativeHooksResult {
 }
 /** Configured agents and their model-specific choices. */
 export interface AgentsListResult {
+  /** Of environments, the one a new conversation runs on when it names none: the default device saved with devices.setDefault, while it is one of environments. Absent: this gateway's own machine. agents.subscribe reads it again each time the default changes. */
+  defaultEnvironment?: string
   /** Configured agents. */
   agents: AgentOption[]
   /** Places a new conversation may run besides this gateway: the SSH destinations config.json names, in the order it names them, then, while any paired environment is connected, `peer:any` (the gateway picks one of them for each opening of the conversation's agent and keeps it there while it serves and is not draining), then each paired environment connected when the catalog is read, as `peer:` and its key in lowercase hex. At most 16 of the first and 8 of the last. agents.list reads it once; agents.subscribe reads it again each time a paired environment connects, disconnects or is revoked. */
@@ -2665,6 +2667,10 @@ export interface DeviceWorker {
 }
 /** Result of devices.list: this gateway's own machine (the hub) and one page of the paired environments that work for it. */
 export interface DevicesListResult {
+  /** The device a new conversation runs on when it names no environment and no channel: an SSH destination config.json names, or a paired environment's peer: name. Absent: this gateway's own machine (the hub). Saved with devices.setDefault. On the first page only. A paired environment that is not connected when a conversation is created leaves that conversation on the hub. */
+  defaultEnvironment?: string
+  /** The SSH hosts conversations may run on, as config.json names them, each with what the gateway's ~/.ssh/config resolves it to. On the first page only. */
+  sshHosts?: DeviceSshHost[]
   /** The machine this gateway runs on, on the first page (one asked with no after); absent on later pages and when it cannot be read. */
   hub?: DeviceMachine
   /** Where this gateway's native listener, which workers dial, is bound: host:port, [v6]:port for IPv6. Absent while native linking is off. A loopback host means only this machine can reach it. */
@@ -2673,6 +2679,60 @@ export interface DevicesListResult {
   workers: DeviceWorker[]
   /** The last worker listed, when more follow: ask again with it as after for the next page. Absent on the last page. */
   next?: string
+}
+/** An SSH host as the gateway's OpenSSH configuration names it. */
+export interface DeviceSshHost {
+  /** The destination as ssh is given it: an alias in ~/.ssh/config, or user@host. */
+  host: string
+  /** Where it connects, when the configuration sets HostName. */
+  hostName?: string
+  /** The account it signs in as, when the configuration sets User. */
+  user?: string
+  /** Its port, when the configuration sets one. */
+  port?: number
+}
+/** Result of devices.sshHosts: the machines the gateway's ~/.ssh/config names that conversations could run on, and the connections under way. */
+export interface DevicesSshHostsResult {
+  /** Every host the configuration names plainly (not a pattern), in its order, at most 32: less those config.json already names, any that is not an SSH destination, and git servers (user git, a known forge such as github.com or gitlab.com, or a host name beginning git., gitlab., gitea. or forgejo.), which answer git and run no shell. Options are resolved as ssh resolves them: the first value any matching Host block gives; Match blocks are not read. Include is followed, from ~/.ssh, at most 32 files and 256 KiB. */
+  suggested: DeviceSshHost[]
+  /** Each host devices.connectSsh is setting up now, or set up or failed to since the gateway started. */
+  connecting: DeviceSshConnect[]
+}
+/** Where one devices.connectSsh stands. */
+export interface DeviceSshConnect {
+  /** The destination being connected. */
+  host: string
+  /** installing: the gateway is asking the host whether this build is there and, if not, sending it. restarting: it is installed and saved in config.json's sshHosts, and the gateway is starting again to serve it; once it answers, the host is in devices.list's sshHosts. connected: it is installed, and this gateway already serves it. failed: see refusal; nothing was saved. */
+  state: "installing" | "restarting" | "connected" | "failed"
+  /** Why it failed, present exactly when state is failed. The environment_ codes are a lease's own (ConversationLease.refusal). devices_host_limit: config.json already names 16 SSH hosts, or 16 connections are under way. devices_busy: config.json is held by another change, or the gateway is already restarting. devices_unavailable: config.json or its audit could not be written. */
+  refusal?:
+    | "environment_unreachable"
+    | "environment_platform_unsupported"
+    | "environment_install_failed"
+    | "environment_version_mismatch"
+    | "devices_host_limit"
+    | "devices_busy"
+    | "devices_unavailable"
+}
+/** Set a machine up for conversations to run on over SSH: the gateway installs this build there, as a conversation's first lease would, then adds it to config.json's sshHosts and starts again in place to serve it. Answered at once; devices.sshHosts says how it goes. Asking again for a host being set up changes nothing. The install and the change are audited under one operation. */
+export interface DevicesConnectSshParams {
+  /** An SSH destination: an alias in the gateway's ~/.ssh/config, or user@host. Letters, digits, ., _, - and @, beginning with a letter or digit, and never here. */
+  host: string
+}
+/** Result of devices.connectSsh. */
+export interface DevicesConnectSshResult {
+  /** Where it stands now. */
+  connecting: DeviceSshConnect
+}
+/** Choose the device new conversations run on when they name no environment and no channel: from this gateway's surfaces and from a phone alike. Saved in config.json as defaultEnvironment and applied at once, without a restart. Each change is audited. */
+export interface DevicesSetDefaultParams {
+  /** An SSH destination config.json names, a paired environment's peer: name (peer: and its key in lowercase hex), or null for this gateway's own machine. Anything else is refused devices_not_a_device. */
+  environment: string | null
+}
+/** Result of devices.setDefault. */
+export interface DevicesSetDefaultResult {
+  /** The saved default: null for this gateway's own machine. */
+  defaultEnvironment: string | null
 }
 /** Which page of the hub's workers to list. */
 export interface DevicesListParams {
@@ -3806,7 +3866,7 @@ export const channelRules = {
 export const bounds = {
   maxOrdinaryResponseBytes: 65536,
   maxRequestFrameBytes: 65536,
-  maxReadyMethods: 120,
+  maxReadyMethods: 123,
   maxAuthCredentialCharacters: 16384,
   maxProductClientIdCharacters: 256,
   maxProductSurfaceInstanceCharacters: 256,
@@ -4101,6 +4161,9 @@ export const ProductMethod = {
   GithubStatus: "github.status",
   GithubConnect: "github.connect",
   DevicesList: "devices.list",
+  DevicesSshHosts: "devices.sshHosts",
+  DevicesConnectSsh: "devices.connectSsh",
+  DevicesSetDefault: "devices.setDefault",
   GithubCancel: "github.cancel",
   GithubDisconnect: "github.disconnect",
   PeerEnroll: "peer.enroll",
@@ -4234,6 +4297,9 @@ export const productReadyMethods = [
   "github.status",
   "github.connect",
   "devices.list",
+  "devices.sshHosts",
+  "devices.connectSsh",
+  "devices.setDefault",
   "github.cancel",
   "github.disconnect",
   "peer.enroll",
@@ -4358,6 +4424,9 @@ export const productMethodGrants = {
   "github.status": "credential.manage",
   "github.connect": "credential.manage",
   "devices.list": "server.read",
+  "devices.sshHosts": "credential.manage",
+  "devices.connectSsh": "credential.manage",
+  "devices.setDefault": "credential.manage",
   "github.cancel": "credential.manage",
   "github.disconnect": "credential.manage",
   "peer.enroll": "credential.manage",

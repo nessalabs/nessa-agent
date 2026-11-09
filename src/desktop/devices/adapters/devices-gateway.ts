@@ -15,6 +15,7 @@ import {
   type DeviceWorker,
   type PairingApi,
 } from "@nessa/client"
+import type { DeviceSshConnect, DeviceSshHost } from "../model/devices"
 import {
   DEVICE_KEY_BYTES,
   INVITATION_BYTES,
@@ -66,6 +67,19 @@ export interface DevicesRead {
   readonly workers: readonly DeviceWorker[]
   /** More pages than [`MAX_PAGES`] follow: workers past these are not read. */
   readonly more: boolean
+  /** The SSH hosts conversations may run on. */
+  readonly sshHosts: readonly DeviceSshHost[]
+  /**
+   * Where new conversations run; `null` is the hub. Absent from a hub that
+   * sets no machines up (it names no SSH hosts either): nothing to choose.
+   */
+  readonly defaultEnvironment?: string | null
+}
+
+/** The machines `~/.ssh/config` names, and each setup under way. */
+export interface SshSuggestions {
+  readonly suggested: readonly DeviceSshHost[]
+  readonly connecting: readonly DeviceSshConnect[]
 }
 
 /**
@@ -94,6 +108,12 @@ export interface DevicesGateway {
   linked(): Promise<Outcome<readonly LinkedDevice[]>>
   /** A pairing code for a computer to enroll as a worker. */
   pair(): Promise<Outcome<WorkerCode>>
+  /** Machines to suggest from the hub's SSH configuration. */
+  sshHosts(): Promise<Outcome<SshSuggestions>>
+  /** Install Nessa on `host` and add it; the hub starts again for it. */
+  connectSsh(host: string): Promise<Outcome<DeviceSshConnect>>
+  /** Make `environment` (`null`: the hub) where new conversations run. */
+  setDefault(environment: string | null): Promise<Outcome<string | null>>
   status(invitationId: string): Promise<Outcome<WorkerPairing>>
   approve(invitationId: string, deviceKey: string): Promise<Outcome<WorkerPairing>>
   cancel(invitationId: string): Promise<Outcome<WorkerPairing>>
@@ -169,8 +189,16 @@ export function devicesGateway(options: {
           ...(first.listening !== undefined ? { listening: first.listening } : {}),
           workers,
           more: next !== undefined,
+          sshHosts: first.sshHosts ?? [],
+          ...(first.sshHosts !== undefined
+            ? { defaultEnvironment: first.defaultEnvironment ?? null }
+            : {}),
         }
       }),
+    sshHosts: () => answer((client) => client.devices.sshHosts()),
+    connectSsh: (host) => answer((client) => client.devices.connectSsh(host)),
+    setDefault: (environment) =>
+      answer((client) => client.devices.setDefault(environment)),
     reach: () =>
       answer(async (client) => (await client.pairing.setLinking(true)).applies),
     cloud: () => answer(async (client) => (await client.boat.status()).state),

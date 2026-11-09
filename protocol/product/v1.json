@@ -218,7 +218,7 @@
         "methods": {
           "type": "array",
           "items": { "type": "string" },
-          "maxItems": 120,
+          "maxItems": 123,
           "description": "Registered product methods; permission is checked for every command."
         }
       },
@@ -2073,7 +2073,7 @@
           "minLength": 1,
           "maxLength": 253,
           "x-utf8MaxBytes": 253,
-          "description": "Where this conversation's agent runs for its whole life: one of the environments agents.list returns, an SSH destination, a paired environment's peer: name, or peer:any, any worker of the gateway's pool, which the gateway chooses each time the agent is opened. Omitted runs it on the gateway's own machine. Ignored when the conversation already exists, which keeps the environment it was created with."
+          "description": "Where this conversation's agent runs for its whole life: one of the environments agents.list returns, an SSH destination, a paired environment's peer: name, peer:any, any worker of the gateway's pool, which the gateway chooses each time the agent is opened, or here, the gateway's own machine. Omitted, with no channel (or the default channel), runs it on the default device (devices.setDefault) while that is offered, else on the gateway's own machine; a child conversation an agent starts never takes the default. Ignored when the conversation already exists, which keeps the environment it was created with."
         },
         "channelId": {
           "type": "string",
@@ -5079,6 +5079,13 @@
       "additionalProperties": false,
       "description": "Configured agents and their model-specific choices.",
       "properties": {
+        "defaultEnvironment": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 253,
+          "x-utf8MaxBytes": 253,
+          "description": "Of environments, the one a new conversation runs on when it names none: the default device saved with devices.setDefault, while it is one of environments. Absent: this gateway's own machine. agents.subscribe reads it again each time the default changes."
+        },
         "agents": {
           "type": "array",
           "items": { "$ref": "#/$defs/AgentOption" },
@@ -6603,6 +6610,19 @@
       "description": "Result of devices.list: this gateway's own machine (the hub) and one page of the paired environments that work for it.",
       "required": ["workers"],
       "properties": {
+        "defaultEnvironment": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 253,
+          "x-utf8MaxBytes": 253,
+          "description": "The device a new conversation runs on when it names no environment and no channel: an SSH destination config.json names, or a paired environment's peer: name. Absent: this gateway's own machine (the hub). Saved with devices.setDefault. On the first page only. A paired environment that is not connected when a conversation is created leaves that conversation on the hub."
+        },
+        "sshHosts": {
+          "type": "array",
+          "maxItems": 16,
+          "items": { "$ref": "#/$defs/DeviceSshHost" },
+          "description": "The SSH hosts conversations may run on, as config.json names them, each with what the gateway's ~/.ssh/config resolves it to. On the first page only."
+        },
         "hub": {
           "$ref": "#/$defs/DeviceMachine",
           "description": "The machine this gateway runs on, on the first page (one asked with no after); absent on later pages and when it cannot be read."
@@ -6625,6 +6645,149 @@
           "description": "The last worker listed, when more follow: ask again with it as after for the next page. Absent on the last page."
         }
       }
+    },
+    "DeviceSshHost": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "An SSH host as the gateway's OpenSSH configuration names it.",
+      "properties": {
+        "host": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 253,
+          "x-utf8MaxBytes": 253,
+          "description": "The destination as ssh is given it: an alias in ~/.ssh/config, or user@host."
+        },
+        "hostName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 253,
+          "x-utf8MaxBytes": 253,
+          "description": "Where it connects, when the configuration sets HostName."
+        },
+        "user": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 253,
+          "x-utf8MaxBytes": 253,
+          "description": "The account it signs in as, when the configuration sets User."
+        },
+        "port": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535,
+          "description": "Its port, when the configuration sets one."
+        }
+      },
+      "required": ["host"]
+    },
+    "DevicesSshHostsResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Result of devices.sshHosts: the machines the gateway's ~/.ssh/config names that conversations could run on, and the connections under way.",
+      "properties": {
+        "suggested": {
+          "type": "array",
+          "maxItems": 32,
+          "items": { "$ref": "#/$defs/DeviceSshHost" },
+          "description": "Every host the configuration names plainly (not a pattern), in its order, at most 32: less those config.json already names, any that is not an SSH destination, and git servers (user git, a known forge such as github.com or gitlab.com, or a host name beginning git., gitlab., gitea. or forgejo.), which answer git and run no shell. Options are resolved as ssh resolves them: the first value any matching Host block gives; Match blocks are not read. Include is followed, from ~/.ssh, at most 32 files and 256 KiB."
+        },
+        "connecting": {
+          "type": "array",
+          "maxItems": 16,
+          "items": { "$ref": "#/$defs/DeviceSshConnect" },
+          "description": "Each host devices.connectSsh is setting up now, or set up or failed to since the gateway started."
+        }
+      },
+      "required": ["suggested", "connecting"]
+    },
+    "DeviceSshConnect": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Where one devices.connectSsh stands.",
+      "properties": {
+        "host": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 253,
+          "x-utf8MaxBytes": 253,
+          "description": "The destination being connected."
+        },
+        "state": {
+          "type": "string",
+          "enum": ["installing", "restarting", "connected", "failed"],
+          "description": "installing: the gateway is asking the host whether this build is there and, if not, sending it. restarting: it is installed and saved in config.json's sshHosts, and the gateway is starting again to serve it; once it answers, the host is in devices.list's sshHosts. connected: it is installed, and this gateway already serves it. failed: see refusal; nothing was saved."
+        },
+        "refusal": {
+          "type": "string",
+          "enum": [
+            "environment_unreachable",
+            "environment_platform_unsupported",
+            "environment_install_failed",
+            "environment_version_mismatch",
+            "devices_host_limit",
+            "devices_busy",
+            "devices_unavailable"
+          ],
+          "description": "Why it failed, present exactly when state is failed. The environment_ codes are a lease's own (ConversationLease.refusal). devices_host_limit: config.json already names 16 SSH hosts, or 16 connections are under way. devices_busy: config.json is held by another change, or the gateway is already restarting. devices_unavailable: config.json or its audit could not be written."
+        }
+      },
+      "required": ["host", "state"]
+    },
+    "DevicesConnectSshParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Set a machine up for conversations to run on over SSH: the gateway installs this build there, as a conversation's first lease would, then adds it to config.json's sshHosts and starts again in place to serve it. Answered at once; devices.sshHosts says how it goes. Asking again for a host being set up changes nothing. The install and the change are audited under one operation.",
+      "properties": {
+        "host": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 253,
+          "x-utf8MaxBytes": 253,
+          "description": "An SSH destination: an alias in the gateway's ~/.ssh/config, or user@host. Letters, digits, ., _, - and @, beginning with a letter or digit, and never here."
+        }
+      },
+      "required": ["host"]
+    },
+    "DevicesConnectSshResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Result of devices.connectSsh.",
+      "properties": {
+        "connecting": {
+          "$ref": "#/$defs/DeviceSshConnect",
+          "description": "Where it stands now."
+        }
+      },
+      "required": ["connecting"]
+    },
+    "DevicesSetDefaultParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Choose the device new conversations run on when they name no environment and no channel: from this gateway's surfaces and from a phone alike. Saved in config.json as defaultEnvironment and applied at once, without a restart. Each change is audited.",
+      "properties": {
+        "environment": {
+          "type": ["string", "null"],
+          "minLength": 1,
+          "maxLength": 253,
+          "x-utf8MaxBytes": 253,
+          "description": "An SSH destination config.json names, a paired environment's peer: name (peer: and its key in lowercase hex), or null for this gateway's own machine. Anything else is refused devices_not_a_device."
+        }
+      },
+      "required": ["environment"]
+    },
+    "DevicesSetDefaultResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Result of devices.setDefault.",
+      "properties": {
+        "defaultEnvironment": {
+          "type": ["string", "null"],
+          "maxLength": 253,
+          "description": "The saved default: null for this gateway's own machine."
+        }
+      },
+      "required": ["defaultEnvironment"]
     },
     "DevicesListParams": {
       "type": "object",

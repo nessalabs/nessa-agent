@@ -397,6 +397,11 @@ pub(super) async fn product_state(
     // and its use depends on the order.
     let packaged_agents = bundle.is_some();
     let limits = settings.limits()?;
+    // The default device, as config.json saves it: read at each creation,
+    // and moved by Devices (`devices.setDefault`) without a restart.
+    #[cfg_attr(not(unix), allow(unused_variables))]
+    let (default_device, default_read) =
+        tokio::sync::watch::channel(settings.default_environment());
     // Paired environments dial the native listener, so they are served only
     // where it is.
     let serving = settings.native.as_ref().map(|_| ServingAuth {
@@ -470,6 +475,7 @@ pub(super) async fn product_state(
                             limits.organization_commands(),
                         ),
                         ssh_hosts: settings.ssh_hosts()?,
+                        default_device: default_read.clone(),
                         command_policy: settings.command_policy()?,
                         serving,
                         access_policy: access_policy.clone(),
@@ -631,7 +637,24 @@ pub(super) async fn product_state(
                 None => tokio::sync::watch::channel(None).1,
             },
         );
-        product = product.with_native_linking(Arc::new(linking));
+        let linking = Arc::new(linking.with_ssh_hosts(settings.ssh_hosts()?));
+        product = product.with_native_linking(linking.clone());
+        // Devices sets SSH hosts up and keeps the default device through the
+        // same config.json, audit and restart.
+        product = product.with_device_setup(
+            Arc::new(crate::devices::application::DeviceSetup::new(
+                Arc::new(crate::devices::infrastructure::HomeSshConfig::new(
+                    super::device_setup::home(),
+                )),
+                settings.ssh_hosts()?,
+                Arc::new(super::device_setup::SshInstall::new(&conversation_root(
+                    namespace,
+                ))?),
+                linking,
+                default_device,
+            )),
+            default_read,
+        );
         if let Some(tunnel) = &tunnel {
             product = product.with_tunnel(tunnel.view());
         }
@@ -892,6 +915,9 @@ struct ConversationSettings {
     organization: crate::conversation::application::OrganizationBudgets,
     /// The SSH hosts a conversation may be created on.
     ssh_hosts: Vec<SshDestination>,
+    /// The default device a new conversation that names no place runs on.
+    #[cfg_attr(not(unix), allow(dead_code))]
+    default_device: tokio::sync::watch::Receiver<Option<String>>,
     /// Where the agent may run commands; `None` grants it no environment
     /// tools.
     command_policy: Option<crate::conversation::domain::CommandPolicy>,
@@ -1252,6 +1278,7 @@ async fn conversations(
         agent_idle,
         organization,
         ssh_hosts,
+        default_device,
         command_policy,
         serving,
         access_policy,
@@ -1599,7 +1626,9 @@ async fn conversations(
         organization,
         Arc::new(super::logins::ServiceLogins(saved_logins)),
     )?;
-    let environment = environment.with_workspaces(workspace_environments);
+    let environment = environment
+        .with_workspaces(workspace_environments)
+        .with_default(default_device);
     // Which paired computers the pool tries first and which it leaves out,
     // kept in config.json beside every other ordinary setting.
     let environment = {
@@ -2077,6 +2106,7 @@ fn agent_catalog(
         environments: hosts.iter().map(|host| host.as_str().to_owned()).collect(),
         // Read with the places each time the catalog is (`agents_catalog_now`).
         command_hosts: Vec::new(),
+        default_environment: None,
         native_hooks: AgentsNativeHooks {
             claude: NativeHooksChoice::Off,
             codex: NativeHooksChoice::Off,

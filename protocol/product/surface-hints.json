@@ -411,6 +411,18 @@
     "readOnly": false,
     "destructive": false
   },
+  "devices.sshHosts": {
+    "readOnly": true,
+    "destructive": false
+  },
+  "devices.connectSsh": {
+    "readOnly": false,
+    "destructive": false
+  },
+  "devices.setDefault": {
+    "readOnly": false,
+    "destructive": false
+  },
   "boat.runtimeSettings": {
     "readOnly": true,
     "destructive": false

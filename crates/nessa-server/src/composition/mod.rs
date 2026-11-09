@@ -40,6 +40,8 @@ mod credential_registry;
 #[cfg(unix)]
 mod current_agent;
 #[cfg(unix)]
+mod device_setup;
+#[cfg(unix)]
 mod env_dial_command;
 #[cfg(unix)]
 mod env_grant_command;

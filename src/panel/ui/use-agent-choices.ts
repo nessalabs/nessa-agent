@@ -1,4 +1,4 @@
-import type { ConversationSelection } from "../../conversation"
+import { HERE, type ConversationSelection } from "../../conversation"
 import type {
   ConversationChoices,
   FollowConversationChoices,
@@ -59,6 +59,7 @@ export function useBindCatalogFallback({
     }
     if (
       selection.environment !== undefined &&
+      selection.environment !== HERE &&
       environments &&
       !environments.includes(selection.environment)
     ) {

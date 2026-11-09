@@ -34,6 +34,7 @@ describe("devicesGateway list", () => {
         listening: "0.0.0.0:47650",
         workers: [worker(1), worker(2), worker(3)],
         more: false,
+        sshHosts: [],
       },
     })
     expect(asked).toEqual([undefined, worker(1).environment, worker(2).environment])
@@ -59,5 +60,46 @@ describe("devicesGateway list", () => {
     expect(asked).toEqual([undefined, worker(1).environment])
     expect(read.ok && read.value.workers).toEqual([worker(1), worker(1)])
     expect(read.ok && read.value.more).toBe(true)
+  })
+})
+
+describe("devicesGateway SSH hosts and the default", () => {
+  it("reads the first page's hosts and default, and passes connect and default through", async () => {
+    const asked: unknown[] = []
+    const devices = {
+      list: async () => ({
+        workers: [],
+        sshHosts: [{ host: "box" }],
+        defaultEnvironment: "box",
+      }),
+      sshHosts: async () => ({ suggested: [{ host: "orb" }], connecting: [] }),
+      connectSsh: async (host: string) => (
+        asked.push(["connect", host]),
+        { host, state: "installing" }
+      ),
+      setDefault: async (environment: string | null) => (
+        asked.push(["default", environment]),
+        environment
+      ),
+    }
+    const gateway = devicesGateway({
+      connected: async () => ({ devices }) as unknown as DevicesClient,
+    })
+    const read = await gateway.list()
+    expect(read.ok && read.value.sshHosts).toEqual([{ host: "box" }])
+    expect(read.ok && read.value.defaultEnvironment).toBe("box")
+    expect(await gateway.sshHosts()).toEqual({
+      ok: true,
+      value: { suggested: [{ host: "orb" }], connecting: [] },
+    })
+    expect(await gateway.connectSsh("orb")).toEqual({
+      ok: true,
+      value: { host: "orb", state: "installing" },
+    })
+    expect(await gateway.setDefault(null)).toEqual({ ok: true, value: null })
+    expect(asked).toEqual([
+      ["connect", "orb"],
+      ["default", null],
+    ])
   })
 })
