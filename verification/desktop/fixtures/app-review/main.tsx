@@ -420,6 +420,7 @@ Object.assign(window, {
         // The open review's own options, which the card's buttons must be.
         openOptions:
           open?.options.map((option) => ({
+            id: option.id,
             label: option.label,
             effect: option.effect,
           })) ?? [],

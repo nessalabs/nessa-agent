@@ -82,6 +82,7 @@ export const ApprovalCard = memo(function ApprovalCard({
       aria-label="Approval needed"
       data-origin={approval.origin.kind}
       data-ask={approval.ask}
+      data-review={approval.id}
     >
       <div className="workspace-approval-top">
         <div className="workspace-approval-head">

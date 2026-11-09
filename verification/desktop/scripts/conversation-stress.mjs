@@ -1413,19 +1413,8 @@ async function answerCard(
     return false
   }
   // The card just answered can still be leaving: the one to answer is the
-  // card that asks `reason`, and the review is the one with that title.
-  const asking = reason ? cards.filter({ hasText: reason }) : cards
-  const showsIt = await asking
-    .first()
-    .waitFor({ timeout: 30_000 })
-    .then(() => true)
-    .catch(() => false)
-  if (!showsIt) {
-    failures.push(`the card does not ask ${JSON.stringify(reason)}`)
-    return false
-  }
-  if (!(await waitFor(async () => (await cards.count()) === 1, 5_000)))
-    failures.push(`${await cards.count()} approval cards shown, not 1`)
+  // card of the review with that title. A card names its review by key
+  // (`data-review`), since an agent's card does not repeat its title.
   const { view } = await untilTurn(
     run,
     conversationId,
@@ -1440,6 +1429,20 @@ async function answerCard(
   const permission = view?.permissions?.find(
     (each) => (!reason || each.title === reason) && (!review || each.review === review),
   )
+  const asking = permission
+    ? cards.and(run.page.locator(`[data-review="${permission.review}"]`))
+    : cards
+  const showsIt = await asking
+    .first()
+    .waitFor({ timeout: 30_000 })
+    .then(() => true)
+    .catch(() => false)
+  if (!showsIt) {
+    failures.push(`no card for the review ${JSON.stringify(reason ?? review)}`)
+    return false
+  }
+  if (!(await waitFor(async () => (await cards.count()) === 1, 5_000)))
+    failures.push(`${await cards.count()} approval cards shown, not 1`)
   // A review the deadline would deny waits long enough to answer from the
   // phone, and the card counts it down in minutes.
   const deadline = permission?.deadline

@@ -70,7 +70,7 @@ Options:
 
 Steps, per engine and layout, in order on one page (--only <names> to pick):
   permission  the turn has asked, and the open conversation shows an agent
-          approval card whose reason is the scenario's title, and the text
+          approval card that does not repeat the scenario's title, and the text
           the scenario streamed before it asked
   allow   the review's allow option runs the scenario's tool and the rest of that branch:
           the window shows the scenario's "allowed" text and a step titled
@@ -201,15 +201,12 @@ const checks = {
           (line) => `the approval card ${line}`,
         ),
       )
-      const reason = fold(
-        await card
-          .locator(css.approvalReason)
-          .innerText()
-          .catch(() => ""),
-      )
-      if (reason !== stack.script.title)
+      // The agent's title for the command is the trace's line above the
+      // card; the card says what runs (the command) and not that again.
+      const reasons = await card.locator(css.approvalReason).count()
+      if (reasons > 0)
         failures.push(
-          `the review asks ${JSON.stringify(reason)}, not ${JSON.stringify(stack.script.title)}`,
+          `the card repeats the agent's title ${JSON.stringify(stack.script.title)}`,
         )
     }
     const text = await pageText(page)

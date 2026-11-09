@@ -21,6 +21,10 @@
  *
  * A review that does not offer always has no such button and no menu.
  *
+ * Each button names the option it answers (`data-option`), and each menu
+ * trigger the options behind it (`data-options`), so a check can tell what
+ * the card offers without reading its words.
+ *
  * The command breaks only between its words — never inside one, so
  * `--simulate` stays whole — each line after the first hanging under the
  * first word, clear of the `$`; a word longer than the card scrolls
@@ -283,6 +287,7 @@ export function ApprovalActions({
               className="workspace-button workspace-approval-more"
               data-primary={allow ? true : undefined}
               aria-label="More Answers"
+              data-options={rest.map((option) => option.id).join(" ")}
               disabled={disabled}
             >
               <DesktopIcon name="chevronDown" />
@@ -315,6 +320,7 @@ export function ApprovalActions({
               type="button"
               className="workspace-button workspace-approval-deny"
               data-answer={refuse.choice}
+              data-option={refuse.id}
               disabled={disabled}
               title={refuse.label}
               {...tips.deny}
@@ -329,6 +335,7 @@ export function ApprovalActions({
                 type="button"
                 className="workspace-button workspace-approval-once"
                 data-answer={allow.choice}
+                data-option={allow.id}
                 data-primary
                 disabled={disabled}
                 title={allow.label}
@@ -372,6 +379,7 @@ export function ApprovalActions({
               type="button"
               className="workspace-button workspace-approval-deny"
               data-answer={refuse.choice}
+              data-option={refuse.id}
               disabled={disabled}
               title={refuse.label}
               {...tips.deny}
@@ -387,6 +395,7 @@ export function ApprovalActions({
                   type="button"
                   className="workspace-button workspace-approval-others"
                   aria-label="More Answers"
+                  data-options={others.map((option) => option.id).join(" ")}
                   disabled={disabled}
                 >
                   <DesktopIcon name="moreHorizontal" />
@@ -415,6 +424,7 @@ export function ApprovalActions({
                 aria-label={answerNames.always}
                 title={allowAlways.label}
                 data-answer={allowAlways.choice}
+                data-option={allowAlways.id}
                 disabled={disabled}
                 {...tips.always}
                 onClick={answer(allowAlways)}
@@ -432,6 +442,7 @@ export function ApprovalActions({
                 type="button"
                 className="workspace-button workspace-approval-once"
                 data-answer={allowOnce.choice}
+                data-option={allowOnce.id}
                 data-primary
                 disabled={disabled}
                 title={allowOnce.label}

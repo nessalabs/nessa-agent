@@ -528,29 +528,33 @@ export const modelRule = (page, module, name, ...args) =>
 export const modelValue = (page, module, name) => fromModel(page, module, name, null)
 
 /**
- * Failures when `root` draws an answer `options` does not offer (#444).
- * `options` are the review's own (`{ label }`). Each `button[data-answer]`
- * is named by its `aria-label`, or by its text when it has none. "More Ways
- * to Allow" is drawn only for an always answer, which a gateway review does
- * not offer, so it is a failure here too.
+ * Failures when `root` draws an answer `options` does not offer, or leaves
+ * one out (#444). `options` are the review's own (`{ id, label }`). The card
+ * names each answer in its own words, so what it offers is read from the
+ * option ids it carries: each button's `data-option`, and each menu
+ * trigger's `data-options` for the answers behind it. "More Ways to Allow"
+ * is drawn only for an always answer, which a gateway review does not
+ * offer, so it is a failure here too.
  */
 export async function unofferedAnswers(root, options) {
-  const labels = await root.locator("button[data-answer]").evaluateAll((elements) =>
-    elements.map((element) => {
-      const labelled = element.getAttribute("aria-label")
-      if (labelled) return labelled
-      return (element.textContent || "").replace(/\s+/g, " ").trim()
-    }),
-  )
-  const offered = (options ?? []).map((option) => option.label)
+  const drawn = await root
+    .locator("button[data-option], button[data-options]")
+    .evaluateAll((elements) =>
+      elements.flatMap((element) => [
+        ...(element.getAttribute("data-option") ?? "").split(" "),
+        ...(element.getAttribute("data-options") ?? "").split(" "),
+      ]),
+    )
+  const ids = new Set(drawn.filter(Boolean))
+  const offered = options ?? []
   const failures = []
-  for (const label of labels) {
-    if (!offered.includes(label))
-      failures.push(`offers "${label}", which this review does not`)
+  for (const id of ids) {
+    if (!offered.some((option) => option.id === id))
+      failures.push(`offers "${id}", which this review does not`)
   }
-  for (const label of offered) {
-    if (!labels.includes(label))
-      failures.push(`omits "${label}", which this review offers`)
+  for (const option of offered) {
+    if (!ids.has(option.id))
+      failures.push(`omits "${option.label}", which this review offers`)
   }
   if (
     (await root

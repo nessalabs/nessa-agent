@@ -227,6 +227,7 @@ export const RequestRow = memo(function RequestRow({
                   type="button"
                   className="workspace-button agents-request-button"
                   data-answer={option.choice}
+                  data-option={option.id}
                   tabIndex={current && answerable ? 0 : -1}
                   disabled={!answerable}
                   aria-keyshortcuts={shortcutOf(overviewKeys, "deny")}
@@ -243,6 +244,11 @@ export const RequestRow = memo(function RequestRow({
                   type="button"
                   className="workspace-button agents-request-button"
                   data-answer={option.choice}
+                  data-option={option.id}
+                  // An Option-click answers the always folded into it.
+                  data-options={
+                    foldedAlways && option === onceOptions[0] ? foldedAlways.id : undefined
+                  }
                   data-primary
                   tabIndex={current && answerable ? 0 : -1}
                   disabled={!answerable}
@@ -270,6 +276,7 @@ export const RequestRow = memo(function RequestRow({
                   type="button"
                   className="workspace-button agents-request-button"
                   data-answer={option.choice}
+                  data-option={option.id}
                   data-primary
                   tabIndex={current && answerable ? 0 : -1}
                   disabled={!answerable}
