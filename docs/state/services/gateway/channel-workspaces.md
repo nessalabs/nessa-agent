@@ -131,8 +131,10 @@ entry `login.claude` that Settings › Saved logins shows and every other
 machine is handed too (#1260), recorded in the logins audit. A `boat.claude-sign-in`
 an earlier build kept is moved there when first read. `boat.disconnect`
 forgets only the connection; the saved Claude login stays, and is removed
-only from Settings › Saved logins. Every serve of a Boat VM reads
-it afresh and writes it as the first line of `env serve`'s standard input,
+only from Settings › Saved logins. Every serve of a Boat VM asks Saved
+logins for it afresh (the same policy and audit as a lease's handoff,
+recorded with lease `boat-serve`; one whose record cannot be kept is not
+served) and writes it as the first line of `env serve`'s standard input,
 which the VM's shell exports as `CLAUDE_CODE_OAUTH_TOKEN` before `env serve`
 starts; an empty line, sent when none is saved or the vault cannot be read,
 sets nothing. A serve keeps what it started with, so after each save or

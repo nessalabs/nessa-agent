@@ -55,7 +55,10 @@ Boat's **Authenticate** (`boat.saveClaudeSignIn`) saves through Saved
 logins, recorded like a save from Settings, so the Claude row in Saved
 logins and Boat's sign-in are one fact in `login.claude`; a `boat.claude-sign-in` entry an earlier build kept is moved
 there when first read. Boat VMs are served with it in their environment, so
-there the host wins with the same login. A Claude login that is an
+there the host wins with the same login. That serve-time sign-in goes
+through the same Cedar policy and audit as a lease's handoff: it is
+recorded `sent` with lease `boat-serve`, and one whose record cannot be
+kept is not served. A Claude login that is an
 Anthropic API key (`sk-ant-api…`) is put in `ANTHROPIC_API_KEY` rather
 than `CLAUDE_CODE_OAUTH_TOKEN`, and Boat does not serve it as its sign-in:
 each lease hands it over instead. A Claude login saved or removed in

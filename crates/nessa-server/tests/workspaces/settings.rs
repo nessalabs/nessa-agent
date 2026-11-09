@@ -1,8 +1,8 @@
 //! Boat's adapter uses the real vault's encryption and unlock-generation fence.
 use crate::workspaces::{
-    application::{ClaudeSignIns, Settings},
+    application::Settings,
     domain::{BoatConnection, Failure},
-    infrastructure::{VaultClaudeSignIns, VaultSettings},
+    infrastructure::VaultSettings,
 };
 use nessa_vault::{
     application::{Caller, Clock, ObservationClock, Vault},
@@ -95,16 +95,15 @@ async fn a_claude_sign_in_is_the_saved_claude_login_and_an_older_entry_moves_the
         },
     );
     let login = crate::logins::infrastructure::login_stores(&vault)[&AgentId::Claude].clone();
-    let sign_ins = VaultClaudeSignIns(login.clone());
-    assert!(matches!(sign_ins.read().await, Err(Failure::Locked)));
+    assert_eq!(login.read(), Err(crate::secrets::SecretUnavailable::Locked));
     vault.create(&session.lease(), passphrase(), &[]).unwrap();
-    assert!(sign_ins.read().await.unwrap().is_none());
+    assert!(login.read().unwrap().is_none());
     // What an earlier build saved for Boat is found, and kept as the saved
     // Claude login from then on.
     let older = nessa_vault::domain::EntryName::new("boat.claude-sign-in").unwrap();
     vault.write(&older, b"sk-ant-oat01-older").unwrap();
     assert_eq!(
-        sign_ins.read().await.unwrap().unwrap().as_bytes(),
+        login.read().unwrap().unwrap().as_slice(),
         b"sk-ant-oat01-older"
     );
     assert!(vault.read(&older).unwrap().is_none());
@@ -129,10 +128,6 @@ async fn a_claude_sign_in_is_the_saved_claude_login_and_an_older_entry_moves_the
         login.read().unwrap().unwrap().as_slice(),
         b"sk-ant-oat01-second"
     );
-    // An API key saved as the Claude login is not Boat's sign-in: each
-    // lease hands it over instead.
-    login.write(b"sk-ant-api03-key").unwrap();
-    assert!(sign_ins.read().await.unwrap().is_none());
     login.delete().unwrap();
-    assert!(sign_ins.read().await.unwrap().is_none());
+    assert!(login.read().unwrap().is_none());
 }

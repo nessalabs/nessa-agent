@@ -1,12 +1,11 @@
-//! Boat connection, and the Claude sign-in its VMs are served with, in the
-//! existing encrypted vault. Unlock generation fences validation/write and
-//! reads; no second keychain or plaintext token file. The sign-in is the
-//! saved Claude login (`login.claude`, issue #1260): one entry, whichever
-//! of Boat's Authenticate or Settings › Saved logins wrote it.
-use crate::secrets::{SecretStore, SecretUnavailable};
+//! Boat connection in the existing encrypted vault. Unlock generation
+//! fences validation/write and reads; no second keychain or plaintext token
+//! file. The Claude sign-in its VMs are served with is the saved Claude
+//! login (`login.claude`, issue #1260), read through the saved logins'
+//! policy and audit (`composition::logins::ServedClaudeSignIns`).
 use crate::workspaces::{
-    application::{ClaudeSignIns, Settings},
-    domain::{BoatConnection, ClaudeSignIn, Failure},
+    application::Settings,
+    domain::{BoatConnection, Failure},
 };
 use async_trait::async_trait;
 use nessa_vault::{application::Vault, domain::EntryName};
@@ -15,8 +14,6 @@ use std::sync::Arc;
 use zeroize::Zeroizing;
 
 pub(crate) struct VaultSettings(pub(crate) Arc<Vault>);
-/// The Claude sign-in for Boat VMs: the saved Claude login's store.
-pub(crate) struct VaultClaudeSignIns(pub(crate) Arc<dyn SecretStore>);
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Stored {
@@ -84,32 +81,5 @@ impl Settings for VaultSettings {
         tokio::task::spawn_blocking(move || vault.delete_in(generation, &entry()).map_err(failed))
             .await
             .map_err(|_| Failure::Storage)?
-    }
-}
-fn unavailable(problem: SecretUnavailable) -> Failure {
-    match problem {
-        SecretUnavailable::Locked => Failure::Locked,
-        SecretUnavailable::Unavailable => Failure::Storage,
-    }
-}
-#[async_trait]
-impl ClaudeSignIns for VaultClaudeSignIns {
-    async fn read(&self) -> Result<Option<ClaudeSignIn>, Failure> {
-        let store = self.0.clone();
-        tokio::task::spawn_blocking(move || {
-            Ok(store
-                .read()
-                .map_err(unavailable)?
-                // A saved Claude login that is not a `claude setup-token`
-                // token (an API key) is not served as Boat's sign-in: each
-                // lease then hands it over in its own variable.
-                .and_then(|bytes| {
-                    String::from_utf8(bytes.to_vec())
-                        .ok()
-                        .and_then(|token| ClaudeSignIn::new(token).ok())
-                }))
-        })
-        .await
-        .map_err(|_| Failure::Storage)?
     }
 }
