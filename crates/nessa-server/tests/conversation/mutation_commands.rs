@@ -154,6 +154,7 @@ fn fixture_with_sessions(
             message_commit_clock: Arc::new(RuntimeMessageCommitClock::new()),
             clock: Arc::new(TestClock),
             environment,
+            tool_settings: Default::default(),
         },
         ConversationLimits::default(),
         None,

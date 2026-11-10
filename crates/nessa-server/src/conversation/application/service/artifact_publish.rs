@@ -158,7 +158,7 @@ impl ConversationService {
             requests.forget(&lease, &call.call);
             return refused(PublishCallRefusal::PublishUnavailable);
         };
-        let wait = environments.publish_wait();
+        let wait = self.inner.tool_settings.publish_wait;
         let offered = offer(
             publishing,
             requests.clone(),

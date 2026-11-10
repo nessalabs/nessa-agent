@@ -197,6 +197,7 @@ mod organization_budget;
 mod place_decision;
 mod placement;
 mod pool_settings;
+mod tool_settings;
 #[cfg(any(unix, test))]
 pub(crate) use pool_settings::PoolSettingsError;
 pub(crate) use pool_settings::{PoolCaller, PoolSettingsStore};
@@ -313,7 +314,6 @@ pub use permission_rules::{
 };
 #[cfg(unix)]
 pub(crate) use placement::{MachineUse, PairedEnvironments, WorkerLoad};
-pub use placement::{FETCH_CALL_WAIT, PUBLISH_CALL_WAIT};
 pub use ports::{
     ArtifactKept, ArtifactRecordGate, AttachmentRelease, AttachmentReleaseCause,
     ConversationAttachments, ConversationCreation, ConversationCreationAudit,
@@ -371,6 +371,7 @@ pub use share_grants::{
     MAX_POLICY_REVISION, MAX_SHARE_GRANTS_PER_CONVERSATION,
 };
 pub use tool_policy::{ToolDecision, ToolInitiator, ToolPolicyEvaluator, ToolPolicyUnavailable};
+pub use tool_settings::{EnvironmentToolSettings, FETCH_CALL_WAIT, PUBLISH_CALL_WAIT};
 pub use usage_limit_policy::{
     UsageLimitPreferenceDecision, UsageLimitPreferenceFacts, UsageLimitPreferenceGrant,
     UsageLimitPreferencePolicyEvaluator,

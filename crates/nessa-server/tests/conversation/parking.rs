@@ -280,6 +280,7 @@ impl Fixture {
                 ),
                 clock: clock.clone(),
                 environment,
+                tool_settings: Default::default(),
             },
             ConversationLimits {
                 park_after,

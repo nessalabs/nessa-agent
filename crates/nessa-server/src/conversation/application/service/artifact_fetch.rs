@@ -217,7 +217,7 @@ impl ConversationService {
         call: FetchCall,
         mut stop: watch::Receiver<bool>,
     ) -> FetchAnswer {
-        let wait = self.inner.environment.fetch_wait();
+        let wait = self.inner.tool_settings.fetch_wait;
         let asked = Mutex::new(None);
         let delivered = Arc::new(AtomicBool::new(false));
         let answered = tokio::time::timeout(wait, async {

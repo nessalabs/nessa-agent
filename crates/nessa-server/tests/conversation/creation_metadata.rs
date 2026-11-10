@@ -66,6 +66,7 @@ impl Fixture {
                 deletion_budgets: DELETION_BUDGETS,
                 message_commit_clock: Arc::new(RuntimeMessageCommitClock::new()),
                 clock: Arc::new(TestClock),
+                tool_settings: Default::default(),
             },
             ConversationLimits::default(),
             None,

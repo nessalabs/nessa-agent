@@ -155,7 +155,7 @@ pub enum CommandCallError {
 impl ConversationService {
     /// Whether this gateway grants the agent's environment tools at all.
     pub fn environment_tools_enabled(&self) -> bool {
-        self.inner.environment.command_policy().is_some()
+        self.inner.tool_settings.commands.is_some()
     }
 
     /// Where conversation `id`'s agent could work, for its running turn's
@@ -183,7 +183,7 @@ impl ConversationService {
             }
             None => None,
         };
-        let policy = environments.command_policy();
+        let policy = self.inner.tool_settings.commands.as_ref();
         let mut listed = vec![EnvironmentListing {
             name: HERE.into(),
             here: true,
@@ -247,7 +247,7 @@ impl ConversationService {
     /// Empty when this gateway grants no commands; `here` is never one.
     pub fn owner_command_hosts<'a>(&self, names: impl IntoIterator<Item = &'a str>) -> Vec<String> {
         let environments = &self.inner.environment;
-        let Some(policy) = environments.command_policy() else {
+        let Some(policy) = self.inner.tool_settings.commands.as_ref() else {
             return Vec::new();
         };
         names
@@ -277,8 +277,9 @@ impl ConversationService {
     ) -> Result<CommandAnswer, CommandCallError> {
         let policy = self
             .inner
-            .environment
-            .command_policy()
+            .tool_settings
+            .commands
+            .as_ref()
             .ok_or(CommandCallError::NotConfigured)?
             .clone();
         let work = CommandWork::new(call.argv.clone(), call.cwd.clone(), call.timeout_ms)
