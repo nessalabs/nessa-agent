@@ -5,7 +5,7 @@
 
 use std::collections::BTreeMap;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use nessa_local_database::rusqlite::{params, Connection, TransactionBehavior};
 use nessa_local_storage::create_directory;
@@ -83,13 +83,25 @@ fn install_metadata(path: &Path, live: &Path) -> Result<(), String> {
     if path.exists() {
         return Ok(());
     }
-    let installed = write_metadata(path, live);
-    if installed.is_err() {
-        // Opening the file creates it. A later startup treats an existing file
-        // as already installed, so a failed write has to disappear.
-        let _ = fs::remove_file(path);
+    // The catalogue is published by rename. A stop while the rows are being
+    // written leaves only the partial file, so the next startup installs again
+    // instead of treating an empty database as finished.
+    let mut partial_name = path.as_os_str().to_owned();
+    partial_name.push(".partial");
+    let partial = PathBuf::from(partial_name);
+    let _ = fs::remove_file(&partial);
+    let installed = write_metadata(&partial, live);
+    if let Err(error) = installed {
+        let _ = fs::remove_file(&partial);
+        return Err(error);
     }
-    installed
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&partial, fs::Permissions::from_mode(0o600))
+            .map_err(|error| error.to_string())?;
+    }
+    fs::rename(&partial, path).map_err(|error| error.to_string())
 }
 
 fn write_metadata(path: &Path, live: &Path) -> Result<(), String> {
@@ -119,13 +131,22 @@ fn write_metadata(path: &Path, live: &Path) -> Result<(), String> {
     let transaction = connection
         .unchecked_transaction()
         .map_err(|error| error.to_string())?;
-    for row in rows {
+    let mut owner_heads = BTreeMap::<(String, String), i64>::new();
+    for row in &rows {
+        let head = owner_heads
+            .entry((row.organization.clone(), row.owner.clone()))
+            .or_insert(0);
+        *head = (*head).max(row.change_revision);
+    }
+    for ((organization, owner), head) in &owner_heads {
         transaction
             .execute(
-                "INSERT OR IGNORE INTO catalogue_owners (organization, owner, head) VALUES (?1, ?2, 1)",
-                params![row.organization, row.owner],
+                "INSERT OR IGNORE INTO catalogue_owners (organization, owner, head) VALUES (?1, ?2, ?3)",
+                params![organization, owner, head],
             )
             .map_err(|error| error.to_string())?;
+    }
+    for row in rows {
         transaction
             .execute(
                 "INSERT OR IGNORE INTO conversations (

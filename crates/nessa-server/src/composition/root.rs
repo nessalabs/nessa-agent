@@ -298,6 +298,9 @@ impl CompositionRoot {
         let mut composed =
             super::local_auth::product_state(&config, dependencies.clock.clone(), bundle).await?;
         if let Some(opener) = deferred_open {
+            if let Some(service) = &composed.routes.conversations {
+                service.set_open_preparation(super::preparation_for(opener.clone()));
+            }
             composed.routes.set_deferred_open(opener);
         }
         let super::local_auth::LocalProduct {

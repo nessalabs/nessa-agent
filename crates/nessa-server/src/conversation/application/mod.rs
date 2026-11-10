@@ -356,7 +356,7 @@ pub use service::{
 pub use service::{
     CommandAnswer, CommandCall, CommandCallError, EnvironmentListing, EnvironmentLoad, HERE,
 };
-pub(crate) use service::{ExportAdmission, ExportHoldFailure, FENCE_LEASE_MS};
+pub(crate) use service::{ExportAdmission, ExportHoldFailure, OpenPreparation, FENCE_LEASE_MS};
 pub use service::{
     FetchAnswer, FetchCall, FetchCallRefusal, PublishAnswer, PublishCall, PublishCallRefusal,
     FETCH_BUSY_BACKOFF, FETCH_READS,

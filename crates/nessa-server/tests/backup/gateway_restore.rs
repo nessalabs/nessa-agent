@@ -24,7 +24,14 @@ use crate::composition::{
     install_serving_stores, merge_published_session, run_backup_restore, startup_authority,
     GatewayDeferredOpen,
 };
+use crate::conversation::application::{
+    ConversationCaller, ConversationCatalogue, ConversationError, ConversationLimits, Reader,
+    RequestedConversation,
+};
+use crate::conversation::infrastructure::LocalConversationStore;
 use crate::core::RunError;
+use nessa_auth::domain::{OrganizationId, PrincipalId};
+use nessa_protocol::conversation::domain::ConversationId;
 
 struct Clock(u64);
 
@@ -313,6 +320,69 @@ async fn a_quarantined_backup_is_accepted_before_an_oversized_conversation_is_op
     assert!(session.is_file());
 }
 
+#[test]
+fn a_failed_metadata_install_publishes_nothing() {
+    let root = tempfile::tempdir().unwrap();
+    let live = root.path().join("live");
+    let metadata = live.join("records/conversation-metadata");
+    fs::create_dir_all(&metadata).unwrap();
+    fs::write(
+        metadata.join("conversation-conv-real"),
+        br#"{"id":"conv-real","organization":"acme","owner":"ada","agent":"claude","model":"opus","approvalMode":"ask","creationRevision":3,"changeRevision":4}"#,
+    )
+    .unwrap();
+    fs::write(live.join("deferred.txt"), b"not a deferred list\n").unwrap();
+    let namespace = root.path().join("gateway");
+    fs::create_dir(&namespace).unwrap();
+    assert!(install_serving_stores(&namespace, &live).is_err());
+    assert!(!namespace.join("conversations/metadata.sqlite3").exists());
+    assert!(!namespace
+        .join("conversations/metadata.sqlite3.partial")
+        .exists());
+    fs::remove_file(live.join("deferred.txt")).unwrap();
+    install_serving_stores(&namespace, &live).unwrap();
+    assert!(namespace.join("conversations/metadata.sqlite3").is_file());
+}
+
+#[tokio::test]
+async fn a_missing_restored_source_does_not_open_a_fresh_session() {
+    let (service, provider, _, _) =
+        crate::conversation_test_support::fixture(ConversationLimits::default());
+    service.set_open_preparation(std::sync::Arc::new(MissingRestoredSource));
+    let id = ConversationId::new(&uuid::Uuid::new_v4().to_string()).unwrap();
+    let error = service
+        .create(
+            id,
+            ConversationCaller {
+                organization_id: OrganizationId::new("org").unwrap(),
+                principal_id: PrincipalId::new("person").unwrap(),
+                surface_id: "panel".into(),
+                action_id: "create".into(),
+            },
+            RequestedConversation::default(),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        ConversationError::DeferredSourceUnavailable
+    ));
+    assert_eq!(
+        provider
+            .open_calls
+            .load(std::sync::atomic::Ordering::SeqCst),
+        0
+    );
+}
+
+struct MissingRestoredSource;
+
+impl crate::conversation::application::OpenPreparation for MissingRestoredSource {
+    fn prepare(&self, _: &str) -> Result<(), ConversationError> {
+        Err(ConversationError::DeferredSourceUnavailable)
+    }
+}
+
 fn open_served(
     namespace: &std::path::Path,
     binding: &AcceptedBinding,
@@ -496,6 +566,31 @@ fn a_summary_keeps_its_title_and_the_conversation_keeps_its_owner() {
         )
         .unwrap();
     assert_eq!(others, 0);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        for directory in [root.path(), &namespace, &namespace.join("conversations")] {
+            fs::set_permissions(directory, fs::Permissions::from_mode(0o700)).unwrap();
+        }
+    }
+    let revision = tokio::runtime::Builder::new_current_thread()
+        .build()
+        .unwrap()
+        .block_on(async {
+            let store =
+                LocalConversationStore::open(&namespace.join("conversations/metadata.sqlite3"))
+                    .unwrap();
+            store
+                .head(
+                    &OrganizationId::new("acme").unwrap(),
+                    &PrincipalId::new("ada").unwrap(),
+                    &Reader::Owner,
+                )
+                .await
+                .unwrap()
+                .revision
+        });
+    assert_eq!(revision, 4);
 }
 
 #[test]

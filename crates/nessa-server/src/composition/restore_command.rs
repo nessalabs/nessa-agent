@@ -3,6 +3,7 @@
 use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use nessa_local_storage::create_directory;
@@ -28,6 +29,7 @@ use crate::backup::infrastructure::{
     DirectoryVerificationSource, ExportFormat, FileRestoreAudit, KeyedInventory, OsPublicationIds,
     OsStagingIds, SqliteDeferredSource,
 };
+use crate::conversation::application::{ConversationError, OpenPreparation};
 use crate::core::RunError;
 
 const LATER_INVENTORY_LIMIT: usize = 4 * 1024 * 1024;
@@ -528,6 +530,30 @@ fn outbox_commands(live: &Path) -> Vec<String> {
     }
     names.sort();
     names
+}
+
+struct DeferredPreparation(Arc<dyn crate::backup::application::DeferredConversationOpen>);
+
+impl OpenPreparation for DeferredPreparation {
+    fn prepare(&self, conversation_id: &str) -> Result<(), ConversationError> {
+        match self.0.open(conversation_id) {
+            Ok(()) => Ok(()),
+            Err(DeferredOpenFailure::SourceMissing) => {
+                Err(ConversationError::DeferredSourceUnavailable)
+            }
+            Err(DeferredOpenFailure::SourceChanged) => {
+                Err(ConversationError::DeferredSourceChanged)
+            }
+            Err(DeferredOpenFailure::Unavailable) => Err(ConversationError::Unavailable),
+        }
+    }
+}
+
+/// The opener startup installs, also fetched before any serving session opens.
+pub(crate) fn preparation_for(
+    opener: Arc<dyn crate::backup::application::DeferredConversationOpen>,
+) -> Arc<dyn OpenPreparation> {
+    Arc::new(DeferredPreparation(opener))
 }
 
 /// Opens a deferred conversation on the accepted restore before the
