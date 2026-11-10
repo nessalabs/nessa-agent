@@ -1,7 +1,10 @@
 //! Files the cut reads: a bad line is named, a secret is not copied, and
 //! both outboxes are part of the same cut.
 
-use crate::conversation::domain::{ChannelExecution, Place};
+use crate::conversation::domain::{
+    Channel, ChannelDefaults, ChannelExecution, ChannelFolder, ChannelId, ChannelName,
+    ChannelNotes, ChannelParts, ChannelPath, ChannelResources, Place,
+};
 use std::fs;
 use std::path::Path;
 
@@ -19,10 +22,6 @@ use crate::backup::infrastructure::{
     DirectoryVerificationSource, FileDeletionLog,
 };
 use crate::conversation::application::{ArtifactBudget, ChannelStore};
-use crate::conversation::domain::{
-    Channel, ChannelDefaults, ChannelFolder, ChannelId, ChannelName, ChannelNotes, ChannelParts,
-    ChannelPath, ChannelResources,
-};
 use crate::conversation::infrastructure::LocalChannelStore;
 use nessa_auth::domain::{OrganizationId, PrincipalId};
 use nessa_protocol::agents::AgentId;

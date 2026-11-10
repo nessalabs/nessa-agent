@@ -1,5 +1,5 @@
-//! Where each conversation placed on an SSH host, a paired environment or
-//! the pool (`peer:any`) runs: one small file per
+//! Where each conversation placed on an SSH host, a paired environment, the
+//! pool (`peer:any`) or a cloud VM of its own (`boat:thread`) runs: one small file per
 //! such conversation, `placements/<conversation id>.json` under the
 //! conversations directory, holding `{"schemaVersion":1,"host":"…"}`. A
 //! conversation that runs here has none.

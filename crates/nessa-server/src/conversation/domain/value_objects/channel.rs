@@ -14,7 +14,7 @@
 //! a request can select stays a choice between places the owner already made
 //! (`composition/agent.rs`). Every value here is checked when it is made and
 //! when it is read back; a stored row that is not one is not a channel.
-use super::place::Place;
+use super::Place;
 use nessa_auth::domain::{OrganizationId, PrincipalId};
 use nessa_protocol::agents::AgentId;
 use nessa_protocol::conversation::domain::{

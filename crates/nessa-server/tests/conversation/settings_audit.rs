@@ -2,8 +2,7 @@
 //! and what came of it; a step recorded again is acknowledged, not doubled.
 use super::*;
 use crate::conversation::application::ConversationCaller;
-use crate::conversation::domain::ChannelId;
-use crate::conversation::domain::{ChannelExecution, Place};
+use crate::conversation::domain::{ChannelExecution, ChannelId, Place};
 use nessa_auth::domain::{OrganizationId, PrincipalId};
 use nessa_protocol::conversation::domain::ConversationId;
 

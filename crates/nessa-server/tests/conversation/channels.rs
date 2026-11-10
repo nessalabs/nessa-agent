@@ -8,9 +8,9 @@ use crate::conversation::application::{
     SubmissionMode, SubmittedMessage,
 };
 use crate::conversation::domain::{
-    ChannelDefaults, ChannelName, ChannelNotes, ChannelRefusal, ProviderSessionErasure,
+    ChannelDefaults, ChannelExecution, ChannelName, ChannelNotes, ChannelRefusal, Place,
+    ProviderSessionErasure,
 };
-use crate::conversation::domain::{ChannelExecution, Place};
 use crate::conversation::infrastructure::{LocalChannelStore, LocalConversationStore};
 #[cfg(unix)]
 use crate::conversation_test_support::channel_lookup::ChannelLookup;
