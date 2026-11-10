@@ -3458,7 +3458,9 @@ const steps = {
         .map((turn) => `${turn.status ?? ""} ${turn.userText ?? ""}`)
         .join("\n")
       if (!said.includes("restored turn text"))
-        failures.push(`the gateway view did not load the restored history: ${JSON.stringify(said)}`)
+        failures.push(
+          `the gateway view did not load the restored history: ${JSON.stringify(said)}`,
+        )
     } catch (error) {
       failures.push(`the gateway could not read the restored history: ${error.message}`)
     } finally {
@@ -3471,7 +3473,9 @@ const steps = {
       const text = prompt(run, STRESS.restore, step, " missing")
       const box = dock(run.page).locator("textarea")
       await box.fill(text)
-      await dock(run.page).getByRole(...composerControls.send).click({ timeout: 10_000 })
+      await dock(run.page)
+        .getByRole(...composerControls.send)
+        .click({ timeout: 10_000 })
       await expectShown(run.page, "no longer at its source", failures)
       // The desktop keeps a refused send as the unsent message, which is the
       // draft: the words stay on screen, in the field or beside the refusal.
