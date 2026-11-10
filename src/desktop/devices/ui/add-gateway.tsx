@@ -11,12 +11,12 @@ import {
   type PairingScope,
 } from "../adapters/gateway-pairing"
 import {
-  gatewayEnrollmentCommand,
   gatewayInvitationStatus,
   reduceGatewayInvitation,
   type GatewayInvitationReceipt,
   type GatewayInvitationStatus,
-} from "../model/gateway-pairing"
+} from "./gateway-invitation"
+import { gatewayEnrollmentCommand } from "../model/gateway-pairing"
 import { bytesToHex, deviceKeyFingerprint } from "../../settings/model/device-key"
 
 type PairingOwnerStatus = GatewayInvitationStatus
