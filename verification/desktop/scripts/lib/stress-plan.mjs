@@ -115,7 +115,7 @@ export const KNOBS = {
   },
   windows: {
     default: 1,
-    what: "turns where an agent reads the window: beside another pane, the focused chat's panel (two tabs, the front tab, hidden and shown, then the other chat), then alone",
+    what: "turns where an agent reads the window: beside another pane, the focused chat's panel (two tabs, the front tab, hidden and shown, then the other chat), then alone; the sidebar it folds parks once its slide ends and is reachable again when opened",
   },
   rails: {
     default: 1,
