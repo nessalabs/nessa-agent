@@ -2055,14 +2055,15 @@ fn environments(
                 changes,
                 // The pool first, while any worker of it takes new work.
                 names: Arc::new(move || {
-                    use crate::conversation::application::{PairedEnvironments, POOL};
+                    use crate::conversation::application::PairedEnvironments;
+                    use crate::conversation::domain::Place;
                     let workers: Vec<String> = connected
                         .connected()
                         .iter()
                         .map(nessa_sdk::domain::agent_execution::leases::PeerEnvironment::name)
                         .collect();
                     let pool = connected.serving().iter().any(|(_, load)| !load.draining);
-                    pool.then(|| POOL.to_owned())
+                    pool.then(|| Place::Pool.name())
                         .into_iter()
                         .chain(workers)
                         .collect()

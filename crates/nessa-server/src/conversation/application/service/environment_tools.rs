@@ -43,7 +43,7 @@ use crate::conversation::application::{
     CommandPolicyEvaluator, CommandPublication, CommandQuestion, CommandResult, Environment,
     PublicationOutcome, ToolDecision, PUBLISH_CALL_WAIT,
 };
-use crate::conversation::domain::{ToolCall, ToolPolicy, ToolSource};
+use crate::conversation::domain::{Place, ToolCall, ToolPolicy, ToolSource};
 use nessa_protocol::conversation::domain::ConversationId;
 use nessa_protocol::lease::{Collection, CollectionRefusal};
 use nessa_sdk::application::agent_execution::{
@@ -189,7 +189,7 @@ impl ConversationService {
             here: true,
             reachable: Some(true),
             commands: false,
-            current: current.is_none(),
+            current: current == Place::Here,
             load: None,
         }];
         // A pool setting that cannot be read leaves load unknown, never
@@ -203,15 +203,11 @@ impl ConversationService {
             .hosts()
             .iter()
             .map(|(name, environment)| (name.clone(), environment.clone()));
-        let workspace =
-            if current.as_deref() == Some(crate::conversation::application::placement::BOAT) {
-                vec![(
-                    crate::conversation::application::placement::BOAT.to_owned(),
-                    environments.of(id).await?,
-                )]
-            } else {
-                Vec::new()
-            };
+        let workspace = if current == Place::CloudVm {
+            vec![(current.name(), environments.of(id).await?)]
+        } else {
+            Vec::new()
+        };
         for (name, environment) in hosts.chain(environments.connected_peers()).chain(workspace) {
             let usable = match (policy, &initiator) {
                 (Some(policy), Some(initiator)) => {
@@ -219,7 +215,7 @@ impl ConversationService {
                 }
                 _ => false,
             };
-            let is_current = current.as_deref() == Some(name.as_str());
+            let is_current = Place::named(&name).is_ok_and(|place| place == current);
             let shown = usable || is_current || matches!(initiator, Some(TurnInitiator::Owner));
             if !shown {
                 continue;
@@ -257,8 +253,9 @@ impl ConversationService {
         names
             .into_iter()
             .filter(|name| {
-                environments
-                    .named(name)
+                Place::named(name)
+                    .ok()
+                    .and_then(|place| environments.named(&place))
                     .is_some_and(|environment| environment.commands().is_some())
                     && allows_host(policy.as_ref(), CommandInitiator::Owner, name)
             })
@@ -330,28 +327,20 @@ impl ConversationService {
         // Where: a host or paired environment this gateway knows, granted,
         // whose environment runs commands. Here runs none: its commands are
         // the agent's own shell's.
-        let environment: Option<Arc<dyn Environment>> = match named {
-            EnvironmentRef::Here => None,
-            EnvironmentRef::Boat => {
-                if self
-                    .inner
-                    .environment
-                    .runs_on(id)
-                    .await
-                    .ok()
-                    .flatten()
-                    .as_deref()
-                    == Some(crate::conversation::application::placement::BOAT)
-                {
+        let place = Place::from(named);
+        let environment: Option<Arc<dyn Environment>> = match &place {
+            Place::Here => None,
+            Place::CloudVm => {
+                if self.inner.environment.runs_on(id).await.ok() == Some(Place::CloudVm) {
                     self.inner.environment.of(id).await.ok()
                 } else {
                     None
                 }
             }
-            _ => self.inner.environment.named(&call.environment),
+            named => self.inner.environment.named(named),
         };
         let Some(environment) = environment else {
-            let refusal = if call.environment == HERE {
+            let refusal = if place == Place::Here {
                 CommandRefusal::CommandsUnavailable
             } else {
                 CommandRefusal::EnvironmentNotGranted
