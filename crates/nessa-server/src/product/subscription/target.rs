@@ -28,6 +28,7 @@ use crate::product::{
     socket::{admit_now, failure, success},
     state::{note_limit, ProductRouteState},
 };
+use crate::timer::clock;
 use nessa_auth::application::session::AuthenticatedSession;
 use nessa_auth::domain::PrincipalId;
 use nessa_projection::CommittedCursor;
@@ -484,7 +485,7 @@ async fn read_batch(
                 Some(wait) => {
                     drop(permit);
                     attempt += 1;
-                    tokio::time::sleep(wait).await;
+                    clock::sleep(wait).await;
                     continue;
                 }
                 None => return Err(code.to_owned()),
@@ -540,7 +541,7 @@ async fn read_batch(
             Err(error) => match retry_after(&error, attempt) {
                 Some(wait) => {
                     attempt += 1;
-                    tokio::time::sleep(wait).await;
+                    clock::sleep(wait).await;
                 }
                 None => return Err(code_of(&error)),
             },
@@ -640,7 +641,7 @@ impl Sent {
         tokio::pin!(written);
         let delivered = tokio::select! {
             result = &mut written => result.is_ok(),
-            () = tokio::time::sleep(DELIVERY_TIMEOUT) => {
+            () = clock::sleep(DELIVERY_TIMEOUT) => {
                 if self.deliveries.withdraw(&self.id) {
                     note_limit("socket.subscription_delivery_deadline");
                     self.end(ConversationSubscriptionEndReason::Lagging, None);
@@ -676,7 +677,7 @@ impl Sent {
                 name: product_event::CONVERSATION_SUBSCRIPTION_ENDED,
                 payload,
             },
-            Deadline::Last(Instant::now() + DELIVERY_TIMEOUT),
+            Deadline::Last(clock::now() + DELIVERY_TIMEOUT),
             None,
         ));
     }
@@ -899,7 +900,7 @@ pub(super) async fn run(run: Run) {
         drop(deliveries.offer(
             &id,
             Outgoing::Reply(failure(&request, code)),
-            Deadline::Last(Instant::now() + DELIVERY_TIMEOUT),
+            Deadline::Last(clock::now() + DELIVERY_TIMEOUT),
             Some(slot),
         ));
     };
@@ -1002,7 +1003,7 @@ pub(super) async fn run(run: Run) {
             }
         }
         if matches!(target, Target::List { .. }) {
-            tokio::time::sleep(LIST_REREAD_FLOOR).await;
+            clock::sleep(LIST_REREAD_FLOOR).await;
             if sources.drain().await {
                 sent.catalogue += 1;
             }

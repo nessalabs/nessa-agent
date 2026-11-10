@@ -1,5 +1,6 @@
 //! Strict provider receipts. No SDK/SSH/MCP authority follows an unverified VM.
 use super::boat_receipt_diagnostics::{self as diagnostics, Diagnostic, Stage};
+use crate::timer::clock;
 use crate::workspaces::application::WorkspaceReceipt;
 use crate::workspaces::domain::{
     AdmissionRefusal, AdmissionRejection, BoatConnection, EnvironmentConfiguration,
@@ -370,7 +371,7 @@ async fn wait_for_start(http: &reqwest::Client, api: &Api, vm: &str) -> Result<(
                 .and_then(Value::as_str)
             {
                 Some("init" | "provisioning" | "provisioned" | "cloning") => {
-                    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                    clock::sleep(std::time::Duration::from_secs(1)).await;
                 }
                 // The final strict reader diagnoses malformed/unsupported states
                 // and rejects unsafe posture, including a wipe pending at ready.

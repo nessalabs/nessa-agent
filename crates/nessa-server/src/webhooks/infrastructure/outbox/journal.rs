@@ -2,6 +2,7 @@
 use super::audit::{Record, RegistrationChange};
 use super::stored::{self, StoredDelivery};
 use super::{capacity, codec, invalid, unavailable, uuid};
+use crate::timer::clock;
 use crate::webhooks::application::{
     DeliveryCause, OutboxError, MAX_REGISTRATIONS, PENDING_LIMIT, RETAINED_LIMIT,
 };
@@ -234,7 +235,7 @@ pub(super) fn commit_before(
     retire_drained(&transaction, at_ms)?;
     super::intents::validate(&transaction)?;
     capacity::check(&transaction, registration)?;
-    if deadline.is_some_and(|at| Instant::now() >= at) {
+    if deadline.is_some_and(|at| clock::now() >= at) {
         return Err(OutboxError::Conflict);
     }
     transaction.commit().map_err(unavailable)
@@ -253,7 +254,7 @@ pub(super) fn commit_observation(
         .map_err(unavailable)?;
     super::intents::validate(&transaction)?;
     capacity::check(&transaction, Some(registration))?;
-    if deadline.is_some_and(|at| Instant::now() >= at) {
+    if deadline.is_some_and(|at| clock::now() >= at) {
         return Err(OutboxError::Conflict);
     }
     transaction.commit().map_err(unavailable)

@@ -31,6 +31,7 @@ use super::{
     SubmittedMessage, Writer,
 };
 use crate::conversation::application::{AgentToolSource, ConversationFuture};
+use crate::timer::clock;
 use nessa_auth::domain::{OrganizationId, PrincipalId};
 use nessa_protocol::conversation::domain::ConversationId;
 use nessa_sdk::application::agent_execution::{
@@ -843,7 +844,7 @@ impl ConversationService {
         loop {
             for look in 0..=SETTLING_LOOKS {
                 if look > 0 {
-                    tokio::time::sleep(SETTLING_LOOK_DELAY).await;
+                    clock::sleep(SETTLING_LOOK_DELAY).await;
                 }
                 if !self.look_once(&child, failure).await {
                     break;
@@ -1149,7 +1150,7 @@ impl ConversationService {
                 }
             }
             drop(admission);
-            tokio::time::sleep(delay).await;
+            clock::sleep(delay).await;
             delay = (delay * 2).min(DELIVERY_RETRY_MOST);
         }
         self.settle_saved(&taken.child, &report.execution).await;

@@ -13,3 +13,6 @@ test-support = []
 
 [dependencies]
 tokio = { version = "1", features = ["rt", "macros", "sync", "time"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt", "macros", "sync", "time", "test-util"] }

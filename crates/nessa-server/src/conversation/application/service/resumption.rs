@@ -31,6 +31,7 @@ use super::{load_conversation, provider_approval_mode, ConversationService, Live
 use crate::conversation::application::{
     ConversationCaller, ConversationError, RevisionHold, UnfinishedTurns,
 };
+use crate::timer::clock;
 use futures_util::{stream, StreamExt};
 use nessa_protocol::conversation::domain::{ConversationApprovalMode, ConversationId};
 use nessa_sdk::application::agent_execution::{
@@ -40,7 +41,7 @@ use nessa_sdk::application::agent_execution::{
 };
 use nessa_sdk::domain::agent_execution::executions::Initiator;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use uuid::Uuid;
 
 /// How long a failure's retry waits: `first` after the first failure in a
@@ -622,7 +623,7 @@ impl ConversationService {
     /// for nothing: the close stops it, and the agent opened next carries it
     /// on.
     pub(super) async fn settles(&self, live: &LiveConversation) -> bool {
-        let deadline = Instant::now() + self.inner.deletion_budgets.stop;
+        let deadline = clock::now() + self.inner.deletion_budgets.stop;
         loop {
             if live.agent.is_idle().await
                 || (live.agent.active_execution_id().is_none()
@@ -633,10 +634,10 @@ impl ConversationService {
             {
                 return true;
             }
-            if Instant::now() >= deadline {
+            if clock::now() >= deadline {
                 return false;
             }
-            tokio::time::sleep(Duration::from_millis(10)).await;
+            clock::sleep(Duration::from_millis(10)).await;
         }
     }
 
@@ -741,7 +742,7 @@ impl ConversationService {
                 () = &mut scheduled => {}
                 () = async {
                     match wait {
-                        Some(wait) => tokio::time::sleep(wait).await,
+                        Some(wait) => clock::sleep(wait).await,
                         None => std::future::pending().await,
                     }
                 } => {}

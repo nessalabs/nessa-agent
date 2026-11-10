@@ -894,6 +894,15 @@ real external progress. Test real adapter
 and cross-process exclusion where promised, and keep test controls out of public
 SDK configuration.
 
+Gateway code reads the time and waits for it in one place: an injected
+`Timer` where a test drives the deadline by hand, otherwise
+`crate::timer::clock` (`nessa_timer::clock`). `clock::now`, `clock::sleep` and
+`clock::sleep_until` are the runtime's clock, so a paused test moves every
+deadline the code measures; `clock::os` is the operating system's clock for a
+thread no runtime drives; `clock::wall_now` is for timestamps, never for
+measuring a wait. Do not call `Instant::now`, `SystemTime::now`,
+`tokio::time::sleep` or `std::thread::sleep` directly.
+
 ### Session persistence checks
 
 Measure write growth and validation work with both longer history and smaller

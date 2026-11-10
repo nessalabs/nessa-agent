@@ -50,6 +50,7 @@ use crate::conversation::application::{
     ConversationAttachments, EnvironmentFuture, FetchAsk, FetchFailure, FetchPlaced, FetchRequests,
     FetchTaken, HeldRange, HeldRangeError, HeldSource, HeldSourceFailure,
 };
+use crate::timer::clock;
 use nessa_auth::domain::OrganizationId;
 use nessa_protocol::conversation::domain::ConversationId;
 use nessa_protocol::lease::FetchRefusal;
@@ -691,7 +692,7 @@ impl HeldSource for HeldFile {
                     Err(HeldRangeError::Busy) => {
                         let step = FETCH_BUSY_BACKOFF[busy.min(FETCH_BUSY_BACKOFF.len() - 1)];
                         busy += 1;
-                        tokio::time::sleep(step).await;
+                        clock::sleep(step).await;
                     }
                     Err(HeldRangeError::NotHeld) => return Err(HeldSourceFailure::NotHeld),
                     Err(HeldRangeError::Unavailable) => return Err(HeldSourceFailure::Unavailable),

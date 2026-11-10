@@ -30,6 +30,7 @@
 //! gateway issues is never sent: each connection proves this machine's key
 //! in TLS, and the gateway asks its registry who that key is.
 use super::env_serve_command::{compose, environment_directory, Composed};
+use crate::timer::clock;
 use crate::{
     app::dependencies::RuntimeDependencies,
     core::RunError,
@@ -265,7 +266,7 @@ async fn approved_then_served(
             }
             Err(reason) => tracing::warn!(%reason, "the gateway's build was not taken"),
         }
-        fetch_after = Some(std::time::Instant::now() + FETCH_AGAIN_AFTER);
+        fetch_after = Some(clock::os::now() + FETCH_AGAIN_AFTER);
         composed = tokio::select! {
             biased;
             () = stopped(stopping.clone()) => return Ok(()),
@@ -400,7 +401,7 @@ async fn recover_secret_at(
                 tokio::select! {
                     biased;
                     () = stopped(stop.clone()) => return Ok(()),
-                    () = tokio::time::sleep(APPROVAL_POLL) => {}
+                    () = clock::sleep(APPROVAL_POLL) => {}
                 }
             }
         }
@@ -516,7 +517,7 @@ async fn serve_dialing(
                 // Asked when the refusal comes, so a fetch that failed is
                 // tried again once its wait is over, however long dialing
                 // has gone on.
-                let may_fetch = fetch_after.is_none_or(|after| std::time::Instant::now() >= after);
+                let may_fetch = fetch_after.is_none_or(|after| clock::os::now() >= after);
                 if protocol == LEASE_PROTOCOL {
                     // Refused for something else than its protocol: a build
                     // that speaks this one would be refused the same.
