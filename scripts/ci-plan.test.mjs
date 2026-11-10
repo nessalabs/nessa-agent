@@ -9,6 +9,7 @@ import {
   memberManifest,
   packageArguments,
   planChange,
+  PLATFORM_CODE,
   platformModuleFiles,
   readWorkspace,
   stringLiterals,
@@ -51,12 +52,13 @@ const graph = workspaceGraph([
   {
     dir: "crates/nessa-server",
     manifest: manifest("nessa-server", ["nessa-sdk", "nessa-protocol", "nessa-timer"]),
-    text: `"/../../docs/limits.md" "../../../../src/onboarding/adapters/agents.ts"`,
+    text: `"/../../docs/limits.md" "../../../../src/onboarding/adapters/agents.ts" "../../src/keychain/prompt.json"`,
     platformFiles: [
       "crates/nessa-server/src/keychain.rs",
       "crates/nessa-server/src/sandbox.rs",
       "crates/nessa-server/src/sandbox/",
     ],
+    platformText: `"tunnel-releases.json" "../../src/keychain/prompt.json"`,
   },
   {
     dir: "src-tauri",
@@ -226,6 +228,20 @@ test("any change to a platform file or module runs the platform suites", () => {
   )
 })
 
+test("a data file only platform code reads runs the platform suites", () => {
+  assert.equal(plan("crates/nessa-server/data/tunnel-releases.json").platformTests, true)
+  assert.equal(plan("crates/nessa-server/data/other.json").platformTests, false)
+  assert.equal(plan("src/keychain/prompt.json").platformTests, true)
+})
+
+test("removing the last system-crate call is a platform change", () => {
+  const removed = plan({
+    filename: "crates/nessa-server/src/a.rs",
+    patch: "@@ -1 +1 @@\n-    unsafe { windows_sys::Win32::Foundation::CloseHandle(h) };",
+  })
+  assert.equal(removed.platformTests, true)
+})
+
 test("a module declared under a platform cfg marks its file and folder", () => {
   const source = [
     '#[cfg(target_os = "macos")]',
@@ -248,11 +264,35 @@ test("a module declared under a platform cfg marks its file and folder", () => {
     "crates/x/tests/windows_acl.rs",
     "crates/x/tests/windows_acl/",
   ])
-  // A file that is not `mod.rs` or `lib.rs` holds its children in its own folder.
+  // A file that is not `mod.rs` or `lib.rs` usually holds its children in its
+  // own folder.
   assert.deepEqual(
     platformModuleFiles("crates/x/src/gateway.rs", "#[cfg(unix)]\nmod peer;"),
-    ["crates/x/src/gateway/peer.rs", "crates/x/src/gateway/peer/"],
+    [
+      // `gateway.rs` may be a crate root (a `[[bin]]`), so both homes count.
+      "crates/x/src/peer.rs",
+      "crates/x/src/peer/",
+      "crates/x/src/gateway/peer.rs",
+      "crates/x/src/gateway/peer/",
+    ],
   )
+  // rustfmt wraps a long cfg; a comment may sit between it and the module.
+  assert.deepEqual(
+    platformModuleFiles(
+      "crates/x/tests/it.rs",
+      '#[cfg(any(\n    target_os = "macos",\n    windows\n))]\n/// Native only.\nmod native;\n#[cfg(test)] mod plain;',
+    ),
+    [
+      "crates/x/tests/native.rs",
+      "crates/x/tests/native/",
+      "crates/x/tests/it/native.rs",
+      "crates/x/tests/it/native/",
+    ],
+  )
+  assert.ok(
+    PLATFORM_CODE.test('#[cfg(all(\n    test,\n    target_os = "macos"\n))]\nfn a() {}'),
+  )
+  assert.ok(!PLATFORM_CODE.test("#[cfg(test)]\nfn a() { let windows = 2; }"))
 })
 
 test("a platform-named path or a missing diff runs the platform suites", () => {

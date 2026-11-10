@@ -97,15 +97,22 @@ const ROOT_FRONTEND_FILE =
   /^[^/]+\.(html|ts|tsx|js|mjs|cjs|json|ya?ml|css)$|^nessa-ui-revision$|^\.prettierignore$/
 const PLATFORM_PATH =
   /(^|[/_.-])(windows|win32|macos|darwin|linux|unix|platform)([/_.-]|$)/i
-const PLATFORM_LINE = /cfg!?\s*\(|target_os|std::os::|\bunix\b|\bwindows\b|\bmacos\b/i
 /** Rust that compiles or behaves differently per system. */
 const PLATFORM_WORDS =
   "unix|windows|target_os|target_family|target_env|target_arch|target_vendor"
+const SYSTEM_CRATES = "libc|nix|windows_sys|windows|objc2\\w*|core_foundation\\w*|cocoa"
+// A `cfg` may be wrapped over several lines by rustfmt, so everything up to
+// the attribute's closing `]` counts.
 export const PLATFORM_CODE = new RegExp(
-  `\\bcfg(?:_attr)?!?\\s*\\([^\\n]*\\b(?:${PLATFORM_WORDS})\\b|\\bstd::os::|\\b(?:libc|nix|windows_sys|windows|objc2\\w*|core_foundation\\w*|cocoa)::`,
+  `\\bcfg(?:_attr)?!?\\s*\\([^\\]]{0,400}?\\b(?:${PLATFORM_WORDS})\\b|\\bstd::os::|\\b(?:${SYSTEM_CRATES})::`,
+)
+/** A changed line that mentions a platform: at least what `PLATFORM_CODE` sees. */
+const PLATFORM_LINE = new RegExp(
+  `cfg!?\\s*\\(|\\b(?:${PLATFORM_WORDS}|macos)\\b|std::os::|\\b(?:${SYSTEM_CRATES})::`,
+  "i",
 )
 const PLATFORM_MODULE = new RegExp(
-  `#\\[cfg(?:_attr)?\\s*\\([^\\]\\n]*\\b(?:${PLATFORM_WORDS})\\b[^\\n]*\\]\\s*((?:#\\[[^\\n]*\\]\\s*)*)(?:pub(?:\\([^)]*\\))?\\s+)?mod\\s+(\\w+)`,
+  `#\\[cfg(?:_attr)?\\s*\\([^\\]]*?\\b(?:${PLATFORM_WORDS})\\b[^\\]]*\\]\\s*((?:(?:#\\[[^\\]]*\\]|//[^\\n]*)\\s*)*)(?:pub(?:\\([^)]*\\))?\\s+)?mod\\s+(\\w+)`,
   "g",
 )
 
@@ -137,12 +144,13 @@ function normalise(path) {
 /**
  * The workspace as this script needs it.
  *
- * @param {{ dir: string, manifest: string, text: string, platformFiles?: Iterable<string> }[]} members
+ * @param {{ dir: string, manifest: string, text: string, platformText?: string, platformFiles?: Iterable<string> }[]} members
  *   each member's directory relative to the repository root, its `Cargo.toml`,
  *   the string literals of its Rust sources and build script joined, and the
  *   repository paths of its Rust files that are platform code. A path ending in
  *   `/` stands for every file under it: the folder of a module declared under
- *   a platform `cfg`.
+ *   a platform `cfg`. `platformText` is the literals of those files alone, so
+ *   a data file only platform code reads runs the platform suites too.
  */
 export function workspaceGraph(members) {
   const byDir = new Map()
@@ -153,6 +161,7 @@ export function workspaceGraph(members) {
       dir: member.dir,
       paths,
       text: member.text,
+      platformText: member.platformText ?? "",
       platformFiles: [...(member.platformFiles ?? [])],
     })
   }
@@ -191,7 +200,10 @@ function namesFor(path) {
 function platformReason(member, path, file) {
   const inside = path.slice(member.dir.length)
   if (PLATFORM_PATH.test(inside)) return "names a platform"
-  if (!path.endsWith(".rs")) return null
+  if (!path.endsWith(".rs"))
+    return member.platformText.includes(path.split("/").at(-1))
+      ? "is named by platform code"
+      : null
   if (typeof file.patch !== "string") return "no diff to read"
   if (
     member.platformFiles.some((platform) =>
@@ -263,6 +275,10 @@ export function planChange(files, graph, { event = "pull_request" } = {}) {
         const names = namesFor(path)
         for (const candidate of graph.members) {
           if (names.some((name) => candidate.text.includes(name))) {
+            if (names.some((name) => candidate.platformText.includes(name))) {
+              platformTests = true
+              reasons.push(`${path}: named by platform code in ${candidate.name}`)
+            }
             reached.add(candidate.name)
             reasons.push(`${path}: named by ${candidate.name}`)
           }
@@ -332,12 +348,20 @@ export function stringLiterals(source) {
 export function platformModuleFiles(file, source) {
   const folder = file.slice(0, file.lastIndexOf("/") + 1)
   const stem = file.slice(folder.length).replace(/\.rs$/, "")
-  const children = ["mod", "lib", "main"].includes(stem) ? folder : `${folder}${stem}/`
+  // A crate root (`lib.rs`, `main.rs`, but also `tests/x.rs`, `build.rs` or a
+  // `[[bin]]` path) holds its modules beside it; any other file in a folder
+  // named after it. Which one a file is needs its manifest, so both count.
+  const homes = ["mod", "lib", "main"].includes(stem)
+    ? [folder]
+    : [folder, `${folder}${stem}/`]
   const files = []
   for (const match of source.matchAll(PLATFORM_MODULE)) {
     const path = match[1].match(/#\[path\s*=\s*"([^"]+)"/)
-    const target = path ? normalise(`${folder}${path[1]}`) : `${children}${match[2]}.rs`
-    files.push(target, `${target.replace(/(\/mod)?\.rs$/, "")}/`)
+    const targets = path
+      ? [normalise(`${folder}${path[1]}`)]
+      : homes.map((home) => `${home}${match[2]}.rs`)
+    for (const target of targets)
+      files.push(target, `${target.replace(/(\/mod)?\.rs$/, "")}/`)
   }
   return files
 }
@@ -346,6 +370,7 @@ export function platformModuleFiles(file, source) {
 function memberSources(root, dir) {
   const literals = []
   const platformFiles = []
+  const platformLiterals = []
   const walk = (current) => {
     for (const entry of readdirSync(current, { withFileTypes: true })) {
       if (entry.name === "target" || entry.name === "node_modules") continue
@@ -355,13 +380,20 @@ function memberSources(root, dir) {
         const source = readFileSync(path, "utf8")
         const file = relative(root, path).split(sep).join("/")
         literals.push(...stringLiterals(source))
-        if (PLATFORM_CODE.test(source)) platformFiles.push(file)
+        if (PLATFORM_CODE.test(source)) {
+          platformFiles.push(file)
+          platformLiterals.push(...stringLiterals(source))
+        }
         platformFiles.push(...platformModuleFiles(file, source))
       }
     }
   }
   walk(join(root, dir))
-  return { text: literals.join("\n"), platformFiles }
+  return {
+    text: literals.join("\n"),
+    platformText: platformLiterals.join("\n"),
+    platformFiles,
+  }
 }
 
 /** Read the workspace from a checkout. */
