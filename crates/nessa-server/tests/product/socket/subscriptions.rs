@@ -1209,7 +1209,7 @@ async fn a_grant_revoked_while_a_batch_waits_for_capacity_ends_it_before_the_rea
     let permits = u32::try_from(fixture.state.limits.requests()).unwrap();
     let held = fixture
         .state
-        .requests
+        .admission.requests()
         .clone()
         .acquire_many_owned(permits)
         .await
@@ -1657,7 +1657,7 @@ async fn closing_the_socket_drops_every_subscription() {
     .await
     .expect("every subscription's watch goes with its socket");
     assert_eq!(
-        fixture.state.requests.available_permits(),
+        fixture.state.admission.requests().available_permits(),
         fixture.state.limits.requests()
     );
 }

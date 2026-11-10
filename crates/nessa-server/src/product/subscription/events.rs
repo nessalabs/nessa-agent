@@ -251,7 +251,8 @@ pub(in crate::product) async fn read_event(
     let mut attempt = 0;
     loop {
         let permit = state
-            .requests
+            .admission
+            .requests()
             .clone()
             .acquire_owned()
             .await

@@ -180,7 +180,11 @@ test("a method with no declared grant is refused before any artifact is written"
 test("a method with no surface entry is refused before any artifact is written", () =>
   fixture((path) => {
     edit(path, "protocol/product/manifest.json", (manifest) => {
-      manifest.methods["example.extra"] = { params: null, grant: "server.read" }
+      manifest.methods["example.extra"] = {
+        params: null,
+        grant: "server.read",
+        lane: "requests",
+      }
     })
     const result = unchanged(path, productOutputs, () =>
       generate(path, "generate-product-protocol"),
@@ -189,6 +193,28 @@ test("a method with no surface entry is refused before any artifact is written",
       result.stderr,
       /example\.extra has no CLI or MCP entry and is not excluded/,
     )
+  }))
+
+test("a method with no declared lane is refused before any artifact is written", () =>
+  fixture((path) => {
+    edit(path, "protocol/product/manifest.json", (manifest) => {
+      delete manifest.methods["conversation.cancel"].lane
+    })
+    const result = unchanged(path, productOutputs, () =>
+      generate(path, "generate-product-protocol"),
+    )
+    assert.match(result.stderr, /conversation\.cancel has no declared lane/)
+  }))
+
+test("a method in a lane the gateway does not have is refused", () =>
+  fixture((path) => {
+    edit(path, "protocol/product/manifest.json", (manifest) => {
+      manifest.methods["conversation.cancel"].lane = "urgent"
+    })
+    const result = unchanged(path, productOutputs, () =>
+      generate(path, "generate-product-protocol"),
+    )
+    assert.match(result.stderr, /conversation\.cancel has no declared lane/)
   }))
 
 test("current supported generators publish complete outputs", () =>

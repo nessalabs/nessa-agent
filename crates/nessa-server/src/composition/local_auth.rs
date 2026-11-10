@@ -758,7 +758,7 @@ pub(super) async fn product_state(
                 metadata: metadata.clone(),
                 source: reader.clone(),
                 policy: access_policy.clone(),
-                capacity: product.record_reads.clone(),
+                capacity: product.admission.record_reads().clone(),
                 gateway: product.gateway.clone(),
                 http: Arc::new(HttpsWebhook::new(Arc::new(SystemResolver::new()))),
             });

@@ -4,499 +4,623 @@
   "methods": {
     "session.authenticate": {
       "params": "SessionAuthenticateParams",
-      "grant": null
+      "grant": null,
+      "lane": "requests"
     },
     "auth.session": {
       "params": null,
-      "grant": null
+      "grant": null,
+      "lane": "requests"
     },
     "server.health": {
       "params": null,
-      "grant": "server.read"
+      "grant": "server.read",
+      "lane": "requests"
     },
     "server.reach": {
       "params": null,
-      "grant": "server.read"
+      "grant": "server.read",
+      "lane": "requests"
     },
     "credential.issue": {
       "params": "CredentialIssueParams",
-      "grant": "credential.manage"
+      "grant": "credential.manage",
+      "lane": "requests"
     },
     "credential.list": {
       "params": null,
-      "grant": "credential.manage"
+      "grant": "credential.manage",
+      "lane": "requests"
     },
     "credential.revoke": {
       "params": "CredentialRevokeParams",
-      "grant": "credential.manage"
+      "grant": "credential.manage",
+      "lane": "requests"
     },
     "conversation.create": {
       "params": "ConversationCreateParams",
-      "grant": "conversation.write"
+      "grant": "conversation.write",
+      "lane": "requests"
     },
     "conversation.read": {
       "params": "ConversationReadParams",
-      "grant": "conversation.write"
+      "grant": "conversation.write",
+      "lane": "requests"
     },
     "conversation.recordsHead": {
       "params": "ConversationRecordsHeadParams",
-      "grant": "conversation.read"
+      "grant": "conversation.read",
+      "lane": "recordReads"
     },
     "conversation.recordsPage": {
       "params": "ConversationRecordsPageParams",
-      "grant": "conversation.read"
+      "grant": "conversation.read",
+      "lane": "recordReads"
     },
     "conversation.list": {
       "params": "ConversationListParams",
-      "grant": "conversation.write"
+      "grant": "conversation.write",
+      "lane": "requests"
     },
     "conversation.observe": {
       "params": "ConversationObserveParams",
-      "grant": "conversation.write"
+      "grant": "conversation.write",
+      "lane": "requests"
     },
     "conversation.send": {
       "params": "ConversationSendParams",
-      "grant": "conversation.write"
+      "grant": "conversation.write",
+      "lane": "requests"
     },
     "conversation.steer": {
       "params": "ConversationSendParams",
-      "grant": "conversation.write"
+      "grant": "conversation.write",
+      "lane": "requests"
     },
     "conversation.remove": {
       "params": "ConversationRemoveParams",
-      "grant": "conversation.write"
+      "grant": "conversation.write",
+      "lane": "controls"
     },
     "conversation.stop": {
       "params": "ConversationStopParams",
-      "grant": "conversation.write"
+      "grant": "conversation.write",
+      "lane": "controls"
     },
     "conversation.receipt": {
       "params": "ConversationReceiptParams",
-      "grant": "conversation.write"
+      "grant": "conversation.write",
+      "lane": "requests"
     },
     "conversation.message": {
       "params": "ConversationMessageParams",
-      "grant": "conversation.write"
+      "grant": "conversation.write",
+      "lane": "requests"
     },
     "conversation.messageStatus": {
       "params": "ConversationMessageStatusParams",
-      "grant": "conversation.write"
+      "grant": "conversation.write",
+      "lane": "requests"
     },
     "conversation.answer": {
       "params": "ConversationAnswerParams",
-      "grant": "conversation.write"
+      "grant": "conversation.write",
+      "lane": "controls"
     },
     "conversation.permissionReview": {
       "params": "ConversationPermissionReviewParams",
-      "grant": "conversation.write"
+      "grant": "conversation.write",
+      "lane": "controls"
     },
     "conversation.questionReview": {
       "params": "ConversationQuestionReviewParams",
-      "grant": "conversation.write"
+      "grant": "conversation.write",
+      "lane": "controls"
     },
     "conversation.answerQuestion": {
       "params": "ConversationAnswerQuestionParams",
-      "grant": "conversation.write"
+      "grant": "conversation.write",
+      "lane": "controls"
     },
     "conversation.cancel": {
       "params": "ConversationCancelParams",
-      "grant": "conversation.write"
+      "grant": "conversation.write",
+      "lane": "controls"
     },
     "conversation.close": {
       "params": "ConversationCloseParams",
-      "grant": "conversation.write"
+      "grant": "conversation.write",
+      "lane": "controls"
     },
     "conversation.archive": {
       "params": "ConversationArchiveParams",
-      "grant": "conversation.write"
+      "grant": "conversation.write",
+      "lane": "controls"
     },
     "conversation.unarchive": {
       "params": "ConversationArchiveParams",
-      "grant": "conversation.write"
+      "grant": "conversation.write",
+      "lane": "controls"
     },
     "conversation.rename": {
       "params": "ConversationRenameParams",
-      "grant": "conversation.write"
+      "grant": "conversation.write",
+      "lane": "controls"
     },
     "conversation.delete": {
       "params": "ConversationDeleteParams",
-      "grant": "conversation.write"
+      "grant": "conversation.write",
+      "lane": "deletions"
     },
     "conversation.reorder": {
       "params": "ConversationReorderParams",
-      "grant": "conversation.write"
+      "grant": "conversation.write",
+      "lane": "controls"
     },
     "artifact.read": {
       "params": "ArtifactReadParams",
-      "grant": "conversation.read"
+      "grant": "conversation.read",
+      "lane": "artifactReads"
     },
     "attachment.begin": {
       "params": "AttachmentBeginParams",
-      "grant": "conversation.write"
+      "grant": "conversation.write",
+      "lane": "uploadBegins"
     },
     "attachment.write": {
       "params": "AttachmentWriteParams",
-      "grant": "conversation.write"
+      "grant": "conversation.write",
+      "lane": "requests"
     },
     "agents.list": {
       "params": null,
-      "grant": "server.read"
+      "grant": "server.read",
+      "lane": "requests"
     },
     "agents.setNativeHooks": {
       "params": "AgentsSetNativeHooksParams",
-      "grant": "credential.manage"
+      "grant": "credential.manage",
+      "lane": "requests"
     },
     "agents.subscribe": {
       "params": null,
-      "grant": "server.read"
+      "grant": "server.read",
+      "lane": "requests"
     },
     "agents.unsubscribe": {
       "params": "ConversationUnsubscribeParams",
-      "grant": "server.read"
+      "grant": "server.read",
+      "lane": "requests"
     },
     "conversation.setApprovalMode": {
       "params": "ConversationSetApprovalModeParams",
-      "grant": "conversation.write"
+      "grant": "conversation.write",
+      "lane": "requests"
     },
     "conversation.setUsageLimitAutoContinue": {
       "params": "ConversationSetUsageLimitAutoContinueParams",
-      "grant": "credential.manage"
+      "grant": "credential.manage",
+      "lane": "requests"
     },
     "agents.installOptions": {
       "params": null,
-      "grant": "server.read"
+      "grant": "server.read",
+      "lane": "requests"
     },
     "agents.install": {
       "params": "AgentInstallParams",
-      "grant": "conversation.write"
+      "grant": "conversation.write",
+      "lane": "requests"
     },
     "conversation.catalogueHead": {
       "params": "ConversationCatalogueHeadParams",
-      "grant": "conversation.read"
+      "grant": "conversation.read",
+      "lane": "recordReads"
     },
     "conversation.catalogueManifest": {
       "params": "ConversationCatalogueManifestParams",
-      "grant": "conversation.read"
+      "grant": "conversation.read",
+      "lane": "recordReads"
     },
     "conversation.catalogueResolve": {
       "params": "ConversationCatalogueResolveParams",
-      "grant": "conversation.read"
+      "grant": "conversation.read",
+      "lane": "recordReads"
     },
     "mcp.callTool": {
       "params": "McpCallToolParams",
-      "grant": "conversation.write"
+      "grant": "conversation.write",
+      "lane": "appCalls"
     },
     "mcp.readResource": {
       "params": "McpReadResourceParams",
-      "grant": "conversation.write"
+      "grant": "conversation.write",
+      "lane": "appCalls"
     },
     "mcp.releaseApp": {
       "params": "McpReleaseAppParams",
-      "grant": "conversation.write"
+      "grant": "conversation.write",
+      "lane": "controls"
     },
     "mcp.sendMessage": {
       "params": "McpSendMessageParams",
-      "grant": "conversation.write"
+      "grant": "conversation.write",
+      "lane": "appCalls"
     },
     "mcp.updateModelContext": {
       "params": "McpUpdateModelContextParams",
-      "grant": "conversation.write"
+      "grant": "conversation.write",
+      "lane": "appCalls"
     },
     "mcpServers.list": {
       "params": null,
-      "grant": "credential.manage"
+      "grant": "credential.manage",
+      "lane": "requests"
     },
     "mcpServers.save": {
       "params": "McpServersSaveParams",
-      "grant": "credential.manage"
+      "grant": "credential.manage",
+      "lane": "requests"
     },
     "mcpServers.remove": {
       "params": "McpServersRemoveParams",
-      "grant": "credential.manage"
+      "grant": "credential.manage",
+      "lane": "requests"
     },
     "mcpServers.inspect": {
       "params": "McpServersInspectParams",
-      "grant": "credential.manage"
+      "grant": "credential.manage",
+      "lane": "requests"
     },
     "mcpServers.authorize": {
       "params": "McpServersAuthorizeParams",
-      "grant": "credential.manage"
+      "grant": "credential.manage",
+      "lane": "requests"
     },
     "mcpServers.revoke": {
       "params": "McpServersRevokeParams",
-      "grant": "credential.manage"
+      "grant": "credential.manage",
+      "lane": "requests"
     },
     "apps.trusted": {
       "params": null,
-      "grant": "credential.manage"
+      "grant": "credential.manage",
+      "lane": "requests"
     },
     "apps.untrust": {
       "params": "AppsUntrustParams",
-      "grant": "credential.manage"
+      "grant": "credential.manage",
+      "lane": "requests"
     },
     "phone.endpoint": {
       "params": "PhoneEndpointParams",
-      "grant": "server.read"
+      "grant": "server.read",
+      "lane": "requests"
     },
     "phone.authorize": {
       "params": "PhoneAuthorizeParams",
-      "grant": "credential.manage"
+      "grant": "credential.manage",
+      "lane": "requests"
     },
     "phone.status": {
       "params": "PhoneStatusParams",
-      "grant": "credential.manage"
+      "grant": "credential.manage",
+      "lane": "requests"
     },
     "pairing.create": {
       "params": "PairingCreateParams",
-      "grant": "credential.manage"
+      "grant": "credential.manage",
+      "lane": "requests"
     },
     "pairing.pending": {
       "params": null,
-      "grant": "credential.manage"
+      "grant": "credential.manage",
+      "lane": "requests"
     },
     "pairing.status": {
       "params": "PairingInvitationParams",
-      "grant": "credential.manage"
+      "grant": "credential.manage",
+      "lane": "requests"
     },
     "pairing.approve": {
       "params": "PairingApproveParams",
-      "grant": "credential.manage"
+      "grant": "credential.manage",
+      "lane": "requests"
     },
     "pairing.deny": {
       "params": "PairingInvitationParams",
-      "grant": "credential.manage"
+      "grant": "credential.manage",
+      "lane": "controls"
     },
     "pairing.cancel": {
       "params": "PairingInvitationParams",
-      "grant": "credential.manage"
+      "grant": "credential.manage",
+      "lane": "controls"
     },
     "pairing.setLinking": {
       "params": "PairingSetLinkingParams",
-      "grant": "credential.manage"
+      "grant": "credential.manage",
+      "lane": "requests"
     },
     "pairing.setTunnel": {
       "params": "PairingSetTunnelParams",
-      "grant": "credential.manage"
+      "grant": "credential.manage",
+      "lane": "requests"
     },
     "pairing.tunnel": {
       "params": null,
-      "grant": "credential.manage"
+      "grant": "credential.manage",
+      "lane": "requests"
     },
     "github.liveEvents": {
       "params": "GithubLiveEventsParams",
-      "grant": "credential.manage"
+      "grant": "credential.manage",
+      "lane": "requests"
     },
     "github.status": {
       "params": null,
-      "grant": "credential.manage"
+      "grant": "credential.manage",
+      "lane": "requests"
     },
     "github.connect": {
       "params": null,
-      "grant": "credential.manage"
+      "grant": "credential.manage",
+      "lane": "requests"
     },
     "devices.list": {
       "params": "DevicesListParams",
-      "grant": "server.read"
+      "grant": "server.read",
+      "lane": "requests"
     },
     "devices.sshHosts": {
       "params": null,
-      "grant": "credential.manage"
+      "grant": "credential.manage",
+      "lane": "requests"
     },
     "devices.connectSsh": {
       "params": "DevicesConnectSshParams",
-      "grant": "credential.manage"
+      "grant": "credential.manage",
+      "lane": "requests"
     },
     "devices.setDefault": {
       "params": "DevicesSetDefaultParams",
-      "grant": "credential.manage"
+      "grant": "credential.manage",
+      "lane": "requests"
     },
     "github.cancel": {
       "params": null,
-      "grant": "credential.manage"
+      "grant": "credential.manage",
+      "lane": "requests"
     },
     "github.disconnect": {
       "params": null,
-      "grant": "credential.manage"
+      "grant": "credential.manage",
+      "lane": "requests"
     },
     "peer.enroll": {
       "params": "PeerEnrollParams",
-      "grant": "credential.manage"
+      "grant": "credential.manage",
+      "lane": "requests"
     },
     "peer.list": {
       "params": null,
-      "grant": "credential.manage"
+      "grant": "credential.manage",
+      "lane": "requests"
     },
     "peer.forget": {
       "params": "PeerForgetParams",
-      "grant": "credential.manage"
+      "grant": "credential.manage",
+      "lane": "requests"
     },
     "peer.relay": {
       "params": "PeerRelayParams",
-      "grant": "credential.manage"
+      "grant": "credential.manage",
+      "lane": "requests"
     },
     "conversation.subscribe": {
       "params": "ConversationSubscribeParams",
-      "grant": "conversation.write"
+      "grant": "conversation.write",
+      "lane": "requests"
     },
     "conversation.subscribeList": {
       "params": "ConversationSubscribeListParams",
-      "grant": "conversation.write"
+      "grant": "conversation.write",
+      "lane": "requests"
     },
     "conversation.unsubscribe": {
       "params": "ConversationUnsubscribeParams",
-      "grant": "conversation.write"
+      "grant": "conversation.write",
+      "lane": "requests"
     },
     "conversation.share": {
       "params": "ConversationShareParams",
-      "grant": "credential.manage"
+      "grant": "credential.manage",
+      "lane": "requests"
     },
     "conversation.unshare": {
       "params": "ConversationUnshareParams",
-      "grant": "credential.manage"
+      "grant": "credential.manage",
+      "lane": "requests"
     },
     "conversation.shares": {
       "params": "ConversationSharesParams",
-      "grant": "credential.manage"
+      "grant": "credential.manage",
+      "lane": "requests"
     },
     "conversation.permissionRules": {
       "params": "ConversationPermissionRulesParams",
-      "grant": "conversation.write"
+      "grant": "conversation.write",
+      "lane": "requests"
     },
     "conversation.revokePermissionRule": {
       "params": "ConversationRevokePermissionRuleParams",
-      "grant": "conversation.write"
+      "grant": "conversation.write",
+      "lane": "requests"
     },
     "workspace.publish": {
       "params": "WorkspacePublishParams",
-      "grant": "conversation.write"
+      "grant": "conversation.write",
+      "lane": "requests"
     },
     "channel.create": {
       "params": "ChannelCreateParams",
-      "grant": "conversation.write"
+      "grant": "conversation.write",
+      "lane": "requests"
     },
     "channel.list": {
       "params": "ChannelListParams",
-      "grant": "conversation.write"
+      "grant": "conversation.write",
+      "lane": "requests"
     },
     "channel.setPlacement": {
       "params": "ChannelSetPlacementParams",
-      "grant": "conversation.write"
+      "grant": "conversation.write",
+      "lane": "requests"
     },
     "conversation.subscribeEvents": {
       "params": "ConversationSubscribeEventsParams",
-      "grant": "conversation.write"
+      "grant": "conversation.write",
+      "lane": "requests"
     },
     "conversation.readEarlier": {
       "params": "ConversationReadEarlierParams",
-      "grant": "conversation.write"
+      "grant": "conversation.write",
+      "lane": "requests"
     },
     "conversation.peek": {
       "params": "ConversationReadParams",
-      "grant": "conversation.write"
+      "grant": "conversation.write",
+      "lane": "requests"
     },
     "conversation.setModel": {
       "params": "ConversationSetModelParams",
-      "grant": "conversation.write"
+      "grant": "conversation.write",
+      "lane": "requests"
     },
     "conversation.switchAgent": {
       "params": "ConversationSwitchAgentParams",
-      "grant": "conversation.write"
+      "grant": "conversation.write",
+      "lane": "requests"
     },
     "conversation.fork": {
       "params": "ConversationForkParams",
-      "grant": "conversation.write"
+      "grant": "conversation.write",
+      "lane": "requests"
     },
     "vault.status": {
       "params": null,
-      "grant": "credential.manage"
+      "grant": "credential.manage",
+      "lane": "requests"
     },
     "vault.setup": {
       "params": "VaultPassphraseParams",
-      "grant": "credential.manage"
+      "grant": "credential.manage",
+      "lane": "requests"
     },
     "vault.unlock": {
       "params": "VaultPassphraseParams",
-      "grant": "credential.manage"
+      "grant": "credential.manage",
+      "lane": "requests"
     },
     "vault.changePassphrase": {
       "params": "VaultPassphraseParams",
-      "grant": "credential.manage"
+      "grant": "credential.manage",
+      "lane": "requests"
     },
     "vault.lock": {
       "params": null,
-      "grant": "credential.manage"
+      "grant": "credential.manage",
+      "lane": "requests"
     },
     "boat.status": {
       "params": null,
-      "grant": "credential.manage"
+      "grant": "credential.manage",
+      "lane": "requests"
     },
     "boat.save": {
       "params": "BoatSaveParams",
-      "grant": "credential.manage"
+      "grant": "credential.manage",
+      "lane": "requests"
     },
     "boat.saveClaudeSignIn": {
       "params": "BoatClaudeSignInParams",
-      "grant": "credential.manage"
+      "grant": "credential.manage",
+      "lane": "requests"
     },
     "boat.disconnect": {
       "params": null,
-      "grant": "credential.manage"
+      "grant": "credential.manage",
+      "lane": "requests"
     },
     "devices.pool": {
       "params": "DevicesPoolParams",
-      "grant": "credential.manage"
+      "grant": "credential.manage",
+      "lane": "requests"
     },
     "devices.setPool": {
       "params": "DevicesSetPoolParams",
-      "grant": "credential.manage"
+      "grant": "credential.manage",
+      "lane": "requests"
     },
     "boat.runtimeSettings": {
       "params": "BoatRuntimeReadParams",
-      "grant": "credential.manage"
+      "grant": "credential.manage",
+      "lane": "requests"
     },
     "boat.setRuntimeSettings": {
       "params": "BoatRuntimeSetParams",
-      "grant": "credential.manage"
+      "grant": "credential.manage",
+      "lane": "requests"
     },
     "conversation.webhook.cursor": {
       "params": "ConversationWebhookCursorParams",
-      "grant": "credential.manage"
+      "grant": "credential.manage",
+      "lane": "requests"
     },
     "conversation.webhook.reset": {
       "params": "ConversationWebhookResetParams",
-      "grant": "credential.manage"
+      "grant": "credential.manage",
+      "lane": "requests"
     },
     "logins.status": {
       "params": null,
-      "grant": "credential.manage"
+      "grant": "credential.manage",
+      "lane": "requests"
     },
     "logins.save": {
       "params": "LoginsSaveParams",
-      "grant": "credential.manage"
+      "grant": "credential.manage",
+      "lane": "requests"
     },
     "logins.remove": {
       "params": "LoginsRemoveParams",
-      "grant": "credential.manage"
+      "grant": "credential.manage",
+      "lane": "requests"
     },
     "logins.setDevice": {
       "params": "LoginsSetDeviceParams",
-      "grant": "credential.manage"
+      "grant": "credential.manage",
+      "lane": "requests"
     },
     "voice.status": {
       "params": null,
-      "grant": "credential.manage"
+      "grant": "credential.manage",
+      "lane": "requests"
     },
     "voice.saveKey": {
       "params": "VoiceSaveKeyParams",
-      "grant": "credential.manage"
+      "grant": "credential.manage",
+      "lane": "requests"
     },
     "voice.forgetKey": {
       "params": null,
-      "grant": "credential.manage"
+      "grant": "credential.manage",
+      "lane": "requests"
     },
     "voice.startCall": {
       "params": "VoiceStartCallParams",
-      "grant": "conversation.write"
+      "grant": "conversation.write",
+      "lane": "requests"
     }
   },
   "events": {

@@ -4772,132 +4772,1670 @@ pub const PRODUCT_READY_METHODS: &[&str] = &[
 /// catalogue asks for `conversation.read`. Running a configured server with
 /// the gateway's authority, and enrolling a device, asks for
 /// `credential.manage`; Auth asks again for the exact consent. `None`
-/// means another owner admits the method: the handshake or `auth.session`.
+/// means another owner admits the method: the handshake or `auth.session`,
+/// or the manifest has no such method.
 pub fn action_for_method(method: &str) -> Option<&'static str> {
-    match method {
-        "server.health"
-        | "server.reach"
-        | "agents.list"
-        | "agents.subscribe"
-        | "agents.unsubscribe"
-        | "agents.installOptions"
-        | "phone.endpoint"
-        | "devices.list" => Some("server.read"),
-        "credential.issue"
-        | "credential.list"
-        | "credential.revoke"
-        | "agents.setNativeHooks"
-        | "conversation.setUsageLimitAutoContinue"
-        | "mcpServers.list"
-        | "mcpServers.save"
-        | "mcpServers.remove"
-        | "mcpServers.inspect"
-        | "mcpServers.authorize"
-        | "mcpServers.revoke"
-        | "apps.trusted"
-        | "apps.untrust"
-        | "phone.authorize"
-        | "phone.status"
-        | "pairing.create"
-        | "pairing.pending"
-        | "pairing.status"
-        | "pairing.approve"
-        | "pairing.deny"
-        | "pairing.cancel"
-        | "pairing.setLinking"
-        | "pairing.setTunnel"
-        | "pairing.tunnel"
-        | "github.liveEvents"
-        | "github.status"
-        | "github.connect"
-        | "devices.sshHosts"
-        | "devices.connectSsh"
-        | "devices.setDefault"
-        | "github.cancel"
-        | "github.disconnect"
-        | "peer.enroll"
-        | "peer.list"
-        | "peer.forget"
-        | "peer.relay"
-        | "conversation.share"
-        | "conversation.unshare"
-        | "conversation.shares"
-        | "vault.status"
-        | "vault.setup"
-        | "vault.unlock"
-        | "vault.changePassphrase"
-        | "vault.lock"
-        | "boat.status"
-        | "boat.save"
-        | "boat.saveClaudeSignIn"
-        | "boat.disconnect"
-        | "devices.pool"
-        | "devices.setPool"
-        | "boat.runtimeSettings"
-        | "boat.setRuntimeSettings"
-        | "conversation.webhook.cursor"
-        | "conversation.webhook.reset"
-        | "logins.status"
-        | "logins.save"
-        | "logins.remove"
-        | "logins.setDevice"
-        | "voice.status"
-        | "voice.saveKey"
-        | "voice.forgetKey" => Some("credential.manage"),
-        "conversation.create"
-        | "conversation.read"
-        | "conversation.list"
-        | "conversation.observe"
-        | "conversation.send"
-        | "conversation.steer"
-        | "conversation.remove"
-        | "conversation.stop"
-        | "conversation.receipt"
-        | "conversation.message"
-        | "conversation.messageStatus"
-        | "conversation.answer"
-        | "conversation.permissionReview"
-        | "conversation.questionReview"
-        | "conversation.answerQuestion"
-        | "conversation.cancel"
-        | "conversation.close"
-        | "conversation.archive"
-        | "conversation.unarchive"
-        | "conversation.rename"
-        | "conversation.delete"
-        | "conversation.reorder"
-        | "attachment.begin"
-        | "attachment.write"
-        | "conversation.setApprovalMode"
-        | "agents.install"
-        | "mcp.callTool"
-        | "mcp.readResource"
-        | "mcp.releaseApp"
-        | "mcp.sendMessage"
-        | "mcp.updateModelContext"
-        | "conversation.subscribe"
-        | "conversation.subscribeList"
-        | "conversation.unsubscribe"
-        | "conversation.permissionRules"
-        | "conversation.revokePermissionRule"
-        | "workspace.publish"
-        | "channel.create"
-        | "channel.list"
-        | "channel.setPlacement"
-        | "conversation.subscribeEvents"
-        | "conversation.readEarlier"
-        | "conversation.peek"
-        | "conversation.setModel"
-        | "conversation.switchAgent"
-        | "conversation.fork"
-        | "voice.startCall" => Some("conversation.write"),
-        "conversation.recordsHead"
-        | "conversation.recordsPage"
-        | "artifact.read"
-        | "conversation.catalogueHead"
-        | "conversation.catalogueManifest"
-        | "conversation.catalogueResolve" => Some("conversation.read"),
-        _ => None,
+    ProductMethod::parse(method).and_then(ProductMethod::grant)
+}
+/// An admission lane: the capacity a method waits in on the gateway.
+///
+/// Generated from the `lane` of each method in
+/// `protocol/product/manifest.json`. Each lane has its own capacity, so a
+/// burst of one kind of request never takes another lane's place. How many
+/// permits each lane holds is `OperationalLimits`'s.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ProductLane {
+    Requests,
+    Controls,
+    RecordReads,
+    AppCalls,
+    Deletions,
+    UploadBegins,
+    ArtifactReads,
+}
+
+impl ProductLane {
+    /// Every lane, in manifest order.
+    pub const ALL: &'static [ProductLane] = &[
+        ProductLane::Requests,
+        ProductLane::Controls,
+        ProductLane::RecordReads,
+        ProductLane::AppCalls,
+        ProductLane::Deletions,
+        ProductLane::UploadBegins,
+        ProductLane::ArtifactReads,
+    ];
+
+    /// The lane's manifest spelling.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            ProductLane::Requests => "requests",
+            ProductLane::Controls => "controls",
+            ProductLane::RecordReads => "recordReads",
+            ProductLane::AppCalls => "appCalls",
+            ProductLane::Deletions => "deletions",
+            ProductLane::UploadBegins => "uploadBegins",
+            ProductLane::ArtifactReads => "artifactReads",
+        }
+    }
+}
+
+/// A method `protocol/product/manifest.json` declares.
+///
+/// Generated: the manifest is the only list of methods, and this enum is
+/// how the gateway names one once a frame is read. A method with no route
+/// in an exhaustive match does not compile.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ProductMethod {
+    /// `session.authenticate`
+    SessionAuthenticate,
+    /// `auth.session`
+    AuthSession,
+    /// `server.health`
+    ServerHealth,
+    /// `server.reach`
+    ServerReach,
+    /// `credential.issue`
+    CredentialIssue,
+    /// `credential.list`
+    CredentialList,
+    /// `credential.revoke`
+    CredentialRevoke,
+    /// `conversation.create`
+    ConversationCreate,
+    /// `conversation.read`
+    ConversationRead,
+    /// `conversation.recordsHead`
+    ConversationRecordsHead,
+    /// `conversation.recordsPage`
+    ConversationRecordsPage,
+    /// `conversation.list`
+    ConversationList,
+    /// `conversation.observe`
+    ConversationObserve,
+    /// `conversation.send`
+    ConversationSend,
+    /// `conversation.steer`
+    ConversationSteer,
+    /// `conversation.remove`
+    ConversationRemove,
+    /// `conversation.stop`
+    ConversationStop,
+    /// `conversation.receipt`
+    ConversationReceipt,
+    /// `conversation.message`
+    ConversationMessage,
+    /// `conversation.messageStatus`
+    ConversationMessageStatus,
+    /// `conversation.answer`
+    ConversationAnswer,
+    /// `conversation.permissionReview`
+    ConversationPermissionReview,
+    /// `conversation.questionReview`
+    ConversationQuestionReview,
+    /// `conversation.answerQuestion`
+    ConversationAnswerQuestion,
+    /// `conversation.cancel`
+    ConversationCancel,
+    /// `conversation.close`
+    ConversationClose,
+    /// `conversation.archive`
+    ConversationArchive,
+    /// `conversation.unarchive`
+    ConversationUnarchive,
+    /// `conversation.rename`
+    ConversationRename,
+    /// `conversation.delete`
+    ConversationDelete,
+    /// `conversation.reorder`
+    ConversationReorder,
+    /// `artifact.read`
+    ArtifactRead,
+    /// `attachment.begin`
+    AttachmentBegin,
+    /// `attachment.write`
+    AttachmentWrite,
+    /// `agents.list`
+    AgentsList,
+    /// `agents.setNativeHooks`
+    AgentsSetNativeHooks,
+    /// `agents.subscribe`
+    AgentsSubscribe,
+    /// `agents.unsubscribe`
+    AgentsUnsubscribe,
+    /// `conversation.setApprovalMode`
+    ConversationSetApprovalMode,
+    /// `conversation.setUsageLimitAutoContinue`
+    ConversationSetUsageLimitAutoContinue,
+    /// `agents.installOptions`
+    AgentsInstallOptions,
+    /// `agents.install`
+    AgentsInstall,
+    /// `conversation.catalogueHead`
+    ConversationCatalogueHead,
+    /// `conversation.catalogueManifest`
+    ConversationCatalogueManifest,
+    /// `conversation.catalogueResolve`
+    ConversationCatalogueResolve,
+    /// `mcp.callTool`
+    McpCallTool,
+    /// `mcp.readResource`
+    McpReadResource,
+    /// `mcp.releaseApp`
+    McpReleaseApp,
+    /// `mcp.sendMessage`
+    McpSendMessage,
+    /// `mcp.updateModelContext`
+    McpUpdateModelContext,
+    /// `mcpServers.list`
+    McpServersList,
+    /// `mcpServers.save`
+    McpServersSave,
+    /// `mcpServers.remove`
+    McpServersRemove,
+    /// `mcpServers.inspect`
+    McpServersInspect,
+    /// `mcpServers.authorize`
+    McpServersAuthorize,
+    /// `mcpServers.revoke`
+    McpServersRevoke,
+    /// `apps.trusted`
+    AppsTrusted,
+    /// `apps.untrust`
+    AppsUntrust,
+    /// `phone.endpoint`
+    PhoneEndpoint,
+    /// `phone.authorize`
+    PhoneAuthorize,
+    /// `phone.status`
+    PhoneStatus,
+    /// `pairing.create`
+    PairingCreate,
+    /// `pairing.pending`
+    PairingPending,
+    /// `pairing.status`
+    PairingStatus,
+    /// `pairing.approve`
+    PairingApprove,
+    /// `pairing.deny`
+    PairingDeny,
+    /// `pairing.cancel`
+    PairingCancel,
+    /// `pairing.setLinking`
+    PairingSetLinking,
+    /// `pairing.setTunnel`
+    PairingSetTunnel,
+    /// `pairing.tunnel`
+    PairingTunnel,
+    /// `github.liveEvents`
+    GithubLiveEvents,
+    /// `github.status`
+    GithubStatus,
+    /// `github.connect`
+    GithubConnect,
+    /// `devices.list`
+    DevicesList,
+    /// `devices.sshHosts`
+    DevicesSshHosts,
+    /// `devices.connectSsh`
+    DevicesConnectSsh,
+    /// `devices.setDefault`
+    DevicesSetDefault,
+    /// `github.cancel`
+    GithubCancel,
+    /// `github.disconnect`
+    GithubDisconnect,
+    /// `peer.enroll`
+    PeerEnroll,
+    /// `peer.list`
+    PeerList,
+    /// `peer.forget`
+    PeerForget,
+    /// `peer.relay`
+    PeerRelay,
+    /// `conversation.subscribe`
+    ConversationSubscribe,
+    /// `conversation.subscribeList`
+    ConversationSubscribeList,
+    /// `conversation.unsubscribe`
+    ConversationUnsubscribe,
+    /// `conversation.share`
+    ConversationShare,
+    /// `conversation.unshare`
+    ConversationUnshare,
+    /// `conversation.shares`
+    ConversationShares,
+    /// `conversation.permissionRules`
+    ConversationPermissionRules,
+    /// `conversation.revokePermissionRule`
+    ConversationRevokePermissionRule,
+    /// `workspace.publish`
+    WorkspacePublish,
+    /// `channel.create`
+    ChannelCreate,
+    /// `channel.list`
+    ChannelList,
+    /// `channel.setPlacement`
+    ChannelSetPlacement,
+    /// `conversation.subscribeEvents`
+    ConversationSubscribeEvents,
+    /// `conversation.readEarlier`
+    ConversationReadEarlier,
+    /// `conversation.peek`
+    ConversationPeek,
+    /// `conversation.setModel`
+    ConversationSetModel,
+    /// `conversation.switchAgent`
+    ConversationSwitchAgent,
+    /// `conversation.fork`
+    ConversationFork,
+    /// `vault.status`
+    VaultStatus,
+    /// `vault.setup`
+    VaultSetup,
+    /// `vault.unlock`
+    VaultUnlock,
+    /// `vault.changePassphrase`
+    VaultChangePassphrase,
+    /// `vault.lock`
+    VaultLock,
+    /// `boat.status`
+    BoatStatus,
+    /// `boat.save`
+    BoatSave,
+    /// `boat.saveClaudeSignIn`
+    BoatSaveClaudeSignIn,
+    /// `boat.disconnect`
+    BoatDisconnect,
+    /// `devices.pool`
+    DevicesPool,
+    /// `devices.setPool`
+    DevicesSetPool,
+    /// `boat.runtimeSettings`
+    BoatRuntimeSettings,
+    /// `boat.setRuntimeSettings`
+    BoatSetRuntimeSettings,
+    /// `conversation.webhook.cursor`
+    ConversationWebhookCursor,
+    /// `conversation.webhook.reset`
+    ConversationWebhookReset,
+    /// `logins.status`
+    LoginsStatus,
+    /// `logins.save`
+    LoginsSave,
+    /// `logins.remove`
+    LoginsRemove,
+    /// `logins.setDevice`
+    LoginsSetDevice,
+    /// `voice.status`
+    VoiceStatus,
+    /// `voice.saveKey`
+    VoiceSaveKey,
+    /// `voice.forgetKey`
+    VoiceForgetKey,
+    /// `voice.startCall`
+    VoiceStartCall,
+}
+
+impl ProductMethod {
+    /// Every method, in manifest order.
+    pub const ALL: &'static [ProductMethod] = &[
+        ProductMethod::SessionAuthenticate,
+        ProductMethod::AuthSession,
+        ProductMethod::ServerHealth,
+        ProductMethod::ServerReach,
+        ProductMethod::CredentialIssue,
+        ProductMethod::CredentialList,
+        ProductMethod::CredentialRevoke,
+        ProductMethod::ConversationCreate,
+        ProductMethod::ConversationRead,
+        ProductMethod::ConversationRecordsHead,
+        ProductMethod::ConversationRecordsPage,
+        ProductMethod::ConversationList,
+        ProductMethod::ConversationObserve,
+        ProductMethod::ConversationSend,
+        ProductMethod::ConversationSteer,
+        ProductMethod::ConversationRemove,
+        ProductMethod::ConversationStop,
+        ProductMethod::ConversationReceipt,
+        ProductMethod::ConversationMessage,
+        ProductMethod::ConversationMessageStatus,
+        ProductMethod::ConversationAnswer,
+        ProductMethod::ConversationPermissionReview,
+        ProductMethod::ConversationQuestionReview,
+        ProductMethod::ConversationAnswerQuestion,
+        ProductMethod::ConversationCancel,
+        ProductMethod::ConversationClose,
+        ProductMethod::ConversationArchive,
+        ProductMethod::ConversationUnarchive,
+        ProductMethod::ConversationRename,
+        ProductMethod::ConversationDelete,
+        ProductMethod::ConversationReorder,
+        ProductMethod::ArtifactRead,
+        ProductMethod::AttachmentBegin,
+        ProductMethod::AttachmentWrite,
+        ProductMethod::AgentsList,
+        ProductMethod::AgentsSetNativeHooks,
+        ProductMethod::AgentsSubscribe,
+        ProductMethod::AgentsUnsubscribe,
+        ProductMethod::ConversationSetApprovalMode,
+        ProductMethod::ConversationSetUsageLimitAutoContinue,
+        ProductMethod::AgentsInstallOptions,
+        ProductMethod::AgentsInstall,
+        ProductMethod::ConversationCatalogueHead,
+        ProductMethod::ConversationCatalogueManifest,
+        ProductMethod::ConversationCatalogueResolve,
+        ProductMethod::McpCallTool,
+        ProductMethod::McpReadResource,
+        ProductMethod::McpReleaseApp,
+        ProductMethod::McpSendMessage,
+        ProductMethod::McpUpdateModelContext,
+        ProductMethod::McpServersList,
+        ProductMethod::McpServersSave,
+        ProductMethod::McpServersRemove,
+        ProductMethod::McpServersInspect,
+        ProductMethod::McpServersAuthorize,
+        ProductMethod::McpServersRevoke,
+        ProductMethod::AppsTrusted,
+        ProductMethod::AppsUntrust,
+        ProductMethod::PhoneEndpoint,
+        ProductMethod::PhoneAuthorize,
+        ProductMethod::PhoneStatus,
+        ProductMethod::PairingCreate,
+        ProductMethod::PairingPending,
+        ProductMethod::PairingStatus,
+        ProductMethod::PairingApprove,
+        ProductMethod::PairingDeny,
+        ProductMethod::PairingCancel,
+        ProductMethod::PairingSetLinking,
+        ProductMethod::PairingSetTunnel,
+        ProductMethod::PairingTunnel,
+        ProductMethod::GithubLiveEvents,
+        ProductMethod::GithubStatus,
+        ProductMethod::GithubConnect,
+        ProductMethod::DevicesList,
+        ProductMethod::DevicesSshHosts,
+        ProductMethod::DevicesConnectSsh,
+        ProductMethod::DevicesSetDefault,
+        ProductMethod::GithubCancel,
+        ProductMethod::GithubDisconnect,
+        ProductMethod::PeerEnroll,
+        ProductMethod::PeerList,
+        ProductMethod::PeerForget,
+        ProductMethod::PeerRelay,
+        ProductMethod::ConversationSubscribe,
+        ProductMethod::ConversationSubscribeList,
+        ProductMethod::ConversationUnsubscribe,
+        ProductMethod::ConversationShare,
+        ProductMethod::ConversationUnshare,
+        ProductMethod::ConversationShares,
+        ProductMethod::ConversationPermissionRules,
+        ProductMethod::ConversationRevokePermissionRule,
+        ProductMethod::WorkspacePublish,
+        ProductMethod::ChannelCreate,
+        ProductMethod::ChannelList,
+        ProductMethod::ChannelSetPlacement,
+        ProductMethod::ConversationSubscribeEvents,
+        ProductMethod::ConversationReadEarlier,
+        ProductMethod::ConversationPeek,
+        ProductMethod::ConversationSetModel,
+        ProductMethod::ConversationSwitchAgent,
+        ProductMethod::ConversationFork,
+        ProductMethod::VaultStatus,
+        ProductMethod::VaultSetup,
+        ProductMethod::VaultUnlock,
+        ProductMethod::VaultChangePassphrase,
+        ProductMethod::VaultLock,
+        ProductMethod::BoatStatus,
+        ProductMethod::BoatSave,
+        ProductMethod::BoatSaveClaudeSignIn,
+        ProductMethod::BoatDisconnect,
+        ProductMethod::DevicesPool,
+        ProductMethod::DevicesSetPool,
+        ProductMethod::BoatRuntimeSettings,
+        ProductMethod::BoatSetRuntimeSettings,
+        ProductMethod::ConversationWebhookCursor,
+        ProductMethod::ConversationWebhookReset,
+        ProductMethod::LoginsStatus,
+        ProductMethod::LoginsSave,
+        ProductMethod::LoginsRemove,
+        ProductMethod::LoginsSetDevice,
+        ProductMethod::VoiceStatus,
+        ProductMethod::VoiceSaveKey,
+        ProductMethod::VoiceForgetKey,
+        ProductMethod::VoiceStartCall,
+    ];
+
+    /// The method a frame names, or `None` when the manifest has none by
+    /// that name.
+    pub fn parse(method: &str) -> Option<Self> {
+        match method {
+            "session.authenticate" => Some(ProductMethod::SessionAuthenticate),
+            "auth.session" => Some(ProductMethod::AuthSession),
+            "server.health" => Some(ProductMethod::ServerHealth),
+            "server.reach" => Some(ProductMethod::ServerReach),
+            "credential.issue" => Some(ProductMethod::CredentialIssue),
+            "credential.list" => Some(ProductMethod::CredentialList),
+            "credential.revoke" => Some(ProductMethod::CredentialRevoke),
+            "conversation.create" => Some(ProductMethod::ConversationCreate),
+            "conversation.read" => Some(ProductMethod::ConversationRead),
+            "conversation.recordsHead" => Some(ProductMethod::ConversationRecordsHead),
+            "conversation.recordsPage" => Some(ProductMethod::ConversationRecordsPage),
+            "conversation.list" => Some(ProductMethod::ConversationList),
+            "conversation.observe" => Some(ProductMethod::ConversationObserve),
+            "conversation.send" => Some(ProductMethod::ConversationSend),
+            "conversation.steer" => Some(ProductMethod::ConversationSteer),
+            "conversation.remove" => Some(ProductMethod::ConversationRemove),
+            "conversation.stop" => Some(ProductMethod::ConversationStop),
+            "conversation.receipt" => Some(ProductMethod::ConversationReceipt),
+            "conversation.message" => Some(ProductMethod::ConversationMessage),
+            "conversation.messageStatus" => Some(ProductMethod::ConversationMessageStatus),
+            "conversation.answer" => Some(ProductMethod::ConversationAnswer),
+            "conversation.permissionReview" => Some(ProductMethod::ConversationPermissionReview),
+            "conversation.questionReview" => Some(ProductMethod::ConversationQuestionReview),
+            "conversation.answerQuestion" => Some(ProductMethod::ConversationAnswerQuestion),
+            "conversation.cancel" => Some(ProductMethod::ConversationCancel),
+            "conversation.close" => Some(ProductMethod::ConversationClose),
+            "conversation.archive" => Some(ProductMethod::ConversationArchive),
+            "conversation.unarchive" => Some(ProductMethod::ConversationUnarchive),
+            "conversation.rename" => Some(ProductMethod::ConversationRename),
+            "conversation.delete" => Some(ProductMethod::ConversationDelete),
+            "conversation.reorder" => Some(ProductMethod::ConversationReorder),
+            "artifact.read" => Some(ProductMethod::ArtifactRead),
+            "attachment.begin" => Some(ProductMethod::AttachmentBegin),
+            "attachment.write" => Some(ProductMethod::AttachmentWrite),
+            "agents.list" => Some(ProductMethod::AgentsList),
+            "agents.setNativeHooks" => Some(ProductMethod::AgentsSetNativeHooks),
+            "agents.subscribe" => Some(ProductMethod::AgentsSubscribe),
+            "agents.unsubscribe" => Some(ProductMethod::AgentsUnsubscribe),
+            "conversation.setApprovalMode" => Some(ProductMethod::ConversationSetApprovalMode),
+            "conversation.setUsageLimitAutoContinue" => {
+                Some(ProductMethod::ConversationSetUsageLimitAutoContinue)
+            }
+            "agents.installOptions" => Some(ProductMethod::AgentsInstallOptions),
+            "agents.install" => Some(ProductMethod::AgentsInstall),
+            "conversation.catalogueHead" => Some(ProductMethod::ConversationCatalogueHead),
+            "conversation.catalogueManifest" => Some(ProductMethod::ConversationCatalogueManifest),
+            "conversation.catalogueResolve" => Some(ProductMethod::ConversationCatalogueResolve),
+            "mcp.callTool" => Some(ProductMethod::McpCallTool),
+            "mcp.readResource" => Some(ProductMethod::McpReadResource),
+            "mcp.releaseApp" => Some(ProductMethod::McpReleaseApp),
+            "mcp.sendMessage" => Some(ProductMethod::McpSendMessage),
+            "mcp.updateModelContext" => Some(ProductMethod::McpUpdateModelContext),
+            "mcpServers.list" => Some(ProductMethod::McpServersList),
+            "mcpServers.save" => Some(ProductMethod::McpServersSave),
+            "mcpServers.remove" => Some(ProductMethod::McpServersRemove),
+            "mcpServers.inspect" => Some(ProductMethod::McpServersInspect),
+            "mcpServers.authorize" => Some(ProductMethod::McpServersAuthorize),
+            "mcpServers.revoke" => Some(ProductMethod::McpServersRevoke),
+            "apps.trusted" => Some(ProductMethod::AppsTrusted),
+            "apps.untrust" => Some(ProductMethod::AppsUntrust),
+            "phone.endpoint" => Some(ProductMethod::PhoneEndpoint),
+            "phone.authorize" => Some(ProductMethod::PhoneAuthorize),
+            "phone.status" => Some(ProductMethod::PhoneStatus),
+            "pairing.create" => Some(ProductMethod::PairingCreate),
+            "pairing.pending" => Some(ProductMethod::PairingPending),
+            "pairing.status" => Some(ProductMethod::PairingStatus),
+            "pairing.approve" => Some(ProductMethod::PairingApprove),
+            "pairing.deny" => Some(ProductMethod::PairingDeny),
+            "pairing.cancel" => Some(ProductMethod::PairingCancel),
+            "pairing.setLinking" => Some(ProductMethod::PairingSetLinking),
+            "pairing.setTunnel" => Some(ProductMethod::PairingSetTunnel),
+            "pairing.tunnel" => Some(ProductMethod::PairingTunnel),
+            "github.liveEvents" => Some(ProductMethod::GithubLiveEvents),
+            "github.status" => Some(ProductMethod::GithubStatus),
+            "github.connect" => Some(ProductMethod::GithubConnect),
+            "devices.list" => Some(ProductMethod::DevicesList),
+            "devices.sshHosts" => Some(ProductMethod::DevicesSshHosts),
+            "devices.connectSsh" => Some(ProductMethod::DevicesConnectSsh),
+            "devices.setDefault" => Some(ProductMethod::DevicesSetDefault),
+            "github.cancel" => Some(ProductMethod::GithubCancel),
+            "github.disconnect" => Some(ProductMethod::GithubDisconnect),
+            "peer.enroll" => Some(ProductMethod::PeerEnroll),
+            "peer.list" => Some(ProductMethod::PeerList),
+            "peer.forget" => Some(ProductMethod::PeerForget),
+            "peer.relay" => Some(ProductMethod::PeerRelay),
+            "conversation.subscribe" => Some(ProductMethod::ConversationSubscribe),
+            "conversation.subscribeList" => Some(ProductMethod::ConversationSubscribeList),
+            "conversation.unsubscribe" => Some(ProductMethod::ConversationUnsubscribe),
+            "conversation.share" => Some(ProductMethod::ConversationShare),
+            "conversation.unshare" => Some(ProductMethod::ConversationUnshare),
+            "conversation.shares" => Some(ProductMethod::ConversationShares),
+            "conversation.permissionRules" => Some(ProductMethod::ConversationPermissionRules),
+            "conversation.revokePermissionRule" => {
+                Some(ProductMethod::ConversationRevokePermissionRule)
+            }
+            "workspace.publish" => Some(ProductMethod::WorkspacePublish),
+            "channel.create" => Some(ProductMethod::ChannelCreate),
+            "channel.list" => Some(ProductMethod::ChannelList),
+            "channel.setPlacement" => Some(ProductMethod::ChannelSetPlacement),
+            "conversation.subscribeEvents" => Some(ProductMethod::ConversationSubscribeEvents),
+            "conversation.readEarlier" => Some(ProductMethod::ConversationReadEarlier),
+            "conversation.peek" => Some(ProductMethod::ConversationPeek),
+            "conversation.setModel" => Some(ProductMethod::ConversationSetModel),
+            "conversation.switchAgent" => Some(ProductMethod::ConversationSwitchAgent),
+            "conversation.fork" => Some(ProductMethod::ConversationFork),
+            "vault.status" => Some(ProductMethod::VaultStatus),
+            "vault.setup" => Some(ProductMethod::VaultSetup),
+            "vault.unlock" => Some(ProductMethod::VaultUnlock),
+            "vault.changePassphrase" => Some(ProductMethod::VaultChangePassphrase),
+            "vault.lock" => Some(ProductMethod::VaultLock),
+            "boat.status" => Some(ProductMethod::BoatStatus),
+            "boat.save" => Some(ProductMethod::BoatSave),
+            "boat.saveClaudeSignIn" => Some(ProductMethod::BoatSaveClaudeSignIn),
+            "boat.disconnect" => Some(ProductMethod::BoatDisconnect),
+            "devices.pool" => Some(ProductMethod::DevicesPool),
+            "devices.setPool" => Some(ProductMethod::DevicesSetPool),
+            "boat.runtimeSettings" => Some(ProductMethod::BoatRuntimeSettings),
+            "boat.setRuntimeSettings" => Some(ProductMethod::BoatSetRuntimeSettings),
+            "conversation.webhook.cursor" => Some(ProductMethod::ConversationWebhookCursor),
+            "conversation.webhook.reset" => Some(ProductMethod::ConversationWebhookReset),
+            "logins.status" => Some(ProductMethod::LoginsStatus),
+            "logins.save" => Some(ProductMethod::LoginsSave),
+            "logins.remove" => Some(ProductMethod::LoginsRemove),
+            "logins.setDevice" => Some(ProductMethod::LoginsSetDevice),
+            "voice.status" => Some(ProductMethod::VoiceStatus),
+            "voice.saveKey" => Some(ProductMethod::VoiceSaveKey),
+            "voice.forgetKey" => Some(ProductMethod::VoiceForgetKey),
+            "voice.startCall" => Some(ProductMethod::VoiceStartCall),
+            _ => None,
+        }
+    }
+
+    /// The method's wire name.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            ProductMethod::SessionAuthenticate => "session.authenticate",
+            ProductMethod::AuthSession => "auth.session",
+            ProductMethod::ServerHealth => "server.health",
+            ProductMethod::ServerReach => "server.reach",
+            ProductMethod::CredentialIssue => "credential.issue",
+            ProductMethod::CredentialList => "credential.list",
+            ProductMethod::CredentialRevoke => "credential.revoke",
+            ProductMethod::ConversationCreate => "conversation.create",
+            ProductMethod::ConversationRead => "conversation.read",
+            ProductMethod::ConversationRecordsHead => "conversation.recordsHead",
+            ProductMethod::ConversationRecordsPage => "conversation.recordsPage",
+            ProductMethod::ConversationList => "conversation.list",
+            ProductMethod::ConversationObserve => "conversation.observe",
+            ProductMethod::ConversationSend => "conversation.send",
+            ProductMethod::ConversationSteer => "conversation.steer",
+            ProductMethod::ConversationRemove => "conversation.remove",
+            ProductMethod::ConversationStop => "conversation.stop",
+            ProductMethod::ConversationReceipt => "conversation.receipt",
+            ProductMethod::ConversationMessage => "conversation.message",
+            ProductMethod::ConversationMessageStatus => "conversation.messageStatus",
+            ProductMethod::ConversationAnswer => "conversation.answer",
+            ProductMethod::ConversationPermissionReview => "conversation.permissionReview",
+            ProductMethod::ConversationQuestionReview => "conversation.questionReview",
+            ProductMethod::ConversationAnswerQuestion => "conversation.answerQuestion",
+            ProductMethod::ConversationCancel => "conversation.cancel",
+            ProductMethod::ConversationClose => "conversation.close",
+            ProductMethod::ConversationArchive => "conversation.archive",
+            ProductMethod::ConversationUnarchive => "conversation.unarchive",
+            ProductMethod::ConversationRename => "conversation.rename",
+            ProductMethod::ConversationDelete => "conversation.delete",
+            ProductMethod::ConversationReorder => "conversation.reorder",
+            ProductMethod::ArtifactRead => "artifact.read",
+            ProductMethod::AttachmentBegin => "attachment.begin",
+            ProductMethod::AttachmentWrite => "attachment.write",
+            ProductMethod::AgentsList => "agents.list",
+            ProductMethod::AgentsSetNativeHooks => "agents.setNativeHooks",
+            ProductMethod::AgentsSubscribe => "agents.subscribe",
+            ProductMethod::AgentsUnsubscribe => "agents.unsubscribe",
+            ProductMethod::ConversationSetApprovalMode => "conversation.setApprovalMode",
+            ProductMethod::ConversationSetUsageLimitAutoContinue => {
+                "conversation.setUsageLimitAutoContinue"
+            }
+            ProductMethod::AgentsInstallOptions => "agents.installOptions",
+            ProductMethod::AgentsInstall => "agents.install",
+            ProductMethod::ConversationCatalogueHead => "conversation.catalogueHead",
+            ProductMethod::ConversationCatalogueManifest => "conversation.catalogueManifest",
+            ProductMethod::ConversationCatalogueResolve => "conversation.catalogueResolve",
+            ProductMethod::McpCallTool => "mcp.callTool",
+            ProductMethod::McpReadResource => "mcp.readResource",
+            ProductMethod::McpReleaseApp => "mcp.releaseApp",
+            ProductMethod::McpSendMessage => "mcp.sendMessage",
+            ProductMethod::McpUpdateModelContext => "mcp.updateModelContext",
+            ProductMethod::McpServersList => "mcpServers.list",
+            ProductMethod::McpServersSave => "mcpServers.save",
+            ProductMethod::McpServersRemove => "mcpServers.remove",
+            ProductMethod::McpServersInspect => "mcpServers.inspect",
+            ProductMethod::McpServersAuthorize => "mcpServers.authorize",
+            ProductMethod::McpServersRevoke => "mcpServers.revoke",
+            ProductMethod::AppsTrusted => "apps.trusted",
+            ProductMethod::AppsUntrust => "apps.untrust",
+            ProductMethod::PhoneEndpoint => "phone.endpoint",
+            ProductMethod::PhoneAuthorize => "phone.authorize",
+            ProductMethod::PhoneStatus => "phone.status",
+            ProductMethod::PairingCreate => "pairing.create",
+            ProductMethod::PairingPending => "pairing.pending",
+            ProductMethod::PairingStatus => "pairing.status",
+            ProductMethod::PairingApprove => "pairing.approve",
+            ProductMethod::PairingDeny => "pairing.deny",
+            ProductMethod::PairingCancel => "pairing.cancel",
+            ProductMethod::PairingSetLinking => "pairing.setLinking",
+            ProductMethod::PairingSetTunnel => "pairing.setTunnel",
+            ProductMethod::PairingTunnel => "pairing.tunnel",
+            ProductMethod::GithubLiveEvents => "github.liveEvents",
+            ProductMethod::GithubStatus => "github.status",
+            ProductMethod::GithubConnect => "github.connect",
+            ProductMethod::DevicesList => "devices.list",
+            ProductMethod::DevicesSshHosts => "devices.sshHosts",
+            ProductMethod::DevicesConnectSsh => "devices.connectSsh",
+            ProductMethod::DevicesSetDefault => "devices.setDefault",
+            ProductMethod::GithubCancel => "github.cancel",
+            ProductMethod::GithubDisconnect => "github.disconnect",
+            ProductMethod::PeerEnroll => "peer.enroll",
+            ProductMethod::PeerList => "peer.list",
+            ProductMethod::PeerForget => "peer.forget",
+            ProductMethod::PeerRelay => "peer.relay",
+            ProductMethod::ConversationSubscribe => "conversation.subscribe",
+            ProductMethod::ConversationSubscribeList => "conversation.subscribeList",
+            ProductMethod::ConversationUnsubscribe => "conversation.unsubscribe",
+            ProductMethod::ConversationShare => "conversation.share",
+            ProductMethod::ConversationUnshare => "conversation.unshare",
+            ProductMethod::ConversationShares => "conversation.shares",
+            ProductMethod::ConversationPermissionRules => "conversation.permissionRules",
+            ProductMethod::ConversationRevokePermissionRule => "conversation.revokePermissionRule",
+            ProductMethod::WorkspacePublish => "workspace.publish",
+            ProductMethod::ChannelCreate => "channel.create",
+            ProductMethod::ChannelList => "channel.list",
+            ProductMethod::ChannelSetPlacement => "channel.setPlacement",
+            ProductMethod::ConversationSubscribeEvents => "conversation.subscribeEvents",
+            ProductMethod::ConversationReadEarlier => "conversation.readEarlier",
+            ProductMethod::ConversationPeek => "conversation.peek",
+            ProductMethod::ConversationSetModel => "conversation.setModel",
+            ProductMethod::ConversationSwitchAgent => "conversation.switchAgent",
+            ProductMethod::ConversationFork => "conversation.fork",
+            ProductMethod::VaultStatus => "vault.status",
+            ProductMethod::VaultSetup => "vault.setup",
+            ProductMethod::VaultUnlock => "vault.unlock",
+            ProductMethod::VaultChangePassphrase => "vault.changePassphrase",
+            ProductMethod::VaultLock => "vault.lock",
+            ProductMethod::BoatStatus => "boat.status",
+            ProductMethod::BoatSave => "boat.save",
+            ProductMethod::BoatSaveClaudeSignIn => "boat.saveClaudeSignIn",
+            ProductMethod::BoatDisconnect => "boat.disconnect",
+            ProductMethod::DevicesPool => "devices.pool",
+            ProductMethod::DevicesSetPool => "devices.setPool",
+            ProductMethod::BoatRuntimeSettings => "boat.runtimeSettings",
+            ProductMethod::BoatSetRuntimeSettings => "boat.setRuntimeSettings",
+            ProductMethod::ConversationWebhookCursor => "conversation.webhook.cursor",
+            ProductMethod::ConversationWebhookReset => "conversation.webhook.reset",
+            ProductMethod::LoginsStatus => "logins.status",
+            ProductMethod::LoginsSave => "logins.save",
+            ProductMethod::LoginsRemove => "logins.remove",
+            ProductMethod::LoginsSetDevice => "logins.setDevice",
+            ProductMethod::VoiceStatus => "voice.status",
+            ProductMethod::VoiceSaveKey => "voice.saveKey",
+            ProductMethod::VoiceForgetKey => "voice.forgetKey",
+            ProductMethod::VoiceStartCall => "voice.startCall",
+        }
+    }
+
+    /// The grant Cedar is asked for; `None` when another owner admits the
+    /// method (see [`action_for_method`]).
+    pub const fn grant(self) -> Option<&'static str> {
+        match self {
+            ProductMethod::SessionAuthenticate => None,
+            ProductMethod::AuthSession => None,
+            ProductMethod::ServerHealth => Some("server.read"),
+            ProductMethod::ServerReach => Some("server.read"),
+            ProductMethod::CredentialIssue => Some("credential.manage"),
+            ProductMethod::CredentialList => Some("credential.manage"),
+            ProductMethod::CredentialRevoke => Some("credential.manage"),
+            ProductMethod::ConversationCreate => Some("conversation.write"),
+            ProductMethod::ConversationRead => Some("conversation.write"),
+            ProductMethod::ConversationRecordsHead => Some("conversation.read"),
+            ProductMethod::ConversationRecordsPage => Some("conversation.read"),
+            ProductMethod::ConversationList => Some("conversation.write"),
+            ProductMethod::ConversationObserve => Some("conversation.write"),
+            ProductMethod::ConversationSend => Some("conversation.write"),
+            ProductMethod::ConversationSteer => Some("conversation.write"),
+            ProductMethod::ConversationRemove => Some("conversation.write"),
+            ProductMethod::ConversationStop => Some("conversation.write"),
+            ProductMethod::ConversationReceipt => Some("conversation.write"),
+            ProductMethod::ConversationMessage => Some("conversation.write"),
+            ProductMethod::ConversationMessageStatus => Some("conversation.write"),
+            ProductMethod::ConversationAnswer => Some("conversation.write"),
+            ProductMethod::ConversationPermissionReview => Some("conversation.write"),
+            ProductMethod::ConversationQuestionReview => Some("conversation.write"),
+            ProductMethod::ConversationAnswerQuestion => Some("conversation.write"),
+            ProductMethod::ConversationCancel => Some("conversation.write"),
+            ProductMethod::ConversationClose => Some("conversation.write"),
+            ProductMethod::ConversationArchive => Some("conversation.write"),
+            ProductMethod::ConversationUnarchive => Some("conversation.write"),
+            ProductMethod::ConversationRename => Some("conversation.write"),
+            ProductMethod::ConversationDelete => Some("conversation.write"),
+            ProductMethod::ConversationReorder => Some("conversation.write"),
+            ProductMethod::ArtifactRead => Some("conversation.read"),
+            ProductMethod::AttachmentBegin => Some("conversation.write"),
+            ProductMethod::AttachmentWrite => Some("conversation.write"),
+            ProductMethod::AgentsList => Some("server.read"),
+            ProductMethod::AgentsSetNativeHooks => Some("credential.manage"),
+            ProductMethod::AgentsSubscribe => Some("server.read"),
+            ProductMethod::AgentsUnsubscribe => Some("server.read"),
+            ProductMethod::ConversationSetApprovalMode => Some("conversation.write"),
+            ProductMethod::ConversationSetUsageLimitAutoContinue => Some("credential.manage"),
+            ProductMethod::AgentsInstallOptions => Some("server.read"),
+            ProductMethod::AgentsInstall => Some("conversation.write"),
+            ProductMethod::ConversationCatalogueHead => Some("conversation.read"),
+            ProductMethod::ConversationCatalogueManifest => Some("conversation.read"),
+            ProductMethod::ConversationCatalogueResolve => Some("conversation.read"),
+            ProductMethod::McpCallTool => Some("conversation.write"),
+            ProductMethod::McpReadResource => Some("conversation.write"),
+            ProductMethod::McpReleaseApp => Some("conversation.write"),
+            ProductMethod::McpSendMessage => Some("conversation.write"),
+            ProductMethod::McpUpdateModelContext => Some("conversation.write"),
+            ProductMethod::McpServersList => Some("credential.manage"),
+            ProductMethod::McpServersSave => Some("credential.manage"),
+            ProductMethod::McpServersRemove => Some("credential.manage"),
+            ProductMethod::McpServersInspect => Some("credential.manage"),
+            ProductMethod::McpServersAuthorize => Some("credential.manage"),
+            ProductMethod::McpServersRevoke => Some("credential.manage"),
+            ProductMethod::AppsTrusted => Some("credential.manage"),
+            ProductMethod::AppsUntrust => Some("credential.manage"),
+            ProductMethod::PhoneEndpoint => Some("server.read"),
+            ProductMethod::PhoneAuthorize => Some("credential.manage"),
+            ProductMethod::PhoneStatus => Some("credential.manage"),
+            ProductMethod::PairingCreate => Some("credential.manage"),
+            ProductMethod::PairingPending => Some("credential.manage"),
+            ProductMethod::PairingStatus => Some("credential.manage"),
+            ProductMethod::PairingApprove => Some("credential.manage"),
+            ProductMethod::PairingDeny => Some("credential.manage"),
+            ProductMethod::PairingCancel => Some("credential.manage"),
+            ProductMethod::PairingSetLinking => Some("credential.manage"),
+            ProductMethod::PairingSetTunnel => Some("credential.manage"),
+            ProductMethod::PairingTunnel => Some("credential.manage"),
+            ProductMethod::GithubLiveEvents => Some("credential.manage"),
+            ProductMethod::GithubStatus => Some("credential.manage"),
+            ProductMethod::GithubConnect => Some("credential.manage"),
+            ProductMethod::DevicesList => Some("server.read"),
+            ProductMethod::DevicesSshHosts => Some("credential.manage"),
+            ProductMethod::DevicesConnectSsh => Some("credential.manage"),
+            ProductMethod::DevicesSetDefault => Some("credential.manage"),
+            ProductMethod::GithubCancel => Some("credential.manage"),
+            ProductMethod::GithubDisconnect => Some("credential.manage"),
+            ProductMethod::PeerEnroll => Some("credential.manage"),
+            ProductMethod::PeerList => Some("credential.manage"),
+            ProductMethod::PeerForget => Some("credential.manage"),
+            ProductMethod::PeerRelay => Some("credential.manage"),
+            ProductMethod::ConversationSubscribe => Some("conversation.write"),
+            ProductMethod::ConversationSubscribeList => Some("conversation.write"),
+            ProductMethod::ConversationUnsubscribe => Some("conversation.write"),
+            ProductMethod::ConversationShare => Some("credential.manage"),
+            ProductMethod::ConversationUnshare => Some("credential.manage"),
+            ProductMethod::ConversationShares => Some("credential.manage"),
+            ProductMethod::ConversationPermissionRules => Some("conversation.write"),
+            ProductMethod::ConversationRevokePermissionRule => Some("conversation.write"),
+            ProductMethod::WorkspacePublish => Some("conversation.write"),
+            ProductMethod::ChannelCreate => Some("conversation.write"),
+            ProductMethod::ChannelList => Some("conversation.write"),
+            ProductMethod::ChannelSetPlacement => Some("conversation.write"),
+            ProductMethod::ConversationSubscribeEvents => Some("conversation.write"),
+            ProductMethod::ConversationReadEarlier => Some("conversation.write"),
+            ProductMethod::ConversationPeek => Some("conversation.write"),
+            ProductMethod::ConversationSetModel => Some("conversation.write"),
+            ProductMethod::ConversationSwitchAgent => Some("conversation.write"),
+            ProductMethod::ConversationFork => Some("conversation.write"),
+            ProductMethod::VaultStatus => Some("credential.manage"),
+            ProductMethod::VaultSetup => Some("credential.manage"),
+            ProductMethod::VaultUnlock => Some("credential.manage"),
+            ProductMethod::VaultChangePassphrase => Some("credential.manage"),
+            ProductMethod::VaultLock => Some("credential.manage"),
+            ProductMethod::BoatStatus => Some("credential.manage"),
+            ProductMethod::BoatSave => Some("credential.manage"),
+            ProductMethod::BoatSaveClaudeSignIn => Some("credential.manage"),
+            ProductMethod::BoatDisconnect => Some("credential.manage"),
+            ProductMethod::DevicesPool => Some("credential.manage"),
+            ProductMethod::DevicesSetPool => Some("credential.manage"),
+            ProductMethod::BoatRuntimeSettings => Some("credential.manage"),
+            ProductMethod::BoatSetRuntimeSettings => Some("credential.manage"),
+            ProductMethod::ConversationWebhookCursor => Some("credential.manage"),
+            ProductMethod::ConversationWebhookReset => Some("credential.manage"),
+            ProductMethod::LoginsStatus => Some("credential.manage"),
+            ProductMethod::LoginsSave => Some("credential.manage"),
+            ProductMethod::LoginsRemove => Some("credential.manage"),
+            ProductMethod::LoginsSetDevice => Some("credential.manage"),
+            ProductMethod::VoiceStatus => Some("credential.manage"),
+            ProductMethod::VoiceSaveKey => Some("credential.manage"),
+            ProductMethod::VoiceForgetKey => Some("credential.manage"),
+            ProductMethod::VoiceStartCall => Some("conversation.write"),
+        }
+    }
+
+    /// The admission lane the method waits in.
+    pub const fn lane(self) -> ProductLane {
+        match self {
+            ProductMethod::SessionAuthenticate => ProductLane::Requests,
+            ProductMethod::AuthSession => ProductLane::Requests,
+            ProductMethod::ServerHealth => ProductLane::Requests,
+            ProductMethod::ServerReach => ProductLane::Requests,
+            ProductMethod::CredentialIssue => ProductLane::Requests,
+            ProductMethod::CredentialList => ProductLane::Requests,
+            ProductMethod::CredentialRevoke => ProductLane::Requests,
+            ProductMethod::ConversationCreate => ProductLane::Requests,
+            ProductMethod::ConversationRead => ProductLane::Requests,
+            ProductMethod::ConversationRecordsHead => ProductLane::RecordReads,
+            ProductMethod::ConversationRecordsPage => ProductLane::RecordReads,
+            ProductMethod::ConversationList => ProductLane::Requests,
+            ProductMethod::ConversationObserve => ProductLane::Requests,
+            ProductMethod::ConversationSend => ProductLane::Requests,
+            ProductMethod::ConversationSteer => ProductLane::Requests,
+            ProductMethod::ConversationRemove => ProductLane::Controls,
+            ProductMethod::ConversationStop => ProductLane::Controls,
+            ProductMethod::ConversationReceipt => ProductLane::Requests,
+            ProductMethod::ConversationMessage => ProductLane::Requests,
+            ProductMethod::ConversationMessageStatus => ProductLane::Requests,
+            ProductMethod::ConversationAnswer => ProductLane::Controls,
+            ProductMethod::ConversationPermissionReview => ProductLane::Controls,
+            ProductMethod::ConversationQuestionReview => ProductLane::Controls,
+            ProductMethod::ConversationAnswerQuestion => ProductLane::Controls,
+            ProductMethod::ConversationCancel => ProductLane::Controls,
+            ProductMethod::ConversationClose => ProductLane::Controls,
+            ProductMethod::ConversationArchive => ProductLane::Controls,
+            ProductMethod::ConversationUnarchive => ProductLane::Controls,
+            ProductMethod::ConversationRename => ProductLane::Controls,
+            ProductMethod::ConversationDelete => ProductLane::Deletions,
+            ProductMethod::ConversationReorder => ProductLane::Controls,
+            ProductMethod::ArtifactRead => ProductLane::ArtifactReads,
+            ProductMethod::AttachmentBegin => ProductLane::UploadBegins,
+            ProductMethod::AttachmentWrite => ProductLane::Requests,
+            ProductMethod::AgentsList => ProductLane::Requests,
+            ProductMethod::AgentsSetNativeHooks => ProductLane::Requests,
+            ProductMethod::AgentsSubscribe => ProductLane::Requests,
+            ProductMethod::AgentsUnsubscribe => ProductLane::Requests,
+            ProductMethod::ConversationSetApprovalMode => ProductLane::Requests,
+            ProductMethod::ConversationSetUsageLimitAutoContinue => ProductLane::Requests,
+            ProductMethod::AgentsInstallOptions => ProductLane::Requests,
+            ProductMethod::AgentsInstall => ProductLane::Requests,
+            ProductMethod::ConversationCatalogueHead => ProductLane::RecordReads,
+            ProductMethod::ConversationCatalogueManifest => ProductLane::RecordReads,
+            ProductMethod::ConversationCatalogueResolve => ProductLane::RecordReads,
+            ProductMethod::McpCallTool => ProductLane::AppCalls,
+            ProductMethod::McpReadResource => ProductLane::AppCalls,
+            ProductMethod::McpReleaseApp => ProductLane::Controls,
+            ProductMethod::McpSendMessage => ProductLane::AppCalls,
+            ProductMethod::McpUpdateModelContext => ProductLane::AppCalls,
+            ProductMethod::McpServersList => ProductLane::Requests,
+            ProductMethod::McpServersSave => ProductLane::Requests,
+            ProductMethod::McpServersRemove => ProductLane::Requests,
+            ProductMethod::McpServersInspect => ProductLane::Requests,
+            ProductMethod::McpServersAuthorize => ProductLane::Requests,
+            ProductMethod::McpServersRevoke => ProductLane::Requests,
+            ProductMethod::AppsTrusted => ProductLane::Requests,
+            ProductMethod::AppsUntrust => ProductLane::Requests,
+            ProductMethod::PhoneEndpoint => ProductLane::Requests,
+            ProductMethod::PhoneAuthorize => ProductLane::Requests,
+            ProductMethod::PhoneStatus => ProductLane::Requests,
+            ProductMethod::PairingCreate => ProductLane::Requests,
+            ProductMethod::PairingPending => ProductLane::Requests,
+            ProductMethod::PairingStatus => ProductLane::Requests,
+            ProductMethod::PairingApprove => ProductLane::Requests,
+            ProductMethod::PairingDeny => ProductLane::Controls,
+            ProductMethod::PairingCancel => ProductLane::Controls,
+            ProductMethod::PairingSetLinking => ProductLane::Requests,
+            ProductMethod::PairingSetTunnel => ProductLane::Requests,
+            ProductMethod::PairingTunnel => ProductLane::Requests,
+            ProductMethod::GithubLiveEvents => ProductLane::Requests,
+            ProductMethod::GithubStatus => ProductLane::Requests,
+            ProductMethod::GithubConnect => ProductLane::Requests,
+            ProductMethod::DevicesList => ProductLane::Requests,
+            ProductMethod::DevicesSshHosts => ProductLane::Requests,
+            ProductMethod::DevicesConnectSsh => ProductLane::Requests,
+            ProductMethod::DevicesSetDefault => ProductLane::Requests,
+            ProductMethod::GithubCancel => ProductLane::Requests,
+            ProductMethod::GithubDisconnect => ProductLane::Requests,
+            ProductMethod::PeerEnroll => ProductLane::Requests,
+            ProductMethod::PeerList => ProductLane::Requests,
+            ProductMethod::PeerForget => ProductLane::Requests,
+            ProductMethod::PeerRelay => ProductLane::Requests,
+            ProductMethod::ConversationSubscribe => ProductLane::Requests,
+            ProductMethod::ConversationSubscribeList => ProductLane::Requests,
+            ProductMethod::ConversationUnsubscribe => ProductLane::Requests,
+            ProductMethod::ConversationShare => ProductLane::Requests,
+            ProductMethod::ConversationUnshare => ProductLane::Requests,
+            ProductMethod::ConversationShares => ProductLane::Requests,
+            ProductMethod::ConversationPermissionRules => ProductLane::Requests,
+            ProductMethod::ConversationRevokePermissionRule => ProductLane::Requests,
+            ProductMethod::WorkspacePublish => ProductLane::Requests,
+            ProductMethod::ChannelCreate => ProductLane::Requests,
+            ProductMethod::ChannelList => ProductLane::Requests,
+            ProductMethod::ChannelSetPlacement => ProductLane::Requests,
+            ProductMethod::ConversationSubscribeEvents => ProductLane::Requests,
+            ProductMethod::ConversationReadEarlier => ProductLane::Requests,
+            ProductMethod::ConversationPeek => ProductLane::Requests,
+            ProductMethod::ConversationSetModel => ProductLane::Requests,
+            ProductMethod::ConversationSwitchAgent => ProductLane::Requests,
+            ProductMethod::ConversationFork => ProductLane::Requests,
+            ProductMethod::VaultStatus => ProductLane::Requests,
+            ProductMethod::VaultSetup => ProductLane::Requests,
+            ProductMethod::VaultUnlock => ProductLane::Requests,
+            ProductMethod::VaultChangePassphrase => ProductLane::Requests,
+            ProductMethod::VaultLock => ProductLane::Requests,
+            ProductMethod::BoatStatus => ProductLane::Requests,
+            ProductMethod::BoatSave => ProductLane::Requests,
+            ProductMethod::BoatSaveClaudeSignIn => ProductLane::Requests,
+            ProductMethod::BoatDisconnect => ProductLane::Requests,
+            ProductMethod::DevicesPool => ProductLane::Requests,
+            ProductMethod::DevicesSetPool => ProductLane::Requests,
+            ProductMethod::BoatRuntimeSettings => ProductLane::Requests,
+            ProductMethod::BoatSetRuntimeSettings => ProductLane::Requests,
+            ProductMethod::ConversationWebhookCursor => ProductLane::Requests,
+            ProductMethod::ConversationWebhookReset => ProductLane::Requests,
+            ProductMethod::LoginsStatus => ProductLane::Requests,
+            ProductMethod::LoginsSave => ProductLane::Requests,
+            ProductMethod::LoginsRemove => ProductLane::Requests,
+            ProductMethod::LoginsSetDevice => ProductLane::Requests,
+            ProductMethod::VoiceStatus => ProductLane::Requests,
+            ProductMethod::VoiceSaveKey => ProductLane::Requests,
+            ProductMethod::VoiceForgetKey => ProductLane::Requests,
+            ProductMethod::VoiceStartCall => ProductLane::Requests,
+        }
+    }
+
+    /// Decode `params` into this method's declared params type. A method
+    /// whose manifest params are `null` takes an empty object.
+    pub fn decode_params(self, params: Value) -> Result<ProductParams, ParamsRefused> {
+        Ok(match self {
+            ProductMethod::SessionAuthenticate => ProductParams::SessionAuthenticate(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
+            ProductMethod::AuthSession => match params {
+                Value::Object(fields) if fields.is_empty() => ProductParams::AuthSession,
+                _ => return Err(ParamsRefused),
+            },
+            ProductMethod::ServerHealth => match params {
+                Value::Object(fields) if fields.is_empty() => ProductParams::ServerHealth,
+                _ => return Err(ParamsRefused),
+            },
+            ProductMethod::ServerReach => match params {
+                Value::Object(fields) if fields.is_empty() => ProductParams::ServerReach,
+                _ => return Err(ParamsRefused),
+            },
+            ProductMethod::CredentialIssue => ProductParams::CredentialIssue(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
+            ProductMethod::CredentialList => match params {
+                Value::Object(fields) if fields.is_empty() => ProductParams::CredentialList,
+                _ => return Err(ParamsRefused),
+            },
+            ProductMethod::CredentialRevoke => ProductParams::CredentialRevoke(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
+            ProductMethod::ConversationCreate => ProductParams::ConversationCreate(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
+            ProductMethod::ConversationRead => ProductParams::ConversationRead(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
+            ProductMethod::ConversationRecordsHead => ProductParams::ConversationRecordsHead(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
+            ProductMethod::ConversationRecordsPage => ProductParams::ConversationRecordsPage(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
+            ProductMethod::ConversationList => ProductParams::ConversationList(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
+            ProductMethod::ConversationObserve => ProductParams::ConversationObserve(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
+            ProductMethod::ConversationSend => ProductParams::ConversationSend(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
+            ProductMethod::ConversationSteer => ProductParams::ConversationSteer(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
+            ProductMethod::ConversationRemove => ProductParams::ConversationRemove(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
+            ProductMethod::ConversationStop => ProductParams::ConversationStop(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
+            ProductMethod::ConversationReceipt => ProductParams::ConversationReceipt(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
+            ProductMethod::ConversationMessage => ProductParams::ConversationMessage(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
+            ProductMethod::ConversationMessageStatus => ProductParams::ConversationMessageStatus(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
+            ProductMethod::ConversationAnswer => ProductParams::ConversationAnswer(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
+            ProductMethod::ConversationPermissionReview => {
+                ProductParams::ConversationPermissionReview(
+                    serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+                )
+            }
+            ProductMethod::ConversationQuestionReview => ProductParams::ConversationQuestionReview(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
+            ProductMethod::ConversationAnswerQuestion => ProductParams::ConversationAnswerQuestion(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
+            ProductMethod::ConversationCancel => ProductParams::ConversationCancel(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
+            ProductMethod::ConversationClose => ProductParams::ConversationClose(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
+            ProductMethod::ConversationArchive => ProductParams::ConversationArchive(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
+            ProductMethod::ConversationUnarchive => ProductParams::ConversationUnarchive(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
+            ProductMethod::ConversationRename => ProductParams::ConversationRename(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
+            ProductMethod::ConversationDelete => ProductParams::ConversationDelete(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
+            ProductMethod::ConversationReorder => ProductParams::ConversationReorder(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
+            ProductMethod::ArtifactRead => ProductParams::ArtifactRead(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
+            ProductMethod::AttachmentBegin => ProductParams::AttachmentBegin(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
+            ProductMethod::AttachmentWrite => ProductParams::AttachmentWrite(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
+            ProductMethod::AgentsList => match params {
+                Value::Object(fields) if fields.is_empty() => ProductParams::AgentsList,
+                _ => return Err(ParamsRefused),
+            },
+            ProductMethod::AgentsSetNativeHooks => ProductParams::AgentsSetNativeHooks(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
+            ProductMethod::AgentsSubscribe => match params {
+                Value::Object(fields) if fields.is_empty() => ProductParams::AgentsSubscribe,
+                _ => return Err(ParamsRefused),
+            },
+            ProductMethod::AgentsUnsubscribe => ProductParams::AgentsUnsubscribe(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
+            ProductMethod::ConversationSetApprovalMode => {
+                ProductParams::ConversationSetApprovalMode(
+                    serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+                )
+            }
+            ProductMethod::ConversationSetUsageLimitAutoContinue => {
+                ProductParams::ConversationSetUsageLimitAutoContinue(
+                    serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+                )
+            }
+            ProductMethod::AgentsInstallOptions => match params {
+                Value::Object(fields) if fields.is_empty() => ProductParams::AgentsInstallOptions,
+                _ => return Err(ParamsRefused),
+            },
+            ProductMethod::AgentsInstall => ProductParams::AgentsInstall(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
+            ProductMethod::ConversationCatalogueHead => ProductParams::ConversationCatalogueHead(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
+            ProductMethod::ConversationCatalogueManifest => {
+                ProductParams::ConversationCatalogueManifest(
+                    serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+                )
+            }
+            ProductMethod::ConversationCatalogueResolve => {
+                ProductParams::ConversationCatalogueResolve(
+                    serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+                )
+            }
+            ProductMethod::McpCallTool => ProductParams::McpCallTool(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
+            ProductMethod::McpReadResource => ProductParams::McpReadResource(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
+            ProductMethod::McpReleaseApp => ProductParams::McpReleaseApp(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
+            ProductMethod::McpSendMessage => ProductParams::McpSendMessage(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
+            ProductMethod::McpUpdateModelContext => ProductParams::McpUpdateModelContext(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
+            ProductMethod::McpServersList => match params {
+                Value::Object(fields) if fields.is_empty() => ProductParams::McpServersList,
+                _ => return Err(ParamsRefused),
+            },
+            ProductMethod::McpServersSave => ProductParams::McpServersSave(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
+            ProductMethod::McpServersRemove => ProductParams::McpServersRemove(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
+            ProductMethod::McpServersInspect => ProductParams::McpServersInspect(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
+            ProductMethod::McpServersAuthorize => ProductParams::McpServersAuthorize(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
+            ProductMethod::McpServersRevoke => ProductParams::McpServersRevoke(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
+            ProductMethod::AppsTrusted => match params {
+                Value::Object(fields) if fields.is_empty() => ProductParams::AppsTrusted,
+                _ => return Err(ParamsRefused),
+            },
+            ProductMethod::AppsUntrust => ProductParams::AppsUntrust(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
+            ProductMethod::PhoneEndpoint => ProductParams::PhoneEndpoint(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
+            ProductMethod::PhoneAuthorize => ProductParams::PhoneAuthorize(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
+            ProductMethod::PhoneStatus => ProductParams::PhoneStatus(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
+            ProductMethod::PairingCreate => ProductParams::PairingCreate(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
+            ProductMethod::PairingPending => match params {
+                Value::Object(fields) if fields.is_empty() => ProductParams::PairingPending,
+                _ => return Err(ParamsRefused),
+            },
+            ProductMethod::PairingStatus => ProductParams::PairingStatus(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
+            ProductMethod::PairingApprove => ProductParams::PairingApprove(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
+            ProductMethod::PairingDeny => ProductParams::PairingDeny(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
+            ProductMethod::PairingCancel => ProductParams::PairingCancel(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
+            ProductMethod::PairingSetLinking => ProductParams::PairingSetLinking(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
+            ProductMethod::PairingSetTunnel => ProductParams::PairingSetTunnel(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
+            ProductMethod::PairingTunnel => match params {
+                Value::Object(fields) if fields.is_empty() => ProductParams::PairingTunnel,
+                _ => return Err(ParamsRefused),
+            },
+            ProductMethod::GithubLiveEvents => ProductParams::GithubLiveEvents(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
+            ProductMethod::GithubStatus => match params {
+                Value::Object(fields) if fields.is_empty() => ProductParams::GithubStatus,
+                _ => return Err(ParamsRefused),
+            },
+            ProductMethod::GithubConnect => match params {
+                Value::Object(fields) if fields.is_empty() => ProductParams::GithubConnect,
+                _ => return Err(ParamsRefused),
+            },
+            ProductMethod::DevicesList => ProductParams::DevicesList(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
+            ProductMethod::DevicesSshHosts => match params {
+                Value::Object(fields) if fields.is_empty() => ProductParams::DevicesSshHosts,
+                _ => return Err(ParamsRefused),
+            },
+            ProductMethod::DevicesConnectSsh => ProductParams::DevicesConnectSsh(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
+            ProductMethod::DevicesSetDefault => ProductParams::DevicesSetDefault(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
+            ProductMethod::GithubCancel => match params {
+                Value::Object(fields) if fields.is_empty() => ProductParams::GithubCancel,
+                _ => return Err(ParamsRefused),
+            },
+            ProductMethod::GithubDisconnect => match params {
+                Value::Object(fields) if fields.is_empty() => ProductParams::GithubDisconnect,
+                _ => return Err(ParamsRefused),
+            },
+            ProductMethod::PeerEnroll => ProductParams::PeerEnroll(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
+            ProductMethod::PeerList => match params {
+                Value::Object(fields) if fields.is_empty() => ProductParams::PeerList,
+                _ => return Err(ParamsRefused),
+            },
+            ProductMethod::PeerForget => ProductParams::PeerForget(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
+            ProductMethod::PeerRelay => {
+                ProductParams::PeerRelay(serde_json::from_value(params).map_err(|_| ParamsRefused)?)
+            }
+            ProductMethod::ConversationSubscribe => ProductParams::ConversationSubscribe(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
+            ProductMethod::ConversationSubscribeList => ProductParams::ConversationSubscribeList(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
+            ProductMethod::ConversationUnsubscribe => ProductParams::ConversationUnsubscribe(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
+            ProductMethod::ConversationShare => ProductParams::ConversationShare(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
+            ProductMethod::ConversationUnshare => ProductParams::ConversationUnshare(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
+            ProductMethod::ConversationShares => ProductParams::ConversationShares(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
+            ProductMethod::ConversationPermissionRules => {
+                ProductParams::ConversationPermissionRules(
+                    serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+                )
+            }
+            ProductMethod::ConversationRevokePermissionRule => {
+                ProductParams::ConversationRevokePermissionRule(
+                    serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+                )
+            }
+            ProductMethod::WorkspacePublish => ProductParams::WorkspacePublish(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
+            ProductMethod::ChannelCreate => ProductParams::ChannelCreate(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
+            ProductMethod::ChannelList => ProductParams::ChannelList(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
+            ProductMethod::ChannelSetPlacement => ProductParams::ChannelSetPlacement(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
+            ProductMethod::ConversationSubscribeEvents => {
+                ProductParams::ConversationSubscribeEvents(
+                    serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+                )
+            }
+            ProductMethod::ConversationReadEarlier => ProductParams::ConversationReadEarlier(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
+            ProductMethod::ConversationPeek => ProductParams::ConversationPeek(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
+            ProductMethod::ConversationSetModel => ProductParams::ConversationSetModel(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
+            ProductMethod::ConversationSwitchAgent => ProductParams::ConversationSwitchAgent(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
+            ProductMethod::ConversationFork => ProductParams::ConversationFork(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
+            ProductMethod::VaultStatus => match params {
+                Value::Object(fields) if fields.is_empty() => ProductParams::VaultStatus,
+                _ => return Err(ParamsRefused),
+            },
+            ProductMethod::VaultSetup => ProductParams::VaultSetup(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
+            ProductMethod::VaultUnlock => ProductParams::VaultUnlock(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
+            ProductMethod::VaultChangePassphrase => ProductParams::VaultChangePassphrase(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
+            ProductMethod::VaultLock => match params {
+                Value::Object(fields) if fields.is_empty() => ProductParams::VaultLock,
+                _ => return Err(ParamsRefused),
+            },
+            ProductMethod::BoatStatus => match params {
+                Value::Object(fields) if fields.is_empty() => ProductParams::BoatStatus,
+                _ => return Err(ParamsRefused),
+            },
+            ProductMethod::BoatSave => {
+                ProductParams::BoatSave(serde_json::from_value(params).map_err(|_| ParamsRefused)?)
+            }
+            ProductMethod::BoatSaveClaudeSignIn => ProductParams::BoatSaveClaudeSignIn(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
+            ProductMethod::BoatDisconnect => match params {
+                Value::Object(fields) if fields.is_empty() => ProductParams::BoatDisconnect,
+                _ => return Err(ParamsRefused),
+            },
+            ProductMethod::DevicesPool => ProductParams::DevicesPool(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
+            ProductMethod::DevicesSetPool => ProductParams::DevicesSetPool(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
+            ProductMethod::BoatRuntimeSettings => ProductParams::BoatRuntimeSettings(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
+            ProductMethod::BoatSetRuntimeSettings => ProductParams::BoatSetRuntimeSettings(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
+            ProductMethod::ConversationWebhookCursor => ProductParams::ConversationWebhookCursor(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
+            ProductMethod::ConversationWebhookReset => ProductParams::ConversationWebhookReset(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
+            ProductMethod::LoginsStatus => match params {
+                Value::Object(fields) if fields.is_empty() => ProductParams::LoginsStatus,
+                _ => return Err(ParamsRefused),
+            },
+            ProductMethod::LoginsSave => ProductParams::LoginsSave(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
+            ProductMethod::LoginsRemove => ProductParams::LoginsRemove(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
+            ProductMethod::LoginsSetDevice => ProductParams::LoginsSetDevice(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
+            ProductMethod::VoiceStatus => match params {
+                Value::Object(fields) if fields.is_empty() => ProductParams::VoiceStatus,
+                _ => return Err(ParamsRefused),
+            },
+            ProductMethod::VoiceSaveKey => ProductParams::VoiceSaveKey(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
+            ProductMethod::VoiceForgetKey => match params {
+                Value::Object(fields) if fields.is_empty() => ProductParams::VoiceForgetKey,
+                _ => return Err(ParamsRefused),
+            },
+            ProductMethod::VoiceStartCall => ProductParams::VoiceStartCall(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
+        })
+    }
+}
+
+/// Params that do not decode into their method's declared type.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ParamsRefused;
+
+/// A method's params, decoded into the type the manifest declares for it.
+pub enum ProductParams {
+    SessionAuthenticate(SessionAuthenticateParams),
+    AuthSession,
+    ServerHealth,
+    ServerReach,
+    CredentialIssue(CredentialIssueParams),
+    CredentialList,
+    CredentialRevoke(CredentialRevokeParams),
+    ConversationCreate(ConversationCreateParams),
+    ConversationRead(ConversationReadParams),
+    ConversationRecordsHead(ConversationRecordsHeadParams),
+    ConversationRecordsPage(ConversationRecordsPageParams),
+    ConversationList(ConversationListParams),
+    ConversationObserve(ConversationObserveParams),
+    ConversationSend(ConversationSendParams),
+    ConversationSteer(ConversationSendParams),
+    ConversationRemove(ConversationRemoveParams),
+    ConversationStop(ConversationStopParams),
+    ConversationReceipt(ConversationReceiptParams),
+    ConversationMessage(ConversationMessageParams),
+    ConversationMessageStatus(ConversationMessageStatusParams),
+    ConversationAnswer(ConversationAnswerParams),
+    ConversationPermissionReview(ConversationPermissionReviewParams),
+    ConversationQuestionReview(ConversationQuestionReviewParams),
+    ConversationAnswerQuestion(ConversationAnswerQuestionParams),
+    ConversationCancel(ConversationCancelParams),
+    ConversationClose(ConversationCloseParams),
+    ConversationArchive(ConversationArchiveParams),
+    ConversationUnarchive(ConversationArchiveParams),
+    ConversationRename(ConversationRenameParams),
+    ConversationDelete(ConversationDeleteParams),
+    ConversationReorder(ConversationReorderParams),
+    ArtifactRead(ArtifactReadParams),
+    AttachmentBegin(AttachmentBeginParams),
+    AttachmentWrite(AttachmentWriteParams),
+    AgentsList,
+    AgentsSetNativeHooks(AgentsSetNativeHooksParams),
+    AgentsSubscribe,
+    AgentsUnsubscribe(ConversationUnsubscribeParams),
+    ConversationSetApprovalMode(ConversationSetApprovalModeParams),
+    ConversationSetUsageLimitAutoContinue(ConversationSetUsageLimitAutoContinueParams),
+    AgentsInstallOptions,
+    AgentsInstall(AgentInstallParams),
+    ConversationCatalogueHead(ConversationCatalogueHeadParams),
+    ConversationCatalogueManifest(ConversationCatalogueManifestParams),
+    ConversationCatalogueResolve(ConversationCatalogueResolveParams),
+    McpCallTool(McpCallToolParams),
+    McpReadResource(McpReadResourceParams),
+    McpReleaseApp(McpReleaseAppParams),
+    McpSendMessage(McpSendMessageParams),
+    McpUpdateModelContext(McpUpdateModelContextParams),
+    McpServersList,
+    McpServersSave(McpServersSaveParams),
+    McpServersRemove(McpServersRemoveParams),
+    McpServersInspect(McpServersInspectParams),
+    McpServersAuthorize(McpServersAuthorizeParams),
+    McpServersRevoke(McpServersRevokeParams),
+    AppsTrusted,
+    AppsUntrust(AppsUntrustParams),
+    PhoneEndpoint(PhoneEndpointParams),
+    PhoneAuthorize(PhoneAuthorizeParams),
+    PhoneStatus(PhoneStatusParams),
+    PairingCreate(PairingCreateParams),
+    PairingPending,
+    PairingStatus(PairingInvitationParams),
+    PairingApprove(PairingApproveParams),
+    PairingDeny(PairingInvitationParams),
+    PairingCancel(PairingInvitationParams),
+    PairingSetLinking(PairingSetLinkingParams),
+    PairingSetTunnel(PairingSetTunnelParams),
+    PairingTunnel,
+    GithubLiveEvents(GithubLiveEventsParams),
+    GithubStatus,
+    GithubConnect,
+    DevicesList(DevicesListParams),
+    DevicesSshHosts,
+    DevicesConnectSsh(DevicesConnectSshParams),
+    DevicesSetDefault(DevicesSetDefaultParams),
+    GithubCancel,
+    GithubDisconnect,
+    PeerEnroll(PeerEnrollParams),
+    PeerList,
+    PeerForget(PeerForgetParams),
+    PeerRelay(PeerRelayParams),
+    ConversationSubscribe(ConversationSubscribeParams),
+    ConversationSubscribeList(ConversationSubscribeListParams),
+    ConversationUnsubscribe(ConversationUnsubscribeParams),
+    ConversationShare(ConversationShareParams),
+    ConversationUnshare(ConversationUnshareParams),
+    ConversationShares(ConversationSharesParams),
+    ConversationPermissionRules(ConversationPermissionRulesParams),
+    ConversationRevokePermissionRule(ConversationRevokePermissionRuleParams),
+    WorkspacePublish(WorkspacePublishParams),
+    ChannelCreate(ChannelCreateParams),
+    ChannelList(ChannelListParams),
+    ChannelSetPlacement(ChannelSetPlacementParams),
+    ConversationSubscribeEvents(ConversationSubscribeEventsParams),
+    ConversationReadEarlier(ConversationReadEarlierParams),
+    ConversationPeek(ConversationReadParams),
+    ConversationSetModel(ConversationSetModelParams),
+    ConversationSwitchAgent(ConversationSwitchAgentParams),
+    ConversationFork(ConversationForkParams),
+    VaultStatus,
+    VaultSetup(VaultPassphraseParams),
+    VaultUnlock(VaultPassphraseParams),
+    VaultChangePassphrase(VaultPassphraseParams),
+    VaultLock,
+    BoatStatus,
+    BoatSave(BoatSaveParams),
+    BoatSaveClaudeSignIn(BoatClaudeSignInParams),
+    BoatDisconnect,
+    DevicesPool(DevicesPoolParams),
+    DevicesSetPool(DevicesSetPoolParams),
+    BoatRuntimeSettings(BoatRuntimeReadParams),
+    BoatSetRuntimeSettings(BoatRuntimeSetParams),
+    ConversationWebhookCursor(ConversationWebhookCursorParams),
+    ConversationWebhookReset(ConversationWebhookResetParams),
+    LoginsStatus,
+    LoginsSave(LoginsSaveParams),
+    LoginsRemove(LoginsRemoveParams),
+    LoginsSetDevice(LoginsSetDeviceParams),
+    VoiceStatus,
+    VoiceSaveKey(VoiceSaveKeyParams),
+    VoiceForgetKey,
+    VoiceStartCall(VoiceStartCallParams),
+}
+
+impl ProductParams {
+    /// The method these params belong to.
+    pub const fn method(&self) -> ProductMethod {
+        match self {
+            ProductParams::SessionAuthenticate(_) => ProductMethod::SessionAuthenticate,
+            ProductParams::AuthSession => ProductMethod::AuthSession,
+            ProductParams::ServerHealth => ProductMethod::ServerHealth,
+            ProductParams::ServerReach => ProductMethod::ServerReach,
+            ProductParams::CredentialIssue(_) => ProductMethod::CredentialIssue,
+            ProductParams::CredentialList => ProductMethod::CredentialList,
+            ProductParams::CredentialRevoke(_) => ProductMethod::CredentialRevoke,
+            ProductParams::ConversationCreate(_) => ProductMethod::ConversationCreate,
+            ProductParams::ConversationRead(_) => ProductMethod::ConversationRead,
+            ProductParams::ConversationRecordsHead(_) => ProductMethod::ConversationRecordsHead,
+            ProductParams::ConversationRecordsPage(_) => ProductMethod::ConversationRecordsPage,
+            ProductParams::ConversationList(_) => ProductMethod::ConversationList,
+            ProductParams::ConversationObserve(_) => ProductMethod::ConversationObserve,
+            ProductParams::ConversationSend(_) => ProductMethod::ConversationSend,
+            ProductParams::ConversationSteer(_) => ProductMethod::ConversationSteer,
+            ProductParams::ConversationRemove(_) => ProductMethod::ConversationRemove,
+            ProductParams::ConversationStop(_) => ProductMethod::ConversationStop,
+            ProductParams::ConversationReceipt(_) => ProductMethod::ConversationReceipt,
+            ProductParams::ConversationMessage(_) => ProductMethod::ConversationMessage,
+            ProductParams::ConversationMessageStatus(_) => ProductMethod::ConversationMessageStatus,
+            ProductParams::ConversationAnswer(_) => ProductMethod::ConversationAnswer,
+            ProductParams::ConversationPermissionReview(_) => {
+                ProductMethod::ConversationPermissionReview
+            }
+            ProductParams::ConversationQuestionReview(_) => {
+                ProductMethod::ConversationQuestionReview
+            }
+            ProductParams::ConversationAnswerQuestion(_) => {
+                ProductMethod::ConversationAnswerQuestion
+            }
+            ProductParams::ConversationCancel(_) => ProductMethod::ConversationCancel,
+            ProductParams::ConversationClose(_) => ProductMethod::ConversationClose,
+            ProductParams::ConversationArchive(_) => ProductMethod::ConversationArchive,
+            ProductParams::ConversationUnarchive(_) => ProductMethod::ConversationUnarchive,
+            ProductParams::ConversationRename(_) => ProductMethod::ConversationRename,
+            ProductParams::ConversationDelete(_) => ProductMethod::ConversationDelete,
+            ProductParams::ConversationReorder(_) => ProductMethod::ConversationReorder,
+            ProductParams::ArtifactRead(_) => ProductMethod::ArtifactRead,
+            ProductParams::AttachmentBegin(_) => ProductMethod::AttachmentBegin,
+            ProductParams::AttachmentWrite(_) => ProductMethod::AttachmentWrite,
+            ProductParams::AgentsList => ProductMethod::AgentsList,
+            ProductParams::AgentsSetNativeHooks(_) => ProductMethod::AgentsSetNativeHooks,
+            ProductParams::AgentsSubscribe => ProductMethod::AgentsSubscribe,
+            ProductParams::AgentsUnsubscribe(_) => ProductMethod::AgentsUnsubscribe,
+            ProductParams::ConversationSetApprovalMode(_) => {
+                ProductMethod::ConversationSetApprovalMode
+            }
+            ProductParams::ConversationSetUsageLimitAutoContinue(_) => {
+                ProductMethod::ConversationSetUsageLimitAutoContinue
+            }
+            ProductParams::AgentsInstallOptions => ProductMethod::AgentsInstallOptions,
+            ProductParams::AgentsInstall(_) => ProductMethod::AgentsInstall,
+            ProductParams::ConversationCatalogueHead(_) => ProductMethod::ConversationCatalogueHead,
+            ProductParams::ConversationCatalogueManifest(_) => {
+                ProductMethod::ConversationCatalogueManifest
+            }
+            ProductParams::ConversationCatalogueResolve(_) => {
+                ProductMethod::ConversationCatalogueResolve
+            }
+            ProductParams::McpCallTool(_) => ProductMethod::McpCallTool,
+            ProductParams::McpReadResource(_) => ProductMethod::McpReadResource,
+            ProductParams::McpReleaseApp(_) => ProductMethod::McpReleaseApp,
+            ProductParams::McpSendMessage(_) => ProductMethod::McpSendMessage,
+            ProductParams::McpUpdateModelContext(_) => ProductMethod::McpUpdateModelContext,
+            ProductParams::McpServersList => ProductMethod::McpServersList,
+            ProductParams::McpServersSave(_) => ProductMethod::McpServersSave,
+            ProductParams::McpServersRemove(_) => ProductMethod::McpServersRemove,
+            ProductParams::McpServersInspect(_) => ProductMethod::McpServersInspect,
+            ProductParams::McpServersAuthorize(_) => ProductMethod::McpServersAuthorize,
+            ProductParams::McpServersRevoke(_) => ProductMethod::McpServersRevoke,
+            ProductParams::AppsTrusted => ProductMethod::AppsTrusted,
+            ProductParams::AppsUntrust(_) => ProductMethod::AppsUntrust,
+            ProductParams::PhoneEndpoint(_) => ProductMethod::PhoneEndpoint,
+            ProductParams::PhoneAuthorize(_) => ProductMethod::PhoneAuthorize,
+            ProductParams::PhoneStatus(_) => ProductMethod::PhoneStatus,
+            ProductParams::PairingCreate(_) => ProductMethod::PairingCreate,
+            ProductParams::PairingPending => ProductMethod::PairingPending,
+            ProductParams::PairingStatus(_) => ProductMethod::PairingStatus,
+            ProductParams::PairingApprove(_) => ProductMethod::PairingApprove,
+            ProductParams::PairingDeny(_) => ProductMethod::PairingDeny,
+            ProductParams::PairingCancel(_) => ProductMethod::PairingCancel,
+            ProductParams::PairingSetLinking(_) => ProductMethod::PairingSetLinking,
+            ProductParams::PairingSetTunnel(_) => ProductMethod::PairingSetTunnel,
+            ProductParams::PairingTunnel => ProductMethod::PairingTunnel,
+            ProductParams::GithubLiveEvents(_) => ProductMethod::GithubLiveEvents,
+            ProductParams::GithubStatus => ProductMethod::GithubStatus,
+            ProductParams::GithubConnect => ProductMethod::GithubConnect,
+            ProductParams::DevicesList(_) => ProductMethod::DevicesList,
+            ProductParams::DevicesSshHosts => ProductMethod::DevicesSshHosts,
+            ProductParams::DevicesConnectSsh(_) => ProductMethod::DevicesConnectSsh,
+            ProductParams::DevicesSetDefault(_) => ProductMethod::DevicesSetDefault,
+            ProductParams::GithubCancel => ProductMethod::GithubCancel,
+            ProductParams::GithubDisconnect => ProductMethod::GithubDisconnect,
+            ProductParams::PeerEnroll(_) => ProductMethod::PeerEnroll,
+            ProductParams::PeerList => ProductMethod::PeerList,
+            ProductParams::PeerForget(_) => ProductMethod::PeerForget,
+            ProductParams::PeerRelay(_) => ProductMethod::PeerRelay,
+            ProductParams::ConversationSubscribe(_) => ProductMethod::ConversationSubscribe,
+            ProductParams::ConversationSubscribeList(_) => ProductMethod::ConversationSubscribeList,
+            ProductParams::ConversationUnsubscribe(_) => ProductMethod::ConversationUnsubscribe,
+            ProductParams::ConversationShare(_) => ProductMethod::ConversationShare,
+            ProductParams::ConversationUnshare(_) => ProductMethod::ConversationUnshare,
+            ProductParams::ConversationShares(_) => ProductMethod::ConversationShares,
+            ProductParams::ConversationPermissionRules(_) => {
+                ProductMethod::ConversationPermissionRules
+            }
+            ProductParams::ConversationRevokePermissionRule(_) => {
+                ProductMethod::ConversationRevokePermissionRule
+            }
+            ProductParams::WorkspacePublish(_) => ProductMethod::WorkspacePublish,
+            ProductParams::ChannelCreate(_) => ProductMethod::ChannelCreate,
+            ProductParams::ChannelList(_) => ProductMethod::ChannelList,
+            ProductParams::ChannelSetPlacement(_) => ProductMethod::ChannelSetPlacement,
+            ProductParams::ConversationSubscribeEvents(_) => {
+                ProductMethod::ConversationSubscribeEvents
+            }
+            ProductParams::ConversationReadEarlier(_) => ProductMethod::ConversationReadEarlier,
+            ProductParams::ConversationPeek(_) => ProductMethod::ConversationPeek,
+            ProductParams::ConversationSetModel(_) => ProductMethod::ConversationSetModel,
+            ProductParams::ConversationSwitchAgent(_) => ProductMethod::ConversationSwitchAgent,
+            ProductParams::ConversationFork(_) => ProductMethod::ConversationFork,
+            ProductParams::VaultStatus => ProductMethod::VaultStatus,
+            ProductParams::VaultSetup(_) => ProductMethod::VaultSetup,
+            ProductParams::VaultUnlock(_) => ProductMethod::VaultUnlock,
+            ProductParams::VaultChangePassphrase(_) => ProductMethod::VaultChangePassphrase,
+            ProductParams::VaultLock => ProductMethod::VaultLock,
+            ProductParams::BoatStatus => ProductMethod::BoatStatus,
+            ProductParams::BoatSave(_) => ProductMethod::BoatSave,
+            ProductParams::BoatSaveClaudeSignIn(_) => ProductMethod::BoatSaveClaudeSignIn,
+            ProductParams::BoatDisconnect => ProductMethod::BoatDisconnect,
+            ProductParams::DevicesPool(_) => ProductMethod::DevicesPool,
+            ProductParams::DevicesSetPool(_) => ProductMethod::DevicesSetPool,
+            ProductParams::BoatRuntimeSettings(_) => ProductMethod::BoatRuntimeSettings,
+            ProductParams::BoatSetRuntimeSettings(_) => ProductMethod::BoatSetRuntimeSettings,
+            ProductParams::ConversationWebhookCursor(_) => ProductMethod::ConversationWebhookCursor,
+            ProductParams::ConversationWebhookReset(_) => ProductMethod::ConversationWebhookReset,
+            ProductParams::LoginsStatus => ProductMethod::LoginsStatus,
+            ProductParams::LoginsSave(_) => ProductMethod::LoginsSave,
+            ProductParams::LoginsRemove(_) => ProductMethod::LoginsRemove,
+            ProductParams::LoginsSetDevice(_) => ProductMethod::LoginsSetDevice,
+            ProductParams::VoiceStatus => ProductMethod::VoiceStatus,
+            ProductParams::VoiceSaveKey(_) => ProductMethod::VoiceSaveKey,
+            ProductParams::VoiceForgetKey => ProductMethod::VoiceForgetKey,
+            ProductParams::VoiceStartCall(_) => ProductMethod::VoiceStartCall,
+        }
     }
 }
 pub const PRODUCT_VERSION: u64 = 1;
