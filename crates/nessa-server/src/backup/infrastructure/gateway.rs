@@ -2321,9 +2321,10 @@ fn attach_carried(
 ///
 /// A namespace that is not a restored gateway has none. Once the accepted
 /// pointer is present, a deferred list that is missing, unreadable, not the
-/// bytes the accepted journal sealed, or not the current spelling is not
-/// treated as "nothing left": the cut would otherwise name those
-/// conversations' metadata and drop the size and digest a later restore needs.
+/// bytes the accepted journal sealed, or sealed by a journal the acceptance
+/// audit does not trust, is not treated as "nothing left": the cut would
+/// otherwise name those conversations' metadata and drop the size and digest
+/// a later restore needs.
 fn outstanding_deferred(namespace: &Path) -> Result<Vec<DeferredEntry>, ExportFailure> {
     let pointer = namespace.join("backup").join("accepted-restore.txt");
     let text = match fs::read_to_string(&pointer) {
@@ -2333,10 +2334,22 @@ fn outstanding_deferred(namespace: &Path) -> Result<Vec<DeferredEntry>, ExportFa
     };
     let binding = crate::backup::application::binding_from_pointer(&text)
         .map_err(|_| ExportFailure::Inventory)?;
-    // The same seal startup and a deferred open use. A later edit of
-    // `deferred.txt`, including a well-formed empty list, is not an empty
-    // inventory. A missing file is the same refusal.
-    if accepted_tree_matches(&binding.live, &super::DirectoryQuarantine).is_err() {
+    // Startup's accepted-authority check, then the file seal. A journal
+    // rewritten to match a new `deferred.txt` still fails the audit. A
+    // missing file is the same refusal. Opening the audit does not create it.
+    if !binding.audit.join("restore.jsonl").is_file() {
+        return Err(ExportFailure::Inventory);
+    }
+    let audit = super::FileRestoreAudit::open(&binding.audit, AuditReadClock)
+        .map_err(|_| ExportFailure::Inventory)?;
+    if crate::backup::application::confirm_accepted(
+        &binding.live,
+        &super::DirectoryQuarantine,
+        &audit,
+    )
+    .is_err()
+        || accepted_tree_matches(&binding.live, &super::DirectoryQuarantine).is_err()
+    {
         return Err(ExportFailure::Inventory);
     }
     let text = match fs::read_to_string(binding.live.join("deferred.txt")) {
@@ -2361,6 +2374,15 @@ fn outstanding_deferred(namespace: &Path) -> Result<Vec<DeferredEntry>, ExportFa
         );
     }
     Ok(entries)
+}
+
+/// The audit is only read. Its clock is not asked.
+struct AuditReadClock;
+
+impl ExportClock for AuditReadClock {
+    fn unix_ms(&self) -> u64 {
+        0
+    }
 }
 
 fn deleted_conversations(namespace: &Path) -> HashSet<String> {
