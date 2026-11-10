@@ -4176,6 +4176,10 @@ impl ConversationService {
             service
                 .refuse_linked_files_elsewhere(&id, !message.files().is_empty())
                 .await?;
+            // A deferred restored conversation is fetched before a message
+            // opens an agent. A missing source refuses the send, and does not
+            // start a fresh session over the history that was not fetched.
+            service.prepare_restored_history(&id).await?;
             // An app's message is for a live opening, and opens none: one
             // ended by the desktop stopping the agent is refused below, not
             // opened again for it.
