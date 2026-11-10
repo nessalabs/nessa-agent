@@ -425,7 +425,12 @@ against a private scripted gateway.
   `src/desktop/ui/ambient-grain.png`, drawn by `.desktop-grain` in the desktop
   stylesheet. It is pre-rendered to keep SVG turbulence out of runtime raster
   work (#370); `verification/desktop/scripts/smoke.mjs` checks its image format,
-  tile size and compositing in both engines.
+  tile size and compositing in both engines. The two drifting washes are the
+  same idea (#1249): `DesktopAmbient` (`src/desktop/ui/ambient-light.tsx`)
+  paints each once into a small texture and the stylesheet scales that
+  texture by the drift, so WebKit does not re-blur a full-window gradient
+  on every frame. `ambient-overview.mjs` checks the overview still finishes
+  inside its 10s wait.
 - Split panes are a module of the desktop window's, not of the workspace:
   `src/desktop/split-panes/` (its map is `index.ts`) owns the pane layout, its
   sizing, drops and the drag's phases (`model/`, pure), the port a host
