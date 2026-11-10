@@ -3,7 +3,7 @@ id: desktop-gateway-pairing
 title: Pair a gateway with explicit Human sign-in
 kind: flow
 status: implemented
-sourceRevision: "92ef76a3c8ea3f6d3c38d617ed32710f7db522bc"
+sourceRevision: "fe7551adb9ecd1055647b66a2291672144c4ab1c"
 parent: desktop-workspace
 summary: Choose before creating a code, authenticate the Human separately, and recover canonical invitations after uncertain replies.
 sources:
@@ -111,9 +111,12 @@ connection completion closes before exposing commands. JavaScript
 string zeroization is not promised. An unfinished invitation stays with the
 registry and requires fresh explicit sign-in after reopening.
 
-Source review checkpoint: `92ef76a3c8ea3f6d3c38d617ed32710f7db522bc`. This page reconciles
+Source review checkpoint: `fe7551adb9ecd1055647b66a2291672144c4ab1c`. This page reconciles
 the new Devices entry, immutable display selection, scoped adapter, composition,
-SDK endpoint and focused regressions. The source checkpoint is a review record,
+SDK endpoint and focused regressions. Current main's ambient elapsed clock is
+separate from this flow's injected `after` timer; the integration adds no pairing
+state or authority. Later mandatory harness corrections preserve the catalogue
+and read-only inventory contracts. The source checkpoint is a review record,
 not an execution receipt. Native lifecycle, unrelated desktop pages and the
 OwnerPhone model keep their own earlier checkpoints. Browser and mutation
 receipts are in [completion evidence](../../../../reviews/893-desktop-completion.md).

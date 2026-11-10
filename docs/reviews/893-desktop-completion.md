@@ -1,12 +1,15 @@
 # Issue 893 desktop completion evidence
 
-Implementation/check-harness checkpoint: `92ef76a3c8ea3f6d3c38d617ed32710f7db522bc`.
-Runtime product-code checkpoint: `491d9359234aa1218cdcb6d0fde19bfb3719e11f`;
-the subsequent commit changes verification selectors only.
+Current assembled-source/check-harness checkpoint:
+`fe7551adb9ecd1055647b66a2291672144c4ab1c`, integrating main
+`f4c1ba3637e7f95361e9fe7009a31a01a8afff94` unchanged.
+Gateway-specific runtime code last changed at
+`491d9359234aa1218cdcb6d0fde19bfb3719e11f`.
 Behavioral/negative-control checkpoint before the layer-only move:
 `41cec9e2121cb420c67d8036334840c4832b903c`.
-Current main `26b7263514a98e85a50d3ce3c08a8f6b52f4662b` is integrated unchanged; its
-only changes since the initial base are #1283 README/check-changed tooling.
+The initial publication integrated main
+`26b7263514a98e85a50d3ce3c08a8f6b52f4662b`; its
+only changes since the initial base were #1283 README/check-changed tooling.
 All 20 upstream changed-check tests passed after integration.
 Initial base: main `994f3f93117d5f670afb5c74d2cf03cf09056bc1`.
 Isolated branch: `codex/893-desktop-same-person`.
@@ -14,6 +17,38 @@ Isolated branch: `codex/893-desktop-same-person`.
 This is the implementation/evidence checkpoint. The follow-up PR's **How we
 checked it** section is the live record for broad qualification and exact-head
 CI. A passed focused check below does not imply every merge gate passed.
+
+## Current-main qualification reconciliation
+
+Merged #1291 supplies the ambient renderer and explicit elapsed clock. It is
+preserved unchanged. The new clock does not control pairing's injected `after`
+timer, and no pairing state, authority or consent class changed. Independent
+integration review at `e543aa44` found no issue in that relationship, endpoint
+agreement, Human-session teardown or immutable selection.
+
+The earlier green CI associated with head `8d9daab9` checked synthetic merge
+`28f9fb2b79564754bf23e895ec08b58aeb37c346`, already combining it with main
+`f4c1ba36`. Its tree equals the local integration commit `e543aa44`. The earlier
+local broad matrix and main controls predated that integration. Their failures
+remain historical evidence; they do not qualify the newly assembled checkout.
+
+Two mandatory verification prerequisites contradicted their current owners.
+Smoke demanded a subtitle although the Settings catalogue, masthead and UI kit
+explicitly require none. It now requires one exact title, catalogue-owned tabs
+and no residual masthead copy. The linked-device fixture omitted the read-only
+MCP inventory which Connections now reads first. It now advertises and answers
+only `mcpServers.list` with the published result shape; unknown-method rejection
+and all pairing/consent assertions remain intact. Fresh review found no issue.
+
+Before correction, production smoke held 28/32 and linked devices 2/18 across
+both engines. Fixed and restored runs hold 32/32 and 18/18. Inserting an unmarked
+masthead paragraph causes four exact extra-copy failures. Removing only the MCP
+whitelist entry causes sixteen exact unexpected-method failures. Both source
+mutations were restored. The desktop verification unit suite passes 682 tests,
+with two skips, and scoped format/lint checks pass. These controls close the two
+fixture inconsistencies; the complete browser matrix and new-head CI still need
+their own verdicts on the frozen assembled source. Issue #893 is not declared
+complete while that qualification remains open.
 
 ## Merged prerequisite and ownership
 
