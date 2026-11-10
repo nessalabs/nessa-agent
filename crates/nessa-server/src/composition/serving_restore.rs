@@ -3,13 +3,14 @@
 //! The sealed tree stays the backup. Metadata rows and session streams are
 //! copied into the namespace the service opens, which is not that tree.
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 
-use nessa_local_database::rusqlite::{params, Connection};
+use nessa_local_database::rusqlite::{params, Connection, TransactionBehavior};
 use nessa_local_storage::create_directory;
 
-use crate::backup::domain::{decode_deferred, JOURNAL_HEADER};
+use crate::backup::domain::{decode_deferred, decode_identity, JOURNAL_HEADER};
 
 const METADATA_SCHEMA: &str = include_str!("../conversation/infrastructure/schema.sql");
 
@@ -82,6 +83,16 @@ fn install_metadata(path: &Path, live: &Path) -> Result<(), String> {
     if path.exists() {
         return Ok(());
     }
+    let installed = write_metadata(path, live);
+    if installed.is_err() {
+        // Opening the file creates it. A later startup treats an existing file
+        // as already installed, so a failed write has to disappear.
+        let _ = fs::remove_file(path);
+    }
+    installed
+}
+
+fn write_metadata(path: &Path, live: &Path) -> Result<(), String> {
     let connection = Connection::open(path).map_err(|error| error.to_string())?;
     connection
         .execute_batch(METADATA_SCHEMA)
@@ -96,43 +107,60 @@ fn install_metadata(path: &Path, live: &Path) -> Result<(), String> {
                 agent: "restored".into(),
                 model: "restored".into(),
                 approval_mode: "ask".into(),
+                creation_revision: 1,
+                change_revision: 1,
                 title: None,
+                preview: None,
+                updated_at_ms: 0,
+                archived: 0,
             });
         }
     }
+    let transaction = connection
+        .unchecked_transaction()
+        .map_err(|error| error.to_string())?;
     for row in rows {
-        connection
+        transaction
             .execute(
                 "INSERT OR IGNORE INTO catalogue_owners (organization, owner, head) VALUES (?1, ?2, 1)",
                 params![row.organization, row.owner],
             )
             .map_err(|error| error.to_string())?;
-        connection
+        transaction
             .execute(
                 "INSERT OR IGNORE INTO conversations (
                     id, organization, owner, creator_surface, creation_action,
                     creation_requested_at_ms, agent, model, approval_mode,
                     creation_revision, change_revision
-                 ) VALUES (?1, ?2, ?3, 'restore', 'backup.restore.accept', 0, ?4, ?5, ?6, 1, 1)",
+                 ) VALUES (?1, ?2, ?3, 'restore', 'backup.restore.accept', 0, ?4, ?5, ?6, ?7, ?8)",
                 params![
                     row.id,
                     row.organization,
                     row.owner,
                     row.agent,
                     row.model,
-                    row.approval_mode
+                    row.approval_mode,
+                    row.creation_revision,
+                    row.change_revision
                 ],
             )
             .map_err(|error| error.to_string())?;
-        connection
+        transaction
             .execute(
                 "INSERT OR IGNORE INTO summaries (
                     conversation_id, title, preview, updated_at_ms, archived
-                 ) VALUES (?1, ?2, NULL, 0, 0)",
-                params![row.id, row.title],
+                 ) VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![
+                    row.id,
+                    row.title,
+                    row.preview,
+                    row.updated_at_ms,
+                    row.archived
+                ],
             )
             .map_err(|error| error.to_string())?;
     }
+    transaction.commit().map_err(|error| error.to_string())?;
     Ok(())
 }
 
@@ -143,49 +171,187 @@ struct MetadataRow {
     agent: String,
     model: String,
     approval_mode: String,
+    creation_revision: i64,
+    change_revision: i64,
     title: Option<String>,
+    preview: Option<String>,
+    updated_at_ms: i64,
+    archived: i64,
 }
 
+struct ConversationFields {
+    organization: String,
+    owner: String,
+    agent: String,
+    model: String,
+    approval_mode: String,
+    creation_revision: i64,
+    change_revision: i64,
+}
+
+struct SummaryFields {
+    title: Option<String>,
+    preview: Option<String>,
+    updated_at_ms: i64,
+    archived: i64,
+}
+
+enum Classified {
+    Conversation(String),
+    Summary(String),
+    Ignore,
+}
+
+/// Conversation rows and summary rows are separate export records. A summary
+/// names the same conversation and nothing else: its missing owner must not
+/// become the conversation, and the conversation's empty title must not hide
+/// the saved one. Directory order does not choose.
 fn metadata_rows(live: &Path) -> Result<Vec<MetadataRow>, String> {
     let directory = live.join("records").join("conversation-metadata");
     let Ok(entries) = fs::read_dir(directory) else {
         return Ok(Vec::new());
     };
-    let mut rows = Vec::new();
+    let mut paths = Vec::new();
     for entry in entries.flatten() {
-        if !entry.path().is_file() {
-            continue;
+        if entry.path().is_file() {
+            paths.push(entry.path());
         }
-        let Ok(bytes) = fs::read(entry.path()) else {
+    }
+    paths.sort();
+    let mut conversations = BTreeMap::new();
+    let mut summaries = BTreeMap::new();
+    for path in paths {
+        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        let Ok(bytes) = fs::read(&path) else {
             continue;
         };
         let Ok(value) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
             continue;
         };
-        let Some(id) = value
-            .get("id")
-            .or_else(|| value.get("conversationId"))
-            .and_then(|id| id.as_str())
-        else {
-            continue;
-        };
-        if value.get("erased").is_some() && value.get("agent").is_none() {
-            continue;
+        match classify(name, &value) {
+            Classified::Conversation(id) => {
+                let Some(fields) = conversation_fields(&value) else {
+                    continue;
+                };
+                conversations.entry(id).or_insert(fields);
+            }
+            Classified::Summary(id) => {
+                summaries.entry(id).or_insert(summary_fields(&value));
+            }
+            Classified::Ignore => {}
         }
-        rows.push(MetadataRow {
-            id: id.to_owned(),
-            organization: text(&value, "organization").unwrap_or_else(|| "restored".into()),
-            owner: text(&value, "owner").unwrap_or_else(|| "restored".into()),
-            agent: text(&value, "agent").unwrap_or_else(|| "restored".into()),
-            model: text(&value, "model").unwrap_or_else(|| "restored".into()),
-            approval_mode: match text(&value, "approvalMode").as_deref() {
-                Some(mode @ ("ask" | "auto" | "full")) => mode.to_owned(),
-                _ => "ask".into(),
-            },
-            title: text(&value, "title"),
+    }
+    Ok(conversations
+        .into_iter()
+        .map(|(id, conversation)| {
+            let summary = summaries.remove(&id);
+            MetadataRow {
+                id,
+                organization: conversation.organization,
+                owner: conversation.owner,
+                agent: conversation.agent,
+                model: conversation.model,
+                approval_mode: conversation.approval_mode,
+                creation_revision: conversation.creation_revision,
+                change_revision: conversation.change_revision,
+                title: summary.as_ref().and_then(|summary| summary.title.clone()),
+                preview: summary.as_ref().and_then(|summary| summary.preview.clone()),
+                updated_at_ms: summary
+                    .as_ref()
+                    .map(|summary| summary.updated_at_ms)
+                    .unwrap_or(0),
+                archived: summary
+                    .as_ref()
+                    .map(|summary| summary.archived)
+                    .unwrap_or(0),
+            }
+        })
+        .collect())
+}
+
+fn classify(file_name: &str, value: &serde_json::Value) -> Classified {
+    if let Ok(decoded) = decode_identity(file_name, 512) {
+        if let Some(classified) = classified_name(&decoded, value) {
+            return classified;
+        }
+    }
+    classified_body(value)
+}
+
+fn classified_name(name: &str, value: &serde_json::Value) -> Option<Classified> {
+    if let Some(rest) = name.strip_prefix("conversation-") {
+        return Some(match text(value, "id") {
+            Some(id) if id == rest => Classified::Conversation(id),
+            _ => Classified::Ignore,
         });
     }
-    Ok(rows)
+    if let Some(rest) = name.strip_prefix("summary-") {
+        return Some(match text(value, "conversationId") {
+            Some(id) if id == rest => Classified::Summary(id),
+            _ => Classified::Ignore,
+        });
+    }
+    if name.starts_with("tombstone-") {
+        return Some(Classified::Ignore);
+    }
+    None
+}
+
+fn classified_body(value: &serde_json::Value) -> Classified {
+    if value.get("erased").is_some() && value.get("agent").is_none() {
+        return Classified::Ignore;
+    }
+    if value.get("agent").is_some() {
+        if let Some(id) = text(value, "id") {
+            return Classified::Conversation(id);
+        }
+    }
+    if value.get("id").is_none() {
+        if let Some(id) = text(value, "conversationId") {
+            return Classified::Summary(id);
+        }
+    }
+    Classified::Ignore
+}
+
+fn conversation_fields(value: &serde_json::Value) -> Option<ConversationFields> {
+    let creation_revision = positive(value, "creationRevision").unwrap_or(1);
+    let change_revision = positive(value, "changeRevision")
+        .unwrap_or(creation_revision)
+        .max(creation_revision);
+    Some(ConversationFields {
+        organization: text(value, "organization")?,
+        owner: text(value, "owner")?,
+        agent: text(value, "agent")?,
+        model: text(value, "model").unwrap_or_else(|| "restored".into()),
+        approval_mode: match text(value, "approvalMode").as_deref() {
+            Some(mode @ ("ask" | "auto" | "full")) => mode.to_owned(),
+            _ => "ask".into(),
+        },
+        creation_revision,
+        change_revision,
+    })
+}
+
+fn summary_fields(value: &serde_json::Value) -> SummaryFields {
+    SummaryFields {
+        title: text(value, "title"),
+        preview: text(value, "preview"),
+        updated_at_ms: value
+            .get("updatedAtMs")
+            .and_then(|item| item.as_i64())
+            .unwrap_or(0),
+        archived: i64::from(value.get("archived").and_then(|item| item.as_bool()) == Some(true)),
+    }
+}
+
+fn positive(value: &serde_json::Value, name: &str) -> Option<i64> {
+    value
+        .get(name)
+        .and_then(|item| item.as_i64())
+        .filter(|number| *number > 0)
 }
 
 fn text(value: &serde_json::Value, name: &str) -> Option<String> {
@@ -203,59 +369,72 @@ fn merge_stream(serving: &Path, published: &Path, conversation_id: &str) -> Resu
     let published = published
         .to_str()
         .ok_or_else(|| "session path is not Unicode".to_owned())?;
-    let connection = Connection::open(serving).map_err(|error| error.to_string())?;
+    let mut connection = Connection::open(serving).map_err(|error| error.to_string())?;
     connection
         .execute("ATTACH DATABASE ?1 AS fetched", params![published])
         .map_err(|error| error.to_string())?;
-    let present: i64 = connection
-        .query_row(
-            "SELECT COUNT(*) FROM event_streams WHERE public_id = ?1",
-            params![conversation_id],
-            |row| row.get(0),
-        )
-        .unwrap_or(0);
-    if present == 0 {
-        connection
-            .execute(
-                "INSERT INTO event_streams (public_id, incarnation, floor, tail, retired)
-                 SELECT public_id, incarnation, floor, tail, COALESCE(retired, 0)
-                 FROM fetched.event_streams WHERE public_id = ?1",
-                params![conversation_id],
-            )
+    // The stream, its name, and its records are one conversation. A stop
+    // between those inserts used to leave the stream in place, and the next
+    // open treated that fragment as the whole history.
+    let merged = (|| -> Result<(), String> {
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|error| error.to_string())?;
-        let key: i64 = connection
+        let present: i64 = transaction
             .query_row(
-                "SELECT stream_key FROM event_streams WHERE public_id = ?1",
+                "SELECT COUNT(*) FROM event_streams WHERE public_id = ?1",
                 params![conversation_id],
                 |row| row.get(0),
             )
             .map_err(|error| error.to_string())?;
-        connection
-            .execute(
-                "INSERT OR IGNORE INTO event_stream_names (
-                    public_id, latest_incarnation, active_stream_key
-                 )
-                 SELECT public_id, latest_incarnation, ?2
-                 FROM fetched.event_stream_names WHERE public_id = ?1",
-                params![conversation_id, key],
-            )
-            .map_err(|error| error.to_string())?;
-        connection
-            .execute(
-                "INSERT INTO event_records (
-                    stream_key, offset, event_id, schema_id, schema_version, payload
-                 )
-                 SELECT ?2, offset, event_id, schema_id, schema_version, payload
-                 FROM fetched.event_records
-                 WHERE stream_key = (
-                    SELECT stream_key FROM fetched.event_streams WHERE public_id = ?1
-                 )",
-                params![conversation_id, key],
-            )
-            .map_err(|error| error.to_string())?;
-    }
-    connection
+        if present == 0 {
+            transaction
+                .execute(
+                    "INSERT INTO event_streams (public_id, incarnation, floor, tail, retired)
+                     SELECT public_id, incarnation, floor, tail, COALESCE(retired, 0)
+                     FROM fetched.event_streams WHERE public_id = ?1",
+                    params![conversation_id],
+                )
+                .map_err(|error| error.to_string())?;
+            let key: i64 = transaction
+                .query_row(
+                    "SELECT stream_key FROM event_streams WHERE public_id = ?1",
+                    params![conversation_id],
+                    |row| row.get(0),
+                )
+                .map_err(|error| error.to_string())?;
+            transaction
+                .execute(
+                    "INSERT OR IGNORE INTO event_stream_names (
+                        public_id, latest_incarnation, active_stream_key
+                     )
+                     SELECT public_id, latest_incarnation, ?2
+                     FROM fetched.event_stream_names WHERE public_id = ?1",
+                    params![conversation_id, key],
+                )
+                .map_err(|error| error.to_string())?;
+            transaction
+                .execute(
+                    "INSERT INTO event_records (
+                        stream_key, offset, event_id, schema_id, schema_version, payload
+                     )
+                     SELECT ?2, offset, event_id, schema_id, schema_version, payload
+                     FROM fetched.event_records
+                     WHERE stream_key = (
+                        SELECT stream_key FROM fetched.event_streams WHERE public_id = ?1
+                     )",
+                    params![conversation_id, key],
+                )
+                .map_err(|error| error.to_string())?;
+        }
+        transaction.commit().map_err(|error| error.to_string())
+    })();
+    let detached = connection
         .execute("DETACH DATABASE fetched", [])
-        .map_err(|error| error.to_string())?;
-    Ok(())
+        .map_err(|error| error.to_string());
+    match (merged, detached) {
+        (Ok(()), Ok(_)) => Ok(()),
+        (Err(error), _) => Err(error),
+        (Ok(()), Err(error)) => Err(error),
+    }
 }

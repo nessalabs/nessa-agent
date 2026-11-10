@@ -18,7 +18,10 @@ use crate::backup::application::{
 use crate::backup::domain::{credentials_imported_on_restore, IDENTITY_BODY, REPLAY_BODY};
 use crate::backup::infrastructure::snapshot::SESSION_EXPORT_LIMIT;
 use crate::backup::infrastructure::{capture_namespace, DirectoryPublisher, FileDeletionLog};
-use crate::composition::{open_restored_conversation, run_backup_restore, startup_authority};
+use crate::composition::{
+    install_serving_stores, merge_published_session, open_restored_conversation,
+    run_backup_restore, startup_authority,
+};
 use crate::core::RunError;
 
 struct Clock(u64);
@@ -407,6 +410,239 @@ fn write_session(database_path: &PathBuf, bulk_len: usize) {
             "INSERT INTO event_records(stream_key, offset, event_id, schema_id, schema_version, payload)
              VALUES (2, ?1, 'bulk-event', 'nessa.record', 1, zeroblob(?2))",
             nessa_local_database::rusqlite::params![offset.as_slice(), bulk_len as i64],
+        )
+        .unwrap();
+}
+
+#[test]
+fn a_summary_keeps_its_title_and_the_conversation_keeps_its_owner() {
+    let root = tempfile::tempdir().unwrap();
+    let live = root.path().join("live");
+    let metadata = live.join("records/conversation-metadata");
+    fs::create_dir_all(&metadata).unwrap();
+    // The summary is written first. Directory order must not decide which
+    // record supplies the owner and which supplies the title.
+    fs::write(
+        metadata.join("summary-conv-real"),
+        br#"{"conversationId":"conv-real","title":"Quarterly","preview":"notes","updatedAtMs":42,"archived":false}"#,
+    )
+    .unwrap();
+    fs::write(
+        metadata.join("conversation-conv-real"),
+        br#"{"id":"conv-real","organization":"acme","owner":"ada","agent":"claude","model":"opus","approvalMode":"ask","creationRevision":3,"changeRevision":4}"#,
+    )
+    .unwrap();
+    fs::write(
+        metadata.join("summary-conv-title-only"),
+        br#"{"conversationId":"conv-title-only","title":"Orphan","updatedAtMs":1,"archived":false}"#,
+    )
+    .unwrap();
+    fs::write(
+        metadata.join("tombstone-conv-gone"),
+        br#"{"conversationId":"conv-gone","erased":true}"#,
+    )
+    .unwrap();
+    let namespace = root.path().join("gateway");
+    fs::create_dir(&namespace).unwrap();
+    install_serving_stores(&namespace, &live).unwrap();
+    let connection = nessa_local_database::rusqlite::Connection::open(
+        namespace.join("conversations/metadata.sqlite3"),
+    )
+    .unwrap();
+    let owner: (String, String, String, i64, i64) = connection
+        .query_row(
+            "SELECT organization, owner, agent, creation_revision, change_revision
+             FROM conversations WHERE id = 'conv-real'",
+            [],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                ))
+            },
+        )
+        .unwrap();
+    assert_eq!(owner, ("acme".into(), "ada".into(), "claude".into(), 3, 4));
+    let summary: (Option<String>, Option<String>, i64, i64) = connection
+        .query_row(
+            "SELECT title, preview, updated_at_ms, archived FROM summaries WHERE conversation_id = 'conv-real'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .unwrap();
+    assert_eq!(
+        summary,
+        (Some("Quarterly".into()), Some("notes".into()), 42, 0)
+    );
+    let others: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM conversations WHERE id IN ('conv-title-only', 'conv-gone')",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(others, 0);
+}
+
+#[test]
+fn a_fetched_stream_is_absent_until_its_records_are_written_with_it() {
+    let root = tempfile::tempdir().unwrap();
+    let namespace = root.path().join("gateway");
+    let live = root.path().join("live");
+    let serving = namespace.join("conversations/sessions/records.sqlite3");
+    fs::create_dir_all(serving.parent().unwrap()).unwrap();
+    fs::create_dir_all(live.join("sessions")).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(serving.parent().unwrap(), fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    write_session(&serving, 64);
+    let incomplete = live.join("sessions/conv-new.sqlite3");
+    write_stream_without_records(&incomplete, "conv-new");
+    let error = merge_published_session(&namespace, &live, "conv-new").unwrap_err();
+    assert!(!error.is_empty());
+    let connection = nessa_local_database::rusqlite::Connection::open(&serving).unwrap();
+    let stranded: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM event_streams WHERE public_id = 'conv-new'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(stranded, 0);
+    let kept: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM event_records WHERE stream_key = 1",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(kept, 1);
+    drop(connection);
+    fs::remove_file(&incomplete).unwrap();
+    write_one_stream(&incomplete, "conv-new", b"fetched-body");
+    merge_published_session(&namespace, &live, "conv-new").unwrap();
+    merge_published_session(&namespace, &live, "conv-new").unwrap();
+    let connection = nessa_local_database::rusqlite::Connection::open(&serving).unwrap();
+    let streams: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM event_streams WHERE public_id = 'conv-new'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(streams, 1);
+    let payload: Vec<u8> = connection
+        .query_row(
+            "SELECT payload FROM event_records
+             WHERE stream_key = (
+                SELECT stream_key FROM event_streams WHERE public_id = 'conv-new'
+             )",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(payload, b"fetched-body");
+}
+
+fn write_stream_without_records(path: &PathBuf, conversation_id: &str) {
+    let database = nessa_local_database::rusqlite::Connection::open(path).unwrap();
+    database
+        .execute_batch(
+            "CREATE TABLE event_streams(
+                stream_key INTEGER PRIMARY KEY,
+                public_id TEXT NOT NULL,
+                incarnation BLOB NOT NULL,
+                floor BLOB NOT NULL,
+                tail BLOB NOT NULL,
+                retired INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE TABLE event_stream_names(
+                public_id TEXT PRIMARY KEY,
+                latest_incarnation BLOB NOT NULL,
+                active_stream_key INTEGER
+            );",
+        )
+        .unwrap();
+    let incarnation = [0x33u8; 16];
+    let tail = [0u8, 0, 0, 0, 0, 0, 0, 1];
+    database
+        .execute(
+            "INSERT INTO event_streams(stream_key, public_id, incarnation, floor, tail)
+             VALUES (7, ?1, ?2, ?3, ?3)",
+            nessa_local_database::rusqlite::params![
+                conversation_id,
+                incarnation.as_slice(),
+                tail.as_slice()
+            ],
+        )
+        .unwrap();
+    database
+        .execute(
+            "INSERT INTO event_stream_names(public_id, latest_incarnation, active_stream_key)
+             VALUES (?1, ?2, 7)",
+            nessa_local_database::rusqlite::params![conversation_id, incarnation.as_slice()],
+        )
+        .unwrap();
+}
+
+fn write_one_stream(path: &PathBuf, conversation_id: &str, payload: &[u8]) {
+    let database = nessa_local_database::rusqlite::Connection::open(path).unwrap();
+    database
+        .execute_batch(
+            "CREATE TABLE event_streams(
+                stream_key INTEGER PRIMARY KEY,
+                public_id TEXT NOT NULL,
+                incarnation BLOB NOT NULL,
+                floor BLOB NOT NULL,
+                tail BLOB NOT NULL,
+                retired INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE TABLE event_stream_names(
+                public_id TEXT PRIMARY KEY,
+                latest_incarnation BLOB NOT NULL,
+                active_stream_key INTEGER
+            );
+            CREATE TABLE event_records(
+                stream_key INTEGER NOT NULL,
+                offset BLOB NOT NULL,
+                event_id TEXT NOT NULL,
+                schema_id TEXT NOT NULL,
+                schema_version INTEGER NOT NULL,
+                payload BLOB NOT NULL
+            );",
+        )
+        .unwrap();
+    let incarnation = [0x33u8; 16];
+    let tail = [0u8, 0, 0, 0, 0, 0, 0, 1];
+    let offset = [0u8, 0, 0, 0, 0, 0, 0, 1];
+    database
+        .execute(
+            "INSERT INTO event_streams(stream_key, public_id, incarnation, floor, tail)
+             VALUES (7, ?1, ?2, ?3, ?3)",
+            nessa_local_database::rusqlite::params![
+                conversation_id,
+                incarnation.as_slice(),
+                tail.as_slice()
+            ],
+        )
+        .unwrap();
+    database
+        .execute(
+            "INSERT INTO event_stream_names(public_id, latest_incarnation, active_stream_key)
+             VALUES (?1, ?2, 7)",
+            nessa_local_database::rusqlite::params![conversation_id, incarnation.as_slice()],
+        )
+        .unwrap();
+    database
+        .execute(
+            "INSERT INTO event_records(stream_key, offset, event_id, schema_id, schema_version, payload)
+             VALUES (7, ?1, 'fetched-event', 'nessa.record', 1, ?2)",
+            nessa_local_database::rusqlite::params![offset.as_slice(), payload],
         )
         .unwrap();
 }

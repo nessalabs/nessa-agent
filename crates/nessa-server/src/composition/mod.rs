@@ -34,6 +34,8 @@ pub use backup_verification::run_backup_verifier;
 pub use restore_command::run_backup_restore;
 pub(crate) use restore_command::{open_restored_conversation, startup_authority};
 pub use restore_planning::run_restore_planner;
+#[cfg(test)]
+pub(crate) use serving_restore::{install_serving_stores, merge_published_session};
 
 pub use root::CompositionRoot;
 
