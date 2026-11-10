@@ -5,6 +5,7 @@
 
 use std::collections::BTreeMap;
 use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
 
 use nessa_local_database::rusqlite::{params, Connection, TransactionBehavior};
@@ -177,17 +178,20 @@ fn publish_copy(source: &Path, destination: &Path) -> Result<(), String> {
     partial_name.push(".partial");
     let partial = PathBuf::from(partial_name);
     let _ = fs::remove_file(&partial);
-    if let Err(error) = fs::copy(source, &partial) {
+    let copied = (|| -> Result<(), String> {
+        // The file has to be private before SQLite or a reader opens it.
+        // A copied file otherwise keeps the process default ACL, which
+        // Windows refuses as not owned solely by this user.
+        let mut output =
+            nessa_local_storage::open(&partial, nessa_local_storage::OpenMode::CreateNew)
+                .map_err(|error| error.to_string())?;
+        let mut input = fs::File::open(source).map_err(|error| error.to_string())?;
+        io::copy(&mut input, &mut output).map_err(|error| error.to_string())?;
+        output.sync_all().map_err(|error| error.to_string())
+    })();
+    if let Err(error) = copied {
         let _ = fs::remove_file(&partial);
-        return Err(error.to_string());
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        if let Err(error) = fs::set_permissions(&partial, fs::Permissions::from_mode(0o600)) {
-            let _ = fs::remove_file(&partial);
-            return Err(error.to_string());
-        }
+        return Err(error);
     }
     if let Err(error) = fs::rename(&partial, destination) {
         let _ = fs::remove_file(&partial);
@@ -363,6 +367,8 @@ fn install_metadata(path: &Path, live: &Path) -> Result<(), String> {
 }
 
 fn write_metadata(path: &Path, live: &Path) -> Result<(), String> {
+    nessa_local_storage::open(path, nessa_local_storage::OpenMode::CreateNew)
+        .map_err(|error| error.to_string())?;
     let connection = Connection::open(path).map_err(|error| error.to_string())?;
     connection
         .execute_batch(METADATA_SCHEMA)

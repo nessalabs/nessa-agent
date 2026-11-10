@@ -117,25 +117,19 @@ async fn a_quarantined_backup_is_accepted_before_an_oversized_conversation_is_op
     .unwrap();
     let bundle = published.path().join("cut");
     let key_file = published.path().join("mac.key");
-    fs::write(&key_file, inventory.key().0).unwrap();
-    #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&key_file, fs::Permissions::from_mode(0o600)).unwrap();
-        fs::set_permissions(published.path(), fs::Permissions::from_mode(0o700)).unwrap();
-        fs::set_permissions(&bundle, fs::Permissions::from_mode(0o700)).unwrap();
+        use std::io::Write;
+        nessa_local_storage::open(&key_file, nessa_local_storage::OpenMode::CreateNew)
+            .unwrap()
+            .write_all(&inventory.key().0)
+            .unwrap();
     }
 
     let destination_root = tempfile::tempdir().unwrap();
     let gateway_root = tempfile::tempdir().unwrap();
     let destination = destination_root.path().join("tree");
     let gateway = gateway_root.path().join("gateway");
-    fs::create_dir(&gateway).unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&gateway, fs::Permissions::from_mode(0o700)).unwrap();
-    }
+    nessa_local_storage::create_directory(&gateway).unwrap();
     let (code, text) = run(&[
         arg("stage"),
         arg("--bundle"),
@@ -443,14 +437,7 @@ async fn a_restored_catalogue_lists_for_the_new_local_owner() {
     )
     .unwrap();
     let namespace = root.path().join("gateway");
-    fs::create_dir_all(namespace.join("auth")).unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        for directory in [root.path(), &namespace, &namespace.join("auth")] {
-            fs::set_permissions(directory, fs::Permissions::from_mode(0o700)).unwrap();
-        }
-    }
+    nessa_local_storage::create_directory(&namespace.join("auth")).unwrap();
     install_serving_stores(&namespace, &live).unwrap();
     let credentials = nessa_auth::adapters::local::LocalCredentialStore::open(
         namespace.join("auth"),
@@ -537,12 +524,7 @@ fn the_first_session_database_is_absent_until_its_copy_finishes() {
     let published = live.join("sessions/conv-new.sqlite3");
     write_one_stream(&published, "conv-new", b"fetched-body");
     let sessions = namespace.join("conversations/sessions");
-    fs::create_dir_all(&sessions).unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&sessions, fs::Permissions::from_mode(0o700)).unwrap();
-    }
+    nessa_local_storage::create_directory(&sessions).unwrap();
     fs::write(sessions.join("records.sqlite3.partial"), b"truncated").unwrap();
     merge_published_session(&namespace, &live, "conv-new").unwrap();
     let serving = sessions.join("records.sqlite3");
@@ -986,13 +968,8 @@ fn a_fetched_stream_is_absent_until_its_records_are_written_with_it() {
     let namespace = root.path().join("gateway");
     let live = root.path().join("live");
     let serving = namespace.join("conversations/sessions/records.sqlite3");
-    fs::create_dir_all(serving.parent().unwrap()).unwrap();
+    nessa_local_storage::create_directory(serving.parent().unwrap()).unwrap();
     fs::create_dir_all(live.join("sessions")).unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(serving.parent().unwrap(), fs::Permissions::from_mode(0o700)).unwrap();
-    }
     write_session(&serving, 64);
     let incomplete = live.join("sessions/conv-new.sqlite3");
     write_stream_without_records(&incomplete, "conv-new");
