@@ -14,5 +14,4 @@ describe("the window's keyboard", () => {
       }
     })
   }
-
 })
