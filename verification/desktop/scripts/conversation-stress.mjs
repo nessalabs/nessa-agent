@@ -175,8 +175,9 @@ import {
  *               worker pairs; a channel naming a computer not connected is
  *               refused channel_place_unavailable; in the channel's settings
  *               New threads runs on Computer, the worker, chosen from the
- *               computers listed; a thread made in it naming no place is
- *               answered with its lease on that worker; the channel goes back
+ *               computers listed; a chat started in the channel from the
+ *               window (⌘N, Send) is answered with its lease on that worker
+ *               and the window says where it runs; the channel goes back
  *               here, the worker stops and linking is turned off again
  *   tunnel      native linking and then the web tunnel are turned on in
  *               Settings, each restarting the gateway, which starts a
@@ -5405,17 +5406,27 @@ const steps = {
           `the channel runs ${listed?.coordinatorPlacement} / ${listed?.threadPlacement}, not local / ${worker.name}`,
         )
       if (failures.length) return
-      // A thread made in it, naming no place, runs on that computer.
-      const conversationId = randomUUID()
-      await run.client.conversation.create({
-        conversationId,
-        agent: run.stack.agent,
-        channelId: channel.channelId,
-      })
+      // A new chat started in it from the window, as a person would (the
+      // channel chosen, ⌘N, typed and sent), runs on that computer, and
+      // the window says so above its transcript.
       const text = prompt(run, STRESS.reply, step, " place")
-      await run.client.conversation.submit(
-        run.client.conversation.prepare(conversationId, text),
-      )
+      const conversationId = await run.exclusive(async () => {
+        await run.page
+          .locator(`${css.sidebar} nav`)
+          .getByText(channel.name, { exact: true })
+          .first()
+          .click({ timeout: 10_000 })
+        await run.page.keyboard.press(keys.newSession)
+        const home = run.page.locator(`${css.focusedPane} ${css.paneHome}`)
+        await home.locator(css.field).waitFor({ timeout: 15_000 })
+        await home.locator(css.field).fill(text)
+        await home.getByRole(...composerControls.send).click({ timeout: 10_000 })
+        return waitFor(() => selectedStressConversation(run.page, text), 30_000)
+      })
+      if (!conversationId) {
+        failures.push(`the chat started in ${channel.name} was never listed`)
+        return
+      }
       const { view } = await settled(
         run,
         conversationId,
@@ -5424,10 +5435,23 @@ const steps = {
         "completed",
         failures,
       )
+      const { conversations } = await run.client.conversation.list({})
+      const summary = conversations.find((each) => each.conversationId === conversationId)
+      if (summary?.channelId !== channel.channelId)
+        failures.push(
+          `the chat started in ${channel.name} is in ${summary?.channelId ?? "no channel"}`,
+        )
       if (view?.lease?.environment !== "peer" || view.lease.host !== worker.name)
         failures.push(
           `a thread in a channel on ${worker.name} runs on ${view?.lease?.environment} ${view?.lease?.host}`,
         )
+      const said = run.page.locator(`${css.focusedPane} [data-workspace-place="peer"]`)
+      if (!(await waitFor(async () => (await said.count()) > 0, 10_000)))
+        failures.push(`the window does not say the chat runs on ${worker.name}`)
+      else if (run.evidence)
+        await run.page.screenshot({
+          path: join(run.evidence, `place-${run.engine}-chat.png`),
+        })
       // Checked at rest while its computer serves: with none, the gateway
       // refuses to read it, as in `pool`.
       failures.push(...(await atRest(run, [conversationId])))
@@ -5453,6 +5477,14 @@ const steps = {
         await openLinkedDevices(run.page)
         if (await switchLinking(run, false, failures)) await closeSettings(run.page)
       })
+      // Back to the main conversation, in the default channel: the chat
+      // above left the session list showing the step's channel.
+      await run.page
+        .locator(`${css.sidebar} nav`)
+        .getByText("Conversations", { exact: true })
+        .first()
+        .click({ timeout: 10_000 })
+        .catch(() => {})
       await openStressConversation(run.page, run.main.id, run.main.title)
     }
   },
