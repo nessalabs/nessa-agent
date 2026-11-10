@@ -1,0 +1,33 @@
+{
+  "sourceRevision": "8fb90870e6cb63fe7a6f5ad982301fd46883b1bc",
+  "runtimeVerifiedCheckpoint": "0b93e7c525e1c4720913493772d1006bab2b5225",
+  "changedSourceFiles": ["crates/nessa-server/tests/conversation/background_tasks.rs"],
+  "testBodiesUnchanged": true,
+  "productionSourceUnchanged": true,
+  "fileSha256": "fabb7ac9dfe95c9e4662ab746e74b32373d6ba0bd033b6a6b0604107ac0001de",
+  "ciFailure": {
+    "head": "ff2471f3616dad5d3a89341777c70f19c2893aeb",
+    "run": 42657520316,
+    "job": 129302409155,
+    "cause": "Windows clippy rejected unused running_turn and Environments imports; both are used only by the Unix VM stress fixture."
+  },
+  "fix": "Guard running_turn with cfg(unix); move Environments to the existing Unix import group. Keep warnings denied.",
+  "localCheck": {
+    "command": [
+      "cargo",
+      "clippy",
+      "-p",
+      "nessa-server",
+      "--all-targets",
+      "--",
+      "-D",
+      "warnings"
+    ],
+    "environment": {
+      "CARGO_INCREMENTAL": "0"
+    },
+    "status": 0,
+    "log": "windows-imports-clippy.log"
+  },
+  "independentReview": "Guards match the only callers; remaining imports audited; no additional mismatch."
+}

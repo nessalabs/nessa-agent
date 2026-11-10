@@ -110,7 +110,7 @@ fn class_of(magic: &[u8]) -> Option<Magic> {
 }
 /// A credential record: the pending layout, then two u16-prefixed identifiers,
 /// each bounded by the identifier owner's own limit.
-const CREDENTIAL_MAX_BYTES: usize = PENDING_BYTES + 2 * (2 + MAX_IDENTIFIER_BYTES);
+const CREDENTIAL_MAX_BYTES: usize = PENDING_BYTES + 1 + 2 * (2 + MAX_IDENTIFIER_BYTES);
 
 /// One private storage owner. Its native lock and retained directory live through
 /// every operation; `private_state_lock_excludes_second_handle` tests exclusion.
@@ -576,7 +576,7 @@ fn encode_pending(
     pin: &[u8; 44],
     intent: PublicIntent,
 ) -> Zeroizing<Vec<u8>> {
-    let mut bytes = Zeroizing::new(Vec::with_capacity(PENDING_BYTES));
+    let mut bytes = Zeroizing::new(Vec::with_capacity(pending_bytes(intent.class())));
     bytes.extend_from_slice(magics(intent.class()).0);
     bytes.extend_from_slice(key.expose_bytes());
     bytes.extend_from_slice(pin);
@@ -589,6 +589,9 @@ fn encode_public(bytes: &mut Vec<u8>, intent: PublicIntent) {
     bytes.extend_from_slice(intent.consent().bytes());
     bytes.extend_from_slice(&intent.generation().to_be_bytes());
     bytes.extend_from_slice(&intent.expiry_ms().to_be_bytes());
+    if intent.class().is_peer() {
+        bytes.push(u8::from(intent.same_person()));
+    }
 }
 fn encode_credential(credential: &DeviceCredential) -> Zeroizing<Vec<u8>> {
     let mut bytes = encode_pending(
@@ -620,8 +623,12 @@ fn decode_client(bytes: &[u8]) -> Result<ClientRecord, PrivateStateError> {
             credential: true,
             ..
         }) => {
-            let pending = decode_pending_fields(&bytes[..PENDING_BYTES], class)?;
-            let mut rest = &bytes[PENDING_BYTES..];
+            let bound = pending_bytes(class);
+            let pending = decode_pending_fields(
+                bytes.get(..bound).ok_or(PrivateStateError::Corrupt)?,
+                class,
+            )?;
+            let mut rest = &bytes[bound..];
             let mut identifier = || -> Result<String, PrivateStateError> {
                 let (length, tail) = rest
                     .split_first_chunk::<2>()
@@ -657,7 +664,7 @@ fn decode_pending(bytes: &[u8]) -> Result<PendingEnrollment, PrivateStateError> 
     else {
         return Err(PrivateStateError::Corrupt);
     };
-    if bytes.len() != PENDING_BYTES {
+    if bytes.len() != pending_bytes(class) {
         return Err(PrivateStateError::Corrupt);
     }
     decode_pending_fields(bytes, class)
@@ -672,7 +679,7 @@ fn decode_pending_fields(
     seed.copy_from_slice(&bytes[4..36]);
     let mut pin = [0; 44];
     pin.copy_from_slice(&bytes[36..80]);
-    let intent = decode_public(&bytes[80..PENDING_BYTES], class)?;
+    let intent = decode_public(&bytes[80..pending_bytes(class)], class)?;
     Ok(PendingEnrollment::new(
         PrivateKeyMaterial::new(seed),
         pin,
@@ -680,7 +687,7 @@ fn decode_pending_fields(
     ))
 }
 fn decode_public(bytes: &[u8], class: ConsentClass) -> Result<PublicIntent, PrivateStateError> {
-    if bytes.len() != PUBLIC_INTENT_BYTES {
+    if bytes.len() != PUBLIC_INTENT_BYTES + usize::from(class.is_peer()) {
         return Err(PrivateStateError::Corrupt);
     }
     PublicIntent::new(
@@ -711,6 +718,16 @@ fn decode_public(bytes: &[u8], class: ConsentClass) -> Result<PublicIntent, Priv
         ),
         class,
     )
+    .and_then(|public| {
+        if !class.is_peer() {
+            return Ok(public);
+        }
+        match bytes[64] {
+            0 => public.with_same_person(false),
+            1 => public.with_same_person(true),
+            _ => Err(crate::domain::pairing::PairingError::Invalid),
+        }
+    })
     .map_err(|_| PrivateStateError::Corrupt)
 }
 fn storage_error(error: io::Error) -> PrivateStateError {
@@ -758,4 +775,10 @@ fn publication_step(step: PrivatePublicationStage) -> PrivatePublicationStep {
         }
         PrivatePublicationStage::SyncDirectory => PrivatePublicationStep::SyncDirectory,
     }
+}
+
+/// Device and owner-phone profiles have no same-person choice. Each peer
+/// profile carries its one required choice byte in the retained intent.
+fn pending_bytes(class: ConsentClass) -> usize {
+    PENDING_BYTES + usize::from(class.is_peer())
 }

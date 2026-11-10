@@ -1,0 +1,179 @@
+{
+  "check": "conversation-stress",
+  "ok": false,
+  "started": "2026-11-10T00:43:29.276Z",
+  "finished": "2026-11-10T00:48:56.247Z",
+  "target": {
+    "url": "http://127.0.0.1:45143/desktop.html",
+    "mode": "dev"
+  },
+  "results": [
+    {
+      "name": "008 channel",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "selected:channel,vmBackground",
+      "ms": 41794,
+      "seen": {
+        "index": 8,
+        "kind": "channel"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "019 vmBackground",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "selected:channel,vmBackground",
+      "ms": 12449,
+      "seen": {
+        "index": 19,
+        "kind": "vmBackground"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "background",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "selected:channel,vmBackground",
+      "seen": {
+        "conversations": 2,
+        "turns": 3
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "at rest",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "selected:channel,vmBackground",
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "followers",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "selected:channel,vmBackground",
+      "seen": [
+        {
+          "conversations": 6,
+          "churned": 65,
+          "resumed": 0,
+          "lagging": 0,
+          "refusedAsExpected": 1
+        },
+        {
+          "conversations": 6,
+          "churned": 66,
+          "resumed": 0,
+          "lagging": 0,
+          "refusedAsExpected": 2
+        }
+      ],
+      "failures": [],
+      "ok": true
+    },
+    {
+      "engine": "chromium",
+      "layout": "columns",
+      "name": "console",
+      "harmless": [
+        "console.error: Connecting to 'http://127.0.0.1:9/policy-probe' violates the following Content Security Policy directive: \"connect-src 'self' blob: ipc: http://ipc.localhost ws://127.0.0.1:7420 http://127.0.0.1:7420 ws://127.0.0.1:7421 http://127.0.0.1:7421 https: http://127.0.0.1:33219 ws://127.0.0.1:33219 ws://12",
+        "console.error: Fetch API cannot load http://127.0.0.1:9/policy-probe. Refused to connect because it violates the document's Content Security Policy."
+      ],
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "008 channel",
+      "engine": "webkit",
+      "layout": "columns",
+      "scope": "selected:channel,vmBackground",
+      "ms": 53683,
+      "seen": {
+        "index": 8,
+        "kind": "channel"
+      },
+      "failures": [
+        "the conversation started in stress-made-r8-s1 is in ch_4pr4fs5edz",
+        "the agent in stress-made-r8-s1 did not work in /workspace/.setup/tmp/nessa-mcp-live-claude-f0UGuB/ci/instances/conversation-stress/channels/ch_7qzxuskfcc: Working in: /workspace/.setup/tmp/nessa-mcp-live-claude-f0UGuB/ci/instances/conversation-stress/channels/ch_4pr4fs5edz System prompt: You are Nessa, a helpful assistant. Follow the user's request. Use your native tools for file operations and web research. All Nessa tools are provided through MCP.",
+        "Boat is not shown as unavailable while it is not connected",
+        "moving the main agent kept the main chat that runs on this machine",
+        "the old main chat is gone after the main agent moved",
+        "the channel made in /workspace/.setup/tmp/nessa-stress-X1VHzy/chosen-pOlqJF works in /workspace/.setup/tmp/nessa-stress-X1VHzy/chosen-0aRiX7 (made: false)",
+        "the conversation started in stress-chosen-r8-s1 is in ch_zuppx7bjln",
+        "the agent in stress-chosen-r8-s1 did not work in /workspace/.setup/tmp/nessa-stress-X1VHzy/chosen-0aRiX7: Working in: /workspace/.setup/tmp/nessa-stress-X1VHzy/chosen-pOlqJF System prompt: You are Nessa, a helpful assistant. Follow the user's request. Use your native tools for file operations and web research. All Nessa tools are provided through MCP. For shell commands use the Nessa MCP shell tool, wh"
+      ],
+      "ok": false
+    },
+    {
+      "name": "019 vmBackground",
+      "engine": "webkit",
+      "layout": "columns",
+      "scope": "selected:channel,vmBackground",
+      "cannotRun": true,
+      "error": "not run: 008 channel did not hold",
+      "failures": [],
+      "ok": false
+    },
+    {
+      "name": "background",
+      "engine": "webkit",
+      "layout": "columns",
+      "scope": "selected:channel,vmBackground",
+      "seen": {
+        "conversations": 2,
+        "turns": 3
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "at rest",
+      "engine": "webkit",
+      "layout": "columns",
+      "scope": "selected:channel,vmBackground",
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "followers",
+      "engine": "webkit",
+      "layout": "columns",
+      "scope": "selected:channel,vmBackground",
+      "seen": [
+        {
+          "conversations": 7,
+          "churned": 63,
+          "resumed": 0,
+          "lagging": 0,
+          "refusedAsExpected": 10
+        },
+        {
+          "conversations": 7,
+          "churned": 65,
+          "resumed": 0,
+          "lagging": 0,
+          "refusedAsExpected": 10
+        }
+      ],
+      "failures": [],
+      "ok": true
+    },
+    {
+      "engine": "webkit",
+      "layout": "columns",
+      "name": "console",
+      "harmless": [
+        "console.error: Refused to connect to http://127.0.0.1:9/policy-probe because it does not appear in the connect-src directive of the Content Security Policy."
+      ],
+      "failures": [],
+      "ok": true
+    }
+  ]
+}

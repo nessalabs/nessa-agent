@@ -34,13 +34,11 @@ impl SshInstall {
             Arc::new(super::local_auth::SystemClock),
         )
         .map_err(|error| RunError::Agent(error.to_string()))?;
-        Ok(Self {
-            installer: HostInstaller::this_build(
-                Arc::new(OpenSshConnector::new()),
-                root.join("host-builds"),
-            ),
-            audit,
-        })
+        let installer =
+            HostInstaller::this_build(Arc::new(OpenSshConnector::new()), root.join("host-builds"));
+        #[cfg(all(test, unix))]
+        let installer = super::vm_background_gateway::installer(installer);
+        Ok(Self { installer, audit })
     }
 }
 

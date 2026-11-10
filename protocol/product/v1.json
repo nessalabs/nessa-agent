@@ -1215,6 +1215,10 @@
           "x-utf8MaxBytes": 65536,
           "description": "User input text, whole; empty for a message of images alone. Its only bound is the frame's."
         },
+        "retried": {
+          "type": "boolean",
+          "description": "Sent again for the person after a restart or a failure cut its first try short. userText is still the person's own words, never the notice the agent was given. Absent for a first try."
+        },
         "attachments": {
           "type": "array",
           "maxItems": 10,
@@ -6071,6 +6075,10 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
+        "samePerson": {
+          "type": "boolean",
+          "description": "Immutable attribution choice for a peer gateway. This adds no capability and does not change enrollment class; absent means false."
+        },
         "enrollee": {
           "$ref": "#/$defs/PairingEnrollee",
           "description": "Who the invitation enrolls; absent means device."
@@ -6199,6 +6207,10 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
+        "samePerson": {
+          "type": "boolean",
+          "description": "The immutable choice saved on a peer-gateway invitation, including false. Omitted for other enrollment classes and by older gateways; absence is unknown, not an inferred false choice. This is historical consent, not proof that a person link has committed or that a read is authorized."
+        },
         "invitationId": {
           "x-pairing-byte-array": "InvitationId",
           "description": "Random identity of the invitation, as its bytes.",
@@ -6299,7 +6311,7 @@
         },
         "activationStopped": {
           "$ref": "#/$defs/PairingActivationStop",
-          "description": "Present when activation stopped before active: whether approving again can finish it."
+          "description": "Present when activation or its next person-attribution write stopped. The credential may already be Active; approving again retries the owed link without another credential or receiver."
         }
       },
       "required": ["status"],

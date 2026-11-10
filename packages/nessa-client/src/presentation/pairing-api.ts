@@ -39,6 +39,9 @@ export type PairingApi = {
    * owner's devices; it pairs the same way and can only read.
    * `enrollee: "environment"` invites a gateway that will run agents for this
    * one; it pairs the same way and can only serve, never read.
+   * `samePerson: true` on a gateway invitation records person attribution
+   * after activation. It adds no capability; reads still need a share grant.
+   * A failed link write leaves Active and is retried by the grant store.
    */
   create(params?: PairingCreateParams): Promise<PairingCreateResult>
   /** Unfinished enrollments for this owner, including ones still owed cleanup. No code. */

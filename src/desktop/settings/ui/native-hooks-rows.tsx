@@ -35,8 +35,9 @@ export function NativeHooksProvider({
   )
 }
 
+/** Said once, under the group: the rows say only their state. */
 const warning =
-  "Hooks can approve, deny, or change a tool call and its result without Nessa asking, and can run commands when the agent starts."
+  "Hooks can approve or change tool calls without asking. Turn on only for projects you trust."
 
 const rows = [
   { id: "claude-native-hooks", agent: "claude" },
@@ -153,8 +154,8 @@ function HookRow({
       phase.kind === "absent"
         ? "Not available in this window."
         : phase.kind === "reading"
-          ? "Reading this choice."
-          : "Could not read this choice."
+          ? "Loading"
+          : "Couldn’t read this"
     return <ItemRow setting={id} label={entry.label} detail={detail} unavailable />
   }
   const failed = phase.failed === agent
@@ -162,11 +163,8 @@ function HookRow({
     agent === "claude"
       ? phase.choice.claudeConfigured !== false
       : phase.choice.codexConfigured !== false
-  const detail = failed
-    ? "Could not change this."
-    : configured
-      ? entry.detail
-      : `${entry.detail} This agent isn't set up.`
+  // A word of state, only where there is one to say.
+  const detail = failed ? "Couldn’t change this" : configured ? undefined : "Not set up"
   return (
     <ItemRow
       setting={id}

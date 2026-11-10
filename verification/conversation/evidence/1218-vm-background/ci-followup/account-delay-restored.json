@@ -1,0 +1,93 @@
+{
+  "check": "conversation-stress",
+  "ok": true,
+  "started": "2026-11-10T01:28:05.356Z",
+  "finished": "2026-11-10T01:29:37.517Z",
+  "target": {
+    "url": "http://127.0.0.1:46287/desktop.html",
+    "mode": "dev"
+  },
+  "results": [
+    {
+      "name": "008 channel",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "selected:channel,vmBackground",
+      "ms": 63135,
+      "seen": {
+        "index": 8,
+        "kind": "channel"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "019 vmBackground",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "selected:channel,vmBackground",
+      "ms": 12640,
+      "seen": {
+        "index": 19,
+        "kind": "vmBackground"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "background",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "selected:channel,vmBackground",
+      "seen": {
+        "conversations": 2,
+        "turns": 3
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "at rest",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "selected:channel,vmBackground",
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "followers",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "selected:channel,vmBackground",
+      "seen": [
+        {
+          "conversations": 6,
+          "churned": 83,
+          "resumed": 0,
+          "lagging": 0,
+          "refusedAsExpected": 3
+        },
+        {
+          "conversations": 6,
+          "churned": 83,
+          "resumed": 0,
+          "lagging": 0,
+          "refusedAsExpected": 3
+        }
+      ],
+      "failures": [],
+      "ok": true
+    },
+    {
+      "engine": "chromium",
+      "layout": "columns",
+      "name": "console",
+      "harmless": [
+        "console.error: Connecting to 'http://127.0.0.1:9/policy-probe' violates the following Content Security Policy directive: \"connect-src 'self' blob: ipc: http://ipc.localhost ws://127.0.0.1:7420 http://127.0.0.1:7420 ws://127.0.0.1:7421 http://127.0.0.1:7421 https: http://127.0.0.1:44665 ws://127.0.0.1:44665 ws://12",
+        "console.error: Fetch API cannot load http://127.0.0.1:9/policy-probe. Refused to connect because it violates the document's Content Security Policy."
+      ],
+      "failures": [],
+      "ok": true
+    }
+  ]
+}

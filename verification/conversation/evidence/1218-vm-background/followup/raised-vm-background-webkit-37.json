@@ -1,0 +1,32 @@
+{
+  "lease": {
+    "initial": {
+      "state": "live",
+      "revision": 1,
+      "environment": "boat",
+      "sandbox": "harness_default",
+      "droppedEvents": 0
+    },
+    "afterIdle": {
+      "state": "live",
+      "revision": 1,
+      "environment": "boat",
+      "sandbox": "harness_default",
+      "droppedEvents": 0
+    }
+  },
+  "events": [
+    {
+      "kind": "created",
+      "thread": "c650816c-ac2b-46ec-b943-ac2c45fbf57d"
+    },
+    {
+      "kind": "background",
+      "thread": "c650816c-ac2b-46ec-b943-ac2c45fbf57d"
+    },
+    {
+      "kind": "rested",
+      "thread": "c650816c-ac2b-46ec-b943-ac2c45fbf57d"
+    }
+  ]
+}

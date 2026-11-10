@@ -154,11 +154,9 @@ describe("the welcome", () => {
         onRetryGateway: () => {},
       }),
     )
-    // The whole line is there from the first frame, the name painted still
-    // rather than typed in letter by letter.
-    expect(markup).toMatch(
-      /<h1[^>]*>Welcome to <span data-slot="gradient-text"[^>]*>Nessa<\/span><\/h1>/,
-    )
+    // The whole line is there from the first frame, plain words in the app's
+    // own ink: not typed in letter by letter, and not painted in colour.
+    expect(markup).toMatch(/<h1[^>]*>Welcome to Nessa<\/h1>/)
     expect(markup).toContain("Your personal sidekick")
     // The way on is there from the start, so the step never lacks one.
     expect(markup).toContain("Get started")

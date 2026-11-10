@@ -20,11 +20,15 @@ afterEach(async () => {
 const unlimited: BoatRuntimeSettings = { defaultLifetime: { mode: "never" } }
 async function select(value: string) {
   await act(async () => {
-    const field = host.querySelector("select")
-    if (!field) throw new Error("missing lifetime control")
-    field.value = value
-    field.dispatchEvent(new Event("change", { bubbles: true }))
+    const option = host.querySelector<HTMLButtonElement>(`[data-value="${value}"]`)
+    if (!option) throw new Error(`missing lifetime choice ${value}`)
+    option.click()
   })
+}
+/** The choice the control shows as made. */
+function chosen() {
+  return host.querySelector<HTMLElement>("[data-boat-runtime-settings]")?.dataset
+    .selection
 }
 it("a late save cannot replace a newly connected gateway's settings", async () => {
   let finish: ((value: BoatRuntimeSettings) => void) | undefined
@@ -48,7 +52,7 @@ it("a late save cannot replace a newly connected gateway's settings", async () =
   }
   await act(async () => root.render(<BoatRuntimeControl gateway={fresh} />))
   await act(async () => finish?.({ defaultLifetime: { mode: "after", seconds: 14_400 } }))
-  expect(host.querySelector("select")?.value).toBe("28800")
+  expect(chosen()).toBe("28800")
   expect(fresh.setRuntimeSettings).not.toHaveBeenCalled()
 })
 it("choosing the saved custom duration again saves nothing", async () => {
@@ -62,11 +66,11 @@ it("choosing the saved custom duration again saves nothing", async () => {
     setRuntimeSettings,
   }
   await act(async () => root.render(<BoatRuntimeControl gateway={gateway} />))
-  expect(host.querySelector("select")?.value).toBe("12345")
-  expect(host.textContent).toContain("After 12345 seconds")
+  expect(chosen()).toBe("12345")
+  expect(host.textContent).toContain("12345s")
   await select("12345")
   expect(setRuntimeSettings).not.toHaveBeenCalled()
-  expect(host.querySelector("select")?.value).toBe("12345")
+  expect(chosen()).toBe("12345")
 })
 it("saves an ordinary global default without receiving token capabilities", async () => {
   let stored = unlimited
@@ -83,10 +87,10 @@ it("saves an ordinary global default without receiving token capabilities", asyn
   )
   const gateway = { runtimeSettings: async () => stored, setRuntimeSettings }
   await act(async () => root.render(<BoatRuntimeControl gateway={gateway} />))
-  expect(host.querySelector("select")?.value).toBe("never")
+  expect(chosen()).toBe("never")
   await select("14400")
   expect(setRuntimeSettings.mock.calls).toEqual([[{ mode: "after", seconds: 14_400 }]])
-  expect(host.querySelector("select")?.value).toBe("14400")
+  expect(chosen()).toBe("14400")
   expect(host.textContent).not.toContain("keep billing")
   await select("never")
   expect(host.textContent).toContain("VMs keep billing until you stop them in Boat.")
@@ -120,16 +124,16 @@ it("keeps explicit unlimited separate from inheritance and resets one channel", 
   await act(async () =>
     root.render(<BoatRuntimeControl gateway={gateway} channelId="ch_bbbbbbbbbb" />),
   )
-  expect(host.querySelector("select")?.value).toBe("default")
+  expect(chosen()).toBe("default")
   await select("never")
-  expect(host.querySelector("select")?.value).toBe("never")
+  expect(chosen()).toBe("never")
   await select("default")
   expect(writes).toEqual([
     { mode: "never", channelId: "ch_bbbbbbbbbb" },
     { mode: "default", channelId: "ch_bbbbbbbbbb" },
   ])
-  expect(host.querySelector("select")?.value).toBe("default")
-  expect(host.textContent).toContain("Use Nessa default (4 hours)")
+  expect(chosen()).toBe("default")
+  expect(host.textContent).toContain("Default: 4 hours")
 })
 it("ignores a late read from another channel", async () => {
   let finish!: (value: BoatRuntimeSettings) => void
@@ -152,9 +156,9 @@ it("ignores a late read from another channel", async () => {
   await act(async () =>
     root.render(<BoatRuntimeControl gateway={gateway} channelId="ch_cccccccccc" />),
   )
-  expect(host.querySelector("select")?.value).toBe("28800")
+  expect(chosen()).toBe("28800")
   await act(async () => finish({ ...unlimited, channelId: "ch_bbbbbbbbbb" }))
-  expect(host.querySelector("select")?.value).toBe("28800")
+  expect(chosen()).toBe("28800")
 })
 it("requires an explicit reload after an uncertain save and does not replay it", async () => {
   let stored = unlimited
@@ -175,5 +179,5 @@ it("requires an explicit reload after an uncertain save and does not replay it",
   )
   expect(setRuntimeSettings).toHaveBeenCalledTimes(1)
   expect(runtimeSettings).toHaveBeenCalledTimes(2)
-  expect(host.querySelector("select")?.value).toBe("14400")
+  expect(chosen()).toBe("14400")
 })

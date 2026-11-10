@@ -840,6 +840,8 @@ struct Stored {
     consent: String,
     generation: u64,
     expiry_ms: u64,
+    /// Required even when false: stripping it cannot relabel retained consent.
+    same_person: bool,
     credential: Option<StoredCredential>,
     /// The peer ended the enrollment; never with a credential.
     revoked: bool,
@@ -864,6 +866,7 @@ fn encode(record: &PeerRecord, own: &[u8; 44]) -> Result<Vec<u8>, PrivateStateEr
         consent: STANDARD.encode(intent.consent().bytes()),
         generation: intent.generation(),
         expiry_ms: intent.expiry_ms(),
+        same_person: intent.same_person(),
         revoked: record.phase == PeerPhase::Revoked,
         credential: match &record.phase {
             PeerPhase::Pending | PeerPhase::Revoked => None,
@@ -906,6 +909,7 @@ fn decode(bytes: &[u8], key: &DeviceKey, own: &[u8; 44]) -> Result<PeerRecord, P
         stored.expiry_ms,
         ConsentClass::PeerRead,
     )
+    .and_then(|intent| intent.with_same_person(stored.same_person))
     .map_err(|_| PrivateStateError::Corrupt)?;
     let phase = match (stored.revoked, stored.credential) {
         (true, None) => PeerPhase::Revoked,

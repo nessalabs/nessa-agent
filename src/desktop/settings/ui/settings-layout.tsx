@@ -14,10 +14,8 @@ import {
 import { PortalContainerProvider } from "@nessa-ui/react/lib/portal-container"
 import { IdentityButton, IdentityRow } from "../../ui/identity"
 import { EdgePeekStrip } from "../../ui/edge-peek-strip"
-import { HistoryButtons } from "../../ui/history-buttons"
 import { settingsSidebar } from "../model/settings-sidebar"
 import {
-  dekOf,
   settingsCategories,
   settingsCategory,
   settingsResultKey,
@@ -35,10 +33,8 @@ import { tooltip } from "../../ui/tooltip"
 
 /** Each category's icon in the sidebar, for every category the catalogue has. */
 const categoryIcons: Record<SettingsCategoryId, DesktopIconRole> = {
-  general: "preferences",
   appearance: "appearance",
   workspace: "workspace",
-  models: "model",
   connections: "connections",
   privacy: "privacy",
   advanced: "advanced",
@@ -119,12 +115,11 @@ export function SettingsLayout(model: SettingsSurfaceModel) {
           >
             <DesktopIcon name="sidebar" />
           </button>
-          <HistoryButtons />
           <button
             type="button"
             className="settings-titlebar-button settings-titlebar-back"
-            aria-label="Back to nessa Agent"
-            {...tooltip("Back to nessa Agent")}
+            aria-label="Back to nessa Studio"
+            {...tooltip("Back to nessa Studio")}
             tabIndex={sidebarOpen ? -1 : 0}
             aria-hidden={sidebarOpen || undefined}
             onClick={onClose}
@@ -238,9 +233,9 @@ export function SettingsLayout(model: SettingsSurfaceModel) {
             {/* Where "nessa Studio" opened Settings, the way back to the app. */}
             <IdentityRow as="div" mark="none">
               <IdentityButton
-                product="Agent"
+                product="Studio"
                 back
-                label="Back to nessa Agent"
+                label="Back to nessa Studio"
                 onClick={onClose}
               />
             </IdentityRow>
@@ -302,7 +297,6 @@ function SettingsPage({
     <div className="settings-column settings-page">
       <SettingsMasthead
         title={settingsCategory(category).label}
-        dek={dekOf(category)}
         headingId="settings-heading"
       >
         {tabs ? <SettingsTabStrip tabs={tabs} selected={tab} onSelect={onTab} /> : null}

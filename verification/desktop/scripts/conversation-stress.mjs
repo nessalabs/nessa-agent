@@ -110,7 +110,10 @@ import {
  *               dims the desktop, and a glow fills the screen and forms the
  *               window (glow, fill, form, open, in that order) before any of
  *               the window's words can be seen; welcome's words are all
- *               there as it opens, its name painted still rather than typed in,
+ *               there as it opens, its name plain text in the app's ink rather
+ *               than typed in or painted; the pane and the light beside it
+ *               are graphite (dark, no hue) on welcome, and the pane on the
+ *               picker,
  *               with Get started already showing; welcome has no Back button
  *               and Close sits in the top-right corner; past it the picker
  *               has Back in the top-left corner, which returns to welcome;
@@ -202,8 +205,12 @@ import {
  *               on; the gateway's logs and records never hold the login,
  *               and its records say it was withheld, then sent. The switch
  *               and the login are removed again after
- *   voice       an OpenAI key is saved in Settings › Connections › Accounts
- *               against a fake realtime provider on this machine: the key
+ *   voice       Talk while Nessa is locked offers Unlock beside the notice
+ *               and then starts the call; with no key saved it fails with
+ *               an Add key button beside
+ *               the notice; the key is saved through its dialog (Settings
+ *               then says it is saved, with no key field), against a fake
+ *               realtime provider on this machine: the key
  *               is never logged or audited, only the gateway asks the
  *               provider for a call. Talk opens a call above the composer
  *               (the orb, "Listening", and the speaker, microphone and End
@@ -331,6 +338,7 @@ import {
   STREAM_WORDS,
   STRESS,
   TABLE_LINES,
+  CODE_LINES,
   TRACE_CALLS,
   TRACE_PAUSE_MS,
   WATCH_CALLS,
@@ -412,6 +420,7 @@ import {
 import { KNOBS, describe, knobsFrom, selectedPlan, random } from "./lib/stress-plan.mjs"
 import { flatSurfaceFailures } from "./lib/workspace.mjs"
 import { startWorker } from "./lib/stress-workers.mjs"
+import { vmBackgroundFixture } from "./lib/stress-vm-background.mjs"
 import {
   stressProfile,
   selectStressFixture,
@@ -1342,15 +1351,14 @@ async function seenTurns(run, conversationId) {
 
 /**
  * The newest turn the gateway sent again on behalf of the one sent as `text`:
- * a message held behind a failure is stopped with it and sent again, as a
- * notice and then the original text.
+ * a message held behind a failure is stopped with it and sent again. The
+ * agent is given a notice before the text; the view keeps the person's own
+ * words and marks the turn `retried`.
  */
 function carried(view, seen, text) {
   return view.messages.findLast(
     (each) =>
-      !seen.has(each.executionId) &&
-      each.userText !== text &&
-      each.userText.endsWith(text),
+      !seen.has(each.executionId) && each.retried === true && each.userText === text,
   )
 }
 
@@ -1438,19 +1446,8 @@ async function answerCard(
     return false
   }
   // The card just answered can still be leaving: the one to answer is the
-  // card that asks `reason`, and the review is the one with that title.
-  const asking = reason ? cards.filter({ hasText: reason }) : cards
-  const showsIt = await asking
-    .first()
-    .waitFor({ timeout: 30_000 })
-    .then(() => true)
-    .catch(() => false)
-  if (!showsIt) {
-    failures.push(`the card does not ask ${JSON.stringify(reason)}`)
-    return false
-  }
-  if (!(await waitFor(async () => (await cards.count()) === 1, 5_000)))
-    failures.push(`${await cards.count()} approval cards shown, not 1`)
+  // card of the review with that title. A card names its review by key
+  // (`data-review`), since an agent's card does not repeat its title.
   const { view } = await untilTurn(
     run,
     conversationId,
@@ -1465,6 +1462,20 @@ async function answerCard(
   const permission = view?.permissions?.find(
     (each) => (!reason || each.title === reason) && (!review || each.review === review),
   )
+  const asking = permission
+    ? cards.and(run.page.locator(`[data-review="${permission.review}"]`))
+    : cards
+  const showsIt = await asking
+    .first()
+    .waitFor({ timeout: 30_000 })
+    .then(() => true)
+    .catch(() => false)
+  if (!showsIt) {
+    failures.push(`no card for the review ${JSON.stringify(reason ?? review)}`)
+    return false
+  }
+  if (!(await waitFor(async () => (await cards.count()) === 1, 5_000)))
+    failures.push(`${await cards.count()} approval cards shown, not 1`)
   // A review the deadline would deny waits long enough to answer from the
   // phone, and the card counts it down in minutes.
   const deadline = permission?.deadline
@@ -1763,6 +1774,21 @@ async function makeChannel(
   await head.locator(css.channelAdd).click({ timeout: 10_000 })
   const flow = page.locator(css.newChannel)
   if (!(await asking("name"))) return null
+  // One title and no instructions under it; the field sits right under the
+  // question it answers, not at the foot of an empty page.
+  if ((await flow.locator(".new-channel-head p").count()) !== 0)
+    failures.push("the New channel title still has a line of instructions under it")
+  const gap = await page.evaluate((flow) => {
+    const asked = document.querySelector(`${flow} .new-channel-asked`)
+    const composer = document.querySelector(`${flow} .new-channel-composer-row`)
+    return asked && composer
+      ? composer.getBoundingClientRect().top - asked.getBoundingClientRect().bottom
+      : null
+  }, css.newChannel)
+  if (gap === null || gap > 64)
+    failures.push(
+      `the New channel field is ${gap}px below its question, not right under it`,
+    )
   await page.locator(`${css.newChannelField}[data-step="name"]`).fill(name)
   await photograph(`${name}-1-name`)
   await page.keyboard.press(keys.enter)
@@ -2053,18 +2079,20 @@ async function talkInChannel(run, step, channel, failures, notes, attached = [])
   for (const path of run.stack.agent === "claude" ? attached : [])
     if (!reply.includes(path))
       failures.push(`the agent in ${channel.name} was not told of ${path}`)
-  // The chat says where its agent runs: a local channel's, on this computer.
-  const place = run.page.locator(
-    `${css.focusedPane} .workspace-heading [data-workspace-place]`,
-  )
-  const placed = await waitFor(
+  // A local channel's chat runs on this computer, the usual place, so its
+  // heading says nothing under the title: no start time, place or lease
+  // (UI audit #6). The pane menu and the shield say those.
+  const heading = run.page.locator(`${css.focusedPane} .workspace-heading`)
+  const quiet = await waitFor(
     async () =>
-      (await place.count()) === 1 && (await place.innerText()) === "This computer",
+      (await heading.count()) === 1 &&
+      (await heading.locator("p").count()) === 0 &&
+      (await heading.locator("[data-workspace-place]").count()) === 0,
     10_000,
   )
-  if (!placed)
+  if (!quiet)
     failures.push(
-      `the chat in ${channel.name} does not say it runs on this computer: ${(await place.count()) ? await place.innerText() : "nothing"}`,
+      `the chat in ${channel.name} says more than its title: ${(await heading.count()) ? await heading.innerText() : "no heading"}`,
     )
 }
 
@@ -2647,8 +2675,111 @@ async function unusedNativeContext(run, step, failures) {
 }
 
 const steps = {
+  async vmBackground(run, step, failures) {
+    const original = run.main
+    const id = randomUUID()
+    const setup = `${STRESS.reply} VM background ${step.index}`
+    await run.client.conversation.create({
+      conversationId: id,
+      agent: run.stack.agent,
+      environment: "boat:thread",
+    })
+    await run.client.conversation.submit(run.client.conversation.prepare(id, setup))
+    await settled(run, id, new Set(), setup, "completed", failures)
+    run.checked.push(id)
+    run.main = { id, title: await titleOf(run, id) }
+    await openStressConversation(run.page, id, run.main.title)
+    run.backgroundPrefix = STRESS.vmBackground
+    let launchIndex = -1
+    let leaseEvidence = null
+    run.backgroundRunning = async (task, initialLease) => {
+      if (
+        !(await waitFor(
+          async () =>
+            (launchIndex = run.stack.vmFixture
+              .events()
+              .findIndex(
+                (event) => event.thread === id && event.kind === "background",
+              )) >= 0,
+          20000,
+        ))
+      ) {
+        failures.push("the admitted VM command never reached its workspace runtime")
+        return
+      }
+      await sleep((PARK_IDLE_SECONDS + 1) * 1000)
+      const all = run.stack.vmFixture.events()
+      const events = all.filter((event) => event.thread === id)
+      if (events.filter((event) => event.kind === "background").length !== 1)
+        failures.push(
+          "the VM task did not dispatch exactly once through its workspace runtime",
+        )
+      if (
+        all
+          .slice(launchIndex + 1)
+          .some((event) => event.thread === id && event.kind === "rested")
+      )
+        failures.push(
+          "the VM rested while its background command was still running past idle",
+        )
+      const held = await run.client.conversation.read(id)
+      leaseEvidence = { initial: initialLease, afterIdle: held.lease }
+      if (
+        held.lease?.state !== "live" ||
+        held.lease.environment !== "boat" ||
+        held.lease.revision !== initialLease?.revision
+      )
+        failures.push(
+          "the cloud agent parked or changed its lease while its background task was running",
+        )
+      if (
+        !held.tools.some(
+          (tool) =>
+            tool.toolId === task.toolId &&
+            tool.executionId === task.executionId &&
+            tool.status === "running",
+        )
+      )
+        failures.push("the VM background row did not stay running past idle")
+      writeFileSync(join(run.stack.vmFixture.root, id, "finish-background"), "release")
+    }
+    try {
+      await steps.background(run, step, failures)
+      const view = await run.client.conversation.read(id)
+      if (
+        !view.tools.some((tool) =>
+          tool.details?.includes(join(run.stack.vmFixture.root, id)),
+        )
+      )
+        failures.push(
+          "the VM background command did not run in its admitted VM working directory",
+        )
+      if (
+        !(await waitFor(
+          async () =>
+            launchIndex >= 0 &&
+            run.stack.vmFixture
+              .events()
+              .slice(launchIndex + 1)
+              .some((event) => event.thread === id && event.kind === "rested"),
+          30000,
+        ))
+      )
+        failures.push("the completed VM background task did not permit idle rest")
+      if (run.evidence)
+        writeView(run.evidence, `views/vm-background-${run.engine}-${step.index}.json`, {
+          lease: leaseEvidence,
+          events: run.stack.vmFixture.events().filter((event) => event.thread === id),
+        })
+    } finally {
+      run.backgroundPrefix = null
+      run.backgroundRunning = null
+      run.main = original
+      await openStressConversation(run.page, original.id, original.title)
+    }
+  },
   async background(run, step, failures) {
-    const text = prompt(run, STRESS.background, step)
+    const text = prompt(run, run.backgroundPrefix ?? STRESS.background, step)
     const seen = await send(run, run.main.id, text, failures)
     const { turn } = await settled(run, run.main.id, seen, text, "completed", failures)
     if (!turn) return
@@ -2683,6 +2814,7 @@ const steps = {
       await trace.screenshot({
         path: join(run.evidence, `background-${run.engine}-running.png`),
       })
+    await run.backgroundRunning?.(task, running.lease)
     const completed = await waitFor(async () => {
       const view = await run.client.conversation.read(run.main.id)
       const original = view.tools.find(
@@ -2872,8 +3004,9 @@ const steps = {
       sendBy,
     )
     const { turn } = await settled(run, run.main.id, seen, text, "completed", failures)
-    // A reply carried on behind a failure echoes its notice first.
-    const echoed = turn && turn.userText !== text ? turn.userText.slice(0, 40) : text
+    // A reply carried on behind a failure echoes the notice the agent was
+    // given first; the person's own message is the text they sent.
+    const echoed = turn?.retried ? "[" : text
     await expectShown(run.page, `${SAYS.echo}${echoed}`, failures)
     if ((await run.page.locator(css.sendFailure).count()) > 0)
       failures.push("the composer shows a send failure")
@@ -3235,8 +3368,8 @@ const steps = {
       )
     if (settledTurn.turn.error)
       failures.push(`a usage limit kept a diagnostic: ${settledTurn.turn.error}`)
-    const early = "Your last turn on this request ended early"
-    if ((await pageText(run.page)).includes(early))
+    const after = await run.client.conversation.read(run.main.id)
+    if (after.messages.some((each) => each.retried && each.userText === text))
       failures.push("a usage limit resumed the turn")
     await expectShown(run.page, "Usage limit reached", failures)
     await expectShown(run.page, "Reset time unknown", failures)
@@ -3443,8 +3576,8 @@ const steps = {
           return view.messages.find(
             (each) =>
               !seen.has(each.executionId) &&
-              each.userText !== text &&
-              each.userText.endsWith(text) &&
+              each.retried === true &&
+              each.userText === text &&
               each.status === "completed",
           )
         }, 90_000)
@@ -3459,14 +3592,27 @@ const steps = {
           )
           return
         }
-        if (!/restarted/i.test(resumed.userText))
-          failures.push("the resumed turn does not say Nessa restarted")
+        // The window shows the person's own words, marked Retried, and never
+        // the notice written for the agent as theirs (UI audit #2).
         const resumedInWindow = await waitFor(async () => {
           const text = await pageText(run.page)
           return (
-            text.includes(fold(resumed.userText)) && text.includes(fold(SAYS.resumed))
+            text.includes(fold(resumed.userText)) &&
+            text.includes(fold(SAYS.resumed)) &&
+            (await run.page.locator('[data-role="user"] [data-retried]').count()) > 0
           )
         }, 60_000)
+        const notices = await run.page
+          .locator('[data-role="user"] .workspace-bubble')
+          .allInnerTexts()
+        if (
+          notices.some((said) =>
+            /^\[(Nessa restarted|Your last turn|This message did not reach)/.test(said),
+          )
+        )
+          failures.push(
+            "the window shows the agent's resume notice as the person's message",
+          )
         if (!resumedInWindow)
           failures.push(
             "the window does not show the current resumed turn and its completion",
@@ -3588,7 +3734,9 @@ const steps = {
         ? page.screenshot({ path: join(run.evidence, `mcp-${what}.png`) }).catch(() => {})
         : undefined
     await run.exclusive(async () => {
-      await openMcpServers(page)
+      if ((await openMcpServers(page)).prompted)
+        failures.push("opening Connections asked for the passphrase")
+      await noHistoryButtons(page, failures, "Settings")
       await shot("list")
       // Added from the window, off for new conversations so no agent starts it.
       await page.getByRole("button", { name: names.mcp.add, exact: true }).click()
@@ -4094,30 +4242,81 @@ const steps = {
             .catch(() => {})
         : undefined
     const row = run.page.locator('[data-setting="voice"]')
+    const pane = dock(run.page)
+    const talk = pane.getByRole("button", { name: "Talk", exact: true })
     await run.exclusive(async () => {
-      const needsUnlock = (await run.client.vault.status()).state === "locked"
-      await openAccounts(run.page)
-      if (needsUnlock) await run.page.locator('[data-vault-dialog="unlock"]').waitFor()
-      await unlockVault(run.page, { expectedContainer: "[data-settings-layers]" })
-      await row.locator('[data-voice-key="input"]').fill(realtime.key)
-      await row.locator('[data-voice-key="save"]').click()
+      // With no key saved, the refused call offers to add one where it was
+      // refused, instead of sending the person to Settings.
+      await talk.click({ timeout: 10_000 })
+      const notice = run.page.locator('.voice-dock[data-phase="failed"]')
+      const add = notice.locator('[data-voice-key="add"]')
+      // A locked Nessa (after a restart) offers Unlock in place, and then
+      // starts the call it was asked for.
+      const unlock = notice.locator('[data-voice-fix="unlock"]')
+      await Promise.race([
+        add.waitFor({ timeout: 15_000 }),
+        unlock.waitFor({ timeout: 15_000 }),
+      ]).catch(() => {})
+      if (await unlock.isVisible()) {
+        await shot("locked")
+        await unlock.click()
+        await run.page
+          .locator('[data-vault-dialog="unlock"]')
+          .waitFor({ timeout: 10_000 })
+        await unlockVault(run.page)
+      }
+      if (
+        !(await add.waitFor({ timeout: 15_000 }).then(
+          () => true,
+          () => false,
+        ))
+      ) {
+        failures.push("a call refused for want of a key does not offer to add one")
+        return
+      }
+      if (/Settings ›/.test((await notice.textContent()) ?? ""))
+        failures.push("the missing-key notice still sends the person to Settings")
+      await shot("key-missing")
+      await add.click()
+      const asked = run.page.locator('[data-voice-key="dialog"]')
+      await asked.locator('[data-voice-key="input"]').fill(realtime.key)
+      await asked.locator('[data-voice-key="save"]').click()
+      const unlocking = run.page.locator('[data-vault-dialog="unlock"]')
+      await waitFor(
+        async () => (await unlocking.isVisible()) || !(await asked.isVisible()),
+        15_000,
+      )
       await unlockVault(run.page)
-      const saved = await row
-        .locator('[data-voice-key="saved"]')
+      if (
+        !(await asked.waitFor({ state: "hidden", timeout: 15_000 }).then(
+          () => true,
+          () => false,
+        ))
+      )
+        failures.push("the key dialog stayed open after Save")
+      if (
+        !(await notice.waitFor({ state: "hidden", timeout: 5_000 }).then(
+          () => true,
+          () => false,
+        ))
+      )
+        failures.push("the missing-key notice stayed after the key was saved")
+      // Settings says the key is saved, in one word, with no field to type in.
+      await openAccounts(run.page)
+      const saved = await run.page
+        .locator('[data-setting="voice"][data-voice-key="saved"]')
         .waitFor({ timeout: 15_000 })
         .then(() => true)
         .catch(() => false)
       if (!saved) failures.push("the voice row does not say the key is saved")
       else await shot("key-saved")
-      if ((await row.locator('[data-voice-key="input"]').inputValue()) !== "")
-        failures.push("the voice row kept the key in its field after saving")
+      if ((await row.locator("input").count()) !== 0)
+        failures.push("the voice row shows a key field instead of one button")
       await closeSettings(run.page)
     })
     if (failures.length) return
     if (!(await run.client.voice.status()).keySaved)
       failures.push("the gateway does not report the voice key saved")
-    const pane = dock(run.page)
-    const talk = pane.getByRole("button", { name: "Talk", exact: true })
     const end = pane.getByRole("button", { name: "End call", exact: true })
     const orb = run.page.locator(".voice-dock .voice-orb")
     const phase = () =>
@@ -4721,6 +4920,7 @@ const steps = {
         await heading(names.setup.welcome).waitFor({ timeout: 15_000 })
         await openedAsAGlow(page, failures)
         await welcomedAtOnce(page, failures)
+        await setupIsGraphite(page, failures, "welcome", true)
         if (run.evidence)
           await page.screenshot({ path: join(run.evidence, "onboarding-welcome.png") })
         // Welcome has nothing before it: no Back, and Close in its corner.
@@ -4755,6 +4955,7 @@ const steps = {
         await button(names.setup.getStarted).click()
         await heading(names.setup.chooseAgent).waitFor({ timeout: 10_000 })
         await pickerOffers(page, failures)
+        await setupIsGraphite(page, failures, "picker", false)
         if (run.evidence)
           await page.screenshot({ path: join(run.evidence, "onboarding-picker.png") })
         // Close leaves setup from the picker: one handoff, as left.
@@ -5152,6 +5353,28 @@ const steps = {
             .getAttribute("data-kind")) !== "boat"
         )
           failures.push("Boat's tile is not drawn as a boat")
+        // One title with nothing under it, one Add device, and Boat's state
+        // said once, in one word.
+        // The kit's PageHeader, in the same place as Settings' title.
+        const header = await page.evaluate(() => {
+          const head = document.querySelector(
+            '[data-devices-page="list"] > [data-slot="page-header"]',
+          )
+          return head
+            ? {
+                next: head.nextElementSibling?.tagName ?? null,
+                size: getComputedStyle(head.querySelector("h1")).fontSize,
+              }
+            : null
+        })
+        if (!header) failures.push("Devices does not start with the page header")
+        else if (header.next === "P")
+          failures.push("the Devices title still has a line under it")
+        if ((await page.locator('[data-devices-action^="add"]').count()) !== 1)
+          failures.push("Devices offers Add device more than once")
+        const boatSays = await list.locator("[data-devices-cloud]").innerText()
+        if (/Offline/.test(boatSays) && /Not connected/.test(boatSays))
+          failures.push(`Boat's tile says its state twice: ${boatSays}`)
         // The `ssh` step's suggestions are a section of their own, under it.
         const headings = await page
           .locator(
@@ -5242,9 +5465,11 @@ const steps = {
               }
             })
             .catch(() => null)
-          if (!card || card.fill === "rgba(0, 0, 0, 0)" || !(card.radius > 0))
+          // Its rows are drawn as Settings draws them: flat on the page, as
+          // rows with hairlines, not a card (the kit's flat SettingsGroup).
+          if (!card || card.fill !== "rgba(0, 0, 0, 0)" || card.radius !== 0)
             failures.push(
-              `Add a phone draws its rows without a card: ${JSON.stringify(card)}`,
+              `Add a phone draws its rows in a card, not flat as Settings does: ${JSON.stringify(card)}`,
             )
           await photograph("phone")
           await pair.click()
@@ -5932,6 +6157,11 @@ const steps = {
       failures.push("⌘W did not close the pane beside")
       return
     }
+    // A new session beside names itself: alone, a home is its greeting;
+    // beside another pane every pane says what it is (UI audit #27).
+    await homeBesideNamed(run.page, failures)
+    await noHistoryButtons(run.page, failures, "the window")
+    if (failures.length) return
     await run.page.keyboard.press(keys.toggleSidebar)
     await channelShowsList(run.page, failures)
     if (failures.length) return
@@ -7134,6 +7364,13 @@ const steps = {
                 ),
               ),
               cut: label ? label.scrollWidth > label.clientWidth : false,
+              color: label ? getComputedStyle(label).color : "",
+              detail: (() => {
+                const detail = column.querySelector("[data-cut]")
+                return detail
+                  ? { text: detail.textContent ?? "", from: detail.dataset.cut }
+                  : null
+              })(),
             }
           })(),
         }
@@ -7181,6 +7418,29 @@ const steps = {
           )
       }
     }
+    // The verb is never cut (only a long title of its own is). A path gives
+    // way from its start, keeping the file name; anything else from its end.
+    // A failed call is told by its glyph and bar: its words keep the tone of
+    // a call that went well (UI audit #24).
+    for (const [index, row] of drawn.entries()) {
+      if (!row.name) continue
+      if (!TRACE_CALLS[index].title && row.name.cut)
+        failures.push(`row ${index + 1}'s verb ${JSON.stringify(row.name.text)} is cut`)
+      const detail = row.name.detail
+      if (detail) {
+        const path = !/\s/.test(detail.text) && detail.text.includes("/")
+        if (detail.from !== (path ? "start" : "end"))
+          failures.push(
+            `row ${index + 1}'s detail ${JSON.stringify(detail.text)} is cut from its ${detail.from}`,
+          )
+      }
+    }
+    const fine = drawn.find((row) => row.status !== "failed" && row.name)
+    for (const [index, row] of drawn.entries())
+      if (row.status === "failed" && fine && row.name?.color !== fine.name.color)
+        failures.push(
+          `row ${index + 1} failed and its words are drawn ${row.name?.color}, not ${fine.name.color}`,
+        )
     // A call's card shows the input it was made with.
     const asked = TRACE_CALLS.findIndex((call) => Object.keys(call.arguments).length)
     const row = rows.nth(asked)
@@ -7238,6 +7498,34 @@ const steps = {
       }
       await page.keyboard.press(keys.escape)
       await menuGone()
+      // The access menu ends where the composer ends, not past it toward the
+      // window's edge (UI audit #26).
+      const access = page
+        .locator(css.focusedPane)
+        .locator('.workspace-dock [data-slot="composer-access-mode"]')
+      await access.click({ timeout: 10_000 })
+      const accessMenu = page.locator('[data-slot="composer-access-mode-content"]')
+      await accessMenu.waitFor({ timeout: 5_000 })
+      const edges = await access.evaluate((control) => ({
+        menu: document
+          .querySelector('[data-slot="composer-access-mode-content"]')
+          ?.getBoundingClientRect().right,
+        composer: control.closest(".desktop-composer")?.getBoundingClientRect().right,
+      }))
+      if (
+        typeof edges.menu !== "number" ||
+        typeof edges.composer !== "number" ||
+        Math.abs(edges.menu - edges.composer) > 1
+      )
+        failures.push(
+          `the access menu ends at ${edges.menu}, not at the composer's edge ${edges.composer}`,
+        )
+      if (run.evidence)
+        await page.screenshot({
+          path: join(run.evidence, `menu-${run.engine}-access.png`),
+        })
+      await page.keyboard.press(keys.escape)
+      await accessMenu.waitFor({ state: "detached", timeout: 5_000 })
       // The overview's filter: the chosen choice's check before its number,
       // the numbers in one column, and a number picks its choice.
       const had = await page.evaluate((key) => {
@@ -7256,6 +7544,37 @@ const steps = {
         await page.getByRole("button", { name: names.overviewShowAll }).click()
         await page.locator(css.overviewListed).waitFor({ timeout: 10_000 })
       }
+      // The first group starts right under the header; a row waiting on a
+      // command is its title and that command, with no line of why above it;
+      // a reply from the peek is the composer in its compact size (UI audit
+      // #22, #23).
+      const overview = await page.evaluate(() => {
+        const header = document
+          .querySelector(".agents-overview-header")
+          ?.getBoundingClientRect()
+        const group = document
+          .querySelector(".agents-overview-group")
+          ?.getBoundingClientRect()
+        return {
+          gap: header && group ? Math.round(group.top - header.bottom) : null,
+          doubled: [...document.querySelectorAll(".agents-request")].filter(
+            (row) =>
+              row.querySelector(".agents-request-command") &&
+              row.querySelector(".agents-request-why"),
+          ).length,
+          pills: [...document.querySelectorAll(".agents-reply-pill")].map((pill) =>
+            pill.matches('.desktop-composer[data-size="compact"]'),
+          ),
+        }
+      })
+      if (overview.gap !== null && overview.gap > 32)
+        failures.push(
+          `the overview's first group starts ${overview.gap}px under its header`,
+        )
+      if (overview.doubled)
+        failures.push(`${overview.doubled} overview rows say why above their command`)
+      if (overview.pills.some((compact) => !compact))
+        failures.push("a reply from the overview is not the composer's compact size")
       const pick = async (key) => {
         await filter.click({ timeout: 10_000 })
         await page.keyboard.press(key)
@@ -7489,9 +7808,23 @@ const steps = {
     if (!turn) return
     // The gateway keeps the answer as it streamed: every line, in order, once.
     const said = (turn.parts ?? []).map((part) => part.text ?? "").join("")
-    const expected = `${SAYS.table}${text}\n\n${TABLE_LINES.map((line) => `${line}\n`).join("")}`
+    const expected = `${SAYS.table}${text}\n\n${[...TABLE_LINES, "", ...CODE_LINES]
+      .map((line) => `${line}\n`)
+      .join("")}`
     if (said.trimEnd() !== expected.trimEnd())
       failures.push(`the table answer came back as ${JSON.stringify(said.slice(0, 120))}`)
+    // The list previews the answer as prose: a table's pipes and dashes are
+    // left out (UI audit #3).
+    let listed
+    const previewed = await waitFor(async () => {
+      const { conversations } = await run.client.conversation.list({})
+      listed = conversations.find((each) => each.conversationId === run.main.id)
+      return listed?.preview === `${SAYS.table}${text}`.trim()
+    }, 10_000)
+    if (!previewed)
+      failures.push(
+        `the list previews the table answer as ${JSON.stringify(listed?.preview)}`,
+      )
     // The window draws both tables in the agent's message, and draws them
     // whole: no word split across lines, the narrow table inside the reply,
     // the wide one scrolling in its own panel with its hidden side faded.
@@ -7585,6 +7918,66 @@ const steps = {
       failures.push(
         "the wide table does not fade its right side, where columns are hidden",
       )
+    // Each table's copy control sits above its panel's top-right corner, never
+    // on a column name: the wide table cuts its last column at the panel
+    // edge, so a control inside the panel covered that name (UI audit #25).
+    await tables.nth(1).hover()
+    const copies = await message.evaluate((element) =>
+      [...element.querySelectorAll('[data-slot="markdown-table"]')].map((table) => {
+        const copy = table
+          .querySelector('[data-slot="copy-button"]')
+          ?.getBoundingClientRect()
+        const panel = table
+          .querySelector('[data-slot="table-container"]')
+          .getBoundingClientRect()
+        return copy
+          ? { above: copy.bottom <= panel.top + 0.5, right: copy.right - panel.right }
+          : null
+      }),
+    )
+    for (const [index, copy] of copies.entries()) {
+      if (!copy) failures.push(`table ${index + 1} has no copy control`)
+      else if (!copy.above || Math.abs(copy.right) > 1)
+        failures.push(
+          `table ${index + 1}'s copy control is not above its top-right corner (${JSON.stringify(copy)})`,
+        )
+    }
+    // Scrolled up, the way back to the latest sits on the composer's top
+    // edge, half over it, rather than on a line of the reply (UI audit #28).
+    const transcript = run.page.locator(css.focusedPane).locator(".workspace-transcript")
+    if (
+      await transcript.evaluate((each) => each.scrollHeight > each.clientHeight + 200)
+    ) {
+      const box = await transcript.boundingBox()
+      await run.page.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
+      await run.page.mouse.wheel(0, -600)
+      const jump = run.page
+        .locator(css.focusedPane)
+        .locator(".workspace-jump:not([data-hidden])")
+      if (!(await waitFor(async () => (await jump.count()) === 1, 5_000)))
+        failures.push("scrolled up, the way back to the latest did not show")
+      else {
+        const placed = await jump.evaluate((button) => {
+          const at = button.getBoundingClientRect()
+          const composer = button
+            .closest(".workspace-pane")
+            ?.querySelector(".workspace-dock .desktop-composer")
+            ?.getBoundingClientRect()
+          const middle = at.top + at.height / 2
+          const hit = document.elementFromPoint(at.left + at.width / 2, middle)
+          return {
+            off: composer ? Math.round(middle - composer.top) : null,
+            onTop: Boolean(hit?.closest(".workspace-jump")),
+          }
+        })
+        if (placed.off === null || Math.abs(placed.off) > 6 || !placed.onTop)
+          failures.push(
+            `the way back to the latest is not on the composer's top edge: ${JSON.stringify(placed)}`,
+          )
+        await jump.click()
+        await waitFor(async () => (await jump.count()) === 0, 5_000)
+      }
+    }
     if (run.evidence)
       await run.page.screenshot({
         path: join(run.evidence, `table-${run.engine ?? "window"}.png`),
@@ -7593,6 +7986,7 @@ const steps = {
     await port.evaluate((each) => each.scrollTo({ left: each.scrollWidth }))
     if (!(await faded(true, false)))
       failures.push("scrolled to its end, the wide table did not fade its left side")
+    await codeStaysDark(run.page, message, failures)
   },
 
   async long(run, step, failures) {
@@ -8073,11 +8467,82 @@ async function flatPanes(page, failures) {
     panes: await page.locator(css.pane).count(),
     hairlines: await page.locator(`${css.chat} ${css.paneEdge}[data-axis="x"]`).count(),
     broken: await flatSurfaceFailures(page),
+    // Room between each pane's composer and the pane's right edge: one
+    // gutter in every pane, a narrow one too (UI audit #27).
+    gutters: await page.locator(css.pane).evaluateAll((panes) =>
+      panes.map((pane) => {
+        const composer = pane.querySelector(".workspace-dock .desktop-composer")
+        return composer
+          ? Math.round(
+              pane.getBoundingClientRect().right - composer.getBoundingClientRect().right,
+            )
+          : null
+      }),
+    ),
   })
   const holds = (state) =>
-    state.panes === 2 && state.hairlines === 1 && state.broken.length === 0
+    state.panes === 2 &&
+    state.hairlines === 1 &&
+    state.broken.length === 0 &&
+    state.gutters.every((gutter) => gutter !== null && gutter >= 16)
   if (await waitFor(async () => holds(await now()), 10_000)) return
   failures.push(`the panes are not one flat surface: ${JSON.stringify(await now())}`)
+}
+
+/**
+ * Opens a new session beside the one pane (⇧⌘N), checks its header reads
+ * "New session" and is shown while the conversation's stays as it was, then
+ * closes it again (⌘W).
+ */
+/**
+ * The titlebar has no Back or Forward: the window keeps no history for them
+ * to walk, and two buttons that never did anything were noise (UI audit #31).
+ */
+async function noHistoryButtons(page, failures, where) {
+  const titlebar = page.locator(".workspace-titlebar, .settings-titlebar")
+  if (!(await titlebar.count())) {
+    failures.push(`${where} has no titlebar to look at`)
+    return
+  }
+  const named = await titlebar.evaluateAll((bars) =>
+    bars.flatMap((bar) =>
+      [...bar.querySelectorAll("button")]
+        .map((button) => button.getAttribute("aria-label") ?? "")
+        .filter((label) => /^Go (Back|Forward)\b/.test(label)),
+    ),
+  )
+  if (named.length) failures.push(`${where}'s titlebar shows ${JSON.stringify(named)}`)
+}
+
+async function homeBesideNamed(page, failures) {
+  await page.keyboard.press(keys.newSessionBeside)
+  if (
+    !(await waitFor(async () => (await page.locator(css.pane).count()) === 2, 10_000))
+  ) {
+    failures.push(
+      `a new session beside left ${await page.locator(css.pane).count()} panes, not 2`,
+    )
+    return
+  }
+  const home = page.locator(css.focusedPane)
+  const named = await waitFor(
+    async () =>
+      (await home.locator(css.paneHome).count()) === 1 &&
+      (await home
+        .locator("[data-shown] .workspace-pane-title")
+        .textContent()
+        .catch(() => "")) === "New session",
+    5_000,
+  )
+  if (!named)
+    failures.push(
+      `the new session beside is not named: ${JSON.stringify(
+        await home.locator(".workspace-pane-title").allTextContents(),
+      )}`,
+    )
+  await page.keyboard.press(keys.closePane)
+  if (!(await waitFor(async () => (await page.locator(css.pane).count()) === 1, 10_000)))
+    failures.push("⌘W did not close the new session beside")
 }
 
 /**
@@ -8136,12 +8601,19 @@ async function reopened(run, conversationId) {
   return { ms, view, reads }
 }
 
-/** Opens Settings › Connections › MCP servers, as a person does, and waits for its list. */
+/**
+ * Opens Settings › Connections › MCP servers, as a person does, and waits
+ * for its list. Connections opens on MCP servers, which needs no vault: a
+ * passphrase prompt there (a locked vault) is a failure the caller reports.
+ */
 async function openMcpServers(page) {
   if (!(await page.$(css.settings))) await page.keyboard.press(keys.settings)
   await page.locator(css.settingsCategory, { hasText: names.connections }).click()
-  await page.locator(css.settingsTab, { hasText: names.integrations }).click()
   await page.waitForSelector(selectorFor.mcpServersIn("listed"), { timeout: 10_000 })
+  const prompted = await page.locator('[data-vault-dialog="unlock"]').isVisible()
+  const tab = page.locator(css.settingsTab, { hasText: names.integrations })
+  if ((await tab.getAttribute("aria-selected")) !== "true") await tab.click()
+  return { prompted }
 }
 
 /** Chooses `item` from the ⋯ menu of the MCP server row named `name`. */
@@ -8157,6 +8629,13 @@ async function mcpMenu(page, name, item) {
 async function openLinkedDevices(page) {
   if (!(await page.$(css.settings))) await page.keyboard.press(keys.settings)
   await page.locator(css.settingsCategory, { hasText: names.connections }).click()
+  // Connections opens on Accounts, whose rows read the vault: a locked Nessa
+  // asks to be unlocked before the tabs take a click.
+  await page
+    .locator('[data-vault-dialog="unlock"]')
+    .waitFor({ timeout: 2_000 })
+    .then(() => unlockVault(page))
+    .catch(() => {})
   await page.locator(css.settingsTab, { hasText: names.linkedDevices }).click()
 }
 
@@ -8291,7 +8770,7 @@ async function welcomedAtOnce(page, failures) {
       return {
         text: heading?.textContent,
         letters: heading?.querySelectorAll("[data-slot=type-in-letter]").length ?? 0,
-        painted: heading?.querySelector("[data-slot=gradient-text]")?.textContent,
+        painted: heading?.querySelectorAll("[data-slot=gradient-text]").length ?? 0,
         waiting: document.querySelectorAll(
           ".nessa-setup-pane [data-typed], .nessa-setup-after",
         ).length,
@@ -8306,8 +8785,146 @@ async function welcomedAtOnce(page, failures) {
   if (welcome.letters || welcome.waiting)
     failures.push(`the welcome is typed in: ${JSON.stringify(welcome)}`)
   if (!welcome.begin) failures.push("Get started is not there as the welcome opens")
-  if (welcome.painted !== "Nessa")
-    failures.push(`the welcome paints ${JSON.stringify(welcome.painted)}, not the name`)
+  if (welcome.painted)
+    failures.push("the welcome paints the name in colour; setup is graphite like the app")
+}
+
+/**
+ * The window is dark only, and so are its code and diagrams: with the OS
+ * turned to light, the answer's code block is still drawn on a dark ground and
+ * its Mermaid diagram's boxes are still dark (UI audit #29). The code is read
+ * from the screen, as the highlighter draws its own colours; the diagram from
+ * its boxes' fills. The page's appearance is put back after, whatever the
+ * check found.
+ */
+async function codeStaysDark(page, message, failures) {
+  const block = message.locator('[data-slot="code-block"]')
+  const diagram = message.locator('[data-slot="mermaid-diagram"] svg')
+  const drawn = await waitFor(
+    async () => (await block.count()) === 1 && (await diagram.count()) >= 1,
+    20_000,
+  )
+  if (!drawn) {
+    failures.push("the answer's code block or diagram was not drawn")
+    return
+  }
+  await page.emulateMedia({ colorScheme: "light" })
+  try {
+    await block.scrollIntoViewIfNeeded()
+    const codeLight = async () => {
+      const box = await block.boundingBox()
+      const shot = (await page.screenshot()).toString("base64")
+      return page.evaluate(
+        async ([png, box, scale]) => {
+          const image = new Image()
+          image.src = `data:image/png;base64,${png}`
+          await image.decode()
+          const canvas = document.createElement("canvas")
+          canvas.width = image.width
+          canvas.height = image.height
+          const ctx = canvas.getContext("2d")
+          ctx.drawImage(image, 0, 0)
+          // The block's right end, past its one short line of code.
+          const [r, g, b] = ctx.getImageData(
+            Math.round((box.x + box.width - 24) * scale),
+            Math.round((box.y + box.height / 2) * scale),
+            1,
+            1,
+          ).data
+          return Math.round((r + g + b) / 3)
+        },
+        [shot, box, await page.evaluate(() => window.devicePixelRatio)],
+      )
+    }
+    // The lightest box in the diagram, 0 to 255.
+    const diagramLight = () =>
+      message.evaluate((element) => {
+        const swatch = document.createElement("canvas").getContext("2d")
+        let lightest = 0
+        for (const shape of element.querySelectorAll(
+          '[data-slot="mermaid-diagram"] svg .node :is(rect, polygon, circle, path)',
+        )) {
+          const fill = getComputedStyle(shape).fill
+          if (!fill || fill === "none") continue
+          swatch.clearRect(0, 0, 1, 1)
+          swatch.fillStyle = fill
+          swatch.fillRect(0, 0, 1, 1)
+          const [r, g, b, a] = swatch.getImageData(0, 0, 1, 1).data
+          if (a > 128) lightest = Math.max(lightest, Math.round((r + g + b) / 3))
+        }
+        return lightest
+      })
+    // Anything following the OS redraws light within a moment: wait it out.
+    let code = 0
+    let boxes = 0
+    for (let tries = 0; tries < 8; tries += 1) {
+      code = Math.max(code, await codeLight())
+      boxes = Math.max(boxes, await diagramLight())
+      if (code > 80 || boxes > 120) break
+      await sleep(250)
+    }
+    if (code > 80)
+      failures.push(`with the OS in light mode the code block turns light (${code}/255)`)
+    if (boxes > 120)
+      failures.push(`with the OS in light mode the diagram turns light (${boxes}/255)`)
+    if (boxes === 0) failures.push("the diagram has no filled boxes to read")
+  } finally {
+    await page.emulateMedia({ colorScheme: null })
+  }
+}
+
+/**
+ * Setup wears the app's graphite: on the welcome, its glass pane and the light
+ * beside it are dark greys with no hue, as the window it hands over to is.
+ * Read from the screen, since the light is drawn on a canvas. On the picker
+ * the picture is the chosen agent's own (`artToo` false), and only the pane
+ * is held to it.
+ */
+async function setupIsGraphite(page, failures, where, artToo) {
+  const boxes = await page.evaluate(() =>
+    [".nessa-setup-pane", ".nessa-setup-art"].map((selector) => {
+      const r = document.querySelector(selector)?.getBoundingClientRect()
+      // A strip down the box's middle, clear of its words and rows.
+      return r && { x: r.left + 12, y: r.top + 12, w: 8, h: r.height - 24 }
+    }),
+  )
+  const shot = (await page.screenshot()).toString("base64")
+  const samples = await page.evaluate(
+    async ([png, boxes, scale]) => {
+      const image = new Image()
+      image.src = `data:image/png;base64,${png}`
+      await image.decode()
+      const canvas = document.createElement("canvas")
+      canvas.width = image.width
+      canvas.height = image.height
+      const ctx = canvas.getContext("2d")
+      ctx.drawImage(image, 0, 0)
+      return boxes.map((box) => {
+        if (!box) return null
+        let hue = 0
+        let light = 0
+        for (let step = 0; step <= 10; step += 1) {
+          const [r, g, b] = ctx.getImageData(
+            Math.round((box.x + box.w / 2) * scale),
+            Math.round((box.y + (box.h * step) / 10) * scale),
+            1,
+            1,
+          ).data
+          hue = Math.max(hue, Math.max(r, g, b) - Math.min(r, g, b))
+          light = Math.max(light, (r + g + b) / 3)
+        }
+        return { hue, light }
+      })
+    },
+    [shot, boxes, await page.evaluate(() => window.devicePixelRatio)],
+  )
+  const [pane, art] = samples
+  if (!pane || pane.hue > 14 || pane.light > 90)
+    failures.push(`${where}: the pane is not dark graphite: ${JSON.stringify(pane)}`)
+  if (artToo && (!art || art.hue > 14 || art.light > 170))
+    failures.push(
+      `${where}: the light beside the pane has colour: ${JSON.stringify(art)}`,
+    )
 }
 
 /**
@@ -8844,7 +9461,7 @@ async function githubReadAgent(run, step, failures) {
 
 /** Leaves Settings: Esc does not close it; its back control returns to the app. */
 async function closeSettings(page) {
-  await page.getByRole("button", { name: "Back to nessa Agent" }).first().click()
+  await page.getByRole("button", { name: "Back to nessa Studio" }).first().click()
   await page.waitForSelector(css.settings, { state: "detached", timeout: 10_000 })
 }
 
@@ -9829,7 +10446,12 @@ async function startStack(options) {
   }
   let stack
   try {
+    const vmFixture = selected.some((step) => step.kind === "vmBackground")
+      ? await vmBackgroundFixture(directory, PARK_IDLE_SECONDS)
+      : null
+    Object.assign(environment, vmFixture?.environment)
     stack = await startGatewayStack(options, INSTANCE, {
+      executable: vmFixture?.executable,
       vault: true,
       environment,
       servers,
@@ -9848,7 +10470,7 @@ async function startStack(options) {
       nativeContext,
       model: profile.model,
       evidence: recordingDirectory,
-      limits: { agentIdleSeconds: knobs.parks > 0 ? PARK_IDLE_SECONDS : 0 },
+      limits: { agentIdleSeconds: knobs.parks > 0 || vmFixture ? PARK_IDLE_SECONDS : 0 },
       // The agent a `handoff` step switches its conversation to.
       others: [
         ...new Set([
@@ -9866,6 +10488,7 @@ async function startStack(options) {
     })
     const { agents } = await stack.client.agents.list()
     stack.profile = selectStressFixture(profile, agents)
+    stack.vmFixture = vmFixture
     stack.fakeSsh = fakeSsh
     // The PATH the gateway was started with: a step that changes it adds to
     // this one, so what another step put there (the `ssh` step's stand-in)

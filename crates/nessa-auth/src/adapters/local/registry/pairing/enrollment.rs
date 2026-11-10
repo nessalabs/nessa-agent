@@ -28,6 +28,18 @@ use crate::{
 };
 use std::sync::Arc;
 impl PairingStore for LocalCredentialStore {
+    fn validate_same_person_owner(
+        &self,
+        intent: &crate::domain::pairing::ConsentIntent,
+    ) -> Result<(), PairingStoreError> {
+        let slot = self
+            .registry()
+            .map_err(|_| PairingStoreError::Unavailable)?;
+        super::owner_principal(slot.as_ref().ok_or(PairingStoreError::Unavailable)?, intent)
+            .map(|_| ())
+            .map_err(PairingStoreError::Domain)
+    }
+
     fn publish_first_gateway_key(
         &self,
         keys: &dyn GatewayKeyStore,
@@ -198,6 +210,7 @@ impl PairingStore for LocalCredentialStore {
             {
                 return Err(PairingStoreError::Domain(PairingError::Invalid));
             }
+            super::owner_principal(current, record.intent()).map_err(PairingStoreError::Domain)?;
             self.config
                 .validate_pairing_count(
                     current
@@ -344,7 +357,7 @@ impl PairingStore for LocalCredentialStore {
                     )
                     .map(Some)
             },
-            |_, _| Ok(()),
+            |_, _, _| Ok(()),
         )
     }
     fn remember_receiver(
@@ -402,7 +415,16 @@ impl PairingStore for LocalCredentialStore {
                     )
                     .map(Some)
             },
-            |next, transition| {
+            |next, transition, current| {
+                self.require_person_link_absent(current, transition.after())
+                    .map_err(|error| match error {
+                        crate::application::pairing::PersonLinkError::Conflict => {
+                            PairingStoreError::Domain(PairingError::Conflict)
+                        }
+                        crate::application::pairing::PersonLinkError::Unavailable => {
+                            PairingStoreError::Unavailable
+                        }
+                    })?;
                 if next.credentials.len() >= self.config.max_credentials {
                     return Err(PairingStoreError::Domain(PairingError::Capacity));
                 }
@@ -605,6 +627,13 @@ impl PairingStore for LocalCredentialStore {
             self.publish_snapshot(next)
                 .map_err(|_| PairingStoreError::Unavailable)?;
             self.publish_revision(revision);
+            if record.phase() == PairingPhase::Active
+                && decision == OwnerDecision::Cancel
+                && record.intent().same_person()
+            {
+                self.reconcile_person_links(slot.as_ref().ok_or(PairingStoreError::Unavailable)?)
+                    .map_err(|_| PairingStoreError::Unavailable)?;
+            }
             Ok(transition.after().clone())
         })
     }
@@ -632,7 +661,11 @@ impl LocalCredentialStore {
             &PairingRecord,
             u64,
         ) -> Result<Option<PairingTransition>, PairingError>,
-        effect: impl FnOnce(&mut Registry, &PairingTransition) -> Result<(), PairingStoreError>,
+        effect: impl FnOnce(
+            &mut Registry,
+            &PairingTransition,
+            &Registry,
+        ) -> Result<(), PairingStoreError>,
     ) -> Result<PairingRecord, PairingStoreError> {
         let mut slot = self
             .mutation_registry()
@@ -654,6 +687,10 @@ impl LocalCredentialStore {
         let Some(transition) =
             transition(current, &record, now).map_err(PairingStoreError::Domain)?
         else {
+            if record.phase() == PairingPhase::Active && record.intent().same_person() {
+                self.reconcile_person_links(current)
+                    .map_err(|_| PairingStoreError::Unavailable)?;
+            }
             return Ok(record);
         };
         let mut next = current.clone();
@@ -664,7 +701,7 @@ impl LocalCredentialStore {
             .revision
             .checked_add(1)
             .ok_or(PairingStoreError::Domain(PairingError::Capacity))?;
-        effect(&mut next, &transition)?;
+        effect(&mut next, &transition, current)?;
         self.persist(&next)
             .map_err(|_| PairingStoreError::Unavailable)?;
         let revision = next.revision;
@@ -672,6 +709,12 @@ impl LocalCredentialStore {
         self.publish_snapshot(next)
             .map_err(|_| PairingStoreError::Unavailable)?;
         self.publish_revision(revision);
+        if transition.after().phase() == PairingPhase::Active
+            && transition.after().intent().same_person()
+        {
+            self.reconcile_person_links(slot.as_ref().ok_or(PairingStoreError::Unavailable)?)
+                .map_err(|_| PairingStoreError::Unavailable)?;
+        }
         Ok(transition.after().clone())
     }
     fn commit_pairing(

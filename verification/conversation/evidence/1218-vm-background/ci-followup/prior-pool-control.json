@@ -1,0 +1,108 @@
+{
+  "check": "conversation-stress",
+  "ok": true,
+  "started": "2026-11-10T00:56:28.385Z",
+  "finished": "2026-11-10T00:59:15.037Z",
+  "target": {
+    "url": "http://127.0.0.1:39487/desktop.html",
+    "mode": "dev"
+  },
+  "results": [
+    {
+      "name": "006 mcp",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "selected:mcp,channel,pool",
+      "ms": 35010,
+      "seen": {
+        "index": 6,
+        "kind": "mcp"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "008 channel",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "selected:mcp,channel,pool",
+      "ms": 63409,
+      "seen": {
+        "index": 8,
+        "kind": "channel"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "014 pool",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "selected:mcp,channel,pool",
+      "ms": 40966,
+      "seen": {
+        "index": 14,
+        "kind": "pool"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "background",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "selected:mcp,channel,pool",
+      "seen": {
+        "conversations": 2,
+        "turns": 3
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "at rest",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "selected:mcp,channel,pool",
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "followers",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "selected:mcp,channel,pool",
+      "seen": [
+        {
+          "conversations": 6,
+          "churned": 152,
+          "resumed": 15,
+          "lagging": 0,
+          "refusedAsExpected": 8
+        },
+        {
+          "conversations": 6,
+          "churned": 147,
+          "resumed": 15,
+          "lagging": 0,
+          "refusedAsExpected": 6
+        }
+      ],
+      "failures": [],
+      "ok": true
+    },
+    {
+      "engine": "chromium",
+      "layout": "columns",
+      "name": "console",
+      "harmless": [
+        "console.error: Connecting to 'http://127.0.0.1:9/policy-probe' violates the following Content Security Policy directive: \"connect-src 'self' blob: ipc: http://ipc.localhost ws://127.0.0.1:7420 http://127.0.0.1:7420 ws://127.0.0.1:7421 http://127.0.0.1:7421 https: http://127.0.0.1:40409 ws://127.0.0.1:40409 ws://12",
+        "console.error: Fetch API cannot load http://127.0.0.1:9/policy-probe. Refused to connect because it violates the document's Content Security Policy.",
+        "console.error: WebSocket connection to 'ws://127.0.0.1:40409/session' failed: Error in connection establishment: net::ERR_CONNECTION_REFUSED (http://127.0.0.1:39487/packages/nessa-client/src/composition/root.ts) [owned gateway restart; session reconnected]",
+        "console.error: WebSocket connection to 'ws://127.0.0.1:40409/session' failed: Error in connection establishment: net::ERR_CONNECTION_REFUSED (http://127.0.0.1:39487/packages/nessa-client/src/composition/root.ts) [owned gateway restart; session reconnected]"
+      ],
+      "failures": [],
+      "ok": true
+    }
+  ]
+}

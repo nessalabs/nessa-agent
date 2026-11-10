@@ -1,0 +1,199 @@
+{
+  "check": "conversation-stress",
+  "ok": true,
+  "started": "2026-11-09T16:37:59.188Z",
+  "finished": "2026-11-09T16:39:38.028Z",
+  "target": {
+    "url": "http://127.0.0.1:35001/desktop.html",
+    "mode": "dev"
+  },
+  "results": [
+    {
+      "name": "018 vmBackground",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "selected:vmBackground",
+      "ms": 11764,
+      "seen": {
+        "index": 18,
+        "kind": "vmBackground"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "023 vmBackground",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "selected:vmBackground",
+      "ms": 11378,
+      "seen": {
+        "index": 23,
+        "kind": "vmBackground"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "037 vmBackground",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "selected:vmBackground",
+      "ms": 11406,
+      "seen": {
+        "index": 37,
+        "kind": "vmBackground"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "background",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "selected:vmBackground",
+      "seen": {
+        "conversations": 2,
+        "turns": 3
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "at rest",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "selected:vmBackground",
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "followers",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "selected:vmBackground",
+      "seen": [
+        {
+          "conversations": 6,
+          "churned": 41,
+          "resumed": 0,
+          "lagging": 0,
+          "refusedAsExpected": 4
+        },
+        {
+          "conversations": 6,
+          "churned": 42,
+          "resumed": 0,
+          "lagging": 0,
+          "refusedAsExpected": 4
+        }
+      ],
+      "failures": [],
+      "ok": true
+    },
+    {
+      "engine": "chromium",
+      "layout": "columns",
+      "name": "console",
+      "harmless": [
+        "console.error: Connecting to 'http://127.0.0.1:9/policy-probe' violates the following Content Security Policy directive: \"connect-src 'self' blob: ipc: http://ipc.localhost ws://127.0.0.1:7420 http://127.0.0.1:7420 ws://127.0.0.1:7421 http://127.0.0.1:7421 https: http://127.0.0.1:33575 ws://127.0.0.1:33575 ws://12",
+        "console.error: Fetch API cannot load http://127.0.0.1:9/policy-probe. Refused to connect because it violates the document's Content Security Policy."
+      ],
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "018 vmBackground",
+      "engine": "webkit",
+      "layout": "columns",
+      "scope": "selected:vmBackground",
+      "ms": 14121,
+      "seen": {
+        "index": 18,
+        "kind": "vmBackground"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "023 vmBackground",
+      "engine": "webkit",
+      "layout": "columns",
+      "scope": "selected:vmBackground",
+      "ms": 12454,
+      "seen": {
+        "index": 23,
+        "kind": "vmBackground"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "037 vmBackground",
+      "engine": "webkit",
+      "layout": "columns",
+      "scope": "selected:vmBackground",
+      "ms": 12486,
+      "seen": {
+        "index": 37,
+        "kind": "vmBackground"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "background",
+      "engine": "webkit",
+      "layout": "columns",
+      "scope": "selected:vmBackground",
+      "seen": {
+        "conversations": 2,
+        "turns": 3
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "at rest",
+      "engine": "webkit",
+      "layout": "columns",
+      "scope": "selected:vmBackground",
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "followers",
+      "engine": "webkit",
+      "layout": "columns",
+      "scope": "selected:vmBackground",
+      "seen": [
+        {
+          "conversations": 7,
+          "churned": 44,
+          "resumed": 0,
+          "lagging": 0,
+          "refusedAsExpected": 8
+        },
+        {
+          "conversations": 7,
+          "churned": 46,
+          "resumed": 0,
+          "lagging": 0,
+          "refusedAsExpected": 7
+        }
+      ],
+      "failures": [],
+      "ok": true
+    },
+    {
+      "engine": "webkit",
+      "layout": "columns",
+      "name": "console",
+      "harmless": [
+        "console.error: Refused to connect to http://127.0.0.1:9/policy-probe because it does not appear in the connect-src directive of the Content Security Policy."
+      ],
+      "failures": [],
+      "ok": true
+    }
+  ]
+}

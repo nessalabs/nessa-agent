@@ -761,10 +761,9 @@ page slides into place by transform (`slideFrom`), its inline title held
 still at its place meanwhile (`holdStill`), whatever row it was in.
 
 Every surface's titlebar — classic, both layouts, Settings — carries the
-sidebar toggle, then Back and Forward (`src/desktop/ui/history-buttons.tsx`),
-in one place whether the sidebar is drawn, revealed or hidden. The window has
-no history yet: the two rest, and their props are the one seam history will
-attach to; ⌘[ and ⌘] are reserved for them. Controls name themselves in one
+sidebar toggle in one place whether the sidebar is drawn, revealed or hidden.
+The window keeps no navigation history, so it shows no Back or Forward
+buttons; they come back only together with history that works. Controls name themselves in one
 tooltip for the whole window, in the window's own glass
 (`src/desktop/adapters/use-window-tooltips.ts`).
 

@@ -1,0 +1,18 @@
+starting a dev server of its own on port 44075…
+warmed 1336 modules in 6157 ms
+conversation-stress {"vmBackgroundTasks":1,"backgroundTasks":1,"inputFiles":1,"pairedCatalogues":1,"modelSwitches":1,"seed":1,"rounds":16,"asides":2,"parallel":2,"turns":3,"switches":3,"stops":2,"parentstops":1,"fails":1,"signIns":1,"usageLimits":1,"reviews":20,"large":1,"restarts":1,"threads":1,"awaits":1,"watches":1,"followers":2,"closes":1,"parks":1,"renames":1,"handoffs":1,"deletes":1,"fresh":2,"windows":1,"rails":1,"waitingRows":1,"streams":1,"panels":1,"onboardings":1,"linkings":1,"mcpServers":1,"pastes":1,"attaches":1,"tables":1,"traces":1,"transcriptViews":1,"notices":1,"pools":1,"devices":1,"sshHosts":1,"tunnels":1,"drifts":1,"upgrades":1,"menus":1,"menuPanels":1,"passphrases":1,"githubs":1,"voices":1,"logins":1,"launches":1,"webhooks":1,"huddles":1,"channels":1,"long":30,"profile":{"agent":"claude","model":"claude-sonnet-5","scenario":"full","advertisedModes":["ask","auto","full"],"requiredModes":["ask","auto","full"]}}
+19. vmBackground
+Skipping host requirements validation logic because `PLAYWRIGHT_SKIP_VALIDATE_HOST_REQUIREMENTS` env variable is set.
+ok    019 vmBackground [chromium columns]
+ok    background [chromium columns]
+ok    at rest [chromium columns]
+ok    followers [chromium columns]
+ok    console [chromium columns]
+Skipping host requirements validation logic because `PLAYWRIGHT_SKIP_VALIDATE_HOST_REQUIREMENTS` env variable is set.
+ok    019 vmBackground [webkit columns]
+ok    background [webkit columns]
+ok    at rest [webkit columns]
+ok    followers [webkit columns]
+ok    console [webkit columns]
+wrote /tmp/1218-browser-final-default.json
+conversation-stress: 10/10 held

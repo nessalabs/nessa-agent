@@ -282,6 +282,7 @@ impl GatewayPairing {
         self: &Arc<Self>,
         session: AuthenticatedSession,
         class: ConsentClass,
+        same_person: bool,
         entropy: R,
     ) -> Result<CreatedInvitation, PairingRuntimeError> {
         let owner_lease = self.admit_owner()?;
@@ -298,7 +299,7 @@ impl GatewayPairing {
             let _owner_lease = owner_lease;
             let _permit = permit;
             let runtime = owner;
-            runtime.create_blocking(&handle, &session, class, entropy)
+            runtime.create_blocking(&handle, &session, class, same_person, entropy)
         })
         .await
         .map_err(|error| PairingRuntimeError::WorkerFault(worker_fault(error)))?
@@ -311,6 +312,7 @@ impl GatewayPairing {
         handle: &Handle,
         session: &AuthenticatedSession,
         class: ConsentClass,
+        same_person: bool,
         mut entropy: R,
     ) -> Result<CreatedInvitation, PairingRuntimeError> {
         let mut bytes = [0; 32];
@@ -331,6 +333,7 @@ impl GatewayPairing {
                     InvitationId::new(invite),
                     ConsentIntentId::new(consent),
                     class,
+                    same_person,
                 ))
             },
         )

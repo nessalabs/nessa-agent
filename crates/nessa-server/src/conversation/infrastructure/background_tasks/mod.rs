@@ -1,9 +1,15 @@
 //! Private task records and transition audit in one SQLite transaction.
 //! `BackgroundStore -> tasks (current output) + transitions (minimal evidence)`.
+//! The runner/transport adapters execute local or VM tasks; the conversation
+//! remains the lifecycle owner. `io` adapts the VM helper's standard descriptors.
 mod encoding;
+#[cfg(unix)]
+pub(crate) mod io;
 mod rows;
 #[cfg(unix)]
 mod runner;
+#[cfg(unix)]
+pub(crate) mod transport;
 #[cfg(unix)]
 pub use runner::ShepherdBackgroundTasks;
 

@@ -1,5 +1,4 @@
 import { memo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react"
-import { Button } from "@nessa-ui/react/button"
 import { EmptyState } from "@nessa-ui/react/empty-state"
 import { GroupHeader } from "@nessa-ui/react/group-header"
 import { SearchField } from "@nessa-ui/react/search-field"
@@ -172,20 +171,8 @@ export const SessionList = memo(function SessionList() {
               <EmptyState
                 className="workspace-list-empty desktop-pill-ink"
                 variant="compact"
-                title={query ? "No sessions match." : "No sessions here yet."}
-                action={
-                  query ? undefined : (
-                    <Button
-                      variant="tinted"
-                      size="28"
-                      shape="pill"
-                      press="scale"
-                      onClick={() => dispatch(newSession())}
-                    >
-                      New Session
-                    </Button>
-                  )
-                }
+                // The composer beside the list already starts one.
+                title={query ? "No sessions match" : "No sessions yet"}
               />
             ) : null}
             {/* Each group is a listbox of its sessions. */}
@@ -214,6 +201,7 @@ export const SessionList = memo(function SessionList() {
                     key={sessionId}
                     sessionId={sessionId}
                     tabStop={sessionId === tabStop}
+                    summarized={group.id === "needs-you"}
                   />
                 ))}
               </div>
@@ -228,10 +216,17 @@ export const SessionList = memo(function SessionList() {
 const SessionRow = memo(function SessionRow({
   sessionId,
   tabStop,
+  summarized,
 }: {
   sessionId: string
   /** Whether the row is the list's one Tab stop. */
   tabStop: boolean
+  /**
+   * Whether the row says what was said last, under its title: only where the
+   * person is asked for something (Needs you). Every other row is one line,
+   * title and time, so a column holds many sessions at a glance.
+   */
+  summarized: boolean
 }) {
   const session = useWorkspaceSelector((state) => selectSession(state, sessionId))
   // With the list's measure, the frame after the boxes, so the fold does not
@@ -315,7 +310,9 @@ const SessionRow = memo(function SessionRow({
             }
             // A short first message is the title too; it is said once.
             description={
-              sameWords(session.title, session.preview) ? null : session.preview
+              !summarized || sameWords(session.title, session.preview)
+                ? null
+                : session.preview
             }
           />
         </ContextMenuTrigger>

@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest"
 import {
-  dekOf,
   firstTabOf,
   namesItsTab,
   searchSettings,
@@ -54,7 +53,7 @@ describe("the settings catalogue", () => {
     })
   })
 
-  it("keeps experiments under Advanced, just before About, and not under General", () => {
+  it("keeps experiments under Advanced, just before About", () => {
     const ids = settingsCategories.map((category) => category.id)
     expect(ids.slice(-2)).toEqual(["advanced", "about"])
     expect(tabsOf("advanced").map((tab) => tab.id)).toEqual(["experimental", "setup"])
@@ -62,7 +61,6 @@ describe("the settings catalogue", () => {
       category: "advanced",
       label: "Experimental",
     })
-    expect(tabsOf("general").map((tab) => tab.id)).not.toContain("experimental")
     // The previews on offer: subagents and the side rail.
     expect(
       settingsEntries
@@ -77,7 +75,7 @@ describe("the settings catalogue", () => {
   })
 
   it("shows a category's tabs only when it has several to choose from", () => {
-    expect(showsTabs("general")).toBe(true)
+    expect(showsTabs("appearance")).toBe(true)
     expect(showsTabs("advanced")).toBe(true)
     expect(showsTabs("about")).toBe(false)
   })
@@ -89,18 +87,27 @@ describe("the settings catalogue", () => {
           expect(tab.label, category.id).not.toBe(category.label)
   })
 
-  it("gives a category a line under its title only where its name does not say enough", () => {
-    expect(dekOf("advanced")).toBe(
-      "Early features to try, and first-run setup to replay.",
-    )
-    expect(dekOf("appearance")).toBeUndefined()
-    // One short line: never more than a glance.
-    for (const category of settingsCategories)
-      expect((dekOf(category.id) ?? "").length, category.id).toBeLessThanOrEqual(64)
+  it("lists only what is built: no page of controls that would do nothing", () => {
+    expect(settingsCategories.map((category) => category.id)).toEqual([
+      "appearance",
+      "workspace",
+      "connections",
+      "privacy",
+      "advanced",
+      "about",
+    ])
+    expect(tabsOf("connections").map((tab) => tab.id)).toEqual([
+      // Accounts reads the vault: Connections does not open on it.
+      "integrations",
+      "accounts",
+      "devices",
+    ])
+    expect(tabsOf("privacy").map((tab) => tab.id)).toEqual(["access", "native-hooks"])
+    // A page's title has no line under it.
+    for (const category of settingsCategories) expect("dek" in category).toBe(false)
   })
 
   it("knows a setting named like its tab, whose group needs no title on screen", () => {
-    expect(namesItsTab("agents")).toBe(true)
     expect(namesItsTab("workspace-layout")).toBe(true)
     expect(namesItsTab("mcp-servers")).toBe(true)
     expect(namesItsTab("icon-family")).toBe(false)
@@ -148,18 +155,18 @@ describe("searchSettings", () => {
   })
 
   it("finds a tab by its label", () => {
-    expect(searchSettings("notifications")[0]).toEqual({
-      category: "general",
-      tab: "notifications",
-      label: "Notifications",
-      trail: "General",
+    expect(searchSettings("keyboard")[0]).toEqual({
+      category: "workspace",
+      tab: "keyboard",
+      label: "Keyboard",
+      trail: "Workspace",
     })
   })
 
   it("finds a category by its label, on its first tab", () => {
     expect(searchSettings("connections")[0]).toMatchObject({
       category: "connections",
-      tab: "agents",
+      tab: "integrations",
       label: "Connections",
     })
   })
@@ -190,7 +197,7 @@ describe("searchSettings", () => {
   })
 
   it("does not repeat a category whose first tab shares its name", () => {
-    expect(searchSettings("general").filter((m) => m.label === "General")).toHaveLength(1)
+    expect(searchSettings("about").filter((m) => m.label === "About")).toHaveLength(1)
   })
 
   it("names a single-tab category alone in the trail", () => {

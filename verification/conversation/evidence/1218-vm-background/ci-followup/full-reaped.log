@@ -1,0 +1,155 @@
+starting a dev server of its own on port 46625…
+warmed 1338 modules in 5465 ms
+conversation-stress {"vmBackgroundTasks":1,"backgroundTasks":1,"inputFiles":0,"pairedCatalogues":1,"modelSwitches":1,"seed":1,"rounds":16,"asides":2,"parallel":2,"turns":3,"switches":3,"stops":2,"parentstops":1,"fails":1,"signIns":1,"usageLimits":1,"reviews":20,"large":1,"restarts":1,"threads":1,"awaits":1,"watches":1,"followers":2,"closes":1,"parks":1,"renames":1,"handoffs":1,"deletes":1,"fresh":2,"windows":1,"rails":1,"waitingRows":1,"streams":1,"panels":1,"onboardings":1,"linkings":1,"mcpServers":1,"pastes":1,"attaches":1,"tables":1,"traces":1,"transcriptViews":1,"notices":1,"pools":1,"devices":1,"sshHosts":1,"tunnels":1,"drifts":1,"upgrades":1,"menus":1,"menuPanels":1,"passphrases":1,"githubs":1,"voices":1,"logins":1,"launches":1,"webhooks":1,"huddles":1,"channels":1,"long":30,"profile":{"agent":"claude","model":"claude-sonnet-5","scenario":"full","advertisedModes":["ask","auto","full"],"requiredModes":["ask","auto","full"]}}
+1. table
+2. fresh
+3. rail
+4. switch ask→full
+5. permission deny (full)
+6. mcp
+7. aside
+8. channel
+9. switch full→auto
+10. permission allow (auto)
+11. aside
+12. delete
+13. long 30 turns
+14. pool
+15. trace
+16. vmBackground
+17. notice
+18. ssh
+19. usageLimit
+20. reply after usageLimit
+21. passphrase
+22. stream
+23. fail
+24. reply after fail
+25. panel
+26. linking
+27. menu
+28. fresh
+29. watch
+30. launch
+31. signIn
+32. reply after signIn
+33. github
+34. devices
+35. park
+36. drift
+37. delegate
+38. window
+39. tunnel
+40. paste
+41. stop
+42. background
+43. upgrade
+44. attach
+45. parent-stop
+46. close
+47. menuPanel
+48. await
+49. large allow (auto)
+50. restart SIGTERM
+51. login
+52. voice
+53. rename
+54. reviews allow (auto)
+55. onboarding
+56. switch auto→full
+57. permission deny (full)
+58. huddle
+59. webhook
+60. switch full→ask
+61. waitingRow deny (ask)
+62. stop
+63. transcriptView
+64. pairedCatalogue
+65. model allow (ask)
+66. handoff
+Skipping host requirements validation logic because `PLAYWRIGHT_SKIP_VALIDATE_HOST_REQUIREMENTS` env variable is set.
+ok    001 table [chromium columns]
+ok    002 fresh [chromium columns]
+ok    003 rail [chromium columns]
+ok    004 switch [chromium columns]
+ok    005 permission [chromium columns]
+ok    006 mcp [chromium columns]
+ok    007 aside [chromium columns]
+ok    008 channel [chromium columns]
+ok    009 switch [chromium columns]
+ok    010 permission [chromium columns]
+ok    011 aside [chromium columns]
+ok    012 delete [chromium columns]
+long conversation: 30 turns, first 251 ms, last 324 ms
+long conversation reopened in 248 ms; one turn in 33 ms
+long conversation read back to its first turn in 8 pages
+ok    013 long [chromium columns]
+pool: worker a14 drained in 68 ms
+pool: worker b14 drained in 78 ms
+ok    014 pool [chromium columns]
+ok    015 trace [chromium columns]
+ok    016 vmBackground [chromium columns]
+ok    017 notice [chromium columns]
+ok    018 ssh [chromium columns]
+ok    019 usageLimit [chromium columns]
+ok    020 reply [chromium columns]
+ok    021 passphrase [chromium columns]
+ok    022 stream [chromium columns]
+ok    023 fail [chromium columns]
+ok    024 reply [chromium columns]
+ok    025 panel [chromium columns]
+ok    026 linking [chromium columns]
+ok    027 menu [chromium columns]
+read deebd1f4-19b0-470f-a8d7-742223ffb70d: conversation_not_found
+ok    028 fresh [chromium columns]
+ok    029 watch [chromium columns]
+launch: listed 449ms after the gateway was up
+ok    030 launch [chromium columns]
+ok    031 signIn [chromium columns]
+ok    032 reply [chromium columns]
+ok    033 github [chromium columns]
+ok    034 devices [chromium columns]
+ok    035 park [chromium columns]
+ok    036 drift [chromium columns]
+ok    037 delegate [chromium columns]
+ok    038 window [chromium columns]
+ok    039 tunnel [chromium columns]
+ok    040 paste [chromium columns]
+ok    041 stop [chromium columns]
+ok    042 background [chromium columns]
+upgrade: restarted on a version 6 file
+ok    043 upgrade [chromium columns]
+ok    044 attach [chromium columns]
+ok    045 parent-stop [chromium columns]
+close_thread acceptance {"conversationId":"6adb1dae-8bc9-4e6a-a822-0e77f6d6a9f2","state":"accepted","threadId":"6adb1dae-8bc9-4e6a-a822-0e77f6d6a9f2","closing":true}
+close_thread parking {"conversationId":"6adb1dae-8bc9-4e6a-a822-0e77f6d6a9f2","accepted":false,"parking":0,"targetParking":0,"cleanupFailures":0,"previousParking":null,"recent":[]}
+close_thread reopened-read parking {"conversationId":"6adb1dae-8bc9-4e6a-a822-0e77f6d6a9f2","accepted":false,"parking":0,"targetParking":0,"cleanupFailures":0,"previousParking":null,"recent":[]}
+ok    046 close [chromium columns]
+ok    047 menuPanel [chromium columns]
+ok    048 await [chromium columns]
+ok    049 large [chromium columns]
+ok    050 restart [chromium columns]
+ok    051 login [chromium columns]
+ok    052 voice [chromium columns]
+ok    053 rename [chromium columns]
+ok    054 reviews [chromium columns]
+ok    055 onboarding [chromium columns]
+ok    056 switch [chromium columns]
+ok    057 permission [chromium columns]
+ok    058 huddle [chromium columns]
+webhook captured fixed Head 46; 46 queued, 0 attempted; loopback policy unchanged
+ok    059 webhook [chromium columns]
+ok    060 switch [chromium columns]
+ok    061 waitingRow [chromium columns]
+ok    062 stop [chromium columns]
+ok    063 transcriptView [chromium columns]
+ok    064 pairedCatalogue [chromium columns]
+ok    065 model [chromium columns]
+ok    066 handoff [chromium columns]
+ok    background [chromium columns]
+ok    at rest [chromium columns]
+ok    followers [chromium columns]
+ok    console [chromium columns]
+wrote /tmp/1218-full-reaped.json
+conversation-stress: 70/70 held
+subreaper: reaped 7 orphaned descendants

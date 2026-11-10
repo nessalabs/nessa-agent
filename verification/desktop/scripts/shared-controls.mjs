@@ -5,7 +5,6 @@
  * given the window's inks in one rule. Every instance on the page is held to
  * that component's measured contract.
  */
-import { measureAdoptedPill, pressScale } from "./lib/adopted-pill.mjs"
 import { openPage, need, waitUntilSettled, withEngines } from "./lib/browser.mjs"
 import { hoverFailures, sampleHover } from "./lib/hover-state.mjs"
 import { attempt, chosen } from "./lib/cli.mjs"
@@ -333,9 +332,9 @@ function measureEmptyStates(sel) {
 }
 
 /**
- * The empty list's New Session. The sample's writing channel has one
- * session; archiving it is the list with nothing in it and no query, which
- * is the only place that button is drawn.
+ * The empty list: one quiet line and no button, since the composer beside it
+ * already starts a session (UI audit #14). The sample's writing channel has
+ * one session; archiving it is the list with nothing in it and no query.
  */
 async function emptyListPill(page) {
   await page.locator(css.sidebar).getByText("writing", { exact: true }).click()
@@ -345,16 +344,12 @@ async function emptyListPill(page) {
   )
   await page.locator(css.sessionListRow).click({ button: "right" })
   await page.getByRole("menuitem", { name: "Archive" }).click()
-  await page.waitForSelector(css.listEmptyAction, { timeout: 5000 }).catch(() => {})
-  const pill = await page.evaluate(measureAdoptedPill, [
-    css.listEmptyAction,
-    "New Session",
-  ])
-  const failures = [...pill.failures]
-  if (pill.height)
-    failures.push(
-      ...(await pressScale(page, page.locator(css.listEmptyAction), "New Session")),
-    )
+  await need(page, ".workspace-list-empty", "the empty list's note")
+  const failures = []
+  const said = (await page.locator(".workspace-list-empty").innerText()).trim()
+  if (said !== "No sessions yet") failures.push(`the empty list says "${said}"`)
+  if ((await page.locator(".workspace-list-empty button").count()) > 0)
+    failures.push("the empty list still offers a button beside the composer")
   return failures
 }
 
@@ -472,8 +467,8 @@ const checks = {
     if (!inSettings) failures.push("no identity at Settings' foot")
     else {
       failures.push(...inSettings.failures.map((f) => `"${inSettings.text}": ${f}`))
-      if (inSettings.text !== "nessa Agent")
-        failures.push(`Settings' foot reads "${inSettings.text}", not "nessa Agent"`)
+      if (inSettings.text !== "nessa Studio")
+        failures.push(`Settings' foot reads "${inSettings.text}", not "nessa Studio"`)
       failures.push(
         ...(
           await identityHover(page, scale, `${css.settings} ${css.identityButton}`)
@@ -969,7 +964,7 @@ Checks, per engine and layout (--only badges,empty,identity,keys,list,rims,rows,
              --desktop-selected, press scale 0.97). A missing button, the old
              button, another corner, another fill, or a press that does not
              scale fails.
-  identity   "nessa Studio" at the sidebar's foot and "‹ nessa Agent" at
+  identity   "nessa Studio" at the sidebar's foot and "‹ nessa Studio" at
              Settings' are one control (ui/identity.tsx): a pill
              the corner controls' size and radius, "nessa" and a word in
              --desktop-muted, named, filled with --desktop-hover under the

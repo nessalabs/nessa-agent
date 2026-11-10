@@ -1,0 +1,75 @@
+{
+  "check": "conversation-stress",
+  "ok": false,
+  "started": "2026-11-09T16:17:08.408Z",
+  "finished": "2026-11-09T16:18:28.325Z",
+  "target": {
+    "url": "http://127.0.0.1:38213/desktop.html",
+    "mode": "dev"
+  },
+  "results": [
+    {
+      "name": "010 vmBackground",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "selected:vmBackground",
+      "ms": 62317,
+      "seen": {
+        "index": 10,
+        "kind": "vmBackground"
+      },
+      "failures": [
+        "\"stress vm-background r10 s1\" ended failed (The agent provider reported an error: start failed: Background commands require a local or cloud workspace; this conversation's environment is unsupported. The turn could not complete all required work.), not completed",
+        "the window does not show \"Background task started.\"",
+        "the background tool did not remain running after its calling turn ended",
+        "the VM background command did not run in its admitted VM working directory",
+        "the completed VM background task did not permit idle rest"
+      ],
+      "ok": false
+    },
+    {
+      "name": "background",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "selected:vmBackground",
+      "seen": {
+        "conversations": 2,
+        "turns": 3
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "at rest",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "selected:vmBackground",
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "followers",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "selected:vmBackground",
+      "seen": [
+        {
+          "conversations": 4,
+          "churned": 75,
+          "resumed": 0,
+          "lagging": 0,
+          "refusedAsExpected": 0
+        },
+        {
+          "conversations": 4,
+          "churned": 77,
+          "resumed": 0,
+          "lagging": 0,
+          "refusedAsExpected": 0
+        }
+      ],
+      "failures": [],
+      "ok": true
+    }
+  ]
+}

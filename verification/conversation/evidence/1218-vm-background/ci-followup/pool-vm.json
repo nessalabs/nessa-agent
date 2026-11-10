@@ -1,0 +1,94 @@
+{
+  "check": "conversation-stress",
+  "ok": true,
+  "started": "2026-11-10T00:54:49.342Z",
+  "finished": "2026-11-10T00:55:52.135Z",
+  "target": {
+    "url": "http://127.0.0.1:41173/desktop.html",
+    "mode": "dev"
+  },
+  "results": [
+    {
+      "name": "016 pool",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "selected:pool,vmBackground",
+      "ms": 33988,
+      "seen": {
+        "index": 16,
+        "kind": "pool"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "019 vmBackground",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "selected:pool,vmBackground",
+      "ms": 12714,
+      "seen": {
+        "index": 19,
+        "kind": "vmBackground"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "background",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "selected:pool,vmBackground",
+      "seen": {
+        "conversations": 2,
+        "turns": 3
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "at rest",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "selected:pool,vmBackground",
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "followers",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "selected:pool,vmBackground",
+      "seen": [
+        {
+          "conversations": 5,
+          "churned": 56,
+          "resumed": 9,
+          "lagging": 0,
+          "refusedAsExpected": 3
+        },
+        {
+          "conversations": 5,
+          "churned": 52,
+          "resumed": 9,
+          "lagging": 0,
+          "refusedAsExpected": 4
+        }
+      ],
+      "failures": [],
+      "ok": true
+    },
+    {
+      "engine": "chromium",
+      "layout": "columns",
+      "name": "console",
+      "harmless": [
+        "console.error: Connecting to 'http://127.0.0.1:9/policy-probe' violates the following Content Security Policy directive: \"connect-src 'self' blob: ipc: http://ipc.localhost ws://127.0.0.1:7420 http://127.0.0.1:7420 ws://127.0.0.1:7421 http://127.0.0.1:7421 https: http://127.0.0.1:44057 ws://127.0.0.1:44057 ws://12",
+        "console.error: Fetch API cannot load http://127.0.0.1:9/policy-probe. Refused to connect because it violates the document's Content Security Policy.",
+        "console.error: WebSocket connection to 'ws://127.0.0.1:44057/session' failed: Error in connection establishment: net::ERR_CONNECTION_REFUSED (http://127.0.0.1:41173/packages/nessa-client/src/composition/root.ts) [owned gateway restart; session reconnected]"
+      ],
+      "failures": [],
+      "ok": true
+    }
+  ]
+}

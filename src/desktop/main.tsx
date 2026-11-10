@@ -9,6 +9,7 @@ import type { NessaClient } from "@nessa/client"
 import * as React from "react"
 import { createRoot } from "react-dom/client"
 import { Provider } from "react-redux"
+import { CodeBlockProvider } from "@nessa-ui/react/code-block"
 import {
   askReviewNoticeAccess,
   chooseChannelFolder,
@@ -265,11 +266,17 @@ createRoot(container).render(
                                           gateway={dependencies.savedLogins}
                                         >
                                           <VoiceProvider controller={voice}>
-                                            <DesktopWindow
-                                              hostKind={host.kind}
-                                              browserSurface={host.kind === "browser"}
-                                              inspectable={import.meta.env.DEV}
-                                            />
+                                            {/* The window is dark only (desktop.html's
+                                                `dark` class, the native window's Dark
+                                                theme), so code and diagrams are too,
+                                                whatever the OS appearance is. */}
+                                            <CodeBlockProvider mode="dark">
+                                              <DesktopWindow
+                                                hostKind={host.kind}
+                                                browserSurface={host.kind === "browser"}
+                                                inspectable={import.meta.env.DEV}
+                                              />
+                                            </CodeBlockProvider>
                                           </VoiceProvider>
                                         </SavedLoginsProvider>
                                       </VoiceKeyProvider>

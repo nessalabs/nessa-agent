@@ -36,7 +36,7 @@ it("rests both rows when this window has no gateway", async () => {
     expect(toggle(id)).toBeNull()
   }
   expect(host.textContent).toContain(
-    "Hooks can approve, deny, or change a tool call and its result without Nessa asking, and can run commands when the agent starts.",
+    "Hooks can approve or change tool calls without asking. Turn on only for projects you trust.",
   )
 })
 
@@ -81,7 +81,7 @@ it("keeps the previous choice when the gateway refuses the change", async () => 
   await act(async () => {})
   await act(async () => toggle("codex-native-hooks")?.click())
   expect(toggle("codex-native-hooks")?.getAttribute("aria-checked")).toBe("false")
-  expect(row("codex-native-hooks")?.textContent).toContain("Could not change this.")
+  expect(row("codex-native-hooks")?.textContent).toContain("Couldn’t change this")
 })
 
 it("shows the choice a lost response left in effect", async () => {
@@ -103,7 +103,7 @@ it("shows the choice a lost response left in effect", async () => {
   await act(async () => {})
   await act(async () => toggle("codex-native-hooks")?.click())
   expect(toggle("codex-native-hooks")?.getAttribute("aria-checked")).toBe("true")
-  expect(row("codex-native-hooks")?.textContent).toContain("Could not change this.")
+  expect(row("codex-native-hooks")?.textContent).toContain("Couldn’t change this")
 })
 
 it("keeps the stored choice when the agent is not in the catalog", async () => {
@@ -129,8 +129,8 @@ it("keeps the stored choice when the agent is not in the catalog", async () => {
   )
   await act(async () => {})
   expect(toggle("claude-native-hooks")?.getAttribute("aria-checked")).toBe("true")
-  expect(row("claude-native-hooks")?.textContent).toContain("This agent isn't set up.")
-  expect(row("claude-native-hooks")?.textContent).toContain("only for projects you trust")
+  expect(row("claude-native-hooks")?.textContent).toContain("Not set up")
+  expect(host.textContent).toContain("only for projects you trust")
 })
 
 it("reads the choice again when the window regains focus or becomes visible", async () => {
@@ -386,7 +386,7 @@ it.each([true, false])(
     } else {
       expect(toggle("claude-native-hooks")).toBeNull()
       expect(requiredRow("claude-native-hooks").textContent).toContain(
-        "Could not read this choice.",
+        "Couldn’t read this",
       )
     }
   },

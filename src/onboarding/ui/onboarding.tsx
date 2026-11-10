@@ -30,7 +30,6 @@ import type { ShortcutPlatform } from "../model/shortcut-display"
 import { AgentBackdrop } from "@nessa-ui/react/agent-card"
 import { AgentFigure } from "@nessa-ui/react/agent-figure/agent-figure"
 import { Button } from "@nessa-ui/react/button"
-import { GradientText } from "@nessa-ui/react/gradient-text"
 import { StepDots } from "@nessa-ui/react/step-dots"
 import {
   SETUP_AGENTS,
@@ -54,7 +53,7 @@ const PANE_BUTTON = "h-11 w-full rounded-full nessa-text-3 font-medium"
 /** A step's way on: the pane's one dark pill, as wide as its words. */
 const PANE_PILL = "h-11 self-start rounded-full px-6 nessa-text-3 font-medium"
 
-/** One row of the agent picker, on the pane's light glass. */
+/** One row of the agent picker, on the pane's dark glass. */
 const OPTION =
   "flex w-full items-center gap-3 rounded-xl border border-border bg-card/55 px-3 py-2.5 text-left transition-[background-color,border-color,box-shadow] outline-none hover:bg-card/85 focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/40 aria-pressed:border-foreground/55 aria-pressed:bg-card aria-pressed:shadow-md"
 
@@ -104,7 +103,7 @@ const SetupPane = React.forwardRef<
   { step: OnboardingState["step"]; children: React.ReactNode }
 >(function SetupPane({ step, children }, ref) {
   return (
-    <div ref={ref} tabIndex={-1} className="nessa-setup-pane nessa-setup-light">
+    <div ref={ref} tabIndex={-1} className="nessa-setup-pane dark">
       <StepDots
         className="nessa-setup-dots"
         count={DOTTED_STEPS.length}
@@ -808,7 +807,7 @@ export function Onboarding({
       <SetupPane ref={step} step={state.step}>
         <div className="flex flex-col gap-3">
           <h1 id={SETUP_HEADING_ID} className={PANE_HEADING}>
-            Welcome to <GradientText>Nessa</GradientText>
+            Welcome to Nessa
           </h1>
           <p className="nessa-text-5 text-muted-foreground">Your personal sidekick</p>
           <Button size="lg" className={`mt-4 ${PANE_PILL}`} onClick={onBegin}>

@@ -30,12 +30,22 @@ pub struct BackgroundCleanupFailure {
     pub cause: Box<BackgroundTaskError>,
 }
 
+/// Execution placement resolved by the conversation, never by command text.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum BackgroundTarget {
+    Local(String),
+    Vm {
+        conversation: ConversationId,
+        workspace: String,
+    },
+}
+
 /// Process effects, supplied at composition; independent of provider lifetimes.
 pub trait BackgroundRunner: Send + Sync {
     fn run(
         &self,
         command: BackgroundCommand,
-        workspace: String,
+        target: BackgroundTarget,
         stop: watch::Receiver<Option<TaskStop>>,
     ) -> BackgroundRun<'_, TaskOutcome>;
     fn shutdown(&self) -> BackgroundRun<'_, Result<(), BackgroundTaskError>>;

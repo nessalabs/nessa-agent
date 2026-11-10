@@ -486,6 +486,22 @@ async fn a_turn_the_provider_failed_is_sent_again_after_its_backoff() {
         );
         assert!(resumed.ends_with("Refactor the parser"), "{resumed}");
         until(|| !durable.marks.holds(&id)).await;
+        // The person sees their own words on the retry, marked as sent
+        // again; the notice is the agent's alone.
+        let view = service.read(id.clone(), caller("read")).await.unwrap();
+        let shown: Vec<_> = view
+            .messages
+            .iter()
+            .map(|message| (message.user_text.as_str(), message.retried))
+            .collect();
+        assert_eq!(
+            shown,
+            [
+                ("Refactor the parser", None),
+                ("Refactor the parser", Some(true))
+            ],
+            "{state:?}"
+        );
         service.shutdown().await.unwrap();
         tokio::time::timeout(BOUND, retries).await.unwrap().unwrap();
     }

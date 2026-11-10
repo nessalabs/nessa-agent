@@ -248,16 +248,6 @@ export function ago(thenMs: number, nowMs: number): string {
   return days === 1 ? "yesterday" : `${days} days ago`
 }
 
-/** The page's one line under its title. */
-export function summary(hub: string, workers: readonly WorkerCard[]): string {
-  const online = workers.filter((worker) => worker.status !== "offline").length
-  const agents = workers.reduce((sum, worker) => sum + worker.agents, 0)
-  const total = workers.length
-  if (total === 0) return `${hub} is your hub. Add a computer to run agents on it too.`
-  const devices = `${online} of ${total} ${total === 1 ? "computer" : "computers"} online`
-  return `${hub} is your hub. ${devices}, ${agentsWord(agents).toLowerCase()} on them.`
-}
-
 /** An SSH host, as a card: the machine by name, its alias said beneath. */
 export interface SshHostCard {
   /** The alias, as conversations and the default name it. */

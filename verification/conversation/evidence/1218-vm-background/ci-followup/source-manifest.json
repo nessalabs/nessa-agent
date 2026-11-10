@@ -1,0 +1,186 @@
+{
+  "sourceRevision": "b957e8bdf5225ce6aabe3e6c7bf2228022851603",
+  "baseRevision": "8fc037044854579bc06f1c344a4b04d9b91f2bf6",
+  "rustBinarySourceCheckpoint": "6ff533d992cd98653a27167d899edd16f49be9c9",
+  "rustSourceUnchangedSinceBinaryBuild": true,
+  "fullRunCliSha256": "46a6e3c06b64d5a0f60a9490f96b0b0bff2810b8fba2b2c348c7dbd8650b24f1",
+  "binaryTestsCliSha256": "024c61f380e9a218afc52b7539814978a5f779d0b4659396aa600119840d23fb",
+  "files": [
+    {
+      "path": ".github/workflows/conversation-stress-load.yml",
+      "sha256": "0125484c8256b446eec9a901318919ce4b6b30521275b0f3a42bd2210de455d4"
+    },
+    {
+      "path": "crates/nessa-server/src/cli/entrypoint/arguments.rs",
+      "sha256": "a76f0322cfb711dbf669b666a420926c443412cc7323c36da050b4a6cf584edb"
+    },
+    {
+      "path": "crates/nessa-server/src/composition/background_command.rs",
+      "sha256": "9544964c9f7a435b0cd073967972d4bdbb62457397afc8eca60748462ef73c15"
+    },
+    {
+      "path": "crates/nessa-server/src/composition/background_tools.rs",
+      "sha256": "589cb5430767569772fb4fbe62c9626bef3ae1ee6eaadcc940e2f79bd396b7fc"
+    },
+    {
+      "path": "crates/nessa-server/src/composition/device_setup.rs",
+      "sha256": "c86ea360834381eb4289ab2ea7eda24fbc8052ac1f8ee60ab4cb594f40fd197d"
+    },
+    {
+      "path": "crates/nessa-server/src/composition/local_auth.rs",
+      "sha256": "434a007f865151d7b6718bcd8d65f7b1545db99141488454c41c9ac5eb6d27a1"
+    },
+    {
+      "path": "crates/nessa-server/src/composition/mod.rs",
+      "sha256": "2481901468458a6a6d3c447f5281c1d7df53ca2dfc0c2c8bc33664f81cbff123"
+    },
+    {
+      "path": "crates/nessa-server/src/composition/root.rs",
+      "sha256": "4d1a022cad8f7f24827a3e6069614d39357f6ddd87b8a05716407664ea591215"
+    },
+    {
+      "path": "crates/nessa-server/src/conversation/application/background_tasks/mod.rs",
+      "sha256": "09ae7d19a16913e45d3ab3d8e81db37890abe1e401d1700e1f08e258d057c028"
+    },
+    {
+      "path": "crates/nessa-server/src/conversation/application/background_tasks/ports.rs",
+      "sha256": "805d727c93717e8085f4a4d8e0edffc458ac1601d9c3265226d0c5e90055d1da"
+    },
+    {
+      "path": "crates/nessa-server/src/conversation/application/service.rs",
+      "sha256": "1954b57daf8b0ea09627666196a1636f794520d774b556363ae9b1568a6d623f"
+    },
+    {
+      "path": "crates/nessa-server/src/conversation/application/service/background_tasks.rs",
+      "sha256": "d55929ce85a12a1cddfd7f560d6f45e5a6bfa2ee003333bc286abc9be9f0a86c"
+    },
+    {
+      "path": "crates/nessa-server/src/conversation/domain/background_task/values.rs",
+      "sha256": "e82e463096d16648405405441eb922c42cb5d19628bc1dbfceb2f1ecc42dbbd5"
+    },
+    {
+      "path": "crates/nessa-server/src/conversation/infrastructure/background_tasks/encoding.rs",
+      "sha256": "25e3505f4b689734781c854190bbca2bd8bb6474ffe9746d29c26f90545f529d"
+    },
+    {
+      "path": "crates/nessa-server/src/conversation/infrastructure/background_tasks/io.rs",
+      "sha256": "161d1e03883e3fd0bd1137e1eb039861f43495d14ecb91cc777240773ea7a08a"
+    },
+    {
+      "path": "crates/nessa-server/src/conversation/infrastructure/background_tasks/mod.rs",
+      "sha256": "2448fbbaaac56123840aa40be82166e488c70cd6a5b73ecb083c1e6cb9d6a215"
+    },
+    {
+      "path": "crates/nessa-server/src/conversation/infrastructure/background_tasks/runner.rs",
+      "sha256": "280c3ebf2ed0c86469a8fbeb83be3e958c747d6d893912be510e9d7f6ea1688c"
+    },
+    {
+      "path": "crates/nessa-server/src/conversation/infrastructure/background_tasks/transport.rs",
+      "sha256": "080b97febdbde04aa15b4f17dcd447151b04650830cc2462ddbc8466f212e3e2"
+    },
+    {
+      "path": "crates/nessa-server/src/conversation/infrastructure/mod.rs",
+      "sha256": "f37a22595d1447b47577693126d2f22691ee9e37ab7aa5b4b6346727e2bc16fa"
+    },
+    {
+      "path": "crates/nessa-server/src/conversation/infrastructure/ssh_environment/background_command.rs",
+      "sha256": "d95cd6d1387148ab174938269ea0f780774c2fb6b3c0d15b238643d00bc5f370"
+    },
+    {
+      "path": "crates/nessa-server/src/conversation/infrastructure/ssh_environment/install.rs",
+      "sha256": "f33f6382b551a8b73a9d535cd953f729125a2ad2841bf878fcbfb656ab1fb44e"
+    },
+    {
+      "path": "crates/nessa-server/src/conversation/infrastructure/ssh_environment/mod.rs",
+      "sha256": "e28501ce0c69e917406352958f3a2eaf1db06d57836686674a970d5756b219a7"
+    },
+    {
+      "path": "crates/nessa-server/src/conversation/infrastructure/workspaces.rs",
+      "sha256": "725c552015120ded536fb95d796289e29859e5e409ca9af23ef662928a3e21f1"
+    },
+    {
+      "path": "crates/nessa-server/src/workspaces/application/workspaces.rs",
+      "sha256": "070639f86bdbbbed8b17b3aaa6bebf98a9bdc088567be000760b57959379726c"
+    },
+    {
+      "path": "crates/nessa-server/src/workspaces/infrastructure/runtime.rs",
+      "sha256": "cdaeed01b7933f87ca47c1d15c2ec064e6a65dd8a43502ba08b5135e5ff293ba"
+    },
+    {
+      "path": "crates/nessa-server/src/workspaces/infrastructure/ssh.rs",
+      "sha256": "657ecd522e8716b7943417361e67f3512a84e4be7f6b54453a7e2103124946b8"
+    },
+    {
+      "path": "crates/nessa-server/tests/background_run_binary.rs",
+      "sha256": "31e9c3e7847273278c0af9ed355da4964b701f5c74bdf345171664166b3a82be"
+    },
+    {
+      "path": "crates/nessa-server/tests/cli/arguments.rs",
+      "sha256": "2ab81c22f13045973a23b254c4d81040f4399f2ebcc9310319a57eb385cca524"
+    },
+    {
+      "path": "crates/nessa-server/tests/composition/vm_background_gateway.rs",
+      "sha256": "ca5adf702b5ec21b23053515b304b0839064a445b7465e27b0b0937642e01ecb"
+    },
+    {
+      "path": "crates/nessa-server/tests/conversation/background_command.rs",
+      "sha256": "9037ba454f040850d1cd310e1ba2eb53b97f90a110ece34a00be23608f0c6282"
+    },
+    {
+      "path": "crates/nessa-server/tests/conversation/background_io.rs",
+      "sha256": "9818191245f11fb1c841c2f84176ac64291fd0925e827fe0ea9e17e90b2ff260"
+    },
+    {
+      "path": "crates/nessa-server/tests/conversation/background_tasks.rs",
+      "sha256": "fabb7ac9dfe95c9e4662ab746e74b32373d6ba0bd033b6a6b0604107ac0001de"
+    },
+    {
+      "path": "crates/nessa-server/tests/conversation/background_transport.rs",
+      "sha256": "55b7c05f4b06f7e5c43e1d9b2db611faccc27912b884e1098dfc1c442357ff8a"
+    },
+    {
+      "path": "crates/nessa-server/tests/conversation/workspace_copies.rs",
+      "sha256": "3cf28f30cfb34d18cfa0b41cc6544676dc6228979dbb16fe50abe08d2cf4cfa4"
+    },
+    {
+      "path": "crates/nessa-server/tests/workspaces/allocation.rs",
+      "sha256": "44e9cbbb7ce0ec775e0d070428362e2180ee2d38df369911b7d5b062787e9e33"
+    },
+    {
+      "path": "scripts/mcp-test-server/local-gateway.mjs",
+      "sha256": "f0e5a595162f2b424db11c052ae1d09de14da39a44a2ad2795ee4b74e370e93a"
+    },
+    {
+      "path": "scripts/mcp-test-server/scenarios/stress.mjs",
+      "sha256": "b6dc57ab3ee8bda818c03a5a3c1c7a20ad406f8e3aa9f91766edcaf84fc43c7c"
+    },
+    {
+      "path": "verification/desktop/scripts/conversation-stress.mjs",
+      "sha256": "aaeb0453190547454b2d06628531fde294579730ad4393e883c5d0f21bc9ed7c"
+    },
+    {
+      "path": "verification/desktop/scripts/lib/boat-runtime-settings.mjs",
+      "sha256": "c924d7adb353a0ee68eb957d261c2897f18a2741f8045a23c108e3b770b5d932"
+    },
+    {
+      "path": "verification/desktop/scripts/lib/gateway-stack.mjs",
+      "sha256": "f0bc909dae18eec549eda7b8faa6b27671c1015152ae7c657c7506d27edc83ca"
+    },
+    {
+      "path": "verification/desktop/scripts/lib/stress-plan.mjs",
+      "sha256": "ae11e654bc06fff18d3b339b12f72a86b1a2a252474c8749687f15e0030b92bf"
+    },
+    {
+      "path": "verification/desktop/scripts/lib/stress-plan.test.mjs",
+      "sha256": "7658b91e72d34f6e9efa399dcf09a260edc3366de660c41e4e9f9df772ede316"
+    },
+    {
+      "path": "verification/desktop/scripts/lib/stress-vm-background.mjs",
+      "sha256": "1584233f5d4a5688dc4388e2895e44b202aad4c0d440b8d17b6b7655c625e0c1"
+    },
+    {
+      "path": "verification/desktop/scripts/lib/stress-vm-background.test.mjs",
+      "sha256": "ae2faaa342340d33000ab382ed427c569062cee3c40a30d8d0470f7dc7706223"
+    }
+  ]
+}

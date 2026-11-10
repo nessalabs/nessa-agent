@@ -507,7 +507,7 @@ async fn a_paired_list_ends_with_storage_failure_after_its_initial_read() {
         ._directory
         .path()
         .join("conversations/metadata.sqlite3");
-    let external = Connection::open(&path).unwrap();
+    let external = Connection::open(path.with_extension("grants.sqlite3")).unwrap();
     external.execute("ALTER TABLE share_grant_changes RENAME COLUMN revision TO intentionally_unreadable_revision", []).unwrap();
     assert!(external
         .query_row("SELECT MAX(revision) FROM share_grant_changes", [], |row| {
@@ -528,7 +528,8 @@ async fn a_paired_list_ends_with_storage_failure_after_its_initial_read() {
         )
         .await
         .unwrap();
-    let preview: String = external
+    let metadata = Connection::open(&path).unwrap();
+    let preview: String = metadata
         .query_row(
             "SELECT preview FROM summaries WHERE conversation_id = ?1",
             [shared.to_string()],

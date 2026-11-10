@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use crate::agent_install::domain::AgentName;
+use crate::conversation::domain::BackgroundCommand;
 use nessa_protocol::relay::RelayAddress;
 use nessa_protocol::tunnel::TunnelAddress;
 
@@ -25,6 +26,11 @@ pub enum LocalProvisioning {
 pub enum Command {
     /// Retain one app-owned encrypted-vault session over anonymous pipes.
     VaultSession,
+    /// Internal SSH command helper; stdin closing cancels its process scope.
+    BackgroundRun {
+        cwd: String,
+        command: BackgroundCommand,
+    },
     Help,
     /// Connect using the current gh account in this binary's namespace.
     GithubConnect {
@@ -184,6 +190,18 @@ pub fn parse(args: &[String]) -> Result<Command, String> {
     }
     if args.is_empty() || args == ["--help"] || args == ["-h"] {
         return Ok(Command::Help);
+    }
+    if args.first().is_some_and(|a| a == "background-run") {
+        return match args {
+            [_, cwd_flag, cwd, timeout_flag, timeout, separator, bash, profile, rc, shell, text]
+                if cwd_flag == "--cwd" && timeout_flag == "--timeout" && separator == "--"
+                && bash == "bash" && profile == "--noprofile" && rc == "--norc" && shell == "-c"
+                && std::path::Path::new(cwd).is_absolute() && !cwd.contains('\0') => {
+                    let command = BackgroundCommand::new(text.clone(), timeout.parse().map_err(|_| "invalid background timeout")?).map_err(|_| "invalid background command")?;
+                    Ok(Command::BackgroundRun { cwd: cwd.clone(), command })
+                }
+            _ => Err("background-run takes --cwd DIR --timeout SECONDS -- bash --noprofile --norc -c COMMAND".into()),
+        };
     }
     if args.iter().any(|a| a == "--cloud") {
         return Err("Cloud authentication is not implemented yet; use --local".into());

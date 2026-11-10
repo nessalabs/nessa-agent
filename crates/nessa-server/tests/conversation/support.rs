@@ -2666,6 +2666,8 @@ impl crate::conversation::application::ShareGrants for EveryConversationGranted 
     ) -> ConversationFuture<'a, Option<crate::conversation::application::HeldGrant>> {
         Box::pin(async {
             Ok(Some(crate::conversation::application::HeldGrant {
+                principal_id: nessa_auth::domain::PrincipalId::new("test-reader").unwrap(),
+                person: None,
                 capabilities: crate::conversation::domain::Capabilities::read(),
                 policy_revision: 1,
             }))

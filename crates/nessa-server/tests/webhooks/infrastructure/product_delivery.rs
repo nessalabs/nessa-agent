@@ -708,7 +708,10 @@ async fn canonical_scheduling_candidates_keep_principal_credential_budget_and_bo
         2
     );
     let connection = nessa_local_database::rusqlite::Connection::open(
-        f._root.path().join("private/conversations.db"),
+        f._root
+            .path()
+            .join("private/conversations.db")
+            .with_extension("grants.sqlite3"),
     )
     .unwrap();
     connection

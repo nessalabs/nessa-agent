@@ -29,8 +29,6 @@ export interface Peek {
    * oldest drawn, which is cut to its latest parts when the turn holds more.
    */
   readonly since: readonly Message[]
-  /** Whether the turn holds more than is drawn, earlier than `since`. */
-  readonly earlier: boolean
   readonly activity: Activity | null
 }
 
@@ -41,7 +39,6 @@ export function peekOf(transcript: Transcript, limit = peekParts): Peek {
   while (last >= 0 && messages[last].role !== "user") last--
   const since: Message[] = []
   let room = limit
-  let total = 0
   for (let index = messages.length - 1; index > last; index--) {
     // A note, a record this read could not apply, or a handoff's line is not the turn's.
     if (
@@ -54,7 +51,6 @@ export function peekOf(transcript: Transcript, limit = peekParts): Peek {
     const message = withoutCards(messages[index])
     // A message of widgets and files alone tells the peek nothing: it is not drawn at all.
     if (message.parts.length === 0 && messages[index].parts.length > 0) continue
-    total += message.parts.length
     if (room === 0) continue
     const drawn =
       message.parts.length <= room
@@ -66,7 +62,6 @@ export function peekOf(transcript: Transcript, limit = peekParts): Peek {
   return {
     asked: last === -1 ? null : messages[last],
     since,
-    earlier: total > limit,
     activity: transcript.activity,
   }
 }

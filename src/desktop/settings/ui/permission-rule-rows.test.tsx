@@ -41,7 +41,7 @@ const rule: PermissionRule = {
 
 it("rests when this window has no gateway", async () => {
   await act(async () => root.render(<PermissionRuleRows />))
-  expect(host.textContent).toContain("Not available in this window.")
+  expect(host.textContent).toContain("Not available in this window")
 })
 
 it("lists a rule and revokes it", async () => {
@@ -67,7 +67,7 @@ it("lists a rule and revokes it", async () => {
   const button = host.querySelector("button")
   await act(async () => button?.click())
   expect(revoked).toEqual(["pr_one"])
-  expect(host.textContent).toContain("Rules you save from a review appear here.")
+  expect(host.textContent).toContain("None yet")
 })
 
 it("says a failed revoke left the rule stored only when the reread still lists it", async () => {
@@ -185,7 +185,7 @@ it("retains revoke ownership until its post-command read finishes", async () => 
   expect(reads).toBe(2)
   expect(revokeButton().disabled).toBe(true)
   await act(async () => pending.resolve({ ok: true, rules: [] }))
-  expect(host.textContent).toContain("Rules you save from a review appear here.")
+  expect(host.textContent).toContain("None yet")
 })
 
 it("ignores a background read begun before a revoke", async () => {

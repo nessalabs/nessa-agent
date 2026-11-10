@@ -530,6 +530,36 @@ fn dispatched(record: &InvocationRecord) -> bool {
         .any(|edge| edge.stage == InvocationStage::Running)
 }
 
+/// The notices a successor's text may open with, and whether each says the
+/// provider had been given the request.
+const NOTICES: [(&str, bool); 4] = [
+    (CUT_OFF_NOTICE, true),
+    (FAILED_NOTICE, true),
+    (UNSENT_NOTICE, false),
+    (HELD_NOTICE, false),
+];
+
+/// What a person asked for in `record`: its own text, or for a successor
+/// turn, the original request without the notice written for the model.
+/// A person's view shows this, so the notice never reads as their message
+/// (`a_turn_the_provider_failed_is_sent_again_after_its_backoff`, and
+/// `a_turn_owed_behind_a_pending_mode_change_is_resumed_once_it_settles` for
+/// its queued preview). `None` when the turn is
+/// not a successor: its text is the person's as it is.
+pub fn resumed_request(record: &InvocationRecord) -> Option<&str> {
+    if Resumption::of(&record.request.execution_id).attempt() == 0 {
+        return None;
+    }
+    let mut request = record.request.user_message.text_str();
+    while let Some(rest) = NOTICES
+        .into_iter()
+        .find_map(|(notice, _)| request.strip_prefix(notice))
+    {
+        request = rest;
+    }
+    Some(request)
+}
+
 /// The successor's request: a notice, then the original message. The images
 /// of a turn the provider was given are left out, since the model has seen
 /// them; a turn it never had is sent whole.
@@ -544,14 +574,9 @@ fn successor_request(
     // when an earlier turn in the chain reached it.
     let mut request = original.text_str();
     let mut dispatched = dispatched(record);
-    while let Some((rest, reached)) = [
-        (CUT_OFF_NOTICE, true),
-        (FAILED_NOTICE, true),
-        (UNSENT_NOTICE, false),
-        (HELD_NOTICE, false),
-    ]
-    .into_iter()
-    .find_map(|(notice, reached)| request.strip_prefix(notice).map(|rest| (rest, reached)))
+    while let Some((rest, reached)) = NOTICES
+        .into_iter()
+        .find_map(|(notice, reached)| request.strip_prefix(notice).map(|rest| (rest, reached)))
     {
         request = rest;
         dispatched |= reached;

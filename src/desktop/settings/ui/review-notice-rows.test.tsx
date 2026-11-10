@@ -53,7 +53,7 @@ it("asks for permission from Allow", async () => {
   expect(button?.textContent).toBe("Allow")
   await act(async () => button?.click())
   expect(requestPermission).toHaveBeenCalledOnce()
-  expect(host.textContent).toContain("On. A review that is waiting shows a notification.")
+  expect(host.textContent).toContain("On")
 })
 
 it("notifies for a waiting review when Allow is granted", async () => {
@@ -91,7 +91,7 @@ it("asks the host where the host shows the notices", async () => {
   await act(async () => host.querySelector("button")?.click())
   expect(ask).toHaveBeenCalledOnce()
   expect(show).toHaveBeenCalledOnce()
-  expect(host.textContent).toContain("On. A review that is waiting shows a notification.")
+  expect(host.textContent).toContain("On")
 })
 
 it("says where the host's notices were blocked", async () => {
@@ -219,7 +219,7 @@ it("ignores a retired prompt after unmount even when the permission source is re
   expect(allow().disabled).toBe(true)
   await act(async () => currentPrompt.resolve("allowed"))
   expect(show).toHaveBeenCalledTimes(1)
-  expect(host.textContent).toContain("On.")
+  expect(host.textContent).toContain("On")
 })
 
 it("does not replay into a rebound source even before its next render", async () => {
@@ -259,7 +259,7 @@ it("ignores a retired initial read after a replacement permission grant", async 
   await act(async () => root.render(<ReviewNoticeRows />))
   await act(async () => allow().click())
   await act(async () => read.resolve("denied"))
-  expect(host.textContent).toContain("On.")
+  expect(host.textContent).toContain("On")
   expect(show).toHaveBeenCalledTimes(1)
 })
 

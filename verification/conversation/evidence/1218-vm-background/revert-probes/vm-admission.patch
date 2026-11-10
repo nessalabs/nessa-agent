@@ -1,0 +1,11 @@
+--- /workspace/nessa-agent-1218/crates/nessa-server/src/conversation/application/service.rs
++++ vm-admission
+@@ -2324,7 +2324,7 @@
+                             let workspace = opening.workspace.clone().or_else(|| configured.workspace.clone()).or_else(|| place.as_ref().and_then(|place| place.folder.to_str().map(str::to_owned))).or_else(|| service.inner.workspace.clone());
+                             let background_target = match &opening.terms.environment {
+                                 EnvironmentRef::Here => workspace.clone().map(BackgroundTarget::Local),
+-                                EnvironmentRef::Boat => opening.workspace.clone().map(|workspace| BackgroundTarget::Vm { conversation: id.clone(), workspace }),
++                                EnvironmentRef::Boat => None,
+                                 _ => None,
+                             };
+                             if let (Some(attachments), Some(hold), Some(delivery)) = (&service.inner.attachments, &opening.hold, &service.inner.input_files) {

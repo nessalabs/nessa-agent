@@ -33,13 +33,13 @@ impl PairingContext {
             public.consent().bytes(),
             &public.generation().to_be_bytes(),
             public.class().as_str().as_bytes(),
-            &exporter,
         ] {
-            let length =
-                u16::try_from(part.len()).map_err(|_| PairingCryptoError::InvalidContext)?;
-            bytes.extend_from_slice(&length.to_be_bytes());
-            bytes.extend_from_slice(part);
+            append_part(&mut bytes, part)?;
         }
+        if public.class().is_peer() {
+            append_part(&mut bytes, &[u8::from(public.same_person())])?;
+        }
+        append_part(&mut bytes, &exporter)?;
         let mut client_identity = DOMAIN.to_vec();
         client_identity.extend_from_slice(public.invitation().bytes());
         let mut server_identity = DOMAIN.to_vec();
@@ -69,4 +69,11 @@ impl PairingContext {
     pub fn as_bytes(&self) -> &[u8] {
         &self.bytes
     }
+}
+
+fn append_part(bytes: &mut Vec<u8>, part: &[u8]) -> Result<(), PairingCryptoError> {
+    let length = u16::try_from(part.len()).map_err(|_| PairingCryptoError::InvalidContext)?;
+    bytes.extend_from_slice(&length.to_be_bytes());
+    bytes.extend_from_slice(part);
+    Ok(())
 }

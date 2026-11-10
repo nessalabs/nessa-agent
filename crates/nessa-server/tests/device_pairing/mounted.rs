@@ -1067,3 +1067,6 @@ async fn a_composed_gateway_enrolls_into_another_with_its_own_key() {
     assert!(tokio::task::block_in_place(|| server_b.stop()).success());
     assert!(tokio::task::block_in_place(|| server_a.stop()).success());
 }
+
+#[path = "mounted/same_person.rs"]
+mod same_person;

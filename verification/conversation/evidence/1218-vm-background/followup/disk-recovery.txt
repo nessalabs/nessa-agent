@@ -1,0 +1,6 @@
+The first integrated lib-test link failed with ld signal 7 (Bus error).
+At failure: overlay 32G, used 30G, available 0, 100%; this worktree target was 28G.
+Cgroup oom and oom_kill counters were zero.
+Removed only this worktree target/debug/incremental; cargo clean -p nessa-server removed 522 files / 7.7 GiB.
+After cleanup: used 6.3G, available 24G. Source was unchanged.
+The retry uses CARGO_INCREMENTAL=0. Its 37 background tests passed.

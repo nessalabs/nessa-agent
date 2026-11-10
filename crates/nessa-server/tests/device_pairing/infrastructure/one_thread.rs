@@ -278,7 +278,12 @@ async fn assert_gateway_closed(owners: &Owners) {
     assert!(matches!(
         fixture
             .gateway
-            .create(fixture.session.clone(), ConsentClass::DeviceRead, OsEntropy)
+            .create(
+                fixture.session.clone(),
+                ConsentClass::DeviceRead,
+                false,
+                OsEntropy
+            )
             .await,
         Err(PairingRuntimeError::ShuttingDown)
     ));

@@ -1,0 +1,20 @@
+running 1 test
+test workspaces::allocation_tests::a_background_stream_holds_the_vm_after_its_runtime_is_dropped ... FAILED
+
+failures:
+
+---- workspaces::allocation_tests::a_background_stream_holds_the_vm_after_its_runtime_is_dropped stdout ----
+
+thread 'workspaces::allocation_tests::a_background_stream_holds_the_vm_after_its_runtime_is_dropped' (28053) panicked at crates/nessa-server/src/workspaces/../../tests/workspaces/allocation.rs:1278:5:
+assertion `left == right` failed
+  left: Ok(true)
+ right: Ok(false)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    workspaces::allocation_tests::a_background_stream_holds_the_vm_after_its_runtime_is_dropped
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 4787 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p nessa-server --lib`

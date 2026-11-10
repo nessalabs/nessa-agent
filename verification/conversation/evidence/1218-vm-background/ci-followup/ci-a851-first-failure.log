@@ -1,0 +1,17 @@
+2026-11-10T01:10:12.6411411Z FAIL  008 channel [chromium columns]
+2026-11-10T01:10:12.6412615Z         - the Boat row says "Boat\nLoading…\nConnect…"
+2026-11-10T01:10:12.6413560Z         - Connect… on the Boat row opens no token field
+2026-11-10T01:10:15.7011384Z ERROR 009 switch [chromium columns]
+2026-11-10T01:10:15.7026750Z         ! not run: 008 channel did not hold
+2026-11-10T01:10:15.7027911Z ERROR 010 permission [chromium columns]
+2026-11-10T01:10:15.7028973Z         ! not run: 008 channel did not hold
+2026-11-10T01:10:15.7030409Z ERROR 011 aside [chromium columns]
+2026-11-10T01:10:15.7031545Z         ! not run: 008 channel did not hold
+2026-11-10T01:10:15.7032459Z ERROR 012 delete [chromium columns]
+2026-11-10T01:10:15.7033323Z         ! not run: 008 channel did not hold
+2026-11-10T01:10:15.7034245Z ERROR 013 long [chromium columns]
+2026-11-10T01:10:15.7035105Z         ! not run: 008 channel did not hold
+2026-11-10T01:10:15.7035978Z ERROR 014 pool [chromium columns]
+2026-11-10T01:10:15.7036828Z         ! not run: 008 channel did not hold
+2026-11-10T01:10:15.7037753Z ERROR 015 trace [chromium columns]
+2026-11-10T01:10:23.2428383Z conversation-stress: 11/70 held (some could not run)

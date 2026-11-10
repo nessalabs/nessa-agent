@@ -244,13 +244,21 @@ async fn run(seed: u64, cycles: usize) {
                     client.quiet(&subscription).await;
                 }
                 Step::Replace => {
+                    grant(&fixture, moving, "receiver", false).await;
+                    assert!(fixture.metadata.held_grant(moving,"receiver").await.unwrap().is_none());
                     grant(&fixture, moving, "receiver-two", true).await;
+                    assert!(fixture.metadata.held_grant(moving,"receiver-two").await.unwrap().is_some());
                     expected.active.remove(&moving.to_string());
                     expected.frame(&client.next().await, &subscription);
                     let removed_at = head(&fixture).await;
+                    grant(&fixture, moving, "receiver-two", false).await;
+                    assert!(fixture.metadata.held_grant(moving,"receiver-two").await.unwrap().is_none());
                     grant(&fixture, moving, "receiver-three", true).await;
+                    assert!(fixture.metadata.held_grant(moving,"receiver-three").await.unwrap().is_some());
                     assert_eq!(head(&fixture).await, removed_at, "R1 cannot follow R2→R3");
                     client.quiet(&subscription).await;
+                    grant(&fixture, moving, "receiver-three", false).await;
+                    assert!(fixture.metadata.held_grant(moving,"receiver-three").await.unwrap().is_none());
                     grant(&fixture, moving, "receiver", true).await;
                     expected.active.insert(moving.to_string());
                     expected.frame(&client.next().await, &subscription);

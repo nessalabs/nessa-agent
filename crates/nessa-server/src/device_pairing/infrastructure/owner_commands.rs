@@ -74,9 +74,15 @@ impl PairingOwnerCommands {
         &self,
         session: &AuthenticatedSession,
         class: ConsentClass,
+        same_person: bool,
     ) -> Result<CreatedInvitation, PairingRuntimeError> {
         self.gateway
-            .create(session.clone(), class, Entropy((self.entropy)()))
+            .create(
+                session.clone(),
+                class,
+                same_person,
+                Entropy((self.entropy)()),
+            )
             .await
     }
     /// The caller's unfinished enrollments (`GatewayPairing::pending`).

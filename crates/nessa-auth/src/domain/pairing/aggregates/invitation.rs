@@ -178,6 +178,22 @@ impl PairingEvent {
     }
 }
 
+/// Original terminal provenance, reconstructed by the existing history replay.
+/// Cleanup retains this decision rather than replacing it with its own time.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum TerminalDecision {
+    End {
+        cause: TerminalCause,
+        actor: PairingInitiator,
+        before: PairingPhase,
+        at_ms: u64,
+    },
+    CredentialRevoked {
+        original: Box<CredentialTransition>,
+        actor: PairingInitiator,
+    },
+}
+
 /// Immutable snapshot of one durable pairing consistency boundary.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PairingRecord {
@@ -194,7 +210,7 @@ pub struct PairingRecord {
     signed_original: bool,
     owner_phone: Option<(OwnerPhoneRequestId, DeviceKey, [u8; 32])>,
     stage: Option<ReceiverStage>,
-    terminal: Option<(TerminalCause, PairingInitiator)>,
+    terminal: Option<TerminalDecision>,
 }
 impl PairingRecord {
     /// Create a finite invitation a device redeems by code (PAKE), using time
@@ -345,7 +361,48 @@ impl PairingRecord {
     }
     /// Original terminal cause and attribution; late cleanup does not replace it.
     pub fn terminal(&self) -> Option<(TerminalCause, &PairingInitiator)> {
-        self.terminal.as_ref().map(|(cause, actor)| (*cause, actor))
+        self.terminal.as_ref().map(|terminal| match terminal {
+            TerminalDecision::End { cause, actor, .. } => (*cause, actor),
+            TerminalDecision::CredentialRevoked { actor, .. } => {
+                (TerminalCause::CredentialRevoked, actor)
+            }
+        })
+    }
+    /// Correlate a published pairing's original terminal decision with the
+    /// canonical credential transition. Nonterminal records have no terminal
+    /// decision to correlate. A pre-publication cancellation cannot supply one.
+    /// This is also the owner used by Active-cancellation history validation.
+    pub fn verify_terminal_revocation(
+        &self,
+        revocation: Option<&CredentialTransition>,
+    ) -> Result<(), PairingError> {
+        match self.terminal.as_ref() {
+            None => Ok(()),
+            Some(TerminalDecision::CredentialRevoked { original, .. }) => {
+                if revocation == Some(original.as_ref()) {
+                    Ok(())
+                } else {
+                    Err(PairingError::Conflict)
+                }
+            }
+            Some(TerminalDecision::End {
+                cause: TerminalCause::Cancelled,
+                actor,
+                before: PairingPhase::Active,
+                at_ms,
+            }) => {
+                let revocation = revocation.ok_or(PairingError::Conflict)?;
+                if self.credential() != Some(revocation.credential_id())
+                    || revocation.cause() != &TransitionCause::Revoked(RevocationCause::Explicit)
+                    || actor != &PairingInitiator::from_credential(revocation.initiator())
+                    || revocation.at() != *at_ms / 1000
+                {
+                    return Err(PairingError::Conflict);
+                }
+                Ok(())
+            }
+            Some(TerminalDecision::End { .. }) => Err(PairingError::Conflict),
+        }
     }
     /// The principal the credential this enrollment issues names, once a key
     /// has claimed it: the owner for a device, the peer's gateway principal
@@ -429,7 +486,10 @@ impl PairingRecord {
                     return Err(PairingError::Invalid);
                 }
                 next.phase = PairingPhase::Terminal;
-                next.terminal = Some((TerminalCause::CredentialRevoked, actor.clone()));
+                next.terminal = Some(TerminalDecision::CredentialRevoked {
+                    original: transition.clone(),
+                    actor: actor.clone(),
+                });
             }
 
             Event::Reserve(id, key, input) => {
@@ -575,7 +635,12 @@ impl PairingRecord {
                     return Err(PairingError::Ineligible);
                 }
                 next.phase = PairingPhase::Terminal;
-                next.terminal = Some((*cause, actor.clone()));
+                next.terminal = Some(TerminalDecision::End {
+                    cause: *cause,
+                    actor: actor.clone(),
+                    before: self.phase,
+                    at_ms,
+                });
                 next.attempts = self
                     .attempts
                     .iter()
@@ -704,15 +769,7 @@ impl PairingTransition {
         {
             return Ok(());
         }
-        let revocation = revocation.ok_or(PairingError::Conflict)?;
-        if self.before.credential() != Some(revocation.credential_id())
-            || revocation.cause() != &TransitionCause::Revoked(RevocationCause::Explicit)
-            || self.actor != PairingInitiator::from_credential(revocation.initiator())
-            || revocation.at() != self.at_ms / 1000
-        {
-            return Err(PairingError::Conflict);
-        }
-        Ok(())
+        self.after.verify_terminal_revocation(revocation)
     }
     /// Record before the decision.
     pub fn before(&self) -> &PairingRecord {

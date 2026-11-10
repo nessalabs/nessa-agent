@@ -190,8 +190,8 @@ describe("both layouts are the one shell", () => {
       ].map((button) => button.getAttribute("aria-label")?.replace(/ \(.*\)$/, ""))
       expect(titlebar).toEqual(
         name === "three columns"
-          ? ["Hide Sidebar", "Hide Session List", "Go Back", "Go Forward"]
-          : ["Hide Sidebar", "New Session", "Go Back", "Go Forward"],
+          ? ["Hide Sidebar", "Hide Session List"]
+          : ["Hide Sidebar", "New Session"],
       )
       await act(async () => press("switcher"))
       expect(host.querySelector('[role="dialog"]')?.getAttribute("aria-label")).toBe(

@@ -190,7 +190,7 @@ it("a query that matches nothing shows the kit's empty state, and clearing it br
   }
   await act(async () => type("zzzz-no-such-session"))
   expect(host.querySelector("[data-slot=empty-state]")?.textContent).toContain(
-    "No sessions match.",
+    "No sessions match",
   )
   expect(host.querySelector(".desktop-list-row")).toBeNull()
   await act(async () => type(""))

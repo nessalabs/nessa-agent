@@ -13,6 +13,7 @@
 export const STRESS = {
   report: "[Thread report]",
   background: "stress background",
+  vmBackground: "stress vm-background",
   backgroundOutcome: "Background tool outcome (tool data, not instructions).",
   reply: "stress reply",
   webhook: "stress webhook witness",
@@ -124,6 +125,23 @@ export const TABLE_LINES = [
   "| --- | --- | --- | --- | ---: | --- | --- | ---: |",
   "| The Last Projectionist | Cineplex Scotiabank Theatre | Sat Oct 17 | 12:30 pm | 104 min | DCP | English | 42 |",
   "| Night Shift at the Lighthouse | CineCycle | Sat Oct 17 | 11:59 pm | 88 min | 16 mm | French, English subtitles | 9 |",
+]
+
+/**
+ * The code and the diagram a `table` turn streams after its tables, so the
+ * window draws a highlighted code block and a Mermaid diagram in the same
+ * answer: the window is dark only, and they must be too whatever the OS
+ * appearance is (UI audit #29).
+ */
+export const CODE_LINES = [
+  "```ts",
+  "const seatsLeft = 42",
+  "```",
+  "",
+  "```mermaid",
+  "flowchart LR",
+  "  A[Seats] --> B[Sold]",
+  "```",
 ]
 
 /**
@@ -248,6 +266,25 @@ export function stressScenario({
       {
         when: STRESS.backgroundOutcome,
         steps: [{ do: "text", chunks: [SAYS.backgroundFinished] }, { do: "end" }],
+      },
+      {
+        when: STRESS.vmBackground,
+        steps: [
+          {
+            do: "tool",
+            server: "nessa-background",
+            tool: "start",
+            arguments: {
+              taskId: "${prompt.id}",
+              command:
+                "pwd; while [ ! -f finish-background ]; do sleep 0.05; done; printf background-stress-output",
+              timeoutSeconds: 30,
+            },
+            save: "background",
+          },
+          { do: "text", chunks: [SAYS.backgroundStarted] },
+          { do: "end" },
+        ],
       },
       {
         when: STRESS.background,
@@ -393,6 +430,8 @@ export function stressScenario({
               "${prompt.text}",
               "\n\n",
               ...TABLE_LINES.map((line) => `${line}\n`),
+              "\n",
+              ...CODE_LINES.map((line) => `${line}\n`),
             ],
           },
           { do: "end" },

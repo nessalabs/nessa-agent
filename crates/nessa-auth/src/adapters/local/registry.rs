@@ -110,6 +110,8 @@ impl LocalStoreConfig {
 
 #[derive(Debug)]
 pub enum LocalStoreError {
+    /// The credential commit succeeded but its attribution effect remains owed.
+    PersonLinksUnavailable,
     Locked,
     NotInitialized,
     AlreadyInitialized,
@@ -162,6 +164,9 @@ impl fmt::Display for LocalStoreError {
                 formatter.write_str(
                     "As a last resort, move the invalid file to secure evidence storage, then run `nessa auth init --local --owner-token-file <new-absolute-path>`; reinitializing creates new identities, invalidates old tokens, and can orphan access tied to the old organization",
                 )
+            }
+            Self::PersonLinksUnavailable => {
+                formatter.write_str("credential commit succeeded; person attribution remains owed")
             }
             Self::Capacity => formatter.write_str("credential registry capacity reached"),
             Self::Conflict => formatter.write_str("credential command conflicts with stored state"),
@@ -310,6 +315,7 @@ pub struct LocalCredentialStore {
     subscribers: Mutex<Vec<mpsc::Sender<u64>>>,
     healthy: AtomicBool,
     stage_gates: Mutex<HashMap<InvitationId, Arc<StageGate>>>,
+    person_links: RwLock<Option<Arc<dyn crate::application::pairing::PairingPersonLinks>>>,
     #[cfg(test)]
     fail_directory_sync: AtomicBool,
     #[cfg(test)]
@@ -452,6 +458,7 @@ impl LocalCredentialStore {
             subscribers: Mutex::new(Vec::new()),
             healthy: AtomicBool::new(true),
             stage_gates: Mutex::new(HashMap::new()),
+            person_links: RwLock::new(None),
             #[cfg(test)]
             fail_directory_sync: AtomicBool::new(false),
             #[cfg(test)]
@@ -1093,6 +1100,7 @@ impl LocalCredentialStore {
         **slot = Some(next.clone());
         self.publish_snapshot(next)?;
         self.publish_revision(revision);
+        self.reconcile_person_links(slot.as_ref().ok_or(LocalStoreError::Corrupt)?)?;
         Ok(RevokeCredentialOutcome {
             revision,
             revocation,
@@ -1402,7 +1410,8 @@ impl From<LocalStoreError> for CredentialAdminError {
             LocalStoreError::Capacity => Self::Capacity,
             LocalStoreError::NotFound => Self::NotFound,
             LocalStoreError::OriginRecoveryRequired => Self::OriginRecoveryRequired,
-            LocalStoreError::Locked
+            LocalStoreError::PersonLinksUnavailable
+            | LocalStoreError::Locked
             | LocalStoreError::NotInitialized
             | LocalStoreError::AlreadyInitialized
             | LocalStoreError::Corrupt
@@ -1797,6 +1806,8 @@ fn validate_registry(
     let mut reserved = HashSet::new();
     let mut original_requests = HashSet::new();
     for (stored, record) in registry.pairings.iter().zip(&pairings) {
+        pairing::owner_principal(registry, record.intent())
+            .map_err(|_| CredentialRegistryFault::InvalidState(RegistryInvariant::PrincipalKind))?;
         if let Some(request) = stored.owner_phone_request().map_err(|_| {
             CredentialRegistryFault::InvalidState(RegistryInvariant::CredentialBinding)
         })? {

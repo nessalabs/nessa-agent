@@ -34,6 +34,7 @@ fn blank(text: &str) -> ConversationView {
             uploads: None,
             execution_id: "exec".into(),
             user_text: text.into(),
+            retried: None,
             attachments: Vec::new(),
             files: Vec::new(),
             app: None,

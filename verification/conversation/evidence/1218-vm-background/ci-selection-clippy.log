@@ -1,0 +1,42 @@
+ Downloading crates ...
+  Downloaded unicode-id v0.3.6
+  Downloaded markdown v1.0.0
+warning: constant evaluation is taking a long time
+    --> crates/nessa-protocol/src/lease.rs:1140:9
+     |
+1140 | /         while at < source.len() {
+1141 | |             if source[at] != b'\r' {
+1142 | |                 length += 1;
+...    |
+1145 | |         }
+     | |_________^ the const evaluator is currently interpreting this expression
+     |
+help: the constant being evaluated
+    --> crates/nessa-server/src/env/config.rs:58:9
+     |
+  58 |           const LEASE_PROTOCOL_DIGITS: [u8; 16] =
+     |           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+  70 | / lease_protocol!(
+  71 | |     "../../../nessa-protocol/src/lease.rs",
+  72 | |     "../../../nessa-protocol/src/pairing/frames.rs",
+  73 | |     "../../../nessa-protocol/src/build_update.rs",
+...    |
+ 116 | |     "../../../nessa-sdk/src/domain/agent_execution/leases/value_objects.rs",
+ 117 | | );
+     | |_- in this macro invocation
+     = note: this warning originates in the macro `lease_protocol` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+    Checking unicode-id v0.3.6
+    Checking nessa-client-core v0.1.0 (/workspace/nessa-agent-1218/crates/nessa-client-core)
+warning: `nessa-server` (lib) generated 1 warning
+    Checking nessa-device-client v0.1.0 (/workspace/nessa-agent-1218/crates/nessa-device-client)
+warning: `nessa-server` (lib test) generated 1 warning (1 duplicate)
+    Checking nessa-vault v0.1.0 (/workspace/nessa-agent-1218/crates/nessa-vault)
+    Checking markdown v1.0.0
+    Checking nessa-protocol v0.1.0 (/workspace/nessa-agent-1218/crates/nessa-protocol)
+    Checking nessa-auth v0.1.0 (/workspace/nessa-agent-1218/crates/nessa-auth)
+    Checking nessa-sdk v0.1.0 (/workspace/nessa-agent-1218/crates/nessa-sdk)
+    Checking nessa-local-storage v0.1.0 (/workspace/nessa-agent-1218/crates/nessa-local-storage)
+    Checking nessa-timer v0.1.0 (/workspace/nessa-agent-1218/crates/nessa-timer)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 43.47s

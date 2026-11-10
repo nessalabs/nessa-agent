@@ -1,0 +1,233 @@
+[
+  {
+    "check": "background",
+    "command": [
+      "cargo",
+      "test",
+      "-p",
+      "nessa-server",
+      "--lib",
+      "background",
+      "--",
+      "--test-threads=4"
+    ],
+    "sourceRevision": "0b93e7c525e1c4720913493772d1006bab2b5225",
+    "environment": {
+      "CARGO_INCREMENTAL": "0"
+    },
+    "status": 0
+  },
+  {
+    "check": "workspaces",
+    "command": ["cargo", "test", "-p", "nessa-server", "--lib", "workspaces::"],
+    "sourceRevision": "0b93e7c525e1c4720913493772d1006bab2b5225",
+    "environment": {
+      "CARGO_INCREMENTAL": "0"
+    },
+    "status": 0,
+    "seconds": 225.2
+  },
+  {
+    "check": "ssh-environment",
+    "command": ["cargo", "test", "-p", "nessa-server", "--lib", "ssh_environment::"],
+    "sourceRevision": "0b93e7c525e1c4720913493772d1006bab2b5225",
+    "environment": {
+      "CARGO_INCREMENTAL": "0"
+    },
+    "status": 0,
+    "seconds": 10.9
+  },
+  {
+    "check": "cli",
+    "command": ["cargo", "test", "-p", "nessa-server", "--lib", "cli::"],
+    "sourceRevision": "0b93e7c525e1c4720913493772d1006bab2b5225",
+    "environment": {
+      "CARGO_INCREMENTAL": "0"
+    },
+    "status": 0,
+    "seconds": 0.58
+  },
+  {
+    "check": "helper-binary",
+    "command": ["cargo", "test", "-p", "nessa-server", "--test", "background_run_binary"],
+    "sourceRevision": "0b93e7c525e1c4720913493772d1006bab2b5225",
+    "environment": {
+      "CARGO_INCREMENTAL": "0"
+    },
+    "status": 0,
+    "seconds": 97.19
+  },
+  {
+    "check": "clippy",
+    "command": [
+      "cargo",
+      "clippy",
+      "-p",
+      "nessa-server",
+      "--all-targets",
+      "--",
+      "-D",
+      "warnings"
+    ],
+    "sourceRevision": "0b93e7c525e1c4720913493772d1006bab2b5225",
+    "environment": {
+      "CARGO_INCREMENTAL": "0"
+    },
+    "status": 0,
+    "seconds": 155.67
+  },
+  {
+    "check": "format",
+    "command": ["cargo", "fmt", "--all", "--", "--check"],
+    "sourceRevision": "0b93e7c525e1c4720913493772d1006bab2b5225",
+    "environment": {
+      "CARGO_INCREMENTAL": "0"
+    },
+    "status": 0,
+    "seconds": 9.49
+  },
+  {
+    "check": "driver-tests",
+    "command": [
+      "node",
+      "--test",
+      "scripts/mcp-test-server/local-gateway.test.mjs",
+      "scripts/mcp-test-server/scripted-scenario.test.mjs",
+      "verification/desktop/scripts/lib/stress-plan.test.mjs",
+      "verification/desktop/scripts/lib/stress-vm-background.test.mjs"
+    ],
+    "sourceRevision": "0b93e7c525e1c4720913493772d1006bab2b5225",
+    "environment": {
+      "CARGO_INCREMENTAL": "0"
+    },
+    "status": 0,
+    "seconds": 9.26
+  },
+  {
+    "check": "architecture-tests",
+    "command": [
+      "node",
+      "--test",
+      "/workspace/nessa-agent-1218/scripts/architecture/rust-boundaries.test.mjs",
+      "/workspace/nessa-agent-1218/scripts/architecture/setup-gate-placement.test.mjs",
+      "/workspace/nessa-agent-1218/scripts/architecture/stand-down-placement.test.mjs",
+      "/workspace/nessa-agent-1218/scripts/architecture/platform-boundaries.test.mjs",
+      "/workspace/nessa-agent-1218/scripts/architecture/overlay-placement.test.mjs",
+      "/workspace/nessa-agent-1218/scripts/architecture/adr-numbers.test.mjs",
+      "/workspace/nessa-agent-1218/scripts/architecture/split-panes-boundary.test.mjs",
+      "/workspace/nessa-agent-1218/scripts/architecture/policy-engine.test.mjs",
+      "/workspace/nessa-agent-1218/scripts/architecture/without-comments.test.mjs",
+      "/workspace/nessa-agent-1218/scripts/architecture/rust-dependency-graphs.test.mjs",
+      "/workspace/nessa-agent-1218/scripts/architecture/desktop-verticals.test.mjs",
+      "/workspace/nessa-agent-1218/scripts/architecture/imported-paths.test.mjs",
+      "/workspace/nessa-agent-1218/scripts/architecture/workspace-shell-split.test.mjs",
+      "/workspace/nessa-agent-1218/scripts/architecture/environment-port.test.mjs",
+      "/workspace/nessa-agent-1218/scripts/architecture/conversation-boundary.test.mjs",
+      "/workspace/nessa-agent-1218/scripts/architecture/whole-workspace.test.mjs",
+      "/workspace/nessa-agent-1218/scripts/architecture/composer-budget.test.mjs"
+    ],
+    "sourceRevision": "0b93e7c525e1c4720913493772d1006bab2b5225",
+    "environment": {
+      "CARGO_INCREMENTAL": "0"
+    },
+    "status": 0,
+    "seconds": 0.82
+  },
+  {
+    "check": "architecture",
+    "command": ["node", "scripts/check-architecture.mjs"],
+    "sourceRevision": "0b93e7c525e1c4720913493772d1006bab2b5225",
+    "environment": {
+      "CARGO_INCREMENTAL": "0"
+    },
+    "status": 0,
+    "seconds": 6.5
+  },
+  {
+    "check": "vm-browser-default",
+    "command": [
+      "node",
+      "verification/desktop/scripts/conversation-stress.mjs",
+      "--only",
+      "vmBackground",
+      "--engine",
+      "chromium,webkit",
+      "--layout",
+      "columns,sidebar",
+      "--channel",
+      "bundled",
+      "--mode",
+      "dev",
+      "--out",
+      "/tmp/1218-browser-final-default.json",
+      "--evidence",
+      "/tmp/1218-browser-final-default"
+    ],
+    "sourceRevision": "0b93e7c525e1c4720913493772d1006bab2b5225",
+    "environment": {
+      "CARGO_INCREMENTAL": "0",
+      "PLAYWRIGHT_SKIP_VALIDATE_HOST_REQUIREMENTS": "1"
+    },
+    "status": 0,
+    "seconds": 169.01
+  },
+  {
+    "check": "vm-browser-raised",
+    "command": [
+      "node",
+      "verification/desktop/scripts/conversation-stress.mjs",
+      "--only",
+      "vmBackground",
+      "--engine",
+      "chromium,webkit",
+      "--layout",
+      "columns,sidebar",
+      "--channel",
+      "bundled",
+      "--mode",
+      "dev",
+      "--out",
+      "/tmp/1218-browser-final-raised.json",
+      "--evidence",
+      "/tmp/1218-browser-final-raised",
+      "--vmBackgroundTasks",
+      "3"
+    ],
+    "sourceRevision": "0b93e7c525e1c4720913493772d1006bab2b5225",
+    "environment": {
+      "CARGO_INCREMENTAL": "0",
+      "PLAYWRIGHT_SKIP_VALIDATE_HOST_REQUIREMENTS": "1"
+    },
+    "status": 0,
+    "seconds": 99.65
+  },
+  {
+    "check": "format-all",
+    "command": [
+      "prettier",
+      "--check",
+      "src",
+      "scripts",
+      "packages",
+      "verification",
+      "eslint.config.js",
+      "prettier.config.js"
+    ],
+    "sourceRevision": "0b93e7c525e1c4720913493772d1006bab2b5225",
+    "status": 0
+  },
+  {
+    "check": "lint-driver",
+    "command": [
+      "eslint",
+      "verification/desktop/scripts/conversation-stress.mjs",
+      "verification/desktop/scripts/lib/gateway-stack.mjs",
+      "verification/desktop/scripts/lib/stress-plan.mjs",
+      "verification/desktop/scripts/lib/stress-plan.test.mjs",
+      "verification/desktop/scripts/lib/stress-vm-background.mjs",
+      "verification/desktop/scripts/lib/stress-vm-background.test.mjs"
+    ],
+    "sourceRevision": "0b93e7c525e1c4720913493772d1006bab2b5225",
+    "status": 0
+  }
+]

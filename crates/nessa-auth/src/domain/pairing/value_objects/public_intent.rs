@@ -11,8 +11,22 @@ pub struct PublicIntent {
     generation: u64,
     expiry_ms: u64,
     class: ConsentClass,
+    same_person: bool,
 }
 impl PublicIntent {
+    /// Preserve the invitation choice in every public transcript and saved retry.
+    pub fn with_same_person(self, same_person: bool) -> Result<Self, PairingError> {
+        self.class.validate_same_person(same_person)?;
+        Ok(Self {
+            same_person,
+            ..self
+        })
+    }
+    /// Immutable attribution choice; this is not a credential class.
+    pub fn same_person(&self) -> bool {
+        self.same_person
+    }
+
     /// Who the invitation enrolls, shared with the canonical full consent owner
     /// and bound into the PAKE transcript.
     pub fn class(&self) -> ConsentClass {
@@ -38,6 +52,7 @@ impl PublicIntent {
             generation,
             expiry_ms,
             class,
+            same_person: false,
         })
     }
     /// Derive the same public correlation from one canonical registry record.
@@ -50,7 +65,8 @@ impl PublicIntent {
             record.intent().generation(),
             record.expires_at_ms(),
             record.intent().class(),
-        )
+        )?
+        .with_same_person(record.intent().same_person())
     }
     /// Public invitation locator, never a credential.
     pub fn invitation(&self) -> InvitationId {

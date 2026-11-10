@@ -20,6 +20,9 @@ on:
         description: The plan's seed. Empty picks one and prints it.
         required: false
         default: ""
+      vm-background-tasks:
+        description: VM background commands through the fake workspace provider.
+        default: "3"
       rounds:
         description: Steps on the main conversation, at least.
         default: "80"
@@ -84,6 +87,7 @@ jobs:
       # the dispatch form shows.
       # The iOS macOS workflow owns real Swift phone stress.
       NESSA_STRESS_INPUTFILES: "0"
+      NESSA_STRESS_VMBACKGROUNDTASKS: ${{ inputs.vm-background-tasks || '3' }}
       NESSA_STRESS_ROUNDS: ${{ inputs.rounds || '80' }}
       NESSA_STRESS_PARALLEL: ${{ inputs.parallel || '12' }}
       NESSA_STRESS_TURNS: ${{ inputs.turns || '8' }}

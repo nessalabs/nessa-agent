@@ -15,6 +15,7 @@ test("every required step appears as often as its number says", () => {
   const steps = plan(knobs)
   const count = (kind) => steps.filter((step) => step.kind === kind).length
   assert.equal(count("background"), knobs.backgroundTasks)
+  assert.equal(count("vmBackground"), knobs.vmBackgroundTasks)
   assert.equal(count("inputFiles"), knobs.inputFiles)
   assert.equal(count("model"), knobs.modelSwitches)
   assert.equal(count("pairedCatalogue"), 1)
@@ -162,6 +163,7 @@ test("the legacy seed preserves the existing non-model work's relative order", (
         handoffs: "0",
         inputFiles: "0",
         backgroundTasks: "0",
+        vmBackgroundTasks: "0",
         windows: "0",
         linkings: "0",
         mcpServers: "0",

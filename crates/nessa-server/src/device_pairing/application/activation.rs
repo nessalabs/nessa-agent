@@ -35,8 +35,8 @@ pub struct FreshStage {
     pub request: AttemptId,
 }
 
-/// Why activation stopped before Active. The approval stands; the record says
-/// where activation got to.
+/// Why activation or its next attribution write stopped. Approval stands;
+/// the canonical record says whether the credential already reached Active.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ActivationError {
     /// Current authorization or the registry refused a step.
@@ -70,13 +70,13 @@ impl ActivationError {
     }
 }
 
-/// What an approval produced: the record as it now stands and, if activation
-/// stopped short of Active, why.
+/// What an approval produced: the canonical phase and any interruption of
+/// activation or its next grant-store attribution write.
 pub struct Approval {
     /// The canonical record after the approval and any activation steps.
     pub record: PairingRecord,
-    /// Why activation stopped, if it did. `None` for Active, or for a record
-    /// whose cleanup completed because it ended meanwhile.
+    /// Why activation or attribution stopped, including after Active. `None`
+    /// when both completed, or cleanup completed after the enrollment ended.
     pub stopped: Option<ActivationError>,
 }
 
@@ -107,16 +107,25 @@ impl PairingOwner<'_> {
         fresh: Option<FreshStage>,
     ) -> Result<Approval, OwnerError> {
         let id = decided.id();
-        if !matches!(
-            decided.phase(),
-            PairingPhase::Approved | PairingPhase::Staging
-        ) {
+        let retrying_link =
+            decided.phase() == PairingPhase::Active && decided.intent().same_person();
+        if !retrying_link
+            && !matches!(
+                decided.phase(),
+                PairingPhase::Approved | PairingPhase::Staging
+            )
+        {
             return Ok(Approval {
                 record: decided,
                 stopped: None,
             });
         }
-        match self.activate(session, decided, fresh).await {
+        let result = if retrying_link {
+            self.publish_current(session, id).await
+        } else {
+            self.activate(session, decided, fresh).await
+        };
+        match result {
             Ok(record) => Ok(Approval {
                 record,
                 stopped: None,
@@ -210,6 +219,14 @@ impl PairingOwner<'_> {
             return Err(ActivationError::ReceiverNotCurrent);
         }
         // Stage and receiver advanced the revision: admit again, fresh.
+        self.publish_current(session, id).await
+    }
+
+    async fn publish_current(
+        &self,
+        session: &AuthenticatedSession,
+        id: InvitationId,
+    ) -> Result<PairingRecord, ActivationError> {
         let admission = self
             .admit(session, id)
             .await

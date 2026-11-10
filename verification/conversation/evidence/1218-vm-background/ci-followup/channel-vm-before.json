@@ -1,0 +1,96 @@
+{
+  "check": "conversation-stress",
+  "ok": false,
+  "started": "2026-11-10T00:37:44.035Z",
+  "finished": "2026-11-10T00:43:06.722Z",
+  "target": {
+    "url": "http://127.0.0.1:34487/desktop.html",
+    "mode": "dev"
+  },
+  "results": [
+    {
+      "name": "008 channel",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "selected:channel,vmBackground",
+      "ms": 116979,
+      "seen": {
+        "index": 8,
+        "kind": "channel"
+      },
+      "failures": [
+        "the global VM lifetime was not saved through settings",
+        "the channel's explicit unlimited lifetime was not saved",
+        "a channel override changed the global default"
+      ],
+      "error": "locator.click: Timeout 15000ms exceeded.\nCall log:\n\u001b[2m  - waiting for locator('.workspace-list [data-session-row=\"5c3200d3-b857-40c7-b7b1-633c12800271\"]').filter({ hasText: 'stress reply main s1 chromium' })\u001b[22m\n",
+      "cannotRun": false,
+      "ok": false
+    },
+    {
+      "name": "019 vmBackground",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "selected:channel,vmBackground",
+      "cannotRun": true,
+      "error": "not run: 008 channel did not hold",
+      "failures": [],
+      "ok": false
+    },
+    {
+      "name": "background",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "selected:channel,vmBackground",
+      "seen": {
+        "conversations": 2,
+        "turns": 3
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "at rest",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "selected:channel,vmBackground",
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "followers",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "selected:channel,vmBackground",
+      "seen": [
+        {
+          "conversations": 3,
+          "churned": 137,
+          "resumed": 0,
+          "lagging": 0,
+          "refusedAsExpected": 0
+        },
+        {
+          "conversations": 3,
+          "churned": 134,
+          "resumed": 0,
+          "lagging": 0,
+          "refusedAsExpected": 0
+        }
+      ],
+      "failures": [],
+      "ok": true
+    },
+    {
+      "engine": "chromium",
+      "layout": "columns",
+      "name": "console",
+      "harmless": [
+        "console.error: Connecting to 'http://127.0.0.1:9/policy-probe' violates the following Content Security Policy directive: \"connect-src 'self' blob: ipc: http://ipc.localhost ws://127.0.0.1:7420 http://127.0.0.1:7420 ws://127.0.0.1:7421 http://127.0.0.1:7421 https: http://127.0.0.1:45933 ws://127.0.0.1:45933 ws://12",
+        "console.error: Fetch API cannot load http://127.0.0.1:9/policy-probe. Refused to connect because it violates the document's Content Security Policy."
+      ],
+      "failures": [],
+      "ok": true
+    }
+  ]
+}

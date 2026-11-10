@@ -111,13 +111,13 @@ it("offers every answer the review carries, each giving its own", async () => {
       />,
     ),
   )
-  for (const name of ["Deny", "Always Allow", "Allow Once"]) byName(name)?.click()
+  for (const name of ["Deny", "Always allow", "Allow once"]) byName(name)?.click()
   expect(given).toEqual(["deny", "always", "once"])
   expect(byName("More Ways to Allow")).toBeDefined()
   await act(async () => root.unmount())
 })
 
-it("offers only the answers the review carries, in the review's words (#444)", async () => {
+it("offers only the answers the review carries, named by what they do, its words as tips (#444)", async () => {
   const given: ApprovalChoice[] = []
   const root = createRoot(host)
   const review: readonly ApprovalOption[] = [
@@ -133,16 +133,17 @@ it("offers only the answers the review carries, in the review's words (#444)", a
       />,
     ),
   )
-  expect(byName("Always Allow")).toBeUndefined()
-  expect(byName("Allow Once")).toBeUndefined()
+  expect(byName("Always allow")).toBeUndefined()
   expect(byName("More Ways to Allow")).toBeUndefined()
-  expect(byName("Deny")).toBeUndefined()
-  for (const name of ["Nope", "Sure"]) byName(name)?.click()
+  expect(byName("More Answers")).toBeUndefined()
+  expect(byName("Deny")?.title).toBe("Nope")
+  expect(byName("Allow once")?.title).toBe("Sure")
+  for (const name of ["Deny", "Allow once"]) byName(name)?.click()
   expect(given).toEqual(["deny", "once"])
   await act(async () => root.unmount())
 })
 
-it("gives the clicked option when two answers allow the same way", async () => {
+it("draws the first of two answers that allow the same way, the other in the menu beside Deny", async () => {
   const given: string[] = []
   const root = createRoot(host)
   const review: readonly ApprovalOption[] = [
@@ -158,8 +159,9 @@ it("gives the clicked option when two answers allow the same way", async () => {
       />,
     ),
   )
-  byName("Run it")?.click()
-  expect(given).toEqual(["run"])
+  byName("Allow once")?.click()
+  expect(given).toEqual(["ship"])
+  expect(byName("More Answers")).toBeDefined()
   await act(async () => root.unmount())
 })
 

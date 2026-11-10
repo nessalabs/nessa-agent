@@ -148,6 +148,7 @@ export function PoolOrder({
         </SegmentedControl>
       ) : null}
       <SettingsGroup
+        surface="flat"
         aria-label="Thread order"
         disabled={!pool || busy || mode === "default"}
         footnote={

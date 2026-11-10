@@ -255,7 +255,7 @@ async fn invite(
 ) -> (String, nessa_auth::domain::pairing::InvitationId) {
     let created = fixture
         .gateway
-        .create(fixture.session.clone(), class, OsEntropy)
+        .create(fixture.session.clone(), class, false, OsEntropy)
         .await
         .unwrap();
     let code = std::str::from_utf8(created.code().display_bytes().as_ref())
@@ -1838,3 +1838,6 @@ async fn a_slot_names_the_transition_a_status_began_whatever_storage_did() {
     assert_eq!(ending.outcome(), Some(SlotOutcome::NotLanded));
     assert!(active(&dialing.records), "the record is as it was");
 }
+
+#[path = "same_person.rs"]
+mod same_person;

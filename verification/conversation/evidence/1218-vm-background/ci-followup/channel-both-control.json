@@ -1,0 +1,155 @@
+{
+  "check": "conversation-stress",
+  "ok": false,
+  "started": "2026-11-10T00:50:06.879Z",
+  "finished": "2026-11-10T00:52:39.610Z",
+  "target": {
+    "url": "http://127.0.0.1:39369/desktop.html",
+    "mode": "dev"
+  },
+  "results": [
+    {
+      "name": "008 channel",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "selected:channel",
+      "ms": 66235,
+      "seen": {
+        "index": 8,
+        "kind": "channel"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "background",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "selected:channel",
+      "seen": {
+        "conversations": 2,
+        "turns": 3
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "at rest",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "selected:channel",
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "followers",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "selected:channel",
+      "seen": [
+        {
+          "conversations": 5,
+          "churned": 71,
+          "resumed": 0,
+          "lagging": 0,
+          "refusedAsExpected": 0
+        },
+        {
+          "conversations": 5,
+          "churned": 74,
+          "resumed": 0,
+          "lagging": 0,
+          "refusedAsExpected": 0
+        }
+      ],
+      "failures": [],
+      "ok": true
+    },
+    {
+      "engine": "chromium",
+      "layout": "columns",
+      "name": "console",
+      "harmless": [
+        "console.error: Connecting to 'http://127.0.0.1:9/policy-probe' violates the following Content Security Policy directive: \"connect-src 'self' blob: ipc: http://ipc.localhost ws://127.0.0.1:7420 http://127.0.0.1:7420 ws://127.0.0.1:7421 http://127.0.0.1:7421 https: http://127.0.0.1:44705 ws://127.0.0.1:44705 ws://12",
+        "console.error: Fetch API cannot load http://127.0.0.1:9/policy-probe. Refused to connect because it violates the document's Content Security Policy."
+      ],
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "008 channel",
+      "engine": "webkit",
+      "layout": "columns",
+      "scope": "selected:channel",
+      "ms": 56898,
+      "seen": {
+        "index": 8,
+        "kind": "channel"
+      },
+      "failures": [
+        "the conversation started in stress-made-r8-s1 is in ch_qthzhppfzh",
+        "the agent in stress-made-r8-s1 did not work in /workspace/.setup/tmp/nessa-mcp-live-claude-8AbYMu/ci/instances/conversation-stress/channels/ch_kpya4ohfcg: Working in: /workspace/.setup/tmp/nessa-mcp-live-claude-8AbYMu/ci/instances/conversation-stress/channels/ch_qthzhppfzh System prompt: You are Nessa, a helpful assistant. Follow the user's request. Use your native tools for file operations and web research. All Nessa tools are provided through MCP.",
+        "moving the main agent kept the main chat that runs on this machine",
+        "the old main chat is gone after the main agent moved",
+        "the channel made in /workspace/.setup/tmp/nessa-stress-fVMSy4/chosen-Wr9g3p works in /workspace/.setup/tmp/nessa-stress-fVMSy4/chosen-k8YEtZ (made: false)",
+        "the conversation started in stress-chosen-r8-s1 is in ch_4l2pps5iz3",
+        "the agent in stress-chosen-r8-s1 did not work in /workspace/.setup/tmp/nessa-stress-fVMSy4/chosen-k8YEtZ: Working in: /workspace/.setup/tmp/nessa-stress-fVMSy4/chosen-Wr9g3p System prompt: You are Nessa, a helpful assistant. Follow the user's request. Use your native tools for file operations and web research. All Nessa tools are provided through MCP. For shell commands use the Nessa MCP shell tool, wh"
+      ],
+      "ok": false
+    },
+    {
+      "name": "background",
+      "engine": "webkit",
+      "layout": "columns",
+      "scope": "selected:channel",
+      "seen": {
+        "conversations": 2,
+        "turns": 3
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "at rest",
+      "engine": "webkit",
+      "layout": "columns",
+      "scope": "selected:channel",
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "followers",
+      "engine": "webkit",
+      "layout": "columns",
+      "scope": "selected:channel",
+      "seen": [
+        {
+          "conversations": 7,
+          "churned": 66,
+          "resumed": 0,
+          "lagging": 0,
+          "refusedAsExpected": 10
+        },
+        {
+          "conversations": 7,
+          "churned": 69,
+          "resumed": 0,
+          "lagging": 0,
+          "refusedAsExpected": 10
+        }
+      ],
+      "failures": [],
+      "ok": true
+    },
+    {
+      "engine": "webkit",
+      "layout": "columns",
+      "name": "console",
+      "harmless": [
+        "console.error: Refused to connect to http://127.0.0.1:9/policy-probe because it does not appear in the connect-src directive of the Content Security Policy."
+      ],
+      "failures": [],
+      "ok": true
+    }
+  ]
+}
