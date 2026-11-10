@@ -1,3 +1,4 @@
+use crate::timer::clock;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, ToSocketAddrs};
 use std::sync::Arc;
 
@@ -137,7 +138,7 @@ impl WebhookHttp for HttpsWebhook {
             .clone()
             .try_acquire_owned()
             .map_err(|_| PrepareFailure::Busy)?;
-        let deadline = Instant::now() + POST_DEADLINE;
+        let deadline = clock::now() + POST_DEADLINE;
         let client = tokio::time::timeout_at(deadline, self.pinned_client(destination))
             .await
             .map_err(|_| PrepareFailure::TimedOut)??;
@@ -162,7 +163,7 @@ impl WebhookPost for PreparedPost {
     async fn post(self: Box<Self>, key: &MacKey, message: &Message) -> Result<u16, PostFailure> {
         // timeout_at may poll its inner future once even when already expired.
         // Refuse before constructing/polling the request in that case.
-        if Instant::now() >= self.deadline {
+        if clock::now() >= self.deadline {
             return Err(PostFailure::TimedOut);
         }
         tokio::time::timeout_at(self.deadline, call(&self.client, &self.url, key, message))
@@ -292,7 +293,7 @@ pub(crate) fn isolated_post(
             address.port()
         ))
         .expect("synthetic loopback URL"),
-        deadline: Instant::now() + POST_DEADLINE,
+        deadline: clock::now() + POST_DEADLINE,
         _permit: permit,
     }))
 }

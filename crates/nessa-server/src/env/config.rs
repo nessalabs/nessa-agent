@@ -114,6 +114,7 @@ lease_protocol!(
     "../../../nessa-sdk/src/infrastructure/harness_process.rs",
     "../../../nessa-sdk/src/infrastructure/process.rs",
     "../../../nessa-sdk/src/domain/agent_execution/leases/value_objects.rs",
+    "../../../nessa-types/src/lib.rs",
 );
 
 /// The lease protocol this build speaks: a fingerprint of its sources, taken

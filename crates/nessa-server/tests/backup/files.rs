@@ -20,7 +20,7 @@ use crate::backup::infrastructure::{
 use crate::conversation::application::{ArtifactBudget, ChannelStore};
 use crate::conversation::domain::{
     Channel, ChannelDefaults, ChannelExecution, ChannelFolder, ChannelId, ChannelName,
-    ChannelNotes, ChannelParts, ChannelPath, ChannelResources, WorkspacePlacement,
+    ChannelNotes, ChannelParts, ChannelPath, ChannelResources, Place,
 };
 use crate::conversation::infrastructure::LocalChannelStore;
 use nessa_auth::domain::{OrganizationId, PrincipalId};
@@ -778,10 +778,7 @@ fn channel_with_settings() -> Channel {
         OrganizationId::new("org").unwrap(),
         PrincipalId::new("owner").unwrap(),
         ChannelParts {
-            execution: ChannelExecution {
-                coordinator: WorkspacePlacement::Boat,
-                threads: WorkspacePlacement::Local,
-            },
+            execution: ChannelExecution::new(&Place::CloudVm, &Place::Here).unwrap(),
             name: ChannelName::new("design").unwrap(),
             folder: ChannelFolder {
                 path: path("/work/channel"),

@@ -138,7 +138,7 @@ impl ConversationService {
             Ok(placed) => placed,
             Err(_) => return refused(PublishCallRefusal::EnvironmentNotLeased),
         };
-        if call.environment != placed.as_deref().unwrap_or(super::HERE) {
+        if call.environment != placed.name() {
             return refused(PublishCallRefusal::EnvironmentNotLeased);
         }
         if *stop.borrow() {
@@ -158,7 +158,7 @@ impl ConversationService {
             requests.forget(&lease, &call.call);
             return refused(PublishCallRefusal::PublishUnavailable);
         };
-        let wait = environments.publish_wait();
+        let wait = self.inner.tool_config.publish_wait;
         let offered = offer(
             publishing,
             requests.clone(),

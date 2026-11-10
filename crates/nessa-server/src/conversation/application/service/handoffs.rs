@@ -475,7 +475,7 @@ impl ConversationService {
                     // it made, asked for as it was then. The source is not
                     // read again, so a source deleted, closed to the caller
                     // or moved to another model since cannot change it.
-                    let environment = self
+                    let place = self
                         .inner
                         .environment
                         .placement(&id)
@@ -491,8 +491,9 @@ impl ConversationService {
                                 agent: existing.agent().map(RequestedAgent::Known),
                                 model: Some(existing.model().as_str().into()),
                                 approval_mode: Some(existing.approval_mode()),
-                                environment,
+                                environment: None,
                                 channel,
+                                fork: Some(place),
                             },
                         )
                         .await;
@@ -519,7 +520,7 @@ impl ConversationService {
                     .map(|snapshot| snapshot.carried_history())
             })
             .unwrap_or_default();
-        let environment = self
+        let place = self
             .inner
             .environment
             .placement(&source)
@@ -576,8 +577,9 @@ impl ConversationService {
                     agent: Some(RequestedAgent::Known(agent)),
                     model: Some(record.model().as_str().into()),
                     approval_mode: Some(record.approval_mode()),
-                    environment,
+                    environment: None,
                     channel,
+                    fork: Some(place),
                 },
             )
             .await;

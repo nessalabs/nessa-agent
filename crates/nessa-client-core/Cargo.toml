@@ -24,6 +24,7 @@ name = "weak_link_measure"
 base64 = "0.22"
 nessa-auth = { path = "../nessa-auth" }
 nessa-protocol = { path = "../nessa-protocol" }
+nessa-projection = { path = "../nessa-projection" }
 nessa-sdk = { path = "../nessa-sdk" }
 nessa-sync = { workspace = true }
 nessa-local-database = { path = "../nessa-local-database" }
@@ -54,3 +55,6 @@ socket2 = "0.6"
 tempfile = "3"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "test-util"] }
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt"] }
+
+[lints]
+workspace = true

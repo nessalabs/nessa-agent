@@ -35,7 +35,7 @@ use tokio::process::Command;
 
 /// The provider name every session this binding opens records in its
 /// history, as its provider identity.
-pub const PROVIDER_NAME: &str = "codex-acp";
+pub const PROVIDER_NAME: &str = nessa_types::providers::CODEX_ACP;
 
 /// Immutable composition factory; opening twice creates independent process scopes.
 #[derive(Clone)]

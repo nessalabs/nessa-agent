@@ -16,7 +16,7 @@ use base64::Engine as _;
 use nessa_auth::application::ports::{AccessError, AccessSnapshot};
 use nessa_auth::application::session::{AuthenticatedSession, ReadCurrentSession};
 use nessa_auth::domain::{MembershipRole, Resource};
-use nessa_protocol::conversation::projection::CommittedCursor;
+use nessa_projection::CommittedCursor;
 use nessa_protocol::conversation::view::{
     ConversationList, ConversationModelChangeEffect, ConversationObservation,
     ConversationObservationCursor, ConversationPartPosition, ConversationPoint,
@@ -1225,6 +1225,7 @@ fn requested_conversation(
         approval_mode: params.approval_mode.map(approval_mode),
         environment: params.environment.clone(),
         channel: requested_channel(params.channel_id.as_deref())?,
+        fork: None,
     })
 }
 /// A channel id as asked: one that is not an id is an invalid request.
@@ -1253,6 +1254,7 @@ fn requested_conversation_from_receipt(
         approval_mode: params.approval_mode.map(approval_mode),
         environment: params.environment.clone(),
         channel: requested_channel(params.channel_id.as_deref())?,
+        fork: None,
     })
 }
 fn approval_mode(mode: WireApprovalMode) -> ConversationApprovalMode {

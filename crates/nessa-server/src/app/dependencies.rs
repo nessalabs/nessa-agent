@@ -1,3 +1,4 @@
+use crate::timer::clock;
 use nessa_protocol::clock::Clock;
 use std::{sync::Arc, time::Instant};
 
@@ -24,7 +25,7 @@ impl Clock for FixedClock {
 impl Default for RuntimeDependencies {
     fn default() -> Self {
         Self {
-            clock: Arc::new(MonotonicClock(Instant::now())),
+            clock: Arc::new(MonotonicClock(clock::os::now())),
         }
     }
 }

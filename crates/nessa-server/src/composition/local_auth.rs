@@ -1,5 +1,6 @@
 //! Local product dependency factory. Provider choices stay outside route handlers.
 use super::agent::AgentsConfig;
+use crate::timer::clock;
 #[cfg(unix)]
 use crate::{
     conversation::{
@@ -46,7 +47,7 @@ use crate::{
     conversation::{
         application::{
             ConversationAgents, ConversationDependencies, ConversationLimits, DriveTools,
-            Environments, McpAppPorts,
+            EnvironmentToolConfig, Environments, McpAppPorts,
         },
         infrastructure::{
             CedarToolPolicyEvaluator, DurableAgentToolAudit, DurableConversationCreationAudit,
@@ -96,17 +97,16 @@ use nessa_auth::{
     domain::{AudienceId, OrganizationId, Resource, ResourceId},
 };
 use nessa_local_database::OpenError;
+#[cfg(unix)]
+use nessa_projection::{McpToolUis, NoMcpToolUis};
+#[cfg(unix)]
+use nessa_protocol::agents::AgentId;
 use nessa_protocol::clock::Clock as ServerClock;
 use nessa_protocol::product::generated::AgentsListResult;
 #[cfg(unix)]
 use nessa_protocol::product::generated::{
     AgentModelOption, AgentOption, AgentsNativeHooks, ApprovalMode as WireApprovalMode,
     ApprovalModeChoice as WireApprovalModeChoice, NativeHooksChoice,
-};
-#[cfg(unix)]
-use nessa_protocol::{
-    agents::AgentId,
-    conversation::tool_uis::{McpToolUis, NoMcpToolUis},
 };
 #[cfg(unix)]
 use nessa_sdk::application::agent_execution::subagents::{
@@ -132,13 +132,7 @@ use nessa_sync::replication::domain::Id as RecordId;
 use std::collections::{BTreeMap, HashSet};
 #[cfg(unix)]
 use std::path::PathBuf;
-use std::{
-    collections::HashMap,
-    io,
-    path::Path,
-    sync::Arc,
-    time::{SystemTime, UNIX_EPOCH},
-};
+use std::{collections::HashMap, io, path::Path, sync::Arc, time::UNIX_EPOCH};
 #[cfg(unix)]
 use tokio::runtime::Handle;
 use uuid::Uuid;
@@ -147,7 +141,7 @@ use uuid::Uuid;
 pub(super) struct SystemClock;
 impl Clock for SystemClock {
     fn unix_milliseconds(&self) -> u64 {
-        SystemTime::now()
+        clock::wall_now()
             .duration_since(UNIX_EPOCH)
             .map_or(0, |elapsed| {
                 u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX)
@@ -1663,7 +1657,7 @@ async fn conversations(
         )),
         None => Arc::new(NoMcpToolUis),
     };
-    let (environment, environment_peers) = environments(
+    let (environment, tool_config, environment_peers) = environments(
         &root,
         &ssh_hosts,
         command_policy,
@@ -1727,6 +1721,7 @@ async fn conversations(
         ),
         clock: clock.clone(),
         environment,
+        tool_config,
         access_policy,
     };
     let workspace = Some(agents.workspace.to_string_lossy().into_owned());
@@ -1953,7 +1948,7 @@ fn environments(
     serving: Option<ServingAuth>,
     organization: crate::conversation::application::OrganizationBudgets,
     logins: Arc<dyn crate::conversation::infrastructure::ssh_environment::SavedLogins>,
-) -> Result<(Environments, Option<PairedParts>), RunError> {
+) -> Result<(Environments, EnvironmentToolConfig, Option<PairedParts>), RunError> {
     use super::paired_environments::{
         ListenerEnvironments, PeerWorkers, RegistryPaired, RegistryServing, SavedSightings,
     };
@@ -2036,11 +2031,14 @@ fn environments(
     }
     // Who may run which commands where is the command policy's, answered by
     // Cedar over the configured hosts and programs (ADR 803 step 4).
-    if let Some(policy) = commands {
-        let evaluator = CedarCommandPolicyEvaluator::new(&policy)
-            .map_err(|_| RunError::Agent("the command policy bundle does not validate".into()))?;
-        environments = environments.with_commands(Arc::new(evaluator));
-    }
+    let tools = match commands {
+        Some(policy) => EnvironmentToolConfig::with_commands(Arc::new(
+            CedarCommandPolicyEvaluator::new(&policy).map_err(|_| {
+                RunError::Agent("the command policy bundle does not validate".into())
+            })?,
+        )),
+        None => EnvironmentToolConfig::default(),
+    };
     let paired = peers.zip(paired_keys).map(|(peers, paired_keys)| {
         let connected = peers.clone();
         let changes = peers.connections();
@@ -2055,14 +2053,15 @@ fn environments(
                 changes,
                 // The pool first, while any worker of it takes new work.
                 names: Arc::new(move || {
-                    use crate::conversation::application::{PairedEnvironments, POOL};
+                    use crate::conversation::application::PairedEnvironments;
+                    use crate::conversation::domain::Place;
                     let workers: Vec<String> = connected
                         .connected()
                         .iter()
                         .map(nessa_sdk::domain::agent_execution::leases::PeerEnvironment::name)
                         .collect();
                     let pool = connected.serving().iter().any(|(_, load)| !load.draining);
-                    pool.then(|| POOL.to_owned())
+                    pool.then(|| Place::Pool.name())
                         .into_iter()
                         .chain(workers)
                         .collect()
@@ -2071,7 +2070,7 @@ fn environments(
             workers,
         )
     });
-    Ok((environments, paired))
+    Ok((environments, tools, paired))
 }
 
 #[cfg(unix)]

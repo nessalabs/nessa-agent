@@ -85,7 +85,7 @@ test("a change with no Rust consequence runs no Rust suite", () => {
 })
 
 test("a frontend file the desktop crate embeds reaches only the desktop crate", () => {
-  // nessa-app is outside the nine-crate test list; its own checks are the
+  // nessa-app is outside the tested crate list; its own checks are the
   // desktop jobs, which this plan never skips.
   const embedded = plan("src/host/window.ts")
   assert.equal(embedded.rust, false)
@@ -376,7 +376,7 @@ test("the real workspace reads, and every tested crate is a member", () => {
   for (const name of RUST_TEST_PACKAGES) assert.ok(names.includes(name), name)
   // Facts the narrowing relies on, checked against the tree rather than assumed.
   assert.ok(real.dependents.get("nessa-sdk").has("nessa-server"))
-  assert.ok(real.dependents.get("nessa-sdk").has("nessa-protocol"))
+  assert.ok(real.dependents.get("nessa-types").has("nessa-protocol"))
   const ui = planChange(
     [{ filename: "src/desktop/workspace/ui/transcript/transcript.tsx" }],
     real,

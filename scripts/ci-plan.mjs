@@ -5,7 +5,7 @@
  * `documentation-only.mjs` answers one question: can this change skip every
  * compile job? This script answers the next ones, for a change that is code:
  *
- *   - which of the nine crates the Rust test and clippy steps list can it
+ *   - which of the crates the Rust test and clippy steps list can it
  *     reach (`rustPackages`), and so whether those steps run at all;
  *   - whether the SDK is among them, which is all the SDK coverage job tests;
  *   - whether it needs the macOS and Windows test suites, or whether a clippy
@@ -82,6 +82,8 @@ export const RUST_TEST_PACKAGES = [
   "nessa-auth",
   "nessa-server",
   "nessa-protocol",
+  "nessa-projection",
+  "nessa-types",
   "nessa-client-core",
   "nessa-device-client",
   "nessa-sdk",

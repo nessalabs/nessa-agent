@@ -1,26 +1,11 @@
 use super::domain::ConversationApprovalMode;
 use crate::agents::AgentId;
-use nessa_sdk::{
-    application::agent_execution::{
-        providers::{
-            CompactionReportingCapability, ElicitationForwardingCapability,
-            IncomingElicitationCapability, ModelSwitchReportingCapability,
-            NativeHookSuppressionCapability, OperationCapabilities, PermissionDeferralCapability,
-            PermissionDenialCapability, PolicyCloseSessionCapability, PolicyEndTurnCapability,
-            PreToolPolicyCapability, ProviderIdentity,
-        },
-        sessions::{
-            ArtifactRecord, CommittedViewState, HandoffKind, HandoffRecord, NoteDelivery,
-            NoteRecord, NoteRetirementReason, NoteState, SessionSnapshot,
-        },
-    },
-    domain::agent_execution::{
-        executions::AgentSource,
-        permissions::PermissionEffect,
-        prompts::{ImageReference, LinkedFile, MessageSender, UserMessage},
-    },
-};
 use serde::Serialize;
+
+/// Most bytes of a conversation view's application transcript body, as the
+/// projection bounds it; product catalogue enrichment is serialized
+/// afterward. A device reads a saved view against the same bound.
+pub const MAX_VIEW_BYTES: usize = 60_000;
 
 /// Current confirmed selection used to enrich the product view from the same
 /// catalog that powers agents.list. Equality lets Projection own replacements.
@@ -82,18 +67,18 @@ pub struct ConversationView {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub lease: Option<ConversationLeaseView>,
     /// Artifacts the conversation recorded, each held when it was recorded,
-    /// the newest [`MAX_VIEW_ARTIFACTS`](super::projection::MAX_VIEW_ARTIFACTS)
+    /// the newest `nessa_projection::MAX_VIEW_ARTIFACTS`
     /// in the order they were recorded. Empty before any was recorded. A
     /// record is history: it stays when the hold is let go, as closing the
     /// conversation does, and whether the bytes are still held is asked
     /// when they are fetched.
     pub artifacts: Vec<ConversationArtifact>,
     /// Notes left in the conversation, the newest
-    /// [`MAX_VIEW_NOTES`](super::projection::MAX_VIEW_NOTES) in the order
+    /// `nessa_projection::MAX_VIEW_NOTES` in the order
     /// they were left. Empty before any was left.
     pub notes: Vec<ConversationNote>,
     /// Switches and the fork the conversation began as, in the order they
-    /// were recorded, at most [`MAX_VIEW_HANDOFFS`](super::projection::MAX_VIEW_HANDOFFS),
+    /// were recorded, at most `nessa_projection::MAX_VIEW_HANDOFFS`,
     /// the newest. Empty before any.
     pub handoffs: Vec<ConversationHandoff>,
     /// Records this read could not apply, oldest first, at most 32. Empty
@@ -129,18 +114,6 @@ pub enum ConversationTranscriptState {
     Complete,
     Stale,
     Unknown,
-}
-impl From<CommittedViewState> for ConversationTranscriptState {
-    fn from(state: CommittedViewState) -> Self {
-        match state {
-            CommittedViewState::NotLoaded => Self::NotLoaded,
-            CommittedViewState::Partial => Self::Partial,
-            CommittedViewState::CompleteEmpty => Self::CompleteEmpty,
-            CommittedViewState::Complete => Self::Complete,
-            CommittedViewState::Stale => Self::Stale,
-            CommittedViewState::Unknown => Self::Unknown,
-        }
-    }
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -381,20 +354,6 @@ pub struct ConversationMessageApp {
     pub server: String,
     pub tool: String,
 }
-impl ConversationMessageApp {
-    /// The app that wrote `message`, or `None` when the person did.
-    pub fn of(message: &UserMessage) -> Option<Self> {
-        match message.sender() {
-            MessageSender::Person | MessageSender::Internal | MessageSender::Agent(_) => None,
-            MessageSender::App(app) => Some(Self {
-                execution_id: app.execution_id().as_str().into(),
-                tool_id: app.tool_id().as_str().into(),
-                server: app.tool().server().into(),
-                tool: app.tool().tool().into(),
-            }),
-        }
-    }
-}
 /// Verified origin of an agent-authored message or note. It carries no
 /// permission to act as the source turn's human initiator.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -402,23 +361,6 @@ impl ConversationMessageApp {
 pub struct ConversationAgentSource {
     pub conversation_id: String,
     pub execution_id: String,
-}
-impl ConversationAgentSource {
-    /// Read an agent message's origin from the SDK's saved sender.
-    pub fn of(message: &UserMessage) -> Option<Self> {
-        match message.sender() {
-            MessageSender::Agent(source) => Some(source.into()),
-            _ => None,
-        }
-    }
-}
-impl From<&AgentSource> for ConversationAgentSource {
-    fn from(source: &AgentSource) -> Self {
-        Self {
-            conversation_id: source.conversation().into(),
-            execution_id: source.execution().as_str().into(),
-        }
-    }
 }
 /// One image a turn referred to. The view never carries its bytes.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -428,28 +370,12 @@ pub struct ConversationAttachment {
     pub mime_type: String,
     pub size: u64,
 }
-impl From<&ImageReference> for ConversationAttachment {
-    fn from(image: &ImageReference) -> Self {
-        Self {
-            digest: image.digest().to_string(),
-            mime_type: image.media_type().as_str().into(),
-            size: image.size(),
-        }
-    }
-}
 /// One file a turn pointed the agent at. The view carries the path, because
 /// the path is the whole of what the turn carried; nothing was ever read.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConversationLinkedFile {
     pub path: String,
-}
-impl From<&LinkedFile> for ConversationLinkedFile {
-    fn from(file: &LinkedFile) -> Self {
-        Self {
-            path: file.path().into(),
-        }
-    }
 }
 /// One review waiting on a person, as a view lists it: its key and who asked,
 /// with the start of the tool's name to say what it is while the rest is
@@ -542,20 +468,12 @@ pub struct ConversationPermissionOption {
 }
 /// Whether an option allows or denies the reviewed request. Only an option
 /// deciding that one request is published: the projection offers no review
-/// with another (`projection.rs`, "a review reaching beyond its request").
+/// with another (`nessa-projection`, "a review reaching beyond its request").
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ConversationPermissionOptionEffect {
     Allow,
     Deny,
-}
-impl From<PermissionEffect> for ConversationPermissionOptionEffect {
-    fn from(effect: PermissionEffect) -> Self {
-        match effect {
-            PermissionEffect::Allow => Self::Allow,
-            PermissionEffect::Deny => Self::Deny,
-        }
-    }
 }
 /// One question waiting on a person, as a view lists it: its key, and the
 /// start of the agent's message to say what it is while the rest is read.
@@ -689,13 +607,13 @@ pub struct ConversationMcpTool {
     pub server: String,
     pub tool: String,
     /// The tool's `ui://` resource, filled when the view is read
-    /// ([`McpToolUis`](super::McpToolUis)); absent when the tool has none or
+    /// (`nessa_projection::McpToolUis`); absent when the tool has none or
     /// it is not known.
     #[serde(rename = "resourceUri", skip_serializing_if = "Option::is_none")]
     pub resource_uri: Option<String>,
     /// The call's arguments, one JSON object encoded, as the gateway's MCP
     /// connection saw them. At most
-    /// [`MAX_MCP_ARGUMENTS_BYTES`](nessa_sdk::domain::agent_execution::tools::MAX_MCP_ARGUMENTS_BYTES),
+    /// `MAX_MCP_ARGUMENTS_BYTES` (the SDK's bound on an MCP call's arguments),
     /// the bound the schema publishes. Absent when the call did not go
     /// through that connection, the harness named no call id it could match,
     /// or the arguments did not fit — never cut.
@@ -722,7 +640,7 @@ impl ConversationCapabilities {
             resume: false,
             permissions: false,
             image_input: false,
-            agent_features: OperationCapabilities::default().into(),
+            agent_features: ConversationAgentFeatures::unnegotiated(),
         }
     }
 }
@@ -742,6 +660,27 @@ pub struct ConversationAgentFeatures {
     pub policy_end_turn: PolicyEndTurnSupport,
     pub policy_close_session: PolicyCloseSessionSupport,
     pub incoming_elicitation: IncomingElicitationSupport,
+}
+
+impl ConversationAgentFeatures {
+    /// What an agent supports before its connection has said: the SDK's
+    /// capabilities before negotiation (`OperationCapabilities::default()`),
+    /// as a view shows them. `nessa-projection` checks the two agree.
+    pub fn unnegotiated() -> Self {
+        Self {
+            permission_denial: PermissionDenialSupport::Unknown,
+            native_hook_suppression: NativeHookSuppressionSupport::Unknown,
+            native_hooks: NativeHooksChoice::Off,
+            compaction_reporting: CompactionReportingSupport::UnsupportedNotImplemented,
+            model_switch_reporting: ModelSwitchReportingSupport::UnsupportedNotImplemented,
+            permission_deferral: PermissionDeferralSupport::UnsupportedNotImplemented,
+            elicitation_forwarding: ElicitationForwardingSupport::Unknown,
+            pre_tool_policy: PreToolPolicySupport::UnsupportedNotImplemented,
+            policy_end_turn: PolicyEndTurnSupport::Unknown,
+            policy_close_session: PolicyCloseSessionSupport::Unknown,
+            incoming_elicitation: IncomingElicitationSupport::Unknown,
+        }
+    }
 }
 
 macro_rules! support_enum {
@@ -802,99 +741,6 @@ support_enum!(IncomingElicitationSupport {
     SupportedWithCorrelatedRoundTrip
 });
 
-impl From<OperationCapabilities> for ConversationAgentFeatures {
-    fn from(value: OperationCapabilities) -> Self {
-        Self {
-            permission_denial: match value.permission_denial() {
-                PermissionDenialCapability::Unknown => PermissionDenialSupport::Unknown,
-                PermissionDenialCapability::Unsupported => PermissionDenialSupport::Unsupported,
-                PermissionDenialCapability::SupportedForOfferedPermissionReviews => {
-                    PermissionDenialSupport::SupportedForOfferedPermissionReviews
-                }
-            },
-            native_hooks: if value.native_hooks_allowed() {
-                NativeHooksChoice::On
-            } else {
-                NativeHooksChoice::Off
-            },
-            native_hook_suppression: match value.native_hook_suppression() {
-                NativeHookSuppressionCapability::Unknown => NativeHookSuppressionSupport::Unknown,
-                NativeHookSuppressionCapability::Unsupported => {
-                    NativeHookSuppressionSupport::Unsupported
-                }
-                NativeHookSuppressionCapability::SupportedForUserConfiguredHooks => {
-                    NativeHookSuppressionSupport::SupportedForUserConfiguredHooks
-                }
-            },
-            compaction_reporting: match value.compaction_reporting() {
-                CompactionReportingCapability::UnsupportedNotImplemented => {
-                    CompactionReportingSupport::UnsupportedNotImplemented
-                }
-                CompactionReportingCapability::SupportedWithInvocationCorrelation => {
-                    CompactionReportingSupport::SupportedWithInvocationCorrelation
-                }
-            },
-            model_switch_reporting: match value.model_switch_reporting() {
-                ModelSwitchReportingCapability::UnsupportedNotImplemented => {
-                    ModelSwitchReportingSupport::UnsupportedNotImplemented
-                }
-                ModelSwitchReportingCapability::SupportedAfterValidatedSwitch => {
-                    ModelSwitchReportingSupport::SupportedAfterValidatedSwitch
-                }
-            },
-            permission_deferral: match value.permission_deferral() {
-                PermissionDeferralCapability::UnsupportedNotImplemented => {
-                    PermissionDeferralSupport::UnsupportedNotImplemented
-                }
-                PermissionDeferralCapability::Unsupported => PermissionDeferralSupport::Unsupported,
-                PermissionDeferralCapability::SupportedWithNonterminalOutcome => {
-                    PermissionDeferralSupport::SupportedWithNonterminalOutcome
-                }
-            },
-            elicitation_forwarding: match value.elicitation_forwarding() {
-                ElicitationForwardingCapability::Unknown => ElicitationForwardingSupport::Unknown,
-                ElicitationForwardingCapability::Unsupported => {
-                    ElicitationForwardingSupport::Unsupported
-                }
-                ElicitationForwardingCapability::SupportedWithCorrelatedRoundTrip => {
-                    ElicitationForwardingSupport::SupportedWithCorrelatedRoundTrip
-                }
-            },
-            pre_tool_policy: match value.pre_tool_policy() {
-                PreToolPolicyCapability::Unknown => PreToolPolicySupport::Unknown,
-                PreToolPolicyCapability::UnsupportedNotImplemented => {
-                    PreToolPolicySupport::UnsupportedNotImplemented
-                }
-                PreToolPolicyCapability::SupportedAtPermissionGate => {
-                    PreToolPolicySupport::SupportedAtPermissionGate
-                }
-            },
-            policy_end_turn: match value.policy_end_turn() {
-                PolicyEndTurnCapability::Unknown => PolicyEndTurnSupport::Unknown,
-                PolicyEndTurnCapability::Unsupported => PolicyEndTurnSupport::Unsupported,
-                PolicyEndTurnCapability::SupportedForCurrentInvocation => {
-                    PolicyEndTurnSupport::SupportedForCurrentInvocation
-                }
-            },
-            policy_close_session: match value.policy_close_session() {
-                PolicyCloseSessionCapability::Unknown => PolicyCloseSessionSupport::Unknown,
-                PolicyCloseSessionCapability::Unsupported => PolicyCloseSessionSupport::Unsupported,
-                PolicyCloseSessionCapability::SupportedForSession => {
-                    PolicyCloseSessionSupport::SupportedForSession
-                }
-            },
-            incoming_elicitation: match value.incoming_elicitation() {
-                IncomingElicitationCapability::Unknown => IncomingElicitationSupport::Unknown,
-                IncomingElicitationCapability::Unsupported => {
-                    IncomingElicitationSupport::Unsupported
-                }
-                IncomingElicitationCapability::SupportedWithCorrelatedRoundTrip => {
-                    IncomingElicitationSupport::SupportedWithCorrelatedRoundTrip
-                }
-            },
-        }
-    }
-}
 /// The conversations one list names, and whether they are all of them.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ConversationList {
@@ -1110,18 +956,6 @@ pub struct ConversationArtifact {
     /// Its length in bytes.
     pub size: u64,
 }
-impl From<&ArtifactRecord> for ConversationArtifact {
-    fn from(record: &ArtifactRecord) -> Self {
-        Self {
-            execution_id: record.turn.as_ref().map(|turn| turn.as_str().into()),
-            lease: record.lease.as_str().into(),
-            name: record.name.as_str().into(),
-            digest: record.file.digest().to_string(),
-            mime_type: record.file.media_type().as_str().into(),
-            size: record.file.size(),
-        }
-    }
-}
 
 /// One note left in the conversation, as everyone who reads it sees it: who
 /// left it, what it says, and where it stands.
@@ -1143,64 +977,6 @@ pub struct ConversationNote {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub after_execution_id: Option<String>,
     pub author: ConversationNoteAuthor,
-}
-impl ConversationNote {
-    /// `note` as `snapshot`, which holds it, says it stands.
-    pub fn of(snapshot: &SessionSnapshot, note: &NoteRecord) -> Self {
-        let state = snapshot.note_state(note);
-        Self {
-            message_id: note.id.as_str().into(),
-            text: note.text.as_str().into(),
-            accepted_at_ms: note.accepted_at_ms,
-            delivery: match note.delivery {
-                NoteDelivery::RecordOnly => ConversationNoteDelivery::RecordOnly,
-                NoteDelivery::NextTurn => ConversationNoteDelivery::NextTurn,
-            },
-            delivery_state: match &state {
-                NoteState::Recorded => ConversationNoteState::Recorded,
-                NoteState::Pending => ConversationNoteState::Pending,
-                NoteState::Assigned(_) => ConversationNoteState::Assigned,
-                NoteState::Retired(_) => ConversationNoteState::Retired,
-            },
-            execution_id: match &state {
-                NoteState::Assigned(turn) => Some(turn.as_str().into()),
-                _ => None,
-            },
-            retired_reason: match &state {
-                NoteState::Retired(retirement) => Some(match retirement.reason {
-                    NoteRetirementReason::Expired => ConversationNoteRetiredReason::Expired,
-                    NoteRetirementReason::PermissionLost => {
-                        ConversationNoteRetiredReason::PermissionLost
-                    }
-                }),
-                _ => None,
-            },
-            after_execution_id: note
-                .after_execution
-                .as_ref()
-                .map(|turn| turn.as_str().into()),
-            author: ConversationNoteAuthor {
-                kind: match note.author {
-                    nessa_sdk::domain::agent_execution::executions::Initiator::Owner => {
-                        ConversationNoteAuthorKind::Owner
-                    }
-                    nessa_sdk::domain::agent_execution::executions::Initiator::Grant(_) => {
-                        ConversationNoteAuthorKind::Grant
-                    }
-                    nessa_sdk::domain::agent_execution::executions::Initiator::Agent(_) => {
-                        ConversationNoteAuthorKind::Agent
-                    }
-                },
-                surface: note.actor.surface_id().into(),
-                agent: match &note.author {
-                    nessa_sdk::domain::agent_execution::executions::Initiator::Agent(source) => {
-                        Some(source.into())
-                    }
-                    _ => None,
-                },
-            },
-        }
-    }
 }
 /// What a note was left for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -1253,52 +1029,6 @@ pub struct ConversationHandoff {
 }
 fn is_zero(value: &u32) -> bool {
     *value == 0
-}
-impl ConversationHandoff {
-    /// `handoff` as a view shows it.
-    pub fn of(handoff: &HandoffRecord) -> Self {
-        let agent = |identity: &ProviderIdentity| ConversationHandoffAgent {
-            agent: AgentId::of_provider(identity.name()).map(|agent| agent.name().into()),
-            model: identity.model_id().into(),
-        };
-        let (kind, from, to, turns, omitted_turns) = match &handoff.kind {
-            HandoffKind::Switch { before, after } => (
-                ConversationHandoffKind::Switch,
-                Some(agent(before)),
-                Some(agent(after)),
-                Vec::new(),
-                0,
-            ),
-            HandoffKind::Fork { history, .. } => (
-                ConversationHandoffKind::Fork,
-                None,
-                None,
-                history
-                    .turns()
-                    .iter()
-                    .map(|turn| ConversationCarriedTurn {
-                        agent: turn.agent_source().map(Into::into),
-                        said: turn.said().map(Into::into),
-                        reply: turn.reply().map(Into::into),
-                    })
-                    .collect(),
-                history.omitted(),
-            ),
-        };
-        Self {
-            handoff_id: handoff.id.as_str().into(),
-            kind,
-            at_ms: handoff.at_ms,
-            after_execution_id: handoff
-                .after_execution
-                .as_ref()
-                .map(|turn| turn.as_str().into()),
-            from,
-            to,
-            turns,
-            omitted_turns,
-        }
-    }
 }
 /// Which handoff it is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -1387,16 +1117,4 @@ pub struct ConversationUploadedFile {
     pub mime_type: String,
     pub size: u64,
     pub name: String,
-}
-impl From<&nessa_sdk::domain::agent_execution::prompts::UploadedFileReference>
-    for ConversationUploadedFile
-{
-    fn from(file: &nessa_sdk::domain::agent_execution::prompts::UploadedFileReference) -> Self {
-        Self {
-            digest: file.digest().to_string(),
-            mime_type: file.media_type().as_str().into(),
-            size: file.size(),
-            name: file.name().into(),
-        }
-    }
 }
