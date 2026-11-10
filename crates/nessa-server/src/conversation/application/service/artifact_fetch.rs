@@ -328,7 +328,7 @@ impl ConversationService {
             Ok(placed) => placed,
             Err(_) => return refused(FetchCallRefusal::EnvironmentNotLeased),
         };
-        if call.environment != placed.as_deref().unwrap_or(super::HERE) {
+        if call.environment != placed.name() {
             return refused(FetchCallRefusal::EnvironmentNotLeased);
         }
         let Some(file) = Sha256Digest::parse(&format!("sha256:{}", call.digest))

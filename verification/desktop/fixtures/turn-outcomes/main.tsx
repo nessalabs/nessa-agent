@@ -32,6 +32,7 @@ import { Provider } from "react-redux"
 import { conversationView } from "../../../../packages/nessa-client/src/protocol/conversation-validate"
 import {
   ClockProvider,
+  monotonicElapsed,
   ClockProvider as ConversationClockProvider,
 } from "../../../../src/clock"
 import {
@@ -201,7 +202,7 @@ createRoot(rootElement).render(
     <Provider store={store}>
       <HeldFilesProvider read={dependencies.heldFiles} save={saveFile}>
         <WidgetRegistryProvider registry={dependencies.widgets}>
-          <ClockProvider now={dependencies.now}>
+          <ClockProvider now={dependencies.now} elapsed={monotonicElapsed()}>
             <DesktopIconFamilyProvider>
               <DesktopWindow hostKind="browser" browserSurface inspectable={false} />
             </DesktopIconFamilyProvider>
@@ -243,7 +244,7 @@ function showPanel() {
   const tree = (
     <React.StrictMode>
       <Provider store={panelStore as never}>
-        <ConversationClockProvider now={dependencies.now}>
+        <ConversationClockProvider now={dependencies.now} elapsed={monotonicElapsed()}>
           <HeldFilesProvider read={readNothing} save={saveFile}>
             <Transcript
               conversation={panelConversation}

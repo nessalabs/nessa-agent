@@ -22,3 +22,6 @@ zeroize = "=1.9.0"
 [dev-dependencies]
 tempfile = "3"
 nessa-local-storage = { path = "../nessa-local-storage" }
+
+[lints]
+workspace = true

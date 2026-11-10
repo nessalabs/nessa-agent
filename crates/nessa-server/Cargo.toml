@@ -162,3 +162,6 @@ tokio-tungstenite = "0.29"
 
 [build-dependencies]
 serde_json = "1"
+
+[lints]
+workspace = true

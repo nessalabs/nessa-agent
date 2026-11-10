@@ -194,6 +194,7 @@ pub use passive_read::AdmittedCatalogueRead;
     )
 )]
 mod organization_budget;
+mod place_decision;
 mod placement;
 mod pool_settings;
 #[cfg(any(unix, test))]
@@ -210,6 +211,8 @@ pub use review_notice_audit::{
 };
 mod review_notice_selection;
 pub(crate) use review_notice_selection::{AuditedReviewSelection, SelectReviewNotice};
+// Still reads time directly: the Place work (#1293) is rewriting it.
+#[allow(clippy::disallowed_methods)]
 mod service;
 mod settings_audit;
 pub use settings_audit::{SettingsAudit, SettingsAuditRecord, SettingsChange, SettingsOutcome};
@@ -312,7 +315,7 @@ pub use permission_rules::{
 };
 #[cfg(unix)]
 pub(crate) use placement::{MachineUse, PairedEnvironments, WorkerLoad};
-pub use placement::{FETCH_CALL_WAIT, POOL, PUBLISH_CALL_WAIT};
+pub use placement::{FETCH_CALL_WAIT, PUBLISH_CALL_WAIT};
 pub use ports::{
     ArtifactKept, ArtifactRecordGate, AttachmentRelease, AttachmentReleaseCause,
     ConversationAttachments, ConversationCreation, ConversationCreationAudit,
@@ -410,7 +413,7 @@ pub(crate) mod lease_tests;
 #[cfg(unix)]
 pub(crate) use placement::ThreadEnvironments;
 pub(crate) use placement::WorkspaceRest;
-pub(crate) use placement::{BOAT, MAX_RETAINED_ENVIRONMENTS};
+pub(crate) use placement::MAX_RETAINED_ENVIRONMENTS;
 
 #[cfg(unix)]
 mod artifact_channels;

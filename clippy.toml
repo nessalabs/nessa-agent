@@ -1,0 +1,13 @@
+# Calls `clippy::disallowed_methods` names. The lint is off in the workspace
+# table and turned on by the crates that hold the rule (nessa-server, outside
+# its tests), so this list binds only there.
+disallowed-methods = [
+  # The one clock (CODING_STANDARDS.md): crate::timer::clock reads the time
+  # and waits for it, so a paused test moves every deadline the code measures.
+  { path = "std::time::Instant::now", reason = "read time through crate::timer::clock (clock::now, or clock::os::now off the runtime)" },
+  { path = "tokio::time::Instant::now", reason = "read time through crate::timer::clock::now" },
+  { path = "std::time::SystemTime::now", reason = "read the wall clock through crate::timer::clock::wall_now" },
+  { path = "tokio::time::sleep", reason = "wait through crate::timer::clock::sleep" },
+  { path = "tokio::time::sleep_until", reason = "wait through crate::timer::clock::sleep_until" },
+  { path = "std::thread::sleep", reason = "block through crate::timer::clock::os::sleep" },
+]

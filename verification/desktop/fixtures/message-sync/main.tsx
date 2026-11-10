@@ -14,7 +14,7 @@ import { makeDesktopStore } from "../../../../src/desktop/store"
 import { DesktopWindow } from "../../../../src/desktop/ui/desktop-window"
 import { DesktopIconFamilyProvider } from "../../../../src/desktop/ui/icons"
 import { WidgetRegistryProvider } from "../../../../src/desktop/widgets"
-import { ClockProvider } from "../../../../src/clock"
+import { ClockProvider, monotonicElapsed } from "../../../../src/clock"
 import { followWorkspace, loadWorkspace } from "../../../../src/desktop/workspace"
 import {
   fakeGateway,
@@ -273,7 +273,7 @@ if (!container) throw new Error("missing #root")
 createRoot(container).render(
   <Provider store={store}>
     <WidgetRegistryProvider registry={dependencies.widgets}>
-      <ClockProvider now={dependencies.now}>
+      <ClockProvider now={dependencies.now} elapsed={monotonicElapsed()}>
         <DesktopIconFamilyProvider>
           <DesktopWindow hostKind="browser" browserSurface inspectable={false} />
         </DesktopIconFamilyProvider>

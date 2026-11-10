@@ -9,7 +9,7 @@ import { createRoot } from "react-dom/client"
 import { Provider } from "react-redux"
 import { ClipboardProvider } from "../../../../src/conversation"
 import { writeClipboardText } from "../../../../src/host/window"
-import { ClockProvider } from "../../../../src/clock"
+import { ClockProvider, monotonicElapsed } from "../../../../src/clock"
 import { createDesktopDependencies } from "../../../../src/desktop/dependencies"
 import { makeDesktopStore } from "../../../../src/desktop/store"
 import { fakeSource } from "../../../../src/desktop/workspace/testing"
@@ -99,7 +99,7 @@ const overview = new URLSearchParams(location.search).get("surface") === "overvi
 createRoot(root).render(
   <AgentSetupProvider source={setup}>
     <Provider store={store}>
-      <ClockProvider now={() => 1000}>
+      <ClockProvider now={() => 1000} elapsed={monotonicElapsed()}>
         <ClipboardProvider
           write={async (text) => {
             if (new URLSearchParams(location.search).get("clipboard") === "native")

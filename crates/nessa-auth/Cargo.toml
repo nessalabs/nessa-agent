@@ -27,3 +27,6 @@ opaque-ke = { version = "=4.0.1", default-features = false, features = ["ristret
 zeroize = "=1.9.0"
 rustls = { version = "=0.23.45", default-features = false, features = ["ring", "std"] }
 ring = "=0.17.14"
+
+[lints]
+workspace = true

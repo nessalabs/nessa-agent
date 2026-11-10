@@ -1,0 +1,5 @@
+#!/bin/sh
+# Runs the local checks that own what this push changes. `pnpm install` turns
+# this directory on (scripts/install-git-hooks.mjs); scripts/pre-push.mjs is
+# the hook. `git push --no-verify` skips it.
+exec node "$(git rev-parse --show-toplevel)/scripts/pre-push.mjs" "$@"

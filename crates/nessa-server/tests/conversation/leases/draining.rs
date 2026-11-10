@@ -1,6 +1,7 @@
 //! A refusal is acknowledged before another worker's placement can block.
 use super::*;
 use crate::conversation::application::{ConversationBindings, WorkerBinding};
+use crate::conversation::domain::Place;
 use crate::conversation::infrastructure::FileBindings;
 
 struct PausedAfterRefusal {
@@ -55,7 +56,7 @@ async fn acknowledged_before_next_placement(fail_once: bool) {
     });
     let (harness, [w1, w2]) = pool_harness_with(root.path(), bindings.clone());
     *bindings.worker.lock().unwrap() = Some(w1.clone());
-    harness.create_on(super::super::POOL).await.unwrap();
+    harness.create_on(&Place::Pool.name()).await.unwrap();
     harness
         .service
         .close(harness.id.clone(), caller("close"))
@@ -190,7 +191,7 @@ async fn a_draining_refusal_retries_its_retained_failed_save_before_placement() 
 async fn an_unacknowledged_draining_refusal_stops_placement_with_storage_failure() {
     let root = tempfile::tempdir().unwrap();
     let (harness, [w1, w2], _) = pool_harness(root.path());
-    harness.create_on(super::super::POOL).await.unwrap();
+    harness.create_on(&Place::Pool.name()).await.unwrap();
     harness
         .service
         .close(harness.id.clone(), caller("close"))

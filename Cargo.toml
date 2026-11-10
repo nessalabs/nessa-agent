@@ -11,6 +11,22 @@ version = "0.1.0"
 edition = "2021"
 rust-version = "1.85"
 
+# Rust rules every crate holds. Each member opts in with `[lints] workspace =
+# true`, which scripts/workspace-lints.test.mjs checks; clippy runs with
+# `-D warnings`, so a `warn` here fails the check. A crate cannot add lints of
+# its own beside this table, so a rule for one crate stays an attribute there.
+[workspace.lints.clippy]
+# Debug output left in after a session of print debugging.
+dbg_macro = "warn"
+# A stub that compiles and panics the first time it is reached.
+todo = "warn"
+unimplemented = "warn"
+# Off here; nessa-server turns it on outside its tests for the one clock
+# (clippy.toml lists the calls), since this table cannot hold a rule for one crate.
+disallowed_methods = "allow"
+# A future bound to `_` is dropped without running; the work silently never happens.
+let_underscore_future = "warn"
+
 # Profiles must live on the workspace root. With a root Cargo.toml, cargo ignores
 # [profile.*] in member crates (and warns). Keep release/dev settings here so
 # Tauri builds still get fat LTO, one codegen unit, strip, and leaner debug info.

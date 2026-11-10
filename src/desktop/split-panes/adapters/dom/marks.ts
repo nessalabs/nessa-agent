@@ -89,7 +89,7 @@ export const classes = {
 
 /**
  * Sets or clears `name` on `root` and on the document element. The panes read
- * it on the workspace; the ambient blur behind the shell reads it on the
+ * it on the workspace; the drifting light behind the shell reads it on the
  * document (`styles.css`). One write, so the two cannot disagree.
  */
 export function reflectMark(root: HTMLElement, name: string, on: boolean): void {

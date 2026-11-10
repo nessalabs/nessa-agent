@@ -17,3 +17,6 @@ uuid = { version = "1", features = ["v4"] }
 
 [dev-dependencies]
 nessa-sdk = { path = "../nessa-sdk", features = ["test-support"] }
+
+[lints]
+workspace = true

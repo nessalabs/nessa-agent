@@ -49,7 +49,7 @@ it("makes the window under Settings inert while it is open, and only then", asyn
   await act(async () =>
     root.render(
       <Provider store={store}>
-        <ClockProvider now={() => 1000}>
+        <ClockProvider now={() => 1000} elapsed={() => 1000}>
           <DesktopWindow hostKind="browser" browserSurface inspectable={false} />
         </ClockProvider>
       </Provider>,
@@ -78,7 +78,7 @@ it("opens Settings, and keeps the window, when asked for a tab it does not have"
   await act(async () =>
     root.render(
       <Provider store={store}>
-        <ClockProvider now={() => 1000}>
+        <ClockProvider now={() => 1000} elapsed={() => 1000}>
           <DesktopWindow hostKind="browser" browserSurface inspectable={false} />
         </ClockProvider>
       </Provider>,

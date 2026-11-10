@@ -45,7 +45,9 @@ import {
  *               report comes back as a turn of its own
  *   await       the agent messages a thread and waits for it with one
  *               subscribe call naming the sent turn: the thread's reply comes
- *               back in that call, and no report follows
+ *               back in that call, and no report follows. The thread names
+ *               where it runs; made from a channel's chat (the `channel`
+ *               step), it is still listed in that channel
  *   webhook     one granted conversation advances to a fixed source Head after
  *               a browser turn; independent native rows prove zero attempts
  *               under the unchanged loopback destination refusal policy
@@ -2032,10 +2034,87 @@ async function dropOnChannel(run, failures, dropped, photograph, name) {
   if (!out) failures.push("the drop target stays lit after the drop")
 }
 
+/** Forks `sourceId`, a conversation in channel `made`, from its row's More
+ * menu, and checks the fork is listed in that channel. */
+async function forkInChannel(run, made, sourceId, failures) {
+  const listed = new Set(
+    (await run.client.conversation.list({})).conversations.map(
+      (each) => each.conversationId,
+    ),
+  )
+  await choose(run.page, sourceId, "Fork")
+  const fork = await waitFor(async () => {
+    const { conversations } = await run.client.conversation.list({})
+    return conversations.find((each) => !listed.has(each.conversationId))
+  }, 15_000)
+  if (!fork) {
+    failures.push(`the gateway never listed a fork of a chat in ${made.name}`)
+    return
+  }
+  run.checked.push(fork.conversationId)
+  if (fork.channelId !== made.channelId)
+    failures.push(
+      `a fork of a chat in ${made.name} is in ${fork.channelId ?? "no channel"}`,
+    )
+}
+
+/**
+ * The `await` turn in `parentId`: the agent makes a thread naming where it
+ * runs (`here`), sends to it and waits for its reply with one subscribe
+ * call. Answers the thread's id, or `undefined` when the turn failed.
+ */
+async function awaitThread(run, step, parentId, failures, extra = "") {
+  const text = prompt(run, STRESS.await, step, extra)
+  const seen = await send(run, parentId, text, failures)
+  const { turn } = await settled(run, parentId, seen, text, "completed", failures)
+  if (!turn) return undefined
+  const said = (turn.parts ?? []).map((part) => part.text ?? "").join("")
+  const found = new RegExp(`${SAYS.awaited}([0-9a-f-]+): (.*)`, "s").exec(said)
+  if (!found) {
+    failures.push(`the await turn did not say what it waited for: ${said.slice(0, 160)}`)
+    return undefined
+  }
+  const agentReply = `${SAYS.echo}Agent-authored input`
+  if (
+    !found[2].startsWith(agentReply) ||
+    !found[2].includes(`${STRESS.reply} awaited by the parent`)
+  )
+    failures.push(
+      `one subscribe call did not return the thread's reply: ${found[2].slice(0, 160)}`,
+    )
+  const expected = fold(`${SAYS.awaited}${found[1]}: ${found[2]}`)
+  const shown = await waitFor(async () => {
+    const lines = await run.page
+      .locator(`${css.focusedPane} .workspace-message[data-role="agent"] p:visible`)
+      .evaluateAll(chatIdentityTexts)
+    return lines.some((line) => fold(line) === expected)
+  }, 30_000)
+  if (!shown)
+    failures.push(
+      `the window does not show the exact awaited chat identity and reply: ${expected}`,
+    )
+  // The reply came back in the call, so no report wakes the conversation.
+  // A report would be queued as soon as the thread's turn settled, which
+  // was before the call returned.
+  await sleep(3_000)
+  const view = await run.client.conversation.read(parentId)
+  if (
+    view.messages.some(
+      (each) =>
+        !seen.has(each.executionId) &&
+        each.userText.startsWith(STRESS.report) &&
+        each.userText.includes(found[1]),
+    )
+  )
+    failures.push("a report followed the reply the agent already took with subscribe")
+  return found[1]
+}
+
 /**
  * The first message of a new session in `channel`, from the home Create left
  * open: it is listed in that channel, and its agent works in the channel's
  * folder, told the channel's notes (Claude's system prompt, where it has one).
+ * Answers the session's id, or `undefined` when it was never listed.
  */
 async function talkInChannel(run, step, channel, failures, notes, attached = []) {
   const text = prompt(run, STRESS.channel, step, ` ${channel.name}`)
@@ -2049,7 +2128,7 @@ async function talkInChannel(run, step, channel, failures, notes, attached = [])
   )
   if (!conversationId) {
     failures.push(`the first message in ${channel.name} was never listed`)
-    return
+    return undefined
   }
   run.checked.push(conversationId)
   const { view } = await settled(
@@ -2094,6 +2173,7 @@ async function talkInChannel(run, step, channel, failures, notes, attached = [])
     failures.push(
       `the chat in ${channel.name} says more than its title: ${(await heading.count()) ? await heading.innerText() : "no heading"}`,
     )
+  return conversationId
 }
 
 /**
@@ -6003,51 +6083,7 @@ const steps = {
   },
 
   async await(run, step, failures) {
-    const text = prompt(run, STRESS.await, step)
-    const seen = await send(run, run.main.id, text, failures)
-    const { turn } = await settled(run, run.main.id, seen, text, "completed", failures)
-    if (!turn) return
-    const said = (turn.parts ?? []).map((part) => part.text ?? "").join("")
-    const found = new RegExp(`${SAYS.awaited}([0-9a-f-]+): (.*)`, "s").exec(said)
-    if (!found) {
-      failures.push(
-        `the await turn did not say what it waited for: ${said.slice(0, 160)}`,
-      )
-      return
-    }
-    const agentReply = `${SAYS.echo}Agent-authored input`
-    if (
-      !found[2].startsWith(agentReply) ||
-      !found[2].includes(`${STRESS.reply} awaited by the parent`)
-    )
-      failures.push(
-        `one subscribe call did not return the thread's reply: ${found[2].slice(0, 160)}`,
-      )
-    const expected = fold(`${SAYS.awaited}${found[1]}: ${found[2]}`)
-    const shown = await waitFor(async () => {
-      const lines = await run.page
-        .locator(`${css.focusedPane} .workspace-message[data-role="agent"] p:visible`)
-        .evaluateAll(chatIdentityTexts)
-      return lines.some((line) => fold(line) === expected)
-    }, 30_000)
-    if (!shown)
-      failures.push(
-        `the window does not show the exact awaited chat identity and reply: ${expected}`,
-      )
-    // The reply came back in the call, so no report wakes the conversation.
-    // A report would be queued as soon as the thread's turn settled, which
-    // was before the call returned.
-    await sleep(3_000)
-    const view = await run.client.conversation.read(run.main.id)
-    if (
-      view.messages.some(
-        (each) =>
-          !seen.has(each.executionId) &&
-          each.userText.startsWith(STRESS.report) &&
-          each.userText.includes(found[1]),
-      )
-    )
-      failures.push("a report followed the reply the agent already took with subscribe")
+    await awaitThread(run, step, run.main.id, failures)
   },
 
   async watch(run, step, failures) {
@@ -6364,7 +6400,7 @@ const steps = {
         if (!existsSync(made.folder))
           failures.push(`the made folder ${made.folder} is not there`)
         await channelRuntimeSettings(run, made, failures)
-        await talkInChannel(
+        const talked = await talkInChannel(
           run,
           step,
           made,
@@ -6372,6 +6408,22 @@ const steps = {
           notes,
           dropped.map(({ path }) => path),
         )
+        // A thread its agent makes naming where it runs stays in the
+        // channel.
+        const thread =
+          talked && (await awaitThread(run, step, talked, failures, ` ${made.name}`))
+        if (thread) {
+          const { conversations } = await run.client.conversation.list({})
+          const listed = conversations.find((each) => each.conversationId === thread)
+          if (listed?.channelId !== made.channelId)
+            failures.push(
+              `a thread made in ${made.name} naming its place is in ${listed?.channelId ?? "no channel"}`,
+            )
+        }
+        // Forked from its row, the fork stays in the channel. (That it runs
+        // where its source runs, not where the channel moved, is held by
+        // the gateway's fork tests: nothing runs on Boat in this run.)
+        if (talked) await forkInChannel(run, made, talked, failures)
         // Talked to, its run location changes from its settings.
         await channelPlacementSettings(run, made, failures)
       }

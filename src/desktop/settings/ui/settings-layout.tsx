@@ -12,6 +12,7 @@ import {
   type RefObject,
 } from "react"
 import { PortalContainerProvider } from "@nessa-ui/react/lib/portal-container"
+import { DesktopAmbient } from "../../ui/ambient-light"
 import { IdentityButton, IdentityRow } from "../../ui/identity"
 import { EdgePeekStrip } from "../../ui/edge-peek-strip"
 import { settingsSidebar } from "../model/settings-sidebar"
@@ -97,9 +98,7 @@ export function SettingsLayout(model: SettingsSurfaceModel) {
         aria-label="Settings"
         tabIndex={-1}
       >
-        <div className="desktop-ambient" aria-hidden="true">
-          <span className="desktop-grain" />
-        </div>
+        <DesktopAmbient />
 
         {/* The drag strip and its stationary controls, where the app keeps its own. */}
         <div className="settings-titlebar" data-tauri-drag-region>
