@@ -3443,14 +3443,9 @@ const steps = {
       throw new Error("the stress restore was not prepared")
     if (!existsSync(source))
       failures.push(`the restored source ${source} is not there to load`)
-    await openStressConversation(run.page, loaded.id, loaded.title)
-    // The list preview is "restored-history". This sentence is only the turn.
-    if (!(await shows(run.page, "restored turn text", 15_000))) {
-      failures.push(
-        `the restored history was not shown: ${JSON.stringify((await pageText(run.page)).slice(0, 500))}`,
-      )
-    }
-    // The window's credential is the panel. The run's client is the owner.
+    // Fetch the loaded conversation before the window is pointed at it.
+    // Opening one restored row also reads its neighbour, and that read would
+    // fetch the one whose source this step is about to take away.
     const panel = await connectClient(run.stack.gateway, INSTANCE, "panel")
     try {
       const view = await panel.conversation.read(loaded.id)
@@ -3469,6 +3464,13 @@ const steps = {
     const hidden = `${source}.aside`
     renameSync(source, hidden)
     try {
+      await openStressConversation(run.page, loaded.id, loaded.title)
+      // The list preview is "restored-history". This sentence is only the turn.
+      if (!(await shows(run.page, "restored turn text", 15_000))) {
+        failures.push(
+          `the restored history was not shown: ${JSON.stringify((await pageText(run.page)).slice(0, 500))}`,
+        )
+      }
       await openStressConversation(run.page, missing.id, missing.title)
       const text = prompt(run, STRESS.restore, step, " missing")
       const box = dock(run.page).locator("textarea")
