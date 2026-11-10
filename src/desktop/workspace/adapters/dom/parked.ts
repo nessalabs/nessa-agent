@@ -90,9 +90,12 @@ export function useFocusLeavesOnFold(ref: RefObject<HTMLElement | null>, away: b
 }
 
 /**
- * Keeps pointer and focus out of a column while it slides away and before it
- * parks (`inert` arrives with the park). `pointer-events` would restyle every
- * row, so these are capture handlers on the column instead. Spread on it.
+ * What `inert` did on the fold's key, for the slide before the column parks:
+ * no press, click or context menu reaches its rows, and focus that lands in
+ * it leaves. `pointer-events` would restyle every row, so these are capture
+ * handlers on the column. Spread them on it instead of anything else that
+ * reacts to the pointer there (an edge peek's holders), so the column's
+ * reach has one owner while it slides.
  */
 export function slidingGuards(sliding: boolean) {
   if (!sliding) return {}
@@ -104,6 +107,7 @@ export function slidingGuards(sliding: boolean) {
     onPointerDownCapture: stop,
     onMouseDownCapture: stop,
     onClickCapture: stop,
+    onContextMenuCapture: stop,
     onFocusCapture: (event: { target: EventTarget }) => {
       if (event.target instanceof HTMLElement) event.target.blur()
     },

@@ -117,8 +117,9 @@ export const SourceList = memo(function SourceList({
       inert={parked}
       data-parked={parked || undefined}
       aria-hidden={away || undefined}
-      {...slidingGuards(away && !parked)}
-      {...(open ? {} : peek?.holders)}
+      // Its reach has one owner at a time: the peek's holders while revealed,
+      // the guards while it slides away, `inert` once parked.
+      {...(away ? slidingGuards(!parked) : open ? {} : peek?.holders)}
     >
       <div className="workspace-sidebar-scroll">
         {variant === "channels" ? <ChannelsTop /> : <TreeTop />}
