@@ -9,6 +9,7 @@ summary: A channel independently places its main agent and new threads on Local
 parent: gateway
 sources:
   - crates/nessa-server/src/conversation/application/placement.rs
+  - crates/nessa-server/src/conversation/domain/value_objects/place.rs
   - crates/nessa-server/src/composition/local_auth.rs
   - crates/nessa-server/src/conversation/infrastructure/ssh_environment/audit.rs
   - crates/nessa-sdk/src/application/agent_execution/sessions/manager.rs

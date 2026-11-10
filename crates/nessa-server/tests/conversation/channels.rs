@@ -8,7 +8,8 @@ use crate::conversation::application::{
     SubmissionMode, SubmittedMessage,
 };
 use crate::conversation::domain::{
-    ChannelDefaults, ChannelName, ChannelNotes, ChannelRefusal, ProviderSessionErasure,
+    ChannelDefaults, ChannelExecution, ChannelName, ChannelNotes, ChannelRefusal, Place,
+    ProviderSessionErasure,
 };
 use crate::conversation::infrastructure::{LocalChannelStore, LocalConversationStore};
 #[cfg(unix)]
@@ -178,7 +179,7 @@ fn path(text: &str) -> ChannelPath {
 
 fn request(folder: Option<&str>) -> ChannelRequest {
     ChannelRequest {
-        execution: crate::conversation::domain::ChannelExecution::default(),
+        execution: ChannelExecution::default(),
         name: ChannelName::new("design-review").unwrap(),
         folder: folder.map(path),
         defaults: ChannelDefaults {
@@ -1099,13 +1100,9 @@ async fn owned_threads_use_channel_start_without_accepting_caller_overrides() {
 #[tokio::test]
 async fn only_the_owner_moves_a_made_channel_and_an_unchanged_one_stays_as_it_is() {
     use crate::conversation::application::ChannelError;
-    use crate::conversation::domain::{ChannelExecution, WorkspacePlacement};
     let fixture = Fixture::new();
     let made = fixture.channel("request-1", None).await;
-    let boat = ChannelExecution {
-        coordinator: WorkspacePlacement::Boat,
-        threads: WorkspacePlacement::Boat,
-    };
+    let boat = ChannelExecution::new(&Place::CloudVm, &Place::CloudVm).unwrap();
     // The default channel has no run location to change, and neither another
     // person nor an unknown id learns whether a channel exists.
     for (who, id) in [
@@ -1166,17 +1163,13 @@ async fn only_the_owner_moves_a_made_channel_and_an_unchanged_one_stays_as_it_is
 #[tokio::test]
 async fn a_move_that_cannot_be_recorded_is_refused_and_changes_nothing() {
     use crate::conversation::application::ChannelError;
-    use crate::conversation::domain::{ChannelExecution, WorkspacePlacement};
     let fixture = Fixture::new();
     let made = fixture.channel("request-1", None).await;
     fixture
         .settings
         .failing
         .store(true, std::sync::atomic::Ordering::SeqCst);
-    let boat = ChannelExecution {
-        coordinator: WorkspacePlacement::Boat,
-        threads: WorkspacePlacement::Boat,
-    };
+    let boat = ChannelExecution::new(&Place::CloudVm, &Place::CloudVm).unwrap();
     assert_eq!(
         fixture
             .service

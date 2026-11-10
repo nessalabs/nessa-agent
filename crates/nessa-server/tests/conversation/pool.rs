@@ -3,6 +3,7 @@
 //! kept there while that one serves, moved with nothing of its provider
 //! context when it drains or leaves, and forgotten with the conversation.
 use super::*;
+use crate::conversation::domain::Place;
 use crate::conversation::infrastructure::{in_process_environment, FileBindings, FilePlacements};
 use std::sync::Mutex;
 
@@ -106,7 +107,7 @@ fn pool() -> Pool {
 impl Pool {
     async fn placed(&self) {
         self.environments
-            .place(&conversation(), Some(POOL), None)
+            .place(&conversation(), &Place::Pool, None)
             .await
             .unwrap();
     }
@@ -139,7 +140,7 @@ async fn the_pool_is_placed_on_only_while_a_worker_serves_and_is_not_draining() 
         assert!(!pool.serves().await);
         assert!(matches!(
             pool.environments
-                .place(&conversation(), Some(POOL), None)
+                .place(&conversation(), &Place::Pool, None)
                 .await,
             Err(ConversationError::EnvironmentNotConfigured)
         ));
@@ -150,9 +151,9 @@ async fn the_pool_is_placed_on_only_while_a_worker_serves_and_is_not_draining() 
     pool.placed().await;
     assert_eq!(
         pool.environments.placement(&conversation()).await.unwrap(),
-        Some(POOL.to_owned())
+        Place::Pool
     );
-    assert!(pool.environments.named(POOL).is_none());
+    assert!(pool.environments.named(&Place::Pool).is_none());
 }
 
 #[cfg(unix)]
@@ -182,7 +183,7 @@ impl crate::conversation::application::ThreadEnvironments for Cloud {
 #[cfg(unix)]
 #[tokio::test]
 async fn with_no_paired_computer_online_the_pool_runs_in_the_cloud_when_it_can() {
-    for (connected, asked) in [(true, POOL.to_owned()), (false, POOL.to_owned())] {
+    for (connected, asked) in [(true, Place::Pool), (false, Place::Pool)] {
         let root = tempfile::tempdir().unwrap();
         let workers = Arc::new(Workers::default());
         let environments = Environments::new(
@@ -195,19 +196,13 @@ async fn with_no_paired_computer_online_the_pool_runs_in_the_cloud_when_it_can()
             Arc::new(FileBindings::new(root.path().join("bindings")).unwrap()),
         )
         .with_workspaces(Arc::new(Cloud(connected)));
-        let placed = environments
-            .place(&conversation(), Some(&asked), None)
-            .await;
+        let placed = environments.place(&conversation(), &asked, None).await;
         if connected {
             placed.unwrap();
             assert_eq!(
-                environments
-                    .placement(&conversation())
-                    .await
-                    .unwrap()
-                    .as_deref(),
-                Some(crate::conversation::application::placement::BOAT),
-                "{asked}"
+                environments.placement(&conversation()).await.unwrap(),
+                Place::CloudVm,
+                "{asked:?}"
             );
         } else {
             // No cloud account: refused, as before.
@@ -232,7 +227,7 @@ async fn with_no_paired_computer_online_the_pool_runs_in_the_cloud_when_it_can()
     .with_workspaces(Arc::new(Cloud(true)));
     assert!(matches!(
         environments
-            .place(&conversation(), Some(&worker(1).name()), None)
+            .place(&conversation(), &Place::Peer(worker(1)), None)
             .await,
         Err(ConversationError::EnvironmentNotConfigured)
     ));
@@ -246,7 +241,7 @@ async fn with_no_paired_computer_online_the_pool_runs_in_the_cloud_when_it_can()
     .with_workspaces(Arc::new(Cloud(true)));
     assert!(matches!(
         environments
-            .place(&conversation(), Some("devbox"), None)
+            .place(&conversation(), &Place::named("devbox").unwrap(), None)
             .await,
         Err(ConversationError::EnvironmentNotConfigured)
     ));
@@ -258,7 +253,6 @@ async fn with_no_paired_computer_online_the_pool_runs_in_the_cloud_when_it_can()
 #[cfg(unix)]
 #[tokio::test]
 async fn boat_without_a_connected_account_is_not_configured() {
-    use crate::conversation::application::placement::BOAT;
     let root = tempfile::tempdir().unwrap();
     let with = |connected| {
         Environments::new(
@@ -269,11 +263,13 @@ async fn boat_without_a_connected_account_is_not_configured() {
         .with_workspaces(Arc::new(Cloud(connected)))
     };
     assert!(matches!(
-        with(false).place(&conversation(), Some(BOAT), None).await,
+        with(false)
+            .place(&conversation(), &Place::CloudVm, None)
+            .await,
         Err(ConversationError::EnvironmentNotConfigured)
     ));
     with(true)
-        .place(&conversation(), Some(BOAT), None)
+        .place(&conversation(), &Place::CloudVm, None)
         .await
         .unwrap();
     assert!(with(true)
@@ -295,7 +291,9 @@ async fn a_gateway_that_pairs_no_environments_places_nothing_on_the_pool() {
         Arc::new(FilePlacements::new(root.path().join("placements")).unwrap()),
     );
     assert!(matches!(
-        environments.place(&conversation(), Some(POOL), None).await,
+        environments
+            .place(&conversation(), &Place::Pool, None)
+            .await,
         Err(ConversationError::EnvironmentNotConfigured)
     ));
 }
@@ -465,7 +463,7 @@ async fn a_context_opened_again_is_not_written_again() {
 async fn a_conversation_off_the_pool_carries_no_worker_context() {
     let pool = pool();
     pool.environments
-        .place(&conversation(), None, None)
+        .place(&conversation(), &Place::Here, None)
         .await
         .unwrap();
     let place = pool.lease(&[]).await.unwrap();
@@ -484,7 +482,7 @@ async fn erasing_a_pool_conversation_forgets_its_worker_and_its_placement() {
     assert_eq!(pool.bound().await, None);
     assert_eq!(
         pool.environments.placement(&conversation()).await.unwrap(),
-        None
+        Place::Here
     );
 }
 
@@ -496,7 +494,7 @@ async fn leases_chosen_at_once_are_spread_before_any_reaches_its_worker() {
     let other = ConversationId::new("6d1b0a3f-2e4c-4d8b-9f70-3c0e5b2d8f41").unwrap();
     pool.placed().await;
     pool.environments
-        .place(&other, Some(POOL), None)
+        .place(&other, &Place::Pool, None)
         .await
         .unwrap();
     // Neither lease has reached its worker's connection yet, and both are
@@ -515,7 +513,7 @@ async fn leases_chosen_at_once_are_spread_before_any_reaches_its_worker() {
     drop((first, second));
     let third = ConversationId::new("7e2c1b4a-3f5d-4e9c-8a81-4d1f6c3e9a52").unwrap();
     pool.environments
-        .place(&third, Some(POOL), None)
+        .place(&third, &Place::Pool, None)
         .await
         .unwrap();
     let after = pool
@@ -533,7 +531,7 @@ async fn a_pool_conversation_is_named_by_its_worker_once_bound_and_is_never_this
     pool.placed().await;
     assert_eq!(
         pool.environments.runs_on(&conversation()).await.unwrap(),
-        Some(POOL.to_owned())
+        Place::Pool
     );
     assert!(!pool
         .environments
@@ -543,7 +541,7 @@ async fn a_pool_conversation_is_named_by_its_worker_once_bound_and_is_never_this
     pool.lease(&[]).await.unwrap();
     assert_eq!(
         pool.environments.runs_on(&conversation()).await.unwrap(),
-        Some(worker(1).name())
+        Place::Peer(worker(1))
     );
     assert!(!pool
         .environments
@@ -656,7 +654,7 @@ async fn a_busy_computer_is_passed_over_for_the_next_in_order_and_kept_when_all_
         (worker(3), 0, 990),
     ]);
     pool.environments
-        .place(&other, Some(POOL), None)
+        .place(&other, &Place::Pool, None)
         .await
         .unwrap();
     let place = pool
@@ -675,7 +673,7 @@ async fn a_computer_left_out_is_never_chosen_and_a_bound_one_moves_off_it() {
     assert!(!pool.serves().await);
     assert!(matches!(
         pool.environments
-            .place(&conversation(), Some(POOL), None)
+            .place(&conversation(), &Place::Pool, None)
             .await,
         Err(ConversationError::EnvironmentNotConfigured)
     ));
@@ -703,7 +701,6 @@ async fn a_computer_left_out_is_never_chosen_and_a_bound_one_moves_off_it() {
 #[cfg(unix)]
 #[tokio::test]
 async fn with_every_computer_busy_a_new_pool_conversation_overflows_to_the_cloud() {
-    use crate::conversation::application::placement::BOAT;
     let root = tempfile::tempdir().unwrap();
     let workers = Arc::new(Workers::default());
     let environments = Environments::new(
@@ -719,25 +716,21 @@ async fn with_every_computer_busy_a_new_pool_conversation_overflows_to_the_cloud
     .with_pool_settings(Preferences::new(&[], &[], 800));
     workers.set_busy(&[(worker(1), 0, 850), (worker(2), 0, 800)]);
     environments
-        .place(&conversation(), Some(POOL), None)
+        .place(&conversation(), &Place::Pool, None)
         .await
         .unwrap();
     assert_eq!(
-        environments
-            .placement(&conversation())
-            .await
-            .unwrap()
-            .as_deref(),
-        Some(BOAT)
+        environments.placement(&conversation()).await.unwrap(),
+        Place::CloudVm
     );
     // One computer below its limit keeps new work on the pool.
     let other = ConversationId::new("6d1b0a3f-2e4c-4d8b-9f70-3cae5b2d8f41").unwrap();
     workers.set_busy(&[(worker(1), 0, 850), (worker(2), 0, 799)]);
-    environments.place(&other, Some(POOL), None).await.unwrap();
-    assert_eq!(
-        environments.placement(&other).await.unwrap().as_deref(),
-        Some(POOL)
-    );
+    environments
+        .place(&other, &Place::Pool, None)
+        .await
+        .unwrap();
+    assert_eq!(environments.placement(&other).await.unwrap(), Place::Pool);
 }
 
 #[tokio::test]

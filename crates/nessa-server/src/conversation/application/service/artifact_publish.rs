@@ -138,7 +138,7 @@ impl ConversationService {
             Ok(placed) => placed,
             Err(_) => return refused(PublishCallRefusal::EnvironmentNotLeased),
         };
-        if call.environment != placed.as_deref().unwrap_or(super::HERE) {
+        if call.environment != placed.name() {
             return refused(PublishCallRefusal::EnvironmentNotLeased);
         }
         if *stop.borrow() {
