@@ -241,6 +241,12 @@ async fn a_quarantined_backup_is_accepted_before_an_oversized_conversation_is_op
     )
     .unwrap();
     assert!(ran.is_empty());
+    let deferred_path = live.join("deferred.txt");
+    let sealed = fs::read(&deferred_path).unwrap();
+    fs::write(&deferred_path, b"tampered\n").unwrap();
+    assert!(startup_authority(&gateway).is_err());
+    assert!(!gateway.join("conversations/metadata.sqlite3").exists());
+    fs::write(&deferred_path, sealed).unwrap();
     let binding = startup_authority(&gateway).unwrap().unwrap();
     assert_eq!(binding.live, live);
     let metadata = nessa_local_database::rusqlite::Connection::open(
@@ -254,7 +260,18 @@ async fn a_quarantined_backup_is_accepted_before_an_oversized_conversation_is_op
             |row| row.get(0),
         )
         .unwrap();
-    assert_eq!(listed_in_service, 2);
+    assert_eq!(
+        listed_in_service, 0,
+        "a deferred stream is not a conversation unless its id is one"
+    );
+    let commands_as_conversations: i64 = metadata
+        .query_row(
+            "SELECT COUNT(*) FROM conversations WHERE id = 'nessa:commands:abc'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(commands_as_conversations, 0);
 
     let (code, text) = run(&[
         arg("list"),
@@ -603,8 +620,15 @@ fn write_session(database_path: &PathBuf, bulk_len: usize) {
         .unwrap();
     database
         .execute(
+            "INSERT INTO event_streams(stream_key, public_id, incarnation, floor, tail)
+             VALUES (3, 'nessa:commands:abc', ?1, ?2, ?2)",
+            [kept_incarnation.as_slice(), tail.as_slice()],
+        )
+        .unwrap();
+    database
+        .execute(
             "INSERT INTO event_stream_names(public_id, latest_incarnation, active_stream_key)
-             VALUES ('conv-kept', ?1, 1), ('conv-bulk', ?2, 2)",
+             VALUES ('conv-kept', ?1, 1), ('conv-bulk', ?2, 2), ('nessa:commands:abc', ?1, 3)",
             [kept_incarnation.as_slice(), bulk_incarnation.as_slice()],
         )
         .unwrap();

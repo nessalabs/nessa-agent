@@ -200,6 +200,13 @@ fn write_metadata(path: &Path, live: &Path) -> Result<(), String> {
         .map_err(|error| error.to_string())?;
     let mut rows = metadata_rows(live)?;
     for id in deferred_ids(live)? {
+        // A deferred stream is not a conversation unless its id is one.
+        // Command-control streams (`nessa:commands:…`) share an oversized
+        // session file and must not become catalogue rows: pagination rejects
+        // an id that is not a conversation UUID.
+        if nessa_protocol::conversation::domain::ConversationId::new(&id).is_err() {
+            continue;
+        }
         if !rows.iter().any(|row| row.id == id) {
             rows.push(MetadataRow {
                 id,

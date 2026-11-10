@@ -488,6 +488,12 @@ pub(crate) fn startup_authority(namespace: &Path) -> Result<Option<AcceptedBindi
                 )
             }
         })?;
+    crate::backup::application::accepted_tree_matches(&binding.live, &DirectoryQuarantine)
+        .map_err(|_| {
+            RunError::Restore(
+                "this restored backup no longer matches the seal that was accepted".into(),
+            )
+        })?;
     let replay = fs::read(binding.live.join("replay.blocked")).unwrap_or_default();
     let commands = outbox_commands(&binding.live);
     let mut ran = false;

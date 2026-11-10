@@ -872,6 +872,23 @@ fn seal_matches(
     Ok(())
 }
 
+/// The live tree still matches the journal that was accepted.
+///
+/// Acceptance and a deferred open both refuse a file whose bytes no longer
+/// match that seal. Startup has to do the same before it copies anything into
+/// the serving catalogue: a later repair of the backup does not rewrite a
+/// catalogue that was already installed.
+pub fn accepted_tree_matches(
+    live: &Path,
+    layout: &dyn QuarantineLayout,
+) -> Result<(), RestoreFault> {
+    let anchored = layout.anchor(live)?;
+    let loaded = layout.load(&anchored)?;
+    let journal = read_journal(&loaded.journal)?;
+    let deferred = deferred_lines(layout, &anchored, &journal)?;
+    seal_matches(&journal, &loaded, &deferred)
+}
+
 fn deferred_lines(
     layout: &dyn QuarantineLayout,
     root: &AnchoredRoot,
