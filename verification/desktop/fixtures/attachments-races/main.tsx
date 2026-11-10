@@ -9,7 +9,7 @@ import { createRoot } from "react-dom/client"
 import { Provider } from "react-redux"
 import { App } from "../../../../src/panel/ui/app"
 import { HeldFilesProvider } from "../../../../src/conversation/ui/held-files"
-import { ClockProvider } from "../../../../src/clock"
+import { ClockProvider, monotonicElapsed } from "../../../../src/clock"
 import { createAttachmentResources } from "../../../../src/panel/adapters/attachment-resources"
 import { makeStore } from "../../../../src/store"
 import {
@@ -592,7 +592,7 @@ function showScope(
   application.render(
     <Provider store={scopeStore}>
       {/* A fixture is its own composition root, so it chooses the clock. */}
-      <ClockProvider now={() => Date.now()}>
+      <ClockProvider now={() => Date.now()} elapsed={monotonicElapsed()}>
         <HeldFilesProvider read={readHeldFile} save={async () => "cancelled"}>
           <App
             attachmentResources={scopeResources}

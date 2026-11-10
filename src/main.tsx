@@ -10,7 +10,7 @@ import "./styles.css"
 import { AgentSetupProvider, SetupGate } from "./onboarding"
 import { nativeAgentApiKeys } from "./onboarding/adapters/agent-api-key"
 import { App } from "./panel"
-import { ClockProvider } from "./clock"
+import { ClockProvider, monotonicElapsed } from "./clock"
 import { ClipboardProvider, HeldFilesProvider } from "./conversation"
 import { SessionLifecycle } from "./session"
 import { makeStore } from "./store"
@@ -66,7 +66,7 @@ const panel = (
     <AgentSetupProvider source={agentSetup}>
       <ClipboardProvider write={writeClipboardText}>
         <HeldFilesProvider read={dependencies.conversation.readHeldFile} save={saveFile}>
-          <ClockProvider now={dependencies.now}>
+          <ClockProvider now={dependencies.now} elapsed={monotonicElapsed()}>
             <App
               onProviderSignIn={signInToProvider}
               canSignInToProvider={providerLoginAvailable}

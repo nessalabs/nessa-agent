@@ -208,7 +208,9 @@ writing the full defaults on first launch is buying.
   `src/conversation/ui/`. Host subscriptions live in `src/panel/adapters/`.
   Clock-driven labels share the provider-scoped publication in
   `src/clock/ui/provider.tsx`; `src/clock/index.ts` is its public module map.
-  Conversation and workspace supply the clock at their composition roots.
+  Conversation and workspace supply both clocks at their composition roots:
+  workspace time, and `monotonicElapsed` for a duration. The provider does
+  not read the process clock itself.
 - The Messages tab is panel chrome over a conversation list, like the update
   tab: `src/panel/application/messages-tab.ts` owns its place in the strip and
   its transitions, and `src/panel/ui/messages-tab.tsx` puts
@@ -425,7 +427,12 @@ against a private scripted gateway.
   `src/desktop/ui/ambient-grain.png`, drawn by `.desktop-grain` in the desktop
   stylesheet. It is pre-rendered to keep SVG turbulence out of runtime raster
   work (#370); `verification/desktop/scripts/smoke.mjs` checks its image format,
-  tile size and compositing in both engines.
+  tile size and compositing in both engines. The two drifting washes are the
+  same idea (#1249): `DesktopAmbient` (`src/desktop/ui/ambient-light.tsx`)
+  paints each once into a small texture and the stylesheet scales that
+  texture by the drift, so WebKit does not re-blur a full-window gradient
+  on every frame. `ambient-overview.mjs` checks the overview still finishes
+  inside its 10s wait.
 - Split panes are a module of the desktop window's, not of the workspace:
   `src/desktop/split-panes/` (its map is `index.ts`) owns the pane layout, its
   sizing, drops and the drag's phases (`model/`, pure), the port a host

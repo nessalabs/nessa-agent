@@ -26,7 +26,7 @@ import { makeStore, type StoreDependencies } from "./store"
 import { MESSAGES_TAB_ID as MESSAGES, stripOrder } from "./panel/application/messages-tab"
 import { useMessagesTab } from "./panel/ui/use-messages-tab"
 import { MessagesIcon } from "./panel/ui/messages-icon"
-import { ClockProvider } from "./clock"
+import { ClockProvider, monotonicElapsed } from "./clock"
 import {
   AGENT_HUES,
   commandErrorCleared,
@@ -370,7 +370,7 @@ createRoot(container).render(
   <React.StrictMode>
     <Provider store={previewStore}>
       {/* This page is its own composition root, so it chooses the clock. */}
-      <ClockProvider now={() => Date.now()}>
+      <ClockProvider now={() => Date.now()} elapsed={monotonicElapsed()}>
         {new URLSearchParams(window.location.search).has("icons") ? <Icons /> : <Panel />}
       </ClockProvider>
     </Provider>

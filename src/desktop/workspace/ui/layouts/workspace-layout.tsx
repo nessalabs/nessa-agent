@@ -10,6 +10,7 @@ import { FlipScope, type SplitPanesSource } from "../../../split-panes"
 import { EscapeScopesProvider } from "../../adapters/dom/widget-escape"
 import { sessionListLimits, type ColumnLimits } from "../../model/window-fit"
 import type { WindowArrangement } from "../../model/shown-window"
+import { DesktopAmbient } from "../../../ui/ambient-light"
 import { IconButton } from "../../../ui/icon-button"
 import { SideRail, SideRailButton, RailView } from "../chrome/side-rail"
 import { StudioCorner } from "../chrome/identity-footer"
@@ -124,9 +125,7 @@ export function WorkspaceLayout(model: WorkspaceWindowModel) {
                 >
                   {/* The light behind the window spans the rail too, so the
                       rail and the workspace stand on one ground. */}
-                  <div className="desktop-ambient" aria-hidden="true">
-                    <span className="desktop-grain" />
-                  </div>
+                  <DesktopAmbient />
                   <WorkspaceTitlebar>
                     {shownRailItem ? (
                       <div className="workspace-titlebar-navigation">

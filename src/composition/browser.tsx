@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react"
 import { NessaRpcError } from "@nessa/client"
 import { isAuthenticationFailure } from "../session/adapters/client/authentication-failure"
 import { Provider } from "react-redux"
-import { ClockProvider } from "../clock"
+import { ClockProvider, monotonicElapsed } from "../clock"
 import {
   conversationTabSnapshot,
   HeldFilesProvider,
@@ -110,7 +110,7 @@ function BrowserSession({
         read={scope.dependencies.conversation.readHeldFile}
         save={saveFile}
       >
-        <ClockProvider now={scope.dependencies.now}>
+        <ClockProvider now={scope.dependencies.now} elapsed={monotonicElapsed()}>
           <App
             attachmentResources={scope.dependencies.attachments}
             canChoosePaths={scope.dependencies.canChoosePaths}

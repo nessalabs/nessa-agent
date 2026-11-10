@@ -73,7 +73,7 @@ async function shown(source = fakeSource()) {
   await act(async () => {
     root.render(
       <Provider store={store}>
-        <ClockProvider now={() => 1_000}>
+        <ClockProvider now={() => 1_000} elapsed={() => 1_000}>
           <SessionList />
           <DeleteSessionHost />
         </ClockProvider>
