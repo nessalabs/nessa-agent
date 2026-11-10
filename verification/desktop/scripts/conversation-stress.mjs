@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import {
+  boatProbe,
   channelPlacementSettings,
   channelRuntimeSettings,
   openAccounts,
@@ -245,11 +246,12 @@ import {
  *               folder with the notes in the agent's system prompt (Claude).
  *               A second channel works in a folder chosen in the picker, and
  *               its first message runs there; the gateway lists both, with
- *               their folders, and each conversation in its own. The first
- *               then moves its new threads and its main agent to Boat and
- *               back from its settings dialog: new threads alone keep the
- *               main chat, a moved main agent names a fresh one and the one
- *               talked to stays in the channel
+ *               their folders, and each conversation in its own. When the
+ *               gateway reports Boat connected, the first then moves its new
+ *               threads and its main agent to Boat and back from its settings
+ *               dialog: new threads alone keep the main chat, a moved main
+ *               agent names a fresh one and the one talked to stays in the
+ *               channel. Without a connected Boat those Boat checks skip
  *   huddle      a turn shows the test server's talk board, the host side of
  *               a voice app: its frame is allowed the microphone, it opens in
  *               the chat's panel as one tab however often it asks (its card a
@@ -1811,37 +1813,32 @@ async function makeChannel(
   // Both choices must remain independent, and Local must not allocate a VM.
   const coordinatorLocation = flow.getByLabel("Main agent location")
   const workerLocation = flow.getByLabel("New threads location")
-  // Boat is offered only while it is connected; otherwise connecting it is
-  // offered right here, and a channel can never be made on a Boat that would
-  // refuse every message.
-  const boatOffered = await waitFor(async () => {
-    const disabled = await coordinatorLocation
-      .locator('option[value="boat"]')
-      .evaluate((option) => option.disabled)
-    if (!disabled) return "offered"
-    return (await flow
-      .locator(
-        '[data-boat-connect] input[type="password"], [data-boat-connect] [data-boat-action="unlock"]',
-      )
-      .first()
-      .isVisible()
-      .catch(() => false))
-      ? "connect"
-      : null
-  }, 5_000)
-  if (!boatOffered)
-    failures.push(
-      "Boat is not connected, yet the placement step offers no way to connect it",
+  // Boat is offered only while it is connected. A run without a connected
+  // Boat (no keys, or a gateway that cannot say) skips these choices rather
+  // than failing on Boat's setup.
+  const boat = await boatProbe(run.client)
+  if (!boat.ready)
+    log(`${name}: Boat is ${boat.state}, so its placement choices are skipped`)
+  else {
+    const offered = await waitFor(
+      () =>
+        coordinatorLocation
+          .locator('option[value="boat"]')
+          .evaluate((option) => !option.disabled),
+      5_000,
     )
-  if (boatOffered === "offered") {
-    await coordinatorLocation.selectOption("boat")
-    if ((await workerLocation.inputValue()) !== "local")
-      failures.push("changing coordinator placement also changed worker placement")
-    await coordinatorLocation.selectOption("local")
-    await workerLocation.selectOption("boat")
-    if ((await coordinatorLocation.inputValue()) !== "local")
-      failures.push("changing worker placement also changed coordinator placement")
-    await workerLocation.selectOption("local")
+    if (!offered)
+      failures.push("Boat is connected, yet the placement step does not offer it")
+    else {
+      await coordinatorLocation.selectOption("boat")
+      if ((await workerLocation.inputValue()) !== "local")
+        failures.push("changing coordinator placement also changed worker placement")
+      await coordinatorLocation.selectOption("local")
+      await workerLocation.selectOption("boat")
+      if ((await coordinatorLocation.inputValue()) !== "local")
+        failures.push("changing worker placement also changed coordinator placement")
+      await workerLocation.selectOption("local")
+    }
   }
   await photograph(`${name}-3-placement`)
   await flow.locator(".new-channel-placement").focus()
@@ -5332,7 +5329,7 @@ const steps = {
         failures.push(`the worker reported ${JSON.stringify(listed.machine)}`)
       // Each page follows the last; together they name the worker once.
       const pages = []
-      for (let after; pages.length < 1_024;) {
+      for (let after; pages.length < 1_024; ) {
         const page = await run.client.devices.list(after)
         pages.push(page)
         if (!page.next) break
