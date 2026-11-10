@@ -402,7 +402,8 @@ pub(crate) struct Environments {
     hosts: BTreeMap<String, Arc<dyn Environment>>,
     /// `None` when this gateway pairs no environments.
     peers: Option<Arc<dyn PairedEnvironments>>,
-    placements: Option<Arc<dyn ConversationPlacements>>,
+    /// Where each conversation was placed, written before it exists.
+    placements: Arc<dyn ConversationPlacements>,
     /// Which worker holds each `peer:any` conversation; `None` where no
     /// conversation can be placed so, with no paired environments.
     bindings: Option<Arc<dyn ConversationBindings>>,
@@ -416,21 +417,54 @@ pub(crate) struct Environments {
     pool_settings: Option<Arc<dyn PoolSettingsStore>>,
 }
 
+#[cfg(test)]
 impl From<Arc<dyn Environment>> for Environments {
-    /// Here alone, with nowhere placements are kept: every conversation runs
-    /// here. For tests; composition always keeps placements.
+    /// Here alone, with placements kept in memory: every conversation runs
+    /// here, as nothing else is offered. For tests.
     fn from(here: Arc<dyn Environment>) -> Self {
-        Self {
-            workspaces: None,
-            here,
-            hosts: BTreeMap::new(),
-            peers: None,
-            placements: None,
-            bindings: None,
-            reserved: Arc::default(),
-            default: None,
-            pool_settings: None,
-        }
+        Self::new(here, BTreeMap::new(), Arc::new(MemoryPlacements::default()))
+    }
+}
+
+/// Placements kept in memory, read back as written; none is here. For
+/// tests built with [`Environments::from`].
+#[cfg(test)]
+#[derive(Default)]
+struct MemoryPlacements(std::sync::Mutex<std::collections::HashMap<ConversationId, Place>>);
+
+#[cfg(test)]
+impl ConversationPlacements for MemoryPlacements {
+    fn place<'a>(
+        &'a self,
+        conversation: &'a ConversationId,
+        place: &'a Place,
+    ) -> EnvironmentFuture<'a, Result<(), PlacementError>> {
+        let mut placed = self.0.lock().expect("placements");
+        match place {
+            Place::Here => placed.remove(conversation),
+            place => placed.insert(conversation.clone(), place.clone()),
+        };
+        Box::pin(async { Ok(()) })
+    }
+    fn placement<'a>(
+        &'a self,
+        conversation: &'a ConversationId,
+    ) -> EnvironmentFuture<'a, Result<Place, PlacementError>> {
+        let place = self
+            .0
+            .lock()
+            .expect("placements")
+            .get(conversation)
+            .cloned()
+            .unwrap_or(Place::Here);
+        Box::pin(async move { Ok(place) })
+    }
+    fn erase<'a>(
+        &'a self,
+        conversation: &'a ConversationId,
+    ) -> EnvironmentFuture<'a, Result<(), PlacementError>> {
+        self.0.lock().expect("placements").remove(conversation);
+        Box::pin(async { Ok(()) })
     }
 }
 
@@ -454,7 +488,7 @@ impl Environments {
             here,
             hosts,
             peers: None,
-            placements: Some(placements),
+            placements,
             bindings: None,
             reserved: Arc::default(),
             default: None,
@@ -659,11 +693,7 @@ impl Environments {
             named if self.offers(named) => named.clone(),
             _ => return Err(ConversationError::EnvironmentNotConfigured),
         };
-        match &self.placements {
-            Some(placements) => Ok(placements.place(conversation, &placed).await?),
-            None if placed == Place::Here => Ok(()),
-            None => Err(ConversationError::EnvironmentNotConfigured),
-        }
+        Ok(self.placements.place(conversation, &placed).await?)
     }
 
     /// Where a conversation that asked for the pool is placed, as
@@ -712,10 +742,7 @@ impl Environments {
         &self,
         conversation: &ConversationId,
     ) -> Result<Place, ConversationError> {
-        match &self.placements {
-            Some(placements) => Ok(placements.placement(conversation).await?),
-            None => Ok(Place::Here),
-        }
+        Ok(self.placements.placement(conversation).await?)
     }
 
     /// Whether `conversation` runs in a cloud workspace of its own
@@ -898,10 +925,7 @@ impl Environments {
         if let Some(bindings) = &self.bindings {
             bindings.erase(conversation).await?;
         }
-        match &self.placements {
-            Some(placements) => Ok(placements.erase(conversation).await?),
-            None => Ok(()),
-        }
+        Ok(self.placements.erase(conversation).await?)
     }
 }
 
