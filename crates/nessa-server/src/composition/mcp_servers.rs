@@ -39,6 +39,7 @@ use crate::mcp_servers::{
     },
 };
 use crate::product::mcp_servers::list_fits;
+use crate::timer::clock;
 use nessa_sdk::infrastructure::{
     acp::sessions::{McpServerList, McpServerSource, StandInSessions, StdioMcpServer},
     clock::RuntimeClock,
@@ -151,7 +152,7 @@ pub(super) async fn finish_recorders(
     recorders: impl IntoIterator<Item = AuditRecorder>,
     bound: Duration,
 ) {
-    let deadline = tokio::time::Instant::now() + bound;
+    let deadline = clock::now() + bound;
     futures_util::future::join_all(recorders.into_iter().map(|recorder| async move {
         let what = recorder.what;
         let _ = recorder.stop.send(());

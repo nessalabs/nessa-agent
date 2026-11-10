@@ -12,6 +12,7 @@ use crate::conversation::infrastructure::{
     record_scope_from_identity,
 };
 use crate::core::read_workers::{ReadWorkerError, ReadWorkers};
+use crate::timer::clock;
 use nessa_protocol::conversation::{
     domain::ConversationId,
     read_scope::{ReadRefusal, ReceiverReadScope},
@@ -28,7 +29,7 @@ use std::sync::{
 };
 #[cfg(test)]
 use std::sync::{Condvar, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use tokio::runtime::Handle;
 use tokio::sync::Notify;
 
@@ -50,7 +51,7 @@ impl std::error::Error for InvalidReadWorkBudget {}
 /// The deadline rule `OperationalLimits` uses for this budget. Product is not
 /// imported here, so the source checks the duration it is given itself.
 fn accept_read_work_budget(work_budget: Duration) -> Result<Duration, InvalidReadWorkBudget> {
-    if work_budget.is_zero() || Instant::now().checked_add(work_budget).is_none() {
+    if work_budget.is_zero() || clock::now().checked_add(work_budget).is_none() {
         Err(InvalidReadWorkBudget)
     } else {
         Ok(work_budget)
@@ -308,7 +309,7 @@ impl NessaRecordReadSource {
                     tokio::select! {
                         biased;
                         finished = &mut work => finished,
-                        () = tokio::time::sleep(self.work_budget) => {
+                        () = clock::sleep(self.work_budget) => {
                             // The worker stops at its next step boundary.
                             stop.store(true, Ordering::SeqCst);
                             wake_storage.wake_discovery_waiters();

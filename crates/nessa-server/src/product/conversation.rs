@@ -16,7 +16,7 @@ use base64::Engine as _;
 use nessa_auth::application::ports::{AccessError, AccessSnapshot};
 use nessa_auth::application::session::{AuthenticatedSession, ReadCurrentSession};
 use nessa_auth::domain::{MembershipRole, Resource};
-use nessa_protocol::conversation::projection::CommittedCursor;
+use nessa_projection::CommittedCursor;
 use nessa_protocol::conversation::view::{
     ConversationList, ConversationModelChangeEffect, ConversationObservation,
     ConversationObservationCursor, ConversationPartPosition, ConversationPoint,

@@ -2,6 +2,7 @@
 // a real conversation service (`docs/design/record-subscriptions.md`). Each
 // test is one row of that design's state table.
 
+use nessa_projection::IntoView;
 use super::*;
 use crate::conversation::application::{
     AccessAction, AccessAsk, AccessDecision, AccessDenial, ConversationAccessPolicyEvaluator,
@@ -731,7 +732,7 @@ impl SubscriptionFixture {
         let cold = RecordStorage::new(self._directory.path().join("records")).unwrap();
         cold.initialize().await.unwrap();
         let session = crate::conversation::application::conversation_session(&self.id);
-        let mut projection = nessa_protocol::conversation::projection::Projection::new(
+        let mut projection = nessa_projection::Projection::new(
             self.id.to_string(),
             nessa_protocol::conversation::view::ConversationCapabilities::read_only(),
             None,
@@ -746,7 +747,7 @@ impl SubscriptionFixture {
                     .unwrap()
                     .unwrap_or_default();
                 projection.replace_committed(&committed, &order, None);
-                projection.transcript_state(committed.state().into());
+                projection.transcript_state(committed.state().into_view());
                 let view = serde_json::to_value(projection.read()).unwrap();
                 if view["transcriptState"] == "complete" {
                     return view;

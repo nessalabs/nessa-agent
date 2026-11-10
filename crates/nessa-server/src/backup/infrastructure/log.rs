@@ -1,6 +1,7 @@
 //! The deletion inventory on disk. The mac key sits beside it and is not
 //! part of an export bundle.
 
+use crate::timer::clock;
 use std::fs::{self, File};
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -73,7 +74,7 @@ impl DeletionLogStore for FileDeletionLog {
                     // The holder's snapshot may need the blocking pool. Wait
                     // asynchronously instead of occupying one of its workers
                     // (`waiting_captures_leave_a_blocking_worker_for_the_holder`).
-                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                    clock::sleep(std::time::Duration::from_millis(10)).await;
                 }
                 Err(std::fs::TryLockError::Error(_)) => return Err(()),
             }

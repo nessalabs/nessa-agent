@@ -1,5 +1,6 @@
 //! Boat VM allocation plus an attached workspace-sdk backend. Nessa owns VM
 //! creation/deletion; the SDK owns supervisor runs and files inside that VM.
+use crate::timer::clock;
 use crate::workspaces::{
     application::{Provider, WorkspaceReceipt, WorkspaceRuntime},
     domain::{BoatConnection, EnvironmentIdentity, Failure},
@@ -117,12 +118,12 @@ impl Provider for BoatProvider {
             super::boat_admission::check(&self.http, &api, connection, vm, admission, None).await?;
         // A VM still stopping from its thread's last rest is resumed once it
         // has stopped.
-        let stopping_until = tokio::time::Instant::now() + STOP_WAIT;
+        let stopping_until = clock::now() + STOP_WAIT;
         while found.sandbox.state == SandboxState::Archiving {
-            if tokio::time::Instant::now() >= stopping_until {
+            if clock::now() >= stopping_until {
                 return Err(Failure::Provider);
             }
-            tokio::time::sleep(Duration::from_secs(1)).await;
+            clock::sleep(Duration::from_secs(1)).await;
             found = super::boat_admission::check(&self.http, &api, connection, vm, admission, None)
                 .await?;
         }

@@ -2,6 +2,7 @@
 //! consent acceptance. Dropping the candidate receiver cancels the listener
 //! and its scoped connections; an empty stream otherwise waits at most the
 //! supplied whole-attempt deadline, including after a separate revoke.
+use crate::timer::clock;
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -10,7 +11,7 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc::{self, Sender};
 use tokio::task::JoinHandle;
-use tokio::time::{timeout, timeout_at, Instant};
+use tokio::time::{timeout, timeout_at};
 
 use crate::mcp_authorization::application::{CallbackBind, CallbackQuery, ConsentCallback};
 
@@ -86,7 +87,7 @@ async fn connection<S: AsyncRead + AsyncWrite + Unpin>(
     mut stream: S,
     budget: Duration,
 ) -> Option<CallbackQuery> {
-    let deadline = Instant::now() + budget;
+    let deadline = clock::now() + budget;
     let header = timeout_at(deadline, read_header(&mut stream))
         .await
         .ok()?

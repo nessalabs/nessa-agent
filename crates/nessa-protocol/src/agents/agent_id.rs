@@ -51,11 +51,11 @@ impl AgentId {
     /// which a conversation's history records as its provider identity. Each
     /// binding owns its name; this only says which binding is whose.
     pub fn provider_name(self) -> &'static str {
-        use nessa_sdk::infrastructure::{claude_acp, codex_acp, opencode_acp};
+        use nessa_types::providers;
         match self {
-            AgentId::Claude => claude_acp::sessions::PROVIDER_NAME,
-            AgentId::Codex => codex_acp::sessions::PROVIDER_NAME,
-            AgentId::Opencode => opencode_acp::sessions::PROVIDER_NAME,
+            AgentId::Claude => providers::CLAUDE_ACP,
+            AgentId::Codex => providers::CODEX_ACP,
+            AgentId::Opencode => providers::OPENCODE_ACP,
         }
     }
 

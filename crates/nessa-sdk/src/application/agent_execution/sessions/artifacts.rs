@@ -69,7 +69,7 @@ impl Error for ArtifactValueError {}
 pub struct ArtifactName(Box<str>);
 impl ArtifactName {
     /// Longest name, in bytes: a file name's bound.
-    pub const MAX_BYTES: usize = 255;
+    pub const MAX_BYTES: usize = nessa_types::leases::MAX_ARTIFACT_NAME_BYTES;
 
     /// Accept `value` when it is a nonempty name of at most
     /// [`Self::MAX_BYTES`] with no `/` and no control character; otherwise
@@ -101,7 +101,7 @@ pub struct PublishedFile {
 impl PublishedFile {
     /// Most bytes one published file may have: the most one attachment may
     /// hold, since the conversation keeps the file as one.
-    pub const MAX_BYTES: u64 = 64 * 1024 * 1024;
+    pub const MAX_BYTES: u64 = nessa_types::leases::MAX_PUBLISHED_FILE_BYTES;
 
     /// Accept a file of 1 to [`Self::MAX_BYTES`] bytes; otherwise
     /// [`ArtifactValueError::Size`]. An empty file is nothing to publish.

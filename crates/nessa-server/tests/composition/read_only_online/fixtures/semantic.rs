@@ -13,8 +13,8 @@ use crate::conversation_test_support::{
     Provider, ProviderFactory, RecordingFileLinkAudit, TestClock, DELETION_BUDGETS,
 };
 use nessa_auth::domain::{OrganizationId, PrincipalId};
+use nessa_projection::retained_view;
 use nessa_protocol::conversation::domain::ConversationId;
-use nessa_protocol::conversation::projection::retained_view;
 use nessa_protocol::conversation::view::ConversationView;
 use nessa_protocol::product::generated::AgentsListResult;
 use nessa_sdk::application::agent_execution::executions::ExecutionUpdate;

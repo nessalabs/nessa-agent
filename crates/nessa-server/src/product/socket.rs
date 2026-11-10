@@ -15,6 +15,7 @@ use crate::conversation::application::{
 };
 #[cfg(test)]
 use crate::conversation_test_support as conversation_support;
+use crate::timer::clock;
 use axum::extract::ws::{CloseFrame, Message};
 use axum::Error;
 use futures_util::stream::{FuturesUnordered, SplitSink};
@@ -116,7 +117,7 @@ where
     S: Stream<Item = Result<Message, Error>> + Sink<Message> + Unpin + Send + 'static,
     P: SessionProof<S>,
 {
-    let deadline = Instant::now() + state.settings.handshake_timeout();
+    let deadline = clock::now() + state.settings.handshake_timeout();
     let nonce = Uuid::new_v4().to_string();
     // Wire timestamps use seconds. Round up from millisecond wall time so the
     // advertisement never truncates the authentication window. Only the shared
@@ -313,7 +314,7 @@ where
     let Some(Ok(Message::Text(text))) = socket.next().await else {
         return Err((String::new(), "unauthorized"));
     };
-    if Instant::now() >= deadline {
+    if clock::now() >= deadline {
         return Err((String::new(), "handshake_timeout"));
     }
     if text.len() > MAX_PAYLOAD_BYTES as usize {
@@ -421,7 +422,7 @@ where
             },
         )
     })?;
-    if Instant::now() >= deadline {
+    if clock::now() >= deadline {
         return Err((frame.id, "handshake_timeout"));
     }
     Ok((frame.id, session, handshake))
@@ -651,7 +652,7 @@ impl QueuedRecordResponse {
             _slot: slot,
             _record_work: record_work,
             _mount: mount,
-            deadline: Instant::now() + RECORD_SEND_TIMEOUT,
+            deadline: clock::now() + RECORD_SEND_TIMEOUT,
         }
     }
 }
@@ -818,7 +819,7 @@ fn queued_record_deadline(response: &Option<QueuedRecordResponse>) -> Option<Ins
 
 async fn wait_for_record_deadline(deadline: Option<Instant>) {
     match deadline {
-        Some(deadline) => tokio::time::sleep_until(deadline).await,
+        Some(deadline) => clock::sleep_until(deadline).await,
         None => std::future::pending().await,
     }
 }
@@ -828,7 +829,7 @@ async fn wait_for_record_deadline(deadline: Option<Instant>) {
 async fn within_deadline<F: Future>(deadline: Instant, work: F) -> Option<F::Output> {
     tokio::pin!(work);
     let guarded = poll_fn(|context| {
-        if Instant::now() >= deadline {
+        if clock::now() >= deadline {
             Poll::Ready(None)
         } else {
             work.as_mut().poll(context).map(Some)
@@ -838,7 +839,7 @@ async fn within_deadline<F: Future>(deadline: Instant, work: F) -> Option<F::Out
         .await
         .ok()
         .flatten()
-        .filter(|_| Instant::now() < deadline)
+        .filter(|_| clock::now() < deadline)
 }
 
 fn missed_record_deadline<T>(value: Option<T>) -> Option<T> {
@@ -852,7 +853,7 @@ fn note_elapsed_delivery(
     record: &Option<QueuedRecordResponse>,
     subscriptions: &SubscriptionDeliveries,
 ) {
-    let now = Instant::now();
+    let now = clock::now();
     if queued_record_deadline(record).is_some_and(|deadline| now >= deadline) {
         note_limit("socket.record_delivery_deadline");
     }
@@ -1007,7 +1008,7 @@ async fn run_authenticated<S>(
                 if remaining == 0 {
                     break;
                 }
-                tokio::time::sleep(Duration::from_secs(remaining.min(3600))).await;
+                clock::sleep(Duration::from_secs(remaining.min(3600))).await;
             }
         } else {
             std::future::pending::<()>().await;
@@ -1049,7 +1050,7 @@ async fn run_authenticated<S>(
         // Authority checks suspend only their own admission. Request completion,
         // delivery teardown and expiry retain independently polled owners (R60).
         let admitted = if let Some(frame) = staged_record {
-            Some((frame, Instant::now()))
+            Some((frame, clock::now()))
         } else {
             tokio::select! {
             _ = &mut writer => {
@@ -1167,7 +1168,7 @@ async fn run_authenticated<S>(
                     break;
                 }
                 match pending_input.take().expect("input check owns one input") {
-                    AuthenticatedInput::Request(frame) => Some((frame, Instant::now())),
+                    AuthenticatedInput::Request(frame) => Some((frame, clock::now())),
                     AuthenticatedInput::Refusal(response) => {
                         if refuse_or_wait(&refusal_send, &mut waiting_refusal, response) {
                             break;
@@ -1208,7 +1209,7 @@ async fn run_authenticated<S>(
                 }
                 let record = matches!(ResponseClass::for_method(&frame.method), ResponseClass::Record);
                 if record {
-                    Some((frame, Instant::now()))
+                    Some((frame, clock::now()))
                 } else {
                     // Every deferred input asks current authority independently;
                     // periodic refresh cannot authorize an input. Later inputs

@@ -76,6 +76,8 @@ const GROUPS = [
     prefixes: [
       "crates/nessa-server/",
       "crates/nessa-protocol/",
+      "crates/nessa-projection/",
+      "crates/nessa-types/",
       "crates/nessa-client-core/",
       "crates/nessa-device-client/",
     ],

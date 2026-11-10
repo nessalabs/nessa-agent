@@ -212,6 +212,8 @@ pub use review_notice_audit::{
 };
 mod review_notice_selection;
 pub(crate) use review_notice_selection::{AuditedReviewSelection, SelectReviewNotice};
+// Still reads time directly: the Place work (#1293) is rewriting it.
+#[allow(clippy::disallowed_methods)]
 mod service;
 mod settings_audit;
 pub use settings_audit::{SettingsAudit, SettingsAuditRecord, SettingsChange, SettingsOutcome};

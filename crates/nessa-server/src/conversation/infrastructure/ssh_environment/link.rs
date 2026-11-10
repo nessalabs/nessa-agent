@@ -76,6 +76,7 @@ use crate::conversation::application::{
 use crate::env::LEASE_PROTOCOL;
 use crate::env_serve::application::FrameStream;
 use crate::env_serve::install::Platform;
+use crate::timer::clock;
 use futures_util::FutureExt;
 use nessa_protocol::build_update::{self, FromEnvironment::UpdateWanted};
 use nessa_protocol::lease::{
@@ -717,7 +718,7 @@ impl HostLink {
         }
         let link = self.clone();
         tokio::spawn(async move {
-            let deadline = tokio::time::Instant::now() + drain;
+            let deadline = clock::now() + drain;
             // The host is told before any lease is seen ending as revoked,
             // so an End asked for one reaches it after `Revoked`, and it
             // records the revocation as that end's cause. A host reading
@@ -2323,7 +2324,7 @@ fn queue_end(
 /// `Ended`. A route already removed, or one whose `Ran` was not said, stays
 /// as it is.
 async fn release_command_route(routes: Arc<Mutex<Routes>>, lease: String) {
-    tokio::time::sleep(COMMAND_STOP_WAIT).await;
+    clock::sleep(COMMAND_STOP_WAIT).await;
     let mut routes = routes.lock().unwrap_or_else(PoisonError::into_inner);
     if routes.leases.get(&lease).is_some_and(|route| {
         route.command && route.end_sent && route.end_queued && route.ran_answered

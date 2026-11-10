@@ -11,9 +11,10 @@ use crate::conversation_test_support::{
     RecordingModeAudit, TestClock, Unlisted, DELETION_BUDGETS,
 };
 use nessa_auth::domain::{OrganizationId, PrincipalId};
+use nessa_projection::tool_uis::McpToolUis;
+use nessa_projection::IntoView;
+use nessa_projection::{bound_view, Projection, MAX_VIEW_BYTES};
 use nessa_protocol::conversation::domain::{ConversationApprovalMode, ConversationId};
-use nessa_protocol::conversation::projection::{bound_view, Projection, MAX_VIEW_BYTES};
-use nessa_protocol::conversation::tool_uis::McpToolUis;
 use nessa_protocol::conversation::view::ConversationTranscriptState;
 use nessa_protocol::conversation::view::{
     ConversationCapabilities, ConversationLifecyclePhase, ConversationMessageStatus,
@@ -250,7 +251,7 @@ fn projection_for(conversation: &str) -> Projection {
             resume: false,
             permissions: true,
             image_input: false,
-            agent_features: OperationCapabilities::default().into(),
+            agent_features: OperationCapabilities::default().into_view(),
         },
         None,
     )

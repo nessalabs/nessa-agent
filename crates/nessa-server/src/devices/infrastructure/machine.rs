@@ -1,6 +1,7 @@
 //! [`MachineProbe`] over `sysinfo`: the host's name, system, processors,
 //! memory, and its local disks.
 use crate::devices::application::MachineProbe;
+use crate::timer::clock;
 use nessa_protocol::lease::{MachineDisk, MachineReport, MAX_MACHINE_DISKS, MAX_MACHINE_FIGURE};
 use std::{
     path::PathBuf,
@@ -58,7 +59,7 @@ impl MachineProbe for SystemMachine {
                         .with_cpu(CpuRefreshKind::nothing().with_cpu_usage())
                         .with_memory(MemoryRefreshKind::nothing().with_ram()),
                 );
-                std::thread::sleep(sysinfo::MINIMUM_CPU_UPDATE_INTERVAL);
+                clock::os::sleep(sysinfo::MINIMUM_CPU_UPDATE_INTERVAL);
                 system.refresh_cpu_usage();
                 held.insert(system)
             }

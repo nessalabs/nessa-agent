@@ -41,6 +41,7 @@ use crate::peer_gateways::application::{
     CacheState, PeerAudit, PeerAuditFuture, PeerAuditRecord, PeerConnector, PeerHolding, PeerState,
     PollerCause,
 };
+use crate::timer::clock;
 use nessa_auth::adapters::pairing::relay_key;
 use nessa_auth::{
     adapters::pairing::{rand, CryptoRng, ManualCode, PairingCryptoError, RngCore},
@@ -695,7 +696,7 @@ impl PeerCommands {
             .saturating_add(u64::try_from(limit.as_millis()).unwrap_or(u64::MAX));
         async move {
             while self.clock.elapsed_ms() < end {
-                tokio::time::sleep(WAKE_TICK).await;
+                clock::sleep(WAKE_TICK).await;
             }
         }
     }
@@ -724,7 +725,7 @@ impl PeerCommands {
                 answered = &mut work => {
                     return (self.clock.elapsed_ms() < deadline).then_some(answered);
                 }
-                () = tokio::time::sleep(WAKE_TICK) => {
+                () = clock::sleep(WAKE_TICK) => {
                     if self.clock.elapsed_ms() >= deadline {
                         return None;
                     }
@@ -760,7 +761,7 @@ impl PeerCommands {
                         Err(_) => return false,
                     }
                 }
-                () = tokio::time::sleep(WAKE_TICK) => {
+                () = clock::sleep(WAKE_TICK) => {
                     if self.clock.elapsed_ms() >= deadline {
                         return false;
                     }
@@ -777,7 +778,7 @@ impl PeerCommands {
                     let in_time = self.clock.elapsed_ms() < deadline;
                     return in_time && result.is_ok();
                 }
-                () = tokio::time::sleep(WAKE_TICK) => {
+                () = clock::sleep(WAKE_TICK) => {
                     if self.clock.elapsed_ms() >= deadline {
                         break;
                     }
