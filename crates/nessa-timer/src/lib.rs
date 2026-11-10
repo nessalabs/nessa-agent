@@ -45,6 +45,9 @@ impl Add<Duration> for Moment {
     }
 }
 
+#[cfg(feature = "runtime")]
+pub mod clock;
+
 /// Resolves once the timer has reached the moment it was asked to wait for.
 pub type Sleep = Pin<Box<dyn Future<Output = ()> + Send>>;
 

@@ -1,5 +1,6 @@
 //! Submit and exact-turn Stop use the same record runtime as creation.
 use super::*;
+use crate::conversation::domain::Place;
 use crate::conversation::{
     application::{
         ConversationAccessPolicyEvaluator, ConversationDependencies, ConversationLimits,
@@ -153,6 +154,7 @@ fn fixture_with_sessions(
             message_commit_clock: Arc::new(RuntimeMessageCommitClock::new()),
             clock: Arc::new(TestClock),
             environment,
+            tool_config: Default::default(),
         },
         ConversationLimits::default(),
         None,
@@ -1457,7 +1459,7 @@ async fn a_submit_linking_a_file_is_refused_on_a_host_before_it_is_staged() {
     service
         .inner
         .environment
-        .place(&target, Some("devbox"), None)
+        .place(&target, &Place::named("devbox").unwrap(), None)
         .await
         .unwrap();
     let mut linking = message("read this");
@@ -1484,6 +1486,53 @@ async fn a_submit_linking_a_file_is_refused_on_a_host_before_it_is_staged() {
     ));
     assert_eq!(command_rows(&root), 0);
     assert_eq!(provider.open_calls.load(Ordering::SeqCst), 0);
+    retire(service, storage, metadata).await;
+}
+
+/// A fork runs where its source runs: a source here forks here though a
+/// default device was set since, which a creation naming no place would go
+/// to.
+#[tokio::test]
+async fn a_fork_of_a_conversation_here_runs_here_whatever_the_default_device() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("data");
+    let provider = Arc::new(ProviderFactory::default());
+    nessa_local_storage::create_directory(&root).unwrap();
+    let placements = Arc::new(
+        crate::conversation::infrastructure::FilePlacements::new(root.join("placements")).unwrap(),
+    );
+    let (default, default_device) = tokio::sync::watch::channel(None);
+    let environments = crate::conversation::application::Environments::new(
+        crate::conversation::infrastructure::in_process_environment(),
+        std::collections::BTreeMap::from([(
+            "devbox".to_string(),
+            Arc::new(Elsewhere) as Arc<dyn crate::conversation::application::Environment>,
+        )]),
+        placements,
+    )
+    .with_default(default_device);
+    let (service, storage, metadata) = fixture_in(&root, provider.clone(), environments);
+    let source = id();
+    opened(&service, &provider, &source).await;
+    default.send(Some("devbox".into())).unwrap();
+    assert_eq!(
+        service.inner.environment.default_place(),
+        Some(Place::named("devbox").unwrap())
+    );
+    let fork = id();
+    service
+        .fork(
+            storage.clone() as Arc<dyn CreationStorage>,
+            fork.clone(),
+            caller("fork"),
+            source.clone(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        service.inner.environment.placement(&fork).await.unwrap(),
+        Place::Here
+    );
     retire(service, storage, metadata).await;
 }
 

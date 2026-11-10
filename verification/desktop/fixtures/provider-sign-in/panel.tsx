@@ -10,7 +10,7 @@ import {
 import { emptyLocalTabs } from "../../../../src/conversation/application/local-tabs"
 import { conversation, textContent } from "../../../../src/conversation/model"
 import { applyView } from "../../../../src/conversation/application/usecases/apply-view"
-import { ClockProvider } from "../../../../src/clock"
+import { ClockProvider, monotonicElapsed } from "../../../../src/clock"
 import { Transcript } from "../../../../src/conversation/ui/transcript"
 import { view } from "../../../../src/desktop/workspace/adapters/gateway/fake-gateway"
 import "@fontsource-variable/geist"
@@ -233,7 +233,7 @@ if (!container) throw new Error("missing root")
 createRoot(container).render(
   <Provider store={store as never}>
     {/* A fixture is its own composition root, so it chooses the clock. */}
-    <ClockProvider now={() => Date.now()}>
+    <ClockProvider now={() => Date.now()} elapsed={monotonicElapsed()}>
       <PanelTranscript />
     </ClockProvider>
   </Provider>,

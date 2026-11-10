@@ -47,6 +47,7 @@ use crate::conversation::application::usage_limit_policy::{
 };
 use crate::conversation::application::{ConversationFuture, Reader};
 use crate::conversation::domain::{ContinuationCause, ContinuationPlan};
+use crate::timer::clock;
 use nessa_auth::application::ports::Clock;
 use nessa_sdk::application::agent_execution::commands::{
     CreationFuture, CreationInitializationFailure, CreationStorage, MutationBinding,
@@ -1870,7 +1871,7 @@ impl ConversationService {
             tokio::select! {
                 () = async {
                     match wait {
-                        Some(wait) => tokio::time::sleep(Duration::from_millis(wait)).await,
+                        Some(wait) => clock::sleep(Duration::from_millis(wait)).await,
                         None => std::future::pending().await,
                     }
                 } => {}
@@ -2561,7 +2562,7 @@ async fn renew_while_held(
         let until_renew = deadline
             .saturating_sub(clock.unix_milliseconds())
             .min(FENCE_RENEW_EVERY_MS);
-        tokio::time::sleep(Duration::from_millis(until_renew)).await;
+        clock::sleep(Duration::from_millis(until_renew)).await;
         if clock.unix_milliseconds() >= deadline {
             lost.store(true, Ordering::SeqCst);
             return;
@@ -2591,7 +2592,7 @@ async fn renew_while_held(
                         lost.store(true, Ordering::SeqCst);
                         return;
                     }
-                    tokio::time::sleep(Duration::from_millis(FENCE_RENEW_RETRY_MS)).await;
+                    clock::sleep(Duration::from_millis(FENCE_RENEW_RETRY_MS)).await;
                 }
             }
         }

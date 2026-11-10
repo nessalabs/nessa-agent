@@ -22,6 +22,7 @@ use crate::mcp_servers::{
     infrastructure::ResourceTicketStore,
 };
 use crate::peer_gateways::infrastructure::PeerCommands;
+use crate::timer::clock;
 use crate::webhooks::infrastructure::WebhookRuntime;
 use axum::extract::FromRef;
 use nessa_auth::{
@@ -35,10 +36,7 @@ use nessa_auth::{
 use nessa_protocol::clock::Clock as UptimeClock;
 use nessa_protocol::product::generated::AgentsListResult;
 use serde_json::Value;
-use std::{
-    sync::Arc,
-    time::{Duration, Instant},
-};
+use std::{sync::Arc, time::Duration};
 use tokio::sync::watch;
 
 /// The receiver bindings, ownership and read grants a paired device's reads
@@ -805,7 +803,7 @@ impl SessionSettings {
                 current_state_interval,
             ),
         ] {
-            if value.is_zero() || Instant::now().checked_add(value).is_none() {
+            if value.is_zero() || clock::now().checked_add(value).is_none() {
                 return Err(field);
             }
         }

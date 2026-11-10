@@ -155,7 +155,9 @@ async function mount(node: React.ReactNode) {
   await act(async () => {
     root.render(
       <StrictMode>
-        <ClockProvider now={now}>{node}</ClockProvider>
+        <ClockProvider now={now} elapsed={now}>
+          {node}
+        </ClockProvider>
       </StrictMode>,
     )
   })

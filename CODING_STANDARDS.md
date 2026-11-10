@@ -24,7 +24,11 @@ must apply these merge gates together with [AGENTS.md](AGENTS.md),
 5. **Failure modes are tested.** New error or reject paths have tests on the
    typed cases.
 6. **Checks that touch the change pass.** Formatters, linters, and the relevant
-   `cargo` / `pnpm` suites for what you edited.
+   `cargo` / `pnpm` suites for what you edited. `pnpm install` turns on a
+   pre-push hook ([scripts/pre-push.mjs](scripts/pre-push.mjs)) that runs what
+   `pnpm check:changed --plan --git` selects and refuses the push when one
+   fails. A Rust rule every crate holds goes in the `[workspace.lints]` table of
+   the root [Cargo.toml](Cargo.toml), with one line on why.
 7. **Degrade honestly.** Survivable edge failures stay survivable (log and
    continue). Missing capabilities stay explicit no-ops — no fake success.
 8. **Organization is reviewed.** Put changes in the owning feature and layer;
@@ -893,6 +897,15 @@ to advance the specific simulated deadline, then resume real time before awaitin
 real external progress. Test real adapter
 and cross-process exclusion where promised, and keep test controls out of public
 SDK configuration.
+
+Gateway code reads the time and waits for it in one place: an injected
+`Timer` where a test drives the deadline by hand, otherwise
+`crate::timer::clock` (`nessa_timer::clock`). `clock::now`, `clock::sleep` and
+`clock::sleep_until` are the runtime's clock, so a paused test moves every
+deadline the code measures; `clock::os` is the operating system's clock for a
+thread no runtime drives; `clock::wall_now` is for timestamps, never for
+measuring a wait. Do not call `Instant::now`, `SystemTime::now`,
+`tokio::time::sleep` or `std::thread::sleep` directly.
 
 ### Session persistence checks
 

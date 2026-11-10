@@ -1,4 +1,4 @@
-use super::domain::ConversationId;
+use nessa_protocol::conversation::domain::ConversationId;
 use nessa_sdk::domain::agent_execution::tools::McpTool;
 use nessa_sdk::domain::mcp_apps::UiResourceUri;
 

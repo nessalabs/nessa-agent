@@ -79,7 +79,7 @@ async function render(conversation: Conversation) {
   await React.act(async () => {
     root.render(
       <Provider store={store as never}>
-        <ClockProvider now={() => 1_000}>
+        <ClockProvider now={() => 1_000} elapsed={() => 1_000}>
           <Transcript
             conversation={conversation}
             ground="paper"

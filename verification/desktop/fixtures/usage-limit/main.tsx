@@ -12,7 +12,7 @@ import { conversationView } from "../../../../src/conversation/adapters/gateway/
 import { conversation as newConversation } from "../../../../src/conversation/model"
 import type { Conversation } from "../../../../src/conversation/model"
 import { Transcript as PanelTranscript } from "../../../../src/conversation/ui/transcript"
-import { ClockProvider } from "../../../../src/clock"
+import { ClockProvider, monotonicElapsed } from "../../../../src/clock"
 import { createDesktopDependencies } from "../../../../src/desktop/dependencies"
 import { makeDesktopStore } from "../../../../src/desktop/store"
 import {
@@ -134,7 +134,7 @@ container.style.display = "flex"
 container.style.flexDirection = "column"
 createRoot(container).render(
   <Provider store={store}>
-    <ClockProvider now={() => fixture.nowMs}>
+    <ClockProvider now={() => fixture.nowMs} elapsed={monotonicElapsed()}>
       <div
         id="desktop"
         style={{ display: "flex", flex: "1 1 50%", minWidth: 0, minHeight: 0 }}

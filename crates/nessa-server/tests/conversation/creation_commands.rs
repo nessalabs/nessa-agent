@@ -106,6 +106,7 @@ fn fixture_with_agents(
             message_commit_clock: Arc::new(RuntimeMessageCommitClock::new()),
             clock: Arc::new(TestClock),
             environment: crate::conversation::infrastructure::in_process_environment().into(),
+            tool_config: Default::default(),
         },
         ConversationLimits::default(),
         None,
@@ -2146,7 +2147,7 @@ async fn ready_creation_publishes_a_real_empty_transcript_for_passive_reads() {
         RecordReadError, RecordReadLease, RecordReadOperation, RecordReadSource, RecordReadValue,
     };
     use crate::conversation::infrastructure::NessaRecordReadSource;
-    use nessa_protocol::conversation::projection::retained_view;
+    use nessa_projection::retained_view;
     use nessa_protocol::conversation::read_scope::ReceiverReadScope;
     use nessa_sync::replication::domain::{Id, PageRequest};
 

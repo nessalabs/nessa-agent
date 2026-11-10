@@ -11,7 +11,7 @@ import "@fontsource-variable/geist-mono"
 import "./styles.css"
 
 import { makeStore } from "./store"
-import { ClockProvider } from "./clock"
+import { ClockProvider, monotonicElapsed } from "./clock"
 import { Transcript } from "./conversation"
 
 /** The barrel is the door; a preview has no more business past it than the app. */
@@ -232,7 +232,7 @@ createRoot(container).render(
   <React.StrictMode>
     <Provider store={makeStore()}>
       {/* This page is its own composition root, so it chooses the clock. */}
-      <ClockProvider now={() => Date.now()}>
+      <ClockProvider now={() => Date.now()} elapsed={monotonicElapsed()}>
         <div className="flex flex-wrap gap-8 bg-muted p-8">
           <Panel label="Finished turn — one line for five tools" conversation={done} />
           <Panel label="While it runs" conversation={running} />

@@ -5,6 +5,7 @@ use super::{
     SubmitFailure, SubmittedMessage, Writer,
 };
 use crate::conversation::domain::ConversationRefusal;
+use crate::timer::clock;
 use nessa_sdk::application::agent_execution::agents::{AgentError, AttachmentPhase, QueueRemoval};
 use nessa_sdk::application::agent_execution::commands::{
     CreationFuture, CreationInitializationFailure, CreationStorage, CreationTaskFault,
@@ -537,7 +538,7 @@ impl MutationTarget for StopTarget {
             let live = service.resolve(&id, &caller).await?;
             // A turn leaving the queue is neither queued nor running for a
             // moment: asked again until it is one or ends, as in `effect`.
-            let deadline = std::time::Instant::now() + MOVING_TURN_WAIT;
+            let deadline = clock::now() + MOVING_TURN_WAIT;
             loop {
                 if live
                     .agent
@@ -577,8 +578,8 @@ impl MutationTarget for StopTarget {
                 }
                 match turn_is_final(&live, &turn).await {
                     Some(true) => return Ok(MutationPlan::AlreadyFinal),
-                    Some(false) if std::time::Instant::now() < deadline => {
-                        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                    Some(false) if clock::now() < deadline => {
+                        clock::sleep(std::time::Duration::from_millis(10)).await;
                     }
                     Some(false) => {
                         return Err(ConversationError::Agent(AgentError::SubmissionUnresolved))
@@ -609,7 +610,7 @@ impl MutationTarget for StopTarget {
             // its selection and its start. It is asked again until it is one
             // or ends, rather than answered as not found
             // (`a_stop_that_meets_a_turn_leaving_the_queue_stops_it`).
-            let deadline = std::time::Instant::now() + MOVING_TURN_WAIT;
+            let deadline = clock::now() + MOVING_TURN_WAIT;
             // A cancel that met the agent's lifecycle ending (a close, or a
             // failure stopping it) while its turn was still listed as running.
             let mut ending: Option<AgentError> = None;
@@ -678,8 +679,8 @@ impl MutationTarget for StopTarget {
                 }
                 match turn_is_final(&live, &turn).await {
                     Some(true) => return Ok(MutationOutcome::AlreadyFinal),
-                    Some(false) if std::time::Instant::now() < deadline => {
-                        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                    Some(false) if clock::now() < deadline => {
+                        clock::sleep(std::time::Duration::from_millis(10)).await;
                     }
                     Some(false) => {
                         return Err(CreationInitializationFailure::Target(

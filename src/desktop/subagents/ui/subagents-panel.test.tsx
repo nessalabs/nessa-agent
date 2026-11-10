@@ -155,7 +155,7 @@ async function renderPanel(
 ) {
   await act(async () =>
     root.render(
-      <ClockProvider now={() => 1_000_000}>
+      <ClockProvider now={() => 1_000_000} elapsed={() => 1_000_000}>
         <SubagentsProvider source={source}>
           <SubagentsPanel sessionId={sessionId} host={widget} />
         </SubagentsProvider>

@@ -189,7 +189,7 @@ async function mount({
   const tree = (
     <Provider store={store}>
       <OverviewQuietProvider store={store} root={scope}>
-        <ClockProvider now={() => 1000}>
+        <ClockProvider now={() => 1000} elapsed={() => 1000}>
           <nav>
             <OverviewRow />
           </nav>

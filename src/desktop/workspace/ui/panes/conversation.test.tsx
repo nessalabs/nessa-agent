@@ -68,7 +68,9 @@ async function mount(store: Store, content: React.ReactNode) {
   await act(async () =>
     root.render(
       <Provider store={store}>
-        <ClockProvider now={() => 1000}>{content}</ClockProvider>
+        <ClockProvider now={() => 1000} elapsed={() => 1000}>
+          {content}
+        </ClockProvider>
       </Provider>,
     ),
   )
@@ -282,7 +284,7 @@ describe("a new session's home greets by the hour of the window's clock", () => 
       await act(async () =>
         root.render(
           <Provider store={store}>
-            <ClockProvider now={() => at(hour)}>
+            <ClockProvider now={() => at(hour)} elapsed={() => at(hour)}>
               <PaneHome sessionId="a" onSend={() => {}} />
             </ClockProvider>
           </Provider>,

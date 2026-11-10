@@ -1,28 +1,30 @@
 //! Projections are bounded display state, not permission or scheduling authority.
 //! The cases that drive `ConversationService` stay in the gateway's
 //! `tests/conversation/projection.rs`.
-use crate::agents::AgentId;
-use crate::conversation::domain::{ConversationApprovalMode, ConversationId, ConversationModelId};
-use crate::conversation::projection::{
+use crate::projection::retained_view;
+use crate::projection::{
     agent_question, agent_review, bound_view, bound_view_within, clipped, question_entry,
     review_entry, Projection, MAX_LISTED_REVIEWS, MAX_QUESTION_ENTRY_BYTES,
     MAX_QUESTION_ENTRY_MESSAGE_BYTES, MAX_REVIEW_ENTRY_BYTES, MAX_REVIEW_ENTRY_TOOL_NAME_BYTES,
     MAX_TEXT, MAX_VIEW_BYTES,
 };
-use crate::conversation::view::{
+#[allow(unused_imports)]
+use crate::{IntoView, ViewOf};
+use nessa_protocol::agents::AgentId;
+use nessa_protocol::conversation::domain::{
+    ConversationApprovalMode, ConversationId, ConversationModelId,
+};
+use nessa_protocol::conversation::view::{
+    ConversationAgentFeatures, ConversationAttachmentEvidenceFailure,
+    ConversationAttachmentEvidenceFailureCode, ConversationCapabilities, ConversationLifecycle,
+    ConversationLifecyclePhase, ConversationMessageStatus, ConversationView, NativeHooksChoice,
+    PermissionDenialSupport, MAX_STRUCTURED_CONTENT_BYTES,
+};
+use nessa_protocol::conversation::view::{
     ConversationModelChangeEffect, ConversationModelChangeStatus, ConversationModelChangeView,
     ConversationPartPosition, ConversationPermissionAsk, ConversationPermissionOptionEffect,
     ConversationReviewKind, ConversationRuntime, ConversationSelectionView,
     ConversationTranscriptState,
-};
-use crate::conversation::{
-    projection::retained_view,
-    view::{
-        ConversationAgentFeatures, ConversationAttachmentEvidenceFailure,
-        ConversationAttachmentEvidenceFailureCode, ConversationCapabilities, ConversationLifecycle,
-        ConversationLifecyclePhase, ConversationMessageStatus, ConversationView, NativeHooksChoice,
-        PermissionDenialSupport, MAX_STRUCTURED_CONTENT_BYTES,
-    },
 };
 use nessa_sdk::application::agent_execution::agents::{
     AgentError, ProviderDiagnostic, UsageLimitKind, UsageLimitProvider,
@@ -84,7 +86,7 @@ fn projection_for(conversation: &str) -> Projection {
             resume: false,
             permissions: true,
             image_input: false,
-            agent_features: OperationCapabilities::default().into(),
+            agent_features: OperationCapabilities::default().into_view(),
         },
         None,
     )
@@ -132,7 +134,7 @@ fn incomplete_committed_view_suppresses_controls_even_after_capability_refresh()
         resume: true,
         permissions: true,
         image_input: false,
-        agent_features: OperationCapabilities::default().into(),
+        agent_features: OperationCapabilities::default().into_view(),
     };
     projection.capabilities(available.clone());
     let stale = projection.read();
@@ -172,9 +174,18 @@ fn older_committed_read_cannot_replace_a_newer_terminal_view() {
         ConversationMessageStatus::Completed
     );
 }
+/// The protocol spells out what an agent supports before negotiation
+/// without the SDK; it must say what the SDK's own default says.
+#[test]
+fn unnegotiated_features_are_the_sdk_default() {
+    assert_eq!(
+        ConversationAgentFeatures::unnegotiated(),
+        ConversationAgentFeatures::view_of(OperationCapabilities::default())
+    );
+}
 #[test]
 fn application_absences_project_as_not_implemented() {
-    let value = serde_json::to_value(ConversationAgentFeatures::from(
+    let value = serde_json::to_value(ConversationAgentFeatures::view_of(
         OperationCapabilities::default(),
     ))
     .unwrap();
@@ -442,7 +453,7 @@ fn provider_diagnostic_and_independent_failure_are_both_visible() {
             resume: false,
             permissions: true,
             image_input: false,
-            agent_features: OperationCapabilities::default().into(),
+            agent_features: OperationCapabilities::default().into_view(),
         },
         Some(&snapshot),
     );
@@ -472,7 +483,7 @@ fn successful_provider_result_with_later_failure_does_not_claim_provider_refusal
             resume: false,
             permissions: true,
             image_input: false,
-            agent_features: OperationCapabilities::default().into(),
+            agent_features: OperationCapabilities::default().into_view(),
         },
         Some(&snapshot),
     );
@@ -739,7 +750,7 @@ fn a_tool_spans_from_its_first_report_to_the_one_that_settles_it_and_keeps_its_i
     // unknown rather than refusing the whole view.
     let damaged = committed_tool_view(&[at(
         bare(Some(ToolStatus::Completed)),
-        crate::conversation::domain::LATEST_TIME_MS + 1,
+        nessa_protocol::conversation::domain::LATEST_TIME_MS + 1,
     )]);
     assert_eq!(damaged.tools[0].started_at_ms, None);
     assert_eq!(damaged.tools[0].ended_at_ms, None);
@@ -773,7 +784,7 @@ fn a_tool_spans_from_its_first_report_to_the_one_that_settles_it_and_keeps_its_i
 
 #[test]
 fn a_tool_lists_the_files_it_changed_and_says_when_a_side_was_cut() {
-    use crate::conversation::view::{
+    use nessa_protocol::conversation::view::{
         ConversationToolChange, MAX_TOOL_CHANGES, MAX_TOOL_CHANGE_PATH_BYTES,
         MAX_TOOL_CHANGE_SIDE_BYTES,
     };
@@ -944,7 +955,7 @@ fn a_restored_tool_shows_the_hooks_choice_saved_with_it_not_the_one_in_effect_no
         resume: false,
         permissions: true,
         image_input: false,
-        agent_features: OperationCapabilities::default().into(),
+        agent_features: OperationCapabilities::default().into_view(),
     };
     capabilities.agent_features.native_hooks = NativeHooksChoice::On;
     let mut projection = Projection::new("conversation".into(), capabilities.clone(), None);
@@ -985,7 +996,7 @@ fn a_later_update_of_an_unmarked_tool_fills_in_its_hooks_choice() {
             resume: false,
             permissions: true,
             image_input: false,
-            agent_features: OperationCapabilities::default().into(),
+            agent_features: OperationCapabilities::default().into_view(),
         },
         Some(&saved),
     );
@@ -1015,7 +1026,7 @@ fn saved_hooks_choices_that_disagree_within_one_execution_show_none() {
             resume: false,
             permissions: true,
             image_input: false,
-            agent_features: OperationCapabilities::default().into(),
+            agent_features: OperationCapabilities::default().into_view(),
         },
         Some(&saved),
     );
@@ -1169,7 +1180,7 @@ fn an_ask_whose_closure_never_reached_storage_is_not_offered_after_restart() {
             resume: false,
             permissions: true,
             image_input: false,
-            agent_features: OperationCapabilities::default().into(),
+            agent_features: OperationCapabilities::default().into_view(),
         },
         Some(&snapshot),
     );
@@ -2251,12 +2262,14 @@ fn a_bounded_view_keeps_every_question_and_review_it_lists() {
     let mut view = projection.read();
     let message = view.messages[0].clone();
     view.messages = (0..40)
-        .map(|_| crate::conversation::view::ConversationMessage {
-            uploads: Vec::new(),
-            user_text: "y".repeat(8_000),
-            retried: None,
-            ..message.clone()
-        })
+        .map(
+            |_| nessa_protocol::conversation::view::ConversationMessage {
+                uploads: Vec::new(),
+                user_text: "y".repeat(8_000),
+                retried: None,
+                ..message.clone()
+            },
+        )
         .collect();
     view.messages.push(message);
     view.title = Some("t".repeat(512));
@@ -2433,7 +2446,7 @@ fn typed_authentication_refusal_survives_projection_and_not_diagnostic_text() {
                 resume: false,
                 permissions: true,
                 image_input: false,
-                agent_features: OperationCapabilities::default().into(),
+                agent_features: OperationCapabilities::default().into_view(),
             },
             Some(&snapshot),
         );
@@ -2470,7 +2483,7 @@ fn authentication_recovery_keeps_independent_required_work_failure() {
                 resume: false,
                 permissions: true,
                 image_input: false,
-                agent_features: OperationCapabilities::default().into(),
+                agent_features: OperationCapabilities::default().into_view(),
             },
             Some(&snapshot),
         );
@@ -2513,7 +2526,7 @@ fn a_usage_limit_is_published_without_the_provider_failure_sentence() {
             resume: false,
             permissions: true,
             image_input: false,
-            agent_features: OperationCapabilities::default().into(),
+            agent_features: OperationCapabilities::default().into_view(),
         },
         Some(&snapshot),
     )
@@ -2522,11 +2535,11 @@ fn a_usage_limit_is_published_without_the_provider_failure_sentence() {
     let usage = message.usage_limit.as_ref().expect("usage limit");
     assert_eq!(
         usage.provider,
-        crate::conversation::view::ConversationUsageLimitProvider::Claude
+        nessa_protocol::conversation::view::ConversationUsageLimitProvider::Claude
     );
     assert_eq!(
         usage.recovery,
-        crate::conversation::view::ConversationUsageLimitRecovery::TimedReset
+        nessa_protocol::conversation::view::ConversationUsageLimitRecovery::TimedReset
     );
     assert_eq!(usage.resets_at_ms, Some(1_800_000_000_000));
     assert_eq!(usage.auto_resuming, None);
@@ -2601,7 +2614,7 @@ fn a_usage_limit_in_a_later_aggregate_error_is_published_without_a_provider_repo
     let usage = message.usage_limit.as_ref().expect("usage limit");
     assert_eq!(
         usage.provider,
-        crate::conversation::view::ConversationUsageLimitProvider::Claude
+        nessa_protocol::conversation::view::ConversationUsageLimitProvider::Claude
     );
     assert_eq!(message.required_work_failed, Some(true));
 }
@@ -2623,7 +2636,7 @@ fn project_snapshot(snapshot: &SessionSnapshot) -> ConversationView {
             resume: false,
             permissions: true,
             image_input: false,
-            agent_features: OperationCapabilities::default().into(),
+            agent_features: OperationCapabilities::default().into_view(),
         },
         Some(snapshot),
     )
@@ -2681,8 +2694,8 @@ fn stopped_review(outcome: RefusalOutcome) -> DeclinedReview {
 }
 
 fn local_notice(
-    message: &crate::conversation::view::ConversationMessage,
-) -> &crate::conversation::view::ConversationPart {
+    message: &nessa_protocol::conversation::view::ConversationMessage,
+) -> &nessa_protocol::conversation::view::ConversationPart {
     message
         .parts
         .iter()
@@ -2866,8 +2879,8 @@ fn a_hook_stop_names_the_tool_and_the_hook_reason() {
 }
 
 fn notices(
-    message: &crate::conversation::view::ConversationMessage,
-) -> Vec<&crate::conversation::view::ConversationPart> {
+    message: &nessa_protocol::conversation::view::ConversationMessage,
+) -> Vec<&nessa_protocol::conversation::view::ConversationPart> {
     message
         .parts
         .iter()
@@ -2982,7 +2995,9 @@ fn a_repeated_permission_id_is_still_one_review() {
 /// different, and each sentence stays.
 #[test]
 fn a_deadline_notice_stays_beside_a_declined_review_with_the_same_id() {
-    use crate::product::generated::{ConversationNoticeKind, ConversationPart as WirePart};
+    use nessa_protocol::product::generated::{
+        ConversationNoticeKind, ConversationPart as WirePart,
+    };
     use nessa_sdk::domain::agent_execution::permissions::DeadlineReason;
     let decline = DeclinedReview::selected(
         ReviewDeclineId::new("7").unwrap(),
@@ -3014,7 +3029,7 @@ fn a_deadline_notice_stays_beside_a_declined_review_with_the_same_id() {
     assert_eq!(shown_notices[1].notice_kind, "review");
     assert_eq!(shown_notices[1].notice_id, "7");
     assert!(shown_notices[1].text.contains("not reviewable"));
-    let wire = |part: &crate::conversation::view::ConversationPart| -> WirePart {
+    let wire = |part: &nessa_protocol::conversation::view::ConversationPart| -> WirePart {
         serde_json::from_value(serde_json::to_value(part).unwrap()).unwrap()
     };
     assert_eq!(
@@ -3029,14 +3044,16 @@ fn a_deadline_notice_stays_beside_a_declined_review_with_the_same_id() {
 
 #[test]
 fn a_notice_kind_survives_the_product_wire() {
-    use crate::product::generated::{ConversationNoticeKind, ConversationPart as WirePart};
+    use nessa_protocol::product::generated::{
+        ConversationNoticeKind, ConversationPart as WirePart,
+    };
     let view = shown(vec![
         event(ExecutionUpdate::Message(MessageChunk::text("hello"))),
         declined(refusal("Bash")),
         review("{}".into()),
         hook_cancellation(RefusalOutcome::CloseSession, "shell is blocked"),
     ]);
-    let wire = |part: &crate::conversation::view::ConversationPart| -> WirePart {
+    let wire = |part: &nessa_protocol::conversation::view::ConversationPart| -> WirePart {
         serde_json::from_value(serde_json::to_value(part).unwrap()).unwrap()
     };
     let text = &view.messages[0].parts[0];
@@ -3053,7 +3070,7 @@ fn a_notice_kind_survives_the_product_wire() {
     );
 }
 
-fn text_len(message: &crate::conversation::view::ConversationMessage) -> usize {
+fn text_len(message: &nessa_protocol::conversation::view::ConversationMessage) -> usize {
     message.parts.iter().map(|part| part.text.len()).sum()
 }
 
@@ -3520,8 +3537,8 @@ fn startup_authentication_uses_primary_retained_cause_without_a_provider_report(
 
 mod artifacts {
     use super::*;
-    use crate::conversation::projection::MAX_VIEW_ARTIFACTS;
-    use crate::conversation::view::ConversationArtifact;
+    use crate::projection::MAX_VIEW_ARTIFACTS;
+    use nessa_protocol::conversation::view::ConversationArtifact;
     use nessa_sdk::application::agent_execution::sessions::{
         ArtifactName, ArtifactRecord, PublishedFile,
     };
@@ -3630,7 +3647,7 @@ mod artifacts {
 
 mod notes {
     use super::*;
-    use crate::conversation::projection::MAX_VIEW_NOTES;
+    use crate::projection::MAX_VIEW_NOTES;
     use nessa_sdk::application::agent_execution::sessions::{
         NoteDelivery, NoteId, NoteRecord, NoteRetirement, NoteRetirementReason, NoteText,
     };

@@ -41,9 +41,10 @@ use crate::conversation::application::drive_tools::{
 use crate::conversation::application::{
     admit_command, environment::GrantedTerms, ArtifactBudget, ArtifactCollector, CommandInitiator,
     CommandPolicyEvaluator, CommandPublication, CommandQuestion, CommandResult, Environment,
-    PublicationOutcome, ToolDecision, PUBLISH_CALL_WAIT,
+    PublicationOutcome, ToolDecision,
 };
-use crate::conversation::domain::{ToolCall, ToolPolicy, ToolSource};
+use crate::conversation::domain::{Place, ToolCall, ToolPolicy, ToolSource};
+use crate::timer::clock;
 use nessa_protocol::conversation::domain::ConversationId;
 use nessa_protocol::lease::{Collection, CollectionRefusal};
 use nessa_sdk::application::agent_execution::{
@@ -155,7 +156,7 @@ pub enum CommandCallError {
 impl ConversationService {
     /// Whether this gateway grants the agent's environment tools at all.
     pub fn environment_tools_enabled(&self) -> bool {
-        self.inner.environment.command_policy().is_some()
+        self.inner.tool_config.commands.is_some()
     }
 
     /// Where conversation `id`'s agent could work, for its running turn's
@@ -183,13 +184,13 @@ impl ConversationService {
             }
             None => None,
         };
-        let policy = environments.command_policy();
+        let policy = self.inner.tool_config.commands.as_ref();
         let mut listed = vec![EnvironmentListing {
             name: HERE.into(),
             here: true,
             reachable: Some(true),
             commands: false,
-            current: current.is_none(),
+            current: current == Place::Here,
             load: None,
         }];
         // A pool setting that cannot be read leaves load unknown, never
@@ -203,15 +204,11 @@ impl ConversationService {
             .hosts()
             .iter()
             .map(|(name, environment)| (name.clone(), environment.clone()));
-        let workspace =
-            if current.as_deref() == Some(crate::conversation::application::placement::BOAT) {
-                vec![(
-                    crate::conversation::application::placement::BOAT.to_owned(),
-                    environments.of(id).await?,
-                )]
-            } else {
-                Vec::new()
-            };
+        let workspace = if current == Place::CloudVm {
+            vec![(current.name(), environments.of(id).await?)]
+        } else {
+            Vec::new()
+        };
         for (name, environment) in hosts.chain(environments.connected_peers()).chain(workspace) {
             let usable = match (policy, &initiator) {
                 (Some(policy), Some(initiator)) => {
@@ -219,7 +216,7 @@ impl ConversationService {
                 }
                 _ => false,
             };
-            let is_current = current.as_deref() == Some(name.as_str());
+            let is_current = Place::named(&name).is_ok_and(|place| place == current);
             let shown = usable || is_current || matches!(initiator, Some(TurnInitiator::Owner));
             if !shown {
                 continue;
@@ -251,14 +248,15 @@ impl ConversationService {
     /// Empty when this gateway grants no commands; `here` is never one.
     pub fn owner_command_hosts<'a>(&self, names: impl IntoIterator<Item = &'a str>) -> Vec<String> {
         let environments = &self.inner.environment;
-        let Some(policy) = environments.command_policy() else {
+        let Some(policy) = self.inner.tool_config.commands.as_ref() else {
             return Vec::new();
         };
         names
             .into_iter()
             .filter(|name| {
-                environments
-                    .named(name)
+                Place::named(name)
+                    .ok()
+                    .and_then(|place| environments.named(&place))
                     .is_some_and(|environment| environment.commands().is_some())
                     && allows_host(policy.as_ref(), CommandInitiator::Owner, name)
             })
@@ -280,8 +278,9 @@ impl ConversationService {
     ) -> Result<CommandAnswer, CommandCallError> {
         let policy = self
             .inner
-            .environment
-            .command_policy()
+            .tool_config
+            .commands
+            .as_ref()
             .ok_or(CommandCallError::NotConfigured)?
             .clone();
         let work = CommandWork::new(call.argv.clone(), call.cwd.clone(), call.timeout_ms)
@@ -330,28 +329,20 @@ impl ConversationService {
         // Where: a host or paired environment this gateway knows, granted,
         // whose environment runs commands. Here runs none: its commands are
         // the agent's own shell's.
-        let environment: Option<Arc<dyn Environment>> = match named {
-            EnvironmentRef::Here => None,
-            EnvironmentRef::Boat => {
-                if self
-                    .inner
-                    .environment
-                    .runs_on(id)
-                    .await
-                    .ok()
-                    .flatten()
-                    .as_deref()
-                    == Some(crate::conversation::application::placement::BOAT)
-                {
+        let place = Place::from(named);
+        let environment: Option<Arc<dyn Environment>> = match &place {
+            Place::Here => None,
+            Place::CloudVm => {
+                if self.inner.environment.runs_on(id).await.ok() == Some(Place::CloudVm) {
                     self.inner.environment.of(id).await.ok()
                 } else {
                     None
                 }
             }
-            _ => self.inner.environment.named(&call.environment),
+            named => self.inner.environment.named(named),
         };
         let Some(environment) = environment else {
-            let refusal = if call.environment == HERE {
+            let refusal = if place == Place::Here {
                 CommandRefusal::CommandsUnavailable
             } else {
                 CommandRefusal::EnvironmentNotGranted
@@ -530,11 +521,11 @@ impl ConversationService {
                 collecting.abort();
                 true
             } else {
-                let deadline = tokio::time::Instant::now() + PUBLISH_CALL_WAIT;
+                let deadline = clock::now() + self.inner.tool_config.publish_wait;
                 loop {
                     tokio::select! {
                         collected = &mut collecting => break collected.is_err(),
-                        _ = tokio::time::sleep_until(deadline) => {
+                        _ = clock::sleep_until(deadline) => {
                             collecting.abort();
                             break true;
                         }

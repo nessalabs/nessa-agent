@@ -38,8 +38,8 @@ use crate::mcp_servers::domain::{
     admit_listed_call, known_app, listed_tool, AppCallAdmission, AppFacts, AppRefusal,
     ResourceTicketDigest, MAX_APP_RESULT_BYTES,
 };
+use nessa_projection::bound_view;
 use nessa_protocol::conversation::domain::ConversationId;
-use nessa_protocol::conversation::projection::bound_view;
 use nessa_protocol::conversation::view::{
     ConversationQuestionEntry, ConversationReviewEntry, ConversationView,
 };

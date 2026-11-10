@@ -39,6 +39,7 @@ use crate::peer_gateways::application::{
     CacheState, PeerAudit, PeerAuditFuture, PeerAuditRecord, PeerAuditUnavailable, PeerHolding,
     PeerState, PollerCause,
 };
+use crate::timer::clock;
 use nessa_auth::{
     application::ports::Clock,
     domain::{pairing::DeviceKey, PrincipalId},
@@ -220,7 +221,7 @@ impl DurablePeerAudit {
             }
             tokio::select! {
                 _ = finished.changed() => {}
-                () = tokio::time::sleep(WAKE_TICK) => {}
+                () = clock::sleep(WAKE_TICK) => {}
             }
         }
     }

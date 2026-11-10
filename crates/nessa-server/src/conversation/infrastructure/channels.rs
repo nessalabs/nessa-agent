@@ -144,14 +144,8 @@ fn channel(row: Stored) -> Result<Channel, ConversationError> {
         OrganizationId::new(organization).map_err(|_| invalid())?,
         PrincipalId::new(owner).map_err(|_| invalid())?,
         ChannelParts {
-            execution: crate::conversation::domain::ChannelExecution {
-                coordinator: crate::conversation::domain::WorkspacePlacement::parse(
-                    &coordinator_placement,
-                )
-                .ok_or_else(invalid)?,
-                threads: crate::conversation::domain::WorkspacePlacement::parse(&thread_placement)
-                    .ok_or_else(invalid)?,
-            },
+            execution: ChannelExecution::parse(&coordinator_placement, &thread_placement)
+                .map_err(|_| invalid())?,
             name: ChannelName::new(&name).map_err(|_| invalid())?,
             folder: ChannelFolder {
                 path: path(folder)?,
@@ -233,8 +227,8 @@ impl ChannelStore for LocalChannelStore {
                         resources,
                         i64::try_from(made.created_at_ms())
                             .map_err(|_| ConversationError::InvalidInput)?,
-                        made.execution().coordinator.as_str(),
-                        made.execution().threads.as_str(),
+                        made.execution().coordinator_word(),
+                        made.execution().threads_word(),
                     ],
                 )
                 .map_err(failed)?;
@@ -427,7 +421,7 @@ impl ChannelStore for LocalChannelStore {
                 .optional()
                 .map_err(failed)?
                 .is_some();
-            if current.execution().coordinator != execution.coordinator && main_made {
+            if current.execution().coordinator() != execution.coordinator() && main_made {
                 // The main conversation already made (or begun: a creation
                 // places it in its channel before it exists) stays where it
                 // runs; a fresh one is named for the new place. One never
@@ -442,7 +436,7 @@ impl ChannelStore for LocalChannelStore {
             }
             transaction.execute(
                 "UPDATE channels SET coordinator_placement = ?2, thread_placement = ?3 WHERE channel = ?1",
-                params![id, execution.coordinator.as_str(), execution.threads.as_str()],
+                params![id, execution.coordinator_word(), execution.threads_word()],
             ).map_err(failed)?;
             transaction.commit().map_err(failed)?;
             Ok(Some(changed))

@@ -1,5 +1,6 @@
 //! Optional provider inbox. The host supplies its baked stage through the existing
 //! managed launch contract; absent stage configuration leaves this feature off.
+use crate::timer::clock;
 use crate::{
     core::RunError,
     env::Environment,
@@ -13,7 +14,7 @@ use crate::{
 };
 use std::{
     sync::Arc,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{Duration, UNIX_EPOCH},
 };
 use tokio::task::JoinHandle;
 
@@ -38,7 +39,7 @@ pub(super) fn store(
     Ok(Arc::new(SqliteRelayStore::new(
         root.join("github-relay/inbox.sqlite"),
         Arc::new(|| {
-            SystemTime::now()
+            clock::wall_now()
                 .duration_since(UNIX_EPOCH)
                 .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX))
         }),

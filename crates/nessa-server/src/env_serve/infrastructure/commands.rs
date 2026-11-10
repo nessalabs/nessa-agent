@@ -19,6 +19,7 @@
 use crate::env_serve::application::{
     CommandRan, CommandRunner, CommandStop, PUBLISH_POINT_VARIABLE,
 };
+use crate::timer::clock;
 use nessa_protocol::lease::{Cleanup, CommandEnd, COMMAND_STOP_WAIT, MAX_DATA_BYTES};
 use nessa_sdk::domain::agent_execution::leases::CommandWork;
 use shepherd::{
@@ -134,7 +135,7 @@ impl CommandRunner for ShepherdCommands {
                         return (CommandEnd::NotStarted, None, false);
                     };
                     let output = scope.take_output(pid);
-                    let deadline = tokio::time::Instant::now() + timeout;
+                    let deadline = clock::now() + timeout;
                     let end = tokio::select! {
                         // An exit it already came to wins over a stop asked
                         // for after it: that is how it ended.
@@ -144,7 +145,7 @@ impl CommandRunner for ShepherdCommands {
                             Err(_) => CommandEnd::Unknown,
                         },
                         _ = stop.wait_for(Option::is_some) => CommandEnd::Stopped,
-                        () = tokio::time::sleep_until(deadline) => CommandEnd::TimedOut,
+                        () = clock::sleep_until(deadline) => CommandEnd::TimedOut,
                     };
                     (end, output, true)
                 })
@@ -259,7 +260,7 @@ struct Collected {
 /// lost bytes no count can say, so each such error is told last on stderr,
 /// where whoever reads the output sees it is not whole.
 async fn collect(mut read: impl FnMut() -> OutputSnapshot, wait: Duration) -> Collected {
-    let deadline = tokio::time::Instant::now() + wait;
+    let deadline = clock::now() + wait;
     let mut chunks = Vec::new();
     loop {
         let snapshot = read();
@@ -270,7 +271,7 @@ async fn collect(mut read: impl FnMut() -> OutputSnapshot, wait: Duration) -> Co
                 .map(|chunk| (chunk.stream, chunk.bytes)),
         );
         let open = !snapshot.stdout_closed || !snapshot.stderr_closed;
-        if !open || tokio::time::Instant::now() >= deadline {
+        if !open || clock::now() >= deadline {
             chunks.extend(snapshot.errors.iter().map(|error| {
                 (
                     OutputStream::Stderr,
@@ -279,7 +280,7 @@ async fn collect(mut read: impl FnMut() -> OutputSnapshot, wait: Duration) -> Co
             }));
             return bounded(chunks, snapshot.dropped_bytes);
         }
-        tokio::time::sleep(OUTPUT_POLL).await;
+        clock::sleep(OUTPUT_POLL).await;
     }
 }
 
