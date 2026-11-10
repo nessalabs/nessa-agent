@@ -231,6 +231,17 @@ export type CommandFailure =
    */
   | "linked-file-unreachable"
   | "conversation-state-unreadable"
+  /**
+   * A restored conversation's recorded source is gone. The command was not
+   * taken. Other conversations are unchanged. Putting the source back can
+   * still let a later attempt succeed.
+   */
+  | "source-gone"
+  /**
+   * The source no longer matches the version the backup recorded. The command
+   * was not taken. Other conversations are unchanged.
+   */
+  | "source-changed"
   | "invalid-request"
   /**
    * The command never left this window: there was no gateway connection to

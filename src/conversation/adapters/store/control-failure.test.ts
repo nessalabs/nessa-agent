@@ -94,6 +94,8 @@ it("tells somebody whose control the gateway refused that nothing was done", asy
     "attachment-not-found",
     "attachment-unavailable",
     "conversation-state-unreadable",
+    "source-gone",
+    "source-changed",
     undefined,
   ] as const) {
     const tab = await stopAfterFailing(controlFailure(reason, "refused"))
