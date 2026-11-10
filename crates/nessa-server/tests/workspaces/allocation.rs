@@ -277,7 +277,7 @@ impl Provider for FakeProvider {
         self.connects.lock().unwrap().push(vm.into());
         Ok(Arc::new(Runtime))
     }
-    async fn stop(&self, _: &BoatConnection, vm: &str) -> Result<(), Failure> {
+    async fn stop(&self, _: &BoatConnection, vm: &str, _: RestCause) -> Result<(), Failure> {
         self.recovery_steps
             .lock()
             .unwrap()
@@ -288,7 +288,12 @@ impl Provider for FakeProvider {
         self.stops.lock().unwrap().push(vm.into());
         Ok(())
     }
-    async fn remove(&self, _: &BoatConnection, vm: &str) -> Result<(), Failure> {
+    async fn remove(
+        &self,
+        _: &BoatConnection,
+        vm: &str,
+        _: &EnvironmentIdentity,
+    ) -> Result<(), Failure> {
         self.recovery_steps
             .lock()
             .unwrap()

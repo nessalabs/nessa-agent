@@ -90,10 +90,21 @@ pub(crate) trait Provider: Send + Sync {
     ) -> Result<Arc<dyn WorkspaceRuntime>, Failure>;
     /// Best effort rollback of a received creation receipt that could not be saved.
     /// Acceptance alone cannot be returned as confirmed cleanup.
-    async fn remove(&self, connection: &BoatConnection, vm: &str) -> Result<(), Failure>;
+    /// `admission` is what the VM was admitted under when it was made.
+    async fn remove(
+        &self,
+        connection: &BoatConnection,
+        vm: &str,
+        admission: &EnvironmentIdentity,
+    ) -> Result<(), Failure>;
     /// Stop `vm`, keeping its disk: it costs nothing while stopped, and
     /// [`Provider::connect`] resumes it.
-    async fn stop(&self, connection: &BoatConnection, vm: &str) -> Result<(), Failure>;
+    async fn stop(
+        &self,
+        connection: &BoatConnection,
+        vm: &str,
+        cause: RestCause,
+    ) -> Result<(), Failure>;
 }
 
 /// A thread's workspace in use: held by each runtime [`Workspaces::open`]
@@ -326,7 +337,7 @@ impl Workspaces {
                 cause,
             })
             .is_err();
-        let stopped = AssertUnwindSafe(self.provider.stop(&connection, &vm))
+        let stopped = AssertUnwindSafe(self.provider.stop(&connection, &vm, cause))
             .catch_unwind()
             .await
             .unwrap_or(Err(Failure::Provider));
@@ -515,7 +526,13 @@ impl Workspaces {
                         })
                         .is_err();
                     let (cleanup, cleanup_audit_failed) = self
-                        .cleanup(&connection, &id, &vm, created.disposition)
+                        .cleanup(
+                            &connection,
+                            &id,
+                            &vm,
+                            &created.admission,
+                            created.disposition,
+                        )
                         .await;
                     return Err(Failure::ReceiptRecovery {
                         vm,
@@ -580,8 +597,9 @@ impl Workspaces {
                 disposition,
             })
             .is_err();
-        let (cleanup, cleanup_audit_failed) =
-            self.cleanup(connection, thread, vm, disposition).await;
+        let (cleanup, cleanup_audit_failed) = self
+            .cleanup(connection, thread, vm, admission, disposition)
+            .await;
         Err(Failure::AdmissionRecovery {
             vm: vm.into(),
             rejection: rejection.clone(),
@@ -596,6 +614,7 @@ impl Workspaces {
         connection: &BoatConnection,
         thread: &str,
         vm: &str,
+        admission: &EnvironmentIdentity,
         disposition: RefusalDisposition,
     ) -> (CleanupOutcome, bool) {
         // Never delete an existing/replayed workspace or a target named by an
@@ -603,7 +622,7 @@ impl Workspaces {
         match disposition {
             RefusalDisposition::RetainTarget => (CleanupOutcome::Retained, false),
             RefusalDisposition::RollbackNewVm => {
-                let confirmed = AssertUnwindSafe(self.provider.remove(connection, vm))
+                let confirmed = AssertUnwindSafe(self.provider.remove(connection, vm, admission))
                     .catch_unwind()
                     .await
                     .unwrap_or(Err(Failure::CleanupUncertain))

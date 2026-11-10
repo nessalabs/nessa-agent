@@ -1,9 +1,12 @@
-//! Connection-scoped SSH access. Boat authorizes an ephemeral public key and
-//! supplies the host identity; no user's SSH configuration or agent is consulted.
+//! A thread's VM as Nessa uses it, over the workspace SDK's connection:
+//! the lease's serve and background sessions, short commands, artifact
+//! channels, and the relay back to the gateway's MCP servers through the
+//! socket the connection forwards. The SDK owns the connection itself
+//! (its key, the pinned host, and ending what it started).
 use crate::{
     conversation::{
         application::{ArtifactChannel, ArtifactChannels},
-        infrastructure::ssh_environment::{log_stderr, read_tail},
+        infrastructure::ssh_environment::log_stderr,
     },
     mcp_servers::domain::{relay_arguments, MANAGED_SERVER_NAME, RELAY_SUBCOMMAND},
     workspaces::{
@@ -11,32 +14,25 @@ use crate::{
         domain::{ClaudeSignIn, Failure},
     },
 };
-use base64::Engine;
 use nessa_sdk::application::agent_execution::providers::HarnessMcpRelay;
 use std::{
     io,
-    net::SocketAddr,
     path::{Path, PathBuf},
-    process::Stdio,
-    sync::{Arc, Mutex},
+    sync::Arc,
     time::Duration,
 };
-use tokio::io::AsyncWriteExt;
-use tokio::process::{Child, Command};
-use workspace_sdk::boat_client::Api;
+use workspace_sdk::ports::{FileChannel, IConnection};
 use zeroize::Zeroizing;
 
-pub(super) struct SshAccess {
-    // Drop the process before removing its private files.
-    _child: Mutex<Child>,
-    directory: tempfile::TempDir,
-    endpoint: SocketAddr,
+pub(super) struct VmLink {
+    connection: Arc<dyn IConnection>,
     local_socket: PathBuf,
     local_program: PathBuf,
+    /// Where the gateway's relay socket is reachable in the VM.
     remote_socket: String,
     /// The thread's workspace in the VM, where its shell runs.
     workspace: String,
-    /// The VM, as its SSH diagnostics name it.
+    /// The VM, as its diagnostics name it.
     vm: String,
 }
 
@@ -50,8 +46,36 @@ const VM_NESSA: &str = "/opt/nessa/bin/nessa";
 /// The environment `env serve` runs with in the VM, whichever copy it is.
 const VM_SERVE_ENVIRONMENT: &str =
     "env -u NESSA_INSTANCE NESSA_STAGE=prod NESSA_DATA_DIR=/home/user/.nessa";
+/// What a file channel holds in each direction between its two ends.
+const CHANNEL_BUFFER: usize = 64 * 1024;
+/// How long asking the image's `nessa` for its lease protocol may take.
+const PROTOCOL_WAIT: Duration = Duration::from_secs(30);
+/// The longest any one command may run: past the installer's own bounds on
+/// what it runs (its upload is ten minutes), which end it first.
+const COMMAND_WAIT: Duration = Duration::from_secs(15 * 60);
 
-impl SshAccess {
+impl VmLink {
+    /// `connection` must forward `local_socket`, the gateway's relay socket.
+    pub(super) fn new(
+        connection: Arc<dyn IConnection>,
+        local_socket: PathBuf,
+        local_program: PathBuf,
+        workspace: String,
+        vm: &str,
+    ) -> Result<Arc<Self>, Failure> {
+        let remote_socket = connection
+            .forwarded_socket()
+            .ok_or(Failure::Provider)?
+            .to_owned();
+        Ok(Arc::new(Self {
+            connection,
+            local_socket,
+            local_program,
+            remote_socket,
+            workspace,
+            vm: vm.to_owned(),
+        }))
+    }
     /// `sign_in` goes to the VM as the first line of the serve's input, which
     /// its shell reads before `env serve` starts: never in a command line,
     /// never on a disk. A fresh connection passes none. A saved setup-token
@@ -67,67 +91,38 @@ impl SshAccess {
             ServedCopy::Image => format!("{VM_SERVE_ENVIRONMENT} {VM_NESSA} env serve"),
             ServedCopy::Installed(command) => format!("{VM_SERVE_ENVIRONMENT} {command}"),
         };
-        let program = serve_script(&program);
-        let mut command = ssh(&self.directory, self.endpoint);
-        command
-            .args(["-o", "ControlMaster=no", "-o", "ClearAllForwardings=yes"])
-            .arg(format!("user@{}", self.endpoint.ip()))
-            .arg(program)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped());
-        let mut child = command.spawn()?;
-        let output = Box::new(
-            child
-                .stdout
-                .take()
-                .ok_or_else(|| io::Error::other("missing environment stdout"))?,
-        );
-        let mut stdin = child
-            .stdin
-            .take()
-            .ok_or_else(|| io::Error::other("missing environment stdin"))?;
-        stdin.write_all(&sign_in_line(sign_in)).await?;
-        let input = Box::new(stdin);
+        let line = sign_in_line(sign_in);
+        let stream = self
+            .connection
+            .clone()
+            .stream(&serve_script(&program), Some(&line))
+            .await
+            .map_err(io::Error::other)?;
         Ok(WorkspaceStream {
-            input,
-            output,
-            owner: Box::new((child, self.clone())),
+            input: stream.input,
+            output: stream.output,
+            owner: Box::new((stream.process, self.clone())),
             files: Some(self.clone()),
             mcp_relay: Some(self.clone()),
         })
     }
     /// A command session independent of the agent lease. Dropping its stdin
-    /// tells the VM's Shepherd runner to cancel and clean up its scope.
+    /// tells the VM's Shepherd runner to cancel and clean up its scope;
+    /// dropping the stream ends it and everything it started.
     pub(super) async fn background(
         self: &Arc<Self>,
         program: String,
     ) -> io::Result<WorkspaceStream> {
-        let mut command = ssh(&self.directory, self.endpoint);
-        command
-            .args(["-o", "ControlMaster=no", "-o", "ClearAllForwardings=yes"])
-            .arg(format!("user@{}", self.endpoint.ip()))
-            .arg(program)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-        let mut child = command.spawn()?;
-        if let Some(stderr) = child.stderr.take() {
-            log_stderr(&format!("boat {} background", self.vm), stderr);
-        }
+        let stream = self
+            .connection
+            .clone()
+            .stream(&program, None)
+            .await
+            .map_err(io::Error::other)?;
         Ok(WorkspaceStream {
-            input: Box::new(
-                child
-                    .stdin
-                    .take()
-                    .ok_or_else(|| io::Error::other("missing background stdin"))?,
-            ),
-            output: Box::new(
-                child
-                    .stdout
-                    .take()
-                    .ok_or_else(|| io::Error::other("missing background stdout"))?,
-            ),
-            owner: Box::new((child, self.clone())),
+            input: stream.input,
+            output: stream.output,
+            owner: Box::new((stream.process, self.clone())),
             files: None,
             mcp_relay: None,
         })
@@ -135,18 +130,14 @@ impl SshAccess {
     /// The lease protocol the image's own `nessa` says it speaks, empty
     /// when it says none; `None` when the VM did not answer.
     pub(super) async fn image_protocol(&self) -> Option<String> {
-        let said = tokio::time::timeout(
-            Duration::from_secs(30),
-            self.run(
-                posix(&format!(
-                    "p=$({VM_NESSA} env protocol 2>/dev/null); echo \"protocol $p\""
-                )),
+        let said = self
+            .command(
+                &format!("p=$({VM_NESSA} env protocol 2>/dev/null); echo \"protocol $p\""),
                 None,
-            ),
-        )
-        .await
-        .ok()?
-        .ok()?;
+                PROTOCOL_WAIT,
+            )
+            .await
+            .ok()?;
         let protocol = said.lines().last()?.strip_prefix("protocol")?;
         Some(protocol.trim().to_owned())
     }
@@ -157,175 +148,40 @@ impl SshAccess {
         command: String,
         input: Option<std::fs::File>,
     ) -> io::Result<String> {
-        let mut ssh = ssh(&self.directory, self.endpoint);
-        // A build sent is compressed on the way.
-        if input.is_some() {
-            ssh.args(["-o", "Compression=yes"]);
-        }
-        ssh.args(["-o", "ControlMaster=no", "-o", "ClearAllForwardings=yes"])
-            .arg(format!("user@{}", self.endpoint.ip()))
-            .arg(command)
-            .stdin(input.map_or_else(Stdio::null, Stdio::from))
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-        let mut child = ssh.spawn()?;
-        if let Some(stderr) = child.stderr.take() {
-            log_stderr(&format!("boat {}", self.vm), stderr);
-        }
-        let stdout = child
-            .stdout
-            .take()
-            .ok_or_else(|| io::Error::other("missing command stdout"))?;
-        let output = read_tail(stdout).await?;
-        child.wait().await?;
-        Ok(String::from_utf8_lossy(&output).into_owned())
+        self.command(&command, input, COMMAND_WAIT).await
     }
-    pub(super) async fn connect(
-        api: &Api,
-        vm: &str,
-        local_socket: PathBuf,
-        local_program: PathBuf,
-        workspace: String,
-    ) -> Result<Arc<Self>, Failure> {
-        let directory = tempfile::Builder::new()
-            .prefix("nessa-boat-")
-            .tempdir_in("/tmp")
-            .map_err(|_| Failure::Storage)?;
-        let key = directory.path().join("key");
-        let mut generate = Command::new("ssh-keygen");
-        generate
-            .args([
-                "-q",
-                "-t",
-                "ed25519",
-                "-N",
-                "",
-                "-C",
-                "nessa-boat-temporary",
-                "-f",
-            ])
-            .arg(&key)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .kill_on_drop(true);
-        if !tokio::time::timeout(Duration::from_secs(10), generate.status())
+    async fn command(
+        &self,
+        command: &str,
+        input: Option<std::fs::File>,
+        wait: Duration,
+    ) -> io::Result<String> {
+        let ran = self
+            .connection
+            .run(command, input, wait)
             .await
-            .map_err(|_| Failure::Provider)?
-            .map_err(|_| Failure::Provider)?
-            .success()
-        {
-            return Err(Failure::Provider);
+            .map_err(|error| match error {
+                workspace_sdk::Error::Timeout(_) => io::Error::from(io::ErrorKind::TimedOut),
+                other => io::Error::other(other),
+            })?;
+        if !ran.stderr.is_empty() {
+            log_stderr(
+                &format!("boat {}", self.vm),
+                std::io::Cursor::new(ran.stderr.into_bytes()),
+            );
         }
-        let public_key = tokio::fs::read_to_string(key.with_extension("pub"))
-            .await
-            .map_err(|_| Failure::Storage)?;
-        let authorized = api
-            .ssh_key(vm, public_key)
-            .await
-            .map_err(|_| Failure::Provider)?;
-        if !authorized.ok
-            || authorized.success != Some(true)
-            || authorized.ssh_user.as_deref() != Some("user")
-        {
-            return Err(Failure::Provider);
-        }
-        let endpoint: SocketAddr = authorized
-            .ssh_endpoint
-            .as_deref()
-            .ok_or(Failure::Provider)?
-            .parse()
-            .map_err(|_| Failure::Provider)?;
-        let host_key = authorized.host_key.ok_or(Failure::Provider)?;
-        // A host key is syntax in known_hosts, not an arbitrary response line.
-        let mut parts = host_key.split_ascii_whitespace();
-        let kind = parts.next().ok_or(Failure::Provider)?;
-        let encoded = parts.next().ok_or(Failure::Provider)?;
-        if host_key.contains(['\r', '\n']) || kind != "ssh-ed25519" || encoded.len() > 256 {
-            return Err(Failure::Provider);
-        }
-        if base64::engine::general_purpose::STANDARD
-            .decode(encoded)
-            .is_err()
-        {
-            return Err(Failure::Provider);
-        }
-        tokio::fs::write(
-            directory.path().join("hosts"),
-            format!("nessa-boat {kind} {encoded}\n"),
-        )
-        .await
-        .map_err(|_| Failure::Storage)?;
-        let remote_socket = format!(
-            "/home/user/.nessa/mcp-{}.sock",
-            uuid::Uuid::new_v4().simple()
-        );
-        let mut command = ssh(&directory, endpoint);
-        command
-            .args([
-                "-M",
-                "-N",
-                "-o",
-                "ControlPersist=no",
-                "-o",
-                "ExitOnForwardFailure=yes",
-                "-R",
-            ])
-            .arg(format!("{remote_socket}:{}", local_socket.display()))
-            .arg(format!("user@{}", endpoint.ip()));
-        command.stderr(Stdio::piped());
-        let mut child = command.spawn().map_err(|_| Failure::Provider)?;
-        if let Some(stderr) = child.stderr.take() {
-            tokio::spawn(async move {
-                use tokio::io::AsyncReadExt;
-                let mut bytes = Vec::new();
-                if stderr.take(4096).read_to_end(&mut bytes).await.is_ok() && !bytes.is_empty() {
-                    tracing::warn!(diagnostic = %String::from_utf8_lossy(&bytes), "Boat SSH connection ended");
-                }
-            });
-        }
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
-        loop {
-            if child.try_wait().map_err(|_| Failure::Provider)?.is_some()
-                || tokio::time::Instant::now() >= deadline
-            {
-                return Err(Failure::Provider);
-            }
-            let mut check = ssh(&directory, endpoint);
-            check
-                .args(["-O", "check"])
-                .arg(format!("user@{}", endpoint.ip()));
-            if tokio::time::timeout(Duration::from_secs(1), check.status())
-                .await
-                .is_ok_and(|result| result.is_ok_and(|status| status.success()))
-            {
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(50)).await;
-        }
-        Ok(Arc::new(Self {
-            _child: Mutex::new(child),
-            directory,
-            endpoint,
-            local_socket,
-            local_program,
-            remote_socket,
-            workspace,
-            vm: vm.to_owned(),
-        }))
+        Ok(ran.output)
     }
 }
-/// `script` run by `sh`, whatever the VM account's login shell is, as the
-/// installer's own commands are.
 /// `program`, started once the shell has read the sign-in line: exported as
 /// `CLAUDE_CODE_OAUTH_TOKEN` only when the line holds one. `read` takes no
 /// byte past that line, so what follows is `env serve`'s own input.
 fn serve_script(program: &str) -> String {
-    posix(&format!(
+    format!(
         "IFS= read -r t || exit 1; \
          if [ -n \"$t\" ]; then CLAUDE_CODE_OAUTH_TOKEN=$t; export CLAUDE_CODE_OAUTH_TOKEN; fi; \
          unset t; exec {program}"
-    ))
+    )
 }
 /// What a fresh connection exports before `env serve`. Always nothing: a
 /// saved setup-token is handed with the lease, after that handoff is
@@ -335,68 +191,12 @@ pub(super) fn connection_sign_in(saved: Option<&ClaudeSignIn>) -> Option<&Claude
     None
 }
 
-/// The line [`serve_script`] reads: the token, or nothing.
+/// The line [`serve_script`] reads, without its newline: the token, or
+/// nothing.
 fn sign_in_line(sign_in: Option<&ClaudeSignIn>) -> Zeroizing<Vec<u8>> {
-    let token = sign_in.map_or(&[][..], ClaudeSignIn::as_bytes);
-    // Sized once, so no reallocation leaves a copy behind unerased.
-    let mut line = Zeroizing::new(Vec::with_capacity(token.len() + 1));
-    line.extend_from_slice(token);
-    line.push(b'\n');
-    line
+    Zeroizing::new(sign_in.map_or(&[][..], ClaudeSignIn::as_bytes).to_vec())
 }
-fn posix(script: &str) -> String {
-    format!("sh -c '{}'", script.replace('\'', "'\\''"))
-}
-fn ssh(directory: &tempfile::TempDir, endpoint: SocketAddr) -> Command {
-    let mut command = Command::new("ssh");
-    command
-        .args([
-            "-F",
-            "/dev/null",
-            "-T",
-            "-o",
-            "BatchMode=yes",
-            "-o",
-            "IdentitiesOnly=yes",
-            "-o",
-            "IdentityAgent=none",
-            "-o",
-            "ForwardAgent=no",
-            "-o",
-            "ForwardX11=no",
-            "-o",
-            "StrictHostKeyChecking=yes",
-            "-o",
-            "GlobalKnownHostsFile=/dev/null",
-            "-o",
-            "HostKeyAlias=nessa-boat",
-            "-o",
-            "ServerAliveInterval=15",
-            "-o",
-            "ServerAliveCountMax=2",
-            "-o",
-            "ConnectTimeout=10",
-            "-o",
-            "LogLevel=ERROR",
-            "-p",
-        ])
-        .arg(endpoint.port().to_string())
-        .arg("-i")
-        .arg(directory.path().join("key"))
-        .arg("-S")
-        .arg(directory.path().join("c"))
-        .arg("-o")
-        .arg(format!(
-            "UserKnownHostsFile={}",
-            directory.path().join("hosts").display()
-        ))
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .kill_on_drop(true);
-    command
-}
-impl HarnessMcpRelay for SshAccess {
+impl HarnessMcpRelay for VmLink {
     fn command(&self, program: &Path, arguments: &[String]) -> Option<(PathBuf, Vec<String>)> {
         vm_command(
             &self.local_program,
@@ -410,11 +210,11 @@ impl HarnessMcpRelay for SshAccess {
 }
 
 /// What the agent in the VM runs for a server stand-in the gateway made
-/// (`program mcp-relay <local socket> <server> <configuration>`): the
-/// managed shell runs in the VM, rooted at the thread's workspace, so its
-/// commands run where the agent's files are; any other server is relayed
-/// back to the gateway through the forwarded socket. `None` for anything
-/// that is not one of this gateway's stand-ins.
+/// (`program mcp-relay <local socket> <server> <configuration>`): the managed
+/// shell runs in the VM, rooted at the thread's workspace, so its commands
+/// run where the agent's files are; any other server is relayed back to the
+/// gateway through the forwarded socket. `None` for anything that is not
+/// one of this gateway's stand-ins.
 fn vm_command(
     local_program: &Path,
     local_socket: &Path,
@@ -445,39 +245,40 @@ fn vm_command(
         relay_arguments(remote_socket, server, configuration),
     ))
 }
-impl ArtifactChannels for SshAccess {
+impl ArtifactChannels for VmLink {
+    /// Answers at once, as the lease's transfers expect: the connection's
+    /// file channel is opened behind a local pipe, and a channel that could
+    /// not be opened ends that pipe, which is how its reader learns of it.
     fn open(&self) -> io::Result<ArtifactChannel> {
-        let mut command = ssh(&self.directory, self.endpoint);
-        command
-            .args([
-                "-o",
-                "ControlMaster=no",
-                "-o",
-                "ClearAllForwardings=yes",
-                "-s",
-            ])
-            .arg(format!("user@{}", self.endpoint.ip()))
-            .arg("sftp")
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped());
-        let mut child = command.spawn()?;
-        let from_host = Box::new(
-            child
-                .stdout
-                .take()
-                .ok_or_else(|| io::Error::other("missing SFTP stdout"))?,
-        );
-        let to_host = Box::new(
-            child
-                .stdin
-                .take()
-                .ok_or_else(|| io::Error::other("missing SFTP stdin"))?,
-        );
+        let runtime = tokio::runtime::Handle::try_current().map_err(io::Error::other)?;
+        let (ours, mut theirs) = tokio::io::duplex(CHANNEL_BUFFER);
+        let connection = self.connection.clone();
+        let carried = runtime.spawn(async move {
+            let Ok(FileChannel {
+                from_machine,
+                to_machine,
+                process,
+            }) = connection.files().await
+            else {
+                return;
+            };
+            let mut machine = tokio::io::join(from_machine, to_machine);
+            let _ = tokio::io::copy_bidirectional(&mut theirs, &mut machine).await;
+            drop(process);
+        });
+        let (from_host, to_host) = tokio::io::split(ours);
         Ok(ArtifactChannel {
-            from_host,
-            to_host,
-            keep: Box::new(child),
+            from_host: Box::new(from_host),
+            to_host: Box::new(to_host),
+            keep: Box::new(EndOnDrop(carried)),
         })
+    }
+}
+/// Ends a carried file channel when the channel is let go.
+struct EndOnDrop(tokio::task::JoinHandle<()>);
+impl Drop for EndOnDrop {
+    fn drop(&mut self) {
+        self.0.abort();
     }
 }
 
@@ -485,24 +286,228 @@ impl ArtifactChannels for SshAccess {
 mod tests {
     use super::*;
 
+    use std::sync::Mutex;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use workspace_sdk::ports::{
+        ConnectionStream, IConnectionProcess, ProcessEnd, ProcessExit, RunOutput,
+    };
+
+    /// The SDK's connection contract kept by local processes: each command
+    /// runs under `sh -c`, a stream's first line and a newline go first,
+    /// and the file channel's server is `cat`, which echoes what it is sent.
+    struct Local {
+        /// Every command started, in order.
+        started: Mutex<Vec<String>>,
+        /// Whether the file channel can be opened.
+        files: bool,
+    }
+    struct Process(tokio::process::Child);
+    #[async_trait::async_trait]
+    impl IConnectionProcess for Process {
+        async fn wait(&mut self) -> workspace_sdk::Result<ProcessExit> {
+            let status = self.0.wait().await?;
+            Ok(ProcessExit {
+                end: ProcessEnd::Exited(status.code().unwrap_or(255)),
+                stderr: String::new(),
+            })
+        }
+    }
+    impl Local {
+        fn spawn(&self, command: &str) -> tokio::process::Child {
+            self.started.lock().unwrap().push(command.to_owned());
+            tokio::process::Command::new("sh")
+                .args(["-c", command])
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::piped())
+                .kill_on_drop(true)
+                .spawn()
+                .unwrap()
+        }
+    }
+    #[async_trait::async_trait]
+    impl IConnection for Local {
+        async fn stream(
+            self: Arc<Self>,
+            command: &str,
+            first_line: Option<&[u8]>,
+        ) -> workspace_sdk::Result<ConnectionStream> {
+            let mut child = self.spawn(command);
+            let mut input = child.stdin.take().unwrap();
+            if let Some(line) = first_line {
+                assert!(!line.contains(&b'\n'), "a first line holds no newline");
+                input.write_all(line).await?;
+                input.write_all(b"\n").await?;
+            }
+            Ok(ConnectionStream {
+                input: Box::new(input),
+                output: Box::new(child.stdout.take().unwrap()),
+                process: Box::new(Process(child)),
+            })
+        }
+        async fn run(
+            &self,
+            command: &str,
+            input: Option<std::fs::File>,
+            _: Duration,
+        ) -> workspace_sdk::Result<RunOutput> {
+            self.started.lock().unwrap().push(command.to_owned());
+            let ran = tokio::process::Command::new("sh")
+                .args(["-c", command])
+                .stdin(input.map_or_else(std::process::Stdio::null, Into::into))
+                .output()
+                .await?;
+            Ok(RunOutput {
+                end: ProcessEnd::Exited(ran.status.code().unwrap_or(255)),
+                output: String::from_utf8_lossy(&ran.stdout).into_owned(),
+                stderr: String::from_utf8_lossy(&ran.stderr).into_owned(),
+            })
+        }
+        async fn files(self: Arc<Self>) -> workspace_sdk::Result<FileChannel> {
+            if !self.files {
+                return Err(workspace_sdk::Error::Unsupported("no file server".into()));
+            }
+            let mut child = self.spawn("cat");
+            Ok(FileChannel {
+                to_machine: Box::new(child.stdin.take().unwrap()),
+                from_machine: Box::new(child.stdout.take().unwrap()),
+                process: Box::new(Process(child)),
+            })
+        }
+        fn forwarded_socket(&self) -> Option<&str> {
+            Some("/tmp/forwarded/forward.sock")
+        }
+    }
+    fn linked(files: bool) -> (Arc<Local>, Arc<VmLink>) {
+        let local = Arc::new(Local {
+            started: Mutex::default(),
+            files,
+        });
+        let link = VmLink::new(
+            local.clone(),
+            "/gateway/mcp.sock".into(),
+            "/Applications/Nessa.app/nessa".into(),
+            "/home/user/.nessa/workspaces/thread-1/project".into(),
+            "bx_fixture",
+        )
+        .unwrap();
+        (local, link)
+    }
+
+    /// The lease runs over the serve as it did over SSH: the sign-in line is
+    /// taken first, and every lease byte after it reaches the copy served.
+    #[tokio::test]
+    async fn a_serve_carries_the_lease_after_its_sign_in_line() {
+        let (local, link) = linked(true);
+        let copy = ServedCopy::Installed(
+            r#"sh -c 'printf "%s|" "${CLAUDE_CODE_OAUTH_TOKEN-unset}"; cat'"#.into(),
+        );
+        let sign_in = ClaudeSignIn::new("sk-ant-oat01-fixture_A-1".into()).unwrap();
+        for (given, token) in [
+            (None, "unset"),
+            (Some(&sign_in), "sk-ant-oat01-fixture_A-1"),
+        ] {
+            let mut stream = link.serve(&copy, given).await.unwrap();
+            stream.input.write_all(b"lease frame\n").await.unwrap();
+            drop(stream.input);
+            let mut said = String::new();
+            stream.output.read_to_string(&mut said).await.unwrap();
+            assert_eq!(said, format!("{token}|lease frame\n"));
+            assert!(stream.files.is_some() && stream.mcp_relay.is_some());
+        }
+        let started = local.started.lock().unwrap().clone();
+        assert!(started
+            .iter()
+            .all(|command| command.starts_with("IFS= read -r t")));
+        assert!(started[0].contains(VM_SERVE_ENVIRONMENT));
+        assert!(started.iter().all(|command| !command.contains("sk-ant")));
+    }
+
+    #[tokio::test]
+    async fn a_background_session_is_the_command_alone() {
+        let (local, link) = linked(true);
+        let mut stream = link.background("cat".into()).await.unwrap();
+        stream.input.write_all(b"task\n").await.unwrap();
+        drop(stream.input);
+        let mut said = String::new();
+        stream.output.read_to_string(&mut said).await.unwrap();
+        assert_eq!(said, "task\n");
+        assert!(stream.files.is_none() && stream.mcp_relay.is_none());
+        assert_eq!(*local.started.lock().unwrap(), ["cat"]);
+    }
+
+    #[tokio::test]
+    async fn a_command_answers_its_output_and_the_image_its_protocol() {
+        let (_, link) = linked(true);
+        let mut input = tempfile::tempfile().unwrap();
+        std::io::Write::write_all(&mut input, b"sent").unwrap();
+        std::io::Seek::rewind(&mut input).unwrap();
+        assert_eq!(
+            link.run("cat; echo; echo oops >&2; exit 3".into(), Some(input))
+                .await
+                .unwrap(),
+            "sent\n"
+        );
+        // This host has no image `nessa`: it says no protocol at all.
+        assert_eq!(link.image_protocol().await.as_deref(), Some(""));
+    }
+
+    /// A file channel answers at once and carries bytes both ways; one
+    /// that could not be opened ends, which is how its reader learns it.
+    #[tokio::test]
+    async fn a_file_channel_carries_both_ways_or_ends() {
+        let (_, link) = linked(true);
+        let mut channel = link.open().unwrap();
+        channel.to_host.write_all(b"sftp bytes").await.unwrap();
+        let mut back = [0; 10];
+        channel.from_host.read_exact(&mut back).await.unwrap();
+        assert_eq!(&back, b"sftp bytes");
+        drop(channel);
+
+        let (_, link) = linked(false);
+        let mut channel = link.open().unwrap();
+        let mut rest = Vec::new();
+        tokio::time::timeout(
+            Duration::from_secs(5),
+            channel.from_host.read_to_end(&mut rest),
+        )
+        .await
+        .expect("an unopened channel ends")
+        .unwrap();
+        assert!(rest.is_empty());
+    }
+
     #[test]
-    fn a_script_with_its_own_quotes_reaches_sh_whole() {
-        let script = posix("echo 'a  b'; echo \"$(echo c)\"");
-        // The VM's sshd hands the command to the account's login shell.
-        let said = std::process::Command::new("bash")
-            .args(["-c", &script])
-            .output()
-            .unwrap();
-        assert_eq!(String::from_utf8_lossy(&said.stdout), "a  b\nc\n");
+    fn the_relay_reaches_the_gateway_through_the_forwarded_socket() {
+        let (_, link) = linked(true);
+        let (program, arguments) = HarnessMcpRelay::command(
+            link.as_ref(),
+            Path::new("/Applications/Nessa.app/nessa"),
+            &relay_arguments("/gateway/mcp.sock", "github", "digest"),
+        )
+        .unwrap();
+        assert_eq!(program, PathBuf::from(VM_NESSA));
+        assert_eq!(
+            arguments,
+            relay_arguments("/tmp/forwarded/forward.sock", "github", "digest")
+        );
+    }
+
+    /// What the connection writes before anything else: the line and a
+    /// newline.
+    fn first(line: &[u8]) -> Vec<u8> {
+        assert!(!line.contains(&b'\n'));
+        [line, b"\n"].concat()
     }
 
     /// What `program` saw as its token and its input, when the serve script
-    /// was given `input`, as the VM's login shell would run it.
+    /// was given `input`, as the connection runs it: under `sh -c`.
     fn served(input: &[u8]) -> String {
         use std::io::Write;
-        let program =
-            posix(r#"printf "%s|%s|" "${CLAUDE_CODE_OAUTH_TOKEN-unset}" "${t-gone}"; cat"#);
-        let mut child = std::process::Command::new("bash")
+        let program = format!(
+            "sh -c '{}'",
+            r#"printf "%s|%s|" "${CLAUDE_CODE_OAUTH_TOKEN-unset}" "${t-gone}"; cat"#
+        );
+        let mut child = std::process::Command::new("sh")
             .args(["-c", &serve_script(&program)])
             .env_remove("CLAUDE_CODE_OAUTH_TOKEN")
             .stdin(std::process::Stdio::piped())
@@ -516,7 +521,7 @@ mod tests {
     #[test]
     fn a_saved_sign_in_is_the_serves_token_and_none_of_its_input() {
         let sign_in = ClaudeSignIn::new("sk-ant-oat01-fixture_A-1".into()).unwrap();
-        let mut input = sign_in_line(Some(&sign_in)).to_vec();
+        let mut input = first(&sign_in_line(Some(&sign_in)));
         input.extend_from_slice(b"lease frame one\nlease frame two\n");
         assert_eq!(
             served(&input),
@@ -527,7 +532,7 @@ mod tests {
     #[test]
     fn a_saved_setup_token_is_not_exported_when_the_connection_opens() {
         let sign_in = ClaudeSignIn::new("sk-ant-oat01-fixture_A-1".into()).unwrap();
-        let mut input = sign_in_line(connection_sign_in(Some(&sign_in))).to_vec();
+        let mut input = first(&sign_in_line(connection_sign_in(Some(&sign_in))));
         assert_eq!(input, b"\n");
         input.extend_from_slice(b"lease frame\n");
         assert_eq!(served(&input), "unset|gone|lease frame\n");
@@ -535,7 +540,7 @@ mod tests {
 
     #[test]
     fn with_no_sign_in_the_serve_has_no_token_and_all_its_input() {
-        let mut input = sign_in_line(None).to_vec();
+        let mut input = first(&sign_in_line(None));
         assert_eq!(input, b"\n");
         input.extend_from_slice(b"lease frame\n");
         assert_eq!(served(&input), "unset|gone|lease frame\n");

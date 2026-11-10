@@ -181,10 +181,15 @@ impl Provider for FakeProvider {
     ) -> Result<Arc<dyn WorkspaceRuntime>, Failure> {
         Ok(Arc::new(FakeVm(thread.into())))
     }
-    async fn remove(&self, _: &BoatConnection, _: &str) -> Result<(), Failure> {
+    async fn remove(
+        &self,
+        _: &BoatConnection,
+        _: &str,
+        _: &EnvironmentIdentity,
+    ) -> Result<(), Failure> {
         unreachable!()
     }
-    async fn stop(&self, _: &BoatConnection, vm: &str) -> Result<(), Failure> {
+    async fn stop(&self, _: &BoatConnection, vm: &str, _: RestCause) -> Result<(), Failure> {
         event("rested", vm);
         Ok(())
     }

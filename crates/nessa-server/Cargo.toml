@@ -119,7 +119,7 @@ jsonschema = { version = "0.60.2", default-features = false }
 dbus-secret-service = { version = "=4.1.0", default-features = false, features = ["crypto-rust", "vendored"] }
 
 [target.'cfg(unix)'.dependencies]
-workspace_sdk = { git = "https://github.com/nessalabs/workspace-sdk", rev = "33b8382d72657d176baca19797d8d146803f3d89" }
+workspace_sdk = { git = "https://github.com/nessalabs/workspace-sdk", rev = "950ffd49bf7e0fcfe778bf8f45ab70a690bb2360" }
 # Opening the gateway log without following a link where it should be.
 libc = "0.2"
 # `nessa env serve` runs command leases' commands in process scopes of their
