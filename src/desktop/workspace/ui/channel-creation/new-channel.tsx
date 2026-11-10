@@ -74,7 +74,7 @@ import {
   type ChannelStep,
 } from "../../model/channel-draft"
 import type { ModelRef } from "../../model/workspace-index"
-import { channelPlaceWords } from "../../model/channel-place"
+import { channelPlaceWords } from "../channel-place-words"
 import { useComputers } from "../channel-settings/computers"
 import "./new-channel.css"
 

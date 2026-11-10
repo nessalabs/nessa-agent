@@ -19,7 +19,7 @@ import { useRememberedSession } from "../../adapters/store/remembered-session"
 import { SessionAccessories } from "./session-accessories"
 import { tooltip } from "../../../ui/tooltip"
 import { useChooseHeaderPicture } from "../../../adapters/header-image"
-import { channelPlaceWords } from "../../model/channel-place"
+import { channelPlaceWords } from "../channel-place-words"
 import {
   headerImageRefusalMs,
   headerImageRefusalText,

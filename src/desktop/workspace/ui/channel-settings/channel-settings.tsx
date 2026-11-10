@@ -17,10 +17,10 @@ import {
 } from "../../../ui/menu"
 import {
   channelPlaceKind,
-  channelPlaceWords,
   type ChannelPlace,
   type ChannelPlaceKind,
 } from "../../model/channel-place"
+import { channelPlaceWords } from "../channel-place-words"
 import { setChannelPlacement } from "../../adapters/store/commands"
 import { useComputers, type Computer } from "./computers"
 import { useWorkspaceDispatch, useWorkspaceSelector } from "../../adapters/store/hooks"
