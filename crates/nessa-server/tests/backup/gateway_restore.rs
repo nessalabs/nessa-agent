@@ -1205,8 +1205,7 @@ fn a_stress_restore_names_one_loaded_conversation_and_one_whose_source_can_move(
     assert_eq!(code, 0, "{text}");
     let report: serde_json::Value = text
         .lines()
-        .filter(|line| line.contains("\"prepared\""))
-        .last()
+        .rfind(|line| line.contains("\"prepared\""))
         .and_then(|line| serde_json::from_str(line).ok())
         .unwrap();
     assert_eq!(report["loaded"].as_array().unwrap().len(), 1);

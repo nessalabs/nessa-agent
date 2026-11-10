@@ -5,7 +5,7 @@ use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::UNIX_EPOCH;
 
 use nessa_local_storage::create_directory;
 
@@ -34,6 +34,7 @@ use crate::backup::infrastructure::{
 };
 use crate::conversation::application::{ConversationError, OpenPreparation};
 use crate::core::RunError;
+use crate::timer::clock;
 
 const LATER_INVENTORY_LIMIT: usize = 4 * 1024 * 1024;
 
@@ -41,7 +42,7 @@ struct WallClock;
 
 impl ExportClock for WallClock {
     fn unix_ms(&self) -> u64 {
-        SystemTime::now()
+        clock::wall_now()
             .duration_since(UNIX_EPOCH)
             .map(|elapsed| u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX))
             .unwrap_or(0)
