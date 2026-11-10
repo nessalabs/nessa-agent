@@ -5341,19 +5341,30 @@ const steps = {
       await run.exclusive(async () => {
         // The sidebar lists the channel once the window reads the index
         // again; a reload reads it now.
-        await run.page.reload()
-        const named = run.page
-          .locator(`${css.sidebar} nav`)
-          .getByText(channel.name, { exact: true })
-          .first()
-        await named.hover({ timeout: 15_000 })
-        await run.page
-          .locator(
-            `${css.channelSettingsOpen}[data-channel-settings-open="${channel.channelId}"]`,
-          )
-          .click()
         try {
+          await run.page.reload()
+          // Linking restarted the gateway, which sealed its vault: the
+          // reloaded window asks for it, as a person would be asked.
+          await unlockRequestedVault(run.client, run.page)
+          const named = run.page
+            .locator(`${css.sidebar} nav`)
+            .getByText(channel.name, { exact: true })
+            .first()
+          await named.hover({ timeout: 15_000 })
+          await run.page
+            .locator(
+              `${css.channelSettingsOpen}[data-channel-settings-open="${channel.channelId}"]`,
+            )
+            .click()
           await chooseComputer()
+        } catch (error) {
+          if (run.evidence)
+            await run.page.screenshot({
+              path: join(run.evidence, `place-${run.engine}-failed.png`),
+            })
+          failures.push(
+            `choosing the computer in the channel settings: ${explain(error)}`,
+          )
         } finally {
           // Closed whatever happened, menu first: nothing after this step
           // can reach the window past an open dialog.
