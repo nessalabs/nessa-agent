@@ -266,6 +266,25 @@ pub(super) async fn product_state(
     let namespace = directory
         .parent()
         .ok_or_else(|| setup_error("invalid data root"))?;
+    if namespace
+        .join("backup")
+        .join("accepted-restore.txt")
+        .is_file()
+    {
+        let (organization_id, principal_id) = store.personal_owner().map_err(|error| {
+            RunError::Authentication(format!("the local owner could not be read: {error}"))
+        })?;
+        super::serving_restore::bind_restored_owner(
+            &conversation_root(namespace).join("metadata.sqlite3"),
+            &organization_id,
+            &principal_id,
+        )
+        .map_err(|error| {
+            RunError::Restore(format!(
+                "restored conversations were not bound to this owner: {error}"
+            ))
+        })?;
+    }
     let vault = super::vault::compose(namespace);
     #[cfg(unix)]
     let workspace_audit = DurableEnvironmentAudit::new(

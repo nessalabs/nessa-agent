@@ -35,7 +35,9 @@ pub use restore_command::run_backup_restore;
 pub(crate) use restore_command::{preparation_for, startup_authority, GatewayDeferredOpen};
 pub use restore_planning::run_restore_planner;
 #[cfg(test)]
-pub(crate) use serving_restore::{install_serving_stores, merge_published_session};
+pub(crate) use serving_restore::{
+    bind_restored_owner, install_serving_stores, merge_published_session,
+};
 
 pub use root::CompositionRoot;
 

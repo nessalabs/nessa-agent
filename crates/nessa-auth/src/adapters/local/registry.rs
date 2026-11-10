@@ -499,6 +499,22 @@ impl LocalCredentialStore {
         principal_kind(principal).map(Some)
     }
 
+    /// The personal organization and its admin principal. A local gateway has
+    /// one of each; restored conversations are bound to them.
+    pub fn personal_owner(&self) -> Result<(String, String), LocalStoreError> {
+        let registry = self.registry()?;
+        let registry = registry.as_ref().ok_or(LocalStoreError::NotInitialized)?;
+        let membership = registry
+            .memberships
+            .iter()
+            .find(|membership| membership.id == registry.owner_membership_id)
+            .ok_or(LocalStoreError::NotInitialized)?;
+        Ok((
+            membership.organization_id.clone(),
+            membership.principal_id.clone(),
+        ))
+    }
+
     pub fn identity(&self) -> Result<LocalIdentity, LocalStoreError> {
         let registry = self.registry()?;
         let registry = registry.as_ref().ok_or(LocalStoreError::NotInitialized)?;

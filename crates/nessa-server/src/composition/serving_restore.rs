@@ -35,7 +35,7 @@ pub(crate) fn install_serving_stores(namespace: &Path, live: &Path) -> Result<()
         .join("canonical-records")
         .join("records.sqlite3");
     if canonical.is_file() && !serving.exists() {
-        fs::copy(&canonical, &serving).map_err(|error| error.to_string())?;
+        publish_copy(&canonical, &serving)?;
     }
     for id in deferred_ids(live)? {
         let published = live.join("sessions").join(format!("{id}.sqlite3"));
@@ -66,6 +66,95 @@ pub(crate) fn merge_published_session(
         create_directory(parent).map_err(|error| error.to_string())?;
     }
     merge_stream(&serving, &published, conversation_id)
+}
+
+/// The local owner accepted this restore, so the catalogue is theirs.
+///
+/// Automatic provisioning mints a new organization and principal. Rows that
+/// still name the backup's owner are invisible to that credential. One update
+/// binds every restored conversation to the credential that will list them.
+pub(crate) fn bind_restored_owner(
+    path: &Path,
+    organization: &str,
+    owner: &str,
+) -> Result<(), String> {
+    if !path.is_file() {
+        return Ok(());
+    }
+    let connection = Connection::open(path).map_err(|error| error.to_string())?;
+    let transaction = connection
+        .unchecked_transaction()
+        .map_err(|error| error.to_string())?;
+    let count: i64 = transaction
+        .query_row("SELECT COUNT(*) FROM conversations", [], |row| row.get(0))
+        .map_err(|error| error.to_string())?;
+    if count == 0 {
+        transaction.commit().map_err(|error| error.to_string())?;
+        return Ok(());
+    }
+    let head: i64 = transaction
+        .query_row(
+            "SELECT COALESCE(MAX(change_revision), 1) FROM conversations",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|error| error.to_string())?;
+    transaction
+        .execute(
+            "INSERT OR IGNORE INTO catalogue_owners (organization, owner, head) VALUES (?1, ?2, ?3)",
+            params![organization, owner, head],
+        )
+        .map_err(|error| error.to_string())?;
+    transaction
+        .execute(
+            "UPDATE conversations SET organization = ?1, owner = ?2",
+            params![organization, owner],
+        )
+        .map_err(|error| error.to_string())?;
+    transaction
+        .execute(
+            "DELETE FROM catalogue_owners WHERE organization != ?1 OR owner != ?2",
+            params![organization, owner],
+        )
+        .map_err(|error| error.to_string())?;
+    transaction
+        .execute(
+            "UPDATE catalogue_owners SET head = ?3 WHERE organization = ?1 AND owner = ?2",
+            params![organization, owner, head],
+        )
+        .map_err(|error| error.to_string())?;
+    transaction.commit().map_err(|error| error.to_string())
+}
+
+/// Copy `source` to `destination` only when the copy finishes.
+///
+/// An interrupted copy leaves `destination.partial`. The next startup does not
+/// treat that fragment as the serving database.
+fn publish_copy(source: &Path, destination: &Path) -> Result<(), String> {
+    if destination.exists() {
+        return Ok(());
+    }
+    let mut partial_name = destination.as_os_str().to_owned();
+    partial_name.push(".partial");
+    let partial = PathBuf::from(partial_name);
+    let _ = fs::remove_file(&partial);
+    if let Err(error) = fs::copy(source, &partial) {
+        let _ = fs::remove_file(&partial);
+        return Err(error.to_string());
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Err(error) = fs::set_permissions(&partial, fs::Permissions::from_mode(0o600)) {
+            let _ = fs::remove_file(&partial);
+            return Err(error.to_string());
+        }
+    }
+    if let Err(error) = fs::rename(&partial, destination) {
+        let _ = fs::remove_file(&partial);
+        return Err(error.to_string());
+    }
+    Ok(())
 }
 
 fn deferred_ids(live: &Path) -> Result<Vec<String>, String> {
@@ -384,7 +473,7 @@ fn text(value: &serde_json::Value, name: &str) -> Option<String> {
 
 fn merge_stream(serving: &Path, published: &Path, conversation_id: &str) -> Result<(), String> {
     if !serving.exists() {
-        fs::copy(published, serving).map_err(|error| error.to_string())?;
+        publish_copy(published, serving)?;
         return Ok(());
     }
     let published = published

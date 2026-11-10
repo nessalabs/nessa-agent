@@ -21,12 +21,12 @@ use crate::backup::infrastructure::{
     capture_namespace, CedarInventoryPolicy, DirectoryPublisher, FileDeletionLog,
 };
 use crate::composition::{
-    install_serving_stores, merge_published_session, run_backup_restore, startup_authority,
-    GatewayDeferredOpen,
+    bind_restored_owner, install_serving_stores, merge_published_session, run_backup_restore,
+    startup_authority, GatewayDeferredOpen,
 };
 use crate::conversation::application::{
-    ConversationCaller, ConversationCatalogue, ConversationError, ConversationLimits, Reader,
-    RequestedConversation,
+    ConversationCaller, ConversationCatalogue, ConversationError, ConversationLimits,
+    ConversationListing, Reader, RequestedConversation,
 };
 use crate::conversation::infrastructure::LocalConversationStore;
 use crate::core::RunError;
@@ -342,6 +342,135 @@ fn a_failed_metadata_install_publishes_nothing() {
     fs::remove_file(live.join("deferred.txt")).unwrap();
     install_serving_stores(&namespace, &live).unwrap();
     assert!(namespace.join("conversations/metadata.sqlite3").is_file());
+}
+
+#[tokio::test]
+async fn a_restored_catalogue_lists_for_the_new_local_owner() {
+    let root = tempfile::tempdir().unwrap();
+    let live = root.path().join("live");
+    let metadata_dir = live.join("records/conversation-metadata");
+    fs::create_dir_all(&metadata_dir).unwrap();
+    fs::write(
+        metadata_dir.join("conversation-00000000-0000-4000-8000-000000000001"),
+        br#"{"id":"00000000-0000-4000-8000-000000000001","organization":"acme","owner":"ada","agent":"claude","model":"opus","approvalMode":"ask","creationRevision":3,"changeRevision":4}"#,
+    )
+    .unwrap();
+    fs::write(
+        metadata_dir.join("summary-00000000-0000-4000-8000-000000000001"),
+        br#"{"conversationId":"00000000-0000-4000-8000-000000000001","title":"Quarterly","preview":"notes","updatedAtMs":42,"archived":false}"#,
+    )
+    .unwrap();
+    let namespace = root.path().join("gateway");
+    fs::create_dir_all(namespace.join("auth")).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        for directory in [root.path(), &namespace, &namespace.join("auth")] {
+            fs::set_permissions(directory, fs::Permissions::from_mode(0o700)).unwrap();
+        }
+    }
+    install_serving_stores(&namespace, &live).unwrap();
+    let credentials = nessa_auth::adapters::local::LocalCredentialStore::open(
+        namespace.join("auth"),
+        "credentials.v1.json",
+        std::sync::Arc::new(nessa_auth::adapters::cedar::CedarPolicyEvaluator::new().unwrap()),
+    )
+    .unwrap();
+    credentials
+        .bootstrap(nessa_auth::adapters::local::BootstrapRequest {
+            gateway_id: "gateway".into(),
+            organization: nessa_auth::application::dto::OrganizationInputDto {
+                id: "org-new".into(),
+            },
+            principal: nessa_auth::application::dto::PrincipalInputDto {
+                id: "person-new".into(),
+                kind: nessa_auth::application::dto::PrincipalKindDto::Human,
+            },
+            membership: nessa_auth::application::dto::MembershipInputDto {
+                id: "member".into(),
+                principal_id: "person-new".into(),
+                organization_id: "org-new".into(),
+                role: nessa_auth::application::dto::MembershipRoleDto::Admin,
+                state: nessa_auth::application::dto::MembershipStateDto::Active,
+            },
+            credential_id: "credential".into(),
+            issued_at: 1,
+            expires_at: None,
+            grants: vec![nessa_auth::application::dto::CredentialGrantDto {
+                action: "credential.manage".into(),
+                resource: nessa_auth::application::dto::ResourceDto {
+                    organization_id: "org-new".into(),
+                    id: "gateway".into(),
+                },
+            }],
+        })
+        .unwrap();
+    let (organization, owner) = credentials.personal_owner().unwrap();
+    let catalogue = namespace.join("conversations/metadata.sqlite3");
+    bind_restored_owner(&catalogue, &organization, &owner).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(
+            namespace.join("conversations"),
+            fs::Permissions::from_mode(0o700),
+        )
+        .unwrap();
+    }
+    let store = LocalConversationStore::open(&catalogue).unwrap();
+    let organization = OrganizationId::new(&organization).unwrap();
+    let owner = PrincipalId::new(&owner).unwrap();
+    let listed = store
+        .list(&organization, &owner, false, 10, &Reader::Owner)
+        .await
+        .unwrap();
+    let ids: Vec<_> = listed
+        .conversations
+        .iter()
+        .map(|conversation| conversation.conversation.id().to_string())
+        .collect();
+    assert_eq!(
+        ids,
+        vec!["00000000-0000-4000-8000-000000000001".to_string()]
+    );
+    let previous = store
+        .list(
+            &OrganizationId::new("acme").unwrap(),
+            &PrincipalId::new("ada").unwrap(),
+            false,
+            10,
+            &Reader::Owner,
+        )
+        .await
+        .unwrap();
+    assert!(previous.conversations.is_empty());
+}
+
+#[test]
+fn the_first_session_database_is_absent_until_its_copy_finishes() {
+    let root = tempfile::tempdir().unwrap();
+    let namespace = root.path().join("gateway");
+    let live = root.path().join("live");
+    fs::create_dir_all(live.join("sessions")).unwrap();
+    let published = live.join("sessions/conv-new.sqlite3");
+    write_one_stream(&published, "conv-new", b"fetched-body");
+    let sessions = namespace.join("conversations/sessions");
+    fs::create_dir_all(&sessions).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&sessions, fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    fs::write(sessions.join("records.sqlite3.partial"), b"truncated").unwrap();
+    merge_published_session(&namespace, &live, "conv-new").unwrap();
+    let serving = sessions.join("records.sqlite3");
+    assert!(serving.is_file());
+    assert!(!sessions.join("records.sqlite3.partial").exists());
+    let connection = nessa_local_database::rusqlite::Connection::open(&serving).unwrap();
+    let payload: Vec<u8> = connection
+        .query_row("SELECT payload FROM event_records", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(payload, b"fetched-body");
 }
 
 #[tokio::test]
