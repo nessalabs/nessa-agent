@@ -6,6 +6,7 @@
   "packageManager": "pnpm@11.9.0",
   "scripts": {
     "preinstall": "node scripts/ensure-nessa-ui.mjs",
+    "prepare": "node scripts/install-git-hooks.mjs",
     "dev": "pnpm ui:check && node scripts/free-dev-port.mjs && vite",
     "build": "pnpm ui:check && vite build",
     "preview": "vite preview",

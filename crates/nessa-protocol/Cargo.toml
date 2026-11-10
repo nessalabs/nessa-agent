@@ -23,3 +23,6 @@ zeroize = "=1.9.0"
 nessa-sdk = { path = "../nessa-sdk", features = ["test-support"] }
 tempfile = "3"
 nessa-local-storage = { path = "../nessa-local-storage" }
+
+[lints]
+workspace = true

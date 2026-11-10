@@ -648,7 +648,7 @@ async fn a_thread_an_agent_starts_keeps_its_conversations_preset_not_the_channel
         .await
         .unwrap();
     assert_eq!(
-        fixture.service.thread_start(&id, false).await.unwrap(),
+        fixture.service.thread_start(&id).await.unwrap(),
         (
             Some(channel.id().clone()),
             Some(ConversationApprovalMode::Auto)
@@ -671,16 +671,11 @@ async fn a_thread_an_agent_starts_keeps_its_conversations_preset_not_the_channel
         .iter()
         .all(|asked| asked.3.as_deref() == Some(std::path::Path::new(&absolute("/work/repo")))));
     assert_eq!(
-        fixture.service.thread_start(&id, false).await.unwrap(),
+        fixture.service.thread_start(&id).await.unwrap(),
         (
             Some(channel.id().clone()),
             Some(ConversationApprovalMode::Ask)
         )
-    );
-    // On another host it is in no channel, and names no preset.
-    assert_eq!(
-        fixture.service.thread_start(&id, true).await.unwrap(),
-        (None, None)
     );
     let outside = new_id();
     fixture
@@ -693,7 +688,7 @@ async fn a_thread_an_agent_starts_keeps_its_conversations_preset_not_the_channel
         .await
         .unwrap();
     assert_eq!(
-        fixture.service.thread_start(&outside, false).await.unwrap(),
+        fixture.service.thread_start(&outside).await.unwrap(),
         (None, None)
     );
 }
@@ -976,6 +971,31 @@ async fn owned_threads_use_channel_start_without_accepting_caller_overrides() {
             mode,
             "the channel start owner's current preset survives owned preparation"
         );
+        // A thread that names where it runs stays in the channel and on the
+        // parent's preset all the same.
+        let named = new_id();
+        fixture
+            .service
+            .create_owned_thread(
+                source("owned-named"),
+                named.clone(),
+                RequestedConversation {
+                    environment: Some("here".into()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            fixture.service.channel_id_of(&named).await.unwrap(),
+            Some(channel.id().clone())
+        );
+        let record =
+            super::super::load_conversation(fixture.service.inner.metadata.as_ref(), &named)
+                .await
+                .unwrap()
+                .unwrap();
+        assert_eq!(record.approval_mode(), mode);
         let child_lifetime = ownership
             .child_lifetime_for_session(&super::super::conversation_session(&child))
             .unwrap();

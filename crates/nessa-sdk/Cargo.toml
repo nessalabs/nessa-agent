@@ -45,3 +45,6 @@ percent-encoding = "2"
 rusqlite = { version = "0.40", default-features = false, features = ["bundled"] }
 tokio = { version = "1", features = ["test-util", "rt-multi-thread"] }
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt"] }
+
+[lints]
+workspace = true
