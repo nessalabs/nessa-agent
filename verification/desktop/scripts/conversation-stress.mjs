@@ -5482,7 +5482,10 @@ const steps = {
           .evaluateAll((each) =>
             each.map((button) => button.getAttribute("data-devices-add")),
           )
-        if (JSON.stringify(kinds) !== JSON.stringify(["computer", "phone", "cloud"]))
+        if (
+          JSON.stringify(kinds) !==
+          JSON.stringify(["computer", "gateway", "phone", "cloud"])
+        )
           failures.push(`Add device offers ${JSON.stringify(kinds)}`)
         // A phone pairs right here: Settings' rows, drawn as cards on Devices,
         // and the code's modal on top of the page, giving focus back on Escape.
