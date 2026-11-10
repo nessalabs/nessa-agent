@@ -460,6 +460,26 @@ of inferring which control or delivery result exists. A fresh resume has only
 canonical status, which does not carry an earlier session's activation stop;
 the next explicit approval obtains a current result from the existing owner.
 
+The third round exposed the remaining structural ownership error: canonical
+status, one-use code and the last approval stop were separate view states, so
+clearing the invitation could leave its stop behind. The selected invitation is
+now one immutable presentation value. Create and explicit resume replace its
+facts; reads retain code/approval evidence only for the same invitation; approval
+replaces its stop with that reply's exact result. Active consumes the code, and
+terminal consumes code, stop and fingerprint. Clearing selection drops every
+selected fact together on End, deadline and pagehide. A computed fingerprint is
+correlated to both invitation id and claimed key. This is a projection of the
+registry's records and replies, not a second identity or admission machine.
+
+| Selected-value input | Result | Evidence |
+| --- | --- | --- |
+| End, deadline or pagehide, then a different invitation | Clear the whole value; new invitation cannot inherit code, stop or fingerprint | Three lifecycle regressions |
+| Same-invitation status poll | Retain its approval result; preserve a fingerprint only for the exact claimed key | Permanent-stop and fingerprint regressions |
+| Create or explicit resume | New value; only create carries its returned code; neither inherits a prior approval stop | Creation/recovery regressions |
+| Approval result | One value from canonical status and exact retryable/permanent result; terminal discards old details | Approval/terminal regressions |
+| Create/resume, permanent stop or completed receipt changes the view | Focus the visible page region; a new ready invitation focuses Create. Repeated reads of the same invitation leave the selected control alone | Browser focus assertions and view regression |
+| Late fingerprint for a different invitation or key | Ignore it; never approve a new key under an old fingerprint | Selected-value ordering regressions |
+
 ## Live follow
 
 [#851](https://github.com/nessalabs/nessa-agent/issues/851) already follows

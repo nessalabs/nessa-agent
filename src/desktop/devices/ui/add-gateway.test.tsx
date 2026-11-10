@@ -328,6 +328,7 @@ it("withholds approval if the fingerprint cannot be computed", async () => {
   await click("Continue")
   await click("Create invitation")
   expect(container.textContent).toContain("Fingerprint unavailable")
+  expect(container.textContent).toContain("Go back and reopen Gateway")
   const approve = present(
     [...container.querySelectorAll("button")].find(
       (each) => each.textContent === "Approve matching fingerprint",
@@ -525,7 +526,17 @@ it.each(["approved", "active"] as const)(
     await mount()
     await click("Continue")
     await click("Create invitation")
+    await act(async () =>
+      present(
+        [...container.querySelectorAll("button")].find(
+          (each) => each.textContent === "Approve matching fingerprint",
+        ),
+      ).focus(),
+    )
     await click("Approve matching fingerprint")
+    expect(document.activeElement).toBe(
+      container.querySelector('[aria-label="Pair a gateway"]'),
+    )
     expect(container.textContent).toContain("Activation cannot complete")
     expect(container.textContent).toContain("Cancel this invitation and pair again")
     expect(container.textContent).not.toContain("Activation needs another attempt")
@@ -573,3 +584,137 @@ it.each(["setup", "selected poll"])(
     expect(back).toHaveBeenCalledOnce()
   },
 )
+
+it.each(["explicit end", "deadline", "pagehide"])(
+  "a new invitation after %s does not inherit a previous permanent stop",
+  async (ending) => {
+    vi.spyOn(deviceKey, "deviceKeyFingerprint").mockResolvedValue("fingerprint")
+    const claimed = {
+      ...saved(),
+      phase: "claimed" as const,
+      claimedDeviceKey: Array(32).fill(7),
+    }
+    vi.mocked(scope.pairing.create).mockResolvedValueOnce({
+      code: "ABCD-EFGH",
+      status: claimed,
+    })
+    vi.mocked(scope.pairing.approve).mockResolvedValueOnce({
+      status: { ...claimed, phase: "approved" },
+      activationStopped: "permanent",
+    })
+    await mount()
+    await click("Continue")
+    await click("Create invitation")
+    await click("Approve matching fingerprint")
+    expect(container.textContent).toContain("Activation cannot complete")
+    if (ending === "explicit end") await click("End pairing sign-in")
+    else if (ending === "deadline")
+      await act(async () => vi.advanceTimersByTimeAsync(10 * 60 * 1000))
+    else await act(async () => window.dispatchEvent(new Event("pagehide")))
+    vi.mocked(scope.pairing.create).mockResolvedValueOnce({
+      code: "JKLM-NOPQ",
+      status: { ...claimed, invitationId: Array(16).fill(3) },
+    })
+    await click("Continue")
+    await click("Create invitation")
+    expect(container.textContent).not.toContain("Activation cannot complete")
+    const approve = [...container.querySelectorAll("button")].find(
+      (each) => each.textContent === "Approve matching fingerprint",
+    )
+    expect(approve).toBeDefined()
+    expect(approve?.disabled).toBe(false)
+  },
+)
+
+it("keeps one fingerprint for identical key bytes across fresh status arrays", async () => {
+  const fingerprint = vi
+    .spyOn(deviceKey, "deviceKeyFingerprint")
+    .mockResolvedValue("matching")
+  const claimed = {
+    ...saved(),
+    phase: "claimed" as const,
+    claimedDeviceKey: Array(32).fill(7),
+  }
+  vi.mocked(scope.pairing.create).mockResolvedValue({
+    code: "ABCD-EFGH",
+    status: claimed,
+  })
+  vi.mocked(scope.pairing.status).mockResolvedValue({
+    ...claimed,
+    claimedDeviceKey: [...claimed.claimedDeviceKey],
+  })
+  await mount()
+  await click("Continue")
+  await click("Create invitation")
+  await act(async () => vi.advanceTimersByTimeAsync(2_000))
+  expect(fingerprint).toHaveBeenCalledOnce()
+  expect(container.querySelector("[data-gateway-fingerprint]")?.textContent).toBe(
+    "matching",
+  )
+})
+
+it("withholds an old fingerprint while a different claimed key is being computed", async () => {
+  let complete!: (value: string) => void
+  vi.spyOn(deviceKey, "deviceKeyFingerprint")
+    .mockResolvedValueOnce("old fingerprint")
+    .mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          complete = resolve
+        }),
+    )
+  const claimed = {
+    ...saved(),
+    phase: "claimed" as const,
+    claimedDeviceKey: Array(32).fill(7),
+  }
+  const next = { ...claimed, claimedDeviceKey: Array(32).fill(8) }
+  vi.mocked(scope.pairing.create).mockResolvedValue({
+    code: "ABCD-EFGH",
+    status: claimed,
+  })
+  vi.mocked(scope.pairing.status).mockResolvedValue(next)
+  await mount()
+  await click("Continue")
+  await click("Create invitation")
+  expect(container.querySelector("[data-gateway-fingerprint]")?.textContent).toBe(
+    "old fingerprint",
+  )
+  await act(async () => vi.advanceTimersByTimeAsync(2_000))
+  expect(container.querySelector("[data-gateway-fingerprint]")).toBeNull()
+  const approve = present(
+    [...container.querySelectorAll("button")].find(
+      (each) => each.textContent === "Approve matching fingerprint",
+    ),
+  )
+  expect(approve.disabled).toBe(true)
+  await act(async () => complete("new fingerprint"))
+  expect(container.querySelector("[data-gateway-fingerprint]")?.textContent).toBe(
+    "new fingerprint",
+  )
+  expect(approve.disabled).toBe(false)
+})
+
+it("hands keyboard focus to creation and its receipt without stealing it on a poll", async () => {
+  await mount()
+  const region = present(container.querySelector('[aria-label="Pair a gateway"]'))
+  expect(document.activeElement).toBe(region)
+  await click("Continue")
+  const create = present(
+    [...container.querySelectorAll("button")].find(
+      (each) => each.textContent === "Create invitation",
+    ),
+  )
+  expect(document.activeElement).toBe(create)
+  await click("Create invitation")
+  expect(document.activeElement).toBe(region)
+  const cancel = present(
+    [...container.querySelectorAll("button")].find(
+      (each) => each.textContent === "Cancel invitation",
+    ),
+  )
+  await act(async () => cancel.focus())
+  vi.mocked(scope.pairing.status).mockResolvedValue({ ...saved() })
+  await act(async () => vi.advanceTimersByTimeAsync(2_000))
+  expect(document.activeElement).toBe(cancel)
+})

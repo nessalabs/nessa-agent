@@ -335,7 +335,8 @@ against a private scripted gateway.
   Devices' PeerRead gateway entry (#893) is `devices/ui/add-gateway.tsx`,
   with an explicitly bounded Human reauthentication scope in
   `devices/adapters/gateway-pairing.ts`. Composition injects the connector,
-  stage, ids and timers. `devices/model/gateway-pairing.ts` formats the
+  stage, ids and timers. `devices/model/gateway-pairing.ts` owns the immutable selected invitation
+  (status, code, approval result and keyed fingerprint) and formats the
   enrollment command as one quoted JSON argument. The normal panel session supplies the pinned endpoint;
   only pairing methods reach the view. Its orderings are in
   [Same person](design/access-grants.md#desktop-human-reauthentication).

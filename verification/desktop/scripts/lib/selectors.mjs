@@ -20,6 +20,7 @@ const committedQuestions = "[data-committed-questions]"
 /** CSS selectors, grouped by the part of the window they belong to. */
 export const css = {
   gatewayPairingPage: '[data-devices-page="add-gateway"]',
+  gatewayPairingCommand: ".devices-gateway-command",
   gatewayPairingCode: "[data-gateway-code]",
   gatewayPairingChoice: "[data-gateway-choice]",
   gatewayPairingPhase: "[data-gateway-phase]",

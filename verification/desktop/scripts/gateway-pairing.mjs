@@ -29,8 +29,20 @@ const meta = {
   options: { agent: { type: "string", default: "claude" }, evidence: { type: "string" } },
   help: "Gateway pairing with disposable native gateways. --evidence DIR saves the changed surface. --mode prod supported.",
 }
+const receiverInsertConflict =
+  "CREATE TRIGGER pairing_ui_receiver_conflict BEFORE INSERT ON receivers BEGIN INSERT INTO receivers (receiver_id,credential_id,organization_id,owner_id,access_epoch,active) VALUES (NEW.receiver_id,NEW.credential_id,NEW.organization_id,NEW.owner_id,NEW.access_epoch,NEW.active); END"
+
 function requireValue(condition, message) {
   if (!condition) throw new Error(message)
+}
+async function focusHeld(locator, message) {
+  requireValue(
+    await waitFor(
+      () => locator.evaluate((element) => element === document.activeElement),
+      5_000,
+    ),
+    message,
+  )
 }
 async function enter(page) {
   if (!(await page.locator(css.devicesAddAction).count()))
@@ -38,6 +50,10 @@ async function enter(page) {
   await page.locator(css.devicesAddAction).click()
   await page.locator(css.devicesGatewayTile).click()
   await page.locator(css.gatewayPairingPage).waitFor()
+  await focusHeld(
+    page.locator(css.gatewayPairingPage),
+    "gateway entry did not receive focus",
+  )
 }
 async function signIn(page, token, resume = false) {
   if (token !== undefined) {
@@ -50,6 +66,11 @@ async function signIn(page, token, resume = false) {
   }
   await page.getByRole("button", { name: "Continue", exact: true }).click()
   await page.getByRole("button", { name: "Read pending invitations" }).waitFor()
+  if (!resume)
+    await focusHeld(
+      page.getByRole("button", { name: "Create invitation", exact: true }),
+      "ready invitation did not focus Create",
+    )
 }
 function call(gateway, instance, method, params) {
   return new Promise((resolve, reject) => {
@@ -142,10 +163,11 @@ await main(
                 beforeLoad: (context) =>
                   context.on("page", (page) =>
                     page.on("websocket", (socket) => {
-                      const seen = { client: undefined, closed: false }
+                      const seen = { client: undefined, closed: false, statusReads: 0 }
                       socket.on("framesent", ({ payload }) => {
                         try {
                           const frame = JSON.parse(payload)
+                          if (frame.method === "pairing.status") seen.statusReads += 1
                           if (frame.method === "session.authenticate") {
                             seen.client = frame.params.client.id
                             sessions.push(seen)
@@ -169,6 +191,53 @@ await main(
               await signIn(page)
               await page.getByRole("button", { name: "Create invitation" }).click()
               await page.locator(css.gatewayPairingCode).waitFor()
+              await focusHeld(
+                page.locator(css.gatewayPairingPage),
+                "created invitation did not receive focus",
+              )
+              const commandBox = await page
+                .locator(css.gatewayPairingCommand)
+                .evaluate((element) => ({
+                  width: element.clientWidth,
+                  scrollWidth: element.scrollWidth,
+                }))
+              requireValue(
+                commandBox.width > 0 && commandBox.scrollWidth <= commandBox.width + 1,
+                "native enrollment command overflowed its surface",
+              )
+              const constrainedCommandBox = await page
+                .locator(css.gatewayPairingCommand)
+                .evaluate((element) => {
+                  const width = element.style.width
+                  element.style.width = "240px"
+                  const measured = {
+                    width: element.clientWidth,
+                    scrollWidth: element.scrollWidth,
+                  }
+                  element.style.width = width
+                  return measured
+                })
+              requireValue(
+                constrainedCommandBox.width === 240 &&
+                  constrainedCommandBox.scrollWidth <= constrainedCommandBox.width + 1,
+                "native enrollment command overflowed its constrained surface",
+              )
+              const focusedCancel = page.getByRole("button", {
+                name: "Cancel invitation",
+                exact: true,
+              })
+              await focusedCancel.focus()
+              const statusReads = () =>
+                sessions.reduce((count, each) => count + each.statusReads, 0)
+              const beforeRead = statusReads()
+              requireValue(
+                await waitFor(() => statusReads() > beforeRead, 5_000),
+                "selected invitation did not poll",
+              )
+              await focusHeld(
+                focusedCancel,
+                "a status poll stole focus from the selected control",
+              )
               requireValue(
                 (await page.locator(css.gatewayPairingChoice).innerText()).includes(
                   "no person link",
@@ -273,6 +342,10 @@ await main(
                 name: new RegExp(`Resume ${invitationHex}`),
               })
               await resume.click()
+              await focusHeld(
+                page.locator(css.gatewayPairingPage),
+                "resumed invitation did not receive focus",
+              )
               requireValue(
                 (await page.locator(css.gatewayPairingChoice).innerText()).includes(
                   "same person",
@@ -512,9 +585,7 @@ await main(
                   "receiver-access.sqlite3",
                 ),
               )
-              receivers.exec(
-                "CREATE TRIGGER pairing_ui_receiver_conflict BEFORE INSERT ON receivers BEGIN INSERT INTO receivers (receiver_id,credential_id,organization_id,owner_id,access_epoch,active) VALUES (NEW.receiver_id,NEW.credential_id,NEW.organization_id,NEW.owner_id,NEW.access_epoch,NEW.active); END",
-              )
+              receivers.exec(receiverInsertConflict)
               await page
                 .getByRole("button", { name: "Approve matching fingerprint" })
                 .click()
@@ -531,6 +602,10 @@ await main(
                   .getByRole("button", { name: "Cancel invitation", exact: true })
                   .isEnabled(),
                 "permanent activation omitted cancellation",
+              )
+              await focusHeld(
+                page.locator(css.gatewayPairingPage),
+                "permanent activation did not receive focus",
               )
               const conflict = await owner.pairing.status(conflictId)
               requireValue(
@@ -551,8 +626,54 @@ await main(
                   .get(conflict.credentialId).n === 0,
                 "receiver conflict did not roll back its transaction",
               )
-              // Restore the receiver store before canonical cancellation. No
-              // first person link or link-audit receipt is possible prepublish.
+              // End without cancelling through this page. Fixture-owner cleanup
+              // permits a new invitation; its UI must not inherit the old stop.
+              await page.getByRole("button", { name: "End pairing sign-in" }).click()
+              await focusHeld(
+                page.locator(css.gatewayPairingPage),
+                "ending pairing did not focus its choices",
+              )
+              receivers.exec("DROP TRIGGER pairing_ui_receiver_conflict")
+              const abandoned = await owner.pairing.cancel(conflictId)
+              requireValue(
+                abandoned.phase === "terminal" && !abandoned.cleanupPending,
+                "fixture owner did not retire the abandoned stage",
+              )
+              await call(peer, peerInstance, "peer.forget", { peerKey: enrolled.peerKey })
+              await signIn(page, stack.token())
+              await page.getByRole("button", { name: "Create invitation" }).click()
+              await page.locator(css.gatewayPairingCode).waitFor()
+              requireValue(
+                !(await page
+                  .getByRole("status")
+                  .filter({ hasText: "Activation cannot complete" })
+                  .count()),
+                "new invitation inherited a previous permanent activation stop",
+              )
+              const freshCode = await page.locator(css.gatewayPairingCode).innerText()
+              const freshHex = await page
+                .locator(css.gatewayPairingInvitation)
+                .getAttribute("data-gateway-invitation")
+              const freshId = Array.from(Buffer.from(freshHex, "hex"))
+              await call(peer, peerInstance, "peer.enroll", {
+                address: stack.nativeAddress,
+                code: freshCode,
+              })
+              await page.locator(css.gatewayPairingFingerprint).waitFor()
+              requireValue(
+                await page
+                  .getByRole("button", { name: "Approve matching fingerprint" })
+                  .isEnabled(),
+                "new claimed invitation lost approval after an earlier permanent stop",
+              )
+              receivers.exec(receiverInsertConflict)
+              await page
+                .getByRole("button", { name: "Approve matching fingerprint" })
+                .click()
+              await page
+                .getByRole("status")
+                .filter({ hasText: "Activation cannot complete" })
+                .waitFor()
               receivers.exec("DROP TRIGGER pairing_ui_receiver_conflict")
               await page
                 .getByRole("button", { name: "Cancel invitation", exact: true })
@@ -560,7 +681,7 @@ await main(
               await page
                 .getByRole("button", { name: "End pairing sign-in" })
                 .waitFor({ state: "hidden" })
-              const cancelled = await owner.pairing.status(conflictId)
+              const cancelled = await owner.pairing.status(freshId)
               requireValue(
                 cancelled.phase === "terminal" &&
                   !cancelled.cleanupPending &&
@@ -569,17 +690,22 @@ await main(
                   cancelled.terminal.initiator.principalId === human,
                 "permanent activation lost its Human cancellation receipt",
               )
-              requireValue(
-                grants
-                  .prepare("SELECT count(*) AS n FROM person_links WHERE credential_id=?")
-                  .get(conflict.credentialId).n === 0 &&
-                  grants
-                    .prepare(
-                      "SELECT count(*) AS n FROM person_link_changes WHERE credential_id=?",
-                    )
-                    .get(conflict.credentialId).n === 0,
-                "unpublished permanent stop inserted attribution or a false link receipt",
-              )
+              for (const ended of [abandoned, cancelled]) {
+                requireValue(
+                  ended.credentialId &&
+                    grants
+                      .prepare(
+                        "SELECT count(*) AS n FROM person_links WHERE credential_id=?",
+                      )
+                      .get(ended.credentialId).n === 0 &&
+                    grants
+                      .prepare(
+                        "SELECT count(*) AS n FROM person_link_changes WHERE credential_id=?",
+                      )
+                      .get(ended.credentialId).n === 0,
+                  "unpublished permanent stop inserted attribution or a false link receipt",
+                )
+              }
               // Fail one private status send, with no server mutation or fake
               // authority. Recovery must name a control the person can use.
               await page.getByRole("button", { name: "Back", exact: true }).click()
@@ -635,8 +761,18 @@ await main(
                   .phase === "terminal",
                 "read recovery did not cancel the same invitation",
               )
+              await opened.settleRequests()
+              requireValue(
+                opened.heldErrorCount === 0,
+                "pairing page reported unexpected browser errors",
+              )
               return {
-                true: 4,
+                focusHeld: true,
+                pollPreservedFocus: true,
+                commandBox,
+                constrainedCommandBox,
+                pageErrors: opened.heldErrorCount,
+                true: 5,
                 false: 2,
                 integrationRefused: 1,
                 refresh: 1,
@@ -644,7 +780,8 @@ await main(
                 replacementFalseActive: 1,
                 stalePersonLinks: 0,
                 failedReadRecovered: 1,
-                nativePermanentStop: 1,
+                nativePermanentStop: 2,
+                stalePermanentStopAbsent: true,
                 permanentStopCancelledWithoutLink: true,
                 polledTerminalSessionClosed: true,
                 currentDocumentTemporarySessionsClosed: true,

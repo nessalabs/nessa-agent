@@ -4,18 +4,22 @@
  * orderings in docs/design/access-grants.md and add-gateway.test.tsx. */
 import { Button } from "@nessa-ui/react/button"
 import { PageHeader } from "@nessa-ui/react/page-header"
-import { useEffect, useRef, useState } from "react"
-import type { PairingApi } from "@nessa/client"
+import { useEffect, useReducer, useRef, useState } from "react"
 import {
   gatewayInvitation,
   type GatewayPairing,
   type PairingScope,
 } from "../adapters/gateway-pairing"
-import { gatewayEnrollmentCommand } from "../model/gateway-pairing"
+import {
+  gatewayEnrollmentCommand,
+  gatewayInvitationStatus,
+  reduceGatewayInvitation,
+  type GatewayInvitationReceipt,
+  type GatewayInvitationStatus,
+} from "../model/gateway-pairing"
 import { bytesToHex, deviceKeyFingerprint } from "../../settings/model/device-key"
 
-type PairingOwnerStatus = Awaited<ReturnType<PairingApi["status"]>>
-type ActivationStop = Awaited<ReturnType<PairingApi["approve"]>>["activationStopped"]
+type PairingOwnerStatus = GatewayInvitationStatus
 
 const SESSION_MS = 10 * 60 * 1_000
 const PEER_READ = "peer-gateway-conversation-read"
@@ -45,10 +49,11 @@ export function AddGateway({
   const [message, setMessage] = useState("")
   const [needsRead, setNeedsRead] = useState(true)
   const [pending, setPending] = useState<readonly PairingOwnerStatus[]>([])
-  const [status, setStatus] = useState<PairingOwnerStatus>()
-  const [code, setCode] = useState<string>()
-  const [fingerprint, setFingerprint] = useState<string>()
-  const [activationStopped, setActivationStopped] = useState<ActivationStop>()
+  const [selection, select] = useReducer(reduceGatewayInvitation, undefined)
+  const status = selection?.status
+  const code = selection?.code
+  const fingerprint = selection?.fingerprint
+  const activationStopped = selection?.activationStopped
   const page = useRef<HTMLDivElement | null>(null)
   const createButton = useRef<HTMLButtonElement | null>(null)
   const scope = useRef<PairingScope | undefined>(undefined)
@@ -67,13 +72,15 @@ export function AddGateway({
     deadline.current?.()
     deadline.current = undefined
   }
+  const invitation = status && bytesToHex(status.invitationId)
+  const canCreate = signedIn && !status && !recovering && !needsRead && !busy
+  const permanentStop = activationStopped === "permanent"
   useEffect(() => {
-    page.current?.focus()
-  }, [])
-  useEffect(() => {
-    if (signedIn && !status && !needsRead && !busy) createButton.current?.focus()
-    if (!signedIn && status) page.current?.focus()
-  }, [signedIn, status, needsRead, busy])
+    if (canCreate) createButton.current?.focus()
+    else page.current?.focus()
+    // Selection/receipt changes hand focus to the new view. Repeated reads of
+    // the same invitation leave the person's current control alone.
+  }, [canCreate, invitation, signedIn, recovering, permanentStop])
   useEffect(() => {
     // Reload and back/forward-cache entry need teardown even when React does
     // not unmount. pagehide also retires an unresolved connection attempt.
@@ -82,8 +89,7 @@ export function AddGateway({
       setToken("")
       setSignedIn(false)
       setBusy(false)
-      setCode(undefined)
-      setStatus(undefined)
+      select({ type: "clear" })
       setPending([])
       setMessage("Pairing sign-in ended. Continue again to read pending invitations.")
     }
@@ -133,8 +139,7 @@ export function AddGateway({
       retire()
       setSignedIn(false)
       setBusy(false)
-      setCode(undefined)
-      setStatus(undefined)
+      select({ type: "clear" })
       setPending([])
       setMessage("Pairing sign-in ended. Continue again to read pending invitations.")
     })
@@ -159,42 +164,43 @@ export function AddGateway({
     retire()
     setSignedIn(false)
     setBusy(false)
-    setCode(undefined)
   }
 
-  function apply(next: PairingOwnerStatus, { resuming = false } = {}) {
-    setStatus(next)
+  function apply(receipt: GatewayInvitationReceipt) {
+    const next = gatewayInvitationStatus(receipt)
+    select(receipt)
     setMessage("")
-    if (next.phase === "active") setCode(undefined)
     if (next.phase === "terminal") {
-      setCode(undefined)
-      setActivationStopped(undefined)
       // Only a fresh, explicitly resumed unfinished receipt keeps a scope
       // for Finish removal. Polling an ended invitation retires its old one.
-      if (!resuming || !next.cleanupPending) finishReceipt()
+      if (receipt.type !== "resume" || !next.cleanupPending) finishReceipt()
     }
   }
 
-  const invitation = status && bytesToHex(status.invitationId)
+  const fingerprintKey = status?.claimedDeviceKey && bytesToHex(status.claimedDeviceKey)
   useEffect(() => {
-    setFingerprint(undefined)
-    if (!status?.claimedDeviceKey) return
+    if (!status?.claimedDeviceKey || status.phase === "terminal") return
+    const id = status.invitationId
+    const key = status.claimedDeviceKey
     let live = true
     const current = generation.current
     void deviceKeyFingerprint(Uint8Array.from(status.claimedDeviceKey))
       .then((value) => {
-        if (live && current === generation.current) setFingerprint(value)
+        if (live && current === generation.current)
+          select({ type: "fingerprint", invitationId: id, key, value })
       })
       .catch(() => {
         if (live && current === generation.current)
           setMessage(
-            "Fingerprint unavailable. Read this invitation again before approving.",
+            "Fingerprint unavailable. Go back and reopen Gateway to resume this invitation.",
           )
       })
     return () => {
       live = false
     }
-  }, [status?.claimedDeviceKey])
+    // The public key's contents, not each poll's fresh array, own this calculation.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [invitation, fingerprintKey, status?.phase === "terminal"])
 
   useEffect(() => {
     if (!signedIn || !status || status.phase === "terminal") return
@@ -208,7 +214,7 @@ export function AddGateway({
       void run(async () => {
         const current = generation.current
         const next = await opened.pairing.status(id)
-        if (current === generation.current) apply(next)
+        if (current === generation.current) apply({ type: "read", status: next })
       }).finally(() => {
         if (live && readGeneration === generation.current)
           cancel = gateway.after(2_000, tick)
@@ -357,7 +363,7 @@ export function AddGateway({
                 variant="inverse"
                 size="30"
                 shape="pill"
-                disabled={busy || needsRead}
+                disabled={!canCreate}
                 onClick={() =>
                   void run(async () => {
                     const current = generation.current
@@ -365,8 +371,7 @@ export function AddGateway({
                       gatewayInvitation(samePerson),
                     )
                     if (current !== generation.current) return
-                    setCode(made.code)
-                    apply(made.status)
+                    apply({ type: "create", reply: made })
                   })
                 }
               >
@@ -395,10 +400,7 @@ export function AddGateway({
                   const current = generation.current
                   const next = await currentScope().pairing.status(each.invitationId)
                   if (current !== generation.current) return
-                  setCode(undefined)
-                  setActivationStopped(undefined)
-                  apply(next, { resuming: true })
-                  page.current?.focus()
+                  apply({ type: "resume", status: next })
                 })
               }
             >
@@ -492,8 +494,7 @@ export function AddGateway({
                           key,
                         )
                         if (current !== generation.current) return
-                        setActivationStopped(reply.activationStopped)
-                        apply(reply.status)
+                        apply({ type: "approve", reply })
                         if (reply.status.phase === "active" && !reply.activationStopped) {
                           finishReceipt()
                         }
@@ -515,7 +516,7 @@ export function AddGateway({
                     const current = generation.current
                     const next = await currentScope().pairing.cancel(status.invitationId)
                     if (current !== generation.current) return
-                    apply(next)
+                    apply({ type: "read", status: next })
                   })
                 }
               >
@@ -535,8 +536,7 @@ export function AddGateway({
             retire()
             setSignedIn(false)
             setBusy(false)
-            setCode(undefined)
-            setStatus(undefined)
+            select({ type: "clear" })
             setPending([])
             setRecovering(false)
             setMessage(

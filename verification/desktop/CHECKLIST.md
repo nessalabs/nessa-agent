@@ -2592,6 +2592,11 @@ vault dialog blocking the main conversation click.
 
 ### Gateway invitations
 
+- [ ] **Focus and command layout follow the new page.** Entry, creation, resume,
+  permanent stop and completion focus the visible region; ready creation focuses
+  Create, and polling preserves the chosen control. The command fits its normal
+  surface and a test-constrained 240px surface. _Check:_ `gateway-pairing.mjs`,
+  Chromium/WebKit, both layouts; view focus regressions.
 - [ ] **Choose before creating a PeerRead code.** Devices → Add device → Gateway
   keeps both true and false immutable after create; recovery reads the saved
   choice and does not reconstruct a code. The normal panel remains an Integration;
@@ -2623,6 +2628,12 @@ vault dialog blocking the main conversation click.
   a late owned client closes before it exposes a command. _Check:_
   `gateway-pairing.mjs` (terminal poll), `add-gateway.test.tsx` (terminal replies,
   stale pending reads and Finish removal), and adapter abort regressions.
+- [ ] **New invitations do not inherit old display facts.** End sign-in after a
+  permanent stop, retire its stage through the disposable fixture owner, then
+  create and claim a different invitation. Approval remains available. Status,
+  code, stop and keyed fingerprint are one selected value; End, pagehide and
+  deadline clear it together. _Check:_ `gateway-pairing.mjs`, all three teardown
+  regressions in `add-gateway.test.tsx`, and selected-value ordering tests.
 - [ ] **Uncertain reads have executable recovery.** One private status send fails;
   the page directs Back/reopen, then fresh sign-in resumes and cancels the same
   invitation without reconstructing a code. Setup and selected-view failures
