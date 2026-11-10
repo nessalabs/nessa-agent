@@ -708,8 +708,10 @@ token remains ineligible even if it has an administrator membership.
 The token is not written to application storage or a URL. The temporary session
 has the supplied credential's existing authority; the pairing page exposes only
 pairing operations. It disables reconnect and closes on completion, navigation,
-page hide, explicit End pairing sign-in or a ten-minute deadline. Closing does
-not promise zeroization of JavaScript strings. Reopening requires explicit
+page hide, explicit End pairing sign-in or a scheduled ten-minute UI deadline.
+That timer depends on the browser event loop; it does not expire the credential
+or impose a server session TTL. Closing does not promise zeroization of
+JavaScript strings. Reopening requires explicit
 sign-in and reads pending invitations; it cannot recover a lost one-use code.
 A lost create response must be followed by Read pending invitations before
 another create is offered. A saved choice is read-only; cancel to replace it.

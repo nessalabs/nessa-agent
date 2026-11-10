@@ -148,6 +148,7 @@ it("creates false on the panel and requires a successful pending read after a lo
 })
 
 it("recovers an immutable saved choice without regenerating a code or inferring a legacy value", async () => {
+  vi.mocked(scope.pairing.status).mockResolvedValue(saved(false))
   vi.mocked(scope.pairing.pending).mockResolvedValue({
     items: [
       saved(false),
@@ -294,6 +295,7 @@ it("keeps Active with owed attribution retryable and closes after the exact retr
   expect(container.querySelector("[data-gateway-fingerprint]")?.textContent).toBe(
     "fingerprint",
   )
+  expect(container.querySelector("[data-gateway-code]")).toBeNull()
   expect(container.textContent).toContain("Activation needs another attempt")
   expect(scope.close).not.toHaveBeenCalled()
   vi.mocked(scope.pairing.approve).mockResolvedValueOnce({
@@ -355,6 +357,7 @@ it("keeps worker and owner-phone pending invitations outside the PeerRead entry"
 })
 
 it("shows an absent saved choice as unknown after recovery", async () => {
+  vi.mocked(scope.pairing.status).mockResolvedValue({ ...saved(), samePerson: undefined })
   vi.mocked(scope.pairing.pending).mockResolvedValue({
     items: [{ ...saved(), samePerson: undefined }],
   })
@@ -387,4 +390,109 @@ it("discards an unsubmitted owner token on pagehide before the page can be cache
     present(container.querySelector<HTMLInputElement>('[type="password"]')).value,
   ).toBe("")
   expect(gateway.open).not.toHaveBeenCalled()
+})
+
+it.each([false, true])(
+  "retires a polled terminal receipt and code while preserving cleanupPending=%s",
+  async (cleanupPending) => {
+    await mount()
+    await chooseOwner()
+    await click("Continue")
+    await click("Create invitation")
+    vi.mocked(scope.pairing.status).mockResolvedValue({
+      ...saved(),
+      phase: "terminal",
+      cleanupPending,
+    })
+    await act(async () => vi.advanceTimersByTimeAsync(2_000))
+    expect(scope.close).toHaveBeenCalledOnce()
+    expect(controller.aborted).toBe(true)
+    expect(container.querySelector("[data-gateway-code]")).toBeNull()
+    expect(container.querySelector("[data-gateway-phase]")?.textContent).toContain(
+      "Ended",
+    )
+    expect(container.textContent.includes("Cleanup is still pending")).toBe(
+      cleanupPending,
+    )
+    await act(async () => vi.advanceTimersByTimeAsync(6_000))
+    expect(scope.pairing.status).toHaveBeenCalledTimes(1)
+  },
+)
+
+it("reads fresh status before resuming removal and preserves the canonical choice", async () => {
+  const terminal = { ...saved(false), phase: "terminal" as const, cleanupPending: true }
+  vi.mocked(scope.pairing.pending).mockResolvedValue({ items: [terminal] })
+  vi.mocked(scope.pairing.status).mockResolvedValue(terminal)
+  vi.mocked(scope.pairing.cancel).mockResolvedValue({
+    ...terminal,
+    cleanupPending: false,
+  })
+  await mount()
+  await click("Resume panel invitations")
+  const resume = present(
+    [...container.querySelectorAll("button")].find((each) =>
+      each.textContent?.startsWith("Resume 01"),
+    ),
+  )
+  await act(async () => resume.click())
+  expect(scope.pairing.status).toHaveBeenCalledExactlyOnceWith(terminal.invitationId)
+  expect(scope.close).not.toHaveBeenCalled()
+  expect(container.querySelector("[data-gateway-code]")).toBeNull()
+  await act(async () => vi.advanceTimersByTimeAsync(6_000))
+  expect(scope.pairing.status).toHaveBeenCalledTimes(1)
+  await click("Finish removal")
+  expect(scope.pairing.cancel).toHaveBeenCalledExactlyOnceWith(terminal.invitationId)
+  expect(scope.close).toHaveBeenCalledOnce()
+  expect(container.querySelector("[data-gateway-choice]")?.textContent).toContain(
+    "no person link",
+  )
+})
+
+it("retires a stale pending terminal receipt whose cleanup already completed", async () => {
+  vi.mocked(scope.pairing.pending).mockResolvedValue({
+    items: [{ ...saved(), phase: "terminal", cleanupPending: true }],
+  })
+  vi.mocked(scope.pairing.status).mockResolvedValue({
+    ...saved(),
+    phase: "terminal",
+    cleanupPending: false,
+  })
+  await mount()
+  await click("Resume panel invitations")
+  const resume = present(
+    [...container.querySelectorAll("button")].find((each) =>
+      each.textContent?.startsWith("Resume 01"),
+    ),
+  )
+  await act(async () => resume.click())
+  expect(scope.close).toHaveBeenCalledOnce()
+  expect(container.textContent).not.toContain("Finish removal")
+  expect(scope.pairing.cancel).not.toHaveBeenCalled()
+})
+
+it("retires a terminal approval reply without reviving its old activation notice", async () => {
+  vi.spyOn(deviceKey, "deviceKeyFingerprint").mockResolvedValue("fingerprint")
+  const claimed = {
+    ...saved(),
+    phase: "claimed" as const,
+    claimedDeviceKey: Array(32).fill(7),
+  }
+  vi.mocked(scope.pairing.create).mockResolvedValue({
+    code: "ABCD-EFGH",
+    status: claimed,
+  })
+  vi.mocked(scope.pairing.approve).mockResolvedValue({
+    status: { ...claimed, phase: "terminal", cleanupPending: true },
+    activationStopped: "permanent",
+  })
+  await mount()
+  await click("Continue")
+  await click("Create invitation")
+  await click("Approve matching fingerprint")
+  expect(scope.close).toHaveBeenCalledOnce()
+  expect(container.querySelector("[data-gateway-code]")).toBeNull()
+  expect(container.querySelector("[data-gateway-phase]")?.textContent).toContain("Ended")
+  expect(container.textContent).not.toContain("Activation needs another attempt")
+  expect(container.textContent).toContain("Cleanup is still pending")
+  expect(container.textContent).not.toContain("Finish removal")
 })

@@ -431,12 +431,15 @@ it cannot recover a lost code or change an invitation’s saved choice.
 | Sign-in fails or gateway/org differs | Pin the product endpoint including route/query, translating only `/browser/session` to `/session`; close a mismatched temporary client before any invitation command | Scoped pairing adapter tests |
 | Panel reconnects while its identity is read | Pin its endpoint first; refuse a changed endpoint before sending owner evidence | Scoped pairing adapter tests |
 | Sign-in completes after page closes | Close late client before any command | Scoped pairing adapter tests |
+| Abort while primary/identity/setup is pending | Reject the scope promptly without closing shared panel work; close a late owned client before exposing commands | Scoped pairing adapter tests |
 | Double submit or read overlaps mutation | One operation at a time; reads cannot replace a newer command answer | Gateway pairing view tests |
 | Create answer is lost | Show unconfirmed outcome, read pending; no automatic create replay | Gateway pairing adapter/view tests |
 | Refresh / reopen | Resume owner invitations reauthenticates without asking the choice again; resume panel invitations uses the panel; both read saved choices | Gateway pairing browser check |
 | Claim / approve | Compare claimed key fingerprint, approve exact key; render canonical status and activationStopped | Gateway pairing adapter/browser tests |
 | Fingerprint cannot be computed | Say it is unavailable and withhold approval; never substitute a key | Gateway pairing view tests |
-| Active with owed link | Say activation needs retry; do not claim committed person attribution | Existing canonical link failure probes plus desktop status test |
+| Active with owed link | Discard the consumed code, offer activation retry and do not claim committed person attribution | Existing canonical link failure probes plus desktop status test |
+| Terminal learned by polling or an approval reply | Retire old scope, discard code and activation notice, stop polling; retain cleanupPending without claiming cleanup completed | Gateway pairing view tests |
+| Explicitly resume an unfinished terminal receipt | Read status again; retain the fresh scope only for cleanupPending and explicit Finish removal (canonical cancel retry); retire a complete terminal receipt | Gateway pairing view tests |
 | Cancel / completion / navigation / pagehide / deadline | Close temporary client and discard code and token references; keep canonical records recoverable | Scoped pairing lifecycle tests |
 
 This flow invites a PeerRead gateway. OwnerPhone and Environment entries keep

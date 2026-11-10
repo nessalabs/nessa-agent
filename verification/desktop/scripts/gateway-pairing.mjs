@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 /** #893: a real Integration panel, explicit Human sign-in, immutable PeerRead
  * choice, crash recovery and native enrollment. Only the creation/approval UI
- * under test mutates owner invitations; CLI calls enroll a disposable peer. */
+ * under test mutates invitations; fixture setup also ends one invitation to
+ * exercise terminal polling. CLI calls enroll a disposable peer. */
 import { TEXT_REPLY_SCENARIO } from "../../../scripts/mcp-test-server/scenarios.mjs"
 import { DatabaseSync } from "node:sqlite"
 import { spawn } from "node:child_process"
@@ -199,6 +200,33 @@ await main(
                   path: join(options.evidence, `gateway-choice-${engine}-${layout}.png`),
                 })
               }
+              await signIn(page, stack.token())
+              await page.getByRole("button", { name: "Create invitation" }).click()
+              await page.locator(css.gatewayPairingCode).waitFor()
+              const endedHex = await page
+                .locator(css.gatewayPairingInvitation)
+                .getAttribute("data-gateway-invitation")
+              const endedSession = sessions
+                .filter((each) => each.client === "nessa-pairing")
+                .at(-1)
+              await owner.pairing.cancel(Array.from(Buffer.from(endedHex, "hex")))
+              await page
+                .locator(css.gatewayPairingPhase)
+                .filter({ hasText: "Ended" })
+                .waitFor()
+              await page
+                .getByRole("button", { name: "End pairing sign-in" })
+                .waitFor({ state: "hidden" })
+              requireValue(
+                !(await page.locator(css.gatewayPairingCode).count()),
+                "terminal polling retained the one-use code",
+              )
+              requireValue(
+                await waitFor(async () => endedSession?.closed, 5_000),
+                "terminal polling retained the Human session",
+              )
+              await page.getByRole("button", { name: "Back", exact: true }).click()
+              await enter(page)
               await signIn(page, stack.token())
               await page.getByRole("button", { name: "Create invitation" }).click()
               const code = await page.locator(css.gatewayPairingCode).innerText()
@@ -456,13 +484,14 @@ await main(
                 .click()
               await replacementRow.waitFor({ state: "hidden" })
               return {
-                true: 1,
+                true: 2,
                 false: 2,
                 integrationRefused: 1,
                 refresh: 1,
                 nativeActive: 1,
                 replacementFalseActive: 1,
                 stalePersonLinks: 0,
+                polledTerminalSessionClosed: true,
                 currentDocumentTemporarySessionsClosed: true,
               }
             } finally {

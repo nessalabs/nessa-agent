@@ -28,6 +28,40 @@ export interface GatewayPairing {
 
 type Panel = Pick<NessaClient, "auth" | "pairing"> & { readonly sessionUrl?: string }
 
+/** Abandon this scope's wait without cancelling work owned by the shared panel.
+ * A connection this scope owns is retired if it arrives after cancellation. */
+function inScope<T>(
+  pending: Promise<T>,
+  signal: AbortSignal,
+  retireLate?: (value: T) => void,
+): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const abort = () => {
+      signal.removeEventListener("abort", abort)
+      reject(new DOMException("Pairing closed", "AbortError"))
+    }
+    pending.then(
+      (value) => {
+        signal.removeEventListener("abort", abort)
+        if (signal.aborted) {
+          retireLate?.(value)
+          abort()
+        } else resolve(value)
+      },
+      (error: unknown) => {
+        signal.removeEventListener("abort", abort)
+        reject(error)
+      },
+    )
+    if (signal.aborted) abort()
+    else signal.addEventListener("abort", abort, { once: true })
+  })
+}
+
+function closeLateClient(client: NessaClient): void {
+  client.close()
+}
+
 export function gatewayPairing(options: {
   readonly connected: () => Promise<Panel>
   readonly stage: Stage
@@ -52,36 +86,40 @@ export function gatewayPairing(options: {
       }
       try {
         check()
-        const panel = await options.connected()
+        const panel = await inScope(options.connected(), signal)
         check()
         pairing = panel.pairing
         if (token !== undefined) {
           const endpoint = panel.sessionUrl
           if (!endpoint) throw new Error("Gateway is reconnecting")
-          const expected = await panel.auth.session()
+          const expected = await inScope(panel.auth.session(), signal)
           check()
           if (panel.sessionUrl !== endpoint)
             throw new Error("Gateway changed during sign-in; continue again")
           const url = new URL(endpoint)
           if (url.pathname === "/browser/session") url.pathname = "/session"
-          const client = await options.connect({
-            profile: "product",
-            stage: options.stage,
-            url: url.toString(),
-            auth: { credential: token },
-            role: "surface",
-            surface: { kind: "desktop", instance: options.newId() },
-            client: { id: "nessa-pairing", version: "0.1.0", platform: "browser" },
-            config: new NessaClientConfig({
-              retry: { maxAttempts: 1 },
-              reconnect: { enabled: false },
+          const client = await inScope(
+            options.connect({
+              profile: "product",
+              stage: options.stage,
+              url: url.toString(),
+              auth: { credential: token },
+              role: "surface",
+              surface: { kind: "desktop", instance: options.newId() },
+              client: { id: "nessa-pairing", version: "0.1.0", platform: "browser" },
+              config: new NessaClientConfig({
+                retry: { maxAttempts: 1 },
+                reconnect: { enabled: false },
+              }),
             }),
-          })
+            signal,
+            closeLateClient,
+          )
           // An abort while connect was pending cannot close a client not yet
           // returned. Retire that late result before exposing any command.
           privileged = client
           check()
-          const actual = await client.auth.session()
+          const actual = await inScope(client.auth.session(), signal)
           check()
           if (
             actual.gatewayId !== expected.gatewayId ||

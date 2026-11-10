@@ -163,3 +163,59 @@ it("preserves the trusted product route and routing query rather than selecting 
   )
   scope.close()
 })
+
+it.each(["primary", "panel identity", "owner connect", "owner identity"])(
+  "abandons pending %s promptly on abort without closing the shared panel",
+  async (wait) => {
+    const f = fixture()
+    if (wait === "primary") f.connected.mockReturnValue(new Promise(() => {}))
+    if (wait === "panel identity")
+      f.panel.auth.session.mockReturnValue(new Promise(() => {}))
+    if (wait === "owner connect") f.connect.mockReturnValue(new Promise(() => {}))
+    if (wait === "owner identity")
+      f.privileged.auth.session.mockReturnValue(new Promise(() => {}))
+    const abort = new AbortController()
+    const opened = f.gateway.open("owner-secret", abort.signal)
+    const outcome = opened.catch((error: unknown) => error)
+    const waiting =
+      wait === "primary"
+        ? f.connected
+        : wait === "panel identity"
+          ? f.panel.auth.session
+          : wait === "owner connect"
+            ? f.connect
+            : f.privileged.auth.session
+    await vi.waitFor(() => expect(waiting).toHaveBeenCalledOnce())
+    abort.abort()
+    const answer = await Promise.race([
+      outcome,
+      new Promise((resolve) => setTimeout(() => resolve({ name: "still-pending" }), 0)),
+    ])
+    expect(answer).toMatchObject({ name: "AbortError" })
+    if (wait !== "owner identity") expect(f.privileged.close).not.toHaveBeenCalled()
+    else expect(f.privileged.close).toHaveBeenCalledOnce()
+    if (wait === "primary" || wait === "panel identity")
+      expect(f.connect).not.toHaveBeenCalled()
+  },
+)
+
+it("retires an owned result when abort lands between promise resolution and the awaiting continuation", async () => {
+  const f = fixture()
+  let finish!: (value: NessaClient) => void
+  f.connect.mockImplementation(
+    () =>
+      new Promise((resolve) => {
+        finish = resolve
+      }),
+  )
+  const abort = new AbortController()
+  const opened = f.gateway.open("owner-secret", abort.signal)
+  const outcome = opened.catch((error: unknown) => error)
+  await vi.waitFor(() => expect(f.connect).toHaveBeenCalledOnce())
+  finish(f.privileged as unknown as NessaClient)
+  queueMicrotask(() => abort.abort())
+  expect(await outcome).toMatchObject({ name: "AbortError" })
+  expect(f.privileged.close).toHaveBeenCalledOnce()
+  expect(f.privileged.auth.session).not.toHaveBeenCalled()
+  expect(f.pairing.create).not.toHaveBeenCalled()
+})

@@ -11,6 +11,7 @@ import {
   type GatewayPairing,
   type PairingScope,
 } from "../adapters/gateway-pairing"
+import { gatewayEnrollmentCommand } from "../model/gateway-pairing"
 import { bytesToHex, deviceKeyFingerprint } from "../../settings/model/device-key"
 
 type PairingOwnerStatus = Awaited<ReturnType<PairingApi["status"]>>
@@ -151,9 +152,24 @@ export function AddGateway({
     setMessage("")
   }
 
-  function apply(next: PairingOwnerStatus) {
+  function finishReceipt() {
+    retire()
+    setSignedIn(false)
+    setBusy(false)
+    setCode(undefined)
+  }
+
+  function apply(next: PairingOwnerStatus, { resuming = false } = {}) {
     setStatus(next)
     setMessage("")
+    if (next.phase === "active") setCode(undefined)
+    if (next.phase === "terminal") {
+      setCode(undefined)
+      setActivationStopped(false)
+      // Only a fresh, explicitly resumed unfinished receipt keeps a scope
+      // for Finish removal. Polling an ended invitation retires its old one.
+      if (!resuming || !next.cleanupPending) finishReceipt()
+    }
   }
 
   const invitation = status && bytesToHex(status.invitationId)
@@ -191,7 +207,8 @@ export function AddGateway({
         const next = await opened.pairing.status(id)
         if (current === generation.current) apply(next)
       }).finally(() => {
-        if (live) cancel = gateway.after(2_000, tick)
+        if (live && readGeneration === generation.current)
+          cancel = gateway.after(2_000, tick)
       })
     }
     cancel = gateway.after(2_000, tick)
@@ -370,11 +387,17 @@ export function AddGateway({
               size="30"
               shape="pill"
               disabled={busy}
-              onClick={() => {
-                setCode(undefined)
-                setActivationStopped(false)
-                apply(each)
-              }}
+              onClick={() =>
+                void run(async () => {
+                  const current = generation.current
+                  const next = await currentScope().pairing.status(each.invitationId)
+                  if (current !== generation.current) return
+                  setCode(undefined)
+                  setActivationStopped(false)
+                  apply(next, { resuming: true })
+                  page.current?.focus()
+                })
+              }
             >
               Resume {bytesToHex(each.invitationId)} —{" "}
               {each.samePerson === undefined
@@ -401,20 +424,24 @@ export function AddGateway({
           {code ? (
             <div>
               <p>
-                On the other gateway, run this with this gateway’s native IP address and
-                port in place of GATEWAY_IP:{port}:
+                In a POSIX shell or PowerShell on the other gateway, run this with this
+                gateway’s native IP address and port in place of GATEWAY_IP:{port}:
               </p>
-              <pre className="devices-gateway-command">{`nessa call peer.enroll --params '${JSON.stringify({ address: `GATEWAY_IP:${port}`, code })}'`}</pre>
+              <pre className="devices-gateway-command">
+                {gatewayEnrollmentCommand(port, code)}
+              </pre>
               <p>
                 One-use code: <code data-gateway-code>{code}</code>
               </p>
             </div>
-          ) : (
+          ) : status.phase === "terminal" ? (
+            <p>This invitation has ended. Its code can no longer be used.</p>
+          ) : status.phase !== "active" ? (
             <p>
               The code is shown only when created. Cancel this invitation to make a
               different choice or get a new code.
             </p>
-          )}
+          ) : null}
           {fingerprint && (
             <p>
               Compare this fingerprint with the other gateway before approving:{" "}
@@ -433,9 +460,7 @@ export function AddGateway({
             </p>
           )}
           {status.cleanupPending && (
-            <p>
-              Cleanup is still pending. Read this invitation again before replacing it.
-            </p>
+            <p>Cleanup is still pending. Resume this invitation to finish removal.</p>
           )}
           {signedIn && (
             <div>
@@ -456,13 +481,10 @@ export function AddGateway({
                         key,
                       )
                       if (current !== generation.current) return
-                      apply(reply.status)
                       setActivationStopped(reply.activationStopped !== undefined)
+                      apply(reply.status)
                       if (reply.status.phase === "active" && !reply.activationStopped) {
-                        retire()
-                        setSignedIn(false)
-                        setBusy(false)
-                        setCode(undefined)
+                        finishReceipt()
                       }
                     })
                   }
@@ -483,14 +505,10 @@ export function AddGateway({
                     const next = await currentScope().pairing.cancel(status.invitationId)
                     if (current !== generation.current) return
                     apply(next)
-                    retire()
-                    setSignedIn(false)
-                    setBusy(false)
-                    setCode(undefined)
                   })
                 }
               >
-                Cancel invitation
+                {status.phase === "terminal" ? "Finish removal" : "Cancel invitation"}
               </Button>
             </div>
           )}

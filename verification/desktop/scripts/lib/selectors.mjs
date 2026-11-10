@@ -22,6 +22,7 @@ export const css = {
   gatewayPairingPage: '[data-devices-page="add-gateway"]',
   gatewayPairingCode: "[data-gateway-code]",
   gatewayPairingChoice: "[data-gateway-choice]",
+  gatewayPairingPhase: "[data-gateway-phase]",
   gatewayPairingFingerprint: "[data-gateway-fingerprint]",
   gatewayPairingInvitation: "[data-gateway-invitation]",
   devicesAddAction: '[data-devices-action="add"]',

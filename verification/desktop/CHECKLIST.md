@@ -2610,6 +2610,13 @@ vault dialog blocking the main conversation click.
   socket while the panel stays connected. Unit tests cover deadline, pagehide,
   unmount, late connect and rejected commands after close. _Check:_
   `add-gateway.test.tsx`, `gateway-pairing.test.ts` and `gateway-pairing.mjs`.
+- [ ] **Ended invitations retire the old session.** A terminal poll discards
+  the code and closes the temporary socket. A fresh explicit resume reads status
+  again and keeps a scope only for unfinished removal. Aborting any pending
+  connection or identity read settles promptly without closing shared panel work;
+  a late owned client closes before it exposes a command. _Check:_
+  `gateway-pairing.mjs` (terminal poll), `add-gateway.test.tsx` (terminal replies,
+  stale pending reads and Finish removal), and adapter abort regressions.
 - [ ] **A conversation continues after both choices.** Conversation stress's
   `gatewayPairings` knob defaults to one true/false/cancel cycle, turns native
   linking off again, and sends another message, retaining background, follower,
