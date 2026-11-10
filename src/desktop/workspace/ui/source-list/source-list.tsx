@@ -19,6 +19,7 @@ import {
 import { useBesideKey } from "../session-actions"
 import { contextMenuFromKey } from "../../adapters/dom/context-menu-key"
 import { IdentityFooter } from "../chrome/identity-footer"
+import type { EdgePeekControls } from "../../../adapters/use-edge-peek"
 import { useSidebarPeek, useWorkspaceFrame } from "../workspace-frame"
 import { ChannelBranch } from "./channel-branch"
 import { ChannelRow } from "./channel-row"
@@ -39,6 +40,13 @@ import {
  * stands alone — search, the Agents overview's entry, then channels that
  * disclose their sessions inline. Window actions live in the shared top bar.
  */
+/** The peek's holders that only say the pointer or focus has left. */
+function departures(peek: EdgePeekControls | null) {
+  if (!peek) return {}
+  const { onPointerLeave, onBlur } = peek.holders
+  return { onPointerLeave, onBlur }
+}
+
 export const SourceList = memo(function SourceList({
   variant,
   open,
@@ -118,8 +126,14 @@ export const SourceList = memo(function SourceList({
       data-parked={parked || undefined}
       aria-hidden={away || undefined}
       // Its reach has one owner at a time: the peek's holders while revealed,
-      // the guards while it slides away, `inert` once parked.
-      {...(away ? slidingGuards(!parked) : open ? {} : peek?.holders)}
+      // the guards while it slides away, `inert` once parked. Folded, the
+      // peek still hears the pointer and focus leave it, which is how a
+      // dismissed reveal stops being held (`use-edge-peek.ts`).
+      {...(away
+        ? { ...slidingGuards(!parked), ...departures(peek) }
+        : open
+          ? {}
+          : peek?.holders)}
     >
       <div className="workspace-sidebar-scroll">
         {variant === "channels" ? <ChannelsTop /> : <TreeTop />}
