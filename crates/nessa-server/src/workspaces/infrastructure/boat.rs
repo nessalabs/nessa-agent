@@ -34,10 +34,13 @@ use workspace_sdk::{
 };
 
 /// How long making a thread's VM ready may take: waiting out a stop still
-/// in progress, resuming it and waiting for it, with both checks. It leaves
-/// the rest of the workspace connect budget (`agent-startup-budgets.json`,
-/// 120 s) for the connection and its configuration.
-const READY_BUDGET: Duration = Duration::from_secs(100);
+/// in progress, resuming it and waiting for it, with both checks. The rest
+/// of [`CONNECT_BUDGET`] attaches the workspace, opens its connection and
+/// writes its configuration.
+const READY_BUDGET: Duration = Duration::from_secs(85);
+/// The whole workspace connect budget (`agent-startup-budgets.json`,
+/// 120 s), less a margin for the caller's own records.
+const CONNECT_BUDGET: Duration = Duration::from_secs(115);
 /// Boat's size for every thread's VM.
 const MACHINE_TYPE: &str = "small";
 /// Where each thread's workspace is made inside its VM.
@@ -71,71 +74,13 @@ impl BoatProvider {
             .map_err(|_| Failure::Provider)?
             .with_budget(Budget::new(READY_BUDGET).map_err(|_| Failure::Provider)?))
     }
-}
-
-/// The VM `connection` makes for `thread`, or, without a thread, the spec
-/// its existing VMs are checked and woken with: variables are only sent
-/// when one is made.
-fn spec(connection: &BoatConnection, thread: Option<&str>) -> Result<MachineSpec, Failure> {
-    let variables = thread
-        .map(|thread| BTreeMap::from([("NESSA_THREAD_ID".to_owned(), thread.to_owned())]))
-        .unwrap_or_default();
-    MachineSpec::new(
-        connection.image.clone(),
-        connection.environment.clone(),
-        MACHINE_TYPE,
-        connection.auto_stop.seconds(),
-        variables,
-    )
-    .map_err(|_| Failure::InvalidInput)
-}
-
-#[async_trait]
-impl Provider for BoatProvider {
-    async fn validate(&self, connection: &BoatConnection) -> Result<(), Failure> {
-        // Nessa admits only its own environment: a name it would refuse on
-        // every creation is refused before anything is made for it.
-        nessa_environment(&connection.environment)?;
-        let spec = spec(connection, None)?;
-        self.machines(connection)?
-            .prepare(&spec)
-            .await
-            .map_err(failure)
-    }
-    async fn create(
+    /// The thread's workspace in the ready `vm`, and its connection.
+    async fn attach(
         &self,
-        connection: &BoatConnection,
-        thread: &str,
-    ) -> Result<WorkspaceReceipt, Failure> {
-        nessa_environment(&connection.environment)?;
-        let spec = spec(connection, Some(thread))?;
-        let created = self
-            .machines(connection)?
-            .create(&spec, &format!("nessa-thread-{thread}"))
-            .await
-            .map_err(failure)?;
-        Ok(WorkspaceReceipt {
-            vm: created.vm().into(),
-            admission: identity_from(created.admission())?,
-            refusal: created.refusal().map(rejection_from),
-            disposition: match created.disposition() {
-                Disposition::RollbackNewVm => RefusalDisposition::RollbackNewVm,
-                Disposition::RetainTarget => RefusalDisposition::RetainTarget,
-            },
-        })
-    }
-    async fn connect(
-        &self,
-        connection: &BoatConnection,
+        machines: BoatMachines,
         thread: &str,
         vm: &str,
-        admission: &EnvironmentIdentity,
     ) -> Result<Arc<dyn WorkspaceRuntime>, Failure> {
-        let machines = self.machines(connection)?;
-        machines
-            .ready(&spec(connection, None)?, vm, &identity_to(admission)?)
-            .await
-            .map_err(failure)?;
         // An attachment for this connection only: Nessa's assignments are
         // the VM's record, so the SDK's is made here and dropped with it.
         let records = tempfile::tempdir().map_err(|_| Failure::Storage)?;
@@ -182,6 +127,93 @@ impl Provider for BoatProvider {
             vm,
         )?;
         Ok(Arc::new(super::runtime::BoatRuntime { access }))
+    }
+}
+
+/// The VM `connection` makes for `thread`, or, without a thread, the spec
+/// its existing VMs are checked and woken with: variables are only sent
+/// when one is made.
+fn spec(connection: &BoatConnection, thread: Option<&str>) -> Result<MachineSpec, Failure> {
+    let variables = thread
+        .map(|thread| BTreeMap::from([("NESSA_THREAD_ID".to_owned(), thread.to_owned())]))
+        .unwrap_or_default();
+    MachineSpec::new(
+        connection.image.clone(),
+        connection.environment.clone(),
+        MACHINE_TYPE,
+        connection.auto_stop.seconds(),
+        variables,
+    )
+    .map_err(|_| Failure::InvalidInput)
+}
+
+#[async_trait]
+impl Provider for BoatProvider {
+    async fn validate(&self, connection: &BoatConnection) -> Result<(), Failure> {
+        // Nessa admits only its own environment: a name it would refuse on
+        // every creation is refused before anything is made for it.
+        nessa_environment(&connection.environment)?;
+        let spec = spec(connection, None)?;
+        self.machines(connection)?
+            .prepare(&spec)
+            .await
+            .map_err(failure)
+    }
+    async fn create(
+        &self,
+        connection: &BoatConnection,
+        thread: &str,
+    ) -> Result<WorkspaceReceipt, Failure> {
+        nessa_environment(&connection.environment)?;
+        let spec = spec(connection, Some(thread))?;
+        let machines = self.machines(connection)?;
+        let created = machines
+            .create(&spec, &format!("nessa-thread-{thread}"))
+            .await
+            .map_err(failure)?;
+        let mut refusal = created.refusal().map(rejection_from);
+        // A new VM still wiping what its image carried is clean once it
+        // restarts, and waking it is that restart: it is stopped and kept,
+        // and `connect` decides once it is ready, checking it in full. One
+        // Boat replayed may be in use elsewhere, so its refusal stands.
+        if created.disposition() == Disposition::RollbackNewVm
+            && refusal.as_ref().map(AdmissionRejection::cause)
+                == Some(AdmissionRefusal::WipePending)
+        {
+            // A stop Boat refused leaves it running; the check before
+            // waking then refuses it as still wiping.
+            let _ = machines.stop(created.vm(), StopCause::NotAdmitted).await;
+            refusal = None;
+        }
+        Ok(WorkspaceReceipt {
+            vm: created.vm().into(),
+            admission: identity_from(created.admission())?,
+            refusal,
+            disposition: match created.disposition() {
+                Disposition::RollbackNewVm => RefusalDisposition::RollbackNewVm,
+                Disposition::RetainTarget => RefusalDisposition::RetainTarget,
+            },
+        })
+    }
+    async fn connect(
+        &self,
+        connection: &BoatConnection,
+        thread: &str,
+        vm: &str,
+        admission: &EnvironmentIdentity,
+    ) -> Result<Arc<dyn WorkspaceRuntime>, Failure> {
+        let deadline = tokio::time::Instant::now() + CONNECT_BUDGET;
+        let machines = self.machines(connection)?;
+        machines
+            .ready(&spec(connection, None)?, vm, &identity_to(admission)?)
+            .await
+            .map_err(failure)?;
+        // What follows the VM being ready is bounded by what is left; a
+        // ready VM left unconnected is stopped by its next rest or its
+        // lifetime.
+        tokio::time::timeout_at(deadline, self.attach(machines, thread, vm))
+            .await
+            .map_err(|_| Failure::Provider)?
     }
     async fn stop(
         &self,
@@ -260,7 +292,11 @@ async fn write_config(
         .await
         .map_err(|_| Failure::Provider)?;
     if written.end != workspace_sdk::ports::ProcessEnd::Exited(0) {
-        tracing::warn!(stderr = %written.stderr, "Boat VM configuration was not written");
+        // The VM's own words: logged a line at a time, each escaped.
+        crate::conversation::infrastructure::ssh_environment::log_stderr(
+            "boat configuration",
+            std::io::Cursor::new(written.stderr.into_bytes()),
+        );
         return Err(Failure::Provider);
     }
     Ok(())

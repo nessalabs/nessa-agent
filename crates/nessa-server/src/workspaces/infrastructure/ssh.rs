@@ -254,13 +254,16 @@ impl ArtifactChannels for VmLink {
         let (ours, mut theirs) = tokio::io::duplex(CHANNEL_BUFFER);
         let connection = self.connection.clone();
         let carried = runtime.spawn(async move {
-            let Ok(FileChannel {
+            let FileChannel {
                 from_machine,
                 to_machine,
                 process,
-            }) = connection.files().await
-            else {
-                return;
+            } = match connection.files().await {
+                Ok(channel) => channel,
+                Err(error) => {
+                    tracing::warn!(%error, "Boat file channel could not be opened");
+                    return;
+                }
             };
             let mut machine = tokio::io::join(from_machine, to_machine);
             let _ = tokio::io::copy_bidirectional(&mut theirs, &mut machine).await;
