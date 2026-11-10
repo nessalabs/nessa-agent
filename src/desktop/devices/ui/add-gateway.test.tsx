@@ -335,6 +335,7 @@ it("withholds approval if the fingerprint cannot be computed", async () => {
     ),
   )
   expect(approve.disabled).toBe(true)
+  expect(approve.getAttribute("aria-disabled")).toBe("true")
   expect(scope.pairing.approve).not.toHaveBeenCalled()
 })
 
@@ -718,3 +719,44 @@ it("hands keyboard focus to creation and its receipt without stealing it on a po
   await act(async () => vi.advanceTimersByTimeAsync(2_000))
   expect(document.activeElement).toBe(cancel)
 })
+
+it.each(["Cancel invitation", "Approve matching fingerprint"])(
+  "keeps %s focused but unavailable throughout a held status read",
+  async (label) => {
+    vi.spyOn(deviceKey, "deviceKeyFingerprint").mockResolvedValue("matching fingerprint")
+    const status =
+      label === "Cancel invitation"
+        ? saved()
+        : { ...saved(), phase: "claimed" as const, claimedDeviceKey: Array(32).fill(7) }
+    vi.mocked(scope.pairing.create).mockResolvedValue({ code: "ABCD-EFGH", status })
+    let finish: (value: typeof status) => void = () => {
+      throw new Error("status was not read")
+    }
+    vi.mocked(scope.pairing.status).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve
+        }),
+    )
+    await mount()
+    await click("Continue")
+    await click("Create invitation")
+    const control = present(
+      [...container.querySelectorAll("button")].find(
+        (button) => button.textContent === label,
+      ),
+    )
+    await act(async () => control.focus())
+    expect(document.activeElement).toBe(control)
+    await act(async () => vi.advanceTimersByTimeAsync(2_000))
+    expect(control.disabled).toBe(false)
+    expect(control.getAttribute("aria-disabled")).toBe("true")
+    expect(document.activeElement).toBe(control)
+    await act(async () => control.click())
+    expect(scope.pairing.cancel).not.toHaveBeenCalled()
+    expect(scope.pairing.approve).not.toHaveBeenCalled()
+    await act(async () => finish(status))
+    expect(control.getAttribute("aria-disabled")).toBe("false")
+    expect(document.activeElement).toBe(control)
+  },
+)

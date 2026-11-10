@@ -37,6 +37,7 @@ const wireCodes = [
 ]
 
 const invitationId = Array.from({ length: 16 }, (_, index) => index + 1)
+const ownerPhoneClass = "gateway-owner-conversation-read-write"
 const deviceKey = Array.from({ length: 32 }, () => 1)
 const grant = (action) => ({
   action,
@@ -119,6 +120,10 @@ function scriptedGateway(scenario) {
   let devices = [...(scenario.devices ?? [])]
   let subscriptions = 0
   const unexpected = []
+  const cancellations = []
+  const enrollees = []
+  const readWaiters = []
+  const heldReads = []
   const known = new Set([
     "server.health",
     "channel.list",
@@ -208,9 +213,16 @@ function scriptedGateway(scenario) {
       }
     if (method === "pairing.pending") return { ok: true, payload: { items: invitations } }
     if (method === "pairing.create") {
+      enrollees.push(params?.enrollee)
+      if (params?.enrollee !== "ownerPhone")
+        return {
+          ok: false,
+          error: { code: "invalid_request", message: "owner phone required" },
+        }
       if (invitations.some((item) => item.phase === "available"))
         return { ok: false, error: { code: "pairing_slot_occupied", message: "open" } }
       const created = status({
+        class: ownerPhoneClass,
         expiresAtMs: scenario.expire ? 1 : Date.now() + 120_000,
       })
       invitations.push(created)
@@ -219,6 +231,7 @@ function scriptedGateway(scenario) {
     const id = params?.invitationId
     const found = invitations.find((item) => same(item.invitationId, id))
     if (method === "pairing.cancel") {
+      cancellations.push(params?.invitationId)
       if (!found)
         return { ok: false, error: { code: "pairing_not_found", message: "gone" } }
       const at = invitations.indexOf(found)
@@ -226,6 +239,7 @@ function scriptedGateway(scenario) {
       return {
         ok: true,
         payload: status({
+          class: found.class,
           phase: "terminal",
           terminal: {
             cause: "cancelled",
@@ -301,7 +315,14 @@ function scriptedGateway(scenario) {
         return
       }
       const result = reply(frame.method, frame.params, publish)
-      socket.send(JSON.stringify({ type: "res", id: frame.id, ...result }))
+      // Freeze the read at its original observation, before a later cancel
+      // mutates the fixture. FIFO release exercises the reducer's sequence fence.
+      const response = JSON.stringify({ type: "res", id: frame.id, ...result })
+      const held = frame.method === "pairing.pending" ? readWaiters.shift() : null
+      if (held) {
+        heldReads.push(() => socket.send(response))
+        held()
+      } else socket.send(response)
       if (
         (frame.method === "pairing.setLinking" || frame.method === "pairing.setTunnel") &&
         result.ok
@@ -325,7 +346,27 @@ function scriptedGateway(scenario) {
     })
   }
 
-  return { route, unexpected }
+  return {
+    route,
+    unexpected,
+    cancellations,
+    enrollees,
+    replaceInvitations: (items) => invitations.splice(0, invitations.length, ...items),
+    holdNextRead: () =>
+      new Promise((resolve, reject) => {
+        const timer = setTimeout(
+          () => reject(new Error("quiet read did not arrive in 5 seconds")),
+          5_000,
+        )
+        readWaiters.push(() => {
+          clearTimeout(timer)
+          resolve()
+        })
+      }),
+    releaseReads: () => {
+      for (const release of heldReads.splice(0)) release()
+    },
+  }
 }
 
 function gatewayUrl(url) {
@@ -341,6 +382,7 @@ async function openGateway(browser, url, scenario) {
     layout: "columns",
     width: 1200,
     height: 900,
+    preparePage: scenario.clock ? async (page) => page.clock.install() : undefined,
     beforeLoad: async (context) => {
       const ok = (route) =>
         route.fulfill({ status: 200, contentType: "application/json", body: "{}" })
@@ -474,7 +516,7 @@ await main(meta, async ({ options, rep, url }) => {
         const opened = await openGateway(browser, url, scenario)
         try {
           await showLinked(opened.page)
-          const failures = await check(opened.page)
+          const failures = await check(opened.page, opened.gate)
           const text = await panelText(opened.page)
           return {
             failures: [
@@ -484,6 +526,7 @@ await main(meta, async ({ options, rep, url }) => {
             ],
           }
         } finally {
+          opened.gate.releaseReads()
           await opened.close()
         }
       })
@@ -638,6 +681,155 @@ await main(meta, async ({ options, rep, url }) => {
         ...fit,
       ].filter(Boolean)
     })
+
+    for (const target of ["modal", "row"]) {
+      await gatewayStep(
+        `cancel-during-poll-${target}`,
+        {
+          mode: "on",
+          clock: true,
+          ...(target === "row"
+            ? { invitations: [status({ phase: "available", class: ownerPhoneClass })] }
+            : {}),
+        },
+        async (page, gate) => {
+          if (target === "modal") {
+            await page.locator(selectorFor.linkedAction("pair")).click()
+            await page.locator(css.pairingDialog).waitFor({ timeout: 10_000 })
+          }
+          const cancel = page.locator(
+            target === "modal"
+              ? `${css.pairingDialog} ${selectorFor.linkedAction("cancel")}`
+              : `${css.linked} ${selectorFor.linkedAction("cancel")}`,
+          )
+          const press = await cancel.evaluateHandle((button) => {
+            const observed = []
+            button.addEventListener(
+              "pointerdown",
+              () =>
+                observed.push({
+                  disabled: button.disabled,
+                  busy:
+                    document
+                      .querySelector('[data-setting="linked-devices"][data-connection]')
+                      ?.getAttribute("aria-busy") === "true",
+                }),
+              { once: true },
+            )
+            return observed
+          })
+          try {
+            const box = await cancel.boundingBox()
+            if (!box) throw new Error("Cancel has no pointer target")
+            await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
+            await page.mouse.down()
+            const initial = await press.jsonValue()
+            if (initial.length !== 1 || initial[0].disabled || initial[0].busy)
+              throw new Error("Cancel did not start enabled and quiet")
+            const polling = gate.holdNextRead()
+            await page.clock.fastForward(4_000)
+            await polling
+            if (!(await cancel.isEnabled()))
+              throw new Error("quiet polling disabled Cancel during its pointer gesture")
+            if ((await page.locator(css.linked).getAttribute("aria-busy")) !== "true")
+              throw new Error("the quiet read was not pending during the gesture")
+            const reconciling = gate.holdNextRead()
+            await page.mouse.up()
+            await reconciling
+            if (JSON.stringify(gate.cancellations) !== JSON.stringify([invitationId]))
+              throw new Error("Cancel did not target exactly the held invitation once")
+            if (
+              JSON.stringify(gate.enrollees) !==
+              JSON.stringify(target === "modal" ? ["ownerPhone"] : [])
+            )
+              throw new Error(
+                "phone cancellation changed enrollment consent or created again",
+              )
+            if ((await page.locator(css.pairingDialog).count()) !== 0)
+              throw new Error("confirmed cancellation left its modal open")
+            // The old available snapshot is delivered before the new empty
+            // reconciliation snapshot on the same socket. Neither may revive
+            // a code or a hidden invitation after the captured cancellation.
+            gate.releaseReads()
+            await page.waitForFunction(
+              (selector) => {
+                const button = document.querySelector(selector)
+                return button && !button.disabled
+              },
+              selectorFor.linkedAction("pair"),
+              { timeout: 10_000 },
+            )
+            return [
+              (await page.locator(selectorFor.linkedAction("show")).count()) === 0
+                ? null
+                : "the old poll restored the code",
+              gate.cancellations.length === 1
+                ? null
+                : "a late read replayed cancellation",
+              ...(await laidOut(page)),
+            ].filter(Boolean)
+          } finally {
+            await page.mouse.up()
+            await press.dispose()
+          }
+        },
+      )
+    }
+
+    await gatewayStep(
+      "cancel-retarget",
+      {
+        mode: "on",
+        clock: true,
+        invitations: [status({ phase: "available", class: ownerPhoneClass })],
+      },
+      async (page, gate) => {
+        const cancel = page.locator(`${css.linked} ${selectorFor.linkedAction("cancel")}`)
+        const old = await cancel.elementHandle()
+        if (!old) throw new Error("the held invitation has no Cancel target")
+        try {
+          const box = await cancel.boundingBox()
+          if (!box || !(await cancel.isEnabled()))
+            throw new Error("Cancel is not actionable")
+          await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
+          await page.mouse.down()
+          const other = invitationId.map((byte) => byte + 16)
+          const otherHex = other
+            .map((byte) => byte.toString(16).padStart(2, "0"))
+            .join("")
+          gate.replaceInvitations([
+            status({
+              invitationId: other,
+              consentId: Array.from({ length: 16 }, () => 3),
+              class: ownerPhoneClass,
+              phase: "available",
+            }),
+          ])
+          await page.clock.fastForward(4_000)
+          await page
+            .locator(
+              `${selectorFor.linkedAction("cancel")}[data-invitation="${otherHex}"]`,
+            )
+            .waitFor({ timeout: 10_000 })
+          if (await old.evaluate((button) => button.isConnected))
+            throw new Error("the pressed Cancel target was rebound to another invitation")
+          await page.mouse.up()
+          await cancel.click()
+          await page
+            .locator(selectorFor.linkedAction("pair"))
+            .waitFor({ timeout: 10_000 })
+          return [
+            JSON.stringify(gate.cancellations) === JSON.stringify([other])
+              ? null
+              : "the stale gesture cancelled or retargeted an invitation",
+            gate.enrollees.length === 0 ? null : "cancellation created an invitation",
+          ].filter(Boolean)
+        } finally {
+          await page.mouse.up()
+          await old.dispose()
+        }
+      },
+    )
 
     await gatewayStep(
       "approve",

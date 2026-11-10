@@ -2291,7 +2291,12 @@ from an enrollment that still names the credential. Without a fingerprint,
 Approve is withheld; Deny remains. Revoke is `credential.revoke`. The window
 says an open connection ends the next time it reads.
 
-One request is in flight. A poll does not clear what an action said. A
+One request owns the current result. Explicit Cancel can supersede a quiet
+background poll; that read may still physically finish, but its old sequence
+cannot apply. Initial reads, reconciliation reads and mutations stay held.
+The gateway still decides cancellation against its current enrollment. This
+scheduling rule changes no credential class, grant or owner-phone consent.
+A poll does not clear what an action said. A
 read's error does not stay once a later poll succeeds, and a hidden code is
 said only while that invitation is still open. A
 create that was not answered shows no code; a later available invitation
@@ -2330,3 +2335,8 @@ already saved either way.
 | L26 | The modal is closed (Escape or its close button) with the code still open | The code stays open; the row says so and offers Show code, which takes focus and reopens the same code even when pointer activation left focus on an unrelated control. Closing is view state only and sends nothing | `linked-devices-tab.test.tsx`; `linked-devices.mjs` `pair`; `conversation-stress.mjs` `linking` |
 | L27 | The window's injected clock passes an open code's deadline, or a code is shown already past it | No orb is drawn; the code says expired | `linked-devices-tab.test.tsx`; `linked-devices.mjs` `expired` |
 | L28 | A device uses the code while the modal is up | Its fingerprint, Approve and Deny are in the modal, not again on the page; a notice is said in the modal while it is up | `linked-devices-tab.test.tsx` |
+| L29 | A quiet poll starts between Cancel's pointerdown and pointerup | Cancel remains enabled while connected, linking on, no restart or revoke confirmation, and an invitation is held. Cancel captures that invitation and owns a new sequence; exactly one cancellation is sent. Other controls remain held | `linked-devices-cancel.test.ts`; `linked-devices-tab.test.tsx`; `linked-devices.mjs` `cancel-during-poll-modal` / `cancel-during-poll-row` |
+| L30 | A superseded poll returns success, refusal or failure, before or after cancellation's response and reconciliation | Its old sequence changes nothing, including code and action notice. Only the cancellation and its new reconciliation read can apply; no mutation is replayed | `linked-devices-cancel.test.ts`; `linked-devices-tab.test.tsx`; `linked-devices.mjs` `cancel-during-poll-modal` / `cancel-during-poll-row` |
+| L31 | The poll settles before Cancel is admitted | A captured A command remains admissible only while A is held. Removing A or replacing it with B rejects the stale A command; a fresh B gesture explicitly targets B. Cancel buttons change DOM identity with their invitation so a pressed A target cannot be rebound to B | `linked-devices-cancel.test.ts`; `linked-devices-tab.test.tsx`; `linked-devices.mjs` `cancel-retarget` |
+| L32 | Initial/reconciliation read, mutation, status, restart, disconnected state or revoke confirmation | Cancel stays held. An unanswered cancellation reconciles through the existing read; reconnect never replays the mutation | `linked-devices-cancel.test.ts`; `linked-devices-tab.test.tsx` |
+| L33 | A quiet poll is pending for a hidden invitation whose code is not held | Cancel captures that invitation without inventing a secret; its old poll cannot restore it after cancellation | `linked-devices-cancel.test.ts` |

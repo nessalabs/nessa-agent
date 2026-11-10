@@ -483,8 +483,10 @@ export function AddGateway({
                     variant="inverse"
                     size="30"
                     shape="pill"
-                    disabled={busy || !fingerprint}
-                    onClick={() =>
+                    disabled={!fingerprint}
+                    aria-disabled={busy || !fingerprint}
+                    onClick={() => {
+                      if (busy || !fingerprint) return
                       void run(async () => {
                         const current = generation.current
                         const key = status.claimedDeviceKey
@@ -499,26 +501,28 @@ export function AddGateway({
                           finishReceipt()
                         }
                       })
-                    }
+                    }}
                   >
                     {status.phase === "claimed"
                       ? "Approve matching fingerprint"
                       : "Retry activation"}
                   </Button>
                 )}
+              {/* A status read holds activation without natively blurring focus. */}
               <Button
                 variant="tinted"
                 size="30"
                 shape="pill"
-                disabled={busy}
-                onClick={() =>
+                aria-disabled={busy}
+                onClick={() => {
+                  if (busy) return
                   void run(async () => {
                     const current = generation.current
                     const next = await currentScope().pairing.cancel(status.invitationId)
                     if (current !== generation.current) return
                     apply({ type: "read", status: next })
                   })
-                }
+                }}
               >
                 {status.phase === "terminal" ? "Finish removal" : "Cancel invitation"}
               </Button>

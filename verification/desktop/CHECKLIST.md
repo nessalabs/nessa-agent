@@ -1121,6 +1121,14 @@ phone's scanner is not this screen.
   `linked-devices.test.ts`, `linked-devices-gateway.test.ts`,
   `device-key.test.ts`.
 
+- [ ] **A phone-code Cancel survives a quiet poll during its pointer gesture.**
+  Modal and hidden-row controls keep the captured invitation; late poll replies
+  cannot resurrect it. Replacing A with B removes the pressed A control, and only
+  a fresh B gesture may cancel B. Initial/reconciliation reads and mutations keep
+  Cancel held. _Check:_ `linked-devices.mjs` (`cancel-during-poll-modal`,
+  `cancel-during-poll-row`, `cancel-retarget`), both engines;
+  `linked-devices-cancel.test.ts`, `linked-devices-tab.test.tsx`, rows L29–L33.
+
 - [ ] **Settings opens and leaves**; the window under it is inert while open.
   _Check:_ `smoke.mjs` (`settings`); inertness by hand (click under it).
 - [ ] **Its sidebar folds for room below a 420px page.** _Check:_
@@ -2600,7 +2608,10 @@ vault dialog blocking the main conversation click.
 
 - [ ] **Focus and command layout follow the new page.** Entry, creation, resume,
   permanent stop and completion focus the visible region; ready creation focuses
-  Create, and polling preserves the chosen control. The command fits its normal
+  Create, and polling preserves the chosen control. While an exact native status
+  response is held, the selected Cancel/Approve remains focusable and ARIA
+  unavailable; keyboard activation sends no mutation. Releasing that response
+  preserves focus with zero focusout events. The command fits its normal
   surface and a test-constrained 240px surface. _Check:_ `gateway-pairing.mjs`,
   Chromium/WebKit, both layouts; view focus regressions.
 - [ ] **Choose before creating a PeerRead code.** Devices → Add device → Gateway
