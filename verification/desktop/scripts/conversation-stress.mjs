@@ -5352,6 +5352,19 @@ const steps = {
             `${css.channelSettingsOpen}[data-channel-settings-open="${channel.channelId}"]`,
           )
           .click()
+        try {
+          await chooseComputer()
+        } finally {
+          // Closed whatever happened, menu first: nothing after this step
+          // can reach the window past an open dialog.
+          const dialog = run.page.locator(css.channelSettingsDialog)
+          for (let tries = 0; tries < 3 && (await dialog.count()) > 0; tries += 1) {
+            await run.page.keyboard.press(keys.escape)
+            await dialog.waitFor({ state: "detached", timeout: 2_000 }).catch(() => {})
+          }
+        }
+      })
+      async function chooseComputer() {
         const control = run.page
           .locator(css.channelSettingsDialog)
           .locator(`[data-channel-placement="${channel.channelId}"]`)
@@ -5370,8 +5383,7 @@ const steps = {
           await run.page.screenshot({
             path: join(run.evidence, `place-${run.engine}-${channel.channelId}.png`),
           })
-        await run.page.keyboard.press(keys.escape)
-      })
+      }
       const { channels } = await run.client.channels.list()
       const listed = channels.find((each) => each.channelId === channel.channelId)
       if (
