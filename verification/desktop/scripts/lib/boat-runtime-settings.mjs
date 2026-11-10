@@ -68,6 +68,19 @@ export async function channelRuntimeSettings(run, channel, failures) {
     // pasted in a dialog, never in a field in the list; Auto-stop is its own
     // row beside Boat's.
     const boat = page.locator('[data-setting="boat"]')
+    // The initial read can still be pending after the vault has unlocked.
+    // Connected closes a token dialog, so choose its action only once read.
+    const read = await waitFor(
+      async () =>
+        ["connected", "disconnected", "locked"].includes(
+          await boat.getAttribute("data-boat-state"),
+        ),
+      10_000,
+    )
+    if (!read) {
+      failures.push("the Boat account status did not finish reading")
+      return
+    }
     if ((await boat.locator("input, select").count()) !== 0)
       failures.push("the Boat row shows a field instead of one button")
     if (!/Not connected|Connected|Locked/.test(await boat.innerText()))
