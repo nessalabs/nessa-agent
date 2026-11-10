@@ -475,13 +475,12 @@ impl ConversationService {
                     // it made, asked for as it was then. The source is not
                     // read again, so a source deleted, closed to the caller
                     // or moved to another model since cannot change it.
-                    let environment = self
+                    let place = self
                         .inner
                         .environment
                         .placement(&id)
                         .await
-                        .map_err(target)?
-                        .remote_name();
+                        .map_err(target)?;
                     let channel = self.channel_id_of(&id).await.map_err(target)?;
                     return self
                         .create_command(
@@ -492,8 +491,9 @@ impl ConversationService {
                                 agent: existing.agent().map(RequestedAgent::Known),
                                 model: Some(existing.model().as_str().into()),
                                 approval_mode: Some(existing.approval_mode()),
-                                environment,
+                                environment: None,
                                 channel,
+                                fork: Some(place),
                             },
                         )
                         .await;
@@ -520,13 +520,12 @@ impl ConversationService {
                     .map(|snapshot| snapshot.carried_history())
             })
             .unwrap_or_default();
-        let environment = self
+        let place = self
             .inner
             .environment
             .placement(&source)
             .await
-            .map_err(target)?
-            .remote_name();
+            .map_err(target)?;
         // A fork stays in its source's channel, as it stays on its host.
         let channel = self.channel_id_of(&source).await.map_err(target)?;
         let actor = caller.actor().map_err(target)?;
@@ -578,8 +577,9 @@ impl ConversationService {
                     agent: Some(RequestedAgent::Known(agent)),
                     model: Some(record.model().as_str().into()),
                     approval_mode: Some(record.approval_mode()),
-                    environment,
+                    environment: None,
                     channel,
+                    fork: Some(place),
                 },
             )
             .await;
