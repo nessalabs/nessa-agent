@@ -6,7 +6,7 @@ status: implemented
 summary: A local or cloud command can outlive its calling agent turn and resume that
   conversation with its outcome.
 parent: gateway
-sourceRevision: "8fb90870e6cb63fe7a6f5ad982301fd46883b1bc"
+sourceRevision: "b957e8bdf5225ce6aabe3e6c7bf2228022851603"
 sources:
   - crates/nessa-server/src/conversation/application/service/background_tasks.rs
   - crates/nessa-server/src/conversation/domain/background_task/lifecycle.rs
@@ -192,16 +192,31 @@ environment. No paid VM is provisioned by these checks. Real Boat connectivity,
 provider-owned shells outside this API, live output publication, and process
 adoption after a gateway crash are excluded.
 
+A disposable Linux loopback OpenSSH check runs the actual helper through exit,
+timeout, explicit stop and stdin EOF. EOF returns a cancelled outcome with cleanup
+confirmed. Killing the SSH client removes the observed command, child and
+grandchild; a raw-shell control survives the same connection loss. This is
+component evidence for that process tree, not a separate VM or arbitrary
+unobserved scope members. Gateway interruption settlement and restart are tested
+separately. The [CI follow-up receipts](../../../../verification/conversation/evidence/1218-vm-background/ci-followup/README.md)
+retain these limits and the browser regression controls.
+
 ## Bounded rule model
 
 Owns one admitted task's first stop, immutable terminal outcome, interrupted cleanup uncertainty and one-way continuation disposition. Process execution, capacity admission, persistence CAS and delivery deduplication remain separate unmodeled boundaries. This finite abstraction checks safety only. It does not execute or verify the implementation, promise eventual completion, or qualify external effects. Existing source checkpoints and historical test receipts retain their earlier scope. The scoped model review inspected `crates/nessa-server/src/conversation/domain/background_task/lifecycle.rs`.
 
 ## Source review checkpoint
 
-Reviewed source `9f10c41087f6602abae76168efd312e8574a4d6c` against the prior checkpoint. This review traced
-admission, task binding, settlement/recovery, VM dispatch, descriptor I/O,
-workspace ownership and their regressions. The unrelated transcript additions
-since that checkpoint do not change background tool-row identity. The existing
+Reviewed source `b957e8bdf5225ce6aabe3e6c7bf2228022851603` against checkpoint
+`8fb90870e6cb63fe7a6f5ad982301fd46883b1bc`, including current main `8fc0370`.
+The listed owners are unchanged except for the transcript's optional `retried`
+flag, which does not change background tool-row identity. The review traced
+admission, target binding, preparation cancellation, workspace holds, bounded
+outcomes, EOF cleanup and interruption/restart ownership. The fixture corrections
+retain the real settings store and install the CLI; browser checks now await
+the initial account read and the expected list preview. Current-main component
+and browser receipts are recorded separately from platform and Boat coverage.
+The existing
 bounded-rule model and its historical `modelCheck` receipt were not refreshed
 or rerun; VM transport and physical cleanup remain outside its stated scope.
 The Markdown references and diagram-detail targets were checked; chart rendering

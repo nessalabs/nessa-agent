@@ -1,0 +1,982 @@
+{
+  "check": "conversation-stress",
+  "ok": true,
+  "started": "2026-11-10T01:48:09.352Z",
+  "finished": "2026-11-10T01:59:50.523Z",
+  "target": {
+    "url": "http://127.0.0.1:46625/desktop.html",
+    "mode": "dev"
+  },
+  "results": [
+    {
+      "name": "001 table",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "full",
+      "ms": 5561,
+      "seen": {
+        "index": 1,
+        "kind": "table"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "002 fresh",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "full",
+      "ms": 3966,
+      "seen": {
+        "index": 2,
+        "kind": "fresh"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "003 rail",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "full",
+      "ms": 8832,
+      "seen": {
+        "index": 3,
+        "kind": "rail"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "004 switch",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "full",
+      "ms": 1505,
+      "seen": {
+        "index": 4,
+        "kind": "switch",
+        "from": "ask",
+        "to": "full",
+        "during": false
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "005 permission",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "full",
+      "ms": 403,
+      "seen": {
+        "index": 5,
+        "kind": "permission",
+        "answer": "deny",
+        "mode": "full",
+        "after": "switch"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "006 mcp",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "full",
+      "ms": 18744,
+      "seen": {
+        "index": 6,
+        "kind": "mcp"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "007 aside",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "full",
+      "ms": 1895,
+      "seen": {
+        "index": 7,
+        "kind": "aside"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "008 channel",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "full",
+      "ms": 46350,
+      "seen": {
+        "index": 8,
+        "kind": "channel"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "009 switch",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "full",
+      "ms": 994,
+      "seen": {
+        "index": 9,
+        "kind": "switch",
+        "from": "full",
+        "to": "auto",
+        "during": false
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "010 permission",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "full",
+      "ms": 1286,
+      "seen": {
+        "index": 10,
+        "kind": "permission",
+        "answer": "allow",
+        "mode": "auto",
+        "after": "switch"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "011 aside",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "full",
+      "ms": 1932,
+      "seen": {
+        "index": 11,
+        "kind": "aside"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "012 delete",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "full",
+      "ms": 1746,
+      "seen": {
+        "index": 12,
+        "kind": "delete"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "013 long",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "full",
+      "ms": 18029,
+      "seen": {
+        "index": 13,
+        "kind": "long",
+        "turns": 30
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "014 pool",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "full",
+      "ms": 29786,
+      "seen": {
+        "index": 14,
+        "kind": "pool"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "015 trace",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "full",
+      "ms": 12463,
+      "seen": {
+        "index": 15,
+        "kind": "trace"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "016 vmBackground",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "full",
+      "ms": 12201,
+      "seen": {
+        "index": 16,
+        "kind": "vmBackground"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "017 notice",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "full",
+      "ms": 5727,
+      "seen": {
+        "index": 17,
+        "kind": "notice"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "018 ssh",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "full",
+      "ms": 21181,
+      "seen": {
+        "index": 18,
+        "kind": "ssh"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "019 usageLimit",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "full",
+      "ms": 1527,
+      "seen": {
+        "index": 19,
+        "kind": "usageLimit"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "020 reply",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "full",
+      "ms": 1144,
+      "seen": {
+        "index": 20,
+        "kind": "reply",
+        "after": "usageLimit"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "021 passphrase",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "full",
+      "ms": 9120,
+      "seen": {
+        "index": 21,
+        "kind": "passphrase"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "022 stream",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "full",
+      "ms": 19624,
+      "seen": {
+        "index": 22,
+        "kind": "stream"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "023 fail",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "full",
+      "ms": 488,
+      "seen": {
+        "index": 23,
+        "kind": "fail"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "024 reply",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "full",
+      "ms": 742,
+      "seen": {
+        "index": 24,
+        "kind": "reply",
+        "after": "fail"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "025 panel",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "full",
+      "ms": 2425,
+      "seen": {
+        "index": 25,
+        "kind": "panel"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "026 linking",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "full",
+      "ms": 21845,
+      "seen": {
+        "index": 26,
+        "kind": "linking"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "027 menu",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "full",
+      "ms": 18188,
+      "seen": {
+        "index": 27,
+        "kind": "menu"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "028 fresh",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "full",
+      "ms": 3972,
+      "seen": {
+        "index": 28,
+        "kind": "fresh"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "029 watch",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "full",
+      "ms": 2502,
+      "seen": {
+        "index": 29,
+        "kind": "watch"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "030 launch",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "full",
+      "ms": 6910,
+      "seen": {
+        "index": 30,
+        "kind": "launch"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "031 signIn",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "full",
+      "ms": 531,
+      "seen": {
+        "index": 31,
+        "kind": "signIn"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "032 reply",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "full",
+      "ms": 776,
+      "seen": {
+        "index": 32,
+        "kind": "reply",
+        "after": "signIn"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "033 github",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "full",
+      "ms": 30042,
+      "seen": {
+        "index": 33,
+        "kind": "github"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "034 devices",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "full",
+      "ms": 45927,
+      "seen": {
+        "index": 34,
+        "kind": "devices"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "035 park",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "full",
+      "ms": 9337,
+      "seen": {
+        "index": 35,
+        "kind": "park"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "036 drift",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "full",
+      "ms": 23056,
+      "seen": {
+        "index": 36,
+        "kind": "drift"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "037 delegate",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "full",
+      "ms": 5806,
+      "seen": {
+        "index": 37,
+        "kind": "delegate"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "038 window",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "full",
+      "ms": 12721,
+      "seen": {
+        "index": 38,
+        "kind": "window"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "039 tunnel",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "full",
+      "ms": 19681,
+      "seen": {
+        "index": 39,
+        "kind": "tunnel"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "040 paste",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "full",
+      "ms": 2927,
+      "seen": {
+        "index": 40,
+        "kind": "paste"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "041 stop",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "full",
+      "ms": 3018,
+      "seen": {
+        "index": 41,
+        "kind": "stop"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "042 background",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "full",
+      "ms": 9453,
+      "seen": {
+        "index": 42,
+        "kind": "background"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "043 upgrade",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "full",
+      "ms": 1807,
+      "seen": {
+        "index": 43,
+        "kind": "upgrade"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "044 attach",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "full",
+      "ms": 2887,
+      "seen": {
+        "index": 44,
+        "kind": "attach"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "045 parent-stop",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "full",
+      "ms": 5042,
+      "seen": {
+        "index": 45,
+        "kind": "parent-stop"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "046 close",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "full",
+      "ms": 4304,
+      "seen": {
+        "index": 46,
+        "kind": "close"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "047 menuPanel",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "full",
+      "ms": 6366,
+      "seen": {
+        "index": 47,
+        "kind": "menuPanel"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "048 await",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "full",
+      "ms": 4404,
+      "seen": {
+        "index": 48,
+        "kind": "await"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "049 large",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "full",
+      "ms": 1606,
+      "seen": {
+        "index": 49,
+        "kind": "large",
+        "answer": "allow",
+        "mode": "auto"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "050 restart",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "full",
+      "ms": 7502,
+      "seen": {
+        "index": 50,
+        "kind": "restart",
+        "signal": "SIGTERM"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "051 login",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "full",
+      "ms": 31929,
+      "seen": {
+        "index": 51,
+        "kind": "login"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "052 voice",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "full",
+      "ms": 19357,
+      "seen": {
+        "index": 52,
+        "kind": "voice"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "053 rename",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "full",
+      "ms": 2510,
+      "seen": {
+        "index": 53,
+        "kind": "rename"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "054 reviews",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "full",
+      "ms": 19868,
+      "seen": {
+        "index": 54,
+        "kind": "reviews",
+        "answer": "allow",
+        "mode": "auto"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "055 onboarding",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "full",
+      "ms": 36872,
+      "seen": {
+        "index": 55,
+        "kind": "onboarding"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "056 switch",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "full",
+      "ms": 1246,
+      "seen": {
+        "index": 56,
+        "kind": "switch",
+        "from": "auto",
+        "to": "full",
+        "during": false
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "057 permission",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "full",
+      "ms": 664,
+      "seen": {
+        "index": 57,
+        "kind": "permission",
+        "answer": "deny",
+        "mode": "full",
+        "after": "switch"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "058 huddle",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "full",
+      "ms": 17191,
+      "seen": {
+        "index": 58,
+        "kind": "huddle"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "059 webhook",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "full",
+      "ms": 2720,
+      "seen": {
+        "index": 59,
+        "kind": "webhook"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "060 switch",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "full",
+      "ms": 1314,
+      "seen": {
+        "index": 60,
+        "kind": "switch",
+        "from": "full",
+        "to": "ask",
+        "during": false
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "061 waitingRow",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "full",
+      "ms": 1955,
+      "seen": {
+        "index": 61,
+        "kind": "waitingRow",
+        "answer": "deny",
+        "mode": "ask"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "062 stop",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "full",
+      "ms": 3293,
+      "seen": {
+        "index": 62,
+        "kind": "stop"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "063 transcriptView",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "full",
+      "ms": 20413,
+      "seen": {
+        "index": 63,
+        "kind": "transcriptView"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "064 pairedCatalogue",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "full",
+      "ms": 7087,
+      "seen": {
+        "index": 64,
+        "kind": "pairedCatalogue",
+        "cycles": 1
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "065 model",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "full",
+      "ms": 5772,
+      "seen": {
+        "index": 65,
+        "kind": "model",
+        "answer": "allow",
+        "mode": "ask"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "066 handoff",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "full",
+      "ms": 15592,
+      "seen": {
+        "index": 66,
+        "kind": "handoff"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "background",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "full",
+      "seen": {
+        "conversations": 2,
+        "turns": 3
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "at rest",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "full",
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "followers",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "full",
+      "seen": [
+        {
+          "conversations": 7,
+          "churned": 650,
+          "resumed": 155,
+          "lagging": 0,
+          "refusedAsExpected": 110
+        },
+        {
+          "conversations": 7,
+          "churned": 685,
+          "resumed": 151,
+          "lagging": 0,
+          "refusedAsExpected": 104
+        }
+      ],
+      "failures": [],
+      "ok": true
+    },
+    {
+      "engine": "chromium",
+      "layout": "columns",
+      "name": "console",
+      "harmless": [
+        "console.error: Connecting to 'http://127.0.0.1:9/policy-probe' violates the following Content Security Policy directive: \"connect-src 'self' blob: ipc: http://ipc.localhost ws://127.0.0.1:7420 http://127.0.0.1:7420 ws://127.0.0.1:7421 http://127.0.0.1:7421 https: http://127.0.0.1:39415 ws://127.0.0.1:39415 ws://12",
+        "console.error: Fetch API cannot load http://127.0.0.1:9/policy-probe. Refused to connect because it violates the document's Content Security Policy.",
+        "console.error: WebSocket connection to 'ws://127.0.0.1:39415/session' failed: Error in connection establishment: net::ERR_CONNECTION_REFUSED (http://127.0.0.1:46625/packages/nessa-client/src/composition/root.ts) [owned gateway restart; session reconnected]",
+        "console.error: WebSocket connection to 'ws://127.0.0.1:39415/session' failed: Error in connection establishment: net::ERR_CONNECTION_REFUSED (http://127.0.0.1:46625/packages/nessa-client/src/composition/root.ts) [owned gateway restart; session reconnected]",
+        "console.error: WebSocket connection to 'ws://127.0.0.1:39415/session' failed: Error in connection establishment: net::ERR_CONNECTION_REFUSED (http://127.0.0.1:46625/packages/nessa-client/src/composition/root.ts) [owned gateway restart; session reconnected]",
+        "console.error: WebSocket connection to 'ws://127.0.0.1:39415/session' failed: Error in connection establishment: net::ERR_CONNECTION_REFUSED (http://127.0.0.1:46625/packages/nessa-client/src/composition/root.ts) [owned gateway restart; session reconnected]",
+        "console.error: WebSocket connection to 'ws://127.0.0.1:39415/session' failed: Error in connection establishment: net::ERR_CONNECTION_REFUSED (http://127.0.0.1:46625/packages/nessa-client/src/composition/root.ts) [owned gateway restart; session reconnected]",
+        "console.error: WebSocket connection to 'ws://127.0.0.1:39415/session' failed: Error in connection establishment: net::ERR_CONNECTION_REFUSED (http://127.0.0.1:46625/packages/nessa-client/src/composition/root.ts) [owned gateway restart; session reconnected]",
+        "requestfailed: http://127.0.0.1:39415/mcp-resources net::ERR_ABORTED",
+        "requestfailed: http://127.0.0.1:39415/mcp-resources net::ERR_ABORTED",
+        "console.error: WebSocket connection to 'ws://127.0.0.1:39415/session' failed: Error in connection establishment: net::ERR_CONNECTION_REFUSED (http://127.0.0.1:46625/packages/nessa-client/src/composition/root.ts) [owned gateway restart; session reconnected]",
+        "console.error: WebSocket connection to 'ws://127.0.0.1:39415/session' failed: Error in connection establishment: net::ERR_CONNECTION_REFUSED (http://127.0.0.1:46625/packages/nessa-client/src/composition/root.ts) [owned gateway restart; session reconnected]",
+        "console.error: WebSocket connection to 'ws://127.0.0.1:39415/session' failed: Error in connection establishment: net::ERR_CONNECTION_REFUSED (http://127.0.0.1:46625/packages/nessa-client/src/composition/root.ts) [owned gateway restart; session reconnected]",
+        "console.error: WebSocket connection to 'ws://127.0.0.1:39415/session' failed: Error in connection establishment: net::ERR_CONNECTION_REFUSED (http://127.0.0.1:46625/packages/nessa-client/src/composition/root.ts) [owned gateway restart; session reconnected]",
+        "console.error: WebSocket connection to 'ws://127.0.0.1:39415/session' failed: Error in connection establishment: net::ERR_CONNECTION_REFUSED (http://127.0.0.1:46625/packages/nessa-client/src/composition/root.ts) [owned gateway restart; session reconnected]",
+        "console.error: WebSocket connection to 'ws://127.0.0.1:39415/session' failed: Error in connection establishment: net::ERR_CONNECTION_REFUSED (http://127.0.0.1:46625/packages/nessa-client/src/composition/root.ts) [owned gateway restart; session reconnected]",
+        "console.error: WebSocket connection to 'ws://127.0.0.1:39415/session' failed: Error in connection establishment: net::ERR_CONNECTION_REFUSED (http://127.0.0.1:46625/packages/nessa-client/src/composition/root.ts) [owned gateway restart; session reconnected]",
+        "console.error: WebSocket connection to 'ws://127.0.0.1:39415/session' failed: Error in connection establishment: net::ERR_CONNECTION_REFUSED (http://127.0.0.1:46625/packages/nessa-client/src/composition/root.ts) [owned gateway restart; session reconnected]",
+        "console.error: WebSocket connection to 'ws://127.0.0.1:39415/session' failed: Error in connection establishment: net::ERR_CONNECTION_REFUSED (http://127.0.0.1:46625/packages/nessa-client/src/composition/root.ts) [owned gateway restart; session reconnected]",
+        "console.error: WebSocket connection to 'ws://127.0.0.1:39415/session' failed: Error in connection establishment: net::ERR_CONNECTION_REFUSED (http://127.0.0.1:46625/packages/nessa-client/src/composition/root.ts) [owned gateway restart; session reconnected]",
+        "console.error: WebSocket connection to 'ws://127.0.0.1:39415/session' failed: Error in connection establishment: net::ERR_CONNECTION_REFUSED (http://127.0.0.1:46625/packages/nessa-client/src/composition/root.ts) [owned gateway restart; session reconnected]",
+        "console.error: WebSocket connection to 'ws://127.0.0.1:39415/session' failed: Error in connection establishment: net::ERR_CONNECTION_REFUSED (http://127.0.0.1:46625/packages/nessa-client/src/composition/root.ts) [owned gateway restart; session reconnected]",
+        "requestfailed: http://127.0.0.1:39415/mcp-resources net::ERR_ABORTED",
+        "requestfailed: http://127.0.0.1:39415/mcp-resources net::ERR_ABORTED"
+      ],
+      "failures": [],
+      "ok": true
+    }
+  ]
+}

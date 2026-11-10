@@ -1,0 +1,94 @@
+{
+  "sourceRevision": "b957e8bdf5225ce6aabe3e6c7bf2228022851603",
+  "environment": {
+    "CARGO_INCREMENTAL": "0",
+    "PLAYWRIGHT_SKIP_VALIDATE_HOST_REQUIREMENTS": "1",
+    "mode": "dev",
+    "layout": "columns",
+    "viewport": {
+      "width": 1440,
+      "height": 900
+    },
+    "fullRunInit": "task-scoped Linux subreaper"
+  },
+  "passed": {
+    "background": 37,
+    "workspaces": 86,
+    "ssh_adapter": 130,
+    "cli": 31,
+    "helper_binary": 2,
+    "focused_node_independent": 28,
+    "architecture": 108,
+    "full_chromium": {
+      "held": 70,
+      "total": 70
+    },
+    "fresh_webkit_channel_vm": {
+      "held": 6,
+      "total": 6
+    },
+    "raised_vm_both_engines": {
+      "held": 14,
+      "total": 14
+    },
+    "loopback_ssh": 6
+  },
+  "passedOther": [
+    "server clippy all targets -D warnings",
+    "Rustfmt",
+    "driver ESLint",
+    "driver Prettier",
+    "architecture checker",
+    "independent source review"
+  ],
+  "expectedNegativeControls": {
+    "account_wait_reverted": {
+      "held": 4,
+      "total": 6
+    },
+    "preview_wait_reverted_in_isolated_copy": {
+      "held": 4,
+      "total": 7
+    }
+  },
+  "failedHistoricalRuns": [
+    {
+      "receipt": "channel-vm-before.json",
+      "cause": "fixture runtime settings store replaced"
+    },
+    {
+      "receipt": "channel-vm-combined.json",
+      "cause": "retained same-name channels across engines"
+    },
+    {
+      "receipt": "channel-both-control.json",
+      "cause": "same-name collision without VM fixture"
+    },
+    {
+      "receipt": "full-chromium.json",
+      "cause": "pool_unavailable; not reproduced in controls/repeats"
+    },
+    {
+      "receipt": "full-chromium-repeat.json",
+      "cause": "Devices uploaded test executable"
+    },
+    {
+      "receipt": "current-main-full.json",
+      "cause": "preview still held question"
+    },
+    {
+      "receipt": "current-main-full-bare.json",
+      "cause": "exited zombie under non-reaping container PID 1"
+    }
+  ],
+  "ignored": ["long-lived test gateway fixture", "configured real-host SSH test"],
+  "unrun": [
+    "real Boat",
+    "separate VM/host SSH transport and network partition",
+    "native macOS/Windows locally",
+    "minimum Rust locally",
+    "Nessa Docs renderer/model rerun",
+    "phone input-files scenario (disabled by CI)"
+  ],
+  "newHeadCI": "required after publication; prior runs do not qualify it"
+}

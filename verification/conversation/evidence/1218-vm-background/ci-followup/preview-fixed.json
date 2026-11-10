@@ -1,0 +1,106 @@
+{
+  "check": "conversation-stress",
+  "ok": true,
+  "started": "2026-11-10T01:35:10.710Z",
+  "finished": "2026-11-10T01:35:46.778Z",
+  "target": {
+    "url": "http://127.0.0.1:40273/desktop.html",
+    "mode": "dev"
+  },
+  "results": [
+    {
+      "name": "011 table",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "selected:table",
+      "ms": 6097,
+      "seen": {
+        "index": 11,
+        "kind": "table"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "032 table",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "selected:table",
+      "ms": 8978,
+      "seen": {
+        "index": 32,
+        "kind": "table"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "040 table",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "selected:table",
+      "ms": 6557,
+      "seen": {
+        "index": 40,
+        "kind": "table"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "background",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "selected:table",
+      "seen": {
+        "conversations": 2,
+        "turns": 3
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "at rest",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "selected:table",
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "followers",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "selected:table",
+      "seen": [
+        {
+          "conversations": 3,
+          "churned": 22,
+          "resumed": 0,
+          "lagging": 0,
+          "refusedAsExpected": 0
+        },
+        {
+          "conversations": 3,
+          "churned": 26,
+          "resumed": 0,
+          "lagging": 0,
+          "refusedAsExpected": 0
+        }
+      ],
+      "failures": [],
+      "ok": true
+    },
+    {
+      "engine": "chromium",
+      "layout": "columns",
+      "name": "console",
+      "harmless": [
+        "console.error: Connecting to 'http://127.0.0.1:9/policy-probe' violates the following Content Security Policy directive: \"connect-src 'self' blob: ipc: http://ipc.localhost ws://127.0.0.1:7420 http://127.0.0.1:7420 ws://127.0.0.1:7421 http://127.0.0.1:7421 https: http://127.0.0.1:40733 ws://127.0.0.1:40733 ws://12",
+        "console.error: Fetch API cannot load http://127.0.0.1:9/policy-probe. Refused to connect because it violates the document's Content Security Policy."
+      ],
+      "failures": [],
+      "ok": true
+    }
+  ]
+}

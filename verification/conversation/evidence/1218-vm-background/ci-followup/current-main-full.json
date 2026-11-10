@@ -1,0 +1,730 @@
+{
+  "check": "conversation-stress",
+  "ok": false,
+  "started": "2026-11-10T01:28:34.024Z",
+  "finished": "2026-11-10T01:29:06.894Z",
+  "target": {
+    "url": "http://127.0.0.1:34259/desktop.html",
+    "mode": "dev"
+  },
+  "results": [
+    {
+      "name": "001 table",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "full",
+      "ms": 8931,
+      "seen": {
+        "index": 1,
+        "kind": "table"
+      },
+      "failures": ["the list previews the table answer as \"stress table r1 s1\""],
+      "ok": false
+    },
+    {
+      "name": "002 fresh",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "full",
+      "cannotRun": true,
+      "error": "not run: 001 table did not hold",
+      "failures": [],
+      "ok": false
+    },
+    {
+      "name": "003 rail",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "full",
+      "cannotRun": true,
+      "error": "not run: 001 table did not hold",
+      "failures": [],
+      "ok": false
+    },
+    {
+      "name": "004 switch",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "full",
+      "cannotRun": true,
+      "error": "not run: 001 table did not hold",
+      "failures": [],
+      "ok": false
+    },
+    {
+      "name": "005 permission",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "full",
+      "cannotRun": true,
+      "error": "not run: 001 table did not hold",
+      "failures": [],
+      "ok": false
+    },
+    {
+      "name": "006 mcp",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "full",
+      "cannotRun": true,
+      "error": "not run: 001 table did not hold",
+      "failures": [],
+      "ok": false
+    },
+    {
+      "name": "007 aside",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "full",
+      "cannotRun": true,
+      "error": "not run: 001 table did not hold",
+      "failures": [],
+      "ok": false
+    },
+    {
+      "name": "008 channel",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "full",
+      "cannotRun": true,
+      "error": "not run: 001 table did not hold",
+      "failures": [],
+      "ok": false
+    },
+    {
+      "name": "009 switch",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "full",
+      "cannotRun": true,
+      "error": "not run: 001 table did not hold",
+      "failures": [],
+      "ok": false
+    },
+    {
+      "name": "010 permission",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "full",
+      "cannotRun": true,
+      "error": "not run: 001 table did not hold",
+      "failures": [],
+      "ok": false
+    },
+    {
+      "name": "011 aside",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "full",
+      "cannotRun": true,
+      "error": "not run: 001 table did not hold",
+      "failures": [],
+      "ok": false
+    },
+    {
+      "name": "012 delete",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "full",
+      "cannotRun": true,
+      "error": "not run: 001 table did not hold",
+      "failures": [],
+      "ok": false
+    },
+    {
+      "name": "013 long",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "full",
+      "cannotRun": true,
+      "error": "not run: 001 table did not hold",
+      "failures": [],
+      "ok": false
+    },
+    {
+      "name": "014 pool",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "full",
+      "cannotRun": true,
+      "error": "not run: 001 table did not hold",
+      "failures": [],
+      "ok": false
+    },
+    {
+      "name": "015 trace",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "full",
+      "cannotRun": true,
+      "error": "not run: 001 table did not hold",
+      "failures": [],
+      "ok": false
+    },
+    {
+      "name": "016 vmBackground",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "full",
+      "cannotRun": true,
+      "error": "not run: 001 table did not hold",
+      "failures": [],
+      "ok": false
+    },
+    {
+      "name": "017 notice",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "full",
+      "cannotRun": true,
+      "error": "not run: 001 table did not hold",
+      "failures": [],
+      "ok": false
+    },
+    {
+      "name": "018 ssh",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "full",
+      "cannotRun": true,
+      "error": "not run: 001 table did not hold",
+      "failures": [],
+      "ok": false
+    },
+    {
+      "name": "019 usageLimit",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "full",
+      "cannotRun": true,
+      "error": "not run: 001 table did not hold",
+      "failures": [],
+      "ok": false
+    },
+    {
+      "name": "020 reply",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "full",
+      "cannotRun": true,
+      "error": "not run: 001 table did not hold",
+      "failures": [],
+      "ok": false
+    },
+    {
+      "name": "021 passphrase",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "full",
+      "cannotRun": true,
+      "error": "not run: 001 table did not hold",
+      "failures": [],
+      "ok": false
+    },
+    {
+      "name": "022 stream",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "full",
+      "cannotRun": true,
+      "error": "not run: 001 table did not hold",
+      "failures": [],
+      "ok": false
+    },
+    {
+      "name": "023 fail",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "full",
+      "cannotRun": true,
+      "error": "not run: 001 table did not hold",
+      "failures": [],
+      "ok": false
+    },
+    {
+      "name": "024 reply",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "full",
+      "cannotRun": true,
+      "error": "not run: 001 table did not hold",
+      "failures": [],
+      "ok": false
+    },
+    {
+      "name": "025 panel",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "full",
+      "cannotRun": true,
+      "error": "not run: 001 table did not hold",
+      "failures": [],
+      "ok": false
+    },
+    {
+      "name": "026 linking",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "full",
+      "cannotRun": true,
+      "error": "not run: 001 table did not hold",
+      "failures": [],
+      "ok": false
+    },
+    {
+      "name": "027 menu",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "full",
+      "cannotRun": true,
+      "error": "not run: 001 table did not hold",
+      "failures": [],
+      "ok": false
+    },
+    {
+      "name": "028 fresh",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "full",
+      "cannotRun": true,
+      "error": "not run: 001 table did not hold",
+      "failures": [],
+      "ok": false
+    },
+    {
+      "name": "029 watch",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "full",
+      "cannotRun": true,
+      "error": "not run: 001 table did not hold",
+      "failures": [],
+      "ok": false
+    },
+    {
+      "name": "030 launch",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "full",
+      "cannotRun": true,
+      "error": "not run: 001 table did not hold",
+      "failures": [],
+      "ok": false
+    },
+    {
+      "name": "031 signIn",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "full",
+      "cannotRun": true,
+      "error": "not run: 001 table did not hold",
+      "failures": [],
+      "ok": false
+    },
+    {
+      "name": "032 reply",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "full",
+      "cannotRun": true,
+      "error": "not run: 001 table did not hold",
+      "failures": [],
+      "ok": false
+    },
+    {
+      "name": "033 github",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "full",
+      "cannotRun": true,
+      "error": "not run: 001 table did not hold",
+      "failures": [],
+      "ok": false
+    },
+    {
+      "name": "034 devices",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "full",
+      "cannotRun": true,
+      "error": "not run: 001 table did not hold",
+      "failures": [],
+      "ok": false
+    },
+    {
+      "name": "035 park",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "full",
+      "cannotRun": true,
+      "error": "not run: 001 table did not hold",
+      "failures": [],
+      "ok": false
+    },
+    {
+      "name": "036 drift",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "full",
+      "cannotRun": true,
+      "error": "not run: 001 table did not hold",
+      "failures": [],
+      "ok": false
+    },
+    {
+      "name": "037 delegate",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "full",
+      "cannotRun": true,
+      "error": "not run: 001 table did not hold",
+      "failures": [],
+      "ok": false
+    },
+    {
+      "name": "038 window",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "full",
+      "cannotRun": true,
+      "error": "not run: 001 table did not hold",
+      "failures": [],
+      "ok": false
+    },
+    {
+      "name": "039 tunnel",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "full",
+      "cannotRun": true,
+      "error": "not run: 001 table did not hold",
+      "failures": [],
+      "ok": false
+    },
+    {
+      "name": "040 paste",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "full",
+      "cannotRun": true,
+      "error": "not run: 001 table did not hold",
+      "failures": [],
+      "ok": false
+    },
+    {
+      "name": "041 stop",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "full",
+      "cannotRun": true,
+      "error": "not run: 001 table did not hold",
+      "failures": [],
+      "ok": false
+    },
+    {
+      "name": "042 background",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "full",
+      "cannotRun": true,
+      "error": "not run: 001 table did not hold",
+      "failures": [],
+      "ok": false
+    },
+    {
+      "name": "043 upgrade",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "full",
+      "cannotRun": true,
+      "error": "not run: 001 table did not hold",
+      "failures": [],
+      "ok": false
+    },
+    {
+      "name": "044 attach",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "full",
+      "cannotRun": true,
+      "error": "not run: 001 table did not hold",
+      "failures": [],
+      "ok": false
+    },
+    {
+      "name": "045 parent-stop",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "full",
+      "cannotRun": true,
+      "error": "not run: 001 table did not hold",
+      "failures": [],
+      "ok": false
+    },
+    {
+      "name": "046 close",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "full",
+      "cannotRun": true,
+      "error": "not run: 001 table did not hold",
+      "failures": [],
+      "ok": false
+    },
+    {
+      "name": "047 menuPanel",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "full",
+      "cannotRun": true,
+      "error": "not run: 001 table did not hold",
+      "failures": [],
+      "ok": false
+    },
+    {
+      "name": "048 await",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "full",
+      "cannotRun": true,
+      "error": "not run: 001 table did not hold",
+      "failures": [],
+      "ok": false
+    },
+    {
+      "name": "049 large",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "full",
+      "cannotRun": true,
+      "error": "not run: 001 table did not hold",
+      "failures": [],
+      "ok": false
+    },
+    {
+      "name": "050 restart",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "full",
+      "cannotRun": true,
+      "error": "not run: 001 table did not hold",
+      "failures": [],
+      "ok": false
+    },
+    {
+      "name": "051 login",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "full",
+      "cannotRun": true,
+      "error": "not run: 001 table did not hold",
+      "failures": [],
+      "ok": false
+    },
+    {
+      "name": "052 voice",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "full",
+      "cannotRun": true,
+      "error": "not run: 001 table did not hold",
+      "failures": [],
+      "ok": false
+    },
+    {
+      "name": "053 rename",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "full",
+      "cannotRun": true,
+      "error": "not run: 001 table did not hold",
+      "failures": [],
+      "ok": false
+    },
+    {
+      "name": "054 reviews",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "full",
+      "cannotRun": true,
+      "error": "not run: 001 table did not hold",
+      "failures": [],
+      "ok": false
+    },
+    {
+      "name": "055 onboarding",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "full",
+      "cannotRun": true,
+      "error": "not run: 001 table did not hold",
+      "failures": [],
+      "ok": false
+    },
+    {
+      "name": "056 switch",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "full",
+      "cannotRun": true,
+      "error": "not run: 001 table did not hold",
+      "failures": [],
+      "ok": false
+    },
+    {
+      "name": "057 permission",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "full",
+      "cannotRun": true,
+      "error": "not run: 001 table did not hold",
+      "failures": [],
+      "ok": false
+    },
+    {
+      "name": "058 huddle",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "full",
+      "cannotRun": true,
+      "error": "not run: 001 table did not hold",
+      "failures": [],
+      "ok": false
+    },
+    {
+      "name": "059 webhook",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "full",
+      "cannotRun": true,
+      "error": "not run: 001 table did not hold",
+      "failures": [],
+      "ok": false
+    },
+    {
+      "name": "060 switch",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "full",
+      "cannotRun": true,
+      "error": "not run: 001 table did not hold",
+      "failures": [],
+      "ok": false
+    },
+    {
+      "name": "061 waitingRow",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "full",
+      "cannotRun": true,
+      "error": "not run: 001 table did not hold",
+      "failures": [],
+      "ok": false
+    },
+    {
+      "name": "062 stop",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "full",
+      "cannotRun": true,
+      "error": "not run: 001 table did not hold",
+      "failures": [],
+      "ok": false
+    },
+    {
+      "name": "063 transcriptView",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "full",
+      "cannotRun": true,
+      "error": "not run: 001 table did not hold",
+      "failures": [],
+      "ok": false
+    },
+    {
+      "name": "064 pairedCatalogue",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "full",
+      "cannotRun": true,
+      "error": "not run: 001 table did not hold",
+      "failures": [],
+      "ok": false
+    },
+    {
+      "name": "065 model",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "full",
+      "cannotRun": true,
+      "error": "not run: 001 table did not hold",
+      "failures": [],
+      "ok": false
+    },
+    {
+      "name": "066 handoff",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "full",
+      "cannotRun": true,
+      "error": "not run: 001 table did not hold",
+      "failures": [],
+      "ok": false
+    },
+    {
+      "name": "background",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "full",
+      "seen": {
+        "conversations": 2,
+        "turns": 3
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "at rest",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "full",
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "followers",
+      "engine": "chromium",
+      "layout": "columns",
+      "scope": "full",
+      "seen": [
+        {
+          "conversations": 3,
+          "churned": 13,
+          "resumed": 0,
+          "lagging": 0,
+          "refusedAsExpected": 0
+        },
+        {
+          "conversations": 3,
+          "churned": 16,
+          "resumed": 0,
+          "lagging": 0,
+          "refusedAsExpected": 0
+        }
+      ],
+      "failures": [],
+      "ok": true
+    },
+    {
+      "engine": "chromium",
+      "layout": "columns",
+      "name": "console",
+      "harmless": [
+        "console.error: Connecting to 'http://127.0.0.1:9/policy-probe' violates the following Content Security Policy directive: \"connect-src 'self' blob: ipc: http://ipc.localhost ws://127.0.0.1:7420 http://127.0.0.1:7420 ws://127.0.0.1:7421 http://127.0.0.1:7421 https: http://127.0.0.1:33705 ws://127.0.0.1:33705 ws://12",
+        "console.error: Fetch API cannot load http://127.0.0.1:9/policy-probe. Refused to connect because it violates the document's Content Security Policy."
+      ],
+      "failures": [],
+      "ok": true
+    }
+  ]
+}

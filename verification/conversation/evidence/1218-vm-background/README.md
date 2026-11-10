@@ -4,8 +4,14 @@ The initial implementation on `codex/1218-vm-background` was based on main
 `2b42b4199c2c0692b454746249ca7b564be2b5ad`, in
 `/workspace/nessa-agent-1218`. Publication was subsequently authorized and the
 branch is now draft [PR #1284](https://github.com/nessalabs/nessa-agent/pull/1284).
-No merge, deployment, paid Boat operation or real credential creation is part of
+No PR merge, deployment, paid Boat operation or real credential creation is part of
 this task.
+
+The [CI qualification follow-up](ci-followup/README.md) records the current-main
+source checkpoint, settings/installer corrections, browser readiness regressions,
+complete default stress run and actual loopback OpenSSH evidence. The waterfall
+screenshots now show that current-main run; earlier receipts below retain their
+original source checkpoints.
 
 ## Coordination
 

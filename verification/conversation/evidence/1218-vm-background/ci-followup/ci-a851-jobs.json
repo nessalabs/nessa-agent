@@ -1,0 +1,78 @@
+{
+  "head": "a8519d77b315db1f0078cbac81bbfaeda99e15ff",
+  "run_id": 42731427993,
+  "jobs": [
+    {
+      "name": "What this change needs",
+      "id": 129550153708,
+      "status": "completed",
+      "conclusion": "success"
+    },
+    {
+      "name": "Workflow files are valid",
+      "id": 129550153958,
+      "status": "completed",
+      "conclusion": "success"
+    },
+    {
+      "name": "frontend",
+      "id": 129550215564,
+      "status": "completed",
+      "conclusion": "success"
+    },
+    {
+      "name": "Conversation stress check",
+      "id": 129550215565,
+      "status": "completed",
+      "conclusion": "failure"
+    },
+    {
+      "name": "Desktop app compiles in release profile",
+      "id": 129550215577,
+      "status": "completed",
+      "conclusion": "success"
+    },
+    {
+      "name": "gateway-contract",
+      "id": 129550215622,
+      "status": "completed",
+      "conclusion": "success"
+    },
+    {
+      "name": "SDK domain coverage",
+      "id": 129550215649,
+      "status": "completed",
+      "conclusion": "success"
+    },
+    {
+      "name": "Windows server library tests (server-other)",
+      "id": 129550215653,
+      "status": "completed",
+      "conclusion": "success"
+    },
+    {
+      "name": "Windows server library tests (server-conversation)",
+      "id": 129550215851,
+      "status": "completed",
+      "conclusion": "success"
+    },
+    {
+      "name": "local-auth (ubuntu-22.04)",
+      "id": 129551444266,
+      "status": "completed",
+      "conclusion": "success"
+    },
+    {
+      "name": "local-auth (macos-latest)",
+      "id": 129551444290,
+      "status": "in_progress",
+      "conclusion": null
+    },
+    {
+      "name": "local-auth (windows-latest)",
+      "id": 129551444436,
+      "status": "completed",
+      "conclusion": "success"
+    }
+  ]
+}

@@ -2753,6 +2753,8 @@ background identity while the turn ends. The desktop stress `vmBackground` step
 uses `stress-vm-background.mjs` to launch the ignored, test-only
 `tests/composition/vm_background_gateway.rs` gateway: production admission and VM
 background dispatch, a fake workspace provider, and the real helper subprocess.
+The fixture retains the real runtime-settings store. Its conversation and Devices
+installers send the CLI build rather than the gateway's test executable.
 Released binaries contain no fixture selector. See [the lifecycle](state/services/gateway/background-tasks.md).
 
 ## GitHub webhook ingress and relay

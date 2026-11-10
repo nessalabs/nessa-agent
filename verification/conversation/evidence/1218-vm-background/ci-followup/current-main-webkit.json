@@ -1,0 +1,92 @@
+{
+  "check": "conversation-stress",
+  "ok": true,
+  "started": "2026-11-10T01:28:35.348Z",
+  "finished": "2026-11-10T01:30:13.926Z",
+  "target": {
+    "url": "http://127.0.0.1:42833/desktop.html",
+    "mode": "dev"
+  },
+  "results": [
+    {
+      "name": "008 channel",
+      "engine": "webkit",
+      "layout": "columns",
+      "scope": "selected:channel,vmBackground",
+      "ms": 64034,
+      "seen": {
+        "index": 8,
+        "kind": "channel"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "019 vmBackground",
+      "engine": "webkit",
+      "layout": "columns",
+      "scope": "selected:channel,vmBackground",
+      "ms": 11971,
+      "seen": {
+        "index": 19,
+        "kind": "vmBackground"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "background",
+      "engine": "webkit",
+      "layout": "columns",
+      "scope": "selected:channel,vmBackground",
+      "seen": {
+        "conversations": 2,
+        "turns": 3
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "at rest",
+      "engine": "webkit",
+      "layout": "columns",
+      "scope": "selected:channel,vmBackground",
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "followers",
+      "engine": "webkit",
+      "layout": "columns",
+      "scope": "selected:channel,vmBackground",
+      "seen": [
+        {
+          "conversations": 6,
+          "churned": 84,
+          "resumed": 0,
+          "lagging": 0,
+          "refusedAsExpected": 3
+        },
+        {
+          "conversations": 6,
+          "churned": 83,
+          "resumed": 0,
+          "lagging": 0,
+          "refusedAsExpected": 3
+        }
+      ],
+      "failures": [],
+      "ok": true
+    },
+    {
+      "engine": "webkit",
+      "layout": "columns",
+      "name": "console",
+      "harmless": [
+        "console.error: Refused to connect to http://127.0.0.1:9/policy-probe because it does not appear in the connect-src directive of the Content Security Policy."
+      ],
+      "failures": [],
+      "ok": true
+    }
+  ]
+}
