@@ -266,24 +266,22 @@ pub(super) async fn product_state(
     let namespace = directory
         .parent()
         .ok_or_else(|| setup_error("invalid data root"))?;
-    if namespace
-        .join("backup")
-        .join("accepted-restore.txt")
-        .is_file()
-    {
-        let (organization_id, principal_id) = store.personal_owner().map_err(|error| {
-            RunError::Authentication(format!("the local owner could not be read: {error}"))
-        })?;
-        super::serving_restore::bind_restored_owner(
-            &conversation_root(namespace).join("metadata.sqlite3"),
-            &organization_id,
-            &principal_id,
-        )
-        .map_err(|error| {
-            RunError::Restore(format!(
-                "restored conversations were not bound to this owner: {error}"
-            ))
-        })?;
+    if let Some(live) = accepted_restore_live(namespace) {
+        if super::serving_restore::restore_install_matches(namespace, &live) {
+            let (organization_id, principal_id) = store.personal_owner().map_err(|error| {
+                RunError::Authentication(format!("the local owner could not be read: {error}"))
+            })?;
+            super::serving_restore::bind_restored_owner(
+                &conversation_root(namespace).join("metadata.sqlite3"),
+                &organization_id,
+                &principal_id,
+            )
+            .map_err(|error| {
+                RunError::Restore(format!(
+                    "restored conversations were not bound to this owner: {error}"
+                ))
+            })?;
+        }
     }
     let vault = super::vault::compose(namespace);
     #[cfg(unix)]
@@ -1303,6 +1301,13 @@ fn prepare_access_grants_path(namespace: &Path) -> Result<std::path::PathBuf, Ru
 /// is not in this directory.
 pub(crate) fn conversation_root(namespace: &Path) -> std::path::PathBuf {
     namespace.join("conversations")
+}
+
+fn accepted_restore_live(namespace: &Path) -> Option<std::path::PathBuf> {
+    let text =
+        std::fs::read_to_string(namespace.join("backup").join("accepted-restore.txt")).ok()?;
+    let pointer = crate::backup::domain::decode_accepted_restore(&text).ok()?;
+    Some(std::path::PathBuf::from(pointer.live))
 }
 
 /// Each paired environment's last sighting, `<conversations>/workers`.

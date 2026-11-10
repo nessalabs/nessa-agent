@@ -49,6 +49,8 @@ pub enum RestoreFault {
     Retained,
     /// This platform cannot protect every directory entry through publication.
     PublicationUnsupported,
+    /// The gateway namespace already has conversation stores that are not this restore.
+    NamespaceOccupied,
 }
 
 impl RestoreFault {
@@ -76,6 +78,7 @@ impl RestoreFault {
             Self::FencedBody => "fenced-body",
             Self::Retained => "retained",
             Self::PublicationUnsupported => "publication-unsupported",
+            Self::NamespaceOccupied => "namespace-occupied",
         }
     }
 }

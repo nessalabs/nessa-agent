@@ -1,5 +1,6 @@
 //! Stage, accept, list, and open a quarantined restore without starting a gateway.
 
+use std::collections::HashSet;
 use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -11,6 +12,7 @@ use nessa_local_storage::create_directory;
 use super::backup_output::print;
 use super::serving_restore::{
     install_serving_stores, merge_published_session, namespace_is_restore_root,
+    restore_install_matches, serving_has_stream,
 };
 use crate::backup::application::{
     binding_from_pointer, confirm_accepted, deliver_historical_commands,
@@ -20,8 +22,8 @@ use crate::backup::application::{
     QuarantineLayout, RestoreAction, RestoreFacts, StageRequest, VerificationLimits,
 };
 use crate::backup::domain::{
-    credentials_imported_on_restore, encode_accepted_restore, paths_are_distinct, read_journal,
-    RestoreFault,
+    credentials_imported_on_restore, decode_deferred, encode_accepted_restore, paths_are_distinct,
+    read_journal, RestoreFault,
 };
 use crate::backup::entrypoint::{parse_restore, RestoreCommand, RestoreUsageError, RESTORE_HELP};
 use crate::backup::infrastructure::{
@@ -270,6 +272,9 @@ fn accept(
         if paths_are_distinct(namespace, &roots.live).is_err() {
             return refused(output, RestoreFault::Paths);
         }
+        if serving_namespace_is_foreign(namespace, &roots.live) {
+            return refused(output, RestoreFault::NamespaceOccupied);
+        }
     }
     let audit = match FileRestoreAudit::open(&roots.audit, WallClock) {
         Ok(audit) => audit,
@@ -398,6 +403,12 @@ impl FetchProgress for CommandProgress<'_> {
             self.failed = true;
         }
     }
+}
+
+fn serving_namespace_is_foreign(namespace: &Path, live: &Path) -> bool {
+    let metadata = namespace.join("conversations/metadata.sqlite3");
+    let sessions = namespace.join("conversations/sessions/records.sqlite3");
+    (metadata.is_file() || sessions.is_file()) && !restore_install_matches(namespace, live)
 }
 
 fn accepted_leases(
@@ -568,6 +579,8 @@ pub(crate) struct GatewayDeferredOpen {
     namespace: PathBuf,
     binding: AcceptedBinding,
     policy: CedarInventoryPolicy,
+    /// Deferred conversation ids named by the sealed restore at startup.
+    deferred: HashSet<String>,
 }
 
 impl GatewayDeferredOpen {
@@ -576,16 +589,33 @@ impl GatewayDeferredOpen {
         binding: AcceptedBinding,
         policy: CedarInventoryPolicy,
     ) -> Self {
+        let deferred = deferred_membership(&binding.live);
         Self {
             namespace,
             binding,
             policy,
+            deferred,
         }
     }
 }
 
+fn deferred_membership(live: &Path) -> HashSet<String> {
+    let Ok(text) = fs::read_to_string(live.join("deferred.txt")) else {
+        return HashSet::new();
+    };
+    decode_deferred(&text)
+        .map(|lines| lines.into_iter().map(|line| line.conversation_id).collect())
+        .unwrap_or_default()
+}
+
 impl DeferredConversationOpen for GatewayDeferredOpen {
     fn open(&self, conversation_id: &str) -> Result<(), DeferredOpenFailure> {
+        if !self.deferred.contains(conversation_id) {
+            return Ok(());
+        }
+        if serving_has_stream(&self.namespace, conversation_id) {
+            return Ok(());
+        }
         let audit = FileRestoreAudit::open(&self.binding.audit, WallClock)
             .map_err(|_| DeferredOpenFailure::Unavailable)?;
         let held: Box<dyn crate::backup::application::DeferredSessionSource> =

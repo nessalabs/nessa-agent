@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use nessa_local_database::rusqlite::{params, Connection, TransactionBehavior};
 use nessa_local_storage::create_directory;
 
-use crate::backup::domain::{decode_deferred, decode_identity, JOURNAL_HEADER};
+use crate::backup::domain::{decode_deferred, decode_identity, Fingerprint, JOURNAL_HEADER};
 
 const METADATA_SCHEMA: &str = include_str!("../conversation/infrastructure/schema.sql");
 
@@ -25,6 +25,9 @@ pub(crate) fn namespace_is_restore_root(namespace: &Path) -> bool {
 /// Copy restored conversations into `namespace/conversations` before the
 /// service opens that directory.
 pub(crate) fn install_serving_stores(namespace: &Path, live: &Path) -> Result<(), String> {
+    if restore_install_matches(namespace, live) {
+        return Ok(());
+    }
     let conversations = namespace.join("conversations");
     create_directory(&conversations).map_err(|error| error.to_string())?;
     create_directory(&conversations.join("sessions")).map_err(|error| error.to_string())?;
@@ -43,7 +46,7 @@ pub(crate) fn install_serving_stores(namespace: &Path, live: &Path) -> Result<()
             merge_stream(&serving, &published, &id)?;
         }
     }
-    Ok(())
+    write_install_marker(&conversations, live)
 }
 
 /// Copy one fetched conversation into the session database the service reads.
@@ -153,6 +156,70 @@ fn publish_copy(source: &Path, destination: &Path) -> Result<(), String> {
     if let Err(error) = fs::rename(&partial, destination) {
         let _ = fs::remove_file(&partial);
         return Err(error.to_string());
+    }
+    Ok(())
+}
+
+const INSTALL_HEADER: &str = "nessa-restore-install/1";
+
+/// Whether `namespace` already holds the serving stores installed from `live`.
+pub(crate) fn restore_install_matches(namespace: &Path, live: &Path) -> bool {
+    let Ok(digest) = journal_digest(live) else {
+        return false;
+    };
+    marker_digest(&namespace.join("conversations")).as_deref() == Some(digest.as_str())
+}
+
+/// The serving database already holds this conversation's stream.
+pub(crate) fn serving_has_stream(namespace: &Path, conversation_id: &str) -> bool {
+    let path = namespace
+        .join("conversations")
+        .join("sessions")
+        .join("records.sqlite3");
+    if !path.is_file() {
+        return false;
+    }
+    let Ok(connection) = Connection::open_with_flags(
+        &path,
+        nessa_local_database::rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    ) else {
+        return false;
+    };
+    connection
+        .query_row(
+            "SELECT COUNT(*) FROM event_streams WHERE public_id = ?1",
+            [conversation_id],
+            |row| row.get::<_, i64>(0),
+        )
+        .unwrap_or(0)
+        > 0
+}
+
+fn journal_digest(live: &Path) -> Result<String, String> {
+    let bytes = fs::read(live.join("journal.txt")).map_err(|error| error.to_string())?;
+    Ok(Fingerprint::of(&bytes).hex())
+}
+
+fn marker_digest(conversations: &Path) -> Option<String> {
+    let text = fs::read_to_string(conversations.join("restore-install.txt")).ok()?;
+    let mut lines = text.lines();
+    if lines.next() != Some(INSTALL_HEADER) {
+        return None;
+    }
+    lines.next().map(str::to_owned)
+}
+
+fn write_install_marker(conversations: &Path, live: &Path) -> Result<(), String> {
+    let Ok(digest) = journal_digest(live) else {
+        return Ok(());
+    };
+    let path = conversations.join("restore-install.txt");
+    fs::write(&path, format!("{INSTALL_HEADER}\n{digest}\n")).map_err(|error| error.to_string())?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600))
+            .map_err(|error| error.to_string())?;
     }
     Ok(())
 }

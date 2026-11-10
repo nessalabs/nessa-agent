@@ -327,6 +327,7 @@ async fn a_quarantined_backup_is_accepted_before_an_oversized_conversation_is_op
         open_served(&gateway, &binding, "conv-kept").unwrap_err(),
         DeferredOpenFailure::SourceMissing
     );
+    open_served(&gateway, &binding, "conv-bulk").unwrap();
     assert!(!live.join("sessions/conv-kept.sqlite3").exists());
     assert!(
         !gateway
@@ -335,6 +336,65 @@ async fn a_quarantined_backup_is_accepted_before_an_oversized_conversation_is_op
             || serving_lacks(&gateway, "conv-kept")
     );
     assert!(session.is_file());
+
+    let (code, text) = run(&[
+        arg("accept"),
+        arg("--destination"),
+        destination.as_os_str().to_os_string(),
+        arg("--namespace"),
+        gateway.as_os_str().to_os_string(),
+        arg("--receipt"),
+        arg("lease-drill=stopped-host-1"),
+    ]);
+    assert_eq!(code, 0, "{text}");
+
+    let occupied_root = tempfile::tempdir().unwrap();
+    let occupied = occupied_root.path().join("gateway");
+    let occupied_meta = occupied.join("conversations");
+    fs::create_dir_all(&occupied_meta).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&occupied, fs::Permissions::from_mode(0o700)).unwrap();
+        fs::set_permissions(&occupied_meta, fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    let existing = occupied_meta.join("metadata.sqlite3");
+    fs::write(&existing, b"not-this-restore").unwrap();
+    let (code, text) = run(&[
+        arg("accept"),
+        arg("--destination"),
+        destination.as_os_str().to_os_string(),
+        arg("--namespace"),
+        occupied.as_os_str().to_os_string(),
+        arg("--receipt"),
+        arg("lease-drill=stopped-host-1"),
+    ]);
+    assert_eq!(code, 1, "{text}");
+    assert_eq!(lines(&text)[0]["reason"], "namespace-occupied");
+    assert!(!occupied.join("backup/accepted-restore.txt").exists());
+    assert_eq!(fs::read(&existing).unwrap(), b"not-this-restore");
+}
+
+#[test]
+fn a_read_of_a_conversation_that_was_not_deferred_does_not_walk_the_restore() {
+    let root = tempfile::tempdir().unwrap();
+    let live = root.path().join("live");
+    fs::create_dir_all(&live).unwrap();
+    fs::write(
+        live.join("deferred.txt"),
+        "nessa-deferred/1\ncanonical-records 00000000-0000-4000-8000-0000000000bb 1 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n",
+    )
+    .unwrap();
+    let opener = GatewayDeferredOpen::new(
+        root.path().join("gateway"),
+        AcceptedBinding {
+            live,
+            audit: root.path().join("missing-audit"),
+            source: None,
+        },
+        CedarInventoryPolicy::new().unwrap(),
+    );
+    opener.open("00000000-0000-4000-8000-0000000000aa").unwrap();
 }
 
 #[test]
