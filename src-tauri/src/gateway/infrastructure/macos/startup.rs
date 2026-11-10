@@ -374,9 +374,9 @@ fn sentence_for(reason: &str, port: u16) -> Option<String> {
         "receiverJournalMissing" => {
             Some("its receiver access journal is missing and has to be restored.".into())
         }
-        "restoreNotAccepted" => Some(
-            "its restored backup has not been accepted as the authority.".into(),
-        ),
+        "restoreNotAccepted" => {
+            Some("its restored backup has not been accepted as the authority.".into())
+        }
         "alreadyRunning" => Some("another Nessa is already running for this stage.".into()),
         "portInUse" => Some(format!("port {port} is already in use.")),
         "configuration" => Some("its configuration is not one it can start with.".into()),
