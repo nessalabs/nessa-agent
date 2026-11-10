@@ -9,6 +9,8 @@ summary: A channel independently places its main agent and new threads on Local
 parent: gateway
 sources:
   - crates/nessa-server/src/conversation/application/placement.rs
+  - crates/nessa-server/src/conversation/domain/value_objects/place.rs
+  - crates/nessa-server/src/conversation/application/place_decision.rs
   - crates/nessa-server/src/composition/local_auth.rs
   - crates/nessa-server/src/conversation/infrastructure/ssh_environment/audit.rs
   - crates/nessa-sdk/src/application/agent_execution/sessions/manager.rs
@@ -69,6 +71,12 @@ This page reviews the alpha placement, allocation and main-chat lifecycle. It
 does not claim deployment, provider availability or completion of cloud wake,
 capacity scheduling, provider OAuth or live migration. Local remains the default
 for both channel choices. The main agent runs on messages and worker reports.
+
+`sourceRevision` is kept at the reviewed checkpoint. Since then the Place
+track moved where a new conversation's place is decided into `place.rs` and
+`place_decision.rs` without changing the Local and Boat flow below; a thread
+or fork that names its own place stays in its channel. Those two sources are
+not yet reviewed against this page.
 
 ```mermaid
 stateDiagram-v2

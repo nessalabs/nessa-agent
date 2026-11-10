@@ -152,7 +152,7 @@ async function render(
     root.render(
       <Provider store={store as never}>
         <HeldFilesProvider read={read} save={save}>
-          <ClockProvider now={() => 1_000}>
+          <ClockProvider now={() => 1_000} elapsed={() => 1_000}>
             <Transcript
               conversation={value}
               ground="paper"
@@ -381,7 +381,7 @@ it("reads nothing and offers no save with no reader to read through", async () =
   await React.act(async () => {
     root.render(
       <Provider store={store as never}>
-        <ClockProvider now={() => 1_000}>
+        <ClockProvider now={() => 1_000} elapsed={() => 1_000}>
           <Transcript
             conversation={conversation([report, chart])}
             ground="paper"

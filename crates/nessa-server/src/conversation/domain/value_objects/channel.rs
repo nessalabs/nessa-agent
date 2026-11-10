@@ -14,6 +14,7 @@
 //! a request can select stays a choice between places the owner already made
 //! (`composition/agent.rs`). Every value here is checked when it is made and
 //! when it is read back; a stored row that is not one is not a channel.
+use super::Place;
 use nessa_auth::domain::{OrganizationId, PrincipalId};
 use nessa_protocol::agents::AgentId;
 use nessa_protocol::conversation::domain::{
@@ -249,38 +250,113 @@ pub struct ChannelDefaults {
     pub mode: ConversationApprovalMode,
 }
 
-/// Where the channel's coordinator or worker threads execute. These choices
-/// are independent; Local is the existing path. Pool (any paired computer,
-/// in the order the pool's preferences give, Boat as overflow) is offered
-/// for worker threads only.
+/// Where the channel's main agent and its threads run. The two are chosen
+/// apart. A channel holds here, a cloud VM of each conversation's own, or,
+/// for threads only, any paired computer (the pool, in the order the pool's
+/// preferences give, a cloud VM as overflow); never one named computer yet.
+/// Stored and sent as one word each: `local`, `boat`, `pool`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum WorkspacePlacement {
+pub struct ChannelExecution {
+    coordinator: ChannelPlace,
+    threads: ChannelPlace,
+}
+
+/// The places a channel can hold, each with its word.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum ChannelPlace {
     #[default]
-    Local,
-    Boat,
+    Here,
+    CloudVm,
     Pool,
 }
-impl WorkspacePlacement {
-    pub fn parse(value: &str) -> Option<Self> {
-        match value {
-            "local" => Some(Self::Local),
-            "boat" => Some(Self::Boat),
+impl ChannelPlace {
+    fn of(place: &Place) -> Option<Self> {
+        match place {
+            Place::Here => Some(Self::Here),
+            Place::CloudVm => Some(Self::CloudVm),
+            Place::Pool => Some(Self::Pool),
+            Place::Host(_) | Place::Peer(_) => None,
+        }
+    }
+    fn named(word: &str) -> Option<Self> {
+        match word {
+            "local" => Some(Self::Here),
+            "boat" => Some(Self::CloudVm),
             "pool" => Some(Self::Pool),
             _ => None,
         }
     }
-    pub fn as_str(self) -> &'static str {
+    fn word(self) -> &'static str {
         match self {
-            Self::Local => "local",
-            Self::Boat => "boat",
+            Self::Here => "local",
+            Self::CloudVm => "boat",
             Self::Pool => "pool",
         }
     }
+    fn place(self) -> Place {
+        match self {
+            Self::Here => Place::Here,
+            Self::CloudVm => Place::CloudVm,
+            Self::Pool => Place::Pool,
+        }
+    }
 }
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct ChannelExecution {
-    pub coordinator: WorkspacePlacement,
-    pub threads: WorkspacePlacement,
+
+/// Why a channel cannot run its agents where it was asked to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ChannelPlaceRefusal {
+    /// A word that names no place a channel holds.
+    Unknown,
+    /// One named computer: a channel names a kind of place only.
+    NamedComputer,
+    /// The pool for the main agent, which runs in one known place.
+    PooledMainAgent,
+}
+
+impl ChannelExecution {
+    /// The main agent on `coordinator` and threads on `threads`.
+    ///
+    /// # Errors
+    /// [`ChannelPlaceRefusal`] when a channel cannot hold one of them.
+    pub fn new(coordinator: &Place, threads: &Place) -> Result<Self, ChannelPlaceRefusal> {
+        let held = |place| ChannelPlace::of(place).ok_or(ChannelPlaceRefusal::NamedComputer);
+        Self::held(held(coordinator)?, held(threads)?)
+    }
+    /// The places the channel words `coordinator` and `threads` name, as
+    /// [`Self::new`] takes them.
+    ///
+    /// # Errors
+    /// [`ChannelPlaceRefusal`] for a word that names none, or the pool for
+    /// the main agent.
+    pub fn parse(coordinator: &str, threads: &str) -> Result<Self, ChannelPlaceRefusal> {
+        let held = |word| ChannelPlace::named(word).ok_or(ChannelPlaceRefusal::Unknown);
+        Self::held(held(coordinator)?, held(threads)?)
+    }
+    fn held(coordinator: ChannelPlace, threads: ChannelPlace) -> Result<Self, ChannelPlaceRefusal> {
+        if coordinator == ChannelPlace::Pool {
+            return Err(ChannelPlaceRefusal::PooledMainAgent);
+        }
+        Ok(Self {
+            coordinator,
+            threads,
+        })
+    }
+    /// Where the main agent runs.
+    pub fn coordinator(&self) -> Place {
+        self.coordinator.place()
+    }
+    /// Where the channel's threads run.
+    pub fn threads(&self) -> Place {
+        self.threads.place()
+    }
+    /// The main agent's place as its channel word.
+    pub fn coordinator_word(&self) -> &'static str {
+        self.coordinator.word()
+    }
+    /// The threads' place as its channel word.
+    pub fn threads_word(&self) -> &'static str {
+        self.threads.word()
+    }
 }
 
 /// One stored channel.

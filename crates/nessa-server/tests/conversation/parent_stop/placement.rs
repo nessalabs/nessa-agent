@@ -1,6 +1,7 @@
 //! A lifetime can seal while the current-main placement owner is awaited.
 use super::*;
 use crate::conversation::application::{ConversationPlacements, Environments, PlacementError};
+use crate::conversation::domain::Place;
 use crate::conversation::infrastructure::{in_process_environment, FilePlacements};
 use nessa_sdk::application::agent_execution::sessions::{
     CommittedCompleteness, CommittedFreshness, CommittedSession, CommittedStatus, SessionStorage,
@@ -20,14 +21,14 @@ impl ConversationPlacements for PausedPlacement {
     fn place<'a>(
         &'a self,
         conversation: &'a ConversationId,
-        host: Option<&'a str>,
+        place: &'a Place,
     ) -> EnvironmentFuture<'a, Result<(), PlacementError>> {
-        self.inner.place(conversation, host)
+        self.inner.place(conversation, place)
     }
     fn placement<'a>(
         &'a self,
         conversation: &'a ConversationId,
-    ) -> EnvironmentFuture<'a, Result<Option<String>, PlacementError>> {
+    ) -> EnvironmentFuture<'a, Result<Place, PlacementError>> {
         Box::pin(async move {
             if self.pause.swap(false, Ordering::SeqCst) {
                 self.entered.notify_one();

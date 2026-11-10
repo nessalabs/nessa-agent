@@ -294,7 +294,7 @@ async function render(conversation: Conversation) {
   await React.act(async () => {
     root.render(
       <Provider store={store as never}>
-        <ClockProvider now={() => time}>
+        <ClockProvider now={() => time} elapsed={() => time}>
           <Transcript
             conversation={conversation}
             ground="paper"

@@ -4750,6 +4750,7 @@ async fn a_conversation_runs_on_the_agent_it_was_created_on_and_not_on_the_defau
                 model: None,
                 approval_mode: None,
                 environment: None,
+                fork: None,
             },
         )
         .await
@@ -4875,6 +4876,7 @@ async fn a_conversation_whose_own_agent_is_gone_is_refused_without_taking_its_st
                 model: None,
                 approval_mode: None,
                 environment: None,
+                fork: None,
             },
         )
         .await
@@ -5011,6 +5013,7 @@ async fn a_conversation_refused_for_its_missing_agent_does_not_keep_the_slot_it_
                     model: None,
                     approval_mode: None,
                     environment: None,
+                    fork: None,
                 },
             )
             .await
@@ -5149,6 +5152,7 @@ async fn a_conversation_this_build_cannot_open_is_refused_before_its_storage_is_
                     model: None,
                     approval_mode: None,
                     environment: None,
+                    fork: None,
                 },
             )
             .await
@@ -5223,6 +5227,7 @@ async fn an_agent_this_server_cannot_start_is_refused_before_anything_is_written
                     model: None,
                     approval_mode: None,
                     environment: None,
+                    fork: None,
                 }
             )
             .await,
@@ -5258,6 +5263,7 @@ async fn reopening_is_never_refused_over_an_agent_that_conversation_does_not_nee
                 model: None,
                 approval_mode: None,
                 environment: None,
+                fork: None,
             },
         )
         .await
@@ -5296,6 +5302,7 @@ async fn a_name_this_build_knows_nothing_about_refuses_a_creation_and_not_a_reop
                 model: None,
                 approval_mode: None,
                 environment: None,
+                fork: None,
             },
         )
         .await
@@ -5316,6 +5323,7 @@ async fn a_name_this_build_knows_nothing_about_refuses_a_creation_and_not_a_reop
                     model: None,
                     approval_mode: None,
                     environment: None,
+                    fork: None,
                 },
             )
             .await,
@@ -5631,6 +5639,7 @@ async fn a_conversation_waits_for_its_own_agent_and_not_for_another() {
                 model: None,
                 approval_mode: None,
                 environment: None,
+                fork: None,
             },
         ),
     )

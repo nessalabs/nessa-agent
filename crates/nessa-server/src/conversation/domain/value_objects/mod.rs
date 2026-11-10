@@ -7,6 +7,7 @@
 //! their agents work in, is a [`Channel`].
 mod channel;
 mod conversation_deletion;
+mod place;
 mod pool_preference;
 mod settings_scope;
 mod share_access;
@@ -15,8 +16,8 @@ mod vm_lifetime;
 mod workspace_window;
 pub use channel::{
     Channel, ChannelDefaults, ChannelExecution, ChannelFolder, ChannelId, ChannelName,
-    ChannelNotes, ChannelParts, ChannelPath, ChannelRefusal, ChannelRequest, ChannelResources,
-    WorkspacePlacement, MAX_CHANNELS_PER_OWNER, MAX_CHANNEL_NAME_CHARS, MAX_CHANNEL_NOTES_BYTES,
+    ChannelNotes, ChannelParts, ChannelPath, ChannelPlaceRefusal, ChannelRefusal, ChannelRequest,
+    ChannelResources, MAX_CHANNELS_PER_OWNER, MAX_CHANNEL_NAME_CHARS, MAX_CHANNEL_NOTES_BYTES,
     MAX_CHANNEL_PATH_BYTES, MAX_CHANNEL_REQUEST_ID_BYTES, MAX_CHANNEL_RESOURCES,
     MAX_CHANNEL_RESOURCE_BYTES,
 };
@@ -33,6 +34,7 @@ pub use workspace_window::{
     WindowRefusal, WindowShowing, WorkspaceWindow, MAX_PANEL_TABS,
 };
 
+pub use place::{Place, UnknownPlace};
 pub use pool_preference::{PoolPreference, PoolRefusal, PoolSettings, MAX_POOL_ENTRIES};
 pub use settings_scope::SettingsScope;
 pub use vm_lifetime::{VmLifetime, VmLifetimeSettings};
