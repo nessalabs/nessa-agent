@@ -335,7 +335,6 @@ export async function channelPlacementSettings(run, channel, failures) {
     coordinator: "data-coordinator-placement",
     threads: "data-thread-placement",
   }
-  const field = { coordinator: "coordinatorPlacement", threads: "threadPlacement" }
   const option = (row, name) =>
     control
       .locator(`[data-placement-row="${row}"]`)
