@@ -3479,6 +3479,26 @@ impl ConversationService {
         }
         Ok(slot)
     }
+    /// Fetch a deferred restored conversation without starting an agent.
+    ///
+    /// A missing catalogue row and a tombstone are left alone. Importing after
+    /// a finished delete would keep history nothing erases again.
+    async fn prepare_restored_history(&self, id: &ConversationId) -> Result<(), ConversationError> {
+        let Some(prepare) = self.inner.before_open.get() else {
+            return Ok(());
+        };
+        let Some(record) = load_conversation(self.inner.metadata.as_ref(), id).await? else {
+            return Ok(());
+        };
+        if record.deletion().is_some() {
+            return Ok(());
+        }
+        let conversation_id = id.to_string();
+        let prepare = Arc::clone(prepare);
+        tokio::task::spawn_blocking(move || prepare.prepare(&conversation_id))
+            .await
+            .map_err(|_| ConversationError::Unavailable)?
+    }
     /// A conversation nothing has open, as its committed records fold with
     /// no agent: read-only, lifecycle absent, nothing awaiting an answer.
     async fn read_unopened(
@@ -3494,15 +3514,7 @@ impl ConversationService {
         // still has to be fetched before its history is read. A tombstone
         // already on the record is left alone: importing after a finished
         // delete would keep history nothing erases again.
-        if record.deletion().is_none() {
-            if let Some(prepare) = self.inner.before_open.get() {
-                let conversation_id = id.to_string();
-                let prepare = Arc::clone(prepare);
-                tokio::task::spawn_blocking(move || prepare.prepare(&conversation_id))
-                    .await
-                    .map_err(|_| ConversationError::Unavailable)??;
-            }
-        }
+        self.prepare_restored_history(id).await?;
         let (committed, order) = self.committed_with_order(id).await?;
         let mut projection = self.detached(id, &committed, &order);
         projection.selection(ConversationSelectionView {

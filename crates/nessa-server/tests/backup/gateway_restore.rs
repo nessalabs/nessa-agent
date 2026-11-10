@@ -603,9 +603,26 @@ async fn a_read_only_view_fetches_deferred_history_and_a_deleted_one_does_not() 
         .await
         .unwrap();
     assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    let _ = service
+        .open_events(
+            id.clone(),
+            caller.clone(),
+            nessa_sdk::application::agent_execution::sessions::EventStart::Beginning,
+        )
+        .await;
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 2);
     service.delete(id.clone(), caller.clone()).await.unwrap();
-    let _ = service.read_at(id, caller, ReadOpening::LiveOnly).await;
-    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    let _ = service
+        .read_at(id.clone(), caller.clone(), ReadOpening::LiveOnly)
+        .await;
+    let _ = service
+        .open_events(
+            id,
+            caller,
+            nessa_sdk::application::agent_execution::sessions::EventStart::Beginning,
+        )
+        .await;
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 2);
 }
 
 #[test]
