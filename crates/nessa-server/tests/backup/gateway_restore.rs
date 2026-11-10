@@ -21,17 +21,21 @@ use crate::backup::infrastructure::{
     capture_namespace, CedarInventoryPolicy, DirectoryPublisher, FileDeletionLog,
 };
 use crate::composition::{
-    bind_restored_owner, install_serving_stores, merge_published_session, run_backup_restore,
-    startup_authority, GatewayDeferredOpen,
+    bind_installed_owner, bind_restored_owner, install_serving_stores, merge_published_session,
+    run_backup_restore, startup_authority, GatewayDeferredOpen,
 };
 use crate::conversation::application::{
-    ConversationCaller, ConversationCatalogue, ConversationError, ConversationLimits,
-    ConversationListing, Reader, RequestedConversation,
+    ConversationCaller, ConversationCatalogue, ConversationCreationDisposition, ConversationError,
+    ConversationLimits, ConversationListing, ConversationRepository, Reader, RequestedConversation,
 };
+use crate::conversation::domain::Conversation;
 use crate::conversation::infrastructure::LocalConversationStore;
 use crate::core::RunError;
 use nessa_auth::domain::{OrganizationId, PrincipalId};
-use nessa_protocol::conversation::domain::ConversationId;
+use nessa_protocol::agents::AgentId;
+use nessa_protocol::conversation::domain::{
+    ConversationApprovalMode, ConversationId, ConversationModelId,
+};
 
 struct Clock(u64);
 
@@ -804,6 +808,106 @@ fn a_summary_keeps_its_title_and_the_conversation_keeps_its_owner() {
                 .revision
         });
     assert_eq!(revision, 4);
+}
+
+#[tokio::test]
+async fn a_deleted_conversation_stays_deleted_and_a_later_owner_is_not_rebound() {
+    let root = tempfile::tempdir().unwrap();
+    let live = root.path().join("live");
+    let metadata = live.join("records/conversation-metadata");
+    fs::create_dir_all(&metadata).unwrap();
+    let deleted = "00000000-0000-4000-8000-0000000000dd";
+    fs::write(
+        metadata.join(format!("tombstone-{deleted}")),
+        format!(r#"{{"conversationId":"{deleted}","erased":true}}"#),
+    )
+    .unwrap();
+    let namespace = root.path().join("gateway");
+    fs::create_dir_all(&namespace).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        for directory in [root.path(), &namespace] {
+            fs::set_permissions(directory, fs::Permissions::from_mode(0o700)).unwrap();
+        }
+    }
+    install_serving_stores(&namespace, &live).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(
+            namespace.join("conversations"),
+            fs::Permissions::from_mode(0o700),
+        )
+        .unwrap();
+    }
+    let catalogue = namespace.join("conversations/metadata.sqlite3");
+    let store = LocalConversationStore::open(&catalogue).unwrap();
+    let deleted_id = ConversationId::new(deleted).unwrap();
+    let loaded = store.load(&deleted_id).await.unwrap().unwrap();
+    assert!(loaded.deletion().is_some_and(|deletion| deletion.erased()));
+    let again = store
+        .create(
+            Conversation::new(
+                deleted_id.clone(),
+                OrganizationId::new("restored").unwrap(),
+                PrincipalId::new("restored").unwrap(),
+                "panel".into(),
+                "conversation.create".into(),
+                1,
+                AgentId::parse("claude").unwrap(),
+                ConversationModelId::new("opus").unwrap(),
+                ConversationApprovalMode::Ask,
+            )
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(again.disposition, ConversationCreationDisposition::Existing);
+    assert!(again.conversation.deletion().is_some());
+
+    bind_installed_owner(&namespace, "org-new", "person-new").unwrap();
+    let store = LocalConversationStore::open(&catalogue).unwrap();
+    let bound = store.load(&deleted_id).await.unwrap().unwrap();
+    assert_eq!(bound.owner().as_str(), "person-new");
+    assert!(bound.deletion().is_some_and(|deletion| deletion.erased()));
+    let created = store
+        .create(
+            Conversation::new(
+                ConversationId::new("00000000-0000-4000-8000-0000000000ee").unwrap(),
+                OrganizationId::new("org-other").unwrap(),
+                PrincipalId::new("person-other").unwrap(),
+                "panel".into(),
+                "conversation.create".into(),
+                1,
+                AgentId::parse("claude").unwrap(),
+                ConversationModelId::new("opus").unwrap(),
+                ConversationApprovalMode::Ask,
+            )
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        created.disposition,
+        ConversationCreationDisposition::Created
+    );
+    bind_installed_owner(&namespace, "org-new", "person-new").unwrap();
+    let kept = store
+        .load(&ConversationId::new("00000000-0000-4000-8000-0000000000ee").unwrap())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(kept.owner().as_str(), "person-other");
+    let head = store
+        .head(
+            &OrganizationId::new("org-other").unwrap(),
+            &PrincipalId::new("person-other").unwrap(),
+            &Reader::Owner,
+        )
+        .await
+        .unwrap();
+    assert!(head.revision > 0);
 }
 
 #[test]

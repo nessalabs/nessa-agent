@@ -114,6 +114,14 @@ pub(crate) fn bind_restored_owner(
             params![organization, owner],
         )
         .map_err(|error| error.to_string())?;
+    // The tombstone names the same owner as the row it fences. Leaving the
+    // backup's owner on the deletion would make the row unreadable.
+    transaction
+        .execute(
+            "UPDATE deletions SET organization = ?1, initiator = ?2",
+            params![organization, owner],
+        )
+        .map_err(|error| error.to_string())?;
     transaction
         .execute(
             "DELETE FROM catalogue_owners WHERE organization != ?1 OR owner != ?2",
@@ -127,6 +135,34 @@ pub(crate) fn bind_restored_owner(
         )
         .map_err(|error| error.to_string())?;
     transaction.commit().map_err(|error| error.to_string())
+}
+
+const OWNER_HEADER: &str = "nessa-restore-owner/1";
+
+/// Bind restored rows once. A later startup leaves conversations created
+/// after that first bind with the owner who created them.
+pub(crate) fn bind_installed_owner(
+    namespace: &Path,
+    organization: &str,
+    owner: &str,
+) -> Result<(), String> {
+    let conversations = namespace.join("conversations");
+    let marker = conversations.join("restore-owner.txt");
+    if fs::read_to_string(&marker)
+        .ok()
+        .is_some_and(|text| text.lines().next() == Some(OWNER_HEADER))
+    {
+        return Ok(());
+    }
+    bind_restored_owner(&conversations.join("metadata.sqlite3"), organization, owner)?;
+    fs::write(&marker, format!("{OWNER_HEADER}\n")).map_err(|error| error.to_string())?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&marker, fs::Permissions::from_mode(0o600))
+            .map_err(|error| error.to_string())?;
+    }
+    Ok(())
 }
 
 /// Copy `source` to `destination` only when the copy finishes.
@@ -265,7 +301,33 @@ fn write_metadata(path: &Path, live: &Path) -> Result<(), String> {
     connection
         .execute_batch(METADATA_SCHEMA)
         .map_err(|error| error.to_string())?;
-    let mut rows = metadata_rows(live)?;
+    let restored = metadata_rows(live)?;
+    let mut rows = restored.rows;
+    for fence in &restored.fences {
+        if nessa_protocol::conversation::domain::ConversationId::new(&fence.id).is_err() {
+            continue;
+        }
+        if rows.iter().any(|row| row.id == fence.id) {
+            continue;
+        }
+        // The staged tree keeps the tombstone and omits the conversation it
+        // fences. The serving catalogue needs the row the deletion references.
+        rows.push(MetadataRow {
+            id: fence.id.clone(),
+            organization: "restored".into(),
+            owner: "restored".into(),
+            agent: "restored".into(),
+            model: "restored".into(),
+            approval_mode: "ask".into(),
+            creation_revision: 1,
+            change_revision: 1,
+            title: None,
+            preview: None,
+            updated_at_ms: 0,
+            archived: 0,
+            record_summary: false,
+        });
+    }
     for id in deferred_ids(live)? {
         // A deferred stream is not a conversation unless its id is one.
         // Command-control streams (`nessa:commands:…`) share an oversized
@@ -288,6 +350,7 @@ fn write_metadata(path: &Path, live: &Path) -> Result<(), String> {
                 preview: None,
                 updated_at_ms: 0,
                 archived: 0,
+                record_summary: true,
             });
         }
     }
@@ -309,7 +372,15 @@ fn write_metadata(path: &Path, live: &Path) -> Result<(), String> {
             )
             .map_err(|error| error.to_string())?;
     }
-    for row in rows {
+    let fences: BTreeMap<String, bool> = restored
+        .fences
+        .iter()
+        .filter(|fence| {
+            nessa_protocol::conversation::domain::ConversationId::new(&fence.id).is_ok()
+        })
+        .map(|fence| (fence.id.clone(), fence.erased))
+        .collect();
+    for row in &rows {
         transaction
             .execute(
                 "INSERT OR IGNORE INTO conversations (
@@ -329,20 +400,46 @@ fn write_metadata(path: &Path, live: &Path) -> Result<(), String> {
                 ],
             )
             .map_err(|error| error.to_string())?;
-        transaction
-            .execute(
-                "INSERT OR IGNORE INTO summaries (
-                    conversation_id, title, preview, updated_at_ms, archived
-                 ) VALUES (?1, ?2, ?3, ?4, ?5)",
-                params![
-                    row.id,
-                    row.title,
-                    row.preview,
-                    row.updated_at_ms,
-                    row.archived
-                ],
-            )
-            .map_err(|error| error.to_string())?;
+        if row.record_summary {
+            transaction
+                .execute(
+                    "INSERT OR IGNORE INTO summaries (
+                        conversation_id, title, preview, updated_at_ms, archived
+                     ) VALUES (?1, ?2, ?3, ?4, ?5)",
+                    params![
+                        row.id,
+                        row.title,
+                        row.preview,
+                        row.updated_at_ms,
+                        row.archived
+                    ],
+                )
+                .map_err(|error| error.to_string())?;
+        }
+        if let Some(erased) = fences.get(&row.id) {
+            let (provider_session, provider_erasure, erased) = if *erased {
+                ("absent", Some("no_provider_session"), 1)
+            } else {
+                ("unread", None, 0)
+            };
+            transaction
+                .execute(
+                    "INSERT INTO deletions (
+                        conversation_id, organization, initiator, surface, request,
+                        requested_at_ms, provider_session, provider_session_id,
+                        provider_erasure, erased
+                     ) VALUES (?1, ?2, ?3, 'restore', 'backup.restore.accept', 0, ?4, NULL, ?5, ?6)",
+                    params![
+                        row.id,
+                        row.organization,
+                        row.owner,
+                        provider_session,
+                        provider_erasure,
+                        erased
+                    ],
+                )
+                .map_err(|error| error.to_string())?;
+        }
     }
     transaction.commit().map_err(|error| error.to_string())?;
     Ok(())
@@ -361,6 +458,17 @@ struct MetadataRow {
     preview: Option<String>,
     updated_at_ms: i64,
     archived: i64,
+    record_summary: bool,
+}
+
+struct RestoredMetadata {
+    rows: Vec<MetadataRow>,
+    fences: Vec<DeletionFenceRow>,
+}
+
+struct DeletionFenceRow {
+    id: String,
+    erased: bool,
 }
 
 struct ConversationFields {
@@ -383,6 +491,7 @@ struct SummaryFields {
 enum Classified {
     Conversation(String),
     Summary(String),
+    Tombstone(String),
     Ignore,
 }
 
@@ -390,10 +499,13 @@ enum Classified {
 /// names the same conversation and nothing else: its missing owner must not
 /// become the conversation, and the conversation's empty title must not hide
 /// the saved one. Directory order does not choose.
-fn metadata_rows(live: &Path) -> Result<Vec<MetadataRow>, String> {
+fn metadata_rows(live: &Path) -> Result<RestoredMetadata, String> {
     let directory = live.join("records").join("conversation-metadata");
     let Ok(entries) = fs::read_dir(directory) else {
-        return Ok(Vec::new());
+        return Ok(RestoredMetadata {
+            rows: Vec::new(),
+            fences: Vec::new(),
+        });
     };
     let mut paths = Vec::new();
     for entry in entries.flatten() {
@@ -404,6 +516,7 @@ fn metadata_rows(live: &Path) -> Result<Vec<MetadataRow>, String> {
     paths.sort();
     let mut conversations = BTreeMap::new();
     let mut summaries = BTreeMap::new();
+    let mut fences = BTreeMap::new();
     for path in paths {
         let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
             continue;
@@ -424,10 +537,14 @@ fn metadata_rows(live: &Path) -> Result<Vec<MetadataRow>, String> {
             Classified::Summary(id) => {
                 summaries.entry(id).or_insert(summary_fields(&value));
             }
+            Classified::Tombstone(id) => {
+                let erased = value.get("erased").and_then(|item| item.as_bool()) == Some(true);
+                fences.entry(id).or_insert(erased);
+            }
             Classified::Ignore => {}
         }
     }
-    Ok(conversations
+    let rows = conversations
         .into_iter()
         .map(|(id, conversation)| {
             let summary = summaries.remove(&id);
@@ -450,9 +567,17 @@ fn metadata_rows(live: &Path) -> Result<Vec<MetadataRow>, String> {
                     .as_ref()
                     .map(|summary| summary.archived)
                     .unwrap_or(0),
+                record_summary: true,
             }
         })
-        .collect())
+        .collect();
+    Ok(RestoredMetadata {
+        rows,
+        fences: fences
+            .into_iter()
+            .map(|(id, erased)| DeletionFenceRow { id, erased })
+            .collect(),
+    })
 }
 
 fn classify(file_name: &str, value: &serde_json::Value) -> Classified {
@@ -477,14 +602,20 @@ fn classified_name(name: &str, value: &serde_json::Value) -> Option<Classified> 
             _ => Classified::Ignore,
         });
     }
-    if name.starts_with("tombstone-") {
-        return Some(Classified::Ignore);
+    if let Some(rest) = name.strip_prefix("tombstone-") {
+        return Some(match text(value, "conversationId") {
+            Some(id) if id == rest => Classified::Tombstone(id),
+            _ => Classified::Ignore,
+        });
     }
     None
 }
 
 fn classified_body(value: &serde_json::Value) -> Classified {
     if value.get("erased").is_some() && value.get("agent").is_none() {
+        if let Some(id) = text(value, "conversationId") {
+            return Classified::Tombstone(id);
+        }
         return Classified::Ignore;
     }
     if value.get("agent").is_some() {

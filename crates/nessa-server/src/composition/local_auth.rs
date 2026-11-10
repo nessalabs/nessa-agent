@@ -271,8 +271,8 @@ pub(super) async fn product_state(
             let (organization_id, principal_id) = store.personal_owner().map_err(|error| {
                 RunError::Authentication(format!("the local owner could not be read: {error}"))
             })?;
-            super::serving_restore::bind_restored_owner(
-                &conversation_root(namespace).join("metadata.sqlite3"),
+            super::serving_restore::bind_installed_owner(
+                namespace,
                 &organization_id,
                 &principal_id,
             )
