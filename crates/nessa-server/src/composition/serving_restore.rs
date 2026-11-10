@@ -7,6 +7,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 use nessa_local_database::rusqlite::{params, Connection, TransactionBehavior};
 use nessa_local_storage::create_directory;
@@ -763,7 +764,18 @@ fn text(value: &serde_json::Value, name: &str) -> Option<String> {
         .map(str::to_owned)
 }
 
+/// One gate for the shared serving file. Two first fetches otherwise both
+/// see it missing, and the second treats the first's copy as its own
+/// conversation instead of merging.
+fn serving_database() -> &'static Mutex<()> {
+    static GATE: Mutex<()> = Mutex::new(());
+    &GATE
+}
+
 fn merge_stream(serving: &Path, published: &Path, conversation_id: &str) -> Result<(), String> {
+    let _gate = serving_database()
+        .lock()
+        .map_err(|_| "the serving database lock was poisoned".to_owned())?;
     if !serving.exists() {
         publish_copy(published, serving)?;
         return Ok(());

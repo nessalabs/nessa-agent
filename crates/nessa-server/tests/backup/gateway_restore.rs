@@ -8,6 +8,8 @@
 use std::ffi::OsString;
 use std::fs;
 use std::path::PathBuf;
+use std::sync::{Arc, Barrier};
+use std::thread;
 
 use async_trait::async_trait;
 
@@ -1061,6 +1063,49 @@ fn a_fetched_stream_is_absent_until_its_records_are_written_with_it() {
         )
         .unwrap();
     assert_eq!(payload, b"fetched-body");
+}
+
+#[test]
+fn two_first_fetches_both_land_in_one_serving_database() {
+    let root = tempfile::tempdir().unwrap();
+    let namespace = Arc::new(root.path().join("gateway"));
+    let live = Arc::new(root.path().join("live"));
+    fs::create_dir_all(live.join("sessions")).unwrap();
+    let one = live.join("sessions/one.sqlite3");
+    let two = live.join("sessions/two.sqlite3");
+    write_one_stream(&one, "one", b"one-body");
+    write_one_stream(&two, "two", b"two-body");
+    let start = Arc::new(Barrier::new(2));
+    let mut handles = Vec::new();
+    for id in ["one", "two"] {
+        let start = Arc::clone(&start);
+        let namespace = Arc::clone(&namespace);
+        let live = Arc::clone(&live);
+        handles.push(thread::spawn(move || {
+            start.wait();
+            merge_published_session(&namespace, &live, id).unwrap();
+        }));
+    }
+    for handle in handles {
+        handle.join().unwrap();
+    }
+    let connection = nessa_local_database::rusqlite::Connection::open(
+        namespace.join("conversations/sessions/records.sqlite3"),
+    )
+    .unwrap();
+    for (id, body) in [("one", &b"one-body"[..]), ("two", &b"two-body"[..])] {
+        let payload: Vec<u8> = connection
+            .query_row(
+                "SELECT payload FROM event_records
+                 WHERE stream_key = (
+                    SELECT stream_key FROM event_streams WHERE public_id = ?1
+                 )",
+                [id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(payload, body, "{id}");
+    }
 }
 
 fn write_stream_without_records(path: &PathBuf, conversation_id: &str) {
