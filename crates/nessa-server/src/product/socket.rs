@@ -1313,9 +1313,9 @@ async fn run_authenticated<S>(
         // lane takes no gateway permit (`Admission`).
         let admitted = match state.admission.admit(request) {
             Ok(admitted) => admitted,
-            Err((request, limit_id)) => {
-                note_limit(limit_id);
-                let response = failure(&request.frame().id, "temporarily_unavailable");
+            Err(full) => {
+                note_limit(full.limit_id);
+                let response = failure(&full.request_id, "temporarily_unavailable");
                 let queued = QueuedResponse {
                     message: WireResponse::ordinary(response),
                     _slot: slot,
@@ -1774,7 +1774,7 @@ async fn answer_request(
         Ok(current) => current,
         Err(_) => return failure(&frame.id, "unauthorized"),
     };
-    if !valid_product_request(&frame) {
+    if !valid_product_request(frame) {
         return failure(&frame.id, "invalid_request");
     }
     if frame.method == PRODUCT_HANDSHAKE_METHOD {

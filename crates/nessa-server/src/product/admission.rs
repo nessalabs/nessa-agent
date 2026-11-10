@@ -104,14 +104,19 @@ impl Admission {
         }
     }
 
-    /// Admit `request` to its lane without waiting, or refuse it with the
-    /// limit it found full, handing the request back.
-    pub(crate) fn admit(&self, request: Request) -> Result<Admitted, (Request, &'static str)> {
+    /// Admit `request` to its lane without waiting, or refuse it, naming the
+    /// limit it found full.
+    pub(crate) fn admit(&self, request: Request) -> Result<Admitted, LaneFull> {
         let lane = request.lane();
         let permit = match self.pool(lane) {
             Some(pool) => match pool.clone().try_acquire_owned() {
                 Ok(permit) => Some(permit),
-                Err(_) => return Err((request, Self::limit_id(lane))),
+                Err(_) => {
+                    return Err(LaneFull {
+                        request_id: request.frame.id,
+                        limit_id: Self::limit_id(lane),
+                    })
+                }
             },
             None => None,
         };
@@ -160,6 +165,14 @@ impl Admission {
             ProductLane::ArtifactReads => self.artifact_reads = pool,
         }
     }
+}
+
+/// A request refused because its lane's pool was full.
+pub(crate) struct LaneFull {
+    /// The refused frame's id, to answer it by.
+    pub(crate) request_id: String,
+    /// The limit the refusal is noted under.
+    pub(crate) limit_id: &'static str,
 }
 
 /// A frame that was read, with the manifest method it names.
