@@ -6,10 +6,13 @@ status: implemented
 summary: Backup verification, staged readiness and live activation are separate
   decisions.
 parent: gateway
-sourceRevision: "77a6b620af4d94b234294f6d273fd74b3dfb44c7"
+sourceRevision: "826a5ee6f80cc8af31c801f19629b2fdcc2ce41b"
 sources:
   - crates/nessa-server/src/backup/application/restore.rs
+  - crates/nessa-server/src/backup/application/gateway_restore.rs
+  - crates/nessa-server/src/composition/restore_command.rs
   - crates/nessa-server/tests/backup/restore.rs
+  - crates/nessa-server/tests/backup/gateway_restore.rs
   - docs/design/quarantined-restore.md
   - crates/nessa-server/src/backup/application/restore_planning.rs
 model:
@@ -135,4 +138,4 @@ The abstraction assumes successful policy/audit admission before staging. It omi
 
 ## Further reading
 
-[restore.rs](../../../../crates/nessa-server/src/backup/application/restore.rs) · [restore.rs](../../../../crates/nessa-server/tests/backup/restore.rs) · [quarantined-restore.md](../../../../docs/design/quarantined-restore.md)
+[restore.rs](../../../../crates/nessa-server/src/backup/application/restore.rs) · [gateway_restore.rs](../../../../crates/nessa-server/src/backup/application/gateway_restore.rs) · [restore_command.rs](../../../../crates/nessa-server/src/composition/restore_command.rs) · [restore.rs](../../../../crates/nessa-server/tests/backup/restore.rs) · [gateway_restore.rs](../../../../crates/nessa-server/tests/backup/gateway_restore.rs) · [quarantined-restore.md](../../../../docs/design/quarantined-restore.md)
