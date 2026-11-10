@@ -3490,6 +3490,19 @@ impl ConversationService {
             .await?
             .ok_or(ConversationError::NotFound)?;
         self.access().admit(&record, caller)?;
+        // A view does not start an agent, but a deferred restored conversation
+        // still has to be fetched before its history is read. A tombstone
+        // already on the record is left alone: importing after a finished
+        // delete would keep history nothing erases again.
+        if record.deletion().is_none() {
+            if let Some(prepare) = self.inner.before_open.get() {
+                let conversation_id = id.to_string();
+                let prepare = Arc::clone(prepare);
+                tokio::task::spawn_blocking(move || prepare.prepare(&conversation_id))
+                    .await
+                    .map_err(|_| ConversationError::Unavailable)??;
+            }
+        }
         let (committed, order) = self.committed_with_order(id).await?;
         let mut projection = self.detached(id, &committed, &order);
         projection.selection(ConversationSelectionView {

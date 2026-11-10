@@ -12,7 +12,8 @@ use nessa_local_storage::create_directory;
 use super::backup_output::print;
 use super::serving_restore::{
     install_serving_stores, merge_published_session, namespace_is_restore_root,
-    restore_install_matches, serving_has_stream,
+    remove_imported_stream, restore_install_matches, serving_conversation_is_deleted,
+    serving_has_stream,
 };
 use crate::backup::application::{
     binding_from_pointer, confirm_accepted, deliver_historical_commands,
@@ -616,6 +617,12 @@ impl DeferredConversationOpen for GatewayDeferredOpen {
         if serving_has_stream(&self.namespace, conversation_id) {
             return Ok(());
         }
+        // A delete that already fenced this id must not be followed by the
+        // backup's history. Checked again after the merge, because that
+        // delete can commit while the bytes are being copied.
+        if serving_conversation_is_deleted(&self.namespace, conversation_id) {
+            return Ok(());
+        }
         let audit = FileRestoreAudit::open(&self.binding.audit, WallClock)
             .map_err(|_| DeferredOpenFailure::Unavailable)?;
         let held: Box<dyn crate::backup::application::DeferredSessionSource> =
@@ -635,8 +642,15 @@ impl DeferredConversationOpen for GatewayDeferredOpen {
             ids: &OsPublicationIds,
             progress: &mut progress,
         }) {
-            Ok(_) => merge_published_session(&self.namespace, &self.binding.live, conversation_id)
-                .map_err(|_| DeferredOpenFailure::Unavailable),
+            Ok(_) => {
+                merge_published_session(&self.namespace, &self.binding.live, conversation_id)
+                    .map_err(|_| DeferredOpenFailure::Unavailable)?;
+                if serving_conversation_is_deleted(&self.namespace, conversation_id) {
+                    remove_imported_stream(&self.namespace, conversation_id)
+                        .map_err(|_| DeferredOpenFailure::Unavailable)?;
+                }
+                Ok(())
+            }
             Err(RestoreFault::NotDeferred) => Ok(()),
             Err(RestoreFault::SourceMissing) => Err(DeferredOpenFailure::SourceMissing),
             Err(RestoreFault::SourceChanged) => Err(DeferredOpenFailure::SourceChanged),

@@ -26,7 +26,8 @@ use crate::composition::{
 };
 use crate::conversation::application::{
     ConversationCaller, ConversationCatalogue, ConversationCreationDisposition, ConversationError,
-    ConversationLimits, ConversationListing, ConversationRepository, Reader, RequestedConversation,
+    ConversationLimits, ConversationListing, ConversationRepository, OpenPreparation, ReadOpening,
+    Reader, RequestedConversation,
 };
 use crate::conversation::domain::Conversation;
 use crate::conversation::infrastructure::LocalConversationStore;
@@ -587,10 +588,79 @@ async fn a_missing_restored_source_does_not_open_a_fresh_session() {
 
 struct MissingRestoredSource;
 
-impl crate::conversation::application::OpenPreparation for MissingRestoredSource {
+impl OpenPreparation for MissingRestoredSource {
     fn prepare(&self, _: &str) -> Result<(), ConversationError> {
         Err(ConversationError::DeferredSourceUnavailable)
     }
+}
+
+struct CountedPreparation(std::sync::Arc<std::sync::atomic::AtomicUsize>);
+
+impl OpenPreparation for CountedPreparation {
+    fn prepare(&self, _: &str) -> Result<(), ConversationError> {
+        self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn a_read_only_view_fetches_deferred_history_and_a_deleted_one_does_not() {
+    let (service, _, _, _) =
+        crate::conversation_test_support::fixture(ConversationLimits::default());
+    let id = ConversationId::new(&uuid::Uuid::new_v4().to_string()).unwrap();
+    let caller = ConversationCaller {
+        organization_id: OrganizationId::new("org").unwrap(),
+        principal_id: PrincipalId::new("person").unwrap(),
+        surface_id: "panel".into(),
+        action_id: "create".into(),
+    };
+    service
+        .create(id.clone(), caller.clone(), RequestedConversation::default())
+        .await
+        .unwrap();
+    service.close(id.clone(), caller.clone()).await.unwrap();
+    let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    service.set_open_preparation(std::sync::Arc::new(CountedPreparation(calls.clone())));
+    service
+        .read_at(id.clone(), caller.clone(), ReadOpening::LiveOnly)
+        .await
+        .unwrap();
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    service.delete(id.clone(), caller.clone()).await.unwrap();
+    let _ = service.read_at(id, caller, ReadOpening::LiveOnly).await;
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+}
+
+#[test]
+fn a_deleted_deferred_conversation_is_not_fetched() {
+    let root = tempfile::tempdir().unwrap();
+    let live = root.path().join("live");
+    let metadata = live.join("records/conversation-metadata");
+    fs::create_dir_all(&metadata).unwrap();
+    let id = "00000000-0000-4000-8000-0000000000d1";
+    fs::write(
+        metadata.join(format!("tombstone-{id}")),
+        format!(r#"{{"conversationId":"{id}","erased":true}}"#),
+    )
+    .unwrap();
+    fs::write(
+        live.join("deferred.txt"),
+        format!(
+            "nessa-deferred/1\ncanonical-records {id} 1 {}\n",
+            "ab".repeat(32)
+        ),
+    )
+    .unwrap();
+    let namespace = root.path().join("gateway");
+    fs::create_dir_all(&namespace).unwrap();
+    install_serving_stores(&namespace, &live).unwrap();
+    let binding = AcceptedBinding {
+        live,
+        audit: root.path().join("missing-audit"),
+        source: None,
+    };
+    open_served(&namespace, &binding, id).unwrap();
+    assert!(serving_lacks(&namespace, id));
 }
 
 fn open_served(

@@ -206,6 +206,72 @@ pub(crate) fn restore_install_matches(namespace: &Path, live: &Path) -> bool {
     marker_digest(&namespace.join("conversations")).as_deref() == Some(digest.as_str())
 }
 
+/// The serving catalogue already holds a deletion for this conversation.
+pub(crate) fn serving_conversation_is_deleted(namespace: &Path, conversation_id: &str) -> bool {
+    let path = namespace.join("conversations").join("metadata.sqlite3");
+    if !path.is_file() {
+        return false;
+    }
+    let Ok(connection) = Connection::open_with_flags(
+        &path,
+        nessa_local_database::rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    ) else {
+        return false;
+    };
+    connection
+        .query_row(
+            "SELECT COUNT(*) FROM deletions WHERE conversation_id = ?1",
+            [conversation_id],
+            |row| row.get::<_, i64>(0),
+        )
+        .unwrap_or(0)
+        > 0
+}
+
+/// Drop a stream this process just imported. A delete that finished during
+/// the fetch must not leave that history behind.
+pub(crate) fn remove_imported_stream(
+    namespace: &Path,
+    conversation_id: &str,
+) -> Result<(), String> {
+    let path = namespace
+        .join("conversations")
+        .join("sessions")
+        .join("records.sqlite3");
+    if !path.is_file() {
+        return Ok(());
+    }
+    let mut connection = Connection::open(path).map_err(|error| error.to_string())?;
+    let transaction = connection
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(|error| error.to_string())?;
+    let key: Option<i64> = transaction
+        .query_row(
+            "SELECT stream_key FROM event_streams WHERE public_id = ?1",
+            [conversation_id],
+            |row| row.get(0),
+        )
+        .ok();
+    if let Some(key) = key {
+        transaction
+            .execute("DELETE FROM event_records WHERE stream_key = ?1", [key])
+            .map_err(|error| error.to_string())?;
+        transaction
+            .execute(
+                "DELETE FROM event_stream_names WHERE public_id = ?1",
+                [conversation_id],
+            )
+            .map_err(|error| error.to_string())?;
+        transaction
+            .execute(
+                "DELETE FROM event_streams WHERE public_id = ?1",
+                [conversation_id],
+            )
+            .map_err(|error| error.to_string())?;
+    }
+    transaction.commit().map_err(|error| error.to_string())
+}
+
 /// The serving database already holds this conversation's stream.
 pub(crate) fn serving_has_stream(namespace: &Path, conversation_id: &str) -> bool {
     let path = namespace
