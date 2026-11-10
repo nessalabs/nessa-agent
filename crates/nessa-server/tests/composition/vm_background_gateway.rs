@@ -6,7 +6,6 @@ use crate::conversation::{
         ConversationError, ConversationLimits, Environment, EnvironmentDeclaration,
         EnvironmentFuture, EnvironmentLease, ThreadEnvironments, WorkspaceRest,
     },
-    domain::{SettingsScope, VmLifetime, VmLifetimeSettings},
     infrastructure::{
         in_process_environment,
         ssh_environment::{Build, BuildSource, HostInstaller},
@@ -87,7 +86,7 @@ pub(super) fn service(default: Arc<Workspaces>) -> Arc<Workspaces> {
         Arc::new(FakeProvider),
         Arc::new(FileAssignments(fixture.root.join("assignments"))),
         Arc::new(Audit),
-        Arc::new(Config),
+        default.runtime_settings.clone(),
     ))
 }
 pub(super) fn environments(
@@ -142,25 +141,6 @@ impl Settings for Config {
         unreachable!()
     }
     async fn clear(&self) -> Result<(), Failure> {
-        unreachable!()
-    }
-}
-#[async_trait::async_trait]
-impl RuntimeSettings for Config {
-    async fn read(&self, scope: &SettingsScope) -> Result<VmLifetimeSettings, Failure> {
-        Ok(match scope {
-            SettingsScope::Global => VmLifetimeSettings::global(VmLifetime::Unlimited),
-            SettingsScope::Channel(channel) => {
-                VmLifetimeSettings::for_channel(channel.clone(), VmLifetime::Unlimited, None)
-            }
-        })
-    }
-    async fn save(
-        &self,
-        _: SettingsScope,
-        _: Option<VmLifetime>,
-        _: RuntimeCaller,
-    ) -> Result<VmLifetimeSettings, Failure> {
         unreachable!()
     }
 }
