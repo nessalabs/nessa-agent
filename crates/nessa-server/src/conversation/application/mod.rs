@@ -197,6 +197,7 @@ mod organization_budget;
 mod place_decision;
 mod placement;
 mod pool_settings;
+mod tool_config;
 #[cfg(any(unix, test))]
 pub(crate) use pool_settings::PoolSettingsError;
 pub(crate) use pool_settings::{PoolCaller, PoolSettingsStore};
@@ -315,7 +316,6 @@ pub use permission_rules::{
 };
 #[cfg(unix)]
 pub(crate) use placement::{MachineUse, PairedEnvironments, WorkerLoad};
-pub use placement::{FETCH_CALL_WAIT, PUBLISH_CALL_WAIT};
 pub use ports::{
     ArtifactKept, ArtifactRecordGate, AttachmentRelease, AttachmentReleaseCause,
     ConversationAttachments, ConversationCreation, ConversationCreationAudit,
@@ -372,6 +372,12 @@ pub use share_grants::{
     ShareGrantReceipt, ShareGrantTransition, ShareGrants, MAX_DRIVE_GRANTS_PER_CONVERSATION,
     MAX_POLICY_REVISION, MAX_SHARE_GRANTS_PER_CONVERSATION,
 };
+#[cfg_attr(
+    not(unix),
+    allow(unused_imports, reason = "the Unix gateway composes it; tests name it")
+)]
+pub(crate) use tool_config::EnvironmentToolConfig;
+pub use tool_config::{FETCH_CALL_WAIT, PUBLISH_CALL_WAIT};
 pub use tool_policy::{ToolDecision, ToolInitiator, ToolPolicyEvaluator, ToolPolicyUnavailable};
 pub use usage_limit_policy::{
     UsageLimitPreferenceDecision, UsageLimitPreferenceFacts, UsageLimitPreferenceGrant,

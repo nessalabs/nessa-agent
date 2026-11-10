@@ -343,6 +343,7 @@ fn conversation_service_with_summaries(
             ),
             clock: Arc::new(TestClock),
             environment: crate::conversation::infrastructure::in_process_environment().into(),
+            tool_config: Default::default(),
         },
         ConversationLimits::default(),
         None,

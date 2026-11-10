@@ -47,7 +47,7 @@ use crate::{
     conversation::{
         application::{
             ConversationAgents, ConversationDependencies, ConversationLimits, DriveTools,
-            Environments, McpAppPorts,
+            EnvironmentToolConfig, Environments, McpAppPorts,
         },
         infrastructure::{
             CedarToolPolicyEvaluator, DurableAgentToolAudit, DurableConversationCreationAudit,
@@ -1657,7 +1657,7 @@ async fn conversations(
         )),
         None => Arc::new(NoMcpToolUis),
     };
-    let (environment, environment_peers) = environments(
+    let (environment, tool_config, environment_peers) = environments(
         &root,
         &ssh_hosts,
         command_policy,
@@ -1721,6 +1721,7 @@ async fn conversations(
         ),
         clock: clock.clone(),
         environment,
+        tool_config,
         access_policy,
     };
     let workspace = Some(agents.workspace.to_string_lossy().into_owned());
@@ -1947,7 +1948,7 @@ fn environments(
     serving: Option<ServingAuth>,
     organization: crate::conversation::application::OrganizationBudgets,
     logins: Arc<dyn crate::conversation::infrastructure::ssh_environment::SavedLogins>,
-) -> Result<(Environments, Option<PairedParts>), RunError> {
+) -> Result<(Environments, EnvironmentToolConfig, Option<PairedParts>), RunError> {
     use super::paired_environments::{
         ListenerEnvironments, PeerWorkers, RegistryPaired, RegistryServing, SavedSightings,
     };
@@ -2030,11 +2031,14 @@ fn environments(
     }
     // Who may run which commands where is the command policy's, answered by
     // Cedar over the configured hosts and programs (ADR 803 step 4).
-    if let Some(policy) = commands {
-        let evaluator = CedarCommandPolicyEvaluator::new(&policy)
-            .map_err(|_| RunError::Agent("the command policy bundle does not validate".into()))?;
-        environments = environments.with_commands(Arc::new(evaluator));
-    }
+    let tools = match commands {
+        Some(policy) => EnvironmentToolConfig::with_commands(Arc::new(
+            CedarCommandPolicyEvaluator::new(&policy).map_err(|_| {
+                RunError::Agent("the command policy bundle does not validate".into())
+            })?,
+        )),
+        None => EnvironmentToolConfig::default(),
+    };
     let paired = peers.zip(paired_keys).map(|(peers, paired_keys)| {
         let connected = peers.clone();
         let changes = peers.connections();
@@ -2066,7 +2070,7 @@ fn environments(
             workers,
         )
     });
-    Ok((environments, paired))
+    Ok((environments, tools, paired))
 }
 
 #[cfg(unix)]

@@ -46,9 +46,7 @@
 //! it at a time. Provider sessions stay on the worker that opened them, so
 //! a moved conversation's agent opens new context there.
 use super::place_decision::{pool_choice, PoolNow};
-use super::{
-    CommandPolicyEvaluator, ConversationError, Environment, EnvironmentFuture, PoolSettingsStore,
-};
+use super::{ConversationError, Environment, EnvironmentFuture, PoolSettingsStore};
 use crate::conversation::domain::{ChannelId, Place, PoolPreference, PoolSettings, SettingsScope};
 use nessa_protocol::conversation::domain::ConversationId;
 use nessa_sdk::domain::agent_execution::leases::{EnvironmentRef, LeaseEndCause, PeerEnvironment};
@@ -75,29 +73,12 @@ impl WorkspaceRest {
     }
 }
 use nessa_sdk::domain::agent_execution::sessions::ExecutionSessionId;
-use std::{collections::BTreeMap, sync::Arc, time::Duration};
+use std::{collections::BTreeMap, sync::Arc};
 use tokio::sync::watch;
 
 /// When a computer counts as busy where no pool preferences are kept: at
 /// 90% processor or memory use, as an absent `pool` section says.
 const UNCONFIGURED_BUSY_PERMILLE: u32 = 900;
-
-/// How long an `artifacts_publish` call waits, from its ask, for its file
-/// to be staged, read, checked and kept before it answers that it does not
-/// know (`timed_out`). It is longer than one read's own bound (row
-/// `artifact.publish_deadline`), but the collector takes a lease's files one
-/// at a time, so a file queued behind others may still be read after its
-/// call stopped waiting; it is then kept for the call's person all the same.
-/// Row `artifact.publish_call_wait` in `docs/limits.md`.
-pub const PUBLISH_CALL_WAIT: Duration = Duration::from_secs(16 * 60);
-
-/// How long an `artifacts_fetch` call waits, from its ask, for its file to
-/// be written to the environment, checked and placed before it answers that
-/// it does not know (`timed_out`). A file is written range by range from the
-/// conversation's hold, each range waiting at most its read's busy wait.
-/// Stopped before every byte was written, the environment is told so and
-/// places nothing. Row `artifact.fetch_call_wait` in `docs/limits.md`.
-pub const FETCH_CALL_WAIT: Duration = Duration::from_secs(16 * 60);
 
 /// Why a placement could not be read or written.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -421,18 +402,11 @@ pub(crate) struct Environments {
     hosts: BTreeMap<String, Arc<dyn Environment>>,
     /// `None` when this gateway pairs no environments.
     peers: Option<Arc<dyn PairedEnvironments>>,
-    placements: Option<Arc<dyn ConversationPlacements>>,
+    /// Where each conversation was placed, written before it exists.
+    placements: Arc<dyn ConversationPlacements>,
     /// Which worker holds each `peer:any` conversation; `None` where no
     /// conversation can be placed so, with no paired environments.
     bindings: Option<Arc<dyn ConversationBindings>>,
-    /// Who may run which commands on which hosts, asked of the command
-    /// policy; `None` when this gateway grants none, and the environment
-    /// tools are absent.
-    commands: Option<Arc<dyn CommandPolicyEvaluator>>,
-    /// How long an `artifacts_publish` call waits for its file to be kept.
-    publish_wait: Duration,
-    /// How long an `artifacts_fetch` call waits for its file to be placed.
-    fetch_wait: Duration,
     /// Pool leases chosen for a worker and not yet asked there.
     reserved: Arc<Reserved>,
     /// The default device saved from Devices: where a new conversation that
@@ -443,24 +417,45 @@ pub(crate) struct Environments {
     pool_settings: Option<Arc<dyn PoolSettingsStore>>,
 }
 
+#[cfg(test)]
 impl From<Arc<dyn Environment>> for Environments {
-    /// Here alone, with nowhere placements are kept: every conversation runs
-    /// here. For tests; composition always keeps placements.
+    /// Here alone: every conversation runs here, as nothing else is
+    /// offered. For tests; composition always keeps placements.
     fn from(here: Arc<dyn Environment>) -> Self {
-        Self {
-            workspaces: None,
-            here,
-            hosts: BTreeMap::new(),
-            peers: None,
-            placements: None,
-            bindings: None,
-            commands: None,
-            publish_wait: PUBLISH_CALL_WAIT,
-            fetch_wait: FETCH_CALL_WAIT,
-            reserved: Arc::default(),
-            default: None,
-            pool_settings: None,
-        }
+        Self::new(here, BTreeMap::new(), Arc::new(HereOnlyPlacements))
+    }
+}
+
+/// A placement store for tests built with [`Environments::from`], where
+/// nothing but here is offered: every conversation reads as here, and
+/// anything else is refused as the store being unavailable.
+#[cfg(test)]
+struct HereOnlyPlacements;
+
+#[cfg(test)]
+impl ConversationPlacements for HereOnlyPlacements {
+    fn place<'a>(
+        &'a self,
+        _conversation: &'a ConversationId,
+        place: &'a Place,
+    ) -> EnvironmentFuture<'a, Result<(), PlacementError>> {
+        let placed = match place {
+            Place::Here => Ok(()),
+            _ => Err(PlacementError::Unavailable),
+        };
+        Box::pin(async move { placed })
+    }
+    fn placement<'a>(
+        &'a self,
+        _conversation: &'a ConversationId,
+    ) -> EnvironmentFuture<'a, Result<Place, PlacementError>> {
+        Box::pin(async { Ok(Place::Here) })
+    }
+    fn erase<'a>(
+        &'a self,
+        _conversation: &'a ConversationId,
+    ) -> EnvironmentFuture<'a, Result<(), PlacementError>> {
+        Box::pin(async { Ok(()) })
     }
 }
 
@@ -484,11 +479,8 @@ impl Environments {
             here,
             hosts,
             peers: None,
-            placements: Some(placements),
+            placements,
             bindings: None,
-            commands: None,
-            publish_wait: PUBLISH_CALL_WAIT,
-            fetch_wait: FETCH_CALL_WAIT,
             reserved: Arc::default(),
             default: None,
             pool_settings: None,
@@ -580,46 +572,6 @@ impl Environments {
     /// keeps none and every worker is in, none first.
     pub(crate) fn pool_store(&self) -> Option<&Arc<dyn PoolSettingsStore>> {
         self.pool_settings.as_ref()
-    }
-
-    /// These environments, with commands granted as `policy` answers: the
-    /// command policy composition built over the gateway's configuration.
-    #[cfg_attr(not(unix), allow(dead_code, reason = "the Unix gateway composes it"))]
-    pub(crate) fn with_commands(mut self, policy: Arc<dyn CommandPolicyEvaluator>) -> Self {
-        self.commands = Some(policy);
-        self
-    }
-
-    /// These environments, whose `artifacts_publish` calls wait `wait`
-    /// rather than [`PUBLISH_CALL_WAIT`]. For tests.
-    #[cfg(test)]
-    pub(crate) fn with_publish_wait(mut self, wait: Duration) -> Self {
-        self.publish_wait = wait;
-        self
-    }
-
-    /// How long an `artifacts_publish` call waits for its file to be kept.
-    pub(crate) fn publish_wait(&self) -> Duration {
-        self.publish_wait
-    }
-
-    /// These environments, whose `artifacts_fetch` calls wait `wait` rather
-    /// than [`FETCH_CALL_WAIT`]. For tests.
-    #[cfg(test)]
-    pub(crate) fn with_fetch_wait(mut self, wait: Duration) -> Self {
-        self.fetch_wait = wait;
-        self
-    }
-
-    /// How long an `artifacts_fetch` call waits for its file to be placed.
-    pub(crate) fn fetch_wait(&self) -> Duration {
-        self.fetch_wait
-    }
-
-    /// Who may run which commands, and where; `None` when this gateway
-    /// grants none.
-    pub(crate) fn command_policy(&self) -> Option<&Arc<dyn CommandPolicyEvaluator>> {
-        self.commands.as_ref()
     }
 
     /// The configured hosts, by the destination each is named by.
@@ -732,11 +684,7 @@ impl Environments {
             named if self.offers(named) => named.clone(),
             _ => return Err(ConversationError::EnvironmentNotConfigured),
         };
-        match &self.placements {
-            Some(placements) => Ok(placements.place(conversation, &placed).await?),
-            None if placed == Place::Here => Ok(()),
-            None => Err(ConversationError::EnvironmentNotConfigured),
-        }
+        Ok(self.placements.place(conversation, &placed).await?)
     }
 
     /// Where a conversation that asked for the pool is placed, as
@@ -785,10 +733,7 @@ impl Environments {
         &self,
         conversation: &ConversationId,
     ) -> Result<Place, ConversationError> {
-        match &self.placements {
-            Some(placements) => Ok(placements.placement(conversation).await?),
-            None => Ok(Place::Here),
-        }
+        Ok(self.placements.placement(conversation).await?)
     }
 
     /// Whether `conversation` runs in a cloud workspace of its own
@@ -971,10 +916,7 @@ impl Environments {
         if let Some(bindings) = &self.bindings {
             bindings.erase(conversation).await?;
         }
-        match &self.placements {
-            Some(placements) => Ok(placements.erase(conversation).await?),
-            None => Ok(()),
-        }
+        Ok(self.placements.erase(conversation).await?)
     }
 }
 
