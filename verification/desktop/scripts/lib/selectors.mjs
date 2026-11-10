@@ -313,8 +313,7 @@ export const css = {
   settingsBar: ".settings-bar", // class: the page's titlebar row (drag strip); data-condensed on .settings-content once the masthead's title has scrolled under it
   settingsBarTitle: ".settings-bar-title", // class: the page's name, small, in that row
   settingsContent: ".settings-content", // class
-  settingsMasthead: ".settings-masthead", // class: the page's head: title, dek, tabs
-  settingsDek: ".settings-dek", // class: the one line under a title, where a category has one
+  settingsMasthead: ".settings-masthead", // class: the page's head: title and tabs
   settingsRow: '[data-slot="settings-row"]', // the UI kit's row, on any Settings page
   settingsFound: "[data-setting][data-found]", // where a search just landed
   settingsSearch: 'input[aria-label="Search settings"]',

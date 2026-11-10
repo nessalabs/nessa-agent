@@ -62,6 +62,7 @@ const sessionReady = {
     "credential.list",
     "credential.revoke",
     "channel.list",
+    "mcpServers.list",
     "pairing.pending",
     "pairing.create",
     "pairing.cancel",
@@ -121,6 +122,7 @@ function scriptedGateway(scenario) {
   const known = new Set([
     "server.health",
     "channel.list",
+    "mcpServers.list",
     "workspace.publish",
     "conversation.subscribeList",
     "conversation.unsubscribe",
@@ -163,6 +165,9 @@ function scriptedGateway(scenario) {
     // The workspace's channel picker reads the channels; none here.
     if (method === "channel.list")
       return { ok: true, payload: { channels: [], complete: true } }
+    // Connections opens its read-only MCP inventory before Linked devices.
+    if (method === "mcpServers.list")
+      return { ok: true, payload: { revision: "linked-devices-fixture", servers: [] } }
     if (method === "credential.list")
       return { ok: true, payload: { credentials: devices } }
     if (method === "credential.revoke") {
