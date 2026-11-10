@@ -152,7 +152,7 @@ fn service_stored(
             message_commit_clock: crate::conversation_test_support::runtime_message_commit_clock(),
             clock,
             environment: crate::conversation_test_support::in_process_environment(),
-            tool_settings: Default::default(),
+            tool_config: Default::default(),
         },
         ConversationLimits::default(),
         None,

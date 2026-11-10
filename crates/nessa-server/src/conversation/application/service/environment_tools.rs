@@ -41,7 +41,7 @@ use crate::conversation::application::drive_tools::{
 use crate::conversation::application::{
     admit_command, environment::GrantedTerms, ArtifactBudget, ArtifactCollector, CommandInitiator,
     CommandPolicyEvaluator, CommandPublication, CommandQuestion, CommandResult, Environment,
-    PublicationOutcome, ToolDecision, PUBLISH_CALL_WAIT,
+    PublicationOutcome, ToolDecision,
 };
 use crate::conversation::domain::{Place, ToolCall, ToolPolicy, ToolSource};
 use nessa_protocol::conversation::domain::ConversationId;
@@ -155,7 +155,7 @@ pub enum CommandCallError {
 impl ConversationService {
     /// Whether this gateway grants the agent's environment tools at all.
     pub fn environment_tools_enabled(&self) -> bool {
-        self.inner.tool_settings.commands.is_some()
+        self.inner.tool_config.commands.is_some()
     }
 
     /// Where conversation `id`'s agent could work, for its running turn's
@@ -183,7 +183,7 @@ impl ConversationService {
             }
             None => None,
         };
-        let policy = self.inner.tool_settings.commands.as_ref();
+        let policy = self.inner.tool_config.commands.as_ref();
         let mut listed = vec![EnvironmentListing {
             name: HERE.into(),
             here: true,
@@ -247,7 +247,7 @@ impl ConversationService {
     /// Empty when this gateway grants no commands; `here` is never one.
     pub fn owner_command_hosts<'a>(&self, names: impl IntoIterator<Item = &'a str>) -> Vec<String> {
         let environments = &self.inner.environment;
-        let Some(policy) = self.inner.tool_settings.commands.as_ref() else {
+        let Some(policy) = self.inner.tool_config.commands.as_ref() else {
             return Vec::new();
         };
         names
@@ -277,7 +277,7 @@ impl ConversationService {
     ) -> Result<CommandAnswer, CommandCallError> {
         let policy = self
             .inner
-            .tool_settings
+            .tool_config
             .commands
             .as_ref()
             .ok_or(CommandCallError::NotConfigured)?
@@ -520,7 +520,7 @@ impl ConversationService {
                 collecting.abort();
                 true
             } else {
-                let deadline = tokio::time::Instant::now() + PUBLISH_CALL_WAIT;
+                let deadline = tokio::time::Instant::now() + self.inner.tool_config.publish_wait;
                 loop {
                     tokio::select! {
                         collected = &mut collecting => break collected.is_err(),

@@ -46,7 +46,7 @@ use crate::{
     conversation::{
         application::{
             ConversationAgents, ConversationDependencies, ConversationLimits, DriveTools,
-            EnvironmentToolSettings, Environments, McpAppPorts,
+            EnvironmentToolConfig, Environments, McpAppPorts,
         },
         infrastructure::{
             CedarToolPolicyEvaluator, DurableAgentToolAudit, DurableConversationCreationAudit,
@@ -1663,7 +1663,7 @@ async fn conversations(
         )),
         None => Arc::new(NoMcpToolUis),
     };
-    let (environment, tool_settings, environment_peers) = environments(
+    let (environment, tool_config, environment_peers) = environments(
         &root,
         &ssh_hosts,
         command_policy,
@@ -1727,7 +1727,7 @@ async fn conversations(
         ),
         clock: clock.clone(),
         environment,
-        tool_settings,
+        tool_config,
         access_policy,
     };
     let workspace = Some(agents.workspace.to_string_lossy().into_owned());
@@ -1954,7 +1954,7 @@ fn environments(
     serving: Option<ServingAuth>,
     organization: crate::conversation::application::OrganizationBudgets,
     logins: Arc<dyn crate::conversation::infrastructure::ssh_environment::SavedLogins>,
-) -> Result<(Environments, EnvironmentToolSettings, Option<PairedParts>), RunError> {
+) -> Result<(Environments, EnvironmentToolConfig, Option<PairedParts>), RunError> {
     use super::paired_environments::{
         ListenerEnvironments, PeerWorkers, RegistryPaired, RegistryServing, SavedSightings,
     };
@@ -2038,12 +2038,12 @@ fn environments(
     // Who may run which commands where is the command policy's, answered by
     // Cedar over the configured hosts and programs (ADR 803 step 4).
     let tools = match commands {
-        Some(policy) => EnvironmentToolSettings::with_commands(Arc::new(
+        Some(policy) => EnvironmentToolConfig::with_commands(Arc::new(
             CedarCommandPolicyEvaluator::new(&policy).map_err(|_| {
                 RunError::Agent("the command policy bundle does not validate".into())
             })?,
         )),
-        None => EnvironmentToolSettings::default(),
+        None => EnvironmentToolConfig::default(),
     };
     let paired = peers.zip(paired_keys).map(|(peers, paired_keys)| {
         let connected = peers.clone();

@@ -31,7 +31,7 @@ use super::{
     placement::Environments,
     provider_sessions::{ProviderSessionErasers, ProviderSessionHandler},
     retries::{Claim, DeletionRetries, Waiting},
-    tool_settings::EnvironmentToolSettings,
+    tool_config::EnvironmentToolConfig,
     AccessAction, AgentToolAudit, ArtifactBudget, ArtifactCollector, ArtifactOffer,
     AttachmentRelease, AttachmentReleaseCause, CatalogueHead, ConversationAccessPolicyEvaluator,
     ConversationAttachments, ConversationCreationAudit, ConversationDeletionAudit,
@@ -954,7 +954,7 @@ struct Inner {
     /// Where agents run; every opening is leased from it.
     environment: Environments,
     /// The environment tools' command policy and artifact waits.
-    tool_settings: EnvironmentToolSettings,
+    tool_config: EnvironmentToolConfig,
     clock: Arc<dyn Clock>,
     /// Acknowledges a source turn's delegation decision before target work.
     agent_tool_audit: OnceLock<Arc<dyn AgentToolAudit>>,
@@ -1274,7 +1274,7 @@ pub struct ConversationDependencies {
     /// SSH hosts the configuration names.
     pub(crate) environment: Environments,
     /// The environment tools' command policy and artifact waits.
-    pub(crate) tool_settings: EnvironmentToolSettings,
+    pub(crate) tool_config: EnvironmentToolConfig,
     pub clock: Arc<dyn Clock>,
     /// Decides who may locate, act on and read a conversation: every
     /// command's admission asks it ([`OwnerAccess`]).
@@ -1479,7 +1479,7 @@ impl ConversationService {
             provider_sessions,
             deletion_budgets,
             environment,
-            tool_settings,
+            tool_config,
             clock,
             access_policy,
         } = dependencies;
@@ -1516,7 +1516,7 @@ impl ConversationService {
                 provider_sessions,
                 deletion_budgets,
                 environment,
-                tool_settings,
+                tool_config,
                 clock,
                 agent_tool_audit: OnceLock::new(),
                 settings_audit: OnceLock::new(),

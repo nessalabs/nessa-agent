@@ -25,7 +25,7 @@ pub const FETCH_CALL_WAIT: Duration = Duration::from_secs(16 * 60);
 /// The environment tools' policy and waits, handed to the conversation
 /// service with its other dependencies.
 #[derive(Clone)]
-pub struct EnvironmentToolSettings {
+pub struct EnvironmentToolConfig {
     /// Who may run which commands on which hosts, asked of the command
     /// policy; `None` when this gateway grants none, and the environment
     /// tools are absent.
@@ -36,7 +36,7 @@ pub struct EnvironmentToolSettings {
     pub(crate) fetch_wait: Duration,
 }
 
-impl Default for EnvironmentToolSettings {
+impl Default for EnvironmentToolConfig {
     /// No command policy, and the artifact calls' own waits.
     fn default() -> Self {
         Self {
@@ -47,7 +47,7 @@ impl Default for EnvironmentToolSettings {
     }
 }
 
-impl EnvironmentToolSettings {
+impl EnvironmentToolConfig {
     /// These tools, with commands granted as `policy` answers.
     #[cfg_attr(not(unix), allow(dead_code, reason = "the Unix gateway composes it"))]
     pub(crate) fn with_commands(policy: Arc<dyn CommandPolicyEvaluator>) -> Self {

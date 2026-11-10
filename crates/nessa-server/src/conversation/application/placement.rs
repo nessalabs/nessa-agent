@@ -419,51 +419,42 @@ pub(crate) struct Environments {
 
 #[cfg(test)]
 impl From<Arc<dyn Environment>> for Environments {
-    /// Here alone, with placements kept in memory: every conversation runs
-    /// here, as nothing else is offered. For tests.
+    /// Here alone: every conversation runs here, as nothing else is
+    /// offered. For tests; composition always keeps placements.
     fn from(here: Arc<dyn Environment>) -> Self {
-        Self::new(here, BTreeMap::new(), Arc::new(MemoryPlacements::default()))
+        Self::new(here, BTreeMap::new(), Arc::new(HereOnlyPlacements))
     }
 }
 
-/// Placements kept in memory, read back as written; none is here. For
-/// tests built with [`Environments::from`].
+/// A placement store for tests built with [`Environments::from`], where
+/// nothing but here is offered: every conversation reads as here, and
+/// anything else is refused as the store being unavailable.
 #[cfg(test)]
-#[derive(Default)]
-struct MemoryPlacements(std::sync::Mutex<std::collections::HashMap<ConversationId, Place>>);
+struct HereOnlyPlacements;
 
 #[cfg(test)]
-impl ConversationPlacements for MemoryPlacements {
+impl ConversationPlacements for HereOnlyPlacements {
     fn place<'a>(
         &'a self,
-        conversation: &'a ConversationId,
+        _conversation: &'a ConversationId,
         place: &'a Place,
     ) -> EnvironmentFuture<'a, Result<(), PlacementError>> {
-        let mut placed = self.0.lock().expect("placements");
-        match place {
-            Place::Here => placed.remove(conversation),
-            place => placed.insert(conversation.clone(), place.clone()),
+        let placed = match place {
+            Place::Here => Ok(()),
+            _ => Err(PlacementError::Unavailable),
         };
-        Box::pin(async { Ok(()) })
+        Box::pin(async move { placed })
     }
     fn placement<'a>(
         &'a self,
-        conversation: &'a ConversationId,
+        _conversation: &'a ConversationId,
     ) -> EnvironmentFuture<'a, Result<Place, PlacementError>> {
-        let place = self
-            .0
-            .lock()
-            .expect("placements")
-            .get(conversation)
-            .cloned()
-            .unwrap_or(Place::Here);
-        Box::pin(async move { Ok(place) })
+        Box::pin(async { Ok(Place::Here) })
     }
     fn erase<'a>(
         &'a self,
-        conversation: &'a ConversationId,
+        _conversation: &'a ConversationId,
     ) -> EnvironmentFuture<'a, Result<(), PlacementError>> {
-        self.0.lock().expect("placements").remove(conversation);
         Box::pin(async { Ok(()) })
     }
 }

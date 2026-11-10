@@ -31,7 +31,7 @@ use super::{
 use super::{
     PublishAnswer, PublishAsk, PublishCall, PublishCallRefusal, PublishFailure, PUBLISH_CALL_WAIT,
 };
-use crate::conversation::application::EnvironmentToolSettings;
+use crate::conversation::application::EnvironmentToolConfig;
 use crate::conversation::domain::{CommandPolicy, Place};
 use crate::conversation::infrastructure::{
     in_process_environment, DurableConversationCreationAudit, DurableConversationDeletionAudit,
@@ -422,7 +422,7 @@ fn harness(
     harness_in(
         root,
         environment.into(),
-        EnvironmentToolSettings::default(),
+        EnvironmentToolConfig::default(),
         stop,
         provider,
         binding,
@@ -433,7 +433,7 @@ fn harness(
 fn harness_in(
     root: &Path,
     environment: Environments,
-    tools: EnvironmentToolSettings,
+    tool_config: EnvironmentToolConfig,
     stop: Duration,
     provider: Arc<ProviderFactory>,
     binding: Arc<dyn AgentProvider>,
@@ -441,7 +441,7 @@ fn harness_in(
     harness_working_in(
         root,
         environment,
-        tools,
+        tool_config,
         stop,
         provider,
         binding,
@@ -451,11 +451,14 @@ fn harness_in(
 }
 
 /// [`harness_in`], with the gateway's own workspace.
-#[allow(clippy::too_many_arguments)]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "each is a part of the gateway a test varies"
+)]
 fn harness_working_in(
     root: &Path,
     environment: Environments,
-    tools: EnvironmentToolSettings,
+    tool_config: EnvironmentToolConfig,
     stop: Duration,
     provider: Arc<ProviderFactory>,
     binding: Arc<dyn AgentProvider>,
@@ -530,7 +533,7 @@ fn harness_working_in(
             environment,
             message_commit_clock: Arc::new(RuntimeMessageCommitClock::new()),
             clock,
-            tool_settings: tools,
+            tool_config,
         },
         ConversationLimits::default(),
         workspace,
@@ -2102,7 +2105,7 @@ fn with_host(root: &Path, here: Arc<Substitute>, host: Option<Arc<Host>>) -> Har
     harness_in(
         root,
         Environments::new(here, hosts, placements),
-        EnvironmentToolSettings::default(),
+        EnvironmentToolConfig::default(),
         DELETION_BUDGETS.stop,
         provider,
         binding,
@@ -2150,10 +2153,10 @@ fn with_publishing_host_waiting_and_placements(
             hosts,
             placements,
         ),
-        EnvironmentToolSettings {
+        EnvironmentToolConfig {
             publish_wait: wait,
             fetch_wait: wait,
-            ..EnvironmentToolSettings::default()
+            ..EnvironmentToolConfig::default()
         },
         DELETION_BUDGETS.stop,
         provider,
@@ -2492,7 +2495,7 @@ async fn b_a_conversation_on_a_host_shows_the_hosts_workspace() {
                 hosts,
                 placements,
             ),
-            EnvironmentToolSettings::default(),
+            EnvironmentToolConfig::default(),
             DELETION_BUDGETS.stop,
             provider,
             binding,
@@ -3099,8 +3102,8 @@ fn with_command_host_keeping(
     let binding = Arc::new(Provider::new(provider.clone()));
     let environments = Environments::new(in_process_environment(), hosts, placements);
     let tools = match policy {
-        Some(policy) => EnvironmentToolSettings::with_commands(commands(&policy)),
-        None => EnvironmentToolSettings::default(),
+        Some(policy) => EnvironmentToolConfig::with_commands(commands(&policy)),
+        None => EnvironmentToolConfig::default(),
     };
     harness_working_in(
         root,
@@ -3861,7 +3864,7 @@ pub(crate) fn service_with_command_hosts(root: &Path) -> ConversationService {
     harness_in(
         root,
         environments,
-        EnvironmentToolSettings::with_commands(commands(&policy)),
+        EnvironmentToolConfig::with_commands(commands(&policy)),
         DELETION_BUDGETS.stop,
         provider,
         binding,
@@ -6149,7 +6152,7 @@ async fn k3_the_agents_tools_reach_only_this_gateways_own_worker() {
                 .unwrap(),
             ),
         );
-    let tools = EnvironmentToolSettings::with_commands(commands(&CommandPolicy::new(
+    let tools = EnvironmentToolConfig::with_commands(commands(&CommandPolicy::new(
         [w.name(), x.name()],
         None,
         Vec::new(),
@@ -6254,10 +6257,10 @@ async fn k3_artifacts_move_only_on_this_gateways_own_worker() {
                 .unwrap(),
             ),
         ),
-        EnvironmentToolSettings {
+        EnvironmentToolConfig {
             publish_wait: PUBLISH_CALL_WAIT,
             fetch_wait: PUBLISH_CALL_WAIT,
-            ..EnvironmentToolSettings::default()
+            ..EnvironmentToolConfig::default()
         },
         DELETION_BUDGETS.stop,
         provider,
@@ -7949,7 +7952,7 @@ fn pool_harness_with(
         root,
         Environments::new(in_process_environment(), BTreeMap::new(), placements)
             .with_peers(Arc::new(TwoWorkers(workers.clone())), bindings),
-        EnvironmentToolSettings::default(),
+        EnvironmentToolConfig::default(),
         DELETION_BUDGETS.stop,
         provider,
         binding,
