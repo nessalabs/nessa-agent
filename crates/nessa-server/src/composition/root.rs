@@ -11,6 +11,7 @@ use crate::env::Environment;
 use crate::mcp_servers::application::Unfinished;
 use crate::product::ProductRouteState;
 use crate::server::entrypoint::http;
+use crate::timer::clock;
 use crate::webhooks::infrastructure::WebhookRuntime;
 use crate::{
     app::dependencies::RuntimeDependencies,
@@ -873,7 +874,7 @@ async fn passive_cleanup(
         }
     };
     tokio::pin!(record, catalogue, review_audit, webhook_drain);
-    let timeout = tokio::time::sleep(deadline);
+    let timeout = clock::sleep(deadline);
     tokio::pin!(timeout);
     // One deadline covers every drain: it stays armed while any is pending and
     // fires once, recording evidence only against the drains still pending.

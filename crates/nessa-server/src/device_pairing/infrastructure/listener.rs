@@ -11,6 +11,7 @@ use super::{
     NativeConnectionError, NativeConnectionFailure, NativeEnrollmentConnections, RelayPermit,
     TunnelPermit,
 };
+use crate::timer::clock;
 use nessa_auth::adapters::pairing::{CryptoRng, RngCore};
 use nessa_protocol::pairing::socket::worker_fault;
 use std::{
@@ -241,7 +242,7 @@ impl<A: EnrollmentAccept> NativeEnrollmentListener<A> {
                     tokio::select! {
                         biased;
                         () = &mut stop => break Ok(()),
-                        () = tokio::time::sleep(wait) => {}
+                        () = clock::sleep(wait) => {}
                     }
                 }
                 AcceptStep::Stop => break Err(error),

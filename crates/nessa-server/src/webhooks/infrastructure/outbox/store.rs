@@ -12,6 +12,7 @@ use super::{
     stored::StoredDelivery,
     unavailable, SCHEMA,
 };
+use crate::timer::clock;
 
 use crate::webhooks::application::{
     DeliveryCause, Outbox, OutboxError, PendingDelivery, QueuedRecord, MAX_BODY_BYTES,
@@ -455,7 +456,7 @@ fn write_transition_commit(
     let deadline = match mode {
         TransitionCommit::Ordinary(deadline) | TransitionCommit::Attempt(deadline) => deadline,
     };
-    if deadline.is_some_and(|at| Instant::now() >= at) {
+    if deadline.is_some_and(|at| clock::now() >= at) {
         return Err(OutboxError::Conflict);
     }
     let transaction = connection.transaction().map_err(unavailable)?;

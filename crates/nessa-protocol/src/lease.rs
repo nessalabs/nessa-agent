@@ -126,7 +126,7 @@
 //! compiled, so it changes whenever they do, with nothing to remember to
 //! bump. The package version does not: it stays the same across revisions.
 use base64::{engine::general_purpose::STANDARD, Engine};
-use nessa_sdk::domain::agent_execution::leases::SandboxProfile;
+use nessa_types::leases::SandboxProfile;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::{collections::BTreeMap, time::Duration};
 
@@ -165,8 +165,7 @@ pub fn stop_steps(grace: Duration, kill: Duration) -> Duration {
 /// storage keeps of one file. The environment refuses a larger file before
 /// staging any of it, and the gateway refuses a
 /// [`FromEnvironment::Published`] naming more.
-pub const MAX_ARTIFACT_BYTES: u64 =
-    nessa_sdk::application::agent_execution::sessions::PublishedFile::MAX_BYTES;
+pub const MAX_ARTIFACT_BYTES: u64 = nessa_types::leases::MAX_PUBLISHED_FILE_BYTES;
 /// Most artifacts one lease may have published and not yet collected; the
 /// environment refuses another until one is answered.
 pub const MAX_ARTIFACTS_IN_FLIGHT: usize = 4;
@@ -174,17 +173,14 @@ pub const MAX_ARTIFACTS_IN_FLIGHT: usize = 4;
 /// has sent its request; another waits to be accepted until one is answered.
 pub const MAX_OPEN_PUBLISHERS: usize = 16;
 /// Longest artifact name, in bytes: a file name, for people only.
-pub const MAX_ARTIFACT_NAME_BYTES: usize =
-    nessa_sdk::application::agent_execution::sessions::ArtifactName::MAX_BYTES;
+pub const MAX_ARTIFACT_NAME_BYTES: usize = nessa_types::leases::MAX_ARTIFACT_NAME_BYTES;
 /// Longest path of a staged artifact or a fetch's destination on the
 /// environment, in bytes: the longest a conversation records.
-pub const MAX_ARTIFACT_PATH_BYTES: usize =
-    nessa_sdk::application::agent_execution::sessions::EnvironmentPath::MAX_BYTES;
+pub const MAX_ARTIFACT_PATH_BYTES: usize = nessa_types::leases::MAX_ENVIRONMENT_PATH_BYTES;
 /// Most fetches one lease may have taken and not yet answered on an
 /// environment; the environment refuses another `busy` until one is. The
 /// most a conversation records under way under one lease.
-pub const MAX_FETCHES_IN_FLIGHT: usize =
-    nessa_sdk::application::agent_execution::sessions::CurrentLease::MAX_ASKED_FETCHES;
+pub const MAX_FETCHES_IN_FLIGHT: usize = nessa_types::leases::MAX_ASKED_FETCHES;
 /// Most [`ToEnvironment::ReadArtifact`]s of one artifact an environment
 /// holds at once, each from its arrival until its answer is handed to the
 /// environment's writer; one more is refused `busy`. So a gateway that

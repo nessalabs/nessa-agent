@@ -1189,7 +1189,7 @@ async fn a_latest_lease_this_build_cannot_read_is_never_issued_over(profiles: Sa
     assert_eq!(kinds(&lease), ["unreadable"]);
     assert_eq!(lease.records()[0], later);
     // The view claims nothing about it, not even the revision before it.
-    let view = nessa_protocol::conversation::projection::lease_view(&lease);
+    let view = nessa_projection::lease_view(&lease);
     assert_eq!(view.state, ConversationLeaseState::Unreadable);
     assert_eq!(view.revision, None);
 }
@@ -1644,7 +1644,7 @@ async fn the_view_of_an_ended_lease_says_why_it_ended() {
         .close(harness.id.clone(), caller("close"))
         .await
         .unwrap();
-    let view = nessa_protocol::conversation::projection::lease_view(&harness.lease().await);
+    let view = nessa_projection::lease_view(&harness.lease().await);
     assert_eq!(view.state, ConversationLeaseState::Ended);
     assert_eq!(view.cause, Some(ConversationLeaseCause::Closed));
 }
@@ -2389,7 +2389,7 @@ async fn b_a_conversation_created_on_a_host_runs_there_and_its_lease_names_the_h
     assert_eq!(here.opened.load(Ordering::SeqCst), 0);
     let lease = harness.lease().await;
     assert_eq!(kinds(&lease), ["issued", "ending", "ended"]);
-    let view = nessa_protocol::conversation::projection::lease_view(&lease);
+    let view = nessa_projection::lease_view(&lease);
     assert_eq!(view.environment, Some(ConversationLeaseEnvironment::Ssh));
     assert_eq!(view.host.as_deref(), Some("devbox"));
     assert_eq!(view.cleanup, Some(ConversationLeaseCleanup::Confirmed));
@@ -2637,7 +2637,7 @@ async fn b_gate5_a_conversation_naming_no_host_never_reaches_one() {
     assert_eq!(here.opened.load(Ordering::SeqCst), 1);
     assert_eq!(host.opened.load(Ordering::SeqCst), 0);
     assert!(!placement_file(root.path()).exists());
-    let view = nessa_protocol::conversation::projection::lease_view(&harness.lease().await);
+    let view = nessa_projection::lease_view(&harness.lease().await);
     assert_eq!(view.environment, Some(ConversationLeaseEnvironment::Here));
     assert_eq!(view.host, None);
 }
@@ -2839,7 +2839,7 @@ async fn an_environment_expiry_is_recorded_ending_then_ended_with_its_cleanup() 
     let (lease, kinds) =
         an_environment_expiry_ends_the_lease(Some(LeaseCleanup::Confirmed { forced: false })).await;
     assert_eq!(kinds, ["issued", "ending", "ended"]);
-    let view = nessa_protocol::conversation::projection::lease_view(&lease);
+    let view = nessa_projection::lease_view(&lease);
     assert_eq!(view.state, ConversationLeaseState::Ended);
     assert_eq!(view.cause, Some(ConversationLeaseCause::Expired));
     assert_eq!(view.cleanup, Some(ConversationLeaseCleanup::Confirmed));
@@ -2849,7 +2849,7 @@ async fn an_environment_expiry_is_recorded_ending_then_ended_with_its_cleanup() 
 async fn an_expiry_whose_end_goes_unanswered_is_interrupted() {
     let (lease, kinds) = an_environment_expiry_ends_the_lease(None).await;
     assert_eq!(kinds, ["issued", "ending", "interrupted"]);
-    let view = nessa_protocol::conversation::projection::lease_view(&lease);
+    let view = nessa_projection::lease_view(&lease);
     assert_eq!(view.cause, Some(ConversationLeaseCause::Expired));
 }
 
@@ -2864,7 +2864,7 @@ async fn an_environment_revocation_is_recorded_ending_then_ended_with_its_cleanu
     )
     .await;
     assert_eq!(kinds, ["issued", "ending", "ended"]);
-    let view = nessa_protocol::conversation::projection::lease_view(&lease);
+    let view = nessa_projection::lease_view(&lease);
     assert_eq!(view.state, ConversationLeaseState::Ended);
     assert_eq!(view.cause, Some(ConversationLeaseCause::Revoked));
     assert_eq!(view.cleanup, Some(ConversationLeaseCleanup::Confirmed));
@@ -2874,7 +2874,7 @@ async fn an_environment_revocation_is_recorded_ending_then_ended_with_its_cleanu
 async fn a_revocation_whose_end_goes_unanswered_is_interrupted() {
     let (lease, kinds) = an_environment_ends_the_lease(LeaseEndCause::Revoked, None).await;
     assert_eq!(kinds, ["issued", "ending", "interrupted"]);
-    let view = nessa_protocol::conversation::projection::lease_view(&lease);
+    let view = nessa_projection::lease_view(&lease);
     assert_eq!(view.cause, Some(ConversationLeaseCause::Revoked));
 }
 
@@ -2889,7 +2889,7 @@ async fn k1_an_environment_drain_is_recorded_stopped_by_the_system_then_ended() 
     )
     .await;
     assert_eq!(kinds, ["issued", "ending", "ended"]);
-    let view = nessa_protocol::conversation::projection::lease_view(&lease);
+    let view = nessa_projection::lease_view(&lease);
     assert_eq!(view.state, ConversationLeaseState::Ended);
     assert_eq!(view.cause, Some(ConversationLeaseCause::Stopped));
     assert_eq!(view.cleanup, Some(ConversationLeaseCleanup::Confirmed));

@@ -44,6 +44,7 @@ use crate::conversation::application::{
     PublicationOutcome, ToolDecision, PUBLISH_CALL_WAIT,
 };
 use crate::conversation::domain::{Place, ToolCall, ToolPolicy, ToolSource};
+use crate::timer::clock;
 use nessa_protocol::conversation::domain::ConversationId;
 use nessa_protocol::lease::{Collection, CollectionRefusal};
 use nessa_sdk::application::agent_execution::{
@@ -519,11 +520,11 @@ impl ConversationService {
                 collecting.abort();
                 true
             } else {
-                let deadline = tokio::time::Instant::now() + PUBLISH_CALL_WAIT;
+                let deadline = clock::now() + PUBLISH_CALL_WAIT;
                 loop {
                     tokio::select! {
                         collected = &mut collecting => break collected.is_err(),
-                        _ = tokio::time::sleep_until(deadline) => {
+                        _ = clock::sleep_until(deadline) => {
                             collecting.abort();
                             break true;
                         }

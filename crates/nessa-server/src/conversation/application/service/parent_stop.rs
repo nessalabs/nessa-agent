@@ -16,6 +16,7 @@ use super::{
     conversation_session, ConversationCaller, ConversationError, ConversationId,
     ConversationService, LiveConversation,
 };
+use crate::timer::clock;
 use nessa_auth::domain::PrincipalId;
 use nessa_sdk::application::agent_execution::agents::{owed_turn_ids, OwedTurn};
 use nessa_sdk::application::agent_execution::commands::{
@@ -698,7 +699,7 @@ impl ConversationService {
                             // Exclusive command leases can be occupied by a
                             // read-only lookup. Busy admits no new effect;
                             // retry the same durable selection only.
-                            tokio::time::sleep(Duration::from_millis(10)).await;
+                            clock::sleep(Duration::from_millis(10)).await;
                         }
                         Err(error) => {
                             tracing::warn!(conversation_id=%id, ?error, "restored exact parent Stop remains unconfirmed");

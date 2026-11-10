@@ -19,9 +19,9 @@ use crate::conversation_test_support::{
     DELETION_BUDGETS,
 };
 use nessa_auth::domain::{OrganizationId, PrincipalId};
+use nessa_projection::tool_uis::McpToolUis;
 use nessa_protocol::agents::AgentId;
 use nessa_protocol::conversation::domain::ConversationId;
-use nessa_protocol::conversation::tool_uis::McpToolUis;
 use nessa_protocol::conversation::view::{
     ConversationMessageStatus, ConversationPermission, ConversationReviewKind,
 };

@@ -17,12 +17,12 @@ use nessa_auth::application::ports::{
 };
 use nessa_auth::application::session::AuthenticatedSession;
 use nessa_auth::domain::{AudienceId, CredentialId, OrganizationId, ResourceId};
+use nessa_projection::{
+    bound_view, question_entry, review_entry, Projection, MAX_LISTED_REVIEWS, MAX_VIEW_BYTES,
+};
 use nessa_protocol::agents::AgentId;
 use nessa_protocol::clock::Clock as UptimeClock;
 use nessa_protocol::conversation::domain::{ConversationApprovalMode, ConversationModelId};
-use nessa_protocol::conversation::projection::{
-    bound_view, question_entry, review_entry, Projection, MAX_LISTED_REVIEWS, MAX_VIEW_BYTES,
-};
 use nessa_protocol::conversation::view::{
     ConversationCapabilities, ConversationMessage, ConversationMessageStatus,
     ConversationModelChangeStatus, ConversationModelChangeView, ConversationReviewKind,

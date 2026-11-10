@@ -6,7 +6,8 @@
 //! second default. Fixed limits (a socket's record slot, the request frame)
 //! stay with their owners and are not fields here.
 use crate::conversation::infrastructure::READ_WORK_BUDGET;
-use std::time::{Duration, Instant};
+use crate::timer::clock;
+use std::time::Duration;
 
 /// The most permits one semaphore is built with. Above this, `Semaphore::new`
 /// panics; the value object refuses the count first.
@@ -309,7 +310,7 @@ fn app_calls(count: u64) -> Result<usize, InvalidOperationalLimits> {
 }
 
 fn budget(duration: Duration) -> Result<Duration, InvalidOperationalLimits> {
-    if duration.is_zero() || Instant::now().checked_add(duration).is_none() {
+    if duration.is_zero() || clock::now().checked_add(duration).is_none() {
         Err(InvalidOperationalLimits::ReadWorkBudget)
     } else {
         Ok(duration)

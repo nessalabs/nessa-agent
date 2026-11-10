@@ -63,6 +63,7 @@ use super::commands::{
 };
 use super::records::{PeerEntry, PeerPhase, PeerRecord, SlotOutcome, SlotTransition};
 use crate::peer_gateways::application::{PeerHolding, PollerCause, WITHDRAWN_PER_RECORD};
+use crate::timer::clock;
 use nessa_auth::{
     adapters::pairing::NativeIdentity,
     application::{pairing::ClientPendingStore, ports::Clock as WallClock},
@@ -370,7 +371,7 @@ impl Poller {
                         return true;
                     }
                 }
-                () = tokio::time::sleep(pause) => {
+                () = clock::sleep(pause) => {
                     if soon || next.saturating_sub(self.now()) == 0 {
                         return true;
                     }
@@ -480,7 +481,7 @@ impl Shared {
                 return (!self.stopping()).then_some(turn);
             }
             tokio::select! {
-                () = tokio::time::sleep(WAKE_TICK) => {}
+                () = clock::sleep(WAKE_TICK) => {}
                 () = until_stopped(&mut stopped) => return None,
             }
         }
