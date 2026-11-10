@@ -1488,6 +1488,53 @@ async fn a_submit_linking_a_file_is_refused_on_a_host_before_it_is_staged() {
     retire(service, storage, metadata).await;
 }
 
+/// A fork runs where its source runs: a source here forks here though a
+/// default device was set since, which a creation naming no place would go
+/// to.
+#[tokio::test]
+async fn a_fork_of_a_conversation_here_runs_here_whatever_the_default_device() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("data");
+    let provider = Arc::new(ProviderFactory::default());
+    nessa_local_storage::create_directory(&root).unwrap();
+    let placements = Arc::new(
+        crate::conversation::infrastructure::FilePlacements::new(root.join("placements")).unwrap(),
+    );
+    let (default, default_device) = tokio::sync::watch::channel(None);
+    let environments = crate::conversation::application::Environments::new(
+        crate::conversation::infrastructure::in_process_environment(),
+        std::collections::BTreeMap::from([(
+            "devbox".to_string(),
+            Arc::new(Elsewhere) as Arc<dyn crate::conversation::application::Environment>,
+        )]),
+        placements,
+    )
+    .with_default(default_device);
+    let (service, storage, metadata) = fixture_in(&root, provider.clone(), environments);
+    let source = id();
+    opened(&service, &provider, &source).await;
+    default.send(Some("devbox".into())).unwrap();
+    assert_eq!(
+        service.inner.environment.default_place(),
+        Some(Place::named("devbox").unwrap())
+    );
+    let fork = id();
+    service
+        .fork(
+            storage.clone() as Arc<dyn CreationStorage>,
+            fork.clone(),
+            caller("fork"),
+            source.clone(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        service.inner.environment.placement(&fork).await.unwrap(),
+        Place::Here
+    );
+    retire(service, storage, metadata).await;
+}
+
 /// An owner initiation is not enough. The membership flag is what arms the
 /// remember offer, so a member whose turn is still saved as the owner's is
 /// not offered a choice they cannot use.

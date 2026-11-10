@@ -45,6 +45,7 @@
 //! opened, which is only while no lease of it is live, so one worker holds
 //! it at a time. Provider sessions stay on the worker that opened them, so
 //! a moved conversation's agent opens new context there.
+use super::place_decision::{pool_choice, PoolNow};
 use super::{
     CommandPolicyEvaluator, ConversationError, Environment, EnvironmentFuture, PoolSettingsStore,
 };
@@ -738,42 +739,34 @@ impl Environments {
         }
     }
 
-    /// Where a conversation that asked for the pool is placed: the pool,
-    /// while some worker `channel`'s preferences let it use serves and not
-    /// every one is busy. Otherwise a cloud workspace of its own, where one
-    /// can be had, rather than not at all (none online) or behind every
-    /// busy one (overflow); with no cloud, still the pool when some worker
-    /// serves, busy or not.
+    /// Where a conversation that asked for the pool is placed, as
+    /// [`pool_choice`] decides from the pool now, under `channel`'s
+    /// preferences, and whether a cloud VM can be had.
     async fn place_in_pool(
         &self,
         conversation: &ConversationId,
         channel: Option<&ChannelId>,
     ) -> Result<Place, ConversationError> {
-        let settings = match self.bindings {
-            Some(_) => Some(self.pool_settings(channel).await?),
-            None => None,
-        };
-        let serves = settings
-            .as_ref()
-            .is_some_and(|settings| self.pool_serves(settings));
-        let busy = settings
-            .as_ref()
-            .is_some_and(|settings| self.pool_busy(settings));
-        if serves && !busy {
-            return Ok(Place::Pool);
-        }
-        if self.boat_connected().await {
-            if busy {
-                tracing::info!(conversation_id = %conversation, "every paired computer the pool may use is busy; the conversation runs in a cloud workspace");
-            } else {
-                tracing::info!(conversation_id = %conversation, asked = %Place::Pool.name(), "no paired computer the pool may use is online; the conversation runs in a cloud workspace");
+        let pool = match self.bindings {
+            Some(_) => {
+                let settings = self.pool_settings(channel).await?;
+                if self.pool_busy(&settings) {
+                    PoolNow::Busy
+                } else if self.pool_serves(&settings) {
+                    PoolNow::Free
+                } else {
+                    PoolNow::Offline
+                }
             }
-            return Ok(Place::CloudVm);
+            None => PoolNow::Offline,
+        };
+        // The cloud is asked about only when the pool cannot take it.
+        let cloud = pool != PoolNow::Free && self.boat_connected().await;
+        let chosen = pool_choice(pool, cloud)?;
+        if chosen == Place::CloudVm {
+            tracing::info!(conversation_id = %conversation, asked = %Place::Pool.name(), ?pool, "the pool cannot take the conversation now; it runs in a cloud workspace");
         }
-        if serves {
-            return Ok(Place::Pool);
-        }
-        Err(ConversationError::EnvironmentNotConfigured)
+        Ok(chosen)
     }
 
     /// Whether a cloud workspace can be had now: this gateway builds them
