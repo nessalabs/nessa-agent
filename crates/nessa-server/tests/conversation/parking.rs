@@ -467,7 +467,7 @@ impl Fixture {
             .lease
             .clone()
             .expect("a lease was recorded");
-        let view = nessa_protocol::conversation::projection::lease_view(&lease);
+        let view = nessa_projection::lease_view(&lease);
         (view.state, view.cause)
     }
 

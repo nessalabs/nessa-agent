@@ -342,7 +342,7 @@ impl Fixture {
             .read_committed(conversation_session(&self.id))
             .await?
             .ok_or(ConversationError::NotFound)?;
-        Ok(nessa_protocol::conversation::projection::retained_view(
+        Ok(nessa_projection::retained_view(
             &self.id,
             committed.snapshot(),
             committed.status(),

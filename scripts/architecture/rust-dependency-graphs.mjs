@@ -8,6 +8,8 @@ export const PORTABLE_RUST_PACKAGES = Object.freeze([
   "nessa-agent-credentials",
   "nessa-server",
   "nessa-protocol",
+  "nessa-projection",
+  "nessa-types",
   "nessa-client-core",
   "nessa-device-client",
   "nessa-sdk",
@@ -27,9 +29,10 @@ export const PORTABLE_RUST_PACKAGES = Object.freeze([
  * admitted on "no process state and no runtime of its own"
  * (crates/nessa-protocol/README.md, ADR 483). A server framework, an HTTP
  * client, an async TLS stack or a WebSocket library in its graph means something only
- * one end needs has been admitted. A database is not listed: `nessa-sdk`, which
- * the conversation read model needs for its record types, already carries
- * `rusqlite` for its own session storage.
+ * one end needs has been admitted. Nor is the SDK: the protocol
+ * reads none of its records, so a client reads a view without it (the fold
+ * of records into a view is `nessa-projection`). `nessa-types` is a leaf that
+ * both name values from, so it reaches neither, nor a runtime.
  */
 export const PACKAGE_DENYLISTS = Object.freeze({
   "nessa-client-core": Object.freeze(["nessa-server"]),
@@ -41,7 +44,9 @@ export const PACKAGE_DENYLISTS = Object.freeze({
     "tungstenite",
     "tokio-tungstenite",
     "tower",
+    "nessa-sdk",
   ]),
+  "nessa-types": Object.freeze(["nessa-sdk", "nessa-protocol", "tokio"]),
 })
 
 function isTauriDesktopFramework(packageName) {

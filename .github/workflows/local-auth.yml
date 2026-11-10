@@ -509,7 +509,7 @@ jobs:
         # minutes on this runner. Run 41947356093 was still inside
         # server-other's 2349 tests when a 70-minute deadline fired, with
         # 2283 passed. 90 covers that cold path. A warm run ends in under 35.
-        run: node scripts/cargo-test-parallel.mjs --concurrency 2 --partition ${{ matrix.partition }} -- -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-client-core -p nessa-device-client -p nessa-sdk -p nessa-timer -p nessa-vault
+        run: node scripts/cargo-test-parallel.mjs --concurrency 2 --partition ${{ matrix.partition }} -- -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-projection -p nessa-types -p nessa-client-core -p nessa-device-client -p nessa-sdk -p nessa-timer -p nessa-vault
         timeout-minutes: 90
 
   local-auth:
@@ -573,7 +573,7 @@ jobs:
       # CI does too. Dropping it saved 28 seconds on Windows and cost that
       # guarantee, which is not a trade worth making. `database:check`'s fmt is
       # the exception: `cargo fmt --all` in `gateway-contract` covers it.
-      - run: cargo fmt -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-client-core -p nessa-device-client -p nessa-sdk -p nessa-timer -p nessa-vault -- --check
+      - run: cargo fmt -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-projection -p nessa-types -p nessa-client-core -p nessa-device-client -p nessa-sdk -p nessa-timer -p nessa-vault -- --check
       - run: node --test scripts/architecture/*.test.mjs
       - run: node --test scripts/agents/*.test.mjs
       - run: node scripts/check-architecture.mjs
@@ -602,7 +602,7 @@ jobs:
             printf '::notice title=Native load acceptance::%s\n' "$line"
           done < "$RUNNER_TEMP/page-load-acceptance.txt"
       # Platform-only unused ports must fail before the long runtime suites.
-      - run: cargo clippy -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-client-core -p nessa-device-client -p nessa-sdk -p nessa-timer -p nessa-vault --all-targets -- -D warnings
+      - run: cargo clippy -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-projection -p nessa-types -p nessa-client-core -p nessa-device-client -p nessa-sdk -p nessa-timer -p nessa-vault --all-targets -- -D warnings
       # A test that deadlocks here held this job for six hours, until GitHub's
       # job limit cancelled it (#366). Over 53 green runs this step took at most
       # 7 minutes on Linux, 11 on macOS and 19 on Windows, compile included, so
@@ -647,7 +647,7 @@ jobs:
           observe_phases cargo test -p nessa-server --test native_enrollment one_thread:: -- --nocapture
         timeout-minutes: 45
       - shell: bash
-        run: node scripts/cargo-test-parallel.mjs --concurrency 2 --partition ${{ matrix.partition }} -- -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-client-core -p nessa-device-client -p nessa-sdk -p nessa-timer -p nessa-vault
+        run: node scripts/cargo-test-parallel.mjs --concurrency 2 --partition ${{ matrix.partition }} -- -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-projection -p nessa-types -p nessa-client-core -p nessa-device-client -p nessa-sdk -p nessa-timer -p nessa-vault
         # macOS ran this in 41.6 minutes on main (run 41708958692, 2026-11-03)
         # and hit 45 twice on one PR the same night; 60 still ends a deadlock
         # long before the job does (#366).

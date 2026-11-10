@@ -30,7 +30,8 @@ use crate::product::{
 };
 use nessa_auth::application::session::AuthenticatedSession;
 use nessa_auth::domain::PrincipalId;
-use nessa_protocol::conversation::{domain::ConversationId, projection::CommittedCursor};
+use nessa_projection::CommittedCursor;
+use nessa_protocol::conversation::domain::ConversationId;
 use nessa_protocol::product::generated::{
     product_event, product_method, ConversationListResult, ConversationListed,
     ConversationSubscribeResult, ConversationSubscriptionEndReason, ConversationSubscriptionEnded,

@@ -236,7 +236,7 @@ impl CurrentLease {
     /// Most fetches one lease has asked and not yet ended. Another is
     /// corrupt evidence: a gateway asks no more at once, and an environment
     /// takes no more in flight.
-    pub const MAX_ASKED_FETCHES: usize = 4;
+    pub const MAX_ASKED_FETCHES: usize = nessa_types::leases::MAX_ASKED_FETCHES;
 
     /// Its records, oldest first.
     pub fn records(&self) -> &[LeaseRecord] {

@@ -96,17 +96,15 @@ use nessa_auth::{
     domain::{AudienceId, OrganizationId, Resource, ResourceId},
 };
 use nessa_local_database::OpenError;
+#[cfg(unix)]
+use nessa_projection::{McpToolUis, NoMcpToolUis};
+use nessa_protocol::agents::AgentId;
 use nessa_protocol::clock::Clock as ServerClock;
 use nessa_protocol::product::generated::AgentsListResult;
 #[cfg(unix)]
 use nessa_protocol::product::generated::{
     AgentModelOption, AgentOption, AgentsNativeHooks, ApprovalMode as WireApprovalMode,
     ApprovalModeChoice as WireApprovalModeChoice, NativeHooksChoice,
-};
-#[cfg(unix)]
-use nessa_protocol::{
-    agents::AgentId,
-    conversation::tool_uis::{McpToolUis, NoMcpToolUis},
 };
 #[cfg(unix)]
 use nessa_sdk::application::agent_execution::subagents::{

@@ -27,7 +27,7 @@ use tokio::process::Command;
 
 /// The provider name every session this binding opens records in its
 /// history, as its provider identity.
-pub const PROVIDER_NAME: &str = "opencode-acp";
+pub const PROVIDER_NAME: &str = nessa_types::providers::OPENCODE_ACP;
 
 /// What an Opencode session launched by this binding is allowed to do, as the
 /// `OPENCODE_PERMISSION` value its process is started with.

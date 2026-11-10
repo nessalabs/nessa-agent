@@ -1,0 +1,9 @@
+[package]
+name = "nessa-types"
+version.workspace = true
+edition.workspace = true
+rust-version = "1.85"
+publish = false
+description = "Names and bounds the SDK, the protocol and the gateway all use: no IO, no runtime, no dependencies"
+
+[dependencies]

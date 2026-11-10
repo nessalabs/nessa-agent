@@ -1,14 +1,17 @@
-use super::domain::{ConversationApprovalMode, ConversationId, LATEST_TIME_MS};
-use super::tool_uis::{McpToolUis, NoMcpToolUis};
-use super::view::{
-    ConversationAgentSource, ConversationAnswerOption, ConversationApprovalModeChangeView,
-    ConversationArtifact, ConversationAsked, ConversationCapabilities, ConversationEarlier,
-    ConversationHandoff, ConversationHandoffKind, ConversationLeaseCause, ConversationLeaseCleanup,
-    ConversationLeaseEnvironment, ConversationLeaseRefusal, ConversationLeaseSandbox,
-    ConversationLeaseState, ConversationLeaseView, ConversationLifecycle,
-    ConversationLifecyclePhase, ConversationMcpTool, ConversationMessage, ConversationMessageApp,
-    ConversationMessageStatus, ConversationModelChangeEffect, ConversationModelChangeView,
-    ConversationNote, ConversationPart, ConversationPartPosition, ConversationPending,
+use crate::records;
+use crate::tool_uis::{McpToolUis, NoMcpToolUis};
+use crate::view_of::{IntoView, ViewOf};
+use nessa_protocol::conversation::domain::{
+    ConversationApprovalMode, ConversationId, LATEST_TIME_MS,
+};
+use nessa_protocol::conversation::view::{
+    ConversationAnswerOption, ConversationApprovalModeChangeView, ConversationArtifact,
+    ConversationAsked, ConversationCapabilities, ConversationEarlier, ConversationHandoffKind,
+    ConversationLeaseCause, ConversationLeaseCleanup, ConversationLeaseEnvironment,
+    ConversationLeaseRefusal, ConversationLeaseSandbox, ConversationLeaseState,
+    ConversationLeaseView, ConversationLifecycle, ConversationLifecyclePhase, ConversationMcpTool,
+    ConversationMessage, ConversationMessageStatus, ConversationModelChangeEffect,
+    ConversationModelChangeView, ConversationPart, ConversationPartPosition, ConversationPending,
     ConversationPendingMode, ConversationPermission, ConversationPermissionAsk,
     ConversationPermissionDeadline, ConversationPermissionOption,
     ConversationPermissionOptionEffect, ConversationPermissionOrigin, ConversationPoint,
@@ -69,9 +72,10 @@ pub const MAX_VIEW_ARTIFACTS: usize = 64;
 pub const MAX_VIEW_NOTES: usize = 64;
 /// Most handoffs the view lists: as many as a conversation keeps.
 pub const MAX_VIEW_HANDOFFS: usize = 256;
-// Application transcript body; product catalog enrichment is serialized afterward.
-pub const MAX_VIEW_BYTES: usize = 60_000;
-pub use crate::product::generated::{MAX_LISTED_REVIEWS, MAX_REVIEW_ENTRY_TOOL_NAME_BYTES};
+pub use nessa_protocol::conversation::view::MAX_VIEW_BYTES;
+pub use nessa_protocol::product::generated::{
+    MAX_LISTED_REVIEWS, MAX_REVIEW_ENTRY_TOOL_NAME_BYTES,
+};
 /// The most one review entry takes of a view, encoded, with the comma that
 /// separates it from the next.
 pub const MAX_REVIEW_ENTRY_BYTES: usize = 160;
@@ -79,7 +83,7 @@ pub const MAX_REVIEW_ENTRY_BYTES: usize = 160;
 /// everything else before any of them, and never gives one up, so this
 /// leaves the rest of the view most of its budget.
 pub const MAX_REVIEW_LIST_BYTES: usize = MAX_LISTED_REVIEWS * MAX_REVIEW_ENTRY_BYTES;
-pub use crate::product::generated::MAX_QUESTION_ENTRY_MESSAGE_BYTES;
+pub use nessa_protocol::product::generated::MAX_QUESTION_ENTRY_MESSAGE_BYTES;
 /// The most one question entry takes of a view, encoded, with its comma.
 pub const MAX_QUESTION_ENTRY_BYTES: usize = 112;
 /// What the most questions a view can list take of it: the SDK holds no
@@ -379,7 +383,7 @@ fn permission_deadline(
     Some(ConversationPermissionDeadline {
         wait_ms: nessa_sdk::domain::agent_execution::permissions::wait_ms(deadline.wait()),
         due_at_ms: deadline.due_at_ms()?,
-        effect: ConversationPermissionOptionEffect::from(deadline.effect()),
+        effect: ConversationPermissionOptionEffect::view_of(deadline.effect()),
         reason: deadline.reason().to_owned(),
         stops_turn: deadline.stops_turn(),
     })
@@ -688,7 +692,7 @@ pub fn retained_view(
         revision,
         None,
     );
-    projection.transcript_state(status.view_state().into());
+    projection.transcript_state(status.view_state().into_view());
     bound_view(projection.read())
 }
 
@@ -786,19 +790,19 @@ impl Projection {
                     snapshot.artifacts
                         [snapshot.artifacts.len().saturating_sub(MAX_VIEW_ARTIFACTS)..]
                         .iter()
-                        .map(ConversationArtifact::from)
+                        .map(ConversationArtifact::view_of)
                         .collect()
                 }),
                 notes: snapshot.map_or_else(Vec::new, |snapshot| {
                     snapshot.notes[snapshot.notes.len().saturating_sub(MAX_VIEW_NOTES)..]
                         .iter()
-                        .map(|note| ConversationNote::of(snapshot, note))
+                        .map(|note| records::note(snapshot, note))
                         .collect()
                 }),
                 handoffs: snapshot.map_or_else(Vec::new, |snapshot| {
                     snapshot.handoffs[snapshot.handoffs.len().saturating_sub(MAX_VIEW_HANDOFFS)..]
                         .iter()
-                        .map(ConversationHandoff::of)
+                        .map(records::handoff)
                         .collect()
                 }),
                 unreadable: Vec::new(),
@@ -970,7 +974,7 @@ impl Projection {
                             .images()
                             .iter()
                             .filter(|_| !internal)
-                            .map(Into::into)
+                            .map(IntoView::into_view)
                             .collect(),
                         uploads: record
                             .request
@@ -978,7 +982,7 @@ impl Projection {
                             .uploads()
                             .iter()
                             .filter(|_| !internal)
-                            .map(Into::into)
+                            .map(IntoView::into_view)
                             .collect(),
                         files: record
                             .request
@@ -986,10 +990,10 @@ impl Projection {
                             .files()
                             .iter()
                             .filter(|_| !internal)
-                            .map(Into::into)
+                            .map(IntoView::into_view)
                             .collect(),
-                        app: ConversationMessageApp::of(&record.request.user_message),
-                        agent: ConversationAgentSource::of(&record.request.user_message),
+                        app: records::message_app(&record.request.user_message),
+                        agent: records::message_agent(&record.request.user_message),
                         mode,
                     });
                 } else {
@@ -1856,7 +1860,7 @@ impl Projection {
             .images()
             .iter()
             .filter(|_| !internal)
-            .map(Into::into)
+            .map(IntoView::into_view)
             .collect();
         self.view.messages[index].uploads = record
             .request
@@ -1864,7 +1868,7 @@ impl Projection {
             .uploads()
             .iter()
             .filter(|_| !internal)
-            .map(Into::into)
+            .map(IntoView::into_view)
             .collect();
         self.view.messages[index].files = record
             .request
@@ -1872,10 +1876,10 @@ impl Projection {
             .files()
             .iter()
             .filter(|_| !internal)
-            .map(Into::into)
+            .map(IntoView::into_view)
             .collect();
-        self.view.messages[index].app = ConversationMessageApp::of(&record.request.user_message);
-        self.view.messages[index].agent = ConversationAgentSource::of(&record.request.user_message);
+        self.view.messages[index].app = records::message_app(&record.request.user_message);
+        self.view.messages[index].agent = records::message_agent(&record.request.user_message);
         self.view.messages[index].parts.clear();
         self.view.messages[index].retained_text = 0;
         self.tool_parts.remove(id);
@@ -2100,7 +2104,7 @@ pub fn agent_review(review: &PendingReview) -> Option<ConversationPermission> {
             .map(|option| ConversationPermissionOption {
                 id: option.id().as_str().into(),
                 label: option.label().into(),
-                effect: ConversationPermissionOptionEffect::from(option.decision().effect()),
+                effect: ConversationPermissionOptionEffect::view_of(option.decision().effect()),
             })
             .collect(),
     })
@@ -2437,7 +2441,7 @@ pub fn earlier_turns(
         snapshot
             .handoffs
             .iter()
-            .map(ConversationHandoff::of)
+            .map(records::handoff)
             .filter(|handoff| handoff.kind == ConversationHandoffKind::Fork)
             .collect::<Vec<_>>()
     });
@@ -2654,15 +2658,15 @@ fn gives_up_anything_but_interactions(view: &ConversationView) -> bool {
 }
 
 #[cfg(test)]
-#[path = "../../tests/conversation/projection.rs"]
+#[path = "../tests/projection.rs"]
 mod tests;
 
 #[cfg(test)]
-#[path = "../../tests/conversation/tool_parts.rs"]
+#[path = "../tests/tool_parts.rs"]
 mod tool_part_tests;
 
 #[cfg(test)]
-#[path = "../../tests/conversation/earlier_turns.rs"]
+#[path = "../tests/earlier_turns.rs"]
 mod earlier_turn_tests;
 
 /// The words the person sent with a turn: a successor turn's own text opens
