@@ -20,14 +20,14 @@ impl ConversationPlacements for PausedPlacement {
     fn place<'a>(
         &'a self,
         conversation: &'a ConversationId,
-        host: Option<&'a str>,
+        place: &'a crate::conversation::domain::Place,
     ) -> EnvironmentFuture<'a, Result<(), PlacementError>> {
-        self.inner.place(conversation, host)
+        self.inner.place(conversation, place)
     }
     fn placement<'a>(
         &'a self,
         conversation: &'a ConversationId,
-    ) -> EnvironmentFuture<'a, Result<Option<String>, PlacementError>> {
+    ) -> EnvironmentFuture<'a, Result<crate::conversation::domain::Place, PlacementError>> {
         Box::pin(async move {
             if self.pause.swap(false, Ordering::SeqCst) {
                 self.entered.notify_one();

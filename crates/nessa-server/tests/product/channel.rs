@@ -230,8 +230,14 @@ fn a_placement_change_names_a_channel_and_two_known_places() {
     .unwrap();
     assert_eq!(params.request_id, "r");
     assert_eq!(channel.as_str(), "ch_aaaaaaaaaa");
-    assert_eq!(execution.coordinator, WorkspacePlacement::Boat);
-    assert_eq!(execution.threads, WorkspacePlacement::Local);
+    assert_eq!(
+        execution.coordinator(),
+        &crate::conversation::domain::Place::CloudVm
+    );
+    assert_eq!(
+        execution.threads(),
+        &crate::conversation::domain::Place::Here
+    );
     for refused in [
         json!({"requestId": "r", "channelId": "nope", "coordinatorPlacement": "boat", "threadPlacement": "boat"}),
         json!({"requestId": "r", "channelId": "ch_aaaaaaaaaa", "coordinatorPlacement": "moon", "threadPlacement": "boat"}),

@@ -14,6 +14,7 @@
 //! a request can select stays a choice between places the owner already made
 //! (`composition/agent.rs`). Every value here is checked when it is made and
 //! when it is read back; a stored row that is not one is not a channel.
+use super::place::Place;
 use nessa_auth::domain::{OrganizationId, PrincipalId};
 use nessa_protocol::agents::AgentId;
 use nessa_protocol::conversation::domain::{
@@ -249,38 +250,72 @@ pub struct ChannelDefaults {
     pub mode: ConversationApprovalMode,
 }
 
-/// Where the channel's coordinator or worker threads execute. These choices
-/// are independent; Local is the existing path. Pool (any paired computer,
-/// in the order the pool's preferences give, Boat as overflow) is offered
-/// for worker threads only.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum WorkspacePlacement {
-    #[default]
-    Local,
-    Boat,
-    Pool,
+/// Where the channel's main agent and its threads run. The two are chosen
+/// apart. A channel holds here, a cloud VM of each conversation's own, or,
+/// for threads only, any paired computer (the pool, in the order the pool's
+/// preferences give, a cloud VM as overflow); never one named computer yet.
+/// Stored and sent as one word each: `local`, `boat`, `pool`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ChannelExecution {
+    coordinator: Place,
+    threads: Place,
 }
-impl WorkspacePlacement {
-    pub fn parse(value: &str) -> Option<Self> {
-        match value {
-            "local" => Some(Self::Local),
-            "boat" => Some(Self::Boat),
-            "pool" => Some(Self::Pool),
+impl Default for ChannelExecution {
+    fn default() -> Self {
+        Self {
+            coordinator: Place::Here,
+            threads: Place::Here,
+        }
+    }
+}
+impl ChannelExecution {
+    /// The main agent on `coordinator` and threads on `threads`; `None`
+    /// when a channel cannot hold one of them: a named computer, or the
+    /// pool for the main agent, which runs in one known place.
+    pub fn new(coordinator: Place, threads: Place) -> Option<Self> {
+        let held = |place: &Place| matches!(place, Place::Here | Place::CloudVm | Place::Pool);
+        (held(&coordinator) && held(&threads) && coordinator != Place::Pool).then_some(Self {
+            coordinator,
+            threads,
+        })
+    }
+    /// The places the channel words `coordinator` and `threads` name, as
+    /// [`Self::new`] takes them; `None` for a word that names none.
+    pub fn parse(coordinator: &str, threads: &str) -> Option<Self> {
+        Self::new(Self::place_of(coordinator)?, Self::place_of(threads)?)
+    }
+    fn place_of(word: &str) -> Option<Place> {
+        match word {
+            "local" => Some(Place::Here),
+            "boat" => Some(Place::CloudVm),
+            "pool" => Some(Place::Pool),
             _ => None,
         }
     }
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Local => "local",
-            Self::Boat => "boat",
-            Self::Pool => "pool",
+    fn word_of(place: &Place) -> &'static str {
+        match place {
+            Place::CloudVm => "boat",
+            Place::Pool => "pool",
+            // `new` holds nothing else.
+            Place::Here | Place::Host(_) | Place::Peer(_) => "local",
         }
     }
-}
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct ChannelExecution {
-    pub coordinator: WorkspacePlacement,
-    pub threads: WorkspacePlacement,
+    /// Where the main agent runs.
+    pub fn coordinator(&self) -> &Place {
+        &self.coordinator
+    }
+    /// Where the channel's threads run.
+    pub fn threads(&self) -> &Place {
+        &self.threads
+    }
+    /// The main agent's place as its channel word.
+    pub fn coordinator_word(&self) -> &'static str {
+        Self::word_of(&self.coordinator)
+    }
+    /// The threads' place as its channel word.
+    pub fn threads_word(&self) -> &'static str {
+        Self::word_of(&self.threads)
+    }
 }
 
 /// One stored channel.
@@ -388,8 +423,8 @@ impl Channel {
             ..self.clone()
         }
     }
-    pub fn execution(&self) -> ChannelExecution {
-        self.execution
+    pub fn execution(&self) -> &ChannelExecution {
+        &self.execution
     }
     /// This channel with its agents running where `execution` says: the
     /// one setting a person changes after the channel is made.

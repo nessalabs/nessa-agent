@@ -19,14 +19,14 @@
 //! schema and version stay as they are.
 use crate::conversation::application::{
     ConversationBindings, ConversationPlacements, EnvironmentFuture, PlacementError, WorkerBinding,
-    POOL,
 };
+use crate::conversation::domain::Place;
 use nessa_local_storage::{
     create_directory, is_replaced_file, is_unsafe_file, open, sync_directory, OpenMode,
     PrivateTempFile,
 };
 use nessa_protocol::conversation::domain::ConversationId;
-use nessa_sdk::domain::agent_execution::leases::{EnvironmentRef, PeerEnvironment};
+use nessa_sdk::domain::agent_execution::leases::PeerEnvironment;
 use nessa_sdk::domain::agent_execution::sessions::ExecutionSessionId;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -111,25 +111,20 @@ fn read_bytes(path: PathBuf) -> Result<Option<Vec<u8>>, PlacementError> {
     Ok(Some(bytes))
 }
 
-fn read(path: PathBuf) -> Result<Option<String>, PlacementError> {
+fn read(path: PathBuf) -> Result<Place, PlacementError> {
     let Some(bytes) = read_bytes(path)? else {
-        return Ok(None);
+        return Ok(Place::Here);
     };
     let placement: Placement =
         serde_json::from_slice(&bytes).map_err(|_| PlacementError::Unreadable)?;
-    // An SSH destination, a paired environment's `peer:` name, or the
-    // pool's; never here, which has no placement.
-    let host = EnvironmentRef::named(&placement.host);
-    if placement.schema_version != SCHEMA_VERSION
-        || !(placement.host == POOL
-            || matches!(
-                host,
-                Ok(EnvironmentRef::Ssh(_) | EnvironmentRef::Peer(_) | EnvironmentRef::Boat)
-            ))
-    {
+    if placement.schema_version != SCHEMA_VERSION {
         return Err(PlacementError::Unreadable);
     }
-    Ok(Some(placement.host))
+    // Anywhere but here, which has no placement.
+    match Place::named(&placement.host) {
+        Ok(Place::Here) | Err(_) => Err(PlacementError::Unreadable),
+        Ok(place) => Ok(place),
+    }
 }
 
 async fn blocking<T: Send + 'static>(
@@ -144,11 +139,12 @@ impl ConversationPlacements for FilePlacements {
     fn place<'a>(
         &'a self,
         conversation: &'a ConversationId,
-        host: Option<&'a str>,
+        place: &'a Place,
     ) -> EnvironmentFuture<'a, Result<(), PlacementError>> {
         let directory = self.directory.clone();
         let path = self.path(conversation);
-        let host = host.map(str::to_owned);
+        // Here is the absence of a placement.
+        let host = place.asked_name();
         Box::pin(blocking(move || match host {
             Some(host) => write(
                 directory,
@@ -165,7 +161,7 @@ impl ConversationPlacements for FilePlacements {
     fn placement<'a>(
         &'a self,
         conversation: &'a ConversationId,
-    ) -> EnvironmentFuture<'a, Result<Option<String>, PlacementError>> {
+    ) -> EnvironmentFuture<'a, Result<Place, PlacementError>> {
         let path = self.path(conversation);
         Box::pin(blocking(move || read(path)))
     }

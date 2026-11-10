@@ -1457,7 +1457,11 @@ async fn a_submit_linking_a_file_is_refused_on_a_host_before_it_is_staged() {
     service
         .inner
         .environment
-        .place(&target, Some("devbox"), None)
+        .place(
+            &target,
+            &crate::conversation::domain::Place::named("devbox").unwrap(),
+            None,
+        )
         .await
         .unwrap();
     let mut linking = message("read this");

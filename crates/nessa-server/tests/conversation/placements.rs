@@ -5,6 +5,7 @@ use super::{FileBindings, FilePlacements};
 use crate::conversation::application::{
     ConversationBindings, ConversationPlacements, PlacementError, WorkerBinding,
 };
+use crate::conversation::domain::Place;
 use nessa_protocol::conversation::domain::ConversationId;
 use nessa_sdk::domain::agent_execution::leases::PeerEnvironment;
 use nessa_sdk::domain::agent_execution::sessions::ExecutionSessionId;
@@ -13,6 +14,10 @@ const CONVERSATION: &str = "5c0a9f2e-1d3b-4c7a-8e6f-2b9d4a1c7e30";
 
 fn conversation() -> ConversationId {
     ConversationId::new(CONVERSATION).unwrap()
+}
+
+fn named(name: &str) -> Place {
+    Place::named(name).unwrap()
 }
 
 fn store() -> (tempfile::TempDir, FilePlacements) {
@@ -30,19 +35,19 @@ fn file(root: &tempfile::TempDir) -> std::path::PathBuf {
 #[tokio::test]
 async fn a_conversation_with_no_placement_runs_here() {
     let (_root, placements) = store();
-    assert_eq!(placements.placement(&conversation()).await, Ok(None));
+    assert_eq!(placements.placement(&conversation()).await, Ok(Place::Here));
 }
 
 #[tokio::test]
 async fn a_placement_is_read_back_as_written_and_is_private() {
     let (root, placements) = store();
     placements
-        .place(&conversation(), Some("me@devbox"))
+        .place(&conversation(), &named("me@devbox"))
         .await
         .unwrap();
     assert_eq!(
         placements.placement(&conversation()).await,
-        Ok(Some("me@devbox".into()))
+        Ok(named("me@devbox"))
     );
     let written = std::fs::read_to_string(file(&root)).unwrap();
     assert_eq!(written, "{\"schemaVersion\":1,\"host\":\"me@devbox\"}\n");
@@ -60,24 +65,28 @@ async fn a_placement_on_a_paired_environment_is_read_back_as_written() {
     let (_root, placements) = store();
     let peer = format!("peer:{}", "ab".repeat(32));
     placements
-        .place(&conversation(), Some(&peer))
-        .await
-        .unwrap();
-    assert_eq!(placements.placement(&conversation()).await, Ok(Some(peer)));
-}
-
-/// The pool is placed by its own name and read back as it.
-#[tokio::test]
-async fn a_placement_on_any_worker_is_read_back_as_written() {
-    let (_root, placements) = store();
-    placements
-        .place(&conversation(), Some("peer:any"))
+        .place(&conversation(), &named(&peer))
         .await
         .unwrap();
     assert_eq!(
         placements.placement(&conversation()).await,
-        Ok(Some("peer:any".into()))
+        Ok(Place::Peer(PeerEnvironment::parse(&peer).unwrap()))
     );
+}
+
+/// The pool and a cloud VM are placed by their own names, the file holding
+/// the same text it always has, and read back as the same place.
+#[tokio::test]
+async fn the_pool_and_a_cloud_vm_are_written_by_their_names_and_read_back() {
+    for (place, name) in [(Place::Pool, "peer:any"), (Place::CloudVm, "boat:thread")] {
+        let (root, placements) = store();
+        placements.place(&conversation(), &place).await.unwrap();
+        assert_eq!(placements.placement(&conversation()).await, Ok(place));
+        assert_eq!(
+            std::fs::read_to_string(file(&root)).unwrap(),
+            format!("{{\"schemaVersion\":1,\"host\":\"{name}\"}}\n")
+        );
+    }
 }
 
 fn bindings() -> (tempfile::TempDir, FileBindings) {
@@ -175,18 +184,21 @@ async fn a_binding_this_build_cannot_read_is_refused() {
 async fn placing_here_removes_what_a_failed_creation_left_and_erasing_twice_is_quiet() {
     let (_root, placements) = store();
     placements
-        .place(&conversation(), Some("devbox"))
+        .place(&conversation(), &named("devbox"))
         .await
         .unwrap();
-    placements.place(&conversation(), None).await.unwrap();
-    assert_eq!(placements.placement(&conversation()).await, Ok(None));
     placements
-        .place(&conversation(), Some("devbox"))
+        .place(&conversation(), &Place::Here)
+        .await
+        .unwrap();
+    assert_eq!(placements.placement(&conversation()).await, Ok(Place::Here));
+    placements
+        .place(&conversation(), &named("devbox"))
         .await
         .unwrap();
     placements.erase(&conversation()).await.unwrap();
     placements.erase(&conversation()).await.unwrap();
-    assert_eq!(placements.placement(&conversation()).await, Ok(None));
+    assert_eq!(placements.placement(&conversation()).await, Ok(Place::Here));
 }
 
 #[tokio::test]

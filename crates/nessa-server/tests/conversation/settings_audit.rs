@@ -2,7 +2,7 @@
 //! and what came of it; a step recorded again is acknowledged, not doubled.
 use super::*;
 use crate::conversation::application::ConversationCaller;
-use crate::conversation::domain::{ChannelId, WorkspacePlacement};
+use crate::conversation::domain::ChannelId;
 use nessa_auth::domain::{OrganizationId, PrincipalId};
 use nessa_protocol::conversation::domain::ConversationId;
 
@@ -36,10 +36,11 @@ async fn a_channel_move_keeps_both_places_its_main_chats_and_who_asked() {
     let change = SettingsChange::ChannelPlacement {
         channel: ChannelId::from_random([1; 10]),
         before: ChannelExecution::default(),
-        after: ChannelExecution {
-            coordinator: WorkspacePlacement::Boat,
-            threads: WorkspacePlacement::Local,
-        },
+        after: crate::conversation::domain::ChannelExecution::new(
+            crate::conversation::domain::Place::CloudVm,
+            crate::conversation::domain::Place::Here,
+        )
+        .unwrap(),
         coordinator: old.clone(),
     };
     for outcome in [

@@ -15,7 +15,7 @@ use super::state::ProductRouteState;
 use crate::conversation::application::{ChannelError, ChannelListing, FolderRefusal};
 use crate::conversation::domain::{
     Channel, ChannelDefaults, ChannelExecution, ChannelId, ChannelName, ChannelNotes, ChannelPath,
-    ChannelRequest, ChannelResources, WorkspacePlacement,
+    ChannelRequest, ChannelResources,
 };
 use nessa_auth::application::session::AuthenticatedSession;
 use nessa_protocol::agents::AgentId;
@@ -122,19 +122,12 @@ pub(super) async fn dispatch(
 fn channel_request(params: &ChannelCreateParams) -> Option<ChannelRequest> {
     let path = |text: &str| ChannelPath::new(PathBuf::from(text)).ok();
     Some(ChannelRequest {
-        execution: crate::conversation::domain::ChannelExecution {
-            // A coordinator runs in one known place; only threads go to
-            // the pool.
-            coordinator: crate::conversation::domain::WorkspacePlacement::parse(
-                params.coordinator_placement.as_deref().unwrap_or("local"),
-            )
-            .filter(|placement| {
-                *placement != crate::conversation::domain::WorkspacePlacement::Pool
-            })?,
-            threads: crate::conversation::domain::WorkspacePlacement::parse(
-                params.thread_placement.as_deref().unwrap_or("local"),
-            )?,
-        },
+        // A coordinator runs in one known place; only threads go to the
+        // pool. Either left out runs here.
+        execution: ChannelExecution::parse(
+            params.coordinator_placement.as_deref().unwrap_or("local"),
+            params.thread_placement.as_deref().unwrap_or("local"),
+        )?,
         name: ChannelName::new(&params.name).ok()?,
         folder: match &params.folder {
             Some(folder) => Some(path(folder)?),
@@ -181,8 +174,8 @@ fn wire_channel(channel: &Channel) -> WireChannel {
         model: Some(defaults.model.as_str().to_owned()),
         approval_mode: wire_mode(defaults.mode),
         coordinator_conversation_id: Some(channel.coordinator_id().to_string()),
-        coordinator_placement: channel.execution().coordinator.as_str().into(),
-        thread_placement: channel.execution().threads.as_str().into(),
+        coordinator_placement: channel.execution().coordinator_word().into(),
+        thread_placement: channel.execution().threads_word().into(),
         created_at_ms: channel.created_at_ms(),
     }
 }
@@ -292,12 +285,9 @@ fn placement_request(
 ) -> Option<(ChannelSetPlacementParams, ChannelId, ChannelExecution)> {
     let params = serde_json::from_value::<ChannelSetPlacementParams>(params).ok()?;
     let channel = ChannelId::new(&params.channel_id).ok()?;
-    let execution = ChannelExecution {
-        // The main agent runs in one place: the pool is for threads.
-        coordinator: WorkspacePlacement::parse(&params.coordinator_placement)
-            .filter(|place| *place != WorkspacePlacement::Pool)?,
-        threads: WorkspacePlacement::parse(&params.thread_placement)?,
-    };
+    // The main agent runs in one place: the pool is for threads.
+    let execution =
+        ChannelExecution::parse(&params.coordinator_placement, &params.thread_placement)?;
     Some((params, channel, execution))
 }
 

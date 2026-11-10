@@ -361,7 +361,7 @@ impl ConversationService {
             caller.organization_id.clone(),
             caller.principal_id.clone(),
             ChannelParts {
-                execution: resolved.execution,
+                execution: resolved.execution.clone(),
                 name: resolved.name.clone(),
                 folder,
                 defaults: resolved.defaults.clone(),
@@ -483,7 +483,7 @@ impl ConversationService {
                 Err(ConversationError::ChannelNotFound) => return Err(ChannelError::Forbidden),
                 Err(error) => return Err(error.into()),
             };
-            if found.execution() == execution {
+            if *found.execution() == execution {
                 return Ok(found);
             }
             let coordinator = found.coordinator_id();
@@ -492,7 +492,7 @@ impl ConversationService {
             if current.coordinator_id() != coordinator {
                 continue;
             }
-            if current.execution() == execution {
+            if *current.execution() == execution {
                 return Ok(current);
             }
             // The move is on record, with what it moves from, before it is made.
@@ -501,8 +501,8 @@ impl ConversationService {
                 caller: caller.clone(),
                 change: SettingsChange::ChannelPlacement {
                     channel: id.clone(),
-                    before: current.execution(),
-                    after: execution,
+                    before: current.execution().clone(),
+                    after: execution.clone(),
                     coordinator: coordinator.clone(),
                 },
                 outcome,
@@ -510,7 +510,7 @@ impl ConversationService {
             self.record_setting(record(SettingsOutcome::Requested))
                 .await
                 .map_err(|_| ChannelError::Unavailable)?;
-            let moved = match store.set_execution(id, execution).await {
+            let moved = match store.set_execution(id, execution.clone()).await {
                 Ok(Some(moved)) => moved,
                 failed => {
                     if self
@@ -533,8 +533,8 @@ impl ConversationService {
         };
         tracing::info!(
             channel_id = %changed.id(),
-            coordinator = changed.execution().coordinator.as_str(),
-            threads = changed.execution().threads.as_str(),
+            coordinator = changed.execution().coordinator_word(),
+            threads = changed.execution().threads_word(),
             "channel run location changed"
         );
         Ok(changed)
@@ -633,7 +633,7 @@ impl ConversationService {
             .ok_or(ConversationError::Unavailable)?;
         // Its own placement, fixed at creation, says whether it runs away
         // from the gateway: the channel's may have moved since.
-        let remote = self.inner.environment.placement(id).await?.is_some();
+        let remote = self.inner.environment.placement(id).await?.is_remote();
         let mut place = AgentPlace::of(&found, remote);
         if *id == found.coordinator_id() {
             place.instructions.push_str("\nYou are the main agent for this channel. Coordinate the user's work here. Use the nessa-agents MCP server: create_thread creates a separate Nessa thread, and send_message delegates work to it. Use those tools for channel delegation rather than the harness runtime’s built-in subagent or fork tools, which do not allocate Nessa workspaces. Child Nessa threads inherit this channel and its configured worker placement. Report the thread UUID and receipt actually returned by Nessa. You run only when there is work or a report to handle. Do not claim that a sleeping VM is executing work.\n");

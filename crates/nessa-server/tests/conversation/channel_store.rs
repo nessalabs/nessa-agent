@@ -382,7 +382,7 @@ async fn older_channel_schemas_upgrade_without_relocating_existing_work() {
         let store = LocalChannelStore::open(&path).unwrap();
         let restored = store.get(kept.id()).await.unwrap().unwrap();
         assert_eq!(
-            restored.execution(),
+            *restored.execution(),
             crate::conversation::domain::ChannelExecution::default()
         );
         assert_eq!(restored.coordinator_id(), main);
@@ -415,8 +415,8 @@ async fn older_channel_schemas_upgrade_without_relocating_existing_work() {
                 .unwrap()
                 .unwrap()
                 .execution()
-                .threads,
-            crate::conversation::domain::WorkspacePlacement::Pool
+                .threads(),
+            &crate::conversation::domain::Place::Pool
         );
         store.forget(&main).await.unwrap();
         assert_ne!(
@@ -433,7 +433,6 @@ async fn older_channel_schemas_upgrade_without_relocating_existing_work() {
 
 #[tokio::test]
 async fn moving_the_main_agent_names_a_fresh_main_chat_and_keeps_the_old_one_in_the_channel() {
-    use crate::conversation::domain::{ChannelExecution, WorkspacePlacement};
     let directory = tempfile::tempdir().unwrap();
     let store = store(directory.path());
     let original = made("moves", "design", 1);
@@ -441,24 +440,26 @@ async fn moving_the_main_agent_names_a_fresh_main_chat_and_keeps_the_old_one_in_
     store.create(original.clone()).await.unwrap();
     store.place(&first, original.id()).await.unwrap();
     // Only new threads move: the main chat stays the same one.
-    let threads = ChannelExecution {
-        coordinator: WorkspacePlacement::Local,
-        threads: WorkspacePlacement::Boat,
-    };
+    let threads = crate::conversation::domain::ChannelExecution::new(
+        crate::conversation::domain::Place::Here,
+        crate::conversation::domain::Place::CloudVm,
+    )
+    .unwrap();
     let changed = store
-        .set_execution(original.id(), threads)
+        .set_execution(original.id(), threads.clone())
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(changed.execution(), threads);
+    assert_eq!(*changed.execution(), threads);
     assert_eq!(changed.coordinator_id(), first);
     // The main agent moves: a fresh main chat, the old one still in the channel.
-    let both = ChannelExecution {
-        coordinator: WorkspacePlacement::Boat,
-        threads: WorkspacePlacement::Boat,
-    };
+    let both = crate::conversation::domain::ChannelExecution::new(
+        crate::conversation::domain::Place::CloudVm,
+        crate::conversation::domain::Place::CloudVm,
+    )
+    .unwrap();
     let moved = store
-        .set_execution(original.id(), both)
+        .set_execution(original.id(), both.clone())
         .await
         .unwrap()
         .unwrap();
@@ -473,7 +474,7 @@ async fn moving_the_main_agent_names_a_fresh_main_chat_and_keeps_the_old_one_in_
     let reopened =
         LocalChannelStore::open(&directory.path().join("conversations/channels.sqlite3")).unwrap();
     let kept = reopened.get(original.id()).await.unwrap().unwrap();
-    assert_eq!(kept.execution(), both);
+    assert_eq!(*kept.execution(), both);
     assert_eq!(kept.coordinator_id(), moved.coordinator_id());
     // Once the Boat main chat was made, moving back names yet another one.
     reopened
@@ -491,12 +492,12 @@ async fn moving_the_main_agent_names_a_fresh_main_chat_and_keeps_the_old_one_in_
     let fresh = made("unused", "quiet", 1);
     reopened.create(fresh.clone()).await.unwrap();
     let kept_id = reopened
-        .set_execution(fresh.id(), both)
+        .set_execution(fresh.id(), both.clone())
         .await
         .unwrap()
         .unwrap();
     assert_eq!(kept_id.coordinator_id(), fresh.coordinator_id());
-    assert_eq!(kept_id.execution(), both);
+    assert_eq!(*kept_id.execution(), both);
     let missing = made("absent", "none", 1);
     assert!(reopened
         .set_execution(missing.id(), both)

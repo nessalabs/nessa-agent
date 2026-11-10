@@ -1047,7 +1047,7 @@ async fn vm_background_stress_holds_past_idle_then_rests_and_restart_does_not_re
                 target.clone(),
                 caller("create"),
                 RequestedConversation {
-                    environment: Some(crate::conversation::application::placement::BOAT.into()),
+                    environment: crate::conversation::domain::Place::CloudVm.asked_name(),
                     ..Default::default()
                 },
             )

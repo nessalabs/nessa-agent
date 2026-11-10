@@ -26,10 +26,10 @@ impl DurableSettingsAudit {
     }
 }
 
-fn placement(execution: ChannelExecution) -> Value {
+fn placement(execution: &ChannelExecution) -> Value {
     json!({
-        "coordinator": execution.coordinator.as_str(),
-        "threads": execution.threads.as_str(),
+        "coordinator": execution.coordinator_word(),
+        "threads": execution.threads_word(),
     })
 }
 
@@ -52,7 +52,7 @@ pub(crate) fn stored(record: &SettingsAuditRecord) -> Value {
                 "channelId": channel.as_str(),
                 "coordinatorConversationId": coordinator.to_string(),
             }),
-            json!({ "before": placement(*before), "requested": placement(*after) }),
+            json!({ "before": placement(before), "requested": placement(after) }),
         ),
     };
     let (step, outcome) = match &record.outcome {

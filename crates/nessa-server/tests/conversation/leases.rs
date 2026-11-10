@@ -2328,15 +2328,15 @@ impl ConversationPlacements for PendingPlacements {
     fn place<'a>(
         &'a self,
         conversation: &'a ConversationId,
-        host: Option<&'a str>,
+        place: &'a crate::conversation::domain::Place,
     ) -> EnvironmentFuture<'a, Result<(), PlacementError>> {
-        self.inner.place(conversation, host)
+        self.inner.place(conversation, place)
     }
 
     fn placement<'a>(
         &'a self,
         conversation: &'a ConversationId,
-    ) -> EnvironmentFuture<'a, Result<Option<String>, PlacementError>> {
+    ) -> EnvironmentFuture<'a, Result<crate::conversation::domain::Place, PlacementError>> {
         let placement = self.inner.placement(conversation);
         if !self.stall_reads.load(Ordering::SeqCst) {
             return placement;
@@ -7991,7 +7991,10 @@ impl Harness {
 async fn a_pool_conversation_whose_worker_drains_as_it_is_asked_opens_on_another() {
     let root = tempfile::tempdir().unwrap();
     let (harness, [w1, w2], bindings) = pool_harness(root.path());
-    harness.create_on(super::POOL).await.unwrap();
+    harness
+        .create_on(&crate::conversation::domain::Place::Pool.name())
+        .await
+        .unwrap();
     harness.turn("turn-1").await;
     let (first_context, restored) = harness.last_open();
     assert_eq!(restored, None);
@@ -8075,7 +8078,9 @@ async fn a_pool_worker_that_refuses_and_still_serves_is_not_left_for_another() {
     // Creating it opens its agent, which is refused.
     *w1.refuse.lock().unwrap() = Some(LeaseRefusal::EnvironmentBusy);
     assert!(matches!(
-        harness.create_on(super::POOL).await,
+        harness
+            .create_on(&crate::conversation::domain::Place::Pool.name())
+            .await,
         Err(ConversationError::LeaseRefused(
             LeaseRefusal::EnvironmentBusy
         ))
@@ -8103,7 +8108,9 @@ async fn a_refusal_left_for_a_worker_that_cannot_be_bound_is_still_recorded() {
     *w1.refuse.lock().unwrap() = Some(LeaseRefusal::EnvironmentUnreachable);
     w1.drains.store(true, Ordering::SeqCst);
     assert!(matches!(
-        harness.create_on(super::POOL).await,
+        harness
+            .create_on(&crate::conversation::domain::Place::Pool.name())
+            .await,
         Err(ConversationError::LeaseRefused(
             LeaseRefusal::EnvironmentUnreachable
         ))
@@ -8129,7 +8136,9 @@ async fn a_pool_worker_that_drains_with_no_other_to_ask_is_asked_once() {
     *w1.refuse.lock().unwrap() = Some(LeaseRefusal::EnvironmentUnreachable);
     w1.drains.store(true, Ordering::SeqCst);
     assert!(matches!(
-        harness.create_on(super::POOL).await,
+        harness
+            .create_on(&crate::conversation::domain::Place::Pool.name())
+            .await,
         Err(ConversationError::LeaseRefused(
             LeaseRefusal::EnvironmentUnreachable
         ))

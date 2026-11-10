@@ -210,7 +210,7 @@ impl Fixture {
             ConversationLimits::default().max_conversations,
             None,
             environment,
-            Some(crate::conversation::application::placement::BOAT),
+            Some(crate::conversation::domain::Place::CloudVm),
         )
         .await
     }
@@ -238,7 +238,7 @@ impl Fixture {
         live: usize,
         save_gate: Option<Arc<CompletionSaveGate>>,
         environment: Environments,
-        placed: Option<&str>,
+        placed: Option<crate::conversation::domain::Place>,
     ) -> Self {
         let provider = Arc::new(ProviderFactory::default());
         provider.session_resume.store(true, Ordering::SeqCst);
@@ -295,7 +295,7 @@ impl Fixture {
                 id.clone(),
                 caller("create"),
                 crate::conversation::application::RequestedConversation {
-                    environment: placed.map(str::to_owned),
+                    environment: placed.and_then(|place| place.asked_name()),
                     ..Default::default()
                 },
             )
