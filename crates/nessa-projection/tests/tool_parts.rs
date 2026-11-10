@@ -12,8 +12,10 @@
 //! call's id); what reaches the projection from a frame, and all this tests
 //! needs, is that id and the status the frame states.
 use super::tests::{committed_tool_view, completed_snapshot, event, projection};
-use crate::conversation::projection::{bound_view, Projection, MAX_VIEW_TOOLS};
-use crate::conversation::view::ConversationView;
+use crate::projection::{bound_view, Projection, MAX_VIEW_TOOLS};
+#[allow(unused_imports)]
+use crate::{IntoView, ViewOf};
+use nessa_protocol::conversation::view::ConversationView;
 use nessa_sdk::application::agent_execution::executions::{ExecutionEvent, ExecutionUpdate};
 use nessa_sdk::application::agent_execution::sessions::SessionSnapshot;
 use nessa_sdk::domain::agent_execution::executions::{ExecutionId, MessageChunk};

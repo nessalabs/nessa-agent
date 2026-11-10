@@ -184,3 +184,6 @@ harness = false
 [[example]]
 name = "page_load_acceptance"
 path = "examples/page_load_acceptance/main.rs"
+
+[lints]
+workspace = true

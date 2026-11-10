@@ -63,6 +63,7 @@ use crate::conversation::application::{
     PublishFailure, WorkerLoad,
 };
 use crate::conversation::application::{BudgetPlace, OrganizationBudgets};
+use crate::timer::clock;
 use nessa_auth::application::pairing::DeviceConnectionProof;
 use nessa_protocol::agents::AgentId;
 use nessa_protocol::lease::{
@@ -619,7 +620,7 @@ impl Inner {
         proof: &DeviceConnectionProof,
     ) {
         loop {
-            tokio::time::sleep(self.timings.keepalive).await;
+            clock::sleep(self.timings.keepalive).await;
             match credentials.serves(proof).await {
                 Ok(true) => {}
                 Ok(false) => return,

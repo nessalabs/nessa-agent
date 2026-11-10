@@ -11,8 +11,8 @@ use nessa_local_database::{
     rusqlite::{Connection, TransactionBehavior},
     OpenError, Schema,
 };
+use nessa_projection::retained_view;
 use nessa_protocol::conversation::domain::ConversationId;
-use nessa_protocol::conversation::projection::retained_view;
 use nessa_sdk::application::agent_execution::sessions::{CommittedStatus, StorageError};
 use nessa_sdk::infrastructure::session_storage::{
     TranscriptError, TranscriptFold, MAX_PHYSICAL_RECORD_PAYLOAD_BYTES,

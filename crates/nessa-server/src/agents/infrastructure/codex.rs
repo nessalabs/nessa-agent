@@ -27,19 +27,18 @@
 //!
 //! Nothing here reads a secret. Every question is whether a credential exists.
 
+#[cfg(unix)]
+use crate::timer::clock;
 use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::io::ErrorKind;
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
+#[cfg(unix)]
+use std::process::{Child, ExitStatus};
 use std::process::{Command, Stdio};
 use std::time::Duration;
-#[cfg(unix)]
-use std::{
-    process::{Child, ExitStatus},
-    time::Instant,
-};
 
 use crate::agents::application::ProbeFailure;
 use crate::agents::infrastructure::credentials;
@@ -154,7 +153,7 @@ fn wait_status_group(
     limit: Duration,
 ) -> Result<Option<ExitStatus>, ProbeFailure> {
     let group = child.id();
-    let deadline = Instant::now() + limit;
+    let deadline = clock::os::now() + limit;
     let answered = loop {
         let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
         let result = unsafe {
@@ -171,10 +170,10 @@ fn wait_status_group(
         if unsafe { info.si_pid() } != 0 {
             break true;
         }
-        if Instant::now() >= deadline {
+        if clock::os::now() >= deadline {
             break false;
         }
-        std::thread::sleep(Duration::from_millis(20));
+        clock::os::sleep(Duration::from_millis(20));
     };
     let killed = unsafe { libc::kill(-(group as i32), libc::SIGKILL) };
     // macOS may return EPERM for a group containing only its zombie root.
@@ -185,7 +184,7 @@ fn wait_status_group(
     {
         return Err(ProbeFailure::CleanupUnconfirmed);
     }
-    let deadline = Instant::now() + Duration::from_millis(500);
+    let deadline = clock::os::now() + Duration::from_millis(500);
     let mut status = None;
     loop {
         if status.is_none() {
@@ -200,9 +199,9 @@ fn wait_status_group(
         {
             return Ok(if answered { status } else { None });
         }
-        if Instant::now() >= deadline {
+        if clock::os::now() >= deadline {
             return Err(ProbeFailure::CleanupUnconfirmed);
         }
-        std::thread::sleep(Duration::from_millis(20));
+        clock::os::sleep(Duration::from_millis(20));
     }
 }

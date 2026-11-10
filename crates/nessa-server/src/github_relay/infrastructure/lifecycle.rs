@@ -2,11 +2,12 @@ use crate::github_relay::{
     application::{RelayReporter, RelayWait},
     domain::{Binding, Failure},
 };
+use crate::timer::clock;
 pub struct TokioRelayWait;
 #[async_trait::async_trait]
 impl RelayWait for TokioRelayWait {
     async fn wait(&self, duration: std::time::Duration) {
-        tokio::time::sleep(duration).await;
+        clock::sleep(duration).await;
     }
 }
 pub struct TracingRelayReporter;

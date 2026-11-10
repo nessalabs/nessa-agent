@@ -38,6 +38,7 @@
 //! today, is `conversation::infrastructure::environment`; nothing in
 //! `product/` names either.
 use super::placement::WorkerContext;
+use crate::timer::clock;
 use futures_util::FutureExt;
 use nessa_auth::application::ports::Clock;
 use nessa_protocol::lease::{CollectionRefusal, FetchRefusal, PublishRefusal};
@@ -1205,7 +1206,7 @@ impl LiveLease {
         tokio::pin!(close);
         let within = tokio::select! {
             result = &mut close => Some(result),
-            () = tokio::time::sleep(cleanup_deadline) => None,
+            () = clock::sleep(cleanup_deadline) => None,
         };
         let mut result = match within {
             Some(result) => result,
@@ -1215,7 +1216,7 @@ impl LiveLease {
             }
         };
         // Reconciliation shares End's original budget; it cannot extend it.
-        let release_deadline = tokio::time::Instant::now() + cleanup_deadline;
+        let release_deadline = clock::now() + cleanup_deadline;
         let release = self.release(cause, cleanup_deadline).await;
         if matches!(
             release,

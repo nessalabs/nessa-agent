@@ -10,7 +10,7 @@ description = "What any client of the Nessa gateway needs to speak to it: wire f
 base64 = "0.22"
 hmac = "0.12"
 nessa-auth = { path = "../nessa-auth" }
-nessa-sdk = { path = "../nessa-sdk" }
+nessa-types = { path = "../nessa-types" }
 nessa-sync = { workspace = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -20,6 +20,8 @@ uuid = { version = "1", features = ["v4"] }
 zeroize = "=1.9.0"
 
 [dev-dependencies]
-nessa-sdk = { path = "../nessa-sdk", features = ["test-support"] }
 tempfile = "3"
 nessa-local-storage = { path = "../nessa-local-storage" }
+
+[lints]
+workspace = true

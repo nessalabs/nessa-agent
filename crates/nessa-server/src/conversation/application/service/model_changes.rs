@@ -9,8 +9,9 @@ use crate::conversation::application::{
     ConversationModelApplication, ConversationModelRequest, ConversationModelRequestState,
     ConversationModelSelection, ScheduleActor, SelectionChange,
 };
+use nessa_projection::IntoView;
+use nessa_projection::{bound_view, CommittedCursor};
 use nessa_protocol::conversation::domain::ConversationApprovalMode;
-use nessa_protocol::conversation::projection::{bound_view, CommittedCursor};
 use nessa_protocol::conversation::view::{
     ConversationModelChangeEffect, ConversationModelChangeStatus, ConversationModelChangeView,
     ConversationSelectionView, ConversationView,
@@ -604,7 +605,7 @@ impl ConversationService {
             let active = live.agent.active_execution_id();
             let mut projection = live.projection.lock().await;
             if projection.replace_committed(&committed, &order, active.as_ref()) {
-                projection.transcript_state(committed.state().into());
+                projection.transcript_state(committed.state().into_view());
             }
             projection.lifecycle(lifecycle_view(&live.agent));
             (

@@ -208,19 +208,7 @@ impl SshDestination {
     }
 }
 
-/// What the environment must enforce around the agent's commands. A profile
-/// is declared by whoever can set it up and refused where it cannot be, never
-/// silently weakened ("Sandboxes, honestly").
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum SandboxProfile {
-    /// Whatever the harness does by default, configured by nothing Nessa sets.
-    /// It encloses only what the harness itself encloses.
-    HarnessDefault,
-    /// Nothing encloses the work: it runs as the environment's account. What
-    /// a command lease's environment holds, since a command has no harness to
-    /// sandbox it.
-    None,
-}
+pub use nessa_types::leases::SandboxProfile;
 
 /// The sandbox profiles a binding can set up, or an environment can enforce.
 /// A set rather than one profile, so a request is answered by membership and

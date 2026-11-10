@@ -8,7 +8,7 @@ use nessa_auth::application::ports::Clock as WallClock;
 use nessa_client_core::retained::{ReadFailure, RetainedCache, RetainedTranscript};
 use nessa_protocol::{
     clock::Clock,
-    conversation::{domain::ConversationId, projection::MAX_VIEW_BYTES},
+    conversation::{domain::ConversationId, view::MAX_VIEW_BYTES},
 };
 use nessa_sync::replication::domain::Scope;
 use serde::Serialize;

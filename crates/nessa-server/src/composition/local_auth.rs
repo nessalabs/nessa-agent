@@ -1,5 +1,6 @@
 //! Local product dependency factory. Provider choices stay outside route handlers.
 use super::agent::AgentsConfig;
+use crate::timer::clock;
 #[cfg(unix)]
 use crate::{
     conversation::{
@@ -96,17 +97,16 @@ use nessa_auth::{
     domain::{AudienceId, OrganizationId, Resource, ResourceId},
 };
 use nessa_local_database::OpenError;
+#[cfg(unix)]
+use nessa_projection::{McpToolUis, NoMcpToolUis};
+#[cfg(unix)]
+use nessa_protocol::agents::AgentId;
 use nessa_protocol::clock::Clock as ServerClock;
 use nessa_protocol::product::generated::AgentsListResult;
 #[cfg(unix)]
 use nessa_protocol::product::generated::{
     AgentModelOption, AgentOption, AgentsNativeHooks, ApprovalMode as WireApprovalMode,
     ApprovalModeChoice as WireApprovalModeChoice, NativeHooksChoice,
-};
-#[cfg(unix)]
-use nessa_protocol::{
-    agents::AgentId,
-    conversation::tool_uis::{McpToolUis, NoMcpToolUis},
 };
 #[cfg(unix)]
 use nessa_sdk::application::agent_execution::subagents::{
@@ -132,13 +132,7 @@ use nessa_sync::replication::domain::Id as RecordId;
 use std::collections::{BTreeMap, HashSet};
 #[cfg(unix)]
 use std::path::PathBuf;
-use std::{
-    collections::HashMap,
-    io,
-    path::Path,
-    sync::Arc,
-    time::{SystemTime, UNIX_EPOCH},
-};
+use std::{collections::HashMap, io, path::Path, sync::Arc, time::UNIX_EPOCH};
 #[cfg(unix)]
 use tokio::runtime::Handle;
 use uuid::Uuid;
@@ -147,7 +141,7 @@ use uuid::Uuid;
 pub(super) struct SystemClock;
 impl Clock for SystemClock {
     fn unix_milliseconds(&self) -> u64 {
-        SystemTime::now()
+        clock::wall_now()
             .duration_since(UNIX_EPOCH)
             .map_or(0, |elapsed| {
                 u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX)

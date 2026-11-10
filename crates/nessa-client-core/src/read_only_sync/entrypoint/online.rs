@@ -8,6 +8,7 @@ use crate::read_only_sync::application::{
     driver::{CatalogueRun, RecordDriverCause, RecordDriverError, RecordRun},
     CacheError, CachedProgress, GatewayAttempt,
 };
+use nessa_projection::ViewOf;
 use nessa_protocol::conversation::view::ConversationTranscriptState;
 use nessa_sdk::application::agent_execution::sessions::CommittedStatus;
 use nessa_sync::replication::catalogue::{CatalogueError, CatalogueProgress};
@@ -72,7 +73,7 @@ pub(crate) fn records_report(
     let saved_ok = saved.is_ok();
     let durable = match saved {
         Ok(Some((progress, status))) => {
-            json!({"progress":record_progress(&progress),"status":ConversationTranscriptState::from(status.view_state())})
+            json!({"progress":record_progress(&progress),"status":ConversationTranscriptState::view_of(status.view_state())})
         }
         Ok(None) => json!({"progress":null,"status":"notLoaded"}),
         Err(error) => json!({"failure":cache_failure(&error)}),

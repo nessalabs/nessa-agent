@@ -65,7 +65,7 @@ fn submitted(image: &ImageReference) -> SubmittedImage {
     }
 }
 fn echoed(image: &ImageReference) -> ConversationAttachment {
-    ConversationAttachment::from(image)
+    nessa_projection::ViewOf::view_of(image)
 }
 /// A conversation whose agent takes images and which holds `held`.
 async fn conversation_holding(
