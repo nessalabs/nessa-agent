@@ -43,9 +43,9 @@ pub use ports::{
 #[cfg(test)]
 pub(crate) use restore::ordered_roots;
 pub use restore::{
-    accept_quarantine, accepted_tree_matches, deferred_session_is_servable,
-    open_deferred_conversation, root_posture, stage_quarantine, AcceptReport, AcceptRequest,
-    AnchoredRoot, CutMaterializer, LoadedTree, OpenReport, OpenRequest, PreparedCut, Promoted,
-    PublishedSession, QuarantineLayout, RestoreHold, SealedInventoryReader, SessionAttempt,
-    StageReport, StageRequest, StagedTreeOwner, Staging, TreeId,
+    accept_quarantine, accepted_tree_matches, open_deferred_conversation, root_posture,
+    servable_deferred_sessions, stage_quarantine, AcceptReport, AcceptRequest, AnchoredRoot,
+    CutMaterializer, LoadedTree, OpenReport, OpenRequest, PreparedCut, Promoted, PublishedSession,
+    QuarantineLayout, RestoreHold, SealedInventoryReader, SessionAttempt, StageReport,
+    StageRequest, StagedTreeOwner, Staging, TreeId,
 };

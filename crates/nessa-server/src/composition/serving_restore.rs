@@ -11,9 +11,9 @@ use std::path::{Path, PathBuf};
 use nessa_local_database::rusqlite::{params, Connection, TransactionBehavior};
 use nessa_local_storage::create_directory;
 
-use crate::backup::application::{deferred_session_is_servable, RestoreAudit};
-use crate::backup::domain::{decode_deferred, decode_identity, Fingerprint, JOURNAL_HEADER};
-use crate::backup::infrastructure::DirectoryQuarantine;
+use crate::backup::domain::{
+    decode_deferred, decode_identity, deferred_session_name, Fingerprint, JOURNAL_HEADER,
+};
 
 const METADATA_SCHEMA: &str = include_str!("../conversation/infrastructure/schema.sql");
 
@@ -27,20 +27,18 @@ pub(crate) fn namespace_is_restore_root(namespace: &Path) -> bool {
 
 #[cfg(test)]
 pub(crate) fn install_serving_stores(namespace: &Path, live: &Path) -> Result<(), String> {
-    install_serving_stores_audited(namespace, live, None)
+    install_serving_stores_audited(namespace, live, &[])
 }
 
 /// Copy restored conversations into `namespace/conversations` before the
 /// service opens that directory.
 ///
-/// `audit` is the accepted restore's audit. A deferred session file is merged
-/// only when that audit records its publication as available and the bytes
-/// match the deferred line. Without an audit, those files are left where they
-/// are.
+/// `servable` names deferred sessions whose publication was already checked
+/// against the accepted tree. The tree is not read again here.
 pub(crate) fn install_serving_stores_audited(
     namespace: &Path,
     live: &Path,
-    audit: Option<&dyn RestoreAudit>,
+    servable: &[String],
 ) -> Result<(), String> {
     if restore_install_matches(namespace, live) {
         return Ok(());
@@ -57,19 +55,12 @@ pub(crate) fn install_serving_stores_audited(
     if canonical.is_file() && !serving.exists() {
         publish_copy(&canonical, &serving)?;
     }
-    let audit = audit.as_ref().copied();
-    for id in deferred_ids(live)? {
-        let Some(audit) = audit else {
-            continue;
-        };
-        if !deferred_session_is_servable(live, audit, &DirectoryQuarantine, &id)
-            .map_err(|error| error.cause().to_owned())?
-        {
-            continue;
+    for id in servable {
+        let relative = deferred_session_name(id).map_err(|error| error.cause().to_owned())?;
+        let published = live.join(relative);
+        if published.is_file() {
+            merge_stream(&serving, &published, id)?;
         }
-        let relative = crate::backup::domain::deferred_session_name(&id)
-            .map_err(|error| error.cause().to_owned())?;
-        merge_stream(&serving, &live.join(relative), &id)?;
     }
     write_install_marker(&conversations, live)
 }

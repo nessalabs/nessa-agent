@@ -889,46 +889,55 @@ pub fn accepted_tree_matches(
     seal_matches(&journal, &loaded, &deferred)
 }
 
-/// Whether a deferred session already on disk may be copied into the serving store.
+/// Deferred sessions whose publication may be copied, after one read of the tree.
 ///
-/// An accepted open of a file that is already there requires a publication the
-/// audit recorded as available, and a size and digest that match the deferred
-/// line. A filename is not that check. A file without them stays out of the
-/// serving database, including one whose publication was interrupted.
-pub fn deferred_session_is_servable(
+/// The seal is checked once. A session is included only when the audit recorded
+/// its publication as available and the stream size and digest match the
+/// deferred line. A filename is not that check, and a publication that was
+/// interrupted stays out. A later call does not hash the restored tree again.
+pub fn servable_deferred_sessions(
     live: &Path,
     audit: &dyn RestoreAudit,
     layout: &dyn QuarantineLayout,
-    conversation_id: &str,
-) -> Result<bool, RestoreFault> {
+) -> Result<Vec<String>, RestoreFault> {
     let anchored = layout.anchor(live)?;
     let loaded = layout.load(&anchored)?;
     let journal = read_journal(&loaded.journal)?;
     let lines = deferred_lines(layout, &anchored, &journal)?;
-    let Some(expected) = lines
-        .iter()
-        .find(|line| line.conversation_id == conversation_id)
-    else {
-        return Ok(false);
-    };
-    let relative = deferred_session_name(conversation_id)?;
-    if !layout.exists_relative(&anchored, &relative)? {
+    seal_matches(&journal, &loaded, &lines)?;
+    let mut servable = Vec::new();
+    for line in &lines {
+        if deferred_publication_matches(layout, &anchored, audit, line)? {
+            servable.push(line.conversation_id.clone());
+        }
+    }
+    Ok(servable)
+}
+
+fn deferred_publication_matches(
+    layout: &dyn QuarantineLayout,
+    root: &AnchoredRoot,
+    audit: &dyn RestoreAudit,
+    line: &DeferredLine,
+) -> Result<bool, RestoreFault> {
+    let relative = deferred_session_name(&line.conversation_id)?;
+    if !layout.exists_relative(root, &relative)? {
         return Ok(false);
     }
-    let Some(publication) = layout.publication_relative(&anchored, &relative)? else {
+    let Some(publication) = layout.publication_relative(root, &relative)? else {
         return Ok(false);
     };
     if !audit
-        .available(conversation_id, &publication)
+        .available(&line.conversation_id, &publication)
         .map_err(|_| RestoreFault::Audit)?
     {
         return Ok(false);
     }
-    let cut = match layout.session_cut_relative(&anchored, &relative, conversation_id) {
+    let cut = match layout.session_cut_relative(root, &relative, &line.conversation_id) {
         Ok(cut) => cut,
         Err(_) => return Ok(false),
     };
-    Ok(cut.size == expected.size && cut.digest == expected.digest)
+    Ok(cut.size == line.size && cut.digest == line.digest)
 }
 
 fn deferred_lines(

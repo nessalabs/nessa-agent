@@ -2433,7 +2433,13 @@ async fn an_unaudited_deferred_session_is_not_copied_into_the_serving_store() {
     fs::write(&session, b"not-a-published-session").unwrap();
     let skipped = place.live.parent().unwrap().join("skipped");
     nessa_local_storage::create_directory(&skipped).unwrap();
-    install_serving_stores_audited(&skipped, &place.live, Some(&audit)).unwrap();
+    let servable = crate::backup::application::servable_deferred_sessions(
+        &place.live,
+        &audit,
+        &DirectoryQuarantine,
+    )
+    .unwrap();
+    install_serving_stores_audited(&skipped, &place.live, &servable).unwrap();
     assert!(!skipped
         .join("conversations/sessions/records.sqlite3")
         .exists());
@@ -2443,7 +2449,13 @@ async fn an_unaudited_deferred_session_is_not_copied_into_the_serving_store() {
     open_one(&place, "conv-one", &source, &audit).unwrap();
     let served = place.live.parent().unwrap().join("served");
     nessa_local_storage::create_directory(&served).unwrap();
-    install_serving_stores_audited(&served, &place.live, Some(&audit)).unwrap();
+    let servable = crate::backup::application::servable_deferred_sessions(
+        &place.live,
+        &audit,
+        &DirectoryQuarantine,
+    )
+    .unwrap();
+    install_serving_stores_audited(&served, &place.live, &servable).unwrap();
     let connection = nessa_local_database::rusqlite::Connection::open(
         served.join("conversations/sessions/records.sqlite3"),
     )
