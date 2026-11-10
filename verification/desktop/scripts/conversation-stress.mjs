@@ -3443,9 +3443,10 @@ const steps = {
       throw new Error("the stress restore was not prepared")
     if (!existsSync(source))
       failures.push(`the restored source ${source} is not there to load`)
-    // Fetch the loaded conversation before the window is pointed at it.
-    // Opening one restored row also reads its neighbour, and that read would
-    // fetch the one whose source this step is about to take away.
+    // The missing conversation starts archived, so the followers, who follow
+    // every live row, do not fetch it during the earlier steps. Fetch the
+    // loaded one while its source is still there. It is listed the whole
+    // time, and opening it reads that history back.
     const panel = await connectClient(run.stack.gateway, INSTANCE, "panel")
     try {
       const view = await panel.conversation.read(loaded.id)
@@ -3463,6 +3464,7 @@ const steps = {
     }
     const hidden = `${source}.aside`
     renameSync(source, hidden)
+    let revealed = false
     try {
       await openStressConversation(run.page, loaded.id, loaded.title)
       // The list preview is "restored-history". This sentence is only the turn.
@@ -3471,27 +3473,55 @@ const steps = {
           `the restored history was not shown: ${JSON.stringify((await pageText(run.page)).slice(0, 500))}`,
         )
       }
-      await openStressConversation(run.page, missing.id, missing.title)
-      const text = prompt(run, STRESS.restore, step, " missing")
-      const box = dock(run.page).locator("textarea")
-      await box.fill(text)
-      await dock(run.page)
-        .getByRole(...composerControls.send)
-        .click({ timeout: 10_000 })
-      await expectShown(run.page, "no longer at its source", failures)
-      // The desktop keeps a refused send as the unsent message, which is the
-      // draft: the words stay on screen, in the field or beside the refusal.
-      const kept = await waitFor(
-        async () =>
-          (await box.inputValue()) === text || (await pageText(run.page)).includes(text),
-        10_000,
-      )
-      if (!kept) {
+      const listing = await connectClient(run.stack.gateway, INSTANCE, "panel")
+      try {
+        const result = await listing.conversation.unarchive(missing.id)
+        revealed = result.applied === true
+        if (!revealed)
+          failures.push("the conversation whose source is gone was already listed")
+      } catch (error) {
         failures.push(
-          `a send whose restored source is gone did not keep the draft: ${JSON.stringify(await box.inputValue())} ${JSON.stringify((await pageText(run.page)).slice(0, 500))}`,
+          `the conversation whose source is gone could not be listed: ${error.message}`,
         )
+      } finally {
+        listing.close()
+      }
+      if (revealed) {
+        await openStressConversation(run.page, missing.id, missing.title)
+        const text = prompt(run, STRESS.restore, step, " missing")
+        const box = dock(run.page).locator("textarea")
+        await box.fill(text)
+        await dock(run.page)
+          .getByRole(...composerControls.send)
+          .click({ timeout: 10_000 })
+        await expectShown(run.page, "no longer at its source", failures)
+        // The desktop keeps a refused send as the unsent message, which is the
+        // draft: the words stay on screen, in the field or beside the refusal.
+        const kept = await waitFor(
+          async () =>
+            (await box.inputValue()) === text ||
+            (await pageText(run.page)).includes(text),
+          10_000,
+        )
+        if (!kept) {
+          failures.push(
+            `a send whose restored source is gone did not keep the draft: ${JSON.stringify(await box.inputValue())} ${JSON.stringify((await pageText(run.page)).slice(0, 500))}`,
+          )
+        }
       }
     } finally {
+      if (revealed) {
+        const listing = await connectClient(run.stack.gateway, INSTANCE, "panel")
+        try {
+          await listing.conversation.archive(missing.id)
+        } catch (error) {
+          failures.push(
+            `the conversation whose source is gone stayed listed: ${error.message}`,
+          )
+        } finally {
+          listing.close()
+        }
+      }
       if (existsSync(hidden)) renameSync(hidden, source)
     }
     await openStressConversation(run.page, run.main.id, run.main.title)

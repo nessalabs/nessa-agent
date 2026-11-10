@@ -177,7 +177,15 @@ fn write_metadata(
             [],
         )
         .map_err(|error| error.to_string())?;
-    for conversation in loaded.iter().chain(missing) {
+    // The one whose source the step removes starts archived. A live list
+    // names every unarchived row, and following a row fetches its deferred
+    // history. Listed from the start, that fetch would import it before the
+    // step moves the source.
+    for (conversation, archived) in loaded
+        .iter()
+        .map(|conversation| (conversation, 0))
+        .chain(missing.iter().map(|conversation| (conversation, 1)))
+    {
         connection
             .execute(
                 "INSERT INTO conversations(
@@ -191,8 +199,8 @@ fn write_metadata(
         connection
             .execute(
                 "INSERT INTO summaries(conversation_id, title, preview, updated_at_ms, archived)
-                 VALUES (?1, ?2, ?3, 1, 0)",
-                params![conversation.id, conversation.title, HISTORY],
+                 VALUES (?1, ?2, ?3, 1, ?4)",
+                params![conversation.id, conversation.title, HISTORY, archived],
             )
             .map_err(|error| error.to_string())?;
     }

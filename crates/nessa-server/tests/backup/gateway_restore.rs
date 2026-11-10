@@ -1293,6 +1293,23 @@ fn a_stress_restore_names_one_loaded_conversation_and_one_whose_source_can_move(
         count, 2,
         "the serving catalogue keeps both restored conversations"
     );
+    let archived = |id: &str| -> i64 {
+        metadata
+            .query_row(
+                "SELECT archived FROM summaries WHERE conversation_id = ?1",
+                [id],
+                |row| row.get(0),
+            )
+            .unwrap()
+    };
+    assert_eq!(
+        archived(loaded), 0,
+        "the loaded conversation stays on the live list"
+    );
+    assert_eq!(
+        archived(missing), 1,
+        "the conversation whose source moves stays off the live list until the step lists it"
+    );
     assert!(
         !destination.join("captured-namespace").exists(),
         "the scratch catalogue is not a second metadata file"
