@@ -76,9 +76,14 @@ OpenCode's warm-up. A provider session's erasure is asked from the same place
 (`ProviderSessionEraser::erase_in`), and the placement is let go only once the
 erasure is settled.
 
-A thread an agent starts with `create_thread` is in its starting conversation's
-channel, unless it runs on another host. A channel conversation always runs on
-this machine: a channel with an `environment` is refused.
+Where a new conversation runs is decided in one place, `decide_place`
+(`conversation/application/place_decision.rs`). A person's creation in a
+channel names no place: the channel says where, and one naming an
+`environment` is refused. A thread an agent starts with `create_thread` from a
+conversation in a stored channel is always in that channel and keeps its
+starting conversation's approval mode; it runs where the agent named, else
+where the channel runs its threads. A fork runs where its source runs and
+stays in its source's channel, even after the channel moved.
 
 ## Changing where a channel runs
 
@@ -90,8 +95,10 @@ and is refused `forbidden`). A conversation's own placement is still written
 once, before it exists, and never moves, so a change only says where new
 conversations go:
 
-- **New threads**: every thread made from then on runs in the new place.
-  Threads already made keep running where they started.
+- **New threads**: every thread made from then on that names no place runs
+  in the new place. A thread an agent makes naming a place runs there, and a
+  fork runs where its source runs. Threads already made keep running where
+  they started.
 - **Main agent**: its current main conversation stays where it runs and stays
   in the channel, as an ordinary thread with its history. The channel names a
   fresh main conversation (`channel_coordinator_replacements`, cause

@@ -194,6 +194,7 @@ pub use passive_read::AdmittedCatalogueRead;
     )
 )]
 mod organization_budget;
+mod place_decision;
 mod placement;
 mod pool_settings;
 #[cfg(any(unix, test))]
