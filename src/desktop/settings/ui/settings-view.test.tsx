@@ -8,6 +8,7 @@ import { act, useState } from "react"
 import { createRoot, type Root } from "react-dom/client"
 import { Provider } from "react-redux"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+import { ClockProvider } from "../../../clock"
 import { chordEvent } from "../../model/keyboard"
 import { settingsCategories } from "../model/settings-catalogue"
 import { settingsTabPages } from "./settings-tabs"
@@ -77,7 +78,9 @@ async function mount(width = 1440) {
   await act(async () =>
     root.render(
       <Provider store={testStore()}>
-        <Harness />
+        <ClockProvider now={() => 1000}>
+          <Harness />
+        </ClockProvider>
       </Provider>,
     ),
   )
