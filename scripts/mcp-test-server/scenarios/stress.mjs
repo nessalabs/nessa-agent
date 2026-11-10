@@ -127,6 +127,23 @@ export const TABLE_LINES = [
 ]
 
 /**
+ * The code and the diagram a `table` turn streams after its tables, so the
+ * window draws a highlighted code block and a Mermaid diagram in the same
+ * answer: the window is dark only, and they must be too whatever the OS
+ * appearance is (UI audit #29).
+ */
+export const CODE_LINES = [
+  "```ts",
+  "const seatsLeft = 42",
+  "```",
+  "",
+  "```mermaid",
+  "flowchart LR",
+  "  A[Seats] --> B[Sold]",
+  "```",
+]
+
+/**
  * How many reads of one thread a watch turn makes at once: more than one
  * conversation's agent may have waiting, so some are refused and the rest
  * wait out their `waitMs`.
@@ -393,6 +410,8 @@ export function stressScenario({
               "${prompt.text}",
               "\n\n",
               ...TABLE_LINES.map((line) => `${line}\n`),
+              "\n",
+              ...CODE_LINES.map((line) => `${line}\n`),
             ],
           },
           { do: "end" },

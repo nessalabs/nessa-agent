@@ -12,7 +12,7 @@ import { useSetupFlight } from "./use-setup-flight"
 import type { AgentApiKeySink, AgentReadinessSource } from "../application/ports"
 import type { SetupRecovery } from "../application/setup-recovery"
 import { isOnboardingCompleted, type OnboardingState } from "../model/onboarding"
-import { FIELD_GROUND, coverScale, setupField } from "../model/opening"
+import { FIELD_COLORS, FIELD_GROUND, coverScale, setupField } from "../model/opening"
 
 /** The buttons on the handoff-failure screen, which are the whole point of it:
  * a window with nothing in it but a sentence is a window someone has to kill. */
@@ -69,7 +69,7 @@ export function HandoffFailed({
         // Focusable only as the container of this alert, not as a stop on the
         // way through it.
         tabIndex={-1}
-        className="nessa-setup-alert nessa-setup-light flex flex-col items-center justify-center gap-4 overflow-y-auto bg-background p-8 text-center text-foreground outline-none"
+        className="nessa-setup-alert dark flex flex-col items-center justify-center gap-4 overflow-y-auto bg-background p-8 text-center text-foreground outline-none"
       >
         <h1 id={SETUP_HEADING_ID} className="nessa-text-6 font-semibold">
           {recovery.heading}
@@ -245,6 +245,7 @@ export function SetupGate({
           aria-hidden="true"
           className="nessa-setup-field"
           ground={FIELD_GROUND}
+          colors={FIELD_COLORS}
           spread={field.spread}
           clear={field.clear}
           x={field.x}
