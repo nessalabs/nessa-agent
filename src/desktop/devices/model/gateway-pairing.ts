@@ -1,6 +1,6 @@
-/** The enrollment command shown by Devices. JSON keeps the code as data;
+/** The enrollment command shown by Devices. JSON keeps the code as data.
  * Encoding outside printable ASCII (and the outer quote) keeps one single-quoted
- * argument in POSIX shells and PowerShell, including off-schema gateway replies.
+ * argument in POSIX shells, including off-schema gateway replies.
  * gateway-pairing.test.ts checks the representation boundary and exact payload.
  */
 export function gatewayEnrollmentCommand(port: number, code: string): string {

@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 /** #893: a real Integration panel, explicit Human sign-in, immutable PeerRead
  * choice, crash recovery and native enrollment. Only the creation/approval UI
- * under test mutates invitations; fixture setup also ends one invitation to
- * exercise terminal polling. CLI calls enroll a disposable peer. */
+ * under test mutates invitations. Fixture-only writes exercise terminal polling,
+ * audit failures and a permanent receiver conflict. CLI enrolls a disposable peer. */
 import { TEXT_REPLY_SCENARIO } from "../../../scripts/mcp-test-server/scenarios.mjs"
 import { DatabaseSync } from "node:sqlite"
 import { spawn } from "node:child_process"
@@ -116,13 +116,15 @@ await main(
             let opened
             let owner
             let grants
+            let receivers
             const sessions = []
             try {
               owner = await connectClient(
                 stack.gateway,
                 `pairing-owner-${engine}-${layout}`,
               )
-              const human = (await owner.auth.session()).principalId
+              const ownerSession = await owner.auth.session()
+              const human = ownerSession.principalId
               requireValue(
                 (await stack.client.auth.session()).principalId === "surface:nessa-panel",
                 "fixture panel is not the real Integration",
@@ -483,18 +485,175 @@ await main(
                 .locator('[data-linked-action="confirm-revoke"]')
                 .click()
               await replacementRow.waitFor({ state: "hidden" })
+              // A fixture-only receiver insert collision exercises the real
+              // permanent classification. Its transaction rolls back both rows.
+              await call(peer, peerInstance, "peer.forget", { peerKey: enrolled.peerKey })
+              await page.locator(css.devicesBackAction).click()
+              await enter(page)
+              await signIn(page, stack.token())
+              await page.getByRole("button", { name: "Create invitation" }).click()
+              const conflictCode = await page.locator(css.gatewayPairingCode).innerText()
+              const conflictHex = await page
+                .locator(css.gatewayPairingInvitation)
+                .getAttribute("data-gateway-invitation")
+              const conflictId = Array.from(Buffer.from(conflictHex, "hex"))
+              await call(peer, peerInstance, "peer.enroll", {
+                address: stack.nativeAddress,
+                code: conflictCode,
+              })
+              await page.locator(css.gatewayPairingFingerprint).waitFor()
+              receivers = new DatabaseSync(
+                join(
+                  stack.gateway.directory,
+                  "ci",
+                  "instances",
+                  "gateway-pairing",
+                  "receiver-access",
+                  "receiver-access.sqlite3",
+                ),
+              )
+              receivers.exec(
+                "CREATE TRIGGER pairing_ui_receiver_conflict BEFORE INSERT ON receivers BEGIN INSERT INTO receivers (receiver_id,credential_id,organization_id,owner_id,access_epoch,active) VALUES (NEW.receiver_id,NEW.credential_id,NEW.organization_id,NEW.owner_id,NEW.access_epoch,NEW.active); END",
+              )
+              await page
+                .getByRole("button", { name: "Approve matching fingerprint" })
+                .click()
+              await page
+                .getByRole("status")
+                .filter({ hasText: "Activation cannot complete" })
+                .waitFor()
+              requireValue(
+                !(await page.getByRole("button", { name: "Retry activation" }).count()),
+                "permanent activation still offered retry",
+              )
+              requireValue(
+                await page
+                  .getByRole("button", { name: "Cancel invitation", exact: true })
+                  .isEnabled(),
+                "permanent activation omitted cancellation",
+              )
+              const conflict = await owner.pairing.status(conflictId)
+              requireValue(
+                conflict.phase === "staging" &&
+                  conflict.credentialId &&
+                  !conflict.receiver,
+                "receiver conflict did not stop before publication",
+              )
+              requireValue(
+                !(await owner.credentials.list()).credentials.some(
+                  (each) => each.id === conflict.credentialId,
+                ),
+                "permanent receiver conflict published its reserved credential",
+              )
+              requireValue(
+                receivers
+                  .prepare("SELECT count(*) AS n FROM receivers WHERE credential_id=?")
+                  .get(conflict.credentialId).n === 0,
+                "receiver conflict did not roll back its transaction",
+              )
+              // Restore the receiver store before canonical cancellation. No
+              // first person link or link-audit receipt is possible prepublish.
+              receivers.exec("DROP TRIGGER pairing_ui_receiver_conflict")
+              await page
+                .getByRole("button", { name: "Cancel invitation", exact: true })
+                .click()
+              await page
+                .getByRole("button", { name: "End pairing sign-in" })
+                .waitFor({ state: "hidden" })
+              const cancelled = await owner.pairing.status(conflictId)
+              requireValue(
+                cancelled.phase === "terminal" &&
+                  !cancelled.cleanupPending &&
+                  cancelled.terminal?.cause === "cancelled" &&
+                  cancelled.terminal.initiator.kind === "principal" &&
+                  cancelled.terminal.initiator.principalId === human,
+                "permanent activation lost its Human cancellation receipt",
+              )
+              requireValue(
+                grants
+                  .prepare("SELECT count(*) AS n FROM person_links WHERE credential_id=?")
+                  .get(conflict.credentialId).n === 0 &&
+                  grants
+                    .prepare(
+                      "SELECT count(*) AS n FROM person_link_changes WHERE credential_id=?",
+                    )
+                    .get(conflict.credentialId).n === 0,
+                "unpublished permanent stop inserted attribution or a false link receipt",
+              )
+              // Fail one private status send, with no server mutation or fake
+              // authority. Recovery must name a control the person can use.
+              await page.getByRole("button", { name: "Back", exact: true }).click()
+              await enter(page)
+              await signIn(page, stack.token())
+              await page.getByRole("button", { name: "Create invitation" }).click()
+              await page.locator(css.gatewayPairingCode).waitFor()
+              const readHex = await page
+                .locator(css.gatewayPairingInvitation)
+                .getAttribute("data-gateway-invitation")
+              await page.evaluate(() => {
+                const send = WebSocket.prototype.send
+                WebSocket.prototype.send = function (data) {
+                  let method
+                  try {
+                    method = JSON.parse(String(data)).method
+                  } catch {
+                    // Non-JSON transport data remains untouched.
+                  }
+                  if (method === "pairing.status") {
+                    WebSocket.prototype.send = send
+                    throw new Error("Fixture status transport unavailable")
+                  }
+                  return send.call(this, data)
+                }
+              })
+              await page
+                .getByRole("alert")
+                .filter({ hasText: "Go back and reopen Gateway" })
+                .waitFor()
+              requireValue(
+                await page.getByRole("button", { name: "Back", exact: true }).isEnabled(),
+                "failed selected read prescribed unavailable recovery",
+              )
+              await page.getByRole("button", { name: "Back", exact: true }).click()
+              await enter(page)
+              await signIn(page, stack.token(), true)
+              await page
+                .getByRole("button", { name: new RegExp(`Resume ${readHex}`) })
+                .click()
+              requireValue(
+                !(await page.locator(css.gatewayPairingCode).count()),
+                "read recovery reconstructed a one-use code",
+              )
+              await page
+                .getByRole("button", { name: "Cancel invitation", exact: true })
+                .click()
+              await page
+                .getByRole("button", { name: "End pairing sign-in" })
+                .waitFor({ state: "hidden" })
+              requireValue(
+                (await owner.pairing.status(Array.from(Buffer.from(readHex, "hex"))))
+                  .phase === "terminal",
+                "read recovery did not cancel the same invitation",
+              )
               return {
-                true: 2,
+                true: 4,
                 false: 2,
                 integrationRefused: 1,
                 refresh: 1,
                 nativeActive: 1,
                 replacementFalseActive: 1,
                 stalePersonLinks: 0,
+                failedReadRecovered: 1,
+                nativePermanentStop: 1,
+                permanentStopCancelledWithoutLink: true,
                 polledTerminalSessionClosed: true,
                 currentDocumentTemporarySessionsClosed: true,
               }
             } finally {
+              if (receivers) {
+                receivers.exec("DROP TRIGGER IF EXISTS pairing_ui_receiver_conflict")
+                receivers.close()
+              }
               if (grants) {
                 grants.exec("DROP TRIGGER IF EXISTS pairing_ui_fail_audit")
                 grants.close()

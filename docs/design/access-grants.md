@@ -436,6 +436,8 @@ it cannot recover a lost code or change an invitation’s saved choice.
 | Create answer is lost | Show unconfirmed outcome, read pending; no automatic create replay | Gateway pairing adapter/view tests |
 | Refresh / reopen | Resume owner invitations reauthenticates without asking the choice again; resume panel invitations uses the panel; both read saved choices | Gateway pairing browser check |
 | Claim / approve | Compare claimed key fingerprint, approve exact key; render canonical status and activationStopped | Gateway pairing adapter/browser tests |
+| Approval stops retryably / permanently | Keep the protocol discriminant; retryable offers another approval, permanent offers cancellation/new pairing and no retry. Polling the same invitation does not erase that result | Gateway pairing view/browser tests |
+| An operation answer is unavailable | Say unconfirmed and direct the person through the always-visible Back action to reopen Gateway and resume canonical invitations; no inferred delivery result or mutation replay | Gateway pairing view tests |
 | Fingerprint cannot be computed | Say it is unavailable and withhold approval; never substitute a key | Gateway pairing view tests |
 | Active with owed link | Discard the consumed code, offer activation retry and do not claim committed person attribution | Existing canonical link failure probes plus desktop status test |
 | Terminal learned by polling or an approval reply | Retire old scope, discard code and activation notice, stop polling; retain cleanupPending without claiming cleanup completed | Gateway pairing view tests |
@@ -447,6 +449,16 @@ their existing consent classes. A saved true choice is historical consent;
 neither it nor Active is presented as proof of a committed person link or a share.
 Peer enrollment and read admission remain the existing native pairing and grant
 owners, including the commit and cleanup order above.
+
+The second desktop review found another lifecycle case in the same view, so the
+view design was re-evaluated before its next patch. The protocol already owns
+`retryable | permanent`; a local boolean had thrown that distinction away. The
+correction retains that exact typed outcome and removes the permanent retry
+branch, rather than adding a second activation classifier. Likewise, uncertain
+operations use one Back/reopen recovery instruction valid in every view instead
+of inferring which control or delivery result exists. A fresh resume has only
+canonical status, which does not carry an earlier session's activation stop;
+the next explicit approval obtains a current result from the existing owner.
 
 ## Live follow
 

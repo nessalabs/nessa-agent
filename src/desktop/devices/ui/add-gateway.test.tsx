@@ -70,9 +70,9 @@ afterEach(async () => {
   vi.useRealTimers()
   document.body.replaceChildren()
 })
-async function mount() {
+async function mount(onBack = () => {}) {
   await act(async () =>
-    root.render(<AddGateway gateway={gateway} onBack={() => {}} port={47651} />),
+    root.render(<AddGateway gateway={gateway} onBack={onBack} port={47651} />),
   )
 }
 async function click(text: string) {
@@ -470,29 +470,106 @@ it("retires a stale pending terminal receipt whose cleanup already completed", a
   expect(scope.pairing.cancel).not.toHaveBeenCalled()
 })
 
-it("retires a terminal approval reply without reviving its old activation notice", async () => {
-  vi.spyOn(deviceKey, "deviceKeyFingerprint").mockResolvedValue("fingerprint")
-  const claimed = {
-    ...saved(),
-    phase: "claimed" as const,
-    claimedDeviceKey: Array(32).fill(7),
-  }
-  vi.mocked(scope.pairing.create).mockResolvedValue({
-    code: "ABCD-EFGH",
-    status: claimed,
-  })
-  vi.mocked(scope.pairing.approve).mockResolvedValue({
-    status: { ...claimed, phase: "terminal", cleanupPending: true },
-    activationStopped: "permanent",
-  })
-  await mount()
-  await click("Continue")
-  await click("Create invitation")
-  await click("Approve matching fingerprint")
-  expect(scope.close).toHaveBeenCalledOnce()
-  expect(container.querySelector("[data-gateway-code]")).toBeNull()
-  expect(container.querySelector("[data-gateway-phase]")?.textContent).toContain("Ended")
-  expect(container.textContent).not.toContain("Activation needs another attempt")
-  expect(container.textContent).toContain("Cleanup is still pending")
-  expect(container.textContent).not.toContain("Finish removal")
-})
+it.each(["retryable", "permanent"] as const)(
+  "retires a terminal approval reply without reviving its %s notice",
+  async (activationStopped) => {
+    vi.spyOn(deviceKey, "deviceKeyFingerprint").mockResolvedValue("fingerprint")
+    const claimed = {
+      ...saved(),
+      phase: "claimed" as const,
+      claimedDeviceKey: Array(32).fill(7),
+    }
+    vi.mocked(scope.pairing.create).mockResolvedValue({
+      code: "ABCD-EFGH",
+      status: claimed,
+    })
+    vi.mocked(scope.pairing.approve).mockResolvedValue({
+      status: { ...claimed, phase: "terminal", cleanupPending: true },
+      activationStopped,
+    })
+    await mount()
+    await click("Continue")
+    await click("Create invitation")
+    await click("Approve matching fingerprint")
+    expect(scope.close).toHaveBeenCalledOnce()
+    expect(container.querySelector("[data-gateway-code]")).toBeNull()
+    expect(container.querySelector("[data-gateway-phase]")?.textContent).toContain(
+      "Ended",
+    )
+    expect(container.textContent).not.toContain("Activation needs another attempt")
+    expect(container.textContent).not.toContain("Activation cannot complete")
+    expect(container.textContent).toContain("Cleanup is still pending")
+    expect(container.textContent).not.toContain("Finish removal")
+  },
+)
+
+it.each(["approved", "active"] as const)(
+  "keeps a permanent %s stop authoritative across polling and offers cancellation only",
+  async (phase) => {
+    vi.spyOn(deviceKey, "deviceKeyFingerprint").mockResolvedValue("fingerprint")
+    const claimed = {
+      ...saved(),
+      phase: "claimed" as const,
+      claimedDeviceKey: Array(32).fill(7),
+    }
+    const stopped = { ...claimed, phase }
+    vi.mocked(scope.pairing.create).mockResolvedValue({
+      code: "ABCD-EFGH",
+      status: claimed,
+    })
+    vi.mocked(scope.pairing.approve).mockResolvedValue({
+      status: stopped,
+      activationStopped: "permanent",
+    })
+    vi.mocked(scope.pairing.status).mockResolvedValue(stopped)
+    await mount()
+    await click("Continue")
+    await click("Create invitation")
+    await click("Approve matching fingerprint")
+    expect(container.textContent).toContain("Activation cannot complete")
+    expect(container.textContent).toContain("Cancel this invitation and pair again")
+    expect(container.textContent).not.toContain("Activation needs another attempt")
+    expect(
+      [...container.querySelectorAll("button")].some(
+        (each) => each.textContent === "Retry activation",
+      ),
+    ).toBe(false)
+    await act(async () => vi.advanceTimersByTimeAsync(2_000))
+    expect(scope.pairing.status).toHaveBeenCalledOnce()
+    expect(container.textContent).toContain("Activation cannot complete")
+    expect(
+      [...container.querySelectorAll("button")].some(
+        (each) => each.textContent === "Retry activation",
+      ),
+    ).toBe(false)
+    await click("Cancel invitation")
+    expect(scope.pairing.approve).toHaveBeenCalledOnce()
+    expect(scope.pairing.cancel).toHaveBeenCalledExactlyOnceWith(claimed.invitationId)
+    expect(scope.close).toHaveBeenCalledOnce()
+    expect(container.textContent).not.toContain("Activation cannot complete")
+  },
+)
+
+it.each(["setup", "selected poll"])(
+  "offers executable recovery after a failed %s",
+  async (where) => {
+    const back = vi.fn()
+    if (where === "setup")
+      gateway.open = vi.fn().mockRejectedValue(new Error("unavailable"))
+    await mount(back)
+    await click("Continue")
+    if (where !== "setup") {
+      await click("Create invitation")
+      vi.mocked(scope.pairing.status).mockRejectedValue(new Error("unavailable"))
+      await act(async () => vi.advanceTimersByTimeAsync(2_000))
+    }
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain(
+      "Go back and reopen Gateway",
+    )
+    expect(container.querySelector('[role="alert"]')?.textContent).not.toContain(
+      "Read pending invitations",
+    )
+    await click("Back")
+    expect(back).toHaveBeenCalledOnce()
+  },
+)

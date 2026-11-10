@@ -2605,6 +2605,12 @@ vault dialog blocking the main conversation click.
   Existing UI credential revoke removes that link. _Check:_ `gateway-pairing.mjs`;
   native admission/cleanup regressions remain the authority for no-share refusal,
   expiry, stale credentials and wire binding.
+- [ ] **Permanent activation requires a new pairing.** Preserve the exact stop
+  returned by approval. A retryable write offers retry; a permanent conflict
+  offers cancellation, with no retry action. The disposable receiver-write collision
+  rolls back before canonical cancellation; its reserved credential never
+  publishes, no person link is inserted, and the terminal receipt names the Human. _Check:_ `gateway-pairing.mjs` and
+  `add-gateway.test.tsx` (including preservation across polls).
 - [ ] **Pairing sign-in ends.** Input clears on submission, no token in app storage
   or URL, no managed reconnect, and explicit end/completion closes the temporary
   socket while the panel stays connected. Unit tests cover deadline, pagehide,
@@ -2617,6 +2623,10 @@ vault dialog blocking the main conversation click.
   a late owned client closes before it exposes a command. _Check:_
   `gateway-pairing.mjs` (terminal poll), `add-gateway.test.tsx` (terminal replies,
   stale pending reads and Finish removal), and adapter abort regressions.
+- [ ] **Uncertain reads have executable recovery.** One private status send fails;
+  the page directs Back/reopen, then fresh sign-in resumes and cancels the same
+  invitation without reconstructing a code. Setup and selected-view failures
+  share that guidance. _Check:_ `gateway-pairing.mjs`, `add-gateway.test.tsx`.
 - [ ] **A conversation continues after both choices.** Conversation stress's
   `gatewayPairings` knob defaults to one true/false/cancel cycle, turns native
   linking off again, and sends another message, retaining background, follower,

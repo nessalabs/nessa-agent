@@ -15,6 +15,7 @@ import { gatewayEnrollmentCommand } from "../model/gateway-pairing"
 import { bytesToHex, deviceKeyFingerprint } from "../../settings/model/device-key"
 
 type PairingOwnerStatus = Awaited<ReturnType<PairingApi["status"]>>
+type ActivationStop = Awaited<ReturnType<PairingApi["approve"]>>["activationStopped"]
 
 const SESSION_MS = 10 * 60 * 1_000
 const PEER_READ = "peer-gateway-conversation-read"
@@ -47,7 +48,7 @@ export function AddGateway({
   const [status, setStatus] = useState<PairingOwnerStatus>()
   const [code, setCode] = useState<string>()
   const [fingerprint, setFingerprint] = useState<string>()
-  const [activationStopped, setActivationStopped] = useState(false)
+  const [activationStopped, setActivationStopped] = useState<ActivationStop>()
   const page = useRef<HTMLDivElement | null>(null)
   const createButton = useRef<HTMLButtonElement | null>(null)
   const scope = useRef<PairingScope | undefined>(undefined)
@@ -105,7 +106,9 @@ export function AddGateway({
     } catch {
       if (current === generation.current) {
         setNeedsRead(true)
-        setMessage("Not confirmed. Read pending invitations before trying again.")
+        setMessage(
+          "Not confirmed. Go back and reopen Gateway to resume saved invitations.",
+        )
       }
     } finally {
       if (operation.current === ticket) {
@@ -165,7 +168,7 @@ export function AddGateway({
     if (next.phase === "active") setCode(undefined)
     if (next.phase === "terminal") {
       setCode(undefined)
-      setActivationStopped(false)
+      setActivationStopped(undefined)
       // Only a fresh, explicitly resumed unfinished receipt keeps a scope
       // for Finish removal. Polling an ended invitation retires its old one.
       if (!resuming || !next.cleanupPending) finishReceipt()
@@ -393,7 +396,7 @@ export function AddGateway({
                   const next = await currentScope().pairing.status(each.invitationId)
                   if (current !== generation.current) return
                   setCode(undefined)
-                  setActivationStopped(false)
+                  setActivationStopped(undefined)
                   apply(next, { resuming: true })
                   page.current?.focus()
                 })
@@ -424,8 +427,8 @@ export function AddGateway({
           {code ? (
             <div>
               <p>
-                In a POSIX shell or PowerShell on the other gateway, run this with this
-                gateway’s native IP address and port in place of GATEWAY_IP:{port}:
+                In a POSIX shell on the other gateway, run this with this gateway’s native
+                IP address and port in place of GATEWAY_IP:{port}:
               </p>
               <pre className="devices-gateway-command">
                 {gatewayEnrollmentCommand(port, code)}
@@ -448,9 +451,15 @@ export function AddGateway({
               <code data-gateway-fingerprint>{fingerprint}</code>
             </p>
           )}
-          {activationStopped && (
+          {activationStopped === "retryable" && (
             <p role="status">
               Activation needs another attempt. Person attribution is not confirmed.
+            </p>
+          )}
+          {activationStopped === "permanent" && (
+            <p role="status">
+              Activation cannot complete. Cancel this invitation and pair again. Person
+              attribution is not confirmed.
             </p>
           )}
           {status.phase === "active" && (
@@ -464,36 +473,38 @@ export function AddGateway({
           )}
           {signedIn && (
             <div>
-              {status.claimedDeviceKey && status.phase !== "terminal" && (
-                <Button
-                  className="devices-primary"
-                  variant="inverse"
-                  size="30"
-                  shape="pill"
-                  disabled={busy || !fingerprint}
-                  onClick={() =>
-                    void run(async () => {
-                      const current = generation.current
-                      const key = status.claimedDeviceKey
-                      if (!key) return
-                      const reply = await currentScope().pairing.approve(
-                        status.invitationId,
-                        key,
-                      )
-                      if (current !== generation.current) return
-                      setActivationStopped(reply.activationStopped !== undefined)
-                      apply(reply.status)
-                      if (reply.status.phase === "active" && !reply.activationStopped) {
-                        finishReceipt()
-                      }
-                    })
-                  }
-                >
-                  {status.phase === "claimed"
-                    ? "Approve matching fingerprint"
-                    : "Retry activation"}
-                </Button>
-              )}
+              {status.claimedDeviceKey &&
+                status.phase !== "terminal" &&
+                activationStopped !== "permanent" && (
+                  <Button
+                    className="devices-primary"
+                    variant="inverse"
+                    size="30"
+                    shape="pill"
+                    disabled={busy || !fingerprint}
+                    onClick={() =>
+                      void run(async () => {
+                        const current = generation.current
+                        const key = status.claimedDeviceKey
+                        if (!key) return
+                        const reply = await currentScope().pairing.approve(
+                          status.invitationId,
+                          key,
+                        )
+                        if (current !== generation.current) return
+                        setActivationStopped(reply.activationStopped)
+                        apply(reply.status)
+                        if (reply.status.phase === "active" && !reply.activationStopped) {
+                          finishReceipt()
+                        }
+                      })
+                    }
+                  >
+                    {status.phase === "claimed"
+                      ? "Approve matching fingerprint"
+                      : "Retry activation"}
+                  </Button>
+                )}
               <Button
                 variant="tinted"
                 size="30"
