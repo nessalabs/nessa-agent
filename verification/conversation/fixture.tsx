@@ -27,7 +27,7 @@ import {
   type Conversation,
   type ConversationTranscriptState,
 } from "../../src/conversation/model"
-import { ClockProvider } from "../../src/clock"
+import { ClockProvider, monotonicElapsed } from "../../src/clock"
 import { ConversationControls } from "../../src/conversation/ui/conversation-controls"
 import { ConversationQuestions } from "../../src/conversation/ui/conversation-questions"
 import { ConversationNotification } from "../../src/conversation/ui/conversation-notification"
@@ -259,7 +259,7 @@ function Fixture() {
 createRoot(document.getElementById("root")!).render(
   <Provider store={store}>
     {/* A fixture is its own composition root, so it chooses the clock. */}
-    <ClockProvider now={() => Date.now()}>
+    <ClockProvider now={() => Date.now()} elapsed={monotonicElapsed()}>
       <Fixture />
     </ClockProvider>
   </Provider>,

@@ -157,7 +157,7 @@ async function mount(
   document.body.append(host)
   const root = createRoot(host)
   const view = (
-    <ClockProvider now={() => 1_000_000}>
+    <ClockProvider now={() => 1_000_000} elapsed={() => 1_000_000}>
       <BoatProvider gateway={boat}>
         <DevicesProvider gateway={gateway}>
           <DevicesView />

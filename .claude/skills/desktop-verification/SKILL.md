@@ -18,6 +18,7 @@ This skill is how to use them; it restates neither.
 | The change touches | Run |
 | --- | --- |
 | anything in `src/desktop/` (always, first) | `smoke.mjs` |
+| the drifting ambient light (`ui/ambient-light.tsx`, `.desktop-ambient-light`) | `ambient-overview.mjs` |
 | `ui/icon-button.*`, or any icon-only control | `icon-buttons.mjs` (`--layout classic` for the classic shell) |
 | a key cap (`<kbd>`), a list row (`ui/list-row.*`, the kit's sidebar rows), the identity at a sidebar's foot (`ui/identity.*`) or another repeated pattern | `shared-controls.mjs` |
 | titlebar, column heads, side columns, Settings chrome, the picture band, anything that slides | `safe-area.mjs` |

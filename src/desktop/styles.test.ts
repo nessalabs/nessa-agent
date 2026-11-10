@@ -270,24 +270,44 @@ it("lifts a drag's copy without painting a shadow", () => {
   )
 })
 
-it("keeps the ambient blur on its own layer", () => {
+it("paints the drifting lights as a scaled texture, not a live blur", () => {
   const body = styles.slice(styles.indexOf(".desktop-ambient {")).split("}")[0]
-  expect(body).toMatch(/will-change:\s*transform/)
-  // The filtered circles are not promoted on their own. The parent layer is.
-  const blurAt = styles.indexOf("filter: blur(80px)")
-  const blur = styles.slice(
-    styles.lastIndexOf(".desktop-ambient::before", blurAt),
-    styles.indexOf("}", blurAt),
-  )
-  expect(blur).not.toMatch(/will-change/)
+  expect(body).toMatch(/--ambient-texture:\s*192px/)
+  expect(body).not.toMatch(/will-change/)
+  expect(styles).not.toContain("filter: blur(80px)")
+  expect(styles).not.toContain(".desktop-ambient::before")
+  const light = styles.slice(styles.indexOf(".desktop-ambient-light {")).split("}")[0]
+  expect(light).toMatch(/width:\s*var\(--ambient-texture\)/)
+  expect(light).toMatch(/will-change:\s*transform/)
+  expect(light).toMatch(/transform:\s*scale\(var\(--ambient-scale\)\)/)
+  const drift = styles.slice(styles.indexOf("@keyframes desktop-drift {")).split("}")
+  const frames = `${drift[0]}} ${drift[1]}}`
+  expect(frames).toContain("translate3d(6vw, 4vh, 0)")
+  expect(frames).toContain("scale(var(--ambient-scale))")
+  expect(frames).toContain("scale(calc(var(--ambient-scale) * 1.08))")
+  const low = styles.slice(styles.indexOf(".desktop-ambient-light-low {")).split("}")[0]
+  expect(low).toMatch(/animation-duration:\s*36s/)
+  expect(low).toMatch(/animation-direction:\s*alternate-reverse/)
 })
 
-it("holds the ambient blur still while panes travel", () => {
+it("holds the drifting light still while panes travel and when motion is reduced", () => {
   const selector =
-    ":root:is([data-drag-pressing], [data-drag-reflow], [data-split-flipping])\n  .desktop-ambient::before,\n:root:is([data-drag-pressing], [data-drag-reflow], [data-split-flipping])\n  .desktop-ambient::after {"
+    ":root:is([data-drag-pressing], [data-drag-reflow], [data-split-flipping])\n  .desktop-ambient-light {"
   expect(styles).toContain(selector)
   const body = styles.slice(styles.indexOf(selector)).split("}")[0]
   expect(body).toMatch(/animation-play-state:\s*paused/)
+  expect(styles).toContain(':root[data-drift="still"] .desktop-ambient-light {')
+  expect(styles).toContain(':root[data-motion="reduced"] .desktop-ambient-light,')
+  const layouts = readFileSync(
+    new URL("./workspace/ui/layouts/layouts.css", import.meta.url),
+    "utf8",
+  )
+  const covered =
+    ".workspace-window:has(.workspace-overview-layer[data-covered]) .desktop-ambient {"
+  expect(layouts).toContain(covered)
+  expect(layouts.slice(layouts.indexOf(covered)).split("}")[0]).toMatch(
+    /content-visibility:\s*hidden/,
+  )
 })
 
 it("drops the composer's blur while a drag is carried and keeps the sidebar treatment stable", () => {

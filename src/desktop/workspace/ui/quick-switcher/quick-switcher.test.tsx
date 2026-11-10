@@ -59,7 +59,7 @@ async function pickAndClose() {
   await act(async () =>
     root.render(
       <Provider store={store}>
-        <ClockProvider now={() => 1000}>
+        <ClockProvider now={() => 1000} elapsed={() => 1000}>
           <Host />
         </ClockProvider>
       </Provider>,

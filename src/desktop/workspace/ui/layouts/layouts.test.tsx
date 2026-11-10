@@ -130,7 +130,7 @@ async function render(Layout: typeof ThreeColumns, command = "") {
   await act(async () =>
     root.render(
       <Provider store={store}>
-        <ClockProvider now={() => 1000}>
+        <ClockProvider now={() => 1000} elapsed={() => 1000}>
           <Layout hostKind="browser" browserSurface />
         </ClockProvider>
       </Provider>,
@@ -179,7 +179,7 @@ describe("both layouts are the one shell", () => {
       await act(async () =>
         root.render(
           <Provider store={store}>
-            <ClockProvider now={() => 1000}>
+            <ClockProvider now={() => 1000} elapsed={() => 1000}>
               <Layout hostKind="browser" browserSurface />
             </ClockProvider>
           </Provider>,
@@ -378,7 +378,7 @@ describe("the window tells its agents the focused chat's panel", () => {
     await act(async () =>
       root.render(
         <Provider store={store}>
-          <ClockProvider now={() => 1000}>
+          <ClockProvider now={() => 1000} elapsed={() => 1000}>
             <ThreeColumns hostKind="browser" browserSurface />
           </ClockProvider>
         </Provider>,
@@ -451,7 +451,7 @@ describe("Agents in the sidebar is a place to go, like a channel", () => {
       await act(async () =>
         root.render(
           <Provider store={store}>
-            <ClockProvider now={() => 1000}>
+            <ClockProvider now={() => 1000} elapsed={() => 1000}>
               <Layout hostKind="browser" browserSurface />
             </ClockProvider>
           </Provider>,
@@ -907,7 +907,7 @@ describe("a source removing a session", () => {
       await act(async () =>
         root.render(
           <Provider store={store}>
-            <ClockProvider now={() => 1000}>
+            <ClockProvider now={() => 1000} elapsed={() => 1000}>
               <ThreeColumns hostKind="browser" browserSurface />
             </ClockProvider>
           </Provider>,
@@ -1208,7 +1208,7 @@ describe("a review notice opens its conversation", () => {
     await act(async () =>
       root.render(
         <Provider store={store}>
-          <ClockProvider now={() => 1000}>
+          <ClockProvider now={() => 1000} elapsed={() => 1000}>
             <ThreeColumns hostKind="browser" browserSurface />
           </ClockProvider>
         </Provider>,
@@ -1285,7 +1285,7 @@ describe("a spare sidebar fold paints before the boxes, and the list keeps its m
         await act(async () =>
           root.render(
             <Provider store={store}>
-              <ClockProvider now={() => 1000}>
+              <ClockProvider now={() => 1000} elapsed={() => 1000}>
                 <ThreeColumns hostKind="browser" browserSurface />
               </ClockProvider>
             </Provider>,
@@ -1380,7 +1380,7 @@ describe("a spare sidebar fold paints before the boxes, and the list keeps its m
       await act(async () =>
         root.render(
           <Provider store={store}>
-            <ClockProvider now={() => 1000}>
+            <ClockProvider now={() => 1000} elapsed={() => 1000}>
               <ThreeColumns hostKind="browser" browserSurface />
             </ClockProvider>
           </Provider>,
@@ -1431,7 +1431,7 @@ describe("a spare sidebar fold paints before the boxes, and the list keeps its m
       await act(async () =>
         root.render(
           <Provider store={store}>
-            <ClockProvider now={() => 1000}>
+            <ClockProvider now={() => 1000} elapsed={() => 1000}>
               <ThreeColumns hostKind="browser" browserSurface />
             </ClockProvider>
           </Provider>,
@@ -1486,7 +1486,7 @@ describe("a spare sidebar fold paints before the boxes, and the list keeps its m
       await act(async () =>
         root.render(
           <Provider store={store}>
-            <ClockProvider now={() => 1000}>
+            <ClockProvider now={() => 1000} elapsed={() => 1000}>
               <ThreeColumns hostKind="browser" browserSurface />
             </ClockProvider>
           </Provider>,
