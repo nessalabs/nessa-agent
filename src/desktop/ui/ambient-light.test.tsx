@@ -2,6 +2,7 @@
 import { act } from "react"
 import { createRoot, type Root } from "react-dom/client"
 import { afterEach, expect, it, vi } from "vitest"
+import { ClockProvider } from "../../clock"
 import {
   ambientBlurPadPx,
   ambientBlurPx,
@@ -93,7 +94,6 @@ it("keeps one repaint frame when the light colour changes, and none for a hover"
   })
   vi.stubGlobal("cancelAnimationFrame", () => {})
   let now = 1_000
-  vi.spyOn(performance, "now").mockImplementation(() => now)
 
   const surface = document.createElement("div")
   surface.setAttribute("data-desktop-theme", "graphite")
@@ -103,7 +103,13 @@ it("keeps one repaint frame when the light colour changes, and none for a hover"
   document.body.appendChild(surface)
   const root = createRoot(mountPoint)
   mounted.push({ root, host: surface })
-  await act(async () => root.render(<DesktopAmbient />))
+  await act(async () =>
+    root.render(
+      <ClockProvider now={() => now}>
+        <DesktopAmbient />
+      </ClockProvider>,
+    ),
+  )
 
   const burst = (target: EventTarget, propertyName: string) => {
     for (let i = 0; i < 100; i += 1) {
@@ -136,7 +142,13 @@ it("draws the two lights and the grain", async () => {
   document.body.appendChild(host)
   const root = createRoot(host)
   mounted.push({ root, host })
-  await act(async () => root.render(<DesktopAmbient />))
+  await act(async () =>
+    root.render(
+      <ClockProvider now={() => 0}>
+        <DesktopAmbient />
+      </ClockProvider>,
+    ),
+  )
   expect(host.querySelectorAll(".desktop-ambient-light")).toHaveLength(2)
   expect(host.querySelector(".desktop-grain")).not.toBeNull()
   expect(host.querySelector(".desktop-ambient-light-low")).not.toBeNull()

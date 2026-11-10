@@ -82,6 +82,14 @@ export function ClockProvider({
   return <ClockContext.Provider value={clock}>{children}</ClockContext.Provider>
 }
 
+/** The injected clock, without subscribing. A deadline reads it; a label uses `useNow`. */
+export function useClock(): () => number {
+  const clock = useContext(ClockContext)
+  if (!clock)
+    throw new Error("useClock needs a ClockProvider: the clock comes from composition")
+  return clock.now
+}
+
 /** The injected time now, read again when the interval publishes a tick. */
 export function useNow(interval: number): number {
   const clock = useContext(ClockContext)

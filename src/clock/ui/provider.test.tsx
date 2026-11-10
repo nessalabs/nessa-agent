@@ -3,7 +3,7 @@ import * as React from "react"
 import { act } from "react"
 import { createRoot, type Root } from "react-dom/client"
 import { afterEach, expect, it, vi } from "vitest"
-import { ClockProvider, useNow } from "../index"
+import { ClockProvider, useClock, useNow } from "../index"
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -150,6 +150,19 @@ it("keeps a retired timer from changing the remounted snapshot", async () => {
   expect(renders.reader).toBe(readerRendersBeforeCurrentTick + 1)
   expect(renders.probe).toBe(probeRendersBeforeCurrentTick + 1)
   expect(host.querySelector('[data-testid="reader"]')?.textContent).toBe("1010")
+})
+
+it("reads the injected clock without subscribing to a tick", () => {
+  function Stamp() {
+    const now = useClock()
+    return <output data-testid="stamp">{now()}</output>
+  }
+  mount(
+    <ClockProvider now={() => 42}>
+      <Stamp />
+    </ClockProvider>,
+  )
+  expect(host.querySelector('[data-testid="stamp"]')?.textContent).toBe("42")
 })
 
 it("replaces interval and provider subscriptions with the current clock", () => {
