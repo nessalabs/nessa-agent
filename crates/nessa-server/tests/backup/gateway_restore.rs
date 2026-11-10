@@ -625,6 +625,38 @@ async fn a_read_only_view_fetches_deferred_history_and_a_deleted_one_does_not() 
     assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 2);
 }
 
+#[tokio::test]
+async fn an_unauthorized_open_does_not_fetch_deferred_history() {
+    let (service, _, _, _) =
+        crate::conversation_test_support::fixture(ConversationLimits::default());
+    let id = ConversationId::new(&uuid::Uuid::new_v4().to_string()).unwrap();
+    let owner = ConversationCaller {
+        organization_id: OrganizationId::new("org").unwrap(),
+        principal_id: PrincipalId::new("person").unwrap(),
+        surface_id: "panel".into(),
+        action_id: "create".into(),
+    };
+    service
+        .create(id.clone(), owner.clone(), RequestedConversation::default())
+        .await
+        .unwrap();
+    service.close(id.clone(), owner).await.unwrap();
+    let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    service.set_open_preparation(std::sync::Arc::new(CountedPreparation(calls.clone())));
+    let stranger = ConversationCaller {
+        organization_id: OrganizationId::new("other").unwrap(),
+        principal_id: PrincipalId::new("stranger").unwrap(),
+        surface_id: "panel".into(),
+        action_id: "read".into(),
+    };
+    let error = service
+        .read_at(id, stranger, ReadOpening::Open)
+        .await
+        .unwrap_err();
+    assert!(matches!(error, ConversationError::NotFound), "{error:?}");
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+}
+
 #[test]
 fn a_deleted_deferred_conversation_is_not_fetched() {
     let root = tempfile::tempdir().unwrap();
