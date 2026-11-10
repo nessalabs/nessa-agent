@@ -1060,3 +1060,13 @@ paid on every push, and on three runners if it lands in the matrix.
   `include_str!`, a check that parses a document — that rule stops being true and
   has to change with it. `documentation-only.test.mjs` fails with instructions
   when the Rust half of it breaks; the rest is on you to notice.
+- A code change runs only the Rust suites it can reach. `scripts/ci-plan.mjs`
+  reads the pull request's files and diffs: a file in a crate reaches that crate
+  and every crate depending on it; a file under `src/`, `packages/`,
+  `verification/` or `docs/` reaches a crate only when a string literal in its
+  Rust names it; anything else reaches everything. macOS and Windows always run
+  clippy, and run their test suites only when the diff touches platform code
+  (`cfg`, `target_os`, `std::os`, a platform-named path). Pushes to `main` run
+  everything. If you make Rust read a frontend file by a path it does not spell
+  out (built with `join`, found by walking a folder), name the file in a string
+  literal next to the read, or the plan will not see the dependency.

@@ -3,11 +3,12 @@ import { spawnSync } from "node:child_process"
 import { readFileSync } from "node:fs"
 import test from "node:test"
 
-import { ALWAYS_RUN, evaluateChecks } from "./ci-result.mjs"
+import { RUST_TEST_PACKAGES, packageArguments } from "./ci-plan.mjs"
+import { ALWAYS_RUN, PLANNED_SKIPS, evaluateChecks } from "./ci-result.mjs"
 
-function needs(code, jobs) {
+function needs(code, jobs, plan = {}) {
   return {
-    changes: { result: "success", outputs: { code } },
+    changes: { result: "success", outputs: { code, ...plan } },
     ...Object.fromEntries(
       Object.entries(jobs).map(([job, result]) => [job, { result, outputs: {} }]),
     ),
@@ -176,10 +177,23 @@ test("the Windows split preserves full build flags, platform coverage, guards, c
       server,
       /name: Windows server library tests \(\$\{\{ matrix\.partition \}\}\)/,
     )
-    assert.equal(localCommand[3], serverCommand[3])
+    // The Windows suites, and macOS and Windows in `local-auth`, test the whole
+    // list: the `remaining` partition needs the server library in it. Only the
+    // Linux leg narrows to the plan's crates, and falls back to the same list.
+    const full = packageArguments(RUST_TEST_PACKAGES)
+    assert.equal(
+      full,
+      "-p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-client-core -p nessa-device-client -p nessa-sdk -p nessa-timer -p nessa-vault",
+    )
+    assert.equal(serverCommand[3], full)
     assert.equal(
       localCommand[3],
-      "-p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-client-core -p nessa-device-client -p nessa-sdk -p nessa-timer -p nessa-vault",
+      `\${{ runner.os == 'Linux' && needs.changes.outputs.rust_packages || '${full}' }}`,
+    )
+    assert.ok(
+      local.includes(
+        `cargo clippy \${{ needs.changes.outputs.rust_packages || '${full}' }} --all-targets -- -D warnings`,
+      ),
     )
     assert.match(local, /fail-fast: false/)
     // The desktop CI harness owns the Linux release-baseline agreement. This
@@ -204,7 +218,9 @@ test("the Windows split preserves full build flags, platform coverage, guards, c
       }
       assert.match(
         block,
-        /if: \$\{\{ !cancelled\(\) && needs\.changes\.outputs\.code != 'false' \}\}/,
+        block === local
+          ? /if: \$\{\{ !cancelled\(\) && needs\.changes\.outputs\.code != 'false' \}\}/
+          : /if: \$\{\{ !cancelled\(\) && needs\.changes\.outputs\.code != 'false' && needs\.changes\.outputs\.windows_server_tests != 'false' \}\}/,
       )
       assert.match(
         block,
@@ -230,7 +246,7 @@ test("the Windows split preserves full build flags, platform coverage, guards, c
       /--doc|clippy -p|check-desktop|smoke-auth|check-windows-task-scheduler/,
     )
     for (const check of [
-      "cargo clippy -p nessa-local-storage",
+      "cargo clippy ${{ needs.changes.outputs.rust_packages",
       "node scripts/check-desktop.mjs",
       "check-windows-task-scheduler.ps1",
       "scripts/smoke-auth.mjs",
@@ -247,5 +263,51 @@ test("any Windows job failure or unexpected skip fails the aggregate", () => {
       assert.equal(evaluated.ok, false)
       assert.equal(evaluated.failures[0].job, job)
     }
+  }
+})
+
+test("a code change may skip a planned job only on an explicit false", () => {
+  for (const [job, output] of Object.entries(PLANNED_SKIPS)) {
+    const skipped = { ...compileJobs, [job]: "skipped" }
+    assert.equal(evaluateChecks(needs("true", skipped, { [output]: "false" })).ok, true)
+    for (const plan of [{}, { [output]: "true" }, { [output]: "" }]) {
+      const evaluated = evaluateChecks(needs("true", skipped, plan))
+      assert.equal(evaluated.ok, false)
+      assert.equal(evaluated.failures[0].job, job)
+    }
+    const failed = { ...compileJobs, [job]: "failure" }
+    assert.equal(evaluateChecks(needs("true", failed, { [output]: "false" })).ok, false)
+  }
+})
+
+test("a planned skip of one job does not excuse another", () => {
+  const evaluated = evaluateChecks(
+    needs(
+      "true",
+      { ...compileJobs, "local-auth": "skipped" },
+      { sdk: "false", windows_server_tests: "false" },
+    ),
+  )
+  assert.equal(evaluated.ok, false)
+  assert.equal(evaluated.failures[0].job, "local-auth")
+})
+
+test("each planned skip names an output the changes job declares and a job guarded on it", () => {
+  const workflow = readFileSync(
+    new URL("../.github/workflows/local-auth.yml", import.meta.url),
+    "utf8",
+  )
+  const blocks = jobBlocks(workflow)
+  const changes = blocks.find((block) => block.id === "changes").text
+  for (const [job, output] of Object.entries(PLANNED_SKIPS)) {
+    assert.match(
+      changes,
+      new RegExp(
+        `^      ${output}: \\$\\{\\{ steps\\.decide\\.outputs\\.${output} \\}\\}`,
+        "m",
+      ),
+    )
+    const block = blocks.find((candidate) => candidate.id === job).text
+    assert.ok(block.includes(`needs.changes.outputs.${output} != 'false'`), job)
   }
 })

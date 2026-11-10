@@ -108,9 +108,12 @@ test("local and CI aggregate the same named frontend and native checks", () => {
     workflow,
     /run: bash scripts\/check-sdk-domain-coverage\.sh\r?\n\s+timeout-minutes: \d+\r?\n/,
   )
-  assert.match(
-    workflow,
-    /cargo clippy -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-client-core -p nessa-device-client -p nessa-sdk -p nessa-timer -p nessa-vault --all-targets -- -D warnings/,
+  // Clippy lists the crates the change can reach (`scripts/ci-plan.mjs`), with
+  // the whole list as its fallback when the plan is missing.
+  assert.ok(
+    workflow.includes(
+      "cargo clippy ${{ needs.changes.outputs.rust_packages || '-p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-client-core -p nessa-device-client -p nessa-sdk -p nessa-timer -p nessa-vault' }} --all-targets -- -D warnings",
+    ),
   )
   // The database opener's privacy checks answer differently on each OS, so
   // they run in the matrix, as `pnpm check` runs them locally.
