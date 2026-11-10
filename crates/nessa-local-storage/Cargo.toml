@@ -21,3 +21,6 @@ windows-sys = { version = "0.61", features = ["Wdk_Foundation", "Wdk_Storage_Fil
 [dev-dependencies]
 tokio = { version = "1", default-features = false, features = ["rt", "rt-multi-thread", "sync", "time", "macros"] }
 tempfile = "3"
+
+[lints]
+workspace = true

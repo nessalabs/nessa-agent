@@ -27,3 +27,6 @@ uniffi = { version = "=0.32.2", default-features = false }
 zeroize = "=1.9.0"
 [dev-dependencies]
 tempfile = "3"
+
+[lints]
+workspace = true
