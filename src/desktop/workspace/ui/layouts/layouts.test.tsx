@@ -1345,17 +1345,21 @@ describe("a spare sidebar fold paints before the boxes, and the list keeps its m
         }
         await act(async () => frames.runFrame())
         // The boxes and the folded window land together. The list's measure
-        // is still the one it had.
+        // is still the one it had. The sidebar is hidden from assistive tech
+        // and parks (inert) once its slide has started (`parked.ts`).
         expect(sidebar()?.hasAttribute("data-spare-held")).toBe(false)
         expect(sidebar()?.hasAttribute("data-folding")).toBe(false)
         expect(position()).toBe("absolute")
-        expect(list()?.hasAttribute("inert")).toBe(true)
+        expect(list()?.getAttribute("aria-hidden")).toBe("true")
+        expect(list()?.hasAttribute("inert")).toBe(false)
         expect(sidebar()?.hasAttribute("data-list-held")).toBe(true)
         await act(async () => frames.runFrame())
         // Scene text returns on the frame after the boxes. The list's measure
-        // is still the one it had.
+        // is still the one it had. With no slide in a test DOM, the sidebar
+        // parks on this frame.
         expect(sidebar()?.hasAttribute("data-spare-held")).toBe(false)
         expect(list()?.hasAttribute("inert")).toBe(true)
+        expect(list()?.hasAttribute("data-parked")).toBe(true)
         expect(sidebar()?.hasAttribute("data-list-held")).toBe(true)
         await act(async () => frames.runFrame())
         expect(list()?.hasAttribute("inert")).toBe(true)
@@ -1500,6 +1504,15 @@ describe("a spare sidebar fold paints before the boxes, and the list keeps its m
       expect(host.querySelector(".workspace")?.getAttribute("data-sidebar")).toBe(
         "closed",
       )
+      // The fold waits for no frame. The one frame queued is the park's,
+      // after the fold's style has applied (`parked.ts`).
+      const aside = host.querySelector<HTMLElement>("#workspace-sidebar")
+      expect(aside?.getAttribute("aria-hidden")).toBe("true")
+      expect(aside?.hasAttribute("inert")).toBe(false)
+      expect(frames.pending()).toBe(1)
+      await act(async () => frames.runFrame())
+      expect(aside?.hasAttribute("inert")).toBe(true)
+      expect(aside?.hasAttribute("data-parked")).toBe(true)
       expect(frames.pending()).toBe(0)
       await act(async () => root.unmount())
     } finally {

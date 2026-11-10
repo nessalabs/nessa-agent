@@ -26,6 +26,7 @@ import "./source-list.css"
 import { tooltip } from "../../../ui/tooltip"
 import { OverviewRow } from "./overview-row"
 import { useRowFocusKept } from "../row-focus"
+import { useParkedAfterSlide } from "../../adapters/dom/parked"
 
 /**
  * The sidebar's source list: sections of channels on a glass pane, with the
@@ -53,6 +54,11 @@ export const SourceList = memo(function SourceList({
   const besideKey = useBesideKey()
   const peek = useSidebarPeek()
   const revealed = peek !== null && peek.shown && !peek.handingOff
+  // Folded, it is only there while revealed from the window's edge. It is
+  // out of reach once it has slid away (`parked.ts`).
+  const away = !open && !revealed
+  const asideRef = useRef<HTMLElement>(null)
+  const parked = useParkedAfterSlide(asideRef, away)
 
   // Arrow keys walk the tree's visible rows; right and left unfold and fold.
   const onTreeKeyDown = (event: ReactKeyboardEvent<HTMLElement>) => {
@@ -95,6 +101,7 @@ export const SourceList = memo(function SourceList({
 
   return (
     <aside
+      ref={asideRef}
       id="workspace-sidebar"
       className="workspace-sidebar"
       data-variant={variant}
@@ -102,9 +109,9 @@ export const SourceList = memo(function SourceList({
       data-flip="slide"
       data-flip-id="sidebar"
       aria-label="Sidebar"
-      // Folded, it is only there while revealed from the window's edge.
-      inert={!open && !revealed}
-      aria-hidden={(!open && !revealed) || undefined}
+      inert={parked}
+      data-parked={parked || undefined}
+      aria-hidden={away || undefined}
       {...(open ? {} : peek?.holders)}
     >
       <div className="workspace-sidebar-scroll">
