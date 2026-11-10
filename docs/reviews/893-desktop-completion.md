@@ -1,9 +1,10 @@
 # Issue 893 desktop completion evidence
 
 Current assembled-source/check-harness checkpoint:
-`3cb4eecdb524757253fe786152f8a89b54436d52`, integrating main
-`6c70aeb9c7be470bc30a6f15e4d5500f20a63389` unchanged.
-Desktop pairing runtime code last changed at
+`ea66af43aecc404e17b1c481ffcac568eec92649`, integrating main
+`a991ba4a7736867e8acfdb8154ba76c07e783305` unchanged.
+Phone cancellation and Gateway selected-control focus changed at
+`b2db90dd4`; the Gateway immutable-selection controller last changed at
 `491d9359234aa1218cdcb6d0fde19bfb3719e11f`.
 Behavioral/negative-control checkpoint before the layer-only move:
 `41cec9e2121cb420c67d8036334840c4832b903c`.
@@ -29,8 +30,8 @@ and placement wire/storage words are retained. The decision's internal
 provenance. The shared stress edits are disjoint: Gateway pairing and the exact
 Devices inventory coexist with upstream's await/fork/channel checks and its
 explicit local thread environment. The native
-gateway and MCP fixture build passes at this assembled checkpoint. The diagram
-body is unchanged; the reviewed desktop source checkpoint advances, while the
+gateway and MCP fixture build passed at prior checkpoint `3cb4eecd`. At that integration the diagram
+body was unchanged; the reviewed desktop source checkpoint advanced, while the
 native lifecycle and unrelated OwnerPhone checkpoints retain their own scope.
 
 The complete default development functional matrix at `88bc8b58` held
@@ -42,10 +43,10 @@ Gateway stress holds 10/10 default and 14/14 raised per layout, in both engines.
 The raised cohort uses gatewayPairings3, parallel6, turns4, followers4, rounds40
 and seed7. These are execution receipts for that source cut.
 
-Frontend, SDK and functional `run-all` sources are byte-identical between
-`88bc8b58` and this assembled checkpoint. Those browser observations remain
-evidence for the same frontend source; they do not establish native Rust
-behavior at the new main. Conversation stress and its fixture changed upstream
+Frontend, SDK and functional `run-all` sources were byte-identical between
+`88bc8b58` and assembled checkpoint `3cb4eecd`. Those historical browser
+observations do not qualify the subsequent phone cancellation or selected-control
+focus changes, or establish native Rust behavior at the new main. Conversation stress and its fixture changed upstream
 and require fresh integrated execution. Fresh native/browser integration, the separate
 development retained-app check, exact-configuration main controls and final-head
 CI are recorded on the PR's live evidence comment. Qualification remains open.
@@ -79,6 +80,122 @@ with two skips, and scoped format/lint checks pass. These controls close the two
 fixture inconsistencies. The complete matrix remains red on the broader gates
 recorded above. Issue #893 is not declared complete while qualification remains
 open; passing focused pairing checks does not waive those gates.
+
+## Follow-up cancellation and focus qualification
+
+Published head `8fc4301afed597d998d773453d9d9fed9e3501e3` was checked by
+[CI 42856360767](https://github.com/nessalabs/nessa-agent/actions/runs/42856360767).
+Its synthetic merge `f57060972f3299c6ed30f61a56c7c10c23ad2e29` has the same tree
+(`49373734419afc2507bf051c3eb7f70ef1768249`). macOS passed. The complete gate
+failed on browser stress and Windows conversation tests, including one bounded
+failed-job rerun; it is not a green qualification receipt.
+
+Attempt one reached phone linking step 059: Cancel left its modal open and did
+not reoffer Pair a device. A separate controlled reproduction establishes that
+a quiet poll can disable Cancel between pointerdown and pointerup. This is a
+real defect in the same code on main and the candidate; the CI screenshot alone
+does not prove that timing caused its failure. The correction lets only Cancel
+supersede a quiet poll, retains the captured invitation identity, and rejects old
+results through the existing sequence owner. Initial/reconciliation reads and
+mutations remain protected. Keyed DOM controls prevent a gesture begun on A from
+cancelling a later invitation B. No credential, enrollment, grant or consent rule
+changes.
+
+Attempt two stopped earlier at native gateway Chromium/sidebar: “a status poll
+stole focus”. A held, exact status response reproduces native disabling of the
+selected control. ARIA unavailable state and explicit activation guards preserve
+focus while the existing operation latch keeps serialization. Each native case
+now owns its disposable grantor stack, so a failed case cannot leave an invitation
+that invalidates later cases. The true credential → Integration revoke → false
+credential sequence still reuses the same peer key within each case to test stale
+attribution cleanup. Fixture response holds preserve socket/request/invitation
+identity and default transport forwarding.
+
+The phone fixture's default read-only class is DeviceRead
+(`gateway-conversation-read`), not PeerRead (`peer-gateway-conversation-read`).
+Created phone codes explicitly request OwnerPhone and use its existing
+`gateway-owner-conversation-read-write` class. Earlier scratch probe metadata
+labelled the default class “scriptedPeerRead”; that label was incorrect. Those
+probes do not prove PeerRead or OwnerPhone semantics. The new gesture regressions
+exercise actual OwnerPhone requests and preserve their class on cancellation.
+
+The correction's focused unit suites hold 117/117 before integration; upstream
+changes no TypeScript source in those suites. Eleven individual unit mutations
+all fail their expected regressions, then restore exact file hashes. Restoring
+the row's old poll-disabled binding fails only the new row gesture case in both
+engines (22/24 hold). Removing the row's invitation key fails the retarget case in
+both engines (22/24 hold). Reintroducing native disabled on Gateway Cancel fails
+all four engine/layout checks with `nativeDisabled:true`; Chromium also reports
+`focused:false`. All three browser mutations restore the exact intended source.
+A restored development phone suite holds 24/24, and the previously failing native
+Chromium/sidebar case holds 1/1 with an exact held response. These focused receipts
+precede the Rust clock/type integration; the final integrated production and
+stress results belong to the PR's live qualification record.
+
+The integrated native gateway and MCP build at `ea66af43` passes in 126 seconds,
+with one long constant-evaluation warning in the existing protocol macro. Both
+owning desktop pages have been fully reconciled with committed source; all six
+diagrams render and the documentation validator reports 180 pages, zero issues.
+The historical TLA receipt is retained unchanged and does not cover quiet-poll
+cancellation or DOM identity. Independent implementation review reports no
+findings in cancellation target/sequence ordering, result ownership, reconnect,
+Gateway activation guards or fixture consent-class relationships.
+
+Both Windows attempts passed 1,454 tests and failed one, with six ignored. The
+first failure was `a_fetch_timed_out_or_cancelled_is_recorded_ended_timed_out_or_cancelled`;
+the rerun passed that case and failed the adjacent
+`a_fetch_whose_store_stays_busy_still_ends_on_its_wait_or_its_stop`. Each failure
+is a task-join watchdog expiry, with different admission and timing evidence:
+
+| Test | Evidence before cancellation | Join bound |
+| --- | --- | --- |
+| `a_fetch_timed_out_or_cancelled_is_recorded_ended_timed_out_or_cancelled` | Host observes the exact call; frozen-clock finish succeeds | Lesser of remaining wall watchdog and five seconds; remaining budget was not logged |
+| `a_fetch_whose_store_stays_busy_still_ends_on_its_wait_or_its_stop` | Twenty milliseconds elapse before stop; no exact admission handshake | Fixed five seconds, without FrozenFetchTime |
+
+Passing main controls do not establish the cause of these intermittent failures. Main
+`a991ba4a7` leaves both test bodies, cancellation selection, fetch accounting,
+`end_fetch`, SessionManager and storage unchanged; its new sleep wrapper directly
+returns the same Tokio sleep.
+
+The unresolved boundary is cancellation versus durable final FetchEnded saving.
+Save-entry observation is not commit evidence. The next actionable investigation
+is failure-only per-request stage timestamps and save-entry/commit snapshots,
+comparing isolated Windows execution with the partition while retaining every
+assertion and deadline. [PR #1303](https://github.com/nessalabs/nessa-agent/pull/1303)
+owns adjacent publish/fetch wait configuration; this UI follow-up does not change
+that owner's Rust paths. No further blind failed-job rerun is claimed.
+
+The final integrated local checks at `ea66af43` pass: frontend 456 files /
+5,835 tests, 44 webhook tests and production build; phone production 24/24;
+native Gateway production 4/4; phone and Gateway conversation stress each hold
+10/10 default and 14/14 raised per layout in Chromium and WebKit. Raised runs use
+three repetitions, parallel6, turns4, followers4, rounds40 and seed7. The complete
+production scripted aggregate also passes its available families, including a
+second native Gateway 4/4; the MCP sandbox family is explicitly dev-only and was
+not run in that mode. The [machine-readable local receipt](../../verification/desktop/evidence/gateway-pairing/qualification-ea66.json)
+and [aggregate summary](../../verification/desktop/evidence/gateway-pairing/scripted-prod-summary-ea66.md)
+retain the commands and boundaries. They do not make final remote CI green.
+
+The long multi-command local session ended without a verdict during the raised
+sidebar phone run; no result file or live process remained. Its cause is unknown.
+The same raised case subsequently passes 14/14 in an isolated session under the
+unchanged bounds. The interrupted attempt is retained separately and is not
+counted as a test failure or a completed pass.
+
+Preceding main `bc8cb5109` [CI 42861854503](https://github.com/nessalabs/nessa-agent/actions/runs/42861854503)
+passes browser stress and both specific fetch-cancellation cases. Its Windows
+conversation partition instead fails
+`parent_stop_default_override_grandchildren_and_unrelated_execution` with
+Retirement Deadline (1,454 passed, one failed, six ignored). This is a distinct
+failure, not a reproduction or diagnosis of the candidate's fetch timeouts.
+The later main `a991ba4a7` run had no assigned jobs at observation. Historical
+broad functional failures and all 36 selected main control groups are preserved
+in [the functional receipt](../../verification/desktop/evidence/gateway-pairing/historical-functional-88bc8b58.json).
+That is not a fresh complete matrix for `ea66af43`.
+
+The separately attempted current-main full stress control was cancelled before
+its target linking step and has no completed verdict. It has not been restarted.
+The denied issue-description update has not been retried.
 
 ## Merged prerequisite and ownership
 
@@ -217,8 +334,8 @@ to the architecture rule was introduced. The checker and all 108 architecture
 tests pass after the correction. Placement review independently passed 54 focused and 28 harness tests and the
 architecture checker, with one P3 about raw verification selectors. `92ef76a3`
 centralizes those same-output strings, retaining hidden-checkbox coverage. Fresh
-closure review found no issue and closed that P3. No product code changed after
-the full frontend qualification. Broad browser/stress and exact-head CI remain
+closure review found no issue and closed that P3. Between that full frontend
+qualification and `92ef76a3`, no product code changed. Broad browser/stress and exact-head CI remain
 the PR’s live qualification record.
 
 The design/order table was updated before each structural change. The final

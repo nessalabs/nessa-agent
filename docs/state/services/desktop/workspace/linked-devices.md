@@ -6,10 +6,11 @@ status: implemented
 summary: Settings shows the gateway's pairing state, approves the exact
   displayed device key, and rereads after uncertain changes.
 parent: desktop-workspace
-sourceRevision: "b14bdf40fc17117dba10024a3a9bd190d28cc990"
+sourceRevision: "ea66af43aecc404e17b1c481ffcac568eec92649"
 sources:
   - src/desktop/settings/model/linked-devices.ts
   - src/desktop/settings/model/linked-devices.test.ts
+  - src/desktop/settings/model/linked-devices-cancel.test.ts
   - src/desktop/settings/ui/linked-devices-tab.tsx
   - src/desktop/settings/ui/linked-devices-tab.test.tsx
   - src/desktop/settings/ui/settings-layout.tsx
@@ -63,7 +64,7 @@ modelCheck:
 ---
 # Pair, approve and revoke a linked device
 
-Settings → Connections → Linked devices shows the gateway's current linking state. Pair a device asks for a short-lived code; a claimed request shows a fingerprint for approval or denial. A paired owner phone has full conversation access; a read-only linked device uses separate conversation shares.
+Settings → Connections → Linked devices shows the gateway's current linking state. Pair a device asks for a short-lived code; a claimed request shows a fingerprint for approval or denial. A paired owner phone has full conversation access. A PeerRead gateway requires separate conversation shares; a same-person link adds no capability.
 
 These charts follow the desktop reducer and its displayed invitation/device evidence. The gateway remains the authorization and physical enrollment owner. A sample window without a gateway offers no pairing action.
 
@@ -78,6 +79,8 @@ stateDiagram-v2
     state Ready {
         [*] --> Idle
         Idle --> Acting: Action [connected and no request pending]
+        Idle --> Reading: Quiet poll
+        Reading --> Acting: Cancel [quiet poll and captured invitation still current]
         Acting --> Reading: Current response / retain action notice
         Reading --> Idle: Current read applies
     }
@@ -85,13 +88,15 @@ stateDiagram-v2
     Unreachable --> Checking: Reconnected
     Off --> Switching: Enable linking / request gateway change
     Ready --> Switching: Disable linking / request gateway change
-    Switching --> Checking: Gateway drops and returns / read new process
+    Switching --> Checking: Gateway drops and returns / read after reconnect
     Switching --> Unavailable: Wait expires / show saved or unconfirmed outcome
 ```
 
 ## Connection and request ownership
 
-The reducer owns one request at a time and gives it a sequence number. Only a reply matching the pending request can apply. Polling pauses for pending requests, revoke confirmation or a linking restart. A poll does not erase an action's notice; an initial failed read can recover on a later poll.
+The reducer owns one current result and gives its request a sequence number. Only a reply matching that pending request can apply. Cancel may supersede a quiet poll while its read still physically runs. The old poll's reply cannot apply before or after cancellation and its reconciliation read. Other actions wait for the pending request; Cancel also waits for mutation-recovery reads, a linking restart or revoke confirmation. A poll does not erase an action's notice; an initial failed read can recover on a later poll.
+
+Cancel carries the invitation identity displayed by the control. The reducer accepts it only while that invitation is still held. If a poll removes invitation A or replaces it with B before cancellation is admitted, the old A command is ignored. Cancel controls also change DOM identity with the invitation, so a gesture begun on A cannot be rebound to B. The adapter sends the captured identity to the gateway, which remains the cancellation authority.
 
 Turning native linking on or off can restart the gateway. The switch holds the requested value through that restart and waits for a read after the connection has dropped. A lost acknowledgement does not prove the setting was unsaved. The restart deadline supplies a stalled/unconfirmed notice, not proof of process termination. UI unmount removes connection observers and timers; it does not undo an admitted gateway command.
 
@@ -134,7 +139,7 @@ stateDiagram-v2
     Hidden --> Offered: Cancel confirmed from the row
     Shown --> Shown: New code / cancel then create
     Shown --> Spent: Injected clock passes the deadline / orb withdrawn
-    Spent --> Offered: Expiry recorded and read
+    Spent --> Offered: Current read omits invitation
 ```
 
 ## The code's modal
@@ -143,9 +148,9 @@ The reducer owns the code's state (open, used, cancelled, expired). Whether the 
 
 The orb is drawn only for an open code whose deadline the window's injected clock (`useNow`, given by composition) has not passed, read again each second; the UI kit's countdown also reports expiry, which the reducer asks the gateway to record. The modal portals into Settings' own layer so it draws above the fixed Settings panel. The pairing screen handles the dialog's close-focus event and returns focus to the row's enabled control, or waits on the row while a read is out. That destination also holds when a pointer click left focus on an unrelated settings control before the dialog opened.
 
-The active list is built from current credential metadata, excluding the session credential and revoked credentials. `linkedDeviceOf` recognizes a read-only paired device or an owner phone with the ordered read/write/server-read grants; the row labels the latter as full access. The current representation has no device marker, so a manually issued credential with the same grants can appear as a linked device. Creating a code here requests owner-phone enrollment; approval still names the displayed device key.
+The active list is built from current credential metadata, excluding the session credential and revoked credentials. `linkedDeviceOf` recognizes an exact grant-action shape: read alone, or read/write/server-read in the issued order; the row labels the latter as full access. The current metadata has no device marker or consent class, so it does not establish whether a row is a PeerRead gateway, a legacy DeviceRead credential, or a manually issued credential with the same actions. DeviceRead names the owner; PeerRead names the gateway principal. The gateway decides admission and share eligibility from its authoritative records. Creating a code here requests owner-phone enrollment; approval still names the displayed device key.
 
-The close-focus sentence and the active-list paragraph are the delta after checkpoint `b14bdf40`. The charts and the rest of this page were not re-audited with that delta.
+Web-tunnel controls share the adapter and Settings surface but have a separate [connectivity owner](../../gateway/tunnel-connectivity.md). Their lifecycle is outside these charts.
 
 ```mermaid
 stateDiagram-v2
@@ -169,7 +174,7 @@ Revocation takes effect at later server admission/read boundaries; the UI acknow
 
 ## Evidence and browse
 
-The [L1–L28 ordering table](../../../../design/auth/device-pairing.md#desktop-linked-devices) maps the reducer, adapter and UI regressions. [Reducer tests](../../../../../src/desktop/settings/model/linked-devices.test.ts) cover sequence refusal, unavailable controls and uncertain outcomes. [UI tests](../../../../../src/desktop/settings/ui/linked-devices-tab.test.tsx) check displayed fingerprint, revoke confirmation, the modal's close and reopen, focus return, and the orb leaving at the injected clock's deadline. This source review does not rerun native OPAQUE/TLS enrollment or establish physical receiver cleanup.
+The [L1–L33 ordering table](../../../../design/auth/device-pairing.md#desktop-linked-devices) maps the reducer, adapter and UI regressions. [Reducer tests](../../../../../src/desktop/settings/model/linked-devices.test.ts) cover sequence refusal, unavailable controls and uncertain outcomes. [Cancellation ordering tests](../../../../../src/desktop/settings/model/linked-devices-cancel.test.ts) cover quiet-poll supersession, late replies, protected recovery reads and stale captured invitation identities. [UI tests](../../../../../src/desktop/settings/ui/linked-devices-tab.test.tsx) check displayed fingerprint, revoke confirmation, the modal's close and reopen, focus return, and the orb leaving at the injected clock's deadline. This source review does not rerun native OPAQUE/TLS enrollment or establish physical receiver cleanup.
 
 ```mermaid
 flowchart LR
@@ -179,7 +184,7 @@ flowchart LR
 
 ## Bounded rule model
 
-Two displayed keys cover fingerprint-gated approval of the captured key. A linking restart settles only after the old connection dropped. Invitation expiry, modal secret retention, cancel-before-refresh, activation retry and credential revocation are separate gateway/UI contracts and not checked by this abstraction. The model checks design safety, not the implementation. It asserts no liveness and abstracts transport timing into nondeterministic completion order. Regression sources are evidence of intended behavior; this documentation change does not claim their execution.
+Two displayed keys cover fingerprint-gated approval of the captured key. A linking restart settles only after the old connection dropped. Invitation expiry, modal secret retention, cancel-before-refresh, activation retry and credential revocation are separate gateway/UI contracts and not checked by this abstraction. Quiet-poll supersession, cancellation sequence fencing, captured Cancel invitation identities and keyed DOM controls are also outside the model. The model checks design safety, not the implementation. It asserts no liveness and abstracts transport timing into nondeterministic completion order. Regression sources are evidence of intended behavior; this documentation change does not claim their execution.
 
 ## Model coverage
 
@@ -187,6 +192,6 @@ Disposition: direct model. The bounded rule model section names the modeled owne
 
 Excluded: All exclusions stated in the owning Bounded rule model section remain outside verification.
 
-Source review scope: owner entry points and relevant regression declarations were inventoried against frozen source `77a6b620af4d94b234294f6d273fd74b3dfb44c7`. Existing source checkpoints are retained where this was a partial review. A model result establishes bounded design safety only. Browser appearance and interaction were not checked.
+Source review scope: the complete page was reconciled with the current reducer, UI, adapter, metadata classifier, Settings layer and regression declarations, including source changes since `b14bdf40`. The source checkpoint includes the quiet-poll cancellation, captured-target and DOM-identity corrections and their integration with main `a991ba4a7`. This source review does not refresh the historical model source mapping, model files or checker receipt. A model result establishes bounded design safety only. All six diagrams across the two reviewed desktop pages rendered in Chromium; no model checker was run for this review.
 
 The gateway [pairing owner](../../gateway/device-pairing.md) separately models approval versus activation with current receiver proof. The desktop key-display/restart model does not certify activation or credential cleanup.

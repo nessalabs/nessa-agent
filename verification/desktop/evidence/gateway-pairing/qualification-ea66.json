@@ -1,0 +1,579 @@
+{
+  "sourceRevision": "ea66af43aecc404e17b1c481ffcac568eec92649",
+  "integratedMain": "a991ba4a7736867e8acfdb8154ba76c07e783305",
+  "executionWorkingTreeChanges": "Documentation only; runtime, tests and harness source match sourceRevision.",
+  "sha256": {
+    "src/desktop/settings/model/linked-devices.ts": "6b608e57ff159f75510aa76b9d153889135d50dfc7e3b131fc4982615a13de6c",
+    "src/desktop/settings/model/linked-devices-cancel.test.ts": "6a84cd55277f68b58e42a8bd7c3076ddb14c56b3cd5d96d73cdf95a62297a8f5",
+    "src/desktop/settings/ui/linked-devices-tab.tsx": "88a5da9dbf3715f83d2f30683aaa05125cf6699fdff496f4d2b6a5e27cacc0f3",
+    "src/desktop/devices/ui/add-gateway.tsx": "6275c0b6b3a7989a85f2e0869febfb2e0c4e739578d18a7bc8885dafb73b6bfd",
+    "verification/desktop/scripts/linked-devices.mjs": "86b0a4aecd9ebb9cb9723112e4266402fdbb8652dd1fcc22838121631d589892",
+    "verification/desktop/scripts/gateway-pairing.mjs": "0fb01949288c04627d0791aa9cf66d3774b39fc0421bb9b165bce99eb00d889d"
+  },
+  "frontend": {
+    "command": "pnpm frontend:check",
+    "hostOwnership": true,
+    "exit": 0,
+    "files": 456,
+    "tests": 5835,
+    "webhookTests": 44,
+    "productionBuild": "passed",
+    "earlierSandboxFailure": "2 private-file ownership tests; no guard changed"
+  },
+  "nativeBuild": {
+    "command": "cargo build -p nessa-server -p nessa-mcp",
+    "exit": 0,
+    "seconds": 126,
+    "warnings": ["long constant evaluation in existing protocol macro"],
+    "binarySha256": "211a779cdebbc6ebbe198e350c56a82619c6ebabbd22baa37323b9ffb2b9d4f5"
+  },
+  "unitMutationProbes": [
+    {
+      "name": "quiet-poll-admission",
+      "exit": 1,
+      "seconds": 1.3,
+      "restored": true,
+      "log": "/tmp/893-probe-quiet-poll-admission.log",
+      "original": "6b608e57ff159f75510aa76b9d153889135d50dfc7e3b131fc4982615a13de6c"
+    },
+    {
+      "name": "recovery-read-held",
+      "exit": 1,
+      "seconds": 1.1,
+      "restored": true,
+      "log": "/tmp/893-probe-recovery-read-held.log",
+      "original": "6b608e57ff159f75510aa76b9d153889135d50dfc7e3b131fc4982615a13de6c"
+    },
+    {
+      "name": "connection-held",
+      "exit": 1,
+      "seconds": 1.1,
+      "restored": true,
+      "log": "/tmp/893-probe-connection-held.log",
+      "original": "6b608e57ff159f75510aa76b9d153889135d50dfc7e3b131fc4982615a13de6c"
+    },
+    {
+      "name": "linking-held",
+      "exit": 1,
+      "seconds": 1.1,
+      "restored": true,
+      "log": "/tmp/893-probe-linking-held.log",
+      "original": "6b608e57ff159f75510aa76b9d153889135d50dfc7e3b131fc4982615a13de6c"
+    },
+    {
+      "name": "restart-held",
+      "exit": 1,
+      "seconds": 1.1,
+      "restored": true,
+      "log": "/tmp/893-probe-restart-held.log",
+      "original": "6b608e57ff159f75510aa76b9d153889135d50dfc7e3b131fc4982615a13de6c"
+    },
+    {
+      "name": "revoke-confirmation-held",
+      "exit": 1,
+      "seconds": 1.1,
+      "restored": true,
+      "log": "/tmp/893-probe-revoke-confirmation-held.log",
+      "original": "6b608e57ff159f75510aa76b9d153889135d50dfc7e3b131fc4982615a13de6c"
+    },
+    {
+      "name": "invitation-held",
+      "exit": 1,
+      "seconds": 1.1,
+      "restored": true,
+      "log": "/tmp/893-probe-invitation-held.log",
+      "original": "6b608e57ff159f75510aa76b9d153889135d50dfc7e3b131fc4982615a13de6c"
+    },
+    {
+      "name": "target-id-fence",
+      "exit": 1,
+      "seconds": 1.1,
+      "restored": true,
+      "log": "/tmp/893-probe-target-id-fence.log",
+      "original": "6b608e57ff159f75510aa76b9d153889135d50dfc7e3b131fc4982615a13de6c"
+    },
+    {
+      "name": "sequence-fence",
+      "exit": 1,
+      "seconds": 1.1,
+      "restored": true,
+      "log": "/tmp/893-probe-sequence-fence.log",
+      "original": "6b608e57ff159f75510aa76b9d153889135d50dfc7e3b131fc4982615a13de6c"
+    },
+    {
+      "name": "modal-poll-button",
+      "exit": 1,
+      "seconds": 5.3,
+      "restored": true,
+      "log": "/tmp/893-probe-modal-poll-button.log",
+      "original": "88a5da9dbf3715f83d2f30683aaa05125cf6699fdff496f4d2b6a5e27cacc0f3"
+    },
+    {
+      "name": "modal-target-key",
+      "exit": 1,
+      "seconds": 5.0,
+      "restored": true,
+      "log": "/tmp/893-probe-modal-target-key.log",
+      "original": "88a5da9dbf3715f83d2f30683aaa05125cf6699fdff496f4d2b6a5e27cacc0f3"
+    }
+  ],
+  "browserMutationProbes": [
+    {
+      "name": "row-poll-admission",
+      "exit": 1,
+      "seconds": 110.3,
+      "restored": true,
+      "sha256": "88a5da9dbf3715f83d2f30683aaa05125cf6699fdff496f4d2b6a5e27cacc0f3"
+    },
+    {
+      "name": "row-target-key",
+      "exit": 1,
+      "seconds": 107.8,
+      "restored": true,
+      "sha256": "88a5da9dbf3715f83d2f30683aaa05125cf6699fdff496f4d2b6a5e27cacc0f3"
+    },
+    {
+      "name": "gateway-native-disabled",
+      "exit": 1,
+      "seconds": 46.3,
+      "restored": true,
+      "sha256": "6275c0b6b3a7989a85f2e0869febfb2e0c4e739578d18a7bc8885dafb73b6bfd"
+    }
+  ],
+  "browsers": [
+    {
+      "name": "phone-prod",
+      "exit": 0,
+      "seconds": 96.6,
+      "source": "ea66af43aecc404e17b1c481ffcac568eec92649",
+      "command": [
+        "python3",
+        "/tmp/893-test-init.py",
+        "node",
+        "verification/desktop/scripts/linked-devices.mjs",
+        "--channel",
+        "bundled",
+        "--out",
+        "/tmp/893-ea66-phone-prod.json",
+        "--mode",
+        "prod",
+        "--engine",
+        "chromium,webkit"
+      ],
+      "overall": true,
+      "cases": 24,
+      "passed": 24
+    },
+    {
+      "name": "gateway-prod",
+      "exit": 0,
+      "seconds": 220.4,
+      "source": "ea66af43aecc404e17b1c481ffcac568eec92649",
+      "command": [
+        "python3",
+        "/tmp/893-test-init.py",
+        "node",
+        "verification/desktop/scripts/gateway-pairing.mjs",
+        "--channel",
+        "bundled",
+        "--out",
+        "/tmp/893-ea66-gateway-prod.json",
+        "--mode",
+        "prod",
+        "--engine",
+        "chromium,webkit",
+        "--layout",
+        "columns,sidebar",
+        "--evidence",
+        "/tmp/893-ea66-gateway-shots"
+      ],
+      "overall": true,
+      "cases": 4,
+      "passed": 4,
+      "focus": [
+        {
+          "engine": "chromium",
+          "layout": "columns",
+          "heldStatusFocus": {
+            "nativeDisabled": false,
+            "unavailable": true,
+            "focused": true
+          },
+          "pollFocusLosses": 0,
+          "pageErrors": 0,
+          "stalePersonLinks": 0
+        },
+        {
+          "engine": "chromium",
+          "layout": "sidebar",
+          "heldStatusFocus": {
+            "nativeDisabled": false,
+            "unavailable": true,
+            "focused": true
+          },
+          "pollFocusLosses": 0,
+          "pageErrors": 0,
+          "stalePersonLinks": 0
+        },
+        {
+          "engine": "webkit",
+          "layout": "columns",
+          "heldStatusFocus": {
+            "nativeDisabled": false,
+            "unavailable": true,
+            "focused": true
+          },
+          "pollFocusLosses": 0,
+          "pageErrors": 0,
+          "stalePersonLinks": 0
+        },
+        {
+          "engine": "webkit",
+          "layout": "sidebar",
+          "heldStatusFocus": {
+            "nativeDisabled": false,
+            "unavailable": true,
+            "focused": true
+          },
+          "pollFocusLosses": 0,
+          "pageErrors": 0,
+          "stalePersonLinks": 0
+        }
+      ]
+    },
+    {
+      "name": "phone-stress-columns-default",
+      "exit": 0,
+      "seconds": 64.7,
+      "source": "ea66af43aecc404e17b1c481ffcac568eec92649",
+      "command": [
+        "python3",
+        "/tmp/893-test-init.py",
+        "node",
+        "verification/desktop/scripts/conversation-stress.mjs",
+        "--channel",
+        "bundled",
+        "--out",
+        "/tmp/893-ea66-phone-stress-columns-default.json",
+        "--mode",
+        "dev",
+        "--engine",
+        "chromium,webkit",
+        "--layout",
+        "columns",
+        "--only",
+        "linking"
+      ],
+      "overall": true,
+      "cases": 10,
+      "passed": 10
+    },
+    {
+      "name": "phone-stress-columns-raised",
+      "exit": 0,
+      "seconds": 163.0,
+      "source": "ea66af43aecc404e17b1c481ffcac568eec92649",
+      "command": [
+        "python3",
+        "/tmp/893-test-init.py",
+        "node",
+        "verification/desktop/scripts/conversation-stress.mjs",
+        "--channel",
+        "bundled",
+        "--out",
+        "/tmp/893-ea66-phone-stress-columns-raised.json",
+        "--mode",
+        "dev",
+        "--engine",
+        "chromium,webkit",
+        "--layout",
+        "columns",
+        "--only",
+        "linking",
+        "--linkings",
+        "3",
+        "--parallel",
+        "6",
+        "--turns",
+        "4",
+        "--followers",
+        "4",
+        "--rounds",
+        "40",
+        "--seed",
+        "7"
+      ],
+      "overall": true,
+      "cases": 14,
+      "passed": 14
+    },
+    {
+      "name": "phone-stress-sidebar-default",
+      "exit": 0,
+      "seconds": 64.0,
+      "source": "ea66af43aecc404e17b1c481ffcac568eec92649",
+      "command": [
+        "python3",
+        "/tmp/893-test-init.py",
+        "node",
+        "verification/desktop/scripts/conversation-stress.mjs",
+        "--channel",
+        "bundled",
+        "--out",
+        "/tmp/893-ea66-phone-stress-sidebar-default.json",
+        "--mode",
+        "dev",
+        "--engine",
+        "chromium,webkit",
+        "--layout",
+        "sidebar",
+        "--only",
+        "linking"
+      ],
+      "overall": true,
+      "cases": 10,
+      "passed": 10
+    },
+    {
+      "name": "gateway-stress-columns-default",
+      "exit": 0,
+      "seconds": 57.0,
+      "source": "ea66af43aecc404e17b1c481ffcac568eec92649",
+      "command": [
+        "python3",
+        "/tmp/893-test-init.py",
+        "node",
+        "verification/desktop/scripts/conversation-stress.mjs",
+        "--mode",
+        "dev",
+        "--channel",
+        "bundled",
+        "--engine",
+        "chromium,webkit",
+        "--layout",
+        "columns",
+        "--only",
+        "gatewayPairing",
+        "--out",
+        "/tmp/893-ea66-gateway-stress-columns-default.json"
+      ],
+      "overall": true,
+      "cases": 10,
+      "passed": 10
+    },
+    {
+      "name": "gateway-stress-columns-raised",
+      "exit": 0,
+      "seconds": 145.1,
+      "source": "ea66af43aecc404e17b1c481ffcac568eec92649",
+      "command": [
+        "python3",
+        "/tmp/893-test-init.py",
+        "node",
+        "verification/desktop/scripts/conversation-stress.mjs",
+        "--mode",
+        "dev",
+        "--channel",
+        "bundled",
+        "--engine",
+        "chromium,webkit",
+        "--layout",
+        "columns",
+        "--only",
+        "gatewayPairing",
+        "--out",
+        "/tmp/893-ea66-gateway-stress-columns-raised.json",
+        "--gatewayPairings",
+        "3",
+        "--parallel",
+        "6",
+        "--turns",
+        "4",
+        "--followers",
+        "4",
+        "--rounds",
+        "40",
+        "--seed",
+        "7"
+      ],
+      "overall": true,
+      "cases": 14,
+      "passed": 14
+    },
+    {
+      "name": "gateway-stress-sidebar-default",
+      "exit": 0,
+      "seconds": 57.3,
+      "source": "ea66af43aecc404e17b1c481ffcac568eec92649",
+      "command": [
+        "python3",
+        "/tmp/893-test-init.py",
+        "node",
+        "verification/desktop/scripts/conversation-stress.mjs",
+        "--mode",
+        "dev",
+        "--channel",
+        "bundled",
+        "--engine",
+        "chromium,webkit",
+        "--layout",
+        "sidebar",
+        "--only",
+        "gatewayPairing",
+        "--out",
+        "/tmp/893-ea66-gateway-stress-sidebar-default.json"
+      ],
+      "overall": true,
+      "cases": 10,
+      "passed": 10
+    },
+    {
+      "name": "gateway-stress-sidebar-raised",
+      "exit": 0,
+      "seconds": 146.5,
+      "source": "ea66af43aecc404e17b1c481ffcac568eec92649",
+      "command": [
+        "python3",
+        "/tmp/893-test-init.py",
+        "node",
+        "verification/desktop/scripts/conversation-stress.mjs",
+        "--mode",
+        "dev",
+        "--channel",
+        "bundled",
+        "--engine",
+        "chromium,webkit",
+        "--layout",
+        "sidebar",
+        "--only",
+        "gatewayPairing",
+        "--out",
+        "/tmp/893-ea66-gateway-stress-sidebar-raised.json",
+        "--gatewayPairings",
+        "3",
+        "--parallel",
+        "6",
+        "--turns",
+        "4",
+        "--followers",
+        "4",
+        "--rounds",
+        "40",
+        "--seed",
+        "7"
+      ],
+      "overall": true,
+      "cases": 14,
+      "passed": 14
+    },
+    {
+      "name": "phone-stress-sidebar-raised-isolated",
+      "exit": 0,
+      "seconds": 169.9,
+      "source": "ea66af43aecc404e17b1c481ffcac568eec92649",
+      "command": [
+        "node",
+        "verification/desktop/scripts/conversation-stress.mjs",
+        "--mode",
+        "dev",
+        "--channel",
+        "bundled",
+        "--engine",
+        "chromium,webkit",
+        "--layout",
+        "sidebar",
+        "--only",
+        "linking",
+        "--linkings",
+        "3",
+        "--parallel",
+        "6",
+        "--turns",
+        "4",
+        "--followers",
+        "4",
+        "--rounds",
+        "40",
+        "--seed",
+        "7"
+      ],
+      "priorAttempt": "Long multi-command session ended without a verdict; no receipt and no live process. Cause unknown; incomplete attempt retained separately.",
+      "overall": true,
+      "cases": 14,
+      "passed": 14
+    }
+  ],
+  "documentation": {
+    "documents": 180,
+    "issues": 0,
+    "renderedDiagrams": 6,
+    "modelCheck": "historical unchanged; new cancellation/DOM behavior excluded"
+  },
+  "priorCI": {
+    "head": "8fc4301afed597d998d773453d9d9fed9e3501e3",
+    "run": 42856360767,
+    "verdict": "failure",
+    "macOS": "passed",
+    "attempt1Failures": [
+      "phone linking step059",
+      "Windows timed-out-or-cancelled fetch join"
+    ],
+    "attempt2Failures": [
+      "gateway Chromium/sidebar polling focus",
+      "Windows busy-store fetch join"
+    ]
+  },
+  "precedingMainCI": {
+    "head": "bc8cb5109f09940e92536ec9151850fa507e1bc6",
+    "run": 42861854503,
+    "windowsJob": 130005205203,
+    "bothFetchTests": "passed",
+    "otherFailure": "parent_stop_default_override_grandchildren_and_unrelated_execution: Retirement Deadline",
+    "browserStress": "passed",
+    "notFailureRateComparison": true
+  },
+  "unresolved": [
+    "Windows cancellation root cause requires stage and durable-save diagnostics under unchanged budgets",
+    "New full development functional matrix not run; historical broad gate red",
+    "Final remote-head CI not yet observed"
+  ],
+  "cancelledControl": "Cancelled before target step; not restarted, no completed verdict",
+  "issueDescriptionUpdate": "Denied earlier; not retried",
+  "scriptedAggregate": {
+    "verdict": "pass",
+    "checks": [
+      {
+        "check": "parent-stop",
+        "ok": true,
+        "cases": 4,
+        "passed": 4
+      },
+      {
+        "check": "scripted-scenarios",
+        "ok": true,
+        "cases": 8,
+        "passed": 8
+      },
+      {
+        "check": "gateway-pairing",
+        "ok": true,
+        "cases": 4,
+        "passed": 4
+      },
+      {
+        "check": "gateway-window",
+        "ok": true,
+        "cases": 11,
+        "passed": 11
+      },
+      {
+        "check": "resize-observers",
+        "ok": true,
+        "cases": 4,
+        "passed": 4
+      }
+    ],
+    "mcpSandbox": "not run: dev server only",
+    "summary": "/tmp/893-ea66-scripted/pr-summary.md"
+  }
+}
