@@ -889,6 +889,48 @@ pub fn accepted_tree_matches(
     seal_matches(&journal, &loaded, &deferred)
 }
 
+/// Whether a deferred session already on disk may be copied into the serving store.
+///
+/// An accepted open of a file that is already there requires a publication the
+/// audit recorded as available, and a size and digest that match the deferred
+/// line. A filename is not that check. A file without them stays out of the
+/// serving database, including one whose publication was interrupted.
+pub fn deferred_session_is_servable(
+    live: &Path,
+    audit: &dyn RestoreAudit,
+    layout: &dyn QuarantineLayout,
+    conversation_id: &str,
+) -> Result<bool, RestoreFault> {
+    let anchored = layout.anchor(live)?;
+    let loaded = layout.load(&anchored)?;
+    let journal = read_journal(&loaded.journal)?;
+    let lines = deferred_lines(layout, &anchored, &journal)?;
+    let Some(expected) = lines
+        .iter()
+        .find(|line| line.conversation_id == conversation_id)
+    else {
+        return Ok(false);
+    };
+    let relative = deferred_session_name(conversation_id)?;
+    if !layout.exists_relative(&anchored, &relative)? {
+        return Ok(false);
+    }
+    let Some(publication) = layout.publication_relative(&anchored, &relative)? else {
+        return Ok(false);
+    };
+    if !audit
+        .available(conversation_id, &publication)
+        .map_err(|_| RestoreFault::Audit)?
+    {
+        return Ok(false);
+    }
+    let cut = match layout.session_cut_relative(&anchored, &relative, conversation_id) {
+        Ok(cut) => cut,
+        Err(_) => return Ok(false),
+    };
+    Ok(cut.size == expected.size && cut.digest == expected.digest)
+}
+
 fn deferred_lines(
     layout: &dyn QuarantineLayout,
     root: &AnchoredRoot,

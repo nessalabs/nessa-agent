@@ -11,7 +11,7 @@ use nessa_local_storage::create_directory;
 
 use super::backup_output::print;
 use super::serving_restore::{
-    install_serving_stores, merge_published_session, namespace_is_restore_root,
+    install_serving_stores_audited, merge_published_session, namespace_is_restore_root,
     remove_imported_stream, restore_install_matches, serving_conversation_is_deleted,
     serving_has_stream,
 };
@@ -521,7 +521,7 @@ pub(crate) fn startup_authority(namespace: &Path) -> Result<Option<AcceptedBindi
     credentials_imported_on_restore(&identity, &[]).map_err(|_| {
         RunError::Restore("a restored gateway does not keep the old private key".into())
     })?;
-    install_serving_stores(namespace, &binding.live).map_err(|error| {
+    install_serving_stores_audited(namespace, &binding.live, Some(&audit)).map_err(|error| {
         RunError::Restore(format!(
             "restored conversations were not installed: {error}"
         ))

@@ -35,7 +35,7 @@ use crate::backup::infrastructure::{
     DirectoryQuarantine, DirectoryVerificationSource, ExportFormat, FileDeletionLog,
     FileRestoreAudit, KeyedInventory, OsPublicationIds, OsStagingIds, SqliteDeferredSource,
 };
-use crate::composition::install_serving_stores;
+use crate::composition::{install_serving_stores, install_serving_stores_audited};
 use crate::conversation::application::{ConversationCreationDisposition, ConversationRepository};
 use crate::conversation::domain::Conversation;
 use crate::conversation::infrastructure::LocalConversationStore;
@@ -2393,6 +2393,69 @@ async fn a_later_deletion_is_installed_as_a_fence() {
         ConversationCreationDisposition::Existing
     );
     assert!(created.conversation.deletion().is_some());
+}
+
+#[tokio::test]
+async fn an_unaudited_deferred_session_is_not_copied_into_the_serving_store() {
+    let scratch = tempfile::tempdir().unwrap();
+    let source_path = scratch.path().join("source.sqlite3");
+    fs::write(&source_path, session_database(&[("conv-one", b"payload")])).unwrap();
+    let inspected =
+        crate::backup::infrastructure::snapshot::inspect_conversation(&source_path, "conv-one")
+            .unwrap();
+    let bundle = publish(
+        vec![],
+        vec![DeferredEntry::new(
+            StoreKind::CanonicalRecords,
+            "conv-one",
+            inspected.size,
+            Fingerprint::from_digest(inspected.digest),
+        )
+        .unwrap()],
+        None,
+    )
+    .await;
+    let place = roots();
+    let audit = MemoryAudit::open();
+    stage(
+        &bundle,
+        &place.quarantine,
+        &place.live,
+        &audit,
+        person(RestoreAction::Stage),
+        None,
+    )
+    .unwrap();
+    accept(&place, &audit, &NoReceipts).unwrap();
+
+    let session = place.live.join("sessions/conv-one.sqlite3");
+    nessa_local_storage::create_directory(session.parent().unwrap()).unwrap();
+    fs::write(&session, b"not-a-published-session").unwrap();
+    let skipped = place.live.parent().unwrap().join("skipped");
+    nessa_local_storage::create_directory(&skipped).unwrap();
+    install_serving_stores_audited(&skipped, &place.live, Some(&audit)).unwrap();
+    assert!(!skipped
+        .join("conversations/sessions/records.sqlite3")
+        .exists());
+
+    fs::remove_file(&session).unwrap();
+    let source = SqliteDeferredSource::new(&source_path);
+    open_one(&place, "conv-one", &source, &audit).unwrap();
+    let served = place.live.parent().unwrap().join("served");
+    nessa_local_storage::create_directory(&served).unwrap();
+    install_serving_stores_audited(&served, &place.live, Some(&audit)).unwrap();
+    let connection = nessa_local_database::rusqlite::Connection::open(
+        served.join("conversations/sessions/records.sqlite3"),
+    )
+    .unwrap();
+    let count: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM event_streams WHERE public_id = 'conv-one'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(count, 1);
 }
 
 #[tokio::test]
