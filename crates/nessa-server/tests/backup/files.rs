@@ -12,8 +12,8 @@ use crate::backup::application::{
     PublishedRecord, VerificationLimits,
 };
 use crate::backup::domain::{
-    encode_accepted_restore, encode_deferred, outbox_watermark, DeferredLine, Fingerprint,
-    Sensitivity, SkipReason, StoreKind,
+    encode_accepted_restore, encode_deferred, encode_journal, outbox_watermark, DeferredLine,
+    Fingerprint, Freshness, SealedFile, Sensitivity, SkipReason, StoreKind,
 };
 use crate::backup::infrastructure::ExportFormat;
 use crate::backup::infrastructure::{
@@ -1718,6 +1718,7 @@ async fn an_export_names_deferred_conversations_the_serving_file_does_not_hold()
         .unwrap(),
     )
     .unwrap();
+    seal_deferred_inventory(&live);
     let _inventory = FileDeletionLog::open(root.join("backup")).unwrap();
     fs::write(
         root.join("backup/accepted-restore.txt"),
@@ -1799,6 +1800,63 @@ async fn a_missing_deferred_inventory_is_not_published_as_a_complete_cut() {
     .unwrap_err();
     assert_eq!(error, ExportFailure::Inventory);
     assert!(!bundle.path().join("cut/manifest.txt").exists());
+}
+
+#[tokio::test]
+async fn a_rewritten_deferred_inventory_is_not_published_as_a_complete_cut() {
+    let namespace = tempfile::tempdir().unwrap();
+    let root = namespace.path();
+    let live = root.join("accepted-live");
+    let audit = root.join("accepted-audit");
+    fs::create_dir_all(&live).unwrap();
+    fs::create_dir_all(&audit).unwrap();
+    fs::write(
+        live.join("deferred.txt"),
+        encode_deferred(&[DeferredLine {
+            store: StoreKind::CanonicalRecords,
+            conversation_id: "00000000-0000-4000-8000-000000000001".into(),
+            size: 4,
+            digest: Fingerprint::of(b"kept"),
+        }])
+        .unwrap(),
+    )
+    .unwrap();
+    seal_deferred_inventory(&live);
+    fs::write(live.join("deferred.txt"), b"nessa-deferred/1\n").unwrap();
+    let inventory = FileDeletionLog::open(root.join("backup")).unwrap();
+    fs::write(
+        root.join("backup/accepted-restore.txt"),
+        encode_accepted_restore(&live, &audit, None).unwrap(),
+    )
+    .unwrap();
+    let bundle = tempfile::tempdir().unwrap();
+    let error = capture_namespace(
+        root,
+        &OpenAdmission,
+        &inventory,
+        &DirectoryPublisher::new(bundle.path().join("cut")),
+        &Clock(8),
+        &inventory.key(),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(error, ExportFailure::Inventory);
+    assert!(!bundle.path().join("cut/manifest.txt").exists());
+}
+
+/// The journal a real accept writes, covering the deferred list now on disk.
+fn seal_deferred_inventory(live: &Path) {
+    let bytes = fs::read(live.join("deferred.txt")).unwrap();
+    let journal = encode_journal(
+        Freshness::Cut,
+        &[],
+        &[SealedFile {
+            path: "deferred.txt".into(),
+            fingerprint: Fingerprint::of(&bytes),
+        }],
+    )
+    .unwrap();
+    fs::write(live.join("journal.txt"), journal).unwrap();
 }
 
 fn holds(bytes: &[u8], needle: &[u8]) -> bool {

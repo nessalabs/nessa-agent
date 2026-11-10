@@ -32,8 +32,9 @@ use super::snapshot::{
     SESSION_EXPORT_LIMIT,
 };
 use crate::backup::application::{
-    capture_export, Authenticator, CopiedStore, DeletionLogStore, ExportClock, ExportFailure,
-    ExportRequest, ExportSource, FenceSource, ManifestPublisher, MutationAdmission, PinnedStore,
+    accepted_tree_matches, capture_export, Authenticator, CopiedStore, DeletionLogStore,
+    ExportClock, ExportFailure, ExportRequest, ExportSource, FenceSource, ManifestPublisher,
+    MutationAdmission, PinnedStore,
 };
 use crate::backup::domain::{
     decode_deferred, CapturedRecord, CredentialKind, DeferredEntry, DeletionFence, Fingerprint,
@@ -2319,10 +2320,10 @@ fn attach_carried(
 /// Deferred canonical conversations an accepted restore has not fetched.
 ///
 /// A namespace that is not a restored gateway has none. Once the accepted
-/// pointer is present, a deferred list that is missing, unreadable, or not
-/// the current spelling is not treated as "nothing left": the cut would
-/// otherwise name those conversations' metadata and drop the size and digest
-/// a later restore needs.
+/// pointer is present, a deferred list that is missing, unreadable, not the
+/// bytes the accepted journal sealed, or not the current spelling is not
+/// treated as "nothing left": the cut would otherwise name those
+/// conversations' metadata and drop the size and digest a later restore needs.
 fn outstanding_deferred(namespace: &Path) -> Result<Vec<DeferredEntry>, ExportFailure> {
     let pointer = namespace.join("backup").join("accepted-restore.txt");
     let text = match fs::read_to_string(&pointer) {
@@ -2332,9 +2333,12 @@ fn outstanding_deferred(namespace: &Path) -> Result<Vec<DeferredEntry>, ExportFa
     };
     let binding = crate::backup::application::binding_from_pointer(&text)
         .map_err(|_| ExportFailure::Inventory)?;
-    // The staged cut always writes this file, including when it names nothing.
-    // A missing file is a missing inventory, not an empty one. The accepted
-    // directory being gone is the same read.
+    // The same seal startup and a deferred open use. A later edit of
+    // `deferred.txt`, including a well-formed empty list, is not an empty
+    // inventory. A missing file is the same refusal.
+    if accepted_tree_matches(&binding.live, &super::DirectoryQuarantine).is_err() {
+        return Err(ExportFailure::Inventory);
+    }
     let text = match fs::read_to_string(binding.live.join("deferred.txt")) {
         Ok(text) => text,
         Err(_) => return Err(ExportFailure::Inventory),

@@ -247,9 +247,10 @@ The private key is not restored; acceptance writes `identity.txt` as `re-pair`.
 
 An oversized conversation is still not copied into the snapshot. A later export
 of an accepted namespace carries deferred conversations the serving file does
-not hold. If that accepted tree's `deferred.txt` is missing, the export stops
-and publishes nothing: the file is written even when it names no conversation,
-so its absence is not an empty inventory. Opening a deferred conversation
+not hold. If that accepted tree's `deferred.txt` is missing, or its bytes are not the
+ones the accepted journal sealed, the export stops and publishes nothing.
+The file is written even when it names no conversation, so its absence or a
+later well-formed replacement is not an empty inventory. Opening a deferred conversation
 streams that one conversation from a source the caller supplies and publishes
 the session file only when the size and stream fingerprint match the cut.
 `a_session_over_64_mib_is_restored_when_opened` is the drill. A missing,
