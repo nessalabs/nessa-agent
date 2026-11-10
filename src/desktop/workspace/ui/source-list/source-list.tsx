@@ -26,7 +26,11 @@ import "./source-list.css"
 import { tooltip } from "../../../ui/tooltip"
 import { OverviewRow } from "./overview-row"
 import { useRowFocusKept } from "../row-focus"
-import { useFocusLeavesOnFold, useParkedAfterSlide } from "../../adapters/dom/parked"
+import {
+  slidingGuards,
+  useFocusLeavesOnFold,
+  useParkedAfterSlide,
+} from "../../adapters/dom/parked"
 
 /**
  * The sidebar's source list: sections of channels on a glass pane, with the
@@ -113,6 +117,7 @@ export const SourceList = memo(function SourceList({
       inert={parked}
       data-parked={parked || undefined}
       aria-hidden={away || undefined}
+      {...slidingGuards(away && !parked)}
       {...(open ? {} : peek?.holders)}
     >
       <div className="workspace-sidebar-scroll">

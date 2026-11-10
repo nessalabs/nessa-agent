@@ -20,6 +20,13 @@ import { useEffect, useLayoutEffect, useState, type RefObject } from "react"
 export function useParkedAfterSlide(
   ref: RefObject<HTMLElement | null>,
   away: boolean,
+  /**
+   * Marks on an ancestor that keep the column on screen though it is away:
+   * it waits until none is there, then for its slide. A pane change holds
+   * the sidebar in the row until the new boxes paint (`data-spare-held`),
+   * and a peek handing off keeps it revealed (`data-peek`).
+   */
+  heldBy = "[data-spare-held], [data-peek]",
 ): boolean {
   const [parked, setParked] = useState(away)
   useEffect(() => {
@@ -33,11 +40,11 @@ export function useParkedAfterSlide(
       if (!done) setParked(true)
     }
     // A frame on, the fold's style has applied and its transition has
-    // started. A pane change that folds it keeps it in the row until the new
-    // boxes paint (`data-spare-held`); its slide starts after that.
+    // started, unless something still holds it on screen (`heldBy`); its
+    // slide starts after that.
     let frame = 0
     const look = () => {
-      if (node?.closest(`[${spareHeld}]`)) {
+      if (node?.closest(heldBy)) {
         frame = requestAnimationFrame(look)
         return
       }
@@ -55,12 +62,9 @@ export function useParkedAfterSlide(
       done = true
       cancelAnimationFrame(frame)
     }
-  }, [away, ref])
+  }, [away, ref, heldBy])
   return away && parked
 }
-
-/** The workspace's mark while a pane change holds the sidebar in the row (`split-panes.tsx`). */
-const spareHeld = "data-spare-held"
 
 function slideOf(node: HTMLElement | null): Animation | null {
   if (!node || typeof node.getAnimations !== "function") return null
@@ -83,4 +87,25 @@ export function useFocusLeavesOnFold(ref: RefObject<HTMLElement | null>, away: b
     const held = node?.ownerDocument.activeElement
     if (away && held instanceof HTMLElement && node?.contains(held)) held.blur()
   }, [away, ref])
+}
+
+/**
+ * Keeps pointer and focus out of a column while it slides away and before it
+ * parks (`inert` arrives with the park). `pointer-events` would restyle every
+ * row, so these are capture handlers on the column instead. Spread on it.
+ */
+export function slidingGuards(sliding: boolean) {
+  if (!sliding) return {}
+  const stop = (event: { preventDefault(): void; stopPropagation(): void }) => {
+    event.preventDefault()
+    event.stopPropagation()
+  }
+  return {
+    onPointerDownCapture: stop,
+    onMouseDownCapture: stop,
+    onClickCapture: stop,
+    onFocusCapture: (event: { target: EventTarget }) => {
+      if (event.target instanceof HTMLElement) event.target.blur()
+    },
+  }
 }

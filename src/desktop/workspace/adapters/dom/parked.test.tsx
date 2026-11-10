@@ -3,7 +3,7 @@ import { act, useRef } from "react"
 import { createRoot, type Root } from "react-dom/client"
 import { afterEach, beforeEach, expect, it } from "vitest"
 import { controlledAnimationFrames } from "../../testing"
-import { useFocusLeavesOnFold, useParkedAfterSlide } from "./parked"
+import { slidingGuards, useFocusLeavesOnFold, useParkedAfterSlide } from "./parked"
 
 let host: HTMLDivElement
 let root: Root
@@ -124,5 +124,36 @@ it("takes focus out of a column on the commit that folds it", async () => {
   host.querySelector("button")?.focus()
   expect(document.activeElement?.tagName).toBe("BUTTON")
   await act(async () => root.render(<Focusable away />))
+  expect(document.activeElement).toBe(document.body)
+})
+
+it("waits while a peek or a pane change still holds the column on screen", async () => {
+  await act(async () => root.render(<Column away={false} slides={() => []} />))
+  host.setAttribute("data-peek", "")
+  await act(async () => root.render(<Column away slides={() => []} />))
+  await act(async () => frames.runFrame())
+  await act(async () => frames.runFrame())
+  expect(parked()).toBe(false)
+  host.removeAttribute("data-peek")
+  await act(async () => frames.runFrame())
+  expect(parked()).toBe(true)
+})
+
+it("keeps clicks and focus out of a column while it slides", async () => {
+  let clicked = 0
+  function Sliding() {
+    return (
+      <aside {...slidingGuards(true)}>
+        <button type="button" onClick={() => (clicked += 1)}>
+          row
+        </button>
+      </aside>
+    )
+  }
+  await act(async () => root.render(<Sliding />))
+  const button = host.querySelector("button")
+  button?.click()
+  expect(clicked).toBe(0)
+  button?.focus()
   expect(document.activeElement).toBe(document.body)
 })
