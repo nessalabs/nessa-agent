@@ -29,6 +29,7 @@ mod restore_command;
 mod restore_planning;
 mod root;
 mod serving_restore;
+mod stress_restore;
 
 pub use backup_verification::run_backup_verifier;
 pub use restore_command::run_backup_restore;

@@ -1181,3 +1181,53 @@ async fn the_restore_command_does_not_touch_a_profile_when_the_arguments_are_ref
         .contains("nessa-backup-restore"));
     assert_eq!(fs::read(&marker).unwrap(), b"canary");
 }
+
+#[test]
+fn a_stress_restore_names_one_loaded_conversation_and_one_whose_source_can_move() {
+    let root = tempfile::tempdir().unwrap();
+    let destination = root.path().join("restore");
+    let namespace = root.path().join("gateway");
+    nessa_local_storage::create_directory(&namespace).unwrap();
+    let mut output = Vec::new();
+    let code = run_backup_restore(
+        &[
+            OsString::from("prepare"),
+            OsString::from("--destination"),
+            destination.as_os_str().to_os_string(),
+            OsString::from("--namespace"),
+            namespace.as_os_str().to_os_string(),
+            OsString::from("--count"),
+            OsString::from("1"),
+        ],
+        &mut output,
+    );
+    let text = String::from_utf8(output).unwrap();
+    assert_eq!(code, 0, "{text}");
+    let report: serde_json::Value = text
+        .lines()
+        .filter(|line| line.contains("\"prepared\""))
+        .last()
+        .and_then(|line| serde_json::from_str(line).ok())
+        .unwrap();
+    assert_eq!(report["loaded"].as_array().unwrap().len(), 1);
+    assert_eq!(report["missing"].as_array().unwrap().len(), 1);
+    let source = PathBuf::from(report["source"].as_str().unwrap());
+    assert!(source.is_file());
+    let deferred = fs::read_to_string(destination.join("live/deferred.txt")).unwrap();
+    let loaded = report["loaded"][0]["id"].as_str().unwrap();
+    let missing = report["missing"][0]["id"].as_str().unwrap();
+    assert!(deferred.contains(loaded), "{deferred}");
+    assert!(deferred.contains(missing), "{deferred}");
+    assert!(startup_authority(&namespace).unwrap().is_some());
+    let metadata = nessa_local_database::rusqlite::Connection::open(
+        namespace.join("conversations/metadata.sqlite3"),
+    )
+    .unwrap();
+    let count: i64 = metadata
+        .query_row("SELECT COUNT(*) FROM conversations", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(
+        count, 2,
+        "the serving catalogue keeps both restored conversations"
+    );
+}

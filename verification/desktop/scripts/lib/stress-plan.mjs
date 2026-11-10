@@ -233,6 +233,10 @@ export const KNOBS = {
     default: 1,
     what: "times channels are made from the sidebar's + (a refused folder, then one made for it; then a chosen folder), each talked to in a new session; the first then moves its new threads and main agent to Boat and back from its settings",
   },
+  restores: {
+    default: 1,
+    what: "restored conversations opened in the window: one shows its saved history, and one whose source is gone refuses a send and keeps the draft",
+  },
   long: {
     default: 30,
     what: "turns of long streamed answers one conversation takes before it is talked to in the window",
@@ -342,11 +346,14 @@ export function plan(knobs, accessScenario = "full") {
   if (knobs.reviews > 0) steps.push({ kind: "reviews" })
   while (steps.length < knobs.rounds)
     steps.push({ kind: next() < 0.5 ? "reply" : "permission" })
-  // Fisher–Yates, seeded.
+  // Fisher–Yates, seeded. Restored conversations are added after it so a
+  // new count does not reshuffle the steps a seed already fixed.
   for (let i = steps.length - 1; i > 0; i -= 1) {
     const j = Math.floor(next() * (i + 1))
     ;[steps[i], steps[j]] = [steps[j], steps[i]]
   }
+  for (let slot = 0; slot < knobs.restores; slot += 1)
+    steps.push({ kind: "restore", slot })
   if (knobs.pairedCatalogues > 0)
     steps.push({ kind: "pairedCatalogue", cycles: knobs.pairedCatalogues })
   // Preset checks keep their original model. Positive model changes follow

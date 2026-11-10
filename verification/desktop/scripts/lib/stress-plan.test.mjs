@@ -62,6 +62,7 @@ test("every required step appears as often as its number says", () => {
   assert.equal(count("github"), knobs.githubs)
   assert.equal(count("passphrase"), knobs.passphrases)
   assert.equal(count("channel"), knobs.channels)
+  assert.equal(count("restore"), knobs.restores)
   assert.equal(count("huddle"), knobs.huddles)
   assert.equal(count("webhook"), knobs.webhooks)
   assert.equal(count("reviews"), 1)
@@ -235,6 +236,7 @@ test("the legacy seed preserves the existing non-model work's relative order", (
       "permission",
       "stop",
       "aside",
+      "restore",
     ],
   )
 })

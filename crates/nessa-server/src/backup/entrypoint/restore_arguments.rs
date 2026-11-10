@@ -9,6 +9,7 @@ Usage:
   nessa-backup-restore accept --destination ABSOLUTE_PATH [--namespace ABSOLUTE_PATH] [--receipt LEASE=TEXT]
   nessa-backup-restore list --destination ABSOLUTE_PATH
   nessa-backup-restore open --destination ABSOLUTE_PATH --conversation ID
+  nessa-backup-restore prepare --destination ABSOLUTE_PATH --namespace ABSOLUTE_PATH [--count N]
 
 Stages an authenticated backup into destination/quarantine. The live path stays
 absent, and this command starts no gateway, harness, or command. accept renames
@@ -16,7 +17,10 @@ that quarantine onto the empty destination/live path after Cedar allows it and,
 when a lease was still open, every --receipt is present. The restored gateway
 does not keep the old private key. open fetches one deferred conversation from
 the source recorded at stage, and refuses when that source is gone. Other
-conversations are not written.
+conversations are not written. prepare writes one accepted restore the
+conversation stress check boots from: each count is one conversation whose
+history can be opened, and one whose source the check moves aside so a send
+is refused and the draft stays.
 ";
 
 #[derive(Debug, PartialEq, Eq)]
@@ -41,6 +45,12 @@ pub enum RestoreCommand {
         destination: PathBuf,
         conversation: String,
     },
+    /// One accepted restore for the conversation stress check.
+    Prepare {
+        destination: PathBuf,
+        namespace: PathBuf,
+        count: u32,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -59,6 +69,7 @@ pub fn parse_restore(arguments: &[OsString]) -> Result<RestoreCommand, RestoreUs
         Some("accept") => parse_accept(rest),
         Some("list") => parse_list(rest),
         Some("open") => parse_open(rest),
+        Some("prepare") => parse_prepare(rest),
         _ => Err(RestoreUsageError),
     }
 }
@@ -151,6 +162,32 @@ fn parse_open(arguments: &[OsString]) -> Result<RestoreCommand, RestoreUsageErro
     Ok(RestoreCommand::Open {
         destination: destination.ok_or(RestoreUsageError)?,
         conversation: conversation.ok_or(RestoreUsageError)?,
+    })
+}
+
+fn parse_prepare(arguments: &[OsString]) -> Result<RestoreCommand, RestoreUsageError> {
+    let mut destination = None;
+    let mut namespace = None;
+    let mut count = 1u32;
+    let mut index = 0;
+    while index < arguments.len() {
+        let flag = arguments[index].to_str().ok_or(RestoreUsageError)?;
+        let value = arguments.get(index + 1).ok_or(RestoreUsageError)?;
+        match flag {
+            "--destination" if destination.is_none() => destination = Some(absolute(value)?),
+            "--namespace" if namespace.is_none() => namespace = Some(absolute(value)?),
+            "--count" if count == 1 => {
+                let text = value.to_str().ok_or(RestoreUsageError)?;
+                count = text.parse().map_err(|_| RestoreUsageError)?;
+            }
+            _ => return Err(RestoreUsageError),
+        }
+        index += 2;
+    }
+    Ok(RestoreCommand::Prepare {
+        destination: destination.ok_or(RestoreUsageError)?,
+        namespace: namespace.ok_or(RestoreUsageError)?,
+        count,
     })
 }
 

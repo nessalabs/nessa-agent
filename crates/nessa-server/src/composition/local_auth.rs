@@ -268,7 +268,7 @@ pub(super) async fn product_state(
         .ok_or_else(|| setup_error("invalid data root"))?;
     if let Some(live) = accepted_restore_live(namespace) {
         if super::serving_restore::restore_install_matches(namespace, &live) {
-            let (organization_id, principal_id) = store.personal_owner().map_err(|error| {
+            let (organization_id, principal_id) = store.catalogue_owner().map_err(|error| {
                 RunError::Authentication(format!("the local owner could not be read: {error}"))
             })?;
             super::serving_restore::bind_installed_owner(

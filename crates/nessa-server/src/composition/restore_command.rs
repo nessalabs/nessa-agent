@@ -178,7 +178,89 @@ pub fn run_backup_restore(arguments: &[std::ffi::OsString], output: &mut dyn Wri
             destination,
             conversation,
         } => open_one(output, &policy, &destination, &conversation),
+        RestoreCommand::Prepare {
+            destination,
+            namespace,
+            count,
+        } => prepare_for_stress(output, &policy, &destination, &namespace, count),
     }
+}
+
+fn prepare_for_stress(
+    output: &mut dyn Write,
+    policy: &CedarInventoryPolicy,
+    destination: &Path,
+    namespace: &Path,
+    count: u32,
+) -> u8 {
+    let prepared = match super::stress_restore::build_stress_restore(destination, count) {
+        Ok(prepared) => prepared,
+        Err(error) => {
+            return print_prepare_error(output, &error);
+        }
+    };
+    if count == 0 {
+        return write_prepare_report(output, namespace, &prepared.source, &prepared);
+    }
+    let bundle = destination.join("bundle");
+    let key_file = destination.join("mac.key");
+    if stage(
+        output,
+        policy,
+        &bundle,
+        &key_file,
+        destination,
+        None,
+        Some(prepared.source.as_path()),
+    ) != 0
+    {
+        return 1;
+    }
+    if accept(output, policy, destination, Some(namespace), &[]) != 0 {
+        return 1;
+    }
+    write_prepare_report(output, namespace, &prepared.source, &prepared)
+}
+
+fn write_prepare_report(
+    output: &mut dyn Write,
+    namespace: &Path,
+    source: &Path,
+    prepared: &super::stress_restore::StressRestore,
+) -> u8 {
+    let report = serde_json::json!({
+        "status": "prepared",
+        "source": source,
+        "loaded": prepared.loaded.iter().map(|conversation| serde_json::json!({
+            "id": conversation.id,
+            "title": conversation.title,
+        })).collect::<Vec<_>>(),
+        "missing": prepared.missing.iter().map(|conversation| serde_json::json!({
+            "id": conversation.id,
+            "title": conversation.title,
+        })).collect::<Vec<_>>(),
+    });
+    let text = match serde_json::to_string(&report) {
+        Ok(text) => text,
+        Err(error) => return print_prepare_error(output, &error.to_string()),
+    };
+    if fs::write(namespace.join("stress-restore.json"), format!("{text}\n")).is_err() {
+        return print_prepare_error(output, "the stress restore report could not be written");
+    }
+    if writeln!(output, "{text}").is_ok() {
+        0
+    } else {
+        1
+    }
+}
+
+fn print_prepare_error(output: &mut dyn Write, error: &str) -> u8 {
+    let _ = writeln!(
+        output,
+        r#"{{"status":"refused","reason":{}}}"#,
+        serde_json::to_string(error).unwrap_or_else(|_| "\"unavailable\"".into())
+    );
+    1
 }
 
 fn stage(
