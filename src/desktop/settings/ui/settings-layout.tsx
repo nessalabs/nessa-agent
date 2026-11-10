@@ -14,7 +14,6 @@ import {
 import { PortalContainerProvider } from "@nessa-ui/react/lib/portal-container"
 import { IdentityButton, IdentityRow } from "../../ui/identity"
 import { EdgePeekStrip } from "../../ui/edge-peek-strip"
-import { HistoryButtons } from "../../ui/history-buttons"
 import { settingsSidebar } from "../model/settings-sidebar"
 import {
   settingsCategories,
@@ -116,7 +115,6 @@ export function SettingsLayout(model: SettingsSurfaceModel) {
           >
             <DesktopIcon name="sidebar" />
           </button>
-          <HistoryButtons />
           <button
             type="button"
             className="settings-titlebar-button settings-titlebar-back"

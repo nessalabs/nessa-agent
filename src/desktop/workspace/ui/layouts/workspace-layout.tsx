@@ -5,7 +5,6 @@
  */
 import { memo, type CSSProperties, type ReactNode } from "react"
 import { EdgePeekStrip } from "../../../ui/edge-peek-strip"
-import { HistoryButtons } from "../../../ui/history-buttons"
 import { ResizeEdge } from "../../../ui/resize-edge"
 import { FlipScope, type SplitPanesSource } from "../../../split-panes"
 import { EscapeScopesProvider } from "../../adapters/dom/widget-escape"
@@ -172,7 +171,6 @@ export function WorkspaceLayout(model: WorkspaceWindowModel) {
                             onClick={onNewSession}
                           />
                         )}
-                        <HistoryButtons />
                       </div>
                     )}
                     {shownRailItem ? (

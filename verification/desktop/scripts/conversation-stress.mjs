@@ -110,7 +110,10 @@ import {
  *               dims the desktop, and a glow fills the screen and forms the
  *               window (glow, fill, form, open, in that order) before any of
  *               the window's words can be seen; welcome's words are all
- *               there as it opens, its name painted still rather than typed in,
+ *               there as it opens, its name plain text in the app's ink rather
+ *               than typed in or painted; the pane and the light beside it
+ *               are graphite (dark, no hue) on welcome, and the pane on the
+ *               picker,
  *               with Get started already showing; welcome has no Back button
  *               and Close sits in the top-right corner; past it the picker
  *               has Back in the top-left corner, which returns to welcome;
@@ -335,6 +338,7 @@ import {
   STREAM_WORDS,
   STRESS,
   TABLE_LINES,
+  CODE_LINES,
   TRACE_CALLS,
   TRACE_PAUSE_MS,
   WATCH_CALLS,
@@ -3627,6 +3631,7 @@ const steps = {
     await run.exclusive(async () => {
       if ((await openMcpServers(page)).prompted)
         failures.push("opening Connections asked for the passphrase")
+      await noHistoryButtons(page, failures, "Settings")
       await shot("list")
       // Added from the window, off for new conversations so no agent starts it.
       await page.getByRole("button", { name: names.mcp.add, exact: true }).click()
@@ -4810,6 +4815,7 @@ const steps = {
         await heading(names.setup.welcome).waitFor({ timeout: 15_000 })
         await openedAsAGlow(page, failures)
         await welcomedAtOnce(page, failures)
+        await setupIsGraphite(page, failures, "welcome", true)
         if (run.evidence)
           await page.screenshot({ path: join(run.evidence, "onboarding-welcome.png") })
         // Welcome has nothing before it: no Back, and Close in its corner.
@@ -4844,6 +4850,7 @@ const steps = {
         await button(names.setup.getStarted).click()
         await heading(names.setup.chooseAgent).waitFor({ timeout: 10_000 })
         await pickerOffers(page, failures)
+        await setupIsGraphite(page, failures, "picker", false)
         if (run.evidence)
           await page.screenshot({ path: join(run.evidence, "onboarding-picker.png") })
         // Close leaves setup from the picker: one handoff, as left.
@@ -6048,6 +6055,7 @@ const steps = {
     // A new session beside names itself: alone, a home is its greeting;
     // beside another pane every pane says what it is (UI audit #27).
     await homeBesideNamed(run.page, failures)
+    await noHistoryButtons(run.page, failures, "the window")
     if (failures.length) return
     await run.page.keyboard.press(keys.toggleSidebar)
     await channelShowsList(run.page, failures)
@@ -7695,7 +7703,9 @@ const steps = {
     if (!turn) return
     // The gateway keeps the answer as it streamed: every line, in order, once.
     const said = (turn.parts ?? []).map((part) => part.text ?? "").join("")
-    const expected = `${SAYS.table}${text}\n\n${TABLE_LINES.map((line) => `${line}\n`).join("")}`
+    const expected = `${SAYS.table}${text}\n\n${[...TABLE_LINES, "", ...CODE_LINES]
+      .map((line) => `${line}\n`)
+      .join("")}`
     if (said.trimEnd() !== expected.trimEnd())
       failures.push(`the table answer came back as ${JSON.stringify(said.slice(0, 120))}`)
     // The list previews the answer as prose: a table's pipes and dashes are
@@ -7869,6 +7879,7 @@ const steps = {
     await port.evaluate((each) => each.scrollTo({ left: each.scrollWidth }))
     if (!(await faded(true, false)))
       failures.push("scrolled to its end, the wide table did not fade its left side")
+    await codeStaysDark(run.page, message, failures)
   },
 
   async long(run, step, failures) {
@@ -8376,6 +8387,26 @@ async function flatPanes(page, failures) {
  * "New session" and is shown while the conversation's stays as it was, then
  * closes it again (⌘W).
  */
+/**
+ * The titlebar has no Back or Forward: the window keeps no history for them
+ * to walk, and two buttons that never did anything were noise (UI audit #31).
+ */
+async function noHistoryButtons(page, failures, where) {
+  const titlebar = page.locator(".workspace-titlebar, .settings-titlebar")
+  if (!(await titlebar.count())) {
+    failures.push(`${where} has no titlebar to look at`)
+    return
+  }
+  const named = await titlebar.evaluateAll((bars) =>
+    bars.flatMap((bar) =>
+      [...bar.querySelectorAll("button")]
+        .map((button) => button.getAttribute("aria-label") ?? "")
+        .filter((label) => /^Go (Back|Forward)\b/.test(label)),
+    ),
+  )
+  if (named.length) failures.push(`${where}'s titlebar shows ${JSON.stringify(named)}`)
+}
+
 async function homeBesideNamed(page, failures) {
   await page.keyboard.press(keys.newSessionBeside)
   if (
@@ -8632,7 +8663,7 @@ async function welcomedAtOnce(page, failures) {
       return {
         text: heading?.textContent,
         letters: heading?.querySelectorAll("[data-slot=type-in-letter]").length ?? 0,
-        painted: heading?.querySelector("[data-slot=gradient-text]")?.textContent,
+        painted: heading?.querySelectorAll("[data-slot=gradient-text]").length ?? 0,
         waiting: document.querySelectorAll(
           ".nessa-setup-pane [data-typed], .nessa-setup-after",
         ).length,
@@ -8647,8 +8678,146 @@ async function welcomedAtOnce(page, failures) {
   if (welcome.letters || welcome.waiting)
     failures.push(`the welcome is typed in: ${JSON.stringify(welcome)}`)
   if (!welcome.begin) failures.push("Get started is not there as the welcome opens")
-  if (welcome.painted !== "Nessa")
-    failures.push(`the welcome paints ${JSON.stringify(welcome.painted)}, not the name`)
+  if (welcome.painted)
+    failures.push("the welcome paints the name in colour; setup is graphite like the app")
+}
+
+/**
+ * The window is dark only, and so are its code and diagrams: with the OS
+ * turned to light, the answer's code block is still drawn on a dark ground and
+ * its Mermaid diagram's boxes are still dark (UI audit #29). The code is read
+ * from the screen, as the highlighter draws its own colours; the diagram from
+ * its boxes' fills. The page's appearance is put back after, whatever the
+ * check found.
+ */
+async function codeStaysDark(page, message, failures) {
+  const block = message.locator('[data-slot="code-block"]')
+  const diagram = message.locator('[data-slot="mermaid-diagram"] svg')
+  const drawn = await waitFor(
+    async () => (await block.count()) === 1 && (await diagram.count()) >= 1,
+    20_000,
+  )
+  if (!drawn) {
+    failures.push("the answer's code block or diagram was not drawn")
+    return
+  }
+  await page.emulateMedia({ colorScheme: "light" })
+  try {
+    await block.scrollIntoViewIfNeeded()
+    const codeLight = async () => {
+      const box = await block.boundingBox()
+      const shot = (await page.screenshot()).toString("base64")
+      return page.evaluate(
+        async ([png, box, scale]) => {
+          const image = new Image()
+          image.src = `data:image/png;base64,${png}`
+          await image.decode()
+          const canvas = document.createElement("canvas")
+          canvas.width = image.width
+          canvas.height = image.height
+          const ctx = canvas.getContext("2d")
+          ctx.drawImage(image, 0, 0)
+          // The block's right end, past its one short line of code.
+          const [r, g, b] = ctx.getImageData(
+            Math.round((box.x + box.width - 24) * scale),
+            Math.round((box.y + box.height / 2) * scale),
+            1,
+            1,
+          ).data
+          return Math.round((r + g + b) / 3)
+        },
+        [shot, box, await page.evaluate(() => window.devicePixelRatio)],
+      )
+    }
+    // The lightest box in the diagram, 0 to 255.
+    const diagramLight = () =>
+      message.evaluate((element) => {
+        const swatch = document.createElement("canvas").getContext("2d")
+        let lightest = 0
+        for (const shape of element.querySelectorAll(
+          '[data-slot="mermaid-diagram"] svg .node :is(rect, polygon, circle, path)',
+        )) {
+          const fill = getComputedStyle(shape).fill
+          if (!fill || fill === "none") continue
+          swatch.clearRect(0, 0, 1, 1)
+          swatch.fillStyle = fill
+          swatch.fillRect(0, 0, 1, 1)
+          const [r, g, b, a] = swatch.getImageData(0, 0, 1, 1).data
+          if (a > 128) lightest = Math.max(lightest, Math.round((r + g + b) / 3))
+        }
+        return lightest
+      })
+    // Anything following the OS redraws light within a moment: wait it out.
+    let code = 0
+    let boxes = 0
+    for (let tries = 0; tries < 8; tries += 1) {
+      code = Math.max(code, await codeLight())
+      boxes = Math.max(boxes, await diagramLight())
+      if (code > 80 || boxes > 120) break
+      await sleep(250)
+    }
+    if (code > 80)
+      failures.push(`with the OS in light mode the code block turns light (${code}/255)`)
+    if (boxes > 120)
+      failures.push(`with the OS in light mode the diagram turns light (${boxes}/255)`)
+    if (boxes === 0) failures.push("the diagram has no filled boxes to read")
+  } finally {
+    await page.emulateMedia({ colorScheme: null })
+  }
+}
+
+/**
+ * Setup wears the app's graphite: on the welcome, its glass pane and the light
+ * beside it are dark greys with no hue, as the window it hands over to is.
+ * Read from the screen, since the light is drawn on a canvas. On the picker
+ * the picture is the chosen agent's own (`artToo` false), and only the pane
+ * is held to it.
+ */
+async function setupIsGraphite(page, failures, where, artToo) {
+  const boxes = await page.evaluate(() =>
+    [".nessa-setup-pane", ".nessa-setup-art"].map((selector) => {
+      const r = document.querySelector(selector)?.getBoundingClientRect()
+      // A strip down the box's middle, clear of its words and rows.
+      return r && { x: r.left + 12, y: r.top + 12, w: 8, h: r.height - 24 }
+    }),
+  )
+  const shot = (await page.screenshot()).toString("base64")
+  const samples = await page.evaluate(
+    async ([png, boxes, scale]) => {
+      const image = new Image()
+      image.src = `data:image/png;base64,${png}`
+      await image.decode()
+      const canvas = document.createElement("canvas")
+      canvas.width = image.width
+      canvas.height = image.height
+      const ctx = canvas.getContext("2d")
+      ctx.drawImage(image, 0, 0)
+      return boxes.map((box) => {
+        if (!box) return null
+        let hue = 0
+        let light = 0
+        for (let step = 0; step <= 10; step += 1) {
+          const [r, g, b] = ctx.getImageData(
+            Math.round((box.x + box.w / 2) * scale),
+            Math.round((box.y + (box.h * step) / 10) * scale),
+            1,
+            1,
+          ).data
+          hue = Math.max(hue, Math.max(r, g, b) - Math.min(r, g, b))
+          light = Math.max(light, (r + g + b) / 3)
+        }
+        return { hue, light }
+      })
+    },
+    [shot, boxes, await page.evaluate(() => window.devicePixelRatio)],
+  )
+  const [pane, art] = samples
+  if (!pane || pane.hue > 14 || pane.light > 90)
+    failures.push(`${where}: the pane is not dark graphite: ${JSON.stringify(pane)}`)
+  if (artToo && (!art || art.hue > 14 || art.light > 170))
+    failures.push(
+      `${where}: the light beside the pane has colour: ${JSON.stringify(art)}`,
+    )
 }
 
 /**

@@ -69,11 +69,23 @@ export interface SetupField {
 }
 
 /**
- * What shows where no colour reaches. Light, because the window is light: a
- * dark ground showed through as a dark smudge wherever the blooms happened
- * not to cover, which reads as the dimmed backdrop this opening has none of.
+ * Setup wears the app's own look: graphite, with no hue. The window it hands
+ * over to is monochrome dark, so a coloured setup was a second product.
+ *
+ * The ground is what shows where no light reaches, and the lights are greys
+ * from near the ground up to a soft silver, the same light the app's Graphite
+ * theme casts (`--desktop-light-high`, `--desktop-light-low`). An agent's own
+ * colour is still its picture on the picker (`AgentBackdrop`): that is the
+ * agent's, not setup's.
  */
-export const FIELD_GROUND = "#e6dcf3"
+export const FIELD_GROUND = "#121214"
+export const FIELD_COLORS = [
+  "#6e6e74",
+  "#3a3a3f",
+  "#9a9aa0",
+  "#26262a",
+  "#55555b",
+] as const
 
 /** The agents the picker can show on its card: the two it offers, and the
  * Local AI that is listed but cannot be chosen yet. */

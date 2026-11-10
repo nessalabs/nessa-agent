@@ -1117,37 +1117,14 @@ html:has(.nessa-panel[data-compositor="layout"]) .nessa-composer-model-content {
 }
 
 /*
- * First-run setup is always the light glass treatment.
+ * First-run setup is dark, as the app is.
  *
- * Setup's pane is pale glass over the window's light, and that is the look
- * the product wants whatever the OS appearance is — a dark slab over the same
- * pigments reads as a hole rather than glass. The design system switches
- * its tokens with a `dark` class on the document, so a subtree cannot opt back
- * out; these are the light values from its `:root`, re-declared for this one
- * surface so its own components keep the contrast they were built for.
- *
- * Only the tokens setup actually paints with are listed. If the design system
- * restyles its light palette, this block has to follow it.
+ * Its pane and its failure card carry the design system's `dark` class
+ * themselves rather than trusting the document: setup opens on the panel's
+ * page, which follows the OS appearance, and setup must not turn light with it.
+ * The class brings both the dark tokens and the `dark:` variants, from the one
+ * place the design system defines them.
  */
-.nessa-setup-light {
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.145 0 0);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.145 0 0);
-  --primary: oklch(0.205 0 0);
-  --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.97 0 0);
-  --secondary-foreground: oklch(0.205 0 0);
-  --muted: oklch(0.97 0 0);
-  --muted-foreground: oklch(0.52 0 0);
-  --accent: oklch(0.97 0 0);
-  --accent-foreground: oklch(0.205 0 0);
-  --border: oklch(0.922 0 0);
-  --input: oklch(0.922 0 0);
-  --ring: oklch(0.556 0 0);
-  color-scheme: light;
-  color: var(--foreground);
-}
 
 /*
  * Setup's display type.
@@ -1321,16 +1298,17 @@ html:has(.nessa-panel[data-compositor="layout"]) .nessa-composer-model-content {
  * the front wall seen edge on. Nothing here is opaque, so the pane shows
  * through the keys and they belong to the surface rather than sitting on it.
  *
- * Ink on setup's light pane, in one colour, so the caps read as the pane's
- * own drawing rather than a second surface laid on it.
+ * Ink on setup's dark pane, in one colour, so the caps read as the pane's
+ * own drawing rather than a second surface laid on it. The face is the same
+ * ink, faint: a key lights up by holding more of it.
  */
 .nessa-keycap {
   position: relative;
-  --nessa-keycap-ink: 20 19 23;
+  --nessa-keycap-ink: 242 242 245;
   border: 1.5px solid rgb(var(--nessa-keycap-ink) / 0.75);
   border-bottom-width: 3px;
   border-radius: 0.75rem;
-  background: rgb(255 255 255 / 0.4);
+  background: rgb(var(--nessa-keycap-ink) / 0.04);
   color: rgb(var(--nessa-keycap-ink));
 }
 
@@ -1365,7 +1343,7 @@ html:has(.nessa-panel[data-compositor="layout"]) .nessa-composer-model-content {
 
 .nessa-keycap[data-held] {
   border-color: rgb(var(--nessa-keycap-ink) / 0.95);
-  background: rgb(255 255 255 / 0.75);
+  background: rgb(var(--nessa-keycap-ink) / 0.16);
   /* Down by the depth of its own front wall, as a real one would be. */
   translate: 0 2px;
 }
@@ -1399,7 +1377,7 @@ html:has(.nessa-panel[data-compositor="layout"]) .nessa-composer-model-content {
     translate: 0 3px;
     border-bottom-width: 1.5px;
     border-color: rgb(var(--nessa-keycap-ink) / 0.95);
-    background: #fff;
+    background: rgb(var(--nessa-keycap-ink) / 0.28);
   }
 }
 
@@ -1408,7 +1386,7 @@ html:has(.nessa-panel[data-compositor="layout"]) .nessa-composer-model-content {
     translate: 0 3px;
     border-bottom-width: 1.5px;
     border-color: rgb(var(--nessa-keycap-ink) / 0.95);
-    background: #fff;
+    background: rgb(var(--nessa-keycap-ink) / 0.28);
   }
 }
 
@@ -1486,9 +1464,7 @@ html:has(.nessa-panel[data-compositor="layout"]) .nessa-composer-model-content {
 }
 
 /*
- * The pane: light glass over the left of the light. Its own components are on
- * the light palette (`.nessa-setup-light`), because a dark slab over these
- * pigments reads as a hole rather than glass.
+ * The pane: dark glass over the left of the light, in the app's own graphite.
  *
  * It scrolls rather than clips: at a large text size the picker and its
  * Continue button are taller than the window, and a pane that hid the button
@@ -1502,10 +1478,10 @@ html:has(.nessa-panel[data-compositor="layout"]) .nessa-composer-model-content {
   flex-direction: column;
   overflow-y: auto;
   padding: 3.25rem 2.25rem 2rem;
-  background: rgb(250 249 252 / 0.84);
-  -webkit-backdrop-filter: blur(30px) saturate(140%);
-  backdrop-filter: blur(30px) saturate(140%);
-  box-shadow: inset -1px 0 0 rgb(255 255 255 / 0.5);
+  background: rgb(18 18 20 / 0.78);
+  -webkit-backdrop-filter: blur(30px);
+  backdrop-filter: blur(30px);
+  box-shadow: inset -1px 0 0 rgb(255 255 255 / 0.08);
   outline: none;
 }
 

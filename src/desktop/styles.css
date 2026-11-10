@@ -9,19 +9,6 @@ body,
   height: 100%;
 }
 
-/*
- * Back and Forward while there is no history to walk (`ui/history-buttons.tsx`):
- * shown, quiet, and taking no hover; their tooltips still say what they are.
- */
-[data-history][aria-disabled] {
-  opacity: 0.38;
-  cursor: default;
-}
-
-[data-history][aria-disabled]:hover {
-  background: transparent;
-}
-
 /* What lies under Settings: only there to be made inert, it draws nothing of its own. */
 .desktop-window-under {
   display: contents;

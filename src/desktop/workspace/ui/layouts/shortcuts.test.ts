@@ -15,12 +15,4 @@ describe("the window's keyboard", () => {
     })
   }
 
-  it("leaves ⌘[ and ⌘] to Back and Forward", () => {
-    for (const code of ["BracketLeft", "BracketRight"])
-      expect(
-        workspaceShortcuts.some((binding) =>
-          matchesChord(chordEvent({ code, command: true }, true), binding.chord, true),
-        ),
-      ).toBe(false)
-  })
 })
