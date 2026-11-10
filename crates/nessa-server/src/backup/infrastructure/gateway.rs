@@ -2318,9 +2318,11 @@ fn attach_carried(
 
 /// Deferred canonical conversations an accepted restore has not fetched.
 ///
-/// A namespace that is not a restored gateway has none. A pointer that is
-/// not readable, or a deferred list that is not the current spelling, is
-/// not treated as "nothing left": the cut would otherwise look complete.
+/// A namespace that is not a restored gateway has none. Once the accepted
+/// pointer is present, a deferred list that is missing, unreadable, or not
+/// the current spelling is not treated as "nothing left": the cut would
+/// otherwise name those conversations' metadata and drop the size and digest
+/// a later restore needs.
 fn outstanding_deferred(namespace: &Path) -> Result<Vec<DeferredEntry>, ExportFailure> {
     let pointer = namespace.join("backup").join("accepted-restore.txt");
     let text = match fs::read_to_string(&pointer) {
@@ -2330,10 +2332,11 @@ fn outstanding_deferred(namespace: &Path) -> Result<Vec<DeferredEntry>, ExportFa
     };
     let binding = crate::backup::application::binding_from_pointer(&text)
         .map_err(|_| ExportFailure::Inventory)?;
-    let path = binding.live.join("deferred.txt");
-    let text = match fs::read_to_string(&path) {
+    // The staged cut always writes this file, including when it names nothing.
+    // A missing file is a missing inventory, not an empty one. The accepted
+    // directory being gone is the same read.
+    let text = match fs::read_to_string(binding.live.join("deferred.txt")) {
         Ok(text) => text,
-        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(Vec::new()),
         Err(_) => return Err(ExportFailure::Inventory),
     };
     let lines = decode_deferred(&text).map_err(|_| ExportFailure::Inventory)?;

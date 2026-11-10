@@ -1772,6 +1772,35 @@ async fn an_unreadable_deferred_list_is_not_published_as_a_complete_cut() {
     assert!(!bundle.path().join("cut/manifest.txt").exists());
 }
 
+#[tokio::test]
+async fn a_missing_deferred_inventory_is_not_published_as_a_complete_cut() {
+    let namespace = tempfile::tempdir().unwrap();
+    let root = namespace.path();
+    let live = root.join("accepted-live");
+    let audit = root.join("accepted-audit");
+    fs::create_dir_all(&live).unwrap();
+    fs::create_dir_all(&audit).unwrap();
+    let inventory = FileDeletionLog::open(root.join("backup")).unwrap();
+    fs::write(
+        root.join("backup/accepted-restore.txt"),
+        encode_accepted_restore(&live, &audit, None).unwrap(),
+    )
+    .unwrap();
+    let bundle = tempfile::tempdir().unwrap();
+    let error = capture_namespace(
+        root,
+        &OpenAdmission,
+        &inventory,
+        &DirectoryPublisher::new(bundle.path().join("cut")),
+        &Clock(8),
+        &inventory.key(),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(error, ExportFailure::Inventory);
+    assert!(!bundle.path().join("cut/manifest.txt").exists());
+}
+
 fn holds(bytes: &[u8], needle: &[u8]) -> bool {
     !needle.is_empty() && bytes.windows(needle.len()).any(|window| window == needle)
 }
