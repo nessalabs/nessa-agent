@@ -162,7 +162,7 @@ test("the Windows split preserves full build flags, platform coverage, guards, c
       .text.replace(/\r\n/g, "\n")
     const server = blocks.find((block) => block.id === "windows-server-tests").text
     const command =
-      /run: node scripts\/cargo-test-parallel\.mjs --concurrency (\d+) --partition (.+?) -- (.+)\r?$/m
+      /run: node scripts\/cargo-test-parallel\.mjs --concurrency (\d+) --partition (\$\{\{ matrix\.partition \}\}|\S+)(?: --run-packages "(.*)")? -- (.+)\r?$/m
     const localCommand = local.match(command)
     const serverCommand = server.match(command)
     assert.ok(localCommand)
@@ -177,24 +177,26 @@ test("the Windows split preserves full build flags, platform coverage, guards, c
       server,
       /name: Windows server library tests \(\$\{\{ matrix\.partition \}\}\)/,
     )
-    // The Windows suites, and macOS and Windows in `local-auth`, test the whole
-    // list: the `remaining` partition needs the server library in it. Only the
-    // Linux leg narrows to the plan's crates, and falls back to the same list.
+    // Every leg builds the whole list, so features unify as on `main`. Only
+    // the Linux leg narrows, and only which binaries run; elsewhere the
+    // selection is empty, which runs all of them.
     const full = packageArguments(RUST_TEST_PACKAGES)
     assert.equal(
       full,
       "-p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-client-core -p nessa-device-client -p nessa-sdk -p nessa-timer -p nessa-vault",
     )
-    assert.equal(serverCommand[3], full)
+    assert.equal(serverCommand[3], undefined)
+    assert.equal(serverCommand[4], full)
     assert.equal(
       localCommand[3],
-      `\${{ runner.os == 'Linux' && needs.changes.outputs.rust_packages || '${full}' }}`,
+      "${{ runner.os == 'Linux' && needs.changes.outputs.rust_packages || '' }}",
     )
-    assert.ok(
-      local.includes(
-        `cargo clippy \${{ needs.changes.outputs.rust_packages || '${full}' }} --all-targets -- -D warnings`,
-      ),
-    )
+    assert.equal(localCommand[4], full)
+    assert.ok(local.includes(`cargo clippy ${full} --all-targets -- -D warnings`))
+    // One list: every place the workflow spells the crates spells all of them.
+    const lists = checkout.match(/-p nessa-local-storage(?: -p [\w-]+)+/g)
+    assert.ok(lists.length >= 4)
+    for (const list of lists) assert.equal(list, full)
     assert.match(local, /fail-fast: false/)
     // The desktop CI harness owns the Linux release-baseline agreement. This
     // check owns partition coverage for every runner the matrix declares.
@@ -220,7 +222,7 @@ test("the Windows split preserves full build flags, platform coverage, guards, c
         block,
         block === local
           ? /if: \$\{\{ !cancelled\(\) && needs\.changes\.outputs\.code != 'false' \}\}/
-          : /if: \$\{\{ !cancelled\(\) && needs\.changes\.outputs\.code != 'false' && needs\.changes\.outputs\.windows_server_tests != 'false' \}\}/,
+          : /if: \$\{\{ !cancelled\(\) && needs\.changes\.outputs\.code != 'false' && needs\.changes\.outputs\.platform_tests != 'false' \}\}/,
       )
       assert.match(
         block,
@@ -246,7 +248,7 @@ test("the Windows split preserves full build flags, platform coverage, guards, c
       /--doc|clippy -p|check-desktop|smoke-auth|check-windows-task-scheduler/,
     )
     for (const check of [
-      "cargo clippy ${{ needs.changes.outputs.rust_packages",
+      `cargo clippy ${full}`,
       "node scripts/check-desktop.mjs",
       "check-windows-task-scheduler.ps1",
       "scripts/smoke-auth.mjs",
@@ -285,7 +287,7 @@ test("a planned skip of one job does not excuse another", () => {
     needs(
       "true",
       { ...compileJobs, "local-auth": "skipped" },
-      { sdk: "false", windows_server_tests: "false" },
+      { sdk: "false", platform_tests: "false" },
     ),
   )
   assert.equal(evaluated.ok, false)

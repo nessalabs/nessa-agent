@@ -22,6 +22,11 @@
  * from a parser that understood nothing, and the run that skips the suite must
  * not be green.
  *
+ * `--run-packages "-p a -p b"` runs only the binaries of those packages. The
+ * build and the doctests still take the full package arguments, so a narrowed
+ * run compiles exactly what the full one does and only runs less of it. An
+ * empty value runs every binary. `scripts/ci-plan.mjs` decides the list.
+ *
  *   node scripts/cargo-test-parallel.mjs --concurrency 2 -- -p nessa-sdk
  *
  * Diagnostics go to stderr. Test output goes to stdout, one binary per prefix.
@@ -42,27 +47,49 @@ const PARTITIONS = ["all", "server-conversation", "server-other", "remaining"]
 const TEST_KINDS = new Set(["lib", "rlib", "cdylib", "staticlib", "bin", "test"])
 const SKIPPED_KINDS = new Set(["custom-build", "example", "bench"])
 
-/** Split `--concurrency N -- cargo-args` from the process argument list. */
+const USAGE =
+  "usage: cargo-test-parallel.mjs --concurrency N [--partition all|server-conversation|server-other|remaining] [--run-packages '-p a -p b'] -- <cargo test args>"
+
+/** Split `--concurrency N [...] -- cargo-args` from the process argument list. */
 export function parseArgs(argv) {
   const separator = argv.indexOf("--")
   if (separator === -1) throw new Error("cargo arguments must follow --")
   const flags = argv.slice(0, separator)
   const cargoArgs = argv.slice(separator + 1)
   if (cargoArgs.length === 0) throw new Error("cargo test package arguments are required")
-  if (
-    ![2, 4].includes(flags.length) ||
-    flags[0] !== "--concurrency" ||
-    (flags.length === 4 && flags[2] !== "--partition")
-  )
-    throw new Error(
-      "usage: cargo-test-parallel.mjs --concurrency N [--partition all|server-conversation|server-other|remaining] -- <cargo test args>",
+  const values = new Map()
+  for (let index = 0; index < flags.length; index += 2) {
+    const flag = flags[index]
+    if (
+      !["--concurrency", "--partition", "--run-packages"].includes(flag) ||
+      values.has(flag) ||
+      index + 1 >= flags.length
     )
-  const concurrency = Number(flags[1])
+      throw new Error(USAGE)
+    values.set(flag, flags[index + 1])
+  }
+  if (!values.has("--concurrency") || flags[0] !== "--concurrency") throw new Error(USAGE)
+  const concurrency = Number(values.get("--concurrency"))
   if (!Number.isInteger(concurrency) || concurrency < 1)
     throw new Error("concurrency must be a positive integer")
-  const partition = flags[3] ?? "all"
+  const partition = values.get("--partition") ?? "all"
   if (!PARTITIONS.includes(partition)) throw new Error("unknown test partition")
-  return { concurrency, cargoArgs, partition }
+  const runPackages = runPackageNames(values.get("--run-packages") ?? "")
+  return runPackages.length > 0
+    ? { concurrency, cargoArgs, partition, runPackages }
+    : { concurrency, cargoArgs, partition }
+}
+
+/** The names in a `-p a -p b` string; empty means every package. */
+export function runPackageNames(text) {
+  const words = text.split(/\s+/).filter((word) => word !== "")
+  const names = []
+  for (let index = 0; index < words.length; index += 2) {
+    if (words[index] !== "-p" || !words[index + 1])
+      throw new Error(`--run-packages takes "-p name" pairs, not ${JSON.stringify(text)}`)
+    names.push(words[index + 1])
+  }
+  return names
 }
 
 /**
@@ -130,6 +157,22 @@ export function partitionExecutables(executables, metadata) {
     )
   const remaining = executables.filter((item) => item !== serverLib[0])
   return { server: serverLib, remaining }
+}
+
+/**
+ * The executables that belong to the named packages. A name the workspace does
+ * not have, or a selection with nothing in it, is an error: a run that tests
+ * nothing must not pass.
+ */
+export function selectPackages(executables, metadata, names) {
+  const ids = new Map(metadata.packages.map((pkg) => [pkg.name, pkg.id]))
+  for (const name of names)
+    if (!ids.has(name)) throw new Error(`no package named ${name} in this workspace`)
+  const wanted = new Set(names.map((name) => ids.get(name)))
+  const selected = executables.filter((item) => wanted.has(item.packageId))
+  if (selected.length === 0)
+    throw new Error(`no test binaries belong to ${names.join(", ")}`)
+  return selected
 }
 
 /** Compiler diagnostics buried in `cargo --message-format=json` stdout. */
@@ -208,6 +251,7 @@ export async function runParallelCargoTests({
   cargoArgs,
   concurrency,
   partition = "all",
+  runPackages = [],
   run,
   cwd,
   stdout = process.stdout,
@@ -245,21 +289,25 @@ export async function runParallelCargoTests({
   )
 
   let selected = executables
-  if (partition !== "all") {
-    let metadata = ""
+  let metadata = null
+  if (partition !== "all" || runPackages.length > 0) {
+    let text = ""
     const metadataCode = await run(
       "cargo",
       ["metadata", "--no-deps", "--format-version=1"],
       {
         cwd,
         onStdout: (chunk) => {
-          metadata += chunk
+          text += chunk
         },
         onStderr: (chunk) => stderr.write(chunk),
       },
     )
     if (metadataCode !== 0) throw new Error(`cargo metadata exited with ${metadataCode}`)
-    const partitions = partitionExecutables(executables, JSON.parse(metadata))
+    metadata = JSON.parse(text)
+  }
+  if (partition !== "all") {
+    const partitions = partitionExecutables(executables, metadata)
     const server = partitions.server[0]
     async function list(args) {
       let output = ""
@@ -286,6 +334,13 @@ export async function runParallelCargoTests({
       partition === "remaining" ? [...serverTasks, ...partitions.remaining] : serverTasks
     stderr.write(
       `partition ${partition}: ${plan[partition].names.length} server cases in ${serverTasks.length} executables, ${selected.length - serverTasks.length} other binaries; doctests ${partition === "remaining" ? "included" : "owned by remaining"}\n`,
+    )
+  }
+
+  if (runPackages.length > 0) {
+    selected = selectPackages(selected, metadata, runPackages)
+    stderr.write(
+      `running the ${selected.length} binaries of ${runPackages.join(", ")}; doctests keep the full list\n`,
     )
   }
 
@@ -345,11 +400,14 @@ function spawnProcess(command, args, io) {
 const invoked = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href
 if (invoked) {
   try {
-    const { concurrency, cargoArgs, partition } = parseArgs(process.argv.slice(2))
+    const { concurrency, cargoArgs, partition, runPackages } = parseArgs(
+      process.argv.slice(2),
+    )
     await runParallelCargoTests({
       cargoArgs,
       concurrency,
       partition,
+      runPackages,
       run:
         process.env.GITHUB_ACTIONS === "true"
           ? withFailureAnnotations(spawnProcess, (line) => process.stderr.write(line))

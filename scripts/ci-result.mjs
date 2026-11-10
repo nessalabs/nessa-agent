@@ -22,11 +22,11 @@ export const ALWAYS_RUN = ["changes", "workflows"]
 /**
  * Jobs a code change may skip, each with the `changes` output that has to say
  * `false` for the skip to count: the Windows server suites when no platform
- * code that reaches the server changed, the SDK coverage when the SDK is out
- * of reach. Any other value, or none, makes the skip a missed check.
+ * code changed, the SDK coverage when the SDK is out of reach. Any other
+ * value, or none, makes the skip a missed check.
  */
 export const PLANNED_SKIPS = {
-  "windows-server-tests": "windows_server_tests",
+  "windows-server-tests": "platform_tests",
   "sdk-domain-coverage": "sdk",
 }
 

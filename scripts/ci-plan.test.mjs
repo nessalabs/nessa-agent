@@ -9,6 +9,7 @@ import {
   memberManifest,
   packageArguments,
   planChange,
+  platformModuleFiles,
   readWorkspace,
   stringLiterals,
   workspaceGraph,
@@ -50,7 +51,12 @@ const graph = workspaceGraph([
   {
     dir: "crates/nessa-server",
     manifest: manifest("nessa-server", ["nessa-sdk", "nessa-protocol", "nessa-timer"]),
-    text: `"../../../../src/onboarding/adapters/agents.ts"`,
+    text: `"/../../docs/limits.md" "../../../../src/onboarding/adapters/agents.ts"`,
+    platformFiles: [
+      "crates/nessa-server/src/keychain.rs",
+      "crates/nessa-server/src/sandbox.rs",
+      "crates/nessa-server/src/sandbox/",
+    ],
   },
   {
     dir: "src-tauri",
@@ -74,7 +80,6 @@ test("a change with no Rust consequence runs no Rust suite", () => {
   assert.deepEqual(ui.rustPackages, [])
   assert.equal(ui.sdk, false)
   assert.equal(ui.platformTests, false)
-  assert.equal(ui.windowsServerTests, false)
 })
 
 test("a frontend file the desktop crate embeds reaches only the desktop crate", () => {
@@ -123,6 +128,10 @@ test("anything outside the members and the frontend roots reaches every crate", 
   for (const path of [
     "Cargo.lock",
     "Cargo.toml",
+    // Cargo unifies features across every listed crate, so one crate's
+    // manifest can change how the others build.
+    "crates/nessa-timer/Cargo.toml",
+    "src-tauri/Cargo.toml",
     "rust-toolchain.toml",
     "protocol/product/manifest.json",
     "scripts/cargo-test-parallel.mjs",
@@ -134,13 +143,12 @@ test("anything outside the members and the frontend roots reaches every crate", 
     assert.deepEqual(all.rustPackages, RUST_TEST_PACKAGES, path)
     assert.equal(all.sdk, true, path)
     assert.equal(all.platformTests, true, path)
-    assert.equal(all.windowsServerTests, true, path)
   }
 })
 
-test("only an explicit pull request narrows", () => {
+test("only an explicit pull request narrows, and nothing else reads the tree", () => {
   for (const event of ["push", "workflow_dispatch", "merge_group"]) {
-    const all = planChange([{ filename: "src/styles.css" }], graph, { event })
+    const all = planChange([{ filename: "src/styles.css" }], null, { event })
     assert.deepEqual(all.rustPackages, RUST_TEST_PACKAGES)
     assert.equal(all.platformTests, true)
   }
@@ -158,6 +166,14 @@ test("Markdown alone still skips everything, as documentation-only says", () => 
   const docs = plan("README.md", "crates/nessa-sdk/docs/claude-acp.md")
   assert.equal(docs.code, false)
   assert.equal(docs.rust, false)
+})
+
+test("a Markdown file a Rust test reads reaches that test's crate", () => {
+  for (const files of [["docs/limits.md"], ["docs/limits.md", "src/styles.css"]]) {
+    const limits = plan(...files)
+    assert.equal(limits.code, true)
+    assert.deepEqual(limits.rustPackages, ["nessa-server"])
+  }
 })
 
 test("macOS and Windows test suites run only for platform code", () => {
@@ -180,15 +196,62 @@ test("macOS and Windows test suites run only for platform code", () => {
       patch: `@@ -1 +1 @@\n${line}`,
     })
     assert.equal(changed.platformTests, true, line)
-    assert.equal(changed.windowsServerTests, true, line)
   }
-  // A platform word in an unchanged context line is not a change to it.
+  // A platform word in an unchanged context line of a shared file is not a
+  // change to it.
   assert.equal(
     plan({
       filename: "crates/nessa-server/src/a.rs",
-      patch: "@@ -1 +1 @@\n #[cfg(unix)]\n+let a = 2;",
+      patch: "@@ -1 +1 @@\n // unix sockets\n+let a = 2;",
     }).platformTests,
     false,
+  )
+})
+
+test("any change to a platform file or module runs the platform suites", () => {
+  // The edited line names no platform, but the file holds platform code, so
+  // the line may sit inside a `#[cfg(windows)]` block.
+  for (const filename of [
+    "crates/nessa-server/src/keychain.rs",
+    "crates/nessa-server/src/sandbox.rs",
+    "crates/nessa-server/src/sandbox/rules/apply.rs",
+  ]) {
+    const changed = plan({ filename, patch: "@@ -1 +1 @@\n-let a = 1;\n+let a = 2;" })
+    assert.equal(changed.platformTests, true, filename)
+  }
+  assert.equal(
+    plan({ filename: "crates/nessa-server/src/sandboxes.rs", patch: "+let a = 2;" })
+      .platformTests,
+    false,
+  )
+})
+
+test("a module declared under a platform cfg marks its file and folder", () => {
+  const source = [
+    '#[cfg(target_os = "macos")]',
+    "mod keychain;",
+    "#[cfg(unix)]",
+    "#[allow(dead_code)]",
+    "pub(crate) mod sockets;",
+    "#[cfg(windows)]",
+    '#[path = "../tests/windows_acl.rs"]',
+    "mod acl;",
+    "#[cfg(test)]",
+    "mod tests;",
+    "mod shared;",
+  ].join("\n")
+  assert.deepEqual(platformModuleFiles("crates/x/src/lib.rs", source), [
+    "crates/x/src/keychain.rs",
+    "crates/x/src/keychain/",
+    "crates/x/src/sockets.rs",
+    "crates/x/src/sockets/",
+    "crates/x/tests/windows_acl.rs",
+    "crates/x/tests/windows_acl/",
+  ])
+  // A file that is not `mod.rs` or `lib.rs` holds its children in its own folder.
+  assert.deepEqual(
+    platformModuleFiles("crates/x/src/gateway.rs", "#[cfg(unix)]\nmod peer;"),
+    ["crates/x/src/gateway/peer.rs", "crates/x/src/gateway/peer/"],
   )
 })
 
@@ -199,19 +262,15 @@ test("a platform-named path or a missing diff runs the platform suites", () => {
   )
   assert.equal(plan("crates/nessa-server/src/platform_paths.rs").platformTests, true)
   assert.equal(plan({ filename: "crates/nessa-server/src/big.rs" }).platformTests, true)
-  assert.equal(plan({ filename: "crates/nessa-server/Cargo.toml" }).platformTests, true)
-})
-
-test("platform code outside the server runs local-auth's suites, not the server partitions", () => {
-  const sdkOnly = planChange(
-    [{ filename: "crates/nessa-timer/src/lib.rs", patch: "+#[cfg(unix)]" }],
-    workspaceGraph([
-      { dir: "crates/nessa-timer", manifest: manifest("nessa-timer"), text: "" },
-      { dir: "crates/nessa-server", manifest: manifest("nessa-server"), text: "" },
-    ]),
+  // The files API sends `null` for a missing diff or an unrenamed file.
+  assert.equal(
+    plan({
+      filename: "crates/nessa-server/src/big.rs",
+      previous_filename: null,
+      patch: null,
+    }).platformTests,
+    true,
   )
-  assert.equal(sdkOnly.platformTests, true)
-  assert.equal(sdkOnly.windowsServerTests, false)
 })
 
 test("a comment that cites a path does not count as reading it", () => {
@@ -246,7 +305,6 @@ test("the GitHub output spells every answer, the package list as cargo takes it"
       "rust_packages=-p nessa-server",
       "sdk=false",
       "platform_tests=false",
-      "windows_server_tests=false",
       "",
     ].join("\n"),
   )
@@ -268,13 +326,48 @@ test("the real workspace reads, and every tested crate is a member", () => {
   const host = planChange([{ filename: "src/host/window.ts" }], real)
   assert.equal(host.rust, false)
   assert.ok(host.reasons.some((reason) => reason.includes("nessa-app")))
+  const limits = planChange([{ filename: "docs/limits.md", patch: "+a" }], real)
+  assert.ok(limits.rustPackages.includes("nessa-server"))
+  // `windows-server-tests` is skipped on `platform_tests` alone. That is right
+  // only while every tested crate leads to the server.
+  for (const name of RUST_TEST_PACKAGES) {
+    const reach = new Set([name])
+    const queue = [name]
+    while (queue.length > 0)
+      for (const next of real.dependents.get(queue.pop()) ?? [])
+        if (!reach.has(next)) reach.add(next) && queue.push(next)
+    assert.ok(reach.has("nessa-server"), name)
+  }
+  // The platform scan sees the real platform modules.
+  const storage = real.members.find((member) => member.name === "nessa-local-storage")
+  assert.ok(storage.platformFiles.includes("crates/nessa-local-storage/src/windows/"))
 })
 
-test("the workflow's fallback list is this script's list", () => {
+test("the workflow builds this script's list and narrows only the Linux run", () => {
   const workflow = readFileSync(
     new URL("../.github/workflows/local-auth.yml", import.meta.url),
     "utf8",
   )
-  assert.ok(workflow.includes(`'${packageArguments(RUST_TEST_PACKAGES)}'`))
+  const full = packageArguments(RUST_TEST_PACKAGES)
+  assert.ok(workflow.includes(`cargo clippy ${full} --all-targets`))
+  assert.ok(
+    workflow.includes(
+      `--run-packages "\${{ runner.os == 'Linux' && needs.changes.outputs.rust_packages || '' }}" -- ${full}`,
+    ),
+  )
   assert.ok(workflow.includes("node scripts/ci-plan.mjs --files-jsonl --github-output"))
+  // The macOS and Windows suites, and the steps that only they run, wait on
+  // the plan's platform answer.
+  assert.match(
+    workflow,
+    /if: needs\.changes\.outputs\.rust != 'false' && \(runner\.os == 'Linux' \|\| needs\.changes\.outputs\.platform_tests != 'false'\)/,
+  )
+  assert.match(
+    workflow,
+    /if: runner\.os == 'Windows' && needs\.changes\.outputs\.platform_tests != 'false'/,
+  )
+  assert.match(
+    workflow,
+    /if: runner\.os == 'Windows' && !cancelled\(\) && needs\.changes\.outputs\.platform_tests != 'false'/,
+  )
 })

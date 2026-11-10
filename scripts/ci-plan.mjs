@@ -19,9 +19,13 @@
  *
  *   1. A file inside a workspace member reaches that member and every member
  *      that depends on it (normal, dev or build dependency), read from the
- *      members' own `Cargo.toml` files.
+ *      members' own `Cargo.toml` files. A member's `Cargo.toml` itself is not
+ *      such a file: Cargo merges features across every crate a command lists,
+ *      so one manifest's dependency change can change how unrelated crates
+ *      build. It reaches every crate and every platform.
  *   2. A file under the frontend roots (`src/`, `packages/`, `verification/`,
- *      `docs/`, `experiments/`, or a web or config file at the repository root)
+ *      `docs/`, `experiments/`, or a web or config file at the repository root,
+ *      and a Markdown file a Rust test reads, see `documentation-only.mjs`)
  *      reaches a member only when a string literal in that member's Rust source
  *      names it: its file name, or a folder of two or more segments that holds
  *      it. Rust reads such files with `include_str!` (`src/host/window.ts` in
@@ -35,14 +39,23 @@
  * `protocol/`, `scripts/`, `.github/`, a path in no member — reaches every
  * crate and every platform.
  *
- * Platform tests. The macOS and Windows legs keep running clippy, which is what
- * catches a `#[cfg(unix)]` item left dead on Windows or an import that only one
- * system has. Their test suites run when a reached Rust file's diff adds or
- * removes a line that mentions `cfg`, `target_os`, `std::os`, `unix`, `windows`
- * or `macos`; when a changed path names a platform folder or file; when the
- * diff is not available (the files API leaves `patch` out of large and binary
- * files); and on every global change. A push to `main` runs everything, so a
- * platform break this lets through is caught on `main` and fixed forward.
+ * Platform tests. The macOS and Windows legs keep running clippy on every Rust
+ * change, which is what catches a `#[cfg(unix)]` item left dead on Windows or
+ * an import that only one system has. Their test suites run when a reached
+ * Rust file is platform code: its text has a `cfg` on a platform, `target_os`,
+ * `std::os` or a system crate (`PLATFORM_CODE`); a module above it is declared
+ * under such a `cfg`; its path names a platform folder or file; or its diff
+ * adds or removes a line that mentions one. They also run when the diff is not
+ * available (the files API leaves `patch` out of large and binary files) and on
+ * every global change.
+ *
+ * This is the one place the plan can be wrong in the silent direction, and it
+ * is a choice: shared code that names no platform but behaves differently on
+ * one (a path separator, a line ending) is tested on Linux and linted on all
+ * three systems, and its macOS and Windows tests wait for the push to `main`,
+ * which runs everything. A break that gets through is caught there and fixed
+ * forward. Running the two platform suites for every Rust change would keep
+ * the macOS leg at its full fifty minutes for most pull requests.
  *
  * Input on stdin is either one path per line (a person at a terminal: no diffs,
  * so platform tests always run) or, with `--files-jsonl`, one JSON object per
@@ -53,8 +66,8 @@
  *   gh api --paginate repos/o/r/pulls/1/files --jq '.[] | @json' \
  *     | node scripts/ci-plan.mjs --files-jsonl --github-output
  */
-import { readFileSync, readdirSync, statSync } from "node:fs"
-import { join, relative } from "node:path"
+import { appendFileSync, readFileSync, readdirSync, statSync } from "node:fs"
+import { join, relative, sep } from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 
 import { documentationOnly, inertPath } from "./documentation-only.mjs"
@@ -85,6 +98,16 @@ const ROOT_FRONTEND_FILE =
 const PLATFORM_PATH =
   /(^|[/_.-])(windows|win32|macos|darwin|linux|unix|platform)([/_.-]|$)/i
 const PLATFORM_LINE = /cfg!?\s*\(|target_os|std::os::|\bunix\b|\bwindows\b|\bmacos\b/i
+/** Rust that compiles or behaves differently per system. */
+const PLATFORM_WORDS =
+  "unix|windows|target_os|target_family|target_env|target_arch|target_vendor"
+export const PLATFORM_CODE = new RegExp(
+  `\\bcfg(?:_attr)?!?\\s*\\([^\\n]*\\b(?:${PLATFORM_WORDS})\\b|\\bstd::os::|\\b(?:libc|nix|windows_sys|windows|objc2\\w*|core_foundation\\w*|cocoa)::`,
+)
+const PLATFORM_MODULE = new RegExp(
+  `#\\[cfg(?:_attr)?\\s*\\([^\\]\\n]*\\b(?:${PLATFORM_WORDS})\\b[^\\n]*\\]\\s*((?:#\\[[^\\n]*\\]\\s*)*)(?:pub(?:\\([^)]*\\))?\\s+)?mod\\s+(\\w+)`,
+  "g",
+)
 
 /** The `[[workspace]] members` of a root `Cargo.toml`. */
 export function workspaceMembers(rootManifest) {
@@ -114,15 +137,24 @@ function normalise(path) {
 /**
  * The workspace as this script needs it.
  *
- * @param {{ dir: string, manifest: string, text: string }[]} members each
- *   member's directory relative to the repository root, its `Cargo.toml`, and
- *   the string literals of its Rust sources and build script, joined.
+ * @param {{ dir: string, manifest: string, text: string, platformFiles?: Iterable<string> }[]} members
+ *   each member's directory relative to the repository root, its `Cargo.toml`,
+ *   the string literals of its Rust sources and build script joined, and the
+ *   repository paths of its Rust files that are platform code. A path ending in
+ *   `/` stands for every file under it: the folder of a module declared under
+ *   a platform `cfg`.
  */
 export function workspaceGraph(members) {
   const byDir = new Map()
   for (const member of members) {
     const { name, paths } = memberManifest(member.manifest)
-    byDir.set(member.dir, { name, dir: member.dir, paths, text: member.text })
+    byDir.set(member.dir, {
+      name,
+      dir: member.dir,
+      paths,
+      text: member.text,
+      platformFiles: [...(member.platformFiles ?? [])],
+    })
   }
   const dependents = new Map(
     [...byDir.values()].map((member) => [member.name, new Set()]),
@@ -155,6 +187,23 @@ function namesFor(path) {
   return names
 }
 
+/** Why a reached Rust file needs the macOS and Windows suites, or null. */
+function platformReason(member, path, file) {
+  const inside = path.slice(member.dir.length)
+  if (PLATFORM_PATH.test(inside)) return "names a platform"
+  if (!path.endsWith(".rs")) return null
+  if (typeof file.patch !== "string") return "no diff to read"
+  if (
+    member.platformFiles.some((platform) =>
+      platform.endsWith("/") ? path.startsWith(platform) : path === platform,
+    )
+  )
+    return "is platform code"
+  if (changedLines(file.patch).some((line) => PLATFORM_LINE.test(line)))
+    return "changes platform-specific code"
+  return null
+}
+
 function changedLines(patch) {
   return patch
     .split("\n")
@@ -175,7 +224,6 @@ export function planChange(files, graph, { event = "pull_request" } = {}) {
     rustPackages: [...RUST_TEST_PACKAGES],
     sdk: true,
     platformTests: true,
-    windowsServerTests: true,
     reasons: [reason],
   })
   const paths = files.flatMap((file) =>
@@ -191,7 +239,6 @@ export function planChange(files, graph, { event = "pull_request" } = {}) {
       rustPackages: [],
       sdk: false,
       platformTests: false,
-      windowsServerTests: false,
       reasons: ["documentation only"],
     }
 
@@ -202,26 +249,17 @@ export function planChange(files, graph, { event = "pull_request" } = {}) {
     for (const path of [file.filename, file.previous_filename]) {
       if (typeof path !== "string" || path.trim() === "" || inertPath(path)) continue
       const member = memberOf(graph, path)
-      if (member) {
+      if (member && path !== `${member.dir}/Cargo.toml`) {
         reached.add(member.name)
         reasons.push(`${path}: in ${member.name}`)
-        const rustish = /\.rs$|(^|\/)Cargo\.toml$/.test(path)
-        if (PLATFORM_PATH.test(path.slice(member.dir.length))) {
+        const platform = platformReason(member, path, file)
+        if (platform) {
           platformTests = true
-          reasons.push(`${path}: names a platform`)
-        } else if (rustish && typeof file.patch !== "string") {
-          platformTests = true
-          reasons.push(`${path}: no diff to read`)
-        } else if (
-          rustish &&
-          changedLines(file.patch).some((line) => PLATFORM_LINE.test(line))
-        ) {
-          platformTests = true
-          reasons.push(`${path}: changes platform-specific code`)
+          reasons.push(`${path}: ${platform}`)
         }
         continue
       }
-      if (frontendPath(path)) {
+      if (!member && (frontendPath(path) || path.endsWith(".md"))) {
         const names = namesFor(path)
         for (const candidate of graph.members) {
           if (names.some((name) => candidate.text.includes(name))) {
@@ -253,7 +291,6 @@ export function planChange(files, graph, { event = "pull_request" } = {}) {
     rustPackages,
     sdk: reached.has("nessa-sdk"),
     platformTests: rust && platformTests,
-    windowsServerTests: rust && platformTests && reached.has("nessa-server"),
     reasons,
   }
 }
@@ -271,7 +308,6 @@ export function githubOutput(plan) {
     `rust_packages=${packageArguments(plan.rustPackages)}`,
     `sdk=${plan.sdk}`,
     `platform_tests=${plan.platformTests}`,
-    `windows_server_tests=${plan.windowsServerTests}`,
     "",
   ].join("\n")
 }
@@ -286,19 +322,46 @@ export function stringLiterals(source) {
   return [...withoutComments.matchAll(/"(?:[^"\\\n]|\\.)*"/g)].map((match) => match[0])
 }
 
-function rustText(root, dir) {
-  const chunks = []
+/**
+ * The files of the modules one Rust source declares under a platform `cfg`,
+ * as repository paths: each module's file and its folder, which holds its own
+ * submodules. Everything in such a module compiles on one system only.
+ *
+ * @param {string} file the declaring file's repository path
+ */
+export function platformModuleFiles(file, source) {
+  const folder = file.slice(0, file.lastIndexOf("/") + 1)
+  const stem = file.slice(folder.length).replace(/\.rs$/, "")
+  const children = ["mod", "lib", "main"].includes(stem) ? folder : `${folder}${stem}/`
+  const files = []
+  for (const match of source.matchAll(PLATFORM_MODULE)) {
+    const path = match[1].match(/#\[path\s*=\s*"([^"]+)"/)
+    const target = path ? normalise(`${folder}${path[1]}`) : `${children}${match[2]}.rs`
+    files.push(target, `${target.replace(/(\/mod)?\.rs$/, "")}/`)
+  }
+  return files
+}
+
+/** What `workspaceGraph` needs from one member's Rust sources on disk. */
+function memberSources(root, dir) {
+  const literals = []
+  const platformFiles = []
   const walk = (current) => {
     for (const entry of readdirSync(current, { withFileTypes: true })) {
       if (entry.name === "target" || entry.name === "node_modules") continue
       const path = join(current, entry.name)
       if (entry.isDirectory()) walk(path)
-      else if (entry.name.endsWith(".rs"))
-        chunks.push(...stringLiterals(readFileSync(path, "utf8")))
+      else if (entry.name.endsWith(".rs")) {
+        const source = readFileSync(path, "utf8")
+        const file = relative(root, path).split(sep).join("/")
+        literals.push(...stringLiterals(source))
+        if (PLATFORM_CODE.test(source)) platformFiles.push(file)
+        platformFiles.push(...platformModuleFiles(file, source))
+      }
     }
   }
   walk(join(root, dir))
-  return chunks.join("\n")
+  return { text: literals.join("\n"), platformFiles }
 }
 
 /** Read the workspace from a checkout. */
@@ -307,7 +370,9 @@ export function readWorkspace(root) {
     (dir) => ({
       dir,
       manifest: readFileSync(join(root, dir, "Cargo.toml"), "utf8"),
-      text: statSync(join(root, dir)).isDirectory() ? rustText(root, dir) : "",
+      ...(statSync(join(root, dir)).isDirectory()
+        ? memberSources(root, dir)
+        : { text: "" }),
     }),
   )
   return workspaceGraph(members)
@@ -337,20 +402,20 @@ if (invoked) {
   let input = ""
   process.stdin.setEncoding("utf8")
   for await (const chunk of process.stdin) input += chunk
+  const event = process.env.EVENT ?? "pull_request"
   const root =
     relative(process.cwd(), fileURLToPath(new URL("..", import.meta.url))) || "."
+  // Anything but a pull request runs everything, so it neither needs nor
+  // depends on reading the workspace.
   const plan = planChange(
     parseInput(input, args.includes("--files-jsonl")),
-    readWorkspace(root),
-    {
-      event: process.env.EVENT ?? "pull_request",
-    },
+    event === "pull_request" ? readWorkspace(root) : null,
+    { event },
   )
   process.stdout.write(`${JSON.stringify(plan, null, 2)}\n`)
   if (args.includes("--github-output")) {
     const output = process.env.GITHUB_OUTPUT
     if (!output) throw new Error("GITHUB_OUTPUT is not set")
-    const { appendFileSync } = await import("node:fs")
     appendFileSync(output, githubOutput(plan))
   }
 }
