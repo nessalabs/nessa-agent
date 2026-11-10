@@ -1234,6 +1234,9 @@ The optional `nessa-background` MCP tools reuse the authenticated session relay
 and conversation tool admission. Shepherd owns a command's process scope; the
 conversation application owns the original call binding, durable lifecycle and
 internal completion delivery. Status projection updates the existing waterfall
-row after the provider turn has ended. Local workspace placement is required;
-remote commands are refused. See [background tasks](state/services/gateway/background-tasks.md)
+row after the provider turn has ended. Local commands use the gateway's
+Shepherd. Boat commands use an independent SSH session to the verified installed
+`background-run` helper in that thread's existing VM. The stream retains the
+workspace's `InUse` token until it ends; EOF requests VM-side scope cancellation and cleanup.
+Other remote placements are refused. See [background tasks](state/services/gateway/background-tasks.md)
 for recovery and cleanup limits.

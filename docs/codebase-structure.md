@@ -2742,9 +2742,20 @@ coordinates admission, native-call binding, detached execution and internal
 continuation. Its runner, store and argument-decoder ports live in
 `conversation/application/background_tasks`; immutable lifecycle transitions live
 in `conversation/domain/background_task`. `infrastructure/background_tasks`
-implements transactional current-state/audit persistence and the Shepherd adapter.
+implements transactional current-state/audit persistence, the local Shepherd
+adapter, and the bounded SSH task transport. `ssh_environment/background_command.rs`
+spells the exact-build helper invocation; `ThreadWorkspaces` opens the existing
+VM without provisioning and the workspace runtime retains `InUse` for its stream.
+`composition/background_command.rs` wires the VM helper's account environment and
+Shepherd to stdin/stdout; agent credentials do not enter that command environment.
 The service decorates existing tool rows; frontend transcript code retains their
-background identity while the turn ends. See [the lifecycle](state/services/gateway/background-tasks.md).
+background identity while the turn ends. The desktop stress `vmBackground` step
+uses `stress-vm-background.mjs` to launch the ignored, test-only
+`tests/composition/vm_background_gateway.rs` gateway: production admission and VM
+background dispatch, a fake workspace provider, and the real helper subprocess.
+The fixture retains the real runtime-settings store. Its conversation and Devices
+installers send the CLI build rather than the gateway's test executable.
+Released binaries contain no fixture selector. See [the lifecycle](state/services/gateway/background-tasks.md).
 
 ## GitHub webhook ingress and relay
 

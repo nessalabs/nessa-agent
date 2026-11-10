@@ -640,3 +640,46 @@ fn call_and_mcp_take_a_method_or_only_a_credential_file() {
         assert!(parse(&args(&words)).is_err(), "{words:?}");
     }
 }
+
+#[test]
+fn background_helper_accepts_only_the_bounded_shell_contract() {
+    let cwd = if cfg!(windows) {
+        r"C:\work"
+    } else {
+        "/tmp/work"
+    };
+    let valid = args(&[
+        "background-run",
+        "--cwd",
+        cwd,
+        "--timeout",
+        "12",
+        "--",
+        "bash",
+        "--noprofile",
+        "--norc",
+        "-c",
+        "echo ok",
+    ]);
+    assert!(matches!(parse(&valid), Ok(Command::BackgroundRun { .. })));
+    for (index, bad) in [
+        (2, "relative"),
+        (2, "/tmp/\0bad"),
+        (4, "0"),
+        (4, "3601"),
+        (4, "bad"),
+        (6, "sh"),
+        (7, "--login"),
+        (10, " "),
+    ] {
+        let mut words = valid.clone();
+        words[index] = bad.into();
+        assert!(parse(&words).is_err(), "{words:?}");
+    }
+    let mut extra = valid.clone();
+    extra.push("extra".into());
+    assert!(parse(&extra).is_err());
+    let mut large = valid;
+    large[10] = "x".repeat(crate::conversation::domain::BackgroundCommand::MAX_BYTES + 1);
+    assert!(parse(&large).is_err());
+}

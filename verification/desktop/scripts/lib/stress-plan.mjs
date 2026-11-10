@@ -12,6 +12,10 @@
 
 /** Every number the check takes: its default, and what it counts. */
 export const KNOBS = {
+  vmBackgroundTasks: {
+    default: 1,
+    what: "VM background commands through the composer, real helper and fake provider, holding past idle and resting afterward",
+  },
   backgroundTasks: {
     default: 1,
     what: "background commands outliving their calling turn and settling the original tool row",
@@ -289,6 +293,7 @@ export function plan(knobs, accessScenario = "full") {
   add(knobs.signIns, () => ({ kind: "signIn" }))
   add(knobs.restarts, () => ({ kind: "restart" }))
   add(knobs.backgroundTasks, () => ({ kind: "background" }))
+  add(knobs.vmBackgroundTasks, () => ({ kind: "vmBackground" }))
   add(knobs.threads, () => ({ kind: "delegate" }))
   add(knobs.awaits, () => ({ kind: "await" }))
   add(knobs.watches, () => ({ kind: "watch" }))

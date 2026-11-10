@@ -96,6 +96,42 @@ impl SshAccess {
             mcp_relay: Some(self.clone()),
         })
     }
+    /// A command session independent of the agent lease. Dropping its stdin
+    /// tells the VM's Shepherd runner to cancel and clean up its scope.
+    pub(super) async fn background(
+        self: &Arc<Self>,
+        program: String,
+    ) -> io::Result<WorkspaceStream> {
+        let mut command = ssh(&self.directory, self.endpoint);
+        command
+            .args(["-o", "ControlMaster=no", "-o", "ClearAllForwardings=yes"])
+            .arg(format!("user@{}", self.endpoint.ip()))
+            .arg(program)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let mut child = command.spawn()?;
+        if let Some(stderr) = child.stderr.take() {
+            log_stderr(&format!("boat {} background", self.vm), stderr);
+        }
+        Ok(WorkspaceStream {
+            input: Box::new(
+                child
+                    .stdin
+                    .take()
+                    .ok_or_else(|| io::Error::other("missing background stdin"))?,
+            ),
+            output: Box::new(
+                child
+                    .stdout
+                    .take()
+                    .ok_or_else(|| io::Error::other("missing background stdout"))?,
+            ),
+            owner: Box::new((child, self.clone())),
+            files: None,
+            mcp_relay: None,
+        })
+    }
     /// The lease protocol the image's own `nessa` says it speaks, empty
     /// when it says none; `None` when the VM did not answer.
     pub(super) async fn image_protocol(&self) -> Option<String> {

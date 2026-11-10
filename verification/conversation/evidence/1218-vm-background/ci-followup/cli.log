@@ -1,0 +1,60 @@
+warning: constant evaluation is taking a long time
+    --> crates/nessa-protocol/src/lease.rs:1235:20
+     |
+1235 |         while at < source.len() {
+     |                    ^^^^^^^^^^^^ the const evaluator is currently interpreting this expression
+     |
+help: the constant being evaluated
+    --> crates/nessa-server/src/env/config.rs:58:9
+     |
+  58 |           const LEASE_PROTOCOL_DIGITS: [u8; 16] =
+     |           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+  70 | / lease_protocol!(
+  71 | |     "../../../nessa-protocol/src/lease.rs",
+  72 | |     "../../../nessa-protocol/src/pairing/frames.rs",
+  73 | |     "../../../nessa-protocol/src/build_update.rs",
+...    |
+ 116 | |     "../../../nessa-sdk/src/domain/agent_execution/leases/value_objects.rs",
+ 117 | | );
+     | |_- in this macro invocation
+     = note: this warning originates in the macro `lease_protocol` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: `nessa-server` (lib test) generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.31s
+     Running unittests src/lib.rs (target/debug/deps/nessa_server-b02bbfaea7450623)
+
+running 31 tests
+test cli::application_tests::token_scope_comes_from_authenticated_gateway_and_failed_issuance_is_not_replayed ... ok
+test cli::application_tests::explicit_ttl_is_capped_and_invalid_lifetimes_never_issue ... ok
+test cli::argument_tests::a_stand_in_names_an_absolute_socket_a_server_and_its_configuration ... ok
+test cli::argument_tests::artifact_publish_takes_no_flag_as_its_path ... ok
+test cli::argument_tests::artifact_publish_names_one_path_and_optionally_its_type ... ok
+test cli::argument_tests::call_and_mcp_take_a_method_or_only_a_credential_file ... ok
+test cli::argument_tests::background_helper_accepts_only_the_bounded_shell_contract ... ok
+test cli::argument_tests::env_grant_names_agents_or_every_agent_and_commands_with_their_longest_run ... ok
+test cli::argument_tests::env_enroll_names_a_gateway_and_a_code_and_env_dial_a_gateway ... ok
+test cli::argument_tests::env_ungrant_takes_one_thing_back_and_env_grants_lists_them ... ok
+test cli::argument_tests::github_connection_has_no_user_facing_stage_or_endpoint_override ... ok
+test cli::argument_tests::github_passphrases_use_stdin_and_never_an_argument_or_stage_override ... ok
+test cli::argument_tests::install_agent_wants_exactly_one_agent ... ok
+test cli::argument_tests::install_agent_refuses_a_name_that_could_be_a_path ... ok
+test cli::argument_tests::limits_prints_json_and_takes_nothing_else ... ok
+test cli::argument_tests::relay_serve_names_the_address_it_listens_on ... ok
+test cli::argument_tests::local_bootstrap_is_explicit_and_cloud_never_falls_back ... ok
+test cli::argument_tests::the_help_text_mentions_installing_an_agent ... ok
+test cli::argument_tests::token_ttl_is_explicit_bounded_and_exclusive_with_no_expiry ... ok
+test cli::argument_tests::install_agent_names_one_agent ... ok
+test cli::gateway_tests::adapter_rejects_an_authenticated_identity_with_nonportable_expiry ... ok
+test cli::infrastructure::mcp::tests::an_oversized_frame_stops_before_the_rest_is_buffered ... ok
+test cli::gateway_tests::adapter_bounds_unsolicited_notices_and_rejects_mismatched_request_ids_and_scope ... ok
+test cli::surface_tests::a_gateway_refusal_keeps_its_code_and_schema_failures_are_not_sent ... ok
+test cli::surface_tests::a_cli_call_and_an_mcp_call_send_the_same_method ... ok
+test cli::surface_tests::the_agent_name_bound_is_utf8_bytes ... ok
+test cli::gateway_tests::a_dropped_passphrase_change_stays_unconfirmed_on_the_cli_and_on_mcp ... ok
+test cli::surface_tests::the_surface_wait_outlasts_an_archive_install ... ok
+test cli::surface_tests::mcp_lists_each_exposed_method_and_not_an_excluded_one ... ok
+test cli::surface_tests::tools_list_matches_the_mcp_tool_contract ... ok
+test cli::gateway_tests::a_timed_out_call_reconnects_instead_of_reading_the_late_reply ... ok
+
+test result: ok. 31 passed; 0 failed; 0 ignored; 0 measured; 4789 filtered out; finished in 0.26s

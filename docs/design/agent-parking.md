@@ -45,11 +45,9 @@ different rule, because its VM is billed while it runs:
 - A background command of it that still runs keeps it in use. Whether one
   runs is the background task owner's to say (`BackgroundTasks::running_for`),
   not a guess from its turn: the process supervisor knows what it started.
-  Today no background command can start in a cloud workspace (the task owner
-  refuses one for a conversation with no local workspace), so this never
-  holds a VM yet; running them in the VM under Shepherd, and seeing the
-  commands a provider runs on its own (Codex's built-in shell), is
-  [#1218](https://github.com/nessalabs/nessa-agent/issues/1218).
+  A cloud background command runs in that thread's VM under Shepherd and holds
+  the workspace runtime's `InUse` token. Commands a provider starts outside
+  `background.start`, including its own built-in shell, are not counted.
 - Once its slot is released, its SSH link is let go (`SshEnvironment::let_go`,
   only while nothing holds it: no lease, and no opening between taking the
   link and recording its grant; asked again for half a minute while the
@@ -166,3 +164,35 @@ Parking moves the agent's start onto the next message. Measured cold starts on
 (`pnpm test:scale`) has a park and resume phase that reports how many agents
 were parked, the resumed turns' latency, and CPU and memory for the gateway and
 for its agent processes in every phase.
+
+## VM background commands (#1218)
+
+The conversation admits a background command against its observed native tool
+call before saving its task. Its immutable placement identifies the machine;
+the admitted workspace is the directory reported by that machine's lease.
+Only local and per-thread Boat workspaces support this operation.
+
+| Event and ordering | Owner and next effect |
+| --- | --- |
+| New admitted call | Save its binding before starting a runner; a retry returns that binding |
+| VM runner starts | Open the existing workspace with provisioning disabled; retain its runtime's `InUse` token |
+| VM command starts | Run this gateway's installed build's `background-run` over SSH; Shepherd owns the command scope |
+| Stop during workspace opening or helper installation | Retain accepted preparation until it answers; successful preparation observing stop settles cancelled/not-started before launch; a preparation error remains interrupted with unconfirmed cleanup |
+| Stop after the VM stream opens | Send a stop byte; keep reading until Shepherd reports exit and cleanup |
+| SSH stdin closes | VM runner cancels Shepherd and waits for scope cleanup |
+| Command exits while SSH stdin stays open | A nonblocking stdin descriptor allows the helper to return without leaving a blocking read holding runtime shutdown |
+| SSH output buffer fills | Nonblocking write readiness preserves the bounded terminal record until the reader drains it |
+| SSH ends without an outcome | Settle interrupted with cleanup unconfirmed; do not infer release from a transport error |
+| Outcome received | Validate the record; the finished stream releases its runtime, while the task owner saves terminal evidence and delivers the continuation |
+| Idle limit passes while task runs | Existing background owner prevents parking, and `InUse` prevents a direct rest |
+| Verified task and delivery finish | Clear the background owner; the next eligible idle sweep can rest the VM |
+| Gateway restarts | Existing recovery settles saved unfinished tasks interrupted without replaying commands |
+
+The gated `a_stop_during_background_install_does_not_launch_the_command`
+regression covers stopping during preparation. The command timeout measures
+execution; the transport deadline begins after preparation, without a startup
+deadline.
+
+The transport keeps bounded terminal output and accepts only a validated outcome.
+It does not distribute agent logins or change command authorization. Provider-owned
+shells outside `background.start` remain outside this task owner's accounting.

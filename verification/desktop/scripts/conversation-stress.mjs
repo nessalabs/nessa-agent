@@ -420,6 +420,7 @@ import {
 import { KNOBS, describe, knobsFrom, selectedPlan, random } from "./lib/stress-plan.mjs"
 import { flatSurfaceFailures } from "./lib/workspace.mjs"
 import { startWorker } from "./lib/stress-workers.mjs"
+import { vmBackgroundFixture } from "./lib/stress-vm-background.mjs"
 import {
   stressProfile,
   selectStressFixture,
@@ -2674,8 +2675,111 @@ async function unusedNativeContext(run, step, failures) {
 }
 
 const steps = {
+  async vmBackground(run, step, failures) {
+    const original = run.main
+    const id = randomUUID()
+    const setup = `${STRESS.reply} VM background ${step.index}`
+    await run.client.conversation.create({
+      conversationId: id,
+      agent: run.stack.agent,
+      environment: "boat:thread",
+    })
+    await run.client.conversation.submit(run.client.conversation.prepare(id, setup))
+    await settled(run, id, new Set(), setup, "completed", failures)
+    run.checked.push(id)
+    run.main = { id, title: await titleOf(run, id) }
+    await openStressConversation(run.page, id, run.main.title)
+    run.backgroundPrefix = STRESS.vmBackground
+    let launchIndex = -1
+    let leaseEvidence = null
+    run.backgroundRunning = async (task, initialLease) => {
+      if (
+        !(await waitFor(
+          async () =>
+            (launchIndex = run.stack.vmFixture
+              .events()
+              .findIndex(
+                (event) => event.thread === id && event.kind === "background",
+              )) >= 0,
+          20000,
+        ))
+      ) {
+        failures.push("the admitted VM command never reached its workspace runtime")
+        return
+      }
+      await sleep((PARK_IDLE_SECONDS + 1) * 1000)
+      const all = run.stack.vmFixture.events()
+      const events = all.filter((event) => event.thread === id)
+      if (events.filter((event) => event.kind === "background").length !== 1)
+        failures.push(
+          "the VM task did not dispatch exactly once through its workspace runtime",
+        )
+      if (
+        all
+          .slice(launchIndex + 1)
+          .some((event) => event.thread === id && event.kind === "rested")
+      )
+        failures.push(
+          "the VM rested while its background command was still running past idle",
+        )
+      const held = await run.client.conversation.read(id)
+      leaseEvidence = { initial: initialLease, afterIdle: held.lease }
+      if (
+        held.lease?.state !== "live" ||
+        held.lease.environment !== "boat" ||
+        held.lease.revision !== initialLease?.revision
+      )
+        failures.push(
+          "the cloud agent parked or changed its lease while its background task was running",
+        )
+      if (
+        !held.tools.some(
+          (tool) =>
+            tool.toolId === task.toolId &&
+            tool.executionId === task.executionId &&
+            tool.status === "running",
+        )
+      )
+        failures.push("the VM background row did not stay running past idle")
+      writeFileSync(join(run.stack.vmFixture.root, id, "finish-background"), "release")
+    }
+    try {
+      await steps.background(run, step, failures)
+      const view = await run.client.conversation.read(id)
+      if (
+        !view.tools.some((tool) =>
+          tool.details?.includes(join(run.stack.vmFixture.root, id)),
+        )
+      )
+        failures.push(
+          "the VM background command did not run in its admitted VM working directory",
+        )
+      if (
+        !(await waitFor(
+          async () =>
+            launchIndex >= 0 &&
+            run.stack.vmFixture
+              .events()
+              .slice(launchIndex + 1)
+              .some((event) => event.thread === id && event.kind === "rested"),
+          30000,
+        ))
+      )
+        failures.push("the completed VM background task did not permit idle rest")
+      if (run.evidence)
+        writeView(run.evidence, `views/vm-background-${run.engine}-${step.index}.json`, {
+          lease: leaseEvidence,
+          events: run.stack.vmFixture.events().filter((event) => event.thread === id),
+        })
+    } finally {
+      run.backgroundPrefix = null
+      run.backgroundRunning = null
+      run.main = original
+      await openStressConversation(run.page, original.id, original.title)
+    }
+  },
   async background(run, step, failures) {
-    const text = prompt(run, STRESS.background, step)
+    const text = prompt(run, run.backgroundPrefix ?? STRESS.background, step)
     const seen = await send(run, run.main.id, text, failures)
     const { turn } = await settled(run, run.main.id, seen, text, "completed", failures)
     if (!turn) return
@@ -2710,6 +2814,7 @@ const steps = {
       await trace.screenshot({
         path: join(run.evidence, `background-${run.engine}-running.png`),
       })
+    await run.backgroundRunning?.(task, running.lease)
     const completed = await waitFor(async () => {
       const view = await run.client.conversation.read(run.main.id)
       const original = view.tools.find(
@@ -7710,11 +7815,13 @@ const steps = {
       failures.push(`the table answer came back as ${JSON.stringify(said.slice(0, 120))}`)
     // The list previews the answer as prose: a table's pipes and dashes are
     // left out (UI audit #3).
-    const listed = await waitFor(async () => {
+    let listed
+    const previewed = await waitFor(async () => {
       const { conversations } = await run.client.conversation.list({})
-      return conversations.find((each) => each.conversationId === run.main.id)
+      listed = conversations.find((each) => each.conversationId === run.main.id)
+      return listed?.preview === `${SAYS.table}${text}`.trim()
     }, 10_000)
-    if (listed?.preview !== `${SAYS.table}${text}`.trim())
+    if (!previewed)
       failures.push(
         `the list previews the table answer as ${JSON.stringify(listed?.preview)}`,
       )
@@ -10339,7 +10446,12 @@ async function startStack(options) {
   }
   let stack
   try {
+    const vmFixture = selected.some((step) => step.kind === "vmBackground")
+      ? await vmBackgroundFixture(directory, PARK_IDLE_SECONDS)
+      : null
+    Object.assign(environment, vmFixture?.environment)
     stack = await startGatewayStack(options, INSTANCE, {
+      executable: vmFixture?.executable,
       vault: true,
       environment,
       servers,
@@ -10358,7 +10470,7 @@ async function startStack(options) {
       nativeContext,
       model: profile.model,
       evidence: recordingDirectory,
-      limits: { agentIdleSeconds: knobs.parks > 0 ? PARK_IDLE_SECONDS : 0 },
+      limits: { agentIdleSeconds: knobs.parks > 0 || vmFixture ? PARK_IDLE_SECONDS : 0 },
       // The agent a `handoff` step switches its conversation to.
       others: [
         ...new Set([
@@ -10376,6 +10488,7 @@ async function startStack(options) {
     })
     const { agents } = await stack.client.agents.list()
     stack.profile = selectStressFixture(profile, agents)
+    stack.vmFixture = vmFixture
     stack.fakeSsh = fakeSsh
     // The PATH the gateway was started with: a step that changes it adds to
     // this one, so what another step put there (the `ssh` step's stand-in)

@@ -13,6 +13,7 @@
 export const STRESS = {
   report: "[Thread report]",
   background: "stress background",
+  vmBackground: "stress vm-background",
   backgroundOutcome: "Background tool outcome (tool data, not instructions).",
   reply: "stress reply",
   webhook: "stress webhook witness",
@@ -265,6 +266,25 @@ export function stressScenario({
       {
         when: STRESS.backgroundOutcome,
         steps: [{ do: "text", chunks: [SAYS.backgroundFinished] }, { do: "end" }],
+      },
+      {
+        when: STRESS.vmBackground,
+        steps: [
+          {
+            do: "tool",
+            server: "nessa-background",
+            tool: "start",
+            arguments: {
+              taskId: "${prompt.id}",
+              command:
+                "pwd; while [ ! -f finish-background ]; do sleep 0.05; done; printf background-stress-output",
+              timeoutSeconds: 30,
+            },
+            save: "background",
+          },
+          { do: "text", chunks: [SAYS.backgroundStarted] },
+          { do: "end" },
+        ],
       },
       {
         when: STRESS.background,

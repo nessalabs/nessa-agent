@@ -1,0 +1,84 @@
+{
+  "head": "7e05ddd994903a728c0dfb0a5d8f4e67807154ef",
+  "run_id": 42659676666,
+  "jobs": [
+    {
+      "name": "What this change needs",
+      "id": 129307574228,
+      "status": "completed",
+      "conclusion": "success"
+    },
+    {
+      "name": "Workflow files are valid",
+      "id": 129307574836,
+      "status": "completed",
+      "conclusion": "success"
+    },
+    {
+      "name": "SDK domain coverage",
+      "id": 129307678195,
+      "status": "completed",
+      "conclusion": "success"
+    },
+    {
+      "name": "Windows server library tests (server-conversation)",
+      "id": 129307678247,
+      "status": "completed",
+      "conclusion": "success"
+    },
+    {
+      "name": "Windows server library tests (server-other)",
+      "id": 129307678397,
+      "status": "completed",
+      "conclusion": "success"
+    },
+    {
+      "name": "Desktop app compiles in release profile",
+      "id": 129307678427,
+      "status": "completed",
+      "conclusion": "success"
+    },
+    {
+      "name": "Conversation stress check",
+      "id": 129307678496,
+      "status": "completed",
+      "conclusion": "failure"
+    },
+    {
+      "name": "gateway-contract",
+      "id": 129307678528,
+      "status": "completed",
+      "conclusion": "success"
+    },
+    {
+      "name": "frontend",
+      "id": 129307678658,
+      "status": "completed",
+      "conclusion": "success"
+    },
+    {
+      "name": "local-auth (macos-latest)",
+      "id": 129313554127,
+      "status": "completed",
+      "conclusion": "success"
+    },
+    {
+      "name": "local-auth (windows-latest)",
+      "id": 129313554266,
+      "status": "completed",
+      "conclusion": "success"
+    },
+    {
+      "name": "local-auth (ubuntu-22.04)",
+      "id": 129313554350,
+      "status": "completed",
+      "conclusion": "success"
+    },
+    {
+      "name": "Required checks passed",
+      "id": 129342986348,
+      "status": "completed",
+      "conclusion": "failure"
+    }
+  ]
+}

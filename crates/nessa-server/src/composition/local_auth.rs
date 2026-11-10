@@ -5,8 +5,12 @@ use crate::{
     conversation::{
         application::{ChannelStore, ThreadEnvironments},
         infrastructure::{
-            ssh_environment::{DurableEnvironmentAudit, EnvironmentAudit, EnvironmentEvent},
-            LocalChannelStore, ThreadWorkspaces,
+            background_tasks::transport::WorkspaceBackgroundTasks,
+            ssh_environment::{
+                DurableEnvironmentAudit, EnvironmentAudit, EnvironmentEvent, HostInstaller,
+                RemoteShell,
+            },
+            LocalChannelStore, ShepherdBackgroundTasks, ThreadWorkspaces,
         },
     },
     workspaces::{
@@ -126,6 +130,8 @@ use nessa_sdk::{
 use nessa_sync::replication::domain::Id as RecordId;
 #[cfg(unix)]
 use std::collections::{BTreeMap, HashSet};
+#[cfg(unix)]
+use std::path::PathBuf;
 use std::{
     collections::HashMap,
     io,
@@ -320,6 +326,8 @@ pub(super) async fn product_state(
         )
         .with_image(worker_image()),
     );
+    #[cfg(all(test, unix))]
+    let workspace_service = super::vm_background_gateway::service(workspace_service);
     let inventory =
         Arc::new(CommittedInventory::open(namespace, Arc::new(SystemClock)).map_err(setup_error)?);
     // One receiver authority, shared by conversations' passive reads and by
@@ -1338,7 +1346,7 @@ async fn conversations(
     if let Some(tools) = &environment_tools {
         built_in.push(tools.clone());
     }
-    let mut mcp = match std::env::current_exe() {
+    let mut mcp = match child_program() {
         Ok(gateway) => {
             super::mcp_servers::compose(
                 &mut agents,
@@ -1412,20 +1420,21 @@ async fn conversations(
         audit: workspace_audit,
         // Its own shell is never used: each VM's install runs over that
         // VM's connection.
-        installer: Arc::new(
-            crate::conversation::infrastructure::ssh_environment::HostInstaller::this_build(
-                Arc::new(
-                    crate::conversation::infrastructure::ssh_environment::OpenSshConnector::new(),
-                ),
-                root.join("host-builds"),
-            ),
-        ),
+        installer: Arc::new(host_installer(
+            Arc::new(crate::conversation::infrastructure::ssh_environment::OpenSshConnector::new()),
+            root.join("host-builds"),
+        )),
         environments: Default::default(),
         logins: Some(Arc::new(super::logins::ServiceLogins(saved_logins.clone()))),
     });
     // A sign-in saved for Boat reaches conversations already connected.
     tokio::spawn(thread_workspaces.clone().follow_claude_sign_ins());
-    let workspace_environments: Arc<dyn ThreadEnvironments> = thread_workspaces;
+    let workspace_environments: Arc<dyn ThreadEnvironments> = thread_workspaces.clone();
+    #[cfg(all(test, unix))]
+    let workspace_environments = super::vm_background_gateway::environments(
+        workspace_environments,
+        thread_workspaces.service.clone(),
+    );
     let clock: Arc<dyn Clock> = Arc::new(SystemClock);
     let host = crate::agent_install::infrastructure::host_platform();
     let opencode = EffectiveOpenCodeProfile::decide(
@@ -1727,15 +1736,18 @@ async fn conversations(
     // ticket by `audit_ticket_ends`, which takes the store's events, and
     // every held context's drop by `audit_context_drops`, which takes what
     // the conversations' apps report.
+    let limits = ConversationLimits {
+        max_conversations: live_conversations,
+        park_after: agent_idle,
+        ..ConversationLimits::default()
+    };
+    #[cfg(all(test, unix))]
+    let limits = super::vm_background_gateway::limits(limits);
     let (service, resource_route) = match mcp.as_mut() {
         Some(mcp) => {
             let service = ConversationService::with_mcp_apps(
                 dependencies,
-                ConversationLimits {
-                    max_conversations: live_conversations,
-                    park_after: agent_idle,
-                    ..ConversationLimits::default()
-                },
+                limits,
                 workspace,
                 tool_uis,
                 mcp_app_ports(
@@ -1747,16 +1759,7 @@ async fn conversations(
             (service, Some((mcp.resource_tickets.clone(), mcp_app_audit)))
         }
         None => (
-            ConversationService::with_tool_uis(
-                dependencies,
-                ConversationLimits {
-                    max_conversations: live_conversations,
-                    park_after: agent_idle,
-                    ..ConversationLimits::default()
-                },
-                workspace,
-                tool_uis,
-            ),
+            ConversationService::with_tool_uis(dependencies, limits, workspace, tool_uis),
             None,
         ),
     };
@@ -1863,13 +1866,14 @@ async fn conversations(
             .collect();
     service.bind_background_tasks(
         Arc::new(background_store),
-        Arc::new(
-            crate::conversation::infrastructure::ShepherdBackgroundTasks::new(
+        Arc::new(WorkspaceBackgroundTasks::new(
+            Arc::new(ShepherdBackgroundTasks::new(
                 shepherd::SupervisorBuilder::new().build(),
                 background_environment,
                 Arc::new(shepherd::SystemClock),
-            ),
-        ),
+            )),
+            thread_workspaces,
+        )),
         Arc::new(super::background_tools::Arguments),
         Arc::new(crate::timer::TokioTimer::new()),
     );
@@ -1955,8 +1959,8 @@ fn environments(
     };
     use crate::conversation::infrastructure::{
         ssh_environment::{
-            DurableEnvironmentAudit, HostInstaller, OpenSshConnector, PeerEnvironments,
-            PeerUpdates, SshEnvironment, SshTimings,
+            DurableEnvironmentAudit, OpenSshConnector, PeerEnvironments, PeerUpdates,
+            SshEnvironment, SshTimings,
         },
         CedarCommandPolicyEvaluator, FileBindings, FilePlacements,
     };
@@ -1984,10 +1988,7 @@ fn environments(
     // One installer for SSH hosts and paired ones alike: the same build,
     // and the same release builds it pins, kept in one cache.
     let connector = Arc::new(OpenSshConnector::new());
-    let installer = Arc::new(HostInstaller::this_build(
-        connector.clone(),
-        root.join("host-builds"),
-    ));
+    let installer = Arc::new(host_installer(connector.clone(), root.join("host-builds")));
     let peers = match (serving, &audit) {
         (Some(serving), Some(audit)) => Some(Arc::new(
             PeerEnvironments::new(
@@ -2306,4 +2307,21 @@ impl RecoveryAudit for WorkspaceRecoveryAudit {
             .record(&record)
             .map_err(|_| WorkspaceFailure::Storage)
     }
+}
+
+#[cfg(unix)]
+fn child_program() -> io::Result<PathBuf> {
+    #[cfg(all(test, unix))]
+    if let Some(cli) = super::vm_background_gateway::cli() {
+        return Ok(cli);
+    }
+    std::env::current_exe()
+}
+
+#[cfg(unix)]
+fn host_installer(shell: Arc<dyn RemoteShell>, cache: PathBuf) -> HostInstaller {
+    let installer = HostInstaller::this_build(shell, cache);
+    #[cfg(all(test, unix))]
+    let installer = super::vm_background_gateway::installer(installer);
+    installer
 }

@@ -14,6 +14,7 @@ mod thread_report_admission;
 mod thread_reports;
 mod workspace_windows;
 use self::mutation::SubmissionPermit;
+use super::background_tasks::BackgroundTarget;
 use super::metadata_target::{load_conversation, validate_target};
 use super::session_key::conversation_session;
 use super::source_permits::SourcePermits;
@@ -104,7 +105,9 @@ use nessa_sdk::domain::agent_execution::{
         AgentSource, ExecutionId, ExecutionOutcome, GrantInitiator, Initiation, Initiator,
         InvocationStage, MessageKind,
     },
-    leases::{AgentWork, LeaseCleanup, LeaseEndCause, SandboxProfile, SandboxProfiles},
+    leases::{
+        AgentWork, EnvironmentRef, LeaseCleanup, LeaseEndCause, SandboxProfile, SandboxProfiles,
+    },
     permissions::{
         CustomPermissionCancellationReason, PermissionCancellationReason, PermissionId,
         PermissionOptionId,
@@ -765,7 +768,7 @@ enum SubmissionDelivery {
 /// would wait on that lease.
 type Carried = Arc<std::sync::Mutex<Option<(std::sync::Weak<LiveConversation>, Taken)>>>;
 struct LiveConversation {
-    local_workspace: Option<String>,
+    background_target: Option<BackgroundTarget>,
     agent: Agent,
     /// The lease its agent runs under. Every close of the agent goes through
     /// it, so the lease's end is recorded with the close.
@@ -2319,7 +2322,11 @@ impl ConversationService {
                             }
                             let tool_source = checked_source(agent);
                             let workspace = opening.workspace.clone().or_else(|| configured.workspace.clone()).or_else(|| place.as_ref().and_then(|place| place.folder.to_str().map(str::to_owned))).or_else(|| service.inner.workspace.clone());
-                            let local_workspace = matches!(opening.terms.environment, nessa_sdk::domain::agent_execution::leases::EnvironmentRef::Here).then(|| workspace.clone()).flatten();
+                            let background_target = match &opening.terms.environment {
+                                EnvironmentRef::Here => workspace.clone().map(BackgroundTarget::Local),
+                                EnvironmentRef::Boat => opening.workspace.clone().map(|workspace| BackgroundTarget::Vm { conversation: id.clone(), workspace }),
+                                _ => None,
+                            };
                             if let (Some(attachments), Some(hold), Some(delivery)) = (&service.inner.attachments, &opening.hold, &service.inner.input_files) {
                                 if let Some(workspace) = workspace {
                                     let local = matches!(opening.terms.environment, nessa_sdk::domain::agent_execution::leases::EnvironmentRef::Here).then(|| delivery.local.clone());
@@ -2545,7 +2552,7 @@ impl ConversationService {
                                     .publish(&attachment_id);
                             });
                             let live = Arc::new(LiveConversation {
-                                local_workspace,
+                                background_target,
                                 model_budget: Mutex::new(ModelBudget {
                                     identity: agent.provider_identity(),
                                     reserved_output_tokens: configured.reserved_output_tokens,

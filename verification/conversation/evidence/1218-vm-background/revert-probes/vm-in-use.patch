@@ -1,0 +1,12 @@
+--- /workspace/nessa-agent-1218/crates/nessa-server/src/workspaces/application/workspaces.rs
++++ vm-in-use
+@@ -125,8 +125,7 @@
+         Ok(stream)
+     }
+     async fn background(&self, command: String) -> std::io::Result<WorkspaceStream> {
+-        let mut stream = self.runtime.background(command).await?;
+-        stream.owner = Box::new((stream.owner, self.in_use.clone()));
++        let stream = self.runtime.background(command).await?;
+         Ok(stream)
+     }
+     async fn image_protocol(&self) -> Option<String> {

@@ -9,7 +9,7 @@ mod records;
 
 pub use ports::{
     BackgroundCallMatcher, BackgroundCleanupFailure, BackgroundRun, BackgroundRunner,
-    BackgroundStore, BackgroundTaskError,
+    BackgroundStore, BackgroundTarget, BackgroundTaskError,
 };
 pub use records::{BackgroundRecord, BackgroundSource};
 

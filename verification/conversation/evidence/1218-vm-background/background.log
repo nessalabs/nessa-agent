@@ -1,0 +1,40 @@
+running 36 tests
+test cli::argument_tests::background_helper_accepts_only_the_bounded_shell_contract ... ok
+test composition::background_tools::tests::background_matches_both_current_provider_inputs_and_rejects_contradictions ... ok
+test composition::background_tools::tests::background_identity_schema_and_domain_consume_the_product_contract ... ok
+test conversation::application::service::deletion_tests::a_repository_error_in_a_background_try_is_never_a_reason_to_wait ... ok
+test conversation::application::service::deletion_tests::a_person_s_delete_is_never_queued_behind_a_background_try ... ok
+test conversation::application::service::mutation::tests::background_tasks::ambiguous_calls_and_pre_admission_cancellation_launch_nothing ... ok
+test conversation::application::service::mutation::tests::background_tasks::background_deletion_does_not_join_admission_blocked_delivery ... ok
+test conversation::application::service::mutation::tests::background_tasks::background_completion_reopens_the_same_parked_provider_session ... ok
+test conversation::application::service::mutation::tests::background_tasks::background_deletion_stops_process_without_resuming_deleted_conversation ... ok
+test conversation::application::service::mutation::tests::background_tasks::background_failed_cancel_save_preserves_first_initiator_on_retry ... ok
+test conversation::application::service::mutation::tests::background_tasks::background_failed_stop_audit_still_cleans_every_owner_and_supervisor ... ok
+test conversation::application::service::mutation::tests::background_tasks::background_restart_records_unknown_cleanup_without_reexecuting_command ... ok
+test conversation::application::service::mutation::tests::background_tasks::background_remote_placements_and_missing_vm_cwd_fail_before_runner_effects ... ok
+test conversation::application::service::mutation::tests::background_tasks::background_shutdown_stops_process_and_preserves_undelivered_evidence ... ok
+test conversation::application::service::mutation::tests::background_tasks::background_start_reuses_admission_when_export_has_queued ... ok
+test conversation::application::service::mutation::tests::background_tasks::background_task_keeps_original_call_and_delivers_one_hidden_continuation ... ok
+test conversation::domain::background_task::lifecycle::tests::cleanup_and_delivery_independently_retain_capacity ... ok
+test conversation::domain::background_task::lifecycle::tests::first_stop_and_terminal_evidence_are_immutable ... ok
+test conversation::domain::background_task::lifecycle::tests::impossible_outcomes_cannot_settle_or_restore_released_capacity ... ok
+test conversation::domain::background_task::lifecycle::tests::restore_and_successor_refuse_contradictory_or_rewritten_lifecycle ... ok
+test conversation::infrastructure::background_tasks::io::tests::background_input_reads_a_pipe_and_its_eof ... ok
+test conversation::infrastructure::background_tasks::io::tests::background_input_reads_a_socket_and_its_eof ... ok
+test conversation::infrastructure::background_tasks::io::tests::background_output_waits_for_socket_backpressure ... ok
+test conversation::infrastructure::background_tasks::tests::background_store_capacity_and_failed_audit_never_partially_admit ... ok
+test conversation::infrastructure::background_tasks::tests::background_store_commits_audit_with_current_state_and_preserves_first_binding ... ok
+test conversation::infrastructure::background_tasks::tests::background_store_rejects_index_and_admission_disagreement_before_recovery ... ok
+test conversation::infrastructure::background_tasks::transport::tests::a_connection_already_closed_does_not_start_a_command ... ok
+test conversation::application::service::mutation::tests::background_tasks::a_running_background_command_is_reported_until_its_end_is_settled ... ok
+test conversation::infrastructure::background_tasks::transport::tests::cancel_keeps_the_reader_pending_until_cleanup_answers ... ok
+test conversation::infrastructure::background_tasks::transport::tests::missing_malformed_oversized_and_inconsistent_outcomes_are_interrupted ... ok
+test conversation::infrastructure::background_tasks::transport::tests::ssh_eof_cleans_the_shepherd_scope_before_reporting ... ok
+test conversation::infrastructure::ssh_environment::background_command::tests::background_arguments_survive_the_login_shell_without_interpretation_or_newline_loss ... ok
+test workspaces::allocation_tests::a_background_stream_holds_the_vm_after_its_runtime_is_dropped ... ok
+test conversation::application::service::mutation::tests::background_tasks::background_delivery_save_retries_without_repeating_model_continuation ... ok
+test conversation::application::service::mutation::tests::background_tasks::vm_background_stress_holds_past_idle_then_rests_and_restart_does_not_replay ... ok
+test conversation::infrastructure::background_tasks::transport::tests::bounded_output_exit_and_timeout_cross_the_stream ... ok
+
+test result: ok. 36 passed; 0 failed; 0 ignored; 0 measured; 4755 filtered out; finished in 1.86s
+

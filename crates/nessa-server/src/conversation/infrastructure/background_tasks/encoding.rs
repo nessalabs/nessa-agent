@@ -37,7 +37,7 @@ struct Record {
 }
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct Outcome {
+pub(super) struct Outcome {
     cause: Cause,
     scope: Option<u64>,
     process: Option<u64>,
@@ -175,7 +175,7 @@ impl Delivery {
     }
 }
 impl Outcome {
-    fn encode(value: &TaskOutcome) -> Self {
+    pub(super) fn encode(value: &TaskOutcome) -> Self {
         Self {
             cause: Cause::encode(value.cause),
             scope: value.scope,
@@ -191,7 +191,7 @@ impl Outcome {
             error: value.error.clone(),
         }
     }
-    fn decode(self) -> Result<TaskOutcome, BackgroundTaskError> {
+    pub(super) fn decode(self) -> Result<TaskOutcome, BackgroundTaskError> {
         if self.stdout.len() + self.stderr.len() > TaskOutcome::MAX_OUTPUT_BYTES * 3 {
             return Err(BackgroundTaskError::Storage);
         }

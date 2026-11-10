@@ -1,0 +1,6 @@
+ok negative control: raw SSH descendant survives connection loss; explicitly cleaned
+ok exit: exited; cleanup_verified=true; stdin held open
+ok timeout: timed_out; cleanup_verified=true; stdin held open
+ok stop: cancelled; cleanup_verified=true; stdin held open
+ok eof: cancelled; cleanup_verified=true; SSH stdin closed; command, child and grandchild cleaned
+ok disconnect: SSH client killed; command, child and grandchild cleaned

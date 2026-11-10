@@ -1,0 +1,11 @@
+--- /workspace/nessa-agent-1218/crates/nessa-server/src/conversation/infrastructure/background_tasks/transport.rs
++++ eof-cancellation
+@@ -154,7 +154,7 @@
+         biased;
+         outcome = &mut run => outcome,
+         _ = &mut read => {
+-            cancel.send_replace(Some(cause));
++            drop(cause);
+             run.await
+         }
+     };

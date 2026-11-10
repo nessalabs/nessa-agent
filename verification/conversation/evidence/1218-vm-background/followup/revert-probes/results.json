@@ -1,0 +1,16 @@
+{
+  "restoredSourceCommit": "90ae1efb888d3421c9807943a16258e572bfab3c",
+  "restoredByteForByte": true,
+  "probes": [
+    {
+      "name": "stop-during-preparation",
+      "status": 101,
+      "expected": "gated test fails on unexpected background launch port call"
+    },
+    {
+      "name": "VM-admission-through-browser",
+      "status": 1,
+      "expected": "browser turn fails with original unsupported-environment error"
+    }
+  ]
+}

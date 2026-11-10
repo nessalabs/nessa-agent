@@ -19,6 +19,9 @@ impl WorkspaceRuntime for BoatRuntime {
             .await
             .map_err(|_| Failure::Provider)
     }
+    async fn background(&self, command: String) -> std::io::Result<WorkspaceStream> {
+        self.access.background(command).await
+    }
     async fn image_protocol(&self) -> Option<String> {
         self.access.image_protocol().await
     }

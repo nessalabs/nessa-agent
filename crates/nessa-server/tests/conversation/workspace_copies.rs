@@ -2,6 +2,7 @@
 //! while it speaks this build's lease protocol, else this build, installed
 //! in the VM over its own connection.
 use super::*;
+use crate::conversation::domain::TaskInitiator;
 use crate::conversation::infrastructure::ssh_environment::{
     Build, BuildSource, EnvironmentEvent, InstallTimings,
 };
@@ -10,6 +11,7 @@ use crate::workspaces::{application::WorkspaceStream, domain::Failure};
 use std::io;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
+use tokio::sync::{watch, Semaphore};
 
 const THIS_BUILD: &[u8] = b"this build";
 
@@ -80,7 +82,7 @@ struct Vm {
     panics: AtomicBool,
     installed: AtomicBool,
     commands: Mutex<Vec<String>>,
-    uploads: Option<tokio::sync::Semaphore>,
+    uploads: Option<Semaphore>,
 }
 impl Vm {
     fn with_image(image: Option<&str>) -> Self {
@@ -180,7 +182,7 @@ async fn a_vm_that_could_not_be_asked_has_nothing_installed_on_a_guess() {
 #[tokio::test]
 async fn an_install_outlasts_the_opening_that_gave_up_on_it_and_is_never_sent_twice() {
     let vm = Arc::new(Vm {
-        uploads: Some(tokio::sync::Semaphore::new(0)),
+        uploads: Some(Semaphore::new(0)),
         ..Vm::with_image(Some(""))
     });
     let copies = VmCopies {
@@ -256,4 +258,40 @@ async fn an_install_that_panicked_is_let_go_and_the_next_opening_asks_again() {
         Ok(ServedCopy::Installed(served))
     );
     assert_eq!(vm.uploads(), 1);
+}
+
+#[tokio::test]
+async fn a_stop_during_background_install_does_not_launch_the_command() {
+    let vm = Vm {
+        uploads: Some(Semaphore::new(0)),
+        ..Vm::with_image(Some(LEASE_PROTOCOL))
+    };
+    let installer = installer();
+    let audit = Audit::default();
+    let command = BackgroundCommand::new("touch should-not-start", 10).unwrap();
+    let conversation = conversation();
+    let (cancel, stop) = watch::channel(None);
+    let pending = background_on(
+        &installer,
+        &audit,
+        &vm,
+        &conversation,
+        "/vm/workspace",
+        &command,
+        &stop,
+    );
+    tokio::pin!(pending);
+    tokio::select! {
+        answer = &mut pending => panic!("preparation did not wait: {}", answer.is_ok()),
+        _ = async { while vm.uploads() == 0 { tokio::task::yield_now().await; } } => (),
+    }
+    cancel.send_replace(Some(TaskStop::GatewayStopped(
+        TaskInitiator::new("test".into(), "stop-during-install".into(), "stop".into()).unwrap(),
+    )));
+    // The upload remains owned until it answers; stopping must not drop it.
+    assert!(futures_util::poll!(pending.as_mut()).is_pending());
+    vm.uploads.as_ref().unwrap().add_permits(1);
+    // Vm's default background method errors; None proves it was never called.
+    assert!(pending.await.unwrap().is_none());
+    assert!(vm.installed.load(Ordering::SeqCst));
 }

@@ -1,24 +1,39 @@
 //! Real conversation/store/provider orchestration with a controlled process port.
 use super::*;
+#[cfg(unix)]
+use crate::conversation::application::service::environment_tools::running_turn;
+#[cfg(unix)]
+use crate::conversation::application::{Environments, ThreadEnvironments, WorkspaceRest};
+#[cfg(unix)]
+use crate::conversation::infrastructure::FilePlacements;
 use crate::conversation::{
     application::{
         background_tasks::{
             BackgroundCallMatcher, BackgroundRecord, BackgroundRun, BackgroundRunner,
-            BackgroundStore, BackgroundTaskError,
+            BackgroundStore, BackgroundTarget, BackgroundTaskError,
         },
-        AgentToolAudit, AgentToolAuditRecord, ConversationFuture,
+        AgentToolAudit, AgentToolAuditRecord, ConversationFuture, Environment,
+        EnvironmentDeclaration, EnvironmentFuture, EnvironmentLease,
     },
     domain::{BackgroundCommand, BackgroundTaskId, TaskCause, TaskDelivery, TaskOutcome, TaskStop},
-    infrastructure::LocalBackgroundTasks,
+    infrastructure::{in_process_environment, LocalBackgroundTasks},
 };
+#[cfg(unix)]
+use nessa_auth::application::ports::Clock;
 use nessa_sdk::{
-    application::agent_execution::executions::ExecutionUpdate,
+    application::agent_execution::{executions::ExecutionUpdate, providers::AgentProvider},
     domain::agent_execution::{
+        leases::{EnvironmentRef, LeaseCleanup, LeaseId, LeaseRefusal, LeaseTerms, SshDestination},
         prompts::MessageSender,
         tools::{McpTool, ToolCallId, ToolCallInput, ToolCallUpdate, ToolStatus},
     },
 };
-use std::sync::atomic::AtomicUsize;
+#[cfg(unix)]
+use std::sync::atomic::AtomicU64;
+use std::sync::{
+    atomic::{AtomicBool, AtomicUsize, Ordering},
+    Arc, Mutex as StdMutex,
+};
 use tokio::sync::{watch, Notify};
 
 #[derive(Default)]
@@ -47,11 +62,13 @@ impl BackgroundCallMatcher for Matcher {
 #[derive(Default)]
 struct Runner {
     runs: AtomicUsize,
+    targets: StdMutex<Vec<BackgroundTarget>>,
     started: Notify,
     released: Notify,
     stopped: AtomicUsize,
     shutdowns: AtomicUsize,
-    hold_cleanup: std::sync::atomic::AtomicBool,
+    interrupted: AtomicBool,
+    hold_cleanup: AtomicBool,
     cleanup_entered: Notify,
     release_cleanup: Notify,
 }
@@ -59,10 +76,11 @@ impl BackgroundRunner for Runner {
     fn run(
         &self,
         _: BackgroundCommand,
-        _: String,
+        target: BackgroundTarget,
         mut stop: watch::Receiver<Option<TaskStop>>,
     ) -> BackgroundRun<'_, TaskOutcome> {
         Box::pin(async move {
+            self.targets.lock().unwrap().push(target);
             self.runs.fetch_add(1, Ordering::SeqCst);
             self.started.notify_one();
             let cancelled = tokio::select! {
@@ -75,6 +93,9 @@ impl BackgroundRunner for Runner {
                     self.cleanup_entered.notify_one();
                     self.release_cleanup.notified().await;
                 }
+            }
+            if self.interrupted.load(Ordering::SeqCst) {
+                return TaskOutcome::interrupted();
             }
             outcome(if cancelled {
                 TaskCause::Cancelled
@@ -932,4 +953,278 @@ async fn a_running_background_command_is_reported_until_its_end_is_settled() {
     })
     .await
     .expect("its end is settled");
+}
+
+/// A VM placement and lease with a controlled runner; no Boat account exists.
+struct FakeVmEnvironment(EnvironmentRef, Option<String>);
+impl Environment for FakeVmEnvironment {
+    fn declaration(&self) -> EnvironmentDeclaration {
+        let mut declaration = in_process_environment().declaration();
+        declaration.environment = self.0.clone();
+        declaration
+    }
+    fn open<'a>(
+        &'a self,
+        lease: &'a LeaseId,
+        grant: &'a LeaseTerms,
+        binding: Arc<dyn AgentProvider>,
+    ) -> EnvironmentFuture<'a, Result<EnvironmentLease, LeaseRefusal>> {
+        Box::pin(async move {
+            let mut opened = in_process_environment().open(lease, grant, binding).await?;
+            opened.workspace = self.1.clone();
+            Ok(opened)
+        })
+    }
+    fn account<'a>(&'a self, _: &'a LeaseId) -> EnvironmentFuture<'a, Option<LeaseCleanup>> {
+        Box::pin(async { Some(LeaseCleanup::NotHeld) })
+    }
+}
+#[cfg(unix)]
+#[derive(Default)]
+struct FakeVmWorkspaces(AtomicUsize);
+#[cfg(unix)]
+impl ThreadEnvironments for FakeVmWorkspaces {
+    fn environment(&self, _: &ConversationId) -> Result<Arc<dyn Environment>, ConversationError> {
+        Ok(Arc::new(FakeVmEnvironment(
+            EnvironmentRef::Boat,
+            Some("/vm/workspace".into()),
+        )))
+    }
+    fn available(&self) -> EnvironmentFuture<'_, bool> {
+        Box::pin(async { true })
+    }
+    fn rest<'a>(&'a self, _: &'a ConversationId, _: WorkspaceRest) -> EnvironmentFuture<'a, bool> {
+        self.0.fetch_add(1, Ordering::SeqCst);
+        Box::pin(async { true })
+    }
+}
+#[cfg(unix)]
+#[derive(Default)]
+struct VmClock(AtomicU64);
+#[cfg(unix)]
+impl Clock for VmClock {
+    fn unix_milliseconds(&self) -> u64 {
+        self.0.load(Ordering::SeqCst)
+    }
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn vm_background_stress_holds_past_idle_then_rests_and_restart_does_not_replay() {
+    let repetitions = std::env::var("NESSA_VM_BACKGROUND_STRESS_REPEATS").map_or(3, |count| {
+        count
+            .parse::<usize>()
+            .expect("stress repetitions are a number")
+    });
+    assert!((1..=100).contains(&repetitions));
+    for _ in 0..repetitions {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("data");
+        let provider = Arc::new(ProviderFactory::default());
+        provider.session_resume.store(true, Ordering::SeqCst);
+        let vms = Arc::new(FakeVmWorkspaces::default());
+        let placements =
+            Arc::new(FilePlacements::new(directory.path().join("placements")).unwrap());
+        let environment =
+            Environments::new(in_process_environment(), Default::default(), placements)
+                .with_workspaces(vms.clone());
+        let (mut service, storage, metadata) = fixture_in(&root, provider.clone(), environment);
+        let clock = Arc::new(VmClock::default());
+        Arc::get_mut(&mut service.inner).unwrap().clock = clock.clone();
+        let tasks = Arc::new(LocalBackgroundTasks::open(&root.join("tasks.sqlite3")).unwrap());
+        let runner = Arc::new(Runner::default());
+        service.bind_agent_tool_audit(Arc::new(Audit));
+        service.bind_background_tasks(
+            tasks.clone(),
+            runner.clone(),
+            Arc::new(Matcher),
+            Arc::new(crate::timer::TokioTimer::new()),
+        );
+        service.resume_background_tasks().await.unwrap();
+        let target = id();
+        service
+            .create(
+                target.clone(),
+                caller("create"),
+                RequestedConversation {
+                    environment: Some(crate::conversation::application::placement::BOAT.into()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        let release = turn(
+            &service,
+            &provider,
+            &target,
+            "first",
+            vec![update("original", "build", "make")],
+        )
+        .await;
+        let admitted = start(&service, &target, "build", "make").await.unwrap();
+        runner.started.notified().await;
+        assert_eq!(admitted.source.workspace, "/vm/workspace");
+        assert_eq!(
+            *runner.targets.lock().unwrap(),
+            [BackgroundTarget::Vm {
+                conversation: target.clone(),
+                workspace: "/vm/workspace".into()
+            }]
+        );
+        release.send(()).unwrap();
+        let live = service.live(&target).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while !live.agent.is_idle().await {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        drop(live);
+        for _ in 0..5 {
+            clock.0.fetch_add(600_000, Ordering::SeqCst);
+            assert_eq!(service.sweep(None).await, 0);
+            assert_eq!(vms.0.load(Ordering::SeqCst), 0);
+        }
+        runner.released.notify_one();
+        wait_delivery(&tasks, &target, "build").await;
+        tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                clock.0.fetch_add(600_000, Ordering::SeqCst);
+                service.sweep(None).await;
+                if vms.0.load(Ordering::SeqCst) > 0 {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(runner.runs.load(Ordering::SeqCst), 1);
+        // The transport reports connection loss as interrupted, rather than
+        // claiming cleanup or falling back to a command on the gateway.
+        runner.interrupted.store(true, Ordering::SeqCst);
+        let release = turn(
+            &service,
+            &provider,
+            &target,
+            "lost-ssh",
+            vec![update("lost", "lost-ssh", "make")],
+        )
+        .await;
+        // The completion turn also notifies the scripted provider. Wait for
+        // this exact new turn's source instead of consuming its stale permit.
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if let Some(live) = service.live(&target).await {
+                    if let Some(snapshot) = live.agent.session_manager().snapshot().await {
+                        if running_turn(&snapshot, "relay-call")
+                            .is_some_and(|(_, execution, _, _)| execution.as_str() == "lost-ssh")
+                        {
+                            break;
+                        }
+                    }
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        start(&service, &target, "lost-ssh", "make").await.unwrap();
+        runner.started.notified().await;
+        release.send(()).unwrap();
+        runner.released.notify_one();
+        let lost = wait_delivery(&tasks, &target, "lost-ssh").await;
+        assert_eq!(
+            lost.lifecycle.outcome().unwrap().cause,
+            TaskCause::Interrupted
+        );
+        assert!(!lost.lifecycle.outcome().unwrap().cleanup_verified);
+        assert!(lost.lifecycle.retains_capacity());
+        // A saved task from the VM survives a gateway restart as interrupted.
+        // Recovery consumes its original immutable placement and never calls a runner.
+        let mut pending = admitted;
+        pending.id = BackgroundTaskId::new("lost-vm-command").unwrap();
+        pending.source.execution = "lost-gateway-turn".into();
+        pending.source.tool_call = "lost-vm-native".into();
+        assert!(service.shutdown().await.is_err());
+        drop(service);
+        storage.shutdown().await.unwrap();
+        drop(metadata);
+        tasks.save(pending, None).await.unwrap();
+        let placements =
+            Arc::new(FilePlacements::new(directory.path().join("placements")).unwrap());
+        let environment =
+            Environments::new(in_process_environment(), Default::default(), placements)
+                .with_workspaces(vms);
+        let (restarted, storage, metadata) = fixture_in(&root, provider.clone(), environment);
+        let reopened = Arc::new(LocalBackgroundTasks::open(&root.join("tasks.sqlite3")).unwrap());
+        let unused = Arc::new(Runner::default());
+        restarted.bind_background_tasks(
+            reopened.clone(),
+            unused.clone(),
+            Arc::new(Matcher),
+            Arc::new(crate::timer::TokioTimer::new()),
+        );
+        restarted.resume_background_tasks().await.unwrap();
+        let recovered = reopened
+            .read(&target, &BackgroundTaskId::new("lost-vm-command").unwrap())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            recovered.lifecycle.outcome().unwrap().cause,
+            TaskCause::Interrupted
+        );
+        assert!(!recovered.lifecycle.outcome().unwrap().cleanup_verified);
+        assert_eq!(unused.runs.load(Ordering::SeqCst), 0);
+        // Unconfirmed cleanup retains capacity and makes shutdown honest.
+        let _ = restarted.shutdown().await;
+        drop(restarted);
+        storage.shutdown().await.unwrap();
+        drop(metadata);
+    }
+}
+
+#[tokio::test]
+async fn background_remote_placements_and_missing_vm_cwd_fail_before_runner_effects() {
+    for placement in [
+        EnvironmentRef::Ssh(SshDestination::new("fixture-host").unwrap()),
+        EnvironmentRef::Boat,
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("data");
+        let provider = Arc::new(ProviderFactory::default());
+        let remote: Arc<dyn Environment> = Arc::new(FakeVmEnvironment(placement, None));
+        let (mut service, storage, metadata) = fixture_in(&root, provider.clone(), remote.into());
+        Arc::get_mut(&mut service.inner).unwrap().workspace = Some("/gateway-only".into());
+        let tasks = Arc::new(LocalBackgroundTasks::open(&root.join("tasks.sqlite3")).unwrap());
+        let runner = Arc::new(Runner::default());
+        service.bind_agent_tool_audit(Arc::new(Audit));
+        service.bind_background_tasks(
+            tasks.clone(),
+            runner.clone(),
+            Arc::new(Matcher),
+            Arc::new(crate::timer::TokioTimer::new()),
+        );
+        service.resume_background_tasks().await.unwrap();
+        let target = id();
+        opened(&service, &provider, &target).await;
+        let release = turn(
+            &service,
+            &provider,
+            &target,
+            "first",
+            vec![update("one", "rejected", "make")],
+        )
+        .await;
+        assert_eq!(
+            start(&service, &target, "rejected", "make").await,
+            Err(BackgroundTaskError::UnsupportedEnvironment)
+        );
+        assert_eq!(runner.runs.load(Ordering::SeqCst), 0);
+        assert!(tasks.pending().await.unwrap().is_empty());
+        release.send(()).unwrap();
+        retire(service, storage, metadata).await;
+    }
 }

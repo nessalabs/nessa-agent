@@ -172,6 +172,7 @@ export async function exited(child, ms) {
  * Provisions and starts a gateway, and waits until it is healthy.
  *
  * @param {object} o
+ * @param {string} [o.executable] explicit gateway CLI wrapper for a test-only composition
  * @param {string} o.agent the one agent configured, and selected
  * @param {number} o.port the gateway's port on 127.0.0.1
  * @param {string} o.instance the gateway instance's name
@@ -220,7 +221,8 @@ export async function startLocalGateway(o) {
   const stage = o.stage ?? "ci"
   if (!["ci", "dev"].includes(stage))
     throw new Error("verification gateways use ci or dev")
-  const nessa = process.env.MCP_LIVE_NESSA ?? join(repoRoot, "target/debug/nessa")
+  const nessa =
+    o.executable ?? process.env.MCP_LIVE_NESSA ?? join(repoRoot, "target/debug/nessa")
   if (!existsSync(nessa))
     throw new Error(
       "build the gateway first (cargo build -p nessa-server), or set MCP_LIVE_NESSA",

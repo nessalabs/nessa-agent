@@ -1,0 +1,11 @@
+--- /workspace/nessa-agent-1218/crates/nessa-server/src/composition/background_command.rs
++++ socket-output
+@@ -18,7 +18,7 @@
+         .into_iter()
+         .collect();
+     let input = BackgroundIo::from_fd(std::io::stdin().as_fd().try_clone_to_owned()?)?;
+-    let output = BackgroundIo::from_fd(std::io::stdout().as_fd().try_clone_to_owned()?)?;
++    let output = tokio::io::stdout();
+     let runner = ShepherdBackgroundTasks::new(
+         shepherd::SupervisorBuilder::new().build(),
+         environment,
