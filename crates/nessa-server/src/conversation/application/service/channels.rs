@@ -491,7 +491,6 @@ impl ConversationService {
             if *found.execution() == execution {
                 return Ok(found);
             }
-            self.offers_places(&execution, found.execution())?;
             let coordinator = found.coordinator_id();
             let _creation = self.inner.creation.lock(&coordinator).await;
             let current = store.get(id).await?.ok_or(ChannelError::Forbidden)?;
@@ -501,6 +500,10 @@ impl ConversationService {
             if *current.execution() == execution {
                 return Ok(current);
             }
+            // Checked against what the channel holds now, under the lock: a
+            // move made meanwhile may have let go of a computer this one
+            // would keep.
+            self.offers_places(&execution, current.execution())?;
             // The move is on record, with what it moves from, before it is made.
             let record = |outcome| SettingsAuditRecord {
                 operation_id: operation.clone(),

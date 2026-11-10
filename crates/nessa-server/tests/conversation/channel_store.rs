@@ -3,8 +3,8 @@
 //! and a folder is checked, resolved, before agents may work in it.
 use super::*;
 use crate::conversation::domain::{ChannelExecution, Place};
-use nessa_sdk::domain::agent_execution::leases::SshDestination;
 use crate::conversation_test_support::absolute;
+use nessa_sdk::domain::agent_execution::leases::SshDestination;
 
 fn store(directory: &Path) -> LocalChannelStore {
     let private = directory.join("conversations");

@@ -269,7 +269,9 @@ pub struct UnknownChannelPlace;
 
 /// The place `word` names: a kind of place by its channel word, else one
 /// named computer by its place name. A kind is spelled one way only, so
-/// `here`, `peer:any` and `boat:thread` name nothing here.
+/// `here`, `peer:any` and `boat:thread` name nothing here, and the three
+/// words are kept for the kinds: an SSH host named `local`, `boat` or
+/// `pool` cannot be a channel's computer.
 fn channel_place(word: &str) -> Result<Place, UnknownChannelPlace> {
     match word {
         "local" => Ok(Place::Here),
@@ -312,7 +314,10 @@ impl ChannelExecution {
     /// # Errors
     /// [`UnknownChannelPlace`] for a word that names none.
     pub fn parse(coordinator: &str, threads: &str) -> Result<Self, UnknownChannelPlace> {
-        Ok(Self::new(channel_place(coordinator)?, channel_place(threads)?))
+        Ok(Self::new(
+            channel_place(coordinator)?,
+            channel_place(threads)?,
+        ))
     }
     /// Where the main agent runs.
     pub fn coordinator(&self) -> &Place {

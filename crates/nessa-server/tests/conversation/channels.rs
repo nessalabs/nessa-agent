@@ -1174,7 +1174,11 @@ async fn only_the_owner_moves_a_made_channel_and_an_unchanged_one_stays_as_it_is
     // Asking for where it already runs changes nothing, main chat included.
     let same = fixture
         .service
-        .set_channel_execution(&caller("person", "move"), made.id(), made.execution().clone())
+        .set_channel_execution(
+            &caller("person", "move"),
+            made.id(),
+            made.execution().clone(),
+        )
         .await
         .unwrap();
     assert_eq!(same, made);
@@ -1298,7 +1302,13 @@ async fn a_channel_names_a_computer_the_gateway_serves_and_its_new_chats_run_the
         .await
         .unwrap();
     assert_eq!(
-        fixture.service.inner.environment.placement(&thread).await.unwrap(),
+        fixture
+            .service
+            .inner
+            .environment
+            .placement(&thread)
+            .await
+            .unwrap(),
         devbox
     );
     // The main agent moves there too; asking for a computer it does not
@@ -1340,7 +1350,13 @@ async fn a_channel_names_a_computer_the_gateway_serves_and_its_new_chats_run_the
         .await
         .unwrap();
     assert_eq!(
-        fixture.service.inner.environment.placement(&main).await.unwrap(),
+        fixture
+            .service
+            .inner
+            .environment
+            .placement(&main)
+            .await
+            .unwrap(),
         devbox
     );
     fixture.service.shutdown().await.unwrap();

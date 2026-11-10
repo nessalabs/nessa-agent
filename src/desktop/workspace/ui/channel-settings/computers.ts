@@ -5,6 +5,7 @@
 import { useEffect, useState } from "react"
 import { useDevicesGateway } from "../../../devices"
 import { sortWorkers, workerCard } from "../../../devices/model/devices"
+import { channelPlaceKind } from "../../model/channel-place"
 
 /** One computer a channel may name: its place name and what a person calls it. */
 export interface Computer {
@@ -29,10 +30,13 @@ export function useComputers(): readonly Computer[] {
         ...sortWorkers(read.value.workers.map(workerCard))
           .filter((worker) => worker.status === "online")
           .map((worker) => ({ environment: worker.environment, name: worker.name })),
-        ...read.value.sshHosts.map((host) => ({
-          environment: host.host,
-          name: host.host,
-        })),
+        // A host named like a kind of place would be read as that kind.
+        ...read.value.sshHosts
+          .filter((host) => channelPlaceKind(host.host) === "computer")
+          .map((host) => ({
+            environment: host.host,
+            name: host.host,
+          })),
       ])
     })
     return () => {

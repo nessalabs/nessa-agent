@@ -174,8 +174,8 @@ fn wire_channel(channel: &Channel) -> WireChannel {
         model: Some(defaults.model.as_str().to_owned()),
         approval_mode: wire_mode(defaults.mode),
         coordinator_conversation_id: Some(channel.coordinator_id().to_string()),
-        coordinator_placement: channel.execution().coordinator_word().into(),
-        thread_placement: channel.execution().threads_word().into(),
+        coordinator_placement: channel.execution().coordinator_word(),
+        thread_placement: channel.execution().threads_word(),
         created_at_ms: channel.created_at_ms(),
     }
 }
@@ -203,8 +203,8 @@ fn listed(listing: ChannelListing, after: Option<&ChannelId>) -> ChannelListResu
                 model: None,
                 approval_mode: ApprovalMode::Ask,
                 coordinator_conversation_id: None,
-                coordinator_placement: ChannelExecution::default().coordinator_word().into(),
-                thread_placement: ChannelExecution::default().threads_word().into(),
+                coordinator_placement: ChannelExecution::default().coordinator_word(),
+                thread_placement: ChannelExecution::default().threads_word(),
                 created_at_ms: 0,
             })
             .into_iter()

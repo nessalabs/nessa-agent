@@ -174,7 +174,7 @@ import {
  *   place       native linking is turned on and a real `nessa env dial`
  *               worker pairs; a channel naming a computer not connected is
  *               refused channel_place_unavailable; in the channel's settings
- *               New threads runs on One computer, the worker, chosen from the
+ *               New threads runs on Computer, the worker, chosen from the
  *               computers listed; a thread made in it naming no place is
  *               answered with its lease on that worker; the channel goes back
  *               here, the worker stops and linking is turned off again
@@ -5314,12 +5314,12 @@ const steps = {
             name,
           ),
       })
-      ;({ channel } = await run.client.channels.create({
+      channel = await run.client.channels.create({
         requestId: `stress-place-r${step.index}-s${run.knobs.seed}`,
         name: `stress-place-r${step.index}-s${run.knobs.seed}`,
         agent: run.stack.agent,
         model: run.stack.profile.model,
-      }))
+      })
       // A computer the gateway cannot reach now is refused, and nothing
       // changes.
       const absent = `peer:${"0".repeat(64)}`
@@ -5336,7 +5336,7 @@ const steps = {
         )
       if (refused !== "channel_place_unavailable")
         failures.push(`a channel naming a computer not connected answered ${refused}`)
-      // The person chooses it in the channel's settings: One computer, then
+      // The person chooses it in the channel's settings: Computer, then
       // the worker from the computers listed.
       await run.exclusive(async () => {
         // The sidebar lists the channel once the window reads the index
