@@ -12,6 +12,7 @@ use crate::{
     },
 };
 use base64::Engine;
+use boat_client::Api;
 use nessa_sdk::application::agent_execution::providers::HarnessMcpRelay;
 use std::{
     io,
@@ -23,7 +24,6 @@ use std::{
 };
 use tokio::io::AsyncWriteExt;
 use tokio::process::{Child, Command};
-use workspace_sdk::boat_client::Api;
 use zeroize::Zeroizing;
 
 pub(super) struct SshAccess {

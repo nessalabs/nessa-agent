@@ -1,17 +1,32 @@
-//! Boat VM allocation plus an attached workspace-sdk backend. Nessa owns VM
-//! creation/deletion; the SDK owns supervisor runs and files inside that VM.
+//! Boat VM allocation over the Boat HTTP client. Nessa creates, resumes,
+//! stops and deletes the VM, makes the thread's folder in it, and then runs
+//! everything inside over its own lease protocol (`nessa env serve`).
 use crate::workspaces::{
     application::{Provider, WorkspaceReceipt, WorkspaceRuntime},
     domain::{BoatConnection, EnvironmentIdentity, Failure},
 };
 use async_trait::async_trait;
+use boat_client::{self, Api, ClientConfig, SandboxState};
 use std::{sync::Arc, time::Duration};
-use workspace_sdk::{
-    boat_client::{self, Api, ClientConfig, SandboxState},
-    infrastructure::MemoryStateRepository,
-    providers::{SandboxOpenOptions, SandboxProvider, SupervisorDeployment},
-    OpenRequest, ProviderId, WorkspaceId, WorkspaceSdk,
-};
+
+/// Where a thread's agent works inside its VM. VMs made before Nessa stopped
+/// calling workspace-sdk have their folder here already (the SDK put it under
+/// `<root>/<thread>/project`), so this path must not move. The thread id is
+/// checked to be a single plain path segment because it goes into a shell
+/// command and a path.
+pub(crate) fn thread_folder(thread: &str) -> Result<String, Failure> {
+    let plain = !thread.is_empty()
+        && thread.len() <= 128
+        && thread != "."
+        && thread != ".."
+        && thread
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"-_.".contains(&byte));
+    if !plain {
+        return Err(Failure::InvalidInput);
+    }
+    Ok(format!("/home/user/.nessa/workspaces/{thread}/project"))
+}
 
 /// How long an opening waits for a VM that is stopping to have stopped.
 /// With the 90 s wait for it to be ready after its resume, the opening stays
@@ -152,30 +167,14 @@ impl Provider for BoatProvider {
         };
         super::boat_admission::check(&self.http, &api, connection, vm, admission, maximum_ttl)
             .await?;
-        let provider =
-            SandboxProvider::new(api.clone()).with_supervisor(SupervisorDeployment::Preinstalled {
-                executable: "/opt/nessa/bin/workspace-supervisor".into(),
-            });
-        let sdk = WorkspaceSdk::builder(Arc::new(MemoryStateRepository::default()))
-            .provider(Arc::new(provider))
-            .map_err(|_| Failure::Provider)?
-            .build()
-            .map_err(|_| Failure::Provider)?;
-        let mut options = SandboxOpenOptions::new("/home/user/.nessa/workspaces");
-        options.sandbox_id = Some(vm.to_owned());
-        let request = OpenRequest::new(
-            WorkspaceId::new(thread).map_err(|_| Failure::InvalidInput)?,
-            &options,
-        )
-        .map_err(|_| Failure::Provider)?;
-        let workspace = sdk
-            .open(
-                &ProviderId::new("boat").map_err(|_| Failure::Provider)?,
-                request,
-            )
+        let root = thread_folder(thread)?;
+        let made = api
+            .exec(vm, format!("umask 077 && mkdir -p '{root}'"))
             .await
             .map_err(|_| Failure::Provider)?;
-        let root = workspace.descriptor().root;
+        if !made.success || made.exit_code != Some(0) {
+            return Err(Failure::Provider);
+        }
         let config = serde_json::json!({"envServe":{"commands":true,"artifactsIn":true},"agents":{"catalog":"/opt/nessa/models.json","workspace":root,"selected":"codex","runtimes":{
             "codex":{"command":"/opt/nessa/bin/node","args":["/opt/nessa/harnesses/node_modules/@agentclientprotocol/codex-acp/dist/index.js"],"model":"gpt-5.6-terra","toolsEnabled":true},
             "claude":{"command":"/opt/nessa/bin/node","args":["/opt/nessa/harnesses/node_modules/@agentclientprotocol/claude-agent-acp/dist/index.js"],"model":"claude-sonnet-5","toolsEnabled":true}

@@ -2807,11 +2807,11 @@ and shared bounds are `protocol/defaults/github-relays.json` and
 allocation receipts: `domain` contains values and failures; `application` orders
 allocation through Settings, Assignments, Provider and RecoveryAudit ports in
 `application/workspaces.rs`; `infrastructure`
-implements encrypted vault settings, private receipt files, Boat/workspace-sdk
-preparation and scoped SSH access. `domain/workspace.rs` owns legal receipt histories. `domain/environment.rs` owns the supported
+implements encrypted vault settings, private receipt files, Boat client calls
+(create, resume, stop, the thread folder) and scoped SSH access. `domain/workspace.rs` owns legal receipt histories. `domain/environment.rs` owns the supported
 credential posture, immutable environment identity and bounded refusal evidence;
 `infrastructure/boat_admission.rs` checks complete current provider state and raw
-VM receipts before SDK authority. `assignments.rs` retains proof and terminal
+VM receipts before the VM is used. `assignments.rs` retains proof and terminal
 refusals in private histories, while old receipts are read only as Unverified.
 Tests live in `tests/workspaces`; real-provider
 verification lives in `scripts/workspaces`, with the single-file local MCP fixture

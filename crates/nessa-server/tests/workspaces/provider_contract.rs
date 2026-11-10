@@ -1,6 +1,6 @@
 //! Sanitized provider responses and the published release worker retain the
 //! workspace allocation, protocol and pinned host identities we consume.
-use workspace_sdk::boat_client::{SandboxInfoResponse, SandboxState, SshKeyResponse};
+use boat_client::{SandboxInfoResponse, SandboxState, SshKeyResponse};
 
 #[test]
 fn boat_v1_receipts_keep_workspace_and_ssh_trust_identity() {
@@ -29,4 +29,21 @@ fn shipping_worker_covers_the_compiled_lease_protocol() {
         crate::workspaces::infrastructure::worker_image().is_some(),
         "publish and pin the credential-free worker for this lease protocol before shipping"
     );
+}
+
+#[test]
+fn a_thread_folder_stays_where_existing_vms_have_it() {
+    use crate::workspaces::{domain::Failure, infrastructure::thread_folder};
+    // workspace-sdk made `<root>/<thread>/project`; VMs made then still hold it.
+    assert_eq!(
+        thread_folder("thread-1").unwrap(),
+        "/home/user/.nessa/workspaces/thread-1/project"
+    );
+    // The id goes into a shell command and a path: one plain segment only.
+    for refused in ["", ".", "..", "a/b", "a'b", "a b", "$(x)", &"x".repeat(129)] {
+        assert!(
+            matches!(thread_folder(refused), Err(Failure::InvalidInput)),
+            "{refused:?} was accepted"
+        );
+    }
 }

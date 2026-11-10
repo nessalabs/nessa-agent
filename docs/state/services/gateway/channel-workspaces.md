@@ -79,7 +79,7 @@ stateDiagram-v2
     Intent --> AdmissionRefused: persist actual target and refusal
     Intent --> Uncertain: response lost or receipt not saved
     Assigned --> Verifying: open same saved VM
-    Verifying --> Ready: verify before resume and SDK authority
+    Verifying --> Ready: verify before resume and use
     Verifying --> AdmissionRefused: persist configuration or receipt mismatch
     Verifying --> Unavailable: provider IO or missing VM
     Unavailable --> Verifying: retry the same target
@@ -93,7 +93,7 @@ agent-credential posture, with the owner's default profile and no additional
 GitHub, general/sandbox credentials, contents, secret files or repository/setup
 injection. Unknown credential/access configuration refuses. Current settings are
 checked at creation and reconnection, with a concrete VM receipt check before
-any workspace SDK, harness, SSH or MCP authority.
+any thread folder, harness, SSH or MCP authority.
 
 A fresh creation acknowledgement can arrive while the snapshot is still starting
 and inherited credentials are being removed. Nessa polls that new VM for at most
@@ -187,7 +187,8 @@ infrastructure connection in its encrypted vault. A matching prebuilt worker
 image is required. Shipping checks reject a release pin that does not cover the
 compiled lease protocol; an incompatible source build refuses token-only setup
 until a matching image is published. The local gateway stays reachable and its vault must be
-unlocked to provision. The SDK prepares the attached workspace; existing SSH
+unlocked to provision. Nessa makes the thread's folder in the VM with one
+`mkdir -p` (mode 700) through the Boat client; existing SSH
 leases own agent process framing, approvals, accounting and cleanup.
 
 Approved local access uses existing MCP connections. A pinned SSH connection

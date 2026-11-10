@@ -21,10 +21,12 @@ do not change admission, rollback ownership or cleanup confirmation.
 Its application ports separate settings, assignment storage and provider effects.
 Conversation placement owns which environment a thread uses. The conversation
 adapter composes workspace streams with the existing remote lease implementation.
-`workspace-sdk` prepares the attached workspace and its descriptor through the
-preinstalled supervisor. Nessa owns VM creation; an attached SDK workspace cannot
-delete its VM. The SDK is pinned to portability revision
-`33b8382d72657d176baca19797d8d146803f3d89`.
+Nessa depends on the Boat HTTP client (`boat_client`, in the workspace-sdk
+repository at `33b8382d72657d176baca19797d8d146803f3d89`) and not on the SDK
+itself. Nessa creates, resumes, stops and deletes the VM, and makes the thread's
+folder `/home/user/.nessa/workspaces/<thread>/project` with one `mkdir -p`
+(mode 700). That is the path the SDK's attach made, so VMs made before this
+change are found again. Nothing in the VM's supervisor is used.
 
 Existing SSH lease frames own agent stdin/stdout, approvals, process accounting,
 Stop and End. The initial HTTP managed-pipe bridge completed one turn but twice
@@ -32,7 +34,7 @@ returned `InputOutcome::Unknown` during sustained use. Retrying ambiguous stdin
 could duplicate a command, so that bridge was removed. This is a recorded SDK
 capability limit, not a proven SDK defect or a new replay mechanism in Nessa.
 
-The release image contains native Nessa and workspace-supervisor binaries, Node,
+The release image contains native Nessa, Node,
 pinned ACP harnesses and the model catalog. It contains no user credentials or
 pairing identity. Token-only setup uses one shared snapshot pin and refuses a
 source build whose lease protocol differs. Boat supplies the user's subscription

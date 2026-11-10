@@ -313,7 +313,7 @@ pub(super) async fn product_state(
                     .redirect(reqwest::redirect::Policy::none())
                     .build()
                     .map_err(setup_error)?,
-                api_base: workspace_sdk::boat_client::ClientConfig::DEFAULT_BASE_PATH.into(),
+                api_base: boat_client::ClientConfig::DEFAULT_BASE_PATH.into(),
                 // SAFETY: geteuid has no preconditions.
                 relay_socket: super::mcp_servers::relay_socket(namespace, unsafe {
                     libc::geteuid()

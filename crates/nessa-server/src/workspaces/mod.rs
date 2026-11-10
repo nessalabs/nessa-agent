@@ -1,8 +1,8 @@
-//! Channel-selected workspaces: Nessa owns placement and VM receipts; the SDK
-//! owns the workspace process and file mechanisms behind infrastructure ports.
+//! Channel-selected workspaces: Nessa owns placement, VM receipts and the VM
+//! itself; agents in the VM run over Nessa's lease protocol.
 //!
 //! channel -> application::Workspaces -> Settings / Assignments / Provider
-//!                                      infrastructure -> workspace-sdk / Boat
+//!                                      infrastructure -> Boat client
 pub(crate) mod application;
 pub(crate) mod domain;
 pub(crate) mod infrastructure;

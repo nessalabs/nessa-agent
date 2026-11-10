@@ -5,10 +5,10 @@ use crate::workspaces::domain::{
     AdmissionRefusal, AdmissionRejection, BoatConnection, EnvironmentConfiguration,
     EnvironmentIdentity, Failure, ObservedEnvironment, RefusalDisposition,
 };
-use serde_json::Value;
-use workspace_sdk::boat_client::{
+use boat_client::{
     Api, CreateSandboxRequest, CreateSandboxResponse, SandboxInfoResponse, SandboxState,
 };
+use serde_json::Value;
 
 const SANDBOX_FIELDS: &[&str] = &[
     "id",
@@ -168,7 +168,7 @@ pub(super) async fn environment(
     )
 }
 
-fn supported_state(sandbox: &workspace_sdk::boat_client::Sandbox) -> bool {
+fn supported_state(sandbox: &boat_client::Sandbox) -> bool {
     sandbox.state != SandboxState::Unknown
 }
 
@@ -578,7 +578,7 @@ pub(super) async fn receipt(
     }
     Ok(decoded)
 }
-pub(super) fn observed(sandbox: &workspace_sdk::boat_client::Sandbox) -> ObservedEnvironment {
+pub(super) fn observed(sandbox: &boat_client::Sandbox) -> ObservedEnvironment {
     ObservedEnvironment {
         name: sandbox.environment.clone(),
         version: sandbox.environment_version,

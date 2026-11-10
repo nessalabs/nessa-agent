@@ -8,6 +8,8 @@ mod runtime;
 mod settings;
 mod ssh;
 pub(crate) use assignments::FileAssignments;
+#[cfg(test)]
+pub(crate) use boat::thread_folder;
 pub(crate) use boat::BoatProvider;
 pub(crate) use settings::VaultSettings;
 
