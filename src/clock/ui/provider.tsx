@@ -11,6 +11,7 @@ type Listener = () => void
 
 type Clock = {
   now: () => number
+  elapsed: () => number
   storeFor(interval: number): ClockStore
 }
 
@@ -55,10 +56,11 @@ function createClockStore(interval: number): ClockStore {
   }
 }
 
-function createClock(now: () => number): Clock {
+function createClock(now: () => number, elapsed: () => number): Clock {
   const stores = new Map<number, ClockStore>()
   return {
     now,
+    elapsed,
     storeFor(interval) {
       let store = stores.get(interval)
       if (!store) {
@@ -70,16 +72,33 @@ function createClock(now: () => number): Clock {
   }
 }
 
-/** Supplies one injected time source to the clock-driven labels below it. */
+/**
+ * Supplies the clocks below it. `now` is the workspace time, which a seeded
+ * page freezes. `elapsed` is monotonic time for a duration; it is not `now`,
+ * so a frozen workspace clock cannot pin a deadline open.
+ */
 export function ClockProvider({
   now,
+  elapsed,
   children,
 }: {
   now: () => number
+  elapsed?: () => number
   children: ReactNode
 }) {
-  const clock = useMemo(() => createClock(now), [now])
+  const clock = useMemo(
+    () => createClock(now, elapsed ?? (() => performance.now())),
+    [now, elapsed],
+  )
   return <ClockContext.Provider value={clock}>{children}</ClockContext.Provider>
+}
+
+/** Monotonic time for a duration. It does not subscribe; a label uses `useNow`. */
+export function useElapsed(): () => number {
+  const clock = useContext(ClockContext)
+  if (!clock)
+    throw new Error("useElapsed needs a ClockProvider: the clock comes from composition")
+  return clock.elapsed
 }
 
 /** The injected clock, without subscribing. A deadline reads it; a label uses `useNow`. */

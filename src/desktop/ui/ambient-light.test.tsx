@@ -93,7 +93,9 @@ it("keeps one repaint frame when the light colour changes, and none for a hover"
     return frames.length
   })
   vi.stubGlobal("cancelAnimationFrame", () => {})
-  let now = 1_000
+  // A seeded workspace freezes its clock. The repaint deadline must not use it.
+  const workspaceNow = () => 1_700_000_000_000
+  let elapsed = 1_000
 
   const surface = document.createElement("div")
   surface.setAttribute("data-desktop-theme", "graphite")
@@ -105,7 +107,7 @@ it("keeps one repaint frame when the light colour changes, and none for a hover"
   mounted.push({ root, host: surface })
   await act(async () =>
     root.render(
-      <ClockProvider now={() => now}>
+      <ClockProvider now={workspaceNow} elapsed={() => elapsed}>
         <DesktopAmbient />
       </ClockProvider>,
     ),
@@ -124,8 +126,8 @@ it("keeps one repaint frame when the light colour changes, and none for a hover"
   burst(surface, "--desktop-light-high")
   expect(frames).toHaveLength(1)
 
-  now = 2_000
-  frames[0]?.(now)
+  elapsed = 2_000
+  frames[0]?.(0)
   expect(frames).toHaveLength(1)
 })
 

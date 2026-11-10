@@ -1,5 +1,5 @@
 import { useLayoutEffect, useRef } from "react"
-import { useClock } from "../../clock"
+import { useElapsed } from "../../clock"
 
 /**
  * The drifting light is painted once into a small texture and scaled up.
@@ -101,7 +101,7 @@ export function DesktopAmbient() {
   const high = useRef<HTMLSpanElement>(null)
   const low = useRef<HTMLSpanElement>(null)
   const canvas = useRef<HTMLCanvasElement | null>(null)
-  const now = useClock()
+  const elapsed = useElapsed()
 
   useLayoutEffect(() => {
     const root = host.current
@@ -152,7 +152,7 @@ export function DesktopAmbient() {
       pending = false
       if (stop) return
       paint()
-      if (now() < until) schedule()
+      if (elapsed() < until) schedule()
     }
     const schedule = () => {
       if (pending || stop) return
@@ -160,7 +160,7 @@ export function DesktopAmbient() {
       frame = requestAnimationFrame(follow)
     }
     const watch = () => {
-      until = now() + 900
+      until = elapsed() + 900
       schedule()
     }
     const onTransition = (event: Event) => {
@@ -186,7 +186,7 @@ export function DesktopAmbient() {
       mutations?.disconnect()
       surface?.removeEventListener("transitionrun", onTransition)
     }
-  }, [now])
+  }, [elapsed])
 
   return (
     <div className="desktop-ambient" ref={host} aria-hidden="true">

@@ -228,7 +228,9 @@ createRoot(container).render(
       <AgentSetupProvider source={agentSetup}>
         <Provider store={store}>
           <WidgetRegistryProvider registry={dependencies.widgets}>
-            <ClockProvider now={dependencies.now}>
+            {/* A seeded page freezes `now`. A duration, such as the light's
+                repaint, reads `elapsed` so that freeze cannot hold it open. */}
+            <ClockProvider now={dependencies.now} elapsed={() => performance.now()}>
               <SubagentsProvider source={dependencies.subagents}>
                 {/* Every icon in the window resolves through the family chosen in Settings. */}
                 <DesktopIconFamilyProvider>
