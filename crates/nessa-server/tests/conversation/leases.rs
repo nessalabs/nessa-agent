@@ -31,7 +31,7 @@ use super::{
 use super::{
     PublishAnswer, PublishAsk, PublishCall, PublishCallRefusal, PublishFailure, PUBLISH_CALL_WAIT,
 };
-use crate::conversation::domain::CommandPolicy;
+use crate::conversation::domain::{CommandPolicy, Place};
 use crate::conversation::infrastructure::{
     in_process_environment, DurableConversationCreationAudit, DurableConversationDeletionAudit,
     DurableConversationFileLinkAudit, DurableExecutionAudit, FilePlacements,
@@ -2328,15 +2328,15 @@ impl ConversationPlacements for PendingPlacements {
     fn place<'a>(
         &'a self,
         conversation: &'a ConversationId,
-        host: Option<&'a str>,
+        place: &'a Place,
     ) -> EnvironmentFuture<'a, Result<(), PlacementError>> {
-        self.inner.place(conversation, host)
+        self.inner.place(conversation, place)
     }
 
     fn placement<'a>(
         &'a self,
         conversation: &'a ConversationId,
-    ) -> EnvironmentFuture<'a, Result<Option<String>, PlacementError>> {
+    ) -> EnvironmentFuture<'a, Result<Place, PlacementError>> {
         let placement = self.inner.placement(conversation);
         if !self.stall_reads.load(Ordering::SeqCst) {
             return placement;
@@ -2647,10 +2647,16 @@ async fn b_a_host_the_configuration_does_not_name_is_refused_and_nothing_is_crea
     let root = tempfile::tempdir().unwrap();
     let here = Arc::new(Substitute::new(SandboxProfiles::HARNESS_DEFAULT));
     let harness = with_host(root.path(), here.clone(), Some(Arc::new(Host::new())));
-    assert!(matches!(
-        harness.create_on("elsewhere").await,
-        Err(ConversationError::EnvironmentNotConfigured)
-    ));
+    // Unconfigured, or no place at all: refused the same way.
+    for name in ["elsewhere", "a b", "peer:zz", "-oProxyCommand=x"] {
+        assert!(
+            matches!(
+                harness.create_on(name).await,
+                Err(ConversationError::EnvironmentNotConfigured)
+            ),
+            "{name}"
+        );
+    }
     assert!(!placement_file(root.path()).exists());
     assert!(harness
         .service
@@ -7991,7 +7997,7 @@ impl Harness {
 async fn a_pool_conversation_whose_worker_drains_as_it_is_asked_opens_on_another() {
     let root = tempfile::tempdir().unwrap();
     let (harness, [w1, w2], bindings) = pool_harness(root.path());
-    harness.create_on(super::POOL).await.unwrap();
+    harness.create_on(&Place::Pool.name()).await.unwrap();
     harness.turn("turn-1").await;
     let (first_context, restored) = harness.last_open();
     assert_eq!(restored, None);
@@ -8075,7 +8081,7 @@ async fn a_pool_worker_that_refuses_and_still_serves_is_not_left_for_another() {
     // Creating it opens its agent, which is refused.
     *w1.refuse.lock().unwrap() = Some(LeaseRefusal::EnvironmentBusy);
     assert!(matches!(
-        harness.create_on(super::POOL).await,
+        harness.create_on(&Place::Pool.name()).await,
         Err(ConversationError::LeaseRefused(
             LeaseRefusal::EnvironmentBusy
         ))
@@ -8103,7 +8109,7 @@ async fn a_refusal_left_for_a_worker_that_cannot_be_bound_is_still_recorded() {
     *w1.refuse.lock().unwrap() = Some(LeaseRefusal::EnvironmentUnreachable);
     w1.drains.store(true, Ordering::SeqCst);
     assert!(matches!(
-        harness.create_on(super::POOL).await,
+        harness.create_on(&Place::Pool.name()).await,
         Err(ConversationError::LeaseRefused(
             LeaseRefusal::EnvironmentUnreachable
         ))
@@ -8129,7 +8135,7 @@ async fn a_pool_worker_that_drains_with_no_other_to_ask_is_asked_once() {
     *w1.refuse.lock().unwrap() = Some(LeaseRefusal::EnvironmentUnreachable);
     w1.drains.store(true, Ordering::SeqCst);
     assert!(matches!(
-        harness.create_on(super::POOL).await,
+        harness.create_on(&Place::Pool.name()).await,
         Err(ConversationError::LeaseRefused(
             LeaseRefusal::EnvironmentUnreachable
         ))

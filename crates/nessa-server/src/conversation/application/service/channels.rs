@@ -533,8 +533,8 @@ impl ConversationService {
         };
         tracing::info!(
             channel_id = %changed.id(),
-            coordinator = changed.execution().coordinator.as_str(),
-            threads = changed.execution().threads.as_str(),
+            coordinator = changed.execution().coordinator_word(),
+            threads = changed.execution().threads_word(),
             "channel run location changed"
         );
         Ok(changed)
@@ -633,7 +633,7 @@ impl ConversationService {
             .ok_or(ConversationError::Unavailable)?;
         // Its own placement, fixed at creation, says whether it runs away
         // from the gateway: the channel's may have moved since.
-        let remote = self.inner.environment.placement(id).await?.is_some();
+        let remote = self.inner.environment.placement(id).await?.is_remote();
         let mut place = AgentPlace::of(&found, remote);
         if *id == found.coordinator_id() {
             place.instructions.push_str("\nYou are the main agent for this channel. Coordinate the user's work here. Use the nessa-agents MCP server: create_thread creates a separate Nessa thread, and send_message delegates work to it. Use those tools for channel delegation rather than the harness runtime’s built-in subagent or fork tools, which do not allocate Nessa workspaces. Child Nessa threads inherit this channel and its configured worker placement. Report the thread UUID and receipt actually returned by Nessa. You run only when there is work or a report to handle. Do not claim that a sleeping VM is executing work.\n");
