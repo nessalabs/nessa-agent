@@ -5203,7 +5203,7 @@ const steps = {
     const page = run.page
     await setSideRail(page, true, failures)
     if (failures.length) return
-    await page.locator('[data-rail-item="devices"]').click()
+    await page.locator(selectorFor.railItem("devices")).click()
     for (const samePerson of [false, true]) {
       await page.locator(css.devicesAddAction).click()
       await page.locator(css.devicesGatewayTile).click()
@@ -5233,7 +5233,7 @@ const steps = {
       await switchLinking(run, false, failures)
     })
     await page.locator(css.devicesBackAction).click()
-    await page.locator('[data-rail-item="agents"]').click()
+    await page.locator(selectorFor.railItem("agents")).click()
     await setSideRail(page, false, failures)
     await openStressConversation(page, run.main.id, run.main.title)
     const text = `${STRESS.reply}gateway-pairing-${step.index}`

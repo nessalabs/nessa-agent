@@ -310,7 +310,7 @@ await main(
                 "canonical true choice missing",
               )
               requireValue(
-                !(await page.locator('[type="checkbox"]').count()),
+                !(await page.getByRole("checkbox", { includeHidden: true }).count()),
                 "created choice is still editable",
               )
               if (options.evidence) {
@@ -476,9 +476,9 @@ await main(
               await page.getByRole("button", { name: "Back", exact: true }).click()
               await page.locator(css.devicesAddAction).click()
               await page.locator(css.devicesPhoneTile).click()
-              const row = page.locator(`[data-credential="${pending.credentialId}"]`)
-              await row.locator('[data-linked-action="revoke"]').click()
-              await row.locator('[data-linked-action="confirm-revoke"]').click()
+              const row = page.locator(selectorFor.linkedCredential(pending.credentialId))
+              await row.locator(selectorFor.linkedAction("revoke")).click()
+              await row.locator(selectorFor.linkedAction("confirm-revoke")).click()
               await row.waitFor({ state: "hidden" })
               requireValue(
                 grants
@@ -551,11 +551,11 @@ await main(
               await page.locator(css.devicesAddAction).click()
               await page.locator(css.devicesPhoneTile).click()
               const replacementRow = page.locator(
-                `[data-credential="${replacement.credentialId}"]`,
+                selectorFor.linkedCredential(replacement.credentialId),
               )
-              await replacementRow.locator('[data-linked-action="revoke"]').click()
+              await replacementRow.locator(selectorFor.linkedAction("revoke")).click()
               await replacementRow
-                .locator('[data-linked-action="confirm-revoke"]')
+                .locator(selectorFor.linkedAction("confirm-revoke"))
                 .click()
               await replacementRow.waitFor({ state: "hidden" })
               // A fixture-only receiver insert collision exercises the real

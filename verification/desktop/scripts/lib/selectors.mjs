@@ -430,6 +430,7 @@ export const selectorFor = {
   reviewState: (state) => `body[data-review-state="${state}"]`, // the review app saying where it is
   chartState: (state) => `body[data-chart-state="${state}"]`, // the chart app saying where it is
   reviewOutput: (name) => `#${name}`, // what the review app heard back: result, first, hidden-no-ui, hidden-with-ui, again
+  linkedCredential: (id) => `[data-credential="${id}"]`,
   linkedAction: (action) => `[data-linked-action="${action}"]`,
   stressTreeSessionFor: (id) => `.workspace-thread-row[data-session-row="${id}"]`,
   sessionListRowFor: (id) => `.workspace-list [data-session-row="${id}"]`, // one session's row in the session list
