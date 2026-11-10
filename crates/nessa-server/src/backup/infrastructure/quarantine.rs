@@ -38,7 +38,7 @@ use crate::backup::application::{
     Staging, StagingIds, TreeId, VerificationFormat, VerificationLimits, VerificationSource,
 };
 use crate::backup::domain::{
-    conversation_is_fenced, credential_is_fenced, encode_deferred, fresher_fences,
+    conversation_is_fenced, credential_is_fenced, encode_deferred, encode_identity, fresher_fences,
     leases_to_interrupt, metadata_omitted, normalized_root, paths_conflict_on,
     relative_path_is_safe, session_sidecar, share_grant_is_fenced, staging_id_is_usable,
     CredentialKind, DeferredEntry, DeferredLine, DeletionFence, DeletionLog, FenceKind,
@@ -173,6 +173,7 @@ impl CutMaterializer for DirectoryMaterializer {
                 leases = open;
             }
         }
+        write_missing_conversation_fences(&mut files, &fence_list)?;
         files.push((
             "deferred.txt".into(),
             encode_deferred(&deferred)?.into_bytes(),
@@ -186,6 +187,32 @@ impl CutMaterializer for DirectoryMaterializer {
             freshness,
         })
     }
+}
+
+fn write_missing_conversation_fences(
+    files: &mut Vec<(String, Vec<u8>)>,
+    fences: &[DeletionFence],
+) -> Result<(), RestoreFault> {
+    let directory = format!("records/{}/", StoreKind::ConversationMetadata.as_str());
+    for fence in fences {
+        let FenceKind::Conversation { id } = fence.kind() else {
+            continue;
+        };
+        let path = format!("{directory}{}", encode_identity(&format!("tombstone-{id}")));
+        if files.iter().any(|(existing, _)| existing == &path) {
+            continue;
+        }
+        // A later inventory can name a deleted conversation the older cut
+        // never stored as a tombstone. The staged tree has to carry that
+        // fence, or the serving catalogue has nothing to refuse a recreate with.
+        let body = serde_json::to_vec(&json!({
+            "conversationId": id,
+            "erased": true,
+        }))
+        .map_err(|_| RestoreFault::Unreadable)?;
+        files.push((path, body));
+    }
+    Ok(())
 }
 
 fn session_without_fenced(

@@ -35,6 +35,15 @@ use crate::backup::infrastructure::{
     DirectoryQuarantine, DirectoryVerificationSource, ExportFormat, FileDeletionLog,
     FileRestoreAudit, KeyedInventory, OsPublicationIds, OsStagingIds, SqliteDeferredSource,
 };
+use crate::composition::install_serving_stores;
+use crate::conversation::application::{ConversationCreationDisposition, ConversationRepository};
+use crate::conversation::domain::Conversation;
+use crate::conversation::infrastructure::LocalConversationStore;
+use nessa_auth::domain::{OrganizationId, PrincipalId};
+use nessa_protocol::agents::AgentId;
+use nessa_protocol::conversation::domain::{
+    ConversationApprovalMode, ConversationId, ConversationModelId,
+};
 
 struct Roots {
     _keep: tempfile::TempDir,
@@ -2298,6 +2307,95 @@ async fn a_newer_fence_omits_the_grant() {
 }
 
 #[tokio::test]
+async fn a_later_deletion_is_installed_as_a_fence() {
+    let id = "00000000-0000-4000-8000-0000000000aa";
+    let conversation = format!(
+        r#"{{"id":"{id}","organization":"acme","owner":"ada","agent":"claude","model":"opus","approvalMode":"ask"}}"#
+    );
+    let bundle = publish(
+        vec![Row {
+            store: StoreKind::ConversationMetadata,
+            identity: format!("conversation-{id}"),
+            bytes: Bytes::Public(conversation.into_bytes()),
+        }],
+        vec![],
+        None,
+    )
+    .await;
+    let later_log = DeletionLog::default()
+        .append(DeletionFence::conversation(id).unwrap())
+        .0;
+    let later = seal_inventory(bundle.key, &later_log);
+    let place = roots();
+    let report = stage(
+        &bundle,
+        &place.quarantine,
+        &place.live,
+        &MemoryAudit::open(),
+        person(RestoreAction::Stage),
+        Some(&later),
+    )
+    .unwrap();
+    assert_eq!(report.freshness, Freshness::Superset);
+    let metadata = place.quarantine.join("records/conversation-metadata");
+    assert!(!metadata.join(format!("conversation-{id}")).exists());
+    let tombstone: serde_json::Value =
+        serde_json::from_slice(&fs::read(metadata.join(format!("tombstone-{id}"))).unwrap())
+            .unwrap();
+    assert_eq!(tombstone["conversationId"], id);
+    assert_eq!(tombstone["erased"], true);
+
+    let namespace = place.quarantine.parent().unwrap().join("gateway");
+    fs::create_dir(&namespace).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        for directory in [
+            place.quarantine.parent().unwrap(),
+            &namespace,
+            &place.quarantine,
+        ] {
+            fs::set_permissions(directory, fs::Permissions::from_mode(0o700)).unwrap();
+        }
+    }
+    install_serving_stores(&namespace, &place.quarantine).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(
+            namespace.join("conversations"),
+            fs::Permissions::from_mode(0o700),
+        )
+        .unwrap();
+    }
+    let store =
+        LocalConversationStore::open(&namespace.join("conversations/metadata.sqlite3")).unwrap();
+    let conversation_id = ConversationId::new(id).unwrap();
+    let created = store
+        .create(
+            Conversation::new(
+                conversation_id,
+                OrganizationId::new("restored").unwrap(),
+                PrincipalId::new("restored").unwrap(),
+                "panel".into(),
+                "conversation.create".into(),
+                1,
+                AgentId::parse("claude").unwrap(),
+                ConversationModelId::new("opus").unwrap(),
+                ConversationApprovalMode::Ask,
+            )
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        created.disposition,
+        ConversationCreationDisposition::Existing
+    );
+    assert!(created.conversation.deletion().is_some());
+}
+
+#[tokio::test]
 async fn an_open_lease_is_interrupted_in_quarantine() {
     let lease = br#"{"kind":"granted","lease":"lease-1"}"#;
     let bundle = publish(
@@ -3540,7 +3638,18 @@ async fn a_fenced_conversation_inside_the_session_is_not_restored() {
     .unwrap();
     assert!(holds(&place.quarantine, kept));
     assert!(!holds(&place.quarantine, fenced));
-    assert!(!holds(&place.quarantine, b"conv-fenced"));
+    assert!(!holds(
+        &place
+            .quarantine
+            .join("records/canonical-records/records.sqlite3"),
+        b"conv-fenced",
+    ));
+    assert!(holds(
+        &place
+            .quarantine
+            .join("records/conversation-metadata/tombstone-conv-fenced"),
+        b"conv-fenced",
+    ));
     assert!(!place.live.exists());
 
     let absent = DeletionLog::default()
