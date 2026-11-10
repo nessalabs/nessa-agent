@@ -103,7 +103,7 @@ async function render(): Promise<Store> {
     root.render(
       <Provider store={store}>
         <WidgetRegistryProvider registry={registry}>
-          <ClockProvider now={() => 1000}>
+          <ClockProvider now={() => 1000} elapsed={() => 1000}>
             <ThreeColumns hostKind="browser" browserSurface />
           </ClockProvider>
         </WidgetRegistryProvider>

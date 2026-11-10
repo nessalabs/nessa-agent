@@ -146,6 +146,12 @@ production build at 4× CPU throttling.
   (`src/desktop/styles.css`, `.desktop-grain`).
   _Check:_ `smoke.mjs` (`ambient-grain`), both engines/layouts; `perf-budget.mjs`
   checks the unchanged frame budget.
+- [ ] **The drifting light is a scaled texture, not a live blur** (#1249).
+  Each wash is painted once at 192px and the drift only transforms it.
+  A full-size `filter: blur()` on that animation is re-rastered every frame
+  in WebKit, and the Agents overview then cannot finish a row per frame
+  inside its 10s wait. Show All on a 79-row list still has that deadline.
+  _Check:_ `ambient-overview.mjs`, both engines.
 - [ ] **The measurement works.** The calibration busy loop slows by roughly
   the throttle rate, and a 120 ms frame of known cost is measured and attributed.
   _Check:_ the `calibration` result of `perf-budget.mjs`; if it fails, no

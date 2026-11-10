@@ -119,6 +119,7 @@ function panel(choices?: ConversationChoices) {
       store,
       children: React.createElement(ClockProvider, {
         now: () => 1_000,
+        elapsed: () => 1_000,
         children: React.createElement(App, {
           attachmentResources,
           canChoosePaths: false,

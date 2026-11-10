@@ -246,11 +246,8 @@ html:not(.dark) [data-surface] {
   --desktop-light-edge: oklch(0.8 0.1 295);
 }
 
-/* Changing theme cross-fades the light rather than snapping it. */
-.desktop-ambient::before,
-.desktop-ambient::after {
-  transition: background 600ms ease;
-}
+/* Theme changes cross-fade the light's colours (`@property` below). The
+   texture is repainted while that interpolation runs (`ambient-light.tsx`). */
 
 /*
  * Native macOS window buttons remain host-owned and sit inside the sidebar,
@@ -261,16 +258,20 @@ html:not(.dark) [data-surface] {
   --desktop-window-controls-inset: 79px;
 }
 
-/* A slow, faint light behind everything, so the glass has something to hold. */
+/* A slow, faint light behind everything, so the glass has something to hold.
+   Each wash is a small texture (`--ambient-texture`) scaled up by the drift
+   (`--ambient-scale`, set from the measured 70vmax circle). A full-size
+   blurred gradient animated in place is re-rastered every frame in WebKit,
+   and the overview then cannot finish drawing inside its wait (#1249,
+   `ambient-light.tsx`). */
 .desktop-ambient {
   position: absolute;
   inset: 0;
   z-index: -1;
   overflow: hidden;
   pointer-events: none;
-  /* Kept as its own layer, so a cover over it does not throw the blur away
-     and rebuild it when the cover lifts (`styles.test.ts`). */
-  will-change: transform;
+  --ambient-texture: 192px;
+  --ambient-scale: 1;
 }
 
 /*
@@ -289,46 +290,46 @@ html:not(.dark) [data-surface] {
   background-image: url("./ui/ambient-grain.png");
 }
 
-.desktop-ambient::before,
-.desktop-ambient::after {
-  content: "";
+.desktop-ambient-light {
   position: absolute;
-  width: 70vmax;
-  height: 70vmax;
-  border-radius: 50%;
-  filter: blur(80px);
+  width: var(--ambient-texture);
+  height: var(--ambient-texture);
   opacity: 0.55;
+  transform-origin: center;
+  /* The resting size. The drift replaces it while it runs, and this remains
+     when the drift is turned off so the light does not collapse to the texture. */
+  transform: scale(var(--ambient-scale));
+  /* Its own layer: the drift is then a transform of the texture, not a
+     repaint of a full-window blur (`styles.test.ts`). */
+  will-change: transform;
+  background-repeat: no-repeat;
+  background-size: 100% 100%;
   animation: desktop-drift 28s var(--desktop-ease) infinite alternate;
 }
 
-.desktop-ambient::before {
-  left: 10%;
-  top: -35%;
-  background: radial-gradient(closest-side, var(--desktop-light-high), transparent);
+/* Centered on the old 70vmax circle: 10% from the left, 35% above the top. */
+.desktop-ambient-light-high {
+  left: calc(10% + 35vmax - var(--ambient-texture) / 2);
+  top: calc(-35% + 35vmax - var(--ambient-texture) / 2);
 }
 
-.desktop-ambient::after {
-  right: -20%;
-  bottom: -45%;
-  background: radial-gradient(closest-side, var(--desktop-light-low), transparent);
+/* Centered on the old circle that sat 20% past the right and 45% past the bottom. */
+.desktop-ambient-light-low {
+  left: calc(120% - 35vmax - var(--ambient-texture) / 2);
+  top: calc(145% - 35vmax - var(--ambient-texture) / 2);
   animation-duration: 36s;
   animation-direction: alternate-reverse;
 }
 
 /* The drifting light turned off in Settings › Appearance › Motion: it stays where it is. */
-:root[data-drift="still"] .desktop-ambient::before,
-:root[data-drift="still"] .desktop-ambient::after {
+:root[data-drift="still"] .desktop-ambient-light {
   animation: none;
 }
 
-/* While panes travel, the blur holds still. Drifting it would raster the
-   blur again on every frame of the drag (`styles.test.ts`). The mark is on
-   the document as well as the workspace, so the shell's blur is held too
-   (`marks.ts`). */
+/* While panes travel, the drift holds still. The mark is on the document as
+   well as the workspace, so the shell's light is held too (`marks.ts`). */
 :root:is([data-drag-pressing], [data-drag-reflow], [data-split-flipping])
-  .desktop-ambient::before,
-:root:is([data-drag-pressing], [data-drag-reflow], [data-split-flipping])
-  .desktop-ambient::after {
+  .desktop-ambient-light {
   animation-play-state: paused;
 }
 
@@ -350,8 +351,11 @@ html:not(.dark) [data-surface] {
 }
 
 @keyframes desktop-drift {
+  from {
+    transform: translate3d(0, 0, 0) scale(var(--ambient-scale));
+  }
   to {
-    transform: translate3d(6vw, 4vh, 0) scale(1.08);
+    transform: translate3d(6vw, 4vh, 0) scale(calc(var(--ambient-scale) * 1.08));
   }
 }
 
@@ -1802,8 +1806,7 @@ html:not(.dark) .desktop-tooltip {
 }
 
 /* Less motion, as Settings › Appearance › Motion or the system asks (`data-motion`). */
-:root[data-motion="reduced"] .desktop-ambient::before,
-:root[data-motion="reduced"] .desktop-ambient::after,
+:root[data-motion="reduced"] .desktop-ambient-light,
 :root[data-motion="reduced"] .desktop-home-inner,
 :root[data-motion="reduced"] .desktop-popover[data-state="open"] {
   animation: none;

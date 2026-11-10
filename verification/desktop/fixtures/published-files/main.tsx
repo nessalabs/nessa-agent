@@ -47,6 +47,7 @@ import {
 } from "../../../../src/conversation"
 import {
   ClockProvider,
+  monotonicElapsed,
   ClockProvider as ConversationClockProvider,
 } from "../../../../src/clock"
 import { textContent, type Conversation } from "../../../../src/conversation/model"
@@ -277,7 +278,7 @@ createRoot(rootElement).render(
     <Provider store={store}>
       <HeldFilesProvider read={dependencies.heldFiles} save={saveFile}>
         <WidgetRegistryProvider registry={dependencies.widgets}>
-          <ClockProvider now={dependencies.now}>
+          <ClockProvider now={dependencies.now} elapsed={monotonicElapsed()}>
             <DesktopIconFamilyProvider>
               <DesktopWindow hostKind="browser" browserSurface inspectable={false} />
             </DesktopIconFamilyProvider>
@@ -398,7 +399,7 @@ function renderPanel(
   createRoot(element).render(
     <React.StrictMode>
       <Provider store={panelStore as never}>
-        <ConversationClockProvider now={dependencies.now}>
+        <ConversationClockProvider now={dependencies.now} elapsed={monotonicElapsed()}>
           <HeldFilesProvider read={read} save={saveFile}>
             <Transcript
               conversation={value}

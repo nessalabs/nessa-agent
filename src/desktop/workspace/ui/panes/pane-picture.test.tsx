@@ -69,7 +69,7 @@ async function panes(withHome = false, onCommit?: () => void) {
   await act(async () =>
     root.render(
       <Provider store={store}>
-        <ClockProvider now={() => 1000}>
+        <ClockProvider now={() => 1000} elapsed={() => 1000}>
           <Profiler id="pane-picture" onRender={() => onCommit?.()}>
             {placements.map((placement) => (
               <Pane
