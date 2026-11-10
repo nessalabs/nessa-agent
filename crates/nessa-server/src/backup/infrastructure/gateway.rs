@@ -2324,12 +2324,19 @@ fn attach_carried(
 /// bytes the accepted journal sealed, or sealed by a journal the acceptance
 /// audit does not trust, is not treated as "nothing left": the cut would
 /// otherwise name those conversations' metadata and drop the size and digest
-/// a later restore needs.
+/// a later restore needs. A missing pointer is that same refusal when
+/// installation already wrote `conversations/restore-install.txt`.
 fn outstanding_deferred(namespace: &Path) -> Result<Vec<DeferredEntry>, ExportFailure> {
     let pointer = namespace.join("backup").join("accepted-restore.txt");
     let text = match fs::read_to_string(&pointer) {
         Ok(text) => text,
-        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) if error.kind() == ErrorKind::NotFound => {
+            return if installed_restore(namespace) {
+                Err(ExportFailure::Inventory)
+            } else {
+                Ok(Vec::new())
+            };
+        }
         Err(_) => return Err(ExportFailure::Inventory),
     };
     let binding = crate::backup::application::binding_from_pointer(&text)
@@ -2374,6 +2381,18 @@ fn outstanding_deferred(namespace: &Path) -> Result<Vec<DeferredEntry>, ExportFa
         );
     }
     Ok(entries)
+}
+
+/// Installation left this namespace as a restored gateway.
+///
+/// The marker outlives the accepted pointer. A missing pointer is then a
+/// lost binding, not an ordinary namespace with nothing deferred.
+fn installed_restore(namespace: &Path) -> bool {
+    match fs::metadata(namespace.join("conversations").join("restore-install.txt")) {
+        Ok(_) => true,
+        Err(error) if error.kind() == ErrorKind::NotFound => false,
+        Err(_) => true,
+    }
 }
 
 /// The audit is only read. Its clock is not asked.

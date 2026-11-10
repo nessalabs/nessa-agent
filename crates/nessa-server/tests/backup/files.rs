@@ -1806,6 +1806,33 @@ async fn a_missing_deferred_inventory_is_not_published_as_a_complete_cut() {
 }
 
 #[tokio::test]
+async fn an_installed_restore_without_its_pointer_is_not_published_as_a_complete_cut() {
+    let namespace = tempfile::tempdir().unwrap();
+    let root = namespace.path();
+    let conversations = root.join("conversations");
+    fs::create_dir_all(&conversations).unwrap();
+    fs::write(
+        conversations.join("restore-install.txt"),
+        "nessa-restore-install/1\nabc\n",
+    )
+    .unwrap();
+    let inventory = FileDeletionLog::open(root.join("backup")).unwrap();
+    let bundle = tempfile::tempdir().unwrap();
+    let error = capture_namespace(
+        root,
+        &OpenAdmission,
+        &inventory,
+        &DirectoryPublisher::new(bundle.path().join("cut")),
+        &Clock(8),
+        &inventory.key(),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(error, ExportFailure::Inventory);
+    assert!(!bundle.path().join("cut/manifest.txt").exists());
+}
+
+#[tokio::test]
 async fn a_rewritten_deferred_inventory_is_not_published_as_a_complete_cut() {
     let namespace = tempfile::tempdir().unwrap();
     let root = namespace.path();

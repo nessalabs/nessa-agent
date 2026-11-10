@@ -249,7 +249,9 @@ An oversized conversation is still not copied into the snapshot. A later export
 of an accepted namespace carries deferred conversations the serving file does
 not hold. If that accepted tree's `deferred.txt` is missing, its bytes are not the
 ones the accepted journal sealed, or that journal is not the one the
-acceptance audit recorded, the export stops and publishes nothing.
+acceptance audit recorded, the export stops and publishes nothing. An
+installed restore that has lost `backup/accepted-restore.txt` is the same
+refusal: `conversations/restore-install.txt` is still there.
 The file is written even when it names no conversation, so its absence or a
 later well-formed replacement is not an empty inventory. Opening a deferred conversation
 streams that one conversation from a source the caller supplies and publishes
