@@ -1059,9 +1059,8 @@ describe("a transcript", () => {
     expect(deadline?.getAttribute("aria-label")).toBe(
       "If nobody answers within 30 seconds, this is denied automatically.",
     )
-    expect(host.querySelector(".workspace-approval-reason")?.textContent).toBe(
-      "Runs the tests.",
-    )
+    // The agent's own title says again what the command says: not drawn.
+    expect(host.querySelector(".workspace-approval-reason")).toBeNull()
   })
 
   it("names what an agent's command reaches and runs, above the command itself", async () => {
@@ -1103,9 +1102,8 @@ describe("a transcript", () => {
     expect(card?.querySelector(".workspace-approval-command")?.textContent).toBe(
       '$ curl -s "https://tad2026.eventive.org/api" |\n  head -c 1000;\ncurl -I https://tad2026.eventive.org/',
     )
-    expect(card?.querySelector(".workspace-approval-meta dd")?.textContent).toBe(
-      "mcp__nessa__shell",
-    )
+    // The tool is in the command's words; the card does not name it again.
+    expect(card?.querySelector(".workspace-approval-meta")).toBeNull()
     // Short enough to show whole: nothing to unfold.
     expect(card?.querySelector(".workspace-approval-disclose")).toBeNull()
   })
@@ -1206,8 +1204,8 @@ describe("a transcript", () => {
     // Every answer, whichever of them the card's width shows (`approval-request.tsx`).
     expect(buttons()).toEqual([
       ["Deny", false],
-      ["Always Allow", false],
-      ["Allow Once", false],
+      ["Always allow", false],
+      ["Allow once", false],
       ["More Ways to Allow", false],
     ])
     await act(async () => {
@@ -1295,7 +1293,7 @@ describe("a transcript", () => {
     await act(async () => source.release("approve"))
   })
 
-  it("answers the clicked option when two allow the same way", async () => {
+  it("answers the drawn option when two allow the same way", async () => {
     const source = fakeSource()
     const approval = conversation.approvals[0]
     if (!approval) throw new Error("the sample asks for nothing")
@@ -1311,14 +1309,15 @@ describe("a transcript", () => {
         },
       ],
     })
-    const run = [...host.querySelectorAll("button")].find(
-      (button) => button.textContent === "Run it",
+    const once = [...host.querySelectorAll("button")].find(
+      (button) => button.textContent === "Allow once",
     )
+    expect(once?.title).toBe("Ship it")
     await act(async () => {
-      run?.click()
+      once?.click()
     })
     expect(source.calls.filter((call) => call[0] === "approve")).toEqual([
-      ["approve", "b", "ap", "once", "person", "run"],
+      ["approve", "b", "ap", "once", "person", "ship"],
     ])
   })
 
@@ -1326,9 +1325,9 @@ describe("a transcript", () => {
     await shown()
     const head = () => host.querySelector(".workspace-approval-head")?.textContent ?? ""
     const card = () => host.querySelector<HTMLElement>(".workspace-approval")
-    expect(head()).toMatch(/^\S.* wants to run a command$/)
+    expect(head()).toMatch(/^\S.* wants to run$/)
     expect(card()?.dataset.origin).toBe("agent")
-    const agent = head().replace(/ wants to run a command$/, "")
+    const agent = head().replace(/ wants to run$/, "")
     await act(async () => root.render(<></>))
     await shown(fakeSource(), {
       ...conversation,
@@ -1378,7 +1377,7 @@ describe("a transcript", () => {
     // Deny stays at the left; the review's allow is the primary button, in the review's words.
     expect(buttons()).toEqual([
       ["Deny", false],
-      ["Allow", false],
+      ["Allow once", false],
     ])
     await act(async () => {
       host.querySelector<HTMLButtonElement>(".workspace-approval [data-primary]")?.click()
@@ -1401,7 +1400,7 @@ describe("a transcript", () => {
     )
     expect(
       spoken(approvalHead({ origin: { kind: "agent" }, ask: "tool" }, "Claude")),
-    ).toBe("Claude wants to run a command")
+    ).toBe("Claude wants to run")
     await shown(fakeSource(), {
       ...conversation,
       approvals: [

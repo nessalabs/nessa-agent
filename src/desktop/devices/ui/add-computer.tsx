@@ -22,6 +22,7 @@ import {
   SegmentedControlOption,
 } from "@nessa-ui/react/segmented-control"
 import { useEffect, useRef, useState } from "react"
+import { PageHeader } from "@nessa-ui/react/page-header"
 import { useClipboardWrite } from "../../../conversation"
 import type {
   DevicesGateway,
@@ -289,13 +290,13 @@ export function AddComputer({
         {back}
         Devices
       </button>
-      <header className="devices-heading">
-        <h1>Add a computer</h1>
+      <div className="devices-heading">
+        <PageHeader title="Add a computer" />
         <p className="devices-muted">
           It runs agents the hub sends it, with its own files and tools. Nessa must be
           installed on it.
         </p>
-      </header>
+      </div>
 
       {step.kind === "added" ? (
         <section className="devices-card" data-devices-added>

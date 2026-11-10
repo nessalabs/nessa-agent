@@ -58,6 +58,13 @@ body {
   --desktop-gutter: 8px;
   --desktop-radius: 14px;
   /*
+   * Every top-level page (Settings, Devices, New channel, Agents) starts the
+   * same way: its `PageHeader` this far below the titlebar row, and a page
+   * of forms no wider than this, centred.
+   */
+  --desktop-page-top: 24px;
+  --desktop-page-width: 720px;
+  /*
    * Corner controls sit the same distance from a pane's top and side edges,
    * and their corners are concentric with the pane's: inner radius is the
    * pane's radius minus that distance. Everything below derives from these.
@@ -169,6 +176,8 @@ body {
   --desktop-radius-md: 12px;
   --desktop-radius-lg: 16px;
   --desktop-radius-xl: 20px;
+  /* The room between a pane's composer and the pane's edges, the same in every pane. */
+  --workspace-dock-gutter: 16px;
 
   /* Type. */
   --desktop-text-caption: 11px;
@@ -1136,6 +1145,29 @@ html:not(.dark) [data-surface] {
   /* Grows with what is typed, then scrolls. */
   field-sizing: content;
   max-height: 40vh;
+}
+
+/*
+ * The composer in its compact size: the same surface, one line that grows,
+ * and Send beside it at its usual size. The Agents peek replies with it
+ * (`reply-pill.tsx`), so a reply there looks like a reply in a pane.
+ */
+.desktop-composer[data-size="compact"] {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  padding: 6px 6px 6px 16px;
+  border-radius: var(--desktop-radius-xl);
+}
+
+.desktop-composer[data-size="compact"] textarea {
+  flex: 1;
+  min-width: 0;
+  min-height: 32px;
+  max-height: none;
+  padding: 7px 0;
+  font-size: var(--desktop-text-read);
+  line-height: 18px;
 }
 
 /*

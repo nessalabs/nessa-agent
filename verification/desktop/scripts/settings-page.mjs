@@ -32,13 +32,7 @@ const sizes = [
  * scrolling at 1000 × 700: each category's first tab, but Connections and
  * Advanced (a list of agents, and nothing yet).
  */
-const aboveTheFold = [
-  "General",
-  "Appearance",
-  "Workspace",
-  "Models",
-  "Privacy & Permissions",
-]
+const aboveTheFold = ["Appearance", "Workspace", "Privacy & Permissions"]
 
 /** The longest page, which scrolls at every size: Workspace › Keyboard. */
 const longPage = { category: "Workspace", tab: "Keyboard" }
@@ -255,7 +249,7 @@ const checks = {
   arrive: async (page, { browser, url }) => {
     const failures = []
     const measure = async (target) => {
-      await show(target, "Models")
+      await show(target, "Appearance")
       await target.locator(css.settingsCategory, { hasText: "Workspace" }).first().click()
       return target.evaluate(
         (sel) =>
@@ -298,7 +292,7 @@ const checks = {
   search: async (page) => {
     const failures = []
     await page.setViewportSize(sizes[1])
-    await show(page, "General")
+    await show(page, "Appearance")
     const field = page.locator(css.settingsSearch)
     await field.fill("drifting light")
     await page.keyboard.press("Enter")
@@ -380,9 +374,17 @@ const checks = {
     const text = (await row.textContent()) ?? ""
     const disabled = await row.getAttribute("data-disabled")
     if (disabled === null) failures.push("remembered rules are usable without a gateway")
-    if (!text.includes("Remembered rules"))
-      failures.push("the row does not name remembered rules")
-    if (!text.includes("Not available in this window."))
+    // The group's heading names the rules once; the resting row says why, once.
+    const heading = await page
+      .locator('[data-slot="settings-group"]', { has: row })
+      .locator('[data-slot="settings-group-title"]')
+      .textContent()
+      .catch(() => null)
+    if (heading !== "Remembered rules")
+      failures.push("the group is not headed Remembered rules")
+    if (text.includes("Remembered rules"))
+      failures.push("the row repeats its group's heading")
+    if (!text.includes("Not available in this window"))
       failures.push("the row does not say it is unavailable")
     return { text, failures }
   },
@@ -418,7 +420,7 @@ const checks = {
     const note = await page.$eval("#settings-panel", (panel) => panel.textContent ?? "")
     if (
       !note.includes(
-        "Hooks can approve, deny, or change a tool call and its result without Nessa asking, and can run commands when the agent starts.",
+        "Hooks can approve or change tool calls without asking. Turn on only for projects you trust.",
       )
     )
       failures.push("the page does not say what hooks can do")
@@ -445,7 +447,7 @@ const checks = {
       ["claude-native-hooks", "Claude Code hooks"],
       ["codex-native-hooks", "Codex hooks"],
     ]) {
-      await show(page, "General")
+      await show(page, "Appearance")
       const field = page.locator(css.settingsSearch)
       await field.fill(label)
       await page.keyboard.press("Enter")
@@ -496,14 +498,13 @@ const checks = {
     const text = (await row.textContent()) ?? ""
     const checked = await row.locator('[role="switch"]').getAttribute("aria-checked")
     if (checked !== "true") failures.push(`Claude's switch is ${checked}, not on`)
-    if (!text.includes("turn it on only for projects you trust"))
-      failures.push("the on row does not show the trust warning")
-    if (!text.includes("Applies the next time each conversation's agent starts."))
-      failures.push("the on row does not say the choice applies at the next start")
+    // The trust warning is said once, under the group, never in a row.
+    if (text.includes("projects you trust"))
+      failures.push("the on row repeats the group's trust warning")
     const note = await page.$eval("#settings-panel", (panel) => panel.textContent ?? "")
     if (
       !note.includes(
-        "Hooks can approve, deny, or change a tool call and its result without Nessa asking, and can run commands when the agent starts.",
+        "Hooks can approve or change tool calls without asking. Turn on only for projects you trust.",
       )
     )
       failures.push("the page does not say what hooks can do")
@@ -527,10 +528,10 @@ const checks = {
     await openNativeHooksState(page, url, "unset")
     const row = page.locator('[data-setting="claude-native-hooks"]')
     const text = (await row.textContent()) ?? ""
-    if (!text.includes("This agent isn't set up."))
+    if (!text.includes("Not set up"))
       failures.push("the unset row does not say the agent isn't set up")
-    if (!text.includes("turn it on only for projects you trust"))
-      failures.push("the unset row does not keep the trust warning")
+    if (text.includes("projects you trust"))
+      failures.push("the unset row repeats the group's trust warning")
     await shotNativeHooks(page, row, `native-hooks-unset-${engine}.png`)
     return { failures }
   },
@@ -543,10 +544,10 @@ const checks = {
     await openNativeHooksState(page, url, "failed")
     const row = page.locator('[data-setting="claude-native-hooks"]')
     await row.locator('[role="switch"]').click()
-    await row.getByText("Could not change this.").waitFor()
+    await row.getByText("Couldn’t change this").waitFor()
     const text = (await row.textContent()) ?? ""
     const checked = await row.locator('[role="switch"]').getAttribute("aria-checked")
-    if (!text.includes("Could not change this."))
+    if (!text.includes("Couldn’t change this"))
       failures.push("the failed row does not say the change failed")
     if (checked !== "true")
       failures.push(`the failed change did not keep Claude's stored choice: ${checked}`)
@@ -587,7 +588,7 @@ const checks = {
           const box = await opened.page.locator(css.settings).boundingBox()
           if (!box || box.width < 400 || box.height < 400)
             failures.push(`${layout}: Settings is not shown: ${JSON.stringify(box)}`)
-          const back = opened.page.getByRole("button", { name: "Back to nessa Agent" })
+          const back = opened.page.getByRole("button", { name: "Back to nessa Studio" })
           if (!(await back.isVisible()))
             failures.push(`${layout}: Settings has no way back`)
           else {
@@ -668,8 +669,8 @@ Per engine:
   remembered-rules  Access rests the remembered-rules row without a gateway
   native-hooks  Native hooks rests Claude and Codex hook rows without a gateway, and
                  says a hook can deny or change a tool call
-  native-hooks-on  with a gateway, Claude's switch on shows the trust warning
-                 and that the choice applies at the next start
+  native-hooks-on  with a gateway, Claude's switch turns on, and the trust warning
+                 is said once, under the group, not in the row
   native-hooks-unset  Claude on, and not in the catalog, says it isn't set up
   native-hooks-failed  a refused change says it could not change`,
 }

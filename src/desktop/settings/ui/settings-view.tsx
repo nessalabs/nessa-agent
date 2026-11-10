@@ -14,7 +14,7 @@ import { useSettingsSurface } from "./use-settings-surface"
  * `settings-controls.tsx`.
  *
  * Opened from "nessa Studio" at the foot of the app's sidebar (or ⌘,); in
- * Settings that same place reads "nessa Agent" with a back chevron, and
+ * Settings that same place reads "nessa Studio" with a back chevron, and
  * returns to the app. The sidebar toggle sits where the app's does and ⌘B
  * works the same; with the sidebar hidden, a back chevron beside the toggle
  * is the way out. Esc does not close Settings.

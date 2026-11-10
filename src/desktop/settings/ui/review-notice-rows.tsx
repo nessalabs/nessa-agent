@@ -43,14 +43,11 @@ export function ReviewNoticeRows() {
   }, [source])
   if (access === "unsupported") return null
   const entry = setting("review-notices")
+  // One word of state; where the system blocks them, how to unblock.
   const detail =
-    access === "allowed"
-      ? "On. A review that is waiting shows a notification."
-      : access === "denied"
-        ? source.blocked
-        : entry.detail
+    access === "allowed" ? "On" : access === "denied" ? source.blocked : "Off"
   return (
-    <Group title={entry.label}>
+    <Group>
       <ItemRow
         setting="review-notices"
         label={entry.label}
@@ -60,6 +57,7 @@ export function ReviewNoticeRows() {
           access === "not-asked" ? (
             <button
               type="button"
+              className="settings-button"
               disabled={asking}
               onClick={() => {
                 if (latest.current?.source !== source || latest.current.kind === "ask")

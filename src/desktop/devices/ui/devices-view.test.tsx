@@ -185,9 +185,8 @@ const text = (host: HTMLElement, selector: string) =>
 
 it("lists the hub, its computers online first, the cloud and the linked phone", async () => {
   const { host, root } = await mount(fakeGateway().gateway)
-  expect(text(host, "[data-devices-summary]")).toBe(
-    "Studio is your hub. 1 of 2 computers online, 4 agents on them.",
-  )
+  // The title stands alone: no line of instructions under it.
+  expect(host.querySelector(".devices-heading p")).toBeNull()
   expect(text(host, "#devices-hub-name")).toBe("Studio")
   expect(text(host, '[data-devices-stat="CPU"] .devices-stat-value')).toBe("61%")
   const tiles = [...host.querySelectorAll("[data-devices-worker]")].map((tile) =>
@@ -213,7 +212,7 @@ it("lists the hub, its computers online first, the cloud and the linked phone", 
   expect(vi.getTimerCount()).toBe(0)
 })
 
-it("shows every device in one list, each saying what it is, with Add device last", async () => {
+it("shows every device in one list, each saying what it is, and one Add device", async () => {
   const { host, root } = await mount(fakeGateway().gateway)
   const list = host.querySelector("[data-devices-list]")
   expect(
@@ -231,12 +230,13 @@ it("shows every device in one list, each saying what it is, with Add device last
               ? "phone"
               : tile.getAttribute("data-devices-action")),
       ),
-  ).toEqual(["ab", "cd", "cloud", "phone", "add-tile"])
+  ).toEqual(["ab", "cd", "cloud", "phone"])
   expect(text(host, "[data-devices-cloud] .devices-tile-body .devices-muted")).toBe(
     "Cloud VMs",
   )
   expect(host.querySelectorAll("h2:not(#devices-hub-name)")).toHaveLength(0)
   expect(text(host, '[data-devices-action="add"]')).toBe("Add device")
+  expect(host.querySelectorAll('[data-devices-action^="add"]')).toHaveLength(1)
   await act(async () => root.unmount())
 })
 
@@ -257,7 +257,10 @@ it("manages Boat from its own page, with no trip to Settings", async () => {
     cloud: async () => ({ ok: true, value: "disconnected" }),
   })
   const { host, root } = await mount(gateway, false, boat)
-  expect(text(host, "[data-devices-cloud] .devices-tile-foot")).toBe("Not connected")
+  // One word for where Boat stands, not "Offline" and "Not connected" both.
+  expect(text(host, "[data-devices-cloud] .devices-status")).toBe("Not connected")
+  expect(host.querySelector("[data-devices-cloud] .devices-tile-foot")).toBeNull()
+  expect(host.querySelector("[data-devices-cloud]")?.textContent).not.toContain("Offline")
   expect(host.textContent).not.toContain("Settings ›")
   // Boat is drawn as a boat; one not connected sits still.
   const tileBoat = host.querySelector("[data-devices-cloud] [data-slot=device-figure]")
@@ -299,7 +302,7 @@ it("offers Unlock, not a token field, while the vault is locked, then reads Boat
   }
   const { gateway } = fakeGateway({ cloud: async () => ({ ok: true, value: cloud }) })
   const { host, root } = await mount(gateway, false, boat)
-  expect(text(host, "[data-devices-cloud] .devices-tile-foot")).toBe("Locked")
+  expect(text(host, "[data-devices-cloud] .devices-status")).toBe("Locked")
   await act(async () =>
     (host.querySelector("[data-devices-cloud]") as HTMLElement).click(),
   )

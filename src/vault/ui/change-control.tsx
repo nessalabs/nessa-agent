@@ -46,7 +46,8 @@ function MountedChangeControl({ source }: { source: VaultSource }) {
   return (
     <>
       <Button
-        variant="ghost"
+        variant="tinted"
+        size="28"
         onClick={() => {
           void open()
         }}

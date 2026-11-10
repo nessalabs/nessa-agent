@@ -8,7 +8,11 @@ import { unlockRequestedVault } from "./vault.mjs"
 export async function openAccounts(page) {
   if (!(await page.$(css.settings))) await page.keyboard.press(keys.settings)
   await page.locator(css.settingsCategory, { hasText: names.connections }).click()
-  await page.locator(css.settingsTab, { hasText: names.accounts }).click()
+  // Connections opens on Accounts, whose unlock dialog (a locked vault)
+  // covers the tabs: click the tab only when another one is showing.
+  const tab = page.locator(css.settingsTab, { hasText: names.accounts })
+  await tab.waitFor()
+  if ((await tab.getAttribute("aria-selected")) !== "true") await tab.click()
 }
 
 /** Edit the global default and one saved channel through the actual UI,
@@ -42,8 +46,56 @@ export async function channelRuntimeSettings(run, channel, failures) {
     // Accounts also reads protected GitHub status. A prior listener restart
     // seals the app lease; answer that independent request through the UI.
     await unlockRequestedVault(client, page)
+    // Settings' sidebar is the app's flat sidebar, not a floating card.
+    const sidebar = await page.locator(".settings-glass").evaluate((glass) => {
+      const style = getComputedStyle(glass)
+      const box = glass.getBoundingClientRect()
+      return {
+        left: box.left,
+        top: box.top,
+        radius: style.borderTopLeftRadius,
+        shadow: style.boxShadow,
+      }
+    })
+    if (
+      sidebar.left !== 0 ||
+      sidebar.top !== 0 ||
+      sidebar.radius !== "0px" ||
+      sidebar.shadow !== "none"
+    )
+      failures.push(`Settings' sidebar is a card: ${JSON.stringify(sidebar)}`)
+    // Each account is one row: a word of state and one button. The token is
+    // pasted in a dialog, never in a field in the list; Auto-stop is its own
+    // row beside Boat's.
+    const boat = page.locator('[data-setting="boat"]')
+    if ((await boat.locator("input, select").count()) !== 0)
+      failures.push("the Boat row shows a field instead of one button")
+    if (!/Not connected|Connected|Locked/.test(await boat.innerText()))
+      failures.push(`the Boat row says ${JSON.stringify(await boat.innerText())}`)
+    if ((await boat.locator(css.boatRuntimeSettings).count()) !== 0)
+      failures.push("Auto-stop is inside the Boat row, not a row of its own")
+    const connect = boat.locator('[data-boat-action="connect"]')
+    if (await connect.count()) {
+      await connect.click()
+      const dialog = page.locator("[data-boat-dialog]")
+      const asked = await dialog
+        .locator('input[type="password"]')
+        .waitFor({ timeout: 5_000 })
+        .then(
+          () => true,
+          () => false,
+        )
+      if (!asked) failures.push("Connect… on the Boat row opens no token field")
+      const font = await dialog
+        .locator('input[type="password"]')
+        .evaluate((input) => getComputedStyle(input).fontFamily)
+        .catch(() => "")
+      if (/mono/i.test(font)) failures.push(`the Boat token field is in ${font}`)
+      await page.keyboard.press("Escape")
+      await dialog.waitFor({ state: "hidden", timeout: 5_000 })
+    }
     const global = page.locator(css.boatRuntimeSettings)
-    await global.locator("select").selectOption("14400")
+    await global.locator('[data-value="14400"]').click()
     const defaultSaved = await waitFor(
       async () =>
         (await client.boat.runtimeSettings()).defaultLifetime.seconds === 14_400,
@@ -52,8 +104,8 @@ export async function channelRuntimeSettings(run, channel, failures) {
     if (!defaultSaved)
       failures.push("the global VM lifetime was not saved through settings")
     receipts.default = await client.boat.runtimeSettings()
-    // A choice saves as it is made; the select is live again once it lands.
-    await waitFor(() => global.locator("select").isEnabled(), 10_000)
+    // A choice saves as it is made; the choices are live again once it lands.
+    await waitFor(() => global.locator('[data-value="never"]').isEnabled(), 10_000)
     if (run.evidence)
       await page.screenshot({
         path: join(run.evidence, `boat-default-${channel.channelId}.png`),
@@ -87,11 +139,43 @@ export async function channelRuntimeSettings(run, channel, failures) {
     await gear.click()
     const dialog = page.locator(css.channelSettingsDialog)
     const control = dialog.locator(css.boatRuntimeSettings)
-    const select = control.locator("select")
-    await waitFor(async () => (await select.inputValue()) === "default", 10_000)
-    if ((await select.inputValue()) !== "default")
+    await control.waitFor({ timeout: 10_000 })
+    // Every control fits inside the dialog, and no setting's name is
+    // squeezed onto a line per word beside its control (UI audit #1).
+    const fit = await dialog.evaluate((box) => {
+      const edge = box.getBoundingClientRect()
+      const spilled = [...box.querySelectorAll("button, select, input")]
+        .filter((each) => {
+          const rect = each.getBoundingClientRect()
+          return (
+            rect.width > 0 &&
+            (rect.right > edge.right + 0.5 || rect.left < edge.left - 0.5)
+          )
+        })
+        .map((each) => each.textContent?.trim() || each.getAttribute("aria-label"))
+      const squeezed = [...box.querySelectorAll('[data-slot="settings-row-label"]')]
+        .filter((label) => {
+          const lines =
+            label.getBoundingClientRect().height /
+            parseFloat(getComputedStyle(label).lineHeight)
+          return lines > 1.5
+        })
+        .map((label) => label.textContent)
+      return { spilled, squeezed, selects: box.querySelectorAll("select").length }
+    })
+    if (fit.spilled.length > 0)
+      failures.push(
+        `channel settings controls run past the dialog: ${fit.spilled.join(", ")}`,
+      )
+    if (fit.squeezed.length > 0)
+      failures.push(`channel settings names wrap: ${fit.squeezed.join(", ")}`)
+    if (fit.selects > 0) failures.push("channel settings still use a native select")
+    const chosen = () => control.getAttribute("data-selection")
+    const choose = (value) => control.locator(`[data-value="${value}"]`).click()
+    await waitFor(async () => (await chosen()) === "default", 10_000)
+    if ((await chosen()) !== "default")
       failures.push("a new channel did not inherit the VM lifetime default")
-    await select.selectOption("never")
+    await choose("never")
     if (
       !(await waitFor(
         async () =>
@@ -101,7 +185,7 @@ export async function channelRuntimeSettings(run, channel, failures) {
       ))
     )
       failures.push("the channel's explicit unlimited lifetime was not saved")
-    await waitFor(() => select.isEnabled(), 10_000)
+    await waitFor(() => control.locator('[data-value="default"]').isEnabled(), 10_000)
     receipts.override = await client.boat.runtimeSettings({
       channelId: channel.channelId,
     })
@@ -111,7 +195,7 @@ export async function channelRuntimeSettings(run, channel, failures) {
       await page.screenshot({
         path: join(run.evidence, `boat-channel-${channel.channelId}.png`),
       })
-    await select.selectOption("default")
+    await choose("default")
     if (
       !(await waitFor(
         async () =>
@@ -220,7 +304,10 @@ export async function channelPlacementSettings(run, channel, failures) {
   // offered, disabled, the move is asked of the gateway directly, as another
   // window would, and the dialog is checked once the window reads it again.
   await control.waitFor({ timeout: 10_000 })
-  const boatOffered = (await option("threads", "Boat").count()) > 0
+  // Boat is always named; it can be chosen only once connected.
+  const boatOffered =
+    (await option("threads", "Boat").count()) > 0 &&
+    !(await option("threads", "Boat").isDisabled())
   const toBoat = async (row, current) => {
     if (!boatOffered) {
       await client.channels.setPlacement({
@@ -259,7 +346,7 @@ export async function channelPlacementSettings(run, channel, failures) {
       failures.push("the channel settings do not show where its main agent runs")
     receipts.boatOffered = boatOffered
     if (!boatOffered) {
-      const waiting = option("threads", "Boat (not connected)")
+      const waiting = option("threads", "Boat")
       if ((await waiting.count()) === 0 || !(await waiting.isDisabled()))
         failures.push("Boat is not shown as unavailable while it is not connected")
     }

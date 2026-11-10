@@ -98,6 +98,7 @@ export function TunnelGroup({ gateway }: { gateway: LinkedDevicesGateway }) {
   const named = state.draft.mode === "named"
   return (
     <SettingsGroup
+      surface="flat"
       title={tunnelSentences.title}
       footnote={tunnelFootnote(state)}
       data-tunnel

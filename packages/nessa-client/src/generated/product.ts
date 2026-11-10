@@ -530,6 +530,8 @@ export interface ConversationMessage {
   executionId: string
   /** User input text, whole; empty for a message of images alone. Its only bound is the frame's. */
   userText: string
+  /** Sent again for the person after a restart or a failure cut its first try short. userText is still the person's own words, never the notice the agent was given. Absent for a first try. */
+  retried?: boolean
   /** Images the user sent with this turn, in attachment order. */
   attachments: ImageAttachment[]
   /** Original stored file inputs, in order; at most 64 MiB together. Omitted means none. */

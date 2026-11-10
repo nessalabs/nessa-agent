@@ -156,7 +156,7 @@ export const css = {
   emptyTitle: '[data-slot="empty-state-title"]', // the kit's EmptyState's words
   identityRow: ".desktop-identity", // class: the row holding the identity
   identityProduct: ".desktop-identity-words > span", // class: the identity's word after "nessa"
-  identityButton: ".desktop-identity-button", // class: "nessa Studio" / "‹ nessa Agent" (src/desktop/ui/identity.tsx)
+  identityButton: ".desktop-identity-button", // class: "nessa Studio" / "‹ nessa Studio" (src/desktop/ui/identity.tsx)
   emptyState: '[data-slot="empty-state"]', // the kit's EmptyState
   countBadge: ".workspace-badge", // class: a sidebar row's count, the kit's Badge
   litPoint: '.workspace-status:is([data-status="needs-you"], [data-status="unread"])', // class: StatusGlyph's lit points
@@ -189,7 +189,6 @@ export const css = {
   peekEdge: ".desktop-peek-edge", // class: the strip at the folded sidebar's edge a hover reveals it from
   listSearch: ".workspace-list .workspace-search", // class: the session list's search field
   listScroll: ".workspace-list-scroll", // class: the session list's scroller
-  listEmptyAction: ".workspace-list-empty button", // the empty list's New Session, the kit's tinted pill
   sessionListRow: ".workspace-list [data-session-row]", // a row of the session list, not a sidebar thread
   selectedSessionListRow: '.workspace-list [data-session-row][aria-selected="true"]', // the conversation the focused pane actually shows
   sessionRow: "[data-drag-item]", // a session a drag can carry to a pane
@@ -240,10 +239,9 @@ export const css = {
   overviewGroup: ".agents-overview-group", // class: a listed group, labelled by its h2
   peekConversation: ".agents-peek", // class: the whole conversation article, beside the list or inline
   overviewPeek: ".agents-overview-peek", // class: the peek beside the list, which scrolls
-  peekSummary: ".agents-peek-summary", // class: what is going on, in the source's line
+  peekSummary: ".agents-peek-state > .agents-truncate", // class: where it stands in one line: waiting, the source's line of what it is doing, or finished
   peekCommand: ".agents-peek .workspace-approval-command", // class: the command in the peek, beside the list or under the row
   peekStory: ".agents-peek-story", // class: the turn's story, top to bottom
-  peekEarlier: ".agents-peek-earlier", // class: says the turn holds more above what the peek draws
   transcriptStep: '[data-slot="tool-trace-step"]', // kit slot: one call the agent made, a row of a message's trace
   transcriptWorkToggle: '.workspace-work [data-slot="tool-trace-line"]', // a run of calls opens its rows in place
   transcriptWorkEarlier: '.workspace-work [data-slot="tool-trace-earlier"]', // an open run shows the calls folded before its last few
@@ -602,8 +600,8 @@ export const names = {
   /** A pane's "…" menu: the header picture's two choices (issue #320). */
   chooseHeaderPicture: "Choose Header Picture…",
   useNightScene: "Use Night Scene",
-  allowOnce: "Allow Once",
-  leaveSettings: "Back to nessa Agent",
+  allowOnce: "Allow once",
+  leaveSettings: "Back to nessa Studio",
   /** Settings' category and tab holding the MCP servers. */
   connections: "Connections",
   integrations: "MCP servers",
@@ -719,7 +717,7 @@ export const names = {
   modelWithoutLevels: "Claude Haiku 4.5",
   /** Its least level is None, which `modelWithoutFast` does not offer. */
   modelWithLeastLevel: "GPT-5.6 Sol",
-  alwaysAllow: "Always Allow",
+  alwaysAllow: "Always allow",
   /** The card's menu for an always answer, drawn only when the review offers one. */
   moreWaysToAllow: "More Ways to Allow",
   /** The sample session (in-memory source) whose conversation carries a widget of each state. */
@@ -775,14 +773,26 @@ export const names = {
   closeWindow: "Close",
 }
 
+/** The option id of Nessa's project allow rule: the card's Always allow. */
+const REMEMBER_ALLOW = "nessa.remember.allow"
+
 /**
- * The label of the option with `effect` on a conversation permission.
- * A card's button says this (#444); a surface never invents "Allow Once".
- * Null when the review offers no such option.
+ * The name of the card's button for the first option with `effect` on a
+ * conversation permission. The card draws only the answers the review offers
+ * (#444), each named by what it does (Deny, Allow once, Always allow) with
+ * the review's own words as its tooltip (UI audit #7). Null when the review
+ * offers no such option.
  */
 export function offeredLabel(options, effect) {
-  const option = options?.find((each) => each.effect === effect)
-  return option ? option.label : null
+  const option =
+    options?.find((each) => each.effect === effect && each.id !== REMEMBER_ALLOW) ??
+    options?.find((each) => each.effect === effect)
+  if (!option) return null
+  return option.id === REMEMBER_ALLOW
+    ? "Always allow"
+    : effect === "deny"
+      ? "Deny"
+      : "Allow once"
 }
 
 /** Role and accessible-name selectors for the committed conversation fixture. */

@@ -45,6 +45,30 @@ fn a_reply_previews_as_one_line_of_plain_text() {
 }
 
 #[test]
+fn a_preview_leaves_out_tables_and_code() {
+    assert_eq!(
+        preview(
+            "Tables: two options\n\n| Option | Price |\n| --- | ---: |\n| Single | $16 |\n\nPick one."
+        )
+        .as_deref(),
+        Some("Tables: two options Pick one.")
+    );
+    assert_eq!(
+        preview("Run this:\n\n```sh\npnpm dev\n| not a table |\n```\nThen reload.").as_deref(),
+        Some("Run this: Then reload.")
+    );
+    // A delimiter row with no leading pipe is still a table's.
+    assert_eq!(preview("a | b\n---|---\nok").as_deref(), Some("a | b ok"));
+    // A reply that opens with a block still previews the prose after it.
+    assert_eq!(
+        preview("```\nls\n```\nDone, two files.").as_deref(),
+        Some("Done, two files.")
+    );
+    // A reply of a table alone has nothing a row could show.
+    assert_eq!(preview("| a | b |\n|---|---|\n| 1 | 2 |"), None);
+}
+
+#[test]
 fn a_preview_is_cut_on_a_character_boundary_at_its_byte_bound() {
     let text = "€".repeat(300);
     let preview = ConversationPreview::from_text(&text).unwrap();

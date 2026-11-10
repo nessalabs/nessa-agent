@@ -32,6 +32,7 @@ import {
 import { useNow } from "../../../clock"
 import { linkedOn, type LinkedDevice } from "../../model/linked-device"
 import { LinkedDevicesTab } from "../../settings/ui/linked-devices-tab"
+import { PageHeader } from "@nessa-ui/react/page-header"
 import { DeviceLoginsSwitch } from "../../settings/ui/saved-logins"
 import { BoatConnectionFields, useBoatConnection } from "../../settings/ui/boat-row"
 import type {
@@ -47,7 +48,6 @@ import {
   sshHostCard,
   sortWorkers,
   statusWord,
-  summary,
   workerCard,
   type DeviceStatus,
   type DeviceSshConnect,
@@ -181,7 +181,7 @@ export function DevicesView() {
       <div className="devices-page devices-add-page" data-devices-page="add-phone">
         <BackButton onBack={list} />
         <div className="devices-heading">
-          <h1>Add a phone</h1>
+          <PageHeader title="Add a phone" />
           <p className="devices-muted">
             Pair the Nessa app to talk to the hub from anywhere.
           </p>
@@ -211,7 +211,7 @@ export function DevicesView() {
       <div className="devices-page" data-devices-page="pool">
         <BackButton onBack={list} />
         <div className="devices-heading">
-          <h1>Thread order</h1>
+          <PageHeader title="Thread order" />
           <p className="devices-muted">
             Which computer a new thread on Any computer runs on. A channel can keep its
             own order in its settings.
@@ -308,25 +308,22 @@ function DevicesList({
     ) : null
   return (
     <div className="devices-page" data-devices-page="list">
-      <header className="devices-header">
-        <div className="devices-heading">
-          <h1>Devices</h1>
-          <p className="devices-muted" data-devices-summary>
-            {loaded ? summary(hubName, read.workers ?? []) : " "}
-          </p>
-        </div>
-        <Button
-          className="devices-primary"
-          variant="inverse"
-          size="30"
-          shape="pill"
-          onClick={onAdd}
-          data-devices-action="add"
-        >
-          {plus}
-          Add device
-        </Button>
-      </header>
+      <PageHeader
+        title="Devices"
+        actions={
+          <Button
+            className="devices-primary"
+            variant="inverse"
+            size="30"
+            shape="pill"
+            onClick={onAdd}
+            data-devices-action="add"
+          >
+            {plus}
+            Add device
+          </Button>
+        }
+      />
       {read.unreachable ? (
         <p className="devices-muted" role="status" data-devices-unreachable>
           The hub isn&apos;t answering. Showing what it last said.
@@ -384,15 +381,6 @@ function DevicesList({
               ))}
               <CloudTile cloud={read.cloud} onOpen={onCloud} />
               <LinkedTiles linked={read.linked} />
-              <button
-                type="button"
-                className="devices-tile devices-tile-add"
-                onClick={onAdd}
-                data-devices-action="add-tile"
-              >
-                {plus}
-                <span>Add device</span>
-              </button>
             </div>
             {read.more ? (
               <p className="devices-muted" data-devices-more>
@@ -491,6 +479,7 @@ function Tile({
   name,
   kind,
   status,
+  said = statusWord(status),
   footer,
   onClick,
   star,
@@ -502,7 +491,9 @@ function Tile({
   name: string
   kind: string
   status: DeviceStatus
-  footer: ReactNode
+  /** The status in words, when the device's own word says more than `status`'s. */
+  said?: string
+  footer?: ReactNode
   onClick?: () => void
   /** Makes it the default device; beside the tile, never inside its button. */
   star?: ReactNode
@@ -523,11 +514,11 @@ function Tile({
           <span className="devices-tile-name">{name}</span>
           <span className="devices-status">
             <Dot status={status} />
-            {statusWord(status)}
+            {said}
           </span>
         </div>
         <span className="devices-muted">{kind}</span>
-        <div className="devices-tile-foot">{footer}</div>
+        {footer !== undefined ? <div className="devices-tile-foot">{footer}</div> : null}
       </div>
     </>
   )
@@ -536,7 +527,7 @@ function Tile({
       type="button"
       className="devices-tile"
       onClick={onClick}
-      aria-label={`${name}, ${statusWord(status)}`}
+      aria-label={`${name}, ${said}`}
       {...data}
     >
       {body}
@@ -722,9 +713,10 @@ function CloudTile({
       name="Boat"
       kind="Cloud VMs"
       status={cloud === "connected" ? "ready" : "offline"}
+      // One word: where Boat stands, said once beside its name.
+      said={cloudWord(cloud)}
       onClick={onOpen}
       data-devices-cloud={cloud ?? "unknown"}
-      footer={<span>{cloudWord(cloud)}</span>}
     />
   )
 }
@@ -779,7 +771,7 @@ function AddDevice({
     <div className="devices-page" data-devices-page="add-device">
       <BackButton onBack={onBack} />
       <div className="devices-heading">
-        <h1>Add device</h1>
+        <PageHeader title="Add device" />
         <p className="devices-muted">What would you like to add?</p>
       </div>
       <div className="devices-grid">
@@ -836,7 +828,7 @@ function CloudPage({
           className="devices-detail-figure"
         />
         <div className="devices-heading">
-          <h1>Boat</h1>
+          <PageHeader title="Boat" />
           <p
             className="devices-status devices-detail-status"
             data-devices-cloud-state={word}
@@ -922,7 +914,7 @@ function WorkerPage({
               className="devices-detail-figure"
             />
             <div className="devices-heading">
-              <h1>{worker.name}</h1>
+              <PageHeader title={worker.name} />
               <p className="devices-status devices-detail-status">
                 <Dot status={worker.status} />
                 {statusWord(worker.status)}

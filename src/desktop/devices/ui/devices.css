@@ -4,13 +4,14 @@
   box-sizing: border-box;
   display: flex;
   width: 100%;
-  max-width: 1120px;
+  max-width: calc(var(--desktop-page-width) + 2 * clamp(16px, 4vw, 48px));
   height: 100%;
   flex-direction: column;
   gap: 32px;
   align-self: stretch;
   margin: 0 auto;
-  padding: calc(var(--desktop-titlebar-height) + 16px) clamp(16px, 4vw, 48px) 64px;
+  padding: calc(var(--desktop-titlebar-height) + var(--desktop-page-top))
+    clamp(16px, 4vw, 48px) 64px;
   overflow-y: auto;
   color: var(--foreground);
   font-size: var(--desktop-text-body);
@@ -25,26 +26,11 @@
   font-family: var(--nessa-font-mono);
 }
 
-.devices-header {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-end;
-  justify-content: space-between;
-  gap: 16px;
-}
-
 .devices-heading {
   display: flex;
   min-width: 0;
   flex-direction: column;
   gap: 6px;
-}
-
-.devices-heading h1 {
-  margin: 0;
-  font-size: var(--desktop-text-display);
-  font-weight: 600;
-  letter-spacing: -0.015em;
 }
 
 /* The window's button reset (`chrome.css`) is unlayered, so it outranks the
@@ -224,20 +210,6 @@ button.devices-tile:focus-visible,
   border-top: 1px solid var(--desktop-rim);
   color: var(--desktop-ink-2);
   font-size: var(--desktop-text-footnote);
-}
-
-.devices-tile-add {
-  min-height: 132px;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  background: transparent;
-  box-shadow: inset 0 0 0 1px var(--desktop-rim);
-  color: var(--desktop-muted);
-}
-
-.devices-tile-add:hover {
-  color: var(--foreground);
 }
 
 /* A status is a small dot beside its word, never the only way it is said. */

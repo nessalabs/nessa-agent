@@ -94,7 +94,7 @@ const option = (row: string, label: string) => {
 
 it("offers Boat only once it is connected", async () => {
   await shown(async () => channel, "disconnected" as BoatStatus["state"])
-  expect(option("threads", "Boat (not connected)").disabled).toBe(true)
+  expect(option("threads", "Boat").disabled).toBe(true)
   expect(option("threads", "This Mac").disabled).toBe(false)
 })
 

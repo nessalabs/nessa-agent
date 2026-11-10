@@ -396,7 +396,7 @@ export const Transcript = memo(function Transcript({
   }, [messages, earlier, scrollRef])
 
   return (
-    // The way back to the latest floats over the scroller's foot, above the composer.
+    // The way back to the latest sits on the scroller's foot, half over the composer.
     <div className="workspace-transcript-frame" data-split-through>
       <div
         className="workspace-transcript"

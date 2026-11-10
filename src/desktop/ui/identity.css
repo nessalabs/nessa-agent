@@ -1,6 +1,6 @@
 /*
  * The window's name at a sidebar's foot (`identity.tsx`): "nessa Studio",
- * and in Settings "‹ nessa Agent" in the same place. The row is one corner
+ * and in Settings "‹ nessa Studio" in the same place. The row is one corner
  * control tall, the pill the corner controls' size and radius, concentric
  * with the card's corner (`styles.css`).
  */
@@ -83,7 +83,7 @@
   color: var(--foreground);
 }
 
-/* "‹ nessa Agent": the chevron leads, and steps back under the pointer. */
+/* "‹ nessa Studio": the chevron leads, and steps back under the pointer. */
 .desktop-identity-back {
   width: 18px;
   height: 16px;

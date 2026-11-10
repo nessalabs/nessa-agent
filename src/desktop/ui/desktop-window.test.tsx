@@ -62,7 +62,7 @@ it("makes the window under Settings inert while it is open, and only then", asyn
   expect(under()?.hasAttribute("inert")).toBe(true)
   await act(async () =>
     host
-      .querySelector<HTMLButtonElement>('.settings [aria-label="Back to nessa Agent"]')
+      .querySelector<HTMLButtonElement>('.settings [aria-label="Back to nessa Studio"]')
       ?.click(),
   )
   expect(host.querySelector(".settings")).toBeNull()
@@ -88,6 +88,6 @@ it("opens Settings, and keeps the window, when asked for a tab it does not have"
   await act(async () => openSettings(event))
   expect(host.querySelector(".settings")).not.toBeNull()
   expect(
-    host.querySelector('.settings [aria-label="Back to nessa Agent"]'),
+    host.querySelector('.settings [aria-label="Back to nessa Studio"]'),
   ).not.toBeNull()
 })

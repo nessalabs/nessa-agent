@@ -8,6 +8,7 @@ import {
   type ReactNode,
 } from "react"
 import { NessaBoatError, type BoatStatus } from "@nessa/client"
+import { Dialog } from "@nessa-ui/react/dialog"
 import type { BoatGateway } from "../adapters/boat-gateway"
 import { useVaultUnlock } from "../../../vault"
 import { BoatRuntimeControl } from "./boat-runtime-control"
@@ -184,7 +185,7 @@ export function BoatTokenForm({ connection }: { connection: BoatConnection }) {
           <div className="settings-boat-fields">
             <input
               id={tokenId}
-              className="settings-input settings-input-mono"
+              className="settings-input"
               type="password"
               autoComplete="off"
               spellCheck={false}
@@ -242,24 +243,83 @@ export function BoatConnected({ connection }: { connection: BoatConnection }) {
   )
 }
 
+/**
+ * Settings › Connections › Accounts › Boat: one word of where it stands and
+ * one button. The token is pasted in a dialog that Connect… opens; how long
+ * VMs live is its own row, beside it (`BoatRuntimeControl`).
+ */
 export function BoatRow() {
   const connection = useBoatConnection()
   const entry = setting("boat")
   const found = useContext(FoundSetting) === "boat"
+  const [asking, setAsking] = useState(false)
+  const state = connection.status?.state
+  // A token the dialog saved closes it: the row says Connected.
+  useEffect(() => {
+    if (state === "connected") setAsking(false)
+  }, [state])
   return (
-    <ItemRow
-      unavailable={!connection.gateway}
-      setting="boat"
-      found={found}
-      label={entry.label}
-      detail={entry.detail}
-      control={
-        connection.status?.state === "connected" ? (
-          <BoatConnected connection={connection} />
-        ) : undefined
-      }
-    >
-      <BoatConnectionFields connection={connection} />
-    </ItemRow>
+    <>
+      <ItemRow
+        unavailable={!connection.gateway}
+        setting="boat"
+        found={found}
+        label={entry.label}
+        data-boat-state={state ?? (connection.unread ? "unread" : "reading")}
+        detail={
+          !asking && connection.error
+            ? connection.error
+            : state === "connected"
+              ? "Connected"
+              : state === "locked"
+                ? "Locked"
+                : state === undefined
+                  ? connection.unread
+                    ? undefined
+                    : "Loading…"
+                  : "Not connected"
+        }
+        control={
+          state === "connected" ? (
+            <RowAction
+              disabled={connection.busy}
+              onClick={() => void connection.disconnect()}
+              data-boat-action="disconnect"
+            >
+              Disconnect
+            </RowAction>
+          ) : state === "locked" ? (
+            <RowAction
+              disabled={connection.busy}
+              onClick={() => void connection.unlock()}
+              data-boat-action="unlock"
+            >
+              Unlock
+            </RowAction>
+          ) : (
+            <RowAction onClick={() => setAsking(true)} data-boat-action="connect">
+              Connect…
+            </RowAction>
+          )
+        }
+      />
+      <BoatRuntimeControl gateway={connection.gateway} />
+      {asking ? (
+        <Dialog
+          open
+          size="sm"
+          title="Connect Boat"
+          data-boat-dialog=""
+          onOpenChange={(open) => {
+            if (!open) setAsking(false)
+          }}
+        >
+          <div className="settings-surface settings-boat">
+            <BoatTokenForm connection={connection} />
+            {connection.error && <p role="alert">{connection.error}</p>}
+          </div>
+        </Dialog>
+      ) : null}
+    </>
   )
 }
