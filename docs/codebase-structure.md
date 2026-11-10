@@ -208,7 +208,9 @@ writing the full defaults on first launch is buying.
   `src/conversation/ui/`. Host subscriptions live in `src/panel/adapters/`.
   Clock-driven labels share the provider-scoped publication in
   `src/clock/ui/provider.tsx`; `src/clock/index.ts` is its public module map.
-  Conversation and workspace supply the clock at their composition roots.
+  Conversation and workspace supply both clocks at their composition roots:
+  workspace time, and `monotonicElapsed` for a duration. The provider does
+  not read the process clock itself.
 - The Messages tab is panel chrome over a conversation list, like the update
   tab: `src/panel/application/messages-tab.ts` owns its place in the strip and
   its transitions, and `src/panel/ui/messages-tab.tsx` puts

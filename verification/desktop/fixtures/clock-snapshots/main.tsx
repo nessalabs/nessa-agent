@@ -96,7 +96,7 @@ window.clearInterval = ((handle?: number) => {
 
 root.render(
   <React.StrictMode>
-    <ClockProvider now={now}>
+    <ClockProvider now={now} elapsed={now}>
       <ClockReadout />
     </ClockProvider>
   </React.StrictMode>,

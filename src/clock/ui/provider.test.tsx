@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
+import { readFileSync } from "node:fs"
 import * as React from "react"
 import { act } from "react"
 import { createRoot, type Root } from "react-dom/client"
 import { afterEach, expect, it, vi } from "vitest"
-import { ClockProvider, useClock, useNow } from "../index"
+import { ClockProvider, useClock, useElapsed, useNow } from "../index"
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -35,7 +36,7 @@ it("keeps the actual hook snapshot stable when injected time crosses a label buc
   const errors = vi.spyOn(console, "error").mockImplementation(() => {})
 
   mount(
-    <ClockProvider now={now}>
+    <ClockProvider now={now} elapsed={now}>
       <Reader name="clock" interval={1000} />
     </ClockProvider>,
   )
@@ -54,11 +55,11 @@ it("publishes timer ticks to same-interval readers without mixing provider clock
 
   mount(
     <>
-      <ClockProvider now={() => firstNow}>
+      <ClockProvider now={() => firstNow} elapsed={() => firstNow}>
         <Reader name="first-a" interval={1000} />
         <Reader name="first-b" interval={1000} />
       </ClockProvider>
-      <ClockProvider now={() => secondNow}>
+      <ClockProvider now={() => secondNow} elapsed={() => secondNow}>
         <Reader name="second" interval={1000} />
       </ClockProvider>
     </>,
@@ -113,7 +114,7 @@ it("keeps a retired timer from changing the remounted snapshot", async () => {
     setReaderVisible = setReaderVisibleState
     setProbeVisible = setProbeVisibleState
     return (
-      <ClockProvider now={now}>
+      <ClockProvider now={now} elapsed={now}>
         {readerVisible ? <CountedReader name="reader" /> : null}
         {probeVisible ? <CountedReader name="probe" /> : null}
       </ClockProvider>
@@ -152,13 +153,42 @@ it("keeps a retired timer from changing the remounted snapshot", async () => {
   expect(host.querySelector('[data-testid="reader"]')?.textContent).toBe("1010")
 })
 
+it("reads the elapsed clock the caller supplied", () => {
+  function Stamp() {
+    const elapsed = useElapsed()
+    return <output data-testid="elapsed">{elapsed()}</output>
+  }
+  const reads: number[] = []
+  mount(
+    <ClockProvider
+      now={() => 1}
+      elapsed={() => {
+        reads.push(1)
+        return 7
+      }}
+    >
+      <Stamp />
+    </ClockProvider>,
+  )
+  expect(host.querySelector('[data-testid="elapsed"]')?.textContent).toBe("7")
+  expect(reads).toEqual([1])
+})
+
+it("keeps the process clock out of the provider", () => {
+  const source = readFileSync("src/clock/ui/provider.tsx", "utf8")
+  const provider = source.slice(source.indexOf("export function ClockProvider"))
+  expect(provider).not.toContain("performance")
+  expect(provider).toContain("elapsed: () => number")
+  expect(provider).not.toMatch(/elapsed\??\s*=/)
+})
+
 it("reads the injected clock without subscribing to a tick", () => {
   function Stamp() {
     const now = useClock()
     return <output data-testid="stamp">{now()}</output>
   }
   mount(
-    <ClockProvider now={() => 42}>
+    <ClockProvider now={() => 42} elapsed={() => 42}>
       <Stamp />
     </ClockProvider>,
   )
@@ -174,14 +204,14 @@ it("replaces interval and provider subscriptions with the current clock", () => 
   const render = (now: () => number, interval: number) =>
     act(() =>
       root.render(
-        <ClockProvider now={now}>
+        <ClockProvider now={now} elapsed={now}>
           <Reader name="clock" interval={interval} />
         </ClockProvider>,
       ),
     )
 
   mount(
-    <ClockProvider now={firstNow}>
+    <ClockProvider now={firstNow} elapsed={firstNow}>
       <Reader name="clock" interval={1000} />
     </ClockProvider>,
   )

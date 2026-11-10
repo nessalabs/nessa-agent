@@ -7,7 +7,7 @@
 import { createRoot } from "react-dom/client"
 import { Provider } from "react-redux"
 import { monotonicWallClock } from "../../../../src/conversation/adapters/browser/wall-clock"
-import { ClockProvider } from "../../../../src/clock"
+import { ClockProvider, monotonicElapsed } from "../../../../src/clock"
 import type { NativeHooksGateway } from "../../../../src/desktop/settings/adapters/native-hooks-gateway"
 import { NativeHooksProvider } from "../../../../src/desktop/settings"
 import { SettingsHost } from "../../../../src/desktop/settings/ui/settings-view"
@@ -42,7 +42,7 @@ if (!root) throw new Error("missing #root")
 
 createRoot(root).render(
   <Provider store={testStore()}>
-    <ClockProvider now={monotonicWallClock()}>
+    <ClockProvider now={monotonicWallClock()} elapsed={monotonicElapsed()}>
       <DesktopIconFamilyProvider>
         <NativeHooksProvider gateway={gateway}>
           <SettingsHost hostKind="browser" browserSurface open onClose={() => {}} />

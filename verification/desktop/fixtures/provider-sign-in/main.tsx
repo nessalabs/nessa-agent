@@ -6,7 +6,7 @@ import { createRoot } from "react-dom/client"
 import { Provider } from "react-redux"
 import { createDesktopDependencies } from "../../../../src/desktop/dependencies"
 import { makeDesktopStore } from "../../../../src/desktop/store"
-import { ClockProvider } from "../../../../src/clock"
+import { ClockProvider, monotonicElapsed } from "../../../../src/clock"
 import {
   followWorkspace,
   loadWorkspace,
@@ -302,7 +302,7 @@ container.style.height = "100vh"
 container.style.display = "flex"
 createRoot(container).render(
   <Provider store={store}>
-    <ClockProvider now={() => 1000}>
+    <ClockProvider now={() => 1000} elapsed={monotonicElapsed()}>
       <Transcript sessionId="b" scrollRef={createRef()} onHeadingVisible={() => {}} />
       <WorkspaceSendFailure sessionId="b" />
     </ClockProvider>

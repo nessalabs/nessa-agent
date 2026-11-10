@@ -106,7 +106,7 @@ async function fourPanes() {
     root.render(
       <StrictMode>
         <Provider store={store}>
-          <ClockProvider now={() => 1000}>
+          <ClockProvider now={() => 1000} elapsed={() => 1000}>
             <Frame>
               {placements.map((placement) => (
                 <Profiler

@@ -73,9 +73,19 @@ function createClock(now: () => number, elapsed: () => number): Clock {
 }
 
 /**
+ * The process's monotonic elapsed time. Composition passes this for a
+ * duration. A seeded workspace clock is a different clock and must not be
+ * used in its place.
+ */
+export function monotonicElapsed(): () => number {
+  return () => performance.now()
+}
+
+/**
  * Supplies the clocks below it. `now` is the workspace time, which a seeded
  * page freezes. `elapsed` is monotonic time for a duration; it is not `now`,
- * so a frozen workspace clock cannot pin a deadline open.
+ * so a frozen workspace clock cannot pin a deadline open. Both are required:
+ * omitting `elapsed` must not reach for the process clock from here.
  */
 export function ClockProvider({
   now,
@@ -83,13 +93,10 @@ export function ClockProvider({
   children,
 }: {
   now: () => number
-  elapsed?: () => number
+  elapsed: () => number
   children: ReactNode
 }) {
-  const clock = useMemo(
-    () => createClock(now, elapsed ?? (() => performance.now())),
-    [now, elapsed],
-  )
+  const clock = useMemo(() => createClock(now, elapsed), [now, elapsed])
   return <ClockContext.Provider value={clock}>{children}</ClockContext.Provider>
 }
 

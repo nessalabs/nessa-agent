@@ -78,7 +78,7 @@ async function mount(width = 1440) {
   await act(async () =>
     root.render(
       <Provider store={testStore()}>
-        <ClockProvider now={() => 1000}>
+        <ClockProvider now={() => 1000} elapsed={() => 1000}>
           <Harness />
         </ClockProvider>
       </Provider>,

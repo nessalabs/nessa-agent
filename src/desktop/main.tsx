@@ -31,7 +31,7 @@ import {
   writeClipboardText,
 } from "../host"
 import { ClipboardProvider, HeldFilesProvider } from "../conversation"
-import { ClockProvider } from "../clock"
+import { ClockProvider, monotonicElapsed } from "../clock"
 import { environmentFromVite } from "../env/vite"
 import { connectBrowserSession, createBrowserAuth } from "../session"
 import { StartupMounted } from "../startup/ui/mounted-signal"
@@ -230,7 +230,7 @@ createRoot(container).render(
           <WidgetRegistryProvider registry={dependencies.widgets}>
             {/* A seeded page freezes `now`. A duration, such as the light's
                 repaint, reads `elapsed` so that freeze cannot hold it open. */}
-            <ClockProvider now={dependencies.now} elapsed={() => performance.now()}>
+            <ClockProvider now={dependencies.now} elapsed={monotonicElapsed()}>
               <SubagentsProvider source={dependencies.subagents}>
                 {/* Every icon in the window resolves through the family chosen in Settings. */}
                 <DesktopIconFamilyProvider>

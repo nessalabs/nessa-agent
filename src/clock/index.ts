@@ -6,4 +6,10 @@
  * injected clock, and each interval publishes a stable revision rather than
  * deriving a React snapshot from time that advances independently.
  */
-export { ClockProvider, useClock, useElapsed, useNow } from "./ui/provider"
+export {
+  ClockProvider,
+  monotonicElapsed,
+  useClock,
+  useElapsed,
+  useNow,
+} from "./ui/provider"

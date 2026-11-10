@@ -116,6 +116,7 @@ function appElement(targetStore: AppStore, targetResources: typeof resources) {
       store: targetStore,
       children: React.createElement(ClockProvider, {
         now: () => 1_000,
+        elapsed: () => 1_000,
         children: React.createElement(App, {
           attachmentResources: targetResources,
           canChoosePaths: true,

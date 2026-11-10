@@ -146,7 +146,7 @@ it("draws the two lights and the grain", async () => {
   mounted.push({ root, host })
   await act(async () =>
     root.render(
-      <ClockProvider now={() => 0}>
+      <ClockProvider now={() => 0} elapsed={() => 0}>
         <DesktopAmbient />
       </ClockProvider>,
     ),

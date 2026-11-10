@@ -60,7 +60,7 @@ it("lets go of the home's field before the first message is written, not after",
   await act(async () =>
     root.render(
       <Provider store={store}>
-        <ClockProvider now={() => 1000}>
+        <ClockProvider now={() => 1000} elapsed={() => 1000}>
           {placements.map((placement) => (
             <Pane
               key={placement.key}

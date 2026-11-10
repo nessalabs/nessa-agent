@@ -12,7 +12,7 @@ import {
 } from "../../src/conversation/adapters/store/slice"
 import { useConversation } from "../../src/conversation/ui/use-conversation"
 import { ConversationControls } from "../../src/conversation/ui/conversation-controls"
-import { ClockProvider } from "../../src/clock"
+import { ClockProvider, monotonicElapsed } from "../../src/clock"
 import { createLifetimeCounters, publishLifetimeCounters } from "./lifetime-counters"
 
 const A = "00000000-0000-4000-8000-000000000001"
@@ -104,7 +104,7 @@ const host = document.getElementById("root")
 if (!host) throw new Error("Lifetime fixture root missing")
 createRoot(host).render(
   <Provider store={store}>
-    <ClockProvider now={() => 1_000}>
+    <ClockProvider now={() => 1_000} elapsed={monotonicElapsed()}>
       <Fixture />
     </ClockProvider>
   </Provider>,
