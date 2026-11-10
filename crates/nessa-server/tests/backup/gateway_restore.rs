@@ -1183,6 +1183,25 @@ async fn the_restore_command_does_not_touch_a_profile_when_the_arguments_are_ref
 }
 
 #[test]
+fn an_installed_restore_without_its_pointer_does_not_start() {
+    let root = tempfile::tempdir().unwrap();
+    let namespace = root.path().join("gateway");
+    let conversations = namespace.join("conversations");
+    fs::create_dir_all(&conversations).unwrap();
+    assert_eq!(startup_authority(&namespace).unwrap(), None);
+    fs::write(
+        conversations.join("restore-install.txt"),
+        "nessa-restore-install/1\nabc\n",
+    )
+    .unwrap();
+    let error = startup_authority(&namespace).unwrap_err();
+    assert!(
+        matches!(error, RunError::Restore(ref message) if message.contains("lost the pointer")),
+        "{error}"
+    );
+}
+
+#[test]
 fn a_stress_restore_names_one_loaded_conversation_and_one_whose_source_can_move() {
     let root = tempfile::tempdir().unwrap();
     let destination = root.path().join("restore");

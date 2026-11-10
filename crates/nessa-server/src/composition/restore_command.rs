@@ -548,7 +548,10 @@ fn refused(output: &mut dyn Write, error: RestoreFault) -> u8 {
 ///
 /// Absent is an ordinary gateway. A pointer that is not an accepted live
 /// restore, or one whose identity is not a fresh re-pair, refuses startup
-/// before the gateway listens. Historical outbox names are not executed.
+/// before the gateway listens. An installed restore that has lost its pointer
+/// is not an ordinary gateway: conversation operations would open a fresh
+/// stream and never fetch the saved history. Historical outbox names are not
+/// executed.
 pub(crate) fn startup_authority(namespace: &Path) -> Result<Option<AcceptedBinding>, RunError> {
     if namespace_is_restore_root(namespace) {
         return Err(RunError::Restore(
@@ -557,6 +560,11 @@ pub(crate) fn startup_authority(namespace: &Path) -> Result<Option<AcceptedBindi
     }
     let pointer = namespace.join("backup").join("accepted-restore.txt");
     if !pointer.is_file() {
+        if crate::backup::infrastructure::installed_restore(namespace) {
+            return Err(RunError::Restore(
+                "this restored backup has lost the pointer that names its accepted tree".into(),
+            ));
+        }
         return Ok(None);
     }
     let text = fs::read_to_string(&pointer)

@@ -2387,7 +2387,7 @@ fn outstanding_deferred(namespace: &Path) -> Result<Vec<DeferredEntry>, ExportFa
 ///
 /// The marker outlives the accepted pointer. A missing pointer is then a
 /// lost binding, not an ordinary namespace with nothing deferred.
-fn installed_restore(namespace: &Path) -> bool {
+pub(crate) fn installed_restore(namespace: &Path) -> bool {
     match fs::metadata(namespace.join("conversations").join("restore-install.txt")) {
         Ok(_) => true,
         Err(error) if error.kind() == ErrorKind::NotFound => false,

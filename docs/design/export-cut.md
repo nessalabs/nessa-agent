@@ -264,4 +264,6 @@ in place.
 stage leaves the live path absent, accept is the authority, and open fetches
 one deferred conversation. A missing source is `source-missing` and writes no
 other session file. A gateway pointed at a tree that has not been accepted
-does not listen. Remote executors are not contacted.
+does not listen. An installed restore that has lost
+`backup/accepted-restore.txt` does not listen either:
+`conversations/restore-install.txt` is still there. Remote executors are not contacted.
