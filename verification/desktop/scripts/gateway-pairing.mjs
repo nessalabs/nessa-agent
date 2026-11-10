@@ -8,7 +8,10 @@ import { DatabaseSync } from "node:sqlite"
 import { spawn } from "node:child_process"
 import { mkdirSync } from "node:fs"
 import { join } from "node:path"
-import { startLocalGateway } from "../../../scripts/mcp-test-server/local-gateway.mjs"
+import {
+  repoRoot,
+  startLocalGateway,
+} from "../../../scripts/mcp-test-server/local-gateway.mjs"
 import { attempt } from "./lib/cli.mjs"
 import { openPage, withEngines } from "./lib/browser.mjs"
 import { gatewayHost } from "./lib/fake-host.mjs"
@@ -75,7 +78,7 @@ async function signIn(page, token, resume = false) {
 function call(gateway, instance, method, params) {
   return new Promise((resolve, reject) => {
     const proc = spawn(
-      process.env.MCP_LIVE_NESSA,
+      process.env.MCP_LIVE_NESSA ?? join(repoRoot, "target/debug/nessa"),
       [
         "call",
         method,
