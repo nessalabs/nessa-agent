@@ -27,6 +27,7 @@ use super::{
     live_changes::LiveChanges,
     locks::ConversationLocks,
     mcp_apps::{McpAppError, McpAppInitiator, McpAppPorts, McpAppRef},
+    place_decision::{decide_place, Creation, PlaceAsk},
     placement::Environments,
     provider_sessions::{ProviderSessionErasers, ProviderSessionHandler},
     retries::{Claim, DeletionRetries, Waiting},
@@ -44,7 +45,8 @@ use super::{
     SubmittedMessage, UnfinishedDeletions,
 };
 use crate::conversation::domain::{
-    Conversation, ConversationDeletion, ProviderSessionErasure, ProviderSessionLink, ToolSource,
+    Conversation, ConversationDeletion, Place, ProviderSessionErasure, ProviderSessionLink,
+    ToolSource,
 };
 pub use channels::{
     AgentPlace, ChannelError, ChannelFolders, ChannelListing, ChannelStore, FolderRefusal,
@@ -307,6 +309,10 @@ pub struct RequestedConversation {
     pub environment: Option<String>,
     /// The channel it is in for its whole life; `None` is the default one.
     pub channel: Option<crate::conversation::domain::ChannelId>,
+    /// A fork's: where its source runs, read from the source's record. A
+    /// fork runs there and names no `environment`; it asks for its source's
+    /// `channel` too.
+    pub fork: Option<Place>,
 }
 
 /// Server-selected admission limits. Clients cannot choose provider budgets or owner capacity.
@@ -1662,14 +1668,27 @@ impl ConversationService {
         // conversation that does not need that agent at all. The same is
         // true of a name no adapter exists for, which is why that one is
         // carried this far instead of being refused where it was parsed.
-        // A stored channel's folder is on this machine: a conversation in one
-        // runs here.
         let channel = service
             .channel_for_creation(&caller, requested.channel.as_ref())
             .await?;
-        if channel.is_some() && requested.environment.is_some() {
-            return Err(ConversationError::InvalidInput);
-        }
+        // Where it will run, by the one rule in `decide_place`. Recorded
+        // below, before it exists.
+        let place_asked = decide_place(PlaceAsk {
+            asked: requested.environment.as_deref(),
+            channel: channel.as_ref().map(|channel| {
+                if id == channel.coordinator_id() {
+                    channel.execution().coordinator()
+                } else {
+                    channel.execution().threads()
+                }
+            }),
+            default_device: service.inner.environment.default_place(),
+            creation: match (new_only, requested.fork.clone()) {
+                (_, Some(source)) => Creation::Fork(source),
+                (true, None) => Creation::Thread,
+                (false, None) => Creation::Person,
+            },
+        })?;
         // What the caller left out starts as its channel says. The channel's
         // model is its agent's, so it is the default only on that agent.
         let defaults = channel.as_ref().map(|channel| channel.defaults());
@@ -1685,22 +1704,9 @@ impl ConversationService {
                 .filter(|defaults| defaults.agent == agent)
                 .map(|defaults| defaults.model.as_str().to_owned())
         });
-        // Where it will run, by its channel: its main agent's placement or
-        // its threads'. Recorded below, before the conversation exists.
-        let channel_environment = channel.as_ref().and_then(|channel| {
-            match if id == channel.coordinator_id() {
-                channel.execution().coordinator
-            } else {
-                channel.execution().threads
-            } {
-                crate::conversation::domain::WorkspacePlacement::Local => None,
-                crate::conversation::domain::WorkspacePlacement::Boat => Some(super::BOAT),
-                crate::conversation::domain::WorkspacePlacement::Pool => Some(super::POOL),
-            }
-        });
         let place = channel
             .as_ref()
-            .map(|channel| AgentPlace::of(channel, channel_environment.is_some()));
+            .map(|channel| AgentPlace::of(channel, place_asked.is_remote()));
         let configured = match model.as_deref() {
             Some(model) => {
                 service
@@ -1769,24 +1775,12 @@ impl ConversationService {
         // Where it runs is recorded before the conversation exists, under the
         // creation lock, so it never exists without knowing; a host the
         // configuration does not name creates nothing.
-        // `here` names this machine outright. A conversation the person
-        // starts outside a channel, naming no place, runs on the default
-        // device while it is offered; a child an agent starts, and one in a
-        // channel, keep to where they were asked to run.
-        let default_place = (requested.environment.is_none() && channel.is_none() && !new_only)
-            .then(|| service.inner.environment.default_place())
-            .flatten();
-        let requested_place = match requested.environment.as_deref() {
-            Some(nessa_sdk::domain::agent_execution::leases::EnvironmentRef::HERE) => None,
-            Some(name) => Some(name),
-            None => channel_environment.or(default_place.as_deref()),
-        };
         service
             .inner
             .environment
             .place(
                 &id,
-                requested_place,
+                &place_asked,
                 channel.as_ref().map(|channel| channel.id()),
             )
             .await?;
@@ -6412,7 +6406,7 @@ impl ConversationService {
             .placement(record.id())
             .await
             .map_err(AskFailure::Failed)?
-            .is_some()
+            .is_remote()
         {
             return Ok(ProviderSessionErasure::NoHandler);
         }

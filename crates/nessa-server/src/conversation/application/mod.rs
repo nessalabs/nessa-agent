@@ -194,6 +194,7 @@ pub use passive_read::AdmittedCatalogueRead;
     )
 )]
 mod organization_budget;
+mod place_decision;
 mod placement;
 mod pool_settings;
 #[cfg(any(unix, test))]
@@ -312,7 +313,7 @@ pub use permission_rules::{
 };
 #[cfg(unix)]
 pub(crate) use placement::{MachineUse, PairedEnvironments, WorkerLoad};
-pub use placement::{FETCH_CALL_WAIT, POOL, PUBLISH_CALL_WAIT};
+pub use placement::{FETCH_CALL_WAIT, PUBLISH_CALL_WAIT};
 pub use ports::{
     ArtifactKept, ArtifactRecordGate, AttachmentRelease, AttachmentReleaseCause,
     ConversationAttachments, ConversationCreation, ConversationCreationAudit,
@@ -410,7 +411,7 @@ pub(crate) mod lease_tests;
 #[cfg(unix)]
 pub(crate) use placement::ThreadEnvironments;
 pub(crate) use placement::WorkspaceRest;
-pub(crate) use placement::{BOAT, MAX_RETAINED_ENVIRONMENTS};
+pub(crate) use placement::MAX_RETAINED_ENVIRONMENTS;
 
 #[cfg(unix)]
 mod artifact_channels;

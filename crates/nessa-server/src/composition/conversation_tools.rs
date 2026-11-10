@@ -76,7 +76,7 @@ impl BuiltInServer for ConversationTools {
         vec![
             json!({
                 "name": "create_thread",
-                "description": "Create an empty thread owned by the person whose turn is calling. Returns its threadId. Uses the configured default agent/model and asks for tool permission normally. environment \"peer:any\" lets the gateway pick a paired computer by the person's priority order and current load (see environments_list). When the configuration bounds how many threads one conversation may have at work, past it this answers thread_limit_reached: end your turn, and a thread's report wakes you to create the next.",
+                "description": "Create an empty thread owned by the person whose turn is calling. Returns its threadId. Uses the configured default agent/model; in a channel you made it stays in your conversation's channel and starts on your conversation's approval mode, wherever it runs. environment \"peer:any\" lets the gateway pick a paired computer by the person's priority order and current load (see environments_list). When the configuration bounds how many threads one conversation may have at work, past it this answers thread_limit_reached: end your turn, and a thread's report wakes you to create the next.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -405,6 +405,7 @@ async fn run(
                         approval_mode: None,
                         environment: args.environment,
                         channel: None,
+                        fork: None,
                     },
                 )
                 .await

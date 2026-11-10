@@ -113,6 +113,7 @@ impl Preparation {
                 .map(ChannelId::new)
                 .transpose()
                 .map_err(|_| ConversationError::InvalidInput)?,
+            fork: None,
         })
     }
 }
@@ -238,7 +239,7 @@ impl ConversationService {
             return Err(CreationFailure::Target(ConversationError::Unavailable));
         }
         let (channel, approval_mode) = self
-            .thread_start(source.conversation(), preparation.environment.is_some())
+            .thread_start(source.conversation())
             .await
             .map_err(CreationFailure::Target)?;
         let preparation = Preparation {
