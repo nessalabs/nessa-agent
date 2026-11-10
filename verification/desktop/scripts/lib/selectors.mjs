@@ -19,6 +19,15 @@ const committedQuestions = "[data-committed-questions]"
 
 /** CSS selectors, grouped by the part of the window they belong to. */
 export const css = {
+  gatewayPairingPage: '[data-devices-page="add-gateway"]',
+  gatewayPairingCode: "[data-gateway-code]",
+  gatewayPairingChoice: "[data-gateway-choice]",
+  gatewayPairingFingerprint: "[data-gateway-fingerprint]",
+  gatewayPairingInvitation: "[data-gateway-invitation]",
+  devicesAddAction: '[data-devices-action="add"]',
+  devicesBackAction: '[data-devices-action="back"]',
+  devicesGatewayTile: '[data-devices-add="gateway"]',
+  devicesPhoneTile: '[data-devices-add="phone"]',
   boatRuntimeSettings: "[data-boat-runtime-settings]",
   channelSettingsOpen: "[data-channel-settings-open]",
   channelSettingsDialog: "[data-channel-settings]",
@@ -190,6 +199,11 @@ export const css = {
   listSearch: ".workspace-list .workspace-search", // class: the session list's search field
   listScroll: ".workspace-list-scroll", // class: the session list's scroller
   sessionListRow: ".workspace-list [data-session-row]", // a row of the session list, not a sidebar thread
+  stressSelectedSessionRow:
+    '.workspace-list [data-session-row][aria-selected="true"], .workspace-thread-row[aria-current="page"]',
+  stressTreeChannel: '[data-row="channel"][data-channel]',
+  stressTreeDisclosure: ".workspace-disclosure",
+  stressTreeMore: '[data-row="more"]',
   selectedSessionListRow: '.workspace-list [data-session-row][aria-selected="true"]', // the conversation the focused pane actually shows
   sessionRow: "[data-drag-item]", // a session a drag can carry to a pane
   sidebarEdge: '[role="separator"][aria-label="Resize Sidebar"]',
@@ -415,6 +429,7 @@ export const selectorFor = {
   chartState: (state) => `body[data-chart-state="${state}"]`, // the chart app saying where it is
   reviewOutput: (name) => `#${name}`, // what the review app heard back: result, first, hidden-no-ui, hidden-with-ui, again
   linkedAction: (action) => `[data-linked-action="${action}"]`,
+  stressTreeSessionFor: (id) => `.workspace-thread-row[data-session-row="${id}"]`,
   sessionListRowFor: (id) => `.workspace-list [data-session-row="${id}"]`, // one session's row in the session list
   shareAction: (action) => `[data-share-action="${action}"]`, // submit | change | revoke | confirm-revoke | cancel-revoke | restart | retry | close
   shareGrant: (credentialId) => `[data-share-grant="${credentialId}"]`,

@@ -175,6 +175,7 @@ const dependencies = createDesktopDependencies({
   providerLoginAvailable,
   mintClaudeSignIn: { available: claudeSignInMintAvailable, mint: mintClaudeSignIn },
   gateway,
+  stage: environment.stage,
   reviewNotices: nativeNotices ? { sync: syncReviewNotices } : undefined,
   workspace: seeded?.workspace,
   now: seeded?.now,

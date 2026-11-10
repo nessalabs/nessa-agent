@@ -2589,3 +2589,28 @@ vault dialog blocking the main conversation click.
 - The conversation stress `passphrases` step changes through Settings, verifies
   Locked, explicitly unlocks, restores its disposable phrase and sends a reply.
   Run default1 and raised3. `vault.mjs`, `conversation-stress.mjs` own these checks.
+
+### Gateway invitations
+
+- [ ] **Choose before creating a PeerRead code.** Devices → Add device → Gateway
+  keeps both true and false immutable after create; recovery reads the saved
+  choice and does not reconstruct a code. The normal panel remains an Integration;
+  true requires explicit Human sign-in on a separate pairing scope. _Check:_
+  `gateway-pairing.mjs`, Chromium/WebKit and columns/sidebar: two choices, one
+  Integration refusal without registration, one refresh/recovery, one native
+  claim/approval per case. The production scripted runner includes this check.
+- [ ] **Active can precede attribution.** A fixture audit insertion failure leaves
+  the credential Active and no person link; retry keeps its credential and
+  receiver, then the exact Human link commits. There are zero implicit share rows.
+  Existing UI credential revoke removes that link. _Check:_ `gateway-pairing.mjs`;
+  native admission/cleanup regressions remain the authority for no-share refusal,
+  expiry, stale credentials and wire binding.
+- [ ] **Pairing sign-in ends.** Input clears on submission, no token in app storage
+  or URL, no managed reconnect, and explicit end/completion closes the temporary
+  socket while the panel stays connected. Unit tests cover deadline, pagehide,
+  unmount, late connect and rejected commands after close. _Check:_
+  `add-gateway.test.tsx`, `gateway-pairing.test.ts` and `gateway-pairing.mjs`.
+- [ ] **A conversation continues after both choices.** Conversation stress's
+  `gatewayPairings` knob defaults to one true/false/cancel cycle, turns native
+  linking off again, and sends another message, retaining background, follower,
+  at-rest and console checks. Run both layouts explicitly and raise the count.

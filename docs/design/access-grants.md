@@ -403,6 +403,48 @@ expiry can be observed while the Active-to-link write is still owed. The
 ordering is tested by
 `expiry_before_the_first_link_consumes_the_choice_without_replay`.
 
+### Desktop Human reauthentication
+
+The Devices gateway invitation uses explicit Human reauthentication for a true
+choice. It does not establish an Integration-to-Human relation. The ordinary
+panel connection keeps its credential; the person supplies an owner access token
+for a separate `/session` connection to that connection’s current gateway URL.
+No address is accepted beside the token. The authenticated gateway and organization
+must match the panel before an invitation command is sent. The registry remains
+the owner of Human eligibility; the view does not infer it from a role or label.
+The Human is both invitation owner and audit actor.
+
+This is a privileged operation: the supplied credential retains its existing
+permissions. Only the pairing port reaches that client. The input clears on
+submission and pagehide. The connection disables reconnect and closes on completion,
+explicit sign-out, navigation or its scheduled ten-minute UI deadline. That timer
+depends on the browser event loop; it is not credential expiry or a server session TTL.
+Closing releases references;
+JavaScript strings are not claimed to be zeroized. No token is persisted, placed
+in a URL, or sent to browser login. A fresh page asks for authentication again.
+Codes exist only in the create reply. Recovery reads canonical pending/status;
+it cannot recover a lost code or change an invitation’s saved choice.
+
+| State / event | Ordered behavior | Evidence |
+| --- | --- | --- |
+| Choice before create | No invitation until explicit create; false uses panel, true asks Human sign-in | Desktop gateway pairing tests |
+| Sign-in fails or gateway/org differs | Pin the product endpoint including route/query, translating only `/browser/session` to `/session`; close a mismatched temporary client before any invitation command | Scoped pairing adapter tests |
+| Panel reconnects while its identity is read | Pin its endpoint first; refuse a changed endpoint before sending owner evidence | Scoped pairing adapter tests |
+| Sign-in completes after page closes | Close late client before any command | Scoped pairing adapter tests |
+| Double submit or read overlaps mutation | One operation at a time; reads cannot replace a newer command answer | Gateway pairing view tests |
+| Create answer is lost | Show unconfirmed outcome, read pending; no automatic create replay | Gateway pairing adapter/view tests |
+| Refresh / reopen | Resume owner invitations reauthenticates without asking the choice again; resume panel invitations uses the panel; both read saved choices | Gateway pairing browser check |
+| Claim / approve | Compare claimed key fingerprint, approve exact key; render canonical status and activationStopped | Gateway pairing adapter/browser tests |
+| Fingerprint cannot be computed | Say it is unavailable and withhold approval; never substitute a key | Gateway pairing view tests |
+| Active with owed link | Say activation needs retry; do not claim committed person attribution | Existing canonical link failure probes plus desktop status test |
+| Cancel / completion / navigation / pagehide / deadline | Close temporary client and discard code and token references; keep canonical records recoverable | Scoped pairing lifecycle tests |
+
+This flow invites a PeerRead gateway. OwnerPhone and Environment entries keep
+their existing consent classes. A saved true choice is historical consent;
+neither it nor Active is presented as proof of a committed person link or a share.
+Peer enrollment and read admission remain the existing native pairing and grant
+owners, including the commit and cleanup order above.
+
 ## Live follow
 
 [#851](https://github.com/nessalabs/nessa-agent/issues/851) already follows

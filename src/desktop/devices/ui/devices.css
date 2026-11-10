@@ -583,3 +583,29 @@ button.devices-tile:focus-visible,
   align-items: center;
   gap: 4px;
 }
+
+.devices-gateway-field {
+  display: grid;
+  gap: 8px;
+  margin-block: 16px;
+}
+.devices-gateway-command {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.devices-gateway-page > button {
+  align-self: flex-start;
+}
+.devices-gateway-input {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--desktop-radius-sm);
+  background: var(--background);
+  color: var(--foreground);
+}
+.devices-gateway-input:focus-visible {
+  outline: var(--desktop-focus-outline);
+  outline-offset: 2px;
+}

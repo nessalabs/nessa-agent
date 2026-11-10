@@ -332,6 +332,12 @@ against a private scripted gateway.
   (`dependencies.ts`, `main.tsx`) only where the window has a gateway.
   A remote row shows its URL and redacted authorization facts, and
   Authorize and Revoke call `mcpServers.authorize` and `mcpServers.revoke`.
+  Devices' PeerRead gateway entry (#893) is `devices/ui/add-gateway.tsx`,
+  with an explicitly bounded Human reauthentication scope in
+  `devices/adapters/gateway-pairing.ts`. Composition injects the connector,
+  stage, ids and timers. The normal panel session supplies the pinned endpoint;
+  only pairing methods reach the view. Its orderings are in
+  [Same person](design/access-grants.md#desktop-human-reauthentication).
   Linked devices (#462) is the same shape: `model/linked-devices.ts` and
   `model/device-key.ts`, `adapters/linked-devices-gateway.ts`, and
   `ui/linked-devices-tab.tsx`, which composes the UI kit's settings rows,
