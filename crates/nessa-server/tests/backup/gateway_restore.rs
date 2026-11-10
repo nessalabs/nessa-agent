@@ -12,15 +12,17 @@ use std::path::PathBuf;
 use async_trait::async_trait;
 
 use crate::backup::application::{
-    deliver_historical_commands, AdmissionFailure, AdmissionLease, DeferredOpenFailure,
-    ExportClock, MutationAdmission,
+    deliver_historical_commands, AcceptedBinding, AdmissionFailure, AdmissionLease,
+    DeferredConversationOpen, DeferredOpenFailure, ExportClock, MutationAdmission,
 };
 use crate::backup::domain::{credentials_imported_on_restore, IDENTITY_BODY, REPLAY_BODY};
 use crate::backup::infrastructure::snapshot::SESSION_EXPORT_LIMIT;
-use crate::backup::infrastructure::{capture_namespace, DirectoryPublisher, FileDeletionLog};
+use crate::backup::infrastructure::{
+    capture_namespace, CedarInventoryPolicy, DirectoryPublisher, FileDeletionLog,
+};
 use crate::composition::{
-    install_serving_stores, merge_published_session, open_restored_conversation,
-    run_backup_restore, startup_authority,
+    install_serving_stores, merge_published_session, run_backup_restore, startup_authority,
+    GatewayDeferredOpen,
 };
 use crate::core::RunError;
 
@@ -273,7 +275,7 @@ async fn a_quarantined_backup_is_accepted_before_an_oversized_conversation_is_op
     assert!(opened.iter().any(|line| line["status"] == "progress"));
     let session = live.join("sessions/conv-bulk.sqlite3");
     assert!(session.is_file());
-    open_restored_conversation(&gateway, &binding, "conv-bulk").unwrap();
+    open_served(&gateway, &binding, "conv-bulk").unwrap();
     let serving = nessa_local_database::rusqlite::Connection::open(
         gateway.join("conversations/sessions/records.sqlite3"),
     )
@@ -298,7 +300,7 @@ async fn a_quarantined_backup_is_accepted_before_an_oversized_conversation_is_op
     assert_eq!(code, 1, "{text}");
     assert_eq!(lines(&text).last().unwrap()["reason"], "source-missing");
     assert_eq!(
-        open_restored_conversation(&gateway, &binding, "conv-kept").unwrap_err(),
+        open_served(&gateway, &binding, "conv-kept").unwrap_err(),
         DeferredOpenFailure::SourceMissing
     );
     assert!(!live.join("sessions/conv-kept.sqlite3").exists());
@@ -309,6 +311,15 @@ async fn a_quarantined_backup_is_accepted_before_an_oversized_conversation_is_op
             || serving_lacks(&gateway, "conv-kept")
     );
     assert!(session.is_file());
+}
+
+fn open_served(
+    namespace: &std::path::Path,
+    binding: &AcceptedBinding,
+    conversation_id: &str,
+) -> Result<(), DeferredOpenFailure> {
+    let policy = CedarInventoryPolicy::new().map_err(|_| DeferredOpenFailure::Unavailable)?;
+    GatewayDeferredOpen::new(namespace.to_path_buf(), binding.clone(), policy).open(conversation_id)
 }
 
 fn serving_lacks(namespace: &std::path::Path, conversation_id: &str) -> bool {

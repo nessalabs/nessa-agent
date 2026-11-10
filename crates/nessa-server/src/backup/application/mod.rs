@@ -27,7 +27,7 @@ pub use export::{capture_export, ExportFailure, ExportRequest};
 pub use gateway_restore::{
     binding_from_pointer, confirm_accepted, deliver_historical_commands,
     list_accepted_conversations, open_accepted_conversation, AbsentSessionSource, AcceptedBinding,
-    DeferredConversationOpen, DeferredOpenFailure,
+    AcceptedFetch, DeferredConversationOpen, DeferredOpenFailure,
 };
 pub use ports::{
     current_journal_is_live, current_journal_is_trusted, current_staging_id,

@@ -276,7 +276,7 @@ impl CompositionRoot {
             .map(std::path::Path::to_path_buf);
         let accepted_restore = namespace
             .as_deref()
-            .map(super::restore_command::startup_authority)
+            .map(super::startup_authority)
             .transpose()?
             .flatten();
         let deferred_open = match (namespace, accepted_restore) {
@@ -285,9 +285,9 @@ impl CompositionRoot {
                     crate::backup::infrastructure::CedarInventoryPolicy::new().map_err(|_| {
                         crate::core::RunError::Restore("restore policy could not be loaded".into())
                     })?;
-                Some(std::sync::Arc::new(
-                    super::restore_command::GatewayDeferredOpen::new(namespace, binding, policy),
-                ))
+                Some(std::sync::Arc::new(super::GatewayDeferredOpen::new(
+                    namespace, binding, policy,
+                )))
             }
             _ => None,
         };

@@ -14,9 +14,9 @@ use super::serving_restore::{
 use crate::backup::application::{
     binding_from_pointer, confirm_accepted, deliver_historical_commands,
     list_accepted_conversations, open_accepted_conversation, stage_quarantine, AbsentSessionSource,
-    AcceptReport, AcceptRequest, AcceptedBinding, DeferredConversationOpen, DeferredOpenFailure,
-    ExportClock, FetchProgress, InventoryCause, LeaseReceipts, QuarantineLayout, RestoreAction,
-    RestoreFacts, StageRequest, VerificationLimits,
+    AcceptReport, AcceptRequest, AcceptedBinding, AcceptedFetch, DeferredConversationOpen,
+    DeferredOpenFailure, ExportClock, FetchProgress, InventoryCause, LeaseReceipts,
+    QuarantineLayout, RestoreAction, RestoreFacts, StageRequest, VerificationLimits,
 };
 use crate::backup::domain::{
     credentials_imported_on_restore, encode_accepted_restore, paths_are_distinct, read_journal,
@@ -356,17 +356,17 @@ fn open_one(
         output,
         failed: false,
     };
-    let opened = open_accepted_conversation(
-        &roots.live,
-        conversation,
-        person(RestoreAction::Fetch),
+    let opened = open_accepted_conversation(&mut AcceptedFetch {
+        live: &roots.live,
+        conversation_id: conversation,
+        facts: person(RestoreAction::Fetch),
         policy,
-        &audit,
-        &DirectoryQuarantine,
-        held.as_ref(),
-        &OsPublicationIds,
-        &mut progress,
-    );
+        audit: &audit,
+        layout: &DirectoryQuarantine,
+        source: held.as_ref(),
+        ids: &OsPublicationIds,
+        progress: &mut progress,
+    });
     if progress.failed {
         return 1;
     }
@@ -532,24 +532,14 @@ fn outbox_commands(live: &Path) -> Vec<String> {
 
 /// Opens a deferred conversation on the accepted restore before the
 /// conversation service starts an agent.
-pub(super) struct GatewayDeferredOpen {
+pub(crate) struct GatewayDeferredOpen {
     namespace: PathBuf,
     binding: AcceptedBinding,
     policy: CedarInventoryPolicy,
 }
 
-/// Fetch `conversation_id` into the namespace the conversation service reads.
-pub(crate) fn open_restored_conversation(
-    namespace: &Path,
-    binding: &AcceptedBinding,
-    conversation_id: &str,
-) -> Result<(), DeferredOpenFailure> {
-    let policy = CedarInventoryPolicy::new().map_err(|_| DeferredOpenFailure::Unavailable)?;
-    GatewayDeferredOpen::new(namespace.to_path_buf(), binding.clone(), policy).open(conversation_id)
-}
-
 impl GatewayDeferredOpen {
-    pub(super) fn new(
+    pub(crate) fn new(
         namespace: PathBuf,
         binding: AcceptedBinding,
         policy: CedarInventoryPolicy,
@@ -572,17 +562,17 @@ impl DeferredConversationOpen for GatewayDeferredOpen {
                 _ => Box::new(AbsentSessionSource),
             };
         let mut progress = Quiet;
-        match open_accepted_conversation(
-            &self.binding.live,
+        match open_accepted_conversation(&mut AcceptedFetch {
+            live: &self.binding.live,
             conversation_id,
-            surface(),
-            &self.policy,
-            &audit,
-            &DirectoryQuarantine,
-            held.as_ref(),
-            &OsPublicationIds,
-            &mut progress,
-        ) {
+            facts: surface(),
+            policy: &self.policy,
+            audit: &audit,
+            layout: &DirectoryQuarantine,
+            source: held.as_ref(),
+            ids: &OsPublicationIds,
+            progress: &mut progress,
+        }) {
             Ok(_) => merge_published_session(&self.namespace, &self.binding.live, conversation_id)
                 .map_err(|_| DeferredOpenFailure::Unavailable),
             Err(RestoreFault::NotDeferred) => Ok(()),

@@ -122,34 +122,43 @@ pub fn list_accepted_conversations(
     Ok(deferred_conversation_ids(&decode_deferred(text)?))
 }
 
+/// What an accepted restore needs in order to fetch one deferred conversation.
+pub struct AcceptedFetch<'a> {
+    pub live: &'a Path,
+    pub conversation_id: &'a str,
+    pub facts: RestoreFacts<'a>,
+    pub policy: &'a dyn RestorePolicyEvaluator,
+    pub audit: &'a dyn RestoreAudit,
+    pub layout: &'a dyn QuarantineLayout,
+    pub source: &'a dyn DeferredSessionSource,
+    pub ids: &'a dyn PublicationIds,
+    pub progress: &'a mut dyn FetchProgress,
+}
+
 /// Fetch one deferred conversation on an accepted restore.
 ///
 /// A conversation that was not deferred is [`RestoreFault::NotDeferred`] and
 /// the source is not read. A missing source publishes nothing.
 pub fn open_accepted_conversation(
-    live: &Path,
-    conversation_id: &str,
-    facts: RestoreFacts<'_>,
-    policy: &dyn RestorePolicyEvaluator,
-    audit: &dyn RestoreAudit,
-    layout: &dyn QuarantineLayout,
-    source: &dyn DeferredSessionSource,
-    ids: &dyn PublicationIds,
-    progress: &mut dyn FetchProgress,
+    fetch: &mut AcceptedFetch<'_>,
 ) -> Result<OpenReport, RestoreFault> {
-    confirm_accepted(live, layout, audit)?;
+    confirm_accepted(fetch.live, fetch.layout, fetch.audit)?;
     open_deferred_conversation(
         &OpenRequest {
-            facts,
-            root: live,
-            conversation_id,
+            facts: RestoreFacts {
+                kind: fetch.facts.kind,
+                cause: fetch.facts.cause,
+                action: fetch.facts.action,
+            },
+            root: fetch.live,
+            conversation_id: fetch.conversation_id,
         },
-        policy,
-        audit,
-        layout,
-        source,
-        ids,
-        progress,
+        fetch.policy,
+        fetch.audit,
+        fetch.layout,
+        fetch.source,
+        fetch.ids,
+        fetch.progress,
     )
 }
 
