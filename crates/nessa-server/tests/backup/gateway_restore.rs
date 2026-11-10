@@ -1229,4 +1229,39 @@ fn a_stress_restore_names_one_loaded_conversation_and_one_whose_source_can_move(
         count, 2,
         "the serving catalogue keeps both restored conversations"
     );
+    assert!(
+        !destination.join("captured-namespace").exists(),
+        "the scratch catalogue is not a second metadata file"
+    );
+    let mut catalogues = Vec::new();
+    catalogue_files(root.path(), &mut catalogues);
+    assert_eq!(
+        catalogues,
+        vec![namespace.join("conversations/metadata.sqlite3")],
+        "the upgrade step counts every conversations/metadata.sqlite3"
+    );
+}
+
+fn catalogue_files(directory: &std::path::Path, found: &mut Vec<PathBuf>) {
+    let Ok(entries) = fs::read_dir(directory) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            catalogue_files(&path, found);
+            continue;
+        }
+        let conversations = path
+            .parent()
+            .and_then(|parent| parent.file_name())
+            .is_some_and(|name| name == "conversations");
+        if conversations
+            && path
+                .file_name()
+                .is_some_and(|name| name == "metadata.sqlite3")
+        {
+            found.push(path);
+        }
+    }
 }

@@ -135,6 +135,10 @@ pub fn build_stress_restore(destination: &Path, count: u32) -> Result<StressRest
     let mut key = open(&key_file, OpenMode::CreateNew).map_err(|error| error.to_string())?;
     key.write_all(&inventory.key().0)
         .map_err(|error| error.to_string())?;
+    // The scratch catalogue is only the export's input. Left under the
+    // gateway directory it is a second conversations/metadata.sqlite3, and
+    // the stress upgrade step refuses any count but one.
+    fs::remove_dir_all(namespace).map_err(|error| error.to_string())?;
     Ok(StressRestore {
         source,
         loaded,
