@@ -70,11 +70,25 @@ function git(args) {
   return result.stdout
 }
 
+/**
+ * The environment the checks get: the hook's, less the variables git sets for
+ * this repository. A push from a linked worktree runs the hook with `GIT_DIR`
+ * set, and a check that runs git in a fixture repository of its own would
+ * otherwise write into this one. The hook runs from the worktree root, so git
+ * finds the repository there without them.
+ */
+export function checkEnvironment(env, localVariables) {
+  const clean = { ...env }
+  for (const name of localVariables) delete clean[name]
+  return clean
+}
+
 /** The plan `check:changed` makes for this branch against main. */
-function changedPlan() {
+function changedPlan(env) {
   const script = fileURLToPath(new URL("./check-changed.mjs", import.meta.url))
   const result = spawnSync(process.execPath, [script, "--plan", "--git"], {
     encoding: "utf8",
+    env,
     stdio: ["ignore", "pipe", "inherit"],
   })
   if (result.error) throw result.error
@@ -86,16 +100,32 @@ export function main({
   stdin = readFileSync(0, "utf8"),
   run = git,
   makePlan = changedPlan,
-  runChecks = runScripts,
+  runChecks = (commands, env) =>
+    runScripts(commands, (file, args, options) =>
+      spawnSync(file, args, { ...options, env }),
+    ),
+  env = process.env,
   log = (line) => process.stderr.write(`${line}\n`),
 } = {}) {
-  const commits = pushedShas(stdin).map((sha) =>
-    run(["rev-parse", `${sha}^{commit}`]).trim(),
-  )
+  let commits
+  try {
+    commits = pushedShas(stdin).map((sha) =>
+      run(["rev-parse", "--verify", `${sha}^{commit}`]).trim(),
+    )
+  } catch {
+    log(
+      "pre-push: refused: the push sends an object that is not a commit or a tag of one",
+    )
+    log("pre-push: `git push --no-verify` skips this hook.")
+    return 1
+  }
   const verdict = pushVerdict({
     commits,
     head: commits.length > 0 ? run(["rev-parse", "HEAD"]).trim() : "",
-    status: commits.length > 0 ? run(["status", "--porcelain"]) : "",
+    // Untracked files count whatever `status.showUntrackedFiles` says, because
+    // the plan reads them (`ls-files --others`).
+    status:
+      commits.length > 0 ? run(["status", "--porcelain", "--untracked-files=all"]) : "",
   })
   if (verdict.refuse) {
     log(`pre-push: refused: ${verdict.reason}`)
@@ -106,11 +136,15 @@ export function main({
     log(`pre-push: nothing to check: ${verdict.reason}`)
     return 0
   }
-  const plan = makePlan()
+  const children = checkEnvironment(
+    env,
+    run(["rev-parse", "--local-env-vars"]).split("\n").filter(Boolean),
+  )
+  const plan = makePlan(children)
   log(`pre-push: ${plan.tier} plan: ${plan.reason}`)
   if (plan.commands.length === 0) return 0
   log(`pre-push: running ${plan.commands.map((command) => `pnpm ${command}`).join(", ")}`)
-  const status = runChecks(plan.commands)
+  const status = runChecks(plan.commands, children)
   if (status !== 0) log("pre-push: refused: a selected check failed")
   return status
 }

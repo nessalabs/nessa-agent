@@ -58,24 +58,32 @@ function hook({
   plan,
   checkStatus = 0,
   stdin = `refs/heads/t ${A} refs/heads/t ${ZERO}\n`,
+  env = {},
 }) {
   const ran = []
+  const seen = []
   const lines = []
   const code = main({
     stdin,
     run: (args) => {
+      if (args[1] === "--local-env-vars") return "GIT_DIR\nGIT_INDEX_FILE\n"
       if (args[0] === "rev-parse") return `${A}\n`
       if (args[0] === "status") return status
       throw new Error(`unexpected git ${args.join(" ")}`)
     },
-    makePlan: () => plan,
-    runChecks: (commands) => {
+    makePlan: (children) => {
+      seen.push(children)
+      return plan
+    },
+    runChecks: (commands, children) => {
+      seen.push(children)
       ran.push(...commands)
       return checkStatus
     },
+    env,
     log: (line) => lines.push(line),
   })
-  return { code, ran, lines }
+  return { code, ran, lines, seen }
 }
 
 test("the hook runs exactly what the plan selects and refuses when one fails", () => {
@@ -92,9 +100,31 @@ test("the hook runs exactly what the plan selects and refuses when one fails", (
   assert.match(failed.lines.at(-1), /refused: a selected check failed/)
 })
 
+test("the checks never see the variables git set for this repository", () => {
+  const plan = { tier: "narrow", commands: ["frontend:check"], reason: "narrowed" }
+  const result = hook({
+    plan,
+    env: { PATH: "/bin", GIT_DIR: "/repo/.git/worktrees/w", GIT_INDEX_FILE: "/i" },
+  })
+  assert.deepEqual(result.seen, [{ PATH: "/bin" }, { PATH: "/bin" }])
+})
+
+test("a push of something that is not a commit is refused with a sentence", () => {
+  const lines = []
+  const code = main({
+    stdin: `refs/heads/t ${A} refs/heads/t ${ZERO}\n`,
+    run: () => {
+      throw new Error("not a commit")
+    },
+    log: (line) => lines.push(line),
+  })
+  assert.equal(code, 1)
+  assert.match(lines[0], /not a commit/)
+})
+
 test("a docs-only plan selects nothing and the push goes on", () => {
   const result = hook({
-    plan: { tier: "documentation", commands: [], reason: "Markdown" },
+    plan: { tier: "docs", commands: [], reason: "Markdown" },
   })
   assert.equal(result.code, 0)
   assert.deepEqual(result.ran, [])
@@ -128,12 +158,19 @@ test("git push runs the checked-in hook: a failing check or a dirty checkout is 
   const work = join(root, "work")
   const remote = join(root, "remote.git")
   const git = (...args) =>
-    execFileSync("git", args, { cwd: work, stdio: "pipe", encoding: "utf8" })
+    execFileSync("git", args, { cwd: work, env, stdio: "pipe", encoding: "utf8" })
   const write = (path, text) => {
     const file = join(work, path)
     mkdirSync(dirname(file), { recursive: true })
     writeFileSync(file, text)
   }
+  // A fixture of its own, whatever repository the suite runs under: a push
+  // from a linked worktree runs the suite with GIT_DIR set.
+  const local = execFileSync("git", ["rev-parse", "--local-env-vars"], {
+    encoding: "utf8",
+  })
+  const env = { ...process.env }
+  for (const name of local.split("\n").filter(Boolean)) delete env[name]
   const here = dirname(fileURLToPath(import.meta.url))
   mkdirSync(work)
   execFileSync("git", ["init", "--bare", "--initial-branch=main", remote], {
@@ -156,7 +193,7 @@ test("git push runs the checked-in hook: a failing check or a dirty checkout is 
       scripts: {
         check: "pnpm frontend:check",
         "frontend:check":
-          "node -e \"process.exit(require('fs').existsSync('src/fail') ? 3 : 0)\"",
+          "node -e \"process.exit(require('fs').existsSync('src/fail') ? 3 : process.env.GIT_DIR ? 4 : 0)\"",
       },
     }),
   )
@@ -168,8 +205,8 @@ test("git push runs the checked-in hook: a failing check or a dirty checkout is 
   git("fetch", "origin")
   git("config", "core.hooksPath", HOOKS)
   git("checkout", "-b", "topic")
-  const push = () =>
-    spawnSync("git", ["push", "origin", "topic"], { cwd: work, encoding: "utf8" })
+  const push = (from = work, branch = "topic") =>
+    spawnSync("git", ["push", "origin", branch], { cwd: from, env, encoding: "utf8" })
 
   write("README.md", "docs\n")
   git("add", ".")
@@ -198,4 +235,17 @@ test("git push runs the checked-in hook: a failing check or a dirty checkout is 
   const clean = push()
   assert.equal(clean.status, 0, clean.stderr)
   assert.match(clean.stderr, /running pnpm frontend:check/)
+
+  // From a linked worktree git runs the hook with GIT_DIR set; the check
+  // above exits 4 if it reaches it.
+  const tree = join(root, "tree")
+  git("worktree", "add", "-q", "-b", "side", tree)
+  writeFileSync(join(tree, "src", "a.ts"), "export const a = 2\n")
+  execFileSync("git", ["-c", "commit.gpgsign=false", "commit", "-qam", "side"], {
+    cwd: tree,
+    env,
+  })
+  const linked = push(tree, "side")
+  assert.equal(linked.status, 0, linked.stderr)
+  assert.match(linked.stderr, /running pnpm frontend:check/)
 })

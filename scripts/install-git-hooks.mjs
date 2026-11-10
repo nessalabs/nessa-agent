@@ -6,10 +6,12 @@
  *
  * It sets `core.hooksPath` only when nothing has set it. A person who points
  * git at hooks of their own keeps them, and is told how to add ours. Outside a
- * git checkout (a tarball) it does nothing.
+ * git checkout of its own (a tarball, even one unpacked inside another
+ * repository) it does nothing.
  */
 import { spawnSync } from "node:child_process"
-import { pathToFileURL } from "node:url"
+import { realpathSync } from "node:fs"
+import { fileURLToPath, pathToFileURL } from "node:url"
 
 export const HOOKS = ".githooks"
 
@@ -37,10 +39,11 @@ function git(args) {
 
 const invoked = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href
 if (invoked) {
-  const inside = git(["rev-parse", "--is-inside-work-tree"])
+  const own = realpathSync(fileURLToPath(new URL("..", import.meta.url)))
+  const top = git(["rev-parse", "--show-toplevel"])
   const configured = git(["config", "--get", "core.hooksPath"])
   const action = hooksAction({
-    inCheckout: inside?.status === 0 && inside.stdout === "true",
+    inCheckout: top?.status === 0 && realpathSync(top.stdout) === own,
     hooksPath: configured?.status === 0 ? configured.stdout : null,
   })
   if (action.note) process.stderr.write(`${action.note}\n`)
