@@ -1690,3 +1690,163 @@ async fn unread_retained_selection_evidence_holds_admission_for_bounded_retry() 
     );
     fixture.retire().await;
 }
+
+/// A fork of a deferred conversation fetches that history before copying it.
+/// Copying the empty serving session, then fetching later, leaves the fork
+/// without the turns.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_fork_fetches_deferred_source_history_before_copying_it() {
+    let fixture = Fixture::new();
+    let source = fixture.create().await;
+    fixture
+        .service
+        .close(source.clone(), caller("close"))
+        .await
+        .unwrap();
+    let handle = tokio::runtime::Handle::current();
+    fixture
+        .service
+        .set_open_preparation(Arc::new(FetchingHistory {
+            handle,
+            storage: fixture.storage.clone(),
+            source: source.to_string(),
+        }));
+    let fork = new_id();
+    let store = fixture.service.commands().unwrap();
+    fixture
+        .service
+        .fork(store, fork.clone(), caller("fork"), source.clone())
+        .await
+        .unwrap();
+    let view = fixture.service.read(fork, caller("read")).await.unwrap();
+    let said: Vec<_> = view.handoffs[0]
+        .turns
+        .iter()
+        .map(|turn| turn.said.clone().unwrap_or_default())
+        .collect();
+    assert_eq!(said, vec!["deferred history".to_owned()]);
+    fixture.retire().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_fork_stops_when_the_deferred_source_cannot_be_fetched() {
+    let fixture = Fixture::new();
+    let source = fixture.create().await;
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    fixture
+        .service
+        .set_open_preparation(Arc::new(RefusingHistory(calls.clone())));
+    let store = fixture.service.commands().unwrap();
+    let error = fixture
+        .service
+        .fork(store.clone(), new_id(), caller("fork"), source.clone())
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(
+            error,
+            CreationFailure::Target(ConversationError::DeferredSourceUnavailable)
+        ),
+        "{error:?}"
+    );
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    let stranger = ConversationCaller {
+        organization_id: OrganizationId::new("other").unwrap(),
+        principal_id: PrincipalId::new("stranger").unwrap(),
+        surface_id: "panel".into(),
+        action_id: "fork".into(),
+    };
+    let _ = fixture
+        .service
+        .fork(store, new_id(), stranger, source)
+        .await;
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    fixture.retire().await;
+}
+
+struct FetchingHistory {
+    handle: tokio::runtime::Handle,
+    storage: Arc<RecordStorage>,
+    source: String,
+}
+
+impl OpenPreparation for FetchingHistory {
+    fn prepare(&self, conversation_id: &str) -> Result<(), ConversationError> {
+        if conversation_id != self.source {
+            return Ok(());
+        }
+        let storage = self.storage.clone();
+        let id = self.source.clone();
+        self.handle
+            .block_on(async move { write_deferred_turn(&storage, &id).await })
+            .map_err(|_| ConversationError::Unavailable)
+    }
+}
+
+struct RefusingHistory(Arc<std::sync::atomic::AtomicUsize>);
+
+impl OpenPreparation for RefusingHistory {
+    fn prepare(&self, _: &str) -> Result<(), ConversationError> {
+        self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Err(ConversationError::DeferredSourceUnavailable)
+    }
+}
+
+async fn write_deferred_turn(storage: &RecordStorage, id: &str) -> Result<(), String> {
+    use nessa_sdk::application::agent_execution::executions::ExecutionRequest;
+    use nessa_sdk::application::agent_execution::permissions::ActionContext;
+    use nessa_sdk::application::agent_execution::sessions::{
+        InvocationRecord, SessionChange, SessionSaveUnit, SessionStorage, SubmissionAcknowledgement,
+    };
+    use nessa_sdk::domain::agent_execution::executions::{ExecutionId, Initiation, SubmissionMode};
+    use nessa_sdk::domain::agent_execution::prompts::{PromptText, UserMessage};
+    use nessa_sdk::domain::agent_execution::sessions::SessionId;
+
+    let session = SessionId::new(id).map_err(|error| error.to_string())?;
+    let lease = storage
+        .open(session)
+        .await
+        .map_err(|error| error.to_string())?;
+    let binding = lease
+        .load()
+        .await
+        .map_err(|error| error.to_string())?
+        .binding()
+        .clone();
+    let execution = ExecutionId::new("deferred-turn").map_err(|error| error.to_string())?;
+    let record = InvocationRecord {
+        decline: None,
+        cancellation_delivery: None,
+        resumed_from: None,
+        target_event_offset: None,
+        submission: SubmissionMode::Immediate,
+        request: ExecutionRequest {
+            execution_id: execution.clone(),
+            user_message: UserMessage::text_only(
+                PromptText::new("deferred history").map_err(|error| error.to_string())?,
+            ),
+            estimated_input_tokens: 1,
+            reserved_output_tokens: 1,
+        },
+        actor: ActionContext::new("person", "panel", "deferred-turn")
+            .map_err(|error| error.to_string())?,
+        initiation: Initiation::owner(),
+        notes: Vec::new(),
+        handoff: None,
+        acknowledgement: SubmissionAcknowledgement::Acknowledged,
+        events: Vec::new(),
+        scheduling: Vec::new(),
+        cancellation: None,
+        provider_report: None,
+        local_cancellation: None,
+        local_outcome: None,
+        result: None,
+    };
+    let unit = SessionSaveUnit::new(vec![SessionChange::InputAccepted(Box::new(record))])
+        .map_err(|error| error.to_string())?;
+    lease
+        .save_changes(binding, vec![unit])
+        .await
+        .map_err(|error| error.to_string())?;
+    Ok(())
+}
