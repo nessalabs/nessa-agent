@@ -7805,11 +7805,13 @@ const steps = {
       failures.push(`the table answer came back as ${JSON.stringify(said.slice(0, 120))}`)
     // The list previews the answer as prose: a table's pipes and dashes are
     // left out (UI audit #3).
-    const listed = await waitFor(async () => {
+    let listed
+    const previewed = await waitFor(async () => {
       const { conversations } = await run.client.conversation.list({})
-      return conversations.find((each) => each.conversationId === run.main.id)
+      listed = conversations.find((each) => each.conversationId === run.main.id)
+      return listed?.preview === `${SAYS.table}${text}`.trim()
     }, 10_000)
-    if (listed?.preview !== `${SAYS.table}${text}`.trim())
+    if (!previewed)
       failures.push(
         `the list previews the table answer as ${JSON.stringify(listed?.preview)}`,
       )
