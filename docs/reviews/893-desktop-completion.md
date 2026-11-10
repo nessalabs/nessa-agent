@@ -1,8 +1,8 @@
 # Issue 893 desktop completion evidence
 
 Current assembled-source/check-harness checkpoint:
-`49112732e8e7b08fc4190ef771511c389f484087`, integrating main
-`19954d1f99adbfefea9036bcd33ce9f49c353038` unchanged.
+`3cb4eecdb524757253fe786152f8a89b54436d52`, integrating main
+`6c70aeb9c7be470bc30a6f15e4d5500f20a63389` unchanged.
 Desktop pairing runtime code last changed at
 `491d9359234aa1218cdcb6d0fde19bfb3719e11f`.
 Behavioral/negative-control checkpoint before the layer-only move:
@@ -20,11 +20,15 @@ CI. A passed focused check below does not imply every merge gate passed.
 
 ## Current-main qualification reconciliation
 
-Main advanced during the frozen browser run with #1293's Place refactor. The
-integration preserves it unchanged. Independent review found no overlap with
-this feature and no pairing, principal, grant, admission, protocol, SDK or
-frontend change. `Place::Pool.name()` preserves the environment listing's
-`peer:any`; channel and placement wire/storage words are retained. The native
+Main advanced with #1293's Place refactor and #1301's single placement decision.
+Their integrations preserve the owning changes. Independent review found no
+pairing, principal, grant, admission, protocol, SDK or frontend change.
+`Place::Pool.name()` preserves the environment listing's `peer:any`; channel
+and placement wire/storage words are retained. The decision's internal
+`Creation::Person` means ordinary client creation, not authenticated Human
+provenance. The shared stress edits are disjoint: Gateway pairing and the exact
+Devices inventory coexist with upstream's await/fork/channel checks and its
+explicit local thread environment. The native
 gateway and MCP fixture build passes at this assembled checkpoint. The diagram
 body is unchanged; the reviewed desktop source checkpoint advances, while the
 native lifecycle and unrelated OwnerPhone checkpoints retain their own scope.
@@ -38,10 +42,11 @@ Gateway stress holds 10/10 default and 14/14 raised per layout, in both engines.
 The raised cohort uses gatewayPairings3, parallel6, turns4, followers4, rounds40
 and seed7. These are execution receipts for that source cut.
 
-Frontend, SDK and desktop verification sources are byte-identical between
+Frontend, SDK and functional `run-all` sources are byte-identical between
 `88bc8b58` and this assembled checkpoint. Those browser observations remain
 evidence for the same frontend source; they do not establish native Rust
-behavior at the new main. Fresh native/browser integration, the separate
+behavior at the new main. Conversation stress and its fixture changed upstream
+and require fresh integrated execution. Fresh native/browser integration, the separate
 development retained-app check, exact-configuration main controls and final-head
 CI are recorded on the PR's live evidence comment. Qualification remains open.
 
