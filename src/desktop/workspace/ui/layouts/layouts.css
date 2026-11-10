@@ -48,10 +48,16 @@
 }
 
 /* The cover is its own frame, after the one that opens (`overview-layer.tsx`).
-   Opaque. A translucent fill would composite the blurred ambient across the
-   whole content region (`styles.test.ts`). */
+   Opaque. A translucent fill would composite the ambient light across the
+   whole content region (`styles.test.ts`). While it is up the light is not
+   drawn: WebKit still repaints that layer on every overview row, and the
+   list then misses its wait (#1249). The drift clock keeps running. */
 .workspace-overview-layer[data-covered] {
   background: var(--background);
+}
+
+.workspace-window:has(.workspace-overview-layer[data-covered]) .desktop-ambient {
+  content-visibility: hidden;
 }
 
 /*

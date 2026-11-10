@@ -127,7 +127,7 @@ it("draws an input waiting that the view lists apart from its turns after every 
   await React.act(async () => {
     root.render(
       <Provider store={store as never}>
-        <ClockProvider now={() => 1_000}>
+        <ClockProvider now={() => 1_000} elapsed={() => 1_000}>
           <Transcript
             conversation={applyView(conversation("tab"), view)}
             ground="paper"

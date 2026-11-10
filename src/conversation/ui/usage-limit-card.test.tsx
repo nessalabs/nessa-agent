@@ -42,7 +42,11 @@ function detail(): string {
 }
 
 function render(card: React.ReactNode, now = () => reset - 1) {
-  root.render(<ClockProvider now={now}>{card}</ClockProvider>)
+  root.render(
+    <ClockProvider now={now} elapsed={now}>
+      {card}
+    </ClockProvider>,
+  )
 }
 
 it("refreshes an unscheduled limit at its translated reset without a parent render", () => {
