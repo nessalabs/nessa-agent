@@ -117,7 +117,7 @@ async function shown(
     root.render(
       <StrictMode>
         <Provider store={store}>
-          <ClockProvider now={() => 1000}>
+          <ClockProvider now={() => 1000} elapsed={() => 1000}>
             <ClipboardProvider write={clipboardWrite}>
               <Transcript
                 sessionId="b"
@@ -154,7 +154,7 @@ async function failedRead(reason: "unavailable" | "signed-out") {
   await act(async () => {
     root.render(
       <Provider store={store}>
-        <ClockProvider now={() => 1000}>
+        <ClockProvider now={() => 1000} elapsed={() => 1000}>
           <Transcript sessionId="b" scrollRef={createRef()} onHeadingVisible={() => {}} />
         </ClockProvider>
       </Provider>,
@@ -942,7 +942,7 @@ describe("a transcript", () => {
     await act(async () => {
       root.render(
         <Provider store={store}>
-          <ClockProvider now={() => 1000}>
+          <ClockProvider now={() => 1000} elapsed={() => 1000}>
             <Transcript
               sessionId="b"
               scrollRef={createRef()}

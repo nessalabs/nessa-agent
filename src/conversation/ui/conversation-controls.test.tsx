@@ -128,7 +128,7 @@ it("says when the published view left history out or has not confirmed it", asyn
   }
   await act(async () => {
     root.render(
-      <ClockProvider now={() => time}>
+      <ClockProvider now={() => time} elapsed={() => time}>
         <ConversationControls conversation={conversation} gatewayAvailable />
       </ClockProvider>,
     )
@@ -147,7 +147,7 @@ describe("the floating card countdown", () => {
     const dueAtMs = time + 30_000
     await act(async () => {
       root.render(
-        <ClockProvider now={() => time}>
+        <ClockProvider now={() => time} elapsed={() => time}>
           <ConversationControls conversation={waiting(dueAtMs)} gatewayAvailable />
         </ClockProvider>,
       )
@@ -169,7 +169,7 @@ it("captures the displayed review's conversation for both answer and dismiss", a
   const conversation = { ...waiting(time + 30_000), serverConversationId: "captured" }
   await act(async () => {
     root.render(
-      <ClockProvider now={() => time}>
+      <ClockProvider now={() => time} elapsed={() => time}>
         <ConversationControls conversation={conversation} gatewayAvailable />
       </ClockProvider>,
     )
@@ -218,7 +218,7 @@ it("offers no answer on a review until it has loaded whole, and offers trying ag
   const show = (conversation: Conversation) =>
     act(async () => {
       root.render(
-        <ClockProvider now={() => time}>
+        <ClockProvider now={() => time} elapsed={() => time}>
           <ConversationControls conversation={conversation} gatewayAvailable />
         </ClockProvider>,
       )
