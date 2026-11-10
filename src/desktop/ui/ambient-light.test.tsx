@@ -7,6 +7,7 @@ import {
   ambientBlurPx,
   ambientScale,
   DesktopAmbient,
+  isAmbientLightTransition,
   paintAmbientLight,
   transparentStop,
 } from "./ambient-light"
@@ -57,6 +58,69 @@ it("blurs the small texture by the on-screen blur divided by the scale", () => {
   expect(url).toMatch(/^data:image\/png/)
   expect(seen).toContain(`blur(${ambientBlurPx / scale}px)`)
   expect(canvas.width).toBe(192)
+})
+
+it("follows only a light-colour transition on the surface itself", () => {
+  const surface = document.createElement("div")
+  const control = document.createElement("button")
+  surface.append(control)
+  expect(
+    isAmbientLightTransition({ target: control, propertyName: "background" }, surface),
+  ).toBe(false)
+  expect(
+    isAmbientLightTransition({ target: surface, propertyName: "background" }, surface),
+  ).toBe(false)
+  expect(
+    isAmbientLightTransition(
+      { target: surface, propertyName: "--desktop-light-high" },
+      surface,
+    ),
+  ).toBe(true)
+})
+
+it("keeps one repaint frame when the light colour changes, and none for a hover", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true)
+  class Observer implements ResizeObserver {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  }
+  vi.stubGlobal("ResizeObserver", Observer)
+  const frames: FrameRequestCallback[] = []
+  vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+    frames.push(callback)
+    return frames.length
+  })
+  vi.stubGlobal("cancelAnimationFrame", () => {})
+  let now = 1_000
+  vi.spyOn(performance, "now").mockImplementation(() => now)
+
+  const surface = document.createElement("div")
+  surface.setAttribute("data-desktop-theme", "graphite")
+  const mountPoint = document.createElement("div")
+  const control = document.createElement("button")
+  surface.append(mountPoint, control)
+  document.body.appendChild(surface)
+  const root = createRoot(mountPoint)
+  mounted.push({ root, host: surface })
+  await act(async () => root.render(<DesktopAmbient />))
+
+  const burst = (target: EventTarget, propertyName: string) => {
+    for (let i = 0; i < 100; i += 1) {
+      target.dispatchEvent(
+        new TransitionEvent("transitionrun", { bubbles: true, propertyName }),
+      )
+    }
+  }
+  burst(control, "background")
+  burst(surface, "background")
+  expect(frames).toHaveLength(0)
+  burst(surface, "--desktop-light-high")
+  expect(frames).toHaveLength(1)
+
+  now = 2_000
+  frames[0]?.(now)
+  expect(frames).toHaveLength(1)
 })
 
 it("draws the two lights and the grain", async () => {

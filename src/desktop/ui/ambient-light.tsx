@@ -59,6 +59,27 @@ export function paintAmbientLight(
   return canvas.toDataURL("image/png")
 }
 
+const lightColorProperties = [
+  "--desktop-light-high",
+  "--desktop-light-low",
+  "--desktop-light-edge",
+] as const
+
+/**
+ * A theme cross-fade is a transition of one of the light colours on the
+ * surface itself. Hover and focus transitions bubble from controls inside
+ * that surface and are not one of these.
+ */
+export function isAmbientLightTransition(
+  event: { target: EventTarget | null; propertyName: string },
+  surface: EventTarget,
+): boolean {
+  return (
+    event.target === surface &&
+    (lightColorProperties as readonly string[]).includes(event.propertyName)
+  )
+}
+
 /** The 70vmax circle, in CSS pixels, measured the way the stylesheet sizes it. */
 function circlePx(): number {
   const probe = document.createElement("div")
@@ -118,34 +139,50 @@ export function DesktopAmbient() {
             paint()
           })
     observer?.observe(document.documentElement)
-    // Theme changes interpolate `--desktop-light-*` for 800ms. Follow that
-    // and repaint the texture; the drift itself stays a transform.
+    // Theme changes interpolate `--desktop-light-*` for 800ms. One frame
+    // chain follows that and repaints the texture. The drift itself stays a
+    // transform. A second chain is not started while one is already waiting:
+    // descendant hover transitions used to each open their own.
     let until = 0
+    let pending = false
+    let frame = 0
     const follow = () => {
+      pending = false
       if (stop) return
       paint()
-      if (performance.now() < until) requestAnimationFrame(follow)
+      if (performance.now() < until) schedule()
     }
-    const onTheme = () => {
+    const schedule = () => {
+      if (pending || stop) return
+      pending = true
+      frame = requestAnimationFrame(follow)
+    }
+    const watch = () => {
       until = performance.now() + 900
-      requestAnimationFrame(follow)
+      schedule()
     }
-    surface?.addEventListener("transitionrun", onTheme)
+    const onTransition = (event: Event) => {
+      if (!surface || !(event instanceof TransitionEvent)) return
+      if (!isAmbientLightTransition(event, surface)) return
+      watch()
+    }
+    surface?.addEventListener("transitionrun", onTransition)
     const mutations =
       surface === null || typeof MutationObserver === "undefined"
         ? null
-        : new MutationObserver(onTheme)
+        : new MutationObserver(watch)
     if (surface) {
       mutations?.observe(surface, {
         attributes: true,
-        attributeFilter: ["data-desktop-theme", "style", "data-tinted-from-picture"],
+        attributeFilter: ["data-desktop-theme", "data-tinted-from-picture"],
       })
     }
     return () => {
       stop = true
+      if (frame) cancelAnimationFrame(frame)
       observer?.disconnect()
       mutations?.disconnect()
-      surface?.removeEventListener("transitionrun", onTheme)
+      surface?.removeEventListener("transitionrun", onTransition)
     }
   }, [])
 
