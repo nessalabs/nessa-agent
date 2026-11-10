@@ -1,5 +1,6 @@
 //! One vault before any provider is configured. No native store is opened here.
 use crate::product::VaultRoutes;
+use crate::timer::clock;
 use nessa_vault::{
     application::{Clock, ObservationClock, Vault},
     infrastructure::{EncryptedFileVault, FileAudit, OsEntropy},
@@ -21,7 +22,7 @@ pub(super) fn compose(namespace: &Path) -> Arc<VaultRoutes> {
             namespace.join("vault/audit"),
             Arc::new(WallClock),
         )),
-        Arc::new(Monotonic(Instant::now())),
+        Arc::new(Monotonic(clock::os::now())),
     );
     Arc::new(VaultRoutes {
         vault,
@@ -38,7 +39,7 @@ pub(super) fn compose(namespace: &Path) -> Arc<VaultRoutes> {
 struct WallClock;
 impl ObservationClock for WallClock {
     fn unix_millis(&self) -> Result<u64, nessa_vault::domain::Failure> {
-        std::time::SystemTime::now()
+        clock::wall_now()
             .duration_since(std::time::UNIX_EPOCH)
             .ok()
             .and_then(|elapsed| u64::try_from(elapsed.as_millis()).ok())

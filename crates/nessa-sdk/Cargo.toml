@@ -19,6 +19,7 @@ sha2 = "0.10"
 base64 = "0.22"
 nessa-local-storage = { path = "../nessa-local-storage", features = ["physical-operation"] }
 nessa-timer = { path = "../nessa-timer", features = ["runtime"] }
+nessa-types = { path = "../nessa-types" }
 nessa-local-database = { path = "../nessa-local-database" }
 tracing = "0.1"
 event-stream = { git = "https://github.com/nessalabs/event-stream", rev = "e16580f", default-features = false, features = ["codec", "sqlite", "retention"] }

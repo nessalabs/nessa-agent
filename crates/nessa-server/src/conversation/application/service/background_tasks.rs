@@ -16,9 +16,8 @@ use crate::conversation::domain::{
 };
 use crate::timer::Timer;
 use futures_util::FutureExt;
-use nessa_protocol::conversation::{
-    domain::ConversationId, projection::bound_view, view::ConversationView,
-};
+use nessa_projection::bound_view;
+use nessa_protocol::conversation::{domain::ConversationId, view::ConversationView};
 use nessa_sdk::domain::common::value_objects::Sha256Digest;
 use nessa_sdk::{
     application::agent_execution::executions::ExecutionUpdate,

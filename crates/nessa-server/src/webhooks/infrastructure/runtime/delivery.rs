@@ -7,6 +7,7 @@ use crate::conversation::{
     },
     infrastructure::LocalConversationStore,
 };
+use crate::timer::clock;
 use crate::webhooks::{
     application::{
         observation, AdmissionFailure, AdmitDelivery, DeliveryCause, DispatchAdmission,
@@ -526,7 +527,7 @@ impl WebhookRuntime {
         }
         // Canonical physical read and cursor work ended. Re-admit against the
         // actual current credential/grant; the prior read is not dispatch authority.
-        let deadline = Instant::now() + POST_DEADLINE;
+        let deadline = clock::now() + POST_DEADLINE;
         let hold = match self
             .admit_dispatch_before(
                 &reader.admission,
@@ -587,7 +588,7 @@ impl WebhookRuntime {
         tokio::pin!(write);
         let receipt = tokio::select! {
             result = &mut write => Some(result),
-            _ = tokio::time::sleep_until(deadline) => None,
+            _ = clock::sleep_until(deadline) => None,
         };
         if receipt.is_none() {
             // The future stays pinned/alive: any real spawn_blocking SQL remains
@@ -608,7 +609,7 @@ impl WebhookRuntime {
             tokio::pin!(settlement);
             let settled = tokio::select! {
                 result = &mut settlement => Some(result),
-                _ = tokio::time::sleep_until(deadline) => None,
+                _ = clock::sleep_until(deadline) => None,
             };
             hold.cancel();
             if settled.is_none() {
@@ -621,7 +622,7 @@ impl WebhookRuntime {
             };
         }
         let expired = !hold.is_valid_at(self.owner.clock.unix_seconds());
-        if expired || Instant::now() >= deadline {
+        if expired || clock::now() >= deadline {
             if expired {
                 if let Some(known) = self
                     .owner
@@ -660,7 +661,7 @@ impl WebhookRuntime {
             tokio::select! {
                 biased;
                 actual = &mut post => observation(actual),
-                _ = tokio::time::sleep_until(deadline) => Observation::TimedOut,
+                _ = clock::sleep_until(deadline) => Observation::TimedOut,
             }
         }; // The POST future is gone before authority can be released.
         *self
@@ -696,7 +697,7 @@ impl WebhookRuntime {
             tokio::pin!(work);
             let admitted = tokio::select! {
                 result = &mut work => Some(result),
-                _ = tokio::time::sleep_until(deadline) => None,
+                _ = clock::sleep_until(deadline) => None,
             };
             match admitted {
                 None => {
@@ -714,7 +715,7 @@ impl WebhookRuntime {
                 hold.cancel();
                 Err(error)
             }
-            Ok(()) if Instant::now() >= deadline => {
+            Ok(()) if clock::now() >= deadline => {
                 hold.cancel();
                 Ok(None)
             }

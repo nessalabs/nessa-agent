@@ -1,5 +1,6 @@
 //! Connection-scoped SSH access. Boat authorizes an ephemeral public key and
 //! supplies the host identity; no user's SSH configuration or agent is consulted.
+use crate::timer::clock;
 use crate::{
     conversation::{
         application::{ArtifactChannel, ArtifactChannels},
@@ -284,10 +285,10 @@ impl SshAccess {
                 }
             });
         }
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+        let deadline = clock::now() + Duration::from_secs(15);
         loop {
             if child.try_wait().map_err(|_| Failure::Provider)?.is_some()
-                || tokio::time::Instant::now() >= deadline
+                || clock::now() >= deadline
             {
                 return Err(Failure::Provider);
             }
@@ -301,7 +302,7 @@ impl SshAccess {
             {
                 break;
             }
-            tokio::time::sleep(Duration::from_millis(50)).await;
+            clock::sleep(Duration::from_millis(50)).await;
         }
         Ok(Arc::new(Self {
             _child: Mutex::new(child),

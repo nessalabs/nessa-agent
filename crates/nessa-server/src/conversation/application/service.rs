@@ -54,28 +54,25 @@ pub use channels::{
 use futures_util::{future::join_all, FutureExt};
 use nessa_auth::application::ports::Clock;
 use nessa_auth::domain::{OrganizationId, PrincipalId};
+use nessa_projection::{
+    agent_question, agent_review, bound_view, clipped, earlier_turns, question_entry, review_entry,
+    CommittedCursor, IntoView, McpToolUis, NoMcpToolUis, Projection, MAX_TEXT,
+};
 use nessa_protocol::agents::AgentId;
 use nessa_protocol::conversation::domain::{
     ConversationApprovalMode, ConversationId, ConversationModelId, ConversationSummary,
     ConversationTitle,
 };
-use nessa_protocol::conversation::{
-    projection::{
-        agent_question, agent_review, bound_view, clipped, earlier_turns, question_entry,
-        review_entry, CommittedCursor, Projection, MAX_TEXT,
-    },
-    tool_uis::{McpToolUis, NoMcpToolUis},
-    view::{
-        ConversationApprovalModeChangeStatus, ConversationApprovalModeChangeView,
-        ConversationAttachmentEvidenceFailure, ConversationAttachmentEvidenceFailureCode,
-        ConversationCapabilities, ConversationDisposition, ConversationEarlier,
-        ConversationLifecycle, ConversationLifecyclePhase, ConversationList, ConversationListEntry,
-        ConversationObservation, ConversationObservationCursor, ConversationPermission,
-        ConversationPoint, ConversationQuestion, ConversationQuestionEntry,
-        ConversationReorderOutcome, ConversationReviewEntry, ConversationReviewKind,
-        ConversationRuntime, ConversationSelectionView, ConversationStartupFailure,
-        ConversationStartupFailureCode, ConversationView, SubmissionReceipt,
-    },
+use nessa_protocol::conversation::view::{
+    ConversationApprovalModeChangeStatus, ConversationApprovalModeChangeView,
+    ConversationAttachmentEvidenceFailure, ConversationAttachmentEvidenceFailureCode,
+    ConversationCapabilities, ConversationDisposition, ConversationEarlier, ConversationLifecycle,
+    ConversationLifecyclePhase, ConversationList, ConversationListEntry, ConversationObservation,
+    ConversationObservationCursor, ConversationPermission, ConversationPoint, ConversationQuestion,
+    ConversationQuestionEntry, ConversationReorderOutcome, ConversationReviewEntry,
+    ConversationReviewKind, ConversationRuntime, ConversationSelectionView,
+    ConversationStartupFailure, ConversationStartupFailureCode, ConversationView,
+    SubmissionReceipt,
 };
 use nessa_protocol::product_contract::generated::MAX_MCP_MESSAGE_BYTES;
 use nessa_sdk::application::agent_execution::{
@@ -2473,7 +2470,7 @@ impl ConversationService {
                                 image_input: service
                                     .takes_images(&agent, operation_capabilities)
                                     != Some(false),
-                                agent_features: operation_capabilities.into(),
+                                agent_features: operation_capabilities.into_view(),
                             };
                             let mut projection =
                                 Projection::new(id.to_string(), capabilities, snapshot.as_ref())
@@ -3356,7 +3353,7 @@ impl ConversationService {
             .await?;
         let mut projection = live.projection.lock().await;
         if projection.replace_committed(&committed, &order, active.as_ref()) {
-            projection.transcript_state(committed.state().into());
+            projection.transcript_state(committed.state().into_view());
         }
         let operation_capabilities = live.agent.operation_capabilities();
         // The last known answer stands while the agent is being restored, so the
@@ -3370,7 +3367,7 @@ impl ConversationService {
             resume: operation_capabilities.session_resume(),
             permissions: live.agent.capabilities().features().tool_use(),
             image_input,
-            agent_features: operation_capabilities.into(),
+            agent_features: operation_capabilities.into_view(),
         });
         projection.lifecycle(lifecycle_view(&live.agent));
         if let Some(effect) = model_effect {
@@ -3582,7 +3579,7 @@ impl ConversationService {
             Projection::new(id.to_string(), ConversationCapabilities::read_only(), None)
                 .with_tool_uis(self.inner.tool_uis.clone());
         projection.replace_committed(committed, order, None);
-        projection.transcript_state(committed.state().into());
+        projection.transcript_state(committed.state().into_view());
         projection
     }
     /// A view nothing can act on through: the selection from the record,
@@ -3661,7 +3658,7 @@ impl ConversationService {
                 let mut projection = live.projection.lock().await;
                 let accepted = projection.replace_committed(committed, order, active.as_ref());
                 if accepted {
-                    projection.transcript_state(committed.state().into());
+                    projection.transcript_state(committed.state().into_view());
                 }
                 (
                     projection.read_with_mode_change(change.clone()),

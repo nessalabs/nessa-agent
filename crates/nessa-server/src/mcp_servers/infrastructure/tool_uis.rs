@@ -1,5 +1,6 @@
 use crate::conversation::application::conversation_session;
-use nessa_protocol::conversation::{domain::ConversationId, tool_uis::McpToolUis};
+use nessa_projection::McpToolUis;
+use nessa_protocol::conversation::domain::ConversationId;
 use nessa_sdk::domain::{agent_execution::tools::McpTool, mcp_apps::UiResourceUri};
 use nessa_sdk::infrastructure::mcp::McpServers;
 

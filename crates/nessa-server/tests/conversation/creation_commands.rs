@@ -2146,7 +2146,7 @@ async fn ready_creation_publishes_a_real_empty_transcript_for_passive_reads() {
         RecordReadError, RecordReadLease, RecordReadOperation, RecordReadSource, RecordReadValue,
     };
     use crate::conversation::infrastructure::NessaRecordReadSource;
-    use nessa_protocol::conversation::projection::retained_view;
+    use nessa_projection::retained_view;
     use nessa_protocol::conversation::read_scope::ReceiverReadScope;
     use nessa_sync::replication::domain::{Id, PageRequest};
 

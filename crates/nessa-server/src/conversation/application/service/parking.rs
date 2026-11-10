@@ -23,6 +23,7 @@
 //! lock is held until the slot is released, so a message that arrives meanwhile
 //! waits and then opens the conversation again rather than being refused.
 use super::{ConversationError, ConversationService, LiveConversation, Slot};
+use crate::timer::clock;
 use futures_util::{stream, StreamExt};
 use nessa_protocol::conversation::domain::ConversationId;
 use nessa_sdk::application::agent_execution::{
@@ -94,7 +95,7 @@ impl ConversationService {
         let between = (shortest / 4).clamp(Duration::from_millis(100), MOST_BETWEEN_SWEEPS);
         loop {
             tokio::select! {
-                () = tokio::time::sleep(between) => {}
+                () = clock::sleep(between) => {}
                 () = self.retired() => return,
             }
             if self.inner.retirement.get().is_some() {

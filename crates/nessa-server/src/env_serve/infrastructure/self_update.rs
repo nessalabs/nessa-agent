@@ -29,6 +29,7 @@
 //! copy, and the copy, whose own digest is not that one, never execs again.
 use crate::env_serve::application::{write_frame, FrameStream};
 use crate::env_serve::install::Platform;
+use crate::timer::clock;
 use nessa_protocol::build_update::{
     from_gateway, part_bytes, FromEnvironment, FromGateway, MOST_UPDATE_BYTES, UPDATE_SEND_DEADLINE,
 };
@@ -304,7 +305,7 @@ async fn protocol_of(path: &Path) -> Result<String, NotUpdated> {
         match ran {
             Err(error) if error.raw_os_error() == Some(libc::ETXTBSY) && busy < BUSY_TRIES => {
                 busy += 1;
-                tokio::time::sleep(Duration::from_millis(50 * busy)).await;
+                clock::sleep(Duration::from_millis(50 * busy)).await;
             }
             ran => break ran.map_err(|_| NotUpdated::Unverified("it does not run here"))?,
         }

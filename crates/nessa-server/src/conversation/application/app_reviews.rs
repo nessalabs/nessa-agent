@@ -37,7 +37,7 @@ use super::mcp_apps::{
     ContextDrop, DroppedContexts, McpAppAuditPhase, McpAppAuditRecord, McpAppInitiator, McpAppRef,
     McpAppWithdrawal,
 };
-use nessa_protocol::conversation::projection::{review_entry, MAX_LISTED_REVIEWS};
+use nessa_projection::{review_entry, MAX_LISTED_REVIEWS};
 use nessa_protocol::conversation::view::{
     ConversationPermission, ConversationPermissionAsk, ConversationPermissionOption,
     ConversationPermissionOptionEffect, ConversationPermissionOrigin, ConversationReviewEntry,

@@ -26,6 +26,7 @@
 use super::audit::{EnvironmentAudit, EnvironmentEvent, InstallRefusal};
 use super::install::{Build, HostInstaller, NotOpened, OpenedCopy};
 use crate::env_serve::install::Platform;
+use crate::timer::clock;
 use nessa_protocol::build_update::{
     encode, part, FromGateway, UPDATE_PART_BYTES, UPDATE_SEND_DEADLINE,
 };
@@ -165,7 +166,7 @@ impl PeerUpdates {
     /// A place among the sends, unless `host` began one a moment ago or
     /// every place is taken.
     fn admitted(&self, host: &str) -> Option<OwnedSemaphorePermit> {
-        let now = Instant::now();
+        let now = clock::os::now();
         let mut asked = self.asked.lock().unwrap_or_else(PoisonError::into_inner);
         asked.retain(|_, at| now.duration_since(*at) < HOST_ASKS_EVERY);
         if asked.contains_key(host) {

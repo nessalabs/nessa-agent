@@ -13,7 +13,7 @@ use crate::conversation::application::mcp_apps::TicketEnd;
 use crate::conversation::application::DeletionFailures;
 use crate::mcp_servers::domain::MAX_APP_ARGUMENTS_BYTES;
 use nessa_auth::domain::PrincipalId;
-use nessa_protocol::conversation::projection::{
+use nessa_projection::{
     question_entry, review_entry, MAX_LISTED_REVIEWS, MAX_REVIEW_ENTRY_BYTES,
     MAX_REVIEW_ENTRY_TOOL_NAME_BYTES, MAX_VIEW_BYTES,
 };

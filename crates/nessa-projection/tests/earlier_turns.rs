@@ -2,9 +2,11 @@
 //! at a time (`earlier_turns`), and for how a view says they are there.
 
 use super::tests::{completed_snapshot, projection};
-use crate::conversation::projection::{bound_view, earlier_turns, Projection, MAX_VIEW_BYTES};
-use crate::conversation::tool_uis::NoMcpToolUis;
-use crate::conversation::view::{
+use crate::projection::{bound_view, earlier_turns, Projection, MAX_VIEW_BYTES};
+use crate::tool_uis::NoMcpToolUis;
+#[allow(unused_imports)]
+use crate::{IntoView, ViewOf};
+use nessa_protocol::conversation::view::{
     ConversationEarlier, ConversationMessage, ConversationPartPosition, ConversationPoint,
     ConversationView,
 };
@@ -320,15 +322,18 @@ fn a_forks_copied_turns_come_with_the_page_that_reaches_the_start() {
     assert_eq!(first.messages[0].execution_id, "turn-0");
     assert_eq!(first.handoffs.len(), 1);
     assert_eq!(first.handoffs[0].turns.len(), 1);
-    assert_eq!(first.handoffs[0].turns[0].agent, Some((&origin).into()));
+    assert_eq!(
+        first.handoffs[0].turns[0].agent,
+        Some((&origin).into_view())
+    );
 }
 
 /// A view with no turn has nothing to read before: copied turns too long for
 /// it are counted as left out, never as earlier.
 #[test]
 fn a_fork_with_no_turn_after_it_counts_what_it_leaves_out() {
-    use crate::conversation::projection::bound_view_within;
-    use crate::conversation::view::{
+    use crate::projection::bound_view_within;
+    use nessa_protocol::conversation::view::{
         ConversationCarriedTurn, ConversationHandoff, ConversationHandoffKind,
     };
     let mut view = view_of(&chat(&[]));
@@ -359,8 +364,8 @@ fn a_fork_with_no_turn_after_it_counts_what_it_leaves_out() {
 /// gives way to fit the frame is said to be left out.
 #[test]
 fn a_queued_turn_that_gives_way_is_not_earlier() {
-    use crate::conversation::projection::bound_view_within;
-    use crate::conversation::view::{ConversationPending, ConversationPendingMode};
+    use crate::projection::bound_view_within;
+    use nessa_protocol::conversation::view::{ConversationPending, ConversationPendingMode};
     let replies: Vec<String> = (0..3).map(|index| format!("reply {index}")).collect();
     let mut view = view_of(&chat(&replies));
     assert!(!view.earlier);

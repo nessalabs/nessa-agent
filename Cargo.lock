@@ -3769,6 +3769,7 @@ dependencies = [
  "nessa-auth",
  "nessa-local-database",
  "nessa-local-storage",
+ "nessa-projection",
  "nessa-protocol",
  "nessa-sdk",
  "nessa-sync",
@@ -3872,6 +3873,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "nessa-projection"
+version = "0.1.0"
+dependencies = [
+ "nessa-protocol",
+ "nessa-sdk",
+ "serde",
+ "serde_json",
+ "sha2",
+ "uuid",
+]
+
+[[package]]
 name = "nessa-protocol"
 version = "0.1.0"
 dependencies = [
@@ -3879,8 +3892,8 @@ dependencies = [
  "hmac",
  "nessa-auth",
  "nessa-local-storage",
- "nessa-sdk",
  "nessa-sync",
+ "nessa-types",
  "serde",
  "serde_json",
  "sha2",
@@ -3905,6 +3918,7 @@ dependencies = [
  "nessa-local-storage",
  "nessa-sync",
  "nessa-timer",
+ "nessa-types",
  "percent-encoding",
  "rusqlite",
  "serde",
@@ -3951,6 +3965,7 @@ dependencies = [
  "nessa-images",
  "nessa-local-database",
  "nessa-local-storage",
+ "nessa-projection",
  "nessa-protocol",
  "nessa-sdk",
  "nessa-sync",
@@ -4001,6 +4016,10 @@ version = "0.1.0"
 dependencies = [
  "tokio",
 ]
+
+[[package]]
+name = "nessa-types"
+version = "0.1.0"
 
 [[package]]
 name = "nessa-vault"
