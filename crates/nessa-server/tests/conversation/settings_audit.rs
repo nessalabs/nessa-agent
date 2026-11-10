@@ -3,6 +3,7 @@
 use super::*;
 use crate::conversation::application::ConversationCaller;
 use crate::conversation::domain::ChannelId;
+use crate::conversation::domain::{ChannelExecution, Place};
 use nessa_auth::domain::{OrganizationId, PrincipalId};
 use nessa_protocol::conversation::domain::ConversationId;
 
@@ -36,11 +37,7 @@ async fn a_channel_move_keeps_both_places_its_main_chats_and_who_asked() {
     let change = SettingsChange::ChannelPlacement {
         channel: ChannelId::from_random([1; 10]),
         before: ChannelExecution::default(),
-        after: crate::conversation::domain::ChannelExecution::new(
-            crate::conversation::domain::Place::CloudVm,
-            crate::conversation::domain::Place::Here,
-        )
-        .unwrap(),
+        after: ChannelExecution::new(&Place::CloudVm, &Place::Here).unwrap(),
         coordinator: old.clone(),
     };
     for outcome in [

@@ -10,6 +10,7 @@ use crate::conversation::application::{
 use crate::conversation::domain::{
     ChannelDefaults, ChannelName, ChannelNotes, ChannelRefusal, ProviderSessionErasure,
 };
+use crate::conversation::domain::{ChannelExecution, Place};
 use crate::conversation::infrastructure::{LocalChannelStore, LocalConversationStore};
 #[cfg(unix)]
 use crate::conversation_test_support::channel_lookup::ChannelLookup;
@@ -178,7 +179,7 @@ fn path(text: &str) -> ChannelPath {
 
 fn request(folder: Option<&str>) -> ChannelRequest {
     ChannelRequest {
-        execution: crate::conversation::domain::ChannelExecution::default(),
+        execution: ChannelExecution::default(),
         name: ChannelName::new("design-review").unwrap(),
         folder: folder.map(path),
         defaults: ChannelDefaults {
@@ -1101,11 +1102,7 @@ async fn only_the_owner_moves_a_made_channel_and_an_unchanged_one_stays_as_it_is
     use crate::conversation::application::ChannelError;
     let fixture = Fixture::new();
     let made = fixture.channel("request-1", None).await;
-    let boat = crate::conversation::domain::ChannelExecution::new(
-        crate::conversation::domain::Place::CloudVm,
-        crate::conversation::domain::Place::CloudVm,
-    )
-    .unwrap();
+    let boat = ChannelExecution::new(&Place::CloudVm, &Place::CloudVm).unwrap();
     // The default channel has no run location to change, and neither another
     // person nor an unknown id learns whether a channel exists.
     for (who, id) in [
@@ -1116,7 +1113,7 @@ async fn only_the_owner_moves_a_made_channel_and_an_unchanged_one_stays_as_it_is
         assert_eq!(
             fixture
                 .service
-                .set_channel_execution(&caller(who, "move"), &id, boat.clone())
+                .set_channel_execution(&caller(who, "move"), &id, boat)
                 .await,
             Err(ChannelError::Forbidden),
             "{who} moved {id:?}"
@@ -1125,20 +1122,16 @@ async fn only_the_owner_moves_a_made_channel_and_an_unchanged_one_stays_as_it_is
     // Asking for where it already runs changes nothing, main chat included.
     let same = fixture
         .service
-        .set_channel_execution(
-            &caller("person", "move"),
-            made.id(),
-            made.execution().clone(),
-        )
+        .set_channel_execution(&caller("person", "move"), made.id(), made.execution())
         .await
         .unwrap();
     assert_eq!(same, made);
     let moved = fixture
         .service
-        .set_channel_execution(&caller("person", "move"), made.id(), boat.clone())
+        .set_channel_execution(&caller("person", "move"), made.id(), boat)
         .await
         .unwrap();
-    assert_eq!(*moved.execution(), boat);
+    assert_eq!(moved.execution(), boat);
     assert_eq!(moved.id(), made.id());
     // Asked and applied are on record as the person's, with both places; a
     // refused or unchanged move left none.
@@ -1150,7 +1143,7 @@ async fn only_the_owner_moves_a_made_channel_and_an_unchanged_one_stays_as_it_is
         records[0].change,
         crate::conversation::application::SettingsChange::ChannelPlacement {
             channel: made.id().clone(),
-            before: made.execution().clone(),
+            before: made.execution(),
             after: boat,
             coordinator: made.coordinator_id(),
         }
@@ -1176,15 +1169,11 @@ async fn a_move_that_cannot_be_recorded_is_refused_and_changes_nothing() {
         .settings
         .failing
         .store(true, std::sync::atomic::Ordering::SeqCst);
-    let boat = crate::conversation::domain::ChannelExecution::new(
-        crate::conversation::domain::Place::CloudVm,
-        crate::conversation::domain::Place::CloudVm,
-    )
-    .unwrap();
+    let boat = ChannelExecution::new(&Place::CloudVm, &Place::CloudVm).unwrap();
     assert_eq!(
         fixture
             .service
-            .set_channel_execution(&caller("person", "move"), made.id(), boat.clone())
+            .set_channel_execution(&caller("person", "move"), made.id(), boat)
             .await,
         Err(ChannelError::Unavailable)
     );

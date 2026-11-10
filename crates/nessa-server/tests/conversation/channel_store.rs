@@ -2,6 +2,7 @@
 //! answers the kept channel; a conversation is in one channel for its life;
 //! and a folder is checked, resolved, before agents may work in it.
 use super::*;
+use crate::conversation::domain::{ChannelExecution, Place};
 use crate::conversation_test_support::absolute;
 
 fn store(directory: &Path) -> LocalChannelStore {
@@ -27,7 +28,7 @@ fn made(request_id: &str, name: &str, at: u64) -> Channel {
         OrganizationId::new("org").unwrap(),
         PrincipalId::new("owner").unwrap(),
         ChannelParts {
-            execution: crate::conversation::domain::ChannelExecution::default(),
+            execution: ChannelExecution::default(),
             name: ChannelName::new(name).unwrap(),
             folder: ChannelFolder {
                 path: path(&absolute("/work/repo")),
@@ -381,10 +382,7 @@ async fn older_channel_schemas_upgrade_without_relocating_existing_work() {
         drop(connection);
         let store = LocalChannelStore::open(&path).unwrap();
         let restored = store.get(kept.id()).await.unwrap().unwrap();
-        assert_eq!(
-            *restored.execution(),
-            crate::conversation::domain::ChannelExecution::default()
-        );
+        assert_eq!(restored.execution(), ChannelExecution::default());
         assert_eq!(restored.coordinator_id(), main);
         assert_eq!(
             store.channel_of(&main).await.unwrap(),
@@ -416,7 +414,7 @@ async fn older_channel_schemas_upgrade_without_relocating_existing_work() {
                 .unwrap()
                 .execution()
                 .threads(),
-            &crate::conversation::domain::Place::Pool
+            Place::Pool
         );
         store.forget(&main).await.unwrap();
         assert_ne!(
@@ -440,26 +438,18 @@ async fn moving_the_main_agent_names_a_fresh_main_chat_and_keeps_the_old_one_in_
     store.create(original.clone()).await.unwrap();
     store.place(&first, original.id()).await.unwrap();
     // Only new threads move: the main chat stays the same one.
-    let threads = crate::conversation::domain::ChannelExecution::new(
-        crate::conversation::domain::Place::Here,
-        crate::conversation::domain::Place::CloudVm,
-    )
-    .unwrap();
+    let threads = ChannelExecution::new(&Place::Here, &Place::CloudVm).unwrap();
     let changed = store
-        .set_execution(original.id(), threads.clone())
+        .set_execution(original.id(), threads)
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(*changed.execution(), threads);
+    assert_eq!(changed.execution(), threads);
     assert_eq!(changed.coordinator_id(), first);
     // The main agent moves: a fresh main chat, the old one still in the channel.
-    let both = crate::conversation::domain::ChannelExecution::new(
-        crate::conversation::domain::Place::CloudVm,
-        crate::conversation::domain::Place::CloudVm,
-    )
-    .unwrap();
+    let both = ChannelExecution::new(&Place::CloudVm, &Place::CloudVm).unwrap();
     let moved = store
-        .set_execution(original.id(), both.clone())
+        .set_execution(original.id(), both)
         .await
         .unwrap()
         .unwrap();
@@ -474,7 +464,7 @@ async fn moving_the_main_agent_names_a_fresh_main_chat_and_keeps_the_old_one_in_
     let reopened =
         LocalChannelStore::open(&directory.path().join("conversations/channels.sqlite3")).unwrap();
     let kept = reopened.get(original.id()).await.unwrap().unwrap();
-    assert_eq!(*kept.execution(), both);
+    assert_eq!(kept.execution(), both);
     assert_eq!(kept.coordinator_id(), moved.coordinator_id());
     // Once the Boat main chat was made, moving back names yet another one.
     reopened
@@ -492,12 +482,12 @@ async fn moving_the_main_agent_names_a_fresh_main_chat_and_keeps_the_old_one_in_
     let fresh = made("unused", "quiet", 1);
     reopened.create(fresh.clone()).await.unwrap();
     let kept_id = reopened
-        .set_execution(fresh.id(), both.clone())
+        .set_execution(fresh.id(), both)
         .await
         .unwrap()
         .unwrap();
     assert_eq!(kept_id.coordinator_id(), fresh.coordinator_id());
-    assert_eq!(*kept_id.execution(), both);
+    assert_eq!(kept_id.execution(), both);
     let missing = made("absent", "none", 1);
     assert!(reopened
         .set_execution(missing.id(), both)

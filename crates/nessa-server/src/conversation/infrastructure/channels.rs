@@ -145,7 +145,7 @@ fn channel(row: Stored) -> Result<Channel, ConversationError> {
         PrincipalId::new(owner).map_err(|_| invalid())?,
         ChannelParts {
             execution: ChannelExecution::parse(&coordinator_placement, &thread_placement)
-                .ok_or_else(invalid)?,
+                .map_err(|_| invalid())?,
             name: ChannelName::new(&name).map_err(|_| invalid())?,
             folder: ChannelFolder {
                 path: path(folder)?,
@@ -411,7 +411,7 @@ impl ChannelStore for LocalChannelStore {
                 return Ok(None);
             };
             let current = channel(current)?;
-            let mut changed = current.with_execution(execution.clone());
+            let mut changed = current.with_execution(execution);
             let main_made = transaction
                 .query_row(
                     "SELECT 1 FROM channel_conversations WHERE conversation = ?1",

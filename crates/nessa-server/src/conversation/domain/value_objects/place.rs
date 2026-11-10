@@ -1,15 +1,16 @@
 //! Where a conversation runs, as one value: here, a configured SSH host, one
 //! paired computer, any paired computer (the pool), or a cloud VM of its own.
 //!
-//! A place is written and read as a name at the edges (a placement file, a
-//! request's `environment`, a tool call's `environment`), and as one of a
-//! channel's words in a channel's columns; [`Place::named`] and
-//! [`Place::name`] are the only code that reads or prints a name. Everything
-//! between the edges matches on the value.
+//! A place is written and read as a name where it crosses the process edge:
+//! a placement file, a request's `environment`, a tool call's
+//! `environment`. [`Place::named`] reads such a name and [`Place::name`]
+//! prints one; a channel's columns use its own words
+//! ([`super::ChannelExecution::parse`]). Code that decides where a
+//! conversation runs matches on the value.
 use nessa_sdk::domain::agent_execution::leases::{EnvironmentRef, PeerEnvironment, SshDestination};
 
 /// Where a conversation runs.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Place {
     /// This gateway's own machine.
     Here,
@@ -58,9 +59,10 @@ impl Place {
         }
     }
 
-    /// Its name as a creation asks for it again, `None` for here: a
-    /// request that names no place runs here.
-    pub fn asked_name(&self) -> Option<String> {
+    /// Its name when it is away from here; `None` for here, which a
+    /// request names by naming no place and a placement file by its
+    /// absence.
+    pub fn remote_name(&self) -> Option<String> {
         self.is_remote().then(|| self.name())
     }
 

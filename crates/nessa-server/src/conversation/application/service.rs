@@ -1690,9 +1690,9 @@ impl ConversationService {
         // its threads'. Recorded below, before the conversation exists.
         let channel_place = channel.as_ref().map(|channel| {
             if id == channel.coordinator_id() {
-                channel.execution().coordinator().clone()
+                channel.execution().coordinator()
             } else {
-                channel.execution().threads().clone()
+                channel.execution().threads()
             }
         });
         let place = channel

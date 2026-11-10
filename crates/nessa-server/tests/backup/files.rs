@@ -1,6 +1,7 @@
 //! Files the cut reads: a bad line is named, a secret is not copied, and
 //! both outboxes are part of the same cut.
 
+use crate::conversation::domain::{ChannelExecution, Place};
 use std::fs;
 use std::path::Path;
 
@@ -692,7 +693,7 @@ async fn a_channel_symlink_is_not_followed() {
         channel.organization().clone(),
         channel.owner().clone(),
         ChannelParts {
-            execution: channel.execution().clone(),
+            execution: channel.execution(),
             name: channel.name().clone(),
             folder: channel.folder().clone(),
             defaults: channel.defaults().clone(),
@@ -735,7 +736,7 @@ async fn a_channel_database_holding_a_private_key_is_not_copied() {
         channel.organization().clone(),
         channel.owner().clone(),
         ChannelParts {
-            execution: channel.execution().clone(),
+            execution: channel.execution(),
             name: channel.name().clone(),
             folder: channel.folder().clone(),
             defaults: channel.defaults().clone(),
@@ -778,11 +779,7 @@ fn channel_with_settings() -> Channel {
         OrganizationId::new("org").unwrap(),
         PrincipalId::new("owner").unwrap(),
         ChannelParts {
-            execution: crate::conversation::domain::ChannelExecution::new(
-                crate::conversation::domain::Place::CloudVm,
-                crate::conversation::domain::Place::Here,
-            )
-            .unwrap(),
+            execution: ChannelExecution::new(&Place::CloudVm, &Place::Here).unwrap(),
             name: ChannelName::new("design").unwrap(),
             folder: ChannelFolder {
                 path: path("/work/channel"),

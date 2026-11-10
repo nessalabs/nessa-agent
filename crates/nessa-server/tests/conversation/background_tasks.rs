@@ -4,6 +4,7 @@ use super::*;
 use crate::conversation::application::service::environment_tools::running_turn;
 #[cfg(unix)]
 use crate::conversation::application::{Environments, ThreadEnvironments, WorkspaceRest};
+use crate::conversation::domain::Place;
 #[cfg(unix)]
 use crate::conversation::infrastructure::FilePlacements;
 use crate::conversation::{
@@ -1047,7 +1048,7 @@ async fn vm_background_stress_holds_past_idle_then_rests_and_restart_does_not_re
                 target.clone(),
                 caller("create"),
                 RequestedConversation {
-                    environment: crate::conversation::domain::Place::CloudVm.asked_name(),
+                    environment: Place::CloudVm.remote_name(),
                     ..Default::default()
                 },
             )

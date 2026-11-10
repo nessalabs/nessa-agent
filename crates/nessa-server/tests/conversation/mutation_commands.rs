@@ -1,5 +1,6 @@
 //! Submit and exact-turn Stop use the same record runtime as creation.
 use super::*;
+use crate::conversation::domain::Place;
 use crate::conversation::{
     application::{
         ConversationAccessPolicyEvaluator, ConversationDependencies, ConversationLimits,
@@ -1457,11 +1458,7 @@ async fn a_submit_linking_a_file_is_refused_on_a_host_before_it_is_staged() {
     service
         .inner
         .environment
-        .place(
-            &target,
-            &crate::conversation::domain::Place::named("devbox").unwrap(),
-            None,
-        )
+        .place(&target, &Place::named("devbox").unwrap(), None)
         .await
         .unwrap();
     let mut linking = message("read this");

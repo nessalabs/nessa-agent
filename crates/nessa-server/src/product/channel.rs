@@ -127,7 +127,8 @@ fn channel_request(params: &ChannelCreateParams) -> Option<ChannelRequest> {
         execution: ChannelExecution::parse(
             params.coordinator_placement.as_deref().unwrap_or("local"),
             params.thread_placement.as_deref().unwrap_or("local"),
-        )?,
+        )
+        .ok()?,
         name: ChannelName::new(&params.name).ok()?,
         folder: match &params.folder {
             Some(folder) => Some(path(folder)?),
@@ -203,8 +204,8 @@ fn listed(listing: ChannelListing, after: Option<&ChannelId>) -> ChannelListResu
                 model: None,
                 approval_mode: ApprovalMode::Ask,
                 coordinator_conversation_id: None,
-                coordinator_placement: "local".into(),
-                thread_placement: "local".into(),
+                coordinator_placement: ChannelExecution::default().coordinator_word().into(),
+                thread_placement: ChannelExecution::default().threads_word().into(),
                 created_at_ms: 0,
             })
             .into_iter()
@@ -287,7 +288,7 @@ fn placement_request(
     let channel = ChannelId::new(&params.channel_id).ok()?;
     // The main agent runs in one place: the pool is for threads.
     let execution =
-        ChannelExecution::parse(&params.coordinator_placement, &params.thread_placement)?;
+        ChannelExecution::parse(&params.coordinator_placement, &params.thread_placement).ok()?;
     Some((params, channel, execution))
 }
 

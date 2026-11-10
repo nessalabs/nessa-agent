@@ -361,7 +361,7 @@ impl ConversationService {
             caller.organization_id.clone(),
             caller.principal_id.clone(),
             ChannelParts {
-                execution: resolved.execution.clone(),
+                execution: resolved.execution,
                 name: resolved.name.clone(),
                 folder,
                 defaults: resolved.defaults.clone(),
@@ -483,7 +483,7 @@ impl ConversationService {
                 Err(ConversationError::ChannelNotFound) => return Err(ChannelError::Forbidden),
                 Err(error) => return Err(error.into()),
             };
-            if *found.execution() == execution {
+            if found.execution() == execution {
                 return Ok(found);
             }
             let coordinator = found.coordinator_id();
@@ -492,7 +492,7 @@ impl ConversationService {
             if current.coordinator_id() != coordinator {
                 continue;
             }
-            if *current.execution() == execution {
+            if current.execution() == execution {
                 return Ok(current);
             }
             // The move is on record, with what it moves from, before it is made.
@@ -501,8 +501,8 @@ impl ConversationService {
                 caller: caller.clone(),
                 change: SettingsChange::ChannelPlacement {
                     channel: id.clone(),
-                    before: current.execution().clone(),
-                    after: execution.clone(),
+                    before: current.execution(),
+                    after: execution,
                     coordinator: coordinator.clone(),
                 },
                 outcome,
@@ -510,7 +510,7 @@ impl ConversationService {
             self.record_setting(record(SettingsOutcome::Requested))
                 .await
                 .map_err(|_| ChannelError::Unavailable)?;
-            let moved = match store.set_execution(id, execution.clone()).await {
+            let moved = match store.set_execution(id, execution).await {
                 Ok(Some(moved)) => moved,
                 failed => {
                     if self

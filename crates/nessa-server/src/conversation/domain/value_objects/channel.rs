@@ -255,66 +255,107 @@ pub struct ChannelDefaults {
 /// for threads only, any paired computer (the pool, in the order the pool's
 /// preferences give, a cloud VM as overflow); never one named computer yet.
 /// Stored and sent as one word each: `local`, `boat`, `pool`.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ChannelExecution {
-    coordinator: Place,
-    threads: Place,
+    coordinator: ChannelPlace,
+    threads: ChannelPlace,
 }
-impl Default for ChannelExecution {
-    fn default() -> Self {
-        Self {
-            coordinator: Place::Here,
-            threads: Place::Here,
+
+/// The places a channel can hold, each with its word.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum ChannelPlace {
+    #[default]
+    Here,
+    CloudVm,
+    Pool,
+}
+impl ChannelPlace {
+    fn of(place: &Place) -> Option<Self> {
+        match place {
+            Place::Here => Some(Self::Here),
+            Place::CloudVm => Some(Self::CloudVm),
+            Place::Pool => Some(Self::Pool),
+            Place::Host(_) | Place::Peer(_) => None,
+        }
+    }
+    fn named(word: &str) -> Option<Self> {
+        match word {
+            "local" => Some(Self::Here),
+            "boat" => Some(Self::CloudVm),
+            "pool" => Some(Self::Pool),
+            _ => None,
+        }
+    }
+    fn word(self) -> &'static str {
+        match self {
+            Self::Here => "local",
+            Self::CloudVm => "boat",
+            Self::Pool => "pool",
+        }
+    }
+    fn place(self) -> Place {
+        match self {
+            Self::Here => Place::Here,
+            Self::CloudVm => Place::CloudVm,
+            Self::Pool => Place::Pool,
         }
     }
 }
+
+/// Why a channel cannot run its agents where it was asked to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ChannelPlaceRefusal {
+    /// A word that names no place a channel holds.
+    Unknown,
+    /// One named computer: a channel names a kind of place only.
+    NamedComputer,
+    /// The pool for the main agent, which runs in one known place.
+    PooledMainAgent,
+}
+
 impl ChannelExecution {
-    /// The main agent on `coordinator` and threads on `threads`; `None`
-    /// when a channel cannot hold one of them: a named computer, or the
-    /// pool for the main agent, which runs in one known place.
-    pub fn new(coordinator: Place, threads: Place) -> Option<Self> {
-        let held = |place: &Place| matches!(place, Place::Here | Place::CloudVm | Place::Pool);
-        (held(&coordinator) && held(&threads) && coordinator != Place::Pool).then_some(Self {
+    /// The main agent on `coordinator` and threads on `threads`.
+    ///
+    /// # Errors
+    /// [`ChannelPlaceRefusal`] when a channel cannot hold one of them.
+    pub fn new(coordinator: &Place, threads: &Place) -> Result<Self, ChannelPlaceRefusal> {
+        let held = |place| ChannelPlace::of(place).ok_or(ChannelPlaceRefusal::NamedComputer);
+        Self::held(held(coordinator)?, held(threads)?)
+    }
+    /// The places the channel words `coordinator` and `threads` name, as
+    /// [`Self::new`] takes them.
+    ///
+    /// # Errors
+    /// [`ChannelPlaceRefusal`] for a word that names none, or the pool for
+    /// the main agent.
+    pub fn parse(coordinator: &str, threads: &str) -> Result<Self, ChannelPlaceRefusal> {
+        let held = |word| ChannelPlace::named(word).ok_or(ChannelPlaceRefusal::Unknown);
+        Self::held(held(coordinator)?, held(threads)?)
+    }
+    fn held(coordinator: ChannelPlace, threads: ChannelPlace) -> Result<Self, ChannelPlaceRefusal> {
+        if coordinator == ChannelPlace::Pool {
+            return Err(ChannelPlaceRefusal::PooledMainAgent);
+        }
+        Ok(Self {
             coordinator,
             threads,
         })
     }
-    /// The places the channel words `coordinator` and `threads` name, as
-    /// [`Self::new`] takes them; `None` for a word that names none.
-    pub fn parse(coordinator: &str, threads: &str) -> Option<Self> {
-        Self::new(Self::place_of(coordinator)?, Self::place_of(threads)?)
-    }
-    fn place_of(word: &str) -> Option<Place> {
-        match word {
-            "local" => Some(Place::Here),
-            "boat" => Some(Place::CloudVm),
-            "pool" => Some(Place::Pool),
-            _ => None,
-        }
-    }
-    fn word_of(place: &Place) -> &'static str {
-        match place {
-            Place::CloudVm => "boat",
-            Place::Pool => "pool",
-            // `new` holds nothing else.
-            Place::Here | Place::Host(_) | Place::Peer(_) => "local",
-        }
-    }
     /// Where the main agent runs.
-    pub fn coordinator(&self) -> &Place {
-        &self.coordinator
+    pub fn coordinator(&self) -> Place {
+        self.coordinator.place()
     }
     /// Where the channel's threads run.
-    pub fn threads(&self) -> &Place {
-        &self.threads
+    pub fn threads(&self) -> Place {
+        self.threads.place()
     }
     /// The main agent's place as its channel word.
     pub fn coordinator_word(&self) -> &'static str {
-        Self::word_of(&self.coordinator)
+        self.coordinator.word()
     }
     /// The threads' place as its channel word.
     pub fn threads_word(&self) -> &'static str {
-        Self::word_of(&self.threads)
+        self.threads.word()
     }
 }
 
@@ -423,8 +464,8 @@ impl Channel {
             ..self.clone()
         }
     }
-    pub fn execution(&self) -> &ChannelExecution {
-        &self.execution
+    pub fn execution(&self) -> ChannelExecution {
+        self.execution
     }
     /// This channel with its agents running where `execution` says: the
     /// one setting a person changes after the channel is made.

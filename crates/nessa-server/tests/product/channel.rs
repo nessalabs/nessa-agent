@@ -2,6 +2,7 @@
 //! the default channel first and never answers past one frame; each refusal
 //! has its own code.
 use super::*;
+use crate::conversation::domain::{ChannelExecution, Place};
 use crate::conversation_test_support::absolute;
 use nessa_auth::domain::{OrganizationId, PrincipalId};
 use nessa_protocol::protocol::ResponseFrame;
@@ -34,6 +35,15 @@ fn a_create_reads_into_a_channel_request_with_ask_by_default() {
     .unwrap();
     assert_eq!(chosen.folder.unwrap().as_str(), absolute("/work/repo"));
     assert_eq!(chosen.defaults.mode, ConversationApprovalMode::Full);
+    // A place left out runs here; one named runs there.
+    assert_eq!(request.execution, ChannelExecution::default());
+    let placed = channel_request(&params(json!({
+        "requestId": "r1", "name": "x", "agent": "claude", "model": "m",
+        "threadPlacement": "pool"
+    })))
+    .unwrap();
+    assert_eq!(placed.execution.coordinator(), Place::Here);
+    assert_eq!(placed.execution.threads(), Place::Pool);
 }
 
 #[test]
@@ -44,6 +54,9 @@ fn a_create_that_is_not_a_channel_is_refused_before_the_service() {
         json!({"requestId": "r", "name": "x", "agent": "codex", "model": "m", "folder": "relative"}),
         json!({"requestId": "r", "name": "x", "agent": "codex", "model": "m", "resources": [absolute("/a"), absolute("/a")]}),
         json!({"requestId": "r", "name": "x", "agent": "codex", "model": "m", "notes": "bell\u{7}"}),
+        // The main agent runs in one place, never the pool.
+        json!({"requestId": "r", "name": "x", "agent": "codex", "model": "m", "coordinatorPlacement": "pool"}),
+        json!({"requestId": "r", "name": "x", "agent": "codex", "model": "m", "threadPlacement": "moon"}),
     ] {
         assert!(
             channel_request(&params(refused.clone())).is_none(),
@@ -58,7 +71,7 @@ fn stored(n: u8, notes: &str) -> Channel {
         OrganizationId::new("org").unwrap(),
         PrincipalId::new("person").unwrap(),
         crate::conversation::domain::ChannelParts {
-            execution: crate::conversation::domain::ChannelExecution::default(),
+            execution: ChannelExecution::default(),
             name: ChannelName::new(&format!("channel-{n}")).unwrap(),
             folder: crate::conversation::domain::ChannelFolder {
                 path: ChannelPath::new(PathBuf::from(absolute(&format!("/data/channels/{n}"))))
@@ -123,7 +136,7 @@ fn long(index: u16) -> Channel {
         OrganizationId::new("org").unwrap(),
         PrincipalId::new("person").unwrap(),
         crate::conversation::domain::ChannelParts {
-            execution: crate::conversation::domain::ChannelExecution::default(),
+            execution: ChannelExecution::default(),
             name: ChannelName::new(&format!("channel-{index}")).unwrap(),
             folder: crate::conversation::domain::ChannelFolder {
                 path: ChannelPath::new(PathBuf::from(absolute(&format!("/{}", "f".repeat(4000)))))
@@ -230,14 +243,8 @@ fn a_placement_change_names_a_channel_and_two_known_places() {
     .unwrap();
     assert_eq!(params.request_id, "r");
     assert_eq!(channel.as_str(), "ch_aaaaaaaaaa");
-    assert_eq!(
-        execution.coordinator(),
-        &crate::conversation::domain::Place::CloudVm
-    );
-    assert_eq!(
-        execution.threads(),
-        &crate::conversation::domain::Place::Here
-    );
+    assert_eq!(execution.coordinator(), Place::CloudVm);
+    assert_eq!(execution.threads(), Place::Here);
     for refused in [
         json!({"requestId": "r", "channelId": "nope", "coordinatorPlacement": "boat", "threadPlacement": "boat"}),
         json!({"requestId": "r", "channelId": "ch_aaaaaaaaaa", "coordinatorPlacement": "moon", "threadPlacement": "boat"}),

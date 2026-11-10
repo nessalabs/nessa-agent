@@ -481,7 +481,7 @@ impl ConversationService {
                         .placement(&id)
                         .await
                         .map_err(target)?
-                        .asked_name();
+                        .remote_name();
                     let channel = self.channel_id_of(&id).await.map_err(target)?;
                     return self
                         .create_command(
@@ -526,7 +526,7 @@ impl ConversationService {
             .placement(&source)
             .await
             .map_err(target)?
-            .asked_name();
+            .remote_name();
         // A fork stays in its source's channel, as it stays on its host.
         let channel = self.channel_id_of(&source).await.map_err(target)?;
         let actor = caller.actor().map_err(target)?;

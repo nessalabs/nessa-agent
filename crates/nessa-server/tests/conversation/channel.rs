@@ -2,6 +2,7 @@
 //! sidebar can show, absolute paths, and notes and resources within bounds.
 //! What its agents are told about it is one text, the same for every agent.
 use super::*;
+use crate::conversation::domain::{ChannelExecution, Place};
 use crate::conversation_test_support::absolute;
 
 fn path(text: &str) -> ChannelPath {
@@ -10,7 +11,7 @@ fn path(text: &str) -> ChannelPath {
 
 fn parts(folder: ChannelFolder) -> ChannelParts {
     ChannelParts {
-        execution: crate::conversation::domain::ChannelExecution::default(),
+        execution: ChannelExecution::default(),
         name: ChannelName::new("design-review").unwrap(),
         folder,
         defaults: ChannelDefaults {
@@ -160,7 +161,7 @@ fn a_retry_is_the_same_channel_only_when_it_asks_for_the_same_folder() {
         made: true,
     });
     let mut asked = ChannelRequest {
-        execution: crate::conversation::domain::ChannelExecution::default(),
+        execution: ChannelExecution::default(),
         name: made.name().clone(),
         folder: None,
         defaults: made.defaults().clone(),
@@ -169,13 +170,8 @@ fn a_retry_is_the_same_channel_only_when_it_asks_for_the_same_folder() {
     };
     assert!(made.made_of(&asked));
     // Moved since it was made, a retry of its creation is still the same channel.
-    let moved = made.with_execution(
-        crate::conversation::domain::ChannelExecution::new(
-            crate::conversation::domain::Place::CloudVm,
-            crate::conversation::domain::Place::CloudVm,
-        )
-        .unwrap(),
-    );
+    let moved =
+        made.with_execution(ChannelExecution::new(&Place::CloudVm, &Place::CloudVm).unwrap());
     assert!(moved.made_of(&asked));
     asked.defaults.mode = ConversationApprovalMode::Ask;
     assert!(

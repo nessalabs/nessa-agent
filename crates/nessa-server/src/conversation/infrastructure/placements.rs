@@ -144,7 +144,7 @@ impl ConversationPlacements for FilePlacements {
         let directory = self.directory.clone();
         let path = self.path(conversation);
         // Here is the absence of a placement.
-        let host = place.asked_name();
+        let host = place.remote_name();
         Box::pin(blocking(move || match host {
             Some(host) => write(
                 directory,

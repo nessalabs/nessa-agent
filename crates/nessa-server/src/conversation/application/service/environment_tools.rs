@@ -327,7 +327,8 @@ impl ConversationService {
         // Where: a host or paired environment this gateway knows, granted,
         // whose environment runs commands. Here runs none: its commands are
         // the agent's own shell's.
-        let environment: Option<Arc<dyn Environment>> = match Place::from(named) {
+        let place = Place::from(named);
+        let environment: Option<Arc<dyn Environment>> = match &place {
             Place::Here => None,
             Place::CloudVm => {
                 if self.inner.environment.runs_on(id).await.ok() == Some(Place::CloudVm) {
@@ -336,10 +337,10 @@ impl ConversationService {
                     None
                 }
             }
-            named => self.inner.environment.named(&named),
+            named => self.inner.environment.named(named),
         };
         let Some(environment) = environment else {
-            let refusal = if call.environment == HERE {
+            let refusal = if place == Place::Here {
                 CommandRefusal::CommandsUnavailable
             } else {
                 CommandRefusal::EnvironmentNotGranted
