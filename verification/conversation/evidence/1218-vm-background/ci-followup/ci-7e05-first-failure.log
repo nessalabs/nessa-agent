@@ -5,7 +5,7 @@
 2026-11-09T17:13:04.2981175Z         ! locator.click: Timeout 15000ms exceeded.
 2026-11-09T17:13:04.2981568Z Call log:
 2026-11-09T17:13:04.2982315Z   - waiting for locator('.workspace-list [data-session-row="341d19af-674f-4cb7-b61e-262fc6614649"]').filter({ hasText: 'stress reply main s1 chromium' })
-2026-11-09T17:13:04.2982821Z 
+2026-11-09T17:13:04.2982821Z
 2026-11-09T17:13:05.9438731Z ERROR 009 switch [chromium columns]
 2026-11-09T17:13:05.9439434Z         ! not run: 008 channel did not hold
 2026-11-09T17:13:05.9440348Z ERROR 010 permission [chromium columns]
