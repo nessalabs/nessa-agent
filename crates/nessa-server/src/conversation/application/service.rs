@@ -44,7 +44,8 @@ use super::{
     SubmittedMessage, UnfinishedDeletions,
 };
 use crate::conversation::domain::{
-    Conversation, ConversationDeletion, ProviderSessionErasure, ProviderSessionLink, ToolSource,
+    Conversation, ConversationDeletion, Place, ProviderSessionErasure, ProviderSessionLink,
+    ToolSource,
 };
 pub use channels::{
     AgentPlace, ChannelError, ChannelFolders, ChannelListing, ChannelStore, FolderRefusal,
@@ -1687,20 +1688,17 @@ impl ConversationService {
         });
         // Where it will run, by its channel: its main agent's placement or
         // its threads'. Recorded below, before the conversation exists.
-        let channel_environment = channel.as_ref().and_then(|channel| {
-            match if id == channel.coordinator_id() {
-                channel.execution().coordinator
+        let channel_place = channel.as_ref().map(|channel| {
+            if id == channel.coordinator_id() {
+                channel.execution().coordinator()
             } else {
-                channel.execution().threads
-            } {
-                crate::conversation::domain::WorkspacePlacement::Local => None,
-                crate::conversation::domain::WorkspacePlacement::Boat => Some(super::BOAT),
-                crate::conversation::domain::WorkspacePlacement::Pool => Some(super::POOL),
+                channel.execution().threads()
             }
         });
         let place = channel
             .as_ref()
-            .map(|channel| AgentPlace::of(channel, channel_environment.is_some()));
+            .zip(channel_place.as_ref())
+            .map(|(channel, placed)| AgentPlace::of(channel, placed.is_remote()));
         let configured = match model.as_deref() {
             Some(model) => {
                 service
@@ -1777,16 +1775,17 @@ impl ConversationService {
             .then(|| service.inner.environment.default_place())
             .flatten();
         let requested_place = match requested.environment.as_deref() {
-            Some(nessa_sdk::domain::agent_execution::leases::EnvironmentRef::HERE) => None,
-            Some(name) => Some(name),
-            None => channel_environment.or(default_place.as_deref()),
+            Some(name) => {
+                Place::named(name).map_err(|_| ConversationError::EnvironmentNotConfigured)?
+            }
+            None => channel_place.or(default_place).unwrap_or(Place::Here),
         };
         service
             .inner
             .environment
             .place(
                 &id,
-                requested_place,
+                &requested_place,
                 channel.as_ref().map(|channel| channel.id()),
             )
             .await?;
@@ -6412,7 +6411,7 @@ impl ConversationService {
             .placement(record.id())
             .await
             .map_err(AskFailure::Failed)?
-            .is_some()
+            .is_remote()
         {
             return Ok(ProviderSessionErasure::NoHandler);
         }

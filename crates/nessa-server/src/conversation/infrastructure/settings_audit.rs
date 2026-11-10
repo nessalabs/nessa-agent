@@ -28,8 +28,8 @@ impl DurableSettingsAudit {
 
 fn placement(execution: ChannelExecution) -> Value {
     json!({
-        "coordinator": execution.coordinator.as_str(),
-        "threads": execution.threads.as_str(),
+        "coordinator": execution.coordinator_word(),
+        "threads": execution.threads_word(),
     })
 }
 

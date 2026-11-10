@@ -5,6 +5,7 @@
 //! is moved by hand so each test decides how long the agent sat idle.
 use super::*;
 use crate::conversation::application::SubmittedMessage;
+use crate::conversation::domain::Place;
 use crate::conversation_test_support::{
     access_policy, claude_erasers, only, AcceptingCreationAudit, AcceptingDeletionAudit,
     MemoryAttachments, MemoryListing, MemoryRepository, MemorySummaries, Provider, ProviderFactory,
@@ -210,7 +211,7 @@ impl Fixture {
             ConversationLimits::default().max_conversations,
             None,
             environment,
-            Some(crate::conversation::application::placement::BOAT),
+            Some(Place::CloudVm),
         )
         .await
     }
@@ -238,7 +239,7 @@ impl Fixture {
         live: usize,
         save_gate: Option<Arc<CompletionSaveGate>>,
         environment: Environments,
-        placed: Option<&str>,
+        placed: Option<Place>,
     ) -> Self {
         let provider = Arc::new(ProviderFactory::default());
         provider.session_resume.store(true, Ordering::SeqCst);
@@ -295,7 +296,7 @@ impl Fixture {
                 id.clone(),
                 caller("create"),
                 crate::conversation::application::RequestedConversation {
-                    environment: placed.map(str::to_owned),
+                    environment: placed.and_then(|place| place.remote_name()),
                     ..Default::default()
                 },
             )
