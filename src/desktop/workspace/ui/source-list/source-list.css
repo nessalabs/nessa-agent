@@ -76,7 +76,9 @@
  * A pane change folds the sidebar a frame before the grid paints the new
  * boxes (`data-spare-held`, `split-panes.tsx`). Leaving the row on that
  * frame widens the one pane. It stays in the row, hidden, until the boxes
- * paint, and the two changes share one layout.
+ * paint, and the two changes share one layout. It never parks while held
+ * (`parked.ts` waits the hold out), so this rule never meets
+ * `[data-parked]`'s `content-visibility: hidden`.
  */
 .workspace[data-spare-held][data-folding][data-sidebar="closed"] .workspace-sidebar {
   position: relative;

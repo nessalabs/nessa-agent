@@ -26,7 +26,7 @@ import "./source-list.css"
 import { tooltip } from "../../../ui/tooltip"
 import { OverviewRow } from "./overview-row"
 import { useRowFocusKept } from "../row-focus"
-import { useParkedAfterSlide } from "../../adapters/dom/parked"
+import { useFocusLeavesOnFold, useParkedAfterSlide } from "../../adapters/dom/parked"
 
 /**
  * The sidebar's source list: sections of channels on a glass pane, with the
@@ -59,6 +59,7 @@ export const SourceList = memo(function SourceList({
   const away = !open && !revealed
   const asideRef = useRef<HTMLElement>(null)
   const parked = useParkedAfterSlide(asideRef, away)
+  useFocusLeavesOnFold(asideRef, away)
 
   // Arrow keys walk the tree's visible rows; right and left unfold and fold.
   const onTreeKeyDown = (event: ReactKeyboardEvent<HTMLElement>) => {

@@ -3,7 +3,7 @@ import { act, useRef } from "react"
 import { createRoot, type Root } from "react-dom/client"
 import { afterEach, beforeEach, expect, it } from "vitest"
 import { controlledAnimationFrames } from "../../testing"
-import { useParkedAfterSlide } from "./parked"
+import { useFocusLeavesOnFold, useParkedAfterSlide } from "./parked"
 
 let host: HTMLDivElement
 let root: Root
@@ -92,4 +92,37 @@ it("parks on the next frame when nothing slides, and at once when it starts away
   root = createRoot(host)
   await act(async () => root.render(<Column away slides={() => []} />))
   expect(parked()).toBe(true)
+})
+
+it("parks after the slide that replaced a cancelled one while the column stayed away", async () => {
+  const first = slide()
+  const second = slide()
+  let running: unknown[] = [first.animation]
+  await act(async () => root.render(<Column away={false} slides={() => []} />))
+  await act(async () => root.render(<Column away slides={() => running} />))
+  await act(async () => frames.runFrame())
+  running = [second.animation]
+  await act(async () => first.cancel())
+  expect(parked()).toBe(false)
+  await act(async () => frames.runFrame())
+  await act(async () => second.finish())
+  expect(parked()).toBe(true)
+})
+
+function Focusable({ away }: { away: boolean }) {
+  const ref = useRef<HTMLElement>(null)
+  useFocusLeavesOnFold(ref, away)
+  return (
+    <aside ref={ref}>
+      <button type="button">row</button>
+    </aside>
+  )
+}
+
+it("takes focus out of a column on the commit that folds it", async () => {
+  await act(async () => root.render(<Focusable away={false} />))
+  host.querySelector("button")?.focus()
+  expect(document.activeElement?.tagName).toBe("BUTTON")
+  await act(async () => root.render(<Focusable away />))
+  expect(document.activeElement).toBe(document.body)
 })

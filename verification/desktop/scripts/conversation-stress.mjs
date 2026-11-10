@@ -821,11 +821,24 @@ async function sidebarParks(page, failures, open) {
       failures.push(`the opened sidebar is not reachable: ${JSON.stringify(now)}`)
     return
   }
-  const folding = await read()
-  if (!folding?.hidden)
+  // Sliding (340 ms): hidden from assistive tech, focus already out of it,
+  // but not parked yet — parking on the key restyled every row (#1177).
+  let folding = await read()
+  if (!(await waitFor(async () => (folding = await read())?.hidden === true, 1_000)))
     failures.push(
       `the folding sidebar is not hidden from assistive tech: ${JSON.stringify(folding)}`,
     )
+  else if (folding.inert || folding.parked)
+    failures.push(
+      `the sidebar parked on the fold's key, not after its slide: ${JSON.stringify(folding)}`,
+    )
+  if (
+    await page.evaluate(
+      (selector) => document.querySelector(selector)?.contains(document.activeElement),
+      css.sidebar,
+    )
+  )
+    failures.push("focus stayed inside the folding sidebar")
   const parked = async () => {
     const now = await read()
     return Boolean(now?.inert && now.parked && now.skipped && !now.visible)

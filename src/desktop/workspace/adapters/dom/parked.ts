@@ -1,4 +1,4 @@
-import { useEffect, useState, type RefObject } from "react"
+import { useEffect, useLayoutEffect, useState, type RefObject } from "react"
 
 /**
  * Whether a column that slid away has finished sliding and can be parked:
@@ -13,7 +13,9 @@ import { useEffect, useState, type RefObject } from "react"
  * restyled. The column parks once its own transform transition has ended,
  * so the slide still paints its content all the way out. With no transition
  * (reduced motion, a column that starts away, a test DOM) it parks on the
- * next frame. Coming back unparks it in the same commit.
+ * next frame. Coming back unparks it in the same commit. Focus inside it
+ * leaves on the fold's commit, as `inert` used to make it
+ * (`useFocusLeavesOnFold`), so nothing types into a column on its way out.
  */
 export function useParkedAfterSlide(
   ref: RefObject<HTMLElement | null>,
@@ -41,8 +43,12 @@ export function useParkedAfterSlide(
       }
       const slide = slideOf(node)
       if (!slide) return park()
-      // A cancelled slide (the column came back) rejects; `away` is then false.
-      slide.finished.then(park, () => {})
+      // A slide replaced while the column stays away (its transform changed
+      // mid-slide) rejects: wait for the one that replaced it. A column that
+      // came back has run this effect's cleanup, so it never parks.
+      slide.finished.then(park, () => {
+        if (!done) frame = requestAnimationFrame(look)
+      })
     }
     frame = requestAnimationFrame(look)
     return () => {
@@ -64,4 +70,17 @@ function slideOf(node: HTMLElement | null): Animation | null {
     if (property === "transform" && animation.playState !== "finished") return animation
   }
   return null
+}
+
+/**
+ * Takes focus out of a column the moment it starts to slide away, before
+ * paint, as `inert` on the fold's key did. Parking makes it inert only once
+ * the slide has ended (`useParkedAfterSlide`).
+ */
+export function useFocusLeavesOnFold(ref: RefObject<HTMLElement | null>, away: boolean) {
+  useLayoutEffect(() => {
+    const node = ref.current
+    const held = node?.ownerDocument.activeElement
+    if (away && held instanceof HTMLElement && node?.contains(held)) held.blur()
+  }, [away, ref])
 }
