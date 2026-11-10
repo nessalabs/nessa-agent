@@ -170,12 +170,7 @@ async fn a_quarantined_backup_is_accepted_before_an_oversized_conversation_is_op
     assert_eq!(lines(&text)[0]["reason"], "executors-unfenced");
     assert!(!destination.join("live").exists());
     let pointer = gateway.join("backup/accepted-restore.txt");
-    fs::create_dir_all(pointer.parent().unwrap()).unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(pointer.parent().unwrap(), fs::Permissions::from_mode(0o700)).unwrap();
-    }
+    nessa_local_storage::create_directory(pointer.parent().unwrap()).unwrap();
     fs::write(
         &pointer,
         format!(

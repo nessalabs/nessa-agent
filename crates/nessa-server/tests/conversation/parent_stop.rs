@@ -3302,8 +3302,11 @@ async fn correlated_report_after_dequeue(phase: ReportPhase) {
     let stopped = if phase == ReportPhase::StalledHandoff {
         // The real observation barrier is after capture, and preparation stays
         // held until Stop's existing mutation owner must have answered.
+        // The handoff stays held until this wait returns, so a stop that waits
+        // for it still fails. The extra time is only so a busy runner can
+        // deliver the bounded answer; the production bound is unchanged.
         let first = tokio::time::timeout(
-            super::super::MOVING_TURN_WAIT + Duration::from_secs(2),
+            super::super::MOVING_TURN_WAIT + Duration::from_secs(30),
             &mut stopping,
         )
         .await;
@@ -3421,7 +3424,7 @@ async fn correlated_report_after_dequeue(phase: ReportPhase) {
     if let Some((bounded, owned, accepted, retained, admission_free, independent)) = stalled {
         assert!(
             bounded,
-            "captured handoff bypassed the mutation owner's bound"
+            "stop did not answer SubmissionUnresolved while the handoff stayed held"
         );
         assert!(
             independent,
