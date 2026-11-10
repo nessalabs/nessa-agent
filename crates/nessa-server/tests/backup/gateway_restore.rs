@@ -12,12 +12,13 @@ use std::path::PathBuf;
 use async_trait::async_trait;
 
 use crate::backup::application::{
-    deliver_historical_commands, AdmissionFailure, AdmissionLease, ExportClock, MutationAdmission,
+    deliver_historical_commands, AdmissionFailure, AdmissionLease, DeferredOpenFailure,
+    ExportClock, MutationAdmission,
 };
 use crate::backup::domain::{credentials_imported_on_restore, IDENTITY_BODY, REPLAY_BODY};
 use crate::backup::infrastructure::snapshot::SESSION_EXPORT_LIMIT;
 use crate::backup::infrastructure::{capture_namespace, DirectoryPublisher, FileDeletionLog};
-use crate::composition::{run_backup_restore, startup_authority};
+use crate::composition::{open_restored_conversation, run_backup_restore, startup_authority};
 use crate::core::RunError;
 
 struct Clock(u64);
@@ -138,6 +139,11 @@ async fn a_quarantined_backup_is_accepted_before_an_oversized_conversation_is_op
         .iter()
         .any(|lease| lease == "lease-drill"));
     assert!(!destination.join("live").exists());
+    let quarantined = startup_authority(&destination.join("quarantine")).unwrap_err();
+    assert!(
+        matches!(quarantined, RunError::Restore(ref message) if message.contains("not been accepted")),
+        "{quarantined}"
+    );
     assert_eq!(
         startup_authority(&gateway).unwrap(),
         None,
@@ -225,6 +231,18 @@ async fn a_quarantined_backup_is_accepted_before_an_oversized_conversation_is_op
     assert!(ran.is_empty());
     let binding = startup_authority(&gateway).unwrap().unwrap();
     assert_eq!(binding.live, live);
+    let metadata = nessa_local_database::rusqlite::Connection::open(
+        gateway.join("conversations/metadata.sqlite3"),
+    )
+    .unwrap();
+    let listed_in_service: i64 = metadata
+        .query_row(
+            "SELECT COUNT(*) FROM conversations WHERE id IN ('conv-bulk', 'conv-kept')",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(listed_in_service, 2);
 
     let (code, text) = run(&[
         arg("list"),
@@ -252,6 +270,19 @@ async fn a_quarantined_backup_is_accepted_before_an_oversized_conversation_is_op
     assert!(opened.iter().any(|line| line["status"] == "progress"));
     let session = live.join("sessions/conv-bulk.sqlite3");
     assert!(session.is_file());
+    open_restored_conversation(&gateway, &binding, "conv-bulk").unwrap();
+    let serving = nessa_local_database::rusqlite::Connection::open(
+        gateway.join("conversations/sessions/records.sqlite3"),
+    )
+    .unwrap();
+    let served: i64 = serving
+        .query_row(
+            "SELECT COUNT(*) FROM event_streams WHERE public_id = 'conv-bulk'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(served, 1);
 
     fs::remove_file(&database_path).unwrap();
     let (code, text) = run(&[
@@ -263,8 +294,34 @@ async fn a_quarantined_backup_is_accepted_before_an_oversized_conversation_is_op
     ]);
     assert_eq!(code, 1, "{text}");
     assert_eq!(lines(&text).last().unwrap()["reason"], "source-missing");
+    assert_eq!(
+        open_restored_conversation(&gateway, &binding, "conv-kept").unwrap_err(),
+        DeferredOpenFailure::SourceMissing
+    );
     assert!(!live.join("sessions/conv-kept.sqlite3").exists());
+    assert!(
+        !gateway
+            .join("conversations/sessions/records.sqlite3")
+            .exists()
+            || serving_lacks(&gateway, "conv-kept")
+    );
     assert!(session.is_file());
+}
+
+fn serving_lacks(namespace: &std::path::Path, conversation_id: &str) -> bool {
+    let Ok(connection) = nessa_local_database::rusqlite::Connection::open(
+        namespace.join("conversations/sessions/records.sqlite3"),
+    ) else {
+        return true;
+    };
+    connection
+        .query_row(
+            "SELECT COUNT(*) FROM event_streams WHERE public_id = ?1",
+            [conversation_id],
+            |row| row.get::<_, i64>(0),
+        )
+        .unwrap_or(0)
+        == 0
 }
 
 fn outbox_names(live: &std::path::Path) -> Vec<String> {

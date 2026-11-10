@@ -32,6 +32,7 @@ pub use restore::{
     relative_path_is_safe, restore_lock_path, seal_attestation, seal_files, seal_staging_id,
     session_sidecar, share_grant_is_fenced, staging_id_is_usable, AcceptedRestorePointer,
     DeferredLine, Freshness, Journal, LeaseMark, MetadataFacts, MetadataRow, Posture, RestoreFault,
-    SealedFile, VolumeCase, VolumeProbe, ACCEPTED_RESTORE_HEADER, IDENTITY_BODY, REPLAY_BODY,
+    SealedFile, VolumeCase, VolumeProbe, ACCEPTED_RESTORE_HEADER, IDENTITY_BODY, JOURNAL_HEADER,
+    REPLAY_BODY,
 };
 pub use verification::{ListedRecord, ListedRecords, ListedStore, ManifestListing};

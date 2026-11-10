@@ -269,24 +269,27 @@ impl CompositionRoot {
         // can be holding this generation while this one starts.
         launch.forget_startup_failure();
         let config = Environment::from_system()?;
-        let accepted_restore = config
+        let namespace = config
             .auth_directory
             .as_ref()
             .and_then(|directory| directory.parent())
+            .map(std::path::Path::to_path_buf);
+        let accepted_restore = namespace
+            .as_deref()
             .map(super::restore_command::startup_authority)
             .transpose()?
             .flatten();
-        let deferred_open = match accepted_restore {
-            Some(binding) => {
+        let deferred_open = match (namespace, accepted_restore) {
+            (Some(namespace), Some(binding)) => {
                 let policy =
                     crate::backup::infrastructure::CedarInventoryPolicy::new().map_err(|_| {
                         crate::core::RunError::Restore("restore policy could not be loaded".into())
                     })?;
                 Some(std::sync::Arc::new(
-                    super::restore_command::GatewayDeferredOpen::new(binding, policy),
+                    super::restore_command::GatewayDeferredOpen::new(namespace, binding, policy),
                 ))
             }
-            None => None,
+            _ => None,
         };
         if provisioning == LocalProvisioning::Automatic {
             super::provisioning::ensure_local_credentials(&config)?;

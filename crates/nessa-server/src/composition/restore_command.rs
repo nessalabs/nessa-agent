@@ -8,6 +8,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use nessa_local_storage::create_directory;
 
 use super::backup_output::print;
+use super::serving_restore::{
+    install_serving_stores, merge_published_session, namespace_is_restore_root,
+};
 use crate::backup::application::{
     binding_from_pointer, confirm_accepted, deliver_historical_commands,
     list_accepted_conversations, open_accepted_conversation, stage_quarantine, AbsentSessionSource,
@@ -450,6 +453,11 @@ fn refused(output: &mut dyn Write, error: RestoreFault) -> u8 {
 /// restore, or one whose identity is not a fresh re-pair, refuses startup
 /// before the gateway listens. Historical outbox names are not executed.
 pub(crate) fn startup_authority(namespace: &Path) -> Result<Option<AcceptedBinding>, RunError> {
+    if namespace_is_restore_root(namespace) {
+        return Err(RunError::Restore(
+            "this backup is still quarantined and has not been accepted as the authority".into(),
+        ));
+    }
     let pointer = namespace.join("backup").join("accepted-restore.txt");
     if !pointer.is_file() {
         return Ok(None);
@@ -493,6 +501,11 @@ pub(crate) fn startup_authority(namespace: &Path) -> Result<Option<AcceptedBindi
     credentials_imported_on_restore(&identity, &[]).map_err(|_| {
         RunError::Restore("a restored gateway does not keep the old private key".into())
     })?;
+    install_serving_stores(namespace, &binding.live).map_err(|error| {
+        RunError::Restore(format!(
+            "restored conversations were not installed: {error}"
+        ))
+    })?;
     Ok(Some(binding))
 }
 
@@ -520,13 +533,32 @@ fn outbox_commands(live: &Path) -> Vec<String> {
 /// Opens a deferred conversation on the accepted restore before the
 /// conversation service starts an agent.
 pub(super) struct GatewayDeferredOpen {
+    namespace: PathBuf,
     binding: AcceptedBinding,
     policy: CedarInventoryPolicy,
 }
 
+/// Fetch `conversation_id` into the namespace the conversation service reads.
+pub(crate) fn open_restored_conversation(
+    namespace: &Path,
+    binding: &AcceptedBinding,
+    conversation_id: &str,
+) -> Result<(), DeferredOpenFailure> {
+    let policy = CedarInventoryPolicy::new().map_err(|_| DeferredOpenFailure::Unavailable)?;
+    GatewayDeferredOpen::new(namespace.to_path_buf(), binding.clone(), policy).open(conversation_id)
+}
+
 impl GatewayDeferredOpen {
-    pub(super) fn new(binding: AcceptedBinding, policy: CedarInventoryPolicy) -> Self {
-        Self { binding, policy }
+    pub(super) fn new(
+        namespace: PathBuf,
+        binding: AcceptedBinding,
+        policy: CedarInventoryPolicy,
+    ) -> Self {
+        Self {
+            namespace,
+            binding,
+            policy,
+        }
     }
 }
 
@@ -551,7 +583,8 @@ impl DeferredConversationOpen for GatewayDeferredOpen {
             &OsPublicationIds,
             &mut progress,
         ) {
-            Ok(_) => Ok(()),
+            Ok(_) => merge_published_session(&self.namespace, &self.binding.live, conversation_id)
+                .map_err(|_| DeferredOpenFailure::Unavailable),
             Err(RestoreFault::NotDeferred) => Ok(()),
             Err(RestoreFault::SourceMissing) => Err(DeferredOpenFailure::SourceMissing),
             Err(RestoreFault::SourceChanged) => Err(DeferredOpenFailure::SourceChanged),
