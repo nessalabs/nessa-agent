@@ -1066,14 +1066,14 @@ paid on every push, and on three runners if it lands in the matrix.
   `verification/`, `docs/` or `experiments/`, a web or config file at the root,
   or Markdown a Rust test reads reaches a crate only when a string literal in
   its Rust names it (a path cited in a comment does not count); a crate's
-  `Cargo.toml` and anything else reach everything.
-  Every leg still builds the full crate list, so features unify as on `main`;
-  Linux runs only the reached crates' test binaries. macOS and Windows always
-  run clippy, and run their test suites only when a reached Rust file is
-  platform code (a platform `cfg`, `target_os`, `std::os`, a system crate, a
-  module declared under a platform `cfg`, a platform-named path, or a changed
-  line naming one), or a data file that only platform code names. Shared code that behaves differently per system without
-  naming one waits for the push to `main`, which runs everything. If you make
-  Rust read a frontend file by a path it does not spell
+  `Cargo.toml` and anything else reach everything. Every leg still builds the
+  full crate list, so features unify as on `main`; Linux runs only the reached
+  crates' test binaries. macOS and Windows always run clippy, and run their test
+  suites only when a reached Rust file is platform code (a platform `cfg`,
+  `target_os`, `std::os`, a system crate, a module declared under a platform
+  `cfg`, a platform-named path, or a changed line naming one), or a reached data
+  file is named by platform code. Shared code that behaves differently per
+  system without naming one waits for the push to `main`, which runs
+  everything. If you make Rust read a frontend file by a path it does not spell
   out (built with `join`, found by walking a folder), name the file in a string
   literal next to the read, or the plan will not see the dependency.

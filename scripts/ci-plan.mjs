@@ -104,15 +104,18 @@ const SYSTEM_CRATES = "libc|nix|windows_sys|windows|objc2\\w*|core_foundation\\w
 // A `cfg` may be wrapped over several lines by rustfmt, so everything up to
 // the attribute's closing `]` counts.
 export const PLATFORM_CODE = new RegExp(
-  `\\bcfg(?:_attr)?!?\\s*\\([^\\]]{0,400}?\\b(?:${PLATFORM_WORDS})\\b|\\bstd::os::|\\b(?:${SYSTEM_CRATES})::`,
+  `\\bcfg(?:_attr)?!?\\s*\\([^\\]]{0,400}?\\b(?:${PLATFORM_WORDS})\\b|\\bstd::os::|\\b(?:${SYSTEM_CRATES})::|CARGO_CFG_(?:TARGET|UNIX|WINDOWS)`,
 )
-/** A changed line that mentions a platform: at least what `PLATFORM_CODE` sees. */
+/**
+ * A changed line that mentions a platform: at least what `PLATFORM_CODE` sees.
+ * No word boundary in front, so `CARGO_CFG_TARGET_OS` in a build script counts.
+ */
 const PLATFORM_LINE = new RegExp(
-  `cfg!?\\s*\\(|\\b(?:${PLATFORM_WORDS}|macos)\\b|std::os::|\\b(?:${SYSTEM_CRATES})::`,
+  `cfg!?\\s*\\(|(?:${PLATFORM_WORDS}|macos)\\b|std::os::|(?:${SYSTEM_CRATES})::`,
   "i",
 )
 const PLATFORM_MODULE = new RegExp(
-  `#\\[cfg(?:_attr)?\\s*\\([^\\]]*?\\b(?:${PLATFORM_WORDS})\\b[^\\]]*\\]\\s*((?:(?:#\\[[^\\]]*\\]|//[^\\n]*)\\s*)*)(?:pub(?:\\([^)]*\\))?\\s+)?mod\\s+(\\w+)`,
+  `#\\[cfg(?:_attr)?\\s*\\([^\\]]*?\\b(?:${PLATFORM_WORDS})\\b[^\\]]*\\]\\s*((?:(?:#\\[[^\\]]*\\]|//[^\\n]*\\n)\\s*)*)(?:pub(?:\\([^)]*\\))?\\s+)?mod\\s+(\\w+)`,
   "g",
 )
 
@@ -196,6 +199,16 @@ function namesFor(path) {
   return names
 }
 
+/** Whether a Rust file is platform code by its path or its crate's scan. */
+function platformPath(member, path) {
+  return (
+    PLATFORM_PATH.test(path.slice(member.dir.length)) ||
+    member.platformFiles.some((platform) =>
+      platform.endsWith("/") ? path.startsWith(platform) : path === platform,
+    )
+  )
+}
+
 /** Why a reached Rust file needs the macOS and Windows suites, or null. */
 function platformReason(member, path, file) {
   const inside = path.slice(member.dir.length)
@@ -205,12 +218,7 @@ function platformReason(member, path, file) {
       ? "is named by platform code"
       : null
   if (typeof file.patch !== "string") return "no diff to read"
-  if (
-    member.platformFiles.some((platform) =>
-      platform.endsWith("/") ? path.startsWith(platform) : path === platform,
-    )
-  )
-    return "is platform code"
+  if (platformPath(member, path)) return "is platform code"
   if (changedLines(file.patch).some((line) => PLATFORM_LINE.test(line)))
     return "changes platform-specific code"
   return null
@@ -370,7 +378,7 @@ export function platformModuleFiles(file, source) {
 function memberSources(root, dir) {
   const literals = []
   const platformFiles = []
-  const platformLiterals = []
+  const literalsByFile = new Map()
   const walk = (current) => {
     for (const entry of readdirSync(current, { withFileTypes: true })) {
       if (entry.name === "target" || entry.name === "node_modules") continue
@@ -379,16 +387,20 @@ function memberSources(root, dir) {
       else if (entry.name.endsWith(".rs")) {
         const source = readFileSync(path, "utf8")
         const file = relative(root, path).split(sep).join("/")
-        literals.push(...stringLiterals(source))
-        if (PLATFORM_CODE.test(source)) {
-          platformFiles.push(file)
-          platformLiterals.push(...stringLiterals(source))
-        }
+        const named = stringLiterals(source)
+        literals.push(...named)
+        literalsByFile.set(file, named)
+        if (PLATFORM_CODE.test(source)) platformFiles.push(file)
         platformFiles.push(...platformModuleFiles(file, source))
       }
     }
   }
   walk(join(root, dir))
+  // Second pass: what platform code names, once every platform file is known,
+  // including the files of platform modules and platform-named paths.
+  const platformLiterals = []
+  for (const [file, named] of literalsByFile)
+    if (platformPath({ dir, platformFiles }, file)) platformLiterals.push(...named)
   return {
     text: literals.join("\n"),
     platformText: platformLiterals.join("\n"),

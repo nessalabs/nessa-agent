@@ -242,6 +242,25 @@ test("removing the last system-crate call is a platform change", () => {
   assert.equal(removed.platformTests, true)
 })
 
+test("a build script reading the target system is a platform change", () => {
+  const build = plan({
+    filename: "crates/nessa-server/build.rs",
+    patch: '@@ -1 +1 @@\n-    if env::var("CARGO_CFG_TARGET_OS").unwrap() == "macos" {',
+  })
+  assert.equal(build.platformTests, true)
+  assert.ok(PLATFORM_CODE.test('let os = env::var("CARGO_CFG_TARGET_OS");'))
+})
+
+test("a comment full of slashes after a platform cfg is read in linear time", () => {
+  const started = performance.now()
+  for (const line of ["/".repeat(200), `// see ${"// x ".repeat(60)}`])
+    assert.deepEqual(
+      platformModuleFiles("crates/x/src/lib.rs", `#[cfg(windows)]\n${line}\nfn x() {}\n`),
+      [],
+    )
+  assert.ok(performance.now() - started < 1000)
+})
+
 test("a module declared under a platform cfg marks its file and folder", () => {
   const source = [
     '#[cfg(target_os = "macos")]',
