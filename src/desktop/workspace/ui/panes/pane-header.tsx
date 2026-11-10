@@ -19,6 +19,7 @@ import { useRememberedSession } from "../../adapters/store/remembered-session"
 import { SessionAccessories } from "./session-accessories"
 import { tooltip } from "../../../ui/tooltip"
 import { useChooseHeaderPicture } from "../../../adapters/header-image"
+import { channelPlaceWords } from "../../model/channel-place"
 import {
   headerImageRefusalMs,
   headerImageRefusalText,
@@ -67,9 +68,7 @@ export const PaneHeader = memo(function PaneHeader({
       selectDraft(state, sessionId)?.channelId
     const channel = channelId ? selectChannel(state, channelId) : undefined
     return channel?.coordinatorConversationId === sessionId
-      ? channel.coordinatorPlacement === "boat"
-        ? "Boat"
-        : "Local"
+      ? channelPlaceWords(channel.coordinatorPlacement ?? "local")
       : undefined
   })
   const title = session?.title ?? "New session"

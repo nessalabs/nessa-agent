@@ -59,6 +59,9 @@ describe("the person's channels", () => {
       { channel: { ...made, approvalMode: "never" } },
       { channel: { ...made, notes: "listed" } },
       { channel: { ...made, createdAtMs: -1 } },
+      { channel: { ...made, threadPlacement: "" } },
+      { channel: { ...made, coordinatorPlacement: 7 } },
+      { channel: { ...made, threadPlacement: "x".repeat(254) } },
     ]) {
       const api = createChannelApi({ request: vi.fn().mockResolvedValue(answer) })
       await expect(
@@ -69,6 +72,20 @@ describe("the person's channels", () => {
       request: vi.fn().mockResolvedValue({ channels: [made] }),
     })
     await expect(api.list()).rejects.toThrow("Invalid channel list response")
+  })
+
+  it("reads a channel on any place: the pool, or one computer by its name", async () => {
+    const placed = {
+      ...made,
+      coordinatorPlacement: "pool",
+      threadPlacement: `peer:${"ab".repeat(32)}`,
+    }
+    const api = createChannelApi({
+      request: vi.fn().mockResolvedValue({ channel: placed }),
+    })
+    expect(
+      await api.create({ requestId: "r", name: "x", agent: "codex", model: "m" }),
+    ).toEqual(placed)
   })
 
   it("reads every page of a list the gateway cut, and refuses a cursor that goes nowhere", async () => {

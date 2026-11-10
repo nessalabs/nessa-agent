@@ -1681,9 +1681,9 @@ impl ConversationService {
             asked: requested.environment.as_deref(),
             channel: channel.as_ref().map(|channel| {
                 if id == channel.coordinator_id() {
-                    channel.execution().coordinator()
+                    channel.execution().coordinator().clone()
                 } else {
-                    channel.execution().threads()
+                    channel.execution().threads().clone()
                 }
             }),
             default_device: service.inner.environment.default_place(),

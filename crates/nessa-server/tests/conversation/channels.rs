@@ -205,9 +205,40 @@ impl Fixture {
         provider_sessions: ProviderSessionErasers,
         channel_store: Option<Arc<dyn ChannelStore>>,
     ) -> Self {
+        Self::built(provider_sessions, channel_store, |_| {
+            crate::conversation::infrastructure::in_process_environment().into()
+        })
+    }
+
+    /// A gateway that also serves the SSH host `devbox`, and keeps where
+    /// each conversation runs in files, as the real one does.
+    fn with_devbox() -> Self {
+        Self::built(ProviderSessionErasers::default(), None, |root| {
+            crate::conversation::application::Environments::new(
+                crate::conversation::infrastructure::in_process_environment(),
+                std::collections::BTreeMap::from([(
+                    "devbox".to_string(),
+                    crate::conversation::infrastructure::in_process_environment(),
+                )]),
+                Arc::new(
+                    crate::conversation::infrastructure::FilePlacements::new(
+                        root.join("placements"),
+                    )
+                    .unwrap(),
+                ),
+            )
+        })
+    }
+
+    fn built(
+        provider_sessions: ProviderSessionErasers,
+        channel_store: Option<Arc<dyn ChannelStore>>,
+        environment: impl FnOnce(&std::path::Path) -> crate::conversation::application::Environments,
+    ) -> Self {
         let directory = tempfile::tempdir().unwrap();
         let root = &directory.path().join("gateway");
         nessa_local_storage::create_directory(root).unwrap();
+        let environment = environment(root);
         let storage = Arc::new(RecordStorage::new(root.join("records")).unwrap());
         let metadata = Arc::new(
             LocalConversationStore::open(&root.join("metadata.sqlite3"))
@@ -242,7 +273,7 @@ impl Fixture {
                 deletion_budgets: DELETION_BUDGETS,
                 message_commit_clock: Arc::new(RuntimeMessageCommitClock::new()),
                 clock: Arc::new(TestClock),
-                environment: crate::conversation::infrastructure::in_process_environment().into(),
+                environment,
                 tool_config: Default::default(),
             },
             ConversationLimits::default(),
@@ -1123,7 +1154,7 @@ async fn only_the_owner_moves_a_made_channel_and_an_unchanged_one_stays_as_it_is
     use crate::conversation::application::ChannelError;
     let fixture = Fixture::new();
     let made = fixture.channel("request-1", None).await;
-    let boat = ChannelExecution::new(&Place::CloudVm, &Place::CloudVm).unwrap();
+    let boat = ChannelExecution::new(Place::CloudVm, Place::CloudVm);
     // The default channel has no run location to change, and neither another
     // person nor an unknown id learns whether a channel exists.
     for (who, id) in [
@@ -1134,7 +1165,7 @@ async fn only_the_owner_moves_a_made_channel_and_an_unchanged_one_stays_as_it_is
         assert_eq!(
             fixture
                 .service
-                .set_channel_execution(&caller(who, "move"), &id, boat)
+                .set_channel_execution(&caller(who, "move"), &id, boat.clone())
                 .await,
             Err(ChannelError::Forbidden),
             "{who} moved {id:?}"
@@ -1143,16 +1174,16 @@ async fn only_the_owner_moves_a_made_channel_and_an_unchanged_one_stays_as_it_is
     // Asking for where it already runs changes nothing, main chat included.
     let same = fixture
         .service
-        .set_channel_execution(&caller("person", "move"), made.id(), made.execution())
+        .set_channel_execution(&caller("person", "move"), made.id(), made.execution().clone())
         .await
         .unwrap();
     assert_eq!(same, made);
     let moved = fixture
         .service
-        .set_channel_execution(&caller("person", "move"), made.id(), boat)
+        .set_channel_execution(&caller("person", "move"), made.id(), boat.clone())
         .await
         .unwrap();
-    assert_eq!(moved.execution(), boat);
+    assert_eq!(*moved.execution(), boat);
     assert_eq!(moved.id(), made.id());
     // Asked and applied are on record as the person's, with both places; a
     // refused or unchanged move left none.
@@ -1164,8 +1195,8 @@ async fn only_the_owner_moves_a_made_channel_and_an_unchanged_one_stays_as_it_is
         records[0].change,
         crate::conversation::application::SettingsChange::ChannelPlacement {
             channel: made.id().clone(),
-            before: made.execution(),
-            after: boat,
+            before: made.execution().clone(),
+            after: boat.clone(),
             coordinator: made.coordinator_id(),
         }
     );
@@ -1190,11 +1221,11 @@ async fn a_move_that_cannot_be_recorded_is_refused_and_changes_nothing() {
         .settings
         .failing
         .store(true, std::sync::atomic::Ordering::SeqCst);
-    let boat = ChannelExecution::new(&Place::CloudVm, &Place::CloudVm).unwrap();
+    let boat = ChannelExecution::new(Place::CloudVm, Place::CloudVm);
     assert_eq!(
         fixture
             .service
-            .set_channel_execution(&caller("person", "move"), made.id(), boat)
+            .set_channel_execution(&caller("person", "move"), made.id(), boat.clone())
             .await,
         Err(ChannelError::Unavailable)
     );
@@ -1210,4 +1241,107 @@ async fn a_move_that_cannot_be_recorded_is_refused_and_changes_nothing() {
         .unwrap();
     assert_eq!(kept.execution(), made.execution());
     assert_eq!(kept.coordinator_id(), made.coordinator_id());
+}
+
+#[tokio::test]
+async fn a_channel_names_a_computer_the_gateway_serves_and_its_new_chats_run_there() {
+    use crate::conversation::application::ChannelError;
+    use nessa_sdk::domain::agent_execution::leases::{PeerEnvironment, SshDestination};
+    let fixture = Fixture::with_devbox();
+    let devbox = Place::Host(SshDestination::new("devbox").unwrap());
+    // A computer this gateway does not serve, or a paired one not connected,
+    // is refused when the channel is made or moved, and nothing is kept.
+    for (i, absent) in [
+        Place::Host(SshDestination::new("elsewhere").unwrap()),
+        Place::Peer(PeerEnvironment::new([7; PeerEnvironment::KEY_BYTES])),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let asked = ChannelRequest {
+            execution: ChannelExecution::new(Place::Here, absent.clone()),
+            ..request(None)
+        };
+        assert_eq!(
+            fixture
+                .service
+                .create_channel(caller("person", "absent"), format!("absent-{i}"), asked)
+                .await,
+            Err(ChannelError::PlaceUnavailable),
+            "{absent:?}"
+        );
+    }
+    let made = fixture
+        .service
+        .create_channel(
+            caller("person", "make"),
+            "make".into(),
+            ChannelRequest {
+                execution: ChannelExecution::new(Place::Here, devbox.clone()),
+                ..request(None)
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(made.execution().threads(), &devbox);
+    let thread = new_id();
+    fixture
+        .service
+        .create(
+            thread.clone(),
+            caller("person", "thread"),
+            RequestedConversation {
+                channel: Some(made.id().clone()),
+                ..RequestedConversation::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        fixture.service.inner.environment.placement(&thread).await.unwrap(),
+        devbox
+    );
+    // The main agent moves there too; asking for a computer it does not
+    // serve changes nothing.
+    assert_eq!(
+        fixture
+            .service
+            .set_channel_execution(
+                &caller("person", "move"),
+                made.id(),
+                ChannelExecution::new(
+                    Place::Host(SshDestination::new("elsewhere").unwrap()),
+                    devbox.clone()
+                ),
+            )
+            .await,
+        Err(ChannelError::PlaceUnavailable)
+    );
+    let moved = fixture
+        .service
+        .set_channel_execution(
+            &caller("person", "move"),
+            made.id(),
+            ChannelExecution::new(devbox.clone(), devbox.clone()),
+        )
+        .await
+        .unwrap();
+    let main = moved.coordinator_id();
+    fixture
+        .service
+        .create(
+            main.clone(),
+            caller("person", "main"),
+            RequestedConversation {
+                channel: Some(made.id().clone()),
+                ..RequestedConversation::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        fixture.service.inner.environment.placement(&main).await.unwrap(),
+        devbox
+    );
+    fixture.service.shutdown().await.unwrap();
 }

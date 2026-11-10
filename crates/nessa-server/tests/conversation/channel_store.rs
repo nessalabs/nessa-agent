@@ -3,6 +3,7 @@
 //! and a folder is checked, resolved, before agents may work in it.
 use super::*;
 use crate::conversation::domain::{ChannelExecution, Place};
+use nessa_sdk::domain::agent_execution::leases::SshDestination;
 use crate::conversation_test_support::absolute;
 
 fn store(directory: &Path) -> LocalChannelStore {
@@ -328,7 +329,7 @@ async fn erasing_a_coordinator_rotates_once_and_survives_reopen() {
 
 #[tokio::test]
 async fn older_channel_schemas_upgrade_without_relocating_existing_work() {
-    for version in [1, 2, 3, 4] {
+    for version in [1, 2, 3, 4, 5] {
         let directory = tempfile::tempdir().unwrap();
         let private = directory.path().join("conversations");
         nessa_local_storage::create_directory(&private).unwrap();
@@ -336,6 +337,20 @@ async fn older_channel_schemas_upgrade_without_relocating_existing_work() {
         // Start from the actual old schema, rather than a second handwritten one.
         let current = DEFINITION;
         let tables = current[..current.find("-- A replacement is recorded").unwrap()].to_owned();
+        // Before one named computer (v6), a channel held a kind of place only.
+        let tables = tables
+            .replace(
+                "    -- Where its main agent and its threads run: `local`, `boat`, `pool`, or\n    -- one computer by its place name (ChannelExecution reads them).\n",
+                "",
+            )
+            .replace(
+                "CHECK (length(coordinator_placement) BETWEEN 1 AND 253)",
+                "CHECK (coordinator_placement IN ('local', 'boat'))",
+            )
+            .replace(
+                "CHECK (length(thread_placement) BETWEEN 1 AND 253)",
+                "CHECK (thread_placement IN ('local', 'boat', 'pool'))",
+            );
         // Before the pool (v4), a thread could not run on "any computer".
         let tables = if version < 4 {
             tables.replace(", 'pool')", ")")
@@ -382,19 +397,20 @@ async fn older_channel_schemas_upgrade_without_relocating_existing_work() {
         drop(connection);
         let store = LocalChannelStore::open(&path).unwrap();
         let restored = store.get(kept.id()).await.unwrap().unwrap();
-        assert_eq!(restored.execution(), ChannelExecution::default());
+        assert_eq!(*restored.execution(), ChannelExecution::default());
         assert_eq!(restored.coordinator_id(), main);
         assert_eq!(
             store.channel_of(&main).await.unwrap(),
             Some(kept.id().clone())
         );
-        // Every older file takes threads on the pool once upgraded.
+        // Every older file takes threads on the pool, and a main agent on one
+        // named computer, once upgraded.
         let pooled = LocalChannelStore::open(&path).unwrap();
         drop(pooled);
         let check = Connection::open(&path).unwrap();
         check
             .execute(
-                "UPDATE channels SET thread_placement = 'pool' WHERE channel = ?1",
+                "UPDATE channels SET thread_placement = 'pool', coordinator_placement = 'devbox' WHERE channel = ?1",
                 params![kept.id().as_str()],
             )
             .unwrap();
@@ -406,15 +422,11 @@ async fn older_channel_schemas_upgrade_without_relocating_existing_work() {
         assert_eq!(violations, 0, "version {version}");
         drop(check);
         let store = LocalChannelStore::open(&path).unwrap();
+        let upgraded = store.get(kept.id()).await.unwrap().unwrap();
+        assert_eq!(*upgraded.execution().threads(), Place::Pool);
         assert_eq!(
-            store
-                .get(kept.id())
-                .await
-                .unwrap()
-                .unwrap()
-                .execution()
-                .threads(),
-            Place::Pool
+            *upgraded.execution().coordinator(),
+            Place::Host(SshDestination::new("devbox").unwrap())
         );
         store.forget(&main).await.unwrap();
         assert_ne!(
@@ -438,18 +450,18 @@ async fn moving_the_main_agent_names_a_fresh_main_chat_and_keeps_the_old_one_in_
     store.create(original.clone()).await.unwrap();
     store.place(&first, original.id()).await.unwrap();
     // Only new threads move: the main chat stays the same one.
-    let threads = ChannelExecution::new(&Place::Here, &Place::CloudVm).unwrap();
+    let threads = ChannelExecution::new(Place::Here, Place::CloudVm);
     let changed = store
-        .set_execution(original.id(), threads)
+        .set_execution(original.id(), threads.clone())
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(changed.execution(), threads);
+    assert_eq!(*changed.execution(), threads);
     assert_eq!(changed.coordinator_id(), first);
     // The main agent moves: a fresh main chat, the old one still in the channel.
-    let both = ChannelExecution::new(&Place::CloudVm, &Place::CloudVm).unwrap();
+    let both = ChannelExecution::new(Place::CloudVm, Place::CloudVm);
     let moved = store
-        .set_execution(original.id(), both)
+        .set_execution(original.id(), both.clone())
         .await
         .unwrap()
         .unwrap();
@@ -464,7 +476,7 @@ async fn moving_the_main_agent_names_a_fresh_main_chat_and_keeps_the_old_one_in_
     let reopened =
         LocalChannelStore::open(&directory.path().join("conversations/channels.sqlite3")).unwrap();
     let kept = reopened.get(original.id()).await.unwrap().unwrap();
-    assert_eq!(kept.execution(), both);
+    assert_eq!(*kept.execution(), both);
     assert_eq!(kept.coordinator_id(), moved.coordinator_id());
     // Once the Boat main chat was made, moving back names yet another one.
     reopened
@@ -482,12 +494,12 @@ async fn moving_the_main_agent_names_a_fresh_main_chat_and_keeps_the_old_one_in_
     let fresh = made("unused", "quiet", 1);
     reopened.create(fresh.clone()).await.unwrap();
     let kept_id = reopened
-        .set_execution(fresh.id(), both)
+        .set_execution(fresh.id(), both.clone())
         .await
         .unwrap()
         .unwrap();
     assert_eq!(kept_id.coordinator_id(), fresh.coordinator_id());
-    assert_eq!(kept_id.execution(), both);
+    assert_eq!(*kept_id.execution(), both);
     let missing = made("absent", "none", 1);
     assert!(reopened
         .set_execution(missing.id(), both)

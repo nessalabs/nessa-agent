@@ -6,6 +6,7 @@ use crate::conversation::domain::{ChannelExecution, ChannelFolder, ChannelParts,
 use crate::conversation_test_support::absolute;
 use nessa_auth::domain::{OrganizationId, PrincipalId};
 use nessa_protocol::protocol::ResponseFrame;
+use nessa_sdk::domain::agent_execution::leases::PeerEnvironment;
 use serde_json::json;
 
 fn params(value: serde_json::Value) -> ChannelCreateParams {
@@ -42,8 +43,8 @@ fn a_create_reads_into_a_channel_request_with_ask_by_default() {
         "threadPlacement": "pool"
     })))
     .unwrap();
-    assert_eq!(placed.execution.coordinator(), Place::Here);
-    assert_eq!(placed.execution.threads(), Place::Pool);
+    assert_eq!(placed.execution.coordinator(), &Place::Here);
+    assert_eq!(placed.execution.threads(), &Place::Pool);
 }
 
 #[test]
@@ -54,9 +55,9 @@ fn a_create_that_is_not_a_channel_is_refused_before_the_service() {
         json!({"requestId": "r", "name": "x", "agent": "codex", "model": "m", "folder": "relative"}),
         json!({"requestId": "r", "name": "x", "agent": "codex", "model": "m", "resources": [absolute("/a"), absolute("/a")]}),
         json!({"requestId": "r", "name": "x", "agent": "codex", "model": "m", "notes": "bell\u{7}"}),
-        // The main agent runs in one place, never the pool.
-        json!({"requestId": "r", "name": "x", "agent": "codex", "model": "m", "coordinatorPlacement": "pool"}),
-        json!({"requestId": "r", "name": "x", "agent": "codex", "model": "m", "threadPlacement": "moon"}),
+        // A kind of place has one spelling; its place name is not it.
+        json!({"requestId": "r", "name": "x", "agent": "codex", "model": "m", "coordinatorPlacement": "here"}),
+        json!({"requestId": "r", "name": "x", "agent": "codex", "model": "m", "threadPlacement": "peer:any"}),
     ] {
         assert!(
             channel_request(&params(refused.clone())).is_none(),
@@ -228,6 +229,7 @@ fn each_refusal_has_its_own_code() {
         (ChannelError::RequestConflict, "channel_request_conflict"),
         (ChannelError::Forbidden, "forbidden"),
         (ChannelError::InvalidInput, "invalid_request"),
+        (ChannelError::PlaceUnavailable, "channel_place_unavailable"),
         (ChannelError::Unavailable, "temporarily_unavailable"),
     ] {
         assert_eq!(code(refused("r", error)), expected);
@@ -235,7 +237,7 @@ fn each_refusal_has_its_own_code() {
 }
 
 #[test]
-fn a_placement_change_names_a_channel_and_two_known_places() {
+fn a_placement_change_names_a_channel_and_two_places() {
     let (params, channel, execution) = placement_request(json!({
         "requestId": "r", "channelId": "ch_aaaaaaaaaa",
         "coordinatorPlacement": "boat", "threadPlacement": "local"
@@ -243,14 +245,24 @@ fn a_placement_change_names_a_channel_and_two_known_places() {
     .unwrap();
     assert_eq!(params.request_id, "r");
     assert_eq!(channel.as_str(), "ch_aaaaaaaaaa");
-    assert_eq!(execution.coordinator(), Place::CloudVm);
-    assert_eq!(execution.threads(), Place::Here);
+    assert_eq!(execution.coordinator(), &Place::CloudVm);
+    assert_eq!(execution.threads(), &Place::Here);
+    // The pool and one named computer are places too; whether this gateway
+    // serves that computer is the service's to say.
+    let peer = PeerEnvironment::new([0xcd; PeerEnvironment::KEY_BYTES]);
+    let (_, _, execution) = placement_request(json!({
+        "requestId": "r", "channelId": "ch_aaaaaaaaaa",
+        "coordinatorPlacement": "pool", "threadPlacement": peer.name()
+    }))
+    .unwrap();
+    assert_eq!(execution.coordinator(), &Place::Pool);
+    assert_eq!(execution.threads(), &Place::Peer(peer));
     for refused in [
         json!({"requestId": "r", "channelId": "nope", "coordinatorPlacement": "boat", "threadPlacement": "boat"}),
-        json!({"requestId": "r", "channelId": "ch_aaaaaaaaaa", "coordinatorPlacement": "moon", "threadPlacement": "boat"}),
+        json!({"requestId": "r", "channelId": "ch_aaaaaaaaaa", "coordinatorPlacement": "a b", "threadPlacement": "boat"}),
         json!({"requestId": "r", "channelId": "ch_aaaaaaaaaa", "coordinatorPlacement": "boat"}),
-        json!({"requestId": "r", "channelId": "ch_aaaaaaaaaa", "coordinatorPlacement": "boat", "threadPlacement": "Boat"}),
-        json!({"requestId": "r", "channelId": "ch_aaaaaaaaaa", "coordinatorPlacement": "pool", "threadPlacement": "pool"}),
+        json!({"requestId": "r", "channelId": "ch_aaaaaaaaaa", "coordinatorPlacement": "boat", "threadPlacement": "boat:thread"}),
+        json!({"requestId": "r", "channelId": "ch_aaaaaaaaaa", "coordinatorPlacement": "peer:zz", "threadPlacement": "pool"}),
     ] {
         assert!(placement_request(refused.clone()).is_none(), "{refused}");
     }

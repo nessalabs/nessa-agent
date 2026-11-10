@@ -33,7 +33,7 @@ pub use scheduled_message::{
 };
 pub use value_objects::{
     Capabilities, Capability, Channel, ChannelDefaults, ChannelExecution, ChannelFolder, ChannelId,
-    ChannelName, ChannelNotes, ChannelParts, ChannelPath, ChannelPlaceRefusal, ChannelRefusal,
+    ChannelName, ChannelNotes, ChannelParts, ChannelPath, UnknownChannelPlace, ChannelRefusal,
     ChannelRequest, ChannelResources, CommandHosts, ConversationDeletion, DeletionContradiction,
     PaneContent, PanePlace, Place, PoolPreference, PoolRefusal, PoolSettings,
     ProviderSessionErasure, ProviderSessionLink, SettingsScope, ShareAccess, ShareAccessError,

@@ -692,7 +692,7 @@ async fn a_channel_symlink_is_not_followed() {
         channel.organization().clone(),
         channel.owner().clone(),
         ChannelParts {
-            execution: channel.execution(),
+            execution: channel.execution().clone(),
             name: channel.name().clone(),
             folder: channel.folder().clone(),
             defaults: channel.defaults().clone(),
@@ -735,7 +735,7 @@ async fn a_channel_database_holding_a_private_key_is_not_copied() {
         channel.organization().clone(),
         channel.owner().clone(),
         ChannelParts {
-            execution: channel.execution(),
+            execution: channel.execution().clone(),
             name: channel.name().clone(),
             folder: channel.folder().clone(),
             defaults: channel.defaults().clone(),
@@ -778,7 +778,7 @@ fn channel_with_settings() -> Channel {
         OrganizationId::new("org").unwrap(),
         PrincipalId::new("owner").unwrap(),
         ChannelParts {
-            execution: ChannelExecution::new(&Place::CloudVm, &Place::Here).unwrap(),
+            execution: ChannelExecution::new(Place::CloudVm, Place::Here),
             name: ChannelName::new("design").unwrap(),
             folder: ChannelFolder {
                 path: path("/work/channel"),

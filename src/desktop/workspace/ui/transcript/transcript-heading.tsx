@@ -7,9 +7,14 @@ import { useRememberedSession } from "../../adapters/store/remembered-session"
 import { revealSession } from "../../adapters/store/commands"
 import { useListedChannel, useWorkspaceFrame } from "../workspace-frame"
 import { tooltip } from "../../../ui/tooltip"
+import {
+  channelPlaceKind,
+  channelPlaceWords,
+  type ChannelPlace,
+} from "../../model/channel-place"
 
 /** Where a channel says its sessions run, until a lease says where one does. */
-export type Placement = "local" | "boat" | "pool"
+export type Placement = ChannelPlace
 
 /**
  * Where the agent runs, in words, always: this computer, Boat, an SSH host
@@ -23,13 +28,15 @@ export function placeNote(
 ): string | undefined {
   if (lease && lease.state !== "unreadable" && lease.environment !== undefined)
     return conversationLeasePlace(lease)
-  return placement === "boat"
-    ? conversationLeasePlace({ environment: "boat" })
-    : placement === "pool"
-      ? "Any computer"
-      : placement === "local"
-        ? conversationLeasePlace({ environment: "here" })
-        : undefined
+  if (placement === undefined) return undefined
+  switch (channelPlaceKind(placement)) {
+    case "boat":
+      return conversationLeasePlace({ environment: "boat" })
+    case "local":
+      return conversationLeasePlace({ environment: "here" })
+    default:
+      return channelPlaceWords(placement)
+  }
 }
 
 /**

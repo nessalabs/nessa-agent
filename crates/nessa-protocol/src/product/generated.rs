@@ -3690,6 +3690,8 @@ pub enum ChannelErrorCode {
     ChannelRequestConflict,
     #[serde(rename = "channel_storage_unavailable")]
     ChannelStorageUnavailable,
+    #[serde(rename = "channel_place_unavailable")]
+    ChannelPlaceUnavailable,
     #[serde(rename = "temporarily_unavailable")]
     TemporarilyUnavailable,
 }
@@ -3706,6 +3708,7 @@ impl ChannelErrorCode {
             Self::ChannelLimitReached => "channel_limit_reached",
             Self::ChannelRequestConflict => "channel_request_conflict",
             Self::ChannelStorageUnavailable => "channel_storage_unavailable",
+            Self::ChannelPlaceUnavailable => "channel_place_unavailable",
             Self::TemporarilyUnavailable => "temporarily_unavailable",
         }
     }
