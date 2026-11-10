@@ -39,11 +39,16 @@ function git(args) {
 
 const invoked = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href
 if (invoked) {
-  const own = realpathSync(fileURLToPath(new URL("..", import.meta.url)))
+  // Windows paths differ in slashes and drive-letter case between git and Node.
+  const same = (path) => {
+    const real = realpathSync.native(path)
+    return process.platform === "win32" ? real.toLowerCase() : real
+  }
+  const own = same(fileURLToPath(new URL("..", import.meta.url)))
   const top = git(["rev-parse", "--show-toplevel"])
   const configured = git(["config", "--get", "core.hooksPath"])
   const action = hooksAction({
-    inCheckout: top?.status === 0 && realpathSync(top.stdout) === own,
+    inCheckout: top?.status === 0 && same(top.stdout) === own,
     hooksPath: configured?.status === 0 ? configured.stdout : null,
   })
   if (action.note) process.stderr.write(`${action.note}\n`)
