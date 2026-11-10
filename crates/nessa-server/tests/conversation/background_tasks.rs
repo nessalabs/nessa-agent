@@ -4,6 +4,7 @@ use super::*;
 use crate::conversation::application::service::environment_tools::running_turn;
 #[cfg(unix)]
 use crate::conversation::application::{Environments, ThreadEnvironments, WorkspaceRest};
+#[cfg(unix)]
 use crate::conversation::domain::Place;
 #[cfg(unix)]
 use crate::conversation::infrastructure::FilePlacements;
