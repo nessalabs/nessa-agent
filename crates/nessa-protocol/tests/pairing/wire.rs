@@ -165,6 +165,82 @@ fn object_keys(value: &Value) -> BTreeSet<&str> {
 }
 
 #[test]
+fn gateway_choice_is_required_and_device_wire_stays_unchanged() {
+    for class in ConsentClass::ALL {
+        for choice in [false, true] {
+            if choice && !class.is_peer() {
+                continue;
+            }
+            let base = public();
+            let intent = PublicIntent::new(
+                base.invitation(),
+                base.attempt(),
+                base.consent(),
+                base.generation(),
+                base.expiry_ms(),
+                class,
+            )
+            .unwrap()
+            .with_same_person(choice)
+            .unwrap();
+            let bytes = encode_hello(intent).unwrap();
+            assert!(
+                matches!(decode_reply(&bytes).unwrap(), NativePairingReply::Hello(value) if value == intent)
+            );
+            let mut value: Value = serde_json::from_slice(&bytes).unwrap();
+            let fields = value["public"].as_object_mut().unwrap();
+            if class.is_peer() {
+                assert_eq!(fields.remove("samePerson"), Some(json!(choice)));
+            } else {
+                assert!(!fields.contains_key("samePerson"));
+                fields.insert("samePerson".into(), json!(false));
+            }
+            assert!(decode_reply(&serde_json::to_vec(&value).unwrap()).is_err());
+        }
+    }
+}
+
+#[test]
+fn a_present_same_person_choice_cannot_be_null_for_any_class_or_codec_entry() {
+    for class in ConsentClass::ALL {
+        let base = public();
+        let intent = PublicIntent::new(
+            base.invitation(),
+            base.attempt(),
+            base.consent(),
+            base.generation(),
+            base.expiry_ms(),
+            class,
+        )
+        .unwrap();
+        for (request, bytes) in [
+            (
+                true,
+                encode_request(&NativePairingRequest::Status(intent)).unwrap(),
+            ),
+            (false, encode_hello(intent).unwrap()),
+        ] {
+            let mut value: Value = serde_json::from_slice(&bytes).unwrap();
+            value["public"]["samePerson"] = Value::Null;
+            let bytes = serde_json::to_vec(&value).unwrap();
+            if request {
+                assert_eq!(
+                    decode_request(&bytes).unwrap_err(),
+                    NativeWireError::Invalid,
+                    "{class:?} request"
+                );
+            } else {
+                assert_eq!(
+                    decode_reply(&bytes).unwrap_err(),
+                    NativeWireError::Invalid,
+                    "{class:?} reply"
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn current_enrollment_messages_preserve_their_representation() {
     for request in [
         NativePairingRequest::Hello(public().attempt()),

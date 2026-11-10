@@ -72,6 +72,13 @@ pub enum RuntimeEnd {
 }
 /// Enrollment records share the credential authority's transaction and revision.
 pub trait PairingStore: Send + Sync {
+    /// Ask the credential authority for the true choice's existing owner fact
+    /// before physical registration. Creation repeats it under its mutation lock.
+    fn validate_same_person_owner(
+        &self,
+        intent: &crate::domain::pairing::ConsentIntent,
+    ) -> Result<(), PairingStoreError>;
+
     /// Admit first native key publication while canonical all-history remains empty.
     /// The mutation owner retains its guard through injected private publication.
     fn publish_first_gateway_key(

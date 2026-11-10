@@ -276,7 +276,11 @@ fn earlier_current_version_shape_is_refused_without_creating_a_model_journal() {
         .unwrap();
     assert!(matches!(
         LocalConversationStore::open(&opened.path),
-        Err(nessa_local_database::OpenError::Damaged(_))
+        Err(
+            crate::conversation::infrastructure::ConversationStoreOpenError::Metadata(
+                nessa_local_database::OpenError::Damaged(_)
+            )
+        )
     ));
     let tables: i64 = raw(&opened.path)
         .query_row(
@@ -304,7 +308,7 @@ fn a_partial_current_shape_or_missing_pending_constraint_is_refused_at_open() {
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .unwrap();
         raw(&opened.path).execute_batch(mutation).unwrap();
-        assert!(matches!(LocalConversationStore::open(&opened.path),Err(nessa_local_database::OpenError::Damaged(_))));
+        assert!(matches!(LocalConversationStore::open(&opened.path),Err(crate::conversation::infrastructure::ConversationStoreOpenError::Metadata(nessa_local_database::OpenError::Damaged(_)))));
         let version:i64=raw(&opened.path).query_row("PRAGMA user_version",[],|row|row.get(0)).unwrap();
         assert_eq!(version,version_before);
     }

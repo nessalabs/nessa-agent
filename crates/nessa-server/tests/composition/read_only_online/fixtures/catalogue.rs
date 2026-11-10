@@ -67,33 +67,55 @@ pub(super) async fn serve(setup: &Setup, metadata: Arc<LocalConversationStore>) 
                 } else {
                     receiver
                 };
-                assert!(
-                    metadata
-                        .change(ShareGrantChange {
-                            transition: if line == "revoke" {
-                                ShareGrantTransition::Revoke
-                            } else {
-                                ShareGrantTransition::Grant(ShareAccess::read())
-                            },
-                            conversation_id: main.clone(),
-                            principal_id: Some(
-                                PrincipalId::new(format!("grantee-{}", setup.receiver)).unwrap()
-                            ),
-                            receiver_id: Some(receiver.into()),
-                            credential_id: CredentialId::new(credential).unwrap(),
-                            expected_policy_revision: None,
-                            initiator: ConversationCaller {
-                                organization_id: OrganizationId::new(&setup.organization).unwrap(),
-                                principal_id: PrincipalId::new(&setup.owner).unwrap(),
-                                surface_id: "catalogue".into(),
-                                action_id: uuid(),
-                            },
-                            at_ms: revision,
-                        })
-                        .await
-                        .unwrap()
-                        .applied
-                );
+                let principal = PrincipalId::new(format!("grantee-{}", setup.receiver)).unwrap();
+                let change = |transition, receiver: &str, credential: &str| ShareGrantChange {
+                    transition,
+                    conversation_id: main.clone(),
+                    principal_id: Some(principal.clone()),
+                    receiver_id: Some(receiver.into()),
+                    credential_id: CredentialId::new(credential).unwrap(),
+                    expected_policy_revision: None,
+                    initiator: ConversationCaller {
+                        organization_id: OrganizationId::new(&setup.organization).unwrap(),
+                        principal_id: PrincipalId::new(&setup.owner).unwrap(),
+                        surface_id: "catalogue".into(),
+                        action_id: uuid(),
+                    },
+                    at_ms: revision,
+                };
+                // Receiver subjects are independent. Replacing this fixture's
+                // target explicitly revokes the former receiver; adding another
+                // receiver must not silently evict its grant (#893).
+                for grant in metadata.grants(&main).await.unwrap().grants {
+                    if grant.principal_id == principal
+                        && (line == "revoke" || grant.receiver_id.as_deref() != Some(receiver))
+                    {
+                        assert!(
+                            metadata
+                                .change(change(
+                                    ShareGrantTransition::Revoke,
+                                    grant.receiver_id.as_deref().unwrap(),
+                                    grant.credential_id.as_str(),
+                                ))
+                                .await
+                                .unwrap()
+                                .applied
+                        );
+                    }
+                }
+                if line != "revoke" {
+                    assert!(
+                        metadata
+                            .change(change(
+                                ShareGrantTransition::Grant(ShareAccess::read()),
+                                receiver,
+                                credential,
+                            ))
+                            .await
+                            .unwrap()
+                            .applied
+                    );
+                }
             }
             _ => panic!("unknown catalogue control {line}"),
         }

@@ -2428,6 +2428,8 @@ export const PairingEnrollee = {
 export type PairingEnrollee = (typeof PairingEnrollee)[keyof typeof PairingEnrollee]
 /** Wire input for pairing.create. The owner, organization and gateway come from the session, never from the request. */
 export interface PairingCreateParams {
+  /** Immutable attribution choice for a peer gateway. This adds no capability and does not change enrollment class; absent means false. */
+  samePerson?: boolean
   /** Who the invitation enrolls; absent means device. */
   enrollee?: PairingEnrollee
 }
@@ -2497,6 +2499,8 @@ export interface PairingReceiver {
 }
 /** An owner's view of one enrollment. This is historical enrollment, not read authority: every later read is authorized again. */
 export interface PairingOwnerStatus {
+  /** The immutable choice saved on a peer-gateway invitation, including false. Omitted for other enrollment classes and by older gateways; absence is unknown, not an inferred false choice. This is historical consent, not proof that a person link has committed or that a read is authorized. */
+  samePerson?: boolean
   /** Random identity of the invitation, as its bytes. */
   invitationId: number[]
   /** Identity of the immutable consent the invitation carries. */
@@ -2535,7 +2539,7 @@ export type PairingActivationStop =
 export interface PairingApproveResult {
   /** The enrollment as it now stands. The approval itself is committed whatever else happened. */
   status: PairingOwnerStatus
-  /** Present when activation stopped before active: whether approving again can finish it. */
+  /** Present when activation or its next person-attribution write stopped. The credential may already be Active; approving again retries the owed link without another credential or receiver. */
   activationStopped?: PairingActivationStop
 }
 /** Result of pairing.create: a code for one device, valid until status.expiresAtMs. */

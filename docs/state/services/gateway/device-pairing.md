@@ -38,7 +38,7 @@ modelCheck:
 
 A device first claims an invitation with its authenticated key. Owner approval names that exact key; another key cannot replace the claim. Approval records consent, but does not yet make the device Active. Activation takes fresh current admission, reserves the credential and stage correlation, and owns that physical stage through receiver pairing and publication. A retry rejoins the same stage and receiver rather than issuing another credential.
 
-The receiver result must match the reserved credential, request and generation. Before credential publication, the canonical receiver authority must still hold that pairing, active at its paired epoch or later with no intervening fence. Merely restoring the same credential after revocation is insufficient. A final fresh admission covers the registry revision advanced by staging and receiver evidence. Failure leaves Approved or Staging progress visible; it does not undo consent or report Active.
+The receiver result must match the reserved credential, request and generation. Before credential publication, the canonical receiver authority must still hold that pairing, active at its paired epoch or later with no intervening fence. Merely restoring the same credential after revocation is insufficient. A final fresh admission covers the registry revision advanced by staging and receiver evidence. Failure before publication leaves Approved or Staging progress visible; it does not undo consent or report Active.
 
 ```mermaid
 stateDiagram-v2
@@ -61,3 +61,13 @@ Source inspection included the positive activation and retry controls, wrong-sta
 ## Bounded rule model
 
 Owns exact-key consent, fresh revision-bound stage/publication admission and canonical current receiver proof before Active. Two device keys, one immutable stage and three receiver-history alternatives bound the model. Receiver receipt correlation is the successful Receiver action contract; cryptography and cancellation cleanup remain excluded. This finite abstraction checks safety only. It does not execute or verify the implementation, promise eventual completion, or qualify external effects. Existing source checkpoints and historical test receipts retain their earlier scope. The scoped model review inspected `crates/nessa-server/src/device_pairing/application/activation.rs`, `crates/nessa-server/src/device_pairing/application/owner.rs`, `crates/nessa-auth/src/application/pairing/stage.rs`.
+
+## Later attribution write
+
+The source checkpoint and model receipt above retain their original activation
+scope. Gateway invitations can now also select an immutable same-person choice.
+Their attribution write follows Active and can fail after credential publication;
+that failure returns the canonical Active phase with an interruption. The scoped
+[same-person flow](same-person.md) documents its source checkpoint, retry and
+cleanup guarantees. This navigation correction does not refresh the activation
+model, claim its execution, or advance its historical source mapping.

@@ -11,8 +11,9 @@ import {
   writeFile,
 } from "node:fs/promises"
 import { tmpdir } from "node:os"
-import { dirname, join, resolve } from "node:path"
+import { basename, dirname, join, resolve } from "node:path"
 import test from "node:test"
+import { setTimeout } from "node:timers/promises"
 
 import tailwindcss from "@tailwindcss/vite"
 import { build, createServer } from "vite"
@@ -131,6 +132,11 @@ for (const entry of ["src/styles.css", "src/desktop/styles.css"]) {
         assert.ok(initial.includes(`z-index: ${value};`), `registered UI source ${value}`)
 
       const changed = async (file, effect) => {
+        // The initial ready event can precede registration of nested paths.
+        // Observe this fixture's watch before touching it; keep the event and
+        // stylesheet assertions below as the proof that the edit was handled.
+        while (!server.watcher.getWatched()[dirname(file)]?.includes(basename(file)))
+          await setTimeout(5, undefined, { signal: context.signal })
         packets.length = 0
         await effect()
         let observed

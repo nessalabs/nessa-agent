@@ -9,8 +9,10 @@
 //! row, tombstone, catalogue incarnation and `change_revision` in one
 //! transaction, so another connection's tombstone cannot pair a live row
 //! with the new revision. `export_facts` reads that
-//! database for the export cut: live grants, and grants whose latest journal
-//! row is a revoke.
+//! database with the attached versioned grant file for the export cut: live
+//! grants, and grants whose latest journal row is a revoke. Grant rows and
+//! their audit live in the independent access-grants namespace; attribution and
+//! its audit share that file without changing grant subjects or capabilities.
 //!
 //! `LocalReceiverAuthority` keeps server-minted receiver bindings, durable access
 //! epochs and transition evidence in its own private SQLite dataset,
@@ -147,9 +149,10 @@ mod record_read;
 pub use catalogue_read::NessaCatalogueReadSource;
 pub use record_read::{InvalidReadWorkBudget, NessaRecordReadSource};
 pub(crate) use record_read::{DISCOVERY_STEPS_PER_READ, READ_WORK_BUDGET};
+pub(crate) use store::access_grants_path;
 pub use store::{
-    ExportFacts, ExportFences, ExportSkip, LocalConversationStore, MetadataSnapshot, NamedRecord,
-    RevocationFact,
+    ConversationStoreOpenError, ExportFacts, ExportFences, ExportSkip, LocalConversationStore,
+    LocalPersonLinks, MetadataSnapshot, NamedRecord, RevocationFact,
 };
 
 mod catalogue_source;

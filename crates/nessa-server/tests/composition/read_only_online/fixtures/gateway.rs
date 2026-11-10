@@ -767,7 +767,7 @@ async fn pair_device(
     directory: &str,
 ) -> (String, u64, String, [u8; 32]) {
     let created = commands
-        .create(session, ConsentClass::DeviceRead)
+        .create(session, ConsentClass::DeviceRead, false)
         .await
         .unwrap();
     let code = ManualCode::parse(created.code().expose_bytes()).unwrap();

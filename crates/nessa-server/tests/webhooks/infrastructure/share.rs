@@ -506,24 +506,33 @@ async fn ordinary_share(f: &Fixture, receiver: Option<&str>, request: &str) -> S
         .unwrap()
 }
 fn grant_journal_rows(f: &Fixture) -> i64 {
-    let path = f._root.path().join("private/conversations.db");
+    let path = f
+        ._root
+        .path()
+        .join("private/conversations.db")
+        .with_extension("grants.sqlite3");
     assert!(path.is_file());
     Connection::open(path)
         .unwrap()
         .query_row("SELECT count(*) FROM share_grant_changes", [], |r| r.get(0))
         .unwrap()
 }
+async fn stored_target_grant(f: &Fixture) -> Option<crate::conversation::application::ShareGrant> {
+    f.grants
+        .grants(&f.a)
+        .await
+        .unwrap()
+        .grants
+        .into_iter()
+        .find(|grant| grant.credential_id == f.target.credential)
+}
+
 #[tokio::test]
 async fn a_receiver_bearing_row_is_not_a_principal_share_or_principal_replay() {
     let f = clean().await;
     let (store, _, _) = registered(&f).await;
     let original = ordinary_share(&f, Some("retained-receiver"), "retained-row").await;
-    let before = f
-        .grants
-        .principal_grant(&f.a, &f.target.principal)
-        .await
-        .unwrap()
-        .unwrap();
+    let before = stored_target_grant(&f).await.unwrap();
     assert_eq!(before.receiver_id.as_deref(), Some("retained-receiver"));
     // The ordinary paired contract remains None-means-keep/lost-reply.
     assert!(!ordinary_share(&f, None, "paired-keep").await.applied);
@@ -548,13 +557,7 @@ async fn a_receiver_bearing_row_is_not_a_principal_share_or_principal_replay() {
             matches!(result, Err(ConversationError::ShareTargetNotPaired)),
             "{result:?}"
         );
-        assert_eq!(
-            f.grants
-                .principal_grant(&f.a, &f.target.principal)
-                .await
-                .unwrap(),
-            Some(before.clone())
-        );
+        assert_eq!(stored_target_grant(&f).await, Some(before.clone()));
         assert_eq!(
             grant_journal_rows(&f),
             rows,
@@ -615,23 +618,14 @@ async fn receiver_absent_original_replay_after_unshare_does_not_regrant_or_accep
     absent(&f).await;
     assert_eq!(grant_journal_rows(&f), rows);
     let _ = ordinary_share(&f, Some("later-receiver"), "later-receiver").await;
-    let before = f
-        .grants
-        .principal_grant(&f.a, &f.target.principal)
-        .await
-        .unwrap();
+    let before = stored_target_grant(&f).await;
+    assert!(before.is_some(), "the later receiver row is present");
     let rows = grant_journal_rows(&f);
     let result = share(&f, &store, Capabilities::read(), None).await;
     assert!(
         matches!(result, Err(ConversationError::ShareTargetNotPaired)),
         "{result:?}"
     );
-    assert_eq!(
-        f.grants
-            .principal_grant(&f.a, &f.target.principal)
-            .await
-            .unwrap(),
-        before
-    );
+    assert_eq!(stored_target_grant(&f).await, before);
     assert_eq!(grant_journal_rows(&f), rows);
 }

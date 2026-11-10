@@ -1046,3 +1046,38 @@ fn an_owner_phone_redeemed_by_code_is_told_apart_from_a_signed_one() {
         bytes.as_slice()
     );
 }
+
+#[test]
+fn private_choice_is_retained_only_by_gateway_records_and_rejects_truncation() {
+    for class in ConsentClass::ALL {
+        for choice in [false, true] {
+            if choice && !class.is_peer() {
+                continue;
+            }
+            let base = intent(2);
+            let public = PublicIntent::new(
+                base.invitation(),
+                base.attempt(),
+                base.consent(),
+                base.generation(),
+                base.expiry_ms(),
+                class,
+            )
+            .unwrap()
+            .with_same_person(choice)
+            .unwrap();
+            let bytes = encode_pending(&key(7), &[5; 44], public);
+            assert_eq!(bytes.len(), 144 + usize::from(class.is_peer()));
+            assert_eq!(decode_pending(&bytes).unwrap().intent(), public);
+            for length in 0..bytes.len() {
+                assert!(decode_pending(&bytes[..length]).is_err());
+                assert!(decode_client(&bytes[..length]).is_err());
+            }
+            if class.is_peer() {
+                let mut corrupt = bytes.clone();
+                corrupt[144] = 2;
+                assert!(decode_pending(&corrupt).is_err());
+            }
+        }
+    }
+}

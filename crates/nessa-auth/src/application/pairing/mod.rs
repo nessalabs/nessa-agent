@@ -19,7 +19,11 @@ pub use owner_phone_private::{
 mod owner_phone;
 mod owner_phone_purpose;
 pub use owner_phone_purpose::{OwnerPhonePurpose, OwnerPhonePurposeSource};
+mod person_links;
 mod ports;
+pub use person_links::{
+    PairingLinkEvidence, PairingLinkSource, PairingPersonLinks, PersonLinkError,
+};
 mod private_state;
 mod proof;
 mod receiver;

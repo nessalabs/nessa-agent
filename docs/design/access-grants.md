@@ -372,6 +372,37 @@ successful write of the grant store retries it, and a new enrollment of
 that gateway key is refused until the removal commits. This section does
 not add a link state.
 
+The committed unlink audit is the receipt that this invitation's choice
+finished; a read or restore does not apply that old choice again. When expiry
+and revocation both apply, their retained times preserve the first boundary:
+expiry at or before `revoked_at` keeps expiry as initiator, and an earlier
+revocation keeps its original initiator after the clock passes the expiry.
+The two orderings are covered by
+`a_retry_after_expiry_and_revoke_keeps_the_first_boundary_and_initiator`.
+
+The person is the authoritative Human principal that owns the invitation, not
+an administrator role or a surface identifier. A true choice requires the
+credential authority's principal record to match that owner and identify a Human.
+An admin Integration surface with no published acts-for mapping cannot select
+this choice; refusal leaves its invitation and credential state unchanged. A
+false choice keeps ordinary pairing. Surface provisioning's issuance journal is
+not itself an acts-for contract, and no namespace/admin inference substitutes
+for a person fact. The same domain validator checks that fact before registration,
+again at the canonical invitation commit, and with the effect's credential cut.
+
+Attribution consumes the original terminal decision together with its credential
+revocation. An Active cancellation must match the canonical Explicit revocation,
+actor and whole-second command time; an independent credential-revocation event
+must match that exact original transition. A cancelled pre-publication reservation
+cannot supply a published credential. The domain record retains this evidence
+from the same history replay used by the registry; custom effect sources use the
+same validator rather than reconstructing a second decision.
+
+The terminal receipt also consumes a choice whose initial link never committed:
+expiry can be observed while the Active-to-link write is still owed. The
+ordering is tested by
+`expiry_before_the_first_link_consumes_the_choice_without_replay`.
+
 ## Live follow
 
 [#851](https://github.com/nessalabs/nessa-agent/issues/851) already follows
@@ -870,10 +901,10 @@ decision.
 | G-admit | active | A use reads the row | The row is present | active | The use: a turn, a lease, a subscribe, a webhook attempt, or a directory open | Nothing on the grant row. The use stores the epoch it read on its own record | None on the grant row |
 | G-next | absent | The next admission after revoke | No row for that key | absent | The next use | Nothing | Refusal, cause no grant, initiator the use |
 | G-inflight | active, or already absent | Work that already read an epoch finishes | The use stored that epoch at G-admit | The use's own terminal state. The grant row stays as the later grant commit left it. | The use that read the epoch | The use's own outcome. No second grant row | The use's own audit. The epoch on that record is the epoch it read |
-| G-link | phase Active, link absent | The grant-store write after Active | The invitation's choice is true. The principal is the `gateway:<key>` this activation stored. The choice was not asked again. The phase is Active. | Link present. The grant subject stays the receiver. Admission reports the person only after this commit. | Activation, or G-link-retry | The link row only. No grant row is inserted or copied. | Target the gateway principal, before no link, after the person link, cause the same-person choice, initiator the owner |
-| G-link-retry | phase Active, choice true, link absent | The next successful write of the grant store, live or on restart | The invitation's choice is true. The phase is Active. No link row names this gateway principal. A `Revoked` phase or a revoked credential does not insert a link. | link present. Admission reports the person only after this commit. The choice is not asked again. | The live process, or restart | The link row is inserted in this write. No grant row is written. | Target the gateway principal, before no link, after the person link, cause the same-person choice, initiator the owner. The live process or restart is the writer, not a new initiator. |
-| G-unlink | link present | `credential.revoke`, credential expiry, or enrollment revoke | The link names that gateway principal | link absent. Grant rows stay. A later credential does not inherit it. | The owner, or expiry | The link row is removed. The credential store commits first: credential revoke, or the phase `Revoked` for enrollment revoke. This removal commits next. A failure of that next write, while the process stays up, is G-unlink-retry. A crash between them is C-G-unlink. | Target the gateway principal, before the person link, after no link, cause credential revoked, expired, or enrollment revoked, initiator the owner or expiry |
-| G-unlink-retry | credential revoked or expired, or phase `Revoked`, and the link is still present | The next successful write of the grant store, live or on restart | The link names that gateway principal. A new enrollment of that gateway key is refused until this removal commits. | link absent. A later credential does not inherit it. | The live process, or restart | The link row is removed in this write. No new link is written. P-active does not commit while this row is still present. | Target the gateway principal, before the person link, after no link, cause credential revoked, expired, or enrollment revoked, initiator the owner or expiry. The live process or restart is the writer, not a new initiator. |
+| G-link | phase Active, link absent | The grant-store write after Active | The invitation's choice is true. The principal is the `gateway:<key>` this activation stored. The choice was not asked again. The phase is Active, unexpired and unrevoked, with no committed removal receipt for this credential. | Link present. The grant subject stays the receiver. Admission reports the person only after this commit. | Activation, or G-link-retry | The link row only. No grant row is inserted or copied. | Target the gateway principal, before no link, after the person link, cause the same-person choice, initiator the owner |
+| G-link-retry | phase Active, choice true, link absent | The next successful write of the grant store, live or on restart | The invitation's choice is true. The phase is Active. No link row names this gateway principal. An expired or revoked credential, a `Revoked` phase, or a committed removal receipt does not insert a link. | link present. Admission reports the person only after this commit. The choice is not asked again. | The live process, or restart | The link row is inserted in this write. No grant row is written. | Target the gateway principal, before no link, after the person link, cause the same-person choice, initiator the owner. The live process or restart is the writer, not a new initiator. |
+| G-unlink | link present or initial insertion still owed | `credential.revoke`, credential expiry, or enrollment revoke | The evidence names the exact enrollment credential, and its removal has no committed receipt | That credential's link absent. Grant rows stay. A later credential does not inherit it. | The owner, or expiry | Only that credential's link is removed, if present; another credential's link stays. The removal receipt commits even if the initial insertion never did. The credential store commits first: credential revoke, or the phase `Revoked` for enrollment revoke. This removal commits next. A failure of that next write, while the process stays up, is G-unlink-retry. A crash between them is C-G-unlink. | Target the gateway principal, before that credential's person link or absent, after absent, cause credential revoked, expired, or enrollment revoked, initiator the owner or expiry |
+| G-unlink-retry | credential revoked or expired, or phase `Revoked`, and the removal receipt is still owed | The next successful write of the grant store, live or on restart | The evidence names that exact enrollment credential. A new enrollment of that gateway key is refused until this removal commits. | That credential's link absent. A later credential does not inherit it. | The live process, or restart | Only that credential's link is removed in this write, if present; its receipt commits in either case. No new link is written. P-active does not commit while the old removal remains owed. | Target the gateway principal, before that credential's person link or absent, after absent, cause credential revoked, expired, or enrollment revoked, initiator the owner or expiry. The live process or restart is the writer, not a new initiator. |
 | G-cred | active | `credential.revoke` or a read that derives expiry | The credential is the one that subject uses. Nothing runs at `expires_at`. This row does not stop the registration. | active, same epoch | The owner, or the reader that derived expiry | Nothing on the grant row | None on the grant row. W-observe records an expiry reader. W-cred or W-issue-expired records the stop and copies that initiator. |
 | G-marker | active | Directory open finds a missing root, a missing marker, or different bytes | The grant's resource is that directory resource | absent | The open | Every grant for that resource is removed. Each receiver subject's grant log gets a tombstone in this same write. The cause and the audit-failure rule are D-open-bad and D-audit-down. | D12. This row does not add a second cause |
 | G-current | grant store at this build's version | Process open | The grant store is this build's version | Open. The process serves that grant store. The conversation metadata file is a different store and is not rewritten by this open. | Startup | Nothing. Startup does not rewrite the grant store. | None |

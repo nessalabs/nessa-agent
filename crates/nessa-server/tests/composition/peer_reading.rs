@@ -945,7 +945,7 @@ async fn enroll(
 ) -> (DeviceKey, Option<(String, String)>) {
     let created = a
         .commands
-        .create(&a.session, ConsentClass::PeerRead)
+        .create(&a.session, ConsentClass::PeerRead, false)
         .await
         .unwrap();
     let code = ManualCode::parse(created.code().expose_bytes()).unwrap();
@@ -1674,7 +1674,7 @@ async fn a_full_queue_refuses_the_owner_and_drops_the_poller_record() {
     let accepted = relay.accepted();
     let created = a
         .commands
-        .create(&a.session, ConsentClass::PeerRead)
+        .create(&a.session, ConsentClass::PeerRead, false)
         .await
         .unwrap();
     let code = ManualCode::parse(created.code().expose_bytes()).unwrap();
@@ -2211,7 +2211,7 @@ async fn a_slow_peer_does_not_hold_up_the_others() {
     let created = peers
         .a
         .commands
-        .create(&peers.a.session, ConsentClass::PeerRead)
+        .create(&peers.a.session, ConsentClass::PeerRead, false)
         .await
         .unwrap();
     let code = ManualCode::parse(created.code().expose_bytes()).unwrap();

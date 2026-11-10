@@ -57,7 +57,10 @@ pub(super) async fn dispatch(
                 Some(PairingEnrollee::Gateway) => ConsentClass::PeerRead,
                 Some(PairingEnrollee::Environment) => ConsentClass::PeerEnvironment,
             };
-            match pairing.create(session, class).await {
+            match pairing
+                .create(session, class, params.same_person.unwrap_or(false))
+                .await
+            {
                 Ok(created) => {
                     let display = created.code().display_bytes();
                     let Ok(code) = std::str::from_utf8(display.as_ref()) else {
@@ -153,6 +156,11 @@ pub(super) fn owner_status(record: &PairingRecord) -> PairingOwnerStatus {
     let intent = record.intent();
     let grant = intent.grant();
     PairingOwnerStatus {
+        same_person: matches!(
+            intent.class(),
+            ConsentClass::PeerRead | ConsentClass::PeerEnvironment
+        )
+        .then_some(intent.same_person()),
         invitation_id: *record.id().bytes(),
         consent_id: *intent.id().bytes(),
         generation: intent.generation(),

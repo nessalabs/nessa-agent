@@ -336,6 +336,20 @@ pub(super) async fn product_state(
     } else {
         None
     };
+    // Listener configuration cannot suspend credential cleanup. The access
+    // dataset stays open even with no agents and native linking switched off.
+    if settings.agents.is_none() {
+        let path = prepare_access_grants_path(namespace)?;
+        let links = crate::conversation::infrastructure::LocalPersonLinks::open(
+            &path,
+            store.clone(),
+            Arc::new(SystemClock),
+        )
+        .map_err(|cause| RunError::opening(crate::core::Dataset::AccessGrants, &path, cause))?;
+        store.bind_person_links(links).map_err(|error| {
+            RunError::Authentication(format!("person attribution reconciliation: {error:?}"))
+        })?;
+    }
     // Before any socket is bound: the key is restored or first published,
     // this gateway's unfinished enrollments are settled, and ended ones have
     // their receivers settled (design rows S3–S8).
@@ -480,6 +494,17 @@ pub(super) async fn product_state(
                     },
                 )
                 .await?;
+                let links = built
+                    .metadata
+                    .bind_person_link_source(store.clone(), Arc::new(SystemClock))
+                    .map_err(|error| {
+                        RunError::Authentication(format!("person attribution store: {error}"))
+                    })?;
+                store.bind_person_links(links).map_err(|error| {
+                    RunError::Authentication(format!(
+                        "person attribution reconciliation: {error:?}"
+                    ))
+                })?;
                 built
                     .service
                     .bind_fence_capture(inventory.clone() as Arc<dyn FenceCapture>);
@@ -1236,6 +1261,16 @@ pub(super) fn receiver_journal(namespace: &Path) -> std::path::PathBuf {
         .join("receiver-access.sqlite3")
 }
 
+/// Prepare the access dataset independently of conversation and listener state.
+fn prepare_access_grants_path(namespace: &Path) -> Result<std::path::PathBuf, RunError> {
+    let path = crate::conversation::infrastructure::access_grants_path(namespace);
+    let parent = path
+        .parent()
+        .ok_or_else(|| setup_error("invalid grant root"))?;
+    nessa_local_storage::create_directory(parent).map_err(setup_error)?;
+    Ok(path)
+}
+
 /// Where a namespace keeps its conversations. Read by composition and by the
 /// retirement that reports whether they are still there. The receiver journal
 /// is not in this directory.
@@ -1412,14 +1447,21 @@ async fn conversations(
     // Ownership, tombstones and summaries are one database
     // (docs/adr/done/196-conversation-metadata-database.md).
     let metadata_path = root.join("metadata.sqlite3");
+    let grants_path = prepare_access_grants_path(namespace)?;
     let metadata = Arc::new(
-        LocalConversationStore::open(&metadata_path)
-            .map_err(|cause| {
-                RunError::opening(
+        LocalConversationStore::open_with_grants(&metadata_path, &grants_path)
+            .map_err(|cause| match cause {
+                crate::conversation::infrastructure::ConversationStoreOpenError::Metadata(
+                    cause,
+                ) => RunError::opening(
                     crate::core::Dataset::ConversationMetadata,
                     &metadata_path,
                     cause,
-                )
+                ),
+                crate::conversation::infrastructure::ConversationStoreOpenError::Grants {
+                    path,
+                    cause,
+                } => RunError::opening(crate::core::Dataset::AccessGrants, &path, cause),
             })?
             .with_access_policy(access_policy.clone()),
     );

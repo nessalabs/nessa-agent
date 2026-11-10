@@ -82,6 +82,7 @@ models link back to the source that owns those decisions.
 - [Run harnesses through environment leases](environment-leases.md)
 - [Reach a gateway through a tunnel](tunnel-connectivity.md)
 - [Pair a device through current receiver holding](device-pairing.md)
+- [Pair a gateway as the same person and recover attribution](same-person.md)
 - [Stop captured parent and descendant turns](parent-stop.md)
 - [Call a gateway method from the CLI or MCP](call-a-method-from-the-cli-or-mcp.md)
 

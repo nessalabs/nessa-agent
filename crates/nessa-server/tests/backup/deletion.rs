@@ -205,9 +205,12 @@ async fn a_failed_fence_source_does_not_commit_the_other_source() {
     let root = namespace.path();
     let private = root.join("conversations");
     nessa_local_storage::create_directory(&private).unwrap();
-    let store = LocalConversationStore::open(&private.join("metadata.sqlite3"))
-        .unwrap()
-        .with_access_policy(crate::conversation_test_support::access_policy());
+    let store = LocalConversationStore::open_with_grants(
+        &private.join("metadata.sqlite3"),
+        &namespace_grants(root),
+    )
+    .unwrap()
+    .with_access_policy(crate::conversation_test_support::access_policy());
     let id = new_id();
     store.create(owned(&id)).await.unwrap();
     grant(&store, &id, "party", ShareAccess::read()).await;
@@ -242,7 +245,7 @@ async fn a_damaged_fence_row_leaves_the_stored_revoke() {
     let private = root.join("conversations");
     nessa_local_storage::create_directory(&private).unwrap();
     let metadata = private.join("metadata.sqlite3");
-    let store = LocalConversationStore::open(&metadata)
+    let store = LocalConversationStore::open_with_grants(&metadata, &namespace_grants(root))
         .unwrap()
         .with_access_policy(crate::conversation_test_support::access_policy());
     let kept = new_id();
@@ -275,7 +278,8 @@ async fn a_damaged_fence_row_leaves_the_stored_revoke() {
     assert!(before.contains("kept-party"));
     assert!(before.contains("damaged-party"));
 
-    let connection = nessa_local_database::rusqlite::Connection::open(&metadata).unwrap();
+    let connection =
+        nessa_local_database::rusqlite::Connection::open(namespace_grants(root)).unwrap();
     let changed = connection
         .execute(
             "UPDATE share_grant_changes
@@ -287,7 +291,7 @@ async fn a_damaged_fence_row_leaves_the_stored_revoke() {
     assert!(changed >= 1);
     drop(connection);
 
-    let snapshot = MetadataSnapshot::open(&metadata).unwrap();
+    let snapshot = MetadataSnapshot::open_with_grants(&metadata, &namespace_grants(root)).unwrap();
     assert!(snapshot.fences().is_err());
     let facts = snapshot.facts().unwrap();
     assert!(facts
@@ -747,9 +751,12 @@ fn opened() -> Opened {
     let directory = tempfile::tempdir().unwrap();
     let private = directory.path().join("conversations");
     nessa_local_storage::create_directory(&private).unwrap();
-    let store = LocalConversationStore::open(&private.join("metadata.sqlite3"))
-        .unwrap()
-        .with_access_policy(crate::conversation_test_support::access_policy());
+    let store = LocalConversationStore::open_with_grants(
+        &private.join("metadata.sqlite3"),
+        &namespace_grants(directory.path()),
+    )
+    .unwrap()
+    .with_access_policy(crate::conversation_test_support::access_policy());
     Opened {
         _directory: directory,
         store,
@@ -849,3 +856,89 @@ struct HeldReconciliation {
 }
 
 impl crate::backup::application::InventoryReconciliationLease for HeldReconciliation {}
+
+/// The same independent grant dataset production backup reads.
+fn namespace_grants(root: &std::path::Path) -> std::path::PathBuf {
+    let path = crate::conversation::infrastructure::access_grants_path(root);
+    nessa_local_storage::create_directory(path.parent().unwrap()).unwrap();
+    path
+}
+
+#[tokio::test]
+async fn production_capture_and_inventory_read_independent_grants_not_a_decoy_sibling() {
+    use crate::backup::domain::StoreKind;
+    use crate::backup::infrastructure::CommittedInventory;
+    use std::sync::Arc;
+    struct Time;
+    impl nessa_auth::application::ports::Clock for Time {
+        fn unix_milliseconds(&self) -> u64 {
+            10_000
+        }
+    }
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let private = root.join("conversations");
+    nessa_local_storage::create_directory(&private).unwrap();
+    let metadata = private.join("metadata.sqlite3");
+    let store = LocalConversationStore::open_with_grants(&metadata, &namespace_grants(root))
+        .unwrap()
+        .with_access_policy(crate::conversation_test_support::access_policy());
+    let live = new_id();
+    let revoked = new_id();
+    for id in [&live, &revoked] {
+        store.create(owned(id)).await.unwrap();
+    }
+    grant(&store, &live, "production-live", ShareAccess::read()).await;
+    grant(&store, &revoked, "production-revoked", ShareAccess::read()).await;
+    revoke(&store, &revoked, "production-revoked").await;
+    let decoy = LocalConversationStore::open(&metadata)
+        .unwrap()
+        .with_access_policy(crate::conversation_test_support::access_policy());
+    grant(&decoy, &live, "decoy-live", ShareAccess::read()).await;
+    grant(&decoy, &revoked, "decoy-revoked", ShareAccess::read()).await;
+    revoke(&decoy, &revoked, "decoy-revoked").await;
+    let external_inventory = tempfile::tempdir().unwrap();
+    let inventory = FileDeletionLog::open(external_inventory.path().join("inventory")).unwrap();
+    let bundle = tempfile::tempdir().unwrap();
+    let captured = capture_namespace(
+        root,
+        &FenceAdmission,
+        &inventory,
+        &DirectoryPublisher::new(bundle.path().join("cut")),
+        &FenceClock,
+        &inventory.key(),
+    )
+    .await
+    .unwrap();
+    let grants = captured
+        .manifest()
+        .stores()
+        .iter()
+        .find(|store| store.store() == StoreKind::ShareGrants)
+        .unwrap();
+    assert_eq!(grants.records().len(), 1);
+    let bytes = String::from_utf8(grants.records()[0].public_bytes().unwrap().to_vec()).unwrap();
+    assert!(bytes.contains("production-live"), "{bytes}");
+    assert!(!bytes.contains("decoy"), "{bytes}");
+    let first = inventory.load().await.unwrap();
+    assert_eq!(first.entries().len(), 1);
+    assert!(first.entries()[0]
+        .fence()
+        .key()
+        .contains("production-revoked"));
+    assert!(!first.entries()[0].fence().key().contains("decoy"));
+    // A different, initially empty inventory exercises read_committed_fences,
+    // independently of the inventory capture_namespace just populated.
+    let committed = CommittedInventory::open(root, Arc::new(Time)).unwrap();
+    committed.capture_as("person").await.unwrap();
+    let second = FileDeletionLog::open(root.join("backup"))
+        .unwrap()
+        .load()
+        .await
+        .unwrap();
+    assert_eq!(second.entries().len(), 1);
+    assert_eq!(
+        second.entries()[0].fence().key(),
+        first.entries()[0].fence().key()
+    );
+}

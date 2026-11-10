@@ -56,11 +56,19 @@ impl MetadataSnapshot {
     /// Begin a read transaction. A missing or unreadable file is
     /// [`ConversationError::Metadata`]. The file is not created.
     pub fn open(path: &Path) -> Result<Self, ConversationError> {
+        Self::open_with_grants(path, &super::grant_database::path(path))
+    }
+
+    /// Read the explicitly composed grant file without creating either file.
+    /// The standalone `open` convention is the sibling grant file.
+    pub fn open_with_grants(path: &Path, grants: &Path) -> Result<Self, ConversationError> {
         let connection = Connection::open_with_flags(
             path,
             OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
         )
         .map_err(failed)?;
+        super::grant_database::attach_read_only(&connection, grants)
+            .map_err(|_| ConversationError::Metadata)?;
         connection.execute_batch("BEGIN").map_err(failed)?;
         let watermark = watermark(&connection)?;
         Ok(Self {
@@ -117,7 +125,7 @@ fn watermark(connection: &Connection) -> Result<String, ConversationError> {
         .map_err(failed)?;
     let journal: i64 = connection
         .cached_row(
-            "SELECT COALESCE(MAX(sequence), 0) FROM share_grant_changes",
+            "SELECT COALESCE(MAX(sequence), 0) FROM grants.share_grant_changes",
             [],
             |row| row.get(0),
         )
@@ -153,7 +161,7 @@ pub(super) fn read(connection: &Connection) -> Result<ExportFacts, ConversationE
         &format!(
             "SELECT resource_id, principal_id, receiver_id, credential_id, capabilities, policy,
                     policy_revision
-             FROM share_grants WHERE resource_kind = '{kind}'
+             FROM grants.share_grants WHERE resource_kind = '{kind}'
              ORDER BY resource_id, principal_id",
             kind = ResourceKind::Conversation.as_str(),
         ),
@@ -282,30 +290,31 @@ fn revocation_rows(
                  FROM (
                      SELECT j.resource_id, j.principal_id, j.receiver_id, j.credential_id,
                             j.before AS capabilities, j.sequence
-                     FROM share_grant_changes AS j
+                     FROM grants.share_grant_changes AS j
                      WHERE j.resource_kind = '{kind}'
                        AND j.after = 'none'
                        AND j.sequence = (
-                           SELECT MAX(j2.sequence) FROM share_grant_changes AS j2
+                           SELECT MAX(j2.sequence) FROM grants.share_grant_changes AS j2
                            WHERE j2.resource_kind = j.resource_kind
                              AND j2.resource_id = j.resource_id
                              AND j2.principal_id = j.principal_id
+                             AND j2.receiver_id IS j.receiver_id
                        )
                      UNION ALL
                      SELECT j.resource_id, j.principal_id, j.receiver_id, j.credential_id,
                             j.after AS capabilities, j.sequence
-                     FROM share_grant_changes AS j
+                     FROM grants.share_grant_changes AS j
                      WHERE j.resource_kind = '{kind}'
                        AND j.receiver_id IS NOT NULL
                        AND j.after <> 'none'
                        AND j.sequence = (
-                           SELECT MAX(j2.sequence) FROM share_grant_changes AS j2
+                           SELECT MAX(j2.sequence) FROM grants.share_grant_changes AS j2
                            WHERE j2.resource_kind = j.resource_kind
                              AND j2.resource_id = j.resource_id
                              AND j2.receiver_id = j.receiver_id
                        )
                        AND NOT EXISTS (
-                           SELECT 1 FROM share_grants AS g
+                           SELECT 1 FROM grants.share_grants AS g
                            WHERE g.resource_kind = j.resource_kind
                              AND g.resource_id = j.resource_id
                              AND g.receiver_id = j.receiver_id
@@ -384,12 +393,14 @@ fn identity_of(prefix: &str, value: &Value) -> Option<String> {
         .get("id")
         .or_else(|| value.get("conversationId"))
         .and_then(Value::as_str)?;
-    let extra = value
-        .get("receiverId")
-        .and_then(Value::as_str)
-        .or_else(|| value.get("principalId").and_then(Value::as_str))
-        .map(|party| format!(":{party}"))
-        .unwrap_or_default();
+    let extra = match value.get("receiverId").and_then(Value::as_str) {
+        Some(receiver) => format!(":receiver:{receiver}"),
+        None => value
+            .get("principalId")
+            .and_then(Value::as_str)
+            .map(|principal| format!(":principal:{principal}"))
+            .unwrap_or_default(),
+    };
     let identity = format!("{prefix}-{id}{extra}");
     nameable(&identity).then_some(identity)
 }

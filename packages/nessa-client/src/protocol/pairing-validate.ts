@@ -102,6 +102,16 @@ export function pairingOwnerStatus(value: unknown): PairingOwnerStatus {
         ? (own(item, "cleanupPending") as boolean)
         : invalid("cleanupPending"),
   }
+  const samePerson = own(item, "samePerson")
+  if (samePerson !== undefined) {
+    if (
+      typeof samePerson !== "boolean" ||
+      (status.class !== "peer-gateway-conversation-read" &&
+        status.class !== "peer-gateway-environment-serve")
+    )
+      invalid("samePerson")
+    status.samePerson = samePerson
+  }
   const claimed = own(item, "claimedDeviceKey")
   if (claimed !== undefined)
     status.claimedDeviceKey = bytes(claimed, deviceKeyBytes, "claimedDeviceKey")

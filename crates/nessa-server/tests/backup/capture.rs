@@ -308,9 +308,12 @@ async fn an_unshare_reconciles_the_revoked_grant() {
     let root = namespace.path();
     let private = root.join("conversations");
     nessa_local_storage::create_directory(&private).unwrap();
-    let store = LocalConversationStore::open(&private.join("metadata.sqlite3"))
-        .unwrap()
-        .with_access_policy(crate::conversation_test_support::access_policy());
+    let store = LocalConversationStore::open_with_grants(
+        &private.join("metadata.sqlite3"),
+        &namespace_grants(root),
+    )
+    .unwrap()
+    .with_access_policy(crate::conversation_test_support::access_policy());
     let id = ConversationId::new(&uuid::Uuid::new_v4().to_string()).unwrap();
     store.create(owned(&id)).await.unwrap();
     assert!(
@@ -361,9 +364,12 @@ async fn a_retried_share_reconciles_after_a_failed_capture() {
     let private = root.join("conversations");
     nessa_local_storage::create_directory(&private).unwrap();
     let policy = crate::conversation_test_support::access_policy();
-    let store = LocalConversationStore::open(&private.join("metadata.sqlite3"))
-        .unwrap()
-        .with_access_policy(policy.clone());
+    let store = LocalConversationStore::open_with_grants(
+        &private.join("metadata.sqlite3"),
+        &namespace_grants(root),
+    )
+    .unwrap()
+    .with_access_policy(policy.clone());
     let id = ConversationId::new(&uuid::Uuid::new_v4().to_string()).unwrap();
     store.create(owned(&id)).await.unwrap();
     for (transition, receiver, request) in [
@@ -592,9 +598,12 @@ async fn a_failed_inventory_capture_leaves_the_revoke() {
     let root = namespace.path();
     let private = root.join("conversations");
     nessa_local_storage::create_directory(&private).unwrap();
-    let store = LocalConversationStore::open(&private.join("metadata.sqlite3"))
-        .unwrap()
-        .with_access_policy(crate::conversation_test_support::access_policy());
+    let store = LocalConversationStore::open_with_grants(
+        &private.join("metadata.sqlite3"),
+        &namespace_grants(root),
+    )
+    .unwrap()
+    .with_access_policy(crate::conversation_test_support::access_policy());
     let id = ConversationId::new(&uuid::Uuid::new_v4().to_string()).unwrap();
     store.create(owned(&id)).await.unwrap();
     assert!(
@@ -911,3 +920,10 @@ fn resource() -> Resource {
 struct UncontendedReconciliation;
 
 impl crate::backup::application::InventoryReconciliationLease for UncontendedReconciliation {}
+
+/// The same independent grant dataset production backup reads.
+fn namespace_grants(root: &std::path::Path) -> std::path::PathBuf {
+    let path = crate::conversation::infrastructure::access_grants_path(root);
+    nessa_local_storage::create_directory(path.parent().unwrap()).unwrap();
+    path
+}

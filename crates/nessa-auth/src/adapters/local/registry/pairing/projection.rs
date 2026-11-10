@@ -38,6 +38,8 @@ pub(crate) struct StoredPairing {
     /// without it.
     #[serde(default, skip_serializing_if = "StoredClass::is_device")]
     class: StoredClass,
+    #[serde(default, skip_serializing_if = "is_false")]
+    same_person: bool,
     history: Vec<StoredStep>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     owner_phone_original: Option<StoredOwnerPhoneOriginal>,
@@ -187,6 +189,7 @@ impl StoredPairing {
             lifetime_ms: record.policy().lifetime_ms(),
             attempts: record.policy().attempts(),
             class: StoredClass::from_domain(intent.class()),
+            same_person: intent.same_person(),
             history: Vec::new(),
             owner_phone_original: None,
         })
@@ -320,7 +323,8 @@ impl StoredPairing {
                 ResourceId::new(self.resource.clone()).map_err(invalid)?,
             ),
             self.class.domain(),
-        )?;
+        )?
+        .with_same_person(self.same_person)?;
         // A stored original request is what makes an enrollment a signed one.
         let constructor = if self.owner_phone_original.is_none() {
             PairingRecord::new
@@ -598,4 +602,8 @@ impl StoredEvent {
             ),
         })
     }
+}
+
+fn is_false(value: &bool) -> bool {
+    !value
 }

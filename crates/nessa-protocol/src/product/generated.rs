@@ -2395,6 +2395,8 @@ impl PairingEnrollee {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PairingCreateParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub same_person: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub enrollee: Option<PairingEnrollee>,
 }
 #[derive(Deserialize, Serialize)]
@@ -2504,6 +2506,8 @@ pub struct PairingReceiver {
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PairingOwnerStatus {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub same_person: Option<bool>,
     pub invitation_id: [u8; InvitationId::LENGTH],
     pub consent_id: [u8; ConsentIntentId::LENGTH],
     pub generation: u64,

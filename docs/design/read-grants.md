@@ -26,16 +26,18 @@ default and access is per conversation.
 ## What a grant is
 
 A grant is one row: the grantee's principal, one resource, a capability
-set, the constraints a drive grant carries, and the grant epoch. The
-metadata database keeps it in `share_grants`, keyed by principal, resource
-kind, and resource id. This slice writes kind `conversation` and the
-conversation id. A directory grant uses kind `directory` under the same key.
-`receiver_id` is the receiver a paired device or gateway is bound to, because
-admission still finds that grant by its receiver. An integration, and a later
-agent, store the principal and no receiver. A grant with a principal and no
-receiver can be stored, a paired grant is still found by its receiver, and two
-rows for the same principal, resource kind, and resource id cannot both exist
-(`a_grant_is_keyed_by_principal_and_may_name_no_receiver`).
+set, the constraints a drive grant carries, and the grant epoch. The separate,
+versioned `<namespace>/access-grants/access-grants.sqlite3` file keeps
+`share_grants` and its audit, independently of conversation presence.
+Its subject is the receiver for a paired party, otherwise the principal;
+subject kind, subject id, resource kind and resource id form the unique key.
+Two receivers of the same principal can therefore hold independent grants.
+The metadata adapter attaches this file so a grant, its journal and the
+conversation catalogue revision commit together. Legacy metadata grant tables
+remain unused; opening this file never imports their rows.
+This slice writes resource kind `conversation` and the conversation id.
+A directory uses kind `directory` under the same subject key. `receiver_id`
+continues to identify paired admission; a principal-only row has no receiver.
 The only sets are `read`, `read` and `comment`, and those plus `drive`.
 What they used to be called — Read, Comment, Drive — is that set. A set
 that includes `drive`, and only that set, also carries constraints: the
@@ -171,17 +173,20 @@ A change of capabilities or constraints on a grant the same receiver and
 credential already hold takes no catalogue revision (row J4). The catalogue
 says which conversations a device can read, and that has not changed; moving
 the row would make every reader of the owner's catalogue page it again for
-nothing. The device's head does not move either: it moves with grants,
-revokes, and a replacement of the receiver or credential. Replacing either
-applies, keeps the grant epoch when the capabilities and constraints stay,
-and moves the catalogue revision, so the receiver that gained the grant
-pages it and the one that lost it drops it
-(`a_receiver_switch_is_applied_and_moves_the_catalogue`). The receiver that
-gained a drive grant reads that epoch's policy, and the one that lost the
-grant is fenced with the revoke
-(`a_replaced_receiver_keeps_the_drive_policy_and_is_fenced`). The capability set
-is learnt from `conversation.shares` and is asked where it is enforced, never
+nothing. The device's head does not move either: it moves with its own grants,
+revokes, and credential replacement. A grant for another receiver of the same
+principal is a separate row with its own epoch. Replacing which device can read
+requires explicitly revoking the former credential and granting the next one.
+After removal, the former receiver's head stays fixed during later R2/R3 activity
+it cannot see (`paired_catalogue_seeded_mock_agent_stress_seed_1`). The capability
+set is learnt from `conversation.shares` and is asked where it is enforced, never
 read from the catalogue.
+
+An ordinary change that omits its receiver keeps the existing row for that exact
+credential. Credential-owned principal grants instead require receiver absence,
+including before replay acknowledgement; they cannot reinterpret a live paired
+row as a principal share. Gate selection and transactional lookup use one target
+selector for those two existing contracts.
 
 ### Grant lifecycle
 
@@ -200,7 +205,7 @@ is another capability set or its constraints
 | Transition | Who causes it | Audit evidence | What subscribers see |
 | --- | --- | --- | --- |
 | Grant | The owner calls `conversation.share`. Cedar has allowed `owner.share`, and `grant.comment` and `grant.drive` when the set includes them. | One journal row: capabilities `none` then the set, the principal, receiver, and credential, and the initiator, surface, and request. The grant epoch is that row's sequence. The conversation's catalogue revision moves. | The owner's list subscriptions wake. The new receiver's head moves and its next pass includes the conversation. `conversation.shares` lists the grant. |
-| Re-target | The owner calls `conversation.share` for another device of the same principal, with the same capability set and constraints. | One journal row: capabilities before equal after, the new receiver and credential, the same principal, and the initiator. The epoch stays. The catalogue revision moves. | The owner's list subscriptions wake. The new receiver's pass includes the conversation. The old receiver's head moves and the conversation leaves its pages. Only the immediately preceding journal row with a held grant identifies the receiver losing access: subsequent replacements and a new grant after a revoke do not move an earlier receiver's head (row J35). Export fences the old receiver. The deletion inventory is reconciled after the share commits. |
+| Change receivers | The owner explicitly unshares the former credential and shares the next receiver, even for the same principal. | Each operation has its own normal journal and commit. Removal records the former receiver; the new receiver has a separate grant and epoch. Other receiver grants stay. | The former receiver observes removal; the new receiver observes its own grant. Later activity for R2/R3 does not move departed R1's head (J35). Export fences the removed receiver. Each operation asks deletion inventory after its commit. |
 | Epoch bump | The owner calls `conversation.share` with a different capability set or constraints, for the same receiver and credential. | One journal row: capabilities and constraints before and after, the same receiver. The epoch becomes that row's sequence. The catalogue revision stays. | No list subscription wakes, and device heads stay. `conversation.shares` shows the new epoch. The next drive turn is admitted at that epoch. |
 | Revoke | The owner calls `conversation.unshare`. The grant is found by credential. | One journal row: the capability set then `none`, the receiver the row held, and the initiator. The grant row is deleted. The catalogue revision moves. | The owner's list subscriptions wake. The receiver's head moves and the conversation leaves its pages. The deletion inventory is reconciled and fences that receiver. |
 | Backup capture | After an applied share, or any unshare, `ShareConversation` asks the deletion inventory. Export reads the journal. | A revocation fact for each receiver whose latest row is a revoke, and for each receiver the grant moved off, naming the capabilities they held and that journal sequence. A capture that fails after a revoke is logged and the revoke stays (`a_failed_inventory_capture_leaves_the_revoke`). | The deletion log gains or drops those fences. A later capture that no longer names a receiver drops its fence. List subscriptions are not this path. |
@@ -1008,7 +1013,7 @@ otherwise.
 | J32 | Share comment or drive with a principal that is not signed in as the binding owner, a gateway or any other | Refused `capabilities_refused`; `details.policies` names the Cedar policy ids, empty when no permit matched; the row unchanged and nothing journaled. The share does not match a gateway prefix | `a_gateway_is_refused_comment_and_drive_and_the_grant_is_unchanged` |
 | J33 | A device holding drive sends on that conversation, and the same command names another | Admitted on the granted conversation; `conversation_not_found` on the other | `a_drive_grant_drives_only_the_conversation_it_names` |
 | J34 | A gateway holding read; the same gateway holding a hand-built comment set; a device holding only read, signed in as the binding owner | The gateway reads and is `NotPermitted` comment and drive; the device is `NotPermitted` comment and drive | `paired_peer_gateway_never_comments_or_drives`, `a_hand_built_comment_grant_for_a_gateway_is_denied_by_cedar`, `grant_comment_and_drive_need_their_capability` (`tests/conversation/access_policy.rs`, `tests/conversation/store.rs`) |
-| J35 | One principal's grant moves R1→R2→R3, including a no-op between replacements; R1 is revoked and the principal is granted through R2; R1 is later granted again | R1's head moves on its own removal and stays there during later activity it no longer sees. R2 and R3 observe their own replacement. A revoke is no held grant for the next replacement to remove. A later grant back to R1 moves its head and returns the row again | `a_replaced_receivers_head_stops_at_its_own_replacement`, `a_revoked_receivers_head_does_not_follow_a_later_grant` (`tests/conversation/store.rs`) |
+| J35 | R1 is explicitly revoked; R2 and R3 of the same principal are independently granted, including no-ops; R1 is later granted again | R1's head moves on its own removal and stays there during later activity it cannot see. R2 and R3 keep their own rows. Regranting R1 moves its head and returns the row again. | `paired_catalogue_seeded_mock_agent_stress_seed_1`, `paired_catalogue_seeded_mock_agent_stress_seed_7`, `paired_catalogue_seeded_mock_agent_stress_seed_41`, `paired_catalogue_seeded_mock_agent_stress_under_load` (`tests/product/socket/subscriptions/paired_lists/stress.rs`) |
 | J10 | One page of `conversation.shares`: the page size of grants, each a Drive grant with the largest policy (both pattern lists full, 16 hosts of 253 bytes), every text at its longest, a cursor, and the catalogue revision at the largest safe integer | Fits one frame (`MAX_PAYLOAD_BYTES`); the schema states the page size, the grant cap, the host bounds the domain enforces, and the revision bound. A later page resumes after the cursor and names the same revision | `a_full_page_of_largest_grants_fits_one_frame`, `a_shares_page_resumes_after_its_cursor`, `the_schema_states_the_share_bounds_the_domain_enforces` (`tests/product/read_access.rs`); `shares_returns_one_page_and_refuses_a_page_size_past_its_bound` |
 | J11 | A paired session with pairing's `conversation.read` and a Drive grant sends, steers, stops, answers, cancels, or asks a receipt, naming the granted conversation; then naming another of the owner's | Admitted, and its message starts a turn there; the other is `conversation_not_found` | `a_drive_grant_drives_only_the_conversation_it_names` |
 | J12 | A paired session, holding `conversation.write` and a Drive grant, calls any other method whose grant is `conversation.write`; or, holding a Read or Comment grant, a Drive command; or a party signed in as a principal other than its grantor, as a peer is, holding Drive, a Drive command | `forbidden` | `a_paired_session_writes_only_what_a_drive_grant_admits` |

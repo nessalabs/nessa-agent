@@ -71,6 +71,7 @@ impl PairingOwner<'_> {
         id: InvitationId,
         consent: ConsentIntentId,
         class: ConsentClass,
+        same_person: bool,
     ) -> Result<PreparedInvitation, OwnerError> {
         let context = session.context();
         let intent = ConsentIntent::new(
@@ -82,11 +83,17 @@ impl PairingOwner<'_> {
             self.gateway.clone(),
             class,
         )
+        .and_then(|intent| intent.with_same_person(same_person))
         .map_err(OwnerError::Domain)?;
         self.authorization
             .execute(session, &intent, self.gateway)
             .await
             .map_err(OwnerError::Authorization)?;
+        if intent.same_person() {
+            self.enrollments
+                .validate_same_person_owner(&intent)
+                .map_err(OwnerError::Enrollment)?;
+        }
         // Admitted: settle past-due records so they release the slot and the
         // live limit before the collection check below.
         for record in self

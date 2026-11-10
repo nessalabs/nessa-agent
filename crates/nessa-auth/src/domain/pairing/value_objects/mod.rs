@@ -17,3 +17,6 @@ mod owner_phone_context;
 pub use owner_phone_context::OwnerPhoneContext;
 mod owner_phone;
 pub use owner_phone::{OwnerPhoneRequest, OwnerPhoneRequestId, OwnerPhoneSource};
+
+mod person_link;
+pub use person_link::{PersonLinkCause, PersonLinkChange, PersonLinkInitiator};
