@@ -11,7 +11,10 @@ use crate::backup::application::{
     verify_bundle, ExportClock, ExportFailure, ManifestPublisher, MutationAdmission,
     PublishedRecord, VerificationLimits,
 };
-use crate::backup::domain::{outbox_watermark, Sensitivity, SkipReason, StoreKind};
+use crate::backup::domain::{
+    encode_accepted_restore, encode_deferred, outbox_watermark, DeferredLine, Fingerprint,
+    Sensitivity, SkipReason, StoreKind,
+};
 use crate::backup::infrastructure::ExportFormat;
 use crate::backup::infrastructure::{
     capture_namespace, jsonl_cut, path_sensitivity, DirectoryPublisher,
@@ -1664,6 +1667,109 @@ async fn publish_cut(root: &Path) -> PublishedCut {
         bytes,
         _bundle: bundle,
     }
+}
+
+#[tokio::test]
+async fn an_export_names_deferred_conversations_the_serving_file_does_not_hold() {
+    let namespace = tempfile::tempdir().unwrap();
+    let root = namespace.path();
+    let sessions = root.join("conversations/sessions");
+    fs::create_dir_all(&sessions).unwrap();
+    let database =
+        nessa_local_database::rusqlite::Connection::open(sessions.join("records.sqlite3")).unwrap();
+    database
+        .execute_batch(
+            "CREATE TABLE event_streams(
+                stream_key INTEGER PRIMARY KEY,
+                public_id TEXT NOT NULL,
+                retired INTEGER NOT NULL DEFAULT 0
+             );
+             INSERT INTO event_streams(public_id, retired) VALUES ('kept', 0);",
+        )
+        .unwrap();
+    drop(database);
+    let catalogue = root.join("conversations/metadata.sqlite3");
+    fs::create_dir_all(catalogue.parent().unwrap()).unwrap();
+    let catalogue = nessa_local_database::rusqlite::Connection::open(&catalogue).unwrap();
+    catalogue
+        .execute_batch(
+            "CREATE TABLE deletions(conversation_id TEXT);
+             INSERT INTO deletions(conversation_id) VALUES ('gone');",
+        )
+        .unwrap();
+    drop(catalogue);
+    let live = root.join("accepted-live");
+    let audit = root.join("accepted-audit");
+    fs::create_dir_all(&live).unwrap();
+    fs::create_dir_all(&audit).unwrap();
+    let line = |id: &str, size: u64, body: &[u8]| DeferredLine {
+        store: StoreKind::CanonicalRecords,
+        conversation_id: id.to_owned(),
+        size,
+        digest: Fingerprint::of(body),
+    };
+    fs::write(
+        live.join("deferred.txt"),
+        encode_deferred(&[
+            line("kept", 4, b"kept"),
+            line("missing", 7, b"missing"),
+            line("gone", 4, b"gone"),
+        ])
+        .unwrap(),
+    )
+    .unwrap();
+    let _inventory = FileDeletionLog::open(root.join("backup")).unwrap();
+    fs::write(
+        root.join("backup/accepted-restore.txt"),
+        encode_accepted_restore(&live, &audit, Some(&root.join("source.sqlite3"))).unwrap(),
+    )
+    .unwrap();
+    let cut = publish_cut(root).await;
+    assert!(
+        cut.text.contains("deferred canonical-records missing "),
+        "{}",
+        cut.text
+    );
+    assert!(
+        !cut.text.contains("deferred canonical-records kept "),
+        "{}",
+        cut.text
+    );
+    assert!(
+        !cut.text.contains("deferred canonical-records gone "),
+        "{}",
+        cut.text
+    );
+}
+
+#[tokio::test]
+async fn an_unreadable_deferred_list_is_not_published_as_a_complete_cut() {
+    let namespace = tempfile::tempdir().unwrap();
+    let root = namespace.path();
+    let live = root.join("accepted-live");
+    let audit = root.join("accepted-audit");
+    fs::create_dir_all(&live).unwrap();
+    fs::create_dir_all(&audit).unwrap();
+    fs::write(live.join("deferred.txt"), b"not a deferred list\n").unwrap();
+    let inventory = FileDeletionLog::open(root.join("backup")).unwrap();
+    fs::write(
+        root.join("backup/accepted-restore.txt"),
+        encode_accepted_restore(&live, &audit, None).unwrap(),
+    )
+    .unwrap();
+    let bundle = tempfile::tempdir().unwrap();
+    let error = capture_namespace(
+        root,
+        &OpenAdmission,
+        &inventory,
+        &DirectoryPublisher::new(bundle.path().join("cut")),
+        &Clock(8),
+        &inventory.key(),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(error, ExportFailure::Inventory);
+    assert!(!bundle.path().join("cut/manifest.txt").exists());
 }
 
 fn holds(bytes: &[u8], needle: &[u8]) -> bool {
