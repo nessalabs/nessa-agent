@@ -1,9 +1,9 @@
 # Issue 893 desktop completion evidence
 
 Current assembled-source/check-harness checkpoint:
-`fe7551adb9ecd1055647b66a2291672144c4ab1c`, integrating main
-`f4c1ba3637e7f95361e9fe7009a31a01a8afff94` unchanged.
-Gateway-specific runtime code last changed at
+`49112732e8e7b08fc4190ef771511c389f484087`, integrating main
+`19954d1f99adbfefea9036bcd33ce9f49c353038` unchanged.
+Desktop pairing runtime code last changed at
 `491d9359234aa1218cdcb6d0fde19bfb3719e11f`.
 Behavioral/negative-control checkpoint before the layer-only move:
 `41cec9e2121cb420c67d8036334840c4832b903c`.
@@ -19,6 +19,31 @@ checked it** section is the live record for broad qualification and exact-head
 CI. A passed focused check below does not imply every merge gate passed.
 
 ## Current-main qualification reconciliation
+
+Main advanced during the frozen browser run with #1293's Place refactor. The
+integration preserves it unchanged. Independent review found no overlap with
+this feature and no pairing, principal, grant, admission, protocol, SDK or
+frontend change. `Place::Pool.name()` preserves the environment listing's
+`peer:any`; channel and placement wire/storage words are retained. The native
+gateway and MCP fixture build passes at this assembled checkpoint. The diagram
+body is unchanged; the reviewed desktop source checkpoint advances, while the
+native lifecycle and unrelated OwnerPhone checkpoints retain their own scope.
+
+The complete default development functional matrix at `88bc8b58` held
+1,530/1,620 attempted cases in 7,798.3 seconds, exit 1. Twenty-seven families
+held, ten failed and command-order could not fully run; eighteen cases were
+unable to run. The separate performance budget was omitted explicitly. The
+production scripted aggregate passes, including native pairing 4/4. Selected
+Gateway stress holds 10/10 default and 14/14 raised per layout, in both engines.
+The raised cohort uses gatewayPairings3, parallel6, turns4, followers4, rounds40
+and seed7. These are execution receipts for that source cut.
+
+Frontend, SDK and desktop verification sources are byte-identical between
+`88bc8b58` and this assembled checkpoint. Those browser observations remain
+evidence for the same frontend source; they do not establish native Rust
+behavior at the new main. Fresh native/browser integration, the separate
+development retained-app check, exact-configuration main controls and final-head
+CI are recorded on the PR's live evidence comment. Qualification remains open.
 
 Merged #1291 supplies the ambient renderer and explicit elapsed clock. It is
 preserved unchanged. The new clock does not control pairing's injected `after`
@@ -46,9 +71,9 @@ masthead paragraph causes four exact extra-copy failures. Removing only the MCP
 whitelist entry causes sixteen exact unexpected-method failures. Both source
 mutations were restored. The desktop verification unit suite passes 682 tests,
 with two skips, and scoped format/lint checks pass. These controls close the two
-fixture inconsistencies; the complete browser matrix and new-head CI still need
-their own verdicts on the frozen assembled source. Issue #893 is not declared
-complete while that qualification remains open.
+fixture inconsistencies. The complete matrix remains red on the broader gates
+recorded above. Issue #893 is not declared complete while qualification remains
+open; passing focused pairing checks does not waive those gates.
 
 ## Merged prerequisite and ownership
 
