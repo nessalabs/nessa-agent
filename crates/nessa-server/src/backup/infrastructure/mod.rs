@@ -26,7 +26,6 @@ mod snapshot_file;
 
 pub use admission::ConversationAdmission;
 pub use bundle::DirectoryPublisher;
-#[cfg(test)]
 pub(crate) use cedar::CedarInventoryPolicy;
 pub use committed::CommittedInventory;
 pub use credentials::{read_credentials, CredentialReadError};

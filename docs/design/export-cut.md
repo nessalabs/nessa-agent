@@ -252,5 +252,8 @@ the session file only when the size and stream fingerprint match the cut.
 changed, or interrupted source publishes nothing and leaves other session files
 in place.
 
-`nessa-backup-plan` does not stage or accept. The desktop and `conversation.read`
-do not call the open use case yet. Remote executors are not contacted.
+`nessa-backup-plan` does not stage or accept. `nessa-backup-restore` does:
+stage leaves the live path absent, accept is the authority, and open fetches
+one deferred conversation. A missing source is `source-missing` and writes no
+other session file. A gateway pointed at a tree that has not been accepted
+does not listen. Remote executors are not contacted.

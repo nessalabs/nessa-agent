@@ -131,7 +131,7 @@ The configured safety rules are `AcceptanceHasCurrentProof`, `DurabilityRequires
 
 ## Verification limits
 
-The abstraction assumes successful policy/audit admission before staging. It omits trusted-key recovery, host identity fencing, omission acceptance, file-handle containment, deferred fetch streaming and OS-specific quarantine protection. The offline plan remains informational even though a separate quarantine use case now exists. The cited code and regression sources were inspected at the page checkpoint; their product test suites were not run in this modeling pass.
+The abstraction assumes successful policy/audit admission before staging. It omits trusted-key recovery, host identity fencing, omission acceptance, file-handle containment, deferred fetch streaming and OS-specific quarantine protection. The offline plan remains informational. A gateway whose namespace points at a tree that is not an accepted live restore refuses to listen; `conversation.read` fetches one deferred conversation and refuses when that source is gone. Those gateway steps are outside this model. The cited code and regression sources were inspected at the page checkpoint; their product test suites were not run in this modeling pass.
 
 ## Further reading
 

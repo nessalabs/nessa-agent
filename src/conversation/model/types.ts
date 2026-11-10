@@ -319,6 +319,17 @@ export type ReadFailure =
    * identity for good.
    */
   | "deleted"
+  /**
+   * A restored conversation's recorded source is gone. Nothing was fetched.
+   * Other conversations are unchanged. Putting the source back and reading
+   * again can still succeed.
+   */
+  | "source-gone"
+  /**
+   * The source no longer matches the version the backup recorded. Nothing
+   * was fetched. Other conversations are unchanged.
+   */
+  | "source-changed"
   | "unavailable"
 
 export type Receipt =

@@ -25,10 +25,13 @@
 
 mod backup_output;
 mod backup_verification;
+mod restore_command;
 mod restore_planning;
 mod root;
 
 pub use backup_verification::run_backup_verifier;
+pub use restore_command::run_backup_restore;
+pub(crate) use restore_command::startup_authority;
 pub use restore_planning::run_restore_planner;
 
 pub use root::CompositionRoot;

@@ -31,6 +31,8 @@ pub enum RestoreFault {
     ExecutorsUnfenced,
     Audit,
     Denied,
+    /// The tree is not an accepted live restore. A gateway must not serve it.
+    NotAccepted,
     SourceMissing,
     SourceChanged,
     Interrupted,
@@ -60,6 +62,7 @@ impl RestoreFault {
             Self::ExecutorsUnfenced => "executors-unfenced",
             Self::Audit => "audit",
             Self::Denied => "denied",
+            Self::NotAccepted => "not-accepted",
             Self::SourceMissing => "source-missing",
             Self::SourceChanged => "source-changed",
             Self::Interrupted => "interrupted",
@@ -775,6 +778,128 @@ pub fn extra_session_allowed(relative: &str, deferred: &[DeferredLine]) -> bool 
         .any(|line| deferred_session_name(&line.conversation_id).is_ok_and(|name| name == relative))
 }
 
+/// Header of the pointer a gateway reads to find an accepted restore.
+pub const ACCEPTED_RESTORE_HEADER: &str = "nessa-accepted-restore/1";
+
+/// Where an accepted restore sits, as the pointer spells it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AcceptedRestorePointer {
+    pub live: String,
+    pub audit: String,
+    pub source: Option<String>,
+}
+
+/// The pointer text. `source` is absent when the operator named no session file.
+pub fn encode_accepted_restore(
+    live: &Path,
+    audit: &Path,
+    source: Option<&Path>,
+) -> Result<String, RestoreFault> {
+    let live = absolute_pointer(live)?;
+    let audit = absolute_pointer(audit)?;
+    paths_are_distinct(Path::new(&live), Path::new(&audit))?;
+    let source = match source {
+        Some(path) => absolute_pointer(path)?,
+        None => "-".to_owned(),
+    };
+    Ok(format!(
+        "{ACCEPTED_RESTORE_HEADER}\nlive {live}\naudit {audit}\nsource {source}\n"
+    ))
+}
+
+/// Read a pointer. A line that is not the current spelling is not a pointer.
+pub fn decode_accepted_restore(text: &str) -> Result<AcceptedRestorePointer, RestoreFault> {
+    let mut lines = text.lines();
+    if lines.next() != Some(ACCEPTED_RESTORE_HEADER) {
+        return Err(RestoreFault::Tamper);
+    }
+    let live = pointer_value(lines.next(), "live")?;
+    let audit = pointer_value(lines.next(), "audit")?;
+    let source = pointer_value(lines.next(), "source")?;
+    if lines.next().is_some() {
+        return Err(RestoreFault::Tamper);
+    }
+    paths_are_distinct(Path::new(&live), Path::new(&audit))?;
+    let source = if source == "-" {
+        None
+    } else {
+        Some(absolute_pointer(Path::new(&source))?)
+    };
+    Ok(AcceptedRestorePointer {
+        live,
+        audit,
+        source,
+    })
+}
+
+fn pointer_value(line: Option<&str>, name: &str) -> Result<String, RestoreFault> {
+    let line = line.ok_or(RestoreFault::Tamper)?;
+    let Some((field, value)) = line.split_once(' ') else {
+        return Err(RestoreFault::Tamper);
+    };
+    if field != name || value.is_empty() || value.contains('\0') {
+        return Err(RestoreFault::Tamper);
+    }
+    if !(name == "source" && value == "-") {
+        absolute_pointer(Path::new(value))?;
+    }
+    Ok(value.to_owned())
+}
+
+fn absolute_pointer(path: &Path) -> Result<String, RestoreFault> {
+    let text = path.to_str().ok_or(RestoreFault::Paths)?;
+    if text.is_empty() || text.contains('\n') || text.contains('\0') || !path.is_absolute() {
+        return Err(RestoreFault::Paths);
+    }
+    Ok(text.to_owned())
+}
+
+/// Conversation ids named by deferred lines, in file order, once each.
+pub fn deferred_conversation_ids(lines: &[DeferredLine]) -> Vec<String> {
+    let mut ids = Vec::new();
+    for line in lines {
+        if !ids
+            .iter()
+            .any(|existing: &String| existing == &line.conversation_id)
+        {
+            ids.push(line.conversation_id.clone());
+        }
+    }
+    ids
+}
+
+/// `replay.blocked` is the sealed `blocked` marker, so historical outbox
+/// bytes are not commands.
+pub fn historical_commands_are_blocked(replay: &[u8]) -> bool {
+    replay == REPLAY_BODY.as_bytes()
+}
+
+/// Commands a restored gateway may run from the outbox it was given.
+///
+/// A blocked marker runs nothing. Any other bytes are not a restore marker;
+/// the caller refuses them instead of running the list.
+pub fn commands_after_restore<'a>(replay: &[u8], commands: &'a [String]) -> &'a [String] {
+    if historical_commands_are_blocked(replay) {
+        &[]
+    } else {
+        commands
+    }
+}
+
+/// Credentials a restored gateway may load from the backup.
+///
+/// `identity.txt` of `re-pair` loads none. The bodies stay where they were.
+pub fn credentials_imported_on_restore(
+    identity: &[u8],
+    bodies: &[Vec<u8>],
+) -> Result<Vec<Vec<u8>>, RestoreFault> {
+    if identity != IDENTITY_BODY.as_bytes() {
+        return Err(RestoreFault::Tamper);
+    }
+    let _ = bodies;
+    Ok(Vec::new())
+}
+
 pub fn relative_path_is_safe(path: &str) -> bool {
     !path.is_empty()
         && !path.starts_with('/')
@@ -797,6 +922,54 @@ mod tests {
             log = log.append(fence).0;
         }
         log
+    }
+
+    #[test]
+    fn an_accepted_pointer_names_the_live_tree_and_not_its_audit() {
+        let root = if cfg!(windows) {
+            PathBuf::from(r"C:\")
+        } else {
+            PathBuf::from("/")
+        };
+        let live = root.join("restore").join("live");
+        let audit = root.join("restore").join("audit");
+        let source = root.join("origin").join("records.sqlite3");
+        let text = encode_accepted_restore(&live, &audit, Some(&source)).unwrap();
+        let pointer = decode_accepted_restore(&text).unwrap();
+        assert_eq!(pointer.live, live.to_str().unwrap());
+        assert_eq!(pointer.audit, audit.to_str().unwrap());
+        assert_eq!(pointer.source.as_deref(), source.to_str());
+        let absent = encode_accepted_restore(&live, &audit, None).unwrap();
+        assert_eq!(decode_accepted_restore(&absent).unwrap().source, None);
+        assert_eq!(
+            decode_accepted_restore("not-a-pointer\n").unwrap_err(),
+            RestoreFault::Tamper
+        );
+        assert_eq!(
+            encode_accepted_restore(&live, &live, None).unwrap_err(),
+            RestoreFault::Paths
+        );
+    }
+
+    #[test]
+    fn a_re_pair_restore_imports_no_credentials_and_runs_no_commands() {
+        let secret = b"-----BEGIN PRIVATE KEY-----\n".to_vec();
+        assert!(
+            credentials_imported_on_restore(IDENTITY_BODY.as_bytes(), &[secret])
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            credentials_imported_on_restore(b"same-key\n", &[]).unwrap_err(),
+            RestoreFault::Tamper
+        );
+        let commands = vec!["echo should-not-run".to_owned()];
+        assert!(commands_after_restore(REPLAY_BODY.as_bytes(), &commands).is_empty());
+        assert_eq!(
+            commands_after_restore(b"run\n", &commands),
+            commands.as_slice()
+        );
+        assert!(historical_commands_are_blocked(REPLAY_BODY.as_bytes()));
     }
 
     #[test]

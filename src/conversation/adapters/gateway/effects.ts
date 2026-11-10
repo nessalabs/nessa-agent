@@ -258,6 +258,8 @@ const readFailures: Record<ConversationErrorCode, ReadFailure> = {
   // read is answered from the cache — so "it keeps trying" would be false and
   // the refresh it offers could only ever return this again.
   conversation_state_unreadable: "state-unreadable",
+  deferred_source_unavailable: "source-gone",
+  deferred_source_changed: "source-changed",
   // Deleted, whether or not its erasure finished: the identity is refused for
   // good either way, so a read has nothing to wait for.
   conversation_deleted: "deleted",

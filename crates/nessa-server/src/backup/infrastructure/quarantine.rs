@@ -30,12 +30,12 @@ use serde_json::{json, Value};
 use sha2::Digest;
 
 use crate::backup::application::{
-    current_journal_is_trusted, current_staging_id, AnchoredRoot, CutMaterializer,
-    DecisionAuditError, DeferredSessionSource, ExportClock, FetchProgress, JournalFields,
-    LoadedTree, MacKey, PreparedCut, Promoted, PublicationIds, PublishedSession, QuarantineLayout,
-    RestoreAudit, RestoreEvidence, RestoreHold, SealFields, SealedInventoryReader, SessionAttempt,
-    SessionCut, SessionSourceError, StagedTreeOwner, Staging, StagingIds, TreeId,
-    VerificationFormat, VerificationLimits, VerificationSource,
+    current_journal_is_live, current_journal_is_trusted, current_staging_id, AnchoredRoot,
+    CutMaterializer, DecisionAuditError, DeferredSessionSource, ExportClock, FetchProgress,
+    JournalFields, LoadedTree, MacKey, PreparedCut, Promoted, PublicationIds, PublishedSession,
+    QuarantineLayout, RestoreAudit, RestoreEvidence, RestoreHold, SealFields,
+    SealedInventoryReader, SessionAttempt, SessionCut, SessionSourceError, StagedTreeOwner,
+    Staging, StagingIds, TreeId, VerificationFormat, VerificationLimits, VerificationSource,
 };
 use crate::backup::domain::{
     conversation_is_fenced, credential_is_fenced, encode_deferred, fresher_fences,
@@ -3829,6 +3829,26 @@ impl<C: ExportClock> RestoreAudit for FileRestoreAudit<C> {
         let _file = exclusive(&self.directory).map_err(|_| DecisionAuditError::NotStored)?;
         let lines = read_restore_audit(&self.path)?;
         Ok(current_journal_is_trusted(
+            lines.iter().map(restore_journal_fields),
+            target,
+            digest,
+            staging_id,
+        ))
+    }
+
+    fn is_accepted_live(
+        &self,
+        target: &str,
+        digest: &str,
+        staging_id: Option<&str>,
+    ) -> Result<bool, DecisionAuditError> {
+        let _gate = self
+            .gate
+            .lock()
+            .map_err(|_| DecisionAuditError::NotStored)?;
+        let _file = exclusive(&self.directory).map_err(|_| DecisionAuditError::NotStored)?;
+        let lines = read_restore_audit(&self.path)?;
+        Ok(current_journal_is_live(
             lines.iter().map(restore_journal_fields),
             target,
             digest,

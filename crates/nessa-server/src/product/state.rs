@@ -230,6 +230,9 @@ pub struct ProductRouteState {
     /// same question only until the operating system corrects its wall clock.
     pub(crate) view_clock: Arc<dyn Clock>,
     pub(crate) agent_readiness: Arc<SharedAgentReadiness>,
+    /// Fetches a deferred conversation before an open starts an agent.
+    /// Absent when this gateway is not serving an accepted restore.
+    pub(crate) deferred_open: Option<Arc<dyn crate::backup::application::DeferredConversationOpen>>,
 }
 
 /// The pre-authentication onboarding route is given one way to ask this machine
@@ -390,7 +393,15 @@ impl ProductRouteState {
             uptime_clock: dependencies.uptime_clock,
             view_clock: Arc::new(ProcessTimeline),
             agent_readiness: Arc::new(SharedAgentReadiness::new(dependencies.agent_probe)),
+            deferred_open: None,
         }
+    }
+
+    pub(crate) fn set_deferred_open(
+        &mut self,
+        opener: Arc<dyn crate::backup::application::DeferredConversationOpen>,
+    ) {
+        self.deferred_open = Some(opener);
     }
 
     pub fn with_browser_sessions(

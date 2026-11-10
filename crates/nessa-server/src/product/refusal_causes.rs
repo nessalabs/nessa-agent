@@ -94,6 +94,8 @@ fn conversation(out: &mut String, error: &ConversationError) {
             return group.end();
         }
         E::NotFound => "not-found",
+        E::DeferredSourceUnavailable => "deferred-source-unavailable",
+        E::DeferredSourceChanged => "deferred-source-changed",
         E::ChannelNotFound => "channel-not-found",
         E::Deleted => "deleted",
         E::ShareTargetNotPaired => "share-target-not-paired",

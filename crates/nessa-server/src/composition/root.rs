@@ -269,10 +269,34 @@ impl CompositionRoot {
         // can be holding this generation while this one starts.
         launch.forget_startup_failure();
         let config = Environment::from_system()?;
+        let accepted_restore = config
+            .auth_directory
+            .as_ref()
+            .and_then(|directory| directory.parent())
+            .map(super::restore_command::startup_authority)
+            .transpose()?
+            .flatten();
+        let deferred_open = match accepted_restore {
+            Some(binding) => {
+                let policy =
+                    crate::backup::infrastructure::CedarInventoryPolicy::new().map_err(|_| {
+                        crate::core::RunError::Restore("restore policy could not be loaded".into())
+                    })?;
+                Some(std::sync::Arc::new(
+                    super::restore_command::GatewayDeferredOpen::new(binding, policy),
+                ))
+            }
+            None => None,
+        };
         if provisioning == LocalProvisioning::Automatic {
             super::provisioning::ensure_local_credentials(&config)?;
         }
         let dependencies = runtime_dependencies(&config);
+        let mut composed =
+            super::local_auth::product_state(&config, dependencies.clock.clone(), bundle).await?;
+        if let Some(opener) = deferred_open {
+            composed.routes.set_deferred_open(opener);
+        }
         let super::local_auth::LocalProduct {
             routes: product,
             webhook_delivery,
@@ -283,7 +307,7 @@ impl CompositionRoot {
             native,
             #[cfg(unix)]
             restart,
-        } = super::local_auth::product_state(&config, dependencies.clock.clone(), bundle).await?;
+        } = composed;
         let conversations = product.conversations.clone();
         // Shared with the retirement below, which asks whether any of them may
         // still hold an agent process (ADR 221).

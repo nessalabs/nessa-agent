@@ -241,6 +241,9 @@ async fn answer(
                 {
                     return Ok(failure(&frame.id, code));
                 }
+                // Fetch a deferred restored conversation before this open starts
+                // an agent. A missing source stops here and writes nothing else.
+                prepare_deferred_open(state, &params.conversation_id).await?;
                 let (view, _) =
                     read_view(state, service, session, &id, &frame.id, ReadOpening::Open).await?;
                 Ok(success(&frame.id, &view))
@@ -1107,6 +1110,36 @@ impl AdmissionNotice for FirstTokenNotice {
 /// Who sends a conversation command: the credential's verified identity.
 /// The caller's optional client metadata is deliberately not used to
 /// attribute SDK commands.
+/// Fetch one deferred conversation before the service opens it.
+///
+/// No opener means this gateway is not serving an accepted restore. A
+/// conversation that was not deferred is left to the service. A missing or
+/// changed source does not start an agent.
+async fn prepare_deferred_open(
+    state: &ProductRouteState,
+    conversation_id: &str,
+) -> Result<(), ConversationError> {
+    let Some(opener) = state.deferred_open.clone() else {
+        return Ok(());
+    };
+    let conversation_id = conversation_id.to_owned();
+    let opened = tokio::task::spawn_blocking(move || opener.open(&conversation_id))
+        .await
+        .map_err(|_| ConversationError::Unavailable)?;
+    match opened {
+        Ok(()) => Ok(()),
+        Err(crate::backup::application::DeferredOpenFailure::SourceMissing) => {
+            Err(ConversationError::DeferredSourceUnavailable)
+        }
+        Err(crate::backup::application::DeferredOpenFailure::SourceChanged) => {
+            Err(ConversationError::DeferredSourceChanged)
+        }
+        Err(crate::backup::application::DeferredOpenFailure::Unavailable) => {
+            Err(ConversationError::Unavailable)
+        }
+    }
+}
+
 /// The view `conversation.read` answers, with where in the committed history
 /// it was folded through. A subscription's frame is this same read
 /// (`docs/design/record-subscriptions.md`), so there is one read path.
