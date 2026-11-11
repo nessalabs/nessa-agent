@@ -1,6 +1,7 @@
 //! Actual signed owner approval with a late physical Pair outcome.
 //! Actual signed socket request loses its observer while its real Pair is held.
 use super::*;
+use crate::device_pairing::ConversationReceivers;
 use nessa_auth::{
     adapters::pairing::{FilePairingState, OsEntropy},
     application::{
@@ -9,7 +10,6 @@ use nessa_auth::{
     },
     domain::{pairing::PairingPhase, ResourceId},
 };
-use crate::device_pairing::ConversationReceivers;
 use nessa_device_pairing::{
     application::{
         PairingReceivers, PublicationGuard, ReceiverDispatch, ReceiverError, ReceiverRequest,

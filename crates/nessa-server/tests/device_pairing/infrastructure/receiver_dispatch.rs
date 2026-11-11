@@ -12,8 +12,8 @@ use nessa_client_core::pairing::NativeEnrollmentClient;
 use nessa_device_pairing::application::{
     PairingReceivers, ReceiverDispatch, ReceiverError, ReceiverRequest,
 };
-use nessa_server::device_pairing::ConversationReceivers;
 use nessa_server::app::dependencies::RuntimeDependencies;
+use nessa_server::device_pairing::ConversationReceivers;
 use std::{net::TcpStream, sync::atomic::Ordering};
 
 async fn staging() -> (Fixture, nessa_auth::domain::pairing::InvitationId) {

@@ -27,6 +27,7 @@
 use super::runtime_config::{routable_advertised_host, NativeConfig, RelayAddress};
 use crate::conversation::infrastructure::LocalReceiverAuthority;
 use crate::core::{NativeFailure, NativeShutdownFailure, RunError};
+use crate::device_pairing::ConversationReceivers;
 use crate::product::{DeviceCredentials, NativeSessions, ProductRouteState};
 use crate::relay::gateway::{
     application::{Backoff, Relayed, ThroughRelay},
@@ -56,7 +57,6 @@ use nessa_device_pairing::infrastructure::{
 #[cfg(unix)]
 use nessa_device_pairing::tunnel::infrastructure::ingress::TunnelIngress;
 use nessa_device_pairing::tunnel::infrastructure::ingress::{Tunneled, TunneledAccept};
-use crate::device_pairing::ConversationReceivers;
 use nessa_peer_gateways::infrastructure::{
     DurablePeerAudit, EnrollmentEntropy, PeerCommands, PeerPoller, PeerRecords, PollInputs,
     PollPolicy, TcpPeerConnector, AUDIT_DEADLINE, PREEMPT,

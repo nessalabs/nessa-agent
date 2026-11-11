@@ -28,7 +28,6 @@ use nessa_auth::{
     },
 };
 use nessa_client_core::pairing::{NativeClientError, NativeEnrollmentClient};
-use nessa_server::device_pairing::ConversationReceivers;
 use nessa_device_pairing::{
     application::{
         ActivationError, Approval, CleanupError, PairingReceivers, PublicationGuard,
@@ -42,6 +41,7 @@ use nessa_protocol::pairing::{
     },
     EnrollmentChannel,
 };
+use nessa_server::device_pairing::ConversationReceivers;
 use nessa_server::{
     app::dependencies::RuntimeDependencies,
     conversation::{

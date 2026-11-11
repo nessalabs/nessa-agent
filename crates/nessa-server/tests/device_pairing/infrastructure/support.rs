@@ -23,7 +23,6 @@ use nessa_auth::{
         AudienceId, CredentialId, OrganizationId, Resource, ResourceId,
     },
 };
-use nessa_server::device_pairing::ConversationReceivers;
 use nessa_device_pairing::{
     application::PairingReceivers,
     infrastructure::{
@@ -32,6 +31,7 @@ use nessa_device_pairing::{
         TcpEnrollmentAccept,
     },
 };
+use nessa_server::device_pairing::ConversationReceivers;
 use nessa_server::{
     app::dependencies::RuntimeDependencies, conversation::infrastructure::LocalReceiverAuthority,
 };
