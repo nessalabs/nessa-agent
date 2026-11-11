@@ -15,6 +15,21 @@ export {
   type KeyChord,
 } from "./accelerator"
 export {
+  CALL_PILL_PHASES,
+  CALL_PRESSES,
+  parseCallPicture,
+  parseCallPress,
+  type CallPicture,
+  type CallPillPhase,
+  type CallPress,
+} from "./call-pill"
+export {
+  dragCallPill,
+  hideCallPill,
+  onCallPillPicture,
+  onCallPillPress,
+  pressCallPill,
+  showCallPill,
   availableUpdate,
   askReviewNoticeAccess,
   onReviewNoticeOpened,

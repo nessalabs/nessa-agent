@@ -4,6 +4,7 @@
 mod agent_credentials;
 mod app_sandbox;
 mod attachments;
+mod call_pill;
 mod channel_paths;
 mod composition;
 mod desktop_window;
@@ -101,6 +102,14 @@ fn main() {
         .on_page_load(move |webview, payload| match payload.event() {
             tauri::webview::PageLoadEvent::Started => {
                 observed.observe(webview.label(), payload.url().as_str());
+                // The call lives in the desktop window's page: a page loading
+                // again has no call, so a pill left from the last one goes.
+                if webview.label() == desktop_window::DESKTOP_WINDOW {
+                    let app = webview.app_handle();
+                    if let Some(pill) = app.try_state::<call_pill::CallPill>() {
+                        call_pill::put_away(app, &pill);
+                    }
+                }
             }
             tauri::webview::PageLoadEvent::Finished => {
                 tracing::info!(
@@ -156,8 +165,16 @@ fn main() {
             review_notices::infrastructure::review_notice_access,
             review_notices::infrastructure::review_notice_ask,
             review_notices::infrastructure::review_notice_sync,
+            call_pill::call_pill_show,
+            call_pill::call_pill_hide,
+            call_pill::call_pill_read,
+            call_pill::call_pill_press,
+            call_pill::call_pill_drag,
         ])
         .setup(move |app| {
+            // Before anything that can return early: the pill's commands
+            // declare this state, and a command with no state panics.
+            app.manage(call_pill::CallPill::default());
             page_load::watch(
                 app.handle().clone(),
                 loads,
@@ -320,6 +337,15 @@ fn main() {
                         api.prevent_close();
                         let _ = window.hide();
                     }
+                }
+            }
+            // The pill has no close control, but the system can still ask
+            // (Cmd-W with it focused): it is hidden, never destroyed, so the
+            // next call finds it.
+            if window.label() == call_pill::CALL_WINDOW {
+                if let WindowEvent::CloseRequested { api, .. } = event {
+                    api.prevent_close();
+                    let _ = window.hide();
                 }
             }
             // Closing the desktop window never destroys it while the app runs

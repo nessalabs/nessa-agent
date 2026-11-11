@@ -58,6 +58,14 @@ export const STARTING = {
  * where its menu bar icon is (`setup_tray_point`), 80 px in from the page's
  * top right, counting each ask in `window.__fakeHostTrayAsks`.
  *
+ * Every page's host carries the call pill as `src-tauri/src/call_pill.rs`
+ * does: the picture a desktop page shows (`call_pill_show`, `call_pill_hide`)
+ * reaches a pill page (`call.html`) as `nessa://call-pill-picture` and
+ * answers its `call_pill_read`, and a pill page's `call_pill_press` reaches
+ * the desktop page as `nessa://call-pill-press`. The two pages are two tabs
+ * here, so this host's two halves talk over a broadcast channel. Shows and
+ * hides are counted in `window.__fakeHostPill`.
+ *
  * Given `panel`, the page is the menu-bar panel: the host says it started and
  * its gateway is up, as for setup, takes event listeners, answers the
  * panel's size (`panel_size`) with the page's own, and says setup chose no
@@ -107,6 +115,25 @@ export function gatewayHost({
     for (const { id } of reached) handlers.get(id)({ event, id, payload })
     return reached.length
   }
+  // The call pill, between this page and the other tab.
+  const PILL_PICTURE = "nessa://call-pill-picture"
+  const PILL_PRESS = "nessa://call-pill-press"
+  const pillWire = new BroadcastChannel("nessa-fake-host-call-pill")
+  // What the pill draws now, and whether this page is the one that says so.
+  let pillPicture = null
+  let pillOwner = false
+  window.__fakeHostPill = { shows: 0, hides: 0 }
+  pillWire.addEventListener("message", ({ data }) => {
+    if (data.kind === "picture") {
+      pillPicture = data.picture
+      window.__fakeHostEmit(PILL_PICTURE, data.picture)
+    }
+    if (data.kind === "press") window.__fakeHostEmit(PILL_PRESS, data.press)
+    // A pill page that loaded after the picture was sent asks for it.
+    if (data.kind === "read" && pillOwner)
+      pillWire.postMessage({ kind: "picture", picture: pillPicture })
+  })
+  pillWire.postMessage({ kind: "read" })
   window.__TAURI_INTERNALS__ = {
     transformCallback: (callback) => {
       const id = ++callbacks
@@ -131,6 +158,19 @@ export function gatewayHost({
         return Promise.resolve(window.__fakeHostPicks.resources.shift() ?? [])
       }
       if (command === "home_folder") return Promise.resolve(window.__fakeHostHome)
+      if (command === "call_pill_show" || command === "call_pill_hide") {
+        pillOwner = true
+        pillPicture = command === "call_pill_show" ? args.call : null
+        window.__fakeHostPill[command === "call_pill_show" ? "shows" : "hides"]++
+        pillWire.postMessage({ kind: "picture", picture: pillPicture })
+        return Promise.resolve(null)
+      }
+      if (command === "call_pill_read") return Promise.resolve(pillPicture)
+      if (command === "call_pill_press") {
+        pillWire.postMessage({ kind: "press", press: args.press })
+        return Promise.resolve(null)
+      }
+      if (command === "call_pill_drag") return Promise.resolve(null)
       if (command === "replay_onboarding") {
         window.__fakeHostReplays++
         return Promise.resolve(null)
@@ -144,7 +184,10 @@ export function gatewayHost({
         return Promise.resolve({ revision: 1, state: "ready" })
       // Every window listens for files dragged onto it, which a step sends
       // as the host does (`__fakeHostEmit`).
-      const dragged = DRAGGED_EVENTS.has(args?.event)
+      const dragged =
+        DRAGGED_EVENTS.has(args?.event) ||
+        args?.event === PILL_PICTURE ||
+        args?.event === PILL_PRESS
       if ((started || dragged) && command === "plugin:event|listen") {
         window.__TAURI_EVENT_PLUGIN_INTERNALS__ ??= { unregisterListener() {} }
         listening.push({ event: args.event, id: args.handler })

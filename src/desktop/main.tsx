@@ -17,8 +17,11 @@ import {
   homeFolder,
   openGatewayConfig,
   onPathsDragged,
+  hideCallPill,
   host,
   loadAssignedGatewayEndpoint,
+  onCallPillPress,
+  showCallPill,
   onReviewNoticeOpened,
   reviewNoticeAccess,
   syncReviewNotices,
@@ -57,6 +60,7 @@ import { DesktopWindow } from "./ui/desktop-window"
 import { platformFor, sandboxFor, WidgetRegistryProvider } from "./widgets"
 import { SubagentsProvider } from "./subagents"
 import {
+  followCallWithPill,
   scriptedTransport,
   storeConversations,
   VoiceController,
@@ -215,6 +219,47 @@ const voice = dependencies.voice
       },
     })
   : undefined
+// While a call is open and this window is not the one in front, its switches
+// float over the other apps on a pill, the host's second window. A browser
+// has none, and there nothing is shown.
+if (voice)
+  followCallWithPill({
+    call: voice,
+    pill: {
+      show: showCallPill,
+      hide: hideCallPill,
+      onPress: (handler) => {
+        // Listening is asked for, and answers later: a follow stopped before
+        // then stops the listener as soon as it is there.
+        let stop: (() => void) | null = null
+        let stopped = false
+        void onCallPillPress(handler).then(
+          (unlisten) => (stopped ? unlisten() : (stop = unlisten)),
+          (error: unknown) => console.warn("The call pill will not be heard", error),
+        )
+        return () => {
+          stopped = true
+          stop?.()
+        }
+      },
+    },
+    inFront: {
+      now: () => document.hasFocus(),
+      onChange: (listener) => {
+        window.addEventListener("focus", listener)
+        window.addEventListener("blur", listener)
+        return () => {
+          window.removeEventListener("focus", listener)
+          window.removeEventListener("blur", listener)
+        }
+      },
+    },
+    title: (sessionId) => {
+      const sessions = store.getState().workspace.sessions
+      return Object.hasOwn(sessions, sessionId) ? sessions[sessionId].title : null
+    },
+    showChat: (sessionId) => window.dispatchEvent(openReviewEvent(sessionId)),
+  })
 store.dispatch(followWorkspace())
 void store.dispatch(loadWorkspace())
 

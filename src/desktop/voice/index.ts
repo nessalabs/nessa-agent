@@ -18,6 +18,11 @@ export {
 export { webrtcTransport } from "./adapters/webrtc-transport"
 export { scriptedTransport } from "./adapters/scripted-transport"
 export { storeConversations } from "./adapters/store-chats"
+export {
+  followCallWithPill,
+  type CallPillWindow,
+  type WindowInFront,
+} from "./application/call-pill"
 export { VoiceProvider } from "./ui/voice-context"
 export { VoiceDock } from "./ui/voice-dock"
 export { useComposerVoice } from "./ui/composer-voice"

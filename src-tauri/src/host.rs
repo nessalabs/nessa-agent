@@ -64,6 +64,13 @@ pub const PATHS_DROP_BEGAN: &str = "nessa://paths-drop-began";
 /// holds, which the host did not look at, each a [`crate::channel_paths::DroppedPath`]. Only paths, like
 /// the channel pickers': the gateway checks each again before using it.
 pub const PATHS_DROPPED: &str = "nessa://paths-dropped";
+/// What the call pill should draw now; the payload is
+/// [`crate::call_pill::CallPicture`], or null when no call is shown. Sent to
+/// the pill's window alone; the host keeps the latest for a pill that asks.
+pub const CALL_PILL_PICTURE: &str = "nessa://call-pill-picture";
+/// A press on the call pill; the payload is [`crate::call_pill::CallPress`].
+/// Sent to the desktop window, whose page owns the call.
+pub const CALL_PILL_PRESS: &str = "nessa://call-pill-press";
 /// Setup recorded a finish, and with it the agent it chose. Sent to every
 /// window: one that already asked which agent setup chose asks again.
 pub const SETUP_RECORDED: &str = "nessa://setup-recorded";

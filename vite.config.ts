@@ -220,7 +220,11 @@ export default defineConfig({
     minify: process.env.TAURI_ENV_DEBUG ? false : "esbuild",
     sourcemap: Boolean(process.env.TAURI_ENV_DEBUG),
     rollupOptions: {
-      input: { panel: resolve("index.html"), desktop: resolve("desktop.html") },
+      input: {
+        panel: resolve("index.html"),
+        desktop: resolve("desktop.html"),
+        call: resolve("call.html"),
+      },
       treeshake: {
         // The package's own package.json declares that only its stylesheets
         // have side effects and its modules do not, but that field is not

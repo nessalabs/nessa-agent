@@ -4513,7 +4513,6 @@ const steps = {
     if (failures.length) return
     if (!(await run.client.voice.status()).keySaved)
       failures.push("the gateway does not report the voice key saved")
-    const end = pane.getByRole("button", { name: "End call", exact: true })
     const rim = run.page.locator(".workspace-dock .voice-rim")
     const phase = () =>
       run.page
@@ -4647,6 +4646,88 @@ const steps = {
     await pane.getByRole("button", { name: "Unmute microphone", exact: true }).click()
     await expectShown(run.page, "Listening", failures)
 
+    // Away from the window, the call's switches float on the pill: the same
+    // call, shown in `call.html`, which the host opens as a small window over
+    // other apps. Here it is another tab, and the fake host carries the
+    // picture and the presses between the two as the real one does. A
+    // browser's page cannot lose the front on its own, so the window is told
+    // it has.
+    const pill = await run.page.context().newPage()
+    await pill.setViewportSize({ width: 300, height: 48 })
+    await pill.addInitScript(gatewayHost, { endpoint: null, credential: null })
+    await pill.goto(`${new URL(run.page.url()).origin}/call.html`)
+    const face = pill.locator(".call-pill")
+    if ((await face.count()) > 0)
+      failures.push("the pill shows while the window with the call is in front")
+    const front = (inFront) =>
+      run.page.evaluate((inFront) => {
+        if (inFront) delete document.hasFocus
+        else
+          Object.defineProperty(document, "hasFocus", {
+            configurable: true,
+            value: () => false,
+          })
+        window.dispatchEvent(new Event(inFront ? "focus" : "blur"))
+      }, inFront)
+    await front(false)
+    const pillSays = (words) =>
+      waitFor(
+        async () =>
+          (await face.count()) === 1 &&
+          (await face.locator(".call-pill-state").innerText()).trim() === words,
+        5_000,
+      )
+    if (!(await pillSays("Listening")))
+      failures.push("away from the window, the pill does not show the listening call")
+    else {
+      const named = (await face.locator(".call-pill-title").innerText()).trim()
+      if (named === "") failures.push("the pill names no chat")
+      if (run.evidence)
+        await pill.screenshot({
+          path: join(run.evidence, "voice-pill.png"),
+          omitBackground: true,
+        })
+      // Its microphone switch is the call's own: the composer follows it,
+      // and what the microphone half heard is thrown away as before.
+      const pillCleared = clears()
+      await face.getByRole("button", { name: "Mute microphone", exact: true }).click()
+      if (!(await waitFor(() => clears() === pillCleared + 1, 5_000)))
+        failures.push("muting on the pill did not mute the call")
+      if (!(await pillSays("Muted"))) failures.push("the pill does not say Muted")
+      if (
+        !(await pane
+          .getByRole("button", { name: "Unmute microphone", exact: true })
+          .isVisible())
+      )
+        failures.push("the composer does not show the microphone the pill muted")
+      await face.getByRole("button", { name: "Unmute microphone", exact: true }).click()
+      if (!(await pillSays("Listening")))
+        failures.push("unmuting on the pill did not bring the call back to listening")
+      await face.getByRole("button", { name: "Mute voice", exact: true }).click()
+      if (
+        !(await pane
+          .getByRole("button", { name: "Unmute voice", exact: true })
+          .waitFor({ timeout: 5_000 })
+          .then(() => true)
+          .catch(() => false))
+      )
+        failures.push("the composer does not show the voice the pill muted")
+      await face.getByRole("button", { name: "Unmute voice", exact: true }).click()
+      await pane
+        .getByRole("button", { name: "Mute voice", exact: true })
+        .waitFor({ timeout: 5_000 })
+        .catch(() =>
+          failures.push("unmuting the voice on the pill did not reach the call"),
+        )
+    }
+    // Back in the window, the composer has the switches and the pill goes.
+    await front(true)
+    if (!(await waitFor(async () => (await face.count()) === 0, 5_000)))
+      failures.push("the pill stays while the window with the call is in front")
+    await front(false)
+    if (!(await pillSays("Listening")))
+      failures.push("the pill does not come back when the window leaves the front again")
+
     // Asked to stop, the voice stops the running turn and hears it stopped.
     const wait = prompt(run, `Okay ${STRESS.wait}`, step, " voice")
     const waiting = await seenTurns(run, run.main.id)
@@ -4694,9 +4775,26 @@ const steps = {
         `after the stop the call is ${await phase()} and was told ${JSON.stringify(realtime.told().slice(told))}`,
       )
 
-    await end.click()
+    // End on the pill ends the call, as End in the composer does, and with
+    // no call the pill has nothing to show.
+    await pill
+      .locator(".call-pill")
+      .getByRole("button", { name: "End call", exact: true })
+      .click()
     if (!(await waitFor(() => !realtime.open(), 10_000)))
       failures.push("End call left the call open")
+    if (
+      !(await waitFor(
+        async () => (await pill.locator(".call-pill").count()) === 0,
+        5_000,
+      ))
+    )
+      failures.push("the pill stays after its call ended")
+    await pill.close()
+    await run.page.evaluate(() => {
+      delete document.hasFocus
+      window.dispatchEvent(new Event("focus"))
+    })
     if (
       !(await talk.isVisible().catch(() => false)) &&
       !(await talk

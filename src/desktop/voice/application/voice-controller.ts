@@ -82,9 +82,15 @@ export const HEARING_CHECK_MS = 12_000
  * V18: what to tell the person about a call that has heard nothing, from
  * what the call found about its own audio; null when nothing looks wrong.
  * The far end is checked first: a call nobody answers needs no microphone.
+ * Then the nearest cause first: the microphone itself, what leaves for the
+ * provider, and last whether there is any sound to send.
  */
 export function hearingHint(found: CallCheck): string | null {
   if (!found.answered) return "OpenAI isn’t answering this call. End it and try again."
+  // Before what is sent: a microphone the system took away sends nothing,
+  // and saying only that would point at the network.
+  if (found.microphoneLive === false)
+    return "macOS stopped giving Nessa the microphone. Check that no other app took it, then end the call and try again."
   if (found.audioSent === false)
     return "Your voice isn’t being sent to OpenAI. End the call and try again."
   if (found.microphoneSound === false)
