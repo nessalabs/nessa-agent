@@ -12,7 +12,7 @@ use std::sync::Mutex;
 use nessa_local_database::rusqlite::{params, Connection, TransactionBehavior};
 use nessa_local_storage::create_directory;
 
-use crate::backup::domain::{
+use nessa_backup::domain::{
     decode_deferred, decode_identity, deferred_session_name, Fingerprint, JOURNAL_HEADER,
 };
 

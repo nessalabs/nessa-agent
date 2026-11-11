@@ -27,11 +27,10 @@ use nessa_sdk::domain::agent_execution::prompts::{PromptText, UserMessage};
 use nessa_sdk::domain::agent_execution::sessions::{ProviderContext, SessionId};
 use nessa_sdk::infrastructure::session_storage::RecordStorage;
 
-use crate::backup::application::{
-    AdmissionFailure, AdmissionLease, ExportClock, MutationAdmission,
-};
-use crate::backup::infrastructure::snapshot::SESSION_EXPORT_LIMIT;
-use crate::backup::infrastructure::{capture_namespace, DirectoryPublisher, FileDeletionLog};
+use crate::backup::infrastructure::capture_namespace;
+use nessa_backup::application::{AdmissionFailure, AdmissionLease, ExportClock, MutationAdmission};
+use nessa_backup::infrastructure::snapshot::SESSION_EXPORT_LIMIT;
+use nessa_backup::infrastructure::{DirectoryPublisher, FileDeletionLog};
 
 const HISTORY: &str = "restored-history";
 /// Shown in the transcript. The list preview is [`HISTORY`], so the window

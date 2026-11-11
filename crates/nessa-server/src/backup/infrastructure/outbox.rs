@@ -33,9 +33,9 @@ use nessa_local_storage::{create_directory, open, OpenMode};
 use nessa_protocol::lease::MAX_ARTIFACT_BYTES;
 
 use super::gateway::content_is_secret;
-use crate::backup::application::{CopiedStore, ExportSource, PinnedStore};
-use crate::backup::domain::{outbox_watermark, CapturedRecord, Sensitivity, SourceCut, StoreKind};
 use crate::conversation::application::ArtifactBudget;
+use nessa_backup::application::{CopiedStore, ExportSource, PinnedStore};
+use nessa_backup::domain::{outbox_watermark, CapturedRecord, Sensitivity, SourceCut, StoreKind};
 
 #[cfg(test)]
 #[path = "../../../tests/backup/outbox_lock.rs"]

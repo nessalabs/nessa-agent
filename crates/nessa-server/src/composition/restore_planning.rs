@@ -6,11 +6,11 @@ use std::io::Write;
 use serde::Serialize;
 
 use super::backup_output::print;
-use crate::backup::application::{
+use nessa_backup::application::{
     plan_offline_restore, OfflineRestorePlan, VerificationFailure, VerificationLimits,
 };
-use crate::backup::entrypoint::{parse_verification, VerificationCommand, VerificationUsageError};
-use crate::backup::infrastructure::{
+use nessa_backup::entrypoint::{parse_verification, VerificationCommand, VerificationUsageError};
+use nessa_backup::infrastructure::{
     read_verification_key, DirectoryVerificationSource, ExportFormat,
 };
 

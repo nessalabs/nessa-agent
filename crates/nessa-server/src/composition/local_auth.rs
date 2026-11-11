@@ -1303,7 +1303,7 @@ pub(crate) fn conversation_root(namespace: &Path) -> std::path::PathBuf {
 fn accepted_restore_live(namespace: &Path) -> Option<std::path::PathBuf> {
     let text =
         std::fs::read_to_string(namespace.join("backup").join("accepted-restore.txt")).ok()?;
-    let pointer = crate::backup::domain::decode_accepted_restore(&text).ok()?;
+    let pointer = nessa_backup::domain::decode_accepted_restore(&text).ok()?;
     Some(std::path::PathBuf::from(pointer.live))
 }
 
