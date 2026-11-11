@@ -1,7 +1,7 @@
 //! The resource route called directly: who may ask, what a ticket buys, and
 //! that every refusal is one answer.
 use super::*;
-use crate::attachments::entrypoint::http as attachments;
+use crate::attachments::http as attachments;
 use crate::conversation::application::McpAppAuditPhase;
 use crate::conversation::application::McpAppInitiator;
 use crate::conversation::application::{ResourceTickets, RESOURCE_TICKET_LIFETIME_MS};

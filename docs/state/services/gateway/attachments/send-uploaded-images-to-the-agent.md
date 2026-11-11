@@ -10,15 +10,15 @@ sources:
   - "src/conversation/adapters/store/slice.ts"
   - "src/conversation/model/attachments.ts"
   - "crates/nessa-server/src/conversation/application/service.rs"
-  - "crates/nessa-server/src/attachments/infrastructure/conversation.rs"
-  - "crates/nessa-server/src/attachments/infrastructure/images.rs"
+  - "crates/nessa-server/src/attachments/conversation.rs"
+  - "crates/nessa-attachments/src/infrastructure/images.rs"
   - "crates/nessa-sdk/src/application/agent_execution/providers/images.rs"
   - "crates/nessa-sdk/src/infrastructure/acp/executions/prompt_content.rs"
   - "crates/nessa-sdk/src/infrastructure/acp/executions/worker.rs"
   - "crates/nessa-server/tests/conversation/attachments.rs"
   - "src/conversation/adapters/store/attachments.test.ts"
   - "crates/nessa-sdk/tests/infrastructure/acp/contracts/images.rs"
-  - "crates/nessa-server/tests/attachments/agreement.rs"
+  - "crates/nessa-attachments/tests/agreement.rs"
 diagramLinks: {}
 ---
 

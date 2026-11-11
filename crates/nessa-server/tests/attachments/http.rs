@@ -1,16 +1,16 @@
 //! The upload route called directly: who may ask, what a ticket buys, and the
 //! exact words of every answer.
 use super::*;
-use crate::attachments::application::{
-    AttachmentLimits, NormalizeError, ReleaseCause, ReleaseRequest,
-};
-use crate::attachments_test_support::{
-    conversation, digest_of, organization, principal, Fixture, StubNormalizer, CONVERSATION,
-    OTHER_CONVERSATION,
-};
 use axum::body::to_bytes;
 use axum::http::HeaderValue;
 use futures_util::stream;
+use nessa_attachments::application::{
+    AttachmentLimits, NormalizeError, ReleaseCause, ReleaseRequest,
+};
+use nessa_attachments::test_support::{
+    conversation, digest_of, organization, principal, Fixture, StubNormalizer, CONVERSATION,
+    OTHER_CONVERSATION,
+};
 use serde_json::Value;
 use std::{
     convert::Infallible,

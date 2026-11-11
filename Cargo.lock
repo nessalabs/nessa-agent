@@ -3760,6 +3760,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "nessa-attachments"
+version = "0.1.0"
+dependencies = [
+ "futures-util",
+ "getrandom 0.3.4",
+ "image",
+ "nessa-auth",
+ "nessa-images",
+ "nessa-local-storage",
+ "nessa-protocol",
+ "nessa-sdk",
+ "nessa-sync",
+ "nessa-timer",
+ "serde",
+ "serde_json",
+ "sha2",
+ "subtle",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+]
+
+[[package]]
 name = "nessa-auth"
 version = "0.1.0"
 dependencies = [
@@ -3895,6 +3920,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "nessa-peer-gateways"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "futures-util",
+ "nessa-auth",
+ "nessa-client-core",
+ "nessa-local-storage",
+ "nessa-protocol",
+ "nessa-timer",
+ "serde",
+ "serde_json",
+ "subtle",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "uuid",
+ "zeroize",
+]
+
+[[package]]
 name = "nessa-projection"
 version = "0.1.0"
 dependencies = [
@@ -3981,6 +4027,7 @@ dependencies = [
  "mdns-sd",
  "nessa-agent-credentials",
  "nessa-agent-install",
+ "nessa-attachments",
  "nessa-auth",
  "nessa-client-core",
  "nessa-device-client",
@@ -3988,6 +4035,7 @@ dependencies = [
  "nessa-images",
  "nessa-local-database",
  "nessa-local-storage",
+ "nessa-peer-gateways",
  "nessa-projection",
  "nessa-protocol",
  "nessa-sdk",

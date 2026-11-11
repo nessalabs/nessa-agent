@@ -24,7 +24,7 @@ use nessa_sdk::domain::agent_execution::executions::Initiation;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 use super::operational_limits::OperationalLimits;
-use crate::attachments::application::HeldReads;
+use nessa_attachments::application::HeldReads;
 
 /// One capacity pool per gateway lane, shared by every socket.
 ///

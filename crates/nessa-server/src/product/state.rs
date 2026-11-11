@@ -3,10 +3,7 @@ use super::operational_limits::OperationalLimits;
 use super::turn_timing::TurnTimings;
 use crate::agents::application::{AgentProbe, SharedAgentReadiness};
 use crate::agents::infrastructure::NativeHooksPreferences;
-use crate::attachments::{
-    application::{AttachmentService, HeldReads},
-    entrypoint::{http::UploadRoute, socket::SocketUploads},
-};
+use crate::attachments::http::UploadRoute;
 use crate::conversation::application::{
     CatalogueReadSource, ConversationAccessPolicyEvaluator, ConversationMetadataReader,
     ConversationRepository, ConversationService, FenceCapture, McpAppAudit,
@@ -20,11 +17,14 @@ use crate::mcp_servers::{
     application::McpServerSettings, entrypoint::http::ResourceRoute,
     infrastructure::ResourceTicketStore,
 };
-use crate::peer_gateways::infrastructure::PeerCommands;
 use crate::timer::clock;
 use crate::webhooks::infrastructure::WebhookRuntime;
 use axum::extract::FromRef;
 use nessa_agent_install::application::AgentInstallations;
+use nessa_attachments::{
+    application::{AttachmentService, HeldReads},
+    entrypoint::socket::SocketUploads,
+};
 use nessa_auth::{
     application::{
         credential_admin::CredentialAdmin,
@@ -33,6 +33,7 @@ use nessa_auth::{
     },
     domain::{AudienceId, OrganizationId, Resource, ResourceId},
 };
+use nessa_peer_gateways::infrastructure::PeerCommands;
 use nessa_protocol::clock::Clock as UptimeClock;
 use nessa_protocol::product::generated::AgentsListResult;
 use serde_json::Value;

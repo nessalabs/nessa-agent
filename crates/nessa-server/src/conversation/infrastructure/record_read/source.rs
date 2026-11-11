@@ -11,8 +11,8 @@ use crate::conversation::infrastructure::{
     record_scope::{exact_principal_record_scope, principal_scope_from_identity},
     record_scope_from_identity,
 };
-use crate::core::read_workers::{ReadWorkerError, ReadWorkers};
 use crate::timer::clock;
+use nessa_local_storage::read_workers::{ReadWorkerError, ReadWorkers};
 use nessa_protocol::conversation::{
     domain::ConversationId,
     read_scope::{ReadRefusal, ReceiverReadScope},

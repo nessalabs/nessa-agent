@@ -9,11 +9,11 @@ use super::{
     socket::{failure, success},
     state::ProductRouteState,
 };
-use crate::peer_gateways::infrastructure::{PeerEntry, PeerPhase, PeerSync, SyncState};
 use nessa_auth::{
     adapters::pairing::ManualCode, application::session::AuthenticatedSession,
     domain::pairing::DeviceKey,
 };
+use nessa_peer_gateways::infrastructure::{PeerEntry, PeerPhase, PeerSync, SyncState};
 use nessa_protocol::product::generated::{
     PeerEnrollParams, PeerErrorCode, PeerForgetParams, PeerGateway, PeerListResult,
     PeerPhase as WirePhase, PeerRelayParams, PeerSync as WireSync, PeerSyncState,

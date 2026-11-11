@@ -8,9 +8,9 @@ summary: Peer commands isolate one peer read while preserving unrelated gateway
 parent: gateway
 sourceRevision: "77a6b620af4d94b234294f6d273fd74b3dfb44c7"
 sources:
-  - crates/nessa-server/src/peer_gateways/infrastructure/commands.rs
-  - crates/nessa-server/tests/peer_gateways/commands.rs
-  - crates/nessa-server/src/peer_gateways/infrastructure/poller.rs
+  - crates/nessa-peer-gateways/src/infrastructure/commands.rs
+  - crates/nessa-peer-gateways/tests/commands.rs
+  - crates/nessa-peer-gateways/src/infrastructure/poller.rs
   - docs/design/auth/peer-gateways.md
 model:
   spec: tla/services/gateway/PeerGateways.tla
@@ -90,4 +90,4 @@ Enrollment cryptography, deadline clocks, per-peer cached stream cursors, creden
 
 ## Further reading
 
-[commands.rs](../../../../crates/nessa-server/src/peer_gateways/infrastructure/commands.rs) · [commands.rs](../../../../crates/nessa-server/tests/peer_gateways/commands.rs) · [poller.rs](../../../../crates/nessa-server/src/peer_gateways/infrastructure/poller.rs)
+[commands.rs](../../../../crates/nessa-peer-gateways/src/infrastructure/commands.rs) · [commands.rs](../../../../crates/nessa-peer-gateways/tests/commands.rs) · [poller.rs](../../../../crates/nessa-peer-gateways/src/infrastructure/poller.rs)

@@ -142,7 +142,7 @@ change of policy applies to the next turn.
 time. A peer gets no catalogue-wide change notices, because they would cover
 the owner's whole catalogue. The peer polls.
 
-`PeerPoller` (`crates/nessa-server/src/peer_gateways/infrastructure/poller.rs`)
+`PeerPoller` (`crates/nessa-peer-gateways/src/infrastructure/poller.rs`)
 reads `catalogueHead` on `peer.poll_interval` (30 seconds,
 [limits](../limits.md)) and walks records into the retained cache.
 
@@ -865,7 +865,7 @@ token copied onto a different address or port does not match. The key is the
 This section does not define a second derivation. It is not in the
 announcement.
 
-Shipped pairing does not have that key. [`PeerRecord`](../../crates/nessa-server/src/peer_gateways/infrastructure/records.rs)
+Shipped pairing does not have that key. [`PeerRecord`](../../crates/nessa-peer-gateways/src/infrastructure/records.rs)
 keeps the peer key, the pin, the address, the relay, the intent, and the
 phase. An Active phase also keeps the credential id and the receiver. The
 peer file stores those. [`DeviceCredential`](../../crates/nessa-auth/src/application/pairing/private_state.rs)

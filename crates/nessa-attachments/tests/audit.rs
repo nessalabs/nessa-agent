@@ -1,0 +1,618 @@
+//! What each committed record says, and that it is committed privately.
+use super::*;
+use crate::application::{PublishedFile, RemovedBlob, RetiredHold, RetirementEvidence};
+use crate::domain::{RetiredFrom, TicketLifetime};
+use crate::test_support::{
+    attachment, conversation, digest_of, organization, principal, ManualClock, CONVERSATION,
+};
+use std::fs;
+
+fn ticket() -> UploadTicket {
+    UploadTicket::new(
+        organization("org"),
+        conversation(CONVERSATION),
+        attachment(b"sent", "image/heic"),
+        Caller::new(principal("owner"), "panel", "begin-1").unwrap(),
+        TicketLifetime::starting(1_000).unwrap(),
+    )
+}
+fn hold() -> Hold {
+    Hold::from_upload(&ticket(), attachment(b"kept", "image/jpeg"), 2_000).unwrap()
+}
+fn release() -> ReleaseEvidence {
+    ReleaseEvidence {
+        cause: ReleaseCause::ConversationClosed,
+        caller: Caller::new(principal("closer"), "phone", "close-1").unwrap(),
+        requested_at_ms: 3_000,
+    }
+}
+fn target(stored: bool) -> Value {
+    json!({
+        "organizationId": "org",
+        "conversationId": CONVERSATION,
+        "uploaded": {
+            "digest": digest_of(b"sent").to_string(),
+            "mediaType": "image/heic",
+            "size": 4,
+        },
+        "stored": if stored {
+            json!({
+                "digest": digest_of(b"kept").to_string(),
+                "mediaType": "image/jpeg",
+                "size": 4,
+            })
+        } else {
+            Value::Null
+        },
+    })
+}
+
+/// Who did it: the caller a ticket was issued to, and the caller who closed.
+fn uploader() -> Value {
+    json!({"kind": "caller", "principalId": "owner", "surfaceId": "panel"})
+}
+fn closer() -> Value {
+    json!({"kind": "caller", "principalId": "closer", "surfaceId": "phone"})
+}
+/// The file was already kept: the target pairs what this ticket uploaded with
+/// what the conversation holds.
+fn already_held_target() -> Value {
+    let mut paired = target(true);
+    paired["uploaded"] = target(false)["uploaded"].clone();
+    paired
+}
+
+#[test]
+fn every_record_names_its_target_transition_cause_initiator_and_request() {
+    for (record, expected) in [
+        (
+            AttachmentAuditRecord::HoldCreated { hold: hold() },
+            json!({
+                "kind": "attachment_hold_created",
+                "target": target(true),
+                "transition": {"before": "absent", "after": "held"},
+                "cause": "uploaded",
+                "initiator": uploader(),
+                "correlationId": "begin-1",
+                "requestedAtMs": 1_000,
+                "uploadedAtMs": 2_000,
+            }),
+        ),
+        // Permission to upload is itself recorded, with when it runs out.
+        (
+            AttachmentAuditRecord::TicketIssued { ticket: ticket() },
+            json!({
+                "kind": "attachment_ticket_issued",
+                "target": target(false),
+                "transition": {"before": "absent", "after": "ticket_outstanding"},
+                "cause": "upload_requested",
+                "initiator": uploader(),
+                "correlationId": "begin-1",
+                "requestedAtMs": 1_000,
+                "expiresAtMs": 301_000,
+            }),
+        ),
+        (
+            AttachmentAuditRecord::TicketReplaced { ticket: ticket() },
+            json!({
+                "kind": "attachment_ticket_replaced",
+                "target": target(false),
+                "transition": {"before": "ticket_outstanding", "after": "ticket_replaced"},
+                "cause": "upload_requested_again",
+                "initiator": uploader(),
+                "correlationId": "begin-1",
+                "requestedAtMs": 1_000,
+                "expiresAtMs": 301_000,
+            }),
+        ),
+        // Nothing changed, and the record says so.
+        (
+            AttachmentAuditRecord::AlreadyHeld {
+                ticket: ticket(),
+                hold: hold(),
+            },
+            json!({
+                "kind": "attachment_already_held",
+                "target": already_held_target(),
+                "transition": {"before": "held", "after": "held"},
+                "cause": "uploaded",
+                "initiator": uploader(),
+                "correlationId": "begin-1",
+                "requestedAtMs": 1_000,
+                "heldSinceMs": 2_000,
+            }),
+        ),
+        // Nobody asked for a hold to be taken back, and none of these say so.
+        (
+            AttachmentAuditRecord::HoldReverted {
+                hold: hold(),
+                cause: RevertCause::AuditUnconfirmed,
+                was: RetiredFrom::Pending,
+            },
+            json!({
+                "kind": "attachment_hold_reverted",
+                "target": target(true),
+                "transition": {"before": "pending", "after": "absent"},
+                "cause": "audit_unconfirmed",
+                "initiator": {"kind": "automatic"},
+                "uploadedBy": uploader(),
+                "correlationId": "begin-1",
+                "requestedAtMs": 1_000,
+            }),
+        ),
+        (
+            AttachmentAuditRecord::UploadRejected {
+                ticket: ticket(),
+                reason: UploadRejection::DigestMismatch,
+            },
+            json!({
+                "kind": "attachment_upload_rejected",
+                "target": target(false),
+                "transition": {"before": "ticket_outstanding", "after": "ticket_used_without_hold"},
+                "cause": "digest_mismatch",
+                "initiator": uploader(),
+                "correlationId": "begin-1",
+                "requestedAtMs": 1_000,
+                "expiresAtMs": 301_000,
+            }),
+        ),
+        // Nobody expires a ticket, and the record does not pretend somebody did.
+        (
+            AttachmentAuditRecord::TicketExpired { ticket: ticket() },
+            json!({
+                "kind": "attachment_ticket_expired",
+                "target": target(false),
+                "transition": {"before": "ticket_outstanding", "after": "ticket_expired"},
+                "cause": "ticket_lifetime_elapsed",
+                "initiator": {"kind": "automatic"},
+                "issuedTo": uploader(),
+                "correlationId": "begin-1",
+                "requestedAtMs": 1_000,
+                "expiresAtMs": 301_000,
+            }),
+        ),
+        // Withdrawn by the closer, from the caller it had been issued to.
+        (
+            AttachmentAuditRecord::TicketWithdrawn {
+                ticket: ticket(),
+                release: release(),
+            },
+            json!({
+                "kind": "attachment_ticket_withdrawn",
+                "target": target(false),
+                "transition": {"before": "ticket_outstanding", "after": "ticket_withdrawn"},
+                "cause": "conversation_closed",
+                "initiator": closer(),
+                "issuedTo": uploader(),
+                "correlationId": "close-1",
+                "ticketCorrelationId": "begin-1",
+                "requestedAtMs": 3_000,
+            }),
+        ),
+        // The closer released it; whoever uploaded it did not.
+        (
+            AttachmentAuditRecord::HoldReleased {
+                hold: hold(),
+                was: HoldState::Held,
+                release: release(),
+            },
+            json!({
+                "kind": "attachment_hold_released",
+                "target": target(true),
+                "transition": {"before": "held", "after": "absent"},
+                "cause": "conversation_closed",
+                "initiator": closer(),
+                "correlationId": "close-1",
+                "requestedAtMs": 3_000,
+            }),
+        ),
+        // A hold released before its upload finished recording it says so.
+        (
+            AttachmentAuditRecord::HoldReleased {
+                hold: hold(),
+                was: HoldState::Pending,
+                release: release(),
+            },
+            json!({
+                "kind": "attachment_hold_released",
+                "target": target(true),
+                "transition": {"before": "pending", "after": "absent"},
+                "cause": "conversation_closed",
+                "initiator": closer(),
+                "correlationId": "close-1",
+                "requestedAtMs": 3_000,
+            }),
+        ),
+        (
+            AttachmentAuditRecord::BlobRemoved {
+                removed: RemovedBlob::new(vec![RetiredHold::new(
+                    hold(),
+                    RetiredFrom::Held,
+                    RetirementEvidence::Release(release()),
+                )
+                .expect("valid original retirement")])
+                .expect("nonempty same-digest retirements"),
+            },
+            json!({
+                "kind": "attachment_bytes_removed",
+                "target": {"storedDigest": digest_of(b"kept").to_string()},
+                "transition": {"before": "stored", "after": "absent"},
+                "cause": "unheld_cleanup",
+                "initiator": {"kind": "automatic"},
+                "retirements": [{
+                    "kind": "attachment_hold_released",
+                    "target": target(true),
+                    "transition": {"before": "held", "after": "absent"},
+                    "cause": "conversation_closed",
+                    "initiator": closer(),
+                    "correlationId": "close-1",
+                    "requestedAtMs": 3_000,
+                }],
+            }),
+        ),
+    ] {
+        assert_eq!(record_value(&record), expected, "{record:?}");
+    }
+
+    // Every reason a hold is taken back has its own word, and none of them
+    // names an initiator: no caller asks for any of this.
+    for (cause, name) in [
+        (RevertCause::AuditUnconfirmed, "audit_unconfirmed"),
+        (RevertCause::ConfirmationFailed, "confirmation_failed"),
+        (RevertCause::RemovedBeforeUsable, "removed_before_usable"),
+        (RevertCause::UploadUnresolved, "upload_unresolved"),
+        (RevertCause::ConversationDeleted, "conversation_deleted"),
+        (RevertCause::ConversationNotFound, "conversation_not_found"),
+        (RevertCause::NotRecorded, "not_recorded"),
+    ] {
+        let value = record_value(&AttachmentAuditRecord::HoldReverted {
+            hold: hold(),
+            cause,
+            was: RetiredFrom::Pending,
+        });
+        assert_eq!(value["cause"], name);
+        assert_eq!(value["initiator"], json!({"kind": "automatic"}));
+    }
+
+    // A release because the conversation was deleted says so, on every
+    // record it writes, and keeps the deleting caller as its initiator.
+    let deleting = ReleaseEvidence {
+        cause: ReleaseCause::ConversationDeleted,
+        ..release()
+    };
+    for (record, field) in [
+        (
+            AttachmentAuditRecord::HoldReleased {
+                hold: hold(),
+                was: HoldState::Held,
+                release: deleting.clone(),
+            },
+            "cause",
+        ),
+        (
+            AttachmentAuditRecord::TicketWithdrawn {
+                ticket: ticket(),
+                release: deleting.clone(),
+            },
+            "cause",
+        ),
+        (
+            AttachmentAuditRecord::BlobRemoved {
+                removed: RemovedBlob::new(vec![RetiredHold::new(
+                    hold(),
+                    RetiredFrom::Held,
+                    RetirementEvidence::Release(deleting.clone()),
+                )
+                .expect("valid original retirement")])
+                .expect("nonempty same-digest retirements"),
+            },
+            "cause",
+        ),
+    ] {
+        let value = record_value(&record);
+        let value = if matches!(record, AttachmentAuditRecord::BlobRemoved { .. }) {
+            &value["retirements"][0]
+        } else {
+            &value
+        };
+        assert_eq!(value[field], "conversation_deleted", "{record:?}");
+        assert_eq!(value["initiator"], closer());
+    }
+}
+
+#[test]
+fn every_refusal_has_its_own_name_and_it_is_the_routes_name_for_it() {
+    // One word per fact: what the upload route answers is what the trail says.
+    // `normalization_failed` is the one the route says less about, answering
+    // it as `storage_unavailable`.
+    let named = [
+        (UploadRejection::SizeMismatch, "size_mismatch"),
+        (UploadRejection::DigestMismatch, "digest_mismatch"),
+        (UploadRejection::UploadInterrupted, "upload_interrupted"),
+        (UploadRejection::UploadTimeout, "upload_timeout"),
+        (UploadRejection::StorageUnavailable, "storage_unavailable"),
+        (UploadRejection::Unresolved, "upload_unresolved"),
+        (
+            UploadRejection::ImageInputUnsupported,
+            "image_input_unsupported",
+        ),
+        (UploadRejection::UnsupportedImage, "unsupported_image"),
+        (UploadRejection::ImageTooLarge, "image_too_large"),
+        (UploadRejection::NormalizationFailed, "normalization_failed"),
+    ];
+    for (reason, wire) in named {
+        assert_eq!(rejection(reason), wire);
+    }
+    let distinct: std::collections::BTreeSet<_> = named.iter().map(|(_, wire)| *wire).collect();
+    assert_eq!(distinct.len(), named.len());
+}
+
+#[tokio::test]
+async fn a_record_is_committed_privately_with_its_own_identity_and_observation_time() {
+    let root = tempfile::tempdir().unwrap();
+    let directory = root.path().join("audit");
+    let audit =
+        DurableAttachmentAudit::new(directory.clone(), Arc::new(ManualClock::at(9_000))).unwrap();
+    for _ in 0..2 {
+        audit
+            .record(AttachmentAuditRecord::TicketExpired { ticket: ticket() })
+            .await
+            .unwrap();
+    }
+    let mut identities = Vec::new();
+    for entry in fs::read_dir(&directory).unwrap() {
+        let path = entry.unwrap().path();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+        }
+        let value: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        assert_eq!(value["kind"], "attachment_ticket_expired");
+        // Observed now; requested when the ticket was issued. Neither is
+        // presented as the other.
+        assert_eq!(value["observedAtMs"], 9_000);
+        assert_eq!(value["requestedAtMs"], 1_000);
+        assert_eq!(
+            path.file_name().unwrap().to_str().unwrap(),
+            format!("{}.json", value["recordId"].as_str().unwrap())
+        );
+        identities.push(value["recordId"].as_str().unwrap().to_owned());
+    }
+    assert_eq!(identities.len(), 2);
+    assert_ne!(identities[0], identities[1]);
+}
+
+#[tokio::test]
+async fn a_durable_write_does_not_start_until_the_previous_one_finishes() {
+    let root = tempfile::tempdir().unwrap();
+    let directory = root.path().join("audit");
+    let audit = Arc::new(
+        DurableAttachmentAudit::new(directory.clone(), Arc::new(ManualClock::at(9_000))).unwrap(),
+    );
+    audit.pause_writes_for_test();
+    // A failing assertion must still let the blocked write return, or the
+    // runtime waits on that thread and the failure never prints.
+    let release_writes = ReleaseWrites(Arc::clone(&audit));
+    let first = {
+        let audit = Arc::clone(&audit);
+        tokio::spawn(async move {
+            audit
+                .record(AttachmentAuditRecord::TicketExpired { ticket: ticket() })
+                .await
+        })
+    };
+    for _ in 0..100 {
+        if audit.writes_started() == 1 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+    assert_eq!(audit.writes_started(), 1, "the first write did not start");
+    // The place is still held inside the blocking write. Dropping it before
+    // `spawn_blocking` leaves this at 1.
+    assert_eq!(
+        audit.write_permits_available(),
+        0,
+        "the write dropped its place before it finished"
+    );
+    let second = {
+        let audit = Arc::clone(&audit);
+        tokio::spawn(async move {
+            audit
+                .record(AttachmentAuditRecord::TicketExpired { ticket: ticket() })
+                .await
+        })
+    };
+    for _ in 0..40 {
+        tokio::task::yield_now().await;
+    }
+    assert_eq!(
+        audit.writes_started(),
+        1,
+        "a second write started while the first still held its place"
+    );
+    drop(release_writes);
+    first.await.unwrap().unwrap();
+    second.await.unwrap().unwrap();
+    assert_eq!(audit.writes_started(), 2);
+    assert_eq!(fs::read_dir(&directory).unwrap().count(), 2);
+}
+
+struct ReleaseWrites(Arc<DurableAttachmentAudit>);
+impl Drop for ReleaseWrites {
+    fn drop(&mut self) {
+        self.0.resume_writes_for_test();
+    }
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn an_audit_directory_that_is_not_private_or_not_writable_is_a_visible_failure() {
+    use std::os::unix::fs::PermissionsExt;
+    let root = tempfile::tempdir().unwrap();
+    let shared = root.path().join("shared");
+    fs::create_dir(&shared).unwrap();
+    fs::set_permissions(&shared, fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(DurableAttachmentAudit::new(shared, Arc::new(ManualClock::at(0))).is_err());
+
+    let directory = root.path().join("audit");
+    let audit =
+        DurableAttachmentAudit::new(directory.clone(), Arc::new(ManualClock::at(0))).unwrap();
+    fs::remove_dir(&directory).unwrap();
+    assert_eq!(
+        audit
+            .record(AttachmentAuditRecord::TicketExpired { ticket: ticket() })
+            .await,
+        Err(AuditUnavailable)
+    );
+}
+
+#[test]
+fn a_hold_reversal_reports_its_actual_existing_before_state() {
+    for (was, before) in [
+        (RetiredFrom::Pending, "pending"),
+        (RetiredFrom::Held, "held"),
+    ] {
+        let value = record_value(&AttachmentAuditRecord::HoldReverted {
+            hold: hold(),
+            was,
+            cause: RevertCause::ConfirmationFailed,
+        });
+        assert_eq!(
+            value["transition"],
+            json!({"before": before, "after": "absent"})
+        );
+        assert_eq!(value["target"], target(true));
+        assert_eq!(value["initiator"], json!({"kind": "automatic"}));
+        assert_eq!(value["uploadedBy"], uploader());
+        assert_eq!(value["correlationId"], hold().uploaded_by().action_id());
+        assert_eq!(value["cause"], "confirmation_failed");
+    }
+}
+
+#[test]
+fn substitutable_retirement_reports_refuse_contradictory_inputs() {
+    for was in [RetiredFrom::Pending, RetiredFrom::Held] {
+        let original = hold();
+        assert!(RetiredHold::new(
+            original.clone(),
+            was,
+            RetirementEvidence::RevertedUpload {
+                cause: RevertCause::ConfirmationFailed,
+                caller: release().caller,
+            }
+        )
+        .is_none());
+        let valid = RetiredHold::new(
+            original.clone(),
+            was,
+            RetirementEvidence::RevertedUpload {
+                cause: RevertCause::ConfirmationFailed,
+                caller: original.uploaded_by().clone(),
+            },
+        )
+        .unwrap();
+        assert_eq!(valid.hold(), &original);
+        assert_eq!(valid.was(), was);
+        let removed = RemovedBlob::new(vec![valid.clone()]).unwrap();
+        assert_eq!(removed.digest(), original.stored().digest());
+        assert_eq!(removed.retirements(), std::slice::from_ref(&valid));
+        assert!(RemovedBlob::new(vec![]).is_none());
+        let other =
+            Hold::from_upload(&ticket(), attachment(b"another", "image/jpeg"), 2_000).unwrap();
+        let other = RetiredHold::new(other, was, RetirementEvidence::Release(release())).unwrap();
+        assert!(RemovedBlob::new(vec![valid.clone(), other.clone()]).is_none());
+        assert!(RemovedBlob::new(vec![other, valid]).is_none());
+    }
+}
+
+/// A hold an environment published is created by the lease's caller, for
+/// the lease, and says so; so does a publish that found the file already
+/// held, or became no hold.
+#[test]
+fn a_published_hold_names_its_lease_as_cause() {
+    let requester = Caller::new(principal("owner"), "phone", "request-1").unwrap();
+    let published_hold = Hold::published(
+        organization("org"),
+        conversation(CONVERSATION),
+        attachment(b"sent", "image/heic"),
+        requester.clone(),
+        "lease-1",
+        1_000,
+        2_000,
+    )
+    .unwrap();
+    let offer = PublishedFile::new(
+        organization("org"),
+        conversation(CONVERSATION),
+        attachment(b"sent", "image/heic"),
+        requester,
+        "lease-1",
+    )
+    .unwrap()
+    .offered_at(1_500);
+    let requested = json!({"kind": "caller", "principalId": "owner", "surfaceId": "phone"});
+    let mut kept_as_sent = target(false);
+    kept_as_sent["stored"] = kept_as_sent["uploaded"].clone();
+    for (record, expected) in [
+        (
+            AttachmentAuditRecord::HoldCreated {
+                hold: published_hold,
+            },
+            json!({
+                "kind": "attachment_hold_created",
+                "target": kept_as_sent,
+                "transition": {"before": "absent", "after": "held"},
+                "cause": "lease_published",
+                "lease": "lease-1",
+                "initiator": requested,
+                "correlationId": "request-1",
+                "requestedAtMs": 1_000,
+                "uploadedAtMs": 2_000,
+            }),
+        ),
+        (
+            AttachmentAuditRecord::AlreadyPublished {
+                published: offer.clone(),
+                hold: hold(),
+            },
+            json!({
+                "kind": "attachment_already_held",
+                "target": already_held_target(),
+                "transition": {"before": "held", "after": "held"},
+                "cause": "lease_published",
+                "lease": "lease-1",
+                "initiator": requested,
+                "correlationId": "request-1",
+                "requestedAtMs": 1_500,
+                "heldSinceMs": 2_000,
+            }),
+        ),
+        (
+            AttachmentAuditRecord::PublishRejected {
+                published: offer,
+                reason: UploadRejection::DigestMismatch,
+            },
+            json!({
+                "kind": "attachment_publish_rejected",
+                "target": {
+                    "organizationId": "org",
+                    "conversationId": CONVERSATION,
+                    "uploaded": target(false)["uploaded"],
+                },
+                "transition": {"before": "offered", "after": "not_held"},
+                "cause": "digest_mismatch",
+                "lease": "lease-1",
+                "initiator": requested,
+                "correlationId": "request-1",
+                "requestedAtMs": 1_500,
+            }),
+        ),
+    ] {
+        assert_eq!(record_value(&record), expected, "{record:?}");
+    }
+}

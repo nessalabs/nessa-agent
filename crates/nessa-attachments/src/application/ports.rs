@@ -1,0 +1,617 @@
+use crate::domain::{Attachment, Caller, Hold, HoldState, RetiredFrom, UploadTicket};
+use nessa_auth::domain::{OrganizationId, PrincipalId};
+use nessa_protocol::conversation::domain::ConversationId;
+use nessa_sdk::domain::{agent_execution::leases::LeaseId, common::value_objects::Sha256Digest};
+use std::{future::Future, pin::Pin};
+
+/// A boxed port future with a typed failure.
+pub type PortFuture<'a, T, E> = Pin<Box<dyn Future<Output = Result<T, E>> + Send + 'a>>;
+
+/// The store could not be read or written. Nothing is said about why: callers
+/// decide on the fact, and the adapter logs the detail.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct StoreUnavailable;
+
+/// How many bytes a staged transfer holds and what they hash to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ReceivedBytes {
+    pub size: u64,
+    pub digest: Sha256Digest,
+}
+
+/// Proof of having written one particular pending hold. The store issues it,
+/// and only its bearer may make that hold usable or take it back. An upload
+/// can therefore undo exactly the transition it made and no other: not a later
+/// upload of the same file, and not a hold a release already removed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HoldClaim(Box<str>);
+impl HoldClaim {
+    pub fn new(generation: &str) -> Self {
+        Self(generation.into())
+    }
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+/// What keeping staged bytes did.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Kept {
+    /// The bytes are published and a hold on them is written, but it is not
+    /// usable: nothing that asks what a conversation holds can see it until
+    /// its claim is confirmed.
+    Pending(HoldClaim),
+    /// The conversation already keeps exactly this stored file. Nothing
+    /// changed; the hold is returned as it stands.
+    Existing(Box<Hold>),
+}
+
+/// What confirming a claim found.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Confirmation {
+    /// The pending hold is now usable, as this claim's hold.
+    Confirmed,
+    /// Another upload of the same file made the hold usable first.
+    AlreadyKept,
+    /// The hold is gone: its conversation let go of its files meanwhile.
+    Gone,
+}
+
+/// What taking a claim back found.
+/// An absent hold cannot be a successful retirement predecessor: [`RetiredFrom`]
+/// enforces that restriction for both cleanup outcomes.
+///
+/// ```compile_fail,E0308
+/// use nessa_attachments::{application::Discard, domain::HoldState};
+/// let outcome = Discard::Discarded { was: HoldState::Absent };
+/// ```
+///
+/// ```compile_fail,E0308
+/// use nessa_attachments::{application::Discard, domain::HoldState};
+/// let outcome = Discard::CleanupIncomplete { was: HoldState::Absent };
+/// ```
+#[must_use = "retirement, cleanup and prior-state evidence must be handled"]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Discard {
+    /// The lifetime this claim owns retired, and unheld-byte cleanup completed.
+    Discarded { was: RetiredFrom },
+    /// The lifetime retired, but its unheld blob cleanup could not complete.
+    CleanupIncomplete { was: RetiredFrom },
+    /// Nothing of this claim remains: another upload took the hold over, or a
+    /// release removed it. Nothing was touched.
+    NotMine,
+}
+
+/// One confirmed retirement, preserving its original predecessor and cause.
+///
+/// ```compile_fail
+/// use nessa_attachments::{application::RetiredHold, domain::RetiredFrom};
+/// fn rewrite(mut retired: RetiredHold) { retired.was = RetiredFrom::Held; }
+/// ```
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RetiredHold {
+    hold: Hold,
+    was: RetiredFrom,
+    evidence: RetirementEvidence,
+}
+
+impl RetiredHold {
+    /// Refuse reversal evidence belonging to a different upload caller.
+    pub fn new(hold: Hold, was: RetiredFrom, evidence: RetirementEvidence) -> Option<Self> {
+        if let RetirementEvidence::RevertedUpload { caller, .. } = &evidence {
+            if caller != hold.uploaded_by() {
+                return None;
+            }
+        }
+        Some(Self {
+            hold,
+            was,
+            evidence,
+        })
+    }
+    pub fn hold(&self) -> &Hold {
+        &self.hold
+    }
+    pub fn was(&self) -> RetiredFrom {
+        self.was
+    }
+    pub fn evidence(&self) -> &RetirementEvidence {
+        &self.evidence
+    }
+    pub fn into_parts(self) -> (Hold, RetiredFrom, RetirementEvidence) {
+        (self.hold, self.was, self.evidence)
+    }
+}
+
+// Report agreement concerns returned facts, not physical blob verification.
+fn stored_content_agrees(retirements: &[RetiredHold]) -> bool {
+    retirements.iter().enumerate().all(|(index, retired)| {
+        let stored = retired.hold().stored();
+        retirements[..index].iter().all(|prior| {
+            prior.hold().stored().digest() != stored.digest()
+                || prior.hold().stored().size() == stored.size()
+        })
+    })
+}
+
+/// One physically removed digest and every related confirmed primary retirement.
+/// Contributor order conveys no chronology; no unique last hold is inferred.
+///
+/// ```compile_fail
+/// use nessa_attachments::application::RemovedBlob;
+/// fn erase(mut removed: RemovedBlob) { removed.retirements.clear(); }
+/// ```
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RemovedBlob {
+    digest: Sha256Digest,
+    retirements: Box<[RetiredHold]>,
+}
+
+impl RemovedBlob {
+    /// Refuse missing contributors or contradictory stored content facts.
+    pub fn new(retirements: Vec<RetiredHold>) -> Option<Self> {
+        let digest = retirements.first()?.hold().stored().digest();
+        if !stored_content_agrees(&retirements)
+            || retirements
+                .iter()
+                .any(|retired| retired.hold().stored().digest() != digest)
+        {
+            return None;
+        }
+        Some(Self {
+            digest,
+            retirements: retirements.into_boxed_slice(),
+        })
+    }
+    pub fn digest(&self) -> Sha256Digest {
+        self.digest
+    }
+    pub fn retirements(&self) -> &[RetiredHold] {
+        &self.retirements
+    }
+}
+
+/// Confirmed retirements (including retry confirmation) and actual byte cleanup.
+/// A failure never stops the rest from being tried.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ReleaseReport {
+    pub retired: Vec<RetiredHold>,
+    /// One entry per actually removed digest, with complete related evidence.
+    pub removed: Vec<RemovedBlob>,
+    /// Holds whose retirement was not confirmed, and bytes that could not be
+    /// removed or proved unheld. Each is left in place rather than guessed at.
+    pub failures: usize,
+}
+
+impl ReleaseReport {
+    /// Correlate the whole returned report with the admitted release target.
+    /// Original causal evidence may predate this request, but no foreign target
+    /// or contradictory/partial removal group may become an audit fact.
+    pub fn agrees_with(
+        &self,
+        organization_id: &OrganizationId,
+        conversation_id: &ConversationId,
+    ) -> bool {
+        if !stored_content_agrees(&self.retired) {
+            return false;
+        }
+        for (index, retired) in self.retired.iter().enumerate() {
+            let hold = retired.hold();
+            if hold.organization_id() != organization_id
+                || hold.conversation_id() != conversation_id
+                || self.retired[..index].iter().any(|prior| {
+                    prior.hold().stored().digest() == hold.stored().digest()
+                        && prior.hold().stored().media_type() == hold.stored().media_type()
+                })
+            {
+                return false;
+            }
+        }
+        for (index, removed) in self.removed.iter().enumerate() {
+            if self.removed[..index]
+                .iter()
+                .any(|prior| prior.digest() == removed.digest())
+            {
+                return false;
+            }
+            let related_count = self
+                .retired
+                .iter()
+                .filter(|retired| retired.hold().stored().digest() == removed.digest())
+                .count();
+            if related_count != removed.retirements().len() {
+                return false;
+            }
+            for (index, contributor) in removed.retirements().iter().enumerate() {
+                if !self.retired.contains(contributor)
+                    || removed.retirements()[..index].contains(contributor)
+                {
+                    return false;
+                }
+            }
+        }
+        true
+    }
+}
+
+/// A transfer being written to private temporary storage. Dropping it removes
+/// what was written.
+pub trait StagedUpload: Send {
+    /// Append one chunk.
+    fn write(&mut self, chunk: Vec<u8>) -> PortFuture<'_, (), StoreUnavailable>;
+    /// Make the bytes durable and report what was written.
+    fn finish(&mut self) -> PortFuture<'_, ReceivedBytes, StoreUnavailable>;
+    /// Read back every finished byte. Callers bound the size before writing.
+    fn read(&mut self) -> PortFuture<'_, Vec<u8>, StoreUnavailable>;
+    /// Publish these bytes under their own digest and write a pending hold on
+    /// them, as one change no release can come between. Refused when the
+    /// finished bytes are not exactly `hold.stored()`. A pending hold another
+    /// upload left is replaced, so its claim no longer matches; a usable hold
+    /// is never replaced.
+    fn keep(self: Box<Self>, hold: Hold) -> PortFuture<'static, Kept, StoreUnavailable>;
+}
+
+/// Content-addressed bytes and the conversations holding them.
+pub trait AttachmentStore: Send + Sync {
+    /// Whether the conversation keeps exactly this stored file, usably, bytes
+    /// included. A pending hold does not count.
+    fn holds<'a>(
+        &'a self,
+        organization_id: &'a OrganizationId,
+        conversation_id: &'a ConversationId,
+        stored: &'a Attachment,
+    ) -> PortFuture<'a, bool, StoreUnavailable>;
+    /// The usable hold this conversation earned by uploading exactly this
+    /// file, when its stored bytes are still there.
+    fn find_upload<'a>(
+        &'a self,
+        organization_id: &'a OrganizationId,
+        conversation_id: &'a ConversationId,
+        uploaded: &'a Attachment,
+    ) -> PortFuture<'a, Option<Hold>, StoreUnavailable>;
+    /// Begin writing a transfer.
+    fn stage(&self) -> PortFuture<'_, Box<dyn StagedUpload>, StoreUnavailable>;
+    /// Make the pending hold usable. A pending hold under another claim is
+    /// taken over: this caller has committed evidence for the same file.
+    fn confirm<'a>(
+        &'a self,
+        hold: &'a Hold,
+        claim: &'a HoldClaim,
+    ) -> PortFuture<'a, Confirmation, StoreUnavailable>;
+    /// Take back the hold this claim wrote, if it is still this claim's.
+    fn discard<'a>(
+        &'a self,
+        hold: &'a Hold,
+        claim: &'a HoldClaim,
+        cause: RevertCause,
+    ) -> PortFuture<'a, Discard, StoreUnavailable>;
+    /// Retire each active hold with actual release evidence, retaining identity
+    /// metadata, then clean up bytes no active hold remains on.
+    fn release<'a>(
+        &'a self,
+        organization_id: &'a OrganizationId,
+        conversation_id: &'a ConversationId,
+        evidence: &'a ReleaseEvidence,
+    ) -> PortFuture<'a, ReleaseReport, StoreUnavailable>;
+    /// At most `limit` bytes of the stored file with this digest, by content
+    /// alone. `None` when no such bytes are stored.
+    fn read(
+        &self,
+        digest: Sha256Digest,
+        limit: u64,
+    ) -> PortFuture<'_, Option<Vec<u8>>, StoreUnavailable>;
+}
+
+/// Why an image could not be brought into the form a conversation keeps.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NormalizeError {
+    /// No image is prepared for the selected model: it records no image
+    /// limits, so it is offered none. Nothing is wrong with the upload.
+    NotOffered,
+    /// The bytes are not an image this gateway can decode.
+    Unsupported,
+    /// The image cannot be brought under the selected model's limits.
+    TooLarge,
+    /// Normalization itself failed; the same upload may succeed later.
+    Failed,
+}
+
+/// An image as the gateway will keep it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NormalizedImage {
+    pub bytes: Vec<u8>,
+    pub media_type: String,
+}
+
+/// Future returned by [`ImageNormalizer::normalize`].
+pub type NormalizeFuture<'a> = PortFuture<'a, NormalizedImage, NormalizeError>;
+
+/// Converts an uploaded image into what a conversation keeps: an encoding and
+/// dimensions the selected model accepts. The implementation owns any blocking
+/// work; it is called with the whole verified upload, once. What it returns is
+/// checked by the caller: it must be an image a message can name.
+pub trait ImageNormalizer: Send + Sync {
+    /// Whether any image is prepared for the selected model. `false` is a model
+    /// with no recorded image limits: it is offered none, so an upload that
+    /// says it is an image is refused before a ticket is issued rather than
+    /// normalized into something no message could ever name.
+    fn offers_images(&self) -> bool;
+    /// Fit `original` to the selected model. What the bytes are is read from
+    /// the bytes; the client's declared media type is not an input.
+    fn normalize(&self, original: Vec<u8>) -> NormalizeFuture<'_>;
+}
+
+/// The conversation's owner could not be looked up.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct OwnershipUnavailable;
+
+/// What the conversation context says about one caller and one conversation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Ownership {
+    /// It exists, is this caller's, and was not deleted.
+    Owned,
+    /// Not this caller's, or not there at all: the same answer on purpose.
+    NotFound,
+    /// This caller's, and deleted. Nothing is held under it again.
+    Deleted,
+}
+
+/// Whether a conversation exists and belongs to this caller, and whether it
+/// was deleted. Asked without opening an agent: beginning an upload must not
+/// start a provider. Asked twice per upload: when it begins, and again once
+/// its hold is written, since a conversation can be deleted in between.
+pub trait ConversationOwnership: Send + Sync {
+    fn owns<'a>(
+        &'a self,
+        organization_id: &'a OrganizationId,
+        principal_id: &'a PrincipalId,
+        conversation_id: &'a ConversationId,
+    ) -> PortFuture<'a, Ownership, OwnershipUnavailable>;
+}
+
+/// The host could not supply randomness.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SecretsUnavailable;
+
+/// Where ticket secrets come from: 32 unpredictable bytes each.
+pub trait TicketSecrets: Send + Sync {
+    fn fresh(&self) -> Result<[u8; 32], SecretsUnavailable>;
+}
+
+/// The audit sink did not acknowledge a record.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AuditUnavailable;
+
+/// Why a redeemed ticket did not become a hold. Each is named as the upload
+/// route names it, so the wire, the audit trail, and the guide use one word.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UploadRejection {
+    /// More or fewer bytes than the ticket described.
+    SizeMismatch,
+    /// The right number of bytes, hashing to something else.
+    DigestMismatch,
+    /// The transfer ended before it was complete.
+    UploadInterrupted,
+    /// The transfer did not finish within the upload deadline.
+    UploadTimeout,
+    /// The bytes could not be written, published, or held.
+    StorageUnavailable,
+    /// The work of this upload stopped without an answer, so what the bytes
+    /// were is unknown. Nothing is claimed about them either way.
+    Unresolved,
+    /// The selected model is offered no images, so none is prepared for it.
+    ImageInputUnsupported,
+    /// Declared an image, but not one this gateway can decode.
+    UnsupportedImage,
+    /// An image that cannot be brought under the selected model's limits.
+    ImageTooLarge,
+    /// Normalization failed, or produced something no message could name.
+    NormalizationFailed,
+}
+
+/// Why holds were released.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ReleaseCause {
+    /// The verified caller closed the conversation.
+    ConversationClosed,
+    /// The verified caller deleted the conversation.
+    ConversationDeleted,
+}
+
+/// The verified request behind a release.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ReleaseEvidence {
+    pub cause: ReleaseCause,
+    pub caller: Caller,
+    pub requested_at_ms: u64,
+}
+
+/// Durable cause and verified initiator of one attachment lifetime retirement.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RetirementEvidence {
+    /// An explicit conversation release with its actual request evidence.
+    Release(ReleaseEvidence),
+    /// The upload was taken back under its original verified caller/correlation.
+    RevertedUpload { cause: RevertCause, caller: Caller },
+}
+
+/// Why a pending or kept hold was taken back by the upload that wrote it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RevertCause {
+    /// Its creation was not acknowledged by the audit sink. The sink may have
+    /// committed that record anyway, which is why this one follows it.
+    AuditUnconfirmed,
+    /// Its creation was recorded, but the hold could not be made usable.
+    ConfirmationFailed,
+    /// Its creation was recorded, but the hold was gone before it could be
+    /// made usable: released with its conversation, or taken back by another
+    /// upload of the same file.
+    RemovedBeforeUsable,
+    /// The work of the upload that wrote it stopped without an answer, so
+    /// nobody was left to finish or undo it.
+    UploadUnresolved,
+    /// Its creation was recorded, and its conversation had been deleted by the
+    /// time the hold could be made usable, so it never was.
+    ConversationDeleted,
+    /// Its creation was recorded, and by the time the hold could be made
+    /// usable its conversation was no longer found as the uploader's — its
+    /// ownership record was gone or no longer said so — so it never was.
+    /// Kept apart from a deletion, which leaves a tombstone saying who and
+    /// when; this says only that ownership could not be found.
+    ConversationNotFound,
+    /// A published file held under its lease that its conversation would
+    /// not record: the lease had begun ending, or the conversation had no
+    /// room left. Taken back as soon as it was refused.
+    NotRecorded,
+}
+
+/// One consequential transition. Each variant carries the whole value it
+/// happened to, so target, owner, both digests, initiator, correlation, and
+/// the time of the causing request all travel together. The sink assigns the
+/// record's identity and the time it observed it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum AttachmentAuditRecord {
+    /// The authenticated socket gave a verified caller permission to upload
+    /// one file. Recorded before the ticket is handed out.
+    TicketIssued { ticket: UploadTicket },
+    /// The same request was made again, so its earlier ticket stopped working.
+    TicketReplaced { ticket: UploadTicket },
+    /// A ticket's time passed unused. Nobody did this; it is automatic.
+    TicketExpired { ticket: UploadTicket },
+    /// A ticket was withdrawn unused because its conversation let go of its files.
+    TicketWithdrawn {
+        ticket: UploadTicket,
+        release: ReleaseEvidence,
+    },
+    /// A redeemed ticket was used up without producing a hold.
+    UploadRejected {
+        ticket: UploadTicket,
+        reason: UploadRejection,
+    },
+    /// A verified upload became a hold. Initiated by the ticket's caller.
+    /// Recorded while the hold is pending; the hold becomes usable after.
+    HoldCreated { hold: Hold },
+    /// A verified upload arrived at a file the conversation already keeps.
+    /// The ticket is used; `hold` is the unchanged hold.
+    AlreadyHeld { ticket: UploadTicket, hold: Hold },
+    /// A pending or kept hold was taken back by its own upload. Automatic.
+    HoldReverted {
+        hold: Hold,
+        was: RetiredFrom,
+        cause: RevertCause,
+    },
+    /// A conversation let go of a stored file.
+    HoldReleased {
+        hold: Hold,
+        was: HoldState,
+        release: ReleaseEvidence,
+    },
+    /// A file an environment published under a lease arrived at a file the
+    /// conversation already keeps. Nothing was read; `hold` is unchanged.
+    AlreadyPublished {
+        published: PublishedFile,
+        hold: Hold,
+    },
+    /// A file an environment published under a lease became no hold.
+    PublishRejected {
+        published: PublishedFile,
+        reason: UploadRejection,
+    },
+    /// Unheld bytes were removed after the original retirement.
+    /// Carries its actual predecessor and release-or-reversal evidence.
+    BlobRemoved { removed: RemovedBlob },
+}
+
+/// Durable evidence of attachment transitions, committed before success is reported.
+///
+/// Bulk admission is a permit the service holds around this call. The sink does
+/// not receive that permit and cannot keep it after the service's deadline
+/// drops the call.
+pub trait AttachmentAudit: Send + Sync {
+    fn record(&self, record: AttachmentAuditRecord) -> PortFuture<'_, (), AuditUnavailable>;
+}
+
+/// Asked once a published file is held, before anything says the
+/// conversation keeps it: whether the conversation recorded the file under
+/// its lease. `false`, and the hold is taken back, so a published file is
+/// recorded only once held and not kept without its record.
+pub type PublishRecord = Box<dyn FnOnce() -> Pin<Box<dyn Future<Output = bool> + Send>> + Send>;
+
+/// One file an environment offered by digest under a lease, for the
+/// conversation that lease runs (issue #701). Built by the conversation
+/// context from the lease's own record: who asked for its work, and which
+/// lease it is. Nothing here was checked against the bytes yet.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PublishedFile {
+    organization_id: OrganizationId,
+    conversation_id: ConversationId,
+    file: Attachment,
+    caller: Caller,
+    lease: Box<str>,
+    offered_at_ms: u64,
+}
+impl PublishedFile {
+    /// `None` for a lease id no record could carry: one [`LeaseId::new`]
+    /// refuses.
+    pub fn new(
+        organization_id: OrganizationId,
+        conversation_id: ConversationId,
+        file: Attachment,
+        caller: Caller,
+        lease: &str,
+    ) -> Option<Self> {
+        LeaseId::new(lease).is_ok().then(|| Self {
+            organization_id,
+            conversation_id,
+            file,
+            caller,
+            lease: lease.into(),
+            offered_at_ms: 0,
+        })
+    }
+    /// The same offer, as offered at `now_ms`: stamped by the service that
+    /// keeps it, on its own clock.
+    pub(crate) fn offered_at(mut self, now_ms: u64) -> Self {
+        self.offered_at_ms = now_ms;
+        self
+    }
+    pub fn organization_id(&self) -> &OrganizationId {
+        &self.organization_id
+    }
+    pub fn conversation_id(&self) -> &ConversationId {
+        &self.conversation_id
+    }
+    /// What the environment said the file is.
+    pub fn file(&self) -> &Attachment {
+        &self.file
+    }
+    /// Who asked for the work the lease runs.
+    pub fn caller(&self) -> &Caller {
+        &self.caller
+    }
+    pub fn lease(&self) -> &str {
+        &self.lease
+    }
+    pub fn offered_at_ms(&self) -> u64 {
+        self.offered_at_ms
+    }
+}
+
+/// What keeping a published file found.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PublishKept {
+    /// Read, verified, and now held under the lease that published it.
+    Held(Attachment),
+    /// The conversation already kept exactly this file; nothing was read.
+    AlreadyHeld(Attachment),
+}
+
+/// The transfer ended early.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct UploadInterrupted;
+
+/// The bytes of one upload, a chunk at a time, however they arrive.
+pub trait UploadBody: Send {
+    /// The next chunk, or `None` once the transfer is complete.
+    fn next(&mut self) -> PortFuture<'_, Option<Vec<u8>>, UploadInterrupted>;
+}

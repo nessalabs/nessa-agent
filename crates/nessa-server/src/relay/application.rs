@@ -18,8 +18,8 @@
 //! side is bounded on the injected timer, so a peer that stops reading
 //! cannot hold a task forever; a joined pair is the one exception, as it
 //! may sit idle as long as the two ends like.
-use super::wire::{next_frame, read_frame, write_frame};
 use crate::timer::{within, Moment, Timer};
+use nessa_protocol::relay::wire::{next_frame, read_frame, write_frame};
 use nessa_protocol::relay::{
     key_id, GatewayKey, JoinToken, PublishedOrigin, RelayFrame, JOIN_DEADLINE, MISSED_PINGS,
     PING_INTERVAL, PREAMBLE_DEADLINE,

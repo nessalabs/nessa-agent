@@ -7,21 +7,21 @@ summary: "The gateway checks an image's actual bytes, turns it upright and fits
   it to the agent's supported size and format."
 parent: "gateway-attachments"
 sources:
-  - "crates/nessa-server/src/attachments/infrastructure/normalizer.rs"
+  - "crates/nessa-attachments/src/infrastructure/normalizer.rs"
   - "crates/nessa-server/src/composition/attachments.rs"
   - "crates/nessa-images/src/normalize.rs"
   - "crates/nessa-images/src/sniff.rs"
   - "crates/nessa-images/src/budget.rs"
   - "crates/nessa-images/src/platform/select.rs"
-  - "crates/nessa-server/src/attachments/infrastructure/store.rs"
-  - "crates/nessa-server/src/attachments/domain/entities/hold.rs"
+  - "crates/nessa-attachments/src/infrastructure/store.rs"
+  - "crates/nessa-attachments/src/domain/entities/hold.rs"
   - "crates/nessa-images/tests/normalize.rs"
   - "crates/nessa-images/tests/passthrough.rs"
   - "crates/nessa-images/tests/memory.rs"
   - "crates/nessa-images/tests/platform.rs"
-  - "crates/nessa-server/tests/attachments/normalizer.rs"
-  - "crates/nessa-server/tests/attachments/store.rs"
-  - "crates/nessa-server/tests/attachments/service_over_store.rs"
+  - "crates/nessa-attachments/tests/normalizer.rs"
+  - "crates/nessa-attachments/tests/store.rs"
+  - "crates/nessa-attachments/tests/service_over_store.rs"
 diagramLinks: {}
 model:
   spec: tla/services/gateway/attachments/AttachmentHold.tla
@@ -67,8 +67,8 @@ stateDiagram-v2
 
 ## Further reading
 
-[Source](../../../../../crates/nessa-server/src/attachments/infrastructure/normalizer.rs) · [Related source](../../../../../crates/nessa-server/src/composition/attachments.rs) · [Related tests](../../../../../crates/nessa-images/tests/normalize.rs)
+[Source](../../../../../crates/nessa-attachments/src/infrastructure/normalizer.rs) · [Related source](../../../../../crates/nessa-server/src/composition/attachments.rs) · [Related tests](../../../../../crates/nessa-images/tests/normalize.rs)
 
 ## Bounded rule model
 
-Owns pending hold audit-before-confirm, conversation liveness check and claim-specific rollback. A later claim cannot be retired by the earlier upload. Image byte normalization, format/budget decisions and byte deduplication are pure/external contracts outside this ownership model. This finite abstraction checks safety only. It does not execute or verify the implementation, promise eventual completion, or qualify external effects. Existing source checkpoints and historical test receipts retain their earlier scope. The scoped model review inspected `crates/nessa-server/src/attachments/application/service.rs`.
+Owns pending hold audit-before-confirm, conversation liveness check and claim-specific rollback. A later claim cannot be retired by the earlier upload. Image byte normalization, format/budget decisions and byte deduplication are pure/external contracts outside this ownership model. This finite abstraction checks safety only. It does not execute or verify the implementation, promise eventual completion, or qualify external effects. Existing source checkpoints and historical test receipts retain their earlier scope. The scoped model review inspected `crates/nessa-attachments/src/application/service.rs`.

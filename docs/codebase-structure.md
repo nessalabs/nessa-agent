@@ -579,7 +579,7 @@ Design: [device pairing](design/auth/device-pairing.md#native-enrollment-consume
 [activation and credential delivery](design/auth/device-pairing.md#activation-and-credential-delivery-slice-2b)
 and [protected reads](design/auth/device-pairing.md#protected-reads-over-the-native-channel-slice-3).
 
-The dialing side of a peer gateway is `nessa-server/src/peer_gateways/`.
+The dialing side of a peer gateway is its own crate, `crates/nessa-peer-gateways/`.
 `infrastructure/records.rs` keeps one private record per peer under
 `peer-gateways/` and is the enrollment client's store for one enrollment
 (`PeerSlot`), naming the gateway's own native key without copying it;
@@ -600,11 +600,11 @@ Every change a cycle makes is audited through
 `PeerCommands::poller_changed`. The
 product methods are `nessa-server/src/product/peers.rs`, composed beside native
 pairing in `composition/native_pairing.rs`, which starts and joins the poller.
-Tests are `tests/peer_gateways/enroll.rs` and the two-process case in
+Server tests are `tests/peer_gateways/enroll.rs` and the two-process case in
 `tests/device_pairing/mounted.rs`, both registered by `tests/native_enrollment.rs`,
 the two-gateway read in `tests/composition/peer_reading.rs`, and the
 poller's cadence, the ended cause it keeps when a stop wins the status
-wait, and the record of that cause, in `tests/peer_gateways/poller.rs`.
+wait, and the record of that cause, in the crate's `tests/poller.rs`.
 Design: [peer gateways](design/auth/peer-gateways.md#the-dialing-side),
 [reading a peer](design/auth/peer-gateways.md#reading-a-peer).
 
@@ -1011,10 +1011,11 @@ encoding and size checks, before the first sink call, or when the response drops
 ([R61 and R64](design/authorized-record-reads.md)). The existing
 one-per-socket permit is shared with that physical lease, so delivering a read
 timeout cannot admit another source while the original worker remains live.
-`core/read_workers/` owns tracked blocking source threads, sticky faults and the
-retained join-all drain used by record/catalogue infrastructure. It grants no
-source permission or socket capacity. Its lifecycle tests live under
-`tests/core/read_workers.rs`; record-specific admission tests stay with their
+`nessa_local_storage::read_workers` owns
+tracked blocking source threads, sticky faults and the retained join-all drain
+used by record/catalogue infrastructure and attachment range reads. It grants no
+source permission or socket capacity. Its lifecycle tests live beside it in
+`crates/nessa-local-storage/src/read_workers/tests.rs`; record-specific admission tests stay with their
 source adapter. Attachment adapters consume this owner when activated.
 
 `conversation/application/service/scheduled_messages.rs` owns continuation planning and delivery; `infrastructure/scheduled_messages.rs` and its SQL dataset own preference receipts, history fences, and per-selection-request causal invalidation. The submitting fence also retains bounded command identity and the canonical digest shared with ordinary submit. Deletion scrubs payload and grant identifiers while retaining these non-content facts for exact command-receipt recovery. `service/model_changes.rs` and `service/handoffs.rs` commit invalidation before marking a model or agent selection applied. The invalidation kind keeps model and agent requests in distinct namespaces; an old request retries its recorded invalidation rather than targeting a later limit. The dataset is new in #1075 and stays at version 1; earlier development copies are recreated, without a migration.
@@ -1874,8 +1875,10 @@ its locator ancestry stays caller trust, while root ownership and binding remain
 checked. Private delivery-copy tests live in
 `crates/nessa-sdk/tests/domain/agent_execution/uploaded_delivery.rs`.
 
-`crates/nessa-server/src/attachments/` owns the files a conversation uploads so
-its messages can refer to them. `domain/value_objects/` describe a file
+`crates/nessa-attachments/` (crate `nessa-attachments`) owns the files a
+conversation uploads so its messages can refer to them. The HTTP upload route
+(`http.rs`) and the adapters that meet the conversation context
+(`conversation.rs`) stay in `crates/nessa-server/src/attachments/`. `domain/value_objects/` describe a file
 (`Attachment`: digest, `MediaType`, size, which must all agree), the verified
 `Caller` behind an action, and one `UploadTicket` with its five-minute
 `TicketLifetime`; `domain/entities/` owns the `Hold`, one conversation keeping
@@ -1921,7 +1924,7 @@ local `AttachmentArtifacts` facts/range/drain port and immutable range/byte type
 consumed by successful discard outcomes, reversal audit and saved retirement.
 `infrastructure/hold_record.rs` owns the typed Pending/Kept/Retired saved codec;
 `store/artifacts.rs` scans exact identities incrementally and archives retirement
-metadata. `store/source.rs` consumes `core::read_workers` with one shared,
+metadata. `store/source.rs` consumes `nessa_local_storage::read_workers` with one shared,
 nonwaiting manifest/range slot. The source is local and not composed into protected
 transport or gateway shutdown. State order and remaining activation boundaries
 are owned by [artifact sync](design/artifact-sync.md).

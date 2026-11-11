@@ -25,7 +25,6 @@ pub(crate) mod limits;
 pub mod logins;
 pub mod mcp_authorization;
 pub mod mcp_servers;
-pub mod peer_gateways;
 pub mod product;
 pub(crate) mod relay;
 pub mod secrets;
@@ -41,10 +40,6 @@ pub use core::run;
 #[cfg(test)]
 #[path = "../tests/agents/support.rs"]
 pub(crate) mod agents_test_support;
-
-#[cfg(test)]
-#[path = "../tests/attachments/support.rs"]
-pub(crate) mod attachments_test_support;
 
 #[cfg(test)]
 #[path = "../tests/conversation/support.rs"]

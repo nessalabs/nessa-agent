@@ -14,7 +14,7 @@ source state and persistence proposal. [Architecture](../ARCHITECTURE.md),
 
 ## Merged baseline before this slice
 
-The [attachment module](../../crates/nessa-server/src/attachments/mod.rs) keeps
+The [attachment crate](../../crates/nessa-attachments/README.md) keeps
 bytes once per stored digest and one hold record per organization, conversation,
 stored digest and media type. `LocalAttachmentStore` atomically publishes each
 record through a private temporary file, file sync, replacement, and directory
@@ -214,7 +214,7 @@ manifest must match revision/content before opening. Missing bytes are unavailab
 not a fabricated tombstone. Whole64MiB reads followed by truncation are excluded.
 
 Physical range work must use the existing tracked read-worker implementation,
-now owned by `core::read_workers`, consumed from reviewed producer `f36ac5d0`. `LocalAttachmentStore` owns one source admission semaphore shared by manifest and chunk. `ReadWorkers` alone owns closure tracking, sticky worker fault and retained drain; no source closed/failure ledger is added. A nonwaiting slot permit travels with the closure and its result wrapper until actual work and result handoff/drop complete. The owning
+now owned by `nessa_local_storage::read_workers`, consumed from reviewed producer `f36ac5d0`. `LocalAttachmentStore` owns one source admission semaphore shared by manifest and chunk. `ReadWorkers` alone owns closure tracking, sticky worker fault and retained drain; no source closed/failure ledger is added. A nonwaiting slot permit travels with the closure and its result wrapper until actual work and result handoff/drop complete. The owning
 worker retains the OS handle and source result through actual join, including
 caller loss and result-drop panic. Composition's admission fence/drain-before-store
 cleanup remains queued integration. The source adapter cannot claim complete
