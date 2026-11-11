@@ -370,7 +370,7 @@ function pinFile() {
     readFileSync(
       join(
         dirname(fileURLToPath(import.meta.url)),
-        "../../crates/nessa-server/data/agent-releases.json",
+        "../../crates/nessa-agent-install/data/agent-releases.json",
       ),
       "utf8",
     ),

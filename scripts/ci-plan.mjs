@@ -89,6 +89,7 @@ export const RUST_TEST_PACKAGES = [
   "nessa-sdk",
   "nessa-timer",
   "nessa-vault",
+  "nessa-agent-install",
 ]
 
 /** The files API returns at most this many files; a list that long may be cut. */

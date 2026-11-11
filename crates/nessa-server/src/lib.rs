@@ -2,7 +2,7 @@
 // The one clock: outside tests, time is read only through crate::timer::clock
 // (clippy.toml names the calls it replaces; CODING_STANDARDS.md says why).
 #![cfg_attr(not(test), warn(clippy::disallowed_methods))]
-pub mod agent_install;
+pub use nessa_agent_install as agent_install;
 pub mod agent_warm_up;
 pub mod agents;
 pub mod app;
@@ -40,8 +40,7 @@ pub mod webhooks;
 pub use core::run;
 
 #[cfg(test)]
-#[path = "../tests/agent_install/support.rs"]
-pub(crate) mod agent_install_test_support;
+pub(crate) use nessa_agent_install::test_support as agent_install_test_support;
 
 #[cfg(test)]
 #[path = "../tests/agents/support.rs"]

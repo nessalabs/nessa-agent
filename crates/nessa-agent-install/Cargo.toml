@@ -1,0 +1,39 @@
+[package]
+name = "nessa-agent-install"
+version.workspace = true
+edition.workspace = true
+rust-version = "1.89"
+publish = false
+autotests = false
+description = "Getting an agent's own pinned runtime onto this machine: fetch, verify, unpack, record and reclaim"
+
+[features]
+# The fixtures nessa-server's own install tests build releases and stores from.
+test-support = []
+
+[dependencies]
+nessa-auth = { path = "../nessa-auth" }
+nessa-local-storage = { path = "../nessa-local-storage", features = ["physical-operation"] }
+nessa-protocol = { path = "../nessa-protocol" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+flate2 = "1"
+tar = "0.4"
+tempfile = "3"
+uuid = { version = "1", features = ["v4"] }
+getrandom = "0.3"
+tracing = "0.1"
+# Parsing a pinned archive URL, rather than matching on its spelling.
+url = "2"
+# Fetching an archive is blocking on purpose, and names its TLS backend
+# itself (`infrastructure::https_archives`): see nessa-server's Cargo.toml for
+# why the `rustls` feature is not taken.
+reqwest = { version = "0.13", default-features = false, features = ["blocking", "rustls-no-provider", "http2", "stream", "json"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+
+[target.'cfg(unix)'.dev-dependencies]
+libc = "0.2"
+
+[lints]
+workspace = true
