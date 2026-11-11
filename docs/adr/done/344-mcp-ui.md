@@ -91,9 +91,24 @@ mode does not apply: it is trust in the agent, not in an app. The app is not
 authenticated beyond the caller's credential, so every step is recorded as
 the app's, on that caller's behalf ([design](../../design/mcp-app-calls.md)).
 
-**Display modes map onto 326's places:** `inline` is inline; `fullscreen` on
-desktop is a pane beside the conversation, as ChatGPT's desktop draws it; the
-window place serves a sidebar entry; `pip` is not offered.
+**Display modes map onto 326's places:** `inline` is the card in a message;
+`fullscreen` is the app's tab in that chat's right panel. Since #1220 an app
+has one live view: opening its panel replaces its inline copy with an Open
+row. Closing the panel retains that row; Open starts a fresh panel mount.
+Apps do not offer the
+workspace window; native widgets may still do so. `pip` is not offered.
+
+The display-mode reply describes the requesting view's mode. It is posted on
+that view's transport before opening a panel can retire the view (#1327).
+Posting a reply before retirement does not promise that the retiring document
+consumes it. A replacement mount cannot stand for the original caller's receipt.
+
+| Requesting view and request | Reply and effect order | Evidence |
+| --- | --- | --- |
+| Inline, fullscreen offered | Post the original request id with mode inline; then open the panel, which retires inline | Bridge L17a closes the real transport during open and pins the reply before it; browser panel check pins inline retirement and the sole panel mount |
+| Panel, fullscreen | Answer that same live caller with mode fullscreen; open nothing | Bridge L17 and the panel's browser fixture output |
+| Inline, unsupported or undeclared mode | Answer the same caller with mode inline; open nothing | Bridge L17 and `requestMode` tests |
+| Panel close or app-requested teardown | Release that panel mount; retain the Open row, which can reopen a fresh panel mount | Browser teardown check, the retained `panelled` selector/use-case tests and the bridge teardown regressions |
 
 **The sandbox** (#349). The window frames a proxy on an origin of its own —
 the `nessa-sandbox` scheme in the desktop app (`http://nessa-sandbox.localhost`
@@ -238,8 +253,9 @@ app widgets alike.
   each under `widgets/app/model/`; the hosts drawing an app,
   `widgets/app/ui/app-view.test.tsx`.
 - **In a real browser**: `verification/desktop/scripts/mcp-apps.mjs`, with
-  the fixture app (`widgets/app/fixture/`) — it renders inline, in a pane and
-  in the window; `tools/call` is answered, and refused for a hidden tool; a
+  the fixture app (`widgets/app/fixture/`) — it renders inline or in its
+  panel, with one live view and no window offer; `tools/call` is answered,
+  and refused for a hidden tool; a
   request its CSP does not declare is blocked; its origin is opaque; it is
   torn down on close (`verification/desktop/CHECKLIST.md` › _MCP Apps_).
 - **The desktop app's scheme** serves the proxy and nothing else

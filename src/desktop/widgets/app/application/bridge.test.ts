@@ -101,6 +101,7 @@ function harness(
     phase?: CallPhase
     server?: McpAppServer
     ports?: Partial<McpAppPorts>
+    onOpen?: (place: OpenPlace) => void
   } = {},
 ): Harness {
   const frame = document.createElement("iframe")
@@ -151,7 +152,10 @@ function harness(
     ports,
     post: (message) => transport.post(message),
     host: {
-      open: (place) => void opened.push(place),
+      open: (place) => {
+        opened.push(place)
+        options.onOpen?.(place)
+      },
       close: () => void closed.count++,
       openSession: (sessionId) => void sessions.push(sessionId),
     },
@@ -1754,7 +1758,37 @@ describe("a live app's other requests", () => {
     ])
   })
 
-  it("L17: inline, fullscreen opens a pane and the view stays inline; pip opens nothing", async () => {
+  it("L17a: replies on the original transport before opening can retire its inline view", async () => {
+    let answersAtOpen: Harness["posted"] = []
+    const app = harness({
+      place: "inline",
+      onOpen: () => {
+        answersAtOpen = [...app.posted]
+        app.bridge.remove()
+        app.transport.close()
+        app.frame.remove()
+      },
+    })
+    await live(app)
+    app.posted.length = 0
+    app.say({
+      jsonrpc: "2.0",
+      id: 3,
+      method: "ui/request-display-mode",
+      params: { mode: "fullscreen" },
+    })
+    expect(app.opened).toEqual(["panel"])
+    expect(answersAtOpen).toEqual([
+      {
+        message: { jsonrpc: "2.0", id: 3, result: { mode: "inline" } },
+        origin: sandbox.origin,
+      },
+    ])
+    expect(app.posted).toEqual(answersAtOpen)
+    expect(app.frame.isConnected).toBe(false)
+  })
+
+  it("L17: fullscreen opens the panel and answers the caller's mode; pip opens nothing", async () => {
     const app = harness({ place: "inline" })
     await live(app)
     const ask = (id: number, mode: string) =>
@@ -1774,9 +1808,16 @@ describe("a live app's other requests", () => {
       method: "ui/request-display-mode",
       params: { mode: "inline" },
     })
+    pane.say({
+      jsonrpc: "2.0",
+      id: 2,
+      method: "ui/request-display-mode",
+      params: { mode: "fullscreen" },
+    })
     expect(pane.opened).toEqual([])
     expect(pane.take()).toEqual([
       { jsonrpc: "2.0", id: 1, result: { mode: "fullscreen" } },
+      { jsonrpc: "2.0", id: 2, result: { mode: "fullscreen" } },
     ])
   })
 
