@@ -90,12 +90,22 @@ export function easeRim(shown: RimLook, wanted: RimLook, seconds: number): RimLo
   }
 }
 
-/** The look with nothing moving, for less motion: no circling light, a level that holds. */
-export function stillRim(look: RimLook): RimLook {
+/** The loudness a still rim is drawn at, whatever is heard or said. */
+const STILL_LEVEL = 0.2
+
+/**
+ * The look for `phase` with nothing moving, for less motion: no circling
+ * light, and neither brightness nor reach follows a voice. It is the phase's
+ * look at one fixed loudness, so it changes only when the phase or the
+ * microphone does.
+ */
+export function stillRim(phase: VoicePhase, microphoneOn: boolean): RimLook {
+  const look = rimLook(phase, { input: STILL_LEVEL, output: STILL_LEVEL }, microphoneOn)
   return {
     ...look,
+    // A phase shown only by its circling light still shows as a steady rim.
     glow: Math.max(look.glow, look.sweep > 0 ? 0.2 : 0),
-    level: 0.2,
+    level: look.glow > 0 ? STILL_LEVEL : 0,
     sweep: 0,
     spin: 0,
   }

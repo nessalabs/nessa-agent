@@ -55,15 +55,29 @@ describe("easeRim", () => {
 
 describe("stillRim", () => {
   it("holds a connecting call as a steady rim with nothing circling", () => {
-    const still = stillRim(rimLook("connecting", quiet, true))
+    const still = stillRim("connecting", true)
     expect(still.sweep).toBe(0)
     expect(still.spin).toBe(0)
     expect(still.glow).toBeGreaterThan(0)
   })
 
-  it("does not follow loudness", () => {
-    const loud = stillRim(rimLook("speaking", { input: 0, output: 1 }, true))
-    const soft = stillRim(rimLook("speaking", { input: 0, output: 0 }, true))
-    expect(loud).toEqual(soft)
+  it("takes no loudness, so nothing a voice does can move it", () => {
+    // The moving look does follow the voice in these phases: the still one
+    // is not given the levels at all.
+    expect(rimLook("listening", { input: 1, output: 0 }, true)).not.toEqual(
+      rimLook("listening", { input: 0, output: 0 }, true),
+    )
+    for (const phase of ["listening", "speaking", "working"] as const) {
+      const still = stillRim(phase, true)
+      expect(still.glow).toBeGreaterThan(0)
+      expect(still.sweep).toBe(0)
+      expect(still).toEqual(stillRim(phase, true))
+    }
+  })
+
+  it("keeps a muted microphone grey and a call that is over dark", () => {
+    expect(stillRim("listening", false).grey).toBe(1)
+    expect(stillRim("idle", true).glow).toBe(0)
+    expect(stillRim("idle", true).level).toBe(0)
   })
 })

@@ -189,12 +189,13 @@ export function VoiceRim({
       last = time
       const { phase, microphoneOn, levels } = now.current
       const still = reducedMotion()
-      const wanted = rimLook(phase, levels(), microphoneOn)
       // Connected: one flash as the circling light lets go.
       if (was === "connecting" && phase !== "connecting" && !still) bloom = 1
       was = phase
       bloom = Math.max(0, bloom - seconds * 1.4)
-      shown = still ? stillRim(wanted) : easeRim(shown, wanted, seconds)
+      shown = still
+        ? stillRim(phase, microphoneOn)
+        : easeRim(shown, rimLook(phase, levels(), microphoneOn), seconds)
       turn += seconds * shown.spin
 
       if (!card) return
