@@ -5,7 +5,6 @@
 //! Most tests that use these run on Unix only, as the live set does; a
 //! helper only those tests use is compiled only there, so no other target
 //! sees dead code (`clippy --all-targets -D warnings` on Windows).
-use crate::mcp_authorization::application::PermissiveHandoff;
 #[cfg(unix)]
 use crate::mcp_servers::application::McpServerInitiator;
 use crate::mcp_servers::application::{
@@ -20,6 +19,7 @@ use crate::mcp_servers::infrastructure::{
     ConfigCheck, ConfigFiles, ConfigJsonStore, LaunchSettings, LiveMcpServers, Published,
 };
 use crate::product::mcp_servers::list_fits;
+use nessa_mcp_authorization::application::PermissiveHandoff;
 use nessa_sdk::infrastructure::{
     clock::{Clock, ClockInstant, ClockSleep, RuntimeClock},
     mcp::McpServers,

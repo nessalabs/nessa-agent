@@ -1322,7 +1322,7 @@ real processes in `tests/mcp_servers/inspect.rs`) and
 (`client.mcpServers`), its refusals `NessaMcpServersError`
 (`application/mcp-servers-error.ts`) and its answers checked by
 `protocol/mcp-servers-validate.ts`;
-`src/mcp_authorization/` owns one remote server's consent, token
+`crates/nessa-mcp-authorization/` (crate `nessa-mcp-authorization`) owns one remote server's consent, token
 generation, refresh and revoke (ADR 392): the domain statechart, the
 owner that fences a URL change before the live set is replaced, the
 transport adapter that names an admitted token for the HTTP session, HTTPS
@@ -1332,7 +1332,7 @@ record beside the sealed token files. The optional local-storage
 with one physical slot per instance;
 `records/tests.rs` and `audit/tests.rs` exercise actual file effects and input cleanup.
 Manual ignored real-file benchmarks live under each crate’s `tests/` owning
-`session_storage` or `mcp_authorization/infrastructure` feature and link production
+`session_storage` feature, or in `crates/nessa-mcp-authorization/tests/`, and link production
 libraries without private test probes. The [bounded persistence ordering table](design/bounded-physical-persistence.md)
 names the adapter lifecycle boundary. `mcpServers.authorize` and
 `mcpServers.revoke` are the product methods. An app call that the remote
@@ -1677,10 +1677,13 @@ paths remain current until the coordinated TODO updates all consumers.
 ## Outbound webhook foundation
 
 The outbound [webhook foundation](design/webhook-delivery-implementation.md)
-lives under `crates/nessa-server/src/webhooks`: immutable delivery and destination
-values in `domain/value_objects`, message/transport ports in `application`, and
-JSON, HMAC, DNS and HTTPS in `infrastructure`. Tests use the same layer names
-under `tests/webhooks`. `application/admission.rs` combines current credential
+is the `crates/nessa-webhooks` crate: immutable delivery and destination
+values in `domain/value_objects`, message/transport ports, registrations and the
+outbox port in `application`, and JSON, HMAC, DNS, HTTPS and the private outbox
+in `infrastructure`. Its tests use the same layer names under the crate's
+`tests/`. The parts that meet the conversation context stay in
+`crates/nessa-server/src/webhooks`: admission, the principal share, the
+canonical record source and the runtime. There, `application/admission.rs` combines current credential
 effect holds, principal grant revision holds, checked conversation metadata and
 the existing conversation Cedar evaluator. Credential mutation fences live in
 the auth registry; principal/resource fences remain in the grant store.
@@ -1709,15 +1712,15 @@ then installs under a current credential hold. `infrastructure/outbox/intents.rs
 retains bounded immutable private proposal/configuration facts across uncertain
 auth and installation acknowledgements; they supply no permission verdict.
 The installed registration references that original intent, and transactional
-retirement deletes the private configuration together with the registration. Tests remain in
-`tests/webhooks/infrastructure/outbox.rs`, with shared reset ownership cases in
-`tests/webhooks/infrastructure/outbox/source_reset.rs`.
+retirement deletes the private configuration together with the registration. Tests are
+the crate's `tests/infrastructure/outbox.rs`, with shared reset ownership cases in
+`tests/infrastructure/outbox/source_reset.rs`.
 `composition/webhooks.rs` loads private registration configuration;
-`infrastructure/runtime.rs` owns public issue/revoke/grant commands and shutdown.
+the server's `webhooks/infrastructure/runtime.rs` owns public issue/revoke/grant commands and shutdown.
 `runtime/delivery.rs` composes canonical principal reads, contiguous durable
 queueing, fresh dispatch admission and signed HTTPS. `composition/root.rs` starts
 that worker after fallible startup and joins it through product cleanup.
-`tests/webhooks/infrastructure/product{,_delivery}.rs` exercises public product
+The server's `tests/webhooks/infrastructure/product{,_delivery}.rs` exercises public product
 commands with disposable authorities and an isolated TLS recipient. Whole-feature
 review, source-matched platform CI, browser and conversation stress qualification
 remain incomplete; mounted fixtures alone do not establish readiness. The outbox

@@ -25,8 +25,8 @@ sources:
   - crates/nessa-server/src/conversation/infrastructure/store/share_grants.rs
   - crates/nessa-server/src/conversation/infrastructure/access_policy/cedar/readers.cedar
   - crates/nessa-server/src/webhooks/application/share.rs
-  - crates/nessa-server/src/webhooks/application/registration.rs
-  - crates/nessa-server/src/webhooks/infrastructure/outbox/registry.rs
+  - crates/nessa-webhooks/src/application/registration.rs
+  - crates/nessa-webhooks/src/infrastructure/outbox/registry.rs
   - crates/nessa-server/tests/webhooks/infrastructure/share.rs
   - crates/nessa-server/src/webhooks/application/admission.rs
   - crates/nessa-server/tests/webhooks/infrastructure/admission.rs

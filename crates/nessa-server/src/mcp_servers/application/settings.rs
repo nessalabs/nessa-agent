@@ -76,11 +76,11 @@ use super::ports::{
     McpServerInitiator, McpServerOutcome, McpServerStore, ServerInspector, ServerNames,
     ServerProblem, StoreError, StoreLock, StoredServers,
 };
-use crate::mcp_authorization::application::{AuthorizationHandoff, BindingChange};
 use crate::mcp_servers::domain::{
     EditRefusal, RemoteServerSave, ServerEdit, ServerSave, StdioServer, StoredMcpServer,
     MANAGED_SERVER_NAME,
 };
+use nessa_mcp_authorization::application::{AuthorizationHandoff, BindingChange};
 use nessa_protocol::product_contract::generated::{
     MCP_SERVER_INSPECT_DEADLINE_MS, MCP_SERVER_INSPECT_MAX_CONCURRENT,
     MCP_SERVER_INSPECT_MAX_TOOL_PAGES, MCP_SERVER_INSPECT_MAX_UI_READS,

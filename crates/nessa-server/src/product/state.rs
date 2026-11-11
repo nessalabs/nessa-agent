@@ -215,8 +215,7 @@ pub(crate) struct McpRoutes {
     pub(crate) settings: Option<Arc<McpServerSettings>>,
     /// Remote MCP authorization. `None` when this gateway is not managing
     /// stored servers. `mcpServers.authorize` and `mcpServers.revoke` use it.
-    pub(crate) authorization:
-        Option<Arc<crate::mcp_authorization::application::AuthorizationOwner>>,
+    pub(crate) authorization: Option<Arc<nessa_mcp_authorization::application::AuthorizationOwner>>,
 }
 
 /// Pairing devices and peers, native linking, and the web tunnel.
@@ -463,7 +462,7 @@ impl ProductRouteState {
     /// revoke answer `mcp_servers_not_configured`.
     pub fn with_mcp_authorization(
         mut self,
-        authorization: Arc<crate::mcp_authorization::application::AuthorizationOwner>,
+        authorization: Arc<nessa_mcp_authorization::application::AuthorizationOwner>,
     ) -> Self {
         self.mcp.authorization = Some(authorization);
         self

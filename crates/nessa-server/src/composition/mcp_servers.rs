@@ -23,11 +23,6 @@ use super::runtime_config::{RuntimeConfig, MAX_CONFIG_BYTES};
 use crate::conversation::application::{AppCallPolicyEvaluator, DroppedContexts, McpAppAudit};
 use crate::conversation::infrastructure::CedarAppCallPolicyEvaluator;
 use crate::core::RunError;
-use crate::mcp_authorization::application::AuthorizationOwner;
-use crate::mcp_authorization::infrastructure::{
-    FileAuthorizationAudit, FileRecords, HttpsOAuth, LoopbackCallback, OsEntropy, SystemAuthClock,
-    TransportAuthorization,
-};
 use crate::mcp_servers::{
     application::{BuiltInServer, McpServerSettings, Unfinished},
     domain::{relay_arguments, ConfigurationKey},
@@ -40,6 +35,11 @@ use crate::mcp_servers::{
 };
 use crate::product::mcp_servers::list_fits;
 use crate::timer::clock;
+use nessa_mcp_authorization::application::AuthorizationOwner;
+use nessa_mcp_authorization::infrastructure::{
+    FileAuthorizationAudit, FileRecords, HttpsOAuth, LoopbackCallback, OsEntropy, SystemAuthClock,
+    TransportAuthorization,
+};
 use nessa_sdk::infrastructure::{
     acp::sessions::{McpServerList, McpServerSource, StandInSessions, StdioMcpServer},
     clock::RuntimeClock,
@@ -517,7 +517,7 @@ fn manage_over(
         .unwrap_or_else(|| audit.clone());
     let records = Arc::new(FileRecords::new(parent.join("mcp-authorization")));
     let writer = records.writer_available();
-    let http: Arc<dyn crate::mcp_authorization::application::OAuthHttp> = match HttpsOAuth::new() {
+    let http: Arc<dyn nessa_mcp_authorization::application::OAuthHttp> = match HttpsOAuth::new() {
         Some(client) => Arc::new(client),
         None => Arc::new(RefusingOAuth),
     };
@@ -559,7 +559,7 @@ fn manage_over(
 /// The configured remote URL a bearer would be sent to.
 struct ConfiguredResources(McpServers);
 
-impl crate::mcp_authorization::application::ResourceLookup for ConfiguredResources {
+impl nessa_mcp_authorization::application::ResourceLookup for ConfiguredResources {
     fn resource(&self, server: uuid::Uuid) -> Option<String> {
         self.0
             .configured_remotes()
@@ -573,7 +573,7 @@ impl crate::mcp_authorization::application::ResourceLookup for ConfiguredResourc
 struct NamedDrain(McpServers);
 
 #[async_trait::async_trait]
-impl crate::mcp_authorization::application::SessionDrain for NamedDrain {
+impl nessa_mcp_authorization::application::SessionDrain for NamedDrain {
     async fn drain(&self, server_name: &str) {
         self.0.close_named(server_name);
     }
@@ -583,15 +583,15 @@ impl crate::mcp_authorization::application::SessionDrain for NamedDrain {
 struct RefusingOAuth;
 
 #[async_trait::async_trait]
-impl crate::mcp_authorization::application::OAuthHttp for RefusingOAuth {
+impl nessa_mcp_authorization::application::OAuthHttp for RefusingOAuth {
     async fn get(
         &self,
         _url: &str,
     ) -> Result<
-        crate::mcp_authorization::application::OAuthResponse,
-        crate::mcp_authorization::application::OAuthCallFailure,
+        nessa_mcp_authorization::application::OAuthResponse,
+        nessa_mcp_authorization::application::OAuthCallFailure,
     > {
-        Err(crate::mcp_authorization::application::OAuthCallFailure::NotSent)
+        Err(nessa_mcp_authorization::application::OAuthCallFailure::NotSent)
     }
 
     async fn post_form(
@@ -599,10 +599,10 @@ impl crate::mcp_authorization::application::OAuthHttp for RefusingOAuth {
         _url: &str,
         _body: &str,
     ) -> Result<
-        crate::mcp_authorization::application::OAuthResponse,
-        crate::mcp_authorization::application::OAuthCallFailure,
+        nessa_mcp_authorization::application::OAuthResponse,
+        nessa_mcp_authorization::application::OAuthCallFailure,
     > {
-        Err(crate::mcp_authorization::application::OAuthCallFailure::NotSent)
+        Err(nessa_mcp_authorization::application::OAuthCallFailure::NotSent)
     }
 
     async fn post_json(
@@ -610,10 +610,10 @@ impl crate::mcp_authorization::application::OAuthHttp for RefusingOAuth {
         _url: &str,
         _body: &str,
     ) -> Result<
-        crate::mcp_authorization::application::OAuthResponse,
-        crate::mcp_authorization::application::OAuthCallFailure,
+        nessa_mcp_authorization::application::OAuthResponse,
+        nessa_mcp_authorization::application::OAuthCallFailure,
     > {
-        Err(crate::mcp_authorization::application::OAuthCallFailure::NotSent)
+        Err(nessa_mcp_authorization::application::OAuthCallFailure::NotSent)
     }
 }
 
