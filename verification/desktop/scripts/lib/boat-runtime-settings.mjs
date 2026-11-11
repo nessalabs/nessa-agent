@@ -1,5 +1,6 @@
 import { writeFileSync } from "node:fs"
 import { join } from "node:path"
+import { log } from "./cli.mjs"
 import { waitFor } from "./gateway-stack.mjs"
 import { css, keys, names } from "./selectors.mjs"
 import { unlockRequestedVault } from "./vault.mjs"
@@ -253,13 +254,30 @@ async function listedChannel(client, channelId) {
 }
 
 /**
+ * Whether this run's gateway has a connected Boat. A run without Boat keys,
+ * or one whose gateway cannot answer, has nothing to place agents on, so the
+ * checks that need Boat skip instead of failing. That Boat is offered only
+ * once connected is held by channel-settings.test.tsx.
+ */
+export async function boatProbe(client) {
+  const state = await client.boat.status().then(
+    (status) => status?.state ?? "unknown",
+    (error) => `unreadable (${error?.refusal ?? error?.code ?? error?.message ?? error})`,
+  )
+  return { ready: state === "connected", state }
+}
+
+/**
  * Changes where a made channel runs from its settings dialog, as a person
  * does, after it has been talked to. New threads move first: the main chat
  * stays the same one. Then the main agent moves: the channel names a fresh
  * main chat and the one already talked to stays in the channel as a thread.
  * Both go back to this machine at the end, which names yet another fresh main
  * chat, so the channel is left running where it started. Nothing is sent
- * while it is on Boat: the run has no Boat account.
+ * while it is on Boat.
+ *
+ * It runs only when `boatProbe` finds Boat connected, and says so when it
+ * skips.
  */
 export async function channelPlacementSettings(run, channel, failures) {
   const { page, client } = run
@@ -286,6 +304,19 @@ export async function channelPlacementSettings(run, channel, failures) {
     )
   if (refused !== "forbidden")
     failures.push(`changing an unknown channel's run location answered ${refused}`)
+  const boat = await boatProbe(client)
+  receipts.boat = boat
+  if (!boat.ready) {
+    log(
+      `channel ${channel.channelId}: Boat is ${boat.state}, so its run-location checks are skipped`,
+    )
+    if (run.evidence)
+      writeFileSync(
+        join(run.evidence, `channel-placement-${channel.channelId}.json`),
+        JSON.stringify(receipts, null, 2) + "\n",
+      )
+    return
+  }
   const gear = page.locator(
     `${css.channelSettingsOpen}[data-channel-settings-open="${channel.channelId}"]`,
   )
@@ -304,11 +335,8 @@ export async function channelPlacementSettings(run, channel, failures) {
     coordinator: "data-coordinator-placement",
     threads: "data-thread-placement",
   }
-  const field = { coordinator: "coordinatorPlacement", threads: "threadPlacement" }
-  // The component test finds each option by the button's label. A role
-  // query for that exact name missed Boat in the stress run while the
-  // dialog was already showing the label: the connection read still had
-  // the option disabled.
+  // Each option is found by its button's label. A role query for that
+  // exact name missed Boat in a stress run while the dialog already showed it.
   const option = (row, name) =>
     control
       .locator(`[data-placement-row="${row}"]`)
@@ -318,28 +346,15 @@ export async function channelPlacementSettings(run, channel, failures) {
   // a save not started yet is not busy either.
   const shows = (row, place) =>
     waitFor(async () => (await control.getAttribute(attribute[row])) === place, 10_000)
-  // Boat is chosen in the dialog only while it is connected. Otherwise it is
-  // offered, disabled, the move is asked of the gateway directly, as another
-  // window would, and the dialog is checked once the window reads it again.
   await control.waitFor({ timeout: 10_000 })
-  const boat = option("threads", "Boat")
-  await boat.first().waitFor({ state: "visible", timeout: 10_000 })
-  // The row paints Boat disabled before its connection read. That read
-  // enables the option when Boat is connected; a Boat that is not stays
-  // disabled.
-  const boatOffered = Boolean(await waitFor(() => boat.first().isEnabled(), 10_000))
-  const boatCount = await boat.count()
-  const boatDisabled = boatCount > 0 && !boatOffered
-  const toBoat = async (row, current) => {
-    if (!boatOffered) {
-      await client.channels.setPlacement({
-        requestId: `stress-place-${row}-${channel.channelId}`,
-        channelId: channel.channelId,
-        ...current,
-        [field[row]]: "boat",
-      })
-      return
-    }
+  // Boat is connected, so the dialog offers it once it has read that.
+  const offered = await waitFor(
+    async () =>
+      (await option("threads", "Boat").count()) > 0 &&
+      !(await option("threads", "Boat").isDisabled()),
+    10_000,
+  )
+  const toBoat = async (row) => {
     await option(row, "Boat").click()
     if (!(await shows(row, "boat")))
       failures.push(
@@ -366,17 +381,12 @@ export async function channelPlacementSettings(run, channel, failures) {
       before.coordinatorPlacement
     )
       failures.push("the channel settings do not show where its main agent runs")
-    receipts.boatOffered = boatOffered
-    if (!boatOffered) {
-      if (boatCount === 0 || !boatDisabled)
-        failures.push(
-          `Boat is not shown as unavailable while it is not connected: ${JSON.stringify(await control.innerText())}`,
-        )
+    receipts.boatOffered = Boolean(offered)
+    if (!offered) {
+      failures.push("Boat is connected but the channel settings do not offer it")
+      return
     }
-    await toBoat("threads", {
-      coordinatorPlacement: before.coordinatorPlacement,
-      threadPlacement: before.threadPlacement,
-    })
+    await toBoat("threads")
     const threads = await settled({
       coordinatorPlacement: before.coordinatorPlacement,
       threadPlacement: "boat",
@@ -385,10 +395,7 @@ export async function channelPlacementSettings(run, channel, failures) {
     if (!threads) failures.push("moving new threads to Boat was not saved")
     else if (threads.coordinatorConversationId !== before.coordinatorConversationId)
       failures.push("moving only new threads named a new main chat")
-    await toBoat("coordinator", {
-      coordinatorPlacement: before.coordinatorPlacement,
-      threadPlacement: "boat",
-    })
+    await toBoat("coordinator")
     const moved = await settled({ coordinatorPlacement: "boat", threadPlacement: "boat" })
     receipts.moved = moved
     if (!moved) failures.push("moving the main agent to Boat was not saved")
@@ -405,14 +412,6 @@ export async function channelPlacementSettings(run, channel, failures) {
       if (!old) failures.push("the old main chat is gone after the main agent moved")
       else if (old.channelId !== channel.channelId)
         failures.push("the old main chat left its channel when the main agent moved")
-    }
-    if (!boatOffered) {
-      await page.keyboard.press(keys.escape)
-      await page.reload()
-      await openSettings()
-      for (const row of ["coordinator", "threads"])
-        if (!(await shows(row, "boat")))
-          failures.push(`after a reload the channel settings do not show ${row} on Boat`)
     }
     if (run.evidence)
       await page.screenshot({

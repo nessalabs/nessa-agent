@@ -67,27 +67,31 @@ jobs:
       - run: actionlint
 
   # Everything below this is `rustc`, and a change that edits prose cannot make
-  # any of it fail. This job is what lets such a change say so.
+  # any of it fail. This job is what lets such a change say so, and, for a
+  # change that is code, which Rust work it can reach.
   #
-  # It sits in front of four jobs, so its own cost is the thing to watch: a gate
-  # that saves thirty minutes on the rare pull request and adds twenty seconds
-  # to every other one is not obviously a gain. So it never checks out a working
-  # tree. The file list comes from the API, and the checkout is one file, at
-  # depth one, with no blobs — enough to run the rule and nothing more.
+  # It sits in front of every other job, so its own cost is the thing to watch.
+  # It never checks out a working tree: the file list and diffs come from the
+  # API, and the checkout is the two rule scripts plus the workspace's
+  # `Cargo.toml` files and Rust sources, with no other blobs.
   #
-  # The rule itself is `scripts/documentation-only.mjs`, tested in
-  # `documentation-only.test.mjs`, which is where the reasoning for it lives.
-  # Only pull requests are ever skipped. A push to `main` runs in full whatever
-  # it touched, because that is the run whose caches every later run reads.
+  # The rules are `scripts/documentation-only.mjs` (whether anything compiles)
+  # and `scripts/ci-plan.mjs` (which crates the Rust steps test, whether the SDK
+  # coverage job runs, and whether macOS and Windows run their test suites or
+  # only clippy). Each is tested beside it, and that is where the reasoning
+  # lives. Only pull requests are ever narrowed. A push to `main` runs in full
+  # whatever it touched: it is the run whose caches every later run reads, and
+  # the run that catches a platform break a narrowed pull request let through.
   #
-  # Every job that waits on this one asks `!cancelled() && ... != 'false'`
-  # rather than `== 'true'`, and the difference is the whole safety of the
-  # thing. A required check that is skipped counts as a required check that
-  # passed, so if this job could fail and take the others down as skipped, one
-  # bad API call would be indistinguishable from a green pull request. Written
-  # this way, only an explicit `false` from a job that ran to completion skips
-  # anything; a failure, an empty output or an error leaves `code` unset and
-  # everything runs, with this job red beside it.
+  # Every job and step that waits on this one asks `!= 'false'` rather than
+  # `== 'true'`, and the difference is the whole safety of the thing. A required
+  # check that is skipped counts as a required check that passed, so if this job
+  # could fail and take the others down as skipped, one bad API call would be
+  # indistinguishable from a green pull request. Written this way, only an
+  # explicit `false` from a job that ran to completion skips anything; a
+  # failure, an empty output or an error leaves the outputs unset and everything
+  # runs, with this job red beside it. An empty `rust_packages` runs every
+  # crate's tests.
   changes:
     name: What this change needs
     runs-on: ubuntu-latest
@@ -99,13 +103,27 @@ jobs:
       pull-requests: read
     outputs:
       code: ${{ steps.decide.outputs.code }}
+      rust: ${{ steps.decide.outputs.rust }}
+      rust_packages: ${{ steps.decide.outputs.rust_packages }}
+      sdk: ${{ steps.decide.outputs.sdk }}
+      platform_tests: ${{ steps.decide.outputs.platform_tests }}
     steps:
       - uses: actions/checkout@v4
         with:
-          sparse-checkout: scripts/documentation-only.mjs
+          sparse-checkout: |
+            /scripts/documentation-only.mjs
+            /scripts/ci-plan.mjs
+            /Cargo.toml
+            /crates/**/Cargo.toml
+            /crates/**/*.rs
+            /src-tauri/Cargo.toml
+            /src-tauri/**/*.rs
           sparse-checkout-cone-mode: false
           fetch-depth: 1
           filter: blob:none
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
       - id: decide
         env:
           GH_TOKEN: ${{ github.token }}
@@ -115,22 +133,16 @@ jobs:
           set -euo pipefail
           if [ "$EVENT" != pull_request ]; then
             echo "$EVENT runs everything."
-            echo "code=true" >> "$GITHUB_OUTPUT"
+            : | node scripts/ci-plan.mjs --github-output
             exit 0
           fi
           # `--paginate` because the default page is thirty files and a
-          # truncated list is a list that looks like documentation.
+          # truncated list is a list that looks like documentation. One JSON
+          # object per file keeps each diff with its name.
           gh api --paginate \
             "repos/${GITHUB_REPOSITORY}/pulls/${NUMBER}/files" \
-            --jq '.[].filename' > changed.txt
-          echo "Changed:"
-          sed 's/^/  /' changed.txt
-          if [ "$(node scripts/documentation-only.mjs < changed.txt)" = true ]; then
-            echo "Documentation only; the compile-heavy jobs are skipped."
-            echo "code=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "code=true" >> "$GITHUB_OUTPUT"
-          fi
+            --jq '.[] | {filename, previous_filename, patch} | @json' > changed.jsonl
+          node scripts/ci-plan.mjs --files-jsonl --github-output < changed.jsonl
 
   gateway-contract:
     needs: changes
@@ -474,7 +486,11 @@ jobs:
   windows-server-tests:
     name: Windows server library tests (${{ matrix.partition }})
     needs: changes
-    if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
+    # Skipped only when the plan says no platform code changed
+    # (`scripts/ci-plan.mjs`). Every crate in the list leads to nessa-server,
+    # so a change with platform code always reaches these tests. The macOS and
+    # Windows legs of `local-auth` still run clippy on every Rust change.
+    if: ${{ !cancelled() && needs.changes.outputs.code != 'false' && needs.changes.outputs.platform_tests != 'false' }}
     strategy:
       fail-fast: false
       matrix:
@@ -602,7 +618,12 @@ jobs:
             printf '::notice title=Native load acceptance::%s\n' "$line"
           done < "$RUNNER_TEMP/page-load-acceptance.txt"
       # Platform-only unused ports must fail before the long runtime suites.
-      - run: cargo clippy -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-projection -p nessa-types -p nessa-client-core -p nessa-device-client -p nessa-sdk -p nessa-timer -p nessa-vault --all-targets -- -D warnings
+      # Every Rust change runs this on all three systems: it is what catches a
+      # `#[cfg(unix)]` item left dead on Windows. It always lists every crate,
+      # so features unify as they do on `main`; crates the change cannot reach
+      # come from the cache.
+      - if: needs.changes.outputs.rust != 'false'
+        run: cargo clippy -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-projection -p nessa-types -p nessa-client-core -p nessa-device-client -p nessa-sdk -p nessa-timer -p nessa-vault --all-targets -- -D warnings
       # A test that deadlocks here held this job for six hours, until GitHub's
       # job limit cancelled it (#366). Over 53 green runs this step took at most
       # 7 minutes on Linux, 11 on macOS and 19 on Windows, compile included, so
@@ -624,7 +645,7 @@ jobs:
       # selection below. Aggregate phases per command so the notice limit
       # cannot hide device/drain timings. No raw log access or retry is needed.
       - name: Locate the Windows one-thread enrollment timeout
-        if: runner.os == 'Windows'
+        if: runner.os == 'Windows' && needs.changes.outputs.platform_tests != 'false'
         shell: bash
         run: |
           observe_phases() {
@@ -646,8 +667,14 @@ jobs:
           observe_phases cargo test -p nessa-server --test native_enrollment enrollment::native_gateway_runs_on_a_one_thread_blocking_pool -- --exact --nocapture
           observe_phases cargo test -p nessa-server --test native_enrollment one_thread:: -- --nocapture
         timeout-minutes: 45
+      # Every leg builds and doctests the full list, so features unify as they
+      # do on `main`. Ubuntu then runs only the test binaries of the crates the
+      # change can reach (`--run-packages`; empty runs all). macOS and Windows
+      # run their suites only when the plan says platform code changed, and
+      # then all of them, which Windows' `remaining` partition needs whole.
       - shell: bash
-        run: node scripts/cargo-test-parallel.mjs --concurrency 2 --partition ${{ matrix.partition }} -- -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-projection -p nessa-types -p nessa-client-core -p nessa-device-client -p nessa-sdk -p nessa-timer -p nessa-vault
+        if: needs.changes.outputs.rust != 'false' && (runner.os == 'Linux' || needs.changes.outputs.platform_tests != 'false')
+        run: node scripts/cargo-test-parallel.mjs --concurrency 2 --partition ${{ matrix.partition }} --run-packages "${{ runner.os == 'Linux' && needs.changes.outputs.rust_packages || '' }}" -- -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-projection -p nessa-types -p nessa-client-core -p nessa-device-client -p nessa-sdk -p nessa-timer -p nessa-vault
         # macOS ran this in 41.6 minutes on main (run 41708958692, 2026-11-03)
         # and hit 45 twice on one PR the same night; 60 still ends a deadlock
         # long before the job does (#366).
@@ -655,7 +682,7 @@ jobs:
       # Passing libtest output is normally captured. Keep these bounded native
       # receipts visible even when a separate strict fixture precondition fails.
       - name: Capture native retained-file security query order
-        if: runner.os == 'Windows' && !cancelled()
+        if: runner.os == 'Windows' && !cancelled() && needs.changes.outputs.platform_tests != 'false'
         shell: bash
         run: cargo test -p nessa-local-storage --lib fresh_hardlink_security_queries_reverse_provider_order_without_inheritance_assumptions -- --nocapture
         timeout-minutes: 5
@@ -796,7 +823,8 @@ jobs:
   sdk-domain-coverage:
     name: SDK domain coverage
     needs: changes
-    if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
+    # Only when the change can reach `nessa-sdk` (`scripts/ci-plan.mjs`).
+    if: ${{ !cancelled() && needs.changes.outputs.code != 'false' && needs.changes.outputs.sdk != 'false' }}
     runs-on: ubuntu-latest
     env:
       CARGO_TARGET_DIR: target/sdk-domain-coverage
