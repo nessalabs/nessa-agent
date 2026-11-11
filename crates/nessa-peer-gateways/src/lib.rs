@@ -3,5 +3,8 @@
 //! and keeps what it learned there, one private record per peer. Reading what
 //! a peer granted is a later part; see `docs/design/auth/peer-gateways.md`.
 //! `application` holds the evidence the owner's commands hand to audit.
+// The one clock rule nessa-server holds (clippy.toml), kept here since this
+// code moved out of it.
+#![cfg_attr(not(test), warn(clippy::disallowed_methods))]
 pub mod application;
 pub mod infrastructure;

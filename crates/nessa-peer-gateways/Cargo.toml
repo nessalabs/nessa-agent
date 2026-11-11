@@ -1,0 +1,37 @@
+[package]
+name = "nessa-peer-gateways"
+version.workspace = true
+edition.workspace = true
+rust-version = "1.89"
+publish = false
+autotests = false
+description = "The dialing side of a peer gateway: enroll into another gateway's invitation, keep one private record per peer, and poll it"
+
+[features]
+# Lets the server's composition tests watch a peer's read cycles.
+test-support = []
+
+[dependencies]
+nessa-auth = { path = "../nessa-auth" }
+# A peer gateway dials another gateway as a client (ADR 483, amended for
+# slice H of ADR 252). Without the example's command line.
+nessa-client-core = { path = "../nessa-client-core", default-features = false }
+nessa-local-storage = { path = "../nessa-local-storage", features = ["physical-operation"] }
+nessa-protocol = { path = "../nessa-protocol" }
+nessa-timer = { path = "../nessa-timer", features = ["runtime"] }
+base64 = "0.22"
+futures-util = "0.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+subtle = "2.6"
+tempfile = "3"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "sync", "time", "io-util"] }
+tracing = "0.1"
+uuid = { version = "1", features = ["v4"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["test-util"] }
+zeroize = "=1.9.0"
+
+[lints]
+workspace = true

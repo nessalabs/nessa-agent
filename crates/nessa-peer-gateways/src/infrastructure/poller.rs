@@ -62,8 +62,7 @@ use super::commands::{
     CycleStop, CycleTurn, EnrollmentEntropySource, PeerCommands, PeerSync, PollerRecord, SyncState,
 };
 use super::records::{PeerEntry, PeerPhase, PeerRecord, SlotOutcome, SlotTransition};
-use crate::peer_gateways::application::{PeerHolding, PollerCause, WITHDRAWN_PER_RECORD};
-use crate::timer::clock;
+use crate::application::{PeerHolding, PollerCause, WITHDRAWN_PER_RECORD};
 use nessa_auth::{
     adapters::pairing::NativeIdentity,
     application::{pairing::ClientPendingStore, ports::Clock as WallClock},
@@ -76,7 +75,8 @@ use nessa_client_core::retained::{
 use nessa_protocol::pairing::socket::WAKE_TICK;
 use nessa_protocol::pairing::wire::NativePairingStatus;
 use nessa_protocol::relay::RelayRefusal;
-#[cfg(test)]
+use nessa_timer::clock;
+#[cfg(any(test, feature = "test-support"))]
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::{
     collections::HashMap,
@@ -178,7 +178,7 @@ pub struct PeerPoller {
     commands: Arc<PeerCommands>,
     task: JoinHandle<()>,
     /// How many times this poller has scanned the peer records.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     lists: Arc<AtomicUsize>,
 }
 impl PeerPoller {
@@ -186,7 +186,7 @@ impl PeerPoller {
     pub fn start(commands: Arc<PeerCommands>, inputs: PollInputs) -> Self {
         let (stop, stopped) = watch::channel(false);
         let reads = Arc::new(Semaphore::new(read_places(inputs.policy.reads_at_once)));
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         let lists = Arc::new(AtomicUsize::new(0));
         let shared = Arc::new(Shared {
             commands: commands.clone(),
@@ -202,20 +202,20 @@ impl PeerPoller {
             known: Vec::new(),
             listed_generation: 0,
             listed_at: None,
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             lists: Arc::clone(&lists),
         };
         Self {
             stop,
             commands,
             task: tokio::spawn(poller.run()),
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             lists,
         }
     }
     /// How many times the peer records have been scanned.
-    #[cfg(test)]
-    pub(crate) fn lists(&self) -> usize {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn lists(&self) -> usize {
         self.lists.load(Ordering::Relaxed)
     }
     /// Ask the poller to stop: its waits end, and every cycle in progress is
@@ -256,7 +256,7 @@ struct Poller {
     /// When that list finished, on the injected clock. `None` until one does.
     listed_at: Option<u64>,
     /// How many directory scans this poller has done.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     lists: Arc<AtomicUsize>,
 }
 impl Poller {
@@ -413,7 +413,7 @@ impl Poller {
     /// listed, which waits out the interval and does not stop a read already
     /// running. Who is read is decided again under that peer's turn.
     async fn peers(&mut self) -> Option<Vec<DeviceKey>> {
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         self.lists.fetch_add(1, Ordering::Relaxed);
         let records = self.shared.commands.records().clone();
         let listed = tokio::task::spawn_blocking(move || records.list()).await;
@@ -1208,5 +1208,5 @@ fn hex(key: &DeviceKey) -> String {
 }
 
 #[cfg(test)]
-#[path = "../../../tests/peer_gateways/poller.rs"]
+#[path = "../../tests/poller.rs"]
 mod tests;

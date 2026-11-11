@@ -37,11 +37,10 @@ use super::records::{
     ForgetFailure, PeerEntry, PeerPhase, PeerRecord, PeerRecords, PeerSlot, SlotFound, SlotRefusal,
     SlotSave,
 };
-use crate::peer_gateways::application::{
+use crate::application::{
     CacheState, PeerAudit, PeerAuditFuture, PeerAuditRecord, PeerConnector, PeerHolding, PeerState,
     PollerCause,
 };
-use crate::timer::clock;
 use nessa_auth::adapters::pairing::relay_key;
 use nessa_auth::{
     adapters::pairing::{rand, CryptoRng, ManualCode, PairingCryptoError, RngCore},
@@ -57,6 +56,7 @@ use nessa_protocol::clock::Clock as MonotonicClock;
 use nessa_protocol::pairing::socket::WAKE_TICK;
 use nessa_protocol::product::generated::PeerErrorCode;
 use nessa_protocol::relay::{RelayAddress, DIRECT_HEAD_START};
+use nessa_timer::clock;
 use std::collections::HashMap;
 use std::sync::{Mutex, PoisonError};
 use std::{
@@ -219,7 +219,7 @@ struct PeerTurns {
     closed: bool,
     peers: HashMap<DeviceKey, PeerTurn>,
     /// Test evidence survives a free turn's removal, without retaining its semaphore.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     first_cycles: HashMap<DeviceKey, Arc<ReadStop>>,
 }
 
@@ -368,7 +368,7 @@ impl PeerCommands {
             peers: Mutex::new(PeerTurns {
                 closed: false,
                 peers: HashMap::new(),
-                #[cfg(test)]
+                #[cfg(any(test, feature = "test-support"))]
                 first_cycles: HashMap::new(),
             }),
             syncs: Mutex::new(HashMap::new()),
@@ -380,8 +380,8 @@ impl PeerCommands {
         &self.records
     }
     /// Observe the current cycle's stop flag without retaining its turn.
-    #[cfg(test)]
-    pub(crate) fn active_read_stop(&self, key: &DeviceKey) -> Option<Arc<ReadStop>> {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn active_read_stop(&self, key: &DeviceKey) -> Option<Arc<ReadStop>> {
         let turns = self.peers.lock().unwrap_or_else(PoisonError::into_inner);
         turns
             .peers
@@ -391,8 +391,8 @@ impl PeerCommands {
             .map(|cycle| Arc::clone(cycle.read()))
     }
     /// The first successfully registered cycle, even after its turn was removed.
-    #[cfg(test)]
-    pub(crate) fn first_read_stop(&self, key: &DeviceKey) -> Option<Arc<ReadStop>> {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn first_read_stop(&self, key: &DeviceKey) -> Option<Arc<ReadStop>> {
         self.peers
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
@@ -412,7 +412,7 @@ impl PeerCommands {
         let slot = open_slot(&mut turns, key)?;
         let permit = slot.turn.clone().try_acquire_owned().ok()?;
         slot.cycle = Some(cycle.clone());
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         turns
             .first_cycles
             .entry(key)
@@ -1403,5 +1403,5 @@ fn hex(key: &DeviceKey) -> String {
 }
 
 #[cfg(test)]
-#[path = "../../../tests/peer_gateways/commands.rs"]
+#[path = "../../tests/commands.rs"]
 mod tests;

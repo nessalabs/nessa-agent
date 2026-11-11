@@ -570,7 +570,7 @@ Design: [device pairing](design/auth/device-pairing.md#native-enrollment-consume
 [activation and credential delivery](design/auth/device-pairing.md#activation-and-credential-delivery-slice-2b)
 and [protected reads](design/auth/device-pairing.md#protected-reads-over-the-native-channel-slice-3).
 
-The dialing side of a peer gateway is `nessa-server/src/peer_gateways/`.
+The dialing side of a peer gateway is its own crate, `crates/nessa-peer-gateways/`.
 `infrastructure/records.rs` keeps one private record per peer under
 `peer-gateways/` and is the enrollment client's store for one enrollment
 (`PeerSlot`), naming the gateway's own native key without copying it;
@@ -591,11 +591,11 @@ Every change a cycle makes is audited through
 `PeerCommands::poller_changed`. The
 product methods are `nessa-server/src/product/peers.rs`, composed beside native
 pairing in `composition/native_pairing.rs`, which starts and joins the poller.
-Tests are `tests/peer_gateways/enroll.rs` and the two-process case in
+Server tests are `tests/peer_gateways/enroll.rs` and the two-process case in
 `tests/device_pairing/mounted.rs`, both registered by `tests/native_enrollment.rs`,
 the two-gateway read in `tests/composition/peer_reading.rs`, and the
 poller's cadence, the ended cause it keeps when a stop wins the status
-wait, and the record of that cause, in `tests/peer_gateways/poller.rs`.
+wait, and the record of that cause, in the crate's `tests/poller.rs`.
 Design: [peer gateways](design/auth/peer-gateways.md#the-dialing-side),
 [reading a peer](design/auth/peer-gateways.md#reading-a-peer).
 

@@ -22,15 +22,6 @@ use crate::conversation::infrastructure::{
     NessaRecordReadSource, TestReadGate,
 };
 use crate::device_pairing::infrastructure::PairingOwnerCommands;
-use crate::peer_gateways::application::{
-    CacheState, PeerAudit, PeerAuditFuture, PeerAuditRecord, PeerAuditUnavailable, PeerHolding,
-    PeerState, PollerCause,
-};
-use crate::peer_gateways::infrastructure::{
-    DurablePeerAudit, EnrollmentEntropy, EnrollmentEntropySource, PeerCommands, PeerEntry,
-    PeerError, PeerPhase, PeerPoller, PeerSync, PollInputs, PollPolicy, SyncState,
-    TcpPeerConnector, AUDIT_DEADLINE, READS_AT_ONCE,
-};
 use crate::product::{ProductDependencies, ProductRouteState};
 use nessa_auth::adapters::cedar::CedarPolicyEvaluator;
 use nessa_auth::adapters::local::{BootstrapRequest, LocalCredentialStore};
@@ -48,6 +39,15 @@ use nessa_auth::domain::{
     AudienceId, CredentialId, OrganizationId, PrincipalId, Resource, ResourceId,
 };
 use nessa_client_core::retained::{RetainedCache, HANDSHAKE};
+use nessa_peer_gateways::application::{
+    CacheState, PeerAudit, PeerAuditFuture, PeerAuditRecord, PeerAuditUnavailable, PeerHolding,
+    PeerState, PollerCause,
+};
+use nessa_peer_gateways::infrastructure::{
+    DurablePeerAudit, EnrollmentEntropy, EnrollmentEntropySource, PeerCommands, PeerEntry,
+    PeerError, PeerPhase, PeerPoller, PeerSync, PollInputs, PollPolicy, SyncState,
+    TcpPeerConnector, AUDIT_DEADLINE, READS_AT_ONCE,
+};
 use nessa_protocol::agents::AgentId;
 use nessa_protocol::conversation::domain::{
     ConversationApprovalMode, ConversationId, ConversationModelId,
@@ -1464,7 +1464,7 @@ async fn stalled_audit(
         audits.clone(),
         Arc::new(SystemClock),
         clock.clone(),
-        crate::peer_gateways::infrastructure::AUDIT_QUEUE,
+        nessa_peer_gateways::infrastructure::AUDIT_QUEUE,
         before_write,
     ));
     let b = Reader::prepare_with(

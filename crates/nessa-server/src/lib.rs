@@ -25,7 +25,6 @@ pub(crate) mod limits;
 pub mod logins;
 pub mod mcp_authorization;
 pub mod mcp_servers;
-pub mod peer_gateways;
 pub mod product;
 pub(crate) mod relay;
 pub mod secrets;

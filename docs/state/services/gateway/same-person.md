@@ -26,7 +26,7 @@ sources:
   - crates/nessa-server/src/conversation/infrastructure/store/grant_database.rs
   - crates/nessa-server/tests/device_pairing/infrastructure/person_links.rs
   - crates/nessa-server/tests/conversation/grant_database.rs
-  - crates/nessa-server/src/peer_gateways/infrastructure/records.rs
+  - crates/nessa-peer-gateways/src/infrastructure/records.rs
   - crates/nessa-server/tests/device_pairing/mounted/same_person.rs
   - crates/nessa-server/tests/device_pairing/owner_routes.rs
   - crates/nessa-server/tests/peer_gateways/same_person.rs

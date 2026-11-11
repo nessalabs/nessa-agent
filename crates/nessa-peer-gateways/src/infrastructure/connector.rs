@@ -12,8 +12,8 @@
 //! the first to connect is used and the other dropped; both failing is the
 //! relay's error
 //! ```
-use crate::peer_gateways::application::{PeerConnectFuture, PeerConnector};
-use crate::relay::wire::{read_frame, write_frame};
+use crate::application::{PeerConnectFuture, PeerConnector};
+use nessa_protocol::relay::wire::{read_frame, write_frame};
 use nessa_protocol::relay::{GatewayKey, RelayAddress, RelayFrame, RelayRefusal};
 use std::future::Future;
 use std::io;
@@ -107,5 +107,5 @@ async fn relay_leg(address: &RelayAddress, key: GatewayKey) -> io::Result<TcpStr
 }
 
 #[cfg(test)]
-#[path = "../../../tests/peer_gateways/connector.rs"]
+#[path = "../../tests/connector.rs"]
 mod tests;

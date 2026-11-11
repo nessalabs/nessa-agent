@@ -4,11 +4,11 @@
 //! then records instead of continuing into a read.
 use super::super::audit::DurablePeerAudit;
 use super::*;
-use crate::peer_gateways::application::{
+use crate::application::{
     CacheState, PeerAudit, PeerAuditFuture, PeerAuditRecord, PeerAuditUnavailable,
     PeerConnectFuture, PeerConnector, PeerState,
 };
-use crate::peer_gateways::infrastructure::{PeerRecords, AUDIT_DEADLINE};
+use crate::infrastructure::{PeerRecords, AUDIT_DEADLINE};
 use futures_util::FutureExt;
 use nessa_auth::application::pairing::{GatewayKeyStore, PrivateKeyMaterial, PrivateStateError};
 use nessa_auth::application::ports::Clock;
@@ -830,7 +830,7 @@ fn slot_commands(
         Arc::new(Refuses),
         Arc::new(|| {
             Box::new(nessa_auth::adapters::pairing::OsEntropy)
-                as Box<dyn crate::peer_gateways::infrastructure::EnrollmentEntropy>
+                as Box<dyn crate::infrastructure::EnrollmentEntropy>
         }),
     ))
 }
