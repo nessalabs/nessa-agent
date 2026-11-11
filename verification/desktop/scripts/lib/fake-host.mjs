@@ -59,12 +59,16 @@ export const STARTING = {
  * top right, counting each ask in `window.__fakeHostTrayAsks`.
  *
  * Every page's host carries the call pill as `src-tauri/src/call_pill.rs`
- * does: the picture a desktop page shows (`call_pill_show`, `call_pill_hide`)
- * reaches a pill page (`call.html`) as `nessa://call-pill-picture` and
- * answers its `call_pill_read`, and a pill page's `call_pill_press` reaches
- * the desktop page as `nessa://call-pill-press`. The two pages are two tabs
- * here, so this host's two halves talk over a broadcast channel. Shows and
- * hides are counted in `window.__fakeHostPill`.
+ * does: a desktop page says what its call looks like (`call_pill_set`, null
+ * for no call), and while that page is not in front the picture reaches a
+ * pill page (`call.html`) as `nessa://call-pill-picture` and answers its
+ * `call_pill_read`; in front, or with no call, the pill gets null. A pill
+ * page's `call_pill_press` reaches the desktop page as
+ * `nessa://call-pill-press`. A browser tab cannot lose the front on its
+ * own, so `window.__fakeHostDesktopInFront(false)` says the desktop window
+ * did. The two pages are two tabs here, so this host's two halves talk over
+ * a broadcast channel. Tellings are counted in `window.__fakeHostPill.sets`.
+ * A pill command with other arguments than the real one takes is refused.
  *
  * Given `panel`, the page is the menu-bar panel: the host says it started and
  * its gateway is up, as for setup, takes event listeners, answers the
@@ -119,10 +123,29 @@ export function gatewayHost({
   const PILL_PICTURE = "nessa://call-pill-picture"
   const PILL_PRESS = "nessa://call-pill-press"
   const pillWire = new BroadcastChannel("nessa-fake-host-call-pill")
-  // What the pill draws now, and whether this page is the one that says so.
+  // On the desktop page: what its call looks like and whether the window
+  // is in front, which together decide what the pill draws. On the pill
+  // page: what it was last sent.
+  let pillCall = null
+  let pillFront = true
   let pillPicture = null
   let pillOwner = false
-  window.__fakeHostPill = { shows: 0, hides: 0 }
+  window.__fakeHostPill = { sets: 0 }
+  const pillSettle = () => {
+    pillPicture = pillFront ? null : pillCall
+    pillWire.postMessage({ kind: "picture", picture: pillPicture })
+  }
+  window.__fakeHostDesktopInFront = (inFront) => {
+    pillFront = inFront
+    if (pillOwner) pillSettle()
+  }
+  const pillArgs = (command, args, names) => {
+    const given = Object.keys(args ?? {}).sort()
+    if (JSON.stringify(given) !== JSON.stringify([...names].sort()))
+      throw new Error(
+        `${command} takes ${JSON.stringify(names)}, not ${JSON.stringify(given)}`,
+      )
+  }
   pillWire.addEventListener("message", ({ data }) => {
     if (data.kind === "picture") {
       pillPicture = data.picture
@@ -158,19 +181,27 @@ export function gatewayHost({
         return Promise.resolve(window.__fakeHostPicks.resources.shift() ?? [])
       }
       if (command === "home_folder") return Promise.resolve(window.__fakeHostHome)
-      if (command === "call_pill_show" || command === "call_pill_hide") {
+      if (command === "call_pill_set") {
+        pillArgs(command, args, ["call"])
         pillOwner = true
-        pillPicture = command === "call_pill_show" ? args.call : null
-        window.__fakeHostPill[command === "call_pill_show" ? "shows" : "hides"]++
-        pillWire.postMessage({ kind: "picture", picture: pillPicture })
+        pillCall = args.call
+        window.__fakeHostPill.sets++
+        pillSettle()
         return Promise.resolve(null)
       }
-      if (command === "call_pill_read") return Promise.resolve(pillPicture)
+      if (command === "call_pill_read") {
+        pillArgs(command, args, [])
+        return Promise.resolve(pillPicture)
+      }
       if (command === "call_pill_press") {
+        pillArgs(command, args, ["press"])
         pillWire.postMessage({ kind: "press", press: args.press })
         return Promise.resolve(null)
       }
-      if (command === "call_pill_drag") return Promise.resolve(null)
+      if (command === "call_pill_drag") {
+        pillArgs(command, args, [])
+        return Promise.resolve(null)
+      }
       if (command === "replay_onboarding") {
         window.__fakeHostReplays++
         return Promise.resolve(null)

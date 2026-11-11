@@ -4650,25 +4650,24 @@ const steps = {
     // call, shown in `call.html`, which the host opens as a small window over
     // other apps. Here it is another tab, and the fake host carries the
     // picture and the presses between the two as the real one does. A
-    // browser's page cannot lose the front on its own, so the window is told
-    // it has.
+    // browser's page cannot lose the front on its own, so the fake host is
+    // told the window has, as the real host hears it from the system.
     const pill = await run.page.context().newPage()
     await pill.setViewportSize({ width: 300, height: 48 })
     await pill.addInitScript(gatewayHost, { endpoint: null, credential: null })
     await pill.goto(`${new URL(run.page.url()).origin}/call.html`)
     const face = pill.locator(".call-pill")
+    // The page is up before it is judged empty: a pill that has not drawn
+    // yet is not a pill that stayed away.
+    await pill
+      .locator(".call-pill-page")
+      .waitFor({ timeout: 10_000 })
+      .catch(() => failures.push("the pill's page did not load"))
+    await sleep(300)
     if ((await face.count()) > 0)
       failures.push("the pill shows while the window with the call is in front")
     const front = (inFront) =>
-      run.page.evaluate((inFront) => {
-        if (inFront) delete document.hasFocus
-        else
-          Object.defineProperty(document, "hasFocus", {
-            configurable: true,
-            value: () => false,
-          })
-        window.dispatchEvent(new Event(inFront ? "focus" : "blur"))
-      }, inFront)
+      run.page.evaluate((inFront) => window.__fakeHostDesktopInFront(inFront), inFront)
     await front(false)
     const pillSays = (words) =>
       waitFor(
@@ -4791,10 +4790,7 @@ const steps = {
     )
       failures.push("the pill stays after its call ended")
     await pill.close()
-    await run.page.evaluate(() => {
-      delete document.hasFocus
-      window.dispatchEvent(new Event("focus"))
-    })
+    await front(true)
     if (
       !(await talk.isVisible().catch(() => false)) &&
       !(await talk

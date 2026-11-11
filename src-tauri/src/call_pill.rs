@@ -9,7 +9,10 @@
 //! it (`call_pill_read`) rather than wait for the next change.
 //!
 //! Who may call what is decided here, by the calling window's label: only the
-//! desktop window shows or hides the pill, and only the pill sends presses.
+//! desktop window says what its call looks like, and only the pill sends
+//! presses. Whether the pill is on screen is decided here too, from the
+//! desktop window's own focus, so a page that cannot tell it left the front
+//! (the keyboard was inside a frame) still gets its pill.
 //! The window is declared hidden in `tauri.conf.json`, is never destroyed
 //! while the app runs, and is placed once — top centre of the main screen —
 //! then left wherever the person drags it.
@@ -182,63 +185,77 @@ fn place(pill: &WebviewWindow) {
     }
 }
 
-/// Shows the pill with `call` on it, or updates the one showing. Called by
-/// the desktop window whenever its open call changes while it is not in front.
+/// Whether the pill is on screen: a call is open, and the desktop window is
+/// not the one in front. In front, the composer already has the switches.
+fn shows(call_open: bool, desktop_in_front: bool) -> bool {
+    call_open && !desktop_in_front
+}
+
+/// What the desktop window's call looks like now; none when no call is open.
+/// The desktop page says this at every change, whichever window is in front.
+/// Whether the pill then shows is decided here, from the window itself.
 #[tauri::command]
-pub fn call_pill_show(
+pub fn call_pill_set(
     app: AppHandle,
     window: WebviewWindow,
     pill: State<'_, CallPill>,
-    call: CallPicture,
+    call: Option<CallPicture>,
 ) -> Result<(), String> {
     only(&window, DESKTOP_WINDOW)?;
-    let call = call.bounded();
-    let place_first = {
-        let mut held = pill.held();
-        held.picture = Some(call.clone());
-        !std::mem::replace(&mut held.placed, true)
-    };
-    let Some(native) = app.get_webview_window(CALL_WINDOW) else {
-        return Err("there is no call pill window".into());
-    };
-    if let Err(error) = app.emit_to(CALL_WINDOW, host::CALL_PILL_PICTURE, Some(&call)) {
+    pill.held().picture = call.map(CallPicture::bounded);
+    settle(&app, &pill, window.is_focused().unwrap_or(false));
+    Ok(())
+}
+
+/// The desktop window came to the front or left it.
+pub fn desktop_front_changed(app: &AppHandle, pill: &CallPill, in_front: bool) {
+    settle(app, pill, in_front);
+}
+
+/// The desktop page is loading again: whatever call it held is gone with it.
+pub fn desktop_page_reloading(app: &AppHandle, pill: &CallPill) {
+    pill.held().picture = None;
+    settle(app, pill, true);
+}
+
+/// Brings the pill's window in line with the held picture: drawn and on
+/// screen, or cleared and hidden. Failures cost the pill, never the call.
+fn settle(app: &AppHandle, pill: &CallPill, desktop_in_front: bool) {
+    let picture = drawn(pill, desktop_in_front);
+    let place_first = picture.is_some() && !std::mem::replace(&mut pill.held().placed, true);
+    if let Err(error) = app.emit_to(CALL_WINDOW, host::CALL_PILL_PICTURE, picture.as_ref()) {
         crate::host_log::warn(format!("could not update the call pill: {error}"));
     }
-    if native.is_visible().unwrap_or(false) {
-        return Ok(());
+    let Some(native) = app.get_webview_window(CALL_WINDOW) else {
+        return;
+    };
+    let visible = native.is_visible().unwrap_or(false);
+    if picture.is_none() {
+        if visible {
+            if let Err(error) = native.hide() {
+                crate::host_log::warn(format!("could not hide the call pill: {error}"));
+            }
+        }
+        return;
+    }
+    if visible {
+        return;
     }
     if place_first {
         place(&native);
     }
-    native
-        .show()
-        .map_err(|error| format!("could not show the call pill: {error}"))
-}
-
-/// Hides the pill: the call ended, or the desktop window is in front again.
-#[tauri::command]
-pub fn call_pill_hide(
-    app: AppHandle,
-    window: WebviewWindow,
-    pill: State<'_, CallPill>,
-) -> Result<(), String> {
-    only(&window, DESKTOP_WINDOW)?;
-    put_away(&app, &pill);
-    Ok(())
-}
-
-/// Hides the pill and forgets its picture, whoever asks: the desktop window's
-/// own hide, or its page loading again with no call left to show.
-pub fn put_away(app: &AppHandle, pill: &CallPill) {
-    pill.held().picture = None;
-    let none: Option<&CallPicture> = None;
-    if let Err(error) = app.emit_to(CALL_WINDOW, host::CALL_PILL_PICTURE, none) {
-        crate::host_log::warn(format!("could not clear the call pill: {error}"));
+    if let Err(error) = crate::platform::current().show_quietly(&native) {
+        crate::host_log::warn(format!("could not show the call pill: {error}"));
     }
-    if let Some(native) = app.get_webview_window(CALL_WINDOW) {
-        if let Err(error) = native.hide() {
-            crate::host_log::warn(format!("could not hide the call pill: {error}"));
-        }
+}
+
+/// What the pill draws now: the held picture while it shows, else none.
+fn drawn(pill: &CallPill, desktop_in_front: bool) -> Option<CallPicture> {
+    let held = pill.held();
+    if shows(held.picture.is_some(), desktop_in_front) {
+        held.picture.clone()
+    } else {
+        None
     }
 }
 
@@ -249,7 +266,11 @@ pub fn call_pill_read(
     pill: State<'_, CallPill>,
 ) -> Result<Option<CallPicture>, String> {
     only(&window, CALL_WINDOW)?;
-    Ok(pill.held().picture.clone())
+    let desktop_in_front = window
+        .app_handle()
+        .get_webview_window(DESKTOP_WINDOW)
+        .is_some_and(|desktop| desktop.is_focused().unwrap_or(false));
+    Ok(drawn(&pill, desktop_in_front))
 }
 
 /// A press on the pill, handed to the desktop window, which owns the call.
@@ -280,6 +301,29 @@ pub fn call_pill_drag(window: WebviewWindow) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_pill_shows_only_for_an_open_call_behind_other_windows() {
+        assert!(shows(true, false));
+        assert!(!shows(true, true));
+        assert!(!shows(false, false));
+        assert!(!shows(false, true));
+    }
+
+    #[test]
+    fn the_pill_draws_the_held_picture_only_while_it_shows() {
+        let pill = CallPill::default();
+        assert_eq!(drawn(&pill, false), None);
+        let picture = CallPicture {
+            phase: CallPhase::Listening,
+            title: "Fix the build".into(),
+            microphone_on: true,
+            speaker_on: true,
+        };
+        pill.held().picture = Some(picture.clone());
+        assert_eq!(drawn(&pill, false), Some(picture));
+        assert_eq!(drawn(&pill, true), None);
+    }
 
     #[test]
     fn the_pill_first_stands_at_the_top_centre_of_the_work_area() {

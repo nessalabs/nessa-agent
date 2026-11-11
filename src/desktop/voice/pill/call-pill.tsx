@@ -26,13 +26,20 @@ export function CallPill({
   /** The person began dragging the pill by its name. */
   onDrag: () => void
 }) {
-  const pressed = useRef<{ x: number; y: number; dragged: boolean } | null>(null)
+  // Where the button was pressed, while it is held; a press that travels
+  // from there is a drag, and its click is then not a press on the name.
+  const pressed = useRef<{ x: number; y: number } | null>(null)
+  const dragged = useRef(false)
   const moved = (event: ReactPointerEvent) => {
     const from = pressed.current
-    if (!from || from.dragged) return
+    // Held, and by the main button: a pointer passing over later drags nothing.
+    if (!from || dragged.current || (event.buttons & 1) === 0) return
     if (Math.hypot(event.clientX - from.x, event.clientY - from.y) < DRAG_AFTER) return
-    from.dragged = true
+    dragged.current = true
     onDrag()
+  }
+  const released = () => {
+    pressed.current = null
   }
   return (
     <div
@@ -45,25 +52,29 @@ export function CallPill({
       <button
         type="button"
         className="call-pill-name"
-        aria-label={`Open ${picture.title}`}
+        // The state is in the name: a button's own words are all a screen
+        // reader says of it, and a status inside one is never announced.
+        aria-label={`${picture.title}, ${pillWords(picture)}. Open chat`}
         onPointerDown={(event) => {
           if (event.button !== 0) return
-          pressed.current = { x: event.clientX, y: event.clientY, dragged: false }
+          pressed.current = { x: event.clientX, y: event.clientY }
+          dragged.current = false
         }}
         onPointerMove={moved}
         onPointerLeave={moved}
+        onPointerUp={released}
+        onPointerCancel={released}
         onClick={() => {
-          const dragged = pressed.current?.dragged === true
+          const wasDrag = dragged.current
+          dragged.current = false
           pressed.current = null
-          if (!dragged) onPress("open")
+          if (!wasDrag) onPress("open")
         }}
       >
         <span className="call-pill-light" aria-hidden="true" />
         <span className="call-pill-words">
           <span className="call-pill-title">{picture.title}</span>
-          <span className="call-pill-state" role="status" aria-live="polite">
-            {pillWords(picture)}
-          </span>
+          <span className="call-pill-state">{pillWords(picture)}</span>
         </span>
       </button>
       <button

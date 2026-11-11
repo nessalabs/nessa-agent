@@ -65,8 +65,9 @@ pub const PATHS_DROP_BEGAN: &str = "nessa://paths-drop-began";
 /// the channel pickers': the gateway checks each again before using it.
 pub const PATHS_DROPPED: &str = "nessa://paths-dropped";
 /// What the call pill should draw now; the payload is
-/// [`crate::call_pill::CallPicture`], or null when no call is shown. Sent to
-/// the pill's window alone; the host keeps the latest for a pill that asks.
+/// [`crate::call_pill::CallPicture`], or null when no call is shown. Sent for
+/// the pill's window, whose page listens for it by its own label; the host
+/// keeps the latest for a pill that asks.
 pub const CALL_PILL_PICTURE: &str = "nessa://call-pill-picture";
 /// A press on the call pill; the payload is [`crate::call_pill::CallPress`].
 /// Sent to the desktop window, whose page owns the call.

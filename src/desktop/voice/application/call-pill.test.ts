@@ -17,11 +17,12 @@ const idle: VoiceSnapshot = {
 
 function scene() {
   let state = idle
-  let front = true
+  let title: string | null = "Fix the build"
   const callListeners = new Set<() => void>()
-  const frontListeners = new Set<() => void>()
+  const titleListeners = new Set<() => void>()
   let press: (press: CallPress) => void = () => {}
-  const shown: (CallPicture | null)[] = []
+  let refuse = 0
+  const told: (CallPicture | null)[] = []
   const did: string[] = []
   const set = (next: Partial<VoiceSnapshot>) => {
     state = { ...state, ...next }
@@ -48,80 +49,97 @@ function scene() {
       },
     },
     pill: {
-      show: async (picture) => void shown.push(picture),
-      hide: async () => void shown.push(null),
+      set: async (picture) => {
+        // A slow host: the first telling takes longer than the next, so
+        // only an ordered sender keeps them in order.
+        await new Promise((done) => setTimeout(done, told.length === 0 ? 5 : 0))
+        if (refuse > 0) {
+          refuse -= 1
+          throw new Error("no pill")
+        }
+        told.push(picture)
+      },
       onPress: (handler) => {
         press = handler
         return () => (press = () => {})
       },
     },
-    inFront: {
-      now: () => front,
-      onChange: (listener) => {
-        frontListeners.add(listener)
-        return () => frontListeners.delete(listener)
-      },
+    title: (sessionId) => (sessionId === "s1" ? title : null),
+    onTitles: (listener) => {
+      titleListeners.add(listener)
+      return () => titleListeners.delete(listener)
     },
-    title: (sessionId) => (sessionId === "s1" ? "Fix the build" : null),
     showChat: (sessionId) => did.push(`show ${sessionId}`),
   })
   return {
-    shown,
+    told,
     did,
     set,
     stop,
     press: (name: CallPress) => press(name),
-    front: (now: boolean) => {
-      front = now
-      for (const listener of frontListeners) listener()
+    rename: (next: string | null) => {
+      title = next
+      for (const listener of titleListeners) listener()
     },
-    listeners: () => callListeners.size + frontListeners.size,
+    refuseNext: () => (refuse += 1),
+    settled: () => new Promise((done) => setTimeout(done, 30)),
+    listeners: () => callListeners.size + titleListeners.size,
   }
 }
 
-it("shows the pill when the window with an open call leaves the front, and hides it on return", () => {
+it("tells the host what an open call looks like, in the order it changed, and null when it ends", async () => {
   const s = scene()
-  s.set({ phase: "listening", sessionId: "s1" })
-  expect(s.shown).toEqual([])
-  s.front(false)
-  expect(s.shown).toEqual([
-    { phase: "listening", title: "Fix the build", microphoneOn: true, speakerOn: true },
-  ])
-  s.front(true)
-  expect(s.shown.at(-1)).toBeNull()
-  expect(s.shown).toHaveLength(2)
-})
-
-it("shows nothing for a window away with no call, and updates the pill only when it would draw differently", () => {
-  const s = scene()
-  s.front(false)
-  expect(s.shown).toEqual([])
+  await s.settled()
+  expect(s.told).toEqual([])
   s.set({ phase: "connecting", sessionId: "s1" })
   s.set({ hearing: "hello" })
   s.set({ phase: "listening" })
-  expect(s.shown.map((picture) => picture?.phase)).toEqual(["connecting", "listening"])
-})
-
-it("hides the pill when the call ends or drops", () => {
-  const s = scene()
-  s.front(false)
-  s.set({ phase: "speaking", sessionId: "s1" })
   s.set({ phase: "dropped" })
-  expect(s.shown.at(-1)).toBeNull()
+  await s.settled()
+  expect(s.told).toEqual([
+    { phase: "connecting", title: "Fix the build", microphoneOn: true, speakerOn: true },
+    { phase: "listening", title: "Fix the build", microphoneOn: true, speakerOn: true },
+    null,
+  ])
 })
 
-it("carries each press out on the call, and the pill follows what the call then says", () => {
+it("follows a title that changes while the call is open", async () => {
   const s = scene()
-  s.front(false)
+  s.set({ phase: "listening", sessionId: "s1" })
+  s.rename("Ship the pill")
+  s.rename("Ship the pill")
+  await s.settled()
+  expect(s.told.map((picture) => picture?.title)).toEqual([
+    "Fix the build",
+    "Ship the pill",
+  ])
+})
+
+it("tells the host again after a telling failed, even when the picture is the same", async () => {
+  const s = scene()
+  s.refuseNext()
+  s.set({ phase: "listening", sessionId: "s1" })
+  await s.settled()
+  expect(s.told).toEqual([])
+  s.set({ hearing: "still here" })
+  await s.settled()
+  expect(s.told).toHaveLength(1)
+})
+
+it("carries each press out on the call, and the pill follows what the call then says", async () => {
+  const s = scene()
   s.set({ phase: "listening", sessionId: "s1" })
   s.press("mute")
-  expect(s.shown.at(-1)).toMatchObject({ microphoneOn: false })
+  await s.settled()
+  expect(s.told.at(-1)).toMatchObject({ microphoneOn: false })
   s.press("unmute")
   s.press("speaker-off")
-  expect(s.shown.at(-1)).toMatchObject({ microphoneOn: true, speakerOn: false })
+  await s.settled()
+  expect(s.told.at(-1)).toMatchObject({ microphoneOn: true, speakerOn: false })
   s.press("speaker-on")
   s.press("open")
   s.press("end")
+  await s.settled()
   expect(s.did).toEqual([
     "microphone false",
     "microphone true",
@@ -130,15 +148,15 @@ it("carries each press out on the call, and the pill follows what the call then 
     "show s1",
     "end",
   ])
-  expect(s.shown.at(-1)).toBeNull()
+  expect(s.told.at(-1)).toBeNull()
 })
 
-it("stopping hides a pill that shows and lets go of everything it listened to", () => {
+it("stopping clears the pill and lets go of everything it listened to", async () => {
   const s = scene()
-  s.front(false)
   s.set({ phase: "listening", sessionId: "s1" })
   s.stop()
-  expect(s.shown.at(-1)).toBeNull()
+  await s.settled()
+  expect(s.told.at(-1)).toBeNull()
   expect(s.listeners()).toBe(0)
   s.press("end")
   expect(s.did).toEqual([])

@@ -17,11 +17,10 @@ import {
   homeFolder,
   openGatewayConfig,
   onPathsDragged,
-  hideCallPill,
   host,
   loadAssignedGatewayEndpoint,
   onCallPillPress,
-  showCallPill,
+  setCallPill,
   onReviewNoticeOpened,
   reviewNoticeAccess,
   syncReviewNotices,
@@ -226,8 +225,7 @@ if (voice)
   followCallWithPill({
     call: voice,
     pill: {
-      show: showCallPill,
-      hide: hideCallPill,
+      set: setCallPill,
       onPress: (handler) => {
         // Listening is asked for, and answers later: a follow stopped before
         // then stops the listener as soon as it is there.
@@ -243,21 +241,11 @@ if (voice)
         }
       },
     },
-    inFront: {
-      now: () => document.hasFocus(),
-      onChange: (listener) => {
-        window.addEventListener("focus", listener)
-        window.addEventListener("blur", listener)
-        return () => {
-          window.removeEventListener("focus", listener)
-          window.removeEventListener("blur", listener)
-        }
-      },
-    },
     title: (sessionId) => {
       const sessions = store.getState().workspace.sessions
       return Object.hasOwn(sessions, sessionId) ? sessions[sessionId].title : null
     },
+    onTitles: (listener) => store.subscribe(listener),
     showChat: (sessionId) => window.dispatchEvent(openReviewEvent(sessionId)),
   })
 store.dispatch(followWorkspace())

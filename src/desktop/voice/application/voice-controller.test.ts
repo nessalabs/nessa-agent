@@ -760,7 +760,7 @@ describe("VoiceController", () => {
     )
     // A microphone the system took away is said before what it leaves unsent.
     expect(hearingHint({ ...quiet, answered: true, microphoneLive: false })).toMatch(
-      /^macOS stopped giving Nessa the microphone/,
+      /^The system stopped giving Nessa the microphone/,
     )
     expect(hearingHint({ ...quiet, answered: true, audioSent: true })).toMatch(
       /^No sound is coming from the microphone/,

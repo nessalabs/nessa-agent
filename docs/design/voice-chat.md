@@ -127,23 +127,28 @@ sequenceDiagram
     participant D as Desktop window (holds the call)
     participant H as Host
     participant P as Pill window
-    D->>H: the window left the front with a call open, here is its picture
+    D->>H: a call opened, here is its picture
+    Note over H: the desktop window is in front, so the pill stays hidden
+    H->>H: the desktop window left the front
     H->>P: show, and draw this picture
     P->>H: the person pressed Mute
     H->>D: Mute was pressed on the pill
     D->>H: the call is muted now, here is its picture
     H->>P: draw this picture
-    D->>H: the window is in front again, or the call ended
+    H->>H: the desktop window is in front again
     H->>P: hide
+    D->>H: the call ended (no picture)
 ```
 
 | Rule | Owner |
 | --- | --- |
-| When the pill shows and what it draws: an open call, in a window that is not in front | `voice/model/call-pill.ts` |
-| Keeping the pill in step with the call, and carrying presses out on it | `voice/application/call-pill.ts` |
-| Who may call what: only the desktop window shows or hides, only the pill presses | `call_pill.rs`, by the calling window's label |
+| What the pill draws for a call, and what each press asks of it | `voice/model/call-pill.ts` |
+| Telling the host what the call looks like, in order, and carrying presses out on it | `voice/application/call-pill.ts` |
+| Whether the pill is on screen: a call is open and the desktop window is not in front | the host (`call_pill.rs`), from the system's own focus events. The page is never asked: a page's idea of focus goes stale when its window is hidden |
+| Who may call what: only the desktop window says what the call looks like, only the pill presses | `call_pill.rs`, by the calling window's label |
 | The latest picture, for a pill page that loads late | the host; the pill reads it after it starts listening |
 | Where the pill stands | top centre of the main screen the first time, then wherever it was dragged, until the app quits |
+| Showing without taking the keyboard, and floating beside a full-screen app | `platform` (`show_quietly`, `float_beside_fullscreen`); AppKit on macOS |
 
 A desktop page that loads again has no call, so the host puts the pill away
 when it does. A browser has no second window, and there no pill is shown.

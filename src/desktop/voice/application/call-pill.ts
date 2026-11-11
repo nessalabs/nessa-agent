@@ -1,8 +1,9 @@
 /**
  * Keeps the call pill in step with the window's call (`model/call-pill.ts`
- * has the rules). The pill is shown, updated and hidden as the call and the
- * window's place in front change, and a press on it is carried out on the
- * call as the same press in the composer would be.
+ * has the rules). The pill's host is told what the call looks like at every
+ * change, and a press on the pill is carried out on the call as the same
+ * press in the composer would be. Whether the pill is on screen is the
+ * host's to decide, from which window is in front.
  */
 import {
   callPicture,
@@ -13,18 +14,12 @@ import {
 } from "../model/call-pill"
 import type { VoiceSnapshot } from "./voice-controller"
 
-/** The pill's window, wherever it is: the app's host, or a browser's other tab. */
-export interface CallPillWindow {
-  show(picture: CallPicture): Promise<void>
-  hide(): Promise<void>
+/** The pill's host. */
+export interface CallPillHost {
+  /** What the call looks like now; null when no call is open. */
+  set(picture: CallPicture | null): Promise<void>
   /** Each press on the pill. Answers how to stop listening. */
   onPress(handler: (press: CallPress) => void): () => void
-}
-
-/** Whether this window is the one in front, and each time that changes. */
-export interface WindowInFront {
-  now(): boolean
-  onChange(listener: () => void): () => void
 }
 
 /** The part of the voice controller the pill needs. */
@@ -38,34 +33,45 @@ export interface PillCall {
 
 export interface CallPillDependencies {
   readonly call: PillCall
-  readonly pill: CallPillWindow
-  readonly inFront: WindowInFront
+  readonly pill: CallPillHost
   /** A chat's title by its session; null when the window does not hold it. */
   readonly title: (sessionId: string) => string | null
+  /** Each time a title may have changed. Answers how to stop listening. */
+  readonly onTitles: (listener: () => void) => () => void
   /** Shows a chat in this window: the pill's name was pressed. */
   readonly showChat: (sessionId: string) => void
 }
 
-/** Starts following; answers how to stop, which also hides the pill. */
+/** Starts following; answers how to stop, which also clears the pill. */
 export function followCallWithPill(dependencies: CallPillDependencies): () => void {
-  const { call, pill, inFront } = dependencies
-  let shown: CallPicture | null = null
+  const { call, pill } = dependencies
+  // What the host was last told, or `unknown` when a telling failed: the
+  // next change then tells it again, whatever the picture.
+  let told: CallPicture | null | "unknown" = null
+  // One telling at a time, in order: two sent at once could land reversed,
+  // and the host would keep the older picture.
+  let sending: Promise<void> = Promise.resolve()
+  const tell = (picture: CallPicture | null) => {
+    told = picture
+    sending = sending
+      .then(() => pill.set(picture))
+      .catch((error: unknown) => {
+        // A pill that cannot be reached costs the pill, never the call.
+        console.warn("Voice: the call pill is out of reach", error)
+        if (told === picture) told = "unknown"
+      })
+  }
   const sync = () => {
     const snapshot = call.snapshot()
     const title =
       snapshot.sessionId === null ? "" : (dependencies.title(snapshot.sessionId) ?? "")
-    const wanted = callPicture(snapshot, title, inFront.now())
-    if (samePicture(shown, wanted)) return
-    shown = wanted
-    const sent = wanted === null ? pill.hide() : pill.show(wanted)
-    // A pill that cannot be reached costs the pill, never the call.
-    sent.catch((error: unknown) =>
-      console.warn("Voice: the call pill is out of reach", error),
-    )
+    const wanted = callPicture(snapshot, title)
+    if (told !== "unknown" && samePicture(told, wanted)) return
+    tell(wanted)
   }
   const stops = [
     call.subscribe(sync),
-    inFront.onChange(sync),
+    dependencies.onTitles(sync),
     pill.onPress((press) => {
       const asked = callPressed(press)
       const sessionId = call.snapshot().sessionId
@@ -84,9 +90,6 @@ export function followCallWithPill(dependencies: CallPillDependencies): () => vo
   sync()
   return () => {
     for (const stop of stops) stop()
-    if (shown !== null) {
-      shown = null
-      pill.hide().catch(() => {})
-    }
+    if (told !== null) tell(null)
   }
 }

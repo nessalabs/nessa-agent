@@ -90,7 +90,7 @@ export function hearingHint(found: CallCheck): string | null {
   // Before what is sent: a microphone the system took away sends nothing,
   // and saying only that would point at the network.
   if (found.microphoneLive === false)
-    return "macOS stopped giving Nessa the microphone. Check that no other app took it, then end the call and try again."
+    return "The system stopped giving Nessa the microphone. Check that no other app took it, then end the call and try again."
   if (found.audioSent === false)
     return "Your voice isn’t being sent to OpenAI. End the call and try again."
   if (found.microphoneSound === false)

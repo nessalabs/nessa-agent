@@ -3,8 +3,9 @@
  * press on it means for the call. The pill is a second small window that
  * floats over other apps (`pill/`); it holds no call of its own.
  *
- * It shows only while a call is open and this window is not the one in
- * front: in front, the composer already carries the same switches.
+ * A pill is drawn only for an open call. The host shows it only while the
+ * desktop window is not the one in front (`src-tauri/src/call_pill.rs`): in
+ * front, the composer already carries the same switches.
  */
 import type { VoicePhase } from "./phase"
 
@@ -44,10 +45,7 @@ function openPhase(phase: VoicePhase): OpenPhase | null {
   }
 }
 
-/**
- * What the pill draws for a call, or null when it does not show: no call is
- * open, or this window is in front.
- */
+/** What the pill draws for a call, or null when no call is open. */
 export function callPicture(
   call: {
     readonly phase: VoicePhase
@@ -55,10 +53,9 @@ export function callPicture(
     readonly speakerOn: boolean
   },
   title: string,
-  windowInFront: boolean,
 ): CallPicture | null {
   const phase = openPhase(call.phase)
-  if (phase === null || windowInFront) return null
+  if (phase === null) return null
   return {
     phase,
     title: title.trim() || "Voice call",

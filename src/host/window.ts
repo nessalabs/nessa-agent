@@ -994,23 +994,21 @@ export async function onReviewNoticeOpened(handler: (conversationId: string) => 
 
 /*
  * The call pill (`src-tauri/src/call_pill.rs`): a small window that floats
- * over other apps while a voice call is open. The host carries the call's
- * picture from the desktop window to it and its presses back. A plain
- * browser has no second window to float, so there the pill is never shown.
+ * over other apps while a voice call is open and the desktop window is not
+ * in front. The host carries the call's picture from the desktop window to
+ * it and its presses back. A plain browser has no second window to float,
+ * so there the pill is never shown.
  */
 
-/** Shows the pill with `picture` on it, or updates the one showing. Desktop window only. */
-export async function showCallPill(picture: CallPicture): Promise<void> {
+/**
+ * Says what the desktop window's call looks like now; null when no call is
+ * open. The host shows the pill while there is one and this window is not in
+ * front. Desktop window only.
+ */
+export async function setCallPill(picture: CallPicture | null): Promise<void> {
   if (!inTauri) return
   const { invoke } = await import("@tauri-apps/api/core")
-  await invoke("call_pill_show", { call: picture })
-}
-
-/** Hides the pill. Desktop window only. */
-export async function hideCallPill(): Promise<void> {
-  if (!inTauri) return
-  const { invoke } = await import("@tauri-apps/api/core")
-  await invoke("call_pill_hide")
+  await invoke("call_pill_set", { call: picture })
 }
 
 /** Subscribes the desktop window to presses on the pill. */
@@ -1019,10 +1017,15 @@ export async function onCallPillPress(
 ): Promise<() => void> {
   if (!inTauri) return () => undefined
   const { listen } = await import("@tauri-apps/api/event")
-  return listen<unknown>(HOST_EVENTS.callPillPress, ({ payload }) => {
-    const press = parseCallPress(payload)
-    if (press) handler(press)
-  })
+  return listen<unknown>(
+    HOST_EVENTS.callPillPress,
+    ({ payload }) => {
+      const press = parseCallPress(payload)
+      if (press) handler(press)
+    },
+    // Only what the host sends this window: not every page hears a press.
+    { target: { kind: "WebviewWindow", label: "desktop" } },
+  )
 }
 
 /**
@@ -1037,10 +1040,15 @@ export async function onCallPillPicture(
   const { listen } = await import("@tauri-apps/api/event")
   const { invoke } = await import("@tauri-apps/api/core")
   let heard = false
-  const stop = await listen<unknown>(HOST_EVENTS.callPillPicture, ({ payload }) => {
-    heard = true
-    handler(parseCallPicture(payload))
-  })
+  const stop = await listen<unknown>(
+    HOST_EVENTS.callPillPicture,
+    ({ payload }) => {
+      heard = true
+      handler(parseCallPicture(payload))
+    },
+    // Only what the host sends the pill: a chat's title is no other page's.
+    { target: { kind: "WebviewWindow", label: "call" } },
+  )
   const now = parseCallPicture(await invoke<unknown>("call_pill_read"))
   if (!heard) handler(now)
   return stop

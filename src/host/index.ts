@@ -25,11 +25,10 @@ export {
 } from "./call-pill"
 export {
   dragCallPill,
-  hideCallPill,
   onCallPillPicture,
   onCallPillPress,
   pressCallPill,
-  showCallPill,
+  setCallPill,
   availableUpdate,
   askReviewNoticeAccess,
   onReviewNoticeOpened,
