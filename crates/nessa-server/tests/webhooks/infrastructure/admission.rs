@@ -7,7 +7,7 @@ use crate::conversation::{
     domain::{Conversation, ShareAccess},
     infrastructure::{CedarConversationAccessPolicy, LocalConversationStore},
 };
-use crate::webhooks::application::{AdmissionFailure, AdmitDelivery, Target};
+use crate::webhooks::application::{AdmissionFailure, AdmitDelivery};
 use nessa_auth::{
     adapters::{
         cedar::CedarPolicyEvaluator,
@@ -29,6 +29,7 @@ use nessa_protocol::{
     agents::AgentId,
     conversation::domain::{ConversationApprovalMode, ConversationId, ConversationModelId},
 };
+use nessa_webhooks::application::Target;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::{

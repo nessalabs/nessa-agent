@@ -8,19 +8,10 @@ use crate::conversation::application::{
 use nessa_auth::application::ports::{
     AccessAdmission, AccessError, AccessHold, AccessSnapshot, Clock,
 };
-use nessa_auth::domain::{CredentialId, OrganizationId, PrincipalId, Resource};
+use nessa_auth::domain::Resource;
 use nessa_protocol::conversation::domain::ConversationId;
+use nessa_webhooks::application::Target;
 use std::sync::{Mutex, PoisonError};
-
-/// Secret-free identity of a committed registration. Infrastructure supplies
-/// this from its private registration row, never from an event payload.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Target {
-    pub credential: CredentialId,
-    pub principal: PrincipalId,
-    pub organization: OrganizationId,
-    pub owner: PrincipalId,
-}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AdmissionFailure {

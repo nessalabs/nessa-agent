@@ -6,12 +6,7 @@ use crate::conversation::application::{
     RecordReadLease, RecordReadOperation, RecordReadResponse, RecordReadValue,
 };
 use crate::conversation::infrastructure::{NessaRecordReadSource, TestReadGate};
-use crate::webhooks::application::{
-    MacKey, ReadWebhookRecords, RegisterWebhook, Registration, RegistrationConfig,
-    RegistrationIntent, WebhookReadFailure,
-};
-use crate::webhooks::domain::Destination;
-use crate::webhooks::infrastructure::SqlOutbox;
+use crate::webhooks::application::{ReadWebhookRecords, WebhookReadFailure};
 use nessa_auth::application::credential_admin::CredentialAdmin;
 use nessa_protocol::product::generated::{
     MAX_PHYSICAL_RECORD_PAYLOAD_BYTES, MAX_RECORD_PAGE_PAYLOAD_BYTES, MAX_RECORD_PAGE_RECORDS,
@@ -25,6 +20,11 @@ use nessa_sdk::{
     infrastructure::session_storage::RecordStorage,
 };
 use nessa_sync::replication::domain::{Id, Limits, PageRequest, Scope};
+use nessa_webhooks::application::{
+    MacKey, RegisterWebhook, Registration, RegistrationConfig, RegistrationIntent,
+};
+use nessa_webhooks::domain::Destination;
+use nessa_webhooks::infrastructure::SqlOutbox;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicUsize;
 use std::time::Duration;
@@ -833,8 +833,8 @@ async fn a_retained_page_selector_cannot_cross_unshare_regrant_or_changed_physic
 
 #[tokio::test]
 async fn canonical_principal_page_uses_the_existing_durable_registration_scope_contract() {
-    use crate::webhooks::application::{Outbox, QueueInitiator, QueuedRecord};
-    use crate::webhooks::infrastructure::record_message;
+    use nessa_webhooks::application::{Outbox, QueueInitiator, QueuedRecord};
+    use nessa_webhooks::infrastructure::record_message;
     let f = Fixture::with_purpose(CredentialIssuePurpose::Webhook).await;
     let (store, registration, _path) = registered(&f).await;
     let storage = physical(&f).await;

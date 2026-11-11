@@ -1,5 +1,5 @@
 //! A committed webhook shares as a principal, never as a paired receiver.
-use super::{AdmissionFailure, AdmitDelivery, RegistrationLookup};
+use super::{AdmissionFailure, AdmitDelivery};
 use crate::conversation::application::{
     load_conversation, AccessAction, AccessAsk, AccessDecision, AccessDenial, AccessResource,
     AccessSubject, ConversationCaller, ConversationError, GrantedShare, OwnerAccess, RequestShape,
@@ -8,6 +8,7 @@ use crate::conversation::application::{
 use crate::conversation::domain::{Capabilities, Capability, ShareAccess, ToolPolicy};
 use nessa_auth::domain::CredentialId;
 use nessa_protocol::conversation::domain::ConversationId;
+use nessa_webhooks::application::RegistrationLookup;
 
 pub struct ShareWebhookConversation<'a> {
     pub registrations: &'a dyn RegistrationLookup,
