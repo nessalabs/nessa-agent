@@ -36,6 +36,7 @@ nessa-agent-install = { path = "../nessa-agent-install" }
 nessa-attachments = { path = "../nessa-attachments" }
 nessa-peer-gateways = { path = "../nessa-peer-gateways" }
 nessa-mcp-authorization = { path = "../nessa-mcp-authorization" }
+nessa-webhooks = { path = "../nessa-webhooks" }
 base64 = "0.22"
 # The local-network announcement while native linking listens there
 # (device_pairing::infrastructure::announcer), so a phone that scanned the
@@ -159,6 +160,7 @@ nessa-attachments = { path = "../nessa-attachments", features = ["test-support"]
 nessa-device-client = { path = "../nessa-device-client" }
 # Lets composition tests watch a peer's read cycles and slow its audit writer.
 nessa-peer-gateways = { path = "../nessa-peer-gateways", features = ["test-support"] }
+nessa-webhooks = { path = "../nessa-webhooks", features = ["test-support"] }
 # Plants an unmarked session record. A production build of this crate does not
 # enable it.
 nessa-sdk = { path = "../nessa-sdk", features = ["test-support"] }

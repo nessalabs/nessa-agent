@@ -1,5 +1,5 @@
 //! Current principal admission before bounded canonical physical record reads.
-use super::{AdmissionFailure, AdmitDelivery, DeliveryHold, Registration};
+use super::{AdmissionFailure, AdmitDelivery, DeliveryHold};
 use crate::conversation::application::{
     PrincipalRecordReadSource, PrincipalRecordScope, RecordReadError, RecordReadLease,
     RecordReadOperation, RecordReadResponse, RecordReadValue,
@@ -9,6 +9,7 @@ use nessa_protocol::conversation::{domain::ConversationId, read_scope::ReadRefus
 use nessa_sync::replication::domain::{
     validate_page, validate_page_request, Checkpoint, Limits, Page,
 };
+use nessa_webhooks::application::Registration;
 use std::sync::{Arc, Mutex};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 

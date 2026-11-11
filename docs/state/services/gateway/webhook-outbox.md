@@ -11,49 +11,49 @@ parent: gateway
 sources:
   - crates/nessa-server/src/conversation/infrastructure/store/share_grants.rs
   - crates/nessa-server/tests/webhooks/infrastructure/product_delivery/discovery.rs
-  - crates/nessa-server/src/webhooks/domain/value_objects/registration_lifecycle.rs
-  - crates/nessa-server/tests/webhooks/domain/registration_lifecycle.rs
-  - crates/nessa-server/tests/webhooks/infrastructure/outbox/lifecycle_context.rs
-  - crates/nessa-server/tests/webhooks/infrastructure/outbox/issuance_context.rs
+  - crates/nessa-webhooks/src/domain/value_objects/registration_lifecycle.rs
+  - crates/nessa-webhooks/tests/domain/registration_lifecycle.rs
+  - crates/nessa-webhooks/tests/infrastructure/outbox/lifecycle_context.rs
+  - crates/nessa-webhooks/tests/infrastructure/outbox/issuance_context.rs
   - crates/nessa-auth/src/application/ports.rs
   - crates/nessa-auth/src/application/revocation.rs
-  - crates/nessa-server/src/webhooks/application/outbox.rs
-  - crates/nessa-server/src/webhooks/application/registration_stop.rs
-  - crates/nessa-server/src/webhooks/infrastructure/outbox/stop.rs
-  - crates/nessa-server/tests/webhooks/infrastructure/outbox/registration_stop.rs
-  - crates/nessa-server/tests/webhooks/infrastructure/outbox/stop_rows.rs
+  - crates/nessa-webhooks/src/application/outbox.rs
+  - crates/nessa-webhooks/src/application/registration_stop.rs
+  - crates/nessa-webhooks/src/infrastructure/outbox/stop.rs
+  - crates/nessa-webhooks/tests/infrastructure/outbox/registration_stop.rs
+  - crates/nessa-webhooks/tests/infrastructure/outbox/stop_rows.rs
   - crates/nessa-auth/tests/revocation.rs
-  - crates/nessa-server/src/webhooks/application/registration.rs
-  - crates/nessa-server/src/webhooks/infrastructure/outbox/intents.rs
-  - crates/nessa-server/src/webhooks/infrastructure/outbox/cancellation.rs
-  - crates/nessa-server/tests/webhooks/infrastructure/outbox/registration_cancellation.rs
-  - crates/nessa-server/tests/webhooks/infrastructure/outbox/registration.rs
-  - crates/nessa-server/tests/webhooks/infrastructure/outbox/registration_failures.rs
-  - crates/nessa-server/tests/webhooks/infrastructure/outbox/lifecycle.rs
-  - crates/nessa-server/tests/webhooks/infrastructure/outbox/intent_rows.rs
-  - crates/nessa-server/tests/webhooks/infrastructure/outbox/schema.rs
-  - crates/nessa-server/src/webhooks/domain/value_objects/delivery.rs
-  - crates/nessa-server/src/webhooks/infrastructure/outbox/mod.rs
-  - crates/nessa-server/src/webhooks/infrastructure/outbox/store.rs
-  - crates/nessa-server/src/webhooks/infrastructure/outbox/schema.rs
-  - crates/nessa-server/src/webhooks/infrastructure/outbox/schema.sql
-  - crates/nessa-server/src/webhooks/infrastructure/outbox/registry.rs
-  - crates/nessa-server/src/webhooks/infrastructure/outbox/stored.rs
-  - crates/nessa-server/src/webhooks/infrastructure/outbox/audit.rs
-  - crates/nessa-server/src/webhooks/infrastructure/outbox/cursor.rs
-  - crates/nessa-server/src/webhooks/infrastructure/outbox/codec.rs
-  - crates/nessa-server/src/webhooks/infrastructure/outbox/capacity.rs
-  - crates/nessa-server/src/webhooks/infrastructure/outbox/queue.rs
-  - crates/nessa-server/src/webhooks/infrastructure/outbox/journal.rs
-  - crates/nessa-server/src/webhooks/infrastructure/outbox/publication.rs
-  - crates/nessa-server/src/webhooks/infrastructure/outbox/restoration.rs
-  - crates/nessa-server/src/webhooks/infrastructure/outbox/restoration/progress.rs
-  - crates/nessa-server/src/webhooks/infrastructure/outbox/retirement.rs
-  - crates/nessa-server/src/webhooks/infrastructure/outbox/source_reset/mod.rs
-  - crates/nessa-server/src/webhooks/infrastructure/outbox/source_reset/store.rs
-  - crates/nessa-server/src/webhooks/infrastructure/outbox/source_reset/owner.rs
+  - crates/nessa-webhooks/src/application/registration.rs
+  - crates/nessa-webhooks/src/infrastructure/outbox/intents.rs
+  - crates/nessa-webhooks/src/infrastructure/outbox/cancellation.rs
+  - crates/nessa-webhooks/tests/infrastructure/outbox/registration_cancellation.rs
+  - crates/nessa-webhooks/tests/infrastructure/outbox/registration.rs
+  - crates/nessa-webhooks/tests/infrastructure/outbox/registration_failures.rs
+  - crates/nessa-webhooks/tests/infrastructure/outbox/lifecycle.rs
+  - crates/nessa-webhooks/tests/infrastructure/outbox/intent_rows.rs
+  - crates/nessa-webhooks/tests/infrastructure/outbox/schema.rs
+  - crates/nessa-webhooks/src/domain/value_objects/delivery.rs
+  - crates/nessa-webhooks/src/infrastructure/outbox/mod.rs
+  - crates/nessa-webhooks/src/infrastructure/outbox/store.rs
+  - crates/nessa-webhooks/src/infrastructure/outbox/schema.rs
+  - crates/nessa-webhooks/src/infrastructure/outbox/schema.sql
+  - crates/nessa-webhooks/src/infrastructure/outbox/registry.rs
+  - crates/nessa-webhooks/src/infrastructure/outbox/stored.rs
+  - crates/nessa-webhooks/src/infrastructure/outbox/audit.rs
+  - crates/nessa-webhooks/src/infrastructure/outbox/cursor.rs
+  - crates/nessa-webhooks/src/infrastructure/outbox/codec.rs
+  - crates/nessa-webhooks/src/infrastructure/outbox/capacity.rs
+  - crates/nessa-webhooks/src/infrastructure/outbox/queue.rs
+  - crates/nessa-webhooks/src/infrastructure/outbox/journal.rs
+  - crates/nessa-webhooks/src/infrastructure/outbox/publication.rs
+  - crates/nessa-webhooks/src/infrastructure/outbox/restoration.rs
+  - crates/nessa-webhooks/src/infrastructure/outbox/restoration/progress.rs
+  - crates/nessa-webhooks/src/infrastructure/outbox/retirement.rs
+  - crates/nessa-webhooks/src/infrastructure/outbox/source_reset/mod.rs
+  - crates/nessa-webhooks/src/infrastructure/outbox/source_reset/store.rs
+  - crates/nessa-webhooks/src/infrastructure/outbox/source_reset/owner.rs
   - crates/nessa-server/src/product/webhook_reset.rs
-  - crates/nessa-server/tests/webhooks/infrastructure/outbox/owner_reset.rs
+  - crates/nessa-webhooks/tests/infrastructure/outbox/owner_reset.rs
   - crates/nessa-server/tests/webhooks/infrastructure/product_delivery/owner_reset.rs
   - crates/nessa-server/tests/webhooks/infrastructure/product_delivery/owner_query.rs
   - protocol/product/v1.json
@@ -61,17 +61,17 @@ sources:
   - packages/nessa-client/src/presentation/conversation-api.ts
   - verification/desktop/scripts/conversation-stress.mjs
   - verification/desktop/scripts/lib/gateway-stack.mjs
-  - crates/nessa-server/src/webhooks/infrastructure/outbox/source_reset/fact.rs
-  - crates/nessa-server/src/webhooks/infrastructure/outbox/source_reset/retention.rs
-  - crates/nessa-server/tests/webhooks/infrastructure/outbox/cleanup.rs
-  - crates/nessa-server/tests/webhooks/infrastructure/outbox.rs
-  - crates/nessa-server/tests/webhooks/infrastructure/outbox/source_reset.rs
+  - crates/nessa-webhooks/src/infrastructure/outbox/source_reset/fact.rs
+  - crates/nessa-webhooks/src/infrastructure/outbox/source_reset/retention.rs
+  - crates/nessa-webhooks/tests/infrastructure/outbox/cleanup.rs
+  - crates/nessa-webhooks/tests/infrastructure/outbox.rs
+  - crates/nessa-webhooks/tests/infrastructure/outbox/source_reset.rs
   - crates/nessa-server/src/webhooks/infrastructure/runtime/delivery.rs
   - crates/nessa-server/tests/webhooks/infrastructure/product_delivery.rs
   - crates/nessa-server/src/composition/root.rs
   - crates/nessa-server/src/composition/local_auth.rs
-  - crates/nessa-server/tests/webhooks/infrastructure/outbox/response.rs
-  - crates/nessa-server/tests/webhooks/infrastructure/outbox/retention_fixture.rs
+  - crates/nessa-webhooks/tests/infrastructure/outbox/response.rs
+  - crates/nessa-webhooks/tests/infrastructure/outbox/retention_fixture.rs
 diagramLinks: {}
 diagramDetails:
   - diagram: 1
@@ -178,10 +178,10 @@ original record refuses; a retry of the same record preserves the first local
 observation, including after retirement and cold restore. The credential lookup
 uses a bounded indexed selection and refuses ambiguous retained ownership.
 
-The [actual-source tests](../../../../crates/nessa-server/tests/webhooks/infrastructure/outbox/registration_stop.rs)
+The [actual-source tests](../../../../crates/nessa-webhooks/tests/infrastructure/outbox/registration_stop.rs)
 cover original facts, the held Auth read through sink acknowledgement, lost
 acknowledgement, restoration and substitution before
-publication. [Row and lookup tests](../../../../crates/nessa-server/tests/webhooks/infrastructure/outbox/stop_rows.rs)
+publication. [Row and lookup tests](../../../../crates/nessa-webhooks/tests/infrastructure/outbox/stop_rows.rs)
 check borrowed allocation budgets, valid maximum stop bytes and bounded lookup
 work at the registration ceiling. This source checkpoint records inspected code,
 not platform, browser, CI or full feature qualification.
@@ -736,4 +736,4 @@ corrected remote platform or browser-stress pass.
 
 ## Bounded rule model
 
-Owns one attempt's durable Sending publication before POST, retained observation before outcome callbacks and cold unresolved Sending becoming Unknown. It deliberately excludes queue selection, cursor resets, retention cleanup, retries and registration stop histories; these are separate safety obligations, not proved by this model. This finite abstraction checks safety only. It does not execute or verify the implementation, promise eventual completion, or qualify external effects. Existing source checkpoints and historical test receipts retain their earlier scope. The scoped model review inspected `crates/nessa-server/src/webhooks/infrastructure/runtime/delivery.rs`, `crates/nessa-server/src/webhooks/domain/value_objects/delivery.rs`.
+Owns one attempt's durable Sending publication before POST, retained observation before outcome callbacks and cold unresolved Sending becoming Unknown. It deliberately excludes queue selection, cursor resets, retention cleanup, retries and registration stop histories; these are separate safety obligations, not proved by this model. This finite abstraction checks safety only. It does not execute or verify the implementation, promise eventual completion, or qualify external effects. Existing source checkpoints and historical test receipts retain their earlier scope. The scoped model review inspected `crates/nessa-server/src/webhooks/infrastructure/runtime/delivery.rs`, `crates/nessa-webhooks/src/domain/value_objects/delivery.rs`.

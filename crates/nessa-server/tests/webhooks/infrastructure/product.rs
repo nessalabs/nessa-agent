@@ -14,11 +14,7 @@ use crate::conversation::{
 use crate::core::{Outcome, ShutdownReport};
 use crate::product::{ProductDependencies, ProductRouteState};
 use crate::server::entrypoint::http;
-use crate::webhooks::{
-    application::{MacKey, RegistrationConfig},
-    domain::Destination,
-    infrastructure::{ConfiguredWebhook, SqlOutbox, WebhookRuntime},
-};
+use crate::webhooks::infrastructure::{ConfiguredWebhook, WebhookRuntime};
 use futures_util::{FutureExt, SinkExt, StreamExt};
 use nessa_auth::{
     adapters::{
@@ -48,6 +44,9 @@ use nessa_protocol::{
         read_scope::ReadRefusal,
     },
 };
+use nessa_webhooks::application::{MacKey, RegistrationConfig};
+use nessa_webhooks::domain::Destination;
+use nessa_webhooks::infrastructure::SqlOutbox;
 use serde_json::{json, Value};
 use std::{
     collections::HashMap,

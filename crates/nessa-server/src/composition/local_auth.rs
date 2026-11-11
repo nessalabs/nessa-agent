@@ -36,6 +36,7 @@ use crate::conversation::infrastructure::NessaRecordWatches;
 use crate::mcp_servers::application::BuiltInServer;
 #[cfg(unix)]
 use crate::mcp_servers::infrastructure::{ConfigCheck, ConfigJson, OsConfigFiles};
+use crate::webhooks::infrastructure::DeliveryDependencies;
 #[cfg(unix)]
 use crate::{
     agent_warm_up::{
@@ -78,7 +79,6 @@ use crate::{
     env::Environment,
     mcp_servers::infrastructure::ResourceTicketStore,
     product::{ProductDependencies, ProductRouteState},
-    webhooks::infrastructure::{DeliveryDependencies, HttpsWebhook, SystemResolver},
 };
 use nessa_agent_credentials::CredentialNamespace;
 use nessa_attachments::application::{AttachmentService, HeldReads};
@@ -129,6 +129,7 @@ use nessa_sdk::{
     },
 };
 use nessa_sync::replication::domain::Id as RecordId;
+use nessa_webhooks::infrastructure::{HttpsWebhook, SystemResolver};
 #[cfg(unix)]
 use std::collections::{BTreeMap, HashSet};
 #[cfg(unix)]
