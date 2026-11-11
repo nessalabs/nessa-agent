@@ -5,7 +5,6 @@ use super::*;
 use crate::agents::application::{AgentProbe, AgentProbeEvidence};
 use crate::app::dependencies::RuntimeDependencies;
 use crate::composition::local_auth::SystemClock;
-use crate::device_pairing::infrastructure::{GatewayIdentityError, PairingRuntimeError};
 use crate::product::ProductDependencies;
 use nessa_auth::domain::pairing::ConsentClass;
 use nessa_auth::{
@@ -23,6 +22,7 @@ use nessa_auth::{
     },
     domain::{AudienceId, OrganizationId, ResourceId},
 };
+use nessa_device_pairing::infrastructure::{GatewayIdentityError, PairingRuntimeError};
 use nessa_protocol::agents::AgentId;
 use std::{io::Read, time::Duration};
 use tempfile::TempDir;
@@ -575,7 +575,7 @@ impl LinkingAnnouncer for FakeAnnouncer {
     fn announce(
         &self,
         announcement: &LinkingAnnouncement,
-    ) -> Result<Box<dyn Announced>, crate::device_pairing::application::AnnouncementUnavailable>
+    ) -> Result<Box<dyn Announced>, nessa_device_pairing::application::AnnouncementUnavailable>
     {
         self.0.made.lock().unwrap().push(announcement.clone());
         Ok(Box::new(FakeAnnounced(self.0.clone())))

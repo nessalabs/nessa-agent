@@ -1,0 +1,50 @@
+[package]
+name = "nessa-device-pairing"
+version.workspace = true
+edition.workspace = true
+rust-version = "1.89"
+publish = false
+autotests = false
+description = "Native device enrollment: one-time codes, the TLS listener, owner approval, local-network announcement, and the public tunnel a paired device reaches"
+
+[features]
+# Lets nessa-server's composition tests substitute the invitation generator.
+test-support = []
+
+[dependencies]
+nessa-agent-install = { path = "../nessa-agent-install" }
+nessa-auth = { path = "../nessa-auth" }
+# The client's tunnel bridge and WebSocket settings, without its command line.
+nessa-client-core = { path = "../nessa-client-core", default-features = false }
+nessa-local-storage = { path = "../nessa-local-storage" }
+nessa-protocol = { path = "../nessa-protocol" }
+nessa-timer = { path = "../nessa-timer", features = ["runtime"] }
+async-trait = "0.1"
+base64 = "0.22"
+futures-util = "0.3"
+getrandom = "0.3"
+# The local-network announcement while native linking listens there, so a
+# phone that scanned the gateway's code can find it again after it moves.
+mdns-sd = { version = "0.21", default-features = false }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+subtle = "2.6"
+tempfile = "3"
+flate2 = "1"
+tar = "0.4"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "sync", "time", "io-util", "process"] }
+tokio-tungstenite = { version = "0.29", default-features = false, features = ["connect", "handshake", "rustls-tls-webpki-roots"] }
+tracing = "0.1"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+# The tunnel provider runs as a shepherd service; the same pinned revision.
+shepherd = { git = "https://github.com/nessalabs/shepherd", rev = "85ee0d55acabf5f91b8cac2e925872d044514864" }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["test-util"] }
+tungstenite = "0.29"
+
+[lints]
+workspace = true

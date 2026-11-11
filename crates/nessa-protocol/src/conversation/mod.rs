@@ -24,5 +24,6 @@
 pub mod catalogue_metadata;
 pub mod catalogue_payload;
 pub mod domain;
+pub mod fence_capture;
 pub mod read_scope;
 pub mod view;

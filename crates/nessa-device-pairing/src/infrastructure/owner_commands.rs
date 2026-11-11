@@ -1,7 +1,7 @@
 //! The owner side of one gateway's enrollment runtime, as the product socket
 //! sees it: create, list, read and decide, with entropy chosen by composition.
 use super::{CreatedInvitation, GatewayPairing, PairingRuntimeError};
-use crate::device_pairing::application::Approval;
+use crate::application::Approval;
 use nessa_auth::{
     adapters::pairing::{rand, CryptoRng, RngCore},
     application::{pairing::OwnerDecision, session::AuthenticatedSession},
@@ -63,8 +63,8 @@ impl PairingOwnerCommands {
         Self { gateway, entropy }
     }
     /// A test substitutes the generator after composition has opened the gateway.
-    #[cfg(test)]
-    pub(crate) fn with_entropy(mut self, entropy: InvitationEntropySource) -> Self {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn with_entropy(mut self, entropy: InvitationEntropySource) -> Self {
         self.entropy = entropy;
         self
     }

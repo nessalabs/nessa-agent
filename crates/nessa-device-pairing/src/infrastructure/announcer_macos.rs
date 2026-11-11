@@ -14,7 +14,7 @@
 //! interface; one named address is announced on its interface only. The
 //! registration ends when its reference is deallocated.
 use super::announcer::{GATEWAY_KEY, LINKING_SERVICE};
-use crate::device_pairing::application::{
+use crate::application::{
     Announced, AnnouncementUnavailable, LinkingAnnouncement, LinkingAnnouncer,
 };
 use std::ffi::{c_char, c_void, CString};
@@ -187,7 +187,7 @@ impl Drop for Registration {
 #[cfg(test)]
 mod tests {
     use super::{txt_record, SystemAnnouncer};
-    use crate::device_pairing::application::{LinkingAnnouncement, LinkingAnnouncer as _};
+    use crate::application::{LinkingAnnouncement, LinkingAnnouncer as _};
     use std::process::Command;
     use std::time::Duration;
 

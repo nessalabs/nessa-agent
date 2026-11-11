@@ -11,9 +11,9 @@ use super::{
     NativeConnectionError, NativeConnectionFailure, NativeEnrollmentConnections, RelayPermit,
     TunnelPermit,
 };
-use crate::timer::clock;
 use nessa_auth::adapters::pairing::{CryptoRng, RngCore};
 use nessa_protocol::pairing::socket::worker_fault;
+use nessa_timer::clock;
 use std::{
     future::Future,
     io::{Error as IoError, ErrorKind, Result as IoResult},

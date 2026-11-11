@@ -91,5 +91,5 @@ impl Drop for OwnerLease {
 }
 
 #[cfg(test)]
-#[path = "../../../tests/device_pairing/infrastructure/owner_admission.rs"]
+#[path = "../../tests/owner_admission.rs"]
 mod tests;

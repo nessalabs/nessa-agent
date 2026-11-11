@@ -4,10 +4,10 @@ use super::{
     socket::{failure, success},
     state::ProductRouteState,
 };
-use crate::device_pairing::infrastructure::PhoneAuthorization;
 use nessa_auth::{
     application::session::AuthenticatedSession, domain::pairing::OwnerPhoneRequestId,
 };
+use nessa_device_pairing::infrastructure::PhoneAuthorization;
 use nessa_protocol::{
     product::{
         generated::{

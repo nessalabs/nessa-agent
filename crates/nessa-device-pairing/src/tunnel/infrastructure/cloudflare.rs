@@ -50,7 +50,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 /// The pinned release, compiled in: a gateway cannot be pointed at another.
 const PINS: &str = include_str!("../../../data/tunnel-releases.json");
 /// How long a started `cloudflared` has to connect and name its address.
-pub(crate) const READY_WITHIN: Duration = Duration::from_secs(60);
+pub const READY_WITHIN: Duration = Duration::from_secs(60);
 /// Its log, beside it: what it writes goes here, for as long as it runs.
 const LOG: &str = "cloudflared.log";
 /// How long one metrics request may take.
@@ -73,7 +73,7 @@ struct Pins {
 /// One platform's pinned build.
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(crate) struct PinnedBuild {
+pub struct PinnedBuild {
     operating_system: String,
     architecture: String,
     url: String,
@@ -97,7 +97,7 @@ enum Packaging {
 
 impl PinnedBuild {
     /// This machine's pinned build, or `None` when there is none.
-    pub(crate) fn for_this_machine() -> Option<Self> {
+    pub fn for_this_machine() -> Option<Self> {
         let operating_system = match std::env::consts::OS {
             "macos" => "macos",
             "linux" => "linux",
@@ -121,7 +121,7 @@ impl PinnedBuild {
 }
 
 /// Which program runs.
-pub(crate) enum Program {
+pub enum Program {
     /// The pinned build, downloaded and checked into the tunnel directory.
     Pinned(PinnedBuild),
     /// A program named by `NESSA_TUNNEL_PROGRAM` in a debug build: how the
@@ -134,7 +134,7 @@ pub(crate) enum Program {
 impl Program {
     /// The pinned build, or in a debug build the stand-in named in the
     /// environment.
-    pub(crate) fn chosen() -> Self {
+    pub fn chosen() -> Self {
         if cfg!(debug_assertions) {
             if let Some(given) = std::env::var_os("NESSA_TUNNEL_PROGRAM") {
                 return Self::Given(given.into());
@@ -148,10 +148,10 @@ impl Program {
 /// source dropped, only on a blocking thread: the HTTPS source holds a
 /// blocking client, whose own runtime must never be dropped inside the
 /// gateway's.
-pub(crate) type MakeArchives = Arc<dyn Fn() -> Option<Box<dyn ArchiveSource>> + Send + Sync>;
+pub type MakeArchives = Arc<dyn Fn() -> Option<Box<dyn ArchiveSource>> + Send + Sync>;
 
 /// `cloudflared` as a shepherd service reporting the tunnel's address.
-pub(crate) struct CloudflareService {
+pub struct CloudflareService {
     /// `<namespace>/tunnel`, private to the gateway.
     files: TunnelFiles,
     directory: PathBuf,
@@ -169,7 +169,7 @@ pub(crate) struct CloudflareService {
 }
 
 impl CloudflareService {
-    pub(crate) fn new(
+    pub fn new(
         files: TunnelFiles,
         program: Program,
         archives: MakeArchives,
@@ -356,19 +356,19 @@ impl Service for CloudflareService {
 
 /// The program a last run left running for the tunnel, as its record says.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct LeftRunning {
+pub struct LeftRunning {
     /// The arguments it was started with.
-    pub(crate) args: Vec<String>,
-    pub(crate) started_as: StartedAs,
+    pub args: Vec<String>,
+    pub started_as: StartedAs,
 }
 
 /// What a kept program was started as: compared with a launch, never read.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct StartedAs(SpecFingerprint);
+pub struct StartedAs(SpecFingerprint);
 
 impl StartedAs {
     /// What `launch` starts a program as.
-    pub(crate) fn of(launch: &ServiceLaunch) -> Self {
+    pub fn of(launch: &ServiceLaunch) -> Self {
         Self(SpecFingerprint::of(
             &launch.spec,
             launch.revision.as_deref(),
@@ -378,25 +378,25 @@ impl StartedAs {
 
 /// The program left running could not be looked up.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct KeptLookupFailed;
+pub struct KeptLookupFailed;
 
 /// Where the program a last run left running is recorded, outside this
 /// process. Composition injects shepherd's records ([`ShepherdKept`]);
 /// tests substitute their own.
 #[async_trait]
-pub(crate) trait KeptTunnel: Send + Sync {
+pub trait KeptTunnel: Send + Sync {
     /// The live program kept for the tunnel that no other owner holds.
     async fn left_running(&self) -> Result<Option<LeftRunning>, KeptLookupFailed>;
 }
 
 /// The tunnel's program as shepherd keeps it, under one name.
-pub(crate) struct ShepherdKept {
+pub struct ShepherdKept {
     kept: KeptProcesses,
     name: KeptName,
 }
 
 impl ShepherdKept {
-    pub(crate) fn new(kept: KeptProcesses, name: KeptName) -> Self {
+    pub fn new(kept: KeptProcesses, name: KeptName) -> Self {
         Self { kept, name }
     }
 }
@@ -519,7 +519,7 @@ fn installed(directory: &Path, build: &PinnedBuild) -> PathBuf {
 /// Make the pinned build's program ready: keep it when it is already there
 /// and matches its digest, else download, check and unpack it. Nothing that
 /// does not match its pinned size and digest is ever made runnable (row T12).
-pub(crate) fn install(
+pub fn install(
     directory: &Path,
     build: &PinnedBuild,
     archives: &dyn ArchiveSource,

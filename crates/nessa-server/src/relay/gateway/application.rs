@@ -20,7 +20,7 @@
 //! carries afterwards is the same TLS a direct one does, which the relay
 //! cannot read.
 use crate::timer::{within, Timer};
-use crate::tunnel::application::DeviceTunnelSecrets;
+use nessa_device_pairing::tunnel::application::DeviceTunnelSecrets;
 use nessa_protocol::relay::wire::{next_frame, read_frame, write_frame};
 use nessa_protocol::relay::{
     GatewayKey, JoinToken, PublishedOrigin, RelayFrame, JOIN_DEADLINE, PING_INTERVAL,

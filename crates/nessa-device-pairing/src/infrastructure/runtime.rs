@@ -3,8 +3,7 @@
 mod owner_phone;
 use super::owner_admission::{OwnerAdmission, OwnerAdmissionRefusal, OwnerLease};
 use super::{RegistrationError, RegistrationWorker};
-use crate::conversation::application::FenceCapture;
-use crate::device_pairing::application::{
+use crate::application::{
     Approval, CleanupError, DeviceStatusError, FreshStage, OwnerError, PairingOwner,
     PairingReceivers, ReadDevicePairing, ReadOwnerPhoneRecovery, ReceiverError, SettleCleanup,
 };
@@ -30,6 +29,7 @@ use nessa_auth::{
         CredentialId, Resource,
     },
 };
+use nessa_protocol::conversation::fence_capture::FenceCapture;
 use nessa_protocol::pairing::socket::worker_fault;
 use nessa_protocol::pairing::DevicePairingStatus;
 pub use owner_phone::PhoneAuthorization;
@@ -208,10 +208,7 @@ impl GatewayPairing {
     }
     /// The physical composition owner publishes exactly its bound address once.
     /// Repeated publication of that same binding is factual idempotency.
-    pub(crate) fn publish_native_endpoint(
-        &self,
-        endpoint: SocketAddr,
-    ) -> Result<(), PairingRuntimeError> {
+    pub fn publish_native_endpoint(&self, endpoint: SocketAddr) -> Result<(), PairingRuntimeError> {
         match self.native_endpoint.set(endpoint) {
             Ok(()) => Ok(()),
             Err(_) if self.native_endpoint.get() == Some(&endpoint) => Ok(()),
@@ -599,7 +596,7 @@ impl GatewayPairing {
             .map(|status| (public, status))
     }
     /// The tunnel secrets this gateway issues.
-    pub(crate) fn tunnel_secrets(
+    pub fn tunnel_secrets(
         &self,
     ) -> std::sync::Arc<dyn crate::tunnel::application::DeviceTunnelSecrets> {
         self.dependencies.tunnel_secrets.clone()
@@ -790,7 +787,7 @@ impl GatewayPairing {
     /// Settle this connection's own admitted attempt after its exchange failed
     /// before KE3. Auth refuses to fail an attempt that is no longer Pending, so a
     /// committed claim stays claimed.
-    pub(crate) fn end_attempt<S: Read + Write>(
+    pub fn end_attempt<S: Read + Write>(
         &self,
         channel: &NativeTransport<S>,
         public: PublicIntent,
@@ -889,7 +886,7 @@ impl GatewayPairing {
 }
 
 /// Lower-case hex, for identities the server mints from random bytes.
-pub(super) fn hex(bytes: &[u8]) -> String {
+pub fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 

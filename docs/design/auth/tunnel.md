@@ -133,7 +133,7 @@ users of the machine can see it (see below).
 
 ## Running cloudflared
 
-- **Pinned.** `crates/nessa-server/data/tunnel-releases.json` names one
+- **Pinned.** `crates/nessa-device-pairing/data/tunnel-releases.json` names one
   version, and for each platform its URL, size and SHA-256. The gateway
   downloads it into `<namespace>/tunnel` on first use and refuses anything
   else. It never looks on `PATH` and runs with `--no-autoupdate`. Only a

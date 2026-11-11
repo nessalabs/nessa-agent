@@ -13,8 +13,8 @@ use crate::conversation::{
     application::{
         AttachmentReleaseCause, ConversationAccessPolicyEvaluator, ConversationCreation,
         ConversationCreationAuditRecord, ConversationCreationCause, ConversationDeletionBudgets,
-        ConversationDeletionCause, ConversationFuture, FenceCapture, FenceCaptureError,
-        ProviderSessionEraser, SubmittedFile, UnfinishedDeletions,
+        ConversationDeletionCause, ConversationFuture, ProviderSessionEraser, SubmittedFile,
+        UnfinishedDeletions,
     },
     infrastructure::{
         DurableConversationCreationAudit, DurableConversationDeletionAudit,
@@ -29,6 +29,7 @@ use crate::conversation_test_support::{
 };
 use async_trait::async_trait;
 use nessa_protocol::conversation::domain::{ConversationApprovalMode, ConversationModelId};
+use nessa_protocol::conversation::fence_capture::{FenceCapture, FenceCaptureError};
 use nessa_protocol::conversation::view::ConversationMessageStatus;
 use nessa_sdk::application::agent_execution::permissions::PermissionCaller;
 use nessa_sdk::application::agent_execution::sessions::{

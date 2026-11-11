@@ -15,12 +15,12 @@
 //! what crosses: past the upgrade it is the native TLS, and the listener
 //! checks the key it proves before anything else.
 use super::super::application::DeviceTunnelSecrets;
-use crate::device_pairing::infrastructure::{
+use crate::infrastructure::{
     Accepted, EnrollmentAccept, NativeEnrollmentConnections, TunnelPermit,
 };
-use crate::timer::clock;
 use nessa_client_core::tunnel::{bridge, loopback_pair, websocket_config};
 use nessa_protocol::tunnel::{TunnelSecret, TUNNEL_PATH, TUNNEL_SECRET_HEADER};
+use nessa_timer::clock;
 use std::{
     io,
     net::TcpStream as StdStream,
@@ -48,13 +48,13 @@ const PAIR_DEADLINE: Duration = Duration::from_secs(5);
 
 /// A connection that came through the tunnel, ready for the listener, and
 /// the tunnel permit it holds until it ends.
-pub(crate) struct Tunneled<P = TunnelPermit> {
-    pub(crate) stream: StdStream,
-    pub(crate) permit: P,
+pub struct Tunneled<P = TunnelPermit> {
+    pub stream: StdStream,
+    pub permit: P,
 }
 
 /// The listener's tunnel permits.
-pub(crate) trait TunnelAdmission<P>: Send + Sync {
+pub trait TunnelAdmission<P>: Send + Sync {
     /// A permit for one more tunnel connection, or `None` when the pool is
     /// full or closed.
     fn admit(&self) -> Option<P>;
@@ -69,7 +69,7 @@ impl TunnelAdmission<TunnelPermit> for NativeEnrollmentConnections {
 /// The loopback listener the tunnel forwards to.
 // Started only by the Unix composition, beside the provider's program.
 #[cfg_attr(not(unix), allow(dead_code))]
-pub(crate) struct TunnelIngress<P = TunnelPermit> {
+pub struct TunnelIngress<P = TunnelPermit> {
     listener: TcpListener,
     admission: Arc<dyn TunnelAdmission<P>>,
     secrets: Arc<dyn DeviceTunnelSecrets>,
@@ -79,7 +79,7 @@ pub(crate) struct TunnelIngress<P = TunnelPermit> {
 #[cfg_attr(not(unix), allow(dead_code))]
 impl<P: Send + 'static> TunnelIngress<P> {
     /// Serve `listener`, which composition bound on a loopback address.
-    pub(crate) fn new(
+    pub fn new(
         listener: TcpListener,
         admission: Arc<dyn TunnelAdmission<P>>,
         secrets: Arc<dyn DeviceTunnelSecrets>,
@@ -97,7 +97,7 @@ impl<P: Send + 'static> TunnelIngress<P> {
     /// native side of each is closed, which its worker sees as the peer
     /// leaving. An accept that fails is skipped after a short pause; it
     /// never ends the gateway.
-    pub(crate) async fn serve(self, mut stop: watch::Receiver<bool>) {
+    pub async fn serve(self, mut stop: watch::Receiver<bool>) {
         let mut bridges = JoinSet::new();
         let preauth = Arc::new(Semaphore::new(PREAUTH_CAPACITY));
         loop {
@@ -247,7 +247,7 @@ fn refused(status: StatusCode) -> ErrorResponse {
 /// The listening socket and the connections that came through the tunnel,
 /// as one accept. A closed tunnel channel (no tunnel configured, or it
 /// stopped) leaves the listening socket alone.
-pub(crate) struct TunneledAccept<A> {
+pub struct TunneledAccept<A> {
     socket: A,
     joined: mpsc::Receiver<Tunneled>,
     open: bool,
@@ -255,7 +255,7 @@ pub(crate) struct TunneledAccept<A> {
 
 impl<A> TunneledAccept<A> {
     /// Accept on `socket` and take each connection arriving on `joined`.
-    pub(crate) fn new(socket: A, joined: mpsc::Receiver<Tunneled>) -> Self {
+    pub fn new(socket: A, joined: mpsc::Receiver<Tunneled>) -> Self {
         Self {
             socket,
             joined,

@@ -1,7 +1,7 @@
 //! What a gateway serving through a relay runs on: TCP to the relay, the
 //! native identity's proof, and the listener's relay permits and accept.
 use super::application::{PortFuture, RelayAdmission, RelayDial, RelayKey, Relayed};
-use crate::device_pairing::infrastructure::{
+use nessa_device_pairing::infrastructure::{
     Accepted, EnrollmentAccept, GatewayPairing, NativeEnrollmentConnections, RelayPermit,
 };
 use nessa_protocol::relay::GatewayKey;

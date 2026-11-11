@@ -5,15 +5,15 @@
 //! adapter translates an enrollment stage into its calls: the owner who paired
 //! is the principal, and the request text is derived from the stage's durable
 //! correlation, so every retry of one stage names the same receipt.
-use super::runtime::hex;
 use crate::conversation::{
     domain::{PairedReceiver, ReceiverBinding},
     infrastructure::{LocalReceiverAuthority, ReceiverChangeError},
 };
-use crate::device_pairing::application::{
+use nessa_auth::{application::pairing::ReceiverOutcome, domain::ResourceId};
+use nessa_device_pairing::application::{
     PairingReceivers, PublicationGuard, ReceiverDispatch, ReceiverError, ReceiverRequest,
 };
-use nessa_auth::{application::pairing::ReceiverOutcome, domain::ResourceId};
+use nessa_device_pairing::infrastructure::hex;
 use std::sync::Arc;
 
 /// The receiver authority, as device enrollment asks for it.

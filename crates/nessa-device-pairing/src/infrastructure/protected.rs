@@ -136,5 +136,5 @@ fn too_large() -> Error {
 }
 
 #[cfg(test)]
-#[path = "../../../tests/device_pairing/infrastructure/protected_waker.rs"]
+#[path = "../../tests/protected_waker.rs"]
 mod tests;

@@ -35,7 +35,7 @@ use std::{
 const SECRETS_FILE: &str = "device-secrets.json";
 
 /// Which credentials still hold an active device credential.
-pub(crate) trait ActiveDeviceCredentials: Send + Sync {
+pub trait ActiveDeviceCredentials: Send + Sync {
     /// Their ids, or an error when the registry cannot be read.
     fn ids(&self) -> Result<Vec<String>, SecretError>;
 }
@@ -47,7 +47,7 @@ struct Row {
 }
 
 /// The file store composed into the gateway.
-pub(crate) struct FileDeviceSecrets {
+pub struct FileDeviceSecrets {
     secrets: PathBuf,
     audit: PathBuf,
     clock: Arc<dyn Clock>,
@@ -73,7 +73,7 @@ pub(crate) struct FileDeviceSecrets {
 impl FileDeviceSecrets {
     /// The store for `namespace`: secrets under `tunnel/`, audit under
     /// `conversations/audit/tunnel-device-secrets`.
-    pub(crate) fn open(
+    pub fn open(
         namespace: &Path,
         registry: Arc<nessa_auth::adapters::local::LocalCredentialStore>,
         audience: nessa_auth::domain::AudienceId,
@@ -91,7 +91,7 @@ impl FileDeviceSecrets {
     }
 
     /// Secrets in `directory` (`<namespace>/tunnel`), audit records in `audit`.
-    pub(crate) fn new(
+    pub fn new(
         directory: PathBuf,
         audit: PathBuf,
         clock: Arc<dyn Clock>,

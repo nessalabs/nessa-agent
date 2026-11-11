@@ -12,7 +12,7 @@ use std::{
 };
 
 /// The directory's name beneath the namespace.
-pub(crate) const TUNNEL_DIRECTORY: &str = "tunnel";
+pub const TUNNEL_DIRECTORY: &str = "tunnel";
 /// The token's file in it.
 const TOKEN_FILE: &str = "token";
 /// shepherd's records of the program left running across the gateway's runs.
@@ -20,34 +20,34 @@ const KEPT_DIRECTORY: &str = "kept";
 
 /// `<namespace>/tunnel`.
 #[derive(Clone, Debug)]
-pub(crate) struct TunnelFiles {
+pub struct TunnelFiles {
     directory: PathBuf,
 }
 
 impl TunnelFiles {
-    pub(crate) fn new(namespace: &Path) -> Self {
+    pub fn new(namespace: &Path) -> Self {
         Self {
             directory: namespace.join(TUNNEL_DIRECTORY),
         }
     }
 
-    pub(crate) fn directory(&self) -> &Path {
+    pub fn directory(&self) -> &Path {
         &self.directory
     }
 
     /// Where the token is, for the program that reads it.
-    pub(crate) fn token_path(&self) -> PathBuf {
+    pub fn token_path(&self) -> PathBuf {
         self.directory.join(TOKEN_FILE)
     }
 
     /// Where shepherd records the program it leaves running across runs.
-    pub(crate) fn kept_directory(&self) -> PathBuf {
+    pub fn kept_directory(&self) -> PathBuf {
         self.directory.join(KEPT_DIRECTORY)
     }
 
     /// The saved token, if any. A file that is not a token is an error, not
     /// an absent token.
-    pub(crate) fn read_token(&self) -> io::Result<Option<TunnelToken>> {
+    pub fn read_token(&self) -> io::Result<Option<TunnelToken>> {
         let file = match open(&self.token_path(), OpenMode::Read) {
             Ok(file) => file,
             Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
@@ -64,7 +64,7 @@ impl TunnelFiles {
     }
 
     /// Replace the token, privately and synced.
-    pub(crate) fn write_token(&self, token: &TunnelToken) -> io::Result<()> {
+    pub fn write_token(&self, token: &TunnelToken) -> io::Result<()> {
         create_directory(&self.directory)?;
         let mut file = PrivateTempFile::new_in(&self.directory)?;
         file.as_file_mut().write_all(token.expose().as_bytes())?;
@@ -74,7 +74,7 @@ impl TunnelFiles {
     }
 
     /// Remove the token, if there is one.
-    pub(crate) fn remove_token(&self) -> io::Result<()> {
+    pub fn remove_token(&self) -> io::Result<()> {
         match std::fs::remove_file(self.token_path()) {
             Err(error) if error.kind() != io::ErrorKind::NotFound => Err(error),
             _ => sync_directory(&self.directory),

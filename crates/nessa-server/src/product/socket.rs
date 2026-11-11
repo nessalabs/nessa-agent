@@ -2305,7 +2305,7 @@ async fn dispatch_authorized(
                     if let Some(secrets) = state.linking.tunnel_secrets.as_ref() {
                         if let Err(error) = secrets.revoke(
                             &params.credential_id,
-                            crate::tunnel::application::SecretRevocation::CredentialRevoked,
+                            nessa_device_pairing::tunnel::application::SecretRevocation::CredentialRevoked,
                             session.context().principal_id().as_str(),
                         ) {
                             tracing::warn!(?error, "the device tunnel secret was not revoked");
@@ -4957,8 +4957,8 @@ mod tests {
     /// it is ready, under `server.read`.
     #[tokio::test]
     async fn reach_names_the_tunnel_only_while_it_is_ready() {
-        use crate::tunnel::application::TunnelView;
-        use crate::tunnel::application::{TunnelFailure, TunnelStatus};
+        use nessa_device_pairing::tunnel::application::TunnelView;
+        use nessa_device_pairing::tunnel::application::{TunnelFailure, TunnelStatus};
         let (state, _authority) = fixture(MembershipRole::Member);
         let session = authenticate(&state).await;
         let reach = |state: &ProductRouteState| {

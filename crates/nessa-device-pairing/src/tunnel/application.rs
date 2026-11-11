@@ -16,7 +16,7 @@ use tokio::sync::watch;
 
 /// Where the tunnel stands.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum TunnelStatus {
+pub enum TunnelStatus {
     /// Not ready yet (or starting again).
     Starting,
     /// Ready, at this public address.
@@ -27,7 +27,7 @@ pub(crate) enum TunnelStatus {
 
 /// Why the tunnel is not up.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum TunnelFailure {
+pub enum TunnelFailure {
     /// Its program could not be made ready, or nothing can run: the wire's
     /// word for why (`unsupported`, `download`, `unverified`, `storage`,
     /// `token`, `ingress`).
@@ -40,7 +40,7 @@ pub(crate) enum TunnelFailure {
 
 impl TunnelFailure {
     /// The wire's word for it.
-    pub(crate) fn as_str(self) -> &'static str {
+    pub fn as_str(self) -> &'static str {
         match self {
             Self::Unavailable(reason) => reason,
             Self::Start => "start",
@@ -52,13 +52,13 @@ impl TunnelFailure {
 /// Why the provider's last launch was refused, when it was: the provider
 /// decides it, and the status reads it from here, never from a failure's
 /// wording. Emptied by a launch that goes ahead.
-pub(crate) type LaunchRefusal = std::sync::Arc<std::sync::Mutex<Option<TunnelFailure>>>;
+pub type LaunchRefusal = std::sync::Arc<std::sync::Mutex<Option<TunnelFailure>>>;
 
 /// Where the tunnel's provider forwards each connection to, when
 /// `config.json` names nowhere else: a loopback port beside the native
 /// listener's. A named Cloudflare tunnel is pointed at it in Cloudflare's
 /// dashboard, so it stays the same across starts.
-pub(crate) const DEFAULT_TUNNEL_INGRESS: SocketAddr =
+pub const DEFAULT_TUNNEL_INGRESS: SocketAddr =
     SocketAddr::new(std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST), 47651);
 
 /// How the tunnel is carried, as Settings names it.
@@ -83,22 +83,22 @@ impl TunnelMode {
 
 /// The tunnel as saved and turned on.
 #[derive(Clone, PartialEq, Eq)]
-pub(crate) struct TunnelSetting {
+pub struct TunnelSetting {
     /// The loopback address the provider forwards to.
-    pub(crate) ingress: SocketAddr,
-    pub(crate) provider: TunnelProvider,
+    pub ingress: SocketAddr,
+    pub provider: TunnelProvider,
 }
 
 /// Which provider carries the tunnel, and how.
 #[derive(Clone, PartialEq, Eq)]
-pub(crate) enum TunnelProvider {
+pub enum TunnelProvider {
     Cloudflare(CloudflareTunnel),
 }
 
 /// A Cloudflare tunnel: a quick one with a new random address each start, or
 /// one the person made in Cloudflare's dashboard, at their own hostname.
 #[derive(Clone, PartialEq, Eq)]
-pub(crate) enum CloudflareTunnel {
+pub enum CloudflareTunnel {
     Quick,
     Named {
         address: TunnelAddress,
@@ -141,7 +141,7 @@ impl TunnelToken {
 
     /// Its SHA-256, as lowercase hex: enough to tell two tokens apart
     /// without keeping either.
-    pub(crate) fn digest(&self) -> String {
+    pub fn digest(&self) -> String {
         Sha256::digest(self.0.as_bytes())
             .iter()
             .map(|byte| format!("{byte:02x}"))
@@ -167,7 +167,7 @@ impl fmt::Debug for TunnelSetting {
 
 impl TunnelSetting {
     /// Its mode.
-    pub(crate) fn mode(&self) -> TunnelMode {
+    pub fn mode(&self) -> TunnelMode {
         match &self.provider {
             TunnelProvider::Cloudflare(CloudflareTunnel::Quick) => TunnelMode::Quick,
             TunnelProvider::Cloudflare(CloudflareTunnel::Named { .. }) => TunnelMode::Named,
@@ -176,7 +176,7 @@ impl TunnelSetting {
     /// What tells two settings apart, the token only by its digest: a run
     /// compares the one it serves with the one just saved to know whether
     /// to start again.
-    pub(crate) fn identity(&self) -> String {
+    pub fn identity(&self) -> String {
         let provider = match &self.provider {
             TunnelProvider::Cloudflare(CloudflareTunnel::Quick) => "cloudflare quick".to_owned(),
             TunnelProvider::Cloudflare(CloudflareTunnel::Named { address, token }) => {
@@ -316,7 +316,7 @@ impl DeviceTunnelSecrets for MemoryDeviceSecrets {
 
 /// True when `presented` equals some secret. Every secret is compared, and
 /// a wrong length matches none. An empty list still runs one compare.
-pub(crate) fn any_match(presented: &[u8], secrets: &[[u8; 32]]) -> bool {
+pub fn any_match(presented: &[u8], secrets: &[[u8; 32]]) -> bool {
     use subtle::{Choice, ConstantTimeEq};
     let mut candidate = [0; 32];
     let length_ok = Choice::from(u8::from(presented.len() == 32));
@@ -335,7 +335,7 @@ pub(crate) fn any_match(presented: &[u8], secrets: &[[u8; 32]]) -> bool {
 }
 
 /// True when `mac` is the lookup mac of some secret. Every secret is checked.
-pub(crate) fn any_mac(
+pub fn any_mac(
     secrets: &[[u8; 32]],
     gateway: &nessa_protocol::relay::GatewayKey,
     nonce: &[u8; 32],
@@ -358,13 +358,13 @@ pub(crate) fn any_mac(
 
 /// The running tunnel as the product reads it: its live status.
 #[derive(Clone)]
-pub(crate) struct TunnelView {
-    pub(crate) status: watch::Receiver<TunnelStatus>,
+pub struct TunnelView {
+    pub status: watch::Receiver<TunnelStatus>,
 }
 
 impl TunnelView {
     /// The address a reader can open now, when the tunnel is ready.
-    pub(crate) fn address(&self) -> Option<TunnelAddress> {
+    pub fn address(&self) -> Option<TunnelAddress> {
         match &*self.status.borrow() {
             TunnelStatus::Ready(address) => Some(address.clone()),
             _ => None,

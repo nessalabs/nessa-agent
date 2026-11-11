@@ -22,16 +22,16 @@
 //! into the native listener, whose tunnel edge admits only paired keys
 //! (`device_pairing::infrastructure::connection`).
 use super::runtime_config::TunnelConfig;
-use crate::tunnel::application::{
+use nessa_agent_install::application::ArchiveSource;
+use nessa_agent_install::infrastructure::HttpsArchives;
+use nessa_device_pairing::tunnel::application::{
     CloudflareTunnel, LaunchRefusal, TunnelFailure, TunnelMode, TunnelProvider, TunnelSetting,
     TunnelStatus, TunnelView,
 };
-use crate::tunnel::infrastructure::cloudflare::{
+use nessa_device_pairing::tunnel::infrastructure::cloudflare::{
     CloudflareService, MakeArchives, Program, ShepherdKept, READY_WITHIN,
 };
-use crate::tunnel::infrastructure::files::TunnelFiles;
-use nessa_agent_install::application::ArchiveSource;
-use nessa_agent_install::infrastructure::HttpsArchives;
+use nessa_device_pairing::tunnel::infrastructure::files::TunnelFiles;
 use shepherd::{
     KeptError, KeptName, KeptProcesses, ServiceFailureKind, ServiceOptions, ServiceStatus,
     ServiceStop, SupervisorBuilder, TerminateOptions,

@@ -170,7 +170,6 @@ mod drive_tools;
 mod environment;
 mod error;
 mod error_code;
-mod fence_capture;
 mod live_changes;
 mod locks;
 mod mcp_apps;
@@ -273,7 +272,6 @@ pub(crate) use environment::{
 };
 pub use error::{ConversationError, DeletionFailures, StopFailure};
 pub use error_code::error_code;
-pub use fence_capture::{FenceCapture, FenceCaptureError};
 pub use live_changes::{LiveChangePublisher, LiveChanges};
 pub use mcp_apps::{
     ContextDrop, DroppedContexts, HeldResource, McpAppAsk, McpAppAudit, McpAppAuditPhase,
