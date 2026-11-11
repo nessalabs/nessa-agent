@@ -2187,13 +2187,27 @@ async function pooledChannelChat(run, step, failures) {
       failures.push(
         `the agent in ${name} did not say where it works: ${fold(reply.slice(0, 300))}`,
       )
-    for (const path of [channel.folder, resource])
+    // Every agent says where it works, which must not be the channel's
+    // folder here; only Claude's reply also says its system prompt, so only
+    // there can the notes and the attached file be checked.
+    const told = run.stack.agent === "claude"
+    for (const path of told ? [channel.folder, resource] : [channel.folder])
       if (reply.includes(path))
         failures.push(`the agent on a worker was told this gateway's path ${path}`)
-    if (run.stack.agent === "claude" && !reply.includes(notes))
+    if (told && !reply.includes(notes))
       failures.push(`the agent in ${name} was not told the channel's notes`)
     failures.push(...(await atRest(run, [conversationId])))
   } finally {
+    // Its threads go back here, as in `place`: once the workers stop, a new
+    // thread on the pool would have nowhere to run.
+    await run.client.channels
+      .setPlacement({
+        requestId: `${name}-back`,
+        channelId: channel.channelId,
+        coordinatorPlacement: "local",
+        threadPlacement: "local",
+      })
+      .catch((error) => failures.push(`${name} did not go back here: ${explain(error)}`))
     // Back to the default channel: the chat above left its list showing.
     await run.page
       .locator(`${css.sidebar} nav`)
