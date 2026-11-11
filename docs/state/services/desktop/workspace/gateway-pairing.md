@@ -3,7 +3,7 @@ id: desktop-gateway-pairing
 title: Pair a gateway with explicit Human sign-in
 kind: flow
 status: implemented
-sourceRevision: "ea66af43aecc404e17b1c481ffcac568eec92649"
+sourceRevision: "d1aceae5b77fc6febcb3eff7ac7095988d502b2e"
 parent: desktop-workspace
 summary: Choose before creating a code, authenticate the Human separately, and recover canonical invitations after uncertain replies.
 sources:
@@ -114,7 +114,7 @@ connection completion closes before exposing commands. JavaScript
 string zeroization is not promised. An unfinished invitation stays with the
 registry and requires fresh explicit sign-in after reopening.
 
-Source review checkpoint: `ea66af43aecc404e17b1c481ffcac568eec92649`. This page reconciles
+Source review checkpoint: `d1aceae5b77fc6febcb3eff7ac7095988d502b2e`. This page reconciles
 the new Devices entry, immutable display selection, scoped adapter, composition,
 SDK endpoint and focused regressions. Current main's ambient elapsed clock is
 separate from this flow's injected `after` timer; the integration adds no pairing
@@ -125,7 +125,13 @@ catalogue and read-only inventory contracts. The source checkpoint is a review r
 not an execution receipt. Native lifecycle, unrelated desktop pages and
 the historical OwnerPhone model-check receipt keep their own earlier checkpoints. Browser and mutation
 receipts are in [completion evidence](../../../../reviews/893-desktop-completion.md).
-The source checkpoint includes the selected-command focus correction and
-integration with main `a991ba4a7`. All six diagrams across the two reviewed desktop pages rendered in Chromium;
-no model checker was run for this review. The chart has no formal model. It does not refresh the separate OwnerPhone model
-or claim to verify native host IPC, WKWebView, or deployed gateways.
+The source checkpoint includes reconciliation with main `a83a38717`. The desktop
+implementation and its selected-command focus correction are unchanged since
+`ea66af43`; the merged stress plan retains both named-computer placement and
+gateway pairing. Main's grouped product routes still dispatch to the existing
+pairing authority. No new identity, grant or admission lifecycle is added.
+
+The diagram bodies are unchanged. The earlier six-diagram Chromium rendering
+receipt keeps its original source cut; this review makes no new rendering or
+execution claim. The chart has no formal model. It does not refresh the separate
+OwnerPhone model or claim to verify native host IPC, WKWebView, or deployed gateways.

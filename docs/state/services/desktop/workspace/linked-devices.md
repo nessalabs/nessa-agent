@@ -6,7 +6,7 @@ status: implemented
 summary: Settings shows the gateway's pairing state, approves the exact
   displayed device key, and rereads after uncertain changes.
 parent: desktop-workspace
-sourceRevision: "ea66af43aecc404e17b1c481ffcac568eec92649"
+sourceRevision: "d1aceae5b77fc6febcb3eff7ac7095988d502b2e"
 sources:
   - src/desktop/settings/model/linked-devices.ts
   - src/desktop/settings/model/linked-devices.test.ts
@@ -192,6 +192,16 @@ Disposition: direct model. The bounded rule model section names the modeled owne
 
 Excluded: All exclusions stated in the owning Bounded rule model section remain outside verification.
 
-Source review scope: the complete page was reconciled with the current reducer, UI, adapter, metadata classifier, Settings layer and regression declarations, including source changes since `b14bdf40`. The source checkpoint includes the quiet-poll cancellation, captured-target and DOM-identity corrections and their integration with main `a991ba4a7`. This source review does not refresh the historical model source mapping, model files or checker receipt. A model result establishes bounded design safety only. All six diagrams across the two reviewed desktop pages rendered in Chromium; no model checker was run for this review.
+Source review scope: the complete page was reconciled with the reducer, UI,
+adapter, metadata classifier, Settings layer and regression declarations at
+`d1aceae5b77fc6febcb3eff7ac7095988d502b2e`. These desktop sources are unchanged since
+`ea66af43`; the integration retains main's named-computer placement beside the
+gateway-pairing stress entry. Quiet-poll cancellation, captured targets and keyed
+DOM controls keep their existing owner and ordering.
+
+The diagram bodies are unchanged. The earlier six-diagram Chromium rendering
+receipt keeps its source cut. This source review does not refresh the historical
+model source mapping, model files or checker receipt and makes no new execution
+claim. A model result establishes bounded design safety only.
 
 The gateway [pairing owner](../../gateway/device-pairing.md) separately models approval versus activation with current receiver proof. The desktop key-display/restart model does not certify activation or credential cleanup.
