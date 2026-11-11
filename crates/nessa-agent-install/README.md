@@ -10,8 +10,8 @@ nessa-server ──▶ nessa-agent-install ──▶ nessa-local-storage
                                     └──▶ nessa-auth, nessa-protocol
 ```
 
-Arrows are compile-time dependencies. nessa-server re-exports this crate as
-`agent_install`, composes it (`composition/install_command.rs`,
+Arrows are compile-time dependencies. nessa-server uses it as
+`nessa_agent_install`, composes it (`composition/install_command.rs`,
 `composition/installed_launch.rs`) and serves `agents.install` over the
 product socket.
 

@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
-use crate::agent_install::domain::AgentName;
 use crate::conversation::domain::BackgroundCommand;
+use nessa_agent_install::domain::AgentName;
 use nessa_protocol::relay::RelayAddress;
 use nessa_protocol::tunnel::TunnelAddress;
 

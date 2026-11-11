@@ -1,7 +1,6 @@
 use super::admission::Admission;
 use super::operational_limits::OperationalLimits;
 use super::turn_timing::TurnTimings;
-use crate::agent_install::application::AgentInstallations;
 use crate::agents::application::{AgentProbe, SharedAgentReadiness};
 use crate::agents::infrastructure::NativeHooksPreferences;
 use crate::attachments::{
@@ -25,6 +24,7 @@ use crate::peer_gateways::infrastructure::PeerCommands;
 use crate::timer::clock;
 use crate::webhooks::infrastructure::WebhookRuntime;
 use axum::extract::FromRef;
+use nessa_agent_install::application::AgentInstallations;
 use nessa_auth::{
     application::{
         credential_admin::CredentialAdmin,

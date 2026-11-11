@@ -1454,7 +1454,7 @@ async fn conversations(
         thread_workspaces.service.clone(),
     );
     let clock: Arc<dyn Clock> = Arc::new(SystemClock);
-    let host = crate::agent_install::infrastructure::host_platform();
+    let host = nessa_agent_install::infrastructure::host_platform();
     let opencode = EffectiveOpenCodeProfile::decide(
         agents,
         packaged_agents,
@@ -1652,7 +1652,7 @@ async fn conversations(
         fixed_probe,
         config: agents.clone(),
         opencode,
-        store: Arc::new(crate::agent_install::infrastructure::ManagedRuntimes::new(
+        store: Arc::new(nessa_agent_install::infrastructure::ManagedRuntimes::new(
             directory
                 .parent()
                 .expect("conversation root already validated")

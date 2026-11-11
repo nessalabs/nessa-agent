@@ -11,11 +11,11 @@ use async_trait::async_trait;
 use serde_json::Value;
 
 use super::app::GithubApp;
-use crate::agent_install::infrastructure::https_archives::install_tls_backend;
 use crate::github::application::{
     ApiFailure, DeviceAuthorization, DeviceCode, GithubApi, GithubReadFailure, PollAnswer,
 };
 use crate::github::domain::{AccessToken, GithubAccount, GithubReadKind, GithubRepository};
+use nessa_agent_install::infrastructure::https_archives::install_tls_backend;
 
 /// Shorter than [`CALL_TIMEOUT`], so a connect that never completes fails
 /// as itself.

@@ -2045,8 +2045,7 @@ for an explicit Copy action and reports write failure without claiming success.
 
 ## Installing an agent runtime
 
-`crates/nessa-agent-install/src/` (crate `nessa-agent-install`, re-exported by
-nessa-server as `agent_install`) installs pinned native runtimes into the
+`crates/nessa-agent-install/src/` (crate `nessa-agent-install`) installs pinned native runtimes into the
 private stage/instance namespace. The desktop bundles Node and JavaScript ACP
 adapters; Claude, Codex and OpenCode native programs are downloaded explicitly.
 `application/gateway.rs` defines the authenticated installation port;
