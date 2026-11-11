@@ -420,7 +420,6 @@ function ComposerDetailsLine({
       <button
         type="button"
         className="desktop-composer-details-toggle"
-        aria-pressed={hidden}
         aria-label={hidden ? "Show project and computer" : "Hide project and computer"}
         onClick={() => chooseDetails(otherComposerDetails(details))}
       >

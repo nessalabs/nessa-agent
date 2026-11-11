@@ -1418,16 +1418,17 @@ html:not(.dark) [data-surface] {
 .desktop-composer-details {
   display: flex;
   min-width: 0;
-  flex-wrap: wrap;
   align-items: center;
   gap: 2px;
   margin-top: 6px;
   padding: 0 10px;
-  color: color-mix(in oklab, var(--foreground) 46%, transparent);
+  color: var(--desktop-muted);
+  white-space: nowrap;
   font-size: var(--desktop-text-footnote);
 }
 
 .desktop-composer-details .desktop-chip {
+  min-width: 0;
   height: 24px;
   gap: 5px;
   padding: 0 8px;
@@ -1466,8 +1467,18 @@ html:not(.dark) [data-surface] {
   flex: none;
 }
 
+.desktop-composer-details .desktop-chip > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.desktop-composer-details .desktop-chip-thinking {
+  flex: none;
+}
+
 .desktop-composer-details-toggle {
   height: 24px;
+  flex: none;
   margin-left: auto;
   padding: 0 8px;
   border: 0;

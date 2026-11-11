@@ -7,7 +7,7 @@
  * The rim is quiet by design: a thin line of light with a short halo, never
  * a wash over the conversation.
  */
-import type { VoicePhase } from "../application/voice-controller"
+import type { VoicePhase } from "./phase"
 
 export interface RimLook {
   /** How bright the rim and its halo are, 0–1. */

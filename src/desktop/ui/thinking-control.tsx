@@ -367,7 +367,7 @@ export function ThinkingControl({
         type="button"
         className="desktop-chip desktop-chip-thinking"
         aria-label={
-          selected ? `Thinking level: ${selected.label}` : "Thinking levels unavailable"
+          selected ? `Thinking: ${selected.label}` : "Thinking levels unavailable"
         }
         aria-haspopup="dialog"
         aria-expanded={shown}

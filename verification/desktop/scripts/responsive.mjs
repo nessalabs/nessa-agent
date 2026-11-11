@@ -1063,7 +1063,7 @@ checks["thinking-control"] = async ({ page, engine, options }) => {
     if (now.checked !== want)
       failures.push(`${key}: the level is ${now.checked}, not ${want}`)
     if (!now.knobFocused) failures.push(`${key}: the keyboard left the slider`)
-    if (now.chipLabel !== `Thinking level: ${now.checkedLabel}`)
+    if (now.chipLabel !== `Thinking: ${now.checkedLabel}`)
       failures.push(`${key}: the chip says "${now.chipLabel}"`)
     // Past Max, where the model has Ultra, is the one level marked apart; below it none is.
     if (now.utmost !== (now.ultra && now.checked === now.count - 1))
@@ -1319,10 +1319,7 @@ checks["thinking-control"] = async ({ page, engine, options }) => {
     ultraAdvertised,
     models: catalogueModels,
   }
-  if (
-    least.checked !== 0 ||
-    shownAs.chipLabel !== `Thinking level: ${least.checkedLabel}`
-  )
+  if (least.checked !== 0 || shownAs.chipLabel !== `Thinking: ${least.checkedLabel}`)
     failures.push(
       `None carried to ${names.modelWithoutFast} shows as "${shownAs.chipLabel}", not its least level`,
     )
@@ -1331,7 +1328,7 @@ checks["thinking-control"] = async ({ page, engine, options }) => {
   await page.keyboard.press(keys.escape)
   await pick(names.modelWithLeastLevel)
   carried.back = (await thinkingState(page, chip)).chipLabel
-  if (carried.back !== `Thinking level: ${least.checkedLabel}`)
+  if (carried.back !== `Thinking: ${least.checkedLabel}`)
     failures.push(
       `${least.checkedLabel} chosen on ${names.modelWithoutFast} came back as "${carried.back}"`,
     )

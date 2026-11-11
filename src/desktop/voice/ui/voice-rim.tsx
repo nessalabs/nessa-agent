@@ -1,26 +1,29 @@
 /**
  * The call's glow on the composer's edge: a thin line of light with a short
  * halo, drawn by one fragment shader on a canvas that lies over the
- * composer's dock, takes no pointer, and reaches a little past it. One light circles the edge while
+ * composer's dock and takes no pointer. The halo fades out before the dock's
+ * own edge, because a pane cuts off whatever is drawn past it and a glow cut
+ * off is a hard line. One light circles the edge while
  * the call connects; the rim flashes once as it does, then follows whoever
  * is talking — sky blue for the person, periwinkle for the voice — and a
  * slow light circles again while the agent works. What each phase looks
  * like is `model/rim.ts`'s; this file only draws it.
  *
- * The canvas is laid over its dock (`.workspace-dock`) and finds the
- * composer's card inside it each frame, so the rim stays on the card as the
- * line above it grows or the pane is resized. With less motion nothing
+ * The canvas is laid over its dock (`.workspace-dock`) and measures the
+ * composer's card inside it whenever either changes size, so the rim stays
+ * on the card as the line above it grows or the pane is resized. With less motion nothing
  * circles and loudness is not followed (`stillRim`). Where WebGL is not to
  * be had the dock says so (`data-rim="plain"`) and the stylesheet draws a
  * still ring on the composer instead.
  */
 import { useEffect, useRef, useState } from "react"
-import type { VoicePhase } from "../application/voice-controller"
+import { reducedMotion } from "../../adapters/motion-preference"
+import type { VoicePhase } from "../model/phase"
 import { easeRim, rimLook, stillRim, type RimLook } from "../model/rim"
 import "./voice.css"
 
-/** How far past the dock the canvas reaches, in CSS pixels: the halo's room. */
-const BLEED = 40
+/** How near the canvas's edge the halo has faded to nothing, in CSS pixels. */
+const EDGE_FADE = 10
 
 const VERTEX = "attribute vec2 p;void main(){gl_Position=vec4(p,0.,1.);}"
 
@@ -32,7 +35,7 @@ const VERTEX = "attribute vec2 p;void main(){gl_Position=vec4(p,0.,1.);}"
  */
 const FRAGMENT = `precision mediump float;
 uniform vec2 uRes;uniform vec4 uRect;
-uniform float uRad,uTime,uLevel,uGlow,uSweep,uHue,uGrey,uBloom,uPhase,uDpr;
+uniform float uRad,uTime,uLevel,uGlow,uSweep,uHue,uGrey,uBloom,uPhase,uDpr,uFade;
 float sdRB(vec2 p,vec2 b,float r){vec2 q=abs(p)-b+r;return length(max(q,0.))+min(max(q.x,q.y),0.)-r;}
 float hash(vec2 p){return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453);}
 float noise(vec2 p){vec2 i=floor(p),f=fract(p);f=f*f*(3.-2.*f);
@@ -53,6 +56,7 @@ float a=glow*uGlow*(.2+.8*n)*(.3+.5*uLevel)+arc*uSweep*(glow*.35+rim*.6)+rim*(uG
 vec3 col=mix(vec3(.525,.72,1.),vec3(.70,.66,1.),clamp(uHue*.8+n2*.5-.15,0.,1.));
 col=mix(col,vec3(1.),clamp(rim*.7+n2*.2,0.,1.));
 col=mix(col,vec3(.62),uGrey);
+vec2 e=min(p,uRes-p)/uDpr;a*=smoothstep(0.,uFade,min(e.x,e.y));
 a=clamp(a,0.,1.);gl_FragColor=vec4(col*a,a);}`
 
 const UNIFORMS = [
@@ -68,6 +72,7 @@ const UNIFORMS = [
   "uBloom",
   "uPhase",
   "uDpr",
+  "uFade",
 ] as const
 
 type Uniforms = Record<(typeof UNIFORMS)[number], WebGLUniformLocation | null>
@@ -136,9 +141,43 @@ export function VoiceRim({
       return
     }
     const { gl, uniforms } = drawing
-    const lost = () => setPlain(true)
-    canvas.addEventListener("webglcontextlost", lost)
     let frame = 0
+    const lost = () => {
+      cancelAnimationFrame(frame)
+      setPlain(true)
+    }
+    canvas.addEventListener("webglcontextlost", lost)
+    // Where the card is on the canvas, in CSS pixels; measured when the dock
+    // or the card changes size, not every frame.
+    let card:
+      | { x: number; y: number; halfWidth: number; halfHeight: number; radius: number }
+      | undefined
+    let watched: HTMLElement | null = null
+    const sizes = new ResizeObserver(() => measure())
+    const measure = () => {
+      const form = dock.querySelector<HTMLElement>("form.desktop-composer")
+      if (form !== watched) {
+        if (watched) sizes.unobserve(watched)
+        if (form) sizes.observe(form)
+        watched = form
+      }
+      if (!form) {
+        card = undefined
+        return
+      }
+      const over = canvas.getBoundingClientRect()
+      const box = form.getBoundingClientRect()
+      card = {
+        x: box.left - over.left + box.width / 2,
+        y: box.top - over.top + box.height / 2,
+        halfWidth: box.width / 2,
+        halfHeight: box.height / 2,
+        radius: Number.parseFloat(getComputedStyle(form).borderTopLeftRadius) || 0,
+      }
+    }
+    sizes.observe(dock)
+    measure()
+    const began = performance.now()
     let shown = dark
     let was: VoicePhase = "idle"
     let bloom = 0
@@ -149,7 +188,7 @@ export function VoiceRim({
       const seconds = Math.min(0.05, (time - last) / 1000)
       last = time
       const { phase, microphoneOn, levels } = now.current
-      const still = document.documentElement.dataset.motion === "reduced"
+      const still = reducedMotion()
       const wanted = rimLook(phase, levels(), microphoneOn)
       // Connected: one flash as the circling light lets go.
       if (was === "connecting" && phase !== "connecting" && !still) bloom = 1
@@ -158,7 +197,6 @@ export function VoiceRim({
       shown = still ? stillRim(wanted) : easeRim(shown, wanted, seconds)
       turn += seconds * shown.spin
 
-      const card = dock.querySelector<HTMLElement>("form.desktop-composer")
       if (!card) return
       const scale = Math.min(window.devicePixelRatio || 1, 2)
       const width = Math.round(canvas.clientWidth * scale)
@@ -167,23 +205,22 @@ export function VoiceRim({
         canvas.width = width
         canvas.height = height
       }
-      const over = canvas.getBoundingClientRect()
-      const box = card.getBoundingClientRect()
-      const radius = Number.parseFloat(getComputedStyle(card).borderTopLeftRadius) || 0
       gl.viewport(0, 0, width, height)
       gl.clearColor(0, 0, 0, 0)
       gl.clear(gl.COLOR_BUFFER_BIT)
       gl.uniform2f(uniforms.uRes, width, height)
       gl.uniform4f(
         uniforms.uRect,
-        (box.left - over.left + box.width / 2) * scale,
-        (box.top - over.top + box.height / 2) * scale,
-        (box.width / 2) * scale,
-        (box.height / 2) * scale,
+        card.x * scale,
+        card.y * scale,
+        card.halfWidth * scale,
+        card.halfHeight * scale,
       )
-      gl.uniform1f(uniforms.uRad, radius * scale)
+      gl.uniform1f(uniforms.uRad, card.radius * scale)
       gl.uniform1f(uniforms.uDpr, scale)
-      gl.uniform1f(uniforms.uTime, still ? 0 : time / 1000)
+      gl.uniform1f(uniforms.uFade, EDGE_FADE)
+      // Counted from when the rim appeared: a float this small keeps its detail.
+      gl.uniform1f(uniforms.uTime, still ? 0 : (time - began) / 1000)
       gl.uniform1f(uniforms.uLevel, shown.level)
       gl.uniform1f(uniforms.uGlow, shown.glow)
       gl.uniform1f(uniforms.uSweep, shown.sweep)
@@ -192,12 +229,11 @@ export function VoiceRim({
       gl.uniform1f(uniforms.uBloom, bloom * bloom)
       gl.uniform1f(uniforms.uPhase, turn)
       gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4)
-      // What a check reads: the rim has drawn this phase at least once.
-      if (canvas.dataset.drawn !== phase) canvas.dataset.drawn = phase
     }
     frame = requestAnimationFrame(tick)
     return () => {
       cancelAnimationFrame(frame)
+      sizes.disconnect()
       canvas.removeEventListener("webglcontextlost", lost)
       // The context is left to go with its canvas: an effect run again on
       // the same canvas (React's strict mode) is handed the same context,
@@ -211,7 +247,6 @@ export function VoiceRim({
       className="voice-rim"
       data-phase={phase}
       data-rim={plain ? "plain" : "drawn"}
-      style={{ inset: -BLEED }}
       aria-hidden
     />
   )

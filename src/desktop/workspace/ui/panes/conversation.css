@@ -270,7 +270,8 @@
     }
 
     .workspace-dock .desktop-composer-controls:not(:last-child),
-    .workspace-dock .desktop-composer-controls:last-child > :not(.desktop-send) {
+    .workspace-dock .desktop-composer-controls:last-child > :not(.desktop-send),
+    .workspace-dock .desktop-composer-details {
       display: none;
     }
 
@@ -332,7 +333,8 @@
       .workspace-dock
       :is(
         .desktop-composer-controls:not(:last-child),
-        .desktop-composer-controls:last-child > :not(.desktop-send)
+        .desktop-composer-controls:last-child > :not(.desktop-send),
+        .desktop-composer-details
       ) {
       display: none;
     }
@@ -371,7 +373,7 @@
 /* A pane you are not in keeps its composer's choices, dimmed until you return. */
 .split-panes-grid[data-split-multi]
   .workspace-pane:not([data-focused])
-  .desktop-composer-row {
+  :is(.desktop-composer-row, .desktop-composer-details) {
   opacity: 0.55;
 }
 

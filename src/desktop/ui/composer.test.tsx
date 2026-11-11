@@ -359,3 +359,51 @@ it("offers Fast and the levels only where the catalogue records them for the mod
   expect(chip()?.disabled).toBe(true)
   await act(async () => root.unmount())
 })
+
+it("keeps the project and the computer on a line under the card, hides them when asked, and never hides Thinking", async () => {
+  window.localStorage.removeItem("nessa.desktop.composer-details")
+  const root = createRoot(host)
+  await act(async () =>
+    root.render(
+      <Composer
+        page={false}
+        onPageChange={() => {}}
+        text=""
+        onTextChange={() => {}}
+        placeholder="Reply"
+        model={undefined}
+        onModelChange={() => {}}
+        place="This computer"
+      />,
+    ),
+  )
+  try {
+    const line = host.querySelector<HTMLElement>(".desktop-composer-details")
+    const card = host.querySelector<HTMLElement>("form.desktop-composer")
+    if (!line || !card) throw new Error("the composer drew no card or no line")
+    expect(card.contains(line)).toBe(false)
+    expect(card.querySelector(".desktop-chip-project, .desktop-chip-thinking")).toBeNull()
+    const shown = () => ({
+      project: line.querySelector(".desktop-chip-project") !== null,
+      place: line.querySelector("[data-composer-place]")?.textContent ?? null,
+      thinking: line.querySelector(".desktop-chip-thinking") !== null,
+    })
+    expect(shown()).toEqual({ project: true, place: "This computer", thinking: true })
+    const toggle = () => {
+      const button = line.querySelector<HTMLButtonElement>(
+        ".desktop-composer-details-toggle",
+      )
+      if (!button) throw new Error("the line has no Hide or Show")
+      return button
+    }
+    expect(toggle().getAttribute("aria-label")).toBe("Hide project and computer")
+    await act(async () => toggle().click())
+    expect(shown()).toEqual({ project: false, place: null, thinking: true })
+    expect(toggle().getAttribute("aria-label")).toBe("Show project and computer")
+    await act(async () => toggle().click())
+    expect(shown()).toEqual({ project: true, place: "This computer", thinking: true })
+  } finally {
+    await act(async () => root.unmount())
+    window.localStorage.removeItem("nessa.desktop.composer-details")
+  }
+})

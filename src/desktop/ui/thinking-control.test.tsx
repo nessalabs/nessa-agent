@@ -101,7 +101,7 @@ const words = () =>
 
 it("names the level on its chip, and opens onto a slider at the level chosen", async () => {
   await act(async () => root.render(<Harness />))
-  expect(chip().getAttribute("aria-label")).toBe("Thinking level: Medium")
+  expect(chip().getAttribute("aria-label")).toBe("Thinking: Medium")
   expect(chip().getAttribute("aria-expanded")).toBe("false")
   await open()
   expect(chip().getAttribute("aria-expanded")).toBe("true")
@@ -132,7 +132,7 @@ it("moves between the levels with the keys", async () => {
   await key(slider(), "PageUp")
   expect(said()).toBe("Medium")
   expect(chosen).toEqual(["high", "max", "low", "medium"])
-  expect(chip().getAttribute("aria-label")).toBe("Thinking level: Medium")
+  expect(chip().getAttribute("aria-label")).toBe("Thinking: Medium")
   expect(document.activeElement).toBe(slider())
 })
 
@@ -155,10 +155,10 @@ it("ends at Max for a model without Ultra, and past it at Ultra for one with it"
 
 it("shows a level carried from a model that has it as the nearest below it", async () => {
   await act(async () => root.render(<Harness initial="xhigh" />))
-  expect(chip().getAttribute("aria-label")).toBe("Thinking level: High")
+  expect(chip().getAttribute("aria-label")).toBe("Thinking: High")
   // Below every level the model offers, it is the least of them.
   await act(async () => root.render(<Harness key="none" initial="none" />))
-  expect(chip().getAttribute("aria-label")).toBe("Thinking level: Low")
+  expect(chip().getAttribute("aria-label")).toBe("Thinking: Low")
 })
 
 it("cross-fades the words: what was shown stays, leaving, beneath the new", async () => {

@@ -260,7 +260,7 @@ export const css = {
   // opening a popover holding a slider; the levels are read from
   // the page, never named here (their owner is src/desktop/model/composer-options.ts)
   composerForm: ".desktop-composer", // class: a composer, whose place must not move
-  thinkingChip: 'button[aria-haspopup="dialog"][aria-label^="Thinking level"]',
+  thinkingChip: 'button[aria-haspopup="dialog"][aria-label^="Thinking"]',
   thinkingPopover: '[role="dialog"][aria-label="Thinking"]',
   modelChip: '[data-slot="model-picker-trigger"]', // the composer's model picker
   modelPicker: '[data-slot="model-picker-content"]', // its list, a model each role="option"

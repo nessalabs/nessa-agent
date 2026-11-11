@@ -4533,8 +4533,8 @@ const steps = {
     }
     if (realtime.calls() !== before + 1)
       failures.push(`Talk opened ${realtime.calls() - before} calls, not one`)
-    // The call is a glow on the composer's edge: its canvas lies around the
-    // composer's card and has drawn this phase. No orb is left.
+    // The call is a glow on the composer's edge: its canvas lies over the
+    // composer's card and lights the page just outside it. No orb is left.
     if ((await rim.count()) !== 1) failures.push("the call shows no glow on the composer")
     else {
       const boxes = await rim.evaluate((canvas) => {
@@ -4556,21 +4556,37 @@ const steps = {
         !(
           boxes.card &&
           boxes.over[0] < boxes.card[0] &&
-          boxes.over[1] < boxes.card[1] &&
+          boxes.over[1] <= boxes.card[1] &&
           boxes.over[2] > boxes.card[2] &&
-          boxes.over[3] > boxes.card[3]
+          boxes.over[3] >= boxes.card[3]
         )
       )
         failures.push(
           `the call's glow ${JSON.stringify(boxes.over)} does not reach around the composer ${JSON.stringify(boxes.card)}`,
         )
-      const drawn = await waitFor(
-        async () =>
-          (await rim.getAttribute("data-rim")) === "plain" ||
-          (await rim.getAttribute("data-drawn")) === "listening",
-        5_000,
-      )
-      if (!drawn) failures.push("the call's glow never drew the listening call")
+      // Lit is read off the screen: the strip of page just left of the card
+      // looks different with the glow than with it taken away, and the same
+      // twice without it, so nothing else there is moving.
+      const lit = await waitFor(async () => {
+        if ((await rim.getAttribute("data-rim")) === "plain") return true
+        const card = await pane.locator("form.desktop-composer").boundingBox()
+        if (!card) return false
+        const clip = {
+          x: Math.round(card.x) - 6,
+          y: Math.round(card.y + card.height / 2) - 10,
+          width: 5,
+          height: 20,
+        }
+        const hide = await run.page.addStyleTag({
+          content: ".voice-rim { visibility: hidden !important; }",
+        })
+        const without = await run.page.screenshot({ clip })
+        const again = await run.page.screenshot({ clip })
+        await hide.evaluate((style) => style.remove())
+        const withGlow = await run.page.screenshot({ clip })
+        return without.equals(again) && !withGlow.equals(without)
+      }, 5_000)
+      if (!lit) failures.push("the call's glow lights nothing beside the composer")
     }
     if ((await run.page.locator(".voice-orb").count()) > 0)
       failures.push("the call still shows the orb")
@@ -7919,7 +7935,7 @@ const steps = {
       const project = line.locator(".desktop-chip-project")
       const place = line.locator("[data-composer-place]")
       const said = (await thinking.innerText().catch(() => "")).trim()
-      if (!said.startsWith("Thinking"))
+      if (!/^Thinking: \S/.test(said))
         failures.push(`the thinking chip says ${JSON.stringify(said)}, not its level`)
       if (!(await project.isVisible())) failures.push("the line shows no project")
       const where = (await place.innerText().catch(() => "")).trim()
