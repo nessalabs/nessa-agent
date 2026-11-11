@@ -43,6 +43,20 @@ if (
   throw new Error(
     "ProductSurfaceKind must match protocol/schemas/v1/common.json SurfaceKind",
   )
+/**
+ * The admission lanes a method can wait in, each with its own capacity on
+ * the gateway. `appCalls` is held by the conversation service, not by a
+ * gateway pool; every other lane names one pool of `Admission`.
+ */
+const productLanes = [
+  "requests",
+  "controls",
+  "recordReads",
+  "appCalls",
+  "deletions",
+  "uploadBegins",
+  "artifactReads",
+]
 const manifest = JSON.parse(
   readFileSync(resolve(root, "protocol/product/manifest.json"), "utf8"),
 )
@@ -959,7 +973,8 @@ rs += rustWireShapes(schema.$defs, [
 rs += `pub const PRODUCT_HANDSHAKE_METHOD: &str = ${JSON.stringify(manifest.handshakeMethod)};
 pub const PRODUCT_READY_METHODS: &[&str] = &[${readyMethods.map(JSON.stringify).join(",")}];
 `
-rs += actionForMethodRust(productMethods)
+rs += actionForMethodRust()
+rs += methodEnumRust(productMethods)
 ts += `export const ProductHandshakeMethod = ${JSON.stringify(manifest.handshakeMethod)} as const
 export const productReadyMethods = ${JSON.stringify(readyMethods)} as const
 `
@@ -1089,24 +1104,29 @@ for (const [path, contents] of outputs) {
 
 /**
  * Each product method as the manifest declares it: the params schema name,
- * or null, and the grant Cedar is asked for, or null when another owner
- * admits the method. A missing grant is a refusal, not a default.
+ * or null, the grant Cedar is asked for, or null when another owner admits
+ * the method, and the admission lane it waits in. A missing grant or lane is
+ * a refusal, not a default.
  *
  * @param {unknown} methods
- * @returns {Record<string, { params: string | null, grant: string | null }>}
+ * @returns {Record<string, { params: string | null, grant: string | null, lane: string }>}
  */
 function methodCatalog(methods) {
   if (!methods || typeof methods !== "object" || Array.isArray(methods))
     throw new Error("Product manifest methods must be an object")
-  /** @type {Record<string, { params: string | null, grant: string | null }>} */
+  /** @type {Record<string, { params: string | null, grant: string | null, lane: string }>} */
   const catalog = {}
   for (const [method, spec] of Object.entries(methods)) {
     if (!spec || typeof spec !== "object" || Array.isArray(spec))
-      throw new Error(`Product method ${method} must declare params and a grant`)
+      throw new Error(`Product method ${method} must declare params, a grant and a lane`)
     for (const key of Object.keys(spec)) {
-      if (key !== "params" && key !== "grant")
+      if (key !== "params" && key !== "grant" && key !== "lane")
         throw new Error(`Product method ${method} has unknown field ${key}`)
     }
+    if (!Object.hasOwn(spec, "lane") || !productLanes.includes(spec.lane))
+      throw new Error(
+        `Product method ${method} has no declared lane (one of ${productLanes.join(", ")})`,
+      )
     if (!Object.hasOwn(spec, "grant"))
       throw new Error(`Product method ${method} has no declared grant`)
     if (!Object.hasOwn(spec, "params"))
@@ -1117,7 +1137,7 @@ function methodCatalog(methods) {
       throw new Error(`Product method ${method} params must name a schema or be null`)
     if (grant !== null && (typeof grant !== "string" || grant.length === 0))
       throw new Error(`Product method ${method} has no declared grant`)
-    catalog[method] = { params, grant }
+    catalog[method] = { params, grant, lane: spec.lane }
   }
   return catalog
 }
@@ -1129,24 +1149,8 @@ function methodGrants(methods) {
   )
 }
 
-/**
- * The socket's mapping, generated so it cannot drift from the manifest.
- *
- * @param {Record<string, { grant: string | null }>} methods
- */
-function actionForMethodRust(methods) {
-  /** @type {Map<string, string[]>} */
-  const byGrant = new Map()
-  for (const [method, spec] of Object.entries(methods)) {
-    if (spec.grant === null) continue
-    const group = byGrant.get(spec.grant) ?? []
-    group.push(method)
-    byGrant.set(spec.grant, group)
-  }
-  const arms = [...byGrant.entries()].map(([grant, group]) => {
-    const patterns = group.map((method) => JSON.stringify(method)).join(" | ")
-    return `${patterns} => Some(${JSON.stringify(grant)}),`
-  })
+/** The grant lookup by wire name, over the generated [`ProductMethod`]. */
+function actionForMethodRust() {
   return `/// The grant Cedar is asked for before this method is dispatched.
 ///
 /// Generated from \`protocol/product/manifest.json\`. Writing
@@ -1155,11 +1159,151 @@ function actionForMethodRust(methods) {
 /// catalogue asks for \`conversation.read\`. Running a configured server with
 /// the gateway's authority, and enrolling a device, asks for
 /// \`credential.manage\`; Auth asks again for the exact consent. \`None\`
-/// means another owner admits the method: the handshake or \`auth.session\`.
+/// means another owner admits the method: the handshake or \`auth.session\`,
+/// or the manifest has no such method.
 pub fn action_for_method(method: &str) -> Option<&'static str> {
-    match method {
-        ${arms.join("\n        ")}
-        _ => None,
+    ProductMethod::parse(method).and_then(ProductMethod::grant)
+}
+`
+}
+
+/** `conversation.webhook.cursor` as a Rust variant: `ConversationWebhookCursor`. */
+function rustVariant(method) {
+  return method
+    .split(".")
+    .map((part) => part[0].toUpperCase() + part.slice(1))
+    .join("")
+}
+
+/**
+ * The manifest's methods as one closed Rust type, so the gateway routes by an
+ * exhaustive match rather than by strings: a manifest method with no route is
+ * a compile error. Each variant knows its wire name, its grant and its lane,
+ * and [`ProductParams`] decodes each method's params into its declared type.
+ *
+ * @param {Record<string, { params: string | null, grant: string | null, lane: string }>} methods
+ */
+function methodEnumRust(methods) {
+  const entries = Object.entries(methods)
+  const variants = entries.map(([method]) => rustVariant(method))
+  if (new Set(variants).size !== variants.length)
+    throw new Error("Two product methods share one Rust variant name")
+  const laneVariant = (lane) => lane[0].toUpperCase() + lane.slice(1)
+  return `/// An admission lane: the capacity a method waits in on the gateway.
+///
+/// Generated from the \`lane\` of each method in
+/// \`protocol/product/manifest.json\`. Each lane has its own capacity, so a
+/// burst of one kind of request never takes another lane's place. How many
+/// permits each lane holds is \`OperationalLimits\`'s.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ProductLane {
+    ${productLanes.map((lane) => `${laneVariant(lane)},`).join("\n    ")}
+}
+
+impl ProductLane {
+    /// Every lane, in manifest order.
+    pub const ALL: &'static [ProductLane] = &[${productLanes.map((lane) => `ProductLane::${laneVariant(lane)}`).join(", ")}];
+
+    /// The lane's manifest spelling.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            ${productLanes.map((lane) => `ProductLane::${laneVariant(lane)} => ${JSON.stringify(lane)},`).join("\n            ")}
+        }
+    }
+}
+
+/// A method \`protocol/product/manifest.json\` declares.
+///
+/// Generated: the manifest is the only list of methods, and this enum is
+/// how the gateway names one once a frame is read. A method with no route
+/// in an exhaustive match does not compile.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ProductMethod {
+    ${entries.map(([method]) => `/// \`${method}\`\n    ${rustVariant(method)},`).join("\n    ")}
+}
+
+impl ProductMethod {
+    /// Every method, in manifest order.
+    pub const ALL: &'static [ProductMethod] = &[${variants.map((variant) => `ProductMethod::${variant}`).join(", ")}];
+
+    /// The method a frame names, or \`None\` when the manifest has none by
+    /// that name.
+    pub fn parse(method: &str) -> Option<Self> {
+        match method {
+            ${entries.map(([method]) => `${JSON.stringify(method)} => Some(ProductMethod::${rustVariant(method)}),`).join("\n            ")}
+            _ => None,
+        }
+    }
+
+    /// The method's wire name.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            ${entries.map(([method]) => `ProductMethod::${rustVariant(method)} => ${JSON.stringify(method)},`).join("\n            ")}
+        }
+    }
+
+    /// The grant Cedar is asked for; \`None\` when another owner admits the
+    /// method (see [\`action_for_method\`]).
+    pub const fn grant(self) -> Option<&'static str> {
+        match self {
+            ${entries.map(([method, spec]) => `ProductMethod::${rustVariant(method)} => ${spec.grant === null ? "None" : `Some(${JSON.stringify(spec.grant)})`},`).join("\n            ")}
+        }
+    }
+
+    /// The admission lane the method waits in.
+    pub const fn lane(self) -> ProductLane {
+        match self {
+            ${entries.map(([method, spec]) => `ProductMethod::${rustVariant(method)} => ProductLane::${laneVariant(spec.lane)},`).join("\n            ")}
+        }
+    }
+
+    /// Decode \`params\` into this method's declared params type. A method
+    /// whose manifest params are \`null\` takes an empty object.
+    pub fn decode_params(self, params: Value) -> Result<ProductParams, ParamsRefused> {
+        Ok(match self {
+            ${entries
+              .map(([method, spec]) =>
+                spec.params === null
+                  ? `ProductMethod::${rustVariant(method)} => match params {
+                Value::Object(fields) if fields.is_empty() => ProductParams::${rustVariant(method)},
+                _ => return Err(ParamsRefused),
+            },`
+                  : `ProductMethod::${rustVariant(method)} => ProductParams::${rustVariant(method)}(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),`,
+              )
+              .join("\n            ")}
+        })
+    }
+}
+
+/// Params that do not decode into their method's declared type.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ParamsRefused;
+
+/// A method's params, decoded into the type the manifest declares for it.
+pub enum ProductParams {
+    ${entries
+      .map(([method, spec]) =>
+        spec.params === null
+          ? `${rustVariant(method)},`
+          : `${rustVariant(method)}(${spec.params}),`,
+      )
+      .join("\n    ")}
+}
+
+impl ProductParams {
+    /// The method these params belong to.
+    pub const fn method(&self) -> ProductMethod {
+        match self {
+            ${entries
+              .map(([method, spec]) =>
+                spec.params === null
+                  ? `ProductParams::${rustVariant(method)} => ProductMethod::${rustVariant(method)},`
+                  : `ProductParams::${rustVariant(method)}(_) => ProductMethod::${rustVariant(method)},`,
+              )
+              .join("\n            ")}
+        }
     }
 }
 `

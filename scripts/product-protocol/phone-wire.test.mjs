@@ -128,18 +128,21 @@ test("phone wire bounds grant capacity without copying Auth ordered-action polic
   )
 })
 
-test("phone methods name their precise parameter and admission owners", () => {
+test("phone methods name their precise parameter, admission owners and lane", () => {
   const methods = read("manifest.json").methods
   assert.deepEqual(methods["phone.endpoint"], {
     params: "PhoneEndpointParams",
     grant: "server.read",
+    lane: "requests",
   })
   assert.deepEqual(methods["phone.authorize"], {
     params: "PhoneAuthorizeParams",
     grant: "credential.manage",
+    lane: "requests",
   })
   assert.deepEqual(methods["phone.status"], {
     params: "PhoneStatusParams",
     grant: "credential.manage",
+    lane: "requests",
   })
 })

@@ -392,7 +392,7 @@ async fn run(seed: u64, cycles: usize) {
     wait_for_watches(&fixture, watches).await;
     progress.at("watches_released", cycles);
     assert_eq!(
-        fixture.state.requests.available_permits(),
+        fixture.state.admission.requests().available_permits(),
         fixture.state.limits.requests()
     );
     assert_eq!(

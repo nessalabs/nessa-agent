@@ -284,10 +284,10 @@ async fn a_cancelled_paired_list_releases_its_sources_while_capacity_is_held() {
         .with_devices(this_device(true));
     grants(&fixture.authority, &["conversation.read", "server.read"]);
     let before = fixture.storage.committed_watches();
-    let permits = fixture.state.requests.available_permits() as u32;
+    let permits = fixture.state.admission.requests().available_permits() as u32;
     let held = fixture
         .state
-        .requests
+        .admission.requests()
         .clone()
         .acquire_many_owned(permits)
         .await
@@ -297,9 +297,9 @@ async fn a_cancelled_paired_list_releases_its_sources_while_capacity_is_held() {
     wait_for_watches(&fixture, before + 1).await;
     client.close().await;
     wait_for_watches(&fixture, before).await;
-    assert_eq!(fixture.state.requests.available_permits(), 0);
+    assert_eq!(fixture.state.admission.requests().available_permits(), 0);
     drop(held);
-    assert_eq!(fixture.state.requests.available_permits(), permits as usize);
+    assert_eq!(fixture.state.admission.requests().available_permits(), permits as usize);
 }
 
 #[tokio::test]
@@ -309,10 +309,10 @@ async fn a_paired_list_rechecks_access_after_waiting_for_capacity() {
         .with_devices(this_device(true));
     grants(&fixture.authority, &["conversation.read", "server.read"]);
     let before = fixture.storage.committed_watches();
-    let permits = fixture.state.requests.available_permits() as u32;
+    let permits = fixture.state.admission.requests().available_permits() as u32;
     let held = fixture
         .state
-        .requests
+        .admission.requests()
         .clone()
         .acquire_many_owned(permits)
         .await
@@ -330,7 +330,7 @@ async fn a_paired_list_rechecks_access_after_waiting_for_capacity() {
     );
     client.close().await;
     wait_for_watches(&fixture, before).await;
-    assert_eq!(fixture.state.requests.available_permits(), permits as usize);
+    assert_eq!(fixture.state.admission.requests().available_permits(), permits as usize);
 }
 
 struct RefusedListRead(AccessDenial);

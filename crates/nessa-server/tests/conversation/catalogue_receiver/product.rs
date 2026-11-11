@@ -360,7 +360,7 @@ async fn gateway_child() {
         )
         .with_catalogue_source(source)
         .with_conversations(Arc::new(service));
-    let capacity = state.record_reads.clone();
+    let capacity = state.admission.record_reads().clone();
     let (commands, mut received) = tokio::sync::mpsc::channel::<Value>(8);
     std::thread::spawn(move || {
         for line in std::io::stdin().lock().lines() {

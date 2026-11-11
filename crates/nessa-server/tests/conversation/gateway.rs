@@ -349,7 +349,7 @@ policy: &nessa_auth::adapters::cedar::CedarPolicyEvaluator::new().unwrap(),
     async fn normal_capacity_cannot_consume_reserved_conversation_control_capacity() {
         let state = chat_state();
         let held = state
-            .requests
+            .admission.requests()
             .clone()
             .acquire_many_owned(128)
             .await
@@ -389,7 +389,7 @@ policy: &nessa_auth::adapters::cedar::CedarPolicyEvaluator::new().unwrap(),
         drop(peer.input);
         task.await.unwrap();
         drop(held);
-        assert_eq!(state.controls.available_permits(), 32);
+        assert_eq!(state.admission.controls().available_permits(), 32);
     }
     #[tokio::test]
     async fn deletes_and_controls_never_take_each_others_place() {
@@ -404,7 +404,7 @@ policy: &nessa_auth::adapters::cedar::CedarPolicyEvaluator::new().unwrap(),
         // Every delete slot taken, as a burst of slow deletes would leave
         // them: another delete is turned away, and a permission answer, a
         // cancel and a close are still admitted and reach the service.
-        let deletes = state.deletions.clone().acquire_many_owned(8).await.unwrap();
+        let deletes = state.admission.deletions().clone().acquire_many_owned(8).await.unwrap();
         send_command(&peer, "delete", "conversation.delete", target("delete"));
         assert_eq!(
             response(&mut peer).await["error"]["code"],
@@ -422,12 +422,12 @@ policy: &nessa_auth::adapters::cedar::CedarPolicyEvaluator::new().unwrap(),
                 "{method} was not admitted"
             );
         }
-        assert_eq!(state.controls.available_permits(), 32);
+        assert_eq!(state.admission.controls().available_permits(), 32);
         drop(deletes);
 
         // And the other way about: with every control slot taken, a delete is
         // still admitted.
-        let controls = state.controls.clone().acquire_many_owned(32).await.unwrap();
+        let controls = state.admission.controls().clone().acquire_many_owned(32).await.unwrap();
         send_command(&peer, "answer-2", "conversation.answer", answer);
         assert_eq!(
             response(&mut peer).await["error"]["code"],
@@ -455,7 +455,7 @@ policy: &nessa_auth::adapters::cedar::CedarPolicyEvaluator::new().unwrap(),
         drop(controls);
         drop(peer.input);
         task.await.unwrap();
-        assert_eq!(state.deletions.available_permits(), 8);
+        assert_eq!(state.admission.deletions().available_permits(), 8);
     }
     #[tokio::test]
     async fn client_metadata_cannot_replace_verified_principal() {
@@ -1041,7 +1041,7 @@ policy: &nessa_auth::adapters::cedar::CedarPolicyEvaluator::new().unwrap(),
         // permit stays with the creation task.
         send_command(&peer, "health", "server.health", json!({}));
         assert_eq!(response(&mut peer).await["id"], "health");
-        assert_eq!(state.requests.available_permits(), 127);
+        assert_eq!(state.admission.requests().available_permits(), 127);
         let second = chat_session(&state, "owner-panel").await;
         let read = timeout(
             Duration::from_secs(1),
@@ -1061,13 +1061,13 @@ policy: &nessa_auth::adapters::cedar::CedarPolicyEvaluator::new().unwrap(),
             .unwrap()
             .unwrap();
         assert_eq!(
-            state.requests.available_permits(),
+            state.admission.requests().available_permits(),
             127,
             "dropping the socket leaves the original creation task holding its permit"
         );
         release.send(()).unwrap();
         timeout(Duration::from_secs(1), async {
-            while state.requests.available_permits() != 128 {
+            while state.admission.requests().available_permits() != 128 {
                 tokio::task::yield_now().await;
             }
         })
@@ -1163,7 +1163,7 @@ policy: &nessa_auth::adapters::cedar::CedarPolicyEvaluator::new().unwrap(),
         timeout(Duration::from_secs(10), provider.opening.notified())
             .await
             .expect("provider open follows the durable creation attempt");
-        assert_eq!(state.requests.available_permits(), 127);
+        assert_eq!(state.admission.requests().available_permits(), 127);
         for n in 0..15 {
             send_command(
                 &peer,
@@ -1177,7 +1177,7 @@ policy: &nessa_auth::adapters::cedar::CedarPolicyEvaluator::new().unwrap(),
             assert_eq!(read["id"], format!("read-{n}"));
             assert_eq!(read["ok"], true);
         }
-        assert_eq!(state.requests.available_permits(), 127);
+        assert_eq!(state.admission.requests().available_permits(), 127);
         send_command(&peer, "full", "server.health", json!({}));
         assert_eq!(response(&mut peer).await["id"], "full");
         // An unrelated missing conversation proves the control is dispatched,
@@ -1191,14 +1191,14 @@ policy: &nessa_auth::adapters::cedar::CedarPolicyEvaluator::new().unwrap(),
         let control = response(&mut peer).await;
         assert_eq!(control["id"], "close");
         assert_eq!(control["error"]["code"], "conversation_not_found");
-        assert_eq!(state.requests.available_permits(), 127);
+        assert_eq!(state.admission.requests().available_permits(), 127);
         release.send(()).unwrap();
         let created = response(&mut peer).await;
         assert_eq!(created["id"], "create");
         assert_eq!(created["ok"], true);
         drop(peer.input);
         task.await.unwrap();
-        assert_eq!(state.requests.available_permits(), 128);
+        assert_eq!(state.admission.requests().available_permits(), 128);
     }
     #[tokio::test]
     async fn authenticated_reorder_changes_provider_dispatch_order_atomically() {

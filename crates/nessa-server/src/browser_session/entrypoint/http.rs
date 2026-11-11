@@ -115,7 +115,7 @@ pub async fn login(
     if !allowed(&headers, &state) {
         return response(StatusCode::FORBIDDEN, None);
     }
-    let Ok(permit) = state.requests.clone().try_acquire_owned() else {
+    let Ok(permit) = state.admission.requests().clone().try_acquire_owned() else {
         return response(StatusCode::TOO_MANY_REQUESTS, None);
     };
     let Some(store) = &state.browser_sessions else {
@@ -220,7 +220,7 @@ pub async fn check(State(state): State<ProductRouteState>, headers: HeaderMap) -
     let Some(id) = cookie(&headers) else {
         return response(StatusCode::UNAUTHORIZED, None);
     };
-    let Ok(permit) = state.requests.clone().try_acquire_owned() else {
+    let Ok(permit) = state.admission.requests().clone().try_acquire_owned() else {
         return response(StatusCode::SERVICE_UNAVAILABLE, None);
     };
     let operation_state = state.clone();
@@ -308,7 +308,7 @@ pub async fn logout(State(state): State<ProductRouteState>, headers: HeaderMap) 
     if !allowed(&headers, &state) {
         return response(StatusCode::FORBIDDEN, None);
     }
-    let Ok(permit) = state.requests.clone().try_acquire_owned() else {
+    let Ok(permit) = state.admission.requests().clone().try_acquire_owned() else {
         return response(StatusCode::SERVICE_UNAVAILABLE, None);
     };
     let operation_state = state.clone();

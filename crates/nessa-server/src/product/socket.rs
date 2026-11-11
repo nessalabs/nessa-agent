@@ -1,3 +1,4 @@
+use super::admission::{Admitted, Authorized, Request};
 use super::event_sequence::EventSequence;
 use super::passive_read::deadlines::{PASSIVE_READ_TIMEOUT, RECORD_SEND_TIMEOUT};
 use super::read_access::ReviewNoticeVisibility;
@@ -39,9 +40,9 @@ use nessa_protocol::product::generated::wire_shape_product_session_ready;
 use nessa_protocol::product::generated::{
     action_for_method, product_event, CredentialIssueParams, CredentialListParams,
     CredentialListResult, CredentialRevokeParams, CredentialRevokeResult, ExistingCredentialResult,
-    IssuedCredentialResult, PermissionReviewNotice, PermissionReviewWaiting, ProductSessionReady,
-    SessionAuthenticateParams, SessionChallenge, SessionTermination,
-    MAX_NATIVE_HOOKS_REQUEST_ID_BYTES, MAX_PRODUCT_CLIENT_ID_CHARACTERS,
+    IssuedCredentialResult, PermissionReviewNotice, PermissionReviewWaiting, ProductLane,
+    ProductMethod, ProductSessionReady, SessionAuthenticateParams, SessionChallenge,
+    SessionTermination, MAX_NATIVE_HOOKS_REQUEST_ID_BYTES, MAX_PRODUCT_CLIENT_ID_CHARACTERS,
     MAX_PRODUCT_SURFACE_INSTANCE_CHARACTERS, MAX_RECORD_RESPONSE_BYTES,
     MIN_NATIVE_HOOKS_REQUEST_ID_CHARACTERS, PRODUCT_HANDSHAKE_METHOD, PRODUCT_READY_METHODS,
     PRODUCT_VERSION,
@@ -52,7 +53,6 @@ use nessa_protocol::protocol::{
     health_check_message, unique_envelope, EventFrame, OutgoingMessage, RequestFrame,
     ResponseFrame, MAX_PAYLOAD_BYTES,
 };
-use nessa_sdk::domain::agent_execution::executions::Initiation;
 use serde_json::json;
 use std::collections::{HashMap, VecDeque};
 use std::future::{poll_fn, Future};
@@ -545,40 +545,27 @@ enum ResponseClass {
 }
 
 impl ResponseClass {
+    /// The socket's own lane for a method, from the manifest's admission
+    /// lane: controls and record reads have socket lanes of their own, as do
+    /// app calls; every other lane shares the ordinary one. A method the
+    /// manifest does not declare is ordinary.
     fn for_method(method: &str) -> Self {
-        match method {
-            "conversation.close"
-            | "conversation.stop"
-            | "conversation.archive"
-            | "conversation.unarchive"
-            | "conversation.rename"
-            | "conversation.answer"
-            // A person reads a long review or question before they answer
-            // it, so the read is never behind ordinary requests either.
-            | "conversation.permissionReview"
-            | "conversation.questionReview"
-            | "conversation.answerQuestion"
-            | "conversation.cancel"
-            | "conversation.remove"
-            | "conversation.reorder"
-            // Releasing an app ends its held calls, so it is never behind
-            // them on the app lane.
-            | "mcp.releaseApp"
-            // Ending an enrollment is never crowded out by ordinary requests
-            // (design row O7).
-            | "pairing.deny"
-            | "pairing.cancel" => Self::Control,
-            "mcp.callTool"
-            | "mcp.readResource"
-            // A message can wait on the person's review, as a call can.
-            | "mcp.sendMessage"
-            | "mcp.updateModelContext" => Self::App,
-            "conversation.recordsHead"
-            | "conversation.recordsPage"
-            | "conversation.catalogueHead"
-            | "conversation.catalogueManifest"
-            | "conversation.catalogueResolve" => Self::Record,
-            _ => Self::Ordinary,
+        Self::for_lane(
+            ProductMethod::parse(method)
+                .map(ProductMethod::lane)
+                .unwrap_or(ProductLane::Requests),
+        )
+    }
+
+    fn for_lane(lane: ProductLane) -> Self {
+        match lane {
+            ProductLane::Controls => Self::Control,
+            ProductLane::RecordReads => Self::Record,
+            ProductLane::AppCalls => Self::App,
+            ProductLane::Requests
+            | ProductLane::Deletions
+            | ProductLane::UploadBegins
+            | ProductLane::ArtifactReads => Self::Ordinary,
         }
     }
 }
@@ -1225,7 +1212,8 @@ async fn run_authenticated<S>(
             continue;
         };
         let read_deadline = received_at + PASSIVE_READ_TIMEOUT;
-        let class = ResponseClass::for_method(&frame.method);
+        let request = Request::decode(frame);
+        let class = ResponseClass::for_lane(request.lane());
         let control = matches!(class, ResponseClass::Control);
         let record = matches!(class, ResponseClass::Record);
         let app = matches!(class, ResponseClass::App);
@@ -1233,7 +1221,7 @@ async fn run_authenticated<S>(
         // taking one, so the last slot stays available to another mount
         // (`one_mount_cannot_fill_the_app_lane`).
         let mount_guard = if app {
-            match reserve_app_mount(&app_mounts, &frame, limits.app_calls_per_mount()) {
+            match reserve_app_mount(&app_mounts, request.frame(), limits.app_calls_per_mount()) {
                 Ok(guard) => guard,
                 Err(MountCap) => {
                     // The refusal lane holds one frame. Parking this refusal,
@@ -1241,7 +1229,7 @@ async fn run_authenticated<S>(
                     // closing the socket while the writer is inside a control
                     // frame (`a_mount_cap_refusal_waits_and_keeps_the_socket`).
                     note_limit("socket.app_mount");
-                    app_refusal = Some(failure(&frame.id, "temporarily_unavailable"));
+                    app_refusal = Some(failure(&request.frame().id, "temporarily_unavailable"));
                     continue;
                 }
             }
@@ -1267,7 +1255,7 @@ async fn run_authenticated<S>(
                 ResponseClass::App => "socket.app_calls",
                 ResponseClass::Ordinary => "socket.ordinary_slots",
             });
-            let response = failure(&frame.id, "temporarily_unavailable");
+            let response = failure(&request.frame().id, "temporarily_unavailable");
             if app {
                 app_refusal = Some(response);
                 continue;
@@ -1286,7 +1274,8 @@ async fn run_authenticated<S>(
             continue;
         };
         let slot = Arc::new(slot);
-        if ConnectionSubscriptions::method(&frame.method) {
+        if ConnectionSubscriptions::method(&request.frame().method) {
+            let frame = request.into_frame();
             // Admitted as any request is (row S29): an unsubscribe here,
             // before it changes anything; a subscribe in its own task,
             // before it registers anything. The unsubscribe is admitted
@@ -1321,61 +1310,48 @@ async fn run_authenticated<S>(
             }
             continue;
         }
-        // An app call's capacity across sockets is the conversation
-        // service's, held by the call's own task until it ends: a permit held
-        // here would be let go when the socket went, while the call ran on.
-        let (capacity, limit_id) = if control {
-            (Some(&state.controls), "server.controls")
-        } else if record {
-            (Some(&state.record_reads), "server.record_reads")
-        } else if app {
-            (None, "socket.app_calls")
-        } else if frame.method == "conversation.delete" {
-            (Some(&state.deletions), "server.deletions")
-        } else if frame.method == "attachment.begin" {
-            (Some(&state.upload_begins), "server.upload_begins")
-        } else if frame.method == "artifact.read" {
-            (Some(&state.artifact_reads), "server.artifact_reads")
-        } else {
-            (Some(&state.requests), "server.requests")
-        };
-        let permit = capacity.map(|capacity| capacity.clone().try_acquire_owned());
-        let Ok(permit) = permit.transpose() else {
-            note_limit(limit_id);
-            let response = failure(&frame.id, "temporarily_unavailable");
-            let queued = QueuedResponse {
-                message: WireResponse::ordinary(response),
-                _slot: slot,
-                _record_work: None,
-                _mount: mount_guard,
-            };
-            let rejected = if control {
-                rejected_lane(
-                    "socket.control_lane",
-                    control_send.try_send(ControlOutput::Response(Box::new(queued))),
-                )
-            } else if record {
-                rejected_lane(
-                    "socket.record_lane",
-                    record_send.try_send(QueuedRecordResponse::new(queued)),
-                )
-            } else {
-                rejected_lane("socket.ordinary_lane", ordinary_send.try_send(queued))
-            };
-            if rejected {
-                break;
+        // The lane is the manifest's; its pool is `Admission`'s. The app-call
+        // lane takes no gateway permit (`Admission`).
+        let admitted = match state.admission.admit(request) {
+            Ok(admitted) => admitted,
+            Err(full) => {
+                note_limit(full.limit_id);
+                let response = failure(&full.request_id, "temporarily_unavailable");
+                let queued = QueuedResponse {
+                    message: WireResponse::ordinary(response),
+                    _slot: slot,
+                    _record_work: None,
+                    _mount: mount_guard,
+                };
+                let rejected = if control {
+                    rejected_lane(
+                        "socket.control_lane",
+                        control_send.try_send(ControlOutput::Response(Box::new(queued))),
+                    )
+                } else if record {
+                    rejected_lane(
+                        "socket.record_lane",
+                        record_send.try_send(QueuedRecordResponse::new(queued)),
+                    )
+                } else {
+                    rejected_lane("socket.ordinary_lane", ordinary_send.try_send(queued))
+                };
+                if rejected {
+                    break;
+                }
+                continue;
             }
-            continue;
         };
         let request_state = state.clone();
         let request_session = session.clone();
         let request_window = std::sync::Arc::downgrade(&window);
         let task = tokio::spawn(async move {
             if matches!(class, ResponseClass::Record) {
+                let (request, permit) = admitted.into_parts();
                 let (message, record_work) = dispatch_passive_read(
                     &request_state,
                     &request_session,
-                    frame,
+                    request.into_frame(),
                     // The same socket admission survives both response delivery
                     // and physical work, even after a delivered read_timeout (R61).
                     RecordReadLease::new((
@@ -1387,14 +1363,13 @@ async fn run_authenticated<S>(
                 .await;
                 (message, class, slot, record_work, mount_guard)
             } else {
-                let _permit = permit;
                 // Weak: a request still running when the socket goes does not
                 // keep its window published.
                 let window = request_window.upgrade();
                 let message = dispatch_on(
                     &request_state,
                     &request_session,
-                    frame,
+                    admitted,
                     window.as_deref().and_then(Option::as_ref),
                 )
                 .await;
@@ -1762,34 +1737,45 @@ async fn dispatch(
     session: &AuthenticatedSession,
     frame: RequestFrame,
 ) -> OutgoingMessage {
-    dispatch_on(state, session, frame, None).await
+    dispatch_on(
+        state,
+        session,
+        Admitted::unmetered(Request::decode(frame)),
+        None,
+    )
+    .await
 }
 
-/// [`dispatch`] on a connection that holds `window`, its place to publish
-/// its window in.
+/// [`dispatch`] of an admitted request on a connection that holds `window`,
+/// its place to publish its window in.
 async fn dispatch_on(
     state: &ProductRouteState,
     session: &AuthenticatedSession,
-    frame: RequestFrame,
+    admitted: Admitted,
     window: Option<&WindowSlot>,
 ) -> OutgoingMessage {
-    let method = frame.method.clone();
-    let response = answer_request(state, session, frame, window).await;
+    let method = admitted.request().frame().method.clone();
+    let response = answer_request(state, session, admitted, window).await;
     super::conversation::trace_refused_command(&method, &response);
     response
 }
 
+/// The authorize stage: the session as it stands now, then the method's
+/// grant, before the handler. The lane's permit is held until the answer is
+/// made.
 async fn answer_request(
     state: &ProductRouteState,
     session: &AuthenticatedSession,
-    frame: RequestFrame,
+    admitted: Admitted,
     window: Option<&WindowSlot>,
 ) -> OutgoingMessage {
+    let (request, _permit) = admitted.into_parts();
+    let frame = request.frame();
     let (session, snapshot) = match current_identity(state, session).await {
         Ok(current) => current,
         Err(_) => return failure(&frame.id, "unauthorized"),
     };
-    if !valid_product_request(&frame) {
+    if !valid_product_request(frame) {
         return failure(&frame.id, "invalid_request");
     }
     if frame.method == PRODUCT_HANDSHAKE_METHOD {
@@ -1810,11 +1796,15 @@ async fn answer_request(
         }
         return success(&frame.id, &session_ready(state, &session, &snapshot));
     }
-    match super::read_access::admit_request(state, &session, &frame).await {
-        Ok(_) if frame.method == super::workspace::METHOD => {
-            super::workspace::publish(window, frame)
+    match super::read_access::admit_request(state, &session, frame).await {
+        Ok(initiation) => {
+            let id = frame.id.clone();
+            match Authorized::new(request, initiation) {
+                Some(authorized) => dispatch_authorized(state, &session, authorized, window).await,
+                // Authorization refuses a method the manifest lacks first.
+                None => failure(&id, "unknown_method"),
+            }
         }
-        Ok(initiation) => dispatch_authorized(state, &session, frame, initiation).await,
         Err(code) => failure(&frame.id, code),
     }
 }
@@ -1975,11 +1965,14 @@ impl From<nessa_protocol::product::generated::NativeHooksAgent>
 async fn dispatch_authorized(
     state: &ProductRouteState,
     session: &AuthenticatedSession,
-    frame: RequestFrame,
-    initiation: Initiation,
+    authorized: Authorized,
+    window: Option<&WindowSlot>,
 ) -> OutgoingMessage {
-    match frame.method.as_str() {
-        "agents.list" => {
+    let method = authorized.method();
+    let (frame, initiation) = authorized.into_parts();
+    match method {
+        ProductMethod::WorkspacePublish => super::workspace::publish(window, frame),
+        ProductMethod::AgentsList => {
             if frame.params != json!({}) {
                 return failure(&frame.id, "invalid_request");
             }
@@ -1988,59 +1981,136 @@ async fn dispatch_authorized(
                 None => failure(&frame.id, "conversations_not_configured"),
             }
         }
-        "agents.setNativeHooks" => set_native_hooks(state, session, frame).await,
-        "agents.installOptions" | "agents.install" => {
+        ProductMethod::AgentsSetNativeHooks => set_native_hooks(state, session, frame).await,
+        ProductMethod::AgentsInstallOptions | ProductMethod::AgentsInstall => {
             super::agent_install::dispatch(state, session, frame).await
         }
-        "conversation.webhook.cursor" | "conversation.webhook.reset" => {
+        ProductMethod::ConversationWebhookCursor | ProductMethod::ConversationWebhookReset => {
             super::webhook_reset::dispatch(state, session, frame).await
         }
-        "conversation.share" | "conversation.unshare" | "conversation.shares" => {
+        ProductMethod::ConversationShare
+        | ProductMethod::ConversationUnshare
+        | ProductMethod::ConversationShares => {
             super::read_access::dispatch_share(state, session, frame).await
         }
-        "channel.create" | "channel.list" | "channel.setPlacement" => {
+        ProductMethod::ChannelCreate
+        | ProductMethod::ChannelList
+        | ProductMethod::ChannelSetPlacement => {
             super::channel::dispatch(state, session, frame).await
         }
-        "apps.trusted" | "apps.untrust" => {
+        ProductMethod::AppsTrusted | ProductMethod::AppsUntrust => {
             super::trusted_apps::dispatch(state, session, frame).await
         }
-        method if method.starts_with("conversation.") => {
+        // Every other `conversation.` method. On a socket the record reads and
+        // the subscriptions are served before this stage and never reach it.
+        ProductMethod::ConversationCreate
+        | ProductMethod::ConversationRead
+        | ProductMethod::ConversationRecordsHead
+        | ProductMethod::ConversationRecordsPage
+        | ProductMethod::ConversationList
+        | ProductMethod::ConversationObserve
+        | ProductMethod::ConversationSend
+        | ProductMethod::ConversationSteer
+        | ProductMethod::ConversationRemove
+        | ProductMethod::ConversationStop
+        | ProductMethod::ConversationReceipt
+        | ProductMethod::ConversationMessage
+        | ProductMethod::ConversationMessageStatus
+        | ProductMethod::ConversationAnswer
+        | ProductMethod::ConversationPermissionReview
+        | ProductMethod::ConversationQuestionReview
+        | ProductMethod::ConversationAnswerQuestion
+        | ProductMethod::ConversationCancel
+        | ProductMethod::ConversationClose
+        | ProductMethod::ConversationArchive
+        | ProductMethod::ConversationUnarchive
+        | ProductMethod::ConversationRename
+        | ProductMethod::ConversationDelete
+        | ProductMethod::ConversationReorder
+        | ProductMethod::ConversationSetApprovalMode
+        | ProductMethod::ConversationSetUsageLimitAutoContinue
+        | ProductMethod::ConversationCatalogueHead
+        | ProductMethod::ConversationCatalogueManifest
+        | ProductMethod::ConversationCatalogueResolve
+        | ProductMethod::ConversationSubscribe
+        | ProductMethod::ConversationSubscribeList
+        | ProductMethod::ConversationUnsubscribe
+        | ProductMethod::ConversationPermissionRules
+        | ProductMethod::ConversationRevokePermissionRule
+        | ProductMethod::ConversationSubscribeEvents
+        | ProductMethod::ConversationReadEarlier
+        | ProductMethod::ConversationPeek
+        | ProductMethod::ConversationSetModel
+        | ProductMethod::ConversationSwitchAgent
+        | ProductMethod::ConversationFork => {
             super::conversation::dispatch(state, session, frame, initiation).await
         }
-        "attachment.write" => super::attachment::dispatch_write(state, frame).await,
-        method if method.starts_with("attachment.") => {
-            super::attachment::dispatch(state, session, frame).await
+        ProductMethod::AttachmentWrite => super::attachment::dispatch_write(state, frame).await,
+        ProductMethod::AttachmentBegin => super::attachment::dispatch(state, session, frame).await,
+        ProductMethod::ArtifactRead => {
+            super::attachment::dispatch_read(state, session, frame).await
         }
-        "artifact.read" => super::attachment::dispatch_read(state, session, frame).await,
-        method if method.starts_with("mcp.") => {
+        ProductMethod::McpCallTool
+        | ProductMethod::McpReadResource
+        | ProductMethod::McpReleaseApp
+        | ProductMethod::McpSendMessage
+        | ProductMethod::McpUpdateModelContext => {
             super::mcp_apps::dispatch(state, session, frame).await
         }
-        method if method.starts_with("mcpServers.") => {
+        ProductMethod::McpServersList
+        | ProductMethod::McpServersSave
+        | ProductMethod::McpServersRemove
+        | ProductMethod::McpServersInspect
+        | ProductMethod::McpServersAuthorize
+        | ProductMethod::McpServersRevoke => {
             super::mcp_servers::dispatch(state, session, frame).await
         }
-        method if method.starts_with("boat.") => super::boat::dispatch(state, session, frame).await,
-        method if method.starts_with("vault.") => super::vault::dispatch(state, frame).await,
-        method if method.starts_with("github.") => {
-            super::github::dispatch(state, session, frame).await
+        ProductMethod::BoatStatus
+        | ProductMethod::BoatSave
+        | ProductMethod::BoatSaveClaudeSignIn
+        | ProductMethod::BoatDisconnect
+        | ProductMethod::BoatRuntimeSettings
+        | ProductMethod::BoatSetRuntimeSettings => {
+            super::boat::dispatch(state, session, frame).await
         }
-        method if method.starts_with("logins.") => {
-            super::logins::dispatch(state, session, frame).await
+        ProductMethod::VaultStatus
+        | ProductMethod::VaultSetup
+        | ProductMethod::VaultUnlock
+        | ProductMethod::VaultChangePassphrase
+        | ProductMethod::VaultLock => super::vault::dispatch(state, frame).await,
+        ProductMethod::GithubLiveEvents
+        | ProductMethod::GithubStatus
+        | ProductMethod::GithubConnect
+        | ProductMethod::GithubCancel
+        | ProductMethod::GithubDisconnect => super::github::dispatch(state, session, frame).await,
+        ProductMethod::LoginsStatus
+        | ProductMethod::LoginsSave
+        | ProductMethod::LoginsRemove
+        | ProductMethod::LoginsSetDevice => super::logins::dispatch(state, session, frame).await,
+        ProductMethod::VoiceStatus
+        | ProductMethod::VoiceSaveKey
+        | ProductMethod::VoiceForgetKey
+        | ProductMethod::VoiceStartCall => super::voice::dispatch(state, session, frame).await,
+        ProductMethod::PairingSetLinking => {
+            super::pairing::set_linking(state, session, frame).await
         }
-        method if method.starts_with("voice.") => {
-            super::voice::dispatch(state, session, frame).await
+        ProductMethod::PairingSetTunnel => super::pairing::set_tunnel(state, session, frame).await,
+        ProductMethod::PairingTunnel => super::pairing::tunnel(state, frame).await,
+        ProductMethod::PairingCreate
+        | ProductMethod::PairingPending
+        | ProductMethod::PairingStatus
+        | ProductMethod::PairingApprove
+        | ProductMethod::PairingDeny
+        | ProductMethod::PairingCancel => super::pairing::dispatch(state, session, frame).await,
+        ProductMethod::PhoneEndpoint => super::phone_endpoint::dispatch(state, session, frame),
+        ProductMethod::PhoneAuthorize | ProductMethod::PhoneStatus => {
+            super::phone::dispatch(state, session, frame).await
         }
-        "pairing.setLinking" => super::pairing::set_linking(state, session, frame).await,
-        "pairing.setTunnel" => super::pairing::set_tunnel(state, session, frame).await,
-        "pairing.tunnel" => super::pairing::tunnel(state, frame).await,
-        method if method.starts_with("pairing.") => {
-            super::pairing::dispatch(state, session, frame).await
-        }
-        "phone.endpoint" => super::phone_endpoint::dispatch(state, session, frame),
-        "phone.authorize" | "phone.status" => super::phone::dispatch(state, session, frame).await,
-        method if method.starts_with("peer.") => {
-            super::peers::dispatch(state, session, frame).await
-        }
-        "server.reach" => {
+        ProductMethod::PeerEnroll
+        | ProductMethod::PeerList
+        | ProductMethod::PeerForget
+        | ProductMethod::PeerRelay => super::peers::dispatch(state, session, frame).await,
+        ProductMethod::ServerReach => {
             if frame.params != json!({}) {
                 return failure(&frame.id, "invalid_request");
             }
@@ -2052,8 +2122,10 @@ async fn dispatch_authorized(
                 },
             )
         }
-        "devices.pool" | "devices.setPool" => super::pool::dispatch(state, session, frame).await,
-        "devices.list" => {
+        ProductMethod::DevicesPool | ProductMethod::DevicesSetPool => {
+            super::pool::dispatch(state, session, frame).await
+        }
+        ProductMethod::DevicesList => {
             let Ok(params) = serde_json::from_value::<
                 nessa_protocol::product::generated::DevicesListParams,
             >(frame.params.clone()) else {
@@ -2077,10 +2149,12 @@ async fn dispatch_authorized(
             }
             fitted_devices(&frame.id, list)
         }
-        "devices.sshHosts" | "devices.connectSsh" | "devices.setDefault" => {
+        ProductMethod::DevicesSshHosts
+        | ProductMethod::DevicesConnectSsh
+        | ProductMethod::DevicesSetDefault => {
             super::device_setup::dispatch(state, session, frame).await
         }
-        "server.health" => {
+        ProductMethod::ServerHealth => {
             if frame.params != json!({}) {
                 return failure(&frame.id, "invalid_request");
             }
@@ -2091,7 +2165,7 @@ async fn dispatch_authorized(
             )
             .unwrap_or_else(|_| failure(&frame.id, "internal_error"))
         }
-        "credential.issue" => {
+        ProductMethod::CredentialIssue => {
             let Some(admin) = state.admin.as_ref() else {
                 return failure(&frame.id, "credential_store_unavailable");
             };
@@ -2159,7 +2233,7 @@ async fn dispatch_authorized(
                 Err(error) => failure(&frame.id, credential_admin_code(error)),
             }
         }
-        "credential.list" => {
+        ProductMethod::CredentialList => {
             let Some(admin) = state.admin.as_ref() else {
                 return failure(&frame.id, "credential_store_unavailable");
             };
@@ -2176,7 +2250,7 @@ async fn dispatch_authorized(
                 Err(error) => failure(&frame.id, credential_admin_code(error)),
             }
         }
-        "credential.revoke" => {
+        ProductMethod::CredentialRevoke => {
             let Some(admin) = state.admin.as_ref() else {
                 return failure(&frame.id, "credential_store_unavailable");
             };
@@ -2237,7 +2311,14 @@ async fn dispatch_authorized(
                 Err(error) => failure(&frame.id, credential_admin_code(error)),
             }
         }
-        _ => failure(&frame.id, "unknown_method"),
+        // Answered before this stage on a socket: the handshake and
+        // `auth.session` by `answer_request`, the agent subscriptions by the
+        // socket's subscription owner. Reached any other way, they are not
+        // methods this stage serves.
+        ProductMethod::SessionAuthenticate
+        | ProductMethod::AuthSession
+        | ProductMethod::AgentsSubscribe
+        | ProductMethod::AgentsUnsubscribe => failure(&frame.id, "unknown_method"),
     }
 }
 
@@ -2949,7 +3030,7 @@ mod tests {
     }
 
     #[test]
-    fn every_manifest_method_has_one_runtime_dispatch_path() {
+    fn manifest_methods_are_the_advertised_methods_and_have_grants() {
         let manifest: Value = serde_json::from_str(include_str!(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/../../protocol/product/manifest.json"
@@ -6144,7 +6225,7 @@ mod tests {
                     Duration::from_secs(30),
                 )
                 .unwrap();
-                let permits = state.record_reads.clone();
+                let permits = state.admission.record_reads().clone();
                 let available = permits.available_permits();
                 let (socket, mut peer) = test_socket(None);
                 let task = tokio::spawn(run_authenticated(socket, state, session));
@@ -6261,7 +6342,7 @@ mod tests {
                 Duration::from_secs(30),
             )
             .unwrap();
-            let permits = state.record_reads.clone();
+            let permits = state.admission.record_reads().clone();
             let available = permits.available_permits();
             let (socket, mut peer) = test_socket(None);
             let start = Instant::now();
@@ -8147,14 +8228,15 @@ mod tests {
             let (captured, _guard) = limit_log();
             let (mut state, _) = fixture(MembershipRole::Member);
             let closed = Arc::new(Semaphore::new(0));
-            match assign {
-                AssignLimit::Requests => state.requests = closed,
-                AssignLimit::Controls => state.controls = closed,
-                AssignLimit::RecordReads => state.record_reads = closed,
-                AssignLimit::Deletions => state.deletions = closed,
-                AssignLimit::Uploads => state.upload_begins = closed,
-                AssignLimit::ArtifactReads => state.artifact_reads = closed,
-            }
+            let lane = match assign {
+                AssignLimit::Requests => ProductLane::Requests,
+                AssignLimit::Controls => ProductLane::Controls,
+                AssignLimit::RecordReads => ProductLane::RecordReads,
+                AssignLimit::Deletions => ProductLane::Deletions,
+                AssignLimit::Uploads => ProductLane::UploadBegins,
+                AssignLimit::ArtifactReads => ProductLane::ArtifactReads,
+            };
+            state.admission.replace(lane, closed);
             let session = authenticate(&state).await;
             let (socket, mut peer) = test_socket(None);
             let task = tokio::spawn(run_authenticated(socket, state, session));

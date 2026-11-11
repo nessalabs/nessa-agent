@@ -253,7 +253,7 @@ async fn capacity_wait_rechecks_event_admission() {
     let mut reader = Unread(reads.clone());
     let held = fixture
         .state
-        .requests
+        .admission.requests()
         .clone()
         .acquire_many_owned(u32::try_from(fixture.state.limits.requests()).unwrap())
         .await
@@ -390,7 +390,7 @@ async fn event_read_reauthorizes_page_and_idle_before_publication() {
             .await
             .unwrap();
             assert_eq!(
-                fixture.state.requests.available_permits(),
+                fixture.state.admission.requests().available_permits(),
                 fixture.state.limits.requests() - 1,
                 "source read retains request capacity"
             );
@@ -436,7 +436,7 @@ async fn event_read_reauthorizes_page_and_idle_before_publication() {
                 }
             }
             assert_eq!(
-                fixture.state.requests.available_permits(),
+                fixture.state.admission.requests().available_permits(),
                 fixture.state.limits.requests()
             );
         }
@@ -717,7 +717,7 @@ async fn event_reader_capacity_retries_are_bounded_cancelable_and_reauthorized()
             tokio::task::yield_now().await;
         }
         assert_eq!(
-            fixture.state.requests.available_permits(),
+            fixture.state.admission.requests().available_permits(),
             fixture.state.limits.requests()
         );
         grants(&fixture.authority, &["server.read"]);
@@ -754,7 +754,7 @@ async fn event_reader_capacity_retries_are_bounded_cancelable_and_reauthorized()
     tokio::time::advance(Duration::from_secs(5)).await;
     assert_eq!(reader.reads.load(Ordering::SeqCst), 1);
     assert_eq!(
-        fixture.state.requests.available_permits(),
+        fixture.state.admission.requests().available_permits(),
         fixture.state.limits.requests()
     );
 }
