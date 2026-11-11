@@ -6,22 +6,22 @@ status: "mixed"
 summary: "Installation downloads and publishes the agent version Nessa has tested."
 parent: "sdk-runtime"
 sources:
-  - "crates/nessa-server/src/agent_install/application/install.rs"
-  - "crates/nessa-server/src/agent_install/domain/release_selection.rs"
-  - "crates/nessa-server/src/agent_install/domain/value_objects/pinned_release.\
+  - "crates/nessa-agent-install/src/application/install.rs"
+  - "crates/nessa-agent-install/src/domain/release_selection.rs"
+  - "crates/nessa-agent-install/src/domain/value_objects/pinned_release.\
     rs"
-  - "crates/nessa-server/src/agent_install/domain/entities/install_attempt.rs"
-  - "crates/nessa-server/src/agent_install/infrastructure/delivery/journal.rs"
-  - "crates/nessa-server/src/agent_install/infrastructure/managed_runtimes.rs"
-  - "crates/nessa-server/src/agent_install/application/reclamation.rs"
+  - "crates/nessa-agent-install/src/domain/entities/install_attempt.rs"
+  - "crates/nessa-agent-install/src/infrastructure/delivery/journal.rs"
+  - "crates/nessa-agent-install/src/infrastructure/managed_runtimes.rs"
+  - "crates/nessa-agent-install/src/application/reclamation.rs"
   - "docs/adr/done/173-fetch-agent-runtimes.md"
   - "docs/codebase-structure.md"
-  - "crates/nessa-server/tests/agent_install/install.rs"
-  - "crates/nessa-server/tests/agent_install/publication_delivery.rs"
-  - "crates/nessa-server/tests/agent_install/delivery.rs"
-  - "crates/nessa-server/tests/agent_install/managed_runtimes.rs"
-  - "crates/nessa-server/tests/agent_install/reclamation.rs"
-  - "crates/nessa-server/tests/agent_install/runtime_reclamation.rs"
+  - "crates/nessa-agent-install/tests/install.rs"
+  - "crates/nessa-agent-install/tests/publication_delivery.rs"
+  - "crates/nessa-agent-install/tests/delivery.rs"
+  - "crates/nessa-agent-install/tests/managed_runtimes.rs"
+  - "crates/nessa-agent-install/tests/reclamation.rs"
+  - "crates/nessa-agent-install/tests/runtime_reclamation.rs"
   - "crates/nessa-sdk/tests/infrastructure/acp/sessions/executable_use_cleanup.\
     rs"
 diagramLinks: {}
@@ -68,7 +68,7 @@ stateDiagram-v2
 
 ## Further reading
 
-[Source](../../../../../crates/nessa-server/src/agent_install/application/install.rs) · [Related source](../../../../../crates/nessa-server/src/agent_install/domain/release_selection.rs) · [Related tests](../../../../../crates/nessa-server/tests/agent_install/install.rs)
+[Source](../../../../../crates/nessa-agent-install/src/application/install.rs) · [Related source](../../../../../crates/nessa-agent-install/src/domain/release_selection.rs) · [Related tests](../../../../../crates/nessa-agent-install/tests/install.rs)
 
 ## Model coverage
 

@@ -23,9 +23,9 @@
 //! can read, never on the command line where other users see it; this file
 //! only points at it.
 use super::files::TunnelFiles;
-use crate::agent_install::application::{ArchiveSource, StagedArchive};
 use crate::tunnel::application::{CloudflareTunnel, LaunchRefusal, TunnelFailure};
 use async_trait::async_trait;
+use nessa_agent_install::application::{ArchiveSource, StagedArchive};
 use nessa_protocol::tunnel::TunnelAddress;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};

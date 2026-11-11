@@ -56,7 +56,6 @@ use super::{
     warm_up::{CurrentOpenCodeWarmUp, CurrentWarmUpAdmission},
 };
 use crate::{
-    agent_install::{application::RuntimeStore, domain::HostPlatform},
     agents::{
         application::{
             AgentCredentialKind, AgentCredentialSource, AgentProbe, AgentProbeEvidence,
@@ -73,6 +72,7 @@ use crate::{
     },
     core::RunError,
 };
+use nessa_agent_install::{application::RuntimeStore, domain::HostPlatform};
 use nessa_protocol::{agents::AgentId, conversation::domain::ConversationApprovalMode};
 
 const RESOLUTION_DEADLINE: Duration = Duration::from_secs(5);

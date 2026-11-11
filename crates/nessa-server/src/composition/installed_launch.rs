@@ -16,12 +16,12 @@
 
 use std::{path::Path, sync::Arc};
 
-use crate::agent_install::application::{
+use nessa_agent_install::application::{
     ManagedExecutableUseAdmissionOwner, ManagedExecutableUseGuard, ManagedLaunchSnapshot,
     RuntimeStore, StoreFailure,
 };
-use crate::agent_install::domain::{preferred_release, AgentName, HostPlatform};
-use crate::agent_install::infrastructure::{releases_for, PinFileError};
+use nessa_agent_install::domain::{preferred_release, AgentName, HostPlatform};
+use nessa_agent_install::infrastructure::{releases_for, PinFileError};
 use nessa_protocol::agents::AgentId;
 use nessa_sdk::application::agent_execution::providers::{
     ExecutableUse, ExecutableUseAdmissionFailure, ExecutableUseError, ExecutableUseGuard,
@@ -110,7 +110,7 @@ fn preferred(
 ) -> Result<
     (
         AgentName,
-        Option<crate::agent_install::domain::PinnedRelease>,
+        Option<nessa_agent_install::domain::PinnedRelease>,
     ),
     LaunchError,
 > {

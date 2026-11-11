@@ -1,6 +1,6 @@
 mod native_installs {
     use super::*;
-    use crate::agent_install::{
+    use nessa_agent_install::{
         application::{
             AgentInstallations, GatewayInstallFailure, InstallFailure, InstallationOffer,
             InstalledRuntime, SourceFailure,

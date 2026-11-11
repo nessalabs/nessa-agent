@@ -5,7 +5,7 @@
 //! call that waits for review. Every surface call uses that one budget. A
 //! shorter wait would report failure while the handler continued, and the
 //! late answer would be left on the socket.
-use crate::agent_install::infrastructure::https_archives::ARCHIVE_TRANSFER_TIMEOUT;
+use nessa_agent_install::infrastructure::https_archives::ARCHIVE_TRANSFER_TIMEOUT;
 use nessa_protocol::product_contract::generated::{
     MCP_APP_CALL_TIMEOUT_MS, MCP_APP_REVIEW_DEADLINE_MS,
 };

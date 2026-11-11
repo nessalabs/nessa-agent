@@ -18,10 +18,8 @@ use super::{
     agent::{self, AgentRuntime, AgentsConfig, ValidatedOpenCodePolicy},
     installed_launch::{installed_arguments, supports_installed_launch},
 };
-use crate::{
-    agent_install::domain::HostPlatform,
-    agents::application::{AgentCredential, AgentCredentialKind, ProbeFailure},
-};
+use crate::agents::application::{AgentCredential, AgentCredentialKind, ProbeFailure};
+use nessa_agent_install::domain::HostPlatform;
 use nessa_protocol::agents::AgentId;
 
 const DEFAULT_MODEL: &str = "opencode/minimax-m3";

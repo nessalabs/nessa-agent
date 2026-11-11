@@ -1,5 +1,5 @@
-use crate::agent_install::domain::AgentName;
 use crate::cli::entrypoint::{parse, Command, GrantedAgents, LocalProvisioning, Ungranted};
+use nessa_agent_install::domain::AgentName;
 use nessa_protocol::relay::RelayAddress;
 use nessa_protocol::tunnel::TunnelAddress;
 fn args(words: &[&str]) -> Vec<String> {

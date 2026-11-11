@@ -18,7 +18,7 @@
 // the wrapper for. So those two are read rather than chosen, and the argument
 // above applies only to Opencode.
 //
-// Writes crates/nessa-server/data/agent-releases.json, which is compiled into
+// Writes crates/nessa-agent-install/data/agent-releases.json, which is compiled into
 // the server. Review the diff: a changed digest with an unchanged version means
 // a published archive was replaced, which is not something to wave through.
 import { execFileSync } from "node:child_process"
@@ -708,7 +708,7 @@ async function pin() {
     process.stderr.write(`pinned ${agent.name} across ${releases.length} builds\n`)
   }
 
-  const destination = join(root, "crates/nessa-server/data/agent-releases.json")
+  const destination = join(root, "crates/nessa-agent-install/data/agent-releases.json")
   mkdirSync(resolve(destination, ".."), { recursive: true })
   const document = {
     comment:

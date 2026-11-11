@@ -72,7 +72,7 @@ impl Recipient {
         always_retry: bool,
         pause: Option<(Arc<Notify>, BlockingReceiver<()>)>,
     ) -> Self {
-        crate::agent_install::infrastructure::https_archives::install_tls_backend();
+        nessa_agent_install::infrastructure::https_archives::install_tls_backend();
         let tls = RecipientTls::generate();
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         listener.set_nonblocking(true).unwrap();

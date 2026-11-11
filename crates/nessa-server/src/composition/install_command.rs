@@ -8,20 +8,20 @@ use std::{
 use nessa_local_storage::create_directory;
 use serde_json::{json, Value};
 
-use crate::agent_install::application::{
+use crate::core::RunError;
+use crate::env::Environment;
+use nessa_agent_install::application::{
     AgentInstallations, GatewayInstallFailure, InstallAgentRuntime, InstallFailure,
     InstallationOffer, InstalledRuntime, ReclamationWarning, RuntimeStateEvidence, RuntimeStore,
     SourceFailure, StoreFailure,
 };
-use crate::agent_install::domain::{
+use nessa_agent_install::domain::{
     preferred_release, AgentName, HostPlatform, InstallRequest, PinnedRelease, ReclamationEvent,
 };
-use crate::agent_install::infrastructure::{
+use nessa_agent_install::infrastructure::{
     host_platform, releases_for, DurableInstallAudit, DurableInstallationDelivery,
     DurableReclamationAudit, HttpsArchives, ManagedRuntimes, UuidReclamationOperationIds,
 };
-use crate::core::RunError;
-use crate::env::Environment;
 use nessa_protocol::agents::AgentId;
 
 /// Where installed agent runtimes live, beside the data this stage already owns.

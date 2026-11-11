@@ -4,7 +4,7 @@ use super::{
     socket::{failure, success},
     state::ProductRouteState,
 };
-use crate::agent_install::{
+use nessa_agent_install::{
     application::{GatewayInstallFailure, InstallFailure, SourceFailure, StoreFailure},
     domain::{AgentName, InstallRequest},
 };

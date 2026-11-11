@@ -10,12 +10,12 @@ use std::time::Duration;
 use async_trait::async_trait;
 use serde_json::{json, Value};
 
-use crate::agent_install::infrastructure::https_archives::install_tls_backend;
 use crate::voice::application::{MintFailure, RealtimeProvider};
 use crate::voice::domain::{
     CallGrant, CallTransport, VoiceKey, INSTRUCTIONS, MODEL, SECRET_SECONDS, TOOLS,
     TRANSCRIPTION_MODEL, TRANSCRIPTION_PROMPT, VOICE,
 };
+use nessa_agent_install::infrastructure::https_archives::install_tls_backend;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const CALL_TIMEOUT: Duration = Duration::from_secs(20);
