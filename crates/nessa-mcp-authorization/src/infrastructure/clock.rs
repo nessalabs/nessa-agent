@@ -1,7 +1,7 @@
 //! The clock and the entropy the owner asks for. Both read the process
 //! boundary here, not in the chart.
-use crate::mcp_authorization::application::{AuthClock, Entropy};
-use crate::timer::clock;
+use crate::application::{AuthClock, Entropy};
+use nessa_timer::clock;
 
 pub struct SystemAuthClock;
 

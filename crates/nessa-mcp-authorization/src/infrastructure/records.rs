@@ -16,8 +16,8 @@ use sha2::Sha256;
 use subtle::ConstantTimeEq;
 use uuid::Uuid;
 
-use crate::mcp_authorization::application::{AuthorizationRecords, RecordFailure, TokenMaterial};
-use crate::mcp_authorization::domain::{
+use crate::application::{AuthorizationRecords, RecordFailure, TokenMaterial};
+use crate::domain::{
     Attempt, Deletion, Obligation, Phase, Publication, RefreshActivity, RevokeCause, ServerAuth,
     Settlement, TokenAvailability,
 };
@@ -318,9 +318,9 @@ fn settlement_json(settlement: &Settlement) -> Value {
         "localDrained": settlement.local_drained,
         "secretDeleted": settlement.secret_deleted,
         "remote": settlement.remote.map(|observation| match observation {
-            crate::mcp_authorization::domain::RemoteObservation::Acknowledged => "acknowledged",
-            crate::mcp_authorization::domain::RemoteObservation::Unsupported => "unsupported",
-            crate::mcp_authorization::domain::RemoteObservation::Unconfirmed => "unconfirmed",
+            crate::domain::RemoteObservation::Acknowledged => "acknowledged",
+            crate::domain::RemoteObservation::Unsupported => "unsupported",
+            crate::domain::RemoteObservation::Unconfirmed => "unconfirmed",
         }),
         "evidenceAcked": settlement.evidence_acked,
     })
@@ -443,15 +443,9 @@ fn settlement_of(value: &Value) -> Option<Settlement> {
         local_drained: value.get("localDrained")?.as_bool()?,
         secret_deleted: value.get("secretDeleted")?.as_bool()?,
         remote: match value.get("remote").and_then(|item| item.as_str()) {
-            Some("acknowledged") => {
-                Some(crate::mcp_authorization::domain::RemoteObservation::Acknowledged)
-            }
-            Some("unsupported") => {
-                Some(crate::mcp_authorization::domain::RemoteObservation::Unsupported)
-            }
-            Some("unconfirmed") => {
-                Some(crate::mcp_authorization::domain::RemoteObservation::Unconfirmed)
-            }
+            Some("acknowledged") => Some(crate::domain::RemoteObservation::Acknowledged),
+            Some("unsupported") => Some(crate::domain::RemoteObservation::Unsupported),
+            Some("unconfirmed") => Some(crate::domain::RemoteObservation::Unconfirmed),
             None => None,
             _ => return None,
         },
@@ -492,7 +486,7 @@ fn write_secret(
     directory: &Path,
     server: Uuid,
     secret: &TokenMaterial,
-) -> Result<crate::mcp_authorization::domain::Publication, RecordFailure> {
+) -> Result<crate::domain::Publication, RecordFailure> {
     let secrets = ensure_secrets(directory)?;
     let key = load_or_create_key(&secrets)?;
     let plain = serde_json::to_vec(&json!({
@@ -503,19 +497,16 @@ fn write_secret(
     .map_err(|_| RecordFailure::Unavailable)?;
     let sealed = seal(&key, &plain).map_err(|_| RecordFailure::Unavailable)?;
     write_private(&secrets, &seal_path(directory, server), &sealed)?;
-    Ok(crate::mcp_authorization::domain::Publication::Acknowledged)
+    Ok(crate::domain::Publication::Acknowledged)
 }
 
-fn delete_secret(
-    directory: &Path,
-    server: Uuid,
-) -> Result<crate::mcp_authorization::domain::Deletion, RecordFailure> {
+fn delete_secret(directory: &Path, server: Uuid) -> Result<crate::domain::Deletion, RecordFailure> {
     match std::fs::remove_file(seal_path(directory, server)) {
-        Ok(()) => Ok(crate::mcp_authorization::domain::Deletion::Deleted),
+        Ok(()) => Ok(crate::domain::Deletion::Deleted),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            Ok(crate::mcp_authorization::domain::Deletion::Deleted)
+            Ok(crate::domain::Deletion::Deleted)
         }
-        Err(_) => Ok(crate::mcp_authorization::domain::Deletion::Failed),
+        Err(_) => Ok(crate::domain::Deletion::Failed),
     }
 }
 

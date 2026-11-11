@@ -17,7 +17,7 @@ use super::ports::{
     FenceRefusal, ListedAuthorization, OAuthCallFailure, OAuthHttp, RecordFailure, ResourceLookup,
     RevokeAnswer, SessionDrain, TokenMaterial,
 };
-use crate::mcp_authorization::domain::{
+use crate::domain::{
     AcceptedDiscovery, Admission, Command, Deletion, Effect, Phase, Publication, RefreshActivity,
     Refusal, RemoteObservation, ServerAuth, TokenAvailability, CONSENT_DEADLINE_MS,
 };
@@ -1122,11 +1122,7 @@ impl AuthorizationOwner {
         guard.auth.attempt = None;
     }
 
-    async fn apply(
-        &self,
-        slot: &Arc<Mutex<Slot>>,
-        command: Command,
-    ) -> crate::mcp_authorization::domain::Decision {
+    async fn apply(&self, slot: &Arc<Mutex<Slot>>, command: Command) -> crate::domain::Decision {
         let mut guard = slot.lock().await;
         let decision = guard.auth.step(command);
         guard.auth = decision.auth.clone();
@@ -1410,10 +1406,7 @@ fn listed(auth: &ServerAuth, now_ms: u64) -> ListedAuthorization {
         Phase::AuthorizationIncomplete { obligation } => (
             "authorization_incomplete",
             false,
-            matches!(
-                obligation,
-                crate::mcp_authorization::domain::Obligation::RefreshUnknown
-            ),
+            matches!(obligation, crate::domain::Obligation::RefreshUnknown),
             false,
             None,
         ),
@@ -1499,11 +1492,11 @@ fn parse_token(body: &str) -> ParsedToken {
 }
 
 #[async_trait]
-impl crate::mcp_authorization::application::AuthorizationHandoff for AuthorizationOwner {
+impl crate::application::AuthorizationHandoff for AuthorizationOwner {
     async fn fence(
         &self,
-        changes: &[crate::mcp_authorization::application::BindingChange],
-    ) -> Result<(), crate::mcp_authorization::application::FenceRefusal> {
+        changes: &[crate::application::BindingChange],
+    ) -> Result<(), crate::application::FenceRefusal> {
         AuthorizationOwner::fence(self, changes).await
     }
 }

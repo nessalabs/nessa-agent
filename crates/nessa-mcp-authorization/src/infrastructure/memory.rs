@@ -6,12 +6,12 @@ use async_trait::async_trait;
 use tokio::sync::{Mutex, Notify};
 use uuid::Uuid;
 
-use crate::mcp_authorization::application::{
+use crate::application::{
     AuditFailure, AuthAuditRecord, AuthClock, AuthorizationAudit, AuthorizationRecords,
     CallbackBind, CallbackQuery, ConsentCallback, Entropy, OAuthCallFailure, OAuthHttp,
     OAuthResponse, RecordFailure, ResourceLookup, SessionDrain, TokenMaterial,
 };
-use crate::mcp_authorization::domain::{Deletion, Publication, ServerAuth};
+use crate::domain::{Deletion, Publication, ServerAuth};
 
 /// `Proceed` runs the effect. `Refuse` is a definite refusal before a write.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

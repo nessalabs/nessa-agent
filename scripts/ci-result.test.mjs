@@ -183,7 +183,7 @@ test("the Windows split preserves full build flags, platform coverage, guards, c
     const full = packageArguments(RUST_TEST_PACKAGES)
     assert.equal(
       full,
-      "-p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-projection -p nessa-types -p nessa-client-core -p nessa-device-client -p nessa-sdk -p nessa-timer -p nessa-vault -p nessa-agent-install -p nessa-attachments -p nessa-peer-gateways",
+      "-p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-projection -p nessa-types -p nessa-client-core -p nessa-device-client -p nessa-sdk -p nessa-timer -p nessa-vault -p nessa-agent-install -p nessa-attachments -p nessa-peer-gateways -p nessa-mcp-authorization",
     )
     assert.equal(serverCommand[3], undefined)
     assert.equal(serverCommand[4], full)

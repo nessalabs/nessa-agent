@@ -6,16 +6,16 @@ use std::time::Duration;
 use async_trait::async_trait;
 use uuid::Uuid;
 
-use crate::mcp_authorization::application::{
+use crate::application::{
     AdmissionRefusal, AuthorizationOwner, AuthorizationRecords, AuthorizeAnswer, BindingChange,
     CallbackQuery, FenceRefusal, OAuthCallFailure, OAuthHttp, OAuthResponse, RecordFailure,
     TokenMaterial,
 };
-use crate::mcp_authorization::domain::{
+use crate::domain::{
     AcceptedDiscovery, Admission, Command, Deletion, Phase, Publication, RefreshActivity, Refusal,
     RemoteObservation, RevokeCause, ServerAuth, Settlement, TokenAvailability,
 };
-use crate::mcp_authorization::infrastructure::{MemoryAuthorization, ScriptedCallback};
+use crate::infrastructure::{MemoryAuthorization, ScriptedCallback};
 
 fn server() -> Uuid {
     Uuid::from_u128(7)
@@ -708,10 +708,7 @@ impl GatedRecords {
 
 #[async_trait]
 impl AuthorizationRecords for GatedRecords {
-    async fn load(
-        &self,
-        server: Uuid,
-    ) -> Result<Option<crate::mcp_authorization::domain::ServerAuth>, RecordFailure> {
+    async fn load(&self, server: Uuid) -> Result<Option<crate::domain::ServerAuth>, RecordFailure> {
         let ticket = self.loads.fetch_add(1, Ordering::SeqCst);
         if ticket < 2 {
             self.load_arrived.fetch_add(1, Ordering::SeqCst);
@@ -722,10 +719,7 @@ impl AuthorizationRecords for GatedRecords {
         self.inner.load(server).await
     }
 
-    async fn store(
-        &self,
-        auth: &crate::mcp_authorization::domain::ServerAuth,
-    ) -> Result<(), RecordFailure> {
+    async fn store(&self, auth: &crate::domain::ServerAuth) -> Result<(), RecordFailure> {
         self.inner.store(auth).await
     }
 
@@ -749,14 +743,11 @@ impl AuthorizationRecords for GatedRecords {
         &self,
         server: Uuid,
         secret: &TokenMaterial,
-    ) -> Result<crate::mcp_authorization::domain::Publication, RecordFailure> {
+    ) -> Result<crate::domain::Publication, RecordFailure> {
         self.inner.store_secret(server, secret).await
     }
 
-    async fn delete_secret(
-        &self,
-        server: Uuid,
-    ) -> Result<crate::mcp_authorization::domain::Deletion, RecordFailure> {
+    async fn delete_secret(&self, server: Uuid) -> Result<crate::domain::Deletion, RecordFailure> {
         self.inner.delete_secret(server).await
     }
 }
@@ -866,17 +857,11 @@ impl HoldStore {
 
 #[async_trait]
 impl AuthorizationRecords for HoldStore {
-    async fn load(
-        &self,
-        server: Uuid,
-    ) -> Result<Option<crate::mcp_authorization::domain::ServerAuth>, RecordFailure> {
+    async fn load(&self, server: Uuid) -> Result<Option<crate::domain::ServerAuth>, RecordFailure> {
         self.inner.load(server).await
     }
 
-    async fn store(
-        &self,
-        auth: &crate::mcp_authorization::domain::ServerAuth,
-    ) -> Result<(), RecordFailure> {
+    async fn store(&self, auth: &crate::domain::ServerAuth) -> Result<(), RecordFailure> {
         self.inner.store(auth).await
     }
 
@@ -888,7 +873,7 @@ impl AuthorizationRecords for HoldStore {
         &self,
         server: Uuid,
         secret: &TokenMaterial,
-    ) -> Result<crate::mcp_authorization::domain::Publication, RecordFailure> {
+    ) -> Result<crate::domain::Publication, RecordFailure> {
         if self.hold.load(Ordering::SeqCst) {
             self.waiting.fetch_add(1, Ordering::SeqCst);
             while self.hold.load(Ordering::SeqCst) {
@@ -898,10 +883,7 @@ impl AuthorizationRecords for HoldStore {
         self.inner.store_secret(server, secret).await
     }
 
-    async fn delete_secret(
-        &self,
-        server: Uuid,
-    ) -> Result<crate::mcp_authorization::domain::Deletion, RecordFailure> {
+    async fn delete_secret(&self, server: Uuid) -> Result<crate::domain::Deletion, RecordFailure> {
         self.inner.delete_secret(server).await
     }
 }
@@ -944,7 +926,7 @@ impl OAuthHttp for GatedHttp {
     }
 }
 
-fn ready_with_token_endpoint() -> crate::mcp_authorization::domain::ServerAuth {
+fn ready_with_token_endpoint() -> crate::domain::ServerAuth {
     let mut auth = ready_token();
     auth.token_endpoint = Some("https://as.example/token".into());
     auth.client_id = Some("client".into());

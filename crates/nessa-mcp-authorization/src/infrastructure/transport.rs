@@ -7,7 +7,7 @@ use async_trait::async_trait;
 use nessa_sdk::infrastructure::mcp::{Bearer, McpError, RemoteAuthorization};
 use uuid::Uuid;
 
-use crate::mcp_authorization::application::{AdmissionRefusal, AdmittedToken, AuthorizationOwner};
+use crate::application::{AdmissionRefusal, AdmittedToken, AuthorizationOwner};
 
 /// The transport's view of [`AuthorizationOwner`].
 pub struct TransportAuthorization {

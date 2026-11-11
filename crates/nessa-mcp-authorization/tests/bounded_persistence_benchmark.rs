@@ -1,8 +1,8 @@
 //! Manual composed OAuth benchmark over the production library; no real network.
-use nessa_server::mcp_authorization::application::{
+use nessa_mcp_authorization::application::{
     AuthorizationOwner, AuthorizeAnswer, CallbackQuery, OAuthResponse,
 };
-use nessa_server::mcp_authorization::infrastructure::{
+use nessa_mcp_authorization::infrastructure::{
     FileAuthorizationAudit, FileRecords, MemoryAuthorization, ScriptedCallback,
 };
 use std::{io::Write, sync::Arc, time::Instant};

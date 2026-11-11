@@ -9,8 +9,8 @@ use std::{
 use uuid::Uuid;
 
 use super::FileRecords;
-use crate::mcp_authorization::application::{AuthorizationRecords, RecordFailure, TokenMaterial};
-use crate::mcp_authorization::domain::{Deletion, Publication, ServerAuth};
+use crate::application::{AuthorizationRecords, RecordFailure, TokenMaterial};
+use crate::domain::{Deletion, Publication, ServerAuth};
 
 fn secret() -> TokenMaterial {
     TokenMaterial {

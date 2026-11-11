@@ -2,7 +2,7 @@
 //! consent acceptance. Dropping the candidate receiver cancels the listener
 //! and its scoped connections; an empty stream otherwise waits at most the
 //! supplied whole-attempt deadline, including after a separate revoke.
-use crate::timer::clock;
+use nessa_timer::clock;
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -13,7 +13,7 @@ use tokio::sync::mpsc::{self, Sender};
 use tokio::task::JoinHandle;
 use tokio::time::{timeout, timeout_at};
 
-use crate::mcp_authorization::application::{CallbackBind, CallbackQuery, ConsentCallback};
+use crate::application::{CallbackBind, CallbackQuery, ConsentCallback};
 
 const PAGE: &str = "HTTP/1.1 200 OK\r\ncontent-type: text/html; charset=utf-8\r\ncontent-length: 47\r\nconnection: close\r\n\r\n<!doctype html><p>You can close this page.</p>\n";
 const HEADER_LIMIT: usize = 4096;

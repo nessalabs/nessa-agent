@@ -1,7 +1,7 @@
 //! Protected-resource and authorization-server discovery. Every
 //! authorization-server URL must be HTTPS. The resource probe may be the
 //! configured MCP URL, including loopback HTTP; its bearer is never sent.
-use crate::mcp_authorization::application::ports::{OAuthCallFailure, OAuthHttp, OAuthResponse};
+use crate::application::ports::{OAuthCallFailure, OAuthHttp, OAuthResponse};
 use serde_json::Value;
 use std::sync::Arc;
 

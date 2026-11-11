@@ -1313,7 +1313,7 @@ real processes in `tests/mcp_servers/inspect.rs`) and
 (`client.mcpServers`), its refusals `NessaMcpServersError`
 (`application/mcp-servers-error.ts`) and its answers checked by
 `protocol/mcp-servers-validate.ts`;
-`src/mcp_authorization/` owns one remote server's consent, token
+`crates/nessa-mcp-authorization/` (crate `nessa-mcp-authorization`) owns one remote server's consent, token
 generation, refresh and revoke (ADR 392): the domain statechart, the
 owner that fences a URL change before the live set is replaced, the
 transport adapter that names an admitted token for the HTTP session, HTTPS
@@ -1323,7 +1323,7 @@ record beside the sealed token files. The optional local-storage
 with one physical slot per instance;
 `records/tests.rs` and `audit/tests.rs` exercise actual file effects and input cleanup.
 Manual ignored real-file benchmarks live under each crate’s `tests/` owning
-`session_storage` or `mcp_authorization/infrastructure` feature and link production
+`session_storage` feature, or in `crates/nessa-mcp-authorization/tests/`, and link production
 libraries without private test probes. The [bounded persistence ordering table](design/bounded-physical-persistence.md)
 names the adapter lifecycle boundary. `mcpServers.authorize` and
 `mcpServers.revoke` are the product methods. An app call that the remote

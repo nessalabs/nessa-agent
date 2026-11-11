@@ -1,7 +1,7 @@
 //! Candidate admission through the application owner and loopback boundary.
 use super::*;
-use crate::mcp_authorization::application::{CallbackBind, ConsentCallback};
-use crate::mcp_authorization::infrastructure::LoopbackCallback;
+use crate::application::{CallbackBind, ConsentCallback};
+use crate::infrastructure::LoopbackCallback;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::{mpsc, Mutex};
