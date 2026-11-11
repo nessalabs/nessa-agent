@@ -1,0 +1,45 @@
+[package]
+name = "nessa-webhooks"
+version.workspace = true
+edition.workspace = true
+rust-version = "1.89"
+publish = false
+autotests = false
+description = "Outbound webhooks: registrations, the private durable outbox, signed message bytes and the bounded HTTPS sender"
+
+[features]
+# The in-memory recipient CA and the isolated POST seam nessa-server's
+# product delivery tests run against.
+test-support = ["dep:rcgen", "dep:time"]
+
+[dependencies]
+nessa-agent-install = { path = "../nessa-agent-install" }
+nessa-auth = { path = "../nessa-auth" }
+nessa-local-database = { path = "../nessa-local-database", features = ["encryption"] }
+nessa-local-storage = { path = "../nessa-local-storage" }
+nessa-protocol = { path = "../nessa-protocol" }
+nessa-sync = { workspace = true }
+nessa-timer = { path = "../nessa-timer", features = ["runtime"] }
+async-trait = "0.1"
+fs2 = "0.4"
+hmac = "0.12"
+reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "http2", "stream"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["raw_value"] }
+sha2 = "0.10"
+subtle = "2.6"
+tempfile = "3"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "sync", "time", "io-util"] }
+url = "2"
+uuid = { version = "1", features = ["v4"] }
+rcgen = { version = "=0.14.10", default-features = false, features = ["crypto", "ring"], optional = true }
+time = { version = "0.3", optional = true }
+
+[dev-dependencies]
+rcgen = { version = "=0.14.10", default-features = false, features = ["crypto", "ring"] }
+time = "0.3"
+tokio = { version = "1", features = ["test-util"] }
+
+[lints]
+workspace = true

@@ -8,19 +8,19 @@ summary: Delivery values and a bounded signed HTTPS adapter are built; gateway
 sourceRevision: "b8568beee166680a45a192222da468234933411d"
 parent: gateway
 sources:
-  - crates/nessa-server/src/webhooks/domain/value_objects/delivery.rs
-  - crates/nessa-server/src/webhooks/domain/value_objects/destination.rs
-  - crates/nessa-server/src/webhooks/application/ports.rs
-  - crates/nessa-server/src/webhooks/application/message.rs
-  - crates/nessa-server/src/webhooks/infrastructure/message.rs
-  - crates/nessa-server/src/webhooks/infrastructure/signature.rs
-  - crates/nessa-server/src/webhooks/infrastructure/https.rs
-  - crates/nessa-server/tests/webhooks/domain/delivery.rs
-  - crates/nessa-server/tests/webhooks/domain/destination.rs
-  - crates/nessa-server/tests/webhooks/application/message.rs
-  - crates/nessa-server/tests/webhooks/infrastructure/https.rs
-  - crates/nessa-server/tests/webhooks/infrastructure/fixtures/tls.rs
-  - crates/nessa-server/tests/webhooks/infrastructure/message.rs
+  - crates/nessa-webhooks/src/domain/value_objects/delivery.rs
+  - crates/nessa-webhooks/src/domain/value_objects/destination.rs
+  - crates/nessa-webhooks/src/application/ports.rs
+  - crates/nessa-webhooks/src/application/message.rs
+  - crates/nessa-webhooks/src/infrastructure/message.rs
+  - crates/nessa-webhooks/src/infrastructure/signature.rs
+  - crates/nessa-webhooks/src/infrastructure/https.rs
+  - crates/nessa-webhooks/tests/domain/delivery.rs
+  - crates/nessa-webhooks/tests/domain/destination.rs
+  - crates/nessa-webhooks/tests/application/message.rs
+  - crates/nessa-webhooks/tests/infrastructure/https.rs
+  - crates/nessa-webhooks/tests/infrastructure/fixtures/tls.rs
+  - crates/nessa-webhooks/tests/infrastructure/message.rs
 diagramLinks: {}
 diagramDetails:
   - diagram: 0
@@ -193,10 +193,10 @@ Consequently this slice cannot establish the one-chat, unshare/revoke,
 stale-grant-before-send or forbidden conversation.send integration gates.
 
 Tests for this source live under
-[domain](../../../../crates/nessa-server/tests/webhooks/domain/delivery.rs),
-[application values](../../../../crates/nessa-server/tests/webhooks/application/message.rs),
-[message encoding](../../../../crates/nessa-server/tests/webhooks/infrastructure/message.rs), and
-[HTTPS infrastructure](../../../../crates/nessa-server/tests/webhooks/infrastructure/https.rs).
+[domain](../../../../crates/nessa-webhooks/tests/domain/delivery.rs),
+[application values](../../../../crates/nessa-webhooks/tests/application/message.rs),
+[message encoding](../../../../crates/nessa-webhooks/tests/infrastructure/message.rs), and
+[HTTPS infrastructure](../../../../crates/nessa-webhooks/tests/infrastructure/https.rs).
 The TLS fixture is a disposable loopback recipient with a test-only key and
 trust root, generated only in memory. The CA signs an eight-day server leaf
 with server-auth EKU and the recipient.test SAN. The client retains production
@@ -213,4 +213,4 @@ source review checkpoint or claim runtime composition.
 
 ## Bounded rule model
 
-Owns immutable delivery phase guards, exact grant epoch, bounded attempts, due-time gate and retained first timestamp presence. Five attempts are modeled; actual millisecond arithmetic, transport reservation and signatures are excluded. Sending recovery is Unknown, represented by Observe without safe retry inference. This is the value owner; mounted composition is documented by the later outbox and admission pages. This finite abstraction checks safety only. It does not execute or verify the implementation, promise eventual completion, or qualify external effects. Existing source checkpoints and historical test receipts retain their earlier scope. The scoped model review inspected `crates/nessa-server/src/webhooks/domain/value_objects/delivery.rs`.
+Owns immutable delivery phase guards, exact grant epoch, bounded attempts, due-time gate and retained first timestamp presence. Five attempts are modeled; actual millisecond arithmetic, transport reservation and signatures are excluded. Sending recovery is Unknown, represented by Observe without safe retry inference. This is the value owner; mounted composition is documented by the later outbox and admission pages. This finite abstraction checks safety only. It does not execute or verify the implementation, promise eventual completion, or qualify external effects. Existing source checkpoints and historical test receipts retain their earlier scope. The scoped model review inspected `crates/nessa-webhooks/src/domain/value_objects/delivery.rs`.
