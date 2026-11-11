@@ -1,7 +1,7 @@
 //! Hostile provider responses cross real HTTP; no live account or VM is used.
 use crate::workspaces::{
-    application::Provider,
-    domain::{AdmissionRefusal, BoatConnection, Failure, RefusalDisposition},
+    application::{Provider, RestCause},
+    domain::{AdmissionRefusal, AdmissionRejection, BoatConnection, Failure, RefusalDisposition},
     infrastructure::BoatProvider,
 };
 use axum::{
@@ -142,7 +142,7 @@ async fn cold_snapshot_waits_for_ready_then_requires_a_clean_security_receipt() 
 /// waking it is the restart that ends the wipe, and the wake checks it in
 /// full before anything runs in it. One Boat replayed keeps its refusal.
 #[tokio::test]
-async fn a_new_vm_still_wiping_is_stopped_and_checked_when_woken() {
+async fn a_new_vm_still_wiping_is_reported_and_checked_when_woken() {
     use tracing::instrument::WithSubscriber;
     let output = Arc::new(Mutex::new(Vec::new()));
     let writer = output.clone();
@@ -159,11 +159,22 @@ async fn a_new_vm_still_wiping_is_stopped_and_checked_when_woken() {
         .with_subscriber(subscriber)
         .await
         .unwrap();
-    assert_eq!(receipt.refusal, None);
+    // The adapter only reports it: the workspace decides on the stop, and
+    // records it.
+    assert_eq!(
+        receipt.refusal.as_ref().map(AdmissionRejection::cause),
+        Some(AdmissionRefusal::WipePending)
+    );
     assert_eq!(receipt.disposition, RefusalDisposition::RollbackNewVm);
     let text = String::from_utf8(output.lock().unwrap().clone()).unwrap();
     assert!(text.contains("startup_phase=\"operable\""), "{text}");
     assert!(!text.contains("fixture-token"));
+    assert_eq!(server.state.lock().unwrap().stopped, 0);
+    server
+        .provider
+        .stop(&connection(), VM, RestCause::Wiping)
+        .await
+        .unwrap();
     {
         let state = server.state.lock().unwrap();
         assert_eq!(state.stopped, 1);

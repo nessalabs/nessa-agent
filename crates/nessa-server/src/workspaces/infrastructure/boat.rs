@@ -171,20 +171,9 @@ impl Provider for BoatProvider {
             .create(&spec, &format!("nessa-thread-{thread}"))
             .await
             .map_err(failure)?;
-        let mut refusal = created.refusal().map(rejection_from);
-        // A new VM still wiping what its image carried is clean once it
-        // restarts, and waking it is that restart: it is stopped and kept,
-        // and `connect` decides once it is ready, checking it in full. One
-        // Boat replayed may be in use elsewhere, so its refusal stands.
-        if created.disposition() == Disposition::RollbackNewVm
-            && refusal.as_ref().map(AdmissionRejection::cause)
-                == Some(AdmissionRefusal::WipePending)
-        {
-            // A stop Boat refused leaves it running; the check before
-            // waking then refuses it as still wiping.
-            let _ = machines.stop(created.vm(), StopCause::NotAdmitted).await;
-            refusal = None;
-        }
+        // A new VM still wiping what its image carried is left refused
+        // here: the workspace decides whether to stop it, and records it.
+        let refusal = created.refusal().map(rejection_from);
         Ok(WorkspaceReceipt {
             vm: created.vm().into(),
             admission: identity_from(created.admission())?,
@@ -226,6 +215,7 @@ impl Provider for BoatProvider {
         let cause = match cause {
             RestCause::Idle => StopCause::Idle,
             RestCause::Closed => StopCause::Closed,
+            RestCause::Wiping => StopCause::NotAdmitted,
         };
         self.machines(connection)?
             .stop(vm, cause)
@@ -254,9 +244,9 @@ impl Provider for BoatProvider {
     }
 }
 
-/// Nessa's VMs are made only in its own environment.
+/// Nessa's VMs are made only in the environment its domain admits.
 fn nessa_environment(name: &str) -> Result<(), Failure> {
-    if name == "nessa" {
+    if EnvironmentIdentity::admits(name) {
         Ok(())
     } else {
         Err(Failure::EnvironmentUnavailable)

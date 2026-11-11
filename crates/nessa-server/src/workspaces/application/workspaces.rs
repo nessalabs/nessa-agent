@@ -3,8 +3,8 @@
 use super::RuntimeSettings;
 use crate::conversation::domain::{ChannelId, SettingsScope};
 use crate::workspaces::domain::{
-    AdmissionRejection, Assignment, BoatConnection, CleanupOutcome, EnvironmentIdentity, Failure,
-    RefusalDisposition,
+    AdmissionRefusal, AdmissionRejection, Assignment, BoatConnection, CleanupOutcome,
+    EnvironmentIdentity, Failure, RefusalDisposition,
 };
 use async_trait::async_trait;
 use futures_util::FutureExt;
@@ -187,12 +187,17 @@ pub(crate) enum RestCause {
     Idle,
     /// The agent closed its thread.
     Closed,
+    /// A VM this creation made is still wiping what its image carried:
+    /// waking it is the restart that ends the wipe, so it is stopped before
+    /// it is first connected.
+    Wiping,
 }
 impl RestCause {
     pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::Idle => "idle",
             Self::Closed => "closed",
+            Self::Wiping => "wiping",
         }
     }
 }
@@ -330,6 +335,17 @@ impl Workspaces {
                 }
             }
         };
+        self.stop_recorded(&connection, id, vm, cause).await
+    }
+    /// Stops thread `id`'s `vm` for `cause`, recording the stop before it
+    /// is asked and once it answered.
+    async fn stop_recorded(
+        &self,
+        connection: &BoatConnection,
+        id: String,
+        vm: String,
+        cause: RestCause,
+    ) -> Rested {
         let requested_failed = self
             .record_recovery(&RecoveryEvent::StopRequested {
                 thread: id.clone(),
@@ -337,7 +353,7 @@ impl Workspaces {
                 cause,
             })
             .is_err();
-        let stopped = AssertUnwindSafe(self.provider.stop(&connection, &vm, cause))
+        let stopped = AssertUnwindSafe(self.provider.stop(connection, &vm, cause))
             .catch_unwind()
             .await
             .unwrap_or(Err(Failure::Provider));
@@ -492,7 +508,25 @@ impl Workspaces {
                     .await?;
                 let created = self.provider.create(&connection, &id).await?;
                 let vm = created.vm;
-                if let Some(rejection) = created.refusal {
+                let mut refusal = created.refusal;
+                // A new VM still wiping is clean once it restarts, and the
+                // next wake is that restart: it is stopped, on the record,
+                // and `connect` checks it in full once ready. A stop not
+                // accepted, or not recorded, leaves it refused, so it is
+                // rolled back. A VM Boat replayed may be in use elsewhere,
+                // so its refusal always stands.
+                if created.disposition == RefusalDisposition::RollbackNewVm
+                    && refusal.as_ref().map(AdmissionRejection::cause)
+                        == Some(AdmissionRefusal::WipePending)
+                {
+                    let rested = self
+                        .stop_recorded(&connection, id.clone(), vm.clone(), RestCause::Wiping)
+                        .await;
+                    if rested.stopped == Ok(true) && !rested.audit_failed {
+                        refusal = None;
+                    }
+                }
+                if let Some(rejection) = refusal {
                     return self
                         .refuse(
                             &connection,

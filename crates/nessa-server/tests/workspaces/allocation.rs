@@ -1234,3 +1234,74 @@ async fn a_background_stream_holds_the_vm_after_its_runtime_is_dropped() {
     assert_eq!(service.rest(id(1), RestCause::Idle).await.stopped, Ok(true));
     assert_eq!(provider.deletes.load(Ordering::SeqCst), 0);
 }
+
+fn wiping() -> AdmissionRejection {
+    AdmissionRejection::new(AdmissionRefusal::WipePending, None)
+}
+#[tokio::test]
+async fn a_new_vm_still_wiping_is_stopped_on_the_record_and_then_connected() {
+    let (service, store, provider, audit) = fixture_with_audit();
+    *provider.refusal_on_create.lock().unwrap() = Some(wiping());
+    provider.proceed.add_permits(1);
+    assert!(service.open(id(7), true, None).await.is_ok());
+    let thread = id(7).to_string();
+    let vm = format!("vm-{thread}");
+    assert_eq!(
+        *audit.steps.lock().unwrap(),
+        vec![
+            RecoveryStep::Audit(RecoveryEvent::StopRequested {
+                thread: thread.clone(),
+                vm: vm.clone(),
+                cause: RestCause::Wiping,
+            }),
+            RecoveryStep::Stop(vm.clone()),
+            RecoveryStep::Audit(RecoveryEvent::StopAnswered {
+                thread: thread.clone(),
+                vm: vm.clone(),
+                cause: RestCause::Wiping,
+                failure: None,
+            }),
+        ]
+    );
+    assert!(matches!(
+        store.records.lock().unwrap().get(&thread),
+        Some(Assignment::Assigned { .. })
+    ));
+    assert_eq!(*provider.connects.lock().unwrap(), vec![vm]);
+}
+#[tokio::test]
+async fn a_wiping_vm_whose_stop_is_not_accepted_or_not_recorded_is_rolled_back() {
+    for stop_refused in [false, true] {
+        let (service, store, provider, audit) = fixture_with_audit();
+        *provider.refusal_on_create.lock().unwrap() = Some(wiping());
+        provider.refuse_stop.store(stop_refused, Ordering::SeqCst);
+        audit.fail_stop.store(!stop_refused, Ordering::SeqCst);
+        provider.confirm_remove.store(true, Ordering::SeqCst);
+        provider.proceed.add_permits(1);
+        let result = service.open(id(8), true, None).await;
+        assert!(
+            matches!(
+                &result,
+                Err(Failure::AdmissionRecovery { rejection, .. }) if *rejection == wiping()
+            ),
+            "{:?}",
+            result.err()
+        );
+        assert_eq!(provider.deletes.load(Ordering::SeqCst), 1);
+        assert!(provider.connects.lock().unwrap().is_empty());
+        assert!(matches!(
+            store.records.lock().unwrap().get(&id(8).to_string()),
+            Some(Assignment::Refused { .. })
+        ));
+    }
+}
+#[tokio::test]
+async fn a_replayed_vm_still_wiping_is_refused_and_never_stopped() {
+    let (service, _, provider, _) = fixture_with_audit();
+    *provider.refusal_on_create.lock().unwrap() = Some(wiping());
+    *provider.created_disposition.lock().unwrap() = RefusalDisposition::RetainTarget;
+    provider.proceed.add_permits(1);
+    assert!(service.open(id(9), true, None).await.is_err());
+    assert!(provider.stops.lock().unwrap().is_empty());
+    assert_eq!(provider.deletes.load(Ordering::SeqCst), 0);
+}

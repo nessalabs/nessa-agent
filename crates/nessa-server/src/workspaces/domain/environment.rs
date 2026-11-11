@@ -9,6 +9,12 @@ pub(crate) struct EnvironmentIdentity {
     version: u32,
 }
 impl EnvironmentIdentity {
+    /// Whether Nessa makes VMs in the environment named `name`: only in its
+    /// own. Owned here, so a check before anything is made and the identity
+    /// a VM's receipt carries hold the same rule.
+    pub(crate) fn admits(name: &str) -> bool {
+        name == "nessa"
+    }
     pub(crate) fn new(
         id: String,
         name: String,
@@ -17,7 +23,7 @@ impl EnvironmentIdentity {
     ) -> Result<Self, Failure> {
         let uuid =
             |s: &str| uuid::Uuid::parse_str(s).is_ok_and(|id| id.to_string() == s && !id.is_nil());
-        if !uuid(&id) || !uuid(&version_id) || name != "nessa" || version == 0 {
+        if !uuid(&id) || !uuid(&version_id) || !Self::admits(&name) || version == 0 {
             return Err(Failure::EnvironmentUnavailable);
         }
         Ok(Self {
