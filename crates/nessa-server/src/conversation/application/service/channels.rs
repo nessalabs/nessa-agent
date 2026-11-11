@@ -158,6 +158,24 @@ impl AgentPlace {
     }
 }
 
+/// Where an agent works, by one rule. First the folder its environment
+/// reported: a computer away from this gateway always reports its own, and
+/// this one reports none. Then, here, the folder its agent was configured
+/// with (its channel's, for a conversation in one), its channel's, and last
+/// this gateway's workspace.
+pub(crate) fn working_folder(
+    reported: Option<&String>,
+    configured: Option<&String>,
+    place: Option<&AgentPlace>,
+    gateway: Option<&String>,
+) -> Option<String> {
+    reported
+        .or(configured)
+        .cloned()
+        .or_else(|| place.and_then(|place| place.folder.to_str().map(str::to_owned)))
+        .or_else(|| gateway.cloned())
+}
+
 /// The caller's channels: the default one's folder, then the stored ones in
 /// the order they were made.
 #[derive(Clone, Debug, PartialEq, Eq)]

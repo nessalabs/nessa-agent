@@ -2319,7 +2319,7 @@ impl ConversationService {
                                 manager.expect_handoff(handoff);
                             }
                             let tool_source = checked_source(agent);
-                            let workspace = opening.workspace.clone().or_else(|| configured.workspace.clone()).or_else(|| place.as_ref().and_then(|place| place.folder.to_str().map(str::to_owned))).or_else(|| service.inner.workspace.clone());
+                            let workspace = channels::working_folder(opening.workspace.as_ref(), configured.workspace.as_ref(), place.as_ref(), service.inner.workspace.as_ref());
                             let background_target = match &opening.terms.environment {
                                 EnvironmentRef::Here => workspace.clone().map(BackgroundTarget::Local),
                                 EnvironmentRef::Boat => opening.workspace.clone().map(|workspace| BackgroundTarget::Vm { conversation: id.clone(), workspace }),
@@ -2488,19 +2488,13 @@ impl ConversationService {
                                 approval_mode: record.approval_mode(),
                             });
                             projection.lifecycle(lifecycle_view(&agent));
-                            // Where its agent works: what its environment
-                            // reported (a host's own directory), else this
-                            // gateway's.
-                            let channel_folder = place
-                                .as_ref()
-                                .and_then(|place| place.folder.to_str().map(str::to_owned));
-                            let workspace = opening
-                                .workspace
-                                .as_ref()
-                                .or(configured.workspace.as_ref())
-                                .or(channel_folder.as_ref())
-                                .or(service.inner.workspace.as_ref());
-                            if let Some(workspace) = workspace {
+                            // Where its agent works, said in its view.
+                            if let Some(workspace) = channels::working_folder(
+                                opening.workspace.as_ref(),
+                                configured.workspace.as_ref(),
+                                place.as_ref(),
+                                service.inner.workspace.as_ref(),
+                            ) {
                                 let identity = configured.provider.identity();
                                 projection.runtime(ConversationRuntime {
                                     model: identity.model_id().into(),

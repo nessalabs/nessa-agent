@@ -170,7 +170,11 @@ import {
  *               SIGTERM, drains and exits, and the next message sent in the
  *               window binds the conversation to the other, with new provider
  *               context, as the window's heading and the binding both say;
- *               both workers stop and linking is turned off again
+ *               a chat started from the window in a channel whose threads
+ *               use the pool runs on that worker and is told the channel's
+ *               notes but neither its folder nor its attached file, both
+ *               this gateway's paths; both workers stop and linking is
+ *               turned off again
  *   place       native linking is turned on and a real `nessa env dial`
  *               worker pairs; a channel naming a computer not connected is
  *               refused channel_place_unavailable; in the channel's settings
@@ -2116,6 +2120,88 @@ async function awaitThread(run, step, parentId, failures, extra = "") {
   )
     failures.push("a report followed the reply the agent already took with subscribe")
   return found[1]
+}
+
+/**
+ * A chat started from the window in a channel whose threads use the pool,
+ * while a worker serves it. Its agent runs on that worker, so it is told the
+ * channel's name and notes, and neither the channel's folder nor the files
+ * attached to it: both are this gateway's paths, which it could not open.
+ * Checked at rest here, while the worker serves, as in `pool`.
+ */
+async function pooledChannelChat(run, step, failures) {
+  const name = `stress-pooled-r${step.index}-s${run.knobs.seed}`
+  const notes = `Notes for ${name}.`
+  const attached = mkdtempSync(join(run.stack.scratch, "pooled-"))
+  writeFileSync(join(attached, "brief.md"), "# Brief\n")
+  const resource = realpathSync(join(attached, "brief.md"))
+  const channel = await run.client.channels.create({
+    requestId: name,
+    name,
+    agent: run.stack.agent,
+    model: run.stack.profile.model,
+    notes,
+    resources: [resource],
+    threadPlacement: "pool",
+  })
+  const text = prompt(run, STRESS.channel, step, ` ${name}`)
+  try {
+    const conversationId = await run.exclusive(async () => {
+      // The sidebar lists the channel once the window reads the index again;
+      // a vault sealed by the linking restart asks to be unlocked first.
+      await run.page.reload()
+      await unlockRequestedVault(run.client, run.page)
+      await run.page
+        .locator(`${css.sidebar} nav`)
+        .getByText(name, { exact: true })
+        .first()
+        .click({ timeout: 15_000 })
+      await run.page.keyboard.press(keys.newSession)
+      const home = run.page.locator(`${css.focusedPane} ${css.paneHome}`)
+      await home.locator(css.field).waitFor({ timeout: 15_000 })
+      await home.locator(css.field).fill(text)
+      await home.getByRole(...composerControls.send).click({ timeout: 10_000 })
+      return waitFor(() => selectedStressConversation(run.page, text), 30_000)
+    })
+    if (!conversationId) {
+      failures.push(`the chat started in ${name} was never listed`)
+      return
+    }
+    const { view } = await settled(
+      run,
+      conversationId,
+      new Set(),
+      text,
+      "completed",
+      failures,
+    )
+    if (view?.lease?.environment !== "peer")
+      failures.push(
+        `the chat in ${name} runs on ${view?.lease?.environment}, not a worker`,
+      )
+    const reply = (view?.messages.find((each) => each.userText === text)?.parts ?? [])
+      .filter((part) => part.kind === "text")
+      .map((part) => part.text)
+      .join("")
+    if (!reply.startsWith(SAYS.channel))
+      failures.push(
+        `the agent in ${name} did not say where it works: ${fold(reply.slice(0, 300))}`,
+      )
+    for (const path of [channel.folder, resource])
+      if (reply.includes(path))
+        failures.push(`the agent on a worker was told this gateway's path ${path}`)
+    if (run.stack.agent === "claude" && !reply.includes(notes))
+      failures.push(`the agent in ${name} was not told the channel's notes`)
+    failures.push(...(await atRest(run, [conversationId])))
+  } finally {
+    // Back to the default channel: the chat above left its list showing.
+    await run.page
+      .locator(`${css.sidebar} nav`)
+      .getByText("Conversations", { exact: true })
+      .first()
+      .click({ timeout: 10_000 })
+      .catch(() => {})
+  }
 }
 
 /**
@@ -5260,6 +5346,9 @@ const steps = {
       // (`environment_not_configured`), so it is checked at rest here, while
       // one serves, and not in `run.checked` for the run's own rest check.
       failures.push(...(await atRest(run, [conversationId])))
+      // A channel whose threads use the pool: its agent runs on the worker
+      // and is told the channel and its notes, never a path of this gateway.
+      await pooledChannelChat(run, step, failures)
       const stopped = Date.now()
       if (!(await to.stop("SIGTERM", 30_000)))
         failures.push(`worker ${to.label} did not drain and exit within 30 s`)

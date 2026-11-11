@@ -6,11 +6,15 @@ new conversation in it starts with, and where its agents work:
 - **Defaults**: the agent, the model and the approval preset a new
   conversation starts with. Each is only a start; the person can change any of
   them inside the conversation.
-- **Folder**: where every agent in the channel works. The person picks an
-  existing folder, or the gateway makes `<data>/channels/<id>`
-  (`~/.nessa/channels/<id>` on a desktop). Two channels may share a folder.
+- **Folder**: where every agent in the channel that runs here works. The
+  person picks an existing folder, or the gateway makes `<data>/channels/<id>`
+  (`~/.nessa/channels/<id>` on a desktop). Two channels may share a folder. An
+  agent that runs elsewhere (Boat, or another computer) works in the folder
+  its own computer gives it.
 - **Notes and resources**: text, and absolute paths to files and folders, that
-  every agent in the channel is told in its system instructions.
+  every agent in the channel is told in its system instructions. The folder
+  and resource paths are this gateway's, so an agent that runs elsewhere is
+  told the channel's name and notes only (`Channel::instructions`).
 
 Every conversation is in exactly one channel for its whole life. A
 conversation with no stored channel is in the **default channel**, whose folder

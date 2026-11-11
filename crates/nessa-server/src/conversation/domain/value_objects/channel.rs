@@ -486,24 +486,30 @@ impl Channel {
 
     /// What every agent in this channel is told about it, besides working
     /// in its folder: its name, the person's notes, and the files and folders
-    /// attached to it. One rule, so every agent hears the same words.
-    /// `remote` is whether this agent runs away from the gateway (Boat, or
-    /// another host): its own placement, fixed when its conversation was
-    /// made, never the channel's current one, which may have moved since.
+    /// attached to it. One rule, so every agent in the same place hears the
+    /// same words.
+    ///
+    /// The folder and the attached paths are this gateway's, so only an
+    /// agent that runs here is told them: one that runs elsewhere (Boat, or
+    /// another computer) could not open them, and works in the folder its
+    /// own computer gives it. `remote` is that agent's own placement, fixed
+    /// when its conversation was made, never the channel's current one,
+    /// which may have moved since.
     pub fn instructions(&self, remote: bool) -> String {
         let mut text = format!(
-            "This conversation is in the person's channel \"{}\". Its folder is {}.",
-            self.name.as_str(),
-            self.folder.path.as_str()
+            "This conversation is in the person's channel \"{}\".",
+            self.name.as_str()
         );
-        if remote {
-            text.push_str(" On a remote environment, the channel's local folder and resource paths belong to the gateway, not your VM. Work in your actual environment workspace; access local files only through explicitly approved connections.");
+        if !remote {
+            text.push_str(" Its folder is ");
+            text.push_str(self.folder.path.as_str());
+            text.push('.');
         }
         if !self.notes.is_empty() {
             text.push_str("\n\nThe person's notes for every conversation in this channel:\n");
             text.push_str(self.notes.as_str());
         }
-        if !self.resources.is_empty() {
+        if !remote && !self.resources.is_empty() {
             text.push_str(
                 "\n\nFiles and folders the person attached to this channel. Read them when they are relevant to the request:",
             );
