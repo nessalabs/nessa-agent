@@ -171,6 +171,7 @@ export async function startGatewayStack(
     webhooks,
     environment,
     servers = [],
+    beforeListen,
     model,
     stopChildrenOnParentStop,
     others = [],
@@ -239,6 +240,7 @@ export async function startGatewayStack(
     environment,
     runtimes,
     evidence,
+    beforeListen,
   }).catch((error) => {
     // What it said as it failed, on stderr; the result keeps one line.
     if (error.gatewayLog) log(error.gatewayLog.slice(-4000))

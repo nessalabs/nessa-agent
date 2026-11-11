@@ -1,6 +1,17 @@
 import { expect, it } from "vitest"
-import { permissionTargets, viewEntryBounds, type ConversationApi } from "@nessa/client"
-import { deferred, fakeGateway, questionEntry, reviewEntry } from "./fake-gateway"
+import {
+  permissionTargets,
+  productMethodGrants,
+  viewEntryBounds,
+  type ConversationApi,
+} from "@nessa/client"
+import {
+  deferred,
+  fakeCallMethods,
+  fakeGateway,
+  questionEntry,
+  reviewEntry,
+} from "./fake-gateway"
 
 const conversationId = "00000000-0000-4000-8000-000000000001"
 const target = permissionTargets({
@@ -95,4 +106,11 @@ it("lists a long tool name or message clipped as the gateway clips it", () => {
   })
   // A quote takes two bytes encoded, as the gateway counts it.
   expect(question.message).toBe(`"${"y".repeat(viewEntryBounds.messageBytes - 2)}`)
+})
+
+it("every call the fake answers stands for a manifest method", () => {
+  for (const [call, method] of Object.entries(fakeCallMethods)) {
+    if (method === null) continue
+    expect(Object.hasOwn(productMethodGrants, method), `${call}: ${method}`).toBe(true)
+  }
 })

@@ -1,3 +1,4 @@
+use super::admission::Admission;
 use super::operational_limits::OperationalLimits;
 use super::turn_timing::TurnTimings;
 use crate::agent_install::application::AgentInstallations;
@@ -36,7 +37,7 @@ use nessa_protocol::clock::Clock as UptimeClock;
 use nessa_protocol::product::generated::AgentsListResult;
 use serde_json::Value;
 use std::{sync::Arc, time::Duration};
-use tokio::sync::{watch, Semaphore};
+use tokio::sync::watch;
 
 /// The receiver bindings, ownership and read grants a paired device's reads
 /// are admitted by.
@@ -77,11 +78,9 @@ pub struct ProductRouteState {
     pub(crate) browser_http_allowed: bool,
     pub(crate) browser_session_id: Option<String>,
     pub(crate) browser_session_origin: Option<String>,
-    pub(crate) requests: Arc<Semaphore>,
-    pub(crate) controls: Arc<Semaphore>,
-    /// Physical record reads or pending record replies, kept separate from
-    /// command and control admission. How many is [`OperationalLimits`].
-    pub(crate) record_reads: Arc<Semaphore>,
+    /// One capacity pool per lane; which lane a method waits in is the
+    /// manifest's, how many permits it holds [`OperationalLimits`]'s.
+    pub(crate) admission: Admission,
     /// What wakes a subscription: committed record changes and changes to
     /// an owner's catalogue.
     pub(crate) record_watches: Option<Arc<dyn WatchRecords>>,
@@ -90,26 +89,9 @@ pub struct ProductRouteState {
     /// then closes `temporary_unavailable`, so a client reconnects after the
     /// restart instead of reading from a gateway that is stopping.
     pub(crate) closing: Arc<tokio::sync::watch::Sender<bool>>,
-    /// Beginning an upload has capacity of its own. It opens no provider, so it
-    /// does not belong behind reads and opens; and it sweeps tickets, reads
-    /// holds, and writes audit records, so it must never be what keeps a
-    /// permission answer or a close from being admitted.
-    pub(crate) upload_begins: Arc<Semaphore>,
-    /// Reading a held file back has capacity of its own, so ranges waiting
-    /// on the store's one read slot never hold the requests every other
-    /// ordinary method needs.
-    pub(crate) artifact_reads: Arc<Semaphore>,
-    /// Deleting a conversation has capacity of its own, apart from the
-    /// controls. A delete can take minutes — it may launch the agent to ask it
-    /// about its own record of the session — and a burst of them must never be
-    /// what keeps a permission answer, a cancel, or a close from being
-    /// admitted (`deletes_and_controls_never_take_each_others_place`). How
-    /// many agents are asked at once is bounded again, and lower, by the
-    /// conversation service.
-    pub(crate) deletions: Arc<Semaphore>,
     pub(crate) settings: SessionSettings,
-    /// Admission counts and the cold-read budget. The semaphores above are
-    /// built from it; a socket reads its slot sizes from it too.
+    /// Admission counts and the cold-read budget. `admission` is built from
+    /// it; a socket reads its slot sizes from it too.
     pub(crate) limits: OperationalLimits,
     pub(crate) gateway: Resource,
     pub(crate) audience: AudienceId,
@@ -141,7 +123,6 @@ pub struct ProductRouteState {
     pub(crate) catalogue_source: Option<Arc<dyn CatalogueReadSource>>,
     pub(crate) record_source: Option<Arc<dyn RecordReadSource>>,
     pub(crate) agent_installations: Option<Arc<dyn AgentInstallations>>,
-    pub(crate) installs: Arc<Semaphore>,
     pub(crate) agents_catalog: Option<Arc<AgentsListResult>>,
     /// Claude and Codex native-hook choices. None when this route has no
     /// conversation directory. OpenCode is not in the store.
@@ -328,15 +309,10 @@ impl ProductRouteState {
             browser_http_allowed: false,
             settings: SessionSettings::default(),
             limits,
-            requests: Arc::new(Semaphore::new(limits.requests())),
-            controls: Arc::new(Semaphore::new(limits.controls())),
-            record_reads: Arc::new(Semaphore::new(limits.record_reads())),
+            admission: Admission::new(limits),
             record_watches: None,
             catalogue_watches: None,
             closing: Arc::new(tokio::sync::watch::Sender::new(false)),
-            upload_begins: Arc::new(Semaphore::new(limits.upload_begins())),
-            artifact_reads: Arc::new(Semaphore::new(HeldReads::CONCURRENT_READS)),
-            deletions: Arc::new(Semaphore::new(limits.deletions())),
             gateway: Resource::new(gateway_organization_id, gateway_id),
             audience,
             verifier: dependencies.verifier,
@@ -380,7 +356,6 @@ impl ProductRouteState {
             caller_kinds: None,
             connected_environments: None,
             agent_installations: None,
-            installs: Arc::new(Semaphore::new(1)),
             attachments: None,
             held_reads: None,
             socket_uploads: SocketUploads::default(),
@@ -412,14 +387,10 @@ impl ProductRouteState {
         self
     }
 
-    /// Replace the gateway admission semaphores and the limits a socket reads.
+    /// Replace the gateway admission and the limits a socket reads.
     /// Called once, from composition, before anything is served.
     pub fn with_limits(mut self, limits: OperationalLimits) -> Self {
-        self.requests = Arc::new(Semaphore::new(limits.requests()));
-        self.controls = Arc::new(Semaphore::new(limits.controls()));
-        self.record_reads = Arc::new(Semaphore::new(limits.record_reads()));
-        self.upload_begins = Arc::new(Semaphore::new(limits.upload_begins()));
-        self.deletions = Arc::new(Semaphore::new(limits.deletions()));
+        self.admission = Admission::new(limits);
         self.limits = limits;
         self
     }

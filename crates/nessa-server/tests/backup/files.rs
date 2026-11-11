@@ -8,14 +8,21 @@ use async_trait::async_trait;
 use nessa_protocol::lease::MAX_ARTIFACT_BYTES;
 
 use crate::backup::application::{
+    accepted_tree_matches, QuarantineLayout, RestoreAudit, RestoreEvidence,
+};
+use crate::backup::application::{
     verify_bundle, ExportClock, ExportFailure, ManifestPublisher, MutationAdmission,
     PublishedRecord, VerificationLimits,
 };
-use crate::backup::domain::{outbox_watermark, Sensitivity, SkipReason, StoreKind};
+use crate::backup::domain::{
+    audit_path, encode_accepted_restore, encode_deferred, encode_journal, outbox_watermark,
+    seal_attestation, DeferredLine, Fingerprint, Freshness, SealedFile, Sensitivity, SkipReason,
+    StoreKind, IDENTITY_BODY, REPLAY_BODY,
+};
 use crate::backup::infrastructure::ExportFormat;
 use crate::backup::infrastructure::{
-    capture_namespace, jsonl_cut, path_sensitivity, DirectoryPublisher,
-    DirectoryVerificationSource, FileDeletionLog,
+    capture_namespace, jsonl_cut, path_sensitivity, DirectoryPublisher, DirectoryQuarantine,
+    DirectoryVerificationSource, FileDeletionLog, FileRestoreAudit,
 };
 use crate::conversation::application::{ArtifactBudget, ChannelStore};
 use crate::conversation::domain::{
@@ -1664,6 +1671,281 @@ async fn publish_cut(root: &Path) -> PublishedCut {
         bytes,
         _bundle: bundle,
     }
+}
+
+#[tokio::test]
+async fn an_export_names_deferred_conversations_the_serving_file_does_not_hold() {
+    let namespace = tempfile::tempdir().unwrap();
+    let root = namespace.path();
+    let sessions = root.join("conversations/sessions");
+    fs::create_dir_all(&sessions).unwrap();
+    let database =
+        nessa_local_database::rusqlite::Connection::open(sessions.join("records.sqlite3")).unwrap();
+    database
+        .execute_batch(
+            "CREATE TABLE event_streams(
+                stream_key INTEGER PRIMARY KEY,
+                public_id TEXT NOT NULL,
+                retired INTEGER NOT NULL DEFAULT 0
+             );
+             INSERT INTO event_streams(public_id, retired) VALUES ('kept', 0);",
+        )
+        .unwrap();
+    drop(database);
+    let catalogue = root.join("conversations/metadata.sqlite3");
+    fs::create_dir_all(catalogue.parent().unwrap()).unwrap();
+    let catalogue = nessa_local_database::rusqlite::Connection::open(&catalogue).unwrap();
+    catalogue
+        .execute_batch(
+            "CREATE TABLE deletions(conversation_id TEXT);
+             INSERT INTO deletions(conversation_id) VALUES ('gone');",
+        )
+        .unwrap();
+    drop(catalogue);
+    let live = root.join("accepted-live");
+    let audit = root.join("accepted-audit");
+    fs::create_dir_all(&live).unwrap();
+    let line = |id: &str, size: u64, body: &[u8]| DeferredLine {
+        store: StoreKind::CanonicalRecords,
+        conversation_id: id.to_owned(),
+        size,
+        digest: Fingerprint::of(body),
+    };
+    fs::write(
+        live.join("deferred.txt"),
+        encode_deferred(&[
+            line("kept", 4, b"kept"),
+            line("missing", 7, b"missing"),
+            line("gone", 4, b"gone"),
+        ])
+        .unwrap(),
+    )
+    .unwrap();
+    accept_deferred_inventory(&live, &audit);
+    let _inventory = FileDeletionLog::open(root.join("backup")).unwrap();
+    fs::write(
+        root.join("backup/accepted-restore.txt"),
+        encode_accepted_restore(&live, &audit, Some(&root.join("source.sqlite3"))).unwrap(),
+    )
+    .unwrap();
+    let cut = publish_cut(root).await;
+    assert!(
+        cut.text.contains("deferred canonical-records missing "),
+        "{}",
+        cut.text
+    );
+    assert!(
+        !cut.text.contains("deferred canonical-records kept "),
+        "{}",
+        cut.text
+    );
+    assert!(
+        !cut.text.contains("deferred canonical-records gone "),
+        "{}",
+        cut.text
+    );
+}
+
+#[tokio::test]
+async fn an_unreadable_deferred_list_is_not_published_as_a_complete_cut() {
+    let namespace = tempfile::tempdir().unwrap();
+    let root = namespace.path();
+    let live = root.join("accepted-live");
+    let audit = root.join("accepted-audit");
+    fs::create_dir_all(&live).unwrap();
+    fs::create_dir_all(&audit).unwrap();
+    fs::write(live.join("deferred.txt"), b"not a deferred list\n").unwrap();
+    let inventory = FileDeletionLog::open(root.join("backup")).unwrap();
+    fs::write(
+        root.join("backup/accepted-restore.txt"),
+        encode_accepted_restore(&live, &audit, None).unwrap(),
+    )
+    .unwrap();
+    let bundle = tempfile::tempdir().unwrap();
+    let error = capture_namespace(
+        root,
+        &OpenAdmission,
+        &inventory,
+        &DirectoryPublisher::new(bundle.path().join("cut")),
+        &Clock(8),
+        &inventory.key(),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(error, ExportFailure::Inventory);
+    assert!(!bundle.path().join("cut/manifest.txt").exists());
+}
+
+#[tokio::test]
+async fn a_missing_deferred_inventory_is_not_published_as_a_complete_cut() {
+    let namespace = tempfile::tempdir().unwrap();
+    let root = namespace.path();
+    let live = root.join("accepted-live");
+    let audit = root.join("accepted-audit");
+    fs::create_dir_all(&live).unwrap();
+    fs::create_dir_all(&audit).unwrap();
+    let inventory = FileDeletionLog::open(root.join("backup")).unwrap();
+    fs::write(
+        root.join("backup/accepted-restore.txt"),
+        encode_accepted_restore(&live, &audit, None).unwrap(),
+    )
+    .unwrap();
+    let bundle = tempfile::tempdir().unwrap();
+    let error = capture_namespace(
+        root,
+        &OpenAdmission,
+        &inventory,
+        &DirectoryPublisher::new(bundle.path().join("cut")),
+        &Clock(8),
+        &inventory.key(),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(error, ExportFailure::Inventory);
+    assert!(!bundle.path().join("cut/manifest.txt").exists());
+}
+
+#[tokio::test]
+async fn an_installed_restore_without_its_pointer_is_not_published_as_a_complete_cut() {
+    let namespace = tempfile::tempdir().unwrap();
+    let root = namespace.path();
+    let conversations = root.join("conversations");
+    fs::create_dir_all(&conversations).unwrap();
+    fs::write(
+        conversations.join("restore-install.txt"),
+        "nessa-restore-install/1\nabc\n",
+    )
+    .unwrap();
+    let inventory = FileDeletionLog::open(root.join("backup")).unwrap();
+    let bundle = tempfile::tempdir().unwrap();
+    let error = capture_namespace(
+        root,
+        &OpenAdmission,
+        &inventory,
+        &DirectoryPublisher::new(bundle.path().join("cut")),
+        &Clock(8),
+        &inventory.key(),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(error, ExportFailure::Inventory);
+    assert!(!bundle.path().join("cut/manifest.txt").exists());
+}
+
+#[tokio::test]
+async fn a_rewritten_deferred_inventory_is_not_published_as_a_complete_cut() {
+    let namespace = tempfile::tempdir().unwrap();
+    let root = namespace.path();
+    let live = root.join("accepted-live");
+    let audit = root.join("accepted-audit");
+    fs::create_dir_all(&live).unwrap();
+    fs::write(
+        live.join("deferred.txt"),
+        encode_deferred(&[DeferredLine {
+            store: StoreKind::CanonicalRecords,
+            conversation_id: "00000000-0000-4000-8000-000000000001".into(),
+            size: 4,
+            digest: Fingerprint::of(b"kept"),
+        }])
+        .unwrap(),
+    )
+    .unwrap();
+    accept_deferred_inventory(&live, &audit);
+    fs::write(live.join("deferred.txt"), b"nessa-deferred/1\n").unwrap();
+    reseal_journal(&live);
+    assert!(accepted_tree_matches(&live, &DirectoryQuarantine).is_ok());
+    let inventory = FileDeletionLog::open(root.join("backup")).unwrap();
+    fs::write(
+        root.join("backup/accepted-restore.txt"),
+        encode_accepted_restore(&live, &audit, None).unwrap(),
+    )
+    .unwrap();
+    let bundle = tempfile::tempdir().unwrap();
+    let error = capture_namespace(
+        root,
+        &OpenAdmission,
+        &inventory,
+        &DirectoryPublisher::new(bundle.path().join("cut")),
+        &Clock(8),
+        &inventory.key(),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(error, ExportFailure::Inventory);
+    assert!(!bundle.path().join("cut/manifest.txt").exists());
+}
+
+/// The journal, markers, and acceptance audit a real accept writes.
+fn accept_deferred_inventory(live: &Path, audit_dir: &Path) {
+    fs::write(live.join("identity.txt"), IDENTITY_BODY).unwrap();
+    fs::write(live.join("replay.blocked"), REPLAY_BODY).unwrap();
+    let digest = reseal_journal(live);
+    fs::write(live.join("accept-ready"), "stage-accepted\n").unwrap();
+    let label = audit_path(DirectoryQuarantine.anchor(live).unwrap().path()).unwrap();
+    let attestation = seal_attestation(&digest, "stage-accepted");
+    let audit = FileRestoreAudit::open(audit_dir, Clock(8)).unwrap();
+    let sealed = RestoreEvidence {
+        target: &label,
+        before: "absent",
+        after: "verified",
+        cause: "sealed",
+        initiator: "person",
+        decision: "effect",
+        policies: &[],
+        attestations: &attestation,
+        journal_digest: "",
+        root_generation: "",
+    };
+    audit.append(&sealed).unwrap();
+    audit
+        .append(&RestoreEvidence {
+            before: "verified",
+            after: "ready",
+            cause: "ready",
+            attestations: "",
+            journal_digest: &digest,
+            root_generation: "stage-accepted",
+            ..sealed
+        })
+        .unwrap();
+    audit
+        .append(&RestoreEvidence {
+            before: "verified",
+            after: "promoting",
+            cause: "accepting",
+            attestations: "",
+            journal_digest: &digest,
+            root_generation: "stage-accepted",
+            ..sealed
+        })
+        .unwrap();
+    audit
+        .append(&RestoreEvidence {
+            before: "verified",
+            after: "live",
+            cause: "accepted",
+            attestations: "",
+            journal_digest: &digest,
+            root_generation: "stage-accepted",
+            ..sealed
+        })
+        .unwrap();
+}
+
+/// Rewrite `journal.txt` so it seals the files now in `live`. The acceptance
+/// audit is left naming the previous journal.
+fn reseal_journal(live: &Path) -> String {
+    let files = ["deferred.txt", "identity.txt", "replay.blocked"].map(|name| {
+        let bytes = fs::read(live.join(name)).unwrap();
+        SealedFile {
+            path: name.into(),
+            fingerprint: Fingerprint::of(&bytes),
+        }
+    });
+    let journal = encode_journal(Freshness::Cut, &[], &files).unwrap();
+    let digest = Fingerprint::of(journal.as_bytes()).hex();
+    fs::write(live.join("journal.txt"), journal).unwrap();
+    digest
 }
 
 fn holds(bytes: &[u8], needle: &[u8]) -> bool {

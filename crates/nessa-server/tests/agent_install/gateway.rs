@@ -140,7 +140,7 @@ mod native_installs {
         finish.send(()).unwrap();
         let permit = timeout(
             Duration::from_secs(5),
-            state.installs.clone().acquire_owned(),
+            state.admission.installs().clone().acquire_owned(),
         )
         .await
         .unwrap()
@@ -171,7 +171,7 @@ mod native_installs {
             )
             .await;
             assert_eq!(response.error.unwrap().code, code);
-            assert_eq!(state.installs.available_permits(), 1);
+            assert_eq!(state.admission.installs().available_permits(), 1);
         }
     }
 

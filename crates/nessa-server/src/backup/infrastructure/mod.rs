@@ -26,11 +26,11 @@ mod snapshot_file;
 
 pub use admission::ConversationAdmission;
 pub use bundle::DirectoryPublisher;
-#[cfg(test)]
 pub(crate) use cedar::CedarInventoryPolicy;
 pub use committed::CommittedInventory;
 pub use credentials::{read_credentials, CredentialReadError};
 pub use gateway::capture_namespace;
+pub(crate) use gateway::installed_restore;
 pub use jsonl::jsonl_cut;
 pub use log::FileDeletionLog;
 pub use quarantine::{

@@ -90,3 +90,7 @@ mod restore_planning_tests;
 #[cfg(test)]
 #[path = "../../tests/backup/restore.rs"]
 mod restore_tests;
+
+#[cfg(test)]
+#[path = "../../tests/backup/gateway_restore.rs"]
+mod gateway_restore_tests;

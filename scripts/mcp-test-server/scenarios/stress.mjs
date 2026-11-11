@@ -49,6 +49,7 @@ export const STRESS = {
   githubRead: "stress repository read",
   githubShell: "stress shell github",
   channel: "stress channel",
+  restore: "stress restore",
   huddle: "stress huddle",
 }
 
@@ -104,6 +105,7 @@ export const SAYS = {
   githubShell: "GitHub in the shell: ",
   carried: "Carried on by ",
   channel: "Working in: ",
+  restored: "Restored history: ",
   channelPrompt: "System prompt: ",
   huddle: "Talk board: ",
 }
@@ -629,6 +631,12 @@ export function stressScenario({
           { do: "text", chunks: [SAYS.panelTabs] },
           { do: "end" },
         ],
+      },
+      {
+        // A restored conversation the check opens. The agent is not asked
+        // when the source is gone; this turn is the one a later send would hit.
+        when: STRESS.restore,
+        steps: [{ do: "text", chunks: [SAYS.restored, "${prompt.text}"] }, { do: "end" }],
       },
       {
         // Where the session works and what it was told, said back: a turn in

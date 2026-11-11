@@ -25,11 +25,21 @@
 
 mod backup_output;
 mod backup_verification;
+mod restore_command;
 mod restore_planning;
 mod root;
+mod serving_restore;
+mod stress_restore;
 
 pub use backup_verification::run_backup_verifier;
+pub use restore_command::run_backup_restore;
+pub(crate) use restore_command::{preparation_for, startup_authority, GatewayDeferredOpen};
 pub use restore_planning::run_restore_planner;
+#[cfg(test)]
+pub(crate) use serving_restore::{
+    bind_installed_owner, bind_restored_owner, exclude_deleted_streams, install_serving_stores,
+    install_serving_stores_audited, merge_published_session,
+};
 
 pub use root::CompositionRoot;
 

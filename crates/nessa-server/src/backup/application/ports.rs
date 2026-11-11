@@ -333,6 +333,21 @@ pub trait RestoreAudit: Send + Sync {
         digest: &str,
         staging_id: Option<&str>,
     ) -> Result<bool, DecisionAuditError>;
+
+    /// Whether this root's latest generation is an accepted live tree.
+    ///
+    /// A staged quarantine is trusted for fetch inside the restore use case
+    /// and is not an authority a gateway may serve. The default is false so
+    /// an audit that has not been taught this question cannot promote one.
+    fn is_accepted_live(
+        &self,
+        target: &str,
+        digest: &str,
+        staging_id: Option<&str>,
+    ) -> Result<bool, DecisionAuditError> {
+        let _ = (target, digest, staging_id);
+        Ok(false)
+    }
 }
 
 /// One audit line reduced to the fields a seal lookup reads.
@@ -448,6 +463,22 @@ pub fn current_journal_is_trusted<'a>(
         | RootAuthority::PendingStage(_)
         | RootAuthority::Pending { .. } => false,
     }
+}
+
+/// Acceptance completion, not a staged quarantine, owns this journal.
+pub fn current_journal_is_live<'a>(
+    lines: impl IntoIterator<Item = JournalFields<'a>>,
+    target: &str,
+    digest: &str,
+    staging_id: Option<&str>,
+) -> bool {
+    matches!(
+        current_root_authority(lines, target, digest),
+        RootAuthority::Live {
+            generation,
+            digest: authorized_digest,
+        } if authorized_digest == digest && Some(generation) == staging_id
+    )
 }
 
 enum RootAuthority<'a> {

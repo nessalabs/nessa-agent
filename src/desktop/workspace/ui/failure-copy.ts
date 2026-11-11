@@ -21,6 +21,10 @@ const copy: Record<WorkspaceFailureReason, string> = {
   "not-ready": startupRefusalSentence("not-ready"),
   "not-listening": startupRefusalSentence("not-listening"),
   "wrong-stage": wrongStageSentence(null),
+  "source-gone":
+    "This conversation’s recorded version is no longer at its source. Other conversations are unchanged.",
+  "source-changed":
+    "This conversation’s recorded version changed at its source, so it was not restored. Other conversations are unchanged.",
 }
 
 export function failureCopy(

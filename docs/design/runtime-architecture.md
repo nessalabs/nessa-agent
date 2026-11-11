@@ -1734,9 +1734,12 @@ forwarded to the surface's own loopback, for the life of the lease.
   path ([quarantined restore](quarantined-restore.md)). A revoked grant does
   not return. An open lease is closed in the restored ledger as uncertain,
   and acceptance waits for an operator receipt rather than contacting the
-  executor. The restored gateway does not keep the old private key; peers
-  re-pair. `nessa-backup-plan` stays inspection-only. The desktop and
-  `conversation.read` do not call the deferred fetch yet.
+  executor.   The restored gateway does not keep the old private key; peers
+  re-pair. `nessa-backup-plan` stays inspection-only. `nessa-backup-restore`
+  stages the quarantine and accepts it onto an empty live path. A gateway
+  whose namespace points at a tree that is not that accepted live path
+  refuses to listen. `conversation.read` fetches one deferred conversation
+  before it starts an agent, and says so when the recorded source is gone.
 
 ## Commands
 

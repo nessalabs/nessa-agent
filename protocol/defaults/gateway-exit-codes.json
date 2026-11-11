@@ -16,6 +16,7 @@
     "usage": 32,
     "datasetRefused": 33,
     "serveAndShutdown": 34,
-    "receiverJournalMissing": 35
+    "receiverJournalMissing": 35,
+    "restoreNotAccepted": 36
   }
 }

@@ -242,6 +242,10 @@ export function submissionRefusalMessage(reason: CommandFailure): string | undef
       return "The gateway has too many conversations open to take this one. The message is back in the draft; close a conversation or try again shortly."
     case "conversation-state-unreadable":
       return "Nessa cannot read this conversation's saved state, so the message was not sent. It is back in the draft; start a new conversation to send it."
+    case "source-gone":
+      return "This conversation's recorded version is no longer at its source, so the message was not sent. It is back in the draft. Other conversations are unchanged."
+    case "source-changed":
+      return "This conversation's recorded version changed at its source, so the message was not sent. It is back in the draft. Other conversations are unchanged."
     case "conversation-deleted":
       return "This conversation was deleted, so the message was not sent. It is back in the draft; start a new conversation to send it."
     case "model-unavailable":

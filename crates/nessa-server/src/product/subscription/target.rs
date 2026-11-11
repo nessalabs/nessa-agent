@@ -472,7 +472,7 @@ async fn read_batch(
         // capacity, then is admitted, then reads, as `dispatch` orders a
         // request. Admitted before waiting for capacity, a grant revoked
         // during the wait would let one read through (row S30).
-        let permit = state.requests.clone().acquire_owned().await;
+        let permit = state.admission.requests().clone().acquire_owned().await;
         let (current, list_scope) = match authorize_batch(state, session, target).await {
             Ok(current) => current,
             // A batch's admission that could not be verified now (the

@@ -30,15 +30,15 @@ use serde_json::{json, Value};
 use sha2::Digest;
 
 use crate::backup::application::{
-    current_journal_is_trusted, current_staging_id, AnchoredRoot, CutMaterializer,
-    DecisionAuditError, DeferredSessionSource, ExportClock, FetchProgress, JournalFields,
-    LoadedTree, MacKey, PreparedCut, Promoted, PublicationIds, PublishedSession, QuarantineLayout,
-    RestoreAudit, RestoreEvidence, RestoreHold, SealFields, SealedInventoryReader, SessionAttempt,
-    SessionCut, SessionSourceError, StagedTreeOwner, Staging, StagingIds, TreeId,
-    VerificationFormat, VerificationLimits, VerificationSource,
+    current_journal_is_live, current_journal_is_trusted, current_staging_id, AnchoredRoot,
+    CutMaterializer, DecisionAuditError, DeferredSessionSource, ExportClock, FetchProgress,
+    JournalFields, LoadedTree, MacKey, PreparedCut, Promoted, PublicationIds, PublishedSession,
+    QuarantineLayout, RestoreAudit, RestoreEvidence, RestoreHold, SealFields,
+    SealedInventoryReader, SessionAttempt, SessionCut, SessionSourceError, StagedTreeOwner,
+    Staging, StagingIds, TreeId, VerificationFormat, VerificationLimits, VerificationSource,
 };
 use crate::backup::domain::{
-    conversation_is_fenced, credential_is_fenced, encode_deferred, fresher_fences,
+    conversation_is_fenced, credential_is_fenced, encode_deferred, encode_identity, fresher_fences,
     leases_to_interrupt, metadata_omitted, normalized_root, paths_conflict_on,
     relative_path_is_safe, session_sidecar, share_grant_is_fenced, staging_id_is_usable,
     CredentialKind, DeferredEntry, DeferredLine, DeletionFence, DeletionLog, FenceKind,
@@ -173,6 +173,7 @@ impl CutMaterializer for DirectoryMaterializer {
                 leases = open;
             }
         }
+        write_missing_conversation_fences(&mut files, &fence_list)?;
         files.push((
             "deferred.txt".into(),
             encode_deferred(&deferred)?.into_bytes(),
@@ -186,6 +187,32 @@ impl CutMaterializer for DirectoryMaterializer {
             freshness,
         })
     }
+}
+
+fn write_missing_conversation_fences(
+    files: &mut Vec<(String, Vec<u8>)>,
+    fences: &[DeletionFence],
+) -> Result<(), RestoreFault> {
+    let directory = format!("records/{}/", StoreKind::ConversationMetadata.as_str());
+    for fence in fences {
+        let FenceKind::Conversation { id } = fence.kind() else {
+            continue;
+        };
+        let path = format!("{directory}{}", encode_identity(&format!("tombstone-{id}")));
+        if files.iter().any(|(existing, _)| existing == &path) {
+            continue;
+        }
+        // A later inventory can name a deleted conversation the older cut
+        // never stored as a tombstone. The staged tree has to carry that
+        // fence, or the serving catalogue has nothing to refuse a recreate with.
+        let body = serde_json::to_vec(&json!({
+            "conversationId": id,
+            "erased": true,
+        }))
+        .map_err(|_| RestoreFault::Unreadable)?;
+        files.push((path, body));
+    }
+    Ok(())
 }
 
 fn session_without_fenced(
@@ -3829,6 +3856,26 @@ impl<C: ExportClock> RestoreAudit for FileRestoreAudit<C> {
         let _file = exclusive(&self.directory).map_err(|_| DecisionAuditError::NotStored)?;
         let lines = read_restore_audit(&self.path)?;
         Ok(current_journal_is_trusted(
+            lines.iter().map(restore_journal_fields),
+            target,
+            digest,
+            staging_id,
+        ))
+    }
+
+    fn is_accepted_live(
+        &self,
+        target: &str,
+        digest: &str,
+        staging_id: Option<&str>,
+    ) -> Result<bool, DecisionAuditError> {
+        let _gate = self
+            .gate
+            .lock()
+            .map_err(|_| DecisionAuditError::NotStored)?;
+        let _file = exclusive(&self.directory).map_err(|_| DecisionAuditError::NotStored)?;
+        let lines = read_restore_audit(&self.path)?;
+        Ok(current_journal_is_live(
             lines.iter().map(restore_journal_fields),
             target,
             digest,
