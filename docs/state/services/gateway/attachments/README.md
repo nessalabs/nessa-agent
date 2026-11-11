@@ -8,7 +8,7 @@ parent: "gateway"
 sources:
   - "src/conversation/model/attachments.ts"
   - "src/panel/adapters/attachment-resources.ts"
-  - "crates/nessa-server/src/attachments/application/service.rs"
+  - "crates/nessa-attachments/src/application/service.rs"
   - "crates/nessa-server/src/attachments/mod.rs"
   - "crates/nessa-sdk/src/infrastructure/acp/executions/prompt_content.rs"
   - "src/panel/ui/use-file-attachments-races.test.ts"

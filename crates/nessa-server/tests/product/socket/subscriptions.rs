@@ -2297,8 +2297,8 @@ async fn a_binding_owned_by_another_principal_reads_only_its_grantors_grants() {
 /// files in, as its own principal owns none.
 #[tokio::test]
 async fn a_paired_reader_reads_back_a_held_file_only_where_it_was_granted() {
-    use crate::attachments::application::AttachmentLimits;
-    use crate::attachments_test_support::{digest_of, Fixture};
+    use nessa_attachments::application::AttachmentLimits;
+    use nessa_attachments::test_support::{digest_of, Fixture};
     let held = Fixture::new(AttachmentLimits::default());
     let fixture = SubscriptionFixture::new().await;
     grants(

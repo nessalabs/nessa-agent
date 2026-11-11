@@ -5,7 +5,6 @@
 //! [`OperationalLimits`], a fixed socket constant, or a bound the protocol
 //! schema publishes. `docs/limits.md` is that catalogue rendered, and the
 //! test beside this module refuses a copy that has drifted.
-use crate::attachments::application::{AttachmentLimits, HeldReads};
 use crate::conversation::application::{
     ArtifactBudget, ARTIFACT_READ_RESUMES, FETCH_BUSY_BACKOFF, FETCH_CALL_WAIT, FETCH_READS,
     MAX_ADMITTED_POLICIES, MAX_DRIVE_GRANTS_PER_CONVERSATION, MAX_SHARE_GRANTS_PER_CONVERSATION,
@@ -21,6 +20,7 @@ use crate::peer_gateways::infrastructure::{
 };
 use crate::product::passive_read::deadlines::RECORD_SEND_TIMEOUT;
 use crate::product::{OperationalLimits, SessionSettings, RECORD_LANE, RECORD_SLOT, REFUSAL_LANE};
+use nessa_attachments::application::{AttachmentLimits, HeldReads};
 use nessa_protocol::lease::{
     COMMAND_STOP_WAIT, MAX_ARTIFACTS_IN_FLIGHT, MAX_ARTIFACT_BYTES, MAX_ARTIFACT_READS_IN_FLIGHT,
     MAX_DATA_BYTES, MAX_FETCHES_IN_FLIGHT, MAX_OPEN_PUBLISHERS,
@@ -719,11 +719,11 @@ pub(crate) fn effective_json(
     );
     put(
         "attachment.write_piece_bytes",
-        count(crate::attachments::entrypoint::socket::MAX_PIECE_BYTES),
+        count(nessa_attachments::entrypoint::socket::MAX_PIECE_BYTES),
     );
     put(
         "server.socket_uploads",
-        count(crate::attachments::entrypoint::socket::MAX_SOCKET_UPLOADS),
+        count(nessa_attachments::entrypoint::socket::MAX_SOCKET_UPLOADS),
     );
     put("artifact.read_busy_wait", millis(HeldReads::BUSY_WAIT));
     put("server.artifact_reads", count(HeldReads::CONCURRENT_READS));

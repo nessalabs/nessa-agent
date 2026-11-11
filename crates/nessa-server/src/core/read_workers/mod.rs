@@ -1,14 +1,3 @@
-//! Tracked blocking reads and retained shutdown completion across source adapters.
-//!
-//! Record and catalogue infrastructure call this owner for admission, physical
-//! worker tracking, unexpected faults and join-all drain. Each admitted closure
-//! keeps its own source lease; this owner does not allocate socket capacity or
-//! decide authorization. Attachment range reads can consume the same lifecycle.
-//!
-//! ```text
-//! source adapter -> ReadWorkers::run -> owned OS thread + result
-//! source shutdown -> retained drain -> all actual thread joins
-//! ```
-//! Arrows are calls. Cancelled observers leave the original physical owners live.
-mod workers;
-pub(crate) use workers::{ReadWorkerError, ReadWorkers};
+//! Tracked blocking reads now live in `nessa_local_storage::read_workers`,
+//! beside the physical-operation workers, so feature crates can share them.
+pub(crate) use nessa_local_storage::read_workers::{ReadWorkerError, ReadWorkers};

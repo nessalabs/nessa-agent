@@ -21,9 +21,7 @@ use super::{
     install::{Build, BuildSource, HostInstaller, InstallTimings, RemoteShell, ShellFuture},
     sftp::tests::scripted::{ScriptedSftp, SftpScript},
 };
-use crate::attachments::application::{AttachmentAuditRecord, AttachmentLimits};
-use crate::attachments::infrastructure::ConversationHolds;
-use crate::attachments_test_support::{self as attachments, Fixture, CONVERSATION};
+use crate::attachments::ConversationHolds;
 use crate::conversation::application::{
     ArtifactChannel, ArtifactChannels, ArtifactKept, ArtifactOffer, ConversationAttachments,
     Environment, EnvironmentFuture, EnvironmentLease, FetchAsk, FetchFailure, FetchPlaced,
@@ -36,6 +34,8 @@ use crate::env_serve::application::{
 };
 use crate::env_serve::domain::{Peer, PeerGrant};
 use crate::env_serve::infrastructure::{FileInbox, FileLedger, FileOutbox};
+use nessa_attachments::application::{AttachmentAuditRecord, AttachmentLimits};
+use nessa_attachments::test_support::{self as attachments, Fixture, CONVERSATION};
 use nessa_sdk::application::agent_execution::providers::HarnessHostIdentity;
 
 use crate::env_serve::install::Platform;

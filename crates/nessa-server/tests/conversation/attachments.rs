@@ -5,15 +5,7 @@ use super::{
     ConversationLimits, ConversationRepository, ConversationService, ProviderSessionErasers,
     SubmissionMode, SubmittedImage, SubmittedMessage,
 };
-use crate::attachments::{
-    application::{
-        AttachmentDependencies, AttachmentLimits, AttachmentService, BeginError, BeginOutcome,
-    },
-    infrastructure::{ConversationHolds, ModelImageNormalizer},
-};
-use crate::attachments_test_support::{
-    begin_request, caller as attachment_caller, Fixture, CONVERSATION,
-};
+use crate::attachments::ConversationHolds;
 use crate::{
     conversation::domain::Conversation,
     conversation_test_support::{
@@ -21,6 +13,15 @@ use crate::{
         AcceptingDeletionAudit, MemoryAttachments, MemoryRepository, MemorySummaries, Provider,
         ProviderFactory, RecordingFileLinkAudit, TestClock, Unlisted, DELETION_BUDGETS,
     },
+};
+use nessa_attachments::test_support::{
+    begin_request, caller as attachment_caller, Fixture, CONVERSATION,
+};
+use nessa_attachments::{
+    application::{
+        AttachmentDependencies, AttachmentLimits, AttachmentService, BeginError, BeginOutcome,
+    },
+    infrastructure::ModelImageNormalizer,
 };
 use nessa_auth::domain::{OrganizationId, PrincipalId};
 use nessa_protocol::conversation::domain::{ConversationApprovalMode, ConversationModelId};

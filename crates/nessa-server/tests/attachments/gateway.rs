@@ -3,9 +3,9 @@
 mod attachment_gateway {
     use super::gateway::{chat_request, chat_session, chat_state, response, send_command};
     use super::*;
-    use crate::attachments::application::{AttachmentAuditRecord, AttachmentLimits};
-    use crate::attachments::domain::TicketLimits;
-    use crate::attachments_test_support::{
+    use nessa_attachments::application::{AttachmentAuditRecord, AttachmentLimits};
+    use nessa_attachments::domain::TicketLimits;
+    use nessa_attachments::test_support::{
         digest_of, ChannelBody, Fixture, StubNormalizer, CONVERSATION,
     };
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -446,7 +446,7 @@ mod attachment_gateway {
             .deleted
             .lock()
             .unwrap()
-            .push(crate::attachments_test_support::conversation(CONVERSATION));
+            .push(nessa_attachments::test_support::conversation(CONVERSATION));
         let reply =
             chat_request(&state, &device, "artifact.read", read(BYTES, "text/plain", 0, 4)).await;
         assert_eq!(reply.error.unwrap().code, "conversation_deleted");
@@ -478,7 +478,7 @@ mod attachment_gateway {
             "/../../protocol/product/v1.json"
         )))
         .unwrap();
-        let max = crate::attachments::application::HeldReads::MAX_RANGE_BYTES;
+        let max = nessa_attachments::application::HeldReads::MAX_RANGE_BYTES;
         let defs = &schema["$defs"];
         assert_eq!(
             defs["ArtifactReadParams"]["properties"]["maxBytes"]["maximum"],

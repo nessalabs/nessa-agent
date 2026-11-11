@@ -1,7 +1,7 @@
 //! The words `attachment.begin` answers in.
 use super::*;
-use crate::attachments::application::TicketSecret;
-use crate::attachments_test_support::{attachment, digest_of};
+use nessa_attachments::application::TicketSecret;
+use nessa_attachments::test_support::{attachment, digest_of};
 
 #[test]
 fn a_stored_answer_carries_no_ticket_and_a_ticket_carries_no_reference() {

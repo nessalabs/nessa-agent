@@ -43,10 +43,6 @@ pub use core::run;
 pub(crate) mod agents_test_support;
 
 #[cfg(test)]
-#[path = "../tests/attachments/support.rs"]
-pub(crate) mod attachments_test_support;
-
-#[cfg(test)]
 #[path = "../tests/conversation/support.rs"]
 pub(crate) mod conversation_test_support;
 

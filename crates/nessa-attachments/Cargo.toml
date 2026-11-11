@@ -1,0 +1,40 @@
+[package]
+name = "nessa-attachments"
+version.workspace = true
+edition.workspace = true
+rust-version = "1.89"
+publish = false
+autotests = false
+description = "Files a person attaches: upload tickets, private holds, model-fitted images, and reading a held file back"
+
+[features]
+# The doubles nessa-server's own attachment tests build services from.
+test-support = []
+
+[dependencies]
+nessa-auth = { path = "../nessa-auth" }
+nessa-images = { path = "../nessa-images" }
+nessa-local-storage = { path = "../nessa-local-storage", features = ["physical-operation"] }
+nessa-protocol = { path = "../nessa-protocol" }
+nessa-sdk = { path = "../nessa-sdk" }
+nessa-sync = { workspace = true }
+nessa-timer = { path = "../nessa-timer", features = ["runtime"] }
+futures-util = "0.3"
+getrandom = "0.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+subtle = "2.6"
+tempfile = "3"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time"] }
+tracing = "0.1"
+uuid = { version = "1", features = ["v4"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["test-util"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+image = { version = "0.25.10", default-features = false }
+nessa-sdk = { path = "../nessa-sdk", features = ["test-support"] }
+
+[lints]
+workspace = true

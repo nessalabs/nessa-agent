@@ -14,7 +14,7 @@ source state and persistence proposal. [Architecture](../ARCHITECTURE.md),
 
 ## Merged baseline before this slice
 
-The [attachment module](../../crates/nessa-server/src/attachments/mod.rs) keeps
+The [attachment crate](../../crates/nessa-attachments/README.md) keeps
 bytes once per stored digest and one hold record per organization, conversation,
 stored digest and media type. `LocalAttachmentStore` atomically publishes each
 record through a private temporary file, file sync, replacement, and directory

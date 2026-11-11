@@ -899,7 +899,7 @@ conversation service accepts only references its conversation holds; the ACP
 adapter reads bytes by content through the SDK's image port, and its frame bound
 is derived from the message's image budget. Closing a conversation releases its
 holds, with audit evidence for every transition. See the
-[attachments module map](../crates/nessa-server/src/attachments/mod.rs).
+[attachments crate](../crates/nessa-attachments/README.md).
 Local held-registration manifest facts and bounded range reads are implemented
 through `AttachmentArtifacts`, using the shared tracked read-worker owner; their
 retained retirement metadata and later protected-network activation are described

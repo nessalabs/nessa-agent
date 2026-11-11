@@ -3,20 +3,20 @@
 //! reads back a held file, what conversations ask, and where the agent
 //! adapter reads image bytes.
 use crate::{
-    attachments::{
-        application::{
-            AttachmentDependencies, AttachmentLimits, AttachmentService, HeldReads, ImageNormalizer,
-        },
-        infrastructure::{
-            ConversationHolds, DurableAttachmentAudit, LocalAttachmentStore, OsTicketSecrets,
-            RepositoryOwnership, StoredUserImages,
-        },
-    },
+    attachments::{ConversationHolds, RepositoryOwnership},
     conversation::application::{
         AccessAction, ConversationAccessPolicyEvaluator, ConversationAttachments,
         ConversationRepository,
     },
     core::RunError,
+};
+use nessa_attachments::{
+    application::{
+        AttachmentDependencies, AttachmentLimits, AttachmentService, HeldReads, ImageNormalizer,
+    },
+    infrastructure::{
+        DurableAttachmentAudit, LocalAttachmentStore, OsTicketSecrets, StoredUserImages,
+    },
 };
 use nessa_auth::application::ports::Clock;
 use nessa_sdk::application::agent_execution::providers::UserImageSource;
