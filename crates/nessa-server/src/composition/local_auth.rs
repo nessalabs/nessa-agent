@@ -902,7 +902,7 @@ struct BuiltConversations {
     /// What manages the stored servers and replaces the live set, where this
     /// run holds one.
     mcp_server_settings: Option<Arc<crate::mcp_servers::application::McpServerSettings>>,
-    mcp_authorization: Option<Arc<crate::mcp_authorization::application::AuthorizationOwner>>,
+    mcp_authorization: Option<Arc<nessa_mcp_authorization::application::AuthorizationOwner>>,
     /// What `GET /mcp-resources` redeems on, and records each redemption
     /// in: the store the conversation service issues on, and the audit it
     /// records an app's calls in. `None` without MCP servers.

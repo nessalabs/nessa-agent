@@ -9,7 +9,7 @@ use nessa_local_storage::physical_operation::Worker;
 
 use async_trait::async_trait;
 
-use crate::mcp_authorization::application::{AuditFailure, AuthAuditRecord, AuthorizationAudit};
+use crate::application::{AuditFailure, AuthAuditRecord, AuthorizationAudit};
 
 pub struct FileAuthorizationAudit {
     state: Arc<AuditState>,

@@ -11,8 +11,8 @@ sources:
   - docs/design/bounded-physical-persistence.md
   - crates/nessa-sdk/src/infrastructure/session_storage/ownership.rs
   - crates/nessa-local-storage/src/physical_operation.rs
-  - crates/nessa-server/src/mcp_authorization/infrastructure/records.rs
-  - crates/nessa-server/src/mcp_authorization/infrastructure/audit.rs
+  - crates/nessa-mcp-authorization/src/infrastructure/records.rs
+  - crates/nessa-mcp-authorization/src/infrastructure/audit.rs
 diagramLinks:
   Owner0: "storage-database"
   Owner1: "storage-publication"

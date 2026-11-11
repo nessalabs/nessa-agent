@@ -6,9 +6,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 
-use crate::mcp_authorization::application::{
-    https_url, OAuthCallFailure, OAuthHttp, OAuthResponse,
-};
+use crate::application::{https_url, OAuthCallFailure, OAuthHttp, OAuthResponse};
 use nessa_agent_install::infrastructure::https_archives::install_tls_backend;
 
 /// Shorter than [`CALL_TIMEOUT`]. A connect that never completes has to fail
@@ -178,7 +176,7 @@ mod tests {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
 
-    use crate::mcp_authorization::application::OAuthCallFailure;
+    use crate::application::OAuthCallFailure;
 
     #[test]
     fn http_ipv6_loopback_is_allowed_and_other_http_is_not() {

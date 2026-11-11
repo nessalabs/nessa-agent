@@ -105,8 +105,8 @@ operation's own local guards during unwinding. They do not promise a lifetime fo
 returned-result destructors after Job finishes, whether delivered or discarded after caller loss, or suppress an external
 panic hook. They introduce no public supervisor, retry, ledger or shutdown drain.
 
-Manual benchmarks live in SDK tests/infrastructure/session_storage and server
-tests/mcp_authorization/infrastructure as ignored integration tests. They link
+Manual benchmarks live in SDK tests/infrastructure/session_storage and
+crates/nessa-mcp-authorization/tests as ignored integration tests. They link
 the production library without private cfg(test) fault/probe instrumentation.
 Measurements use 1000 samples per scenario (including four scheduled callers)
 and disclose that limited tail sample size; no CI timing thresholds are added.

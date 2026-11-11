@@ -22,7 +22,7 @@ mod clock;
 mod https;
 mod memory;
 #[cfg(test)]
-#[path = "../../../../nessa-local-storage/tests/support/physical_operation.rs"]
+#[path = "../../../nessa-local-storage/tests/support/physical_operation.rs"]
 mod physical_tests;
 mod records;
 mod transport;
