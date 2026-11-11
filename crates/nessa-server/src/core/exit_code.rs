@@ -99,6 +99,7 @@ pub(super) fn reason(error: &RunError) -> &'static str {
             | NativeFailure::Identity(_)
             | NativeFailure::Open(_),
         ) => "authentication",
+        RunError::Restore(_) => "restoreNotAccepted",
     }
 }
 
@@ -186,6 +187,10 @@ mod tests {
             RunError::ReceiverJournal(super::super::MissingReceiverJournal::new(
                 std::path::PathBuf::from("receiver-access/receiver-access.sqlite3"),
             )),
+            RunError::Restore(
+                "this backup is still quarantined and has not been accepted as the authority"
+                    .into(),
+            ),
         ] {
             assert!(CODES.codes.contains_key(reason(&error)), "{error}");
             assert_eq!(exit_code(&error), CODES.codes[reason(&error)]);

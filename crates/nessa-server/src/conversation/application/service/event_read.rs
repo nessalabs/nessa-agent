@@ -154,6 +154,9 @@ impl ConversationService {
         self.authorize_events(&id, &caller)
             .await
             .map_err(ConversationEventError::Conversation)?;
+        self.prepare_restored_history(&id)
+            .await
+            .map_err(ConversationEventError::Conversation)?;
         self.inner
             .storage
             .events(conversation_session(&id), start)

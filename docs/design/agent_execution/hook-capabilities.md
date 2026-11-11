@@ -18,7 +18,7 @@ an implementation or live-provider certification.
 | --- | --- | --- |
 | Claude | ACP 0.76.0; agent SDK 0.3.257 | Repository [lock](../../../crates/nessa-sdk/harnesses/claude-acp/package-lock.json), [ACP commit](https://github.com/agentclientprotocol/claude-agent-acp/tree/c2e4815029ef3962787ecaefe208b0b6f8b81302) and [SDK artifact](https://registry.npmjs.org/@anthropic-ai/claude-agent-sdk/-/claude-agent-sdk-0.3.257.tgz). Native declarations do not establish ACP access. |
 | Codex | ACP 1.12.0; Codex 0.154.0 | Repository [lock](../../../crates/nessa-sdk/harnesses/codex-acp/package-lock.json), [ACP commit](https://github.com/agentclientprotocol/codex-acp/tree/a7afd2ae077d625710194d9701b83595494449de) and Codex commit `6b9826e3aa83b1a5947db50f4332cb9c65f1b340`. |
-| Opencode | 1.18.31 | Repository [release pins](../../../crates/nessa-server/data/agent-releases.json), upstream commit `014614d35b397775e5d397a490fc72368c894ec2`. Local Homebrew 1.18.20 was not used as evidence of pinned runtime behavior. |
+| Opencode | 1.18.31 | Repository [release pins](../../../crates/nessa-agent-install/data/agent-releases.json), upstream commit `014614d35b397775e5d397a490fc72368c894ec2`. Local Homebrew 1.18.20 was not used as evidence of pinned runtime behavior. |
 | Kiro | No repository pin or adapter | Local signed CLI 2.22.0 installation/help/static strings; current official documentation is supplementary and not pinned behavior. No Nessa support claim. |
 
 Codex 0.154.0 and OpenCode 1.18.31 ran here against a scripted model, with

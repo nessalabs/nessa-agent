@@ -1,8 +1,8 @@
 //! The Cloudflare provider without Cloudflare: the pins, the checked
 //! install, what it runs, and how it reads a ready tunnel's address.
 use super::*;
-use crate::agent_install::application::SourceFailure;
 use crate::tunnel::application::TunnelToken;
+use nessa_agent_install::application::SourceFailure;
 
 /// Serves the bytes it was given for any URL.
 struct Serving(Vec<u8>);

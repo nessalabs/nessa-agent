@@ -28,6 +28,7 @@ const UPGRADES: &[nessa_local_database::Upgrade] = &[
     nessa_local_database::Upgrade::new(2, include_str!("channels-coordinators.sql")),
     nessa_local_database::Upgrade::new(3, include_str!("channels-pool.sql")),
     nessa_local_database::Upgrade::new(4, include_str!("channels-placement-moves.sql")),
+    nessa_local_database::Upgrade::new(5, include_str!("channels-any-place.sql")),
 ];
 const WRITTEN_COLUMNS: &str = "channel, organization_id, owner_id, request_id, name, folder, folder_made, agent, model, mode, notes, resources, created_at, coordinator_placement, thread_placement";
 const COLUMNS: &str = "channel, organization_id, owner_id, request_id, name, folder, \
@@ -411,7 +412,7 @@ impl ChannelStore for LocalChannelStore {
                 return Ok(None);
             };
             let current = channel(current)?;
-            let mut changed = current.with_execution(execution);
+            let mut changed = current.with_execution(execution.clone());
             let main_made = transaction
                 .query_row(
                     "SELECT 1 FROM channel_conversations WHERE conversation = ?1",

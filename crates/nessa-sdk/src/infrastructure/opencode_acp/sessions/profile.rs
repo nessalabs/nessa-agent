@@ -22,7 +22,7 @@ pub(super) const HARNESS: &str = "OpenCode";
 /// The version this profile was written against, checked at `initialize`.
 ///
 /// **The pin file is the source of truth and this string follows it**, not the
-/// other way round. `crates/nessa-server/data/agent-releases.json` is what
+/// other way round. `crates/nessa-agent-install/data/agent-releases.json` is what
 /// decides which Opencode lands on a machine; this only decides which one the
 /// adapter will drive. A bump starts there, by re-running the pin script
 /// against a new release, and ends here.

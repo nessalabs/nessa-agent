@@ -907,7 +907,7 @@ async fn change_wire_preserves_each_publication_fact_independently_of_audit_fail
         });
         let (state, _) = fixture(MembershipRole::Admin);
         let mut state = state.with_vault(routes);
-        state.vault_lease = Some(lease);
+        state.accounts.vault_lease = Some(lease);
         let frame = RequestFrame::new(
             "change",
             "vault.changePassphrase",

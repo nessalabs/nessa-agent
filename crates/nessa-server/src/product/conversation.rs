@@ -127,7 +127,7 @@ async fn answer(
     // caller naming an agent this one is not configured for. Sharing a code
     // between them made the panel tell someone with a working Claude that the
     // gateway has no agent configured.
-    let Some(service) = state.conversations.as_ref() else {
+    let Some(service) = state.conversation.service.as_ref() else {
         // Not `agent_not_configured`: this gateway runs no conversations at
         // all, and telling a user with a working agent to go configure one
         // sends them to change something that was never the problem.
@@ -241,6 +241,8 @@ async fn answer(
                 {
                     return Ok(failure(&frame.id, code));
                 }
+                // Deferred history is fetched inside the service, after this
+                // caller is admitted. The route grant is not that check.
                 let (view, _) =
                     read_view(state, service, session, &id, &frame.id, ReadOpening::Open).await?;
                 Ok(success(&frame.id, &view))
@@ -717,7 +719,7 @@ async fn answer(
                 // Cedar admits or refuses the caller who is answering. A grant
                 // is not rewritten as the owner, and a refusal writes nothing.
                 if is_remember_option(&params.option_id) {
-                    if let Some(rules) = state.permission_rules.as_deref() {
+                    if let Some(rules) = state.conversation.permission_rules.as_deref() {
                         if let Err(error) =
                             rules.authorize(rule_principal(permission_caller), RuleChange::Grant)
                         {
@@ -1055,12 +1057,16 @@ fn remembered_rules<'a>(
     state: &'a ProductRouteState,
     request_id: &str,
 ) -> Result<&'a crate::conversation::infrastructure::PermissionMemory, Box<OutgoingMessage>> {
-    state.permission_rules.as_deref().ok_or_else(|| {
-        Box::new(failure(
-            request_id,
-            ConversationErrorCode::ConversationsNotConfigured.as_str(),
-        ))
-    })
+    state
+        .conversation
+        .permission_rules
+        .as_deref()
+        .ok_or_else(|| {
+            Box::new(failure(
+                request_id,
+                ConversationErrorCode::ConversationsNotConfigured.as_str(),
+            ))
+        })
 }
 
 fn catalog_code(error: RuleCatalogError) -> &'static str {
@@ -1104,9 +1110,6 @@ impl AdmissionNotice for FirstTokenNotice {
     }
 }
 
-/// Who sends a conversation command: the credential's verified identity.
-/// The caller's optional client metadata is deliberately not used to
-/// attribute SDK commands.
 /// The view `conversation.read` answers, with where in the committed history
 /// it was folded through. A subscription's frame is this same read
 /// (`docs/design/record-subscriptions.md`), so there is one read path.
@@ -1188,6 +1191,9 @@ fn usage_limit_preference_facts(
     }
 }
 
+/// Who sends a conversation command: the credential's verified identity.
+/// The caller's optional client metadata is deliberately not used to
+/// attribute SDK commands.
 pub(super) fn caller(session: &AuthenticatedSession, request_id: String) -> ConversationCaller {
     let context = session.context();
     ConversationCaller {
@@ -1484,7 +1490,8 @@ async fn wire_view(
         .clone()
         .ok_or(ConversationError::Unavailable)?;
     let model = state
-        .agents_catalog
+        .agents
+        .catalog
         .as_ref()
         .and_then(|catalog| {
             catalog
@@ -1537,7 +1544,7 @@ async fn wire_view(
         );
         runtime.insert("reasoning".into(), Value::Bool(model.reasoning));
     }
-    if let Some(service) = state.conversations.as_ref() {
+    if let Some(service) = state.conversation.service.as_ref() {
         // One snapshot. Unbound storage is off and has no row. A read that
         // fails is not that: the view would otherwise show the preference off
         // and drop auto-resuming while the durable row is still open, or

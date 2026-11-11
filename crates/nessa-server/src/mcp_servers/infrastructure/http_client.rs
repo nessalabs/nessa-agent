@@ -9,11 +9,11 @@
 //! credential is never sent on to a URL the SDK did not accept. Only the wait
 //! for response headers is bounded. The client has no response timeout, so an
 //! event-stream body stays open after those headers arrive. TLS uses the provider
-//! [`install_tls_backend`](crate::agent_install::infrastructure::https_archives::install_tls_backend)
+//! [`install_tls_backend`](nessa_agent_install::infrastructure::https_archives::install_tls_backend)
 //! names.
-use crate::agent_install::infrastructure::https_archives::install_tls_backend;
 use async_trait::async_trait;
 use futures_util::StreamExt;
+use nessa_agent_install::infrastructure::https_archives::install_tls_backend;
 use nessa_sdk::infrastructure::mcp::{
     HttpBody, HttpChunks, HttpExchange, HttpFailure, HttpMethod, HttpRequest, HttpResponse,
 };

@@ -174,7 +174,7 @@ async fn mount_paused(
             metadata: f.grants.clone(),
             source: source.clone(),
             policy: Arc::new(CedarConversationAccessPolicy::new().unwrap()),
-            capacity: f.state.record_reads.clone(),
+            capacity: f.state.admission.record_reads().clone(),
             gateway: f.state.gateway.clone(),
             http,
         })
@@ -376,7 +376,7 @@ async fn actual_head_page_replacement_pauses_then_freezes_and_requires_owner_res
             metadata: f.grants.clone(),
             source: source.clone(),
             policy: Arc::new(CedarConversationAccessPolicy::new().unwrap()),
-            capacity: f.state.record_reads.clone(),
+            capacity: f.state.admission.record_reads().clone(),
             gateway: f.state.gateway.clone(),
             http: gate.clone(),
         })

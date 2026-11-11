@@ -160,6 +160,7 @@ impl Fixture {
                     nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
                 ),
                 clock: Arc::new(TestClock),
+                tool_config: Default::default(),
             },
             ConversationLimits::default(),
             None,

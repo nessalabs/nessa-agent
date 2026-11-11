@@ -121,9 +121,9 @@ async fn ordinary_native_request_asks_method_once_and_denial_has_zero_handler_ef
     });
     let health = Arc::new(HealthEffect(AtomicUsize::new(0)));
     let mut state = product(registry.clone()).with_pairing(Arc::new(commands));
-    state.owner_phone_policy = policy.clone();
-    state.conversation_access = Some(crate::conversation_test_support::access_policy());
-    state.owner_phone_receivers = Some(receivers.clone());
+    state.owner_phone.policy = policy.clone();
+    state.reads.conversation_access = Some(crate::conversation_test_support::access_policy());
+    state.owner_phone.receivers = Some(receivers.clone());
     state.uptime_clock = health.clone();
     let bound = bind(
         prepared,

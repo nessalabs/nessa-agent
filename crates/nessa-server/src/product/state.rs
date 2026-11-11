@@ -1,6 +1,6 @@
+use super::admission::Admission;
 use super::operational_limits::OperationalLimits;
 use super::turn_timing::TurnTimings;
-use crate::agent_install::application::AgentInstallations;
 use crate::agents::application::{AgentProbe, SharedAgentReadiness};
 use crate::agents::infrastructure::NativeHooksPreferences;
 use crate::attachments::{
@@ -24,6 +24,7 @@ use crate::peer_gateways::infrastructure::PeerCommands;
 use crate::timer::clock;
 use crate::webhooks::infrastructure::WebhookRuntime;
 use axum::extract::FromRef;
+use nessa_agent_install::application::AgentInstallations;
 use nessa_auth::{
     application::{
         credential_admin::CredentialAdmin,
@@ -36,7 +37,7 @@ use nessa_protocol::clock::Clock as UptimeClock;
 use nessa_protocol::product::generated::AgentsListResult;
 use serde_json::Value;
 use std::{sync::Arc, time::Duration};
-use tokio::sync::{watch, Semaphore};
+use tokio::sync::watch;
 
 /// The receiver bindings, ownership and read grants a paired device's reads
 /// are admitted by.
@@ -73,43 +74,16 @@ impl Clock for ProcessTimeline {
 /// This state is constructed only in composition.
 #[derive(Clone)]
 pub struct ProductRouteState {
-    pub(crate) browser_sessions: Option<Arc<dyn crate::browser_session::application::SessionStore>>,
-    pub(crate) browser_http_allowed: bool,
-    pub(crate) browser_session_id: Option<String>,
-    pub(crate) browser_session_origin: Option<String>,
-    pub(crate) requests: Arc<Semaphore>,
-    pub(crate) controls: Arc<Semaphore>,
-    /// Physical record reads or pending record replies, kept separate from
-    /// command and control admission. How many is [`OperationalLimits`].
-    pub(crate) record_reads: Arc<Semaphore>,
-    /// What wakes a subscription: committed record changes and changes to
-    /// an owner's catalogue.
-    pub(crate) record_watches: Option<Arc<dyn WatchRecords>>,
-    pub(crate) catalogue_watches: Option<Arc<dyn WatchCatalogue>>,
+    /// One capacity pool per lane; which lane a method waits in is the
+    /// manifest's, how many permits it holds [`OperationalLimits`]'s.
+    pub(crate) admission: Admission,
     /// Becomes true once host cleanup begins. Every authenticated socket
     /// then closes `temporary_unavailable`, so a client reconnects after the
     /// restart instead of reading from a gateway that is stopping.
     pub(crate) closing: Arc<tokio::sync::watch::Sender<bool>>,
-    /// Beginning an upload has capacity of its own. It opens no provider, so it
-    /// does not belong behind reads and opens; and it sweeps tickets, reads
-    /// holds, and writes audit records, so it must never be what keeps a
-    /// permission answer or a close from being admitted.
-    pub(crate) upload_begins: Arc<Semaphore>,
-    /// Reading a held file back has capacity of its own, so ranges waiting
-    /// on the store's one read slot never hold the requests every other
-    /// ordinary method needs.
-    pub(crate) artifact_reads: Arc<Semaphore>,
-    /// Deleting a conversation has capacity of its own, apart from the
-    /// controls. A delete can take minutes — it may launch the agent to ask it
-    /// about its own record of the session — and a burst of them must never be
-    /// what keeps a permission answer, a cancel, or a close from being
-    /// admitted (`deletes_and_controls_never_take_each_others_place`). How
-    /// many agents are asked at once is bounded again, and lower, by the
-    /// conversation service.
-    pub(crate) deletions: Arc<Semaphore>,
     pub(crate) settings: SessionSettings,
-    /// Admission counts and the cold-read budget. The semaphores above are
-    /// built from it; a socket reads its slot sizes from it too.
+    /// Admission counts and the cold-read budget. `admission` is built from
+    /// it; a socket reads its slot sizes from it too.
     pub(crate) limits: OperationalLimits,
     pub(crate) gateway: Resource,
     pub(crate) audience: AudienceId,
@@ -120,12 +94,66 @@ pub struct ProductRouteState {
     /// until composition points it at that file. Nothing leaves the machine.
     pub(crate) local_timings: Arc<TurnTimings>,
     pub(crate) policy: Arc<dyn PolicyEvaluator>,
-    pub(crate) owner_phone_purpose: Arc<dyn OwnerPhonePurposeSource>,
-    pub(crate) owner_phone_policy: Arc<dyn OwnerPhonePolicyEvaluator>,
-    pub(crate) owner_phone_receivers: Option<Arc<dyn OwnerPhoneReceiverAuthority>>,
-    pub(crate) conversations: Option<Arc<ConversationService>>,
+    pub(crate) uptime_clock: Arc<dyn UptimeClock>,
+    /// The time a conversation view tells a client, which it measures every
+    /// deadline's `dueAtMs` against. It reads the timeline the agents' review
+    /// deadlines are promised on, not [`Self::clock`]: the two answer the
+    /// same question only until the operating system corrects its wall clock.
+    pub(crate) view_clock: Arc<dyn Clock>,
+    pub(crate) agent_readiness: Arc<SharedAgentReadiness>,
+    // Each feature's dependencies, grouped by the methods that use them. A
+    // field is `None` where composition did not set that feature up, and its
+    // methods then answer `*_not_configured` or `*_unavailable`.
+    pub(crate) browser: BrowserRoutes,
+    pub(crate) owner_phone: OwnerPhoneRoutes,
+    pub(crate) conversation: ConversationRoutes,
+    pub(crate) reads: ReadRoutes,
+    pub(crate) agents: AgentRoutes,
+    pub(crate) files: FileRoutes,
+    pub(crate) mcp: McpRoutes,
+    pub(crate) linking: LinkingRoutes,
+    pub(crate) machines: MachineRoutes,
+    pub(crate) accounts: AccountRoutes,
+}
+
+/// The browser sign-in a socket or HTTP request arrived with, and the
+/// store that remembers browser sessions.
+#[derive(Clone, Default)]
+pub(crate) struct BrowserRoutes {
+    pub(crate) sessions: Option<Arc<dyn crate::browser_session::application::SessionStore>>,
+    pub(crate) http_allowed: bool,
+    pub(crate) session_id: Option<String>,
+    pub(crate) session_origin: Option<String>,
+}
+
+/// How the owner's own phone is told apart and what it may reach.
+#[derive(Clone)]
+pub(crate) struct OwnerPhoneRoutes {
+    pub(crate) purpose: Arc<dyn OwnerPhonePurposeSource>,
+    pub(crate) policy: Arc<dyn OwnerPhonePolicyEvaluator>,
+    pub(crate) receivers: Option<Arc<dyn OwnerPhoneReceiverAuthority>>,
+}
+
+/// Conversations and what a turn answers to: the service, remembered
+/// permission rules, and the deletion inventory an unshare reconciles.
+#[derive(Clone, Default)]
+pub(crate) struct ConversationRoutes {
+    pub(crate) service: Option<Arc<ConversationService>>,
     /// Remembered permission rules, and the board a waiting review notifies.
     pub(crate) permission_rules: Option<Arc<crate::conversation::infrastructure::PermissionMemory>>,
+    /// Reconciles the deletion inventory after `conversation.unshare`.
+    /// Absent, the grant is still revoked.
+    pub(crate) fence_capture: Option<Arc<dyn FenceCapture>>,
+}
+
+/// What a passive read or a subscription reads without opening an Agent,
+/// and what decides a paired party's access to it.
+#[derive(Clone, Default)]
+pub(crate) struct ReadRoutes {
+    /// What wakes a subscription: committed record changes and changes to
+    /// an owner's catalogue.
+    pub(crate) record_watches: Option<Arc<dyn WatchRecords>>,
+    pub(crate) catalogue_watches: Option<Arc<dyn WatchCatalogue>>,
     /// Passive reads use these independent authorities without opening an Agent.
     /// The read grants are also what every socket read asks for a paired
     /// device (`read_access`).
@@ -140,9 +168,13 @@ pub struct ProductRouteState {
     pub(crate) conversation_access: Option<Arc<dyn ConversationAccessPolicyEvaluator>>,
     pub(crate) catalogue_source: Option<Arc<dyn CatalogueReadSource>>,
     pub(crate) record_source: Option<Arc<dyn RecordReadSource>>,
-    pub(crate) agent_installations: Option<Arc<dyn AgentInstallations>>,
-    pub(crate) installs: Arc<Semaphore>,
-    pub(crate) agents_catalog: Option<Arc<AgentsListResult>>,
+}
+
+/// The agent catalogue, installs and native hooks (`agents.*`).
+#[derive(Clone, Default)]
+pub(crate) struct AgentRoutes {
+    pub(crate) installations: Option<Arc<dyn AgentInstallations>>,
+    pub(crate) catalog: Option<Arc<AgentsListResult>>,
     /// Claude and Codex native-hook choices. None when this route has no
     /// conversation directory. OpenCode is not in the store.
     pub(crate) native_hooks: Option<Arc<NativeHooksPreferences>>,
@@ -152,36 +184,47 @@ pub struct ProductRouteState {
     /// The paired environments connected now, by name: added to the
     /// catalog's places each time it is read, since they come and go.
     pub(crate) connected_environments: Option<ConnectedEnvironments>,
+}
+
+/// Attachments: uploads in pieces, and held files read back.
+#[derive(Clone, Default)]
+pub(crate) struct FileRoutes {
     pub(crate) attachments: Option<AttachmentService>,
     /// Where `artifact.read` reads a held file back, over the same store.
     pub(crate) held_reads: Option<HeldReads>,
     /// Uploads `attachment.write` is receiving in pieces, gateway-wide, so a
     /// piece is taken whichever connection it arrives on.
     pub(crate) socket_uploads: SocketUploads,
+}
+
+/// Stored MCP servers, their remote authorization, and the MCP App
+/// resources held behind tickets.
+#[derive(Clone, Default)]
+pub(crate) struct McpRoutes {
     /// The MCP App resources held behind tickets: issued by the conversation
     /// service, redeemed at `GET /mcp-resources`, which records each
     /// redemption in the audit beside it before serving. `None` when no MCP server is
     /// composed, and then that route answers every ticket `404`.
     pub(crate) resource_tickets: Option<(Arc<ResourceTicketStore>, Arc<dyn McpAppAudit>)>,
-    pub(crate) admin: Option<Arc<dyn CredentialAdmin>>,
-    pub(crate) webhooks: Option<Arc<WebhookRuntime>>,
-    /// Reconciles the deletion inventory after `conversation.unshare`.
-    /// Absent, the grant is still revoked.
-    pub(crate) fence_capture: Option<Arc<dyn FenceCapture>>,
     /// What `mcpServers.list`, `.save`, `.remove` and `.inspect` manage;
     /// `None` where this gateway holds no live MCP server set — not Unix, no
     /// agents configured, or MCP off this run because its relay socket could
     /// not be bound, a path was not UTF-8 or no key for its digests could be
     /// drawn — which they answer `mcp_servers_not_configured`.
-    pub(crate) mcp_server_settings: Option<Arc<McpServerSettings>>,
+    pub(crate) settings: Option<Arc<McpServerSettings>>,
     /// Remote MCP authorization. `None` when this gateway is not managing
     /// stored servers. `mcpServers.authorize` and `mcpServers.revoke` use it.
-    pub(crate) mcp_authorization:
+    pub(crate) authorization:
         Option<Arc<crate::mcp_authorization::application::AuthorizationOwner>>,
+}
+
+/// Pairing devices and peers, native linking, and the web tunnel.
+#[derive(Clone, Default)]
+pub(crate) struct LinkingRoutes {
     /// Owner pairing commands, composed only when `config.json` names a native
     /// listen address. `None` answers every pairing method
     /// `pairing_not_configured`.
-    pub(crate) pairing: Option<Arc<PairingOwnerCommands>>,
+    pub(crate) commands: Option<Arc<PairingOwnerCommands>>,
     /// Turns native linking on or off (`pairing.setLinking`), composed
     /// whether or not it is on now. `None` — not Unix — answers
     /// `pairing_unavailable`.
@@ -192,6 +235,15 @@ pub struct ProductRouteState {
     /// Paired devices' tunnel secrets. `None` when this gateway does not pair devices.
     pub(crate) tunnel_secrets:
         Option<std::sync::Arc<dyn crate::tunnel::application::DeviceTunnelSecrets>>,
+    /// This gateway's peer commands, composed with native pairing: a peer is
+    /// enrolled with the native key. `None` answers every peer method
+    /// `peer_not_configured`.
+    pub(crate) peers: Option<Arc<PeerCommands>>,
+}
+
+/// The hub's devices, the default device, and channel workspaces.
+#[derive(Clone, Default)]
+pub(crate) struct MachineRoutes {
     /// The hub's devices (`devices.list`). `None` answers
     /// `devices_unavailable`.
     pub(crate) devices: Option<Arc<crate::devices::application::Devices>>,
@@ -203,6 +255,16 @@ pub struct ProductRouteState {
     /// Moves each time the default device is saved: the catalog's
     /// subscribers read it again.
     pub(crate) default_device: Option<watch::Receiver<Option<String>>>,
+    #[cfg(unix)]
+    pub(crate) workspaces: Option<Arc<crate::workspaces::application::Workspaces>>,
+}
+
+/// Credentials and accounts: credential admin, webhooks, GitHub, saved
+/// logins, voice and the vault.
+#[derive(Clone, Default)]
+pub(crate) struct AccountRoutes {
+    pub(crate) admin: Option<Arc<dyn CredentialAdmin>>,
+    pub(crate) webhooks: Option<Arc<WebhookRuntime>>,
     /// The GitHub sign-in (`github.*`). `None` — no agents run here —
     /// answers `github_not_configured`.
     pub(crate) github: Option<Arc<super::GithubRoutes>>,
@@ -214,20 +276,7 @@ pub struct ProductRouteState {
     pub(crate) voice: Option<Arc<crate::voice::application::VoiceCalls>>,
     /// Shared vault; each socket attaches a distinct non-owning lease.
     pub(crate) vault: Option<Arc<super::VaultRoutes>>,
-    #[cfg(unix)]
-    pub(crate) workspaces: Option<Arc<crate::workspaces::application::Workspaces>>,
     pub(crate) vault_lease: Option<nessa_vault::application::Lease>,
-    /// This gateway's peer commands, composed with native pairing: a peer is
-    /// enrolled with the native key. `None` answers every peer method
-    /// `peer_not_configured`.
-    pub(crate) peers: Option<Arc<PeerCommands>>,
-    pub(crate) uptime_clock: Arc<dyn UptimeClock>,
-    /// The time a conversation view tells a client, which it measures every
-    /// deadline's `dueAtMs` against. It reads the timeline the agents' review
-    /// deadlines are promised on, not [`Self::clock`]: the two answer the
-    /// same question only until the operating system corrects its wall clock.
-    pub(crate) view_clock: Arc<dyn Clock>,
-    pub(crate) agent_readiness: Arc<SharedAgentReadiness>,
 }
 
 /// The pre-authentication onboarding route is given one way to ask this machine
@@ -248,7 +297,7 @@ impl FromRef<ProductRouteState> for Arc<SharedAgentReadiness> {
 /// or a conversation: a ticket the socket issued is all it acts on.
 impl FromRef<ProductRouteState> for UploadRoute {
     fn from_ref(state: &ProductRouteState) -> Self {
-        UploadRoute::new(state.attachments.clone())
+        UploadRoute::new(state.files.attachments.clone())
     }
 }
 
@@ -256,7 +305,7 @@ impl FromRef<ProductRouteState> for UploadRoute {
 /// same reason as the upload route: a ticket is all it acts on.
 impl FromRef<ProductRouteState> for ResourceRoute {
     fn from_ref(state: &ProductRouteState) -> Self {
-        ResourceRoute::new(state.resource_tickets.clone())
+        ResourceRoute::new(state.mcp.resource_tickets.clone())
     }
 }
 
@@ -308,7 +357,7 @@ impl ProductRouteState {
     /// MCP stop drains them before the servers stop
     /// ([`McpServerSettings::shutdown`]).
     pub(crate) fn close_mcp_server_admission(&self) {
-        if let Some(settings) = &self.mcp_server_settings {
+        if let Some(settings) = &self.mcp.settings {
             settings.close();
         }
     }
@@ -322,21 +371,10 @@ impl ProductRouteState {
     ) -> Self {
         let limits = OperationalLimits::small();
         Self {
-            browser_sessions: None,
-            browser_session_id: None,
-            browser_session_origin: None,
-            browser_http_allowed: false,
             settings: SessionSettings::default(),
             limits,
-            requests: Arc::new(Semaphore::new(limits.requests())),
-            controls: Arc::new(Semaphore::new(limits.controls())),
-            record_reads: Arc::new(Semaphore::new(limits.record_reads())),
-            record_watches: None,
-            catalogue_watches: None,
+            admission: Admission::new(limits),
             closing: Arc::new(tokio::sync::watch::Sender::new(false)),
-            upload_begins: Arc::new(Semaphore::new(limits.upload_begins())),
-            artifact_reads: Arc::new(Semaphore::new(HeldReads::CONCURRENT_READS)),
-            deletions: Arc::new(Semaphore::new(limits.deletions())),
             gateway: Resource::new(gateway_organization_id, gateway_id),
             audience,
             verifier: dependencies.verifier,
@@ -344,47 +382,20 @@ impl ProductRouteState {
             clock: dependencies.clock,
             local_timings: Arc::new(TurnTimings::quiet()),
             policy: dependencies.policy,
-            owner_phone_purpose: dependencies.owner_phone_purpose,
-            owner_phone_policy: dependencies.owner_phone_policy,
-            owner_phone_receivers: dependencies.owner_phone_receivers,
-            admin: None,
-            webhooks: None,
-            fence_capture: None,
-            mcp_server_settings: None,
-            mcp_authorization: None,
-            pairing: None,
-            native_linking: None,
-            tunnel: None,
-            tunnel_secrets: None,
-            devices: None,
-            device_setup: None,
-            default_device: None,
-            github: None,
-            logins: None,
-            voice: None,
-            vault: None,
-            vault_lease: None,
-            #[cfg(unix)]
-            workspaces: None,
-            peers: None,
-            conversations: None,
-            permission_rules: None,
-            passive_read: None,
-            review_metadata: None,
-            review_auditor: None,
-            conversation_access: None,
-            record_source: None,
-            catalogue_source: None,
-            agents_catalog: None,
-            native_hooks: None,
-            caller_kinds: None,
-            connected_environments: None,
-            agent_installations: None,
-            installs: Arc::new(Semaphore::new(1)),
-            attachments: None,
-            held_reads: None,
-            socket_uploads: SocketUploads::default(),
-            resource_tickets: None,
+            owner_phone: OwnerPhoneRoutes {
+                purpose: dependencies.owner_phone_purpose,
+                policy: dependencies.owner_phone_policy,
+                receivers: dependencies.owner_phone_receivers,
+            },
+            browser: BrowserRoutes::default(),
+            conversation: ConversationRoutes::default(),
+            reads: ReadRoutes::default(),
+            agents: AgentRoutes::default(),
+            files: FileRoutes::default(),
+            mcp: McpRoutes::default(),
+            linking: LinkingRoutes::default(),
+            machines: MachineRoutes::default(),
+            accounts: AccountRoutes::default(),
             uptime_clock: dependencies.uptime_clock,
             view_clock: Arc::new(ProcessTimeline),
             agent_readiness: Arc::new(SharedAgentReadiness::new(dependencies.agent_probe)),
@@ -395,7 +406,7 @@ impl ProductRouteState {
         mut self,
         store: Arc<dyn crate::browser_session::application::SessionStore>,
     ) -> Self {
-        self.browser_sessions = Some(store);
+        self.browser.sessions = Some(store);
         self
     }
 
@@ -412,42 +423,38 @@ impl ProductRouteState {
         self
     }
 
-    /// Replace the gateway admission semaphores and the limits a socket reads.
+    /// Replace the gateway admission and the limits a socket reads.
     /// Called once, from composition, before anything is served.
     pub fn with_limits(mut self, limits: OperationalLimits) -> Self {
-        self.requests = Arc::new(Semaphore::new(limits.requests()));
-        self.controls = Arc::new(Semaphore::new(limits.controls()));
-        self.record_reads = Arc::new(Semaphore::new(limits.record_reads()));
-        self.upload_begins = Arc::new(Semaphore::new(limits.upload_begins()));
-        self.deletions = Arc::new(Semaphore::new(limits.deletions()));
+        self.admission = Admission::new(limits);
         self.limits = limits;
         self
     }
 
     /// Bind the concrete retained webhook/ordinary credential command owner.
     pub fn with_webhooks(mut self, runtime: Arc<WebhookRuntime>) -> Self {
-        self.admin = Some(runtime.clone());
-        self.webhooks = Some(runtime);
+        self.accounts.admin = Some(runtime.clone());
+        self.accounts.webhooks = Some(runtime);
         self
     }
 
     /// Register credential lifecycle operations; missing administration fails closed.
     pub fn with_admin(mut self, admin: Arc<dyn CredentialAdmin>) -> Self {
-        self.admin = Some(admin);
+        self.accounts.admin = Some(admin);
         self
     }
 
     /// Record share revocations in the deletion inventory. Without it, an
     /// unshare still revokes the grant.
     pub fn with_fence_capture(mut self, capture: Arc<dyn FenceCapture>) -> Self {
-        self.fence_capture = Some(capture);
+        self.conversation.fence_capture = Some(capture);
         self
     }
 
     /// Register what manages this gateway's stored MCP servers. Without it
     /// the `mcpServers.*` methods answer `mcp_servers_not_configured`.
     pub fn with_mcp_server_settings(mut self, settings: Arc<McpServerSettings>) -> Self {
-        self.mcp_server_settings = Some(settings);
+        self.mcp.settings = Some(settings);
         self
     }
 
@@ -457,20 +464,20 @@ impl ProductRouteState {
         mut self,
         authorization: Arc<crate::mcp_authorization::application::AuthorizationOwner>,
     ) -> Self {
-        self.mcp_authorization = Some(authorization);
+        self.mcp.authorization = Some(authorization);
         self
     }
 
     /// Register the owner pairing commands of this gateway's native enrollment
     /// runtime. Without them the pairing methods answer `pairing_not_configured`.
     pub fn with_pairing(mut self, pairing: Arc<PairingOwnerCommands>) -> Self {
-        self.pairing = Some(pairing);
+        self.linking.commands = Some(pairing);
         self
     }
 
     /// Register what turns native linking on or off from Settings.
     pub fn with_native_linking(mut self, linking: Arc<dyn NativeLinking>) -> Self {
-        self.native_linking = Some(linking);
+        self.linking.native_linking = Some(linking);
         self
     }
 
@@ -480,19 +487,19 @@ impl ProductRouteState {
         mut self,
         workspaces: Arc<crate::workspaces::application::Workspaces>,
     ) -> Self {
-        self.workspaces = Some(workspaces);
+        self.machines.workspaces = Some(workspaces);
         self
     }
     /// Register the reusable vault independently of provider configuration.
     pub fn with_vault(mut self, vault: Arc<super::VaultRoutes>) -> Self {
-        self.vault = Some(vault);
+        self.accounts.vault = Some(vault);
         self
     }
 
     /// Register the web tunnel this run serves (Unix only).
     #[cfg_attr(not(unix), allow(dead_code))]
     pub(crate) fn with_tunnel(mut self, tunnel: crate::tunnel::application::TunnelView) -> Self {
-        self.tunnel = Some(tunnel);
+        self.linking.tunnel = Some(tunnel);
         self
     }
 
@@ -501,7 +508,7 @@ impl ProductRouteState {
         mut self,
         secrets: std::sync::Arc<dyn crate::tunnel::application::DeviceTunnelSecrets>,
     ) -> Self {
-        self.tunnel_secrets = Some(secrets);
+        self.linking.tunnel_secrets = Some(secrets);
         self
     }
 
@@ -513,8 +520,8 @@ impl ProductRouteState {
         setup: Arc<crate::devices::application::DeviceSetup>,
         default: watch::Receiver<Option<String>>,
     ) -> Self {
-        self.device_setup = Some(setup);
-        self.default_device = Some(default);
+        self.machines.device_setup = Some(setup);
+        self.machines.default_device = Some(default);
         self
     }
 
@@ -522,13 +529,13 @@ impl ProductRouteState {
         mut self,
         devices: Arc<crate::devices::application::Devices>,
     ) -> Self {
-        self.devices = Some(devices);
+        self.machines.devices = Some(devices);
         self
     }
 
     /// Register the GitHub sign-in the github methods answer for.
     pub fn with_github(mut self, github: Arc<super::GithubRoutes>) -> Self {
-        self.github = Some(github);
+        self.accounts.github = Some(github);
         self
     }
 
@@ -537,26 +544,26 @@ impl ProductRouteState {
         mut self,
         logins: Arc<crate::logins::application::SavedLoginsService>,
     ) -> Self {
-        self.logins = Some(logins);
+        self.accounts.logins = Some(logins);
         self
     }
 
     /// Register the voice key and calls the voice methods answer for.
     pub fn with_voice(mut self, voice: Arc<crate::voice::application::VoiceCalls>) -> Self {
-        self.voice = Some(voice);
+        self.accounts.voice = Some(voice);
         self
     }
 
     /// Register this gateway's peer commands. Without them the peer methods
     /// answer `peer_not_configured`.
     pub fn with_peers(mut self, peers: Arc<PeerCommands>) -> Self {
-        self.peers = Some(peers);
+        self.linking.peers = Some(peers);
         self
     }
 
     /// Share server-owned Agents across authenticated sockets. No socket owns cleanup.
     pub fn with_conversations(mut self, service: Arc<ConversationService>) -> Self {
-        self.conversations = Some(service);
+        self.conversation.service = Some(service);
         self
     }
 
@@ -565,7 +572,7 @@ impl ProductRouteState {
         mut self,
         rules: Arc<crate::conversation::infrastructure::PermissionMemory>,
     ) -> Self {
-        self.permission_rules = Some(rules);
+        self.conversation.permission_rules = Some(rules);
         self
     }
 
@@ -578,16 +585,16 @@ impl ProductRouteState {
         share_grants: Arc<dyn ShareGrants>,
         access: Arc<dyn ConversationAccessPolicyEvaluator>,
     ) -> Self {
-        self.review_metadata = Some(ConversationMetadataReader::new(conversations.clone()));
-        self.passive_read = Some((receivers, conversations, share_grants));
-        self.conversation_access = Some(access);
+        self.reads.review_metadata = Some(ConversationMetadataReader::new(conversations.clone()));
+        self.reads.passive_read = Some((receivers, conversations, share_grants));
+        self.reads.conversation_access = Some(access);
         self
     }
 
     /// Bind the shared application owner of unpaired review-policy audit attempts.
     /// A route with metadata but without this dependency refuses review publication.
     pub fn with_review_notice_auditor(mut self, auditor: Arc<ReviewNoticeAuditor>) -> Self {
-        self.review_auditor = Some(auditor);
+        self.reads.review_auditor = Some(auditor);
         self
     }
 
@@ -598,26 +605,26 @@ impl ProductRouteState {
         records: Arc<dyn WatchRecords>,
         catalogue: Arc<dyn WatchCatalogue>,
     ) -> Self {
-        self.record_watches = Some(records);
-        self.catalogue_watches = Some(catalogue);
+        self.reads.record_watches = Some(records);
+        self.reads.catalogue_watches = Some(catalogue);
         self
     }
 
     /// Inject current catalogue metadata reads behind passive admission.
     pub fn with_catalogue_source(mut self, source: Arc<dyn CatalogueReadSource>) -> Self {
-        self.catalogue_source = Some(source);
+        self.reads.catalogue_source = Some(source);
         self
     }
 
     /// Inject the bounded SDK record adapter without opening a conversation Agent.
     pub fn with_record_source(mut self, source: Arc<dyn RecordReadSource>) -> Self {
-        self.record_source = Some(source);
+        self.reads.record_source = Some(source);
         self
     }
 
     /// Install only composition-selected pinned releases through the authenticated gateway.
     pub fn with_agent_installations(mut self, installations: Arc<dyn AgentInstallations>) -> Self {
-        self.agent_installations = Some(installations);
+        self.agents.installations = Some(installations);
         self
     }
 
@@ -631,13 +638,13 @@ impl ProductRouteState {
     }
 
     pub fn with_agents_catalog(mut self, catalog: AgentsListResult) -> Self {
-        self.agents_catalog = Some(Arc::new(catalog));
+        self.agents.catalog = Some(Arc::new(catalog));
         self
     }
 
     /// The native-hook choices Claude and Codex launches read.
     pub fn with_native_hooks(mut self, native_hooks: Arc<NativeHooksPreferences>) -> Self {
-        self.native_hooks = Some(native_hooks);
+        self.agents.native_hooks = Some(native_hooks);
         self
     }
 
@@ -646,7 +653,7 @@ impl ProductRouteState {
         mut self,
         caller_kinds: Arc<dyn crate::agents::application::CallerKindSource>,
     ) -> Self {
-        self.caller_kinds = Some(caller_kinds);
+        self.agents.caller_kinds = Some(caller_kinds);
         self
     }
 
@@ -655,7 +662,7 @@ impl ProductRouteState {
     /// again for its subscribers when they change.
     #[cfg_attr(not(any(unix, test)), allow(dead_code))]
     pub(crate) fn with_connected_environments(mut self, connected: ConnectedEnvironments) -> Self {
-        self.connected_environments = Some(connected);
+        self.agents.connected_environments = Some(connected);
         self
     }
 
@@ -666,10 +673,10 @@ impl ProductRouteState {
     /// it and every `agents.listed` frame carries it, so the two are read
     /// the same way.
     pub(crate) fn agents_catalog_now(&self) -> Option<Value> {
-        let composed = self.agents_catalog.as_ref()?;
+        let composed = self.agents.catalog.as_ref()?;
         let mut catalog =
             serde_json::to_value(composed.as_ref()).expect("generated catalog serializes");
-        if let Some(connected) = &self.connected_environments {
+        if let Some(connected) = &self.agents.connected_environments {
             if let Some(places) = catalog["environments"].as_array_mut() {
                 places.extend((connected.names)().into_iter().map(Value::String));
             }
@@ -683,12 +690,14 @@ impl ProductRouteState {
             .unwrap_or_default();
         // The default device, while it is one of those places.
         let default = self
+            .machines
             .default_device
             .as_ref()
             .and_then(|default| default.borrow().clone())
             .filter(|default| places.contains(&default.as_str()));
         let command_hosts = self
-            .conversations
+            .conversation
+            .service
             .as_ref()
             .map(|service| service.owner_command_hosts(places))
             .unwrap_or_default();
@@ -699,6 +708,7 @@ impl ProductRouteState {
         // The stored hooks choice, read now. The composed catalog's own copy
         // is never shown.
         let selection = self
+            .agents
             .native_hooks
             .as_ref()
             .map(|hooks| hooks.selection())
@@ -710,7 +720,7 @@ impl ProductRouteState {
     /// A wake-up each time a paired environment may have come or gone,
     /// seen as of now; `None` on a gateway that pairs no environments.
     pub(crate) fn agents_catalog_changes(&self) -> Option<watch::Receiver<u64>> {
-        let mut changes = self.connected_environments.as_ref()?.changes.clone();
+        let mut changes = self.agents.connected_environments.as_ref()?.changes.clone();
         changes.mark_unchanged();
         Some(changes)
     }
@@ -718,7 +728,7 @@ impl ProductRouteState {
     /// A wake-up each time the default device is saved, seen as of now;
     /// `None` where Devices cannot set one.
     pub(crate) fn default_device_changes(&self) -> Option<watch::Receiver<Option<String>>> {
-        let mut changes = self.default_device.clone()?;
+        let mut changes = self.machines.default_device.clone()?;
         changes.mark_unchanged();
         Some(changes)
     }
@@ -726,15 +736,15 @@ impl ProductRouteState {
     /// A wake-up after each native hooks command, seen as of now; `None`
     /// where hooks are not configured.
     pub(crate) fn native_hooks_changes(&self) -> Option<watch::Receiver<u64>> {
-        Some(self.native_hooks.as_ref()?.changes())
+        Some(self.agents.native_hooks.as_ref()?.changes())
     }
 
     /// Share one attachment service between the socket that issues tickets and
     /// the route that redeems them, and read held files back over the same
     /// store. Composed only alongside conversations.
     pub fn with_attachments(mut self, service: AttachmentService, reads: HeldReads) -> Self {
-        self.attachments = Some(service);
-        self.held_reads = Some(reads);
+        self.files.attachments = Some(service);
+        self.files.held_reads = Some(reads);
         self
     }
 
@@ -747,7 +757,7 @@ impl ProductRouteState {
         tickets: Arc<ResourceTicketStore>,
         audit: Arc<dyn McpAppAudit>,
     ) -> Self {
-        self.resource_tickets = Some((tickets, audit));
+        self.mcp.resource_tickets = Some((tickets, audit));
         self
     }
 

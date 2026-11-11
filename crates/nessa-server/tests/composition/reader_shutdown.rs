@@ -49,7 +49,14 @@ async fn ordinary_host_joins_a_held_record_read_before_later_cleanup() {
     );
     let source = Arc::new(source);
     let _release = ReleaseRead(read_work.clone());
-    let lease = RecordReadLease::new(state.record_reads.clone().try_acquire_owned().unwrap());
+    let lease = RecordReadLease::new(
+        state
+            .admission
+            .record_reads()
+            .clone()
+            .try_acquire_owned()
+            .unwrap(),
+    );
     let scope = fixture.scope();
     let reading = source.clone();
     let read =
@@ -105,7 +112,10 @@ async fn ordinary_host_joins_a_held_record_read_before_later_cleanup() {
     assert!(conversations.load(Ordering::SeqCst));
     assert!(servers.load(Ordering::SeqCst));
     assert!(shutdown_result(&report).is_ok());
-    assert_eq!(fixture.state().record_reads.available_permits(), 4);
+    assert_eq!(
+        fixture.state().admission.record_reads().available_permits(),
+        4
+    );
 }
 
 /// The host loses its observer of cleanup while a record read is held: the
@@ -125,7 +135,14 @@ async fn ordinary_host_retains_a_reader_fault_after_loss_of_its_observer() {
     let source = Arc::new(source);
     let _release = ReleaseRead(read_work.clone());
     let scope = fixture.scope();
-    let lease = RecordReadLease::new(state.record_reads.clone().try_acquire_owned().unwrap());
+    let lease = RecordReadLease::new(
+        state
+            .admission
+            .record_reads()
+            .clone()
+            .try_acquire_owned()
+            .unwrap(),
+    );
     let reading = source.clone();
     let read =
         tokio::spawn(async move { reading.read(scope, RecordReadOperation::Head, lease).await });

@@ -22,12 +22,13 @@ pub(super) async fn dispatch(
     session: &AuthenticatedSession,
     frame: RequestFrame,
 ) -> OutgoingMessage {
-    let Some(github) = state.github.as_ref() else {
+    let Some(github) = state.accounts.github.as_ref() else {
         return failure(&frame.id, GithubErrorCode::GithubNotConfigured.as_str());
     };
     // The command may wait behind another GitHub request while this connection
     // locks and unlocks. Carry the admitted unlock across that wait.
     let admitted_generation = state
+        .accounts
         .vault
         .as_ref()
         .map(|vault| vault.vault.unlocked_generation());
@@ -40,6 +41,7 @@ pub(super) async fn dispatch(
     let _change = github.changes.lock().await;
     let still_admitted = || {
         state
+            .accounts
             .vault
             .as_ref()
             .map(|vault| vault.vault.unlocked_generation())

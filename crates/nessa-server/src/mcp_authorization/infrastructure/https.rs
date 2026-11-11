@@ -6,10 +6,10 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 
-use crate::agent_install::infrastructure::https_archives::install_tls_backend;
 use crate::mcp_authorization::application::{
     https_url, OAuthCallFailure, OAuthHttp, OAuthResponse,
 };
+use nessa_agent_install::infrastructure::https_archives::install_tls_backend;
 
 /// Shorter than [`CALL_TIMEOUT`]. A connect that never completes has to fail
 /// on its own: the call timeout replaces that failure with a plain timeout,

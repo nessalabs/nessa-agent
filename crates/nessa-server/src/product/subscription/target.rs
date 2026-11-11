@@ -228,7 +228,7 @@ impl Sources {
         catalogue_owner: Option<&PrincipalId>,
     ) -> Result<Self, String> {
         let unavailable = || code_of(&ConversationError::Unavailable);
-        let records = || state.record_watches.as_ref().ok_or_else(unavailable);
+        let records = || state.reads.record_watches.as_ref().ok_or_else(unavailable);
         let closed = |ChangeWatchError::Closed| unavailable();
         Ok(match target {
             Target::Events { conversation, .. } => Self {
@@ -255,6 +255,7 @@ impl Sources {
             Target::List { .. } => {
                 let owner = caller(session, String::new());
                 let catalogue = state
+                    .reads
                     .catalogue_watches
                     .as_ref()
                     .ok_or_else(unavailable)?
@@ -472,7 +473,7 @@ async fn read_batch(
         // capacity, then is admitted, then reads, as `dispatch` orders a
         // request. Admitted before waiting for capacity, a grant revoked
         // during the wait would let one read through (row S30).
-        let permit = state.requests.clone().acquire_owned().await;
+        let permit = state.admission.requests().clone().acquire_owned().await;
         let (current, list_scope) = match authorize_batch(state, session, target).await {
             Ok(current) => current,
             // A batch's admission that could not be verified now (the

@@ -251,111 +251,89 @@ pub struct ChannelDefaults {
 }
 
 /// Where the channel's main agent and its threads run. The two are chosen
-/// apart. A channel holds here, a cloud VM of each conversation's own, or,
-/// for threads only, any paired computer (the pool, in the order the pool's
-/// preferences give, a cloud VM as overflow); never one named computer yet.
-/// Stored and sent as one word each: `local`, `boat`, `pool`.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+/// apart, and each may be any [`Place`]: here, a cloud VM of each
+/// conversation's own, any paired computer (the pool, in the order the
+/// pool's preferences give, a cloud VM as overflow), or one named computer.
+/// Stored and sent as one word each: `local`, `boat` and `pool` for the
+/// kinds, and a named computer by its place name (an SSH destination, or a
+/// paired computer's `peer:<key>`).
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ChannelExecution {
-    coordinator: ChannelPlace,
-    threads: ChannelPlace,
+    coordinator: Place,
+    threads: Place,
 }
 
-/// The places a channel can hold, each with its word.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-enum ChannelPlace {
-    #[default]
-    Here,
-    CloudVm,
-    Pool,
-}
-impl ChannelPlace {
-    fn of(place: &Place) -> Option<Self> {
-        match place {
-            Place::Here => Some(Self::Here),
-            Place::CloudVm => Some(Self::CloudVm),
-            Place::Pool => Some(Self::Pool),
-            Place::Host(_) | Place::Peer(_) => None,
-        }
-    }
-    fn named(word: &str) -> Option<Self> {
-        match word {
-            "local" => Some(Self::Here),
-            "boat" => Some(Self::CloudVm),
-            "pool" => Some(Self::Pool),
-            _ => None,
-        }
-    }
-    fn word(self) -> &'static str {
-        match self {
-            Self::Here => "local",
-            Self::CloudVm => "boat",
-            Self::Pool => "pool",
-        }
-    }
-    fn place(self) -> Place {
-        match self {
-            Self::Here => Place::Here,
-            Self::CloudVm => Place::CloudVm,
-            Self::Pool => Place::Pool,
-        }
-    }
-}
-
-/// Why a channel cannot run its agents where it was asked to.
+/// A word that names no place a channel can run in.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ChannelPlaceRefusal {
-    /// A word that names no place a channel holds.
-    Unknown,
-    /// One named computer: a channel names a kind of place only.
-    NamedComputer,
-    /// The pool for the main agent, which runs in one known place.
-    PooledMainAgent,
+pub struct UnknownChannelPlace;
+
+/// The place `word` names: a kind of place by its channel word, else one
+/// named computer by its place name. A kind is spelled one way only, so
+/// `here`, `peer:any` and `boat:thread` name nothing here, and the three
+/// words are kept for the kinds: an SSH host named `local`, `boat` or
+/// `pool` cannot be a channel's computer.
+fn channel_place(word: &str) -> Result<Place, UnknownChannelPlace> {
+    match word {
+        "local" => Ok(Place::Here),
+        "boat" => Ok(Place::CloudVm),
+        "pool" => Ok(Place::Pool),
+        named => match Place::named(named) {
+            Ok(computer @ (Place::Host(_) | Place::Peer(_))) => Ok(computer),
+            _ => Err(UnknownChannelPlace),
+        },
+    }
+}
+
+/// `place`'s channel word, as [`channel_place`] reads it.
+fn channel_word(place: &Place) -> String {
+    match place {
+        Place::Here => "local".to_owned(),
+        Place::CloudVm => "boat".to_owned(),
+        Place::Pool => "pool".to_owned(),
+        Place::Host(_) | Place::Peer(_) => place.name(),
+    }
+}
+
+impl Default for ChannelExecution {
+    /// Both here.
+    fn default() -> Self {
+        Self::new(Place::Here, Place::Here)
+    }
 }
 
 impl ChannelExecution {
     /// The main agent on `coordinator` and threads on `threads`.
-    ///
-    /// # Errors
-    /// [`ChannelPlaceRefusal`] when a channel cannot hold one of them.
-    pub fn new(coordinator: &Place, threads: &Place) -> Result<Self, ChannelPlaceRefusal> {
-        let held = |place| ChannelPlace::of(place).ok_or(ChannelPlaceRefusal::NamedComputer);
-        Self::held(held(coordinator)?, held(threads)?)
-    }
-    /// The places the channel words `coordinator` and `threads` name, as
-    /// [`Self::new`] takes them.
-    ///
-    /// # Errors
-    /// [`ChannelPlaceRefusal`] for a word that names none, or the pool for
-    /// the main agent.
-    pub fn parse(coordinator: &str, threads: &str) -> Result<Self, ChannelPlaceRefusal> {
-        let held = |word| ChannelPlace::named(word).ok_or(ChannelPlaceRefusal::Unknown);
-        Self::held(held(coordinator)?, held(threads)?)
-    }
-    fn held(coordinator: ChannelPlace, threads: ChannelPlace) -> Result<Self, ChannelPlaceRefusal> {
-        if coordinator == ChannelPlace::Pool {
-            return Err(ChannelPlaceRefusal::PooledMainAgent);
-        }
-        Ok(Self {
+    pub fn new(coordinator: Place, threads: Place) -> Self {
+        Self {
             coordinator,
             threads,
-        })
+        }
+    }
+    /// The places the channel words `coordinator` and `threads` name.
+    ///
+    /// # Errors
+    /// [`UnknownChannelPlace`] for a word that names none.
+    pub fn parse(coordinator: &str, threads: &str) -> Result<Self, UnknownChannelPlace> {
+        Ok(Self::new(
+            channel_place(coordinator)?,
+            channel_place(threads)?,
+        ))
     }
     /// Where the main agent runs.
-    pub fn coordinator(&self) -> Place {
-        self.coordinator.place()
+    pub fn coordinator(&self) -> &Place {
+        &self.coordinator
     }
     /// Where the channel's threads run.
-    pub fn threads(&self) -> Place {
-        self.threads.place()
+    pub fn threads(&self) -> &Place {
+        &self.threads
     }
     /// The main agent's place as its channel word.
-    pub fn coordinator_word(&self) -> &'static str {
-        self.coordinator.word()
+    pub fn coordinator_word(&self) -> String {
+        channel_word(&self.coordinator)
     }
     /// The threads' place as its channel word.
-    pub fn threads_word(&self) -> &'static str {
-        self.threads.word()
+    pub fn threads_word(&self) -> String {
+        channel_word(&self.threads)
     }
 }
 
@@ -464,8 +442,8 @@ impl Channel {
             ..self.clone()
         }
     }
-    pub fn execution(&self) -> ChannelExecution {
-        self.execution
+    pub fn execution(&self) -> &ChannelExecution {
+        &self.execution
     }
     /// This channel with its agents running where `execution` says: the
     /// one setting a person changes after the channel is made.
@@ -508,24 +486,30 @@ impl Channel {
 
     /// What every agent in this channel is told about it, besides working
     /// in its folder: its name, the person's notes, and the files and folders
-    /// attached to it. One rule, so every agent hears the same words.
-    /// `remote` is whether this agent runs away from the gateway (Boat, or
-    /// another host): its own placement, fixed when its conversation was
-    /// made, never the channel's current one, which may have moved since.
+    /// attached to it. One rule, so every agent in the same place hears the
+    /// same words.
+    ///
+    /// The folder and the attached paths are this gateway's, so only an
+    /// agent that runs here is told them: one that runs elsewhere (Boat, or
+    /// another computer) could not open them, and works in the folder its
+    /// own computer gives it. `remote` is that agent's own placement, fixed
+    /// when its conversation was made, never the channel's current one,
+    /// which may have moved since.
     pub fn instructions(&self, remote: bool) -> String {
         let mut text = format!(
-            "This conversation is in the person's channel \"{}\". Its folder is {}.",
-            self.name.as_str(),
-            self.folder.path.as_str()
+            "This conversation is in the person's channel \"{}\".",
+            self.name.as_str()
         );
-        if remote {
-            text.push_str(" On a remote environment, the channel's local folder and resource paths belong to the gateway, not your VM. Work in your actual environment workspace; access local files only through explicitly approved connections.");
+        if !remote {
+            text.push_str(" Its folder is ");
+            text.push_str(self.folder.path.as_str());
+            text.push('.');
         }
         if !self.notes.is_empty() {
             text.push_str("\n\nThe person's notes for every conversation in this channel:\n");
             text.push_str(self.notes.as_str());
         }
-        if !self.resources.is_empty() {
+        if !remote && !self.resources.is_empty() {
             text.push_str(
                 "\n\nFiles and folders the person attached to this channel. Read them when they are relevant to the request:",
             );

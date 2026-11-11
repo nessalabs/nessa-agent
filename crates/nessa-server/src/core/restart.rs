@@ -118,6 +118,9 @@ pub(super) fn restart(error: &RunError) -> Restart {
         // The rest of native pairing can clear: a held private state, a taken
         // port, a failed listener, unavailable storage.
         | RunError::Native(_) => Restart::Worthwhile,
+        // Accepting the backup, or repairing its markers, is a person's act.
+        // Starting again reads the same pointer.
+        RunError::Restore(_) => Restart::Pointless,
     }
 }
 
@@ -184,6 +187,10 @@ mod tests {
             RunError::ReceiverJournal(crate::core::MissingReceiverJournal::new(
                 std::path::PathBuf::from("receiver-access/receiver-access.sqlite3"),
             )),
+            RunError::Restore(
+                "this backup is still quarantined and has not been accepted as the authority"
+                    .into(),
+            ),
         ] {
             assert_eq!(restart(&error), Restart::Pointless, "{error}");
         }

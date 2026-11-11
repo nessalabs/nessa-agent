@@ -1,14 +1,14 @@
 use super::*;
-use crate::agent_install::application::{
+use nessa_agent_install::application::{
     AuditAcknowledgement, InstallAudit, InstallDeliveryFailure, InstallDeliveryFailureStage,
     InstallationDelivery, InstallationDeliverySession, InstalledRuntime, StoreFailure,
 };
-use crate::agent_install::domain::{
+use nessa_agent_install::domain::{
     ArchiveDigest, ArchiveRejected, ArchiveSize, ArchiveUrl, InstallAttempt, InstallTransition,
     Libc, PinnedRelease, PublicationPreparation, ReleasePlatform, ReleaseRequirements,
     ReleaseVersion, RuntimeArtifact,
 };
-use crate::agent_install_test_support::{
+use nessa_agent_install::test_support::{
     agent, audit, host, installs, platform, reclamation_audit, release as test_release, request,
     temporary_root, FakeSource, FakeStore, PINNED_DIGEST,
 };
@@ -436,7 +436,7 @@ fn publication_uncertainty_says_that_later_installs_are_blocked() {
     let release = test_release("1.18.31", PINNED_DIGEST, &platform());
     let delivery_failure = InstallAgentRuntime {
         reclamation_audit: reclamation_audit(),
-        reclamation_operation_ids: crate::agent_install_test_support::reclamation_operation_ids(),
+        reclamation_operation_ids: nessa_agent_install::test_support::reclamation_operation_ids(),
         source: &source,
         store: &store,
         audit: audit(),

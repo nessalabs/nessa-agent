@@ -47,7 +47,7 @@ use crate::{
     conversation::{
         application::{
             ConversationAgents, ConversationDependencies, ConversationLimits, DriveTools,
-            Environments, McpAppPorts,
+            EnvironmentToolConfig, Environments, McpAppPorts,
         },
         infrastructure::{
             CedarToolPolicyEvaluator, DurableAgentToolAudit, DurableConversationCreationAudit,
@@ -260,6 +260,23 @@ pub(super) async fn product_state(
     let namespace = directory
         .parent()
         .ok_or_else(|| setup_error("invalid data root"))?;
+    if let Some(live) = accepted_restore_live(namespace) {
+        if super::serving_restore::restore_install_matches(namespace, &live) {
+            let (organization_id, principal_id) = store.catalogue_owner().map_err(|error| {
+                RunError::Authentication(format!("the local owner could not be read: {error}"))
+            })?;
+            super::serving_restore::bind_installed_owner(
+                namespace,
+                &organization_id,
+                &principal_id,
+            )
+            .map_err(|error| {
+                RunError::Restore(format!(
+                    "restored conversations were not bound to this owner: {error}"
+                ))
+            })?;
+        }
+    }
     let vault = super::vault::compose(namespace);
     #[cfg(unix)]
     let workspace_audit = DurableEnvironmentAudit::new(
@@ -609,7 +626,7 @@ pub(super) async fn product_state(
                     .join("agents"),
             }));
     }
-    product.browser_http_allowed = config.browser_http_allowed();
+    product.browser.http_allowed = config.browser_http_allowed();
     #[cfg(unix)]
     {
         product = product.with_workspaces(workspace_service);
@@ -747,12 +764,12 @@ pub(super) async fn product_state(
             Uuid::new_v4(),
         )
         .map_err(|error| RunError::Agent(format!("review-notice audit unavailable: {error:?}")))?;
-        if product.webhooks.is_some() {
+        if product.accounts.webhooks.is_some() {
             webhook_delivery = Some(DeliveryDependencies {
                 metadata: metadata.clone(),
                 source: reader.clone(),
                 policy: access_policy.clone(),
-                capacity: product.record_reads.clone(),
+                capacity: product.admission.record_reads().clone(),
                 gateway: product.gateway.clone(),
                 http: Arc::new(HttpsWebhook::new(Arc::new(SystemResolver::new()))),
             });
@@ -1280,6 +1297,13 @@ pub(crate) fn conversation_root(namespace: &Path) -> std::path::PathBuf {
     namespace.join("conversations")
 }
 
+fn accepted_restore_live(namespace: &Path) -> Option<std::path::PathBuf> {
+    let text =
+        std::fs::read_to_string(namespace.join("backup").join("accepted-restore.txt")).ok()?;
+    let pointer = crate::backup::domain::decode_accepted_restore(&text).ok()?;
+    Some(std::path::PathBuf::from(pointer.live))
+}
+
 /// Each paired environment's last sighting, `<conversations>/workers`.
 fn worker_sightings(root: &Path) -> crate::devices::application::WorkerSightings {
     crate::devices::application::WorkerSightings::new(
@@ -1430,7 +1454,7 @@ async fn conversations(
         thread_workspaces.service.clone(),
     );
     let clock: Arc<dyn Clock> = Arc::new(SystemClock);
-    let host = crate::agent_install::infrastructure::host_platform();
+    let host = nessa_agent_install::infrastructure::host_platform();
     let opencode = EffectiveOpenCodeProfile::decide(
         agents,
         packaged_agents,
@@ -1628,7 +1652,7 @@ async fn conversations(
         fixed_probe,
         config: agents.clone(),
         opencode,
-        store: Arc::new(crate::agent_install::infrastructure::ManagedRuntimes::new(
+        store: Arc::new(nessa_agent_install::infrastructure::ManagedRuntimes::new(
             directory
                 .parent()
                 .expect("conversation root already validated")
@@ -1657,7 +1681,7 @@ async fn conversations(
         )),
         None => Arc::new(NoMcpToolUis),
     };
-    let (environment, environment_peers) = environments(
+    let (environment, tool_config, environment_peers) = environments(
         &root,
         &ssh_hosts,
         command_policy,
@@ -1721,6 +1745,7 @@ async fn conversations(
         ),
         clock: clock.clone(),
         environment,
+        tool_config,
         access_policy,
     };
     let workspace = Some(agents.workspace.to_string_lossy().into_owned());
@@ -1947,7 +1972,7 @@ fn environments(
     serving: Option<ServingAuth>,
     organization: crate::conversation::application::OrganizationBudgets,
     logins: Arc<dyn crate::conversation::infrastructure::ssh_environment::SavedLogins>,
-) -> Result<(Environments, Option<PairedParts>), RunError> {
+) -> Result<(Environments, EnvironmentToolConfig, Option<PairedParts>), RunError> {
     use super::paired_environments::{
         ListenerEnvironments, PeerWorkers, RegistryPaired, RegistryServing, SavedSightings,
     };
@@ -2030,11 +2055,14 @@ fn environments(
     }
     // Who may run which commands where is the command policy's, answered by
     // Cedar over the configured hosts and programs (ADR 803 step 4).
-    if let Some(policy) = commands {
-        let evaluator = CedarCommandPolicyEvaluator::new(&policy)
-            .map_err(|_| RunError::Agent("the command policy bundle does not validate".into()))?;
-        environments = environments.with_commands(Arc::new(evaluator));
-    }
+    let tools = match commands {
+        Some(policy) => EnvironmentToolConfig::with_commands(Arc::new(
+            CedarCommandPolicyEvaluator::new(&policy).map_err(|_| {
+                RunError::Agent("the command policy bundle does not validate".into())
+            })?,
+        )),
+        None => EnvironmentToolConfig::default(),
+    };
     let paired = peers.zip(paired_keys).map(|(peers, paired_keys)| {
         let connected = peers.clone();
         let changes = peers.connections();
@@ -2066,7 +2094,7 @@ fn environments(
             workers,
         )
     });
-    Ok((environments, paired))
+    Ok((environments, tools, paired))
 }
 
 #[cfg(unix)]

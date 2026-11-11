@@ -191,7 +191,7 @@ async fn review_notice_policy_decisions_preserve_audit_evidence() {
         let audit = Arc::new(RecordingReviewNoticeAudit::default());
         let mut fixture =
             ReviewFixture::new(audit.clone(), Arc::new(MonotonicReviewNoticeClock::new()));
-        fixture.state.conversation_access = Some(Arc::new(Answer(decision.clone())));
+        fixture.state.reads.conversation_access = Some(Arc::new(Answer(decision.clone())));
         let expected = usize::from(matches!(decision, AccessDecision::Allow { .. }));
         let payload = notice_snapshot(
             fixture.board.clone(),
@@ -766,8 +766,8 @@ async fn review_notice_missing_audit_refuses_before_policy() {
     let mut fixture =
         ReviewFixture::new(audit.clone(), Arc::new(MonotonicReviewNoticeClock::new()));
     let policy = Arc::new(ObservedPolicy::default());
-    fixture.state.conversation_access = Some(policy.clone());
-    fixture.state.review_auditor = None;
+    fixture.state.reads.conversation_access = Some(policy.clone());
+    fixture.state.reads.review_auditor = None;
     let (task, mut receive, _authority) = fixture.publish(Arc::new(Semaphore::new(1))).await;
     assert_eq!(
         task.await.unwrap(),
@@ -786,8 +786,8 @@ async fn review_notice_audit_admission_is_bounded_before_decision() {
     let clock = Arc::new(ManualAuditClock::default());
     let mut fixture = ReviewFixture::new(audit.clone(), clock.clone());
     let policy = Arc::new(ObservedPolicy::default());
-    fixture.state.conversation_access = Some(policy.clone());
-    let auditor = fixture.state.review_auditor.as_ref().unwrap().clone();
+    fixture.state.reads.conversation_access = Some(policy.clone());
+    let auditor = fixture.state.reads.review_auditor.as_ref().unwrap().clone();
     let mut admissions = Vec::new();
     for _ in 0..32 {
         admissions.push(auditor.admit().await.unwrap());
@@ -840,7 +840,7 @@ async fn review_notice_lost_publishers_retain_bounded_audit_admission() {
     }
     let mut fixture = ReviewFixture::new(audit.clone(), Arc::new(ManualAuditClock::default()));
     let policy = Arc::new(ObservedPolicy::default());
-    fixture.state.conversation_access = Some(policy.clone());
+    fixture.state.reads.conversation_access = Some(policy.clone());
     let mut publishers = Vec::new();
     for _ in 0..32 {
         publishers.push(fixture.publish(Arc::new(Semaphore::new(1))).await);
@@ -919,7 +919,7 @@ async fn review_notice_audit_clock_panic_closes_without_disclosure() {
             }),
         );
         let policy = Arc::new(ObservedPolicy::default());
-        fixture.state.conversation_access = Some(policy.clone());
+        fixture.state.reads.conversation_access = Some(policy.clone());
         (fixture, audit, policy)
     };
     for fail_on in [0, 1] {
@@ -1032,7 +1032,7 @@ async fn review_notice_refused_facts_do_not_fabricate_policy_audit() {
         let mut fixture =
             ReviewFixture::new(audit.clone(), Arc::new(MonotonicReviewNoticeClock::new()));
         let policy = Arc::new(ObservedPolicy::default());
-        fixture.state.conversation_access = Some(policy.clone());
+        fixture.state.reads.conversation_access = Some(policy.clone());
         let session = authenticate(&fixture.state).await;
         match refusal {
             0 => {
@@ -1200,7 +1200,7 @@ async fn review_notice_durable_audit_preserves_typed_decisions() {
                 .unwrap(),
         );
         let mut fixture = ReviewFixture::new(audit, Arc::new(MonotonicReviewNoticeClock::new()));
-        fixture.state.conversation_access = Some(Arc::new(Answer(decision)));
+        fixture.state.reads.conversation_access = Some(Arc::new(Answer(decision)));
         notice_snapshot(
             fixture.board.clone(),
             fixture.state.clone(),
@@ -1247,7 +1247,7 @@ async fn review_notice_durable_audit_retains_physical_write() {
     let observer_clock = Arc::new(ManualAuditClock::default());
     let mut fixture = ReviewFixture::new(audit.clone(), observer_clock.clone());
     let policy = Arc::new(ObservedPolicy::default());
-    fixture.state.conversation_access = Some(policy.clone());
+    fixture.state.reads.conversation_access = Some(policy.clone());
     let (first, mut first_frames, _authority) = fixture.publish(Arc::new(Semaphore::new(1))).await;
     timeout(Duration::from_secs(2), physical_clock.entered.acquire())
         .await
@@ -1478,7 +1478,7 @@ async fn review_notice_publisher_panic_ends_connection() {
         Arc::new(RecordingReviewNoticeAudit::default()),
         Arc::new(MonotonicReviewNoticeClock::new()),
     );
-    fixture.state.conversation_access = Some(Arc::new(PanickingReviewPolicy));
+    fixture.state.reads.conversation_access = Some(Arc::new(PanickingReviewPolicy));
     let session = authenticate(&fixture.state).await;
     let (socket, mut peer) = test_socket(None);
     let task = tokio::spawn(run_authenticated(socket, fixture.state, session));
@@ -1503,8 +1503,8 @@ async fn review_notice_shutdown_distinguishes_predecision_cancellation_from_tran
     let audit = Arc::new(RecordingReviewNoticeAudit::default());
     let mut fixture = ReviewFixture::new(audit.clone(), Arc::new(ManualAuditClock::default()));
     let policy = Arc::new(ObservedPolicy::default());
-    fixture.state.conversation_access = Some(policy.clone());
-    let auditor = fixture.state.review_auditor.as_ref().unwrap().clone();
+    fixture.state.reads.conversation_access = Some(policy.clone());
+    let auditor = fixture.state.reads.review_auditor.as_ref().unwrap().clone();
     let (entered, metadata_read) = oneshot::channel();
     let (_release, gate) = oneshot::channel();
     *fixture.repository.metadata_load_gate.lock().unwrap() = Some((entered, gate));
@@ -1532,7 +1532,7 @@ async fn review_notice_shutdown_joins_transferred_decisions_after_publisher_loss
     for result in [Ok(()), Err(ReviewNoticeAuditFailure::Unavailable)] {
         let (audit, acknowledge) = GatedAudit::one();
         let fixture = ReviewFixture::new(audit.clone(), Arc::new(ManualAuditClock::default()));
-        let auditor = fixture.state.review_auditor.as_ref().unwrap().clone();
+        let auditor = fixture.state.reads.review_auditor.as_ref().unwrap().clone();
         let (publisher, _frames, _authority) = fixture.publish(Arc::new(Semaphore::new(1))).await;
         audit.captured().await;
         publisher.abort();
@@ -1602,7 +1602,7 @@ async fn review_notice_shutdown_joins_physical_write_and_queued_selection() {
         dropped: Arc::new(Semaphore::new(0)),
     });
     let fixture = ReviewFixture::new(audit.clone(), Arc::new(ManualAuditClock::default()));
-    let auditor = fixture.state.review_auditor.as_ref().unwrap().clone();
+    let auditor = fixture.state.reads.review_auditor.as_ref().unwrap().clone();
     let (first, _first_frames, _first_authority) =
         fixture.publish(Arc::new(Semaphore::new(1))).await;
     timeout(Duration::from_secs(2), physical_clock.entered.acquire())
@@ -1643,7 +1643,7 @@ async fn review_notice_shutdown_retains_first_delivery_failure() {
     ] {
         let (audit, acknowledge) = GatedAudit::one();
         let fixture = ReviewFixture::new(audit.clone(), Arc::new(ManualAuditClock::default()));
-        let auditor = fixture.state.review_auditor.as_ref().unwrap().clone();
+        let auditor = fixture.state.reads.review_auditor.as_ref().unwrap().clone();
         let (first, _frames, _authority) = fixture.publish(Arc::new(Semaphore::new(1))).await;
         audit.captured().await;
         acknowledge.send(Err(first_failure)).unwrap();
@@ -1667,7 +1667,7 @@ async fn review_notice_shutdown_retains_first_delivery_failure() {
             Arc::new(PanickingAudit(invocation)),
             Arc::new(ManualAuditClock::default()),
         );
-        let auditor = fixture.state.review_auditor.as_ref().unwrap().clone();
+        let auditor = fixture.state.reads.review_auditor.as_ref().unwrap().clone();
         let (publisher, _frames, _authority) = fixture.publish(Arc::new(Semaphore::new(1))).await;
         assert_eq!(
             publisher.await.unwrap(),
@@ -1689,7 +1689,7 @@ async fn review_notice_shutdown_deadline_retains_first_failure() {
     for earlier_failure in [None, Some(ReviewNoticeAuditFailure::Unavailable)] {
         let (audit, acknowledge) = GatedAudit::one();
         let fixture = ReviewFixture::new(audit.clone(), Arc::new(ManualAuditClock::default()));
-        let auditor = fixture.state.review_auditor.as_ref().unwrap().clone();
+        let auditor = fixture.state.reads.review_auditor.as_ref().unwrap().clone();
         let (first, _frames, _authority) = fixture.publish(Arc::new(Semaphore::new(1))).await;
         audit.captured().await;
         let (last, last_acknowledgement) = if let Some(failure) = earlier_failure {
@@ -1734,7 +1734,7 @@ async fn review_notice_shutdown_wakes_capacity_waiters_and_joins_admissions() {
         Arc::new(RecordingReviewNoticeAudit::default()),
         Arc::new(ManualAuditClock::default()),
     );
-    let auditor = fixture.state.review_auditor.as_ref().unwrap();
+    let auditor = fixture.state.reads.review_auditor.as_ref().unwrap();
     let mut admissions = Vec::new();
     for _ in 0..32 {
         admissions.push(auditor.admit().await.unwrap());
@@ -1762,7 +1762,7 @@ async fn review_notice_metadata_read_failure_closes_before_false_empty_snapshot(
     let audit = Arc::new(RecordingReviewNoticeAudit::default());
     let mut fixture = ReviewFixture::new(audit.clone(), Arc::new(ManualAuditClock::default()));
     let policy = Arc::new(ObservedPolicy::default());
-    fixture.state.conversation_access = Some(policy.clone());
+    fixture.state.reads.conversation_access = Some(policy.clone());
     *fixture.repository.metadata_load_failure.lock().unwrap() = Some(ConversationError::Storage(
         StorageError::Io("injected metadata read failure".into()),
     ));
@@ -1818,7 +1818,7 @@ async fn review_notice_current_read_failure_prevents_false_empty_snapshot() {
     let audit = Arc::new(RecordingReviewNoticeAudit::default());
     let mut fixture = ReviewFixture::new(audit.clone(), Arc::new(ManualAuditClock::default()));
     let policy = Arc::new(ObservedPolicy::default());
-    fixture.state.conversation_access = Some(policy.clone());
+    fixture.state.reads.conversation_access = Some(policy.clone());
     let reader = Arc::new(FailNextCurrentRead {
         authority: fixture.authority.clone(),
         fail: AtomicBool::new(false),
@@ -1867,7 +1867,7 @@ async fn review_notice_missing_metadata_is_a_successful_hidden_selection() {
     let audit = Arc::new(RecordingReviewNoticeAudit::default());
     let mut fixture = ReviewFixture::new(audit.clone(), Arc::new(ManualAuditClock::default()));
     let policy = Arc::new(ObservedPolicy::default());
-    fixture.state.conversation_access = Some(policy.clone());
+    fixture.state.reads.conversation_access = Some(policy.clone());
     fixture.repository.records.lock().unwrap().clear();
     let hidden = notice_snapshot(
         fixture.board.clone(),

@@ -106,6 +106,7 @@ fn fixture_with_agents(
             message_commit_clock: Arc::new(RuntimeMessageCommitClock::new()),
             clock: Arc::new(TestClock),
             environment: crate::conversation::infrastructure::in_process_environment().into(),
+            tool_config: Default::default(),
         },
         ConversationLimits::default(),
         None,

@@ -1846,6 +1846,14 @@ defines that command's boundary; #324 storage changes remain separately owned.
 `tests/backup/restore.rs` covers quarantine, acceptance, audit failure, and the
 oversized-session drill. The plan command does not call those use cases.
 
+`backup_restore_main.rs` and `composition/restore_command.rs` are
+`nessa-backup-restore`: stage into `destination/quarantine`, accept onto the
+empty `destination/live`, list deferred conversations, and open one.
+`application/gateway_restore.rs` is the accepted-live check, the credential
+and outbox refusal, and the deferred open `conversation.read` calls first.
+A namespace pointer that is not an accepted live restore refuses gateway
+startup. `tests/backup/gateway_restore.rs` is that drill.
+
 ## Attachments
 
 [Phone file uploads](design/phone-file-uploads.md) describes #1149's stored
@@ -2046,7 +2054,7 @@ for an explicit Copy action and reports write failure without claiming success.
 
 ## Installing an agent runtime
 
-`crates/nessa-server/src/agent_install/` installs pinned native runtimes into the
+`crates/nessa-agent-install/src/` (crate `nessa-agent-install`) installs pinned native runtimes into the
 private stage/instance namespace. The desktop bundles Node and JavaScript ACP
 adapters; Claude, Codex and OpenCode native programs are downloaded explicitly.
 `application/gateway.rs` defines the authenticated installation port;
@@ -2245,9 +2253,10 @@ and hashing every platform's archives. Composition reads the store through
 `composition/installed_launch.rs` for each managed readiness observation and
 cold conversation open. It answers with an owned exact-pin launch or with
 nothing, never with a free-text path written down earlier. Tests under
-`tests/agent_install/` split the domain's rules, application ordering and
+`crates/nessa-agent-install/tests/` split the domain's rules, application ordering and
 failure reporting, the three adapters, concurrent publication authority, and
-the command's output.
+the command's output; the gateway and command tests stay in
+`crates/nessa-server/tests/agent_install/`.
 
 ## Command-line surface
 

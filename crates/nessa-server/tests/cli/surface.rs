@@ -222,8 +222,8 @@ fn tools_list_matches_the_mcp_tool_contract() {
 
 #[test]
 fn the_surface_wait_outlasts_an_archive_install() {
-    use crate::agent_install::infrastructure::https_archives::ARCHIVE_TRANSFER_TIMEOUT;
     use crate::cli::infrastructure::surface_call_budget;
+    use nessa_agent_install::infrastructure::https_archives::ARCHIVE_TRANSFER_TIMEOUT;
     use std::time::Duration;
     let budget = surface_call_budget();
     assert!(budget >= ARCHIVE_TRANSFER_TIMEOUT);

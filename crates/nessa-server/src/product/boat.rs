@@ -35,7 +35,7 @@ pub(super) async fn dispatch(
     #[cfg(unix)]
     {
         let mut frame = frame;
-        let Some(service) = &state.workspaces else {
+        let Some(service) = &state.machines.workspaces else {
             return failure(&frame.id, "boat_unavailable");
         };
         if matches!(
@@ -102,7 +102,7 @@ async fn save_claude_login(
     crate::workspaces::domain::ClaudeSignIn::new((*token).clone())?;
     let login =
         nessa_protocol::lease::Login::new((*token).clone()).map_err(|_| Failure::InvalidInput)?;
-    let logins = state.logins.as_ref().ok_or(Failure::Storage)?;
+    let logins = state.accounts.logins.as_ref().ok_or(Failure::Storage)?;
     logins
         .save(
             super::logins::caller(session),
@@ -179,7 +179,7 @@ async fn runtime_dispatch(
             let Ok(channel) = ChannelId::new(&channel) else {
                 return failure(&frame.id, "invalid_request");
             };
-            let Some(conversations) = &state.conversations else {
+            let Some(conversations) = &state.conversation.service else {
                 return failure(&frame.id, "boat_unavailable");
             };
             let caller = super::conversation::caller(session, frame.id.clone());

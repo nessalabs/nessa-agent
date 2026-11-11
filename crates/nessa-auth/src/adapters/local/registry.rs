@@ -499,6 +499,38 @@ impl LocalCredentialStore {
         principal_kind(principal).map(Some)
     }
 
+    /// The personal organization and its admin principal. A local gateway has
+    /// one of each.
+    pub fn personal_owner(&self) -> Result<(String, String), LocalStoreError> {
+        let registry = self.registry()?;
+        let registry = registry.as_ref().ok_or(LocalStoreError::NotInitialized)?;
+        let membership = registry
+            .memberships
+            .iter()
+            .find(|membership| membership.id == registry.owner_membership_id)
+            .ok_or(LocalStoreError::NotInitialized)?;
+        Ok((
+            membership.organization_id.clone(),
+            membership.principal_id.clone(),
+        ))
+    }
+
+    /// Who the desktop window lists conversations as. That window signs in as
+    /// the panel surface, so a restore bound only to the human admin would
+    /// never appear there. The human remains the owner when no panel exists.
+    pub fn catalogue_owner(&self) -> Result<(String, String), LocalStoreError> {
+        let (organization, owner) = self.personal_owner()?;
+        let registry = self.registry()?;
+        let registry = registry.as_ref().ok_or(LocalStoreError::NotInitialized)?;
+        let panel = "surface:nessa-panel";
+        if registry.memberships.iter().any(|membership| {
+            membership.organization_id == organization && membership.principal_id == panel
+        }) {
+            return Ok((organization, panel.to_owned()));
+        }
+        Ok((organization, owner))
+    }
+
     pub fn identity(&self) -> Result<LocalIdentity, LocalStoreError> {
         let registry = self.registry()?;
         let registry = registry.as_ref().ok_or(LocalStoreError::NotInitialized)?;

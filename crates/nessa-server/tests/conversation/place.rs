@@ -1,7 +1,7 @@
 //! A place reads back from its name as the same place, every name reads one
-//! way only, and a channel holds only the places it can run in.
+//! way only, and a channel holds any place in its own words.
 use super::*;
-use crate::conversation::domain::{ChannelExecution, ChannelPlaceRefusal};
+use crate::conversation::domain::{ChannelExecution, UnknownChannelPlace};
 
 fn peer() -> PeerEnvironment {
     PeerEnvironment::new([0xab; PeerEnvironment::KEY_BYTES])
@@ -37,49 +37,36 @@ fn the_names_kept_in_files_and_on_the_wire_are_unchanged() {
 }
 
 #[test]
-fn a_channel_holds_here_a_cloud_vm_or_the_pool_for_threads_only() {
+fn a_channel_holds_any_place_and_spells_each_one_way() {
     let host = Place::Host(SshDestination::new("devbox").unwrap());
-    for (coordinator, threads, held) in [
-        (Place::Here, Place::Here, Ok(())),
-        (Place::CloudVm, Place::Pool, Ok(())),
-        (
-            Place::Pool,
-            Place::Here,
-            Err(ChannelPlaceRefusal::PooledMainAgent),
-        ),
-        (
-            host.clone(),
-            Place::Here,
-            Err(ChannelPlaceRefusal::NamedComputer),
-        ),
-        (Place::Here, host, Err(ChannelPlaceRefusal::NamedComputer)),
-        (
-            Place::Here,
-            Place::Peer(peer()),
-            Err(ChannelPlaceRefusal::NamedComputer),
-        ),
+    for (place, word) in [
+        (Place::Here, "local".to_owned()),
+        (Place::CloudVm, "boat".to_owned()),
+        (Place::Pool, "pool".to_owned()),
+        (host.clone(), "devbox".to_owned()),
+        (Place::Peer(peer()), peer().name()),
     ] {
-        let execution = ChannelExecution::new(&coordinator, &threads);
-        assert_eq!(execution.map(|_| ()), held, "{coordinator:?} {threads:?}");
-        if let Ok(execution) = execution {
-            assert_eq!(execution.coordinator(), coordinator);
-            assert_eq!(execution.threads(), threads);
-            assert_eq!(
-                ChannelExecution::parse(execution.coordinator_word(), execution.threads_word()),
-                Ok(execution)
-            );
-        }
+        let execution = ChannelExecution::new(place.clone(), Place::Pool);
+        assert_eq!(execution.coordinator_word(), word);
+        assert_eq!(*execution.coordinator(), place);
+        assert_eq!(
+            ChannelExecution::parse(&word, "pool"),
+            Ok(execution),
+            "{word}"
+        );
     }
     assert_eq!(
         ChannelExecution::parse("local", "local"),
         Ok(ChannelExecution::default())
     );
-    assert_eq!(
-        ChannelExecution::parse("pool", "local"),
-        Err(ChannelPlaceRefusal::PooledMainAgent)
-    );
-    assert_eq!(
-        ChannelExecution::parse("local", "moon"),
-        Err(ChannelPlaceRefusal::Unknown)
-    );
+    // A kind has one spelling: its place name names nothing here. Any
+    // other word an SSH destination could be is a computer, which the
+    // gateway checks it serves when a person asks for it.
+    for unknown in ["here", "peer:any", "boat:thread", "", "-oProxyCommand=x"] {
+        assert_eq!(
+            ChannelExecution::parse("local", unknown),
+            Err(UnknownChannelPlace),
+            "{unknown:?}"
+        );
+    }
 }

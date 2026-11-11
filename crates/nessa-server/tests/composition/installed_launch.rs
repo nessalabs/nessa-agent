@@ -9,16 +9,16 @@ use std::{
 };
 
 use super::*;
-use crate::agent_install::application::{
+use crate::composition::desktop::bundled_launch;
+use nessa_agent_install::application::{
     ManagedExecutableUse, ManagedExecutableUseAdmissionFailure, ManagedExecutableUseFailure,
     ManagedExecutableUseGuard, ManagedLaunchSnapshot, Publication, PublicationLease,
     PublishFailure, RuntimeStore, StagedArchive, StoreFailure,
 };
-use crate::agent_install::domain::{
+use nessa_agent_install::domain::{
     AgentName, ArchiveDigest, HostPlatform, PinnedRelease, ReleasePlatform,
 };
-use crate::agent_install::infrastructure::releases_for;
-use crate::composition::desktop::bundled_launch;
+use nessa_agent_install::infrastructure::releases_for;
 use nessa_sdk::application::agent_execution::providers::ExecutableUseAdmissionOwner;
 
 struct Answers {

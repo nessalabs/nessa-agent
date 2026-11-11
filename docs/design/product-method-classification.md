@@ -3,9 +3,19 @@
 Owner: [#921](https://github.com/nessalabs/nessa-agent/issues/921). This is the
 implementation companion to [ADR 921](../adr/todo/921-close-product-method-classification.md).
 The ADR owns the architectural decision; this document owns the source inventory,
-type sketch, migration and regression plan. All changes below are proposed.
-Runtime classification is still string-based; no compile probe or runtime
-migration is implemented by these documents.
+type sketch, migration and regression plan.
+
+Status: the identity slice and the lane and capacity part of the cutover are
+implemented. The generator emits `ProductMethod` (with `as_str`, `parse`,
+`grant`, `lane` and typed `ProductParams`) and `ProductLane`; each manifest
+method declares its `lane`, which selects both the socket's response lane and
+the gateway pool in `product/admission.rs` (`Admission`); the top-level
+handler route is an exhaustive match on `ProductMethod`, and a request passes
+`Request`, `Admitted` and `Authorized` on its way to it. Still string-based, and
+still proposed below: the admission plan (`paired_action`, the own-check list,
+paired-share actions), handler modules' own exact-name cases, and the synthetic
+extension compile probe. The catalogue below is the snapshot the design was
+reviewed against.
 
 ## Current source catalogue
 
@@ -35,7 +45,8 @@ connection-owned dispatch before the ordinary handler; the handshake and
 that refusal, subject to existing request validation, session checks and lane
 capacity. An invalid or saturated request can therefore be refused earlier.
 
-The test named `every_manifest_method_has_one_runtime_dispatch_path` proves only
+The test then named `every_manifest_method_has_one_runtime_dispatch_path` (now
+`manifest_methods_are_the_advertised_methods_and_have_grants`) proves only
 that manifest names equal the generated advertised-name list and that most names
 have a generated grant. A newly generated, granted name satisfies those checks
 without selecting a handler, a non-default lane or execution pool, or paired admission. No

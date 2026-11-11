@@ -76,7 +76,7 @@ pub(crate) fn cookie(headers: &HeaderMap) -> Option<&str> {
     Some(value)
 }
 fn allowed(headers: &HeaderMap, state: &ProductRouteState) -> bool {
-    origin(headers, state.browser_http_allowed).is_some()
+    origin(headers, state.browser.http_allowed).is_some()
         && headers.get("x-nessa-browser").is_some_and(|v| v == "1")
 }
 fn response(status: StatusCode, value: Option<String>) -> Response {
@@ -115,16 +115,16 @@ pub async fn login(
     if !allowed(&headers, &state) {
         return response(StatusCode::FORBIDDEN, None);
     }
-    let Ok(permit) = state.requests.clone().try_acquire_owned() else {
+    let Ok(permit) = state.admission.requests().clone().try_acquire_owned() else {
         return response(StatusCode::TOO_MANY_REQUESTS, None);
     };
-    let Some(store) = &state.browser_sessions else {
+    let Some(store) = &state.browser.sessions else {
         return response(StatusCode::SERVICE_UNAVAILABLE, None);
     };
     let Ok(id) = new_session_id() else {
         return response(StatusCode::SERVICE_UNAVAILABLE, None);
     };
-    let request_origin = origin(&headers, state.browser_http_allowed)
+    let request_origin = origin(&headers, state.browser.http_allowed)
         .expect("allowed browser request has an origin")
         .to_owned();
     let prior = cookie(&headers).map(str::to_owned);
@@ -214,20 +214,20 @@ pub async fn check(State(state): State<ProductRouteState>, headers: HeaderMap) -
     if !allowed(&headers, &state) {
         return response(StatusCode::FORBIDDEN, None);
     }
-    let Some(store) = &state.browser_sessions else {
+    let Some(store) = &state.browser.sessions else {
         return response(StatusCode::SERVICE_UNAVAILABLE, None);
     };
     let Some(id) = cookie(&headers) else {
         return response(StatusCode::UNAUTHORIZED, None);
     };
-    let Ok(permit) = state.requests.clone().try_acquire_owned() else {
+    let Ok(permit) = state.admission.requests().clone().try_acquire_owned() else {
         return response(StatusCode::SERVICE_UNAVAILABLE, None);
     };
     let operation_state = state.clone();
     let operation_store = store.clone();
     let id = id.to_owned();
     let operation_id = id.clone();
-    let request_origin = origin(&headers, state.browser_http_allowed)
+    let request_origin = origin(&headers, state.browser.http_allowed)
         .expect("allowed browser request has an origin")
         .to_owned();
     let (reply, result) = oneshot::channel();
@@ -308,13 +308,13 @@ pub async fn logout(State(state): State<ProductRouteState>, headers: HeaderMap) 
     if !allowed(&headers, &state) {
         return response(StatusCode::FORBIDDEN, None);
     }
-    let Ok(permit) = state.requests.clone().try_acquire_owned() else {
+    let Ok(permit) = state.admission.requests().clone().try_acquire_owned() else {
         return response(StatusCode::SERVICE_UNAVAILABLE, None);
     };
     let operation_state = state.clone();
-    let operation_store = state.browser_sessions.clone();
+    let operation_store = state.browser.sessions.clone();
     let id = cookie(&headers).map(str::to_owned);
-    let request_origin = origin(&headers, state.browser_http_allowed)
+    let request_origin = origin(&headers, state.browser.http_allowed)
         .expect("allowed browser request has an origin")
         .to_owned();
     let (reply, removal) = oneshot::channel();

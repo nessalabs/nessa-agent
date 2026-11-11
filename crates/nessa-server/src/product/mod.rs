@@ -29,6 +29,7 @@
 //! `turn_timing` notes, on this machine only, how long a send waited for the
 //! first reply text. `nessa doctor` reads that file; nothing is sent.
 
+mod admission;
 mod attachment;
 pub(crate) mod catalogue_read;
 mod event_sequence;

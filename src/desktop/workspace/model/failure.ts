@@ -37,6 +37,8 @@ export type WorkspaceFailureReason =
   | "not-ready"
   | "not-listening"
   | "wrong-stage"
+  | "source-gone"
+  | "source-changed"
 
 /** The stage this window is on, and the stage the local server was asked for. */
 export type StageMismatch = {

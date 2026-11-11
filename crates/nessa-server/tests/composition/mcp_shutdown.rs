@@ -85,7 +85,7 @@ async fn the_mcp_stop_drains_admitted_writes_before_the_servers_stop() {
                 async { Ok(()) },
                 async { Ok(()) },
                 None::<std::future::Ready<Result<(), ConversationError>>>,
-                super::super::mcp_servers::stop(state.mcp_server_settings.as_deref(), &servers),
+                super::super::mcp_servers::stop(state.mcp.settings.as_deref(), &servers),
                 std::future::ready(Ok(())),
                 Duration::from_secs(30),
             )
@@ -169,7 +169,7 @@ async fn an_unfinished_drain_is_an_unconfirmed_shutdown() {
         async { Ok(()) },
         async { Ok(()) },
         None::<std::future::Ready<Result<(), ConversationError>>>,
-        super::super::mcp_servers::stop(state.mcp_server_settings.as_deref(), &servers),
+        super::super::mcp_servers::stop(state.mcp.settings.as_deref(), &servers),
         std::future::ready(Ok(())),
         Duration::from_secs(30),
     )
@@ -245,7 +245,7 @@ async fn x_early_admission_closes_and_inspections_are_cut_while_conversations_dr
                     let _ = draining.await;
                     Ok::<(), ConversationError>(())
                 }),
-                super::super::mcp_servers::stop(state.mcp_server_settings.as_deref(), &servers),
+                super::super::mcp_servers::stop(state.mcp.settings.as_deref(), &servers),
                 std::future::ready(Ok(())),
                 Duration::from_secs(30),
             )

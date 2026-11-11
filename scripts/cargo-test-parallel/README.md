@@ -6,6 +6,11 @@ tests cover discovery and injected failures. `e2e.test.mjs` uses a disposable,
 dependency-free workspace to exercise real Cargo/libtest/doctest processes and
 the required-check aggregate; `gateway-contract` runs it with stable Rust.
 
+`--run-packages "-p a -p b"` narrows which executables run, never what is
+built: the build and the doctests keep the full package arguments, so Cargo
+unifies features exactly as a full run does. The Linux leg passes the crates
+`scripts/ci-plan.mjs` says a pull request can reach; an empty value runs all.
+
 The Windows jobs build the same eight packages with the same flags. The
 `server-conversation` and `server-other` partitions resolve `nessa-server` and
 its library target from `cargo metadata`, match the artifact's package ID,

@@ -540,7 +540,7 @@ async fn successful_read_during_held_authority(input: HeldAuthorityInput, stalle
         },
     )
     .unwrap();
-    let capacity = state.record_reads.clone();
+    let capacity = state.admission.record_reads().clone();
     let count = if stalled { 4 } else { 1 };
     let mut tasks = Vec::new();
     let mut peers = Vec::new();
@@ -1026,7 +1026,7 @@ async fn held_physical_session() -> (
 
 async fn physical_read_timeout_retains_socket_admission(catalogue: bool) {
     let (state, session, id, source) = held_physical_session().await;
-    let capacity = state.record_reads.clone();
+    let capacity = state.admission.record_reads().clone();
     let (socket, mut peer) = test_socket(None);
     let first = tokio::spawn(run_authenticated(socket, state.clone(), session.clone()));
     let (socket, mut other) = test_socket(None);
@@ -1185,7 +1185,7 @@ const PASSIVE_METHODS: [&str; 5] = [
 
 async fn slot_busy_passive_refusal(method: &str, stalled: bool, overflow: bool) -> bool {
     let (state, session, id, source) = held_physical_session().await;
-    let capacity = state.record_reads.clone();
+    let capacity = state.admission.record_reads().clone();
     let (release, gate) = tokio::sync::oneshot::channel();
     let (socket, mut peer) = test_socket(None);
     let busy_inputs = Arc::new(AtomicUsize::new(0));

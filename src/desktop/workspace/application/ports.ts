@@ -53,6 +53,7 @@ import type {
 } from "../model/sharing"
 import type { QuestionFlights } from "./question-flights"
 import type { AccessMode } from "../model/access"
+import type { ChannelPlace } from "../model/channel-place"
 
 /**
  * A message sent to a session, as the source is asked to deliver it. Sent
@@ -424,9 +425,9 @@ export interface ChannelSource {
 
 /** Where a channel's main agent and its new threads run. */
 export interface ChannelPlacement {
-  readonly coordinatorPlacement: "local" | "boat"
+  readonly coordinatorPlacement: ChannelPlace
   /** `pool`: each new thread on a paired computer, by Devices' order. */
-  readonly threadPlacement: "local" | "boat" | "pool"
+  readonly threadPlacement: ChannelPlace
 }
 
 /** Why a channel was not made, by kind (`model/channel-draft.ts`), never a sentence. */

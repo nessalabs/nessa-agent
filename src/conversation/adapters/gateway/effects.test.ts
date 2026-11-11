@@ -1128,6 +1128,8 @@ it.each([
   ["attachment_unavailable", "attachment-unavailable"],
   ["conversation_not_found", "conversation-not-found"],
   ["conversation_capacity", "conversation-capacity"],
+  ["deferred_source_unavailable", "source-gone"],
+  ["deferred_source_changed", "source-changed"],
   ["agent_not_configured", "agent-not-configured"],
   ["agent_startup_deadline", "agent-startup-deadline"],
   ["invalid_request", "invalid-request"],

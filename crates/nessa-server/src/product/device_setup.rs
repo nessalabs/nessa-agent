@@ -28,7 +28,7 @@ pub(super) async fn dispatch(
     session: &AuthenticatedSession,
     frame: RequestFrame,
 ) -> OutgoingMessage {
-    let Some(setup) = state.device_setup.clone() else {
+    let Some(setup) = state.machines.device_setup.clone() else {
         return failure(&frame.id, UNAVAILABLE);
     };
     match frame.method.as_str() {

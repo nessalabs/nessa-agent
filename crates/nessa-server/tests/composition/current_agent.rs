@@ -14,19 +14,6 @@ use std::{
 
 use super::*;
 use crate::{
-    agent_install::{
-        application::{
-            ManagedExecutableUse, ManagedExecutableUseAdmissionFailure,
-            ManagedExecutableUseFailure, ManagedExecutableUseGuard, ManagedLaunchSnapshot,
-            Publication, PublicationLease, PublishFailure, RuntimeStore, StagedArchive,
-            StoreFailure,
-        },
-        domain::{
-            preferred_release, AgentName, ArchiveDigest, HostPlatform, PinnedRelease,
-            ReleasePlatform,
-        },
-        infrastructure::{host_platform, releases_for},
-    },
     agent_warm_up::{
         application::WarmUpRecords,
         domain::RuntimeFingerprint,
@@ -50,6 +37,17 @@ use crate::{
         MemorySummaries, Provider, ProviderFactory, RecordingFileLinkAudit, TestClock, Unlisted,
         DELETION_BUDGETS,
     },
+};
+use nessa_agent_install::{
+    application::{
+        ManagedExecutableUse, ManagedExecutableUseAdmissionFailure, ManagedExecutableUseFailure,
+        ManagedExecutableUseGuard, ManagedLaunchSnapshot, Publication, PublicationLease,
+        PublishFailure, RuntimeStore, StagedArchive, StoreFailure,
+    },
+    domain::{
+        preferred_release, AgentName, ArchiveDigest, HostPlatform, PinnedRelease, ReleasePlatform,
+    },
+    infrastructure::{host_platform, releases_for},
 };
 use nessa_auth::domain::{OrganizationId, PrincipalId};
 use nessa_protocol::conversation::domain::ConversationId;
@@ -1100,6 +1098,7 @@ fn service(root: &Path, resolver: Arc<CurrentAgentResolver>) -> ConversationServ
             ),
             clock: Arc::new(TestClock),
             environment: crate::conversation::infrastructure::in_process_environment().into(),
+            tool_config: Default::default(),
         },
         ConversationLimits::default(),
         Some(root.join("workspace").to_string_lossy().into_owned()),
