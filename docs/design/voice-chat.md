@@ -148,6 +148,7 @@ sequenceDiagram
 | Who may call what: only the desktop window says what the call looks like, only the pill presses | `call_pill.rs`, by the calling window's label |
 | The latest picture, for a pill page that loads late | the host; the pill reads it after it starts listening |
 | Where the pill stands | top centre of the main screen the first time, then wherever it was dragged, until the app quits |
+| Reaching the windows and the window server | `PillScreen` in `call_pill.rs`: the pill's lifecycle asks only this port, composition supplies the real one (`HostDependencies::call_pill`), and the host's tests stand in for it, failures included |
 | Showing without taking the keyboard, and floating beside a full-screen app | `platform` (`show_quietly`, `float_beside_fullscreen`); AppKit on macOS |
 
 A desktop page that loads again has no call, so the host puts the pill away

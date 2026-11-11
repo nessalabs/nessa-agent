@@ -106,8 +106,8 @@ fn main() {
                 // again has no call, so a pill left from the last one goes.
                 if webview.label() == desktop_window::DESKTOP_WINDOW {
                     let app = webview.app_handle();
-                    if let Some(pill) = app.try_state::<call_pill::CallPill>() {
-                        call_pill::desktop_page_reloading(app, &pill);
+                    if let Some(deps) = app.try_state::<HostDependencies>() {
+                        deps.call_pill.desktop_page_reloading();
                     }
                 }
             }
@@ -171,9 +171,6 @@ fn main() {
             call_pill::call_pill_drag,
         ])
         .setup(move |app| {
-            // Before anything that can return early: the pill's commands
-            // declare this state, and a command with no state panics.
-            app.manage(call_pill::CallPill::default());
             if let Some(pill) = app.get_webview_window(call_pill::CALL_WINDOW) {
                 platform::current().float_beside_fullscreen(&pill);
             }
@@ -363,8 +360,8 @@ fn main() {
                 // A call's pill floats only while this window is not in front.
                 if let WindowEvent::Focused(in_front) = event {
                     let app = window.app_handle();
-                    if let Some(pill) = app.try_state::<call_pill::CallPill>() {
-                        call_pill::desktop_front_changed(app, &pill, *in_front);
+                    if let Some(deps) = app.try_state::<HostDependencies>() {
+                        deps.call_pill.desktop_front_changed(*in_front);
                     }
                 }
                 if let WindowEvent::CloseRequested { api, .. } = event {
