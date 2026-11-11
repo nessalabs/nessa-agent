@@ -29,7 +29,7 @@ node verification/desktop/scripts/shared-controls.mjs --only rows \
 Fixed: `shared-controls: 4/4 held`. Reverting only the selector: `2/4 held`;
 both engines' columns fail with `kit row under its glyph: its fill is
 rgba(0, 0, 0, 0)`. Restoring: `shared-controls: 4/4 held`. Both sidebar cases
-also hold throughout. The same pinned frame retains pointer membership and
+also hold throughout, but their sample has no glyph row. The same pinned frame retains pointer membership and
 its action hit target in both engine screenshots. The rows check also measures
 selected/unread/name state, count/glyph hover, action visibility and hits.
 
@@ -46,3 +46,29 @@ assertion fails in all four profiles. This change must remain draft until
 applicable browser and other repository gates pass. Native WKWebView/manual
 interaction, the final full functional matrix and the scripted gateway flow
 have not been rerun for this isolated repair.
+
+Production performance was measured on this source in headless bundled Chromium,
+three runs per interaction/layout, 4× CPU throttle. Calibration ratio 4.65 held;
+the attributed 120 ms synthetic frame measured 211.5 ms. The interaction budget
+failed all 33 rows (`perf-budget: 1/34 held`, including calibration). For the
+sidebar toggle specifically:
+
+| Layout | Maximum (ms) | Median longest frame (ms) | Frames over 50 ms |
+| --- | ---: | ---: | ---: |
+| columns | 139.6 | 121.7 | 13 |
+| sidebar | 243.6 | 151.1 | 19 |
+
+These are failed contracts, not a performance improvement claim. The retained
+raw result includes each slow frame and available LoAF attribution; 455 of
+1,369 recorded slow frames have no LoAF attribution. Observed scripts include
+MessagePort callbacks, timers and keyboard/pointer handlers, alongside layout.
+This does not establish that the hover selector caused the slow frames. A
+suitable-host/control comparison remains needed before any performance verdict.
+Pressed, coarse-pointer and overview-glass precedence were reviewed in source;
+the focused browser receipts do not directly prove those states.
+
+The full shared-controls suite subsequently reports `30/32 held`: both WebKit
+segmented-control profiles time out at the unchanged 2000 ms bound. All four
+rows profiles pass in that run. Identity, badges, rims, empty states, keys and
+list measurements also pass. These adjacent failures remain qualification
+blockers; their assertions and deadlines were preserved.
