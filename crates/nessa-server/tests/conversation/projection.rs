@@ -11,9 +11,10 @@ use crate::conversation_test_support::{
     RecordingModeAudit, TestClock, Unlisted, DELETION_BUDGETS,
 };
 use nessa_auth::domain::{OrganizationId, PrincipalId};
+use nessa_projection::tool_uis::McpToolUis;
+use nessa_projection::IntoView;
+use nessa_projection::{bound_view, Projection, MAX_VIEW_BYTES};
 use nessa_protocol::conversation::domain::{ConversationApprovalMode, ConversationId};
-use nessa_protocol::conversation::projection::{bound_view, Projection, MAX_VIEW_BYTES};
-use nessa_protocol::conversation::tool_uis::McpToolUis;
 use nessa_protocol::conversation::view::ConversationTranscriptState;
 use nessa_protocol::conversation::view::{
     ConversationCapabilities, ConversationLifecyclePhase, ConversationMessageStatus,
@@ -84,6 +85,7 @@ async fn prepared_empty_history_is_complete_before_provider_attachment_in_both_s
                 message_commit_clock: Arc::new(RuntimeMessageCommitClock::new()),
                 clock: Arc::new(TestClock),
                 environment: crate::conversation::infrastructure::in_process_environment().into(),
+                tool_config: Default::default(),
             },
             ConversationLimits::default(),
             None,
@@ -171,6 +173,7 @@ async fn gateway_record_view_waits_for_message_commit() {
             message_commit_clock: Arc::new(HeldClock),
             clock: Arc::new(TestClock),
             environment: crate::conversation::infrastructure::in_process_environment().into(),
+            tool_config: Default::default(),
         },
         ConversationLimits::default(),
         None,
@@ -248,7 +251,7 @@ fn projection_for(conversation: &str) -> Projection {
             resume: false,
             permissions: true,
             image_input: false,
-            agent_features: OperationCapabilities::default().into(),
+            agent_features: OperationCapabilities::default().into_view(),
         },
         None,
     )
@@ -495,6 +498,7 @@ async fn assert_terminal_failure_round_trip(
             message_commit_clock: Arc::new(RuntimeMessageCommitClock::new()),
             clock: Arc::new(TestClock),
             environment: crate::conversation::infrastructure::in_process_environment().into(),
+            tool_config: Default::default(),
         },
         ConversationLimits::default(),
         None,
@@ -841,6 +845,7 @@ fn service_with_cached_tool_uis(
             message_commit_clock: Arc::new(RuntimeMessageCommitClock::new()),
             clock: Arc::new(TestClock),
             environment: crate::conversation::infrastructure::in_process_environment().into(),
+            tool_config: Default::default(),
         },
         ConversationLimits::default(),
         None,

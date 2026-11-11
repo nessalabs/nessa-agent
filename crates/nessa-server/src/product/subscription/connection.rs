@@ -213,9 +213,9 @@ impl ConnectionSubscriptions {
         };
         // The agent catalog reads no conversation, and is composed where
         // conversations are, as `agents.list` answers.
-        let service = state.conversations.clone();
+        let service = state.conversation.service.clone();
         match target {
-            Target::Agents if state.agents_catalog.is_none() => return not_configured(),
+            Target::Agents if state.agents.catalog.is_none() => return not_configured(),
             Target::View { .. } | Target::List { .. } | Target::Events { .. }
                 if service.is_none() =>
             {

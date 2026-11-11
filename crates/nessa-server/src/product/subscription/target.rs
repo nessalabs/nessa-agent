@@ -28,9 +28,11 @@ use crate::product::{
     socket::{admit_now, failure, success},
     state::{note_limit, ProductRouteState},
 };
+use crate::timer::clock;
 use nessa_auth::application::session::AuthenticatedSession;
 use nessa_auth::domain::PrincipalId;
-use nessa_protocol::conversation::{domain::ConversationId, projection::CommittedCursor};
+use nessa_projection::CommittedCursor;
+use nessa_protocol::conversation::domain::ConversationId;
 use nessa_protocol::product::generated::{
     product_event, product_method, ConversationListResult, ConversationListed,
     ConversationSubscribeResult, ConversationSubscriptionEndReason, ConversationSubscriptionEnded,
@@ -226,7 +228,7 @@ impl Sources {
         catalogue_owner: Option<&PrincipalId>,
     ) -> Result<Self, String> {
         let unavailable = || code_of(&ConversationError::Unavailable);
-        let records = || state.record_watches.as_ref().ok_or_else(unavailable);
+        let records = || state.reads.record_watches.as_ref().ok_or_else(unavailable);
         let closed = |ChangeWatchError::Closed| unavailable();
         Ok(match target {
             Target::Events { conversation, .. } => Self {
@@ -253,6 +255,7 @@ impl Sources {
             Target::List { .. } => {
                 let owner = caller(session, String::new());
                 let catalogue = state
+                    .reads
                     .catalogue_watches
                     .as_ref()
                     .ok_or_else(unavailable)?
@@ -470,7 +473,7 @@ async fn read_batch(
         // capacity, then is admitted, then reads, as `dispatch` orders a
         // request. Admitted before waiting for capacity, a grant revoked
         // during the wait would let one read through (row S30).
-        let permit = state.requests.clone().acquire_owned().await;
+        let permit = state.admission.requests().clone().acquire_owned().await;
         let (current, list_scope) = match authorize_batch(state, session, target).await {
             Ok(current) => current,
             // A batch's admission that could not be verified now (the
@@ -483,7 +486,7 @@ async fn read_batch(
                 Some(wait) => {
                     drop(permit);
                     attempt += 1;
-                    tokio::time::sleep(wait).await;
+                    clock::sleep(wait).await;
                     continue;
                 }
                 None => return Err(code.to_owned()),
@@ -539,7 +542,7 @@ async fn read_batch(
             Err(error) => match retry_after(&error, attempt) {
                 Some(wait) => {
                     attempt += 1;
-                    tokio::time::sleep(wait).await;
+                    clock::sleep(wait).await;
                 }
                 None => return Err(code_of(&error)),
             },
@@ -639,7 +642,7 @@ impl Sent {
         tokio::pin!(written);
         let delivered = tokio::select! {
             result = &mut written => result.is_ok(),
-            () = tokio::time::sleep(DELIVERY_TIMEOUT) => {
+            () = clock::sleep(DELIVERY_TIMEOUT) => {
                 if self.deliveries.withdraw(&self.id) {
                     note_limit("socket.subscription_delivery_deadline");
                     self.end(ConversationSubscriptionEndReason::Lagging, None);
@@ -675,7 +678,7 @@ impl Sent {
                 name: product_event::CONVERSATION_SUBSCRIPTION_ENDED,
                 payload,
             },
-            Deadline::Last(Instant::now() + DELIVERY_TIMEOUT),
+            Deadline::Last(clock::now() + DELIVERY_TIMEOUT),
             None,
         ));
     }
@@ -898,7 +901,7 @@ pub(super) async fn run(run: Run) {
         drop(deliveries.offer(
             &id,
             Outgoing::Reply(failure(&request, code)),
-            Deadline::Last(Instant::now() + DELIVERY_TIMEOUT),
+            Deadline::Last(clock::now() + DELIVERY_TIMEOUT),
             Some(slot),
         ));
     };
@@ -1001,7 +1004,7 @@ pub(super) async fn run(run: Run) {
             }
         }
         if matches!(target, Target::List { .. }) {
-            tokio::time::sleep(LIST_REREAD_FLOOR).await;
+            clock::sleep(LIST_REREAD_FLOOR).await;
             if sources.drain().await {
                 sent.catalogue += 1;
             }

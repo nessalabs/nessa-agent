@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process"
 import { readFileSync } from "node:fs"
 import test from "node:test"
 
-import { documentationOnly } from "./documentation-only.mjs"
+import { READ_BY_RUST, documentationOnly } from "./documentation-only.mjs"
 
 /**
  * This gate decides whether roughly thirty minutes of compilation runs. Every
@@ -46,6 +46,28 @@ test("no crate embeds a Markdown file, which is what makes Markdown inert", () =
     "a crate now compiles a Markdown file in, so Markdown is no longer inert:\n" +
       "  teach scripts/documentation-only.mjs to stop skipping on it.",
   )
+})
+
+/**
+ * A test can also open a document at run time and compare it: the server's
+ * limits test reads `docs/limits.md` through a path it spells in a literal.
+ * Such a file is code to CI. This finds every tracked Markdown path a Rust
+ * literal ends in and holds the exceptions list equal to it.
+ */
+test("every Markdown file a Rust source names is code, and no other", () => {
+  const cwd = new URL("..", import.meta.url)
+  const listed = (pattern) =>
+    execFileSync("git", ["ls-files", pattern], { cwd, encoding: "utf8" })
+      .split("\n")
+      .filter((path) => path.length > 0)
+  const rust = listed("*.rs")
+    .map((path) => readFileSync(new URL(`../${path}`, import.meta.url), "utf8"))
+    .join("\n")
+  const named = listed("*.md").filter(
+    (path) => path.includes("/") && rust.includes(`/${path}"`),
+  )
+  assert.deepEqual(named.toSorted(), [...READ_BY_RUST].toSorted())
+  for (const path of READ_BY_RUST) assert.equal(documentationOnly([path]), false, path)
 })
 
 /**

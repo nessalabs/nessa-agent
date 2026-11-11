@@ -202,7 +202,7 @@ impl Provider for BoatProvider {
         vm: &str,
         admission: &EnvironmentIdentity,
     ) -> Result<Arc<dyn WorkspaceRuntime>, Failure> {
-        let deadline = tokio::time::Instant::now() + CONNECT_BUDGET;
+        let deadline = crate::timer::clock::now() + CONNECT_BUDGET;
         let machines = self.machines(connection)?;
         machines
             .ready(&spec(connection, None)?, vm, &identity_to(admission)?)

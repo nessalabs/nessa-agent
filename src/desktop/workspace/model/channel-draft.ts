@@ -11,6 +11,7 @@
  */
 import type { AccessMode } from "./access"
 import type { Channel, ModelRef } from "./workspace-index"
+import type { ChannelPlace } from "./channel-place"
 
 /** The questions, in the order they are asked. */
 export const channelSteps = [
@@ -56,8 +57,8 @@ export interface ChannelDraft {
   readonly folder: string | null
   readonly model: ModelRef
   readonly access: AccessMode
-  readonly coordinatorPlacement: "local" | "boat"
-  readonly threadPlacement: "local" | "boat" | "pool"
+  readonly coordinatorPlacement: ChannelPlace
+  readonly threadPlacement: ChannelPlace
   readonly notes: string
   /** Absolute files and folders, in the order they were added, none twice. */
   readonly resources: readonly string[]
@@ -166,6 +167,7 @@ export type ChannelFailure =
   | "conflict"
   | "invalid"
   | "forbidden"
+  | "place-unavailable"
   | "unavailable"
 
 /** The step a failure sends the person back to; null when it is no one step's. */
@@ -177,6 +179,8 @@ export function failureStep(failure: ChannelFailure): ChannelStep | null {
       return "folder"
     case "resource-not-found":
       return "resources"
+    case "place-unavailable":
+      return "placement"
     case "invalid":
     case "limit":
     case "conflict":
@@ -205,6 +209,8 @@ export function failureText(failure: ChannelFailure): string {
       return "Something here isn’t one a channel can hold. Check the name and notes."
     case "forbidden":
       return "This window can’t make channels."
+    case "place-unavailable":
+      return "That computer isn’t connected now. Choose another place, or connect it first."
     case "unavailable":
       return "Nessa didn’t answer. Try again."
   }

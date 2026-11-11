@@ -39,7 +39,7 @@ pub(super) async fn dispatch(
     session: &AuthenticatedSession,
     frame: RequestFrame,
 ) -> OutgoingMessage {
-    let Some(service) = state.conversations.as_ref() else {
+    let Some(service) = state.conversation.service.as_ref() else {
         return failure(
             &frame.id,
             ConversationErrorCode::ConversationsNotConfigured.as_str(),

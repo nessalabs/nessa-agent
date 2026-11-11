@@ -2,6 +2,7 @@
 // a real conversation service (`docs/design/record-subscriptions.md`). Each
 // test is one row of that design's state table.
 
+use nessa_projection::IntoView;
 use super::*;
 use crate::conversation::application::{
     AccessAction, AccessAsk, AccessDecision, AccessDenial, ConversationAccessPolicyEvaluator,
@@ -342,6 +343,7 @@ fn conversation_service_with_summaries(
             ),
             clock: Arc::new(TestClock),
             environment: crate::conversation::infrastructure::in_process_environment().into(),
+            tool_config: Default::default(),
         },
         ConversationLimits::default(),
         None,
@@ -542,7 +544,7 @@ impl SubscriptionFixture {
     /// nothing would send it, so it asks no receiver binding.
     async fn owner_turn(&self, execution: &str) {
         let mut owner = self.state.clone();
-        owner.passive_read = None;
+        owner.reads.passive_read = None;
         let params = json!({
             "conversationId": self.id.to_string(),
             "requestId": format!("send-{execution}"),
@@ -730,7 +732,7 @@ impl SubscriptionFixture {
         let cold = RecordStorage::new(self._directory.path().join("records")).unwrap();
         cold.initialize().await.unwrap();
         let session = crate::conversation::application::conversation_session(&self.id);
-        let mut projection = nessa_protocol::conversation::projection::Projection::new(
+        let mut projection = nessa_projection::Projection::new(
             self.id.to_string(),
             nessa_protocol::conversation::view::ConversationCapabilities::read_only(),
             None,
@@ -745,7 +747,7 @@ impl SubscriptionFixture {
                     .unwrap()
                     .unwrap_or_default();
                 projection.replace_committed(&committed, &order, None);
-                projection.transcript_state(committed.state().into());
+                projection.transcript_state(committed.state().into_view());
                 let view = serde_json::to_value(projection.read()).unwrap();
                 if view["transcriptState"] == "complete" {
                     return view;
@@ -1209,7 +1211,7 @@ async fn a_grant_revoked_while_a_batch_waits_for_capacity_ends_it_before_the_rea
     let permits = u32::try_from(fixture.state.limits.requests()).unwrap();
     let held = fixture
         .state
-        .requests
+        .admission.requests()
         .clone()
         .acquire_many_owned(permits)
         .await
@@ -1657,7 +1659,7 @@ async fn closing_the_socket_drops_every_subscription() {
     .await
     .expect("every subscription's watch goes with its socket");
     assert_eq!(
-        fixture.state.requests.available_permits(),
+        fixture.state.admission.requests().available_permits(),
         fixture.state.limits.requests()
     );
 }
@@ -3494,7 +3496,7 @@ fn comment_params(method: &str, id: &ConversationId, request: &str) -> Value {
 /// devices: the fixture's session with no receiver binding.
 async fn owner_call(fixture: &SubscriptionFixture, method: &str, params: Value) -> Value {
     let mut owner = fixture.state.clone();
-    owner.passive_read = None;
+    owner.reads.passive_read = None;
     let frame = RequestFrame::new("call", method, &params).unwrap();
     let OutgoingMessage::Response(response) = dispatch(&owner, &fixture.session, frame).await
     else {

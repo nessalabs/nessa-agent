@@ -8,6 +8,7 @@ import {
   parseArgs,
   partitionExecutables,
   runParallelCargoTests,
+  selectPackages,
   testExecutables,
 } from "./cargo-test-parallel.mjs"
 
@@ -465,6 +466,93 @@ test("Cargo identity partitions exhaustively and disjointly, including Windows p
         partitionExecutables(all, { packages: [{ ...metadata.packages[0], targets }] }),
       /expected one.*library target/,
     )
+})
+
+test("a narrowed run builds and doctests the full list and runs only the named packages", async () => {
+  assert.deepEqual(
+    parseArgs([
+      "--concurrency",
+      "2",
+      "--run-packages",
+      "-p nessa-sdk",
+      "--partition",
+      "all",
+      "--",
+      ...packages,
+    ]),
+    { concurrency: 2, partition: "all", runPackages: ["nessa-sdk"], cargoArgs: packages },
+  )
+  // An empty selection, as the workflow passes off Linux, is every package.
+  assert.equal(
+    parseArgs(["--concurrency", "2", "--run-packages", "", "--", ...packages])
+      .runPackages,
+    undefined,
+  )
+  for (const bad of ["nessa-sdk", "-p", "-p a -x b"])
+    assert.throws(
+      () => parseArgs(["--concurrency", "2", "--run-packages", bad, "--", ...packages]),
+      /--run-packages takes/,
+    )
+  assert.throws(
+    () => parseArgs(["--partition", "all", "--concurrency", "2", "--", ...packages]),
+    /usage: cargo-test-parallel/,
+  )
+
+  const owned = (id, json) => JSON.stringify({ ...JSON.parse(json), package_id: id })
+  const workspace = {
+    packages: [
+      { name: "nessa-sdk", id: "sdk-id", targets: [] },
+      { name: "nessa-local-storage", id: "storage-id", targets: [] },
+    ],
+  }
+  const calls = []
+  const io = streams()
+  await runParallelCargoTests({
+    cargoArgs: packages,
+    concurrency: 2,
+    runPackages: ["nessa-sdk"],
+    ...io,
+    async run(command, args, invocation) {
+      calls.push({ command, args })
+      if (args.includes("--no-run"))
+        invocation.onStdout(
+          [
+            owned("sdk-id", artifact({})),
+            owned(
+              "storage-id",
+              artifact({
+                manifest: "/repo/crates/nessa-local-storage/Cargo.toml",
+                name: "nessa_local_storage",
+                executable: "/repo/target/debug/deps/nessa_local_storage-xyz",
+              }),
+            ),
+          ].join("\n"),
+        )
+      if (args[0] === "metadata") invocation.onStdout(JSON.stringify(workspace))
+      return 0
+    },
+  })
+  assert.deepEqual(calls[0].args, [
+    "test",
+    "--no-run",
+    "--message-format=json",
+    ...packages,
+  ])
+  assert.deepEqual(
+    calls.filter((call) => call.command !== "cargo").map((call) => call.command),
+    ["/repo/target/debug/deps/nessa_sdk-abc"],
+  )
+  assert.deepEqual(calls.at(-1).args, ["test", "--doc", ...packages])
+
+  const executables = testExecutables(owned("sdk-id", artifact({})))
+  assert.throws(
+    () => selectPackages(executables, workspace, ["nessa-vault"]),
+    /no package/,
+  )
+  assert.throws(
+    () => selectPackages(executables, workspace, ["nessa-local-storage"]),
+    /no test binaries/,
+  )
 })
 
 test("partition arguments reject misspellings before building", () => {

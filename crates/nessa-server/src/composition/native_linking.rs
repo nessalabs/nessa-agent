@@ -47,6 +47,7 @@ use crate::device_pairing::application::{
 use crate::devices::application::{DeviceSettings, SetupFuture};
 use crate::mcp_servers::application::StoreError;
 use crate::mcp_servers::infrastructure::{ConfigJson, Published};
+use crate::timer::clock;
 use crate::tunnel::application::{
     CloudflareTunnel, TunnelMode, TunnelProvider, TunnelSetting, TunnelToken,
     DEFAULT_TUNNEL_INGRESS,
@@ -267,7 +268,7 @@ impl ConfigLinking {
         {
             let restart = self.restart.clone();
             tokio::spawn(async move {
-                tokio::time::sleep(ANSWER_GRACE).await;
+                clock::sleep(ANSWER_GRACE).await;
                 restart.request();
             });
         }

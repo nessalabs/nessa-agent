@@ -8,7 +8,12 @@
 // host's own sign-in. This build is not e753740e1590e4f6. The image id stays the published worker until a rebuilt
 // image is published for this hash; a worker dialing in on the older
 // protocol takes this gateway's build.
-const PROTOCOL: &str = "239c696fd0e0b3f4";
+// The shared names and bounds moved out of the SDK into nessa-types (now in
+// the fingerprint), and the env serve sources read time through
+// crate::timer::clock, so this build is not main's 239c696fd0e0b3f4. The
+// frames and their meaning are unchanged; the image id stays the published
+// worker until a rebuilt image is published for this hash.
+const PROTOCOL: &str = "68607d55e45aebbc";
 const IMAGE: &str = "bsh_KC74wkwmxzdt57Y9MxwBdSJlBa75Lfjz0BvFC-6SuS4";
 pub(crate) fn worker_image() -> Option<&'static str> {
     (crate::env::LEASE_PROTOCOL == PROTOCOL).then_some(IMAGE)

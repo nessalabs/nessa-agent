@@ -17,12 +17,12 @@ use nessa_auth::application::ports::{
 };
 use nessa_auth::application::session::AuthenticatedSession;
 use nessa_auth::domain::{AudienceId, CredentialId, OrganizationId, ResourceId};
+use nessa_projection::{
+    bound_view, question_entry, review_entry, Projection, MAX_LISTED_REVIEWS, MAX_VIEW_BYTES,
+};
 use nessa_protocol::agents::AgentId;
 use nessa_protocol::clock::Clock as UptimeClock;
 use nessa_protocol::conversation::domain::{ConversationApprovalMode, ConversationModelId};
-use nessa_protocol::conversation::projection::{
-    bound_view, question_entry, review_entry, Projection, MAX_LISTED_REVIEWS, MAX_VIEW_BYTES,
-};
 use nessa_protocol::conversation::view::{
     ConversationCapabilities, ConversationMessage, ConversationMessageStatus,
     ConversationModelChangeStatus, ConversationModelChangeView, ConversationReviewKind,
@@ -81,7 +81,7 @@ async fn an_unopened_view_carries_the_conversations_model() {
         "nativeHooks":{"claude":"off","codex":"off"}
     }))
     .unwrap();
-    state.agents_catalog = Some(Arc::new(catalog));
+    state.agents.catalog = Some(Arc::new(catalog));
     let mut projection = Projection::new(
         "11111111-1111-4111-8111-111111111111".into(),
         ConversationCapabilities::read_only(),
@@ -129,7 +129,7 @@ async fn confirmed_effect(effect: ConversationModelChangeEffect, expected: &str)
         "nativeHooks":{"claude":"off","codex":"off"}
     }))
     .unwrap();
-    state.agents_catalog = Some(Arc::new(catalog));
+    state.agents.catalog = Some(Arc::new(catalog));
     let mut projection = Projection::new(
         "11111111-1111-4111-8111-111111111111".into(),
         ConversationCapabilities::read_only(),
@@ -178,7 +178,7 @@ async fn wire_control_budget(
         "\u{1}".repeat(ActionContext::MAX_IDENTITY_BYTES),
     )
     .unwrap();
-    Arc::get_mut(state.agents_catalog.as_mut().unwrap())
+    Arc::get_mut(state.agents.catalog.as_mut().unwrap())
         .unwrap()
         .agents[0]
         .models[0]
@@ -300,7 +300,7 @@ async fn a_schedule_store_failure_fails_the_conversation_view() {
     let projection = reading_projection();
 
     let (unbound, _, _, _, _) = mode_fixture();
-    state.conversations = Some(Arc::new(unbound));
+    state.conversation.service = Some(Arc::new(unbound));
     let wire = wire_view(&state, projection.read())
         .await
         .expect("no schedule database is preference off");
@@ -309,7 +309,8 @@ async fn a_schedule_store_failure_fails_the_conversation_view() {
         false
     );
     state
-        .conversations
+        .conversation
+        .service
         .take()
         .unwrap()
         .shutdown()
@@ -318,7 +319,7 @@ async fn a_schedule_store_failure_fails_the_conversation_view() {
 
     let (off, _, _, _, _) = mode_fixture();
     off.bind_scheduled_messages(Arc::new(ScheduleReads::new(false, false, false)));
-    state.conversations = Some(Arc::new(off));
+    state.conversation.service = Some(Arc::new(off));
     let wire = wire_view(&state, projection.read())
         .await
         .expect("a stored off preference is off");
@@ -327,7 +328,8 @@ async fn a_schedule_store_failure_fails_the_conversation_view() {
         false
     );
     state
-        .conversations
+        .conversation
+        .service
         .take()
         .unwrap()
         .shutdown()
@@ -336,13 +338,14 @@ async fn a_schedule_store_failure_fails_the_conversation_view() {
 
     let (preference, _, _, _, _) = mode_fixture();
     preference.bind_scheduled_messages(Arc::new(ScheduleReads::new(true, false, true)));
-    state.conversations = Some(Arc::new(preference));
+    state.conversation.service = Some(Arc::new(preference));
     assert!(
         wire_view(&state, projection.read()).await.is_err(),
         "a preference read failure is not preference off"
     );
     state
-        .conversations
+        .conversation
+        .service
         .take()
         .unwrap()
         .shutdown()
@@ -351,13 +354,14 @@ async fn a_schedule_store_failure_fails_the_conversation_view() {
 
     let (open, _, _, _, _) = mode_fixture();
     open.bind_scheduled_messages(Arc::new(ScheduleReads::new(false, true, true)));
-    state.conversations = Some(Arc::new(open));
+    state.conversation.service = Some(Arc::new(open));
     assert!(
         wire_view(&state, projection.read()).await.is_err(),
         "an open-row read failure does not drop auto-resuming"
     );
     state
-        .conversations
+        .conversation
+        .service
         .take()
         .unwrap()
         .shutdown()
@@ -384,7 +388,7 @@ async fn view_snapshot(first: bool, expect_enabled: bool, expect_resuming: bool)
     reads.flip_first = Some(first);
     reads.open_row = Some(open_row("turn-1"));
     service.bind_scheduled_messages(Arc::new(reads));
-    state.conversations = Some(Arc::new(service));
+    state.conversation.service = Some(Arc::new(service));
     let wire = wire_view(&state, view)
         .await
         .expect("one snapshot is readable");
@@ -397,7 +401,8 @@ async fn view_snapshot(first: bool, expect_enabled: bool, expect_resuming: bool)
         assert!(resuming.is_none(), "{resuming:?}");
     }
     state
-        .conversations
+        .conversation
+        .service
         .take()
         .unwrap()
         .shutdown()
@@ -486,7 +491,7 @@ fn reading_state() -> ProductRouteState {
         "nativeHooks":{"claude":"off","codex":"off"}
     }))
     .unwrap();
-    state.agents_catalog = Some(Arc::new(catalog));
+    state.agents.catalog = Some(Arc::new(catalog));
     state
 }
 

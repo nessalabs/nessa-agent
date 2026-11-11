@@ -142,7 +142,7 @@ async fn start(f: &Harness) -> (String, Client, Client, Arc<OwnerProbe>, Release
             metadata: f.grants.clone(),
             source: probe.clone(),
             policy: Arc::new(CedarConversationAccessPolicy::new().unwrap()),
-            capacity: f.state.record_reads.clone(),
+            capacity: f.state.admission.record_reads().clone(),
             gateway: f.state.gateway.clone(),
             http: preparation.clone(),
         })
@@ -178,11 +178,12 @@ async fn default_and_false_cursor_skip_head_admission_and_capacity_while_request
         2_345,
         "the exact native registration generation keeps its millisecond observation"
     );
-    let permits = f.state.record_reads.available_permits();
+    let permits = f.state.admission.record_reads().available_permits();
     assert!(permits > 0);
     let all = f
         .state
-        .record_reads
+        .admission
+        .record_reads()
         .clone()
         .try_acquire_many_owned(permits as u32)
         .unwrap();
@@ -363,11 +364,11 @@ async fn requested_head_deadline_returns_explicit_refusal_but_shutdown_retains_p
     let mut shutdown = Box::pin(f.runtime.shutdown());
     let retained = shutdown.as_mut().now_or_never().is_none();
     let untouched = before == native_fingerprint(&f);
-    let capacity_held = f.state.record_reads.available_permits();
+    let capacity_held = f.state.admission.record_reads().available_permits();
     drop(head);
     release.0.release();
     tokio::time::timeout(WAIT, shutdown).await.unwrap().unwrap();
-    let capacity_after = f.state.record_reads.available_permits();
+    let capacity_after = f.state.admission.record_reads().available_permits();
     drop(owner);
     drop(unprivileged);
     f.close().await.unwrap();

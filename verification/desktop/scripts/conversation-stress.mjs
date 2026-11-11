@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import {
+  boatProbe,
   channelPlacementSettings,
   channelRuntimeSettings,
   openAccounts,
@@ -32,6 +33,9 @@ import {
  *               the pointer; stopped, the spinner is gone
  *   parent-stop Stop cancels the parent, owned child and grandchild without a report restart
  *   fail        the turn fails; the next message is sent in the same conversation
+ *   restore     a restored conversation is opened and shows its saved record;
+ *               another, whose source file is moved aside, refuses Send and
+ *               keeps the draft
  *   usageLimit  the turn ends in a usage limit; the card shows, the project
  *               preference is turned on and back off, and the turn is not resumed
  *   signIn      the agent refuses the turn for sign-in; the card offers the
@@ -170,7 +174,19 @@ import {
  *               SIGTERM, drains and exits, and the next message sent in the
  *               window binds the conversation to the other, with new provider
  *               context, as the window's heading and the binding both say;
- *               both workers stop and linking is turned off again
+ *               a chat started from the window in a channel whose threads
+ *               use the pool runs on that worker and is told the channel's
+ *               notes but neither its folder nor its attached file, both
+ *               this gateway's paths; both workers stop and linking is
+ *               turned off again
+ *   place       native linking is turned on and a real `nessa env dial`
+ *               worker pairs; a channel naming a computer not connected is
+ *               refused channel_place_unavailable; in the channel's settings
+ *               New threads runs on Computer, the worker, chosen from the
+ *               computers listed; a chat started in the channel from the
+ *               window (⌘N, Send) is answered with its lease on that worker
+ *               and the window says where it runs; the channel goes back
+ *               here, the worker stops and linking is turned off again
  *   tunnel      native linking and then the web tunnel are turned on in
  *               Settings, each restarting the gateway, which starts a
  *               stand-in cloudflared (NESSA_TUNNEL_PROGRAM) and shows its
@@ -245,11 +261,12 @@ import {
  *               folder with the notes in the agent's system prompt (Claude).
  *               A second channel works in a folder chosen in the picker, and
  *               its first message runs there; the gateway lists both, with
- *               their folders, and each conversation in its own. The first
- *               then moves its new threads and its main agent to Boat and
- *               back from its settings dialog: new threads alone keep the
- *               main chat, a moved main agent names a fresh one and the one
- *               talked to stays in the channel
+ *               their folders, and each conversation in its own. When the
+ *               gateway reports Boat connected, the first then moves its new
+ *               threads and its main agent to Boat and back from its settings
+ *               dialog: new threads alone keep the main chat, a moved main
+ *               agent names a fresh one and the one talked to stays in the
+ *               channel. Without a connected Boat those Boat checks skip
  *   huddle      a turn shows the test server's talk board, the host side of
  *               a voice app: its frame is allowed the microphone, it opens in
  *               the chat's panel as one tab however often it asks (its card a
@@ -319,6 +336,7 @@ import {
   lstatSync,
   mkdirSync,
   mkdtempSync,
+  renameSync,
   readdirSync,
   readFileSync,
   realpathSync,
@@ -326,6 +344,7 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs"
+import { spawnSync } from "node:child_process"
 import { tmpdir } from "node:os"
 import { basename, dirname, isAbsolute, join } from "node:path"
 import { setTimeout as sleep } from "node:timers/promises"
@@ -1811,37 +1830,32 @@ async function makeChannel(
   // Both choices must remain independent, and Local must not allocate a VM.
   const coordinatorLocation = flow.getByLabel("Main agent location")
   const workerLocation = flow.getByLabel("New threads location")
-  // Boat is offered only while it is connected; otherwise connecting it is
-  // offered right here, and a channel can never be made on a Boat that would
-  // refuse every message.
-  const boatOffered = await waitFor(async () => {
-    const disabled = await coordinatorLocation
-      .locator('option[value="boat"]')
-      .evaluate((option) => option.disabled)
-    if (!disabled) return "offered"
-    return (await flow
-      .locator(
-        '[data-boat-connect] input[type="password"], [data-boat-connect] [data-boat-action="unlock"]',
-      )
-      .first()
-      .isVisible()
-      .catch(() => false))
-      ? "connect"
-      : null
-  }, 5_000)
-  if (!boatOffered)
-    failures.push(
-      "Boat is not connected, yet the placement step offers no way to connect it",
+  // Boat is offered only while it is connected. A run without a connected
+  // Boat (no keys, or a gateway that cannot say) skips these choices rather
+  // than failing on Boat's setup.
+  const boat = await boatProbe(run.client)
+  if (!boat.ready)
+    log(`${name}: Boat is ${boat.state}, so its placement choices are skipped`)
+  else {
+    const offered = await waitFor(
+      () =>
+        coordinatorLocation
+          .locator('option[value="boat"]')
+          .evaluate((option) => !option.disabled),
+      5_000,
     )
-  if (boatOffered === "offered") {
-    await coordinatorLocation.selectOption("boat")
-    if ((await workerLocation.inputValue()) !== "local")
-      failures.push("changing coordinator placement also changed worker placement")
-    await coordinatorLocation.selectOption("local")
-    await workerLocation.selectOption("boat")
-    if ((await coordinatorLocation.inputValue()) !== "local")
-      failures.push("changing worker placement also changed coordinator placement")
-    await workerLocation.selectOption("local")
+    if (!offered)
+      failures.push("Boat is connected, yet the placement step does not offer it")
+    else {
+      await coordinatorLocation.selectOption("boat")
+      if ((await workerLocation.inputValue()) !== "local")
+        failures.push("changing coordinator placement also changed worker placement")
+      await coordinatorLocation.selectOption("local")
+      await workerLocation.selectOption("boat")
+      if ((await coordinatorLocation.inputValue()) !== "local")
+        failures.push("changing worker placement also changed coordinator placement")
+      await workerLocation.selectOption("local")
+    }
   }
   await photograph(`${name}-3-placement`)
   await flow.locator(".new-channel-placement").focus()
@@ -2108,6 +2122,102 @@ async function awaitThread(run, step, parentId, failures, extra = "") {
   )
     failures.push("a report followed the reply the agent already took with subscribe")
   return found[1]
+}
+
+/**
+ * A chat started from the window in a channel whose threads use the pool,
+ * while a worker serves it. Its agent runs on that worker, so it is told the
+ * channel's name and notes, and neither the channel's folder nor the files
+ * attached to it: both are this gateway's paths, which it could not open.
+ * Checked at rest here, while the worker serves, as in `pool`.
+ */
+async function pooledChannelChat(run, step, failures) {
+  const name = `stress-pooled-r${step.index}-s${run.knobs.seed}`
+  const notes = `Notes for ${name}.`
+  const attached = mkdtempSync(join(run.stack.scratch, "pooled-"))
+  writeFileSync(join(attached, "brief.md"), "# Brief\n")
+  const resource = realpathSync(join(attached, "brief.md"))
+  const channel = await run.client.channels.create({
+    requestId: name,
+    name,
+    agent: run.stack.agent,
+    model: run.stack.profile.model,
+    notes,
+    resources: [resource],
+    threadPlacement: "pool",
+  })
+  const text = prompt(run, STRESS.channel, step, ` ${name}`)
+  try {
+    const conversationId = await run.exclusive(async () => {
+      // The sidebar lists the channel once the window reads the index again;
+      // a vault sealed by the linking restart asks to be unlocked first.
+      await run.page.reload()
+      await unlockRequestedVault(run.client, run.page)
+      await run.page
+        .locator(`${css.sidebar} nav`)
+        .getByText(name, { exact: true })
+        .first()
+        .click({ timeout: 15_000 })
+      await run.page.keyboard.press(keys.newSession)
+      const home = run.page.locator(`${css.focusedPane} ${css.paneHome}`)
+      await home.locator(css.field).waitFor({ timeout: 15_000 })
+      await home.locator(css.field).fill(text)
+      await home.getByRole(...composerControls.send).click({ timeout: 10_000 })
+      return waitFor(() => selectedStressConversation(run.page, text), 30_000)
+    })
+    if (!conversationId) {
+      failures.push(`the chat started in ${name} was never listed`)
+      return
+    }
+    const { view } = await settled(
+      run,
+      conversationId,
+      new Set(),
+      text,
+      "completed",
+      failures,
+    )
+    if (view?.lease?.environment !== "peer")
+      failures.push(
+        `the chat in ${name} runs on ${view?.lease?.environment}, not a worker`,
+      )
+    const reply = (view?.messages.find((each) => each.userText === text)?.parts ?? [])
+      .filter((part) => part.kind === "text")
+      .map((part) => part.text)
+      .join("")
+    if (!reply.startsWith(SAYS.channel))
+      failures.push(
+        `the agent in ${name} did not say where it works: ${fold(reply.slice(0, 300))}`,
+      )
+    // Every agent says where it works, which must not be the channel's
+    // folder here; only Claude's reply also says its system prompt, so only
+    // there can the notes and the attached file be checked.
+    const told = run.stack.agent === "claude"
+    for (const path of told ? [channel.folder, resource] : [channel.folder])
+      if (reply.includes(path))
+        failures.push(`the agent on a worker was told this gateway's path ${path}`)
+    if (told && !reply.includes(notes))
+      failures.push(`the agent in ${name} was not told the channel's notes`)
+    failures.push(...(await atRest(run, [conversationId])))
+  } finally {
+    // Its threads go back here, as in `place`: once the workers stop, a new
+    // thread on the pool would have nowhere to run.
+    await run.client.channels
+      .setPlacement({
+        requestId: `${name}-back`,
+        channelId: channel.channelId,
+        coordinatorPlacement: "local",
+        threadPlacement: "local",
+      })
+      .catch((error) => failures.push(`${name} did not go back here: ${explain(error)}`))
+    // Back to the default channel: the chat above left its list showing.
+    await run.page
+      .locator(`${css.sidebar} nav`)
+      .getByText("Conversations", { exact: true })
+      .first()
+      .click({ timeout: 10_000 })
+      .catch(() => {})
+  }
 }
 
 /**
@@ -3427,6 +3537,112 @@ const steps = {
       )
     if (!(await sendShown(run.page)))
       failures.push("a report returned the parent to Stop")
+  },
+
+  async restore(run, step, failures) {
+    const manifest = run.stack.restore
+    const loaded = manifest?.loaded?.[step.slot]
+    const missing = manifest?.missing?.[step.slot]
+    const source = manifest?.source
+    if (!loaded || !missing || !source)
+      throw new Error("the stress restore was not prepared")
+    if (!existsSync(source))
+      failures.push(`the restored source ${source} is not there to load`)
+    // Both restored conversations start archived, so followers do not fetch
+    // them before this step. Listing the loaded one is setup. The window
+    // opens it while the source is still there, and the client reads the
+    // result only after that.
+    const prepare = await connectClient(run.stack.gateway, INSTANCE, "panel")
+    let listed = false
+    try {
+      const result = await prepare.conversation.unarchive(loaded.id)
+      listed = result.applied === true
+      if (!listed) failures.push("the restored conversation was already listed")
+    } catch (error) {
+      failures.push(`the restored conversation could not be listed: ${error.message}`)
+    } finally {
+      prepare.close()
+    }
+    if (listed) {
+      await openStressConversation(run.page, loaded.id, loaded.title)
+      // The list preview is "restored-history". This sentence is only the turn.
+      if (!(await shows(run.page, "restored turn text", 15_000))) {
+        failures.push(
+          `the restored history was not shown: ${JSON.stringify((await pageText(run.page)).slice(0, 500))}`,
+        )
+      }
+      const panel = await connectClient(run.stack.gateway, INSTANCE, "panel")
+      try {
+        const view = await panel.conversation.read(loaded.id)
+        const said = (view.messages ?? [])
+          .map((turn) => `${turn.status ?? ""} ${turn.userText ?? ""}`)
+          .join("\n")
+        if (!said.includes("restored turn text"))
+          failures.push(
+            `the gateway view did not load the restored history: ${JSON.stringify(said)}`,
+          )
+      } catch (error) {
+        failures.push(`the gateway could not read the restored history: ${error.message}`)
+      } finally {
+        panel.close()
+      }
+    }
+    const hidden = `${source}.aside`
+    renameSync(source, hidden)
+    let revealed = false
+    try {
+      const listing = await connectClient(run.stack.gateway, INSTANCE, "panel")
+      try {
+        const result = await listing.conversation.unarchive(missing.id)
+        revealed = result.applied === true
+        if (!revealed)
+          failures.push("the conversation whose source is gone was already listed")
+      } catch (error) {
+        failures.push(
+          `the conversation whose source is gone could not be listed: ${error.message}`,
+        )
+      } finally {
+        listing.close()
+      }
+      if (revealed) {
+        await openStressConversation(run.page, missing.id, missing.title)
+        const text = prompt(run, STRESS.restore, step, " missing")
+        const box = dock(run.page).locator("textarea")
+        await box.fill(text)
+        await dock(run.page)
+          .getByRole(...composerControls.send)
+          .click({ timeout: 10_000 })
+        await expectShown(run.page, "no longer at its source", failures)
+        // The desktop keeps a refused send as the unsent message, which is the
+        // draft: the words stay on screen, in the field or beside the refusal.
+        const kept = await waitFor(
+          async () =>
+            (await box.inputValue()) === text ||
+            (await pageText(run.page)).includes(text),
+          10_000,
+        )
+        if (!kept) {
+          failures.push(
+            `a send whose restored source is gone did not keep the draft: ${JSON.stringify(await box.inputValue())} ${JSON.stringify((await pageText(run.page)).slice(0, 500))}`,
+          )
+        }
+      }
+    } finally {
+      if (revealed) {
+        const listing = await connectClient(run.stack.gateway, INSTANCE, "panel")
+        try {
+          await listing.conversation.archive(missing.id)
+        } catch (error) {
+          failures.push(
+            `the conversation whose source is gone stayed listed: ${error.message}`,
+          )
+        } finally {
+          listing.close()
+        }
+      }
+      if (existsSync(hidden)) renameSync(hidden, source)
+    }
+    await openStressConversation(run.page, run.main.id, run.main.title)
   },
 
   async fail(run, step, failures) {
@@ -5252,6 +5468,9 @@ const steps = {
       // (`environment_not_configured`), so it is checked at rest here, while
       // one serves, and not in `run.checked` for the run's own rest check.
       failures.push(...(await atRest(run, [conversationId])))
+      // A channel whose threads use the pool: its agent runs on the worker
+      // and is told the channel and its notes, never a path of this gateway.
+      await pooledChannelChat(run, step, failures)
       const stopped = Date.now()
       if (!(await to.stop("SIGTERM", 30_000)))
         failures.push(`worker ${to.label} did not drain and exit within 30 s`)
@@ -5273,6 +5492,211 @@ const steps = {
         await openLinkedDevices(run.page)
         if (await switchLinking(run, false, failures)) await closeSettings(run.page)
       })
+    }
+  },
+
+  async place(run, step, failures) {
+    // A channel's new threads run on one named computer, chosen in its
+    // settings from the computers connected now. Workers dial the native
+    // listener, off until a step turns it on, as in `pool`.
+    const linked = await run.exclusive(async () => {
+      await openLinkedDevices(run.page)
+      const on = await switchLinking(run, true, failures)
+      if (on) await closeSettings(run.page)
+      return on
+    })
+    if (!linked) return
+    let worker
+    let owner
+    let channel
+    try {
+      owner = await connectClient(run.stack.gateway, INSTANCE, "owner")
+      worker = await startWorker({
+        owner,
+        address: run.nativeAddress,
+        agent: run.stack.agent,
+        launch: scriptedLaunch(run.stack.agent, {
+          scenario: run.stack.scenario,
+          nativeContext: run.stack.nativeContext,
+          model: run.stack.profile.model,
+        }),
+        label: `p${step.index}`,
+        connected: async (name) =>
+          (await offers(run, (environments) => environments.includes(name))).includes(
+            name,
+          ),
+      })
+      channel = await run.client.channels.create({
+        requestId: `stress-place-r${step.index}-s${run.knobs.seed}`,
+        name: `stress-place-r${step.index}-s${run.knobs.seed}`,
+        agent: run.stack.agent,
+        model: run.stack.profile.model,
+      })
+      // A computer the gateway cannot reach now is refused, and nothing
+      // changes.
+      const absent = `peer:${"0".repeat(64)}`
+      const refused = await run.client.channels
+        .setPlacement({
+          requestId: `stress-place-absent-${channel.channelId}`,
+          channelId: channel.channelId,
+          coordinatorPlacement: "local",
+          threadPlacement: absent,
+        })
+        .then(
+          () => "accepted",
+          (error) => error.code,
+        )
+      if (refused !== "channel_place_unavailable")
+        failures.push(`a channel naming a computer not connected answered ${refused}`)
+      // The person chooses it in the channel's settings: Computer, then
+      // the worker from the computers listed.
+      await run.exclusive(async () => {
+        // The sidebar lists the channel once the window reads the index
+        // again; a reload reads it now.
+        try {
+          await run.page.reload()
+          // Linking restarted the gateway, which sealed its vault: the
+          // reloaded window asks for it, as a person would be asked.
+          await unlockRequestedVault(run.client, run.page)
+          const named = run.page
+            .locator(`${css.sidebar} nav`)
+            .getByText(channel.name, { exact: true })
+            .first()
+          await named.hover({ timeout: 15_000 })
+          await run.page
+            .locator(
+              `${css.channelSettingsOpen}[data-channel-settings-open="${channel.channelId}"]`,
+            )
+            .click()
+          await chooseComputer()
+        } catch (error) {
+          if (run.evidence)
+            await run.page.screenshot({
+              path: join(run.evidence, `place-${run.engine}-failed.png`),
+            })
+          failures.push(
+            `choosing the computer in the channel settings: ${explain(error)}`,
+          )
+        } finally {
+          // Closed whatever happened, menu first: nothing after this step
+          // can reach the window past an open dialog.
+          const dialog = run.page.locator(css.channelSettingsDialog)
+          for (let tries = 0; tries < 3 && (await dialog.count()) > 0; tries += 1) {
+            await run.page.keyboard.press(keys.escape)
+            await dialog.waitFor({ state: "detached", timeout: 2_000 }).catch(() => {})
+          }
+        }
+      })
+      async function chooseComputer() {
+        const control = run.page
+          .locator(css.channelSettingsDialog)
+          .locator(`[data-channel-placement="${channel.channelId}"]`)
+        const row = control.locator('[data-placement-row="threads"]')
+        await row.getByRole("button", { name: "Computer", exact: true }).click()
+        await control.locator('[data-placement-computer="threads"]').click()
+        await run.page.locator(`[data-placement-choice="${worker.name}"]`).click()
+        const shown = await waitFor(
+          async () =>
+            (await control.getAttribute("data-thread-placement")) === worker.name,
+          10_000,
+        )
+        if (!shown)
+          failures.push(`the channel settings do not show new threads on ${worker.name}`)
+        if (run.evidence)
+          await run.page.screenshot({
+            path: join(run.evidence, `place-${run.engine}-${channel.channelId}.png`),
+          })
+      }
+      const { channels } = await run.client.channels.list()
+      const listed = channels.find((each) => each.channelId === channel.channelId)
+      if (
+        listed?.threadPlacement !== worker.name ||
+        listed.coordinatorPlacement !== "local"
+      )
+        failures.push(
+          `the channel runs ${listed?.coordinatorPlacement} / ${listed?.threadPlacement}, not local / ${worker.name}`,
+        )
+      if (failures.length) return
+      // A new chat started in it from the window, as a person would (the
+      // channel chosen, ⌘N, typed and sent), runs on that computer, and
+      // the window says so above its transcript.
+      const text = prompt(run, STRESS.reply, step, " place")
+      const conversationId = await run.exclusive(async () => {
+        await run.page
+          .locator(`${css.sidebar} nav`)
+          .getByText(channel.name, { exact: true })
+          .first()
+          .click({ timeout: 10_000 })
+        await run.page.keyboard.press(keys.newSession)
+        const home = run.page.locator(`${css.focusedPane} ${css.paneHome}`)
+        await home.locator(css.field).waitFor({ timeout: 15_000 })
+        await home.locator(css.field).fill(text)
+        await home.getByRole(...composerControls.send).click({ timeout: 10_000 })
+        return waitFor(() => selectedStressConversation(run.page, text), 30_000)
+      })
+      if (!conversationId) {
+        failures.push(`the chat started in ${channel.name} was never listed`)
+        return
+      }
+      const { view } = await settled(
+        run,
+        conversationId,
+        new Set(),
+        text,
+        "completed",
+        failures,
+      )
+      const { conversations } = await run.client.conversation.list({})
+      const summary = conversations.find((each) => each.conversationId === conversationId)
+      if (summary?.channelId !== channel.channelId)
+        failures.push(
+          `the chat started in ${channel.name} is in ${summary?.channelId ?? "no channel"}`,
+        )
+      if (view?.lease?.environment !== "peer" || view.lease.host !== worker.name)
+        failures.push(
+          `a thread in a channel on ${worker.name} runs on ${view?.lease?.environment} ${view?.lease?.host}`,
+        )
+      const said = run.page.locator(`${css.focusedPane} [data-workspace-place="peer"]`)
+      if (!(await waitFor(async () => (await said.count()) > 0, 10_000)))
+        failures.push(`the window does not say the chat runs on ${worker.name}`)
+      else if (run.evidence)
+        await run.page.screenshot({
+          path: join(run.evidence, `place-${run.engine}-chat.png`),
+        })
+      // Checked at rest while its computer serves: with none, the gateway
+      // refuses to read it, as in `pool`.
+      failures.push(...(await atRest(run, [conversationId])))
+    } finally {
+      if (channel)
+        await run.client.channels
+          .setPlacement({
+            requestId: `stress-place-back-${channel.channelId}`,
+            channelId: channel.channelId,
+            coordinatorPlacement: "local",
+            threadPlacement: "local",
+          })
+          .catch((error) =>
+            failures.push(`the channel did not go back here: ${explain(error)}`),
+          )
+      if (worker) {
+        if (run.evidence)
+          writeFileSync(join(run.evidence, `worker-${worker.label}.log`), worker.log())
+        await worker.close()
+      }
+      owner?.close()
+      await run.exclusive(async () => {
+        await openLinkedDevices(run.page)
+        if (await switchLinking(run, false, failures)) await closeSettings(run.page)
+      })
+      // Back to the main conversation, in the default channel: the chat
+      // above left the session list showing the step's channel.
+      await run.page
+        .locator(`${css.sidebar} nav`)
+        .getByText("Conversations", { exact: true })
+        .first()
+        .click({ timeout: 10_000 })
+        .catch(() => {})
+      await openStressConversation(run.page, run.main.id, run.main.title)
     }
   },
 
@@ -10502,9 +10926,42 @@ async function startStack(options) {
       ? await vmBackgroundFixture(directory, PARK_IDLE_SECONDS)
       : null
     Object.assign(environment, vmFixture?.environment)
+    let restoreReport = null
     stack = await startGatewayStack(options, INSTANCE, {
       executable: vmFixture?.executable,
       vault: true,
+      beforeListen:
+        knobs.restores > 0
+          ? async ({ directory, stage, instance }) => {
+              const bin = join(repoRoot, "target/debug/nessa-backup-restore")
+              const destination = join(directory, "stress-restore")
+              const namespace = join(directory, stage, "instances", instance)
+              const result = spawnSync(
+                bin,
+                [
+                  "prepare",
+                  "--destination",
+                  destination,
+                  "--namespace",
+                  namespace,
+                  "--count",
+                  String(knobs.restores),
+                ],
+                { encoding: "utf8" },
+              )
+              if (result.status !== 0) {
+                throw new Error(
+                  `stress restore prepare failed: ${result.stdout ?? ""}\n${result.stderr ?? ""}`,
+                )
+              }
+              const line = result.stdout
+                .trim()
+                .split("\n")
+                .filter((each) => each.includes('"prepared"'))
+                .at(-1)
+              restoreReport = JSON.parse(line)
+            }
+          : undefined,
       environment,
       servers,
       webhooks:
@@ -10546,6 +11003,7 @@ async function startStack(options) {
     // this one, so what another step put there (the `ssh` step's stand-in)
     // stays for the launches after it.
     stack.gatewayPath = environment.PATH ?? process.env.PATH ?? ""
+    stack.restore = restoreReport
   } catch (error) {
     await stack?.close()
     await github?.close()

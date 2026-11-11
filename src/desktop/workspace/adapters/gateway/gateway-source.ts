@@ -2595,6 +2595,10 @@ function reasonFor(
     case ConversationErrorCode.DrivePolicyUnenforceable:
     case ConversationErrorCode.Revoked:
       return uncertain ? "unavailable" : "not-supported"
+    case ConversationErrorCode.DeferredSourceUnavailable:
+      return "source-gone"
+    case ConversationErrorCode.DeferredSourceChanged:
+      return "source-changed"
     // Not done now, or not known to be: busy, starting, stopped, storage or
     // audit that did not answer, an outcome the gateway could not settle.
     case ConversationErrorCode.ApprovalModeNotApplied:

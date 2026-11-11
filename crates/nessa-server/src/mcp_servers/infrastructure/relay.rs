@@ -18,6 +18,8 @@ use crate::mcp_servers::application::BuiltInServer;
 use crate::mcp_servers::domain::{
     admit, configuration_digest, remote_configuration_digest, ConfigurationKey, StandInRefusal,
 };
+#[cfg(unix)]
+use crate::timer::clock;
 use nessa_sdk::infrastructure::mcp::{
     McpError, McpOwner, McpServerLaunch, McpServers, McpSession, RemoteMcpServer,
     INITIALIZE_TIMEOUT,
@@ -352,7 +354,7 @@ impl Relay {
                 }
                 Err(error) => {
                     tracing::warn!(%error, "MCP relay socket could not accept a stand-in");
-                    tokio::time::sleep(Duration::from_millis(100)).await;
+                    clock::sleep(Duration::from_millis(100)).await;
                 }
             }
         }

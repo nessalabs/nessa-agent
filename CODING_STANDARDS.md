@@ -24,7 +24,11 @@ must apply these merge gates together with [AGENTS.md](AGENTS.md),
 5. **Failure modes are tested.** New error or reject paths have tests on the
    typed cases.
 6. **Checks that touch the change pass.** Formatters, linters, and the relevant
-   `cargo` / `pnpm` suites for what you edited.
+   `cargo` / `pnpm` suites for what you edited. `pnpm install` turns on a
+   pre-push hook ([scripts/pre-push.mjs](scripts/pre-push.mjs)) that runs what
+   `pnpm check:changed --plan --git` selects and refuses the push when one
+   fails. A Rust rule every crate holds goes in the `[workspace.lints]` table of
+   the root [Cargo.toml](Cargo.toml), with one line on why.
 7. **Degrade honestly.** Survivable edge failures stay survivable (log and
    continue). Missing capabilities stay explicit no-ops — no fake success.
 8. **Organization is reviewed.** Put changes in the owning feature and layer;
@@ -894,6 +898,15 @@ real external progress. Test real adapter
 and cross-process exclusion where promised, and keep test controls out of public
 SDK configuration.
 
+Gateway code reads the time and waits for it in one place: an injected
+`Timer` where a test drives the deadline by hand, otherwise
+`crate::timer::clock` (`nessa_timer::clock`). `clock::now`, `clock::sleep` and
+`clock::sleep_until` are the runtime's clock, so a paused test moves every
+deadline the code measures; `clock::os` is the operating system's clock for a
+thread no runtime drives; `clock::wall_now` is for timestamps, never for
+measuring a wait. Do not call `Instant::now`, `SystemTime::now`,
+`tokio::time::sleep` or `std::thread::sleep` directly.
+
 ### Session persistence checks
 
 Measure write growth and validation work with both longer history and smaller
@@ -1060,3 +1073,20 @@ paid on every push, and on three runners if it lands in the matrix.
   `include_str!`, a check that parses a document — that rule stops being true and
   has to change with it. `documentation-only.test.mjs` fails with instructions
   when the Rust half of it breaks; the rest is on you to notice.
+- A code change runs only the Rust suites it can reach. `scripts/ci-plan.mjs`
+  reads the pull request's files and diffs: a file in a crate reaches that crate
+  and every crate depending on it; a file under `src/`, `packages/`,
+  `verification/`, `docs/` or `experiments/`, a web or config file at the root,
+  or Markdown a Rust test reads reaches a crate only when a string literal in
+  its Rust names it (a path cited in a comment does not count); a crate's
+  `Cargo.toml` and anything else reach everything. Every leg still builds the
+  full crate list, so features unify as on `main`; Linux runs only the reached
+  crates' test binaries. macOS and Windows always run clippy, and run their test
+  suites only when a reached Rust file is platform code (a platform `cfg`,
+  `target_os`, `std::os`, a system crate, a module declared under a platform
+  `cfg`, a platform-named path, or a changed line naming one), or a reached data
+  file is named by platform code. Shared code that behaves differently per
+  system without naming one waits for the push to `main`, which runs
+  everything. If you make Rust read a frontend file by a path it does not spell
+  out (built with `join`, found by walking a folder), name the file in a string
+  literal next to the read, or the plan will not see the dependency.

@@ -6,6 +6,8 @@
 //! Nessa does not get to choose.
 
 use super::*;
+#[cfg(unix)]
+use std::time::Instant;
 
 #[test]
 fn the_file_asked_about_is_the_one_codex_writes_a_chatgpt_login_into() {

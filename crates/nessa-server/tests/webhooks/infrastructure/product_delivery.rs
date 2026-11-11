@@ -244,7 +244,7 @@ async fn mount(f: &Harness, http: Arc<dyn WebhookHttp>) -> Arc<RecordStorage> {
             metadata: f.grants.clone(),
             source,
             policy: Arc::new(CedarConversationAccessPolicy::new().unwrap()),
-            capacity: f.state.record_reads.clone(),
+            capacity: f.state.admission.record_reads().clone(),
             gateway: f.state.gateway.clone(),
             http,
         })
@@ -519,7 +519,7 @@ async fn a_preparing_source_pauses_without_failing_the_shared_command_owner_or_s
             metadata: f.grants.clone(),
             source: Arc::new(PreparingSource(entered.clone())),
             policy: Arc::new(CedarConversationAccessPolicy::new().unwrap()),
-            capacity: f.state.record_reads.clone(),
+            capacity: f.state.admission.record_reads().clone(),
             gateway: f.state.gateway.clone(),
             http: recipient.transport.clone(),
         })

@@ -17,8 +17,10 @@ CREATE TABLE channels (
     -- A JSON array of absolute paths, in the order the person gave them.
     resources TEXT NOT NULL,
     created_at INTEGER NOT NULL,
-    coordinator_placement TEXT NOT NULL DEFAULT 'local' CHECK (coordinator_placement IN ('local', 'boat')),
-    thread_placement TEXT NOT NULL DEFAULT 'local' CHECK (thread_placement IN ('local', 'boat', 'pool')),
+    -- Where its main agent and its threads run: `local`, `boat`, `pool`, or
+    -- one computer by its place name (ChannelExecution reads them).
+    coordinator_placement TEXT NOT NULL DEFAULT 'local' CHECK (length(coordinator_placement) BETWEEN 1 AND 253),
+    thread_placement TEXT NOT NULL DEFAULT 'local' CHECK (length(thread_placement) BETWEEN 1 AND 253),
     UNIQUE (organization_id, owner_id, request_id)
 ) STRICT;
 CREATE TABLE channel_conversations (
@@ -36,4 +38,4 @@ CREATE TABLE channel_coordinator_replacements (
     cause TEXT NOT NULL CHECK (cause IN ('coordinator_conversation_erased', 'coordinator_moved')),
     UNIQUE (channel, generation)
 ) STRICT;
-PRAGMA user_version = 5;
+PRAGMA user_version = 6;

@@ -6,12 +6,14 @@
 //!
 //! Nothing here reads a secret. Every question is whether a credential exists.
 
+#[cfg(any(test, target_os = "macos", not(unix)))]
+use crate::timer::clock;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 #[cfg(any(test, target_os = "macos", not(unix)))]
 use std::process::{Child, ExitStatus};
 #[cfg(any(test, target_os = "macos", not(unix)))]
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use crate::agents::application::ProbeFailure;
 
@@ -111,7 +113,7 @@ const PROCESS_POLL_INTERVAL: Duration = Duration::from_millis(20);
 /// looking at.
 #[cfg(any(test, target_os = "macos", not(unix)))]
 pub(super) fn wait_or_kill(child: &mut Child, limit: Duration) -> Option<ExitStatus> {
-    let deadline = Instant::now() + limit;
+    let deadline = clock::os::now() + limit;
     loop {
         match child.try_wait() {
             Ok(Some(status)) => return Some(status),
@@ -120,11 +122,11 @@ pub(super) fn wait_or_kill(child: &mut Child, limit: Duration) -> Option<ExitSta
             Ok(None) => {}
             Err(_) => break,
         }
-        let left = deadline.saturating_duration_since(Instant::now());
+        let left = deadline.saturating_duration_since(clock::os::now());
         if left.is_zero() {
             break;
         }
-        std::thread::sleep(PROCESS_POLL_INTERVAL.min(left));
+        clock::os::sleep(PROCESS_POLL_INTERVAL.min(left));
     }
     // Kill *and* wait. Killing alone leaves a zombie holding a process table
     // entry for as long as this server runs.

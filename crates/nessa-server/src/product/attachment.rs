@@ -38,7 +38,7 @@ pub(super) async fn dispatch(
     // narrower thing, sending it from here told somebody attaching an image to
     // go and add a runtime for the agent their conversation named — on a
     // gateway that runs no conversations at all.
-    let Some(attachments) = state.attachments.as_ref() else {
+    let Some(attachments) = state.files.attachments.as_ref() else {
         return failure(
             &frame.id,
             ConversationErrorCode::ConversationsNotConfigured.as_str(),
@@ -98,7 +98,7 @@ pub(super) async fn dispatch_write(
     state: &ProductRouteState,
     frame: RequestFrame,
 ) -> OutgoingMessage {
-    let Some(attachments) = state.attachments.as_ref() else {
+    let Some(attachments) = state.files.attachments.as_ref() else {
         return failure(
             &frame.id,
             ConversationErrorCode::ConversationsNotConfigured.as_str(),
@@ -116,6 +116,7 @@ pub(super) async fn dispatch_write(
     };
     let received = params.offset + bytes.len() as u64;
     match state
+        .files
         .socket_uploads
         .write(
             attachments,
@@ -195,7 +196,7 @@ pub(super) async fn dispatch_read(
     session: &AuthenticatedSession,
     frame: RequestFrame,
 ) -> OutgoingMessage {
-    let Some(reads) = state.held_reads.as_ref() else {
+    let Some(reads) = state.files.held_reads.as_ref() else {
         return failure(
             &frame.id,
             ConversationErrorCode::ConversationsNotConfigured.as_str(),

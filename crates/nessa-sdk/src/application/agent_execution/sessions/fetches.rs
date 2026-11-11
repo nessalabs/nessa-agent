@@ -21,7 +21,7 @@ use super::ArtifactValueError;
 pub struct EnvironmentPath(Box<str>);
 impl EnvironmentPath {
     /// Longest path, in bytes: the most an environment reads or answers.
-    pub const MAX_BYTES: usize = 1024;
+    pub const MAX_BYTES: usize = nessa_types::leases::MAX_ENVIRONMENT_PATH_BYTES;
 
     /// Accept `value` when it is 1 to [`Self::MAX_BYTES`] bytes; otherwise
     /// [`ArtifactValueError::Path`].

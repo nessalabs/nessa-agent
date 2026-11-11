@@ -190,7 +190,7 @@ mod attachment_gateway {
         let fixture = Fixture::new(AttachmentLimits::default());
         let state = attachment_state(&fixture);
         let held = state
-            .requests
+            .admission.requests()
             .clone()
             .acquire_many_owned(128)
             .await
@@ -224,13 +224,13 @@ mod attachment_gateway {
         // Every begin slot taken, as a stalled audit sink would leave them: a
         // begin is turned away, and a close is still admitted and answered by
         // its own service rather than by capacity.
-        let begins = state.upload_begins.clone().acquire_many_owned(16).await;
+        let begins = state.admission.upload_begins().clone().acquire_many_owned(16).await;
         send_command(&peer, "begin", "attachment.begin", begin(BYTES, "text/plain"));
         assert_eq!(
             response(&mut peer).await["error"]["code"],
             "temporarily_unavailable"
         );
-        assert_eq!(state.controls.available_permits(), 32);
+        assert_eq!(state.admission.controls().available_permits(), 32);
         send_command(&peer, "close", "conversation.close", close());
         // This fixture runs no conversations at all, which is its own answer
         // rather than "no runtime is configured for that agent": what matters
@@ -244,7 +244,7 @@ mod attachment_gateway {
 
         // And the other way about: with every control slot taken, a begin is
         // still admitted.
-        let controls = state.controls.clone().acquire_many_owned(32).await;
+        let controls = state.admission.controls().clone().acquire_many_owned(32).await;
         send_command(&peer, "close-2", "conversation.close", close());
         assert_eq!(
             response(&mut peer).await["error"]["code"],
@@ -547,7 +547,7 @@ mod attachment_gateway {
         assert_eq!(payload["digest"], digest_of(b"small jpeg").to_string());
         assert_eq!(payload["mimeType"], "image/jpeg");
         assert_eq!(payload["size"], 10);
-        assert_eq!(state.socket_uploads.in_progress(), 0);
+        assert_eq!(state.files.socket_uploads.in_progress(), 0);
 
         // The ticket was spent by its upload.
         let reply = chat_request(
@@ -590,7 +590,7 @@ mod attachment_gateway {
         )
         .await;
         assert_eq!(refused(reply), "upload_failed");
-        assert_eq!(state.socket_uploads.in_progress(), 0);
+        assert_eq!(state.files.socket_uploads.in_progress(), 0);
         // The piece that would have been right is now one of no upload.
         let reply = chat_request(
             &state,
@@ -610,7 +610,7 @@ mod attachment_gateway {
         )
         .await;
         assert_eq!(refused(reply), "upload_failed");
-        assert_eq!(state.socket_uploads.in_progress(), 0);
+        assert_eq!(state.files.socket_uploads.in_progress(), 0);
     }
 
     #[tokio::test]
@@ -666,7 +666,7 @@ mod attachment_gateway {
             let reply = chat_request(&state, &session, "attachment.write", params).await;
             assert_eq!(refused(reply), expected);
         }
-        assert_eq!(state.socket_uploads.in_progress(), 0);
+        assert_eq!(state.files.socket_uploads.in_progress(), 0);
         // Without the chat grant the method is not reachable at all.
         let reader = chat_session(&state, "reader").await;
         let reply =

@@ -200,6 +200,11 @@ const failures: Partial<Record<ConversationErrorCode, CommandFailure>> = {
   environment_install_failed: "environment-install-failed",
   linked_file_unreachable: "linked-file-unreachable",
   conversation_state_unreadable: "conversation-state-unreadable",
+  // Opening a restored conversation asks for its recorded version before any
+  // message is taken. The source is gone, or it no longer matches, so the
+  // command was not admitted.
+  deferred_source_unavailable: "source-gone",
+  deferred_source_changed: "source-changed",
   invalid_request: "invalid-request",
   conversation_deleted: "conversation-deleted",
   // Answer only `conversation.share` and `.unshare`, which the panel never
@@ -258,6 +263,8 @@ const readFailures: Record<ConversationErrorCode, ReadFailure> = {
   // read is answered from the cache — so "it keeps trying" would be false and
   // the refresh it offers could only ever return this again.
   conversation_state_unreadable: "state-unreadable",
+  deferred_source_unavailable: "source-gone",
+  deferred_source_changed: "source-changed",
   // Deleted, whether or not its erasure finished: the identity is refused for
   // good either way, so a read has nothing to wait for.
   conversation_deleted: "deleted",

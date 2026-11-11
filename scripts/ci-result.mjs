@@ -5,8 +5,10 @@
  * GitHub counts a skipped required check as a success. The `changes` job
  * therefore skips compile work only by writing an explicit `false`, and this
  * job is what makes a missing or skipped check visible when that did not
- * happen. A documentation-only change may skip the compile jobs. It may not
- * skip the jobs in `ALWAYS_RUN`, and a failure is a failure either way.
+ * happen. A documentation-only change may skip the compile jobs. A code change
+ * may skip a job in `PLANNED_SKIPS` only when the plan output named beside it
+ * is an explicit `false` (`scripts/ci-plan.mjs`). Nothing may skip the jobs in
+ * `ALWAYS_RUN`, and a failure is a failure either way.
  *
  * The decision is `evaluateChecks`. The process prints that result as JSON on
  * stdout and the failures on stderr, and exits non-zero when the result is not
@@ -16,6 +18,17 @@ import { pathToFileURL } from "node:url"
 
 /** Jobs that have no documentation-only guard. A skip here is a missed check. */
 export const ALWAYS_RUN = ["changes", "workflows"]
+
+/**
+ * Jobs a code change may skip, each with the `changes` output that has to say
+ * `false` for the skip to count: the Windows server suites when no platform
+ * code changed, the SDK coverage when the SDK is out of reach. Any other
+ * value, or none, makes the skip a missed check.
+ */
+export const PLANNED_SKIPS = {
+  "windows-server-tests": "platform_tests",
+  "sdk-domain-coverage": "sdk",
+}
 
 function failure(job, result, reason) {
   return { job, result, reason }
@@ -69,6 +82,14 @@ export function evaluateChecks(needs) {
     const result = jobResult(outcome)
     if (result === "success") continue
     if (documentationOnly && result === "skipped" && !ALWAYS_RUN.includes(job)) continue
+    const plannedOutput = Object.hasOwn(PLANNED_SKIPS, job)
+      ? PLANNED_SKIPS[job]
+      : undefined
+    const planned =
+      plannedOutput !== undefined &&
+      Object.hasOwn(outputs, plannedOutput) &&
+      outputs[plannedOutput] === "false"
+    if (!documentationOnly && result === "skipped" && planned) continue
     failures.push(
       failure(
         job,

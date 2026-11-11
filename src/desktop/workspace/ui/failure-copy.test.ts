@@ -15,6 +15,8 @@ const every: Record<WorkspaceFailureReason, true> = {
   "not-ready": true,
   "not-listening": true,
   "wrong-stage": true,
+  "source-gone": true,
+  "source-changed": true,
 }
 const reasons = Object.keys(every) as WorkspaceFailureReason[]
 

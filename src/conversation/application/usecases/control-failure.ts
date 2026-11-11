@@ -133,6 +133,10 @@ function nothingWasDone(
       return "The gateway no longer has this conversation, so nothing was done."
     case "conversation-state-unreadable":
       return "Nessa cannot read this conversation's saved state, so nothing was done. Start a new conversation to carry on."
+    case "source-gone":
+      return "This conversation's recorded version is no longer at its source, so nothing was done. Other conversations are unchanged."
+    case "source-changed":
+      return "This conversation's recorded version changed at its source, so nothing was done. Other conversations are unchanged."
     case "conversation-deleted":
       return "This conversation was deleted, so nothing was done."
     case "channel-not-found":

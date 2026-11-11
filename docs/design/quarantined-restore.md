@@ -2,7 +2,11 @@
 
 The export cut stays the backup ([export cut](export-cut.md)). This document
 is the restore that follows it (#270, #854). `nessa-backup-plan` does not
-call it and still cannot activate a gateway.
+call it and still cannot activate a gateway. `nessa-backup-restore` does call
+it. Stage does not create the live path. Accept is the authority, and only
+then may a gateway whose namespace points at that live tree listen. Opening
+a deferred conversation fetches it; a missing source is a refusal and other
+session files stay.
 
 ```text
 operator ──▶ Cedar (stage | accept | fetch)

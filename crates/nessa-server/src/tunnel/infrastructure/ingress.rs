@@ -18,6 +18,7 @@ use super::super::application::DeviceTunnelSecrets;
 use crate::device_pairing::infrastructure::{
     Accepted, EnrollmentAccept, NativeEnrollmentConnections, TunnelPermit,
 };
+use crate::timer::clock;
 use nessa_client_core::tunnel::{bridge, loopback_pair, websocket_config};
 use nessa_protocol::tunnel::{TunnelSecret, TUNNEL_PATH, TUNNEL_SECRET_HEADER};
 use std::{
@@ -113,7 +114,7 @@ impl<P: Send + 'static> TunnelIngress<P> {
                     tokio::select! {
                         biased;
                         _ = stop.wait_for(|stopped| *stopped) => return,
-                        () = tokio::time::sleep(Duration::from_millis(50)) => {}
+                        () = clock::sleep(Duration::from_millis(50)) => {}
                     }
                     continue;
                 }

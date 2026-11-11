@@ -31,6 +31,7 @@ use super::{
     placement::Environments,
     provider_sessions::{ProviderSessionErasers, ProviderSessionHandler},
     retries::{Claim, DeletionRetries, Waiting},
+    tool_config::EnvironmentToolConfig,
     AccessAction, AgentToolAudit, ArtifactBudget, ArtifactCollector, ArtifactOffer,
     AttachmentRelease, AttachmentReleaseCause, CatalogueHead, ConversationAccessPolicyEvaluator,
     ConversationAttachments, ConversationCreationAudit, ConversationDeletionAudit,
@@ -54,28 +55,25 @@ pub use channels::{
 use futures_util::{future::join_all, FutureExt};
 use nessa_auth::application::ports::Clock;
 use nessa_auth::domain::{OrganizationId, PrincipalId};
+use nessa_projection::{
+    agent_question, agent_review, bound_view, clipped, earlier_turns, question_entry, review_entry,
+    CommittedCursor, IntoView, McpToolUis, NoMcpToolUis, Projection, MAX_TEXT,
+};
 use nessa_protocol::agents::AgentId;
 use nessa_protocol::conversation::domain::{
     ConversationApprovalMode, ConversationId, ConversationModelId, ConversationSummary,
     ConversationTitle,
 };
-use nessa_protocol::conversation::{
-    projection::{
-        agent_question, agent_review, bound_view, clipped, earlier_turns, question_entry,
-        review_entry, CommittedCursor, Projection, MAX_TEXT,
-    },
-    tool_uis::{McpToolUis, NoMcpToolUis},
-    view::{
-        ConversationApprovalModeChangeStatus, ConversationApprovalModeChangeView,
-        ConversationAttachmentEvidenceFailure, ConversationAttachmentEvidenceFailureCode,
-        ConversationCapabilities, ConversationDisposition, ConversationEarlier,
-        ConversationLifecycle, ConversationLifecyclePhase, ConversationList, ConversationListEntry,
-        ConversationObservation, ConversationObservationCursor, ConversationPermission,
-        ConversationPoint, ConversationQuestion, ConversationQuestionEntry,
-        ConversationReorderOutcome, ConversationReviewEntry, ConversationReviewKind,
-        ConversationRuntime, ConversationSelectionView, ConversationStartupFailure,
-        ConversationStartupFailureCode, ConversationView, SubmissionReceipt,
-    },
+use nessa_protocol::conversation::view::{
+    ConversationApprovalModeChangeStatus, ConversationApprovalModeChangeView,
+    ConversationAttachmentEvidenceFailure, ConversationAttachmentEvidenceFailureCode,
+    ConversationCapabilities, ConversationDisposition, ConversationEarlier, ConversationLifecycle,
+    ConversationLifecyclePhase, ConversationList, ConversationListEntry, ConversationObservation,
+    ConversationObservationCursor, ConversationPermission, ConversationPoint, ConversationQuestion,
+    ConversationQuestionEntry, ConversationReorderOutcome, ConversationReviewEntry,
+    ConversationReviewKind, ConversationRuntime, ConversationSelectionView,
+    ConversationStartupFailure, ConversationStartupFailureCode, ConversationView,
+    SubmissionReceipt,
 };
 use nessa_protocol::product_contract::generated::MAX_MCP_MESSAGE_BYTES;
 use nessa_sdk::application::agent_execution::{
@@ -952,12 +950,17 @@ struct Inner {
     deletion_budgets: ConversationDeletionBudgets,
     /// Where agents run; every opening is leased from it.
     environment: Environments,
+    /// The environment tools' command policy and artifact waits.
+    tool_config: EnvironmentToolConfig,
     clock: Arc<dyn Clock>,
     /// Acknowledges a source turn's delegation decision before target work.
     agent_tool_audit: OnceLock<Arc<dyn AgentToolAudit>>,
     /// Records each change made from Settings before it is reported.
     /// Unbound refuses those changes.
     settings_audit: OnceLock<Arc<dyn super::SettingsAudit>>,
+    /// Fetches restored history before a serving session is opened, so a send
+    /// cannot create an empty stream that a later fetch then refuses to replace.
+    before_open: OnceLock<Arc<dyn OpenPreparation>>,
     /// Physical source admission owners retain their slot after response loss.
     agent_tool_admissions: Arc<SourcePermits>,
     /// What each person's open desktop windows show, for their agents.
@@ -1077,6 +1080,11 @@ struct Inner {
     /// (`handoffs`). Taken by that opening; let go of when the creation ends.
     forks: std::sync::Mutex<HashMap<ConversationId, handoffs::ForkSeed>>,
 }
+/// Fetches one conversation's restored history before its serving session exists.
+pub(crate) trait OpenPreparation: Send + Sync {
+    fn prepare(&self, conversation_id: &str) -> Result<(), ConversationError>;
+}
+
 /// Owns Agents independently of authenticated socket lifetimes. Clones share all owners.
 #[derive(Clone)]
 pub struct ConversationService {
@@ -1270,6 +1278,8 @@ pub struct ConversationDependencies {
     /// Where conversations' agents run, under a lease each: here, and the
     /// SSH hosts the configuration names.
     pub(crate) environment: Environments,
+    /// The environment tools' command policy and artifact waits.
+    pub(crate) tool_config: EnvironmentToolConfig,
     pub clock: Arc<dyn Clock>,
     /// Decides who may locate, act on and read a conversation: every
     /// command's admission asks it ([`OwnerAccess`]).
@@ -1421,6 +1431,12 @@ impl ConversationService {
         ConversationApprovalMode::Ask
     }
 
+    /// Install the fetch that runs before a serving session is opened.
+    /// A second call is ignored; startup installs it once.
+    pub(crate) fn set_open_preparation(&self, preparation: Arc<dyn OpenPreparation>) {
+        let _ = self.inner.before_open.set(preparation);
+    }
+
     /// Own every configured agent, and the one a caller gets by default. No
     /// MCP call shows a UI: see [`Self::with_tool_uis`].
     pub fn new(
@@ -1474,6 +1490,7 @@ impl ConversationService {
             provider_sessions,
             deletion_budgets,
             environment,
+            tool_config,
             clock,
             access_policy,
         } = dependencies;
@@ -1510,8 +1527,10 @@ impl ConversationService {
                 provider_sessions,
                 deletion_budgets,
                 environment,
+                tool_config,
                 clock,
                 agent_tool_audit: OnceLock::new(),
+                before_open: OnceLock::new(),
                 settings_audit: OnceLock::new(),
                 agent_tool_admissions: Arc::new(SourcePermits::new(
                     super::MAX_AGENT_TOOL_ADMISSIONS,
@@ -1677,9 +1696,9 @@ impl ConversationService {
             asked: requested.environment.as_deref(),
             channel: channel.as_ref().map(|channel| {
                 if id == channel.coordinator_id() {
-                    channel.execution().coordinator()
+                    channel.execution().coordinator().clone()
                 } else {
-                    channel.execution().threads()
+                    channel.execution().threads().clone()
                 }
             }),
             default_device: service.inner.environment.default_place(),
@@ -2158,6 +2177,20 @@ impl ConversationService {
                             let session_id = conversation_session(&id);
                             let storage = service.inner.storage.clone();
                             let clock = service.inner.message_commit_clock.clone();
+                            if let Some(prepare) = service.inner.before_open.get() {
+                                let conversation_id = id.to_string();
+                                let prepare = Arc::clone(prepare);
+                                tokio::task::spawn_blocking(move || prepare.prepare(&conversation_id))
+                                    .await
+                                    .map_err(|_| OpeningFailure {
+                                        cause: ConversationError::Unavailable,
+                                        holds: false,
+                                    })?
+                                    .map_err(|cause| OpeningFailure {
+                                        cause,
+                                        holds: false,
+                                    })?;
+                            }
                             // The stopped agent's last handles may still hold
                             // this history. Wait them out, within the lease
                             // bound, instead of answering Busy once. A stop
@@ -2315,7 +2348,7 @@ impl ConversationService {
                                 manager.expect_handoff(handoff);
                             }
                             let tool_source = checked_source(agent);
-                            let workspace = opening.workspace.clone().or_else(|| configured.workspace.clone()).or_else(|| place.as_ref().and_then(|place| place.folder.to_str().map(str::to_owned))).or_else(|| service.inner.workspace.clone());
+                            let workspace = channels::working_folder(opening.workspace.as_ref(), configured.workspace.as_ref(), place.as_ref(), service.inner.workspace.as_ref());
                             let background_target = match &opening.terms.environment {
                                 EnvironmentRef::Here => workspace.clone().map(BackgroundTarget::Local),
                                 EnvironmentRef::Boat => opening.workspace.clone().map(|workspace| BackgroundTarget::Vm { conversation: id.clone(), workspace }),
@@ -2473,7 +2506,7 @@ impl ConversationService {
                                 image_input: service
                                     .takes_images(&agent, operation_capabilities)
                                     != Some(false),
-                                agent_features: operation_capabilities.into(),
+                                agent_features: operation_capabilities.into_view(),
                             };
                             let mut projection =
                                 Projection::new(id.to_string(), capabilities, snapshot.as_ref())
@@ -2484,19 +2517,13 @@ impl ConversationService {
                                 approval_mode: record.approval_mode(),
                             });
                             projection.lifecycle(lifecycle_view(&agent));
-                            // Where its agent works: what its environment
-                            // reported (a host's own directory), else this
-                            // gateway's.
-                            let channel_folder = place
-                                .as_ref()
-                                .and_then(|place| place.folder.to_str().map(str::to_owned));
-                            let workspace = opening
-                                .workspace
-                                .as_ref()
-                                .or(configured.workspace.as_ref())
-                                .or(channel_folder.as_ref())
-                                .or(service.inner.workspace.as_ref());
-                            if let Some(workspace) = workspace {
+                            // Where its agent works, said in its view.
+                            if let Some(workspace) = channels::working_folder(
+                                opening.workspace.as_ref(),
+                                configured.workspace.as_ref(),
+                                place.as_ref(),
+                                service.inner.workspace.as_ref(),
+                            ) {
                                 let identity = configured.provider.identity();
                                 projection.runtime(ConversationRuntime {
                                     model: identity.model_id().into(),
@@ -3356,7 +3383,7 @@ impl ConversationService {
             .await?;
         let mut projection = live.projection.lock().await;
         if projection.replace_committed(&committed, &order, active.as_ref()) {
-            projection.transcript_state(committed.state().into());
+            projection.transcript_state(committed.state().into_view());
         }
         let operation_capabilities = live.agent.operation_capabilities();
         // The last known answer stands while the agent is being restored, so the
@@ -3370,7 +3397,7 @@ impl ConversationService {
             resume: operation_capabilities.session_resume(),
             permissions: live.agent.capabilities().features().tool_use(),
             image_input,
-            agent_features: operation_capabilities.into(),
+            agent_features: operation_capabilities.into_view(),
         });
         projection.lifecycle(lifecycle_view(&live.agent));
         if let Some(effect) = model_effect {
@@ -3444,6 +3471,26 @@ impl ConversationService {
         }
         Ok(slot)
     }
+    /// Fetch a deferred restored conversation without starting an agent.
+    ///
+    /// A missing catalogue row and a tombstone are left alone. Importing after
+    /// a finished delete would keep history nothing erases again.
+    async fn prepare_restored_history(&self, id: &ConversationId) -> Result<(), ConversationError> {
+        let Some(prepare) = self.inner.before_open.get() else {
+            return Ok(());
+        };
+        let Some(record) = load_conversation(self.inner.metadata.as_ref(), id).await? else {
+            return Ok(());
+        };
+        if record.deletion().is_some() {
+            return Ok(());
+        }
+        let conversation_id = id.to_string();
+        let prepare = Arc::clone(prepare);
+        tokio::task::spawn_blocking(move || prepare.prepare(&conversation_id))
+            .await
+            .map_err(|_| ConversationError::Unavailable)?
+    }
     /// A conversation nothing has open, as its committed records fold with
     /// no agent: read-only, lifecycle absent, nothing awaiting an answer.
     async fn read_unopened(
@@ -3455,6 +3502,11 @@ impl ConversationService {
             .await?
             .ok_or(ConversationError::NotFound)?;
         self.access().admit(&record, caller)?;
+        // A view does not start an agent, but a deferred restored conversation
+        // still has to be fetched before its history is read. A tombstone
+        // already on the record is left alone: importing after a finished
+        // delete would keep history nothing erases again.
+        self.prepare_restored_history(id).await?;
         let (committed, order) = self.committed_with_order(id).await?;
         let mut projection = self.detached(id, &committed, &order);
         projection.selection(ConversationSelectionView {
@@ -3582,7 +3634,7 @@ impl ConversationService {
             Projection::new(id.to_string(), ConversationCapabilities::read_only(), None)
                 .with_tool_uis(self.inner.tool_uis.clone());
         projection.replace_committed(committed, order, None);
-        projection.transcript_state(committed.state().into());
+        projection.transcript_state(committed.state().into_view());
         projection
     }
     /// A view nothing can act on through: the selection from the record,
@@ -3661,7 +3713,7 @@ impl ConversationService {
                 let mut projection = live.projection.lock().await;
                 let accepted = projection.replace_committed(committed, order, active.as_ref());
                 if accepted {
-                    projection.transcript_state(committed.state().into());
+                    projection.transcript_state(committed.state().into_view());
                 }
                 (
                     projection.read_with_mode_change(change.clone()),
@@ -4125,6 +4177,10 @@ impl ConversationService {
             service
                 .refuse_linked_files_elsewhere(&id, !message.files().is_empty())
                 .await?;
+            // A deferred restored conversation is fetched before a message
+            // opens an agent. A missing source refuses the send, and does not
+            // start a fresh session over the history that was not fetched.
+            service.prepare_restored_history(&id).await?;
             // An app's message is for a live opening, and opens none: one
             // ended by the desktop stopping the agent is refused below, not
             // opened again for it.

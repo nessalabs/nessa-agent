@@ -37,7 +37,7 @@ pub(super) async fn dispatch(
     session: &AuthenticatedSession,
     frame: RequestFrame,
 ) -> OutgoingMessage {
-    let Some(service) = state.conversations.as_ref() else {
+    let Some(service) = state.conversation.service.as_ref() else {
         return failure(
             &frame.id,
             ChannelErrorCode::ConversationsNotConfigured.as_str(),
@@ -122,8 +122,7 @@ pub(super) async fn dispatch(
 fn channel_request(params: &ChannelCreateParams) -> Option<ChannelRequest> {
     let path = |text: &str| ChannelPath::new(PathBuf::from(text)).ok();
     Some(ChannelRequest {
-        // A coordinator runs in one known place; only threads go to the
-        // pool. Either left out runs here.
+        // Either left out runs here.
         execution: ChannelExecution::parse(
             params.coordinator_placement.as_deref().unwrap_or("local"),
             params.thread_placement.as_deref().unwrap_or("local"),
@@ -175,8 +174,8 @@ fn wire_channel(channel: &Channel) -> WireChannel {
         model: Some(defaults.model.as_str().to_owned()),
         approval_mode: wire_mode(defaults.mode),
         coordinator_conversation_id: Some(channel.coordinator_id().to_string()),
-        coordinator_placement: channel.execution().coordinator_word().into(),
-        thread_placement: channel.execution().threads_word().into(),
+        coordinator_placement: channel.execution().coordinator_word(),
+        thread_placement: channel.execution().threads_word(),
         created_at_ms: channel.created_at_ms(),
     }
 }
@@ -204,8 +203,8 @@ fn listed(listing: ChannelListing, after: Option<&ChannelId>) -> ChannelListResu
                 model: None,
                 approval_mode: ApprovalMode::Ask,
                 coordinator_conversation_id: None,
-                coordinator_placement: ChannelExecution::default().coordinator_word().into(),
-                thread_placement: ChannelExecution::default().threads_word().into(),
+                coordinator_placement: ChannelExecution::default().coordinator_word(),
+                thread_placement: ChannelExecution::default().threads_word(),
                 created_at_ms: 0,
             })
             .into_iter()
@@ -273,6 +272,7 @@ fn refused(request_id: &str, error: ChannelError) -> OutgoingMessage {
         ChannelError::ResourceNotFound => ChannelErrorCode::ChannelResourceNotFound,
         ChannelError::LimitReached => ChannelErrorCode::ChannelLimitReached,
         ChannelError::RequestConflict => ChannelErrorCode::ChannelRequestConflict,
+        ChannelError::PlaceUnavailable => ChannelErrorCode::ChannelPlaceUnavailable,
         ChannelError::Unavailable => ChannelErrorCode::TemporarilyUnavailable,
     };
     tracing::info!(code = code.as_str(), "channel command refused");

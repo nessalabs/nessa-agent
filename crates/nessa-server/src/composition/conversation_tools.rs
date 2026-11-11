@@ -8,6 +8,7 @@ use crate::conversation::application::{
 };
 use crate::conversation::domain::{PaneContent, WindowPanel, WindowShowing};
 use crate::mcp_servers::application::{BuiltInAnswer, BuiltInFuture, BuiltInServer};
+use crate::timer::clock;
 use nessa_protocol::agents::AgentId;
 use nessa_protocol::conversation::domain::ConversationId;
 use nessa_sdk::application::agent_execution::{
@@ -29,10 +30,7 @@ use std::{
     sync::{Arc, OnceLock},
     time::Duration,
 };
-use tokio::{
-    sync::watch,
-    time::{sleep, sleep_until, Instant},
-};
+use tokio::{sync::watch, time::Instant};
 
 pub(super) const SERVER_NAME: &str = "nessa-agents";
 const MAX_WAIT_MS: u64 = 30_000;
@@ -856,7 +854,7 @@ impl SubscriptionControl {
     fn new(stop: watch::Receiver<bool>, wait_ms: u64, execution: Option<String>) -> Self {
         Self {
             stop,
-            prepare_by: Instant::now() + SUBSCRIPTION_SETUP_TIMEOUT,
+            prepare_by: clock::now() + SUBSCRIPTION_SETUP_TIMEOUT,
             wait_by: None,
             wait_ms,
             checkpoint: None,
@@ -880,7 +878,7 @@ impl SubscriptionControl {
         tokio::select! {
             biased;
             _ = self.stop.changed() => Err(SubscriptionEnd::Cancelled),
-            _ = sleep_until(by) => Err(SubscriptionEnd::Deadline),
+            _ = clock::sleep_until(by) => Err(SubscriptionEnd::Deadline),
             result = work => Ok(result),
         }
     }
@@ -890,7 +888,7 @@ impl SubscriptionControl {
         self.behind = false;
         let wait_ms = self.wait_ms;
         self.wait_by
-            .get_or_insert_with(|| Instant::now() + Duration::from_millis(wait_ms));
+            .get_or_insert_with(|| clock::now() + Duration::from_millis(wait_ms));
     }
     /// Everything up to `cursor` is read, and more is waiting after it.
     fn read_to(&mut self, cursor: CommittedEventCursor) {
@@ -898,7 +896,7 @@ impl SubscriptionControl {
         self.behind = true;
     }
     fn waited_out(&self) -> bool {
-        self.wait_by.is_some_and(|by| Instant::now() >= by)
+        self.wait_by.is_some_and(|by| clock::now() >= by)
     }
     fn finish(&self, target: &ConversationId, ended: SubscriptionEnd) -> Result<Value, String> {
         match ended {
@@ -939,7 +937,7 @@ async fn follow(
     match control
         .step_until(
             service.authorize_events(&target, &caller),
-            Instant::now() + SUBSCRIPTION_SETUP_TIMEOUT,
+            clock::now() + SUBSCRIPTION_SETUP_TIMEOUT,
         )
         .await
     {
@@ -989,7 +987,7 @@ async fn observe(
             // Every physical read worker is busy: a moment's wait, not a
             // refusal, within this call's own deadline.
             Ok(Err(EventReadError::Capacity)) => {
-                if let Err(ended) = control.step(sleep(READ_RETRY)).await {
+                if let Err(ended) = control.step(clock::sleep(READ_RETRY)).await {
                     return control.finish(target, ended);
                 }
                 continue;
@@ -1082,7 +1080,7 @@ async fn observe(
                 let reply = match control
                     .step_until(
                         service.thread_turn_end(target, caller, &execution),
-                        Instant::now() + SUBSCRIPTION_SETUP_TIMEOUT,
+                        clock::now() + SUBSCRIPTION_SETUP_TIMEOUT,
                     )
                     .await
                 {
@@ -1137,7 +1135,7 @@ async fn observe(
                 if control.waited_out() {
                     return control.finish(target, SubscriptionEnd::Deadline);
                 }
-                if let Err(ended) = control.step(sleep(Duration::from_millis(250))).await {
+                if let Err(ended) = control.step(clock::sleep(Duration::from_millis(250))).await {
                     return control.finish(target, ended);
                 }
             }
@@ -1160,7 +1158,7 @@ const LOOK_RETRY: Duration = Duration::from_secs(1);
 
 impl TurnLooks {
     fn due(&self, signal: bool) -> bool {
-        !self.looked || signal || self.retry_at.is_some_and(|at| Instant::now() >= at)
+        !self.looked || signal || self.retry_at.is_some_and(|at| clock::now() >= at)
     }
 
     /// A look did not find the end: `readable` says whether the history
@@ -1168,7 +1166,7 @@ impl TurnLooks {
     fn missed(&mut self, signal: bool, readable: bool) {
         self.looked = true;
         self.end_seen |= signal;
-        self.retry_at = (!readable || self.end_seen).then(|| Instant::now() + LOOK_RETRY);
+        self.retry_at = (!readable || self.end_seen).then(|| clock::now() + LOOK_RETRY);
     }
 }
 

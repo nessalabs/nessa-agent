@@ -3,6 +3,7 @@ use super::ssh_environment::{
     ArtifactTransport, EnvironmentAudit, HostInstaller, LeaseConnection, RemoteShell, ShellFuture,
     SshEnvironment, WorkspaceConnector,
 };
+use crate::timer::clock;
 use crate::{
     conversation::application::{
         ChannelStore, ConversationError, Environment, EnvironmentFuture, ThreadEnvironments,
@@ -264,7 +265,7 @@ pub(crate) async fn let_go_each(environments: Vec<Arc<SshEnvironment>>) {
                 tracing::warn!("a Boat connection is still in use; it stays open");
                 break;
             }
-            tokio::time::sleep(wait).await;
+            clock::sleep(wait).await;
             wait *= 2;
         }
     }
@@ -340,7 +341,7 @@ impl ThreadEnvironments for ThreadWorkspaces {
                         tracing::warn!(conversation_id = %conversation, "the conversation's connection is still in use; its VM keeps running");
                         return false;
                     }
-                    tokio::time::sleep(wait).await;
+                    clock::sleep(wait).await;
                     wait *= 2;
                 }
             }

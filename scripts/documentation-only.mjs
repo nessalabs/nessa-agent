@@ -6,18 +6,22 @@
  * nearly all of it `rustc`. A pull request that edits prose pays that in full
  * for checks that cannot read what it changed. This is the gate that says so.
  *
- * The rule is an allow-list, not a deny-list, and it is deliberately one line
- * long: a path is inert when it is Markdown. Everything else runs everything.
- * A gate that skips work has to be wrong in only one direction, and the way to
- * keep it that way is to keep the set of things it will skip on small enough to
- * hold in your head.
+ * The rule is an allow-list, not a deny-list, and it is deliberately short: a
+ * path is inert when it is Markdown that nothing reads. Everything else runs
+ * everything. A gate that skips work has to be wrong in only one direction, and
+ * the way to keep it that way is to keep the set of things it will skip on
+ * small enough to hold in your head.
  *
- * Markdown qualifies because nothing in this repository reads it:
+ * Markdown qualifies because, with the exceptions in `READ_BY_RUST`, nothing in
+ * this repository reads it:
  *
  *   - No `include_str!` names a `.md` file, so no Rust crate embeds one and no
  *     doc test runs out of one. `cargo doc -p nessa-sdk -D warnings` compiles
  *     doc comments in `.rs` sources; `crates/nessa-sdk/docs/*.md` reaches it
  *     only if something includes it, and nothing does.
+ *   - A Rust test may open a Markdown file at run time and compare it, as
+ *     `nessa-server`'s limits test does with `docs/limits.md`. Each such file
+ *     is listed in `READ_BY_RUST`, and a change to it is code.
  *   - `scripts/check-architecture.mjs` enforces the contract *described in*
  *     `docs/ARCHITECTURE.md` and `docs/codebase-structure.md`, but it reads
  *     source to do it. It never opens either file.
@@ -29,8 +33,9 @@
  * there is a change CI has an opinion about.
  *
  * When one of those facts stops being true — a crate starts including its
- * README, a check starts parsing a document — this rule is what has to change
- * with it, and `documentation-only.test.mjs` is where to say so.
+ * README, a test starts reading another document — this rule is what has to
+ * change with it. `documentation-only.test.mjs` scans the Rust sources for both
+ * and fails until `READ_BY_RUST` says so.
  *
  *   git diff --name-only --no-renames base...head | node scripts/documentation-only.mjs
  *
@@ -45,8 +50,14 @@ import { pathToFileURL } from "node:url"
  * extension check would be a second owner of the decision.
  */
 export function inertPath(path) {
-  return path.endsWith(".md")
+  return path.endsWith(".md") && !READ_BY_RUST.has(path)
 }
+
+/**
+ * Markdown files a Rust test reads at run time, by repository path. The test
+ * beside this file holds the list equal to what the Rust sources name.
+ */
+export const READ_BY_RUST = new Set(["docs/limits.md"])
 
 /**
  * Whether every changed path is inert.

@@ -1,4 +1,5 @@
 import { useRef, useState } from "react"
+import { Button } from "@nessa-ui/react/button"
 import { Dialog } from "@nessa-ui/react/dialog"
 import { IconButton } from "../../../ui/icon-button"
 import { useBoatConnection, useBoatGateway } from "../../../settings/ui/boat-row"
@@ -7,12 +8,124 @@ import { ItemRow, Segmented } from "../../../settings/ui/settings-controls"
 import { channelFailure, type ChannelPlacement } from "../../application/ports"
 import { gatewayChannelId } from "../../adapters/gateway/gateway-views"
 import { PoolOrder, useDevicesGateway } from "../../../devices"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuTrigger,
+  MenuRadioGroup,
+  MenuRadioItem,
+} from "../../../ui/menu"
+import {
+  channelPlaceKind,
+  type ChannelPlace,
+  type ChannelPlaceKind,
+} from "../../model/channel-place"
+import { channelPlaceWords } from "../channel-place-words"
 import { setChannelPlacement } from "../../adapters/store/commands"
+import { useComputers, type Computer } from "./computers"
 import { useWorkspaceDispatch, useWorkspaceSelector } from "../../adapters/store/hooks"
 import { selectChannel } from "../../adapters/store/selectors"
 
-type Place = "local" | "boat"
-type ThreadPlace = Place | "pool"
+/**
+ * One of the two settings: a kind of place side by side, and, once
+ * "Computer" is chosen, which computer, from a menu of the ones connected
+ * now. Choosing "Computer" alone saves nothing: the place is saved when a
+ * computer is chosen.
+ */
+function PlaceRow({
+  row,
+  label,
+  value,
+  computers,
+  boatReady,
+  saving,
+  onChange,
+}: {
+  row: "coordinator" | "threads"
+  label: string
+  value: ChannelPlace
+  computers: readonly Computer[]
+  boatReady: boolean
+  saving: boolean
+  onChange: (next: ChannelPlace) => void
+}) {
+  const [picking, setPicking] = useState(false)
+  const kind = channelPlaceKind(value)
+  const shown: ChannelPlaceKind = picking ? "computer" : kind
+  const listed = computers.find((each) => each.environment === value)
+  const kinds: readonly { id: ChannelPlaceKind; label: string; disabled?: boolean }[] = [
+    { id: "local", label: "This Mac" },
+    { id: "boat", label: "Boat", disabled: !boatReady },
+    { id: "pool", label: "Any" },
+    {
+      id: "computer",
+      label: "Computer",
+      disabled: computers.length === 0 && kind !== "computer",
+    },
+  ]
+  return (
+    <ItemRow
+      label={label}
+      detail={
+        row === "coordinator" && !boatReady
+          ? "Connect Boat to run agents there."
+          : undefined
+      }
+      data-placement-row={row}
+      unavailable={saving}
+    >
+      <Segmented<ChannelPlaceKind>
+        label={label}
+        value={shown}
+        options={kinds}
+        onChange={(next) => {
+          if (next === "computer") {
+            setPicking(kind !== "computer")
+            return
+          }
+          setPicking(false)
+          onChange(next)
+        }}
+      />
+      {shown === "computer" ? (
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button
+              variant="secondary"
+              size="sm"
+              disabled={saving}
+              data-placement-computer={row}
+              aria-label={`${label}: which computer`}
+            >
+              {kind === "computer"
+                ? channelPlaceWords(value, listed?.name)
+                : "Choose a computer"}
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start" sideOffset={6}>
+            <MenuRadioGroup
+              value={kind === "computer" ? value : ""}
+              onValueChange={(next) => {
+                setPicking(false)
+                onChange(next)
+              }}
+            >
+              {computers.map((computer) => (
+                <MenuRadioItem
+                  key={computer.environment}
+                  value={computer.environment}
+                  data-placement-choice={computer.environment}
+                >
+                  {computer.name}
+                </MenuRadioItem>
+              ))}
+            </MenuRadioGroup>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      ) : null}
+    </ItemRow>
+  )
+}
 
 /**
  * Where a made channel's agents run, changed after it was made. Each choice
@@ -28,18 +141,8 @@ export function ChannelPlacementControl({ channelId }: { channelId: string }) {
   // As when a channel is made, Boat is offered only once it is connected:
   // agents placed there before that could not start.
   const boatReady = useBoatConnection().status?.state === "connected"
+  const computers = useComputers()
   if (!channel) return null
-  const places: readonly { id: Place; label: string; disabled?: boolean }[] = [
-    { id: "local", label: "This Mac" },
-    {
-      id: "boat",
-      label: "Boat",
-      disabled: !boatReady,
-    },
-  ]
-  // Only threads spread over computers: the main agent stays put.
-  const threadPlaces: readonly { id: ThreadPlace; label: string; disabled?: boolean }[] =
-    [...places, { id: "pool", label: "Any" }]
   const placement: ChannelPlacement = {
     coordinatorPlacement: channel.coordinatorPlacement ?? "local",
     threadPlacement: channel.threadPlacement ?? "local",
@@ -59,10 +162,13 @@ export function ChannelPlacementControl({ channelId }: { channelId: string }) {
         if (!changed) setFailed("This window cannot change where channels run.")
       })
       .catch((error: unknown) => {
+        const failure = channelFailure(error)
         setFailed(
-          channelFailure(error) === "forbidden"
+          failure === "forbidden"
             ? "You can’t change where this channel runs."
-            : "Couldn’t save that. Try again in a moment.",
+            : failure === "place-unavailable"
+              ? "That computer isn’t connected now. Choose another place."
+              : "Couldn’t save that. Try again in a moment.",
         )
       })
       .finally(() => setSaving(false))
@@ -79,31 +185,24 @@ export function ChannelPlacementControl({ channelId }: { channelId: string }) {
     >
       {/* Each setting stacks its name over its control, so neither is squeezed
           in a narrow dialog. */}
-      <ItemRow
+      <PlaceRow
+        row="coordinator"
         label="Main agent runs on"
-        detail={boatReady ? undefined : "Connect Boat to run agents there."}
-        data-placement-row="coordinator"
-        unavailable={saving}
-      >
-        <Segmented<Place>
-          label="Main agent runs on"
-          value={placement.coordinatorPlacement}
-          options={places}
-          onChange={(next) => change({ coordinatorPlacement: next })}
-        />
-      </ItemRow>
-      <ItemRow
+        value={placement.coordinatorPlacement}
+        computers={computers}
+        boatReady={boatReady}
+        saving={saving}
+        onChange={(next) => change({ coordinatorPlacement: next })}
+      />
+      <PlaceRow
+        row="threads"
         label="New threads run on"
-        data-placement-row="threads"
-        unavailable={saving}
-      >
-        <Segmented<ThreadPlace>
-          label="New threads run on"
-          value={placement.threadPlacement}
-          options={threadPlaces}
-          onChange={(next) => change({ threadPlacement: next })}
-        />
-      </ItemRow>
+        value={placement.threadPlacement}
+        computers={computers}
+        boatReady={boatReady}
+        saving={saving}
+        onChange={(next) => change({ threadPlacement: next })}
+      />
       {failed ? (
         <p role="alert" className="settings-boat-note">
           {failed}

@@ -46,7 +46,7 @@ pub(super) async fn dispatch(
     session: &AuthenticatedSession,
     frame: RequestFrame,
 ) -> OutgoingMessage {
-    let Some(settings) = state.mcp_server_settings.as_ref() else {
+    let Some(settings) = state.mcp.settings.as_ref() else {
         return failure(
             &frame.id,
             McpServersErrorCode::McpServersNotConfigured.as_str(),
@@ -60,7 +60,7 @@ pub(super) async fn dispatch(
             match settings.list().await {
                 Ok(list) => {
                     Ok(
-                        answered_authorized(&frame.id, list, state.mcp_authorization.as_deref())
+                        answered_authorized(&frame.id, list, state.mcp.authorization.as_deref())
                             .await,
                     )
                 }
@@ -507,7 +507,7 @@ async fn authorize(
     request_id: &str,
     params: McpServersAuthorizeParams,
 ) -> OutgoingMessage {
-    let Some(owner) = state.mcp_authorization.clone() else {
+    let Some(owner) = state.mcp.authorization.clone() else {
         return failure(
             request_id,
             McpServersErrorCode::McpServersNotConfigured.as_str(),
@@ -584,7 +584,7 @@ async fn revoke(
     request_id: &str,
     params: McpServersRevokeParams,
 ) -> OutgoingMessage {
-    let Some(owner) = state.mcp_authorization.clone() else {
+    let Some(owner) = state.mcp.authorization.clone() else {
         return failure(
             request_id,
             McpServersErrorCode::McpServersNotConfigured.as_str(),

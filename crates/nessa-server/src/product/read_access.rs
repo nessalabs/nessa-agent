@@ -64,7 +64,7 @@ async fn paired_binding(
     state: &ProductRouteState,
     session: &AuthenticatedSession,
 ) -> Result<Option<ReceiverBinding>, &'static str> {
-    let Some((receivers, _, _)) = state.passive_read.as_ref() else {
+    let Some((receivers, _, _)) = state.reads.passive_read.as_ref() else {
         return Ok(None);
     };
     binding_of(receivers.as_ref(), session.context())
@@ -110,6 +110,7 @@ pub(super) async fn catalogue_reader(
             owner: binding.owner_id,
             policy: Some(
                 state
+                    .reads
                     .conversation_access
                     .clone()
                     .ok_or(refusal_code(ReadRefusal::Unverifiable))?,
@@ -129,6 +130,7 @@ fn access_policy(
     state: &ProductRouteState,
 ) -> Result<&dyn ConversationAccessPolicyEvaluator, &'static str> {
     state
+        .reads
         .conversation_access
         .as_deref()
         .ok_or(refusal_code(ReadRefusal::Unverifiable))
@@ -181,13 +183,14 @@ async fn unpaired_may_see_review(
     review: &PublishedReview,
 ) -> Result<ReviewNoticeVisibility, ReviewNoticeAuditFailure> {
     let (Some(conversations), Some(policy), Ok(id)) = (
-        state.review_metadata.as_ref(),
-        state.conversation_access.as_deref(),
+        state.reads.review_metadata.as_ref(),
+        state.reads.conversation_access.as_deref(),
         conversation_id(&review.conversation_id),
     ) else {
         return Ok(ReviewNoticeVisibility::Hidden);
     };
     let auditor = state
+        .reads
         .review_auditor
         .as_ref()
         .ok_or(ReviewNoticeAuditFailure::Unavailable)?;
@@ -267,7 +270,7 @@ pub(super) async fn admit_conversation(
 ) -> Result<(), &'static str> {
     let reader = reader(state, session).await?;
     if let Reader::OwnerPhone(phone) = &reader {
-        let Some((_, conversations, _)) = state.passive_read.as_ref() else {
+        let Some((_, conversations, _)) = state.reads.passive_read.as_ref() else {
             return Err("temporarily_unavailable");
         };
         let target = load_conversation(conversations.as_ref(), id)
@@ -281,7 +284,7 @@ pub(super) async fn admit_conversation(
     let Some(binding) = paired_binding(state, session).await? else {
         return Ok(());
     };
-    let Some((_, conversations, grants)) = state.passive_read.as_ref() else {
+    let Some((_, conversations, grants)) = state.reads.passive_read.as_ref() else {
         return Ok(());
     };
     let access = PairedAccess::new(access_policy(state)?, party(&binding, session));
@@ -322,7 +325,7 @@ pub(super) async fn admit_command_target(
     let Reader::OwnerPhone(phone) = reader(state, session).await? else {
         return Ok(());
     };
-    let Some((_, repository, _)) = state.passive_read.as_ref() else {
+    let Some((_, repository, _)) = state.reads.passive_read.as_ref() else {
         return Err("temporarily_unavailable");
     };
     if let Some(target) = load_conversation(repository.as_ref(), id)
@@ -355,7 +358,7 @@ pub(super) async fn admit_index_rows(
     else {
         return Ok(());
     };
-    let Some((_, repository, _)) = state.passive_read.as_ref() else {
+    let Some((_, repository, _)) = state.reads.passive_read.as_ref() else {
         return Err(ConversationError::Metadata);
     };
     for row in rows {
@@ -508,7 +511,7 @@ pub(super) async fn admit_request(
     if !writes || ADMITTED_BY_ITS_OWN_CHECK.contains(&method) {
         return as_owner().await;
     }
-    let Some((_, conversations, grants)) = state.passive_read.as_ref() else {
+    let Some((_, conversations, grants)) = state.reads.passive_read.as_ref() else {
         return as_owner().await;
     };
     let Some(binding) = paired_binding(state, session).await? else {
@@ -627,7 +630,7 @@ pub(super) async fn dispatch_share(
     session: &AuthenticatedSession,
     frame: RequestFrame,
 ) -> OutgoingMessage {
-    let Some((receivers, conversations, grants)) = state.passive_read.as_ref() else {
+    let Some((receivers, conversations, grants)) = state.reads.passive_read.as_ref() else {
         return failure(
             &frame.id,
             ConversationErrorCode::ConversationsNotConfigured.as_str(),
@@ -644,7 +647,7 @@ pub(super) async fn dispatch_share(
         access: state.access.as_ref(),
         gateway: &state.gateway,
         policy,
-        inventory: state.fence_capture.as_deref(),
+        inventory: state.conversation.fence_capture.as_deref(),
     };
     // Sharing is the owner's: a paired device signs in as its owner's
     // principal, so the policy is asked about it as the paired party it is,
@@ -671,7 +674,7 @@ pub(super) async fn dispatch_share(
                 let caller = caller(session, params.request_id.clone());
                 let selected_capabilities = capabilities(&params.capabilities)?;
                 let expected = expected_revision(params.expected_policy_revision)?;
-                let webhook = if let Some(runtime) = state.webhooks.as_deref() {
+                let webhook = if let Some(runtime) = state.accounts.webhooks.as_deref() {
                     caller.actor()?;
                     // Preserve shape/owner refusal before any target lookup.
                     ShareAccess::new(selected_capabilities, requested_policy.clone())
@@ -688,11 +691,16 @@ pub(super) async fn dispatch_share(
                     false
                 };
                 let granted = if webhook {
-                    let runtime = state.webhooks.as_ref().ok_or(ConversationError::Metadata)?;
+                    let runtime = state
+                        .accounts
+                        .webhooks
+                        .as_ref()
+                        .ok_or(ConversationError::Metadata)?;
                     let owner = runtime.clone();
                     let grants = grants.clone();
                     let conversations = conversations.clone();
                     let policy = state
+                        .reads
                         .conversation_access
                         .clone()
                         .ok_or(ConversationError::Metadata)?;
@@ -756,7 +764,7 @@ pub(super) async fn dispatch_share(
                     .map_err(|_| ConversationError::InvalidInput)?;
                 let caller = caller(session, params.request_id.clone());
                 let expected = expected_revision(params.expected_policy_revision)?;
-                let webhook = if let Some(runtime) = state.webhooks.as_deref() {
+                let webhook = if let Some(runtime) = state.accounts.webhooks.as_deref() {
                     caller.actor()?;
                     let conversation = load_conversation(conversations.as_ref(), &id)
                         .await?
@@ -775,17 +783,22 @@ pub(super) async fn dispatch_share(
                     false
                 };
                 let applied = if webhook {
-                    let runtime = state.webhooks.as_ref().ok_or(ConversationError::Metadata)?;
+                    let runtime = state
+                        .accounts
+                        .webhooks
+                        .as_ref()
+                        .ok_or(ConversationError::Metadata)?;
                     let conversations = conversations.clone();
                     let receivers = receivers.clone();
                     let grants = grants.clone();
                     let access = state.access.clone();
                     let gateway = state.gateway.clone();
                     let policy = state
+                        .reads
                         .conversation_access
                         .clone()
                         .ok_or(ConversationError::Metadata)?;
-                    let inventory = state.fence_capture.clone();
+                    let inventory = state.conversation.fence_capture.clone();
                     runtime
                         .retain_grant(true, async move {
                             ShareConversation {
@@ -862,7 +875,7 @@ pub(super) async fn dispatch_share(
 /// A share that landed can change which waiting reviews a socket may see.
 /// The board's generation does not move, so the publishers are asked directly.
 fn recheck_review_visibility(state: &ProductRouteState) {
-    if let Some(board) = state.permission_rules.as_ref() {
+    if let Some(board) = state.conversation.permission_rules.as_ref() {
         board.recheck_visibility();
     }
 }
@@ -884,7 +897,7 @@ pub(super) async fn paired_share(
         _ => return Err("forbidden"),
     };
     let (Some((_, conversations, grants)), Some(id)) = (
-        state.passive_read.as_ref(),
+        state.reads.passive_read.as_ref(),
         frame
             .params
             .get("conversationId")

@@ -21,6 +21,7 @@ use crate::attachments::{
     },
     domain::Attachment,
 };
+use crate::timer::clock;
 use sha2::{Digest, Sha256};
 use std::{
     collections::HashMap,
@@ -196,7 +197,7 @@ impl SocketUploads {
             // or let the entry go; a caller that went quiet loses it.
             tokio::select! {
                 () = owned.released.notified() => {}
-                () = tokio::time::sleep(ANSWER_KEPT) => uploads.remove(&key, &owned),
+                () = clock::sleep(ANSWER_KEPT) => uploads.remove(&key, &owned),
             }
         });
         Ok(upload)

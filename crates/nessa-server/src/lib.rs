@@ -1,4 +1,7 @@
 //! Nessa gateway with mandatory credential authentication and per-operation authorization.
+// The one clock: outside tests, time is read only through crate::timer::clock
+// (clippy.toml names the calls it replaces; CODING_STANDARDS.md says why).
+#![cfg_attr(not(test), warn(clippy::disallowed_methods))]
 pub mod agent_install;
 pub mod agent_warm_up;
 pub mod agents;
