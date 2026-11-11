@@ -40,6 +40,42 @@ test("a stable full connection proves its capacity", async () => {
   assert.deepEqual(follower.failures, [])
 })
 
+test("a conversation whose restored source is gone is left unfollowed", async () => {
+  const { follower } = fixture()
+  follower.client.subscriptions.view = async (id) => {
+    if (id === "first")
+      throw Object.assign(new Error("gone"), { code: "deferred_source_unavailable" })
+    throw { code: "subscription_capacity" }
+  }
+  await follower.probe()
+  assert.deepEqual(follower.failures, [])
+  assert.equal(follower.counts.refusedAsExpected, 0)
+  assert.equal(follower.unfollowed.has("first"), true)
+  await follower.probe()
+  assert.deepEqual(follower.failures, [])
+  assert.equal(follower.counts.refusedAsExpected, 1)
+})
+
+test("following a conversation whose restored source is gone is not a missed event", async () => {
+  const follower = new Follower({
+    n: 0,
+    limits: { conversationTargets: 2 },
+    mainId: "main",
+  })
+  follower.client = {
+    connectionState: { status: "connected" },
+    subscriptions: {
+      async events() {
+        throw Object.assign(new Error("gone"), { code: "deferred_source_unavailable" })
+      },
+    },
+  }
+  await follower.follow("missing")
+  assert.deepEqual(follower.failures, [])
+  assert.equal(follower.events.has("missing"), false)
+  assert.equal(follower.unfollowed.has("missing"), true)
+})
+
 test("a stable connection accepting an extra view fails", async () => {
   const { follower, closed } = fixture()
   await follower.probe()

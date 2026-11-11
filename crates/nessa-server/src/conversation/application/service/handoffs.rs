@@ -9,7 +9,7 @@
 //!      its history told to expect the switch ─▶ attached
 //!   ─▶ the history holds the switch? applied (agent and model committed)
 //!                                   : not applied (stays on its agent)
-//! fork ─▶ the source's committed history, carried ─▶ seed for the new id
+//! fork ─▶ fetch a deferred source ─▶ its committed history, carried ─▶ seed for the new id
 //!   ─▶ create on the source's agent, model, preset and environment
 //!   ─▶ its opening takes the seed ─▶ the history records the fork first
 //! ```
@@ -507,6 +507,12 @@ impl ConversationService {
         self.access()
             .admit(&record, &caller)
             .map_err(|error| target(error.into()))?;
+        // A deferred source has no serving history until it is fetched.
+        // Copying before that fetch records an empty fork, and fetching the
+        // source later does not put those turns into the fork.
+        self.prepare_restored_history(&source)
+            .await
+            .map_err(target)?;
         let agent = record
             .agent()
             .ok_or(target(ConversationError::AgentUnsupported))?;

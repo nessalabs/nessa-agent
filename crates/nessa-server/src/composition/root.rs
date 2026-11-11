@@ -270,10 +270,39 @@ impl CompositionRoot {
         // can be holding this generation while this one starts.
         launch.forget_startup_failure();
         let config = Environment::from_system()?;
+        let namespace = config
+            .auth_directory
+            .as_ref()
+            .and_then(|directory| directory.parent())
+            .map(std::path::Path::to_path_buf);
+        let accepted_restore = namespace
+            .as_deref()
+            .map(super::startup_authority)
+            .transpose()?
+            .flatten();
+        let deferred_open = match (namespace, accepted_restore) {
+            (Some(namespace), Some(binding)) => {
+                let policy =
+                    crate::backup::infrastructure::CedarInventoryPolicy::new().map_err(|_| {
+                        crate::core::RunError::Restore("restore policy could not be loaded".into())
+                    })?;
+                Some(std::sync::Arc::new(super::GatewayDeferredOpen::new(
+                    namespace, binding, policy,
+                )))
+            }
+            _ => None,
+        };
         if provisioning == LocalProvisioning::Automatic {
             super::provisioning::ensure_local_credentials(&config)?;
         }
         let dependencies = runtime_dependencies(&config);
+        let composed =
+            super::local_auth::product_state(&config, dependencies.clock.clone(), bundle).await?;
+        if let Some(opener) = deferred_open {
+            if let Some(service) = &composed.routes.conversations {
+                service.set_open_preparation(super::preparation_for(opener));
+            }
+        }
         let super::local_auth::LocalProduct {
             routes: product,
             webhook_delivery,
@@ -284,7 +313,7 @@ impl CompositionRoot {
             native,
             #[cfg(unix)]
             restart,
-        } = super::local_auth::product_state(&config, dependencies.clock.clone(), bundle).await?;
+        } = composed;
         let conversations = product.conversations.clone();
         // Shared with the retirement below, which asks whether any of them may
         // still hold an agent process (ADR 221).

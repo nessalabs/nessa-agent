@@ -32,12 +32,13 @@ use super::snapshot::{
     SESSION_EXPORT_LIMIT,
 };
 use crate::backup::application::{
-    capture_export, Authenticator, CopiedStore, DeletionLogStore, ExportClock, ExportFailure,
-    ExportRequest, ExportSource, FenceSource, ManifestPublisher, MutationAdmission, PinnedStore,
+    accepted_tree_matches, capture_export, Authenticator, CopiedStore, DeletionLogStore,
+    ExportClock, ExportFailure, ExportRequest, ExportSource, FenceSource, ManifestPublisher,
+    MutationAdmission, PinnedStore,
 };
 use crate::backup::domain::{
-    CapturedRecord, CredentialKind, DeferredEntry, DeletionFence, Fingerprint, GrantRole,
-    Sensitivity, SkipReason, SkippedRecord, SourceCut, StoreKind,
+    decode_deferred, CapturedRecord, CredentialKind, DeferredEntry, DeletionFence, Fingerprint,
+    GrantRole, Sensitivity, SkipReason, SkippedRecord, SourceCut, StoreKind,
 };
 use crate::conversation::infrastructure::{
     BoatRuntimeConfig, ExportFences, ExportSkip, MetadataSnapshot, NamedRecord, ReceiverSnapshot,
@@ -60,11 +61,13 @@ pub async fn capture_namespace(
         namespace.join("conversations").join("metadata.sqlite3"),
         crate::conversation::infrastructure::access_grants_path(namespace),
     ));
+    let carried = outstanding_deferred(namespace)?;
     let canonical = Arc::new(SessionFiles::new(
         namespace
             .join("conversations")
             .join("sessions")
             .join("records.sqlite3"),
+        carried,
     ));
     let credentials = Arc::new(CredentialCache::new(
         namespace.join("auth").join("credentials.v1.json"),
@@ -409,6 +412,10 @@ impl FactsCache {
 struct SessionFiles {
     path: PathBuf,
     state: Mutex<SessionState>,
+    /// Deferred conversations an accepted restore still has to fetch.
+    /// A later cut of this namespace names them, so they are not dropped
+    /// because they are not in the serving database yet.
+    carried: Vec<DeferredEntry>,
 }
 
 enum SessionState {
@@ -417,21 +424,22 @@ enum SessionState {
     Unreadable,
     Deferred(Vec<DeferredStream>),
     Open(SqliteSnapshot),
-    Bytes(Arc<Vec<u8>>),
+    Bytes(Arc<Vec<u8>>, Vec<String>),
 }
 
 enum SessionView {
     Absent,
     Unreadable,
     Deferred(Vec<DeferredStream>),
-    Bytes(Arc<Vec<u8>>),
+    Bytes(Arc<Vec<u8>>, Vec<String>),
 }
 
 impl SessionFiles {
-    fn new(path: PathBuf) -> Self {
+    fn new(path: PathBuf, carried: Vec<DeferredEntry>) -> Self {
         Self {
             path,
             state: Mutex::new(SessionState::Cold),
+            carried,
         }
     }
 
@@ -453,7 +461,7 @@ impl SessionFiles {
         let opened = tokio::task::spawn_blocking(move || match SqliteSnapshot::open(&path) {
             Ok(snapshot) => SessionState::Open(snapshot),
             Err(()) => match read_capped(&path, SESSION_EXPORT_LIMIT) {
-                CappedFile::Bytes(bytes) => SessionState::Bytes(Arc::new(bytes)),
+                CappedFile::Bytes(bytes) => SessionState::Bytes(Arc::new(bytes), Vec::new()),
                 CappedFile::Missing | CappedFile::Unreadable | CappedFile::Bounded => {
                     SessionState::Unreadable
                 }
@@ -486,23 +494,26 @@ impl SessionFiles {
                     *guard = SessionState::Deferred(streams);
                     return Ok(SessionView::Deferred(shared));
                 }
-                SessionState::Bytes(bytes) => {
+                SessionState::Bytes(bytes, ids) => {
                     let shared = Arc::clone(&bytes);
-                    *guard = SessionState::Bytes(bytes);
-                    return Ok(SessionView::Bytes(shared));
+                    let names = ids.clone();
+                    *guard = SessionState::Bytes(bytes, ids);
+                    return Ok(SessionView::Bytes(shared, names));
                 }
                 SessionState::Open(snapshot) => snapshot,
                 SessionState::Cold => return Err(()),
             }
         };
+        let ids = snapshot.active_ids();
         let copied = tokio::task::spawn_blocking(move || snapshot.backup_bytes())
             .await
             .map_err(|_| ())?;
         match copied {
             Ok(SnapshotCopy::Ready(bytes)) => {
                 let bytes = Arc::new(bytes);
-                *self.state.lock().map_err(|_| ())? = SessionState::Bytes(Arc::clone(&bytes));
-                Ok(SessionView::Bytes(bytes))
+                *self.state.lock().map_err(|_| ())? =
+                    SessionState::Bytes(Arc::clone(&bytes), ids.clone());
+                Ok(SessionView::Bytes(bytes, ids))
             }
             Ok(SnapshotCopy::Deferred(streams)) => {
                 *self.state.lock().map_err(|_| ())? = SessionState::Deferred(streams.clone());
@@ -651,13 +662,28 @@ struct CanonicalPin {
 #[async_trait]
 impl PinnedStore for CanonicalPin {
     async fn read(&mut self) -> Result<SourceCut, ()> {
+        let carried = self.files.carried.clone();
         match self.files.view().await? {
-            SessionView::Absent => absent(StoreKind::CanonicalRecords),
-            SessionView::Unreadable => skipped_file(StoreKind::CanonicalRecords, "records.sqlite3"),
-            SessionView::Deferred(streams) => {
-                finish_deferred(StoreKind::CanonicalRecords, &streams)
+            SessionView::Absent => {
+                attach_carried(absent(StoreKind::CanonicalRecords)?, &carried, &[])
             }
-            SessionView::Bytes(bytes) => {
+            SessionView::Unreadable => attach_carried(
+                skipped_file(StoreKind::CanonicalRecords, "records.sqlite3")?,
+                &carried,
+                &[],
+            ),
+            SessionView::Deferred(streams) => {
+                let present: Vec<String> = streams
+                    .iter()
+                    .map(|stream| stream.conversation_id.clone())
+                    .collect();
+                attach_carried(
+                    finish_deferred(StoreKind::CanonicalRecords, &streams)?,
+                    &carried,
+                    &present,
+                )
+            }
+            SessionView::Bytes(bytes, present) => {
                 // The file is one record. A private-key header or a secret
                 // JSON key inside it cannot be stripped per event, so the
                 // whole file is fingerprinted, named as a skip, and the
@@ -672,14 +698,22 @@ impl PinnedStore for CanonicalPin {
                         &mut records,
                         &mut skipped,
                     );
-                    finish(StoreKind::CanonicalRecords, "file", records, skipped)
+                    attach_carried(
+                        finish(StoreKind::CanonicalRecords, "file", records, skipped)?,
+                        &carried,
+                        &present,
+                    )
                 } else {
                     let record = public(
                         StoreKind::CanonicalRecords,
                         "records.sqlite3",
                         (*bytes).clone(),
                     )?;
-                    finish(StoreKind::CanonicalRecords, "file", vec![record], vec![])
+                    attach_carried(
+                        finish(StoreKind::CanonicalRecords, "file", vec![record], vec![])?,
+                        &carried,
+                        &present,
+                    )
                 }
             }
         }
@@ -819,7 +853,7 @@ impl PinnedStore for NotesPin {
             SessionView::Absent => absent(StoreKind::Notes),
             SessionView::Unreadable => skipped_file(StoreKind::Notes, "records.sqlite3"),
             SessionView::Deferred(streams) => finish_deferred(StoreKind::Notes, &streams),
-            SessionView::Bytes(bytes) => {
+            SessionView::Bytes(bytes, _) => {
                 let fingerprint = crate::backup::domain::Fingerprint::of(bytes.as_slice());
                 finish(StoreKind::Notes, &fingerprint.hex(), vec![], vec![])
             }
@@ -2251,6 +2285,141 @@ fn skip(kind: StoreKind, identity: &str) -> Result<SkippedRecord, ()> {
 
 fn skipped_file(kind: StoreKind, identity: &str) -> Result<SourceCut, ()> {
     finish(kind, "unavailable", vec![], vec![skip(kind, identity)?])
+}
+
+/// Name deferred conversations the serving snapshot does not already hold.
+fn attach_carried(
+    cut: SourceCut,
+    carried: &[DeferredEntry],
+    present: &[String],
+) -> Result<SourceCut, ()> {
+    let mut deferred = cut.deferred().to_vec();
+    for entry in carried {
+        if present.iter().any(|id| id == entry.conversation_id())
+            || deferred
+                .iter()
+                .any(|have| have.conversation_id() == entry.conversation_id())
+        {
+            continue;
+        }
+        deferred.push(entry.clone());
+    }
+    if deferred.len() == cut.deferred().len() {
+        return Ok(cut);
+    }
+    SourceCut::with_deferred(
+        cut.store(),
+        cut.watermark().clone(),
+        cut.records().to_vec(),
+        cut.skipped().to_vec(),
+        deferred,
+    )
+    .map_err(|_| ())
+}
+
+/// Deferred canonical conversations an accepted restore has not fetched.
+///
+/// A namespace that is not a restored gateway has none. Once the accepted
+/// pointer is present, a deferred list that is missing, unreadable, not the
+/// bytes the accepted journal sealed, or sealed by a journal the acceptance
+/// audit does not trust, is not treated as "nothing left": the cut would
+/// otherwise name those conversations' metadata and drop the size and digest
+/// a later restore needs. A missing pointer is that same refusal when
+/// installation already wrote `conversations/restore-install.txt`.
+fn outstanding_deferred(namespace: &Path) -> Result<Vec<DeferredEntry>, ExportFailure> {
+    let pointer = namespace.join("backup").join("accepted-restore.txt");
+    let text = match fs::read_to_string(&pointer) {
+        Ok(text) => text,
+        Err(error) if error.kind() == ErrorKind::NotFound => {
+            return if installed_restore(namespace) {
+                Err(ExportFailure::Inventory)
+            } else {
+                Ok(Vec::new())
+            };
+        }
+        Err(_) => return Err(ExportFailure::Inventory),
+    };
+    let binding = crate::backup::application::binding_from_pointer(&text)
+        .map_err(|_| ExportFailure::Inventory)?;
+    // Startup's accepted-authority check, then the file seal. A journal
+    // rewritten to match a new `deferred.txt` still fails the audit. A
+    // missing file is the same refusal. Opening the audit does not create it.
+    if !binding.audit.join("restore.jsonl").is_file() {
+        return Err(ExportFailure::Inventory);
+    }
+    let audit = super::FileRestoreAudit::open(&binding.audit, AuditReadClock)
+        .map_err(|_| ExportFailure::Inventory)?;
+    if crate::backup::application::confirm_accepted(
+        &binding.live,
+        &super::DirectoryQuarantine,
+        &audit,
+    )
+    .is_err()
+        || accepted_tree_matches(&binding.live, &super::DirectoryQuarantine).is_err()
+    {
+        return Err(ExportFailure::Inventory);
+    }
+    let text = match fs::read_to_string(binding.live.join("deferred.txt")) {
+        Ok(text) => text,
+        Err(_) => return Err(ExportFailure::Inventory),
+    };
+    let lines = decode_deferred(&text).map_err(|_| ExportFailure::Inventory)?;
+    let deleted = deleted_conversations(namespace);
+    let mut entries = Vec::new();
+    for line in lines {
+        if line.store != StoreKind::CanonicalRecords || deleted.contains(&line.conversation_id) {
+            continue;
+        }
+        entries.push(
+            DeferredEntry::new(
+                StoreKind::CanonicalRecords,
+                line.conversation_id,
+                line.size,
+                line.digest,
+            )
+            .map_err(|_| ExportFailure::Inventory)?,
+        );
+    }
+    Ok(entries)
+}
+
+/// Installation left this namespace as a restored gateway.
+///
+/// The marker outlives the accepted pointer. A missing pointer is then a
+/// lost binding, not an ordinary namespace with nothing deferred.
+pub(crate) fn installed_restore(namespace: &Path) -> bool {
+    match fs::metadata(namespace.join("conversations").join("restore-install.txt")) {
+        Ok(_) => true,
+        Err(error) if error.kind() == ErrorKind::NotFound => false,
+        Err(_) => true,
+    }
+}
+
+/// The audit is only read. Its clock is not asked.
+struct AuditReadClock;
+
+impl ExportClock for AuditReadClock {
+    fn unix_ms(&self) -> u64 {
+        0
+    }
+}
+
+fn deleted_conversations(namespace: &Path) -> HashSet<String> {
+    let path = namespace.join("conversations").join("metadata.sqlite3");
+    let Ok(connection) = nessa_local_database::rusqlite::Connection::open_with_flags(
+        &path,
+        nessa_local_database::rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY
+            | nessa_local_database::rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    ) else {
+        return HashSet::new();
+    };
+    let Ok(mut statement) = connection.prepare("SELECT conversation_id FROM deletions") else {
+        return HashSet::new();
+    };
+    let Ok(rows) = statement.query_map([], |row| row.get::<_, String>(0)) else {
+        return HashSet::new();
+    };
+    rows.flatten().collect()
 }
 
 fn finish_deferred(kind: StoreKind, streams: &[DeferredStream]) -> Result<SourceCut, ()> {

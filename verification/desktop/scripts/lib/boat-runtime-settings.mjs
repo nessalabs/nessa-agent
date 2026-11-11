@@ -305,10 +305,15 @@ export async function channelPlacementSettings(run, channel, failures) {
     threads: "data-thread-placement",
   }
   const field = { coordinator: "coordinatorPlacement", threads: "threadPlacement" }
+  // The component test finds each option by the button's label. A role
+  // query for that exact name missed Boat in the stress run while the
+  // dialog was already showing the label: the connection read still had
+  // the option disabled.
   const option = (row, name) =>
     control
       .locator(`[data-placement-row="${row}"]`)
-      .getByRole("button", { name, exact: true })
+      .locator("button")
+      .filter({ hasText: new RegExp(`^${name}$`) })
   // A choice is done when the dialog shows it, not when it stops being busy:
   // a save not started yet is not busy either.
   const shows = (row, place) =>
@@ -317,10 +322,14 @@ export async function channelPlacementSettings(run, channel, failures) {
   // offered, disabled, the move is asked of the gateway directly, as another
   // window would, and the dialog is checked once the window reads it again.
   await control.waitFor({ timeout: 10_000 })
-  // Boat is always named; it can be chosen only once connected.
-  const boatOffered =
-    (await option("threads", "Boat").count()) > 0 &&
-    !(await option("threads", "Boat").isDisabled())
+  const boat = option("threads", "Boat")
+  await boat.first().waitFor({ state: "visible", timeout: 10_000 })
+  // The row paints Boat disabled before its connection read. That read
+  // enables the option when Boat is connected; a Boat that is not stays
+  // disabled.
+  const boatOffered = Boolean(await waitFor(() => boat.first().isEnabled(), 10_000))
+  const boatCount = await boat.count()
+  const boatDisabled = boatCount > 0 && !boatOffered
   const toBoat = async (row, current) => {
     if (!boatOffered) {
       await client.channels.setPlacement({
@@ -359,9 +368,10 @@ export async function channelPlacementSettings(run, channel, failures) {
       failures.push("the channel settings do not show where its main agent runs")
     receipts.boatOffered = boatOffered
     if (!boatOffered) {
-      const waiting = option("threads", "Boat")
-      if ((await waiting.count()) === 0 || !(await waiting.isDisabled()))
-        failures.push("Boat is not shown as unavailable while it is not connected")
+      if (boatCount === 0 || !boatDisabled)
+        failures.push(
+          `Boat is not shown as unavailable while it is not connected: ${JSON.stringify(await control.innerText())}`,
+        )
     }
     await toBoat("threads", {
       coordinatorPlacement: before.coordinatorPlacement,

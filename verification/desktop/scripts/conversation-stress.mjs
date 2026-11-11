@@ -32,6 +32,9 @@ import {
  *               the pointer; stopped, the spinner is gone
  *   parent-stop Stop cancels the parent, owned child and grandchild without a report restart
  *   fail        the turn fails; the next message is sent in the same conversation
+ *   restore     a restored conversation is opened and shows its saved record;
+ *               another, whose source file is moved aside, refuses Send and
+ *               keeps the draft
  *   usageLimit  the turn ends in a usage limit; the card shows, the project
  *               preference is turned on and back off, and the turn is not resumed
  *   signIn      the agent refuses the turn for sign-in; the card offers the
@@ -327,6 +330,7 @@ import {
   lstatSync,
   mkdirSync,
   mkdtempSync,
+  renameSync,
   readdirSync,
   readFileSync,
   realpathSync,
@@ -334,6 +338,7 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs"
+import { spawnSync } from "node:child_process"
 import { tmpdir } from "node:os"
 import { basename, dirname, isAbsolute, join } from "node:path"
 import { setTimeout as sleep } from "node:timers/promises"
@@ -3435,6 +3440,112 @@ const steps = {
       )
     if (!(await sendShown(run.page)))
       failures.push("a report returned the parent to Stop")
+  },
+
+  async restore(run, step, failures) {
+    const manifest = run.stack.restore
+    const loaded = manifest?.loaded?.[step.slot]
+    const missing = manifest?.missing?.[step.slot]
+    const source = manifest?.source
+    if (!loaded || !missing || !source)
+      throw new Error("the stress restore was not prepared")
+    if (!existsSync(source))
+      failures.push(`the restored source ${source} is not there to load`)
+    // Both restored conversations start archived, so followers do not fetch
+    // them before this step. Listing the loaded one is setup. The window
+    // opens it while the source is still there, and the client reads the
+    // result only after that.
+    const prepare = await connectClient(run.stack.gateway, INSTANCE, "panel")
+    let listed = false
+    try {
+      const result = await prepare.conversation.unarchive(loaded.id)
+      listed = result.applied === true
+      if (!listed) failures.push("the restored conversation was already listed")
+    } catch (error) {
+      failures.push(`the restored conversation could not be listed: ${error.message}`)
+    } finally {
+      prepare.close()
+    }
+    if (listed) {
+      await openStressConversation(run.page, loaded.id, loaded.title)
+      // The list preview is "restored-history". This sentence is only the turn.
+      if (!(await shows(run.page, "restored turn text", 15_000))) {
+        failures.push(
+          `the restored history was not shown: ${JSON.stringify((await pageText(run.page)).slice(0, 500))}`,
+        )
+      }
+      const panel = await connectClient(run.stack.gateway, INSTANCE, "panel")
+      try {
+        const view = await panel.conversation.read(loaded.id)
+        const said = (view.messages ?? [])
+          .map((turn) => `${turn.status ?? ""} ${turn.userText ?? ""}`)
+          .join("\n")
+        if (!said.includes("restored turn text"))
+          failures.push(
+            `the gateway view did not load the restored history: ${JSON.stringify(said)}`,
+          )
+      } catch (error) {
+        failures.push(`the gateway could not read the restored history: ${error.message}`)
+      } finally {
+        panel.close()
+      }
+    }
+    const hidden = `${source}.aside`
+    renameSync(source, hidden)
+    let revealed = false
+    try {
+      const listing = await connectClient(run.stack.gateway, INSTANCE, "panel")
+      try {
+        const result = await listing.conversation.unarchive(missing.id)
+        revealed = result.applied === true
+        if (!revealed)
+          failures.push("the conversation whose source is gone was already listed")
+      } catch (error) {
+        failures.push(
+          `the conversation whose source is gone could not be listed: ${error.message}`,
+        )
+      } finally {
+        listing.close()
+      }
+      if (revealed) {
+        await openStressConversation(run.page, missing.id, missing.title)
+        const text = prompt(run, STRESS.restore, step, " missing")
+        const box = dock(run.page).locator("textarea")
+        await box.fill(text)
+        await dock(run.page)
+          .getByRole(...composerControls.send)
+          .click({ timeout: 10_000 })
+        await expectShown(run.page, "no longer at its source", failures)
+        // The desktop keeps a refused send as the unsent message, which is the
+        // draft: the words stay on screen, in the field or beside the refusal.
+        const kept = await waitFor(
+          async () =>
+            (await box.inputValue()) === text ||
+            (await pageText(run.page)).includes(text),
+          10_000,
+        )
+        if (!kept) {
+          failures.push(
+            `a send whose restored source is gone did not keep the draft: ${JSON.stringify(await box.inputValue())} ${JSON.stringify((await pageText(run.page)).slice(0, 500))}`,
+          )
+        }
+      }
+    } finally {
+      if (revealed) {
+        const listing = await connectClient(run.stack.gateway, INSTANCE, "panel")
+        try {
+          await listing.conversation.archive(missing.id)
+        } catch (error) {
+          failures.push(
+            `the conversation whose source is gone stayed listed: ${error.message}`,
+          )
+        } finally {
+          listing.close()
+        }
+      }
+      if (existsSync(hidden)) renameSync(hidden, source)
+    }
+    await openStressConversation(run.page, run.main.id, run.main.title)
   },
 
   async fail(run, step, failures) {
@@ -10715,9 +10826,42 @@ async function startStack(options) {
       ? await vmBackgroundFixture(directory, PARK_IDLE_SECONDS)
       : null
     Object.assign(environment, vmFixture?.environment)
+    let restoreReport = null
     stack = await startGatewayStack(options, INSTANCE, {
       executable: vmFixture?.executable,
       vault: true,
+      beforeListen:
+        knobs.restores > 0
+          ? async ({ directory, stage, instance }) => {
+              const bin = join(repoRoot, "target/debug/nessa-backup-restore")
+              const destination = join(directory, "stress-restore")
+              const namespace = join(directory, stage, "instances", instance)
+              const result = spawnSync(
+                bin,
+                [
+                  "prepare",
+                  "--destination",
+                  destination,
+                  "--namespace",
+                  namespace,
+                  "--count",
+                  String(knobs.restores),
+                ],
+                { encoding: "utf8" },
+              )
+              if (result.status !== 0) {
+                throw new Error(
+                  `stress restore prepare failed: ${result.stdout ?? ""}\n${result.stderr ?? ""}`,
+                )
+              }
+              const line = result.stdout
+                .trim()
+                .split("\n")
+                .filter((each) => each.includes('"prepared"'))
+                .at(-1)
+              restoreReport = JSON.parse(line)
+            }
+          : undefined,
       environment,
       servers,
       webhooks:
@@ -10759,6 +10903,7 @@ async function startStack(options) {
     // this one, so what another step put there (the `ssh` step's stand-in)
     // stays for the launches after it.
     stack.gatewayPath = environment.PATH ?? process.env.PATH ?? ""
+    stack.restore = restoreReport
   } catch (error) {
     await stack?.close()
     await github?.close()

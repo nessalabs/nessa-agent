@@ -137,6 +137,22 @@ impl SqliteSnapshot {
         Ok(Self { connection })
     }
 
+    /// Active conversation ids in this snapshot. A file that is not a session
+    /// database has none. The live file is not read again.
+    pub fn active_ids(&self) -> Vec<String> {
+        let mut statement = match self.connection.prepare(
+            "SELECT CASE WHEN typeof(public_id)='text' THEN public_id END
+             FROM event_streams WHERE retired = 0",
+        ) {
+            Ok(statement) => statement,
+            Err(_) => return Vec::new(),
+        };
+        let Ok(rows) = statement.query_map([], |row| row.get::<_, Option<String>>(0)) else {
+            return Vec::new();
+        };
+        rows.filter_map(|row| row.ok().flatten()).collect()
+    }
+
     /// Copy this snapshot into memory. The live file is not read again.
     ///
     /// A file above [`SESSION_EXPORT_LIMIT`] is [`SnapshotCopy::Deferred`]:

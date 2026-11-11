@@ -245,12 +245,25 @@ is present. A failed or partial stage deletes that tree. Historical outbox bytes
 stay, and `replay.blocked` stays `blocked\n`, so this use case does not run them.
 The private key is not restored; acceptance writes `identity.txt` as `re-pair`.
 
-An oversized conversation is still not copied into the snapshot. Opening it
+An oversized conversation is still not copied into the snapshot. A later export
+of an accepted namespace carries deferred conversations the serving file does
+not hold. If that accepted tree's `deferred.txt` is missing, its bytes are not the
+ones the accepted journal sealed, or that journal is not the one the
+acceptance audit recorded, the export stops and publishes nothing. An
+installed restore that has lost `backup/accepted-restore.txt` is the same
+refusal: `conversations/restore-install.txt` is still there.
+The file is written even when it names no conversation, so its absence or a
+later well-formed replacement is not an empty inventory. Opening a deferred conversation
 streams that one conversation from a source the caller supplies and publishes
 the session file only when the size and stream fingerprint match the cut.
 `a_session_over_64_mib_is_restored_when_opened` is the drill. A missing,
 changed, or interrupted source publishes nothing and leaves other session files
 in place.
 
-`nessa-backup-plan` does not stage or accept. The desktop and `conversation.read`
-do not call the open use case yet. Remote executors are not contacted.
+`nessa-backup-plan` does not stage or accept. `nessa-backup-restore` does:
+stage leaves the live path absent, accept is the authority, and open fetches
+one deferred conversation. A missing source is `source-missing` and writes no
+other session file. A gateway pointed at a tree that has not been accepted
+does not listen. An installed restore that has lost
+`backup/accepted-restore.txt` does not listen either:
+`conversations/restore-install.txt` is still there. Remote executors are not contacted.

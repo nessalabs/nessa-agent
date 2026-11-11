@@ -117,6 +117,8 @@ const outcomes: Readonly<Record<ConversationErrorCode, Outcome>> = {
   [ConversationErrorCode.ConversationCapacity]: "failed",
   [ConversationErrorCode.ConversationConfigurationChanged]: "failed",
   [ConversationErrorCode.ConversationStateUnreadable]: "failed",
+  [ConversationErrorCode.DeferredSourceUnavailable]: "failed",
+  [ConversationErrorCode.DeferredSourceChanged]: "failed",
   [ConversationErrorCode.ConversationStorageUnavailable]: "failed",
   [ConversationErrorCode.AuditUnavailable]: "failed",
   [ConversationErrorCode.SubmissionConflict]: "failed",

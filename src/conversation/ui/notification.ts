@@ -51,6 +51,20 @@ function readNotice(reason: ReadFailure): ConversationNotice {
           "This conversation was deleted, so it cannot be continued. Close this tab; anything in the draft is still here to copy.",
         retry: null,
       }
+    case "source-gone":
+      return {
+        title: "Recorded version unavailable",
+        description:
+          "This conversation’s recorded version is no longer at its source. Other conversations are unchanged.",
+        retry: { kind: "refresh" },
+      }
+    case "source-changed":
+      return {
+        title: "Recorded version changed",
+        description:
+          "This conversation’s recorded version changed at its source, so it was not restored. Other conversations are unchanged.",
+        retry: null,
+      }
     // Everything else, including a cause this build has no name for. It claims
     // only what is certainly true of all of them — deliberately not that the
     // gateway will come back, which no code it sends actually means.
@@ -87,6 +101,8 @@ function outranksACommand(reason: ReadFailure): boolean {
     case "configuration-changed":
     case "state-unreadable":
     case "deleted":
+    case "source-gone":
+    case "source-changed":
       return true
     case "unavailable":
       return false

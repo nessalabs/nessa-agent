@@ -100,6 +100,7 @@ jobs:
       NESSA_STRESS_LARGE: ${{ inputs.large || '3' }}
       NESSA_STRESS_RESTARTS: ${{ inputs.restarts || '4' }}
       NESSA_STRESS_THREADS: ${{ inputs.threads || '6' }}
+      NESSA_STRESS_RESTORES: "2"
       # The chaos check's numbers; its seed is the stress seed.
       NESSA_CHAOS_RUNS: ${{ inputs.chaos-runs || '8' }}
       NESSA_CHAOS_WAVES: ${{ inputs.chaos-waves || '150' }}

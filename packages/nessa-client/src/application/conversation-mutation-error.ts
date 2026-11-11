@@ -56,6 +56,10 @@ const REFUSALS: Partial<Record<ConversationErrorCode, string>> = {
     "The SSH host this conversation runs on has an operating system or processor this version of Nessa has no build for, so it could not install itself there and nothing was sent.",
   environment_install_failed:
     "Nessa could not install itself on the SSH host this conversation runs on: the copy could not be downloaded, did not verify, did not run there, or could not be stored, so nothing was sent. Retry; the gateway's environment audit says which.",
+  deferred_source_unavailable:
+    "This conversation’s recorded version is no longer at its source. Other conversations are unchanged.",
+  deferred_source_changed:
+    "This conversation’s recorded version changed at its source, so it was not restored. Other conversations are unchanged.",
   linked_file_unreachable:
     "This conversation runs on an SSH host, which cannot read files on this computer, so the message was not sent. Remove the linked files, or attach images, whose bytes are sent with them.",
   // Named apart from the two codes below, which say the turn was saved.
@@ -153,6 +157,12 @@ export function rejectedBeforeDispatch(code: ConversationErrorCode): boolean {
     // that and answers every later command from it without opening an agent, so
     // nothing was admitted and nothing can have been applied.
     case ConversationErrorCode.ConversationStateUnreadable:
+      return true
+    // Opening a restored conversation asks for its recorded version before any
+    // agent starts. The source is gone, or it no longer matches, so nothing
+    // was fetched and nothing was applied.
+    case ConversationErrorCode.DeferredSourceUnavailable:
+    case ConversationErrorCode.DeferredSourceChanged:
       return true
     // A deleted conversation's identity is refused from its tombstone, which
     // the gateway reads before it resolves the conversation or admits

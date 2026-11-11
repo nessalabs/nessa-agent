@@ -433,6 +433,8 @@ it.each([
   // The word the client used to report as uncertain, so this sentence and the
   // notice above the composer were both unreachable.
   ["conversation-state-unreadable", /cannot read this conversation's saved state/],
+  ["source-gone", /no longer at its source/],
+  ["source-changed", /changed at its source/],
 ] as const)(
   "knows a message refused as %s was not sent: says why, and brings it back still stored",
   async (reason, text) => {

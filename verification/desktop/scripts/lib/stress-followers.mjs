@@ -13,6 +13,10 @@
  * them, are exactly the conversation's events from the start (none missed,
  * none twice, none out of order), and its view of the main conversation is
  * the one a read gives.
+ *
+ * A deferred conversation whose recorded source is gone cannot be followed.
+ * That refusal is the product's answer, not a missed event, so the
+ * conversation is left out of the comparison.
  */
 
 /**
@@ -26,6 +30,11 @@
 const RESUMED = new Set(["disconnected", "lagging", "source_closed"])
 /** Refusals that say this follower asked for something it should not have. */
 const REFUSED = new Set(["subscription_capacity", "subscription_duplicate"])
+/**
+ * The gateway has no history to follow: the conversation was restored from
+ * a source that is no longer there. Following it again cannot succeed.
+ */
+const UNFOLLOWABLE = new Set(["deferred_source_unavailable"])
 
 /** Whether `error` is the gateway's answer, not a dropped connection. */
 const isRefusal = (error) =>
@@ -144,6 +153,8 @@ export class Follower {
     this.failures = []
     /** conversationId → { ids, seen, cursor, subscription, lost } */
     this.events = new Map()
+    /** Conversations whose source is gone: not followed, not compared. */
+    this.unfollowed = new Set()
     this.view = { frame: null, subscription: null, lost: false }
     this.list = { conversations: [], subscription: null, lost: false }
     this.counts = { churned: 0, resumed: 0, lagging: 0, refusedAsExpected: 0 }
@@ -180,6 +191,12 @@ export class Follower {
       } catch (error) {
         last = error
         if (this.gone(conversationId)) return null
+        // Nothing to follow, and asking again will not grow the history.
+        if (conversationId && UNFOLLOWABLE.has(error?.code)) {
+          this.unfollowed.add(conversationId)
+          this.events.delete(conversationId)
+          return null
+        }
         // Its own bookkeeping is wrong; waiting does not change that.
         if (REFUSED.has(error?.code)) break
         await sleep(500)
@@ -343,7 +360,9 @@ export class Follower {
       [...this.events.values()].some((each) => each.lost || !each.subscription)
     )
       return
-    const others = this.list.conversations.filter((id) => id !== this.mainId)
+    const others = this.list.conversations.filter(
+      (id) => id !== this.mainId && !this.unfollowed.has(id),
+    )
     const room = this.limits.conversationTargets - this.held()
     if (room < 0 || others.length < room + 1) return
     const client = this.client
@@ -393,6 +412,12 @@ export class Follower {
             )
         } catch (error) {
           if (!live()) return
+          // Its source is gone. This probe cannot use it to measure the
+          // room; the next one asks the conversations that can be followed.
+          if (error?.code === "deferred_source_unavailable") {
+            this.unfollowed.add(others[n])
+            return
+          }
           // The gateway restarting, this connection dropping, or a
           // conversation the list still names being deleted or its agent
           // being retired, ends the probe: it asks again on a later round,
@@ -440,7 +465,9 @@ export class Follower {
         for (const id of this.list.conversations) {
           if (this.stopping || this.events.size + 1 >= this.limits.conversationTargets)
             break
-          if (!this.events.has(id) && !this.deleted.has(id)) await this.follow(id)
+          if (this.unfollowed.has(id) || this.deleted.has(id) || this.events.has(id))
+            continue
+          await this.follow(id)
         }
         const followed = [...this.events.keys()]
         const roll = this.random()
