@@ -77,22 +77,25 @@ pub(in crate::product) async fn dispatch(
     let (receiver, epoch, operation) = operation;
     let requested = operation.clone();
     let (receivers, repository, share_grants) = state
+        .reads
         .passive_read
         .as_ref()
         .ok_or(CatalogueReadErrorCode::SourceUnavailable)?;
     let access_policy = state
+        .reads
         .conversation_access
         .as_ref()
         .ok_or(CatalogueReadErrorCode::SourceUnavailable)?;
     let source = state
+        .reads
         .catalogue_source
         .as_ref()
         .ok_or(CatalogueReadErrorCode::SourceUnavailable)?;
     let use_case = ReadCatalogue {
         admission: AdmitPassiveRead {
-            owner_phone_purposes: state.owner_phone_purpose.as_ref(),
-            owner_phone_receivers: state.owner_phone_receivers.as_deref(),
-            owner_phone_policy: state.owner_phone_policy.clone(),
+            owner_phone_purposes: state.owner_phone.purpose.as_ref(),
+            owner_phone_receivers: state.owner_phone.receivers.as_deref(),
+            owner_phone_policy: state.owner_phone.policy.clone(),
             authorization: AuthorizeAction {
                 access: state.access.as_ref(),
                 clock: state.clock.as_ref(),

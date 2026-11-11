@@ -30,7 +30,7 @@ pub(super) fn dispatch(
     if frame.params != expected {
         return failure(&frame.id, "invalid_request");
     }
-    let Some(pairing) = state.pairing.as_ref() else {
+    let Some(pairing) = state.linking.commands.as_ref() else {
         return failure(&frame.id, PairingErrorCode::PairingNotConfigured.as_str());
     };
     let Some((endpoint, pin)) = pairing.native_endpoint() else {

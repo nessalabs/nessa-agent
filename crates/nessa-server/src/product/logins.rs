@@ -23,7 +23,7 @@ pub(super) async fn dispatch(
     session: &AuthenticatedSession,
     frame: RequestFrame,
 ) -> OutgoingMessage {
-    let Some(logins) = state.logins.as_ref() else {
+    let Some(logins) = state.accounts.logins.as_ref() else {
         return failure(&frame.id, LoginsErrorCode::LoginsNotConfigured.as_str());
     };
     let caller = caller(session);

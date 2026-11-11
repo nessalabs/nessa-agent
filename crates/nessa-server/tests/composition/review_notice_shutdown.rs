@@ -175,11 +175,16 @@ async fn review_audit_host_shutdown_joins_physical_write_and_queued_selection() 
         let id = fixture.scope().conversation_id;
         selections.push(tokio::spawn(async move {
             SelectReviewNotice::new(
-                selecting.review_metadata.as_ref().unwrap(),
+                selecting.reads.review_metadata.as_ref().unwrap(),
                 selecting.access.as_ref(),
                 selecting.clock.as_ref(),
-                selecting.conversation_access.as_ref().unwrap().as_ref(),
-                selecting.review_auditor.as_ref().unwrap(),
+                selecting
+                    .reads
+                    .conversation_access
+                    .as_ref()
+                    .unwrap()
+                    .as_ref(),
+                selecting.reads.review_auditor.as_ref().unwrap(),
             )
             .execute(
                 &session,
@@ -347,10 +352,10 @@ async fn review_audit_host_deadline_preserves_first_delivery_failure() {
     .unwrap();
     assert!(matches!(
         SelectReviewNotice::new(
-            state.review_metadata.as_ref().unwrap(),
+            state.reads.review_metadata.as_ref().unwrap(),
             state.access.as_ref(),
             state.clock.as_ref(),
-            state.conversation_access.as_ref().unwrap().as_ref(),
+            state.reads.conversation_access.as_ref().unwrap().as_ref(),
             auditor.as_ref(),
         )
         .execute(

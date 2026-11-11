@@ -138,7 +138,7 @@ async fn raw_event_filters_use_the_published_cardinality_and_uniqueness_contract
     let fixture = SubscriptionFixture::new().await;
     let held = fixture.storage.committed_watches();
     let mut unavailable = fixture.state.clone();
-    unavailable.conversations = None;
+    unavailable.conversation.service = None;
     // Invalid params must not reach even the missing-service/admission branch.
     grants(&fixture.authority, &["server.read"]);
     let mut client = connect(unavailable, &fixture.session);

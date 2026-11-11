@@ -20,7 +20,7 @@ pub(super) async fn dispatch(
     session: &AuthenticatedSession,
     frame: RequestFrame,
 ) -> OutgoingMessage {
-    let Some(installer) = state.agent_installations.clone() else {
+    let Some(installer) = state.agents.installations.clone() else {
         return failure(&frame.id, "agent_installer_unavailable");
     };
     if frame.method == "agents.installOptions" {

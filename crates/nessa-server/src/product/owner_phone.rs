@@ -15,12 +15,12 @@ pub(super) async fn current(
     session: &AuthenticatedSession,
 ) -> Result<Option<OwnerPhoneReader>, &'static str> {
     AdmitOwnerPhoneReader {
-        purposes: state.owner_phone_purpose.as_ref(),
-        holding: state.owner_phone_receivers.as_deref(),
+        purposes: state.owner_phone.purpose.as_ref(),
+        holding: state.owner_phone.receivers.as_deref(),
         clock: state.clock.as_ref(),
         gateway: &state.gateway,
-        policy: state.owner_phone_policy.clone(),
-        access_policy: state.conversation_access.clone(),
+        policy: state.owner_phone.policy.clone(),
+        access_policy: state.reads.conversation_access.clone(),
     }
     .execute(session)
     .await

@@ -38,7 +38,7 @@ pub(super) async fn dispatch(
     session: &AuthenticatedSession,
     frame: RequestFrame,
 ) -> OutgoingMessage {
-    let Some(runtime) = state.webhooks.clone() else {
+    let Some(runtime) = state.accounts.webhooks.clone() else {
         return failure(&frame.id, "conversations_not_configured");
     };
     let requested_head = frame.method == "conversation.webhook.cursor"
@@ -74,6 +74,7 @@ async fn run(
     frame: RequestFrame,
 ) -> Result<OutgoingMessage, &'static str> {
     let runtime = state
+        .accounts
         .webhooks
         .as_ref()
         .ok_or("conversations_not_configured")?;
@@ -136,10 +137,12 @@ async fn run(
     let conversation = conversation_id(&params.conversation_id).map_err(|_| "invalid_request")?;
     let credential = CredentialId::new(params.credential_id).map_err(|_| "invalid_request")?;
     let (receivers, conversations, _) = state
+        .reads
         .passive_read
         .as_ref()
         .ok_or("conversations_not_configured")?;
     let policy = state
+        .reads
         .conversation_access
         .as_deref()
         .ok_or("temporarily_unavailable")?;

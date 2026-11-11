@@ -413,7 +413,7 @@ async fn a_paired_list_admits_its_scope_before_service_availability() {
             .await
             .with_devices(Devices::new(&[("credential", "receiver", owner, true)]));
         grants(&fixture.authority, &["conversation.read", "server.read"]);
-        fixture.state.conversations = None;
+        fixture.state.conversation.service = None;
         for method in ["conversation.list", "conversation.observe"] {
             let reply = fixture.call(method, json!({})).await;
             assert_eq!(reply["error"]["code"], expected, "{method}: {reply}");

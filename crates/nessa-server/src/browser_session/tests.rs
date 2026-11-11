@@ -35,7 +35,7 @@ fn with_cookie(value: &str) -> HeaderMap {
 }
 
 fn set_browser_sessions(state: &mut ProductRouteState, store: Arc<dyn SessionStore>) {
-    state.browser_sessions = Some(store);
+    state.browser.sessions = Some(store);
 }
 
 #[test]
@@ -190,8 +190,8 @@ async fn browser_login_cookie_restore_origin_binding_logout_and_expiry() {
     );
     let identity = authenticate(&state).await;
     let mut socket_state = state.clone();
-    socket_state.browser_session_id = entrypoint::cookie(&h).map(str::to_owned);
-    socket_state.browser_session_origin = Some("https://127.0.0.1:1443".into());
+    socket_state.browser.session_id = entrypoint::cookie(&h).map(str::to_owned);
+    socket_state.browser.session_origin = Some("https://127.0.0.1:1443".into());
     assert!(current_snapshot(&socket_state, &identity).await.is_ok());
     assert_eq!(
         entrypoint::logout(State(state.clone()), h.clone())
@@ -238,8 +238,8 @@ async fn browser_session_reads_current_membership_role_grants_and_revision() {
     let cookie = response.headers()[header::SET_COOKIE].to_str().unwrap();
     let identity = authenticate(&state).await;
     let mut socket_state = state;
-    socket_state.browser_session_id = entrypoint::cookie(&with_cookie(cookie)).map(str::to_owned);
-    socket_state.browser_session_origin = Some("https://127.0.0.1:1443".into());
+    socket_state.browser.session_id = entrypoint::cookie(&with_cookie(cookie)).map(str::to_owned);
+    socket_state.browser.session_origin = Some("https://127.0.0.1:1443".into());
 
     let mut updated = snapshot(MembershipRole::Member, MembershipStatus::Active);
     updated.revision = 7;
@@ -983,7 +983,7 @@ async fn check_returns_service_unavailable_when_admission_or_deadline_is_exhaust
     stalled.settings = stalled
         .settings
         .with_deadlines(Some(std::time::Duration::from_millis(10)), None);
-    stalled.browser_sessions = Some(Arc::new(PendingStore));
+    stalled.browser.sessions = Some(Arc::new(PendingStore));
     let stalled_check = tokio::spawn(entrypoint::check(
         State(stalled.clone()),
         with_cookie(cookie),
@@ -1031,7 +1031,7 @@ async fn check_returns_service_unavailable_when_admission_or_deadline_is_exhaust
 #[tokio::test]
 async fn development_http_cookie_is_separate_and_origin_bound() {
     let (mut state, _) = fixture(MembershipRole::Admin);
-    state.browser_http_allowed = true;
+    state.browser.http_allowed = true;
     let state = state.with_browser_sessions(Arc::new(MemorySessions::default()));
     for origin in ["http://127.0.0.1:1420", "http://[::1]:1420"] {
         let mut h = headers();
@@ -1065,7 +1065,7 @@ async fn development_http_cookie_is_separate_and_origin_bound() {
             StatusCode::UNAUTHORIZED
         );
         let mut disabled = state.clone();
-        disabled.browser_http_allowed = false;
+        disabled.browser.http_allowed = false;
         assert_eq!(
             entrypoint::check(State(disabled), h.clone()).await.status(),
             StatusCode::FORBIDDEN
@@ -1390,8 +1390,8 @@ async fn hostile_store_cannot_restore_an_expired_domain_session() {
         removals: Mutex::new(vec![]),
     });
     set_browser_sessions(&mut state, store.clone());
-    state.browser_session_id = Some("f".repeat(64));
-    state.browser_session_origin = Some("https://127.0.0.1:1443".into());
+    state.browser.session_id = Some("f".repeat(64));
+    state.browser.session_origin = Some("https://127.0.0.1:1443".into());
     clock.now.store(
         100 + crate::browser_session::domain::value_objects::IDLE_SECONDS,
         Ordering::SeqCst,

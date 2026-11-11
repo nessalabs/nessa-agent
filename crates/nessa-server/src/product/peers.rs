@@ -29,7 +29,7 @@ pub(super) async fn dispatch(
     frame: RequestFrame,
 ) -> OutgoingMessage {
     let initiator = session.context().principal_id();
-    let Some(peers) = state.peers.as_ref() else {
+    let Some(peers) = state.linking.peers.as_ref() else {
         return failure(&frame.id, PeerErrorCode::PeerNotConfigured.as_str());
     };
     let id = frame.id;

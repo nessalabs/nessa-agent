@@ -299,7 +299,7 @@ impl CompositionRoot {
         let composed =
             super::local_auth::product_state(&config, dependencies.clock.clone(), bundle).await?;
         if let Some(opener) = deferred_open {
-            if let Some(service) = &composed.routes.conversations {
+            if let Some(service) = &composed.routes.conversation.service {
                 service.set_open_preparation(super::preparation_for(opener));
             }
         }
@@ -314,7 +314,7 @@ impl CompositionRoot {
             #[cfg(unix)]
             restart,
         } = composed;
-        let conversations = product.conversations.clone();
+        let conversations = product.conversation.service.clone();
         // Shared with the retirement below, which asks whether any of them may
         // still hold an agent process (ADR 221).
         let warm_ups = Arc::new(warm_ups);
@@ -382,7 +382,7 @@ impl CompositionRoot {
                     native_listen_addr = %bound.local_address(),
                     "native pairing listening"
                 );
-                if let Some(devices) = &product.devices {
+                if let Some(devices) = &product.machines.devices {
                     devices.listening(bound.local_address());
                 }
                 Some(bound.with_announcer(
@@ -428,6 +428,7 @@ impl CompositionRoot {
         .map_err(RunError::Serve)?;
 
         let _github_relay = product
+            .accounts
             .github
             .as_ref()
             .and_then(|github| github.live.clone())
@@ -615,6 +616,7 @@ impl CompositionRoot {
         // owner, with no intervening await or fallible startup operation.
         if let Some(delivery) = webhook_delivery {
             shutdown_product
+                .accounts
                 .webhooks
                 .as_ref()
                 .ok_or_else(|| RunError::Agent("missing webhook owner".into()))?
@@ -647,7 +649,7 @@ impl CompositionRoot {
                     }
                 },
                 conversations.map(|service| {
-                    let held_reads = shutdown_product.held_reads.clone();
+                    let held_reads = shutdown_product.files.held_reads.clone();
                     let slot = &slot;
                     async move {
                         let drained = service.shutdown().await;
@@ -667,7 +669,7 @@ impl CompositionRoot {
                     #[cfg(unix)]
                     if let Some((servers, tickets, drops)) = mcp_servers {
                         let stopped = super::mcp_servers::stop(
-                            shutdown_product.mcp_server_settings.as_deref(),
+                            shutdown_product.mcp.settings.as_deref(),
                             &servers,
                         )
                         .await;
@@ -848,7 +850,7 @@ pub(crate) async fn cleanup_product(
     deadline: Duration,
 ) {
     product.close_sockets();
-    if let Some(auditor) = &product.review_auditor {
+    if let Some(auditor) = &product.reads.review_auditor {
         auditor.close();
     }
     // A stored MCP server change or inspection admitted from here on would
@@ -857,9 +859,9 @@ pub(crate) async fn cleanup_product(
     // (`x_early_admission_closes_and_inspections_are_cut_while_conversations_drain`).
     product.close_mcp_server_admission();
     passive_cleanup(
-        product.webhooks.as_deref(),
+        product.accounts.webhooks.as_deref(),
         slot,
-        product.review_auditor.as_deref(),
+        product.reads.review_auditor.as_deref(),
         record,
         catalogue,
         conversations,

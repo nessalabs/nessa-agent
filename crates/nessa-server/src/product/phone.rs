@@ -35,7 +35,7 @@ pub(super) async fn dispatch(
     session: &AuthenticatedSession,
     frame: RequestFrame,
 ) -> OutgoingMessage {
-    let Some(commands) = state.pairing.as_ref() else {
+    let Some(commands) = state.linking.commands.as_ref() else {
         return failure(&frame.id, PairingErrorCode::PairingNotConfigured.as_str());
     };
     let Ok(source) = phone_endpoint::source(session.context(), &state.gateway) else {
