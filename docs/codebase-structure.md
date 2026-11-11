@@ -1837,6 +1837,14 @@ defines that command's boundary; #324 storage changes remain separately owned.
 `tests/backup/restore.rs` covers quarantine, acceptance, audit failure, and the
 oversized-session drill. The plan command does not call those use cases.
 
+`backup_restore_main.rs` and `composition/restore_command.rs` are
+`nessa-backup-restore`: stage into `destination/quarantine`, accept onto the
+empty `destination/live`, list deferred conversations, and open one.
+`application/gateway_restore.rs` is the accepted-live check, the credential
+and outbox refusal, and the deferred open `conversation.read` calls first.
+A namespace pointer that is not an accepted live restore refuses gateway
+startup. `tests/backup/gateway_restore.rs` is that drill.
+
 ## Attachments
 
 [Phone file uploads](design/phone-file-uploads.md) describes #1149's stored

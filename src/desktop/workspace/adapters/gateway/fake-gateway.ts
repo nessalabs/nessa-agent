@@ -14,6 +14,7 @@
 import {
   preparedSubmissionFields,
   NessaRpcError,
+  ProductMethod,
   createSubscriptionGate,
   subscriptionLimits,
   viewEntryBounds,
@@ -112,6 +113,47 @@ type Method =
   | "revokePermissionRule"
   | "listChannels"
   | "createChannel"
+
+/**
+ * The product method each recorded call stands for, held to the manifest's
+ * generated list (`ProductMethod`): when the manifest renames or drops a
+ * method the fake still answers, this table stops compiling. `null` is a
+ * call the client makes off the product socket: the upload transport.
+ */
+export const fakeCallMethods = {
+  subscribe: "conversation.subscribe",
+  subscribeList: "conversation.subscribeList",
+  unsubscribe: "conversation.unsubscribe",
+  observe: "conversation.observe",
+  create: "conversation.create",
+  attachmentBegin: "attachment.begin",
+  attachmentUpload: null,
+  send: "conversation.send",
+  answer: "conversation.answer",
+  answerQuestion: "conversation.answerQuestion",
+  permissionReview: "conversation.permissionReview",
+  questionReview: "conversation.questionReview",
+  // `stopThread`: the peek names the turn, then it is stopped.
+  stop: "conversation.stop",
+  withdraw: "conversation.stop",
+  setApprovalMode: "conversation.setApprovalMode",
+  setUsageLimitAutoContinue: "conversation.setUsageLimitAutoContinue",
+  setModel: "conversation.setModel",
+  switchAgent: "conversation.switchAgent",
+  fork: "conversation.fork",
+  read: "conversation.read",
+  readEarlier: "conversation.readEarlier",
+  archive: "conversation.archive",
+  rename: "conversation.rename",
+  delete: "conversation.delete",
+  permissionRules: "conversation.permissionRules",
+  revokePermissionRule: "conversation.revokePermissionRule",
+  listChannels: "channel.list",
+  createChannel: "channel.create",
+} as const satisfies Record<
+  Method,
+  (typeof ProductMethod)[keyof typeof ProductMethod] | null
+>
 
 /** A turn's reply as a fork copies it: its text, joined. */
 function turnReply(turn: ConversationView["messages"][number]): string | undefined {

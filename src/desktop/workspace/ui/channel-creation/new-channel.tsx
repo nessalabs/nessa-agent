@@ -74,6 +74,8 @@ import {
   type ChannelStep,
 } from "../../model/channel-draft"
 import type { ModelRef } from "../../model/workspace-index"
+import { channelPlaceWords } from "../channel-place-words"
+import { useComputers } from "../channel-settings/computers"
 import "./new-channel.css"
 
 /** The question each step asks. */
@@ -408,15 +410,8 @@ function Answer({ step, draft }: { step: ChannelStep; draft: ChannelDraft }) {
     case "placement":
       return (
         <span>
-          Main agent: <em>{draft.coordinatorPlacement === "boat" ? "Boat" : "Local"}</em>{" "}
-          · New threads:{" "}
-          <em>
-            {draft.threadPlacement === "boat"
-              ? "Boat"
-              : draft.threadPlacement === "pool"
-                ? "Any computer"
-                : "Local"}
-          </em>
+          Main agent: <em>{channelPlaceWords(draft.coordinatorPlacement)}</em> · New
+          threads: <em>{channelPlaceWords(draft.threadPlacement)}</em>
         </span>
       )
     case "folder":
@@ -650,6 +645,7 @@ function PlacementAnswer({ flow }: { flow: ChannelCreation }) {
   // would refuse every message. Connecting it is offered right here.
   const boat = useBoatConnection()
   const boatReady = boat.status?.state === "connected"
+  const computers = useComputers()
   return (
     <div
       className="new-channel-placement"
@@ -674,7 +670,8 @@ function PlacementAnswer({ flow }: { flow: ChannelCreation }) {
               if (
                 value === "local" ||
                 value === "boat" ||
-                (value === "pool" && key === "threadPlacement")
+                value === "pool" ||
+                computers.some((computer) => computer.environment === value)
               )
                 dispatch(draftChannel({ change: { [key]: value } }))
             }}
@@ -683,10 +680,12 @@ function PlacementAnswer({ flow }: { flow: ChannelCreation }) {
             <option value="boat" disabled={!boatReady}>
               {boatReady ? "Boat" : "Boat (not connected)"}
             </option>
-            {/* Only threads spread over computers: the main agent stays put. */}
-            {key === "threadPlacement" ? (
-              <option value="pool">Any computer</option>
-            ) : null}
+            <option value="pool">Any computer</option>
+            {computers.map((computer) => (
+              <option key={computer.environment} value={computer.environment}>
+                {computer.name}
+              </option>
+            ))}
           </select>
         </label>
       ))}

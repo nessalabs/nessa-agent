@@ -113,6 +113,10 @@ pub enum RunError {
     /// missing receiver, which startup then refuses for good. The file is
     /// left absent (design rows RJ1–RJ2 in `docs/design/auth/device-pairing.md`).
     ReceiverJournal(MissingReceiverJournal),
+    /// A backup was pointed at this gateway and is not an accepted authority,
+    /// or its restore markers are not ones this process can serve. Nothing
+    /// listens.
+    Restore(String),
 }
 
 /// Where the receiver journal was looked for, and was not.
@@ -413,6 +417,7 @@ impl fmt::Display for RunError {
                 "receiver access journal missing at {}: an enrollment still owes receiver cleanup",
                 missing.path.display()
             ),
+            Self::Restore(message) => write!(f, "{message}"),
         }
     }
 }
@@ -435,7 +440,7 @@ impl std::error::Error for RunError {
             Self::Native(NativeFailure::Directory(source) | NativeFailure::Bind { source, .. }) => {
                 Some(source)
             }
-            Self::Native(_) | Self::ReceiverJournal(_) => None,
+            Self::Native(_) | Self::ReceiverJournal(_) | Self::Restore(_) => None,
         }
     }
 }

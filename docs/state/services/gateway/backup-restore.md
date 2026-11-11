@@ -6,10 +6,14 @@ status: implemented
 summary: Backup verification, staged readiness and live activation are separate
   decisions.
 parent: gateway
-sourceRevision: "77a6b620af4d94b234294f6d273fd74b3dfb44c7"
+sourceRevision: "79ac9f9d87235002fc63b7ab7bfd77b936031d50"
 sources:
   - crates/nessa-server/src/backup/application/restore.rs
+  - crates/nessa-server/src/backup/application/gateway_restore.rs
+  - crates/nessa-server/src/composition/restore_command.rs
+  - crates/nessa-server/src/composition/serving_restore.rs
   - crates/nessa-server/tests/backup/restore.rs
+  - crates/nessa-server/tests/backup/gateway_restore.rs
   - docs/design/quarantined-restore.md
   - crates/nessa-server/src/backup/application/restore_planning.rs
 model:
@@ -131,8 +135,8 @@ The configured safety rules are `AcceptanceHasCurrentProof`, `DurabilityRequires
 
 ## Verification limits
 
-The abstraction assumes successful policy/audit admission before staging. It omits trusted-key recovery, host identity fencing, omission acceptance, file-handle containment, deferred fetch streaming and OS-specific quarantine protection. The offline plan remains informational even though a separate quarantine use case now exists. The cited code and regression sources were inspected at the page checkpoint; their product test suites were not run in this modeling pass.
+The abstraction assumes successful policy/audit admission before staging. It omits trusted-key recovery, host identity fencing, omission acceptance, file-handle containment, deferred fetch streaming and OS-specific quarantine protection. The offline plan remains informational. A gateway whose namespace points at a tree that is not an accepted live restore refuses to listen; `conversation.read` fetches one deferred conversation and refuses when that source is gone. Those gateway steps are outside this model. The cited code and regression sources were inspected at the page checkpoint; their product test suites were not run in this modeling pass.
 
 ## Further reading
 
-[restore.rs](../../../../crates/nessa-server/src/backup/application/restore.rs) · [restore.rs](../../../../crates/nessa-server/tests/backup/restore.rs) · [quarantined-restore.md](../../../../docs/design/quarantined-restore.md)
+[restore.rs](../../../../crates/nessa-server/src/backup/application/restore.rs) · [gateway_restore.rs](../../../../crates/nessa-server/src/backup/application/gateway_restore.rs) · [restore_command.rs](../../../../crates/nessa-server/src/composition/restore_command.rs) · [serving_restore.rs](../../../../crates/nessa-server/src/composition/serving_restore.rs) · [restore.rs](../../../../crates/nessa-server/tests/backup/restore.rs) · [gateway_restore.rs](../../../../crates/nessa-server/tests/backup/gateway_restore.rs) · [quarantined-restore.md](../../../../docs/design/quarantined-restore.md)

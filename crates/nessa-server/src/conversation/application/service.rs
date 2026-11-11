@@ -958,6 +958,9 @@ struct Inner {
     /// Records each change made from Settings before it is reported.
     /// Unbound refuses those changes.
     settings_audit: OnceLock<Arc<dyn super::SettingsAudit>>,
+    /// Fetches restored history before a serving session is opened, so a send
+    /// cannot create an empty stream that a later fetch then refuses to replace.
+    before_open: OnceLock<Arc<dyn OpenPreparation>>,
     /// Physical source admission owners retain their slot after response loss.
     agent_tool_admissions: Arc<SourcePermits>,
     /// What each person's open desktop windows show, for their agents.
@@ -1077,6 +1080,11 @@ struct Inner {
     /// (`handoffs`). Taken by that opening; let go of when the creation ends.
     forks: std::sync::Mutex<HashMap<ConversationId, handoffs::ForkSeed>>,
 }
+/// Fetches one conversation's restored history before its serving session exists.
+pub(crate) trait OpenPreparation: Send + Sync {
+    fn prepare(&self, conversation_id: &str) -> Result<(), ConversationError>;
+}
+
 /// Owns Agents independently of authenticated socket lifetimes. Clones share all owners.
 #[derive(Clone)]
 pub struct ConversationService {
@@ -1423,6 +1431,12 @@ impl ConversationService {
         ConversationApprovalMode::Ask
     }
 
+    /// Install the fetch that runs before a serving session is opened.
+    /// A second call is ignored; startup installs it once.
+    pub(crate) fn set_open_preparation(&self, preparation: Arc<dyn OpenPreparation>) {
+        let _ = self.inner.before_open.set(preparation);
+    }
+
     /// Own every configured agent, and the one a caller gets by default. No
     /// MCP call shows a UI: see [`Self::with_tool_uis`].
     pub fn new(
@@ -1516,6 +1530,7 @@ impl ConversationService {
                 tool_config,
                 clock,
                 agent_tool_audit: OnceLock::new(),
+                before_open: OnceLock::new(),
                 settings_audit: OnceLock::new(),
                 agent_tool_admissions: Arc::new(SourcePermits::new(
                     super::MAX_AGENT_TOOL_ADMISSIONS,
@@ -1681,9 +1696,9 @@ impl ConversationService {
             asked: requested.environment.as_deref(),
             channel: channel.as_ref().map(|channel| {
                 if id == channel.coordinator_id() {
-                    channel.execution().coordinator()
+                    channel.execution().coordinator().clone()
                 } else {
-                    channel.execution().threads()
+                    channel.execution().threads().clone()
                 }
             }),
             default_device: service.inner.environment.default_place(),
@@ -2162,6 +2177,20 @@ impl ConversationService {
                             let session_id = conversation_session(&id);
                             let storage = service.inner.storage.clone();
                             let clock = service.inner.message_commit_clock.clone();
+                            if let Some(prepare) = service.inner.before_open.get() {
+                                let conversation_id = id.to_string();
+                                let prepare = Arc::clone(prepare);
+                                tokio::task::spawn_blocking(move || prepare.prepare(&conversation_id))
+                                    .await
+                                    .map_err(|_| OpeningFailure {
+                                        cause: ConversationError::Unavailable,
+                                        holds: false,
+                                    })?
+                                    .map_err(|cause| OpeningFailure {
+                                        cause,
+                                        holds: false,
+                                    })?;
+                            }
                             // The stopped agent's last handles may still hold
                             // this history. Wait them out, within the lease
                             // bound, instead of answering Busy once. A stop
@@ -3448,6 +3477,26 @@ impl ConversationService {
         }
         Ok(slot)
     }
+    /// Fetch a deferred restored conversation without starting an agent.
+    ///
+    /// A missing catalogue row and a tombstone are left alone. Importing after
+    /// a finished delete would keep history nothing erases again.
+    async fn prepare_restored_history(&self, id: &ConversationId) -> Result<(), ConversationError> {
+        let Some(prepare) = self.inner.before_open.get() else {
+            return Ok(());
+        };
+        let Some(record) = load_conversation(self.inner.metadata.as_ref(), id).await? else {
+            return Ok(());
+        };
+        if record.deletion().is_some() {
+            return Ok(());
+        }
+        let conversation_id = id.to_string();
+        let prepare = Arc::clone(prepare);
+        tokio::task::spawn_blocking(move || prepare.prepare(&conversation_id))
+            .await
+            .map_err(|_| ConversationError::Unavailable)?
+    }
     /// A conversation nothing has open, as its committed records fold with
     /// no agent: read-only, lifecycle absent, nothing awaiting an answer.
     async fn read_unopened(
@@ -3459,6 +3508,11 @@ impl ConversationService {
             .await?
             .ok_or(ConversationError::NotFound)?;
         self.access().admit(&record, caller)?;
+        // A view does not start an agent, but a deferred restored conversation
+        // still has to be fetched before its history is read. A tombstone
+        // already on the record is left alone: importing after a finished
+        // delete would keep history nothing erases again.
+        self.prepare_restored_history(id).await?;
         let (committed, order) = self.committed_with_order(id).await?;
         let mut projection = self.detached(id, &committed, &order);
         projection.selection(ConversationSelectionView {
@@ -4129,6 +4183,10 @@ impl ConversationService {
             service
                 .refuse_linked_files_elsewhere(&id, !message.files().is_empty())
                 .await?;
+            // A deferred restored conversation is fetched before a message
+            // opens an agent. A missing source refuses the send, and does not
+            // start a fresh session over the history that was not fetched.
+            service.prepare_restored_history(&id).await?;
             // An app's message is for a live opening, and opens none: one
             // ended by the desktop stopping the agent is refused below, not
             // opened again for it.

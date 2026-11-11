@@ -14,7 +14,9 @@ fn frame(params: Value) -> RequestFrame {
     RequestFrame {
         kind: "req".into(),
         id: "r1".into(),
-        method: METHOD.into(),
+        method: nessa_protocol::product::generated::ProductMethod::WorkspacePublish
+            .as_str()
+            .into(),
         params,
     }
 }

@@ -24,7 +24,6 @@ use nessa_protocol::product::generated::{
 };
 use nessa_protocol::protocol::{OutgoingMessage, RequestFrame};
 
-pub(super) const METHOD: &str = "workspace.publish";
 /// The schema's own bound on `revision`: the largest whole number a
 /// JavaScript client holds exactly.
 const MAX_REVISION: u64 = (1 << 53) - 1;

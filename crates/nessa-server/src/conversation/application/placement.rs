@@ -520,7 +520,7 @@ impl Environments {
 
     /// Whether `place` is a configured host or a connected paired
     /// environment.
-    fn offers(&self, place: &Place) -> bool {
+    pub(crate) fn offers(&self, place: &Place) -> bool {
         match place {
             Place::Peer(peer) => self
                 .peers

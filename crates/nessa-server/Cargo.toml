@@ -22,6 +22,10 @@ path = "src/backup_verify_main.rs"
 name = "nessa-backup-plan"
 path = "src/backup_plan_main.rs"
 
+[[bin]]
+name = "nessa-backup-restore"
+path = "src/backup_restore_main.rs"
+
 [dependencies]
 # Sets the in-memory credential store in a saved Codex key's home config by
 # TOML key, wherever and however the existing file spells it.

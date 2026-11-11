@@ -30,6 +30,12 @@ pub enum ConversationError {
         release: Box<ConversationError>,
     },
     NotFound,
+    /// A restored conversation's recorded source is gone. Nothing was fetched
+    /// and no agent was started. Other conversations are unchanged.
+    DeferredSourceUnavailable,
+    /// The source no longer matches the version the backup recorded. Nothing
+    /// was fetched and no agent was started. Other conversations are unchanged.
+    DeferredSourceChanged,
     /// The caller's conversation was deleted. Every command on it is refused
     /// for good, a creation of its identity included
     /// (`a_deleted_conversation_refuses_every_command_on_it`).

@@ -337,6 +337,9 @@ export async function startLocalGateway(o) {
       }),
     )
     chmodSync(configPath, 0o600)
+    if (o.beforeListen) {
+      await o.beforeListen({ directory, stage, instance: o.instance })
+    }
     const log = () => output.join("")
     const launch = async () => {
       server = spawn(nessa, ["server"], { env, stdio: ["ignore", "pipe", "pipe"] })

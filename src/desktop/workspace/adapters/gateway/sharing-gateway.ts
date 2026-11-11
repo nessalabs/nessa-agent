@@ -80,6 +80,8 @@ const conversationFailure: Record<ConversationErrorCode, SharingFailure> = {
   [ConversationErrorCode.ConversationCapacity]: "busy",
   [ConversationErrorCode.ConversationStorageUnavailable]: "storage",
   [ConversationErrorCode.ConversationStateUnreadable]: "storage",
+  [ConversationErrorCode.DeferredSourceUnavailable]: "other",
+  [ConversationErrorCode.DeferredSourceChanged]: "other",
   [ConversationErrorCode.AuditUnavailable]: "audit",
   [ConversationErrorCode.ConversationsNotConfigured]: "not-configured",
   [ConversationErrorCode.DrivePolicyUnenforceable]: "unenforceable",

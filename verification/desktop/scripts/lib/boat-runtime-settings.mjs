@@ -335,10 +335,13 @@ export async function channelPlacementSettings(run, channel, failures) {
     coordinator: "data-coordinator-placement",
     threads: "data-thread-placement",
   }
+  // Each option is found by its button's label. A role query for that
+  // exact name missed Boat in a stress run while the dialog already showed it.
   const option = (row, name) =>
     control
       .locator(`[data-placement-row="${row}"]`)
-      .getByRole("button", { name, exact: true })
+      .locator("button")
+      .filter({ hasText: new RegExp(`^${name}$`) })
   // A choice is done when the dialog shows it, not when it stops being busy:
   // a save not started yet is not busy either.
   const shows = (row, place) =>

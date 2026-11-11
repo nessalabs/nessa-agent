@@ -33,6 +33,10 @@ pub fn error_code(error: &ConversationError) -> ConversationErrorCode {
         // stays in the typed error and the log, not in a second wire code.
         ConversationError::CloseIncomplete { agent, .. } => error_code(agent),
         ConversationError::NotFound => ConversationErrorCode::ConversationNotFound,
+        ConversationError::DeferredSourceUnavailable => {
+            ConversationErrorCode::DeferredSourceUnavailable
+        }
+        ConversationError::DeferredSourceChanged => ConversationErrorCode::DeferredSourceChanged,
         ConversationError::Deleted => ConversationErrorCode::ConversationDeleted,
         ConversationError::ShareTargetNotPaired => ConversationErrorCode::ShareTargetNotPaired,
         ConversationError::CapabilitiesRefused { .. } => ConversationErrorCode::CapabilitiesRefused,

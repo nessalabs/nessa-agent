@@ -126,6 +126,10 @@ pub enum ConversationErrorCode {
     ConversationConfigurationChanged,
     #[serde(rename = "conversation_state_unreadable")]
     ConversationStateUnreadable,
+    #[serde(rename = "deferred_source_unavailable")]
+    DeferredSourceUnavailable,
+    #[serde(rename = "deferred_source_changed")]
+    DeferredSourceChanged,
     #[serde(rename = "conversation_storage_unavailable")]
     ConversationStorageUnavailable,
     #[serde(rename = "temporarily_unavailable")]
@@ -243,6 +247,8 @@ impl ConversationErrorCode {
             Self::ConversationClosed => "conversation_closed",
             Self::ConversationConfigurationChanged => "conversation_configuration_changed",
             Self::ConversationStateUnreadable => "conversation_state_unreadable",
+            Self::DeferredSourceUnavailable => "deferred_source_unavailable",
+            Self::DeferredSourceChanged => "deferred_source_changed",
             Self::ConversationStorageUnavailable => "conversation_storage_unavailable",
             Self::TemporarilyUnavailable => "temporarily_unavailable",
             Self::AuditUnavailable => "audit_unavailable",

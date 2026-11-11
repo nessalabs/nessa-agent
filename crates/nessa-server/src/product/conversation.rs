@@ -241,6 +241,8 @@ async fn answer(
                 {
                     return Ok(failure(&frame.id, code));
                 }
+                // Deferred history is fetched inside the service, after this
+                // caller is admitted. The route grant is not that check.
                 let (view, _) =
                     read_view(state, service, session, &id, &frame.id, ReadOpening::Open).await?;
                 Ok(success(&frame.id, &view))
@@ -1104,9 +1106,6 @@ impl AdmissionNotice for FirstTokenNotice {
     }
 }
 
-/// Who sends a conversation command: the credential's verified identity.
-/// The caller's optional client metadata is deliberately not used to
-/// attribute SDK commands.
 /// The view `conversation.read` answers, with where in the committed history
 /// it was folded through. A subscription's frame is this same read
 /// (`docs/design/record-subscriptions.md`), so there is one read path.
@@ -1188,6 +1187,9 @@ fn usage_limit_preference_facts(
     }
 }
 
+/// Who sends a conversation command: the credential's verified identity.
+/// The caller's optional client metadata is deliberately not used to
+/// attribute SDK commands.
 pub(super) fn caller(session: &AuthenticatedSession, request_id: String) -> ConversationCaller {
     let context = session.context();
     ConversationCaller {

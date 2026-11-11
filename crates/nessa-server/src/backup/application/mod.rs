@@ -3,6 +3,7 @@
 
 mod deletion_inventory;
 mod export;
+mod gateway_restore;
 mod ports;
 mod restore;
 mod restore_planning;
@@ -23,21 +24,28 @@ pub use verification::{
 
 pub use deletion_inventory::{capture_fences, capture_inventory, CaptureError, InventoryFailure};
 pub use export::{capture_export, ExportFailure, ExportRequest};
+pub use gateway_restore::{
+    binding_from_pointer, confirm_accepted, deliver_historical_commands,
+    list_accepted_conversations, open_accepted_conversation, AbsentSessionSource, AcceptedBinding,
+    AcceptedFetch, DeferredConversationOpen, DeferredOpenFailure,
+};
 pub use ports::{
-    current_journal_is_trusted, current_staging_id, fetch_names_conversation, AdmissionFailure,
-    AdmissionLease, Authenticator, CopiedStore, DecisionAuditError, DeferredSessionSource,
-    DeletionLogStore, ExportClock, ExportSource, FenceSource, FetchProgress, InventoryAction,
-    InventoryCapturePolicyEvaluator, InventoryCause, InventoryDecision, InventoryDecisionAudit,
-    InventoryDenial, InventoryFacts, InventoryReconciliationLease, JournalFields, LeaseReceipts,
-    LogStoreError, MacError, MacKey, ManifestPublisher, MutationAdmission, PinnedStore,
-    PublicationIds, PublishedRecord, RestoreAction, RestoreAudit, RestoreEvidence, RestoreFacts,
-    RestorePolicyEvaluator, SealFields, SessionCut, SessionSourceError, StagingIds,
+    current_journal_is_live, current_journal_is_trusted, current_staging_id,
+    fetch_names_conversation, AdmissionFailure, AdmissionLease, Authenticator, CopiedStore,
+    DecisionAuditError, DeferredSessionSource, DeletionLogStore, ExportClock, ExportSource,
+    FenceSource, FetchProgress, InventoryAction, InventoryCapturePolicyEvaluator, InventoryCause,
+    InventoryDecision, InventoryDecisionAudit, InventoryDenial, InventoryFacts,
+    InventoryReconciliationLease, JournalFields, LeaseReceipts, LogStoreError, MacError, MacKey,
+    ManifestPublisher, MutationAdmission, PinnedStore, PublicationIds, PublishedRecord,
+    RestoreAction, RestoreAudit, RestoreEvidence, RestoreFacts, RestorePolicyEvaluator, SealFields,
+    SessionCut, SessionSourceError, StagingIds,
 };
 #[cfg(test)]
 pub(crate) use restore::ordered_roots;
 pub use restore::{
-    accept_quarantine, open_deferred_conversation, root_posture, stage_quarantine, AcceptReport,
-    AcceptRequest, AnchoredRoot, CutMaterializer, LoadedTree, OpenReport, OpenRequest, PreparedCut,
-    Promoted, PublishedSession, QuarantineLayout, RestoreHold, SealedInventoryReader,
-    SessionAttempt, StageReport, StageRequest, StagedTreeOwner, Staging, TreeId,
+    accept_quarantine, accepted_tree_matches, open_deferred_conversation, root_posture,
+    servable_deferred_sessions, stage_quarantine, AcceptReport, AcceptRequest, AnchoredRoot,
+    CutMaterializer, LoadedTree, OpenReport, OpenRequest, PreparedCut, Promoted, PublishedSession,
+    QuarantineLayout, RestoreHold, SealedInventoryReader, SessionAttempt, StageReport,
+    StageRequest, StagedTreeOwner, Staging, TreeId,
 };

@@ -967,7 +967,7 @@ async fn check_returns_service_unavailable_when_admission_or_deadline_is_exhaust
     let login = entrypoint::login(State(state.clone()), headers(), body).await;
     let cookie = login.headers()[header::SET_COOKIE].to_str().unwrap();
     let permits = state
-        .requests
+        .admission.requests()
         .clone()
         .acquire_many_owned(128)
         .await

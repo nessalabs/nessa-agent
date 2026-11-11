@@ -71,7 +71,7 @@ pub(super) async fn dispatch(
     let Ok(request) = InstallRequest::new(installer.account_id(), invocation) else {
         return failure(&frame.id, "invalid_request");
     };
-    let Ok(permit) = state.installs.clone().try_acquire_owned() else {
+    let Ok(permit) = state.admission.installs().clone().try_acquire_owned() else {
         return failure(&frame.id, "agent_install_busy");
     };
     let name = params.agent;
