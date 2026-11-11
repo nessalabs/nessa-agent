@@ -72,3 +72,34 @@ segmented-control profiles time out at the unchanged 2000 ms bound. All four
 rows profiles pass in that run. Identity, badges, rims, empty states, keys and
 list measurements also pass. These adjacent failures remain qualification
 blockers; their assertions and deadlines were preserved.
+
+
+A subsequent headed run on the existing Linux VM used an Xorg dummy display
+with no other tests or builds running. Chromium still uses ANGLE SwiftShader
+(software rendering); this is not a hardware Mac or native WKWebView receipt.
+All 33 interaction rows failed the unchanged 50 ms budget. Calibration held
+at 4.02× and attributed the 120 ms synthetic frame at 122.3 ms.
+[Host/GPU facts](gpu-capability.json) and [measurement summary](quiet-host-summary.json)
+retain the workload and numbers.
+
+Five alternating main-CSS/fixed-CSS pairs on nine affected interactions also
+failed the absolute budget. Columns sidebar-toggle initially labelled fixed
+minus main +61.7 ms (95% interval [3.9, 111.8]). Reversing source order labelled
+main minus fixed +154.6 ms ([10.1, 333.4]), the opposite source-normalized sign.
+Neither result is discarded. This does not establish a repeatable selector
+regression or a safe performance verdict; runtime/source-order variation remains
+unresolved. No paid host was provisioned.
+
+The existing authentication workflow now has a manual, default-off
+`desktop-performance` input. It measures production Chromium headed on the
+existing standard `macos-latest` matrix leg, before Rust compilation. It retains
+the original 4× throttle and 50 ms gate, five runs, both layouts, host/GPU facts
+and full JSON in the job log. It adds no job, artifact or cache writer. Standard
+GitHub-hosted runners for this public repository are free; larger runners are
+not used. Actual Mac execution and quietness remain to be verified.
+
+The focused CI contract tests pass 56/56 and actionlint 1.7.12 passes. Removing
+the manual/Mac-only guard makes its regression fail; restoring it passes. An
+independent review found no changes needed in the two CI files. State-model
+checkpoints are unchanged: this opt-in measurement changes no application state
+or lifecycle, and the earlier transient-hover review remains the same scope.

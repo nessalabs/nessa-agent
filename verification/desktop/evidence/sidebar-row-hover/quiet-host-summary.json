@@ -1,0 +1,673 @@
+{
+  "head": "956734eccf3bc2bdf59205ab319daac3fc4d2657",
+  "base": "edf3e028bf48748147ad2a0a35d028e2fc7cfca1",
+  "host": "Existing managed Linux VM,5vCPU,local Xorg dummy display:88; headed bundled Chromium. No parallel tests/builds during sampling; no new paid hosts provisioned. Not a physical Mac or NativeWKWebView.",
+  "runs": [
+    {
+      "file": "/workspace/scratch/1325-headed-perf.json",
+      "calibration": {
+        "name": "calibration",
+        "engine": "chromium",
+        "calibration": {
+          "rate": 4,
+          "plainMs": 79,
+          "throttledMs": 316,
+          "ratio": 4.02,
+          "ok": true
+        },
+        "calibrationFrame": {
+          "cost": 120,
+          "measuredMs": 122.29999999701977,
+          "attributed": true,
+          "ok": true
+        },
+        "failures": [],
+        "ok": true
+      },
+      "interactionRows": [
+        {
+          "name": "split-right",
+          "layout": "columns",
+          "ok": false,
+          "max": 342.5999999977648,
+          "median": 130.80000000074506,
+          "over50": 20
+        },
+        {
+          "name": "split-down",
+          "layout": "columns",
+          "ok": false,
+          "max": 287.29999999701977,
+          "median": 125.40000000223517,
+          "over50": 23
+        },
+        {
+          "name": "move",
+          "layout": "columns",
+          "ok": false,
+          "max": 180,
+          "median": 84.60000000149012,
+          "over50": 6
+        },
+        {
+          "name": "close",
+          "layout": "columns",
+          "ok": false,
+          "max": 202.20000000298023,
+          "median": 109.80000000074506,
+          "over50": 31
+        },
+        {
+          "name": "sidebar",
+          "layout": "columns",
+          "ok": false,
+          "max": 133.30000000074506,
+          "median": 126.59999999776483,
+          "over50": 24
+        },
+        {
+          "name": "session-list",
+          "layout": "columns",
+          "ok": false,
+          "max": 101.69999999925494,
+          "median": 96.60000000149012,
+          "over50": 25
+        },
+        {
+          "name": "send-home",
+          "layout": "columns",
+          "ok": false,
+          "max": 185.79999999701977,
+          "median": 107.59999999776483,
+          "over50": 12
+        },
+        {
+          "name": "typing",
+          "layout": "columns",
+          "ok": false,
+          "max": 176.5,
+          "median": 139.69999999925494,
+          "over50": 16
+        },
+        {
+          "name": "stream-1-of-4",
+          "layout": "columns",
+          "ok": false,
+          "max": 286.69999999925494,
+          "median": 199.69999999925494,
+          "over50": 198
+        },
+        {
+          "name": "drag-drop",
+          "layout": "columns",
+          "ok": false,
+          "max": 304.5,
+          "median": 301.20000000298023,
+          "over50": 155
+        },
+        {
+          "name": "drag-cancel",
+          "layout": "columns",
+          "ok": false,
+          "max": 220.60000000149012,
+          "median": 195.29999999701977,
+          "over50": 62
+        },
+        {
+          "name": "thinking-walk",
+          "layout": "columns",
+          "ok": false,
+          "max": 210.60000000149012,
+          "median": 164.5,
+          "over50": 15
+        },
+        {
+          "name": "thinking-drag",
+          "layout": "columns",
+          "ok": false,
+          "max": 171.29999999701977,
+          "median": 68.90000000223517,
+          "over50": 10
+        },
+        {
+          "name": "overview-open",
+          "layout": "columns",
+          "ok": false,
+          "max": 161.30000000074506,
+          "median": 152.5,
+          "over50": 25
+        },
+        {
+          "name": "overview-select",
+          "layout": "columns",
+          "ok": false,
+          "max": 191.19999999925494,
+          "median": 67.80000000074506,
+          "over50": 11
+        },
+        {
+          "name": "overview-answer",
+          "layout": "columns",
+          "ok": false,
+          "max": 214.30000000074506,
+          "median": 157.19999999925494,
+          "over50": 8
+        },
+        {
+          "name": "overview-leave",
+          "layout": "columns",
+          "ok": false,
+          "max": 90.39999999850988,
+          "median": 81.79999999701977,
+          "over50": 9
+        },
+        {
+          "name": "split-right",
+          "layout": "sidebar",
+          "ok": false,
+          "max": 164.89999999850988,
+          "median": 132.69999999925494,
+          "over50": 29
+        },
+        {
+          "name": "split-down",
+          "layout": "sidebar",
+          "ok": false,
+          "max": 131.10000000149012,
+          "median": 118.80000000074506,
+          "over50": 28
+        },
+        {
+          "name": "move",
+          "layout": "sidebar",
+          "ok": false,
+          "max": 128.69999999925494,
+          "median": 98.60000000149012,
+          "over50": 33
+        },
+        {
+          "name": "close",
+          "layout": "sidebar",
+          "ok": false,
+          "max": 166,
+          "median": 134.19999999925494,
+          "over50": 33
+        },
+        {
+          "name": "sidebar",
+          "layout": "sidebar",
+          "ok": false,
+          "max": 170.80000000074506,
+          "median": 157,
+          "over50": 32
+        },
+        {
+          "name": "send-home",
+          "layout": "sidebar",
+          "ok": false,
+          "max": 149.69999999925494,
+          "median": 120.30000000074506,
+          "over50": 15
+        },
+        {
+          "name": "typing",
+          "layout": "sidebar",
+          "ok": false,
+          "max": 182.5,
+          "median": 164.09999999776483,
+          "over50": 41
+        },
+        {
+          "name": "stream-1-of-4",
+          "layout": "sidebar",
+          "ok": false,
+          "max": 182,
+          "median": 171.89999999850988,
+          "over50": 254
+        },
+        {
+          "name": "drag-drop",
+          "layout": "sidebar",
+          "ok": false,
+          "max": 311,
+          "median": 235.30000000074506,
+          "over50": 329
+        },
+        {
+          "name": "drag-cancel",
+          "layout": "sidebar",
+          "ok": false,
+          "max": 150.5,
+          "median": 140.79999999701977,
+          "over50": 120
+        },
+        {
+          "name": "thinking-walk",
+          "layout": "sidebar",
+          "ok": false,
+          "max": 181.5,
+          "median": 151.19999999925494,
+          "over50": 13
+        },
+        {
+          "name": "thinking-drag",
+          "layout": "sidebar",
+          "ok": false,
+          "max": 242.19999999925494,
+          "median": 155.30000000074506,
+          "over50": 15
+        },
+        {
+          "name": "overview-open",
+          "layout": "sidebar",
+          "ok": false,
+          "max": 185.79999999701977,
+          "median": 155.19999999925494,
+          "over50": 21
+        },
+        {
+          "name": "overview-select",
+          "layout": "sidebar",
+          "ok": false,
+          "max": 193.5,
+          "median": 83.09999999776483,
+          "over50": 10
+        },
+        {
+          "name": "overview-answer",
+          "layout": "sidebar",
+          "ok": false,
+          "max": 269.3999999985099,
+          "median": 176,
+          "over50": 6
+        },
+        {
+          "name": "overview-leave",
+          "layout": "sidebar",
+          "ok": false,
+          "max": 113.30000000074506,
+          "median": 108.69999999925494,
+          "over50": 11
+        }
+      ],
+      "heldInteractions": 0,
+      "observedTotalRows": 35,
+      "heldTotalRows": 2
+    },
+    {
+      "file": "/workspace/scratch/1325-headed-paired.json",
+      "calibration": {
+        "name": "calibration",
+        "engine": "chromium",
+        "calibration": {
+          "rate": 4,
+          "plainMs": 76,
+          "throttledMs": 339,
+          "ratio": 4.48,
+          "ok": true
+        },
+        "calibrationFrame": {
+          "cost": 120,
+          "measuredMs": 135.59999999776483,
+          "attributed": true,
+          "ok": true
+        },
+        "failures": [],
+        "ok": true
+      },
+      "interactionRows": [
+        {
+          "name": "sidebar",
+          "layout": "columns",
+          "ok": false,
+          "max": 232,
+          "median": 191.59999999776483,
+          "over50": 34,
+          "comparison": {
+            "metric": "maxFrame",
+            "unit": "ms",
+            "difference": "head - base",
+            "differences": [
+              111.79999999701977,
+              61.69999999552965,
+              64.40000000223517,
+              16.00000000372529,
+              3.900000002235174
+            ],
+            "medianDifference": 61.69999999552965,
+            "interval": {
+              "low": 3.900000002235174,
+              "high": 111.79999999701977,
+              "level": 0.95,
+              "resamples": 10000,
+              "seed": 1,
+              "method": "percentile bootstrap of the median"
+            },
+            "verdict": "regression"
+          },
+          "baseMax": 134.89999999850988,
+          "baseMedian": 127.80000000074506
+        },
+        {
+          "name": "session-list",
+          "layout": "columns",
+          "ok": false,
+          "max": 135,
+          "median": 112.39999999850988,
+          "over50": 49,
+          "comparison": {
+            "metric": "maxFrame",
+            "unit": "ms",
+            "difference": "head - base",
+            "differences": [
+              9.300000000745058,
+              24.5,
+              -25.300000000745058,
+              -3.699999999254942,
+              28.799999997019768
+            ],
+            "medianDifference": 9.300000000745058,
+            "interval": {
+              "low": -25.300000000745058,
+              "high": 28.799999997019768,
+              "level": 0.95,
+              "resamples": 10000,
+              "seed": 1,
+              "method": "percentile bootstrap of the median"
+            },
+            "verdict": "no change"
+          },
+          "baseMax": 117.5,
+          "baseMedian": 110.5
+        },
+        {
+          "name": "overview-open",
+          "layout": "columns",
+          "ok": false,
+          "max": 159.30000000074506,
+          "median": 127.69999999925494,
+          "over50": 28,
+          "comparison": {
+            "metric": "maxFrame",
+            "unit": "ms",
+            "difference": "head - base",
+            "differences": [
+              -7.300000000745058,
+              -27.299999997019768,
+              32.100000001490116,
+              -110.30000000074506,
+              -149.69999999925494
+            ],
+            "medianDifference": -27.299999997019768,
+            "interval": {
+              "low": -149.69999999925494,
+              "high": 32.100000001490116,
+              "level": 0.95,
+              "resamples": 10000,
+              "seed": 1,
+              "method": "percentile bootstrap of the median"
+            },
+            "verdict": "no change"
+          },
+          "baseMax": 252.39999999850988,
+          "baseMedian": 159.09999999776483
+        },
+        {
+          "name": "overview-select",
+          "layout": "columns",
+          "ok": false,
+          "max": 223.80000000074506,
+          "median": 114.69999999925494,
+          "over50": 22,
+          "comparison": {
+            "metric": "maxFrame",
+            "unit": "ms",
+            "difference": "head - base",
+            "differences": [
+              26.899999998509884,
+              151.19999999925494,
+              11.600000001490116,
+              -86.10000000149012,
+              -42.5
+            ],
+            "medianDifference": 11.600000001490116,
+            "interval": {
+              "low": -86.10000000149012,
+              "high": 151.19999999925494,
+              "level": 0.95,
+              "resamples": 10000,
+              "seed": 1,
+              "method": "percentile bootstrap of the median"
+            },
+            "verdict": "no change"
+          },
+          "baseMax": 168.80000000074506,
+          "baseMedian": 106.19999999925494
+        },
+        {
+          "name": "overview-leave",
+          "layout": "columns",
+          "ok": false,
+          "max": 214,
+          "median": 94.09999999776483,
+          "over50": 19,
+          "comparison": {
+            "metric": "maxFrame",
+            "unit": "ms",
+            "difference": "head - base",
+            "differences": [
+              -16.300000000745058,
+              109.90000000223517,
+              -58.899999994784594,
+              -99.10000000149012,
+              29.800000000745058
+            ],
+            "medianDifference": -16.300000000745058,
+            "interval": {
+              "low": -99.10000000149012,
+              "high": 109.90000000223517,
+              "level": 0.95,
+              "resamples": 10000,
+              "seed": 1,
+              "method": "percentile bootstrap of the median"
+            },
+            "verdict": "no change"
+          },
+          "baseMax": 189.79999999701977,
+          "baseMedian": 104.09999999776483
+        },
+        {
+          "name": "sidebar",
+          "layout": "sidebar",
+          "ok": false,
+          "max": 169.39999999850988,
+          "median": 145,
+          "over50": 50,
+          "comparison": {
+            "metric": "maxFrame",
+            "unit": "ms",
+            "difference": "head - base",
+            "differences": [
+              -55.900000002235174,
+              -70.90000000223517,
+              -57.19999999925494,
+              2.4999999962747097,
+              -46.400000002235174
+            ],
+            "medianDifference": -55.900000002235174,
+            "interval": {
+              "low": -70.90000000223517,
+              "high": 2.4999999962747097,
+              "level": 0.95,
+              "resamples": 10000,
+              "seed": 1,
+              "method": "percentile bootstrap of the median"
+            },
+            "verdict": "no change"
+          },
+          "baseMax": 203.10000000149012,
+          "baseMedian": 198.69999999925494
+        },
+        {
+          "name": "overview-open",
+          "layout": "sidebar",
+          "ok": false,
+          "max": 256.3999999985099,
+          "median": 120.30000000074506,
+          "over50": 28,
+          "comparison": {
+            "metric": "maxFrame",
+            "unit": "ms",
+            "difference": "head - base",
+            "differences": [
+              -32.30000000074506,
+              65.19999999925494,
+              -32.29999999701977,
+              127.69999999925494,
+              -1.1000000014901161
+            ],
+            "medianDifference": -1.1000000014901161,
+            "interval": {
+              "low": -32.30000000074506,
+              "high": 127.69999999925494,
+              "level": 0.95,
+              "resamples": 10000,
+              "seed": 1,
+              "method": "percentile bootstrap of the median"
+            },
+            "verdict": "no change"
+          },
+          "baseMax": 152.59999999776483,
+          "baseMedian": 128.69999999925494
+        },
+        {
+          "name": "overview-select",
+          "layout": "sidebar",
+          "ok": false,
+          "max": 230,
+          "median": 120.5,
+          "over50": 26,
+          "comparison": {
+            "metric": "maxFrame",
+            "unit": "ms",
+            "difference": "head - base",
+            "differences": [
+              -154.89999999850988,
+              23.899999998509884,
+              -120.49999999627471,
+              96.60000000149012,
+              39.899999998509884
+            ],
+            "medianDifference": 23.899999998509884,
+            "interval": {
+              "low": -154.89999999850988,
+              "high": 96.60000000149012,
+              "level": 0.95,
+              "resamples": 10000,
+              "seed": 1,
+              "method": "percentile bootstrap of the median"
+            },
+            "verdict": "no change"
+          },
+          "baseMax": 242,
+          "baseMedian": 133.39999999850988
+        },
+        {
+          "name": "overview-leave",
+          "layout": "sidebar",
+          "ok": false,
+          "max": 180.39999999850988,
+          "median": 93.80000000074506,
+          "over50": 24,
+          "comparison": {
+            "metric": "maxFrame",
+            "unit": "ms",
+            "difference": "head - base",
+            "differences": [
+              10.199999999254942,
+              -89.39999999850988,
+              14.00000000372529,
+              -5.099999997764826,
+              -95
+            ],
+            "medianDifference": -5.099999997764826,
+            "interval": {
+              "low": -95,
+              "high": 14.00000000372529,
+              "level": 0.95,
+              "resamples": 10000,
+              "seed": 1,
+              "method": "percentile bootstrap of the median"
+            },
+            "verdict": "no change"
+          },
+          "baseMax": 199,
+          "baseMedian": 170.19999999925494
+        }
+      ],
+      "heldInteractions": 0,
+      "observedTotalRows": 12,
+      "heldTotalRows": 3
+    },
+    {
+      "file": "/workspace/scratch/1325-headed-paired-reverse.json",
+      "calibration": {
+        "name": "calibration",
+        "engine": "chromium",
+        "calibration": {
+          "rate": 4,
+          "plainMs": 76,
+          "throttledMs": 313,
+          "ratio": 4.11,
+          "ok": true
+        },
+        "calibrationFrame": {
+          "cost": 120,
+          "measuredMs": 135.80000000074506,
+          "attributed": true,
+          "ok": true
+        },
+        "failures": [],
+        "ok": true
+      },
+      "interactionRows": [
+        {
+          "name": "sidebar",
+          "layout": "columns",
+          "ok": false,
+          "max": 522.3000000007451,
+          "median": 273.19999999925494,
+          "over50": 40,
+          "comparison": {
+            "metric": "maxFrame",
+            "unit": "ms",
+            "difference": "head - base",
+            "differences": [
+              333.4000000022352,
+              260.70000000298023,
+              154.60000000149012,
+              70.69999999925494,
+              10.099999997764826
+            ],
+            "medianDifference": 154.60000000149012,
+            "interval": {
+              "low": 10.099999997764826,
+              "high": 333.4000000022352,
+              "level": 0.95,
+              "resamples": 10000,
+              "seed": 1,
+              "method": "percentile bootstrap of the median"
+            },
+            "verdict": "regression"
+          },
+          "baseMax": 188.89999999850988,
+          "baseMedian": 145.80000000074506
+        }
+      ],
+      "heldInteractions": 0,
+      "observedTotalRows": 4,
+      "heldTotalRows": 3
+    }
+  ],
+  "interpretation": "All33headed interaction rows fail50ms. Paired9rows alsofail. First columns-sidebar comparison labels fix-minus-main regression+61.7ms[3.9,111.8]. Reversed source order labels main-minus-fix regression+154.6ms[10.1,333.4], i.e.normalizedfix-minus-main-154.6ms[-333.4,-10.1]. Opposite source-normalized signs do not establish a repeatable selector regression or a no-regression verdict; cold/source-order confounding remains. Both failed results retained. No budget waiver."
+}
