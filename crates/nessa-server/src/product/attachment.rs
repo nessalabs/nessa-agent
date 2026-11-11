@@ -6,13 +6,13 @@ use super::{
     socket::{failure, success},
     state::ProductRouteState,
 };
-use crate::attachments::application::{
+use base64::{engine::general_purpose::STANDARD, Engine};
+use nessa_attachments::application::{
     AttachmentCaller, BeginError, BeginOutcome, BeginUpload, HeldReadError, UploadError,
     UploadRejection,
 };
-use crate::attachments::domain::{Attachment, MediaType};
-use crate::attachments::entrypoint::socket::{PieceError, PieceOutcome, MAX_PIECE_BYTES};
-use base64::{engine::general_purpose::STANDARD, Engine};
+use nessa_attachments::domain::{Attachment, MediaType};
+use nessa_attachments::entrypoint::socket::{PieceError, PieceOutcome, MAX_PIECE_BYTES};
 use nessa_auth::application::session::AuthenticatedSession;
 use nessa_protocol::conversation::domain::ConversationId;
 use nessa_protocol::product::generated::{
@@ -188,7 +188,7 @@ fn piece_error_code(error: PieceError) -> ConversationErrorCode {
 /// admits it, so a paired device reads only what it was shared, and an
 /// ungranted conversation answers `conversation_not_found` as one that does
 /// not exist does. What it may read there is the hold's to say
-/// ([`crate::attachments::application::HeldReads`]): only in a conversation
+/// ([`nessa_attachments::application::HeldReads`]): only in a conversation
 /// that is the caller's, as for an upload, and only exactly the file it
 /// keeps now, named by digest, media type and size.
 pub(super) async fn dispatch_read(

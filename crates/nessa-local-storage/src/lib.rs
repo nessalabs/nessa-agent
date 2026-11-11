@@ -10,6 +10,8 @@ use std::{
 };
 #[cfg(feature = "physical-operation")]
 pub mod physical_operation;
+#[cfg(feature = "physical-operation")]
+pub mod read_workers;
 mod retained_directory;
 mod shared_read;
 #[cfg(unix)]

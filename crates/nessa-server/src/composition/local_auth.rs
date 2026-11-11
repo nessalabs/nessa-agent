@@ -43,7 +43,6 @@ use crate::{
         infrastructure::{DurableWarmUpAudit, FileWarmUpRecords},
     },
     agents::infrastructure::AgentLaunchFiles,
-    attachments::infrastructure::ModelImageNormalizer,
     conversation::{
         application::{
             ConversationAgents, ConversationDependencies, ConversationLimits, DriveTools,
@@ -62,7 +61,6 @@ use crate::{
         application::{AgentCredentialSource, AgentProbe},
         infrastructure::{LocalAgentCredentials, LocalAgentProbe},
     },
-    attachments::application::{AttachmentService, HeldReads},
     backup::infrastructure::CommittedInventory,
     browser_session::adapters::PersistentSessions,
     conversation::{
@@ -83,6 +81,9 @@ use crate::{
     webhooks::infrastructure::{DeliveryDependencies, HttpsWebhook, SystemResolver},
 };
 use nessa_agent_credentials::CredentialNamespace;
+use nessa_attachments::application::{AttachmentService, HeldReads};
+#[cfg(unix)]
+use nessa_attachments::infrastructure::ModelImageNormalizer;
 use nessa_auth::{
     adapters::{cedar::CedarPolicyEvaluator, local::LocalCredentialStore},
     application::{

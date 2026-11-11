@@ -3760,6 +3760,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "nessa-attachments"
+version = "0.1.0"
+dependencies = [
+ "futures-util",
+ "getrandom 0.3.4",
+ "image",
+ "nessa-auth",
+ "nessa-images",
+ "nessa-local-storage",
+ "nessa-protocol",
+ "nessa-sdk",
+ "nessa-sync",
+ "nessa-timer",
+ "serde",
+ "serde_json",
+ "sha2",
+ "subtle",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+]
+
+[[package]]
 name = "nessa-auth"
 version = "0.1.0"
 dependencies = [
@@ -3981,6 +4006,7 @@ dependencies = [
  "mdns-sd",
  "nessa-agent-credentials",
  "nessa-agent-install",
+ "nessa-attachments",
  "nessa-auth",
  "nessa-client-core",
  "nessa-device-client",

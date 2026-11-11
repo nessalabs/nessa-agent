@@ -1,5 +1,5 @@
 use crate::agents::entrypoint::http as agents_handler;
-use crate::attachments::entrypoint::http as attachments_handler;
+use crate::attachments::http as attachments_handler;
 use crate::browser_session::entrypoint as browser;
 use crate::health::entrypoint::handler as health_handler;
 use crate::mcp_servers::entrypoint::http as mcp_resources_handler;

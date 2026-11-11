@@ -2,13 +2,6 @@
 //! port it implements.
 use super::*;
 use crate::{
-    attachments::application::{
-        AttachmentLimits, AttachmentStore, ConversationOwnership, Ownership, OwnershipUnavailable,
-    },
-    attachments_test_support::{
-        conversation, digest_of, organization, principal, Fixture, StubNormalizer, CONVERSATION,
-        OTHER_CONVERSATION,
-    },
     conversation::{
         application::{
             AccessAction, AccessAsk, AccessDecision, AccessDenial, AttachmentRelease,
@@ -18,6 +11,14 @@ use crate::{
         domain::{Conversation, ConversationDeletion},
     },
     conversation_test_support::MemoryRepository,
+};
+use nessa_attachments::application::{
+    AttachmentLimits, AttachmentStore, ConversationOwnership, Ownership, OwnershipUnavailable,
+};
+use nessa_attachments::infrastructure::StoredUserImages;
+use nessa_attachments::test_support::{
+    conversation, digest_of, organization, principal, Fixture, StubNormalizer, CONVERSATION,
+    OTHER_CONVERSATION,
 };
 use nessa_protocol::agents::AgentId;
 use nessa_protocol::conversation::domain::{ConversationApprovalMode, ConversationModelId};
@@ -449,8 +450,8 @@ async fn a_published_file_is_kept_and_a_failed_read_says_why() {
 /// held as exactly that file, and never more than one range.
 #[tokio::test]
 async fn a_held_file_reads_back_for_a_fetch_only_as_its_owner_and_while_held() {
-    use crate::attachments::application::HeldReads;
     use crate::conversation::application::{HeldRange, HeldRangeError};
+    use nessa_attachments::application::HeldReads;
     use nessa_sdk::application::agent_execution::sessions::PublishedFile;
     use nessa_sdk::domain::common::value_objects::MediaType as Declared;
     let fixture = Fixture::new(AttachmentLimits::default());

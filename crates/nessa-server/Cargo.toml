@@ -33,6 +33,7 @@ toml_edit = { version = "=0.25.13", default-features = false, features = ["parse
 tempfile = "3"
 nessa-vault = { path = "../nessa-vault" }
 nessa-agent-install = { path = "../nessa-agent-install" }
+nessa-attachments = { path = "../nessa-attachments" }
 base64 = "0.22"
 # The local-network announcement while native linking listens there
 # (device_pairing::infrastructure::announcer), so a phone that scanned the
@@ -151,6 +152,7 @@ tower = { version = "0.5", features = ["util"] }
 # Online process tests drive the example's command entry point.
 nessa-client-core = { path = "../nessa-client-core", features = ["cli"] }
 nessa-agent-install = { path = "../nessa-agent-install", features = ["test-support"] }
+nessa-attachments = { path = "../nessa-attachments", features = ["test-support"] }
 # Actual native-session tests share the existing paired gateway process fixture.
 nessa-device-client = { path = "../nessa-device-client" }
 # Plants an unmarked session record. A production build of this crate does not

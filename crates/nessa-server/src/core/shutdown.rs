@@ -6,12 +6,12 @@
 //! once, in [`ShutdownReport::stage`]. The rows this module answers to are the
 //! shutdown report and review-audit tables (SR1–SR12, RA1–RA9) in
 //! `docs/design/authorized-record-reads.md`.
-use crate::attachments::application::ArtifactReadError;
 use crate::conversation::application::{
     CatalogueReadError, ConversationError, RecordReadError, ReviewNoticeAuditFailure,
 };
 use crate::device_pairing::infrastructure::PairingRuntimeError;
 use crate::mcp_servers::application::Unfinished;
+use nessa_attachments::application::ArtifactReadError;
 use nessa_auth::application::{
     credential_admin::CredentialAdminError, pairing::PairingWorkerFault,
 };

@@ -4654,7 +4654,7 @@ async fn a_publish_whose_environment_is_lost_before_it_answers_is_unanswered() {
 fn the_publish_call_wait_outlasts_the_reads_own_deadline() {
     assert!(
         PUBLISH_CALL_WAIT
-            > crate::attachments::application::AttachmentLimits::default().publish_deadline
+            > nessa_attachments::application::AttachmentLimits::default().publish_deadline
     );
 }
 /// Row L1 with an environment that keeps its own policy: what is recorded

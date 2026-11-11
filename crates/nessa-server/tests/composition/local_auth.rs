@@ -1,11 +1,11 @@
 use super::*;
-use crate::attachments::application::ImageNormalizer;
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 use crate::desktop_runtime::application::ConversationData;
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 use crate::desktop_runtime::domain::RetirementRefusal;
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 use crate::desktop_runtime::infrastructure::ConversationDirectory;
+use nessa_attachments::application::ImageNormalizer;
 use nessa_auth::{
     adapters::local::BootstrapRequest,
     application::dto::{
