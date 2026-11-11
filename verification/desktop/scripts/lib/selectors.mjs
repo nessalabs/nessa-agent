@@ -90,6 +90,7 @@ export const css = {
   greeting: ".workspace-pane-home .desktop-greeting", // class: "Working late?"
   conversationTitle: ".workspace-heading h2", // class: a conversation's title, atop its transcript
   composerCard: ".desktop-composer", // class: the composer's card
+  composerDetails: ".desktop-composer-details", // class: the line under the card (project, computer, thinking)
   homePage: ".desktop-home[data-page]", // class: a home whose long draft opened the page
   homeCustomize: ".workspace-pane-home .desktop-header-customize", // class: the scene's Customize control
   dragLayer: ".split-panes-layer", // class: what is carried is drawn in it, below the titlebar row

@@ -1115,7 +1115,9 @@ html:not(.dark) [data-surface] {
     color-mix(in oklab, var(--card, var(--sidebar)) 62%, transparent);
   backdrop-filter: blur(24px) saturate(160%);
   -webkit-backdrop-filter: blur(24px) saturate(160%);
+  /* The ring is a call's, where its glow cannot be drawn (`voice.css`). */
   box-shadow:
+    var(--desktop-composer-ring, 0 0 0 0 transparent),
     0 1px 2px rgb(0 0 0 / 20%),
     0 32px 80px -32px rgb(0 0 0 / 75%);
 }
@@ -1398,6 +1400,100 @@ html:not(.dark) [data-surface] {
   stroke-width: 1.75;
 }
 
+/* A hairline between what is set and what acts: the shield, then voice and send. */
+.desktop-composer-divider {
+  width: 1px;
+  height: 16px;
+  flex: none;
+  margin: 0 2px;
+  background: color-mix(in oklab, var(--foreground) 10%, transparent);
+}
+
+/*
+ * The line under the composer: the project, the computer and the thinking
+ * level as quiet words, a step fainter and smaller than the row above, on
+ * the composer's own left edge. Hide and Show stand at its end and are drawn
+ * only under the pointer or the keyboard, so at rest the line is words.
+ */
+.desktop-composer-details {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px;
+  margin-top: 6px;
+  padding: 0 10px;
+  color: color-mix(in oklab, var(--foreground) 46%, transparent);
+  font-size: var(--desktop-text-footnote);
+}
+
+.desktop-composer-details .desktop-chip {
+  height: 24px;
+  gap: 5px;
+  padding: 0 8px;
+  color: inherit;
+  font-size: inherit;
+}
+
+.desktop-composer-details .desktop-chip:hover,
+.desktop-composer-details .desktop-chip[data-state="open"] {
+  color: var(--foreground);
+}
+
+.desktop-composer-details .desktop-chip svg {
+  width: 13px;
+  height: 13px;
+}
+
+.desktop-composer-place {
+  display: inline-flex;
+  min-width: 0;
+  height: 24px;
+  align-items: center;
+  gap: 5px;
+  padding: 0 8px;
+}
+
+.desktop-composer-place > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.desktop-composer-place svg {
+  width: 13px;
+  height: 13px;
+  flex: none;
+}
+
+.desktop-composer-details-toggle {
+  height: 24px;
+  margin-left: auto;
+  padding: 0 8px;
+  border: 0;
+  border-radius: var(--desktop-radius-pill);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  opacity: 0;
+  transition: opacity var(--desktop-fast) ease;
+}
+
+.desktop-composer-details:hover .desktop-composer-details-toggle,
+.desktop-composer-details-toggle:focus-visible {
+  opacity: 1;
+}
+
+.desktop-composer-details-toggle:hover {
+  color: var(--foreground);
+  background: var(--desktop-hover-strong);
+}
+
+.desktop-composer-details-toggle:focus-visible {
+  outline: var(--desktop-focus-outline);
+  outline-offset: 1px;
+}
+
 /* Attach files: an icon-only chip, as square as the chip is tall. */
 .desktop-composer-attach {
   width: 30px;
@@ -1413,13 +1509,28 @@ html:not(.dark) [data-surface] {
 }
 
 /*
- * The model's name gives way before anything beside it: squeezed, it ends in
- * an ellipsis inside its own chip, never running under the access and
- * thinking controls. Narrower still, a pane's composer shows a short name,
- * then the mark alone (`conversation.css`).
+ * The model's chip shows its short name ("Opus 5", `--desktop-model-short`
+ * from `composer.tsx`): the mark beside it says whose model it is, and the
+ * whole name stays the chip's accessible name and its menu's. The name gives
+ * way before anything beside it: squeezed, it ends in an ellipsis inside its
+ * own chip, never running under the access control. Narrowest, a pane's
+ * composer shows the mark alone (`conversation.css`).
  */
 .desktop-chip-model {
   overflow: hidden;
+}
+
+.desktop-composer .desktop-chip-model > span:not([aria-hidden]):not(:first-child) {
+  display: none;
+}
+
+.desktop-composer .desktop-chip-model::after {
+  content: var(--desktop-model-short);
+}
+
+/* The short name is drawn last in the chip's markup; its chevron still ends the chip. */
+.desktop-composer .desktop-chip-model > svg:last-child {
+  order: 1;
 }
 
 .desktop-chip-model > span:not([aria-hidden]):not(:first-child),
@@ -1441,16 +1552,6 @@ html:not(.dark) [data-surface] {
   margin-left: -3px;
   color: var(--foreground);
   fill: currentColor;
-}
-
-/*
- * In a narrow composer the project shows only its folder, leaving room for
- * the model's name; its menu and accessible name still say what it is.
- */
-@container (max-width: 480px) {
-  .desktop-chip-project > span {
-    display: none;
-  }
 }
 
 /*
@@ -1485,12 +1586,6 @@ html:not(.dark) [data-surface] {
 /* Full access keeps the design system's warning colour, even at rest. */
 .desktop-chip[data-access-mode="full-access"] {
   color: var(--destructive);
-}
-
-.desktop-chip-project > svg:last-child {
-  width: 12px;
-  height: 12px;
-  opacity: 0.55;
 }
 
 /*

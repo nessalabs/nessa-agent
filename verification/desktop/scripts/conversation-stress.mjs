@@ -226,9 +226,9 @@ import {
  *               then says it is saved, with no key field), against a fake
  *               realtime provider on this machine: the key
  *               is never logged or audited, only the gateway asks the
- *               provider for a call. Talk opens a call above the composer
- *               (the orb, "Listening", and the speaker, microphone and End
- *               call buttons); the chat so far is handed to the voice; the
+ *               provider for a call. Talk opens a call on the composer
+ *               (a glow on its edge, "Listening", and the speaker, microphone
+ *               and End call buttons); the chat so far is handed to the voice; the
  *               person's spoken words, fillers and a repeated word dropped,
  *               are sent as their message and answered, and the reply is
  *               handed back to the voice to talk about; muting the
@@ -4514,7 +4514,7 @@ const steps = {
     if (!(await run.client.voice.status()).keySaved)
       failures.push("the gateway does not report the voice key saved")
     const end = pane.getByRole("button", { name: "End call", exact: true })
-    const orb = run.page.locator(".voice-dock .voice-orb")
+    const rim = run.page.locator(".workspace-dock .voice-rim")
     const phase = () =>
       run.page
         .locator(".voice-dock")
@@ -4533,9 +4533,47 @@ const steps = {
     }
     if (realtime.calls() !== before + 1)
       failures.push(`Talk opened ${realtime.calls() - before} calls, not one`)
-    if (!(await orb.isVisible())) failures.push("the call shows no orb")
-    else if ((await orb.locator(".voice-orb-clouds").count()) !== 2)
-      failures.push("the orb is not the sky orb: its clouds are missing")
+    // The call is a glow on the composer's edge: its canvas lies around the
+    // composer's card and has drawn this phase. No orb is left.
+    if ((await rim.count()) !== 1) failures.push("the call shows no glow on the composer")
+    else {
+      const boxes = await rim.evaluate((canvas) => {
+        const card = canvas
+          .closest(".workspace-dock")
+          ?.querySelector("form.desktop-composer")
+          ?.getBoundingClientRect()
+        const over = canvas.getBoundingClientRect()
+        const edges = (box) =>
+          box ? [box.left, box.top, box.right, box.bottom].map(Math.round) : null
+        return { rim: canvas.dataset.rim, over: edges(over), card: edges(card) }
+      })
+      // Chromium can always run the shader: a still ring there is a glow
+      // that failed to start. Elsewhere the canvas may not be drawn at all.
+      if (boxes.rim === "plain" && run.engine === "chromium")
+        failures.push("the call's glow fell back to the still ring")
+      if (
+        boxes.rim !== "plain" &&
+        !(
+          boxes.card &&
+          boxes.over[0] < boxes.card[0] &&
+          boxes.over[1] < boxes.card[1] &&
+          boxes.over[2] > boxes.card[2] &&
+          boxes.over[3] > boxes.card[3]
+        )
+      )
+        failures.push(
+          `the call's glow ${JSON.stringify(boxes.over)} does not reach around the composer ${JSON.stringify(boxes.card)}`,
+        )
+      const drawn = await waitFor(
+        async () =>
+          (await rim.getAttribute("data-rim")) === "plain" ||
+          (await rim.getAttribute("data-drawn")) === "listening",
+        5_000,
+      )
+      if (!drawn) failures.push("the call's glow never drew the listening call")
+    }
+    if ((await run.page.locator(".voice-orb").count()) > 0)
+      failures.push("the call still shows the orb")
     for (const name of ["Mute voice", "Mute microphone", "End call"])
       if (!(await pane.getByRole("button", { name, exact: true }).isVisible()))
         failures.push(`the composer shows no ${name} button during the call`)
@@ -4652,7 +4690,7 @@ const steps = {
     )
       failures.push("Talk is not offered again after End call")
     if ((await run.page.locator(".voice-dock").count()) > 0)
-      failures.push("the call's orb stays after End call")
+      failures.push("the call's line and glow stay after End call")
     if (!realtime.received.some((event) => event.type === "response.create"))
       failures.push("the voice was never asked to speak")
 
@@ -7848,6 +7886,92 @@ const steps = {
       ))
     )
       failures.push("the run does not fold again")
+  },
+
+  /**
+   * The composer's row and the line under it. The row keeps what is reached
+   * for on every message; the project, the computer and the thinking level
+   * stand in the line below, and Hide tucks the first two away for the window.
+   */
+  async composer(run, step, failures) {
+    await run.exclusive(async () => {
+      const page = run.page
+      const dock = page.locator(css.focusedPane).locator(".workspace-dock")
+      const row = dock.locator(".desktop-composer-row")
+      const line = dock.locator(".desktop-composer-details")
+      await line.waitFor({ timeout: 10_000 })
+      if (
+        (await row.locator(".desktop-chip-project, .desktop-chip-thinking").count()) > 0
+      )
+        failures.push("the composer's row still holds the project or thinking control")
+      // The chip draws the model's short name; its whole name stays its label.
+      const model = await row.locator(".desktop-chip-model").evaluate((chip) => ({
+        drawn: JSON.parse(getComputedStyle(chip, "::after").content || '""'),
+        label: chip.getAttribute("aria-label") ?? "",
+      }))
+      if (model.drawn === "" || /^(Claude|OpenAI)\s/.test(model.drawn))
+        failures.push(`the model chip draws ${JSON.stringify(model.drawn)}`)
+      if (!model.label.includes(model.drawn))
+        failures.push(
+          `the model chip draws ${JSON.stringify(model.drawn)}, which its name ${JSON.stringify(model.label)} does not hold`,
+        )
+      const thinking = line.locator(".desktop-chip-thinking")
+      const project = line.locator(".desktop-chip-project")
+      const place = line.locator("[data-composer-place]")
+      const said = (await thinking.innerText().catch(() => "")).trim()
+      if (!said.startsWith("Thinking"))
+        failures.push(`the thinking chip says ${JSON.stringify(said)}, not its level`)
+      if (!(await project.isVisible())) failures.push("the line shows no project")
+      const where = (await place.innerText().catch(() => "")).trim()
+      if (where === "") failures.push("the line does not say where the chat runs")
+      // Under the composer, on its left edge, never beside or over it.
+      const boxes = await line.evaluate((element) => {
+        const card = element.parentElement?.querySelector("form.desktop-composer")
+        return {
+          line: element.getBoundingClientRect().top,
+          card: card?.getBoundingClientRect().bottom,
+        }
+      })
+      if (typeof boxes.card !== "number" || boxes.line < boxes.card)
+        failures.push(
+          `the line starts at ${boxes.line}, above the composer's foot ${boxes.card}`,
+        )
+      const shot = async (name) => {
+        if (run.evidence)
+          await dock.screenshot({
+            path: join(run.evidence, `composer-${run.engine}-${name}.png`),
+          })
+      }
+      await shot("shown")
+
+      await line.hover()
+      await line
+        .getByRole("button", { name: "Hide project and computer", exact: true })
+        .click({ timeout: 5_000 })
+      const tucked = await waitFor(
+        async () => (await project.count()) === 0 && (await place.count()) === 0,
+        5_000,
+      )
+      if (!tucked) failures.push("Hide left the project or the computer in the line")
+      if (!(await thinking.isVisible()))
+        failures.push("Hide took the thinking level away with the rest")
+      const kept = await page.evaluate(() =>
+        window.localStorage.getItem("nessa.desktop.composer-details"),
+      )
+      if (kept !== "hidden")
+        failures.push(`Hide was remembered as ${JSON.stringify(kept)}, not hidden`)
+      await shot("hidden")
+
+      await line.hover()
+      await line
+        .getByRole("button", { name: "Show project and computer", exact: true })
+        .click({ timeout: 5_000 })
+      const back = await waitFor(
+        async () => (await project.isVisible()) && (await place.isVisible()),
+        5_000,
+      )
+      if (!back) failures.push("Show did not bring the project and the computer back")
+    })
   },
 
   async menu(run, step, failures) {

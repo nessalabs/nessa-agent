@@ -1,7 +1,8 @@
 /**
- * What a conversation's pane shows above its composer while a call talks to
- * it: the orb, and over it one line — what the voice is saying, the
- * person's words as they are heard, or where the call stands.
+ * What a conversation's pane shows while a call talks to it: one line above
+ * the composer — what the voice is saying, the person's words as they are
+ * heard, or where the call stands — and the glow on the composer's edge
+ * (`voice-rim.tsx`).
  */
 import { useCallback, useEffect } from "react"
 import { StatusLabel } from "@nessa-ui/react/status-label"
@@ -9,9 +10,9 @@ import { VoiceKeyButton } from "../../settings/ui/voice-key-row"
 import { useVaultUnlock } from "../../../vault"
 import type { VoiceSnapshot } from "../application/voice-controller"
 import { useVoiceController, useVoiceSnapshot } from "./voice-context"
-import { VoiceOrb } from "./voice-orb"
+import { VoiceRim } from "./voice-rim"
 
-/** The bubble's line: what is said or heard now, else the call's state. */
+/** The line: what is said or heard now, else the call's state. */
 export function voiceLine(snapshot: VoiceSnapshot): string {
   switch (snapshot.phase) {
     case "connecting":
@@ -88,7 +89,11 @@ export function VoiceDock({ sessionId }: { sessionId: string }) {
       <p className="voice-bubble" role="status" aria-live="polite">
         {line}
       </p>
-      <VoiceOrb phase={snapshot.phase} levels={levels} />
+      <VoiceRim
+        phase={snapshot.phase}
+        microphoneOn={snapshot.microphoneOn}
+        levels={levels}
+      />
     </div>
   )
 }

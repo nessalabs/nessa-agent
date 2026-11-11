@@ -45,7 +45,7 @@ export function placeTooltip(
   }: {
     prefer?: TooltipSide
     avoid?: Box
-    align?: "centre" | "end"
+    align?: "centre" | "start" | "end"
     spacing?: { readonly gap: number; readonly margin: number }
   } = {},
 ): TooltipPlacement {
@@ -53,13 +53,16 @@ export function placeTooltip(
   const across = prefer === "right" || prefer === "left"
   const clamp = (value: number, room: number, size: number) =>
     Math.max(margin, Math.min(value, room - margin - size))
-  // Along the control: centred on it (or its trailing edge), kept inside the window.
+  // Along the control: centred on it (or from its leading edge, or to its
+  // trailing one), kept inside the window.
   const x = across
     ? 0
     : clamp(
         align === "end"
           ? anchor.left + anchor.width - tip.width
-          : anchor.left + anchor.width / 2 - tip.width / 2,
+          : align === "start"
+            ? anchor.left
+            : anchor.left + anchor.width / 2 - tip.width / 2,
         window.width,
         tip.width,
       )

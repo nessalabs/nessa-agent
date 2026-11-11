@@ -201,6 +201,10 @@ export const KNOBS = {
     default: 1,
     what: "times the pane's ⋯ menu and the overview's filter are opened: rows lead with their icons, a chosen filter's check sits before its number, and a number picks it",
   },
+  composers: {
+    default: 1,
+    what: "times the composer's row and the line under it are read: the row holds no project or thinking control, the model is named without its family, and Hide tucks the project and the computer away while the thinking level stays",
+  },
   menuPanels: {
     default: 1,
     what: "times the menu-bar panel is opened over the run: its tabs are page dots after the chat's name, a message sent there wears the chat accent and its rim, and a chat archived from Messages leaves a row card whose Undo brings it back",
@@ -338,6 +342,7 @@ export function plan(knobs, accessScenario = "full") {
   add(knobs.launches, () => ({ kind: "launch" }))
   add(knobs.menuPanels, () => ({ kind: "menuPanel" }))
   add(knobs.menus, () => ({ kind: "menu" }))
+  add(knobs.composers, () => ({ kind: "composer" }))
   add(knobs.githubs, () => ({ kind: "github" }))
   add(knobs.voices, () => ({ kind: "voice" }))
   add(knobs.logins, () => ({ kind: "login" }))
