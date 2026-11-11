@@ -6,13 +6,12 @@ use crate::conversation::application::{
 };
 use crate::conversation::domain::{Capabilities, ToolPolicy, ToolPreset};
 use crate::conversation::infrastructure::{GrantWritePause, NessaRecordReadSource};
-use crate::webhooks::application::{
-    OutboxError, ReadWebhookRecords, Registration, RegistrationLookup, ShareWebhookConversation,
-};
+use crate::webhooks::application::{ReadWebhookRecords, ShareWebhookConversation};
 use nessa_auth::application::credential_admin::CredentialAdmin;
 use nessa_auth::application::ports::AccessAdmission;
 use nessa_local_database::rusqlite::Connection;
 use nessa_sync::replication::domain::Id;
+use nessa_webhooks::application::{OutboxError, Registration, RegistrationLookup};
 use std::sync::atomic::AtomicUsize;
 use std::time::Duration;
 use tokio::runtime::Handle;

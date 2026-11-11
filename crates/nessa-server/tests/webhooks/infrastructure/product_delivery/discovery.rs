@@ -16,7 +16,7 @@ async fn discovery_overflow_keeps_shared_commands_and_healthy_sibling_available(
     // Actual conversation metadata and public, authorized shares: no synthetic
     // duplicate SQL rows and no altered runtime discovery cap.
     let mut extra = Vec::new();
-    for n in 0..crate::webhooks::application::MAX_CURSORS {
+    for n in 0..nessa_webhooks::application::MAX_CURSORS {
         let id = ConversationId::new(&Uuid::new_v4().to_string()).unwrap();
         f.grants
             .create(
@@ -126,7 +126,7 @@ async fn discovery_overflow_keeps_shared_commands_and_healthy_sibling_available(
             .principal_conversations(
                 PrincipalId::new("hook").unwrap(),
                 CredentialId::new(&first).unwrap(),
-                crate::webhooks::application::MAX_CURSORS
+                nessa_webhooks::application::MAX_CURSORS
             )
             .await,
         Err(ConversationError::Capacity)
@@ -146,12 +146,12 @@ async fn discovery_overflow_keeps_shared_commands_and_healthy_sibling_available(
             .principal_conversations(
                 PrincipalId::new("hook").unwrap(),
                 CredentialId::new(&first).unwrap(),
-                crate::webhooks::application::MAX_CURSORS
+                nessa_webhooks::application::MAX_CURSORS
             )
             .await
             .unwrap()
             .len(),
-        crate::webhooks::application::MAX_CURSORS
+        nessa_webhooks::application::MAX_CURSORS
     );
     f.runtime.wake_delivery();
     checked_request(&recipient.next().await, &f.a);

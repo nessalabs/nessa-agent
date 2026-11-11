@@ -1,13 +1,7 @@
 //! Concrete product command owner. Caller loss does not cancel admitted work.
 #[path = "runtime/delivery.rs"]
 mod delivery;
-use super::SqlOutbox;
 use crate::conversation::application::ConversationError;
-use crate::webhooks::application::{
-    ExpiryObserver, ObserveRegistrationStop, OutboxError, RegisterWebhook, RegistrationConfig,
-    RegistrationFailure, RegistrationIntent, StopObservationResult, MAX_OUTBOX_WORKERS,
-    MAX_REGISTRATIONS,
-};
 pub(crate) use delivery::DeliveryDependencies;
 use delivery::PendingSettlement;
 use futures_util::FutureExt;
@@ -24,6 +18,12 @@ use nessa_auth::domain::{CredentialId, IssuanceCause, PrincipalId};
 use nessa_protocol::protocol::{
     WebhookNativeMutations, WebhookPendingOutcome, WebhookRefusal, WebhookStatus,
 };
+use nessa_webhooks::application::{
+    ExpiryObserver, ObserveRegistrationStop, OutboxError, RegisterWebhook, RegistrationConfig,
+    RegistrationFailure, RegistrationIntent, StopObservationResult, MAX_OUTBOX_WORKERS,
+    MAX_REGISTRATIONS,
+};
+use nessa_webhooks::infrastructure::SqlOutbox;
 use std::collections::HashMap;
 use std::fmt::{Debug, Formatter, Result as FmtResult};
 use std::future::Future;
@@ -452,7 +452,7 @@ impl WebhookRuntime {
         let this = self.clone();
         self.owned(false, async move {
             let _issuance = this.owner.issuance.lock().await;
-            crate::webhooks::application::Outbox::recover(
+            nessa_webhooks::application::Outbox::recover(
                 this.owner.store.as_ref(),
                 this.owner.clock.unix_milliseconds(),
             )

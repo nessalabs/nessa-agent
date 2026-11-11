@@ -35,16 +35,16 @@ sources:
   - crates/nessa-server/tests/webhooks/infrastructure/product.rs
   - crates/nessa-server/tests/webhooks/infrastructure/runtime.rs
   - crates/nessa-server/tests/composition/webhooks.rs
-  - crates/nessa-server/src/webhooks/application/registration.rs
-  - crates/nessa-server/src/webhooks/infrastructure/outbox/intents.rs
-  - crates/nessa-server/src/webhooks/infrastructure/outbox/cancellation.rs
-  - crates/nessa-server/tests/webhooks/infrastructure/outbox/registration_cancellation.rs
-  - crates/nessa-server/src/webhooks/infrastructure/outbox/schema.rs
-  - crates/nessa-server/tests/webhooks/infrastructure/outbox/registration.rs
-  - crates/nessa-server/tests/webhooks/infrastructure/outbox/registration_failures.rs
-  - crates/nessa-server/tests/webhooks/infrastructure/outbox/registration_origin.rs
-  - crates/nessa-server/tests/webhooks/infrastructure/outbox/intent_rows.rs
-  - crates/nessa-server/tests/webhooks/infrastructure/outbox/schema.rs
+  - crates/nessa-webhooks/src/application/registration.rs
+  - crates/nessa-webhooks/src/infrastructure/outbox/intents.rs
+  - crates/nessa-webhooks/src/infrastructure/outbox/cancellation.rs
+  - crates/nessa-webhooks/tests/infrastructure/outbox/registration_cancellation.rs
+  - crates/nessa-webhooks/src/infrastructure/outbox/schema.rs
+  - crates/nessa-webhooks/tests/infrastructure/outbox/registration.rs
+  - crates/nessa-webhooks/tests/infrastructure/outbox/registration_failures.rs
+  - crates/nessa-webhooks/tests/infrastructure/outbox/registration_origin.rs
+  - crates/nessa-webhooks/tests/infrastructure/outbox/intent_rows.rs
+  - crates/nessa-webhooks/tests/infrastructure/outbox/schema.rs
   - crates/nessa-server/src/webhooks/infrastructure/runtime/delivery.rs
   - crates/nessa-server/tests/webhooks/infrastructure/product_delivery.rs
 diagramLinks: {}
@@ -432,4 +432,4 @@ and default/raised stress acceptance remain pending.
 
 ## Bounded rule model
 
-Owns durable reservation before Auth issuance, original binding validation before installation and stopped uninstalled cancellation. Matching replay reuses the same reservation identity; conflicting identities take Refused. Installed stop/drain, actual Auth journal proof and retired-receipt selection remain excluded. This finite abstraction checks safety only. It does not execute or verify the implementation, promise eventual completion, or qualify external effects. Existing source checkpoints and historical test receipts retain their earlier scope. The scoped model review inspected `crates/nessa-server/src/webhooks/application/registration.rs`.
+Owns durable reservation before Auth issuance, original binding validation before installation and stopped uninstalled cancellation. Matching replay reuses the same reservation identity; conflicting identities take Refused. Installed stop/drain, actual Auth journal proof and retired-receipt selection remain excluded. This finite abstraction checks safety only. It does not execute or verify the implementation, promise eventual completion, or qualify external effects. Existing source checkpoints and historical test receipts retain their earlier scope. The scoped model review inspected `crates/nessa-webhooks/src/application/registration.rs`.

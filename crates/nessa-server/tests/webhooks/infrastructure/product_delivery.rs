@@ -7,13 +7,7 @@ use crate::conversation::{
     },
     infrastructure::NessaRecordReadSource,
 };
-use crate::webhooks::application::{
-    Message as SignedMessage, Outbox, PrepareFailure, WebhookHttp, WebhookPost,
-};
-use crate::webhooks::infrastructure::tls_fixture::RecipientTls;
-use crate::webhooks::infrastructure::{
-    isolated_post, signature, DeliveryDependencies, MAX_IN_FLIGHT,
-};
+use crate::webhooks::infrastructure::DeliveryDependencies;
 use async_trait::async_trait;
 use nessa_auth::domain::Resource;
 use nessa_sdk::{
@@ -25,6 +19,11 @@ use nessa_sdk::{
     infrastructure::session_storage::RecordStorage,
 };
 use nessa_sync::replication::domain::Id;
+use nessa_webhooks::application::{
+    Message as SignedMessage, Outbox, PrepareFailure, WebhookHttp, WebhookPost,
+};
+use nessa_webhooks::infrastructure::tls_fixture::RecipientTls;
+use nessa_webhooks::infrastructure::{isolated_post, signature, MAX_IN_FLIGHT};
 use std::{
     io::{Read, Write},
     net::{SocketAddr, TcpListener},
@@ -111,7 +110,7 @@ impl Recipient {
                     let len = stream.read(&mut buffer).unwrap();
                     assert!(len > 0, "recipient request ended early");
                     bytes.extend_from_slice(&buffer[..len]);
-                    assert!(bytes.len() <= crate::webhooks::application::MAX_BODY_BYTES + 8192);
+                    assert!(bytes.len() <= nessa_webhooks::application::MAX_BODY_BYTES + 8192);
                     if let Some(end) = bytes.windows(4).position(|w| w == b"\r\n\r\n") {
                         let headers = std::str::from_utf8(&bytes[..end])
                             .unwrap()
@@ -1217,7 +1216,7 @@ async fn dispatch_deadline_releases_grant_while_native_sending_sql_stays_owned()
         let credential = issue_share(&f, &mut client).await;
         tokio::time::timeout(WAIT, pause.entered()).await.unwrap();
         tokio::time::pause();
-        tokio::time::advance(crate::webhooks::application::POST_DEADLINE).await;
+        tokio::time::advance(nessa_webhooks::application::POST_DEADLINE).await;
         // A paused blocking SQL worker prevents virtual auto-advance. Resume
         // real time before observing the timer; keep the original one-second
         // notification bound and release/join SQL before asserting failures.
@@ -1315,7 +1314,7 @@ async fn public_reissue_keeps_stopped_sending_history_separate_from_the_new_regi
         .transition(
             &old.delivery,
             &sending,
-            crate::webhooks::application::DeliveryCause::Admission,
+            nessa_webhooks::application::DeliveryCause::Admission,
             2000,
         )
         .await
@@ -1452,13 +1451,13 @@ async fn dispatch_deadline_releases_partial_admission_before_joining_native_meta
         &registration.target,
         &f.a,
         epoch,
-        Instant::now() + crate::webhooks::application::POST_DEADLINE,
+        Instant::now() + nessa_webhooks::application::POST_DEADLINE,
     ));
     assert!(
         work.as_mut().now_or_never().is_none(),
         "real native metadata read is pending"
     );
-    tokio::time::advance(crate::webhooks::application::POST_DEADLINE).await;
+    tokio::time::advance(nessa_webhooks::application::POST_DEADLINE).await;
     // Resume real time before waiting for OS work. Drive this SAME future
     // concurrently with its notice; waiting for the notice alone stops its timer.
     tokio::time::resume();
@@ -1676,7 +1675,7 @@ async fn pinned_response_refuses_native_cleanup_but_canonical_revoke_and_unshare
             .unwrap();
         assert_eq!(
             f.store.due(2000).await.err(),
-            Some(crate::webhooks::application::OutboxError::Unavailable)
+            Some(nessa_webhooks::application::OutboxError::Unavailable)
         );
         let c = Connection::open(f._root.path().join("private/outbox.db")).unwrap();
         let audits: i64 = c
