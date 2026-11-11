@@ -1,17 +1,10 @@
-import {
-  useLayoutEffect,
-  useRef,
-  useState,
-  type CSSProperties,
-  type ReactNode,
-} from "react"
+import { useLayoutEffect, useRef, useState, type CSSProperties } from "react"
 import {
   ComposerAccessMode,
   type ComposerAccessModeValue,
 } from "@nessa-ui/react/composer-access-mode"
 import { ChatAttachmentTile } from "@nessa-ui/react/chat-bubbles"
 import { StatusLabel } from "@nessa-ui/react/status-label"
-import { useComposerDetailsPreference } from "../adapters/composer-details-preference"
 import { pastedFiles } from "../adapters/pasted-files"
 import type { DraftImage } from "../workspace/model/draft-images"
 import {
@@ -19,17 +12,9 @@ import {
   shortModelName,
   thinkingLevelsFor,
 } from "../model/composer-options"
-import { otherComposerDetails } from "../model/composer-details"
 import { nextPageMode } from "../model/page-mode"
 import { CatalogueModelPicker, findComposerModel } from "./catalogue-model-picker"
 import { DesktopIcon } from "./icons"
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuTrigger,
-  MenuItem,
-  MenuLabel,
-} from "./menu"
 import { IconButton } from "./icon-button"
 import { ThinkingControl } from "./thinking-control"
 import { tooltip } from "./tooltip"
@@ -89,11 +74,10 @@ export interface ComposerVoice {
 }
 
 /**
- * The composer: a message, and in its row only what a person reaches for on
- * every message — attach, the model, what the agent may do without asking,
- * a voice call, and send. What is set once and then only read stands in a
- * quiet line under the card (`ComposerDetailsLine`): the project, the
- * computer the conversation runs on (`place`), and the thinking level.
+ * The composer: a message, and in its row what a person sets for it — attach
+ * and the model at its start; at its end what the agent may do without
+ * asking and how hard it thinks, then, past a hairline, what acts: a voice
+ * call and send.
  */
 export function Composer({
   images: attached,
@@ -107,7 +91,6 @@ export function Composer({
   onStop,
   access,
   voice,
-  place,
   text,
   onTextChange,
   placeholder = "What would you like to work on?",
@@ -143,11 +126,6 @@ export function Composer({
   access?: ComposerAccess
   /** A voice call; without it the composer offers none. */
   voice?: ComposerVoice
-  /**
-   * Where the conversation's agent runs, in words ("This computer"), from
-   * whoever knows it; without it the line under the composer names no place.
-   */
-  place?: string
   /**
    * What is typed and not sent, held by whoever owns it — the workspace keeps
    * a session's in its state, so it outlives a change of layout — and told of
@@ -192,240 +170,193 @@ export function Composer({
   const [fast, setFast] = useState(false)
 
   return (
-    <>
-      <form
-        ref={formRef}
-        className="desktop-composer"
-        // A turn is running: the composer offers Stop (a quiet pane shows only that).
-        data-running={onStop ? "" : undefined}
-        onSubmit={(event) => {
+    <form
+      ref={formRef}
+      className="desktop-composer"
+      // A turn is running: the composer offers Stop (a quiet pane shows only that).
+      data-running={onStop ? "" : undefined}
+      onSubmit={(event) => {
+        event.preventDefault()
+        send()
+      }}
+    >
+      <div
+        className="desktop-composer-body"
+        // The page's empty space below the text still places the caret.
+        onMouseDown={(event) => {
+          if (event.target !== event.currentTarget) return
           event.preventDefault()
-          send()
+          textareaRef.current?.focus()
         }}
       >
-        <div
-          className="desktop-composer-body"
-          // The page's empty space below the text still places the caret.
-          onMouseDown={(event) => {
-            if (event.target !== event.currentTarget) return
-            event.preventDefault()
-            textareaRef.current?.focus()
-          }}
-        >
-          {images.length ? (
-            <ul className="desktop-composer-images" aria-label="Attachments to send">
-              {images.map((image) => (
-                <li
-                  key={image.id}
-                  className="desktop-composer-image"
-                  data-kind={image.kind}
+        {images.length ? (
+          <ul className="desktop-composer-images" aria-label="Attachments to send">
+            {images.map((image) => (
+              <li
+                key={image.id}
+                className="desktop-composer-image"
+                data-kind={image.kind}
+              >
+                {image.kind === "image" ? (
+                  <ChatAttachmentTile label={image.name} imageSrc={image.url} />
+                ) : (
+                  <ChatAttachmentTile
+                    label={image.name}
+                    icon={<DesktopIcon name="file" />}
+                  />
+                )}
+                <button
+                  type="button"
+                  className="desktop-composer-image-remove"
+                  aria-label={`Remove ${image.name}`}
+                  {...tooltip(`Remove ${image.name}`, { side: "above" })}
+                  onClick={() => attached?.onRemove(image.id)}
                 >
-                  {image.kind === "image" ? (
-                    <ChatAttachmentTile label={image.name} imageSrc={image.url} />
-                  ) : (
-                    <ChatAttachmentTile
-                      label={image.name}
-                      icon={<DesktopIcon name="file" />}
-                    />
-                  )}
-                  <button
-                    type="button"
-                    className="desktop-composer-image-remove"
-                    aria-label={`Remove ${image.name}`}
-                    {...tooltip(`Remove ${image.name}`, { side: "above" })}
-                    onClick={() => attached?.onRemove(image.id)}
-                  >
-                    <DesktopIcon name="close" />
-                  </button>
-                </li>
-              ))}
-            </ul>
-          ) : null}
-          <textarea
-            ref={textareaRef}
-            aria-label="Message"
-            placeholder={placeholder}
-            rows={2}
-            value={draft}
-            onChange={(event) => onTextChange(event.target.value)}
-            onPaste={(event) => {
-              if (!attached) return
-              const files = pastedFiles(event.clipboardData)
-              if (files.length === 0) return
-              // Files and no text: nothing for the field to insert.
-              event.preventDefault()
-              attached.onPaste(files)
-            }}
-            onKeyDown={(event) => {
-              // Return sends; Shift-Return, and Return while composing an IME word, do not.
-              if (
-                event.key !== "Enter" ||
-                event.shiftKey ||
-                event.nativeEvent.isComposing
-              )
-                return
-              event.preventDefault()
-              // One press, one act: a held key's repeats do nothing
-              // (`takesAnswerKey` in `workspace/model/overview/walk.ts` owns the rule).
-              if (!event.repeat) send()
-            }}
-          />
-        </div>
-        {attached?.notice ? (
-          <StatusLabel role="status" tone="warning" className="desktop-composer-notice">
-            {attached.notice}
-          </StatusLabel>
+                  <DesktopIcon name="close" />
+                </button>
+              </li>
+            ))}
+          </ul>
         ) : null}
-        {modelNotice ? (
-          <StatusLabel role="status" tone="neutral" className="desktop-composer-notice">
-            {modelNotice}
-          </StatusLabel>
-        ) : null}
-        {access?.notice ? (
-          <StatusLabel
-            tone={access.notice.tone}
-            role="status"
-            className="desktop-composer-notice"
+        <textarea
+          ref={textareaRef}
+          aria-label="Message"
+          placeholder={placeholder}
+          rows={2}
+          value={draft}
+          onChange={(event) => onTextChange(event.target.value)}
+          onPaste={(event) => {
+            if (!attached) return
+            const files = pastedFiles(event.clipboardData)
+            if (files.length === 0) return
+            // Files and no text: nothing for the field to insert.
+            event.preventDefault()
+            attached.onPaste(files)
+          }}
+          onKeyDown={(event) => {
+            // Return sends; Shift-Return, and Return while composing an IME word, do not.
+            if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing)
+              return
+            event.preventDefault()
+            // One press, one act: a held key's repeats do nothing
+            // (`takesAnswerKey` in `workspace/model/overview/walk.ts` owns the rule).
+            if (!event.repeat) send()
+          }}
+        />
+      </div>
+      {attached?.notice ? (
+        <StatusLabel role="status" tone="warning" className="desktop-composer-notice">
+          {attached.notice}
+        </StatusLabel>
+      ) : null}
+      {modelNotice ? (
+        <StatusLabel role="status" tone="neutral" className="desktop-composer-notice">
+          {modelNotice}
+        </StatusLabel>
+      ) : null}
+      {access?.notice ? (
+        <StatusLabel
+          tone={access.notice.tone}
+          role="status"
+          className="desktop-composer-notice"
+        >
+          {access.notice.text}
+        </StatusLabel>
+      ) : null}
+      <div className="desktop-composer-row">
+        <div className="desktop-composer-controls">
+          {attached ? <AttachButton onFiles={attached.onPaste} /> : null}
+          <span
+            className="desktop-tip-anchor"
+            // The chip shows this in place of the whole name ("Opus 5"):
+            // the mark beside it already says whose model it is.
+            style={
+              {
+                "--desktop-model-short": JSON.stringify(
+                  model ? shortModelName(model) : "",
+                ),
+              } as CSSProperties
+            }
+            {...tooltip(
+              onModelChange
+                ? "Model"
+                : "Start a new conversation to choose another model",
+              { side: "above" },
+            )}
           >
-            {access.notice.text}
-          </StatusLabel>
-        ) : null}
-        <div className="desktop-composer-row">
-          <div className="desktop-composer-controls">
-            {attached ? <AttachButton onFiles={attached.onPaste} /> : null}
-            <span
-              className="desktop-tip-anchor"
-              // The chip shows this in place of the whole name ("Opus 5"):
-              // the mark beside it already says whose model it is.
-              style={
-                {
-                  "--desktop-model-short": JSON.stringify(
-                    model ? shortModelName(model) : "",
-                  ),
-                } as CSSProperties
+            <CatalogueModelPicker
+              disabled={modelDisabled}
+              value={shown}
+              onChange={onModelChange}
+              side="top"
+              className="desktop-chip desktop-chip-model"
+            />
+          </span>
+        </div>
+        <div className="desktop-composer-controls">
+          <ComposerAccessMode
+            value={access?.value ?? "ask-approval"}
+            onValueChange={access?.onChange}
+            // Its menu ends where the composer ends, not past it.
+            alignTo={formRef}
+            disabled={!access}
+            className="desktop-chip"
+            contentClassName="desktop-popover"
+            // The window's own tooltip names it; no second, system one.
+            title=""
+            {...tooltip(access ? "Access" : "Chat isn’t connected yet", {
+              side: "above",
+            })}
+          />
+          <span
+            className="desktop-tip-anchor"
+            {...tooltip("Thinking", { side: "above" })}
+          >
+            <ThinkingControl
+              levels={thinkingLevelsFor(model)}
+              value={thinking}
+              onValueChange={setThinking}
+              // Fast is remembered while switching models, but only offered on one that has it.
+              fastMode={
+                model && model.fastMode
+                  ? { pressed: fast, onPressedChange: setFast }
+                  : undefined
               }
-              {...tooltip(
-                onModelChange
-                  ? "Model"
-                  : "Start a new conversation to choose another model",
-                { side: "above" },
-              )}
+            />
+          </span>
+          {/* Settings to its left, what acts to its right. */}
+          <span className="desktop-composer-divider" aria-hidden="true" />
+          {voice ? <VoiceControls voice={voice} /> : null}
+          {onStop ? (
+            <button
+              key="stop"
+              type="button"
+              className="desktop-send"
+              aria-label="Stop"
+              {...tooltip("Stop", { side: "above" })}
+              disabled={onStop.stopping === true}
+              onClick={onStop.stop}
             >
-              <CatalogueModelPicker
-                disabled={modelDisabled}
-                value={shown}
-                onChange={onModelChange}
-                side="top"
-                className="desktop-chip desktop-chip-model"
-              />
-            </span>
-          </div>
-          <div className="desktop-composer-controls">
-            <ComposerAccessMode
-              value={access?.value ?? "ask-approval"}
-              onValueChange={access?.onChange}
-              // Its menu ends where the composer ends, not past it.
-              alignTo={formRef}
-              disabled={!access}
-              className="desktop-chip"
-              contentClassName="desktop-popover"
-              // The window's own tooltip names it; no second, system one.
-              title=""
-              {...tooltip(access ? "Access" : "Chat isn’t connected yet", {
+              <DesktopIcon name="stop" />
+            </button>
+          ) : (
+            <button
+              key="send"
+              type="submit"
+              className="desktop-send"
+              aria-label="Send"
+              {...tooltip(onSend ? "Send" : "Chat isn’t connected yet", {
+                shortcut: onSend ? "↩" : undefined,
                 side: "above",
               })}
-            />
-            {/* Settings to its left, what acts to its right. */}
-            <span className="desktop-composer-divider" aria-hidden="true" />
-            {voice ? <VoiceControls voice={voice} /> : null}
-            {onStop ? (
-              <button
-                key="stop"
-                type="button"
-                className="desktop-send"
-                aria-label="Stop"
-                {...tooltip("Stop", { side: "above" })}
-                disabled={onStop.stopping === true}
-                onClick={onStop.stop}
-              >
-                <DesktopIcon name="stop" />
-              </button>
-            ) : (
-              <button
-                key="send"
-                type="submit"
-                className="desktop-send"
-                aria-label="Send"
-                {...tooltip(onSend ? "Send" : "Chat isn’t connected yet", {
-                  shortcut: onSend ? "↩" : undefined,
-                  side: "above",
-                })}
-                disabled={!onSend || empty}
-              >
-                <DesktopIcon name="send" />
-              </button>
-            )}
-          </div>
+              disabled={!onSend || empty}
+            >
+              <DesktopIcon name="send" />
+            </button>
+          )}
         </div>
-      </form>
-      <ComposerDetailsLine place={place}>
-        <span className="desktop-tip-anchor" {...tooltip("Thinking", { side: "above" })}>
-          <ThinkingControl
-            levels={thinkingLevelsFor(model)}
-            value={thinking}
-            onValueChange={setThinking}
-            // Fast is remembered while switching models, but only offered on one that has it.
-            fastMode={
-              model && model.fastMode
-                ? { pressed: fast, onPressedChange: setFast }
-                : undefined
-            }
-          />
-        </span>
-      </ComposerDetailsLine>
-    </>
-  )
-}
-
-/**
- * The line under the composer: the project, the computer the conversation
- * runs on, and — always — the thinking level (`children`). Hide tucks the
- * project and the computer away for every composer in the window, and Show
- * brings them back (`model/composer-details.ts`); the button shows under the
- * pointer or with the keyboard on it, so the line reads as words at rest.
- */
-function ComposerDetailsLine({
-  place,
-  children,
-}: {
-  place: string | undefined
-  children: ReactNode
-}) {
-  const [details, chooseDetails] = useComposerDetailsPreference()
-  const hidden = details === "hidden"
-  return (
-    <div className="desktop-composer-details" data-details={details}>
-      {hidden ? null : (
-        <>
-          <ProjectMenu />
-          {place ? (
-            <span className="desktop-composer-place" data-composer-place>
-              <DesktopIcon name="computer" />
-              <span>{place}</span>
-            </span>
-          ) : null}
-        </>
-      )}
-      {children}
-      <button
-        type="button"
-        className="desktop-composer-details-toggle"
-        aria-label={hidden ? "Show project and computer" : "Hide project and computer"}
-        onClick={() => chooseDetails(otherComposerDetails(details))}
-      >
-        {hidden ? "Show" : "Hide"}
-      </button>
-    </div>
+      </div>
+    </form>
   )
 }
 
@@ -474,35 +405,6 @@ function VoiceControls({ voice }: { voice: ComposerVoice }) {
         <span>End</span>
       </button>
     </>
-  )
-}
-
-/**
- * Where the conversation will work. There is no native folder picker for this
- * window yet, so opening a folder is shown and disabled rather than faked.
- */
-function ProjectMenu() {
-  return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <button
-          type="button"
-          className="desktop-chip desktop-chip-project"
-          aria-label="Project: none chosen"
-          {...tooltip("Project", { side: "above" })}
-        >
-          <DesktopIcon name="project" />
-          <span>Project</span>
-        </button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent side="top" align="start" sideOffset={10}>
-        <MenuLabel>Project</MenuLabel>
-        <MenuItem disabled {...tooltip("Needs the native folder picker")}>
-          <DesktopIcon name="folderAdd" />
-          Open folder…
-        </MenuItem>
-      </DropdownMenuContent>
-    </DropdownMenu>
   )
 }
 

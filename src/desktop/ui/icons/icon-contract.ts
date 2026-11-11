@@ -65,8 +65,6 @@ const desktopRoles = [
   "attach",
   "folder",
   "folderAdd",
-  "project",
-  "computer",
   "thinking",
   "fast",
   "access",

@@ -17,8 +17,8 @@
  * keys, where the pointer is and which level that is, where the popover sits —
  * is `model/thinking-effort.ts`'s. Motion is transform and opacity, on the
  * window's tokens, and none at all with less motion (`thinking-control.css`).
- * The chip says its level in words and stands in the line under the composer
- * (`composer.tsx`), where a longer or shorter word moves nothing above it.
+ * The chip is the same size whatever the level, so the composer never moves
+ * when it changes.
  */
 import {
   useCallback,
@@ -150,9 +150,7 @@ export function ThinkingControl({
         },
         size,
         room,
-        // From the chip's leading edge: its word changes with the level, so
-        // its trailing edge moves and its leading one does not.
-        { prefer: "above", align: "start", spacing: popoverSpacing },
+        { prefer: "above", align: "end", spacing: popoverSpacing },
       )
       content.style.left = `${placed.x}px`
       content.style.top = `${placed.y}px`
@@ -367,7 +365,7 @@ export function ThinkingControl({
         type="button"
         className="desktop-chip desktop-chip-thinking"
         aria-label={
-          selected ? `Thinking: ${selected.label}` : "Thinking levels unavailable"
+          selected ? `Thinking level: ${selected.label}` : "Thinking levels unavailable"
         }
         aria-haspopup="dialog"
         aria-expanded={shown}
@@ -384,10 +382,6 @@ export function ThinkingControl({
         }}
       >
         <DesktopIcon name="thinking" />
-        {/* The level in words, so it reads without opening the popover. */}
-        <span className="desktop-chip-thinking-label">
-          {selected ? `Thinking: ${selected.label}` : "Thinking"}
-        </span>
         {fastMode ? (
           // Laid out wherever Fast is offered, so turning it on moves nothing.
           <DesktopIcon name="fast" className="desktop-fast-mark" />

@@ -90,7 +90,6 @@ export const css = {
   greeting: ".workspace-pane-home .desktop-greeting", // class: "Working late?"
   conversationTitle: ".workspace-heading h2", // class: a conversation's title, atop its transcript
   composerCard: ".desktop-composer", // class: the composer's card
-  composerDetails: ".desktop-composer-details", // class: the line under the card (project, computer, thinking)
   homePage: ".desktop-home[data-page]", // class: a home whose long draft opened the page
   homeCustomize: ".workspace-pane-home .desktop-header-customize", // class: the scene's Customize control
   dragLayer: ".split-panes-layer", // class: what is carried is drawn in it, below the titlebar row
@@ -260,7 +259,7 @@ export const css = {
   // opening a popover holding a slider; the levels are read from
   // the page, never named here (their owner is src/desktop/model/composer-options.ts)
   composerForm: ".desktop-composer", // class: a composer, whose place must not move
-  thinkingChip: 'button[aria-haspopup="dialog"][aria-label^="Thinking"]',
+  thinkingChip: 'button[aria-haspopup="dialog"][aria-label^="Thinking level"]',
   thinkingPopover: '[role="dialog"][aria-label="Thinking"]',
   modelChip: '[data-slot="model-picker-trigger"]', // the composer's model picker
   modelPicker: '[data-slot="model-picker-content"]', // its list, a model each role="option"

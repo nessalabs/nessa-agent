@@ -500,9 +500,19 @@ html:not(.dark) .desktop-thinking[data-utmost] .desktop-thinking-bloom {
 /* ——— The chip ——— */
 
 /*
- * Wherever Fast is offered the chip lays its bolt out after the level's
- * words, on or off, so turning Fast on moves nothing in the line.
+ * Wherever Fast is offered the chip lays its bolt out, on or off, so turning
+ * Fast on moves nothing in the composer. Off, the bolt is not drawn and the
+ * icon stands centred in the chip — half the bolt's room (its 6px gap, less
+ * its -3px margin, plus its 11px) to the right; on, the icon steps aside and
+ * the bolt appears in the room it leaves.
  */
+.desktop-chip-thinking[data-fast] > svg:first-child {
+  transition: transform var(--desktop-base) var(--desktop-out);
+}
+
+.desktop-chip-thinking[data-fast="off"] > svg:first-child {
+  transform: translateX(7px);
+}
 
 .desktop-chip-thinking .desktop-fast-mark {
   opacity: 0;
@@ -537,7 +547,8 @@ html:not(.dark) .desktop-thinking[data-utmost] .desktop-thinking-bloom {
     .desktop-thinking-knob,
     .desktop-thinking-bloom,
     .desktop-thinking-glow,
-    .desktop-chip-thinking .desktop-fast-mark
+    .desktop-chip-thinking .desktop-fast-mark,
+    .desktop-chip-thinking[data-fast] > svg:first-child
   ),
 :root[data-motion="reduced"] .desktop-thinking-knob::before {
   transition: none;

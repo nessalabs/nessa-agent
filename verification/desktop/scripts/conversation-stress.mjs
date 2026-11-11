@@ -7905,21 +7905,16 @@ const steps = {
   },
 
   /**
-   * The composer's row and the line under it. The row keeps what is reached
-   * for on every message; the project, the computer and the thinking level
-   * stand in the line below, and Hide tucks the first two away for the window.
+   * The composer's row: attach and the model's short name at its start; at
+   * its end the access and thinking choices, a hairline, then what acts. No
+   * project is offered there, and nothing stands under the card.
    */
   async composer(run, step, failures) {
     await run.exclusive(async () => {
       const page = run.page
       const dock = page.locator(css.focusedPane).locator(".workspace-dock")
       const row = dock.locator(".desktop-composer-row")
-      const line = dock.locator(".desktop-composer-details")
-      await line.waitFor({ timeout: 10_000 })
-      if (
-        (await row.locator(".desktop-chip-project, .desktop-chip-thinking").count()) > 0
-      )
-        failures.push("the composer's row still holds the project or thinking control")
+      await row.waitFor({ timeout: 10_000 })
       // The chip draws the model's short name; its whole name stays its label.
       const model = await row.locator(".desktop-chip-model").evaluate((chip) => ({
         drawn: JSON.parse(getComputedStyle(chip, "::after").content || '""'),
@@ -7931,62 +7926,39 @@ const steps = {
         failures.push(
           `the model chip draws ${JSON.stringify(model.drawn)}, which its name ${JSON.stringify(model.label)} does not hold`,
         )
-      const thinking = line.locator(".desktop-chip-thinking")
-      const project = line.locator(".desktop-chip-project")
-      const place = line.locator("[data-composer-place]")
-      const said = (await thinking.innerText().catch(() => "")).trim()
-      if (!/^Thinking: \S/.test(said))
-        failures.push(`the thinking chip says ${JSON.stringify(said)}, not its level`)
-      if (!(await project.isVisible())) failures.push("the line shows no project")
-      const where = (await place.innerText().catch(() => "")).trim()
-      if (where === "") failures.push("the line does not say where the chat runs")
-      // Under the composer, on its left edge, never beside or over it.
-      const boxes = await line.evaluate((element) => {
-        const card = element.parentElement?.querySelector("form.desktop-composer")
+      if ((await dock.locator('[aria-label^="Project"]').count()) > 0)
+        failures.push("the composer still offers a project")
+      // Left to right at the row's end: thinking, the hairline, Send.
+      const edges = await row.evaluate((element) => {
+        const left = (selector) =>
+          element.querySelector(selector)?.getBoundingClientRect().left ?? null
         return {
-          line: element.getBoundingClientRect().top,
-          card: card?.getBoundingClientRect().bottom,
+          thinking: left(".desktop-chip-thinking"),
+          divider: left(".desktop-composer-divider"),
+          send: left(".desktop-send"),
         }
       })
-      if (typeof boxes.card !== "number" || boxes.line < boxes.card)
+      if (!(
+        edges.thinking !== null &&
+        edges.divider !== null &&
+        edges.send !== null &&
+        edges.thinking < edges.divider &&
+        edges.divider < edges.send
+      ))
         failures.push(
-          `the line starts at ${boxes.line}, above the composer's foot ${boxes.card}`,
+          `the row's end is not thinking, hairline, Send: ${JSON.stringify(edges)}`,
         )
-      const shot = async (name) => {
-        if (run.evidence)
-          await dock.screenshot({
-            path: join(run.evidence, `composer-${run.engine}-${name}.png`),
-          })
-      }
-      await shot("shown")
-
-      await line.hover()
-      await line
-        .getByRole("button", { name: "Hide project and computer", exact: true })
-        .click({ timeout: 5_000 })
-      const tucked = await waitFor(
-        async () => (await project.count()) === 0 && (await place.count()) === 0,
-        5_000,
-      )
-      if (!tucked) failures.push("Hide left the project or the computer in the line")
-      if (!(await thinking.isVisible()))
-        failures.push("Hide took the thinking level away with the rest")
-      const kept = await page.evaluate(() =>
-        window.localStorage.getItem("nessa.desktop.composer-details"),
-      )
-      if (kept !== "hidden")
-        failures.push(`Hide was remembered as ${JSON.stringify(kept)}, not hidden`)
-      await shot("hidden")
-
-      await line.hover()
-      await line
-        .getByRole("button", { name: "Show project and computer", exact: true })
-        .click({ timeout: 5_000 })
-      const back = await waitFor(
-        async () => (await project.isVisible()) && (await place.isVisible()),
-        5_000,
-      )
-      if (!back) failures.push("Show did not bring the project and the computer back")
+      // Nothing under the card: the dock ends with the composer.
+      const under = await dock.evaluate((element) => {
+        const card = element.querySelector("form.desktop-composer")
+        return card?.nextElementSibling?.className ?? null
+      })
+      if (under !== null && !String(under).includes("voice-rim"))
+        failures.push(`something stands under the composer: ${JSON.stringify(under)}`)
+      if (run.evidence)
+        await dock.screenshot({
+          path: join(run.evidence, `composer-${run.engine}.png`),
+        })
     })
   },
 

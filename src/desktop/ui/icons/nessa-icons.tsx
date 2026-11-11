@@ -191,14 +191,6 @@ export const nessaIcons: DesktopIconFamily = {
       <path d="M10 8.75v4M8 10.75h4" />
     </>,
   ),
-  // A box, as a project is one thing a conversation works inside.
-  project: drawn(
-    <path d="M10 3l6 3.4v7.2L10 17l-6-3.400V6.400zM4.250 6.500 10 9.750l5.750-3.250M10 9.750V17" />,
-  ),
-  // A laptop, open: the computer a conversation runs on.
-  computer: drawn(
-    <path d="M5 5.500c0-.690.560-1.250 1.250-1.250h7.500c.690 0 1.250.560 1.250 1.250V12H5zM2.750 15h14.500" />,
-  ),
   // Four rising bars, the tallest faint: how much effort, not what it thinks.
   thinking: drawn(
     <>

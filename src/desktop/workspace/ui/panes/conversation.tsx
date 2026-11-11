@@ -24,7 +24,6 @@ import { Transcript } from "../transcript/transcript"
 import { useComposerVoice, VoiceDock } from "../../../voice"
 import { useComposerAccess } from "./composer-access"
 import { useComposerImages } from "./composer-images"
-import { useComposerPlace } from "./composer-place"
 import "./conversation.css"
 
 /** The docked composer is always a card; only a home opens into a page. */
@@ -184,7 +183,6 @@ const DockComposer = memo(function DockComposer({ sessionId }: { sessionId: stri
   const voice = useComposerVoice(sessionId)
   const access = useComposerAccess(sessionId)
   const images = useComposerImages(sessionId)
-  const place = useComposerPlace(sessionId)
   const modelChoiceLive = useWorkspaceSelector((state) =>
     entry(state.workspace.modelChoices, sessionId),
   )
@@ -242,7 +240,6 @@ const DockComposer = memo(function DockComposer({ sessionId }: { sessionId: stri
         onSend={modelBusy ? undefined : send}
         onStop={stop}
         voice={voice}
-        place={place}
         access={access}
         images={images}
         // In a conversation the field is a reply, and says so in fewer words than the home's question.

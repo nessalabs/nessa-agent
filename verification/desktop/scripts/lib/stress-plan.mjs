@@ -203,7 +203,7 @@ export const KNOBS = {
   },
   composers: {
     default: 1,
-    what: "times the composer's row and the line under it are read: the row holds no project or thinking control, the model is named without its family, and Hide tucks the project and the computer away while the thinking level stays",
+    what: "times the composer's row is read: the model is named without its family, thinking stands before the hairline and Send, no project is offered, and nothing stands under the card",
   },
   menuPanels: {
     default: 1,

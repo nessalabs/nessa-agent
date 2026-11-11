@@ -433,8 +433,6 @@ const checks = {
           pane: box(homePane),
           body: box(homePane?.querySelector(sel.paneBody)),
           composer: box(home?.querySelector(sel.composerCard)),
-          // The line under the card is the last thing above the pane's foot.
-          line: box(home?.querySelector(sel.composerDetails)),
           greeting: box(home?.querySelector(".desktop-greeting")),
           greetingAlign: home?.querySelector(".desktop-greeting")
             ? getComputedStyle(home.querySelector(".desktop-greeting")).textAlign
@@ -457,9 +455,6 @@ const checks = {
                 composer: box(
                   other.querySelector(`${sel.conversationDock} ${sel.composerCard}`),
                 ),
-                line: box(
-                  other.querySelector(`${sel.conversationDock} ${sel.composerDetails}`),
-                ),
                 titleType: type(other.querySelector(sel.conversationTitle)),
               }
             : null,
@@ -467,12 +462,10 @@ const checks = {
       }, css)
     const docked = (m, tag) => {
       if (!m.pane || !m.composer) return failures.push(`${tag}: no home in a pane`)
-      // Measured from the line under the card, which ends the composer.
-      const last = m.line ?? m.composer
-      const foot = m.pane.y + m.pane.h - (last.y + last.h)
+      const foot = m.pane.y + m.pane.h - (m.composer.y + m.composer.h)
       if (m.beside?.composer) {
-        const theirLast = m.beside.line ?? m.beside.composer
-        const theirs = m.beside.pane.y + m.beside.pane.h - (theirLast.y + theirLast.h)
+        const theirs =
+          m.beside.pane.y + m.beside.pane.h - (m.beside.composer.y + m.beside.composer.h)
         if (Math.abs(foot - theirs) > tolerance)
           failures.push(
             `${tag}: the home's composer is ${Math.round(foot)}px from its pane's foot, the conversation's ${Math.round(theirs)}px`,
@@ -903,13 +896,8 @@ checks["list-gutter"] = async ({ page, engine, layout, options }) => {
 const sampleThinking = (page, chip) =>
   page.evaluate(
     ([sel, chipSelector]) => {
-      // The chip stands in the line under the card; the card is the line's
-      // neighbour. The card and its controls are what must not move: the
-      // chip's own word changes with the level, so its width does.
       const chipElement = document.querySelector(chipSelector)
-      const composer = chipElement
-        ?.closest(sel.composerDetails)
-        ?.parentElement?.querySelector(sel.composerForm)
+      const composer = chipElement?.closest(sel.composerForm)
       const popover = document.querySelector(sel.thinkingPopover)
       if (!composer || !popover) return false
       const controls = [...composer.querySelectorAll(sel.button)]
@@ -1063,7 +1051,7 @@ checks["thinking-control"] = async ({ page, engine, options }) => {
     if (now.checked !== want)
       failures.push(`${key}: the level is ${now.checked}, not ${want}`)
     if (!now.knobFocused) failures.push(`${key}: the keyboard left the slider`)
-    if (now.chipLabel !== `Thinking: ${now.checkedLabel}`)
+    if (now.chipLabel !== `Thinking level: ${now.checkedLabel}`)
       failures.push(`${key}: the chip says "${now.chipLabel}"`)
     // Past Max, where the model has Ultra, is the one level marked apart; below it none is.
     if (now.utmost !== (now.ultra && now.checked === now.count - 1))
@@ -1167,7 +1155,7 @@ checks["thinking-control"] = async ({ page, engine, options }) => {
         const c = document.querySelector(chipSelector)?.getBoundingClientRect()
         const p = document.querySelector(sel.thinkingPopover)?.getBoundingClientRect()
         return c && p
-          ? { chipLeft: c.left, chipTop: c.top, left: p.left, bottom: p.bottom }
+          ? { chipRight: c.right, chipTop: c.top, right: p.right, bottom: p.bottom }
           : null
       },
       [css, chip],
@@ -1190,14 +1178,13 @@ checks["thinking-control"] = async ({ page, engine, options }) => {
     }
     const row = {
       name,
-      chipMoved: Math.round(now.chipLeft - start.chipLeft),
-      // The popover starts at its chip's leading edge, which no level's word moves.
-      left: Math.round((now.left - now.chipLeft) * 100) / 100,
+      chipMoved: Math.round(now.chipRight - start.chipRight),
+      right: Math.round((now.right - now.chipRight) * 100) / 100,
       above: Math.round((now.chipTop - now.bottom) * 100) / 100,
     }
     following.push(row)
-    if (Math.abs(row.left) > 1)
-      failures.push(`${name}: the popover's edge is ${row.left}px from its chip's`)
+    if (Math.abs(row.right) > 1)
+      failures.push(`${name}: the popover's edge is ${row.right}px from its chip's`)
     if (Math.abs(row.above - 10) > 1)
       failures.push(`${name}: the popover ends ${row.above}px above its chip, not 10`)
   }
@@ -1319,7 +1306,10 @@ checks["thinking-control"] = async ({ page, engine, options }) => {
     ultraAdvertised,
     models: catalogueModels,
   }
-  if (least.checked !== 0 || shownAs.chipLabel !== `Thinking: ${least.checkedLabel}`)
+  if (
+    least.checked !== 0 ||
+    shownAs.chipLabel !== `Thinking level: ${least.checkedLabel}`
+  )
     failures.push(
       `None carried to ${names.modelWithoutFast} shows as "${shownAs.chipLabel}", not its least level`,
     )
@@ -1328,7 +1318,7 @@ checks["thinking-control"] = async ({ page, engine, options }) => {
   await page.keyboard.press(keys.escape)
   await pick(names.modelWithLeastLevel)
   carried.back = (await thinkingState(page, chip)).chipLabel
-  if (carried.back !== `Thinking: ${least.checkedLabel}`)
+  if (carried.back !== `Thinking level: ${least.checkedLabel}`)
     failures.push(
       `${least.checkedLabel} chosen on ${names.modelWithoutFast} came back as "${carried.back}"`,
     )

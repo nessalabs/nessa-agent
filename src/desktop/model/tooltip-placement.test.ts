@@ -59,14 +59,6 @@ describe("where a popover sits by its chip", () => {
     })
   })
 
-  it("starts at the chip's leading edge, wherever its trailing edge is", () => {
-    const from = { ...beside, align: "start" } as const
-    const narrow = { left: 300, top: 600, width: 90, height: 24 }
-    const wide = { ...narrow, width: 150 }
-    expect(placeTooltip(narrow, popover, window, from).x).toBe(300)
-    expect(placeTooltip(wide, popover, window, from).x).toBe(300)
-  })
-
   it("shifts along to stay inside the window by its own margin", () => {
     expect(placeTooltip(chip(20, 600), popover, window, beside).x).toBe(12)
     expect(placeTooltip(chip(990, 600), popover, window, beside).x).toBe(1000 - 12 - 248)

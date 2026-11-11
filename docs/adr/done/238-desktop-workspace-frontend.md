@@ -902,10 +902,9 @@ it offered that still fits is kept: its `ModelFastMode` is the Fast toggle.
 - **Fast is speed, not effort**: a pill of its own beside the heading, a fill
   while on, its bolt filled and leaning forward, two short streaks running
   back past it once as it turns on; never on the track.
-- **Nothing moves the composer.** The chip says its level in words and stands
-  in the line under the composer, so a longer or shorter word moves nothing
-  in the card; wherever Fast is offered its bolt is laid out, on or off, so
-  turning Fast on moves nothing either. The words hold one line in one cell and the slider its
+- **Nothing moves the composer.** The chip is the same size whatever the level;
+  wherever Fast is offered its bolt is laid out, on or off, so turning Fast on
+  moves nothing either. The words hold one line in one cell and the slider its
   size, so the popover does not change size.
 - **Keyboard, pointer and assistive technology.** The chip opens a non-modal
   dialog with the keyboard on the knob, a `slider` whose value is the level's
