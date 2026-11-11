@@ -1,0 +1,110 @@
+# MCP single-view handoff (#1327)
+
+The product source is `8ed0b24db6de14b836894cf5262c1dbc8225537d`, based on
+`edf3e028bf48748147ad2a0a35d028e2fc7cfca1`. Production changes post the original
+request's reply before opening the panel can retire the inline bridge. They do
+not establish that the retiring document consumes the posted reply. The live
+panel's own fullscreen request/reply is separate browser evidence.
+
+Before opening (fixture, Chromium columns):
+
+![Inline app](inline-chromium-columns.png)
+
+The sole panel mount and its Open row:
+
+![Open row](open-row-chromium-columns.png)
+
+[Chromium panel](panel-chromium-columns.png),
+[WebKit Open row](open-row-webkit-columns.png),
+[WebKit panel](panel-webkit-columns.png). The corresponding sidebar images are
+also retained here. These are disposable sample workspaces, not real pairing
+or account access.
+
+## Executed checks
+
+- App/bridge/places and related widget unit suites: 25 files, 344 tests pass.
+  The 84 bridge/places tests are included in 344, not added to it.
+- Browser-app helper unit tests: 23 pass.
+- Full restored MCP browser suite: 100/100 rows held, both engines/layouts.
+  It covers replacement identity, same-panel focus, current-mode replies,
+  no app window offer, teardown and fresh reopening, plus existing security
+  and cleanup checks. Focused changed cases initially held 24/24 rows.
+- [Scripted gateway flow](scripted-summary.md): all five checks pass in both
+  engines, signed out, dev build, isolated real local gateway and fixtures.
+- Native server/MCP build passes on Linux; Rust source is byte-identical to
+  the base. Docs validation reports 179 documents and zero issues.
+- Smoke is **28/32 held**, failing the existing Advanced settings copy check
+  in all profiles. This is an open gate, not a waiver. Native WKWebView and
+  the full functional/performance matrix have not been rerun for this repair.
+
+## Fail / restore probes
+
+[Probe receipts](probe-receipts.json) retain commands, exit codes, mutation
+hashes, restored-source confirmations and browser result rows. Their absolute
+log paths identify the original private local receipts; the executable tests
+and screenshots here are the reviewable repository evidence.
+
+| Rule changed on purpose | Observed failure | Restored result |
+| --- | --- | --- |
+| Reply after host open | L17a sees no original reply when open closes the real transport | All 84 bridge/places tests pass |
+| Wrong reply request id | Both engines' panel callers have no correlated output | 4/4 reply profiles held |
+| Two live app copies | Both engines report original inline still live and no retained Open row | 4/4 single-view profiles held |
+| Offer an app window | Both engines report the forbidden app window action | 4/4 window profiles held |
+
+Assertions, request identities, deadlines and teardown waits are preserved.
+In particular, a replacement iframe's initialized state is not treated as an
+answer to the original caller.
+
+## Documentation boundary
+
+The two state pages receive a partial prose addendum. Their historical source
+checkpoint and 19-state TLC result are retained. That model covers abstract
+initialization eligibility, terminal release initiation and inline teardown
+refusal. It does not prove transport identity/order, document consumption,
+single-view host projection, completed server cleanup or physical erasure.
+TLC was not rerun. The ADR's ordering table and executable tests own the new
+handoff evidence; no unrelated source/model checkpoint is advanced.
+
+
+## Huddle stress: background drain and fixture lifetime
+
+The default columns run held 10/10; the sidebar-only default first could not
+select a row because main's helper was columns-only. The existing helper from
+our #1296 (`1ec76890a3fb11de784ceab35d34c89b87324f1a`) was used as a declared,
+restored test overlay; default sidebar then held 10/10. This dependency is not
+silently included as another navigation implementation in this branch.
+
+Raised runs use `--huddles 3 --parallel 6 --turns 4 --followers 4 --rounds 40
+--seed 7`, both engines, each layout, with the three-second idle setting and
+all app waits unchanged. Before the fixture repair, columns held 10/14; both
+engines' second huddle had no app, and the third could not run. Old bridge
+order also reproduces this failure (9/14). A diagnostic captured the actual
+huddle before cleanup: the correct conversation is selected, its tool is
+complete, and the UI says Paused while idle. The retained
+[diagnostic capture](huddle-failure-before-cleanup.png) is from the last
+(WebKit) engine; the old shared failure filename overwrote the earlier engine. The fixture created/finished its
+turn before waiting for background work to drain.
+
+Moving fixture create/submit/settle inside its existing exclusive section makes
+raised columns **14/14 held** and raised sidebar **14/14 held**. This preserves
+the workload, drain, idle limit, assertions and deadlines. The fixture is fresh
+when opened; it no longer expires while waiting for its setup's drain. The
+[stress summary](huddle-summary.json) retains failures and counts. The verifier
+overlay was restored after both runs. New failure screenshots include engine
+and step identity and are taken before cleanup returns to the main conversation.
+
+Independent product review found no remaining findings. The separate huddle
+review requested unique failure-image names; that correction is reflected in
+the final fixture. Browser execution above preceded that filename-only edit.
+
+
+## Reconciliation checkpoint
+
+The source branch now includes main's webhook extraction at
+`0fb335a488917b6b6e67f88e50d4d4c8f0f7d41f`, merged as
+`cb12f3448964ed142bd73f05ae19782c7d04284f`. This adds no MCP host, app bridge or
+browser-fixture changes from main. The native build, scripted gateway and full
+MCP browser results above were executed before that reconciliation, with
+native source at `8ed0b24d`; they are not an exact-head CI result for the merged
+tree. Final native/CI qualification remains pending. The raised fixture runs
+preceded both reconciliation and the failure-filename-only correction.

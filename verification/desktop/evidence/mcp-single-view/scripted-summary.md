@@ -1,0 +1,14 @@
+Verdict: pass
+
+| Check | Chromium | WebKit |
+| --- | --- | --- |
+| resize-observers | pass | pass |
+| mcp-apps-gateway | pass | pass |
+| gateway-window | pass | pass |
+| scripted-scenarios | pass | pass |
+| parent-stop | pass | pass |
+
+Relevant log lines:
+
+- console chromium: requestfailed: http://127.0.0.1:43955/browser/check net::ERR_ABORTED (aborted after a 204 response, #485) (harmless)
+- console chromium: requestfailed: http://127.0.0.1:43955/mcp-resources net::ERR_ABORTED (aborted after a 200 response, full body, #473) (harmless)
