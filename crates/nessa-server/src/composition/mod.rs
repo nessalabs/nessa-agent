@@ -37,7 +37,7 @@ pub(crate) use restore_command::{preparation_for, startup_authority, GatewayDefe
 pub use restore_planning::run_restore_planner;
 #[cfg(test)]
 pub(crate) use serving_restore::{
-    bind_installed_owner, bind_restored_owner, install_serving_stores,
+    bind_installed_owner, bind_restored_owner, exclude_deleted_streams, install_serving_stores,
     install_serving_stores_audited, merge_published_session,
 };
 

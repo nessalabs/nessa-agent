@@ -11,9 +11,9 @@ use nessa_local_storage::create_directory;
 
 use super::backup_output::print;
 use super::serving_restore::{
-    install_serving_stores_audited, merge_published_session, namespace_is_restore_root,
-    remove_imported_stream, restore_install_matches, serving_conversation_is_deleted,
-    serving_has_stream,
+    deletion_fenced, exclude_deleted_streams, install_serving_stores_audited,
+    merge_published_session, namespace_is_restore_root, remove_imported_stream,
+    restore_install_matches, serving_has_stream,
 };
 use crate::backup::application::{
     binding_from_pointer, confirm_accepted, deliver_historical_commands,
@@ -622,6 +622,13 @@ pub(crate) fn startup_authority(namespace: &Path) -> Result<Option<AcceptedBindi
             "restored conversations were not installed: {error}"
         ))
     })?;
+    // Install returns once its marker matches, including after a fetch that
+    // committed and then stopped. Exclusion runs on every start, before listen.
+    exclude_deleted_streams(namespace).map_err(|error| {
+        RunError::Restore(format!(
+            "a deleted conversation's history was not excluded: {error}"
+        ))
+    })?;
     Ok(Some(binding))
 }
 
@@ -710,13 +717,19 @@ impl DeferredConversationOpen for GatewayDeferredOpen {
         if !self.deferred.contains(conversation_id) {
             return Ok(());
         }
-        if serving_has_stream(&self.namespace, conversation_id) {
-            return Ok(());
-        }
         // A delete that already fenced this id must not be followed by the
-        // backup's history. Checked again after the merge, because that
-        // delete can commit while the bytes are being copied.
-        if serving_conversation_is_deleted(&self.namespace, conversation_id) {
+        // backup's history. A stream committed before that exclusion finished
+        // is removed here, before a later open can treat it as fetched.
+        match deletion_fenced(&self.namespace, conversation_id) {
+            Ok(true) => {
+                remove_imported_stream(&self.namespace, conversation_id)
+                    .map_err(|_| DeferredOpenFailure::Unavailable)?;
+                return Ok(());
+            }
+            Ok(false) => {}
+            Err(_) => return Err(DeferredOpenFailure::Unavailable),
+        }
+        if serving_has_stream(&self.namespace, conversation_id) {
             return Ok(());
         }
         let audit = FileRestoreAudit::open(&self.binding.audit, WallClock)
@@ -739,12 +752,10 @@ impl DeferredConversationOpen for GatewayDeferredOpen {
             progress: &mut progress,
         }) {
             Ok(_) => {
+                // The merge itself omits a conversation fenced while the bytes
+                // were copied. Exclusion is that commit, not a step after it.
                 merge_published_session(&self.namespace, &self.binding.live, conversation_id)
                     .map_err(|_| DeferredOpenFailure::Unavailable)?;
-                if serving_conversation_is_deleted(&self.namespace, conversation_id) {
-                    remove_imported_stream(&self.namespace, conversation_id)
-                        .map_err(|_| DeferredOpenFailure::Unavailable)?;
-                }
                 Ok(())
             }
             Err(RestoreFault::NotDeferred) => Ok(()),

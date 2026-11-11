@@ -23,8 +23,8 @@ use crate::backup::infrastructure::{
     capture_namespace, CedarInventoryPolicy, DirectoryPublisher, FileDeletionLog,
 };
 use crate::composition::{
-    bind_installed_owner, bind_restored_owner, install_serving_stores, merge_published_session,
-    run_backup_restore, startup_authority, GatewayDeferredOpen,
+    bind_installed_owner, bind_restored_owner, exclude_deleted_streams, install_serving_stores,
+    merge_published_session, run_backup_restore, startup_authority, GatewayDeferredOpen,
 };
 use crate::conversation::application::{
     ConversationCaller, ConversationCatalogue, ConversationCreationDisposition, ConversationError,
@@ -691,6 +691,137 @@ fn a_deleted_deferred_conversation_is_not_fetched() {
     assert!(serving_lacks(&namespace, id));
 }
 
+#[test]
+fn a_fenced_conversation_is_not_committed_into_the_serving_database() {
+    let root = tempfile::tempdir().unwrap();
+    let namespace = root.path().join("gateway");
+    let live = root.path().join("live");
+    let deleted = "00000000-0000-4000-8000-0000000000d1";
+    install_fenced(&namespace, &live, deleted);
+    let published = live.join(format!("sessions/{deleted}.sqlite3"));
+    fs::create_dir_all(published.parent().unwrap()).unwrap();
+    write_one_stream(&published, deleted, b"deleted-history");
+    merge_published_session(&namespace, &live, deleted).unwrap();
+    assert!(
+        serving_lacks(&namespace, deleted),
+        "a conversation already deleted is not published"
+    );
+    let kept = live.join("sessions/conv-kept.sqlite3");
+    write_one_stream(&kept, "conv-kept", b"kept-history");
+    merge_published_session(&namespace, &live, "conv-kept").unwrap();
+    assert!(serving_lacks(&namespace, deleted));
+    let connection = nessa_local_database::rusqlite::Connection::open(
+        namespace.join("conversations/sessions/records.sqlite3"),
+    )
+    .unwrap();
+    let payload: Vec<u8> = connection
+        .query_row(
+            "SELECT payload FROM event_records
+             WHERE stream_key = (
+                SELECT stream_key FROM event_streams WHERE public_id = 'conv-kept'
+             )",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(payload, b"kept-history");
+}
+
+#[test]
+fn a_stream_committed_after_erasure_is_removed_before_it_is_served() {
+    let root = tempfile::tempdir().unwrap();
+    let namespace = root.path().join("gateway");
+    let live = root.path().join("live");
+    let deleted = "00000000-0000-4000-8000-0000000000d1";
+    install_fenced(&namespace, &live, deleted);
+    let serving = namespace.join("conversations/sessions/records.sqlite3");
+    nessa_local_storage::create_directory(serving.parent().unwrap()).unwrap();
+    write_one_stream(&serving, deleted, b"deleted-history");
+    let connection = nessa_local_database::rusqlite::Connection::open(&serving).unwrap();
+    let incarnation = [0x44u8; 16];
+    let tail = [0u8, 0, 0, 0, 0, 0, 0, 1];
+    let offset = [0u8, 0, 0, 0, 0, 0, 0, 2];
+    connection
+        .execute(
+            "INSERT INTO event_streams(stream_key, public_id, incarnation, floor, tail)
+             VALUES (8, 'conv-kept', ?1, ?2, ?2)",
+            nessa_local_database::rusqlite::params![incarnation.as_slice(), tail.as_slice()],
+        )
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO event_stream_names(public_id, latest_incarnation, active_stream_key)
+             VALUES ('conv-kept', ?1, 8)",
+            [incarnation.as_slice()],
+        )
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO event_records(stream_key, offset, event_id, schema_id, schema_version, payload)
+             VALUES (8, ?1, 'kept-event', 'nessa.record', 1, ?2)",
+            nessa_local_database::rusqlite::params![offset.as_slice(), b"kept-history".as_slice()],
+        )
+        .unwrap();
+    drop(connection);
+    exclude_deleted_streams(&namespace).unwrap();
+    assert!(serving_lacks(&namespace, deleted));
+    let connection = nessa_local_database::rusqlite::Connection::open(&serving).unwrap();
+    let kept: Vec<u8> = connection
+        .query_row(
+            "SELECT payload FROM event_records WHERE stream_key = 8",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(kept, b"kept-history");
+    drop(connection);
+
+    // The same leftover, seen by an open: the stream is not "already fetched".
+    fs::remove_file(&serving).unwrap();
+    write_one_stream(&serving, deleted, b"deleted-history");
+    fs::write(
+        live.join("deferred.txt"),
+        format!(
+            "nessa-deferred/1\ncanonical-records {deleted} 1 {}\n",
+            "ab".repeat(32)
+        ),
+    )
+    .unwrap();
+    let binding = AcceptedBinding {
+        live: live.clone(),
+        audit: root.path().join("missing-audit"),
+        source: None,
+    };
+    open_served(&namespace, &binding, deleted).unwrap();
+    assert!(serving_lacks(&namespace, deleted));
+    open_served(&namespace, &binding, deleted).unwrap();
+    assert!(serving_lacks(&namespace, deleted));
+}
+
+fn install_fenced(namespace: &std::path::Path, live: &std::path::Path, deleted: &str) {
+    let metadata = live.join("records/conversation-metadata");
+    fs::create_dir_all(&metadata).unwrap();
+    fs::write(
+        metadata.join(format!("conversation-{deleted}")),
+        format!(
+            r#"{{"id":"{deleted}","organization":"acme","owner":"ada","agent":"claude","model":"opus","approvalMode":"ask","creationRevision":1,"changeRevision":1}}"#
+        ),
+    )
+    .unwrap();
+    fs::write(
+        metadata.join(format!("tombstone-{deleted}")),
+        format!(r#"{{"conversationId":"{deleted}","erased":true}}"#),
+    )
+    .unwrap();
+    fs::create_dir_all(namespace).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(namespace, fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    install_serving_stores(namespace, live).unwrap();
+}
+
 fn open_served(
     namespace: &std::path::Path,
     binding: &AcceptedBinding,
@@ -1303,11 +1434,13 @@ fn a_stress_restore_names_one_loaded_conversation_and_one_whose_source_can_move(
             .unwrap()
     };
     assert_eq!(
-        archived(loaded), 0,
+        archived(loaded),
+        0,
         "the loaded conversation stays on the live list"
     );
     assert_eq!(
-        archived(missing), 1,
+        archived(missing),
+        1,
         "the conversation whose source moves stays off the live list until the step lists it"
     );
     assert!(

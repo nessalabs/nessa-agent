@@ -54,15 +54,19 @@ pub(crate) fn install_serving_stores_audited(
         .join("canonical-records")
         .join("records.sqlite3");
     if canonical.is_file() && !serving.exists() {
-        publish_copy(&canonical, &serving)?;
+        publish_copy(&canonical, &serving, || Ok(None))?;
     }
     for id in servable {
         let relative = deferred_session_name(id).map_err(|error| error.cause().to_owned())?;
         let published = live.join(relative);
         if published.is_file() {
-            merge_stream(&serving, &published, id)?;
+            merge_stream(namespace, &serving, &published, id)?;
         }
     }
+    // The canonical copy is the whole session file. A conversation deleted
+    // after that file was sealed is excluded before the install is marked
+    // done, in the same pass as a deferred merge.
+    exclude_deleted_streams(namespace)?;
     write_install_marker(&conversations, live)
 }
 
@@ -85,7 +89,7 @@ pub(crate) fn merge_published_session(
     if let Some(parent) = serving.parent() {
         create_directory(parent).map_err(|error| error.to_string())?;
     }
-    merge_stream(&serving, &published, conversation_id)
+    merge_stream(namespace, &serving, &published, conversation_id)
 }
 
 /// The local owner accepted this restore, so the catalogue is theirs.
@@ -186,7 +190,11 @@ pub(crate) fn bind_installed_owner(
 ///
 /// An interrupted copy leaves `destination.partial`. The next startup does not
 /// treat that fragment as the serving database.
-fn publish_copy(source: &Path, destination: &Path) -> Result<(), String> {
+fn publish_copy(
+    source: &Path,
+    destination: &Path,
+    exclude: impl FnOnce() -> Result<Option<String>, String>,
+) -> Result<(), String> {
     if destination.exists() {
         return Ok(());
     }
@@ -203,7 +211,18 @@ fn publish_copy(source: &Path, destination: &Path) -> Result<(), String> {
                 .map_err(|error| error.to_string())?;
         let mut input = fs::File::open(source).map_err(|error| error.to_string())?;
         io::copy(&mut input, &mut output).map_err(|error| error.to_string())?;
-        output.sync_all().map_err(|error| error.to_string())
+        output.sync_all().map_err(|error| error.to_string())?;
+        // Asked after the copy. A deletion that finishes while the bytes are
+        // moving is excluded before the rename publishes the file.
+        if let Some(conversation_id) = exclude()? {
+            let mut connection = Connection::open(&partial).map_err(|error| error.to_string())?;
+            let transaction = connection
+                .transaction_with_behavior(TransactionBehavior::Immediate)
+                .map_err(|error| error.to_string())?;
+            delete_stream(&transaction, &conversation_id)?;
+            transaction.commit().map_err(|error| error.to_string())?;
+        }
+        Ok(())
     })();
     if let Err(error) = copied {
         let _ = fs::remove_file(&partial);
@@ -227,37 +246,85 @@ pub(crate) fn restore_install_matches(namespace: &Path, live: &Path) -> bool {
 }
 
 /// The serving catalogue already holds a deletion for this conversation.
-pub(crate) fn serving_conversation_is_deleted(namespace: &Path, conversation_id: &str) -> bool {
+///
+/// A catalogue that cannot be read is an error. Treating it as "not deleted"
+/// would publish history a finished deletion will not erase again.
+pub(crate) fn deletion_fenced(namespace: &Path, conversation_id: &str) -> Result<bool, String> {
     let path = namespace.join("conversations").join("metadata.sqlite3");
     if !path.is_file() {
-        return false;
+        return Ok(false);
     }
-    let Ok(connection) = Connection::open_with_flags(
+    let connection = Connection::open_with_flags(
         &path,
         nessa_local_database::rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
-    ) else {
-        return false;
-    };
-    connection
+    )
+    .map_err(|error| error.to_string())?;
+    let count: i64 = connection
         .query_row(
             "SELECT COUNT(*) FROM deletions WHERE conversation_id = ?1",
             [conversation_id],
-            |row| row.get::<_, i64>(0),
+            |row| row.get(0),
         )
-        .unwrap_or(0)
-        > 0
+        .map_err(|error| error.to_string())?;
+    Ok(count > 0)
 }
 
-/// Drop a stream this process just imported. A delete that finished during
-/// the fetch must not leave that history behind.
+/// Drop history the serving database still holds for a deleted conversation.
+///
+/// One transaction. A stop rolls it back, so the next open or the next
+/// startup tries the same exclusion again instead of finding a committed
+/// stream and treating it as the fetched history.
 pub(crate) fn remove_imported_stream(
     namespace: &Path,
     conversation_id: &str,
 ) -> Result<(), String> {
+    let _gate = serving_database()
+        .lock()
+        .map_err(|_| "the serving database lock was poisoned".to_owned())?;
     let path = namespace
         .join("conversations")
         .join("sessions")
         .join("records.sqlite3");
+    delete_serving_stream(&path, conversation_id)
+}
+
+/// Every fenced conversation loses its serving stream before the gateway
+/// listens. A fetch that committed and then stopped is not left for a later
+/// read: deletion has already been marked finished, so it will not erase
+/// this history itself.
+pub(crate) fn exclude_deleted_streams(namespace: &Path) -> Result<(), String> {
+    let metadata = namespace.join("conversations").join("metadata.sqlite3");
+    let serving = namespace
+        .join("conversations")
+        .join("sessions")
+        .join("records.sqlite3");
+    if !metadata.is_file() || !serving.is_file() {
+        return Ok(());
+    }
+    let connection = Connection::open_with_flags(
+        &metadata,
+        nessa_local_database::rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )
+    .map_err(|error| error.to_string())?;
+    let mut statement = connection
+        .prepare("SELECT conversation_id FROM deletions")
+        .map_err(|error| error.to_string())?;
+    let ids = statement
+        .query_map([], |row| row.get::<_, String>(0))
+        .map_err(|error| error.to_string())?;
+    let mut fenced = Vec::new();
+    for id in ids {
+        fenced.push(id.map_err(|error| error.to_string())?);
+    }
+    drop(statement);
+    drop(connection);
+    for id in fenced {
+        remove_imported_stream(namespace, &id)?;
+    }
+    Ok(())
+}
+
+fn delete_serving_stream(path: &Path, conversation_id: &str) -> Result<(), String> {
     if !path.is_file() {
         return Ok(());
     }
@@ -265,31 +332,39 @@ pub(crate) fn remove_imported_stream(
     let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(|error| error.to_string())?;
-    let key: Option<i64> = transaction
-        .query_row(
-            "SELECT stream_key FROM event_streams WHERE public_id = ?1",
-            [conversation_id],
-            |row| row.get(0),
-        )
-        .ok();
-    if let Some(key) = key {
-        transaction
-            .execute("DELETE FROM event_records WHERE stream_key = ?1", [key])
-            .map_err(|error| error.to_string())?;
-        transaction
-            .execute(
-                "DELETE FROM event_stream_names WHERE public_id = ?1",
-                [conversation_id],
-            )
-            .map_err(|error| error.to_string())?;
-        transaction
-            .execute(
-                "DELETE FROM event_streams WHERE public_id = ?1",
-                [conversation_id],
-            )
-            .map_err(|error| error.to_string())?;
-    }
+    delete_stream(&transaction, conversation_id)?;
     transaction.commit().map_err(|error| error.to_string())
+}
+
+fn delete_stream(connection: &Connection, conversation_id: &str) -> Result<(), String> {
+    let key: Option<i64> = match connection.query_row(
+        "SELECT stream_key FROM event_streams WHERE public_id = ?1",
+        [conversation_id],
+        |row| row.get(0),
+    ) {
+        Ok(key) => Some(key),
+        Err(nessa_local_database::rusqlite::Error::QueryReturnedNoRows) => None,
+        Err(error) => return Err(error.to_string()),
+    };
+    let Some(key) = key else {
+        return Ok(());
+    };
+    connection
+        .execute("DELETE FROM event_records WHERE stream_key = ?1", [key])
+        .map_err(|error| error.to_string())?;
+    connection
+        .execute(
+            "DELETE FROM event_stream_names WHERE public_id = ?1",
+            [conversation_id],
+        )
+        .map_err(|error| error.to_string())?;
+    connection
+        .execute(
+            "DELETE FROM event_streams WHERE public_id = ?1",
+            [conversation_id],
+        )
+        .map_err(|error| error.to_string())?;
+    Ok(())
 }
 
 /// The serving database already holds this conversation's stream.
@@ -772,13 +847,26 @@ fn serving_database() -> &'static Mutex<()> {
     &GATE
 }
 
-fn merge_stream(serving: &Path, published: &Path, conversation_id: &str) -> Result<(), String> {
+fn merge_stream(
+    namespace: &Path,
+    serving: &Path,
+    published: &Path,
+    conversation_id: &str,
+) -> Result<(), String> {
     let _gate = serving_database()
         .lock()
         .map_err(|_| "the serving database lock was poisoned".to_owned())?;
+    // The fence is decided before this transaction commits. A conversation
+    // already deleted is not inserted, and a stream an earlier attempt
+    // committed is removed here, not after the commit.
+    let deleted = deletion_fenced(namespace, conversation_id)?;
     if !serving.exists() {
-        publish_copy(published, serving)?;
-        return Ok(());
+        return publish_copy(published, serving, || {
+            Ok(deletion_fenced(namespace, conversation_id)?.then(|| conversation_id.to_owned()))
+        });
+    }
+    if deleted {
+        return delete_serving_stream(serving, conversation_id);
     }
     let published = published
         .to_str()
@@ -840,6 +928,11 @@ fn merge_stream(serving: &Path, published: &Path, conversation_id: &str) -> Resu
                     params![conversation_id, key],
                 )
                 .map_err(|error| error.to_string())?;
+        }
+        // The inserts above are not durable until this commit. A fence that
+        // landed while they were copied is excluded in the same transaction.
+        if deletion_fenced(namespace, conversation_id)? {
+            delete_stream(&transaction, conversation_id)?;
         }
         transaction.commit().map_err(|error| error.to_string())
     })();
