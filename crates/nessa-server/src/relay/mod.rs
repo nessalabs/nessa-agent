@@ -20,4 +20,3 @@
 pub(crate) mod application;
 pub(crate) mod gateway;
 pub(crate) mod infrastructure;
-pub(crate) mod wire;

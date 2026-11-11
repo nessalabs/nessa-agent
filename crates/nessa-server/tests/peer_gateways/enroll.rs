@@ -30,23 +30,23 @@ use nessa_auth::{
     },
 };
 use nessa_client_core::pairing::NativeEnrollmentClient;
+use nessa_peer_gateways::{
+    application::{
+        PeerAudit, PeerAuditFuture, PeerAuditRecord, PeerAuditUnavailable, PeerConnectFuture,
+        PeerConnector,
+    },
+    infrastructure::{
+        DurablePeerAudit, EnrollmentEntropy, EnrollmentEntropySource, PeerCommands, PeerEntry,
+        PeerError, PeerPhase, PeerRecords, SlotOutcome, SlotRefusal, SlotTransition,
+        TcpPeerConnector, AUDIT_DEADLINE, CONNECT,
+    },
+};
 use nessa_protocol::agents::AgentId;
 use nessa_protocol::pairing::wire::NativePairingStatus;
 use nessa_protocol::relay::RelayAddress;
 use nessa_server::{
     agents::application::{AgentProbe, AgentProbeEvidence},
     app::dependencies::RuntimeDependencies,
-    peer_gateways::{
-        application::{
-            PeerAudit, PeerAuditFuture, PeerAuditRecord, PeerAuditUnavailable, PeerConnectFuture,
-            PeerConnector,
-        },
-        infrastructure::{
-            DurablePeerAudit, EnrollmentEntropy, EnrollmentEntropySource, PeerCommands, PeerEntry,
-            PeerError, PeerPhase, PeerRecords, SlotOutcome, SlotRefusal, SlotTransition,
-            TcpPeerConnector, AUDIT_DEADLINE, CONNECT,
-        },
-    },
     product::{ProductDependencies, ProductRouteState},
     server::entrypoint::http,
 };

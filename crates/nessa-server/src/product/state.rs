@@ -17,7 +17,6 @@ use crate::mcp_servers::{
     application::McpServerSettings, entrypoint::http::ResourceRoute,
     infrastructure::ResourceTicketStore,
 };
-use crate::peer_gateways::infrastructure::PeerCommands;
 use crate::timer::clock;
 use crate::webhooks::infrastructure::WebhookRuntime;
 use axum::extract::FromRef;
@@ -34,6 +33,7 @@ use nessa_auth::{
     },
     domain::{AudienceId, OrganizationId, Resource, ResourceId},
 };
+use nessa_peer_gateways::infrastructure::PeerCommands;
 use nessa_protocol::clock::Clock as UptimeClock;
 use nessa_protocol::product::generated::AgentsListResult;
 use serde_json::Value;

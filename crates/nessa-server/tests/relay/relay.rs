@@ -1,8 +1,8 @@
-use super::super::wire::read_frame;
 use super::*;
 use crate::relay::infrastructure::Ed25519Proofs;
 use crate::timer::{manual::ManualTimer, Moment};
 use nessa_auth::{adapters::pairing::NativeIdentity, application::pairing::PrivateKeyMaterial};
+use nessa_protocol::relay::wire::read_frame;
 use std::{
     sync::atomic::{AtomicU8, Ordering},
     time::Duration,

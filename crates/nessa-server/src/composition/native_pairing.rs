@@ -34,10 +34,6 @@ use crate::device_pairing::infrastructure::{
     InvitationEntropy, NativeEnrollmentConnections, NativeEnrollmentListener, PairingOwnerCommands,
     PairingRuntimeDependencies, RelayPermit, TcpEnrollmentAccept, RELAY_CAPACITY, TUNNEL_CAPACITY,
 };
-use crate::peer_gateways::infrastructure::{
-    DurablePeerAudit, EnrollmentEntropy, PeerCommands, PeerPoller, PeerRecords, PollInputs,
-    PollPolicy, TcpPeerConnector, AUDIT_DEADLINE, PREEMPT,
-};
 use crate::product::{DeviceCredentials, NativeSessions, ProductRouteState};
 use crate::relay::gateway::{
     application::{Backoff, Relayed, ThroughRelay},
@@ -60,6 +56,10 @@ use nessa_auth::{
         },
     },
     domain::{pairing::OwnerPhoneRequest, AudienceId, Resource},
+};
+use nessa_peer_gateways::infrastructure::{
+    DurablePeerAudit, EnrollmentEntropy, PeerCommands, PeerPoller, PeerRecords, PollInputs,
+    PollPolicy, TcpPeerConnector, AUDIT_DEADLINE, PREEMPT,
 };
 use nessa_protocol::clock::Clock as MonotonicClock;
 use std::{

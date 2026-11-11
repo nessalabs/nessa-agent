@@ -3920,6 +3920,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "nessa-peer-gateways"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "futures-util",
+ "nessa-auth",
+ "nessa-client-core",
+ "nessa-local-storage",
+ "nessa-protocol",
+ "nessa-timer",
+ "serde",
+ "serde_json",
+ "subtle",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "uuid",
+ "zeroize",
+]
+
+[[package]]
 name = "nessa-projection"
 version = "0.1.0"
 dependencies = [
@@ -4014,6 +4035,7 @@ dependencies = [
  "nessa-images",
  "nessa-local-database",
  "nessa-local-storage",
+ "nessa-peer-gateways",
  "nessa-projection",
  "nessa-protocol",
  "nessa-sdk",

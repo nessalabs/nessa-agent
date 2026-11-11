@@ -2,11 +2,9 @@
 //! that asks for it never finds it taken with no cycle to stop; and closing
 //! the commands for shutdown leaves no effect without its outcome.
 use super::*;
-use crate::peer_gateways::application::{
-    PeerAudit, PeerAuditFuture, PeerAuditRecord, PeerConnectFuture,
-};
-use crate::peer_gateways::infrastructure::audit::DurablePeerAudit;
-use crate::peer_gateways::infrastructure::{AUDIT_HEADROOM, AUDIT_QUEUE};
+use crate::application::{PeerAudit, PeerAuditFuture, PeerAuditRecord, PeerConnectFuture};
+use crate::infrastructure::audit::DurablePeerAudit;
+use crate::infrastructure::{AUDIT_HEADROOM, AUDIT_QUEUE};
 use nessa_auth::application::pairing::{ClientPendingStore, GatewayKeyStore, PrivateKeyMaterial};
 use nessa_auth::application::ports::Clock as WallClock;
 use nessa_auth::domain::AudienceId;

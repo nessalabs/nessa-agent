@@ -35,11 +35,10 @@
 //! intent says what was asked, and the peer record on disk says what it came
 //! to. A record still queued when shutdown's drain runs out is not written
 //! (logged by sequence); one the writer had begun may still land.
-use crate::peer_gateways::application::{
+use crate::application::{
     CacheState, PeerAudit, PeerAuditFuture, PeerAuditRecord, PeerAuditUnavailable, PeerHolding,
     PeerState, PollerCause,
 };
-use crate::timer::clock;
 use nessa_auth::{
     application::ports::Clock,
     domain::{pairing::DeviceKey, PrincipalId},
@@ -48,6 +47,7 @@ use nessa_local_storage::{sync_directory, PrivateTempFile};
 use nessa_protocol::clock::Clock as MonotonicClock;
 use nessa_protocol::pairing::socket::WAKE_TICK;
 use nessa_protocol::relay::RelayAddress;
+use nessa_timer::clock;
 use serde_json::{json, Value};
 use std::{
     io::Write,
@@ -80,7 +80,7 @@ pub const AUDIT_QUEUE: usize = 142;
 
 /// Called by the writer with each record's sequence before it writes it; a
 /// test stalls the store with it.
-type BeforeWrite = Arc<dyn Fn(u64) + Send + Sync>;
+pub type BeforeWrite = Arc<dyn Fn(u64) + Send + Sync>;
 
 /// Peer command evidence in one private directory, written in the order it
 /// was handed over.
@@ -115,8 +115,8 @@ struct Shared {
 }
 impl DurablePeerAudit {
     /// Last sequence handled, kept or refused; observing it leaves the queue open.
-    #[cfg(test)]
-    pub(crate) fn handled_sequence(&self) -> u64 {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn handled_sequence(&self) -> u64 {
         self.shared.handled.load(Ordering::SeqCst)
     }
 
@@ -131,8 +131,8 @@ impl DurablePeerAudit {
 
     /// The same adapter with a queue of `capacity`, whose writer calls
     /// `before_write` with each record's sequence before writing it.
-    #[cfg(test)]
-    pub(crate) fn with_writer_hook(
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn with_writer_hook(
         directory: PathBuf,
         wall: Arc<dyn Clock>,
         clock: Arc<dyn MonotonicClock>,
@@ -556,5 +556,5 @@ pub(super) fn record_value(record: &PeerAuditRecord) -> Value {
 }
 
 #[cfg(test)]
-#[path = "../../../tests/peer_gateways/audit.rs"]
+#[path = "../../tests/audit.rs"]
 mod tests;

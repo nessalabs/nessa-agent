@@ -643,6 +643,9 @@ fn invalid(error: RelayFrameError) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, error)
 }
 
+/// Reading and writing these frames on an async stream.
+pub mod wire;
+
 #[cfg(test)]
 #[path = "../tests/relay/frames.rs"]
 mod tests;
