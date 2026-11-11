@@ -98,7 +98,9 @@ impl ConversationAgentSource for RecordingSource {
         place: &'a AgentPlace,
     ) -> ConversationAgentFuture<'a> {
         assert!(
-            place.instructions.contains("Its folder is"),
+            place
+                .instructions
+                .starts_with("This conversation is in the person's channel"),
             "{}",
             place.instructions
         );
@@ -1311,6 +1313,17 @@ async fn a_channel_names_a_computer_the_gateway_serves_and_its_new_chats_run_the
             .unwrap(),
         devbox
     );
+    // Its agent is told the channel, not this gateway's folder, which it
+    // could not open on devbox.
+    let told = fixture
+        .service
+        .agent_place(&thread)
+        .await
+        .unwrap()
+        .expect("a channel's thread")
+        .instructions;
+    assert!(told.contains(made.name().as_str()), "{told}");
+    assert!(!told.contains(made.folder().path.as_str()), "{told}");
     // The main agent moves there too; asking for a computer it does not
     // serve changes nothing.
     assert_eq!(

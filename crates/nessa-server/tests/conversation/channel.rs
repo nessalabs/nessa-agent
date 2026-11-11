@@ -198,8 +198,6 @@ fn agents_are_told_the_name_folder_notes_and_resources() {
         made: false,
     });
     let text = made.instructions(false);
-    assert!(!text.contains("On a remote environment"), "{text}");
-    assert!(made.instructions(true).contains("On a remote environment"));
     assert!(text.contains("\"design-review\""), "{text}");
     assert!(
         text.contains(&format!("Its folder is {}.", absolute("/repo"))),
@@ -210,4 +208,18 @@ fn agents_are_told_the_name_folder_notes_and_resources() {
         text.contains(&format!("\n- {}", absolute("/home/me/brand-kit"))),
         "{text}"
     );
+}
+
+#[test]
+fn an_agent_elsewhere_is_told_the_name_and_notes_but_no_path_of_this_gateway() {
+    let made = channel(ChannelFolder {
+        path: path(&absolute("/repo")),
+        made: false,
+    });
+    let text = made.instructions(true);
+    assert!(text.contains("\"design-review\""), "{text}");
+    assert!(text.contains("Check every export."), "{text}");
+    assert!(!text.contains(&absolute("/repo")), "{text}");
+    assert!(!text.contains(&absolute("/home/me/brand-kit")), "{text}");
+    assert!(!text.contains("folder"), "{text}");
 }
