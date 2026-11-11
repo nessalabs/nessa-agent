@@ -127,10 +127,7 @@ impl SqlOutbox {
     }
     /// Native CAS says which observed incarnation was selected, not which source
     /// remains current at commit. Auth is retained by the owning product job.
-    pub async fn reset_source(
-        &self,
-        command: ResetCommand,
-    ) -> Result<ResetReceipt, OutboxError> {
+    pub async fn reset_source(&self, command: ResetCommand) -> Result<ResetReceipt, OutboxError> {
         let clock = self.owner.clock.clone();
         let check = command_check(&command);
         self.run_checked(move |connection| check(connection), move |connection, audit, replay| {

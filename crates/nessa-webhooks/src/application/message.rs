@@ -39,11 +39,7 @@ pub struct Message {
 impl Message {
     /// Infrastructure supplies an encoded, bounded envelope. Construction does
     /// not grant access to the conversation whose record it carries.
-    pub fn encoded(
-        id: Uuid,
-        timestamp_ms: u64,
-        body: Vec<u8>,
-    ) -> Result<Self, InvalidMessage> {
+    pub fn encoded(id: Uuid, timestamp_ms: u64, body: Vec<u8>) -> Result<Self, InvalidMessage> {
         if body.len() > MAX_BODY_BYTES {
             return Err(InvalidMessage);
         }

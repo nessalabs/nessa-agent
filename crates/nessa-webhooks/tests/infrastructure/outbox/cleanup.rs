@@ -238,10 +238,9 @@ async fn queued_lifecycle_selection_does_not_walk_terminal_history() {
         c.execute("INSERT INTO deliveries(id,registration,conversation,incarnation,position,scope,body,state) SELECT ?1,registration,conversation,incarnation,?2,scope,body,json_set(state,'$.id',?1,'$.phase','queued') FROM deliveries WHERE id=?3", params![id, (count + 1) as i64, source]).unwrap();
         let mut q = c.prepare(QUEUED_REGISTRATIONS).unwrap();
         let ids = q
-            .query_map(
-                [(crate::application::MAX_REGISTRATIONS + 1) as i64],
-                |r| r.get::<_, String>(0),
-            )
+            .query_map([(crate::application::MAX_REGISTRATIONS + 1) as i64], |r| {
+                r.get::<_, String>(0)
+            })
             .unwrap()
             .collect::<Result<Vec<_>, _>>()
             .unwrap();

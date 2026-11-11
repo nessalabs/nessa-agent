@@ -1,9 +1,7 @@
 //! Secret-free original facts retained through an unacknowledged retirement.
 use super::stop::SavedStop;
 use super::{audit, integer, invalid, unavailable, uuid};
-use crate::application::{
-    OutboxError, Registration, RegistrationStop, Target, MAX_REGISTRATIONS,
-};
+use crate::application::{OutboxError, Registration, RegistrationStop, Target, MAX_REGISTRATIONS};
 use nessa_auth::domain::CredentialId;
 use nessa_local_database::rusqlite::{
     params, Connection, OptionalExtension, Result as SqlResult, Row, Transaction,

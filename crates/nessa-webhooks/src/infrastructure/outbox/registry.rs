@@ -8,9 +8,7 @@ use crate::application::{
     DeliveryCause, ExpiryObserver, MacKey, OutboxError, Registration, RegistrationLookup,
     RegistrationStop, RegistrationStops, StopFact, StopReason, Target,
 };
-use crate::domain::{
-    Destination, LifecycleChange, RegistrationLifecycle, RegistrationPhase,
-};
+use crate::domain::{Destination, LifecycleChange, RegistrationLifecycle, RegistrationPhase};
 use nessa_auth::domain::{CredentialId, OrganizationId, PrincipalId};
 use nessa_local_database::rusqlite::{
     params, Connection, OptionalExtension, Result as SqlResult, Row, Transaction,
