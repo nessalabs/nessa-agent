@@ -88,7 +88,15 @@ stays in its source's channel, even after the channel moved.
 ## Changing where a channel runs
 
 A channel says where its main agent runs and where its threads run
-(`ChannelExecution`: this machine or Boat). Both can change after it is made,
+(`ChannelExecution`). Each is any place: this machine (`local`), a cloud VM
+of each conversation's own (`boat`), any paired computer (`pool`), or one
+computer by its place name, an SSH destination this gateway serves or a
+paired computer's `peer:<key>` (channels.sqlite3 v6). A computer is checked
+when it is asked for: one this gateway does not serve, or a paired computer
+not connected then, is refused `channel_place_unavailable` and nothing
+changes. A computer the channel already names is not checked again, so the
+person can still change the other setting after it went away; a new chat
+there is refused as not configured until it is back. Both can change after it is made,
 from the channel's settings dialog (`channel.setPlacement`, Cedar
 `channel.settings` on the channel; the default channel has nothing to change
 and is refused `forbidden`). A conversation's own placement is still written
@@ -108,6 +116,8 @@ conversations go:
   simply starts in the new place.
 - **Boat** is offered in the dialog only while Boat is connected, as when the
   channel is made; agents placed there before that could not start.
+- **One computer**: the dialog lists the paired computers Devices lists, and
+  offers each only while it is connected.
 - Another window learns of a change when it reads the index again; channel
   changes are not streamed.
 - Each move is recorded in `conversations/audit/settings` as the caller's,

@@ -53,9 +53,13 @@ function boat(state: BoatStatus["state"]): BoatGateway {
 async function shown(
   setPlacement: (id: string, placement: ChannelPlacement) => Promise<Channel>,
   boatState: BoatStatus["state"] = "connected",
+  placed: Partial<Channel> = {},
 ) {
   index = testIndex()
-  channel = index.channels.find((each) => each.id !== "default") as Channel
+  const found = index.channels.find((each) => each.id !== "default") as Channel
+  channel = { ...found, ...placed }
+  const listed = index.channels as Channel[]
+  listed[listed.indexOf(found)] = channel
   const channels = {
     create: () => Promise.reject(new Error("unused")),
     setPlacement,
@@ -140,5 +144,17 @@ it("says a refusal is not the person's to make, and any other failure is passing
   await act(settle)
   expect(host.querySelector("[role=alert]")?.textContent).toBe(
     "Couldn’t save that. Try again in a moment.",
+  )
+})
+
+it("shows a channel on one computer by that computer, and offers none it cannot reach", async () => {
+  await shown(async () => channel)
+  // No computer is connected, so one cannot be chosen.
+  expect(option("threads", "Computer").disabled).toBe(true)
+  await shown(async () => channel, "connected", { threadPlacement: "devbox" })
+  const on = host.querySelector('[data-placement-row="threads"] [aria-pressed="true"]')
+  expect(on?.textContent).toBe("Computer")
+  expect(host.querySelector('[data-placement-computer="threads"]')?.textContent).toBe(
+    "devbox",
   )
 })
