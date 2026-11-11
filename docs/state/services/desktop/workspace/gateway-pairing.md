@@ -3,7 +3,7 @@ id: desktop-gateway-pairing
 title: Pair a gateway with explicit Human sign-in
 kind: flow
 status: implemented
-sourceRevision: "d1aceae5b77fc6febcb3eff7ac7095988d502b2e"
+sourceRevision: "d5fb8be1166e016ea64dabf239ed8b11c504b08a"
 parent: desktop-workspace
 summary: Choose before creating a code, authenticate the Human separately, and recover canonical invitations after uncertain replies.
 sources:
@@ -114,7 +114,7 @@ connection completion closes before exposing commands. JavaScript
 string zeroization is not promised. An unfinished invitation stays with the
 registry and requires fresh explicit sign-in after reopening.
 
-Source review checkpoint: `d1aceae5b77fc6febcb3eff7ac7095988d502b2e`. This page reconciles
+Source review checkpoint: `d5fb8be1166e016ea64dabf239ed8b11c504b08a`. This page reconciles
 the new Devices entry, immutable display selection, scoped adapter, composition,
 SDK endpoint and focused regressions. Current main's ambient elapsed clock is
 separate from this flow's injected `after` timer; the integration adds no pairing
@@ -125,11 +125,13 @@ catalogue and read-only inventory contracts. The source checkpoint is a review r
 not an execution receipt. Native lifecycle, unrelated desktop pages and
 the historical OwnerPhone model-check receipt keep their own earlier checkpoints. Browser and mutation
 receipts are in [completion evidence](../../../../reviews/893-desktop-completion.md).
-The source checkpoint includes reconciliation with main `a83a38717`. The desktop
+The source checkpoint includes reconciliation with main `6f4a46ec0`. The desktop
 implementation and its selected-command focus correction are unchanged since
 `ea66af43`; the merged stress plan retains both named-computer placement and
 gateway pairing. Main's grouped product routes still dispatch to the existing
-pairing authority. No new identity, grant or admission lifecycle is added.
+pairing authority. The attachment and peer-gateway crate extractions retain
+that authority and its registry provenance; their composition imports add no
+identity, grant or admission lifecycle.
 
 The diagram bodies are unchanged. The earlier six-diagram Chromium rendering
 receipt keeps its original source cut; this review makes no new rendering or

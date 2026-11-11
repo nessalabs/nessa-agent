@@ -6,7 +6,7 @@ status: implemented
 summary: Settings shows the gateway's pairing state, approves the exact
   displayed device key, and rereads after uncertain changes.
 parent: desktop-workspace
-sourceRevision: "d1aceae5b77fc6febcb3eff7ac7095988d502b2e"
+sourceRevision: "d5fb8be1166e016ea64dabf239ed8b11c504b08a"
 sources:
   - src/desktop/settings/model/linked-devices.ts
   - src/desktop/settings/model/linked-devices.test.ts
@@ -194,10 +194,12 @@ Excluded: All exclusions stated in the owning Bounded rule model section remain 
 
 Source review scope: the complete page was reconciled with the reducer, UI,
 adapter, metadata classifier, Settings layer and regression declarations at
-`d1aceae5b77fc6febcb3eff7ac7095988d502b2e`. These desktop sources are unchanged since
+`d5fb8be1166e016ea64dabf239ed8b11c504b08a`. These desktop sources are unchanged since
 `ea66af43`; the integration retains main's named-computer placement beside the
 gateway-pairing stress entry. Quiet-poll cancellation, captured targets and keyed
-DOM controls keep their existing owner and ordering.
+DOM controls keep their existing owner and ordering. The subsequent attachment
+and peer-gateway crate extractions change composition imports, not these
+desktop ordering owners.
 
 The diagram bodies are unchanged. The earlier six-diagram Chromium rendering
 receipt keeps its source cut. This source review does not refresh the historical
