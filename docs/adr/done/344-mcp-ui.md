@@ -109,6 +109,7 @@ consumes it. A replacement mount cannot stand for the original caller's receipt.
 | Panel, fullscreen | Answer that same live caller with mode fullscreen; open nothing | Bridge L17 and the panel's browser fixture output |
 | Inline, unsupported or undeclared mode | Answer the same caller with mode inline; open nothing | Bridge L17 and `requestMode` tests |
 | Panel close or app-requested teardown | Release that panel mount; retain the Open row, which can reopen a fresh panel mount | Browser teardown check, the retained `panelled` selector/use-case tests and the bridge teardown regressions |
+| Conversation stress waits for background turns before opening a new talk board | Drain background work inside the existing exclusive section before creating/submitting the fixture turn; then open its settled conversation | Raised `huddle` repeats with the unchanged three-second idle limit, counts and app deadlines; creating before draining reproduces a parked tool without an app |
 
 **The sandbox** (#349). The window frames a proxy on an origin of its own —
 the `nessa-sandbox` scheme in the desktop app (`http://nessa-sandbox.localhost`
