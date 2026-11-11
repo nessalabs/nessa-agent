@@ -175,7 +175,11 @@
   color: var(--desktop-faint);
 }
 
-.workspace-sidebar :where([data-slot="sidebar-menu-item-row"] > [data-size]):hover {
+/* The frame owns hover while a sibling action takes the trailing cell
+   (`shared-controls.mjs`, rows). The control keeps its pressed/selected states. */
+.workspace-sidebar
+  :where([data-slot="sidebar-menu-item-row"]):hover
+  > :where([data-size]) {
   background: var(--desktop-hover);
 }
 
