@@ -104,6 +104,7 @@ export const css = {
 
   // Widgets (ADR 326) and the sample plugin that shows them (src/desktop/widgets/fixture/)
   widgetCard: "[data-widget-inline]", // a widget's card in a message; its value says what it draws
+  widgetCardRow: '[data-widget-inline="row"]', // an Open row while the app is live in its panel
   panel: "#workspace-panel", // the right panel: each chat's own; inert while hidden
   chatPanelTabs: ".workspace-panel-tabs", // class: the panel's tabs, one per widget open for the chat in front
   panelWidget: "[data-panel-widget]", // the panel's tab in front: a widget's trail, Open in Window and body

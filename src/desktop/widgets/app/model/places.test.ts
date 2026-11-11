@@ -10,7 +10,7 @@ describe("display modes", () => {
     expect(offeredModes).toEqual(["inline", "fullscreen"])
   })
 
-  it("an inline view asking for fullscreen opens a pane, and stays inline", () => {
+  it("an inline fullscreen request opens the panel and answers the requesting view's mode", () => {
     expect(requestMode("inline", "fullscreen", undefined)).toEqual({
       open: "panel",
       answer: "inline",

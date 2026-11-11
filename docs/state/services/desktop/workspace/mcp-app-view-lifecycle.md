@@ -42,6 +42,13 @@ An MCP App is an interactive view supplied by a tool. Nessa reads its HTML, load
 
 Closing the view ends its bridge and ignores late replies. Moving or reopening must use the correct mount identity. Gateway-backed workspaces read app resources and call tools through their workspace client. Sample workspaces use a fixture app. The frame handshake does not grant permission to call every tool.
 
+The [display-mode handoff](../../../../../docs/adr/done/344-mcp-ui.md) posts
+the requesting inline view's reply before opening can remove its bridge.
+Opening a panel then retires that inline mount and retains an Open row, also
+after the panel closes. Reopening creates a fresh panel mount. Posting before
+retirement does not establish that the retiring document consumed the reply;
+the panel's own browser request/reply is separate evidence.
+
 ```mermaid
 stateDiagram-v2
     [*] --> Present
@@ -107,5 +114,14 @@ This owner covers the initialization prerequisite, terminal mount release and in
 Disposition: direct model. The bounded rule model section names the modeled owner slice and finite abstraction.
 
 Excluded: All exclusions stated in the owning Bounded rule model section remain outside verification.
+
+Display-mode reply ordering, transport identity and consumption, replacement
+mounts, and the host's one-live-view projection are outside this model. The
+#1327 addendum documents those excluded contracts and their executable checks;
+it does not refresh the handshake model's source mapping or historical TLC
+result. `TerminalReleased` represents release initiation, not completed server
+cleanup or physical erasure. `NoEarlyTell` checks phase eligibility, not the
+full handshake's identity or message ordering. TLC was not rerun for this
+prose-only addendum.
 
 Source review scope: owner entry points and relevant regression declarations were inventoried against frozen source `77a6b620af4d94b234294f6d273fd74b3dfb44c7`. Existing source checkpoints are retained where this was a partial review. A model result establishes bounded design safety only. Browser appearance and interaction were not checked.

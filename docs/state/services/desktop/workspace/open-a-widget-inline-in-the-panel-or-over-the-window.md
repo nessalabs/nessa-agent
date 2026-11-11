@@ -41,6 +41,13 @@ A widget can appear inside a message, as a tab in its chat's right panel, or ove
 
 Native widgets and MCP Apps use different content sources. Gateway mode uses server-provided apps; sample mode uses a fixture. See [connection modes](README.md#connection-modes). A view over the window is still inside Nessa, not a separate operating-system window.
 
+Apps have one live view (#1220): opening a panel retires the inline app and
+leaves an Open row in its message. Closing the panel retains that row; Open
+starts a fresh panel mount. Only an offered native widget can use the window
+place. The [display-mode handoff](../../../../../docs/adr/done/344-mcp-ui.md)
+separates the original caller's posted reply from the replacement panel's own
+request and reply.
+
 ```mermaid
 stateDiagram-v2
     [*] --> Resolving
@@ -55,7 +62,7 @@ stateDiagram-v2
     ReadingAppCall --> Drawable: Known tool call
     Drawable --> PanelPlace: Open / its chat in front, tab added or brought to front, panel shown
     PanelPlace --> Drawable: Close its tab / next tab to the front, else "Nothing open"
-    Drawable --> WindowPlace: Open over window / retain panes beneath
+    Drawable --> WindowPlace: Open over window [native view offered] / retain panes beneath
     WindowPlace --> Drawable: Return to panes
     WindowPlace --> PanelPlace: Back to Panel
     note right of Drawable
@@ -64,6 +71,7 @@ stateDiagram-v2
         Gateway mode uses its server apps.
         Window place is in-app, not detached OS window.
         Registry replacement mounts a fresh reader.
+        Apps retain an Open row after panel closure.
     end note
 ```
 
@@ -76,5 +84,10 @@ stateDiagram-v2
 Disposition: shared owner model. The app mount and per-chat panel own the modeled view lifetime. [desktop-mcp-app-view](mcp-app-view-lifecycle.md) [desktop-workspace-open-resize-expand-and-restore-the-right-panel](open-resize-expand-and-restore-the-right-panel.md)
 
 Excluded: Plugin host-table projection, escape-stack priority and non-app widget availability are pure contracts; window navigation and mount migration remain unmodeled.
+
+The #1327 placement clarification reviews only that excluded host-table
+projection and its browser checks. It does not refresh the broader workspace
+or the linked models' source mapping. Historical checkpoints and model results
+are retained; TLC was not rerun for this prose and guard clarification.
 
 Source review scope: owner entry points and relevant regression declarations were inventoried against frozen source `77a6b620af4d94b234294f6d273fd74b3dfb44c7`. Existing source checkpoints are retained where this was a partial review. A model result establishes bounded design safety only. Browser appearance and interaction were not checked.
