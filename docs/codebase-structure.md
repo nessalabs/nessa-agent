@@ -601,6 +601,21 @@ wait, and the record of that cause, in the crate's `tests/poller.rs`.
 Design: [peer gateways](design/auth/peer-gateways.md#the-dialing-side),
 [reading a peer](design/auth/peer-gateways.md#reading-a-peer).
 
+The environment role of the one binary, `nessa env serve`, is its own crate,
+`crates/nessa-env-serve/` (Unix only, apart from `machine.rs`).
+`application/serve.rs` is the frame loop a gateway's leases run over;
+`domain/` says what a leasing peer is granted; `infrastructure/` holds the
+harness launcher, the lease ledger, the host lock, the grants file and its
+Cedar policy (`infrastructure/cedar/`), the outbox and inbox, and the dial and
+pairing of a host that calls its gateway; `install.rs` names where a build
+lives on a host and the commands that put it there. `machine.rs` reads what a
+machine has (`MachineProbe`), for `env serve` and for `devices.list` alike.
+The server keeps the command line (`composition/env_serve_command.rs`,
+`env_dial_command.rs`, `env_grant_command.rs`) and the lease protocol's
+fingerprint (`env/config.rs`), which names every source of the contract in
+this crate. Its unit tests are in the crate's `tests/`; the real binary is
+driven by the server's `tests/env_serve_binary.rs`.
+
 `crates/nessa-auth` is a workspace library with pure domain models and
 application-owned DTOs/ports. See its [module and collaboration guide](../crates/nessa-auth/README.md).
 The local backend, embedded Cedar, and `/session` gateway are implemented.

@@ -45,7 +45,7 @@ use super::audit::{EnvironmentAudit, EnvironmentEvent, InstallRefusal};
 use super::release::{pins, prune, BundledReleases, HttpsReleases, ReleaseBuild, ReleaseDownload};
 use crate::conversation::domain::BackgroundCommand;
 use crate::env::{BUNDLED_HOST_BUILDS, HOST_BUILDS, HOST_BUILDS_FROM, LEASE_PROTOCOL};
-use crate::env_serve::install::{
+use nessa_env_serve::install::{
     probe_command, serve_command, upload_command, Platform, Probe, Upload, UploadRefusal,
 };
 use nessa_sdk::domain::agent_execution::leases::{LeaseRefusal, SshDestination};

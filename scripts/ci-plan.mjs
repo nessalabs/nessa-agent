@@ -95,6 +95,7 @@ export const RUST_TEST_PACKAGES = [
   "nessa-mcp-authorization",
   "nessa-webhooks",
   "nessa-device-pairing",
+  "nessa-env-serve",
 ]
 
 /** The files API returns at most this many files; a list that long may be cut. */

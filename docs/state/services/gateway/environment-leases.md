@@ -7,11 +7,11 @@ summary: Remote environments admit bounded work and retain physical cleanup owne
 parent: gateway
 sourceRevision: "77a6b620af4d94b234294f6d273fd74b3dfb44c7"
 sources:
-  - crates/nessa-server/src/env_serve/application/grants.rs
-  - crates/nessa-server/src/env_serve/application/serve.rs
-  - crates/nessa-server/tests/env_serve/admission.rs
-  - crates/nessa-server/tests/env_serve/serve.rs
-  - crates/nessa-server/src/env_serve/mod.rs
+  - crates/nessa-env-serve/src/application/grants.rs
+  - crates/nessa-env-serve/src/application/serve.rs
+  - crates/nessa-env-serve/tests/admission.rs
+  - crates/nessa-env-serve/tests/serve.rs
+  - crates/nessa-env-serve/src/lib.rs
 model:
   spec: tla/services/gateway/EnvironmentLeases.tla
   config: tla/services/gateway/EnvironmentLeases.cfg
@@ -89,4 +89,4 @@ The model does not represent grant-snapshot identities or concurrent grant chang
 
 ## Further reading
 
-[grants.rs](../../../../crates/nessa-server/src/env_serve/application/grants.rs) · [serve.rs](../../../../crates/nessa-server/src/env_serve/application/serve.rs) · [admission.rs](../../../../crates/nessa-server/tests/env_serve/admission.rs)
+[grants.rs](../../../../crates/nessa-env-serve/src/application/grants.rs) · [serve.rs](../../../../crates/nessa-env-serve/src/application/serve.rs) · [admission.rs](../../../../crates/nessa-env-serve/tests/admission.rs)

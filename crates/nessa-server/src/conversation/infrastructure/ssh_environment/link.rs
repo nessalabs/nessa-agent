@@ -74,10 +74,10 @@ use crate::conversation::application::{
     PublishFailure,
 };
 use crate::env::LEASE_PROTOCOL;
-use crate::env_serve::application::FrameStream;
-use crate::env_serve::install::Platform;
 use crate::timer::clock;
 use futures_util::FutureExt;
+use nessa_env_serve::application::FrameStream;
+use nessa_env_serve::install::Platform;
 use nessa_protocol::build_update::{self, FromEnvironment::UpdateWanted};
 use nessa_protocol::lease::{
     decode, encode, read_hello, stop_steps, ArtifactReadRefusal, Cleanup, Collection,

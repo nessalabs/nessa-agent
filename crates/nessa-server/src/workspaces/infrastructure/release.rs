@@ -16,7 +16,10 @@
 // Device pairing moved into its own crate (#1311), so env serve's dial
 // imports its TLS stream from there, and this build is not main's
 // 68607d55e45aebbc. Again the frames and their meaning are unchanged.
-const PROTOCOL: &str = "9ebfca20fd69fe0f";
+// Env serve then moved into its own crate (#1311): its sources are listed
+// from there and import each other by crate path, so this build is not
+// 9ebfca20fd69fe0f either, with the frames still unchanged.
+const PROTOCOL: &str = "67da1d599b21a89f";
 const IMAGE: &str = "bsh_KC74wkwmxzdt57Y9MxwBdSJlBa75Lfjz0BvFC-6SuS4";
 pub(crate) fn worker_image() -> Option<&'static str> {
     (crate::env::LEASE_PROTOCOL == PROTOCOL).then_some(IMAGE)
