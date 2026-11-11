@@ -11,7 +11,7 @@
 //! The host record is the gateway's own (`nessa-<id>.local.`), never the
 //! machine's `.local` name: the operating system's responder owns that one,
 //! and a second answer for it with other addresses reads as a name conflict.
-use crate::device_pairing::application::{
+use crate::application::{
     Announced, AnnouncementUnavailable, LinkingAnnouncement, LinkingAnnouncer,
 };
 use mdns_sd::{IfKind, ServiceDaemon, ServiceInfo};

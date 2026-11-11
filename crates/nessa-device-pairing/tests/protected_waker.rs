@@ -3,11 +3,11 @@
 //! pipe, which behaves the same way, stands in for the socket, with a relay to
 //! the real TLS peer whose forwarding toward the peer is held by a gate.
 use super::*;
-use crate::app::dependencies::RuntimeDependencies;
 use futures_util::{SinkExt, StreamExt};
 use nessa_auth::adapters::pairing::{GatewayTrust, NativeIdentity, OsEntropy};
 use nessa_protocol::pairing::socket::{DeadlineStream, WakeEndpoint};
 use nessa_protocol::pairing::{encode_frame, FrameReader};
+use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::{
     io::{Read, Write},
@@ -18,6 +18,14 @@ use std::{
 use tokio::io::{AsyncReadExt, AsyncWriteExt, ReadBuf};
 
 const RESPONSE: usize = 100_000;
+
+/// The real monotonic clock, read from when the test began.
+struct Monotonic(std::time::Instant);
+impl nessa_protocol::clock::Clock for Monotonic {
+    fn elapsed_ms(&self) -> u64 {
+        self.0.elapsed().as_millis().min(u64::MAX as u128) as u64
+    }
+}
 
 /// The writer is parked on a full socket; the reader then runs, receiving a
 /// request; when the socket drains, the writer must be the one woken and its
@@ -55,7 +63,7 @@ async fn reading_never_takes_the_writers_wakeup() {
     let transport = tokio::task::spawn_blocking(move || {
         let (stream, _) = DeadlineStream::new(
             accepted,
-            RuntimeDependencies::default().clock,
+            Arc::new(Monotonic(std::time::Instant::now())),
             WakeEndpoint::new(peer_address),
         )
         .unwrap();
@@ -176,7 +184,7 @@ async fn a_fatal_alert_is_sent_before_the_close() {
     let mut transport = tokio::task::spawn_blocking(move || {
         let (stream, _) = DeadlineStream::new(
             accepted,
-            RuntimeDependencies::default().clock,
+            Arc::new(Monotonic(std::time::Instant::now())),
             WakeEndpoint::new(peer_address),
         )
         .unwrap();
@@ -234,7 +242,7 @@ async fn closing_wakes_a_writer_parked_on_a_full_socket() {
     let mut transport = tokio::task::spawn_blocking(move || {
         let (stream, _) = DeadlineStream::new(
             accepted,
-            RuntimeDependencies::default().clock,
+            Arc::new(Monotonic(std::time::Instant::now())),
             WakeEndpoint::new(peer_address),
         )
         .unwrap();

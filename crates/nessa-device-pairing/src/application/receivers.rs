@@ -81,13 +81,13 @@ impl<'a> ReceiverDispatch<'a> {
             kind,
         })
     }
-    pub(crate) fn pair_request(&self) -> Result<&ReceiverRequest, ReceiverError> {
+    pub fn pair_request(&self) -> Result<&ReceiverRequest, ReceiverError> {
         if self.kind != DispatchKind::Pair {
             return Err(ReceiverError::Conflict);
         }
         Ok(&self.request)
     }
-    pub(crate) fn fence_request(
+    pub fn fence_request(
         &self,
         receiver: &ResourceId,
         paired_epoch: u64,

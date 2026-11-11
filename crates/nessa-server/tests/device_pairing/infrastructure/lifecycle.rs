@@ -18,14 +18,12 @@ use nessa_auth::{
     },
 };
 use nessa_client_core::pairing::{NativeClientError, NativeEnrollmentClient};
-use nessa_protocol::pairing::{socket::NativeWakeCause, wire::NativePairingStatus};
-use nessa_server::{
-    app::dependencies::RuntimeDependencies,
-    device_pairing::infrastructure::{
-        NativeConnectionFailure, NativeEnrollmentConnections, PairingRuntimeError,
-        RegisteredInvitation, RegistrationError, RegistrationWorker,
-    },
+use nessa_device_pairing::infrastructure::{
+    NativeConnectionFailure, NativeEnrollmentConnections, PairingRuntimeError,
+    RegisteredInvitation, RegistrationError, RegistrationWorker,
 };
+use nessa_protocol::pairing::{socket::NativeWakeCause, wire::NativePairingStatus};
+use nessa_server::app::dependencies::RuntimeDependencies;
 use std::{
     net::TcpStream,
     path::Path,

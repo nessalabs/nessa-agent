@@ -21,7 +21,6 @@ use crate::conversation::infrastructure::{
     LocalConversationStore, LocalReceiverAuthority, NessaCatalogueReadSource,
     NessaRecordReadSource, TestReadGate,
 };
-use crate::device_pairing::infrastructure::PairingOwnerCommands;
 use crate::product::{ProductDependencies, ProductRouteState};
 use nessa_auth::adapters::cedar::CedarPolicyEvaluator;
 use nessa_auth::adapters::local::{BootstrapRequest, LocalCredentialStore};
@@ -39,6 +38,7 @@ use nessa_auth::domain::{
     AudienceId, CredentialId, OrganizationId, PrincipalId, Resource, ResourceId,
 };
 use nessa_client_core::retained::{RetainedCache, HANDSHAKE};
+use nessa_device_pairing::infrastructure::PairingOwnerCommands;
 use nessa_peer_gateways::application::{
     CacheState, PeerAudit, PeerAuditFuture, PeerAuditRecord, PeerAuditUnavailable, PeerHolding,
     PeerState, PollerCause,

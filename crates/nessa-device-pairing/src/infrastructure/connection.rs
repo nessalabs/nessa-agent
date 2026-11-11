@@ -46,12 +46,12 @@ const ENVIRONMENT_CAPACITY: usize = NATIVE_CONNECTION_CAPACITY;
 /// (`docs/design/auth/relay.md`). A relayed connection that opens a product
 /// session or an environment moves to that shared pool like a direct one;
 /// only a paired key gets that far.
-pub(crate) const RELAY_CAPACITY: usize = 4;
+pub const RELAY_CAPACITY: usize = 4;
 /// Bound on connections that came through the web tunnel, from before their
 /// WebSocket upgrade until they end: a pool of their own for the same reason
 /// as the relay's, since anyone with the tunnel's public address can open
 /// them (`docs/design/auth/tunnel.md`).
-pub(crate) const TUNNEL_CAPACITY: usize = 4;
+pub const TUNNEL_CAPACITY: usize = 4;
 
 /// Redacted primary physical/protocol refusal, without peer input diagnostics.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

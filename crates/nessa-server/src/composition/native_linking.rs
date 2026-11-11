@@ -39,20 +39,20 @@ use super::runtime_config::{
     TunnelSection, DEFAULT_NATIVE_LISTEN, MAX_SSH_HOSTS, SUPERSEDED_NATIVE_LISTEN,
 };
 use crate::core::self_restart::{RestartEnd, RestartReport, SelfRestart};
-use crate::device_pairing::application::{
-    LinkingApply, LinkingAudit, LinkingAuditPhase, LinkingAuditRecord, LinkingCaller,
-    LinkingChange, LinkingError, LinkingRestart, LinkingSubject, ListenMoved, NativeLinking,
-    SavedTunnel, TunnelChange, TunnelReplaced, TunnelRequest, TunnelSnapshot,
-};
 use crate::devices::application::{DeviceSettings, SetupFuture};
 use crate::mcp_servers::application::StoreError;
 use crate::mcp_servers::infrastructure::{ConfigJson, Published};
 use crate::timer::clock;
-use crate::tunnel::application::{
+use nessa_device_pairing::application::{
+    LinkingApply, LinkingAudit, LinkingAuditPhase, LinkingAuditRecord, LinkingCaller,
+    LinkingChange, LinkingError, LinkingRestart, LinkingSubject, ListenMoved, NativeLinking,
+    SavedTunnel, TunnelChange, TunnelReplaced, TunnelRequest, TunnelSnapshot,
+};
+use nessa_device_pairing::tunnel::application::{
     CloudflareTunnel, TunnelMode, TunnelProvider, TunnelSetting, TunnelToken,
     DEFAULT_TUNNEL_INGRESS,
 };
-use crate::tunnel::infrastructure::files::TunnelFiles;
+use nessa_device_pairing::tunnel::infrastructure::files::TunnelFiles;
 use nessa_sdk::domain::agent_execution::leases::SshDestination;
 use serde_json::{Map, Value};
 use std::{future::Future, net::SocketAddr, pin::Pin, sync::Arc, time::Duration};
@@ -1046,9 +1046,9 @@ async fn bindable(address: SocketAddr) -> Result<(), LinkingError> {
 mod tests {
     use super::*;
     use crate::composition::runtime_config::{RuntimeConfig, MAX_CONFIG_BYTES};
-    use crate::device_pairing::application::LinkingAuditUnavailable;
     use crate::mcp_servers::application::StoreLock;
     use crate::mcp_servers::infrastructure::{ConfigCheck, ConfigFiles};
+    use nessa_device_pairing::application::LinkingAuditUnavailable;
     use nessa_sdk::infrastructure::clock::RuntimeClock;
     use std::sync::Mutex;
 

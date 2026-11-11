@@ -23,17 +23,17 @@ use nessa_auth::{
         AudienceId, CredentialId, OrganizationId, Resource, ResourceId,
     },
 };
-use nessa_server::{
-    app::dependencies::RuntimeDependencies,
-    conversation::infrastructure::LocalReceiverAuthority,
-    device_pairing::{
-        application::PairingReceivers,
-        infrastructure::{
-            restore_gateway_identity, ConversationReceivers, GatewayPairing,
-            NativeEnrollmentConnections, NativeEnrollmentListener, PairingRuntimeDependencies,
-            ProtectedSessions, TcpEnrollmentAccept,
-        },
+use nessa_server::device_pairing::ConversationReceivers;
+use nessa_device_pairing::{
+    application::PairingReceivers,
+    infrastructure::{
+        restore_gateway_identity, GatewayPairing, NativeEnrollmentConnections,
+        NativeEnrollmentListener, PairingRuntimeDependencies, ProtectedSessions,
+        TcpEnrollmentAccept,
     },
+};
+use nessa_server::{
+    app::dependencies::RuntimeDependencies, conversation::infrastructure::LocalReceiverAuthority,
 };
 use std::{
     io::Result as IoResult,
@@ -236,7 +236,7 @@ impl Fixture {
                 key_store: keys.clone(),
                 identity,
                 tunnel_secrets: Arc::new(
-                    nessa_server::tunnel::application::MemoryDeviceSecrets::new(),
+                    nessa_device_pairing::tunnel::application::MemoryDeviceSecrets::new(),
                 ),
             })
             .unwrap(),
@@ -308,7 +308,7 @@ impl Fixture {
                 key_store: keys.clone(),
                 identity,
                 tunnel_secrets: Arc::new(
-                    nessa_server::tunnel::application::MemoryDeviceSecrets::new(),
+                    nessa_device_pairing::tunnel::application::MemoryDeviceSecrets::new(),
                 ),
             })
             .unwrap(),

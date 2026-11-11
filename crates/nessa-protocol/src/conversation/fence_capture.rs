@@ -1,4 +1,6 @@
-//! The deletion inventory, asked after a fence has committed.
+//! The deletion inventory, asked after a fence has committed. The
+//! conversation context, device pairing and backup all meet this one port, so it
+//! lives here rather than in any of them.
 //!
 //! ```text
 //! delete | unshare | revoke ──▶ fence committed

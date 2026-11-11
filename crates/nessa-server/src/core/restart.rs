@@ -17,9 +17,9 @@
 //! else keeps the behaviour it had, because a service that retries too often is
 //! a worse bug than one that retries when it did not need to, but a service
 //! that gives up on a failure that would have cleared is worse than both.
-use crate::device_pairing::infrastructure::{GatewayIdentityError, PairingRuntimeError};
 use nessa_auth::adapters::local::LocalStoreError;
 use nessa_auth::application::pairing::{PairingStoreError, PrivateStateError};
+use nessa_device_pairing::infrastructure::{GatewayIdentityError, PairingRuntimeError};
 
 use super::{error::NativeFailure, RunError};
 
@@ -128,9 +128,9 @@ pub(super) fn restart(error: &RunError) -> Restart {
 mod tests {
     use super::*;
     use crate::core::ServeAndShutdown;
-    use crate::device_pairing::application::{CleanupError, ReceiverError};
     use crate::env::{EnvironmentError, HOST};
     use nessa_auth::domain::pairing::PairingError;
+    use nessa_device_pairing::application::{CleanupError, ReceiverError};
     use std::io::{Error, ErrorKind};
 
     /// The failure this issue was reported for: a registry this build cannot
@@ -257,8 +257,8 @@ mod tests {
     /// derive from one classifier, so they agree for every cleanup failure.
     #[test]
     fn one_classifier_decides_retry_and_relaunch() {
-        use crate::device_pairing::application::ActivationError;
         use nessa_auth::application::pairing::PairingWorkerFault;
+        use nessa_device_pairing::application::ActivationError;
         let stores = [
             PairingStoreError::StageOccupied,
             PairingStoreError::GatewayKeyHistoryExists,
@@ -319,8 +319,8 @@ mod tests {
             assert_eq!(cleanup.recurs(), recurs, "{error:?}");
         }
         // An owner who can sign in again can approve again; a denial cannot.
-        use crate::device_pairing::application::OwnerError;
         use nessa_auth::application::ports::AccessError;
+        use nessa_device_pairing::application::OwnerError;
         for (error, retryable) in [
             (AccessError::CredentialExpired, true),
             (AccessError::InactiveMembership, true),

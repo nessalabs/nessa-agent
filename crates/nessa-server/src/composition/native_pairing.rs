@@ -25,24 +25,14 @@
 //! and S7, S8, D5, D6 ("Activation and credential delivery"), and PR1, PR13
 //! ("Protected reads over the native channel").
 use super::runtime_config::{routable_advertised_host, NativeConfig, RelayAddress};
-use crate::conversation::application::FenceCapture;
 use crate::conversation::infrastructure::LocalReceiverAuthority;
 use crate::core::{NativeFailure, NativeShutdownFailure, RunError};
-use crate::device_pairing::application::{Announced, LinkingAnnouncement, LinkingAnnouncer};
-use crate::device_pairing::infrastructure::{
-    restore_gateway_identity, ConversationReceivers, EnvironmentPeers, GatewayPairing,
-    InvitationEntropy, NativeEnrollmentConnections, NativeEnrollmentListener, PairingOwnerCommands,
-    PairingRuntimeDependencies, RelayPermit, TcpEnrollmentAccept, RELAY_CAPACITY, TUNNEL_CAPACITY,
-};
 use crate::product::{DeviceCredentials, NativeSessions, ProductRouteState};
 use crate::relay::gateway::{
     application::{Backoff, Relayed, ThroughRelay},
     infrastructure::{IdentityKey, RelayedAccept, TcpRelayDial},
 };
 use crate::timer::TokioTimer;
-#[cfg(unix)]
-use crate::tunnel::infrastructure::ingress::TunnelIngress;
-use crate::tunnel::infrastructure::ingress::{Tunneled, TunneledAccept};
 use nessa_auth::{
     adapters::{
         local::LocalCredentialStore,
@@ -57,11 +47,22 @@ use nessa_auth::{
     },
     domain::{pairing::OwnerPhoneRequest, AudienceId, Resource},
 };
+use nessa_device_pairing::application::{Announced, LinkingAnnouncement, LinkingAnnouncer};
+use nessa_device_pairing::infrastructure::{
+    restore_gateway_identity, EnvironmentPeers, GatewayPairing, InvitationEntropy,
+    NativeEnrollmentConnections, NativeEnrollmentListener, PairingOwnerCommands,
+    PairingRuntimeDependencies, RelayPermit, TcpEnrollmentAccept, RELAY_CAPACITY, TUNNEL_CAPACITY,
+};
+#[cfg(unix)]
+use nessa_device_pairing::tunnel::infrastructure::ingress::TunnelIngress;
+use nessa_device_pairing::tunnel::infrastructure::ingress::{Tunneled, TunneledAccept};
+use crate::device_pairing::ConversationReceivers;
 use nessa_peer_gateways::infrastructure::{
     DurablePeerAudit, EnrollmentEntropy, PeerCommands, PeerPoller, PeerRecords, PollInputs,
     PollPolicy, TcpPeerConnector, AUDIT_DEADLINE, PREEMPT,
 };
 use nessa_protocol::clock::Clock as MonotonicClock;
+use nessa_protocol::conversation::fence_capture::FenceCapture;
 use std::{
     io::{ErrorKind, Result as IoResult},
     net::{IpAddr, SocketAddr},
@@ -133,7 +134,7 @@ impl PreparedNative {
     /// The tunnel secrets this gateway issues at pairing.
     pub(super) fn tunnel_secrets(
         &self,
-    ) -> Arc<dyn crate::tunnel::application::DeviceTunnelSecrets> {
+    ) -> Arc<dyn nessa_device_pairing::tunnel::application::DeviceTunnelSecrets> {
         self.gateway.tunnel_secrets()
     }
 
@@ -238,12 +239,13 @@ pub(super) async fn prepare(
             gateway: inputs.gateway,
             key_store: keys,
             identity,
-            tunnel_secrets: crate::tunnel::infrastructure::secrets::FileDeviceSecrets::open(
-                &root,
-                registry.clone(),
-                audience_id,
-                wall.clone(),
-            ),
+            tunnel_secrets:
+                nessa_device_pairing::tunnel::infrastructure::secrets::FileDeviceSecrets::open(
+                    &root,
+                    registry.clone(),
+                    audience_id,
+                    wall.clone(),
+                ),
         })
         .map_err(|error| RunError::Native(NativeFailure::Open(error)))?,
     );
@@ -416,7 +418,7 @@ pub(super) async fn bind(
         tokio::spawn(async move {
             loop {
                 let next = match status.borrow().clone() {
-                    crate::tunnel::application::TunnelStatus::Ready(address) => {
+                    nessa_device_pairing::tunnel::application::TunnelStatus::Ready(address) => {
                         match nessa_protocol::relay::PublishedOrigin::new(address.as_str()) {
                             Some(origin) => Some(origin),
                             None => {

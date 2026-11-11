@@ -1,16 +1,6 @@
 //! Actual signed owner approval with a late physical Pair outcome.
 //! Actual signed socket request loses its observer while its real Pair is held.
 use super::*;
-use crate::device_pairing::{
-    application::{
-        PairingReceivers, PublicationGuard, ReceiverDispatch, ReceiverError, ReceiverRequest,
-    },
-    infrastructure::{
-        restore_gateway_identity, ConversationReceivers, GatewayPairing,
-        NativeEnrollmentConnections, NativeEnrollmentListener, PairingOwnerCommands,
-        PairingRuntimeDependencies, TcpEnrollmentAccept,
-    },
-};
 use nessa_auth::{
     adapters::pairing::{FilePairingState, OsEntropy},
     application::{
@@ -18,6 +8,17 @@ use nessa_auth::{
         ports::{AccessError, AccessReader, Clock},
     },
     domain::{pairing::PairingPhase, ResourceId},
+};
+use crate::device_pairing::ConversationReceivers;
+use nessa_device_pairing::{
+    application::{
+        PairingReceivers, PublicationGuard, ReceiverDispatch, ReceiverError, ReceiverRequest,
+    },
+    infrastructure::{
+        restore_gateway_identity, GatewayPairing, NativeEnrollmentConnections,
+        NativeEnrollmentListener, PairingOwnerCommands, PairingRuntimeDependencies,
+        TcpEnrollmentAccept,
+    },
 };
 use std::{
     net::{Shutdown, TcpStream},
@@ -160,7 +161,9 @@ async fn signed_owner_phone_lost_observer_retains_late_pair_and_first_expiry_unt
             ),
             key_store: keys.clone(),
             identity,
-            tunnel_secrets: Arc::new(crate::tunnel::application::MemoryDeviceSecrets::new()),
+            tunnel_secrets: Arc::new(
+                nessa_device_pairing::tunnel::application::MemoryDeviceSecrets::new(),
+            ),
         })
         .unwrap(),
     );

@@ -5,7 +5,7 @@
 //! MCP server settings' audit beside it is. The requested record and its
 //! outcome share the change's id; between changes the only order is
 //! `observedAtMs`, on the wall clock.
-use crate::device_pairing::application::{
+use crate::application::{
     LinkingApply, LinkingAudit, LinkingAuditPhase, LinkingAuditRecord, LinkingAuditUnavailable,
     LinkingError, LinkingRestart, LinkingSubject, TunnelSnapshot,
 };
@@ -179,7 +179,7 @@ impl LinkingAudit for DurableLinkingAudit {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::device_pairing::application::{LinkingCaller, ListenMoved};
+    use crate::application::{LinkingCaller, ListenMoved};
 
     struct Fixed;
     impl Clock for Fixed {
@@ -343,7 +343,7 @@ mod tests {
 
     #[test]
     fn a_tunnel_outcome_keeps_its_setting_before_and_after() {
-        use crate::device_pairing::application::TunnelReplaced;
+        use crate::application::TunnelReplaced;
         use crate::tunnel::application::TunnelMode;
         let directory = tempfile::tempdir().unwrap();
         let audit = DurableLinkingAudit::new(directory.path().join("audit"), Arc::new(Fixed));

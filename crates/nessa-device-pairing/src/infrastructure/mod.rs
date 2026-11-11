@@ -37,7 +37,6 @@ mod listener;
 mod owner_admission;
 mod owner_commands;
 mod protected;
-mod receivers;
 mod registration;
 mod runtime;
 mod tls_stream;
@@ -48,8 +47,7 @@ pub use announcer_macos::SystemAnnouncer;
 /// This platform's announcer. On macOS the system responder sends the
 /// announcement, since Local Network privacy drops a background gateway's
 /// own multicast; elsewhere the gateway answers itself.
-pub fn platform_announcer(
-) -> std::sync::Arc<dyn crate::device_pairing::application::LinkingAnnouncer> {
+pub fn platform_announcer() -> std::sync::Arc<dyn crate::application::LinkingAnnouncer> {
     #[cfg(target_os = "macos")]
     {
         std::sync::Arc::new(SystemAnnouncer)
@@ -63,7 +61,7 @@ pub use connection::{
     NativeConnectionError, NativeConnectionFailure, NativeEnrollmentConnections, RelayPermit,
     TunnelPermit,
 };
-pub(crate) use connection::{RELAY_CAPACITY, TUNNEL_CAPACITY};
+pub use connection::{RELAY_CAPACITY, TUNNEL_CAPACITY};
 pub use environment_peers::EnvironmentPeers;
 pub use identity::{restore_gateway_identity, GatewayIdentityError};
 #[cfg(unix)]
@@ -71,10 +69,9 @@ pub use linking_audit::DurableLinkingAudit;
 pub use listener::{Accepted, EnrollmentAccept, NativeEnrollmentListener, TcpEnrollmentAccept};
 pub use owner_commands::{InvitationEntropy, InvitationEntropySource, PairingOwnerCommands};
 pub use protected::{ProtectedConnection, ProtectedSessions};
-pub use receivers::ConversationReceivers;
 pub use registration::{RegisteredInvitation, RegistrationError, RegistrationWorker};
 pub use runtime::{
-    BeginPairing, CreatedInvitation, GatewayPairing, PairingRuntimeDependencies,
+    hex, BeginPairing, CreatedInvitation, GatewayPairing, PairingRuntimeDependencies,
     PairingRuntimeError, PhoneAuthorization, ServerHandshake,
 };
 pub use tls_stream::{TlsCloser, TlsStream};

@@ -1,6 +1,6 @@
 //! Signed original commands keep the same blocking lease through activation.
 use super::{GatewayPairing, PairingRuntimeError};
-use crate::device_pairing::application::{
+use crate::application::{
     claimed_status, ActivationError, DeviceStatusError, FreshOwnerPhone, FreshStage, OwnerError,
     PairingReceivers, ReceiverError,
 };

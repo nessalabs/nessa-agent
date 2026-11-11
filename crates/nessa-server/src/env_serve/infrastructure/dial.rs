@@ -22,11 +22,11 @@
 //! each bounded by the native phase deadlines, on a blocking worker as the
 //! device's enrollment client runs them; the stream is then the async
 //! [`TlsStream`], which frames nothing, so lease frames keep their own bound.
-use crate::device_pairing::infrastructure::TlsStream;
 use nessa_auth::adapters::pairing::{
     GatewayTrust, NativeIdentity, NativeTransport, PairingCryptoError,
 };
 use nessa_client_core::retained::dial_gateway;
+use nessa_device_pairing::infrastructure::TlsStream;
 use nessa_protocol::clock::Clock;
 use nessa_protocol::pairing::socket::{
     begin_enrollment_phase, DeadlineError, DeadlineStream, WakeEndpoint, TLS_DEADLINE,

@@ -15,4 +15,4 @@
 #[cfg_attr(not(unix), allow(dead_code))]
 pub mod application;
 #[cfg_attr(not(unix), allow(dead_code))]
-pub(crate) mod infrastructure;
+pub mod infrastructure;

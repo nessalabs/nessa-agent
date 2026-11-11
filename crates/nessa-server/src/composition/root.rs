@@ -385,9 +385,10 @@ impl CompositionRoot {
                 if let Some(devices) = &product.machines.devices {
                     devices.listening(bound.local_address());
                 }
-                Some(bound.with_announcer(
-                    crate::device_pairing::infrastructure::platform_announcer(),
-                ))
+                Some(
+                    bound
+                        .with_announcer(nessa_device_pairing::infrastructure::platform_announcer()),
+                )
             }
             None => None,
         };

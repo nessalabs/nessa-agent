@@ -25,21 +25,21 @@ use nessa_auth::{
     },
 };
 use nessa_client_core::pairing::NativeEnrollmentClient;
+use nessa_device_pairing::tunnel::application::TunnelMode;
+use nessa_device_pairing::{
+    application::{
+        LinkingApply, LinkingCaller, LinkingChange, LinkingError, NativeLinking, SavedTunnel,
+        TunnelChange, TunnelRequest,
+    },
+    infrastructure::{InvitationEntropy, PairingOwnerCommands},
+};
 use nessa_protocol::agents::AgentId;
+use nessa_protocol::conversation::fence_capture::{FenceCapture, FenceCaptureError};
 use nessa_protocol::pairing::wire::NativePairingStatus;
 use nessa_protocol::tunnel::TunnelAddress;
-use nessa_server::conversation::application::{FenceCapture, FenceCaptureError};
-use nessa_server::tunnel::application::TunnelMode;
 use nessa_server::{
     agents::application::{AgentProbe, AgentProbeEvidence},
     app::dependencies::RuntimeDependencies,
-    device_pairing::{
-        application::{
-            LinkingApply, LinkingCaller, LinkingChange, LinkingError, NativeLinking, SavedTunnel,
-            TunnelChange, TunnelRequest,
-        },
-        infrastructure::{InvitationEntropy, PairingOwnerCommands},
-    },
     product::{ProductDependencies, ProductRouteState},
     server::entrypoint::http,
 };

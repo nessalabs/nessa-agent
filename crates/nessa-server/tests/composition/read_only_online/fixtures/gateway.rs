@@ -14,7 +14,6 @@ use crate::conversation::infrastructure::{
     LocalConversationStore, LocalReceiverAuthority, NessaCatalogueReadSource,
     NessaRecordReadSource, NessaRecordWatches,
 };
-use crate::device_pairing::infrastructure::PairingOwnerCommands;
 use crate::product::{ProductDependencies, ProductRouteState};
 use nessa_auth::adapters::cedar::CedarPolicyEvaluator;
 use nessa_auth::adapters::local::{BootstrapRequest, LocalCredentialStore};
@@ -29,6 +28,7 @@ use nessa_auth::application::session::{AuthenticateSession, AuthenticatedSession
 use nessa_auth::domain::pairing::ConsentClass;
 use nessa_auth::domain::{AudienceId, OrganizationId, PrincipalId, Resource, ResourceId};
 use nessa_client_core::retained::RetainedEnrollmentClient;
+use nessa_device_pairing::infrastructure::PairingOwnerCommands;
 use nessa_protocol::agents::AgentId;
 use nessa_protocol::conversation::domain::{
     ConversationApprovalMode, ConversationId, ConversationModelId,
@@ -456,7 +456,7 @@ async fn gateway_child() {
                     .unwrap()
                     .local_addr()
                     .unwrap(),
-                mode: crate::tunnel::application::TunnelMode::Quick,
+                mode: nessa_device_pairing::tunnel::application::TunnelMode::Quick,
                 hostname: None,
             },
         )),

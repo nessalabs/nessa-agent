@@ -197,10 +197,10 @@ async fn exact_replay_returns_the_stored_original_when_entropy_is_unavailable() 
             let n = calls.fetch_add(1, Ordering::SeqCst);
             if n == 0 {
                 Box::new(OsEntropy)
-                    as Box<dyn crate::device_pairing::infrastructure::InvitationEntropy>
+                    as Box<dyn nessa_device_pairing::infrastructure::InvitationEntropy>
             } else {
                 Box::new(RefuseEntropy(draws.clone()))
-                    as Box<dyn crate::device_pairing::infrastructure::InvitationEntropy>
+                    as Box<dyn nessa_device_pairing::infrastructure::InvitationEntropy>
             }
         })
     });

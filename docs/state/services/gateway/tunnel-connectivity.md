@@ -7,9 +7,9 @@ summary: A ready tunnel forwards native TLS but grants no session authority.
 parent: gateway
 sourceRevision: "77a6b620af4d94b234294f6d273fd74b3dfb44c7"
 sources:
-  - crates/nessa-server/src/tunnel/application.rs
-  - crates/nessa-server/src/tunnel/infrastructure/ingress.rs
-  - crates/nessa-server/tests/tunnel/ingress.rs
+  - crates/nessa-device-pairing/src/tunnel/application.rs
+  - crates/nessa-device-pairing/src/tunnel/infrastructure/ingress.rs
+  - crates/nessa-device-pairing/tests/tunnel/ingress.rs
   - crates/nessa-server/tests/composition/tunnel.rs
   - docs/design/auth/tunnel.md
 model:
@@ -78,4 +78,4 @@ Native TLS cryptography, paired credential recovery, pending-secret filesystem r
 
 ## Further reading
 
-[application.rs](../../../../crates/nessa-server/src/tunnel/application.rs) · [ingress.rs](../../../../crates/nessa-server/src/tunnel/infrastructure/ingress.rs) · [ingress.rs](../../../../crates/nessa-server/tests/tunnel/ingress.rs)
+[application.rs](../../../../crates/nessa-device-pairing/src/tunnel/application.rs) · [ingress.rs](../../../../crates/nessa-device-pairing/src/tunnel/infrastructure/ingress.rs) · [ingress.rs](../../../../crates/nessa-device-pairing/tests/tunnel/ingress.rs)
