@@ -1435,8 +1435,8 @@ fn a_stress_restore_names_one_loaded_conversation_and_one_whose_source_can_move(
     };
     assert_eq!(
         archived(loaded),
-        0,
-        "the loaded conversation stays on the live list"
+        1,
+        "the loaded conversation stays off the live list until the window opens it"
     );
     assert_eq!(
         archived(missing),

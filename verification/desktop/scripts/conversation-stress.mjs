@@ -3443,29 +3443,22 @@ const steps = {
       throw new Error("the stress restore was not prepared")
     if (!existsSync(source))
       failures.push(`the restored source ${source} is not there to load`)
-    // The missing conversation starts archived, so the followers, who follow
-    // every live row, do not fetch it during the earlier steps. Fetch the
-    // loaded one while its source is still there. It is listed the whole
-    // time, and opening it reads that history back.
-    const panel = await connectClient(run.stack.gateway, INSTANCE, "panel")
+    // Both restored conversations start archived, so followers do not fetch
+    // them before this step. Listing the loaded one is setup. The window
+    // opens it while the source is still there, and the client reads the
+    // result only after that.
+    const prepare = await connectClient(run.stack.gateway, INSTANCE, "panel")
+    let listed = false
     try {
-      const view = await panel.conversation.read(loaded.id)
-      const said = (view.messages ?? [])
-        .map((turn) => `${turn.status ?? ""} ${turn.userText ?? ""}`)
-        .join("\n")
-      if (!said.includes("restored turn text"))
-        failures.push(
-          `the gateway view did not load the restored history: ${JSON.stringify(said)}`,
-        )
+      const result = await prepare.conversation.unarchive(loaded.id)
+      listed = result.applied === true
+      if (!listed) failures.push("the restored conversation was already listed")
     } catch (error) {
-      failures.push(`the gateway could not read the restored history: ${error.message}`)
+      failures.push(`the restored conversation could not be listed: ${error.message}`)
     } finally {
-      panel.close()
+      prepare.close()
     }
-    const hidden = `${source}.aside`
-    renameSync(source, hidden)
-    let revealed = false
-    try {
+    if (listed) {
       await openStressConversation(run.page, loaded.id, loaded.title)
       // The list preview is "restored-history". This sentence is only the turn.
       if (!(await shows(run.page, "restored turn text", 15_000))) {
@@ -3473,6 +3466,26 @@ const steps = {
           `the restored history was not shown: ${JSON.stringify((await pageText(run.page)).slice(0, 500))}`,
         )
       }
+      const panel = await connectClient(run.stack.gateway, INSTANCE, "panel")
+      try {
+        const view = await panel.conversation.read(loaded.id)
+        const said = (view.messages ?? [])
+          .map((turn) => `${turn.status ?? ""} ${turn.userText ?? ""}`)
+          .join("\n")
+        if (!said.includes("restored turn text"))
+          failures.push(
+            `the gateway view did not load the restored history: ${JSON.stringify(said)}`,
+          )
+      } catch (error) {
+        failures.push(`the gateway could not read the restored history: ${error.message}`)
+      } finally {
+        panel.close()
+      }
+    }
+    const hidden = `${source}.aside`
+    renameSync(source, hidden)
+    let revealed = false
+    try {
       const listing = await connectClient(run.stack.gateway, INSTANCE, "panel")
       try {
         const result = await listing.conversation.unarchive(missing.id)
