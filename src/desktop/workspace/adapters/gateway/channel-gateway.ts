@@ -31,6 +31,7 @@ const failures: Record<ChannelErrorCode, ChannelFailure> = {
   [ChannelErrorCode.ChannelLimitReached]: "limit",
   [ChannelErrorCode.ChannelRequestConflict]: "conflict",
   [ChannelErrorCode.ChannelStorageUnavailable]: "unavailable",
+  [ChannelErrorCode.ChannelPlaceUnavailable]: "place-unavailable",
   [ChannelErrorCode.TemporarilyUnavailable]: "unavailable",
 }
 

@@ -136,8 +136,8 @@ function channel(value: unknown, invalid: string): Channel {
   const nullableText = (field: unknown) => field === null || typeof field === "string"
   if (
     !nullableText(value.coordinatorConversationId) ||
-    (value.coordinatorPlacement !== "local" && value.coordinatorPlacement !== "boat") ||
-    (value.threadPlacement !== "local" && value.threadPlacement !== "boat") ||
+    !isPlace(value.coordinatorPlacement) ||
+    !isPlace(value.threadPlacement) ||
     typeof value.channelId !== "string" ||
     !CHANNEL_ID.test(value.channelId) ||
     typeof value.name !== "string" ||
@@ -161,9 +161,21 @@ function channel(value: unknown, invalid: string): Channel {
     approvalMode: value.approvalMode as ApprovalMode,
     createdAtMs: value.createdAtMs as number,
     coordinatorConversationId: value.coordinatorConversationId as string | null,
-    coordinatorPlacement: value.coordinatorPlacement as "local" | "boat",
-    threadPlacement: value.threadPlacement as "local" | "boat",
+    coordinatorPlacement: value.coordinatorPlacement as string,
+    threadPlacement: value.threadPlacement as string,
   }
+}
+
+/**
+ * A channel place as the gateway words it: `local`, `boat`, `pool`, or one
+ * computer by its place name; the gateway decides which names it serves.
+ */
+function isPlace(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.length > 0 &&
+    new TextEncoder().encode(value).length <= 253
+  )
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

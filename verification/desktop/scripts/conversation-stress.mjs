@@ -171,6 +171,14 @@ import {
  *               window binds the conversation to the other, with new provider
  *               context, as the window's heading and the binding both say;
  *               both workers stop and linking is turned off again
+ *   place       native linking is turned on and a real `nessa env dial`
+ *               worker pairs; a channel naming a computer not connected is
+ *               refused channel_place_unavailable; in the channel's settings
+ *               New threads runs on Computer, the worker, chosen from the
+ *               computers listed; a chat started in the channel from the
+ *               window (⌘N, Send) is answered with its lease on that worker
+ *               and the window says where it runs; the channel goes back
+ *               here, the worker stops and linking is turned off again
  *   tunnel      native linking and then the web tunnel are turned on in
  *               Settings, each restarting the gateway, which starts a
  *               stand-in cloudflared (NESSA_TUNNEL_PROGRAM) and shows its
@@ -5273,6 +5281,211 @@ const steps = {
         await openLinkedDevices(run.page)
         if (await switchLinking(run, false, failures)) await closeSettings(run.page)
       })
+    }
+  },
+
+  async place(run, step, failures) {
+    // A channel's new threads run on one named computer, chosen in its
+    // settings from the computers connected now. Workers dial the native
+    // listener, off until a step turns it on, as in `pool`.
+    const linked = await run.exclusive(async () => {
+      await openLinkedDevices(run.page)
+      const on = await switchLinking(run, true, failures)
+      if (on) await closeSettings(run.page)
+      return on
+    })
+    if (!linked) return
+    let worker
+    let owner
+    let channel
+    try {
+      owner = await connectClient(run.stack.gateway, INSTANCE, "owner")
+      worker = await startWorker({
+        owner,
+        address: run.nativeAddress,
+        agent: run.stack.agent,
+        launch: scriptedLaunch(run.stack.agent, {
+          scenario: run.stack.scenario,
+          nativeContext: run.stack.nativeContext,
+          model: run.stack.profile.model,
+        }),
+        label: `p${step.index}`,
+        connected: async (name) =>
+          (await offers(run, (environments) => environments.includes(name))).includes(
+            name,
+          ),
+      })
+      channel = await run.client.channels.create({
+        requestId: `stress-place-r${step.index}-s${run.knobs.seed}`,
+        name: `stress-place-r${step.index}-s${run.knobs.seed}`,
+        agent: run.stack.agent,
+        model: run.stack.profile.model,
+      })
+      // A computer the gateway cannot reach now is refused, and nothing
+      // changes.
+      const absent = `peer:${"0".repeat(64)}`
+      const refused = await run.client.channels
+        .setPlacement({
+          requestId: `stress-place-absent-${channel.channelId}`,
+          channelId: channel.channelId,
+          coordinatorPlacement: "local",
+          threadPlacement: absent,
+        })
+        .then(
+          () => "accepted",
+          (error) => error.code,
+        )
+      if (refused !== "channel_place_unavailable")
+        failures.push(`a channel naming a computer not connected answered ${refused}`)
+      // The person chooses it in the channel's settings: Computer, then
+      // the worker from the computers listed.
+      await run.exclusive(async () => {
+        // The sidebar lists the channel once the window reads the index
+        // again; a reload reads it now.
+        try {
+          await run.page.reload()
+          // Linking restarted the gateway, which sealed its vault: the
+          // reloaded window asks for it, as a person would be asked.
+          await unlockRequestedVault(run.client, run.page)
+          const named = run.page
+            .locator(`${css.sidebar} nav`)
+            .getByText(channel.name, { exact: true })
+            .first()
+          await named.hover({ timeout: 15_000 })
+          await run.page
+            .locator(
+              `${css.channelSettingsOpen}[data-channel-settings-open="${channel.channelId}"]`,
+            )
+            .click()
+          await chooseComputer()
+        } catch (error) {
+          if (run.evidence)
+            await run.page.screenshot({
+              path: join(run.evidence, `place-${run.engine}-failed.png`),
+            })
+          failures.push(
+            `choosing the computer in the channel settings: ${explain(error)}`,
+          )
+        } finally {
+          // Closed whatever happened, menu first: nothing after this step
+          // can reach the window past an open dialog.
+          const dialog = run.page.locator(css.channelSettingsDialog)
+          for (let tries = 0; tries < 3 && (await dialog.count()) > 0; tries += 1) {
+            await run.page.keyboard.press(keys.escape)
+            await dialog.waitFor({ state: "detached", timeout: 2_000 }).catch(() => {})
+          }
+        }
+      })
+      async function chooseComputer() {
+        const control = run.page
+          .locator(css.channelSettingsDialog)
+          .locator(`[data-channel-placement="${channel.channelId}"]`)
+        const row = control.locator('[data-placement-row="threads"]')
+        await row.getByRole("button", { name: "Computer", exact: true }).click()
+        await control.locator('[data-placement-computer="threads"]').click()
+        await run.page.locator(`[data-placement-choice="${worker.name}"]`).click()
+        const shown = await waitFor(
+          async () =>
+            (await control.getAttribute("data-thread-placement")) === worker.name,
+          10_000,
+        )
+        if (!shown)
+          failures.push(`the channel settings do not show new threads on ${worker.name}`)
+        if (run.evidence)
+          await run.page.screenshot({
+            path: join(run.evidence, `place-${run.engine}-${channel.channelId}.png`),
+          })
+      }
+      const { channels } = await run.client.channels.list()
+      const listed = channels.find((each) => each.channelId === channel.channelId)
+      if (
+        listed?.threadPlacement !== worker.name ||
+        listed.coordinatorPlacement !== "local"
+      )
+        failures.push(
+          `the channel runs ${listed?.coordinatorPlacement} / ${listed?.threadPlacement}, not local / ${worker.name}`,
+        )
+      if (failures.length) return
+      // A new chat started in it from the window, as a person would (the
+      // channel chosen, ⌘N, typed and sent), runs on that computer, and
+      // the window says so above its transcript.
+      const text = prompt(run, STRESS.reply, step, " place")
+      const conversationId = await run.exclusive(async () => {
+        await run.page
+          .locator(`${css.sidebar} nav`)
+          .getByText(channel.name, { exact: true })
+          .first()
+          .click({ timeout: 10_000 })
+        await run.page.keyboard.press(keys.newSession)
+        const home = run.page.locator(`${css.focusedPane} ${css.paneHome}`)
+        await home.locator(css.field).waitFor({ timeout: 15_000 })
+        await home.locator(css.field).fill(text)
+        await home.getByRole(...composerControls.send).click({ timeout: 10_000 })
+        return waitFor(() => selectedStressConversation(run.page, text), 30_000)
+      })
+      if (!conversationId) {
+        failures.push(`the chat started in ${channel.name} was never listed`)
+        return
+      }
+      const { view } = await settled(
+        run,
+        conversationId,
+        new Set(),
+        text,
+        "completed",
+        failures,
+      )
+      const { conversations } = await run.client.conversation.list({})
+      const summary = conversations.find((each) => each.conversationId === conversationId)
+      if (summary?.channelId !== channel.channelId)
+        failures.push(
+          `the chat started in ${channel.name} is in ${summary?.channelId ?? "no channel"}`,
+        )
+      if (view?.lease?.environment !== "peer" || view.lease.host !== worker.name)
+        failures.push(
+          `a thread in a channel on ${worker.name} runs on ${view?.lease?.environment} ${view?.lease?.host}`,
+        )
+      const said = run.page.locator(`${css.focusedPane} [data-workspace-place="peer"]`)
+      if (!(await waitFor(async () => (await said.count()) > 0, 10_000)))
+        failures.push(`the window does not say the chat runs on ${worker.name}`)
+      else if (run.evidence)
+        await run.page.screenshot({
+          path: join(run.evidence, `place-${run.engine}-chat.png`),
+        })
+      // Checked at rest while its computer serves: with none, the gateway
+      // refuses to read it, as in `pool`.
+      failures.push(...(await atRest(run, [conversationId])))
+    } finally {
+      if (channel)
+        await run.client.channels
+          .setPlacement({
+            requestId: `stress-place-back-${channel.channelId}`,
+            channelId: channel.channelId,
+            coordinatorPlacement: "local",
+            threadPlacement: "local",
+          })
+          .catch((error) =>
+            failures.push(`the channel did not go back here: ${explain(error)}`),
+          )
+      if (worker) {
+        if (run.evidence)
+          writeFileSync(join(run.evidence, `worker-${worker.label}.log`), worker.log())
+        await worker.close()
+      }
+      owner?.close()
+      await run.exclusive(async () => {
+        await openLinkedDevices(run.page)
+        if (await switchLinking(run, false, failures)) await closeSettings(run.page)
+      })
+      // Back to the main conversation, in the default channel: the chat
+      // above left the session list showing the step's channel.
+      await run.page
+        .locator(`${css.sidebar} nav`)
+        .getByText("Conversations", { exact: true })
+        .first()
+        .click({ timeout: 10_000 })
+        .catch(() => {})
+      await openStressConversation(run.page, run.main.id, run.main.title)
     }
   },
 

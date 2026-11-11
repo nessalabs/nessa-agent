@@ -27,7 +27,7 @@ use crate::conversation::application::{
 };
 use crate::conversation::domain::{
     Channel, ChannelExecution, ChannelFolder, ChannelId, ChannelParts, ChannelPath, ChannelRequest,
-    ChannelResources, MAX_CHANNELS_PER_OWNER,
+    ChannelResources, Place, MAX_CHANNELS_PER_OWNER,
 };
 use nessa_auth::domain::{OrganizationId, PrincipalId};
 use nessa_protocol::conversation::domain::{ConversationApprovalMode, ConversationId};
@@ -123,6 +123,8 @@ pub enum ChannelError {
     LimitReached,
     RequestConflict,
     Storage,
+    /// A computer it names is not one this gateway can run on now.
+    PlaceUnavailable,
     Unavailable,
 }
 
@@ -288,6 +290,9 @@ impl ConversationService {
         {
             return Err(ChannelError::InvalidInput);
         }
+        if kept.is_none() {
+            self.offers_places(&request.execution, &ChannelExecution::default())?;
+        }
         // Resolved before anything is compared or kept, so a retry naming a
         // folder by another spelling of the same place is the same request.
         // For a retry, a path that no longer resolves is compared as named.
@@ -361,7 +366,7 @@ impl ConversationService {
             caller.organization_id.clone(),
             caller.principal_id.clone(),
             ChannelParts {
-                execution: resolved.execution,
+                execution: resolved.execution.clone(),
                 name: resolved.name.clone(),
                 folder,
                 defaults: resolved.defaults.clone(),
@@ -483,7 +488,7 @@ impl ConversationService {
                 Err(ConversationError::ChannelNotFound) => return Err(ChannelError::Forbidden),
                 Err(error) => return Err(error.into()),
             };
-            if found.execution() == execution {
+            if *found.execution() == execution {
                 return Ok(found);
             }
             let coordinator = found.coordinator_id();
@@ -492,17 +497,21 @@ impl ConversationService {
             if current.coordinator_id() != coordinator {
                 continue;
             }
-            if current.execution() == execution {
+            if *current.execution() == execution {
                 return Ok(current);
             }
+            // Checked against what the channel holds now, under the lock: a
+            // move made meanwhile may have let go of a computer this one
+            // would keep.
+            self.offers_places(&execution, current.execution())?;
             // The move is on record, with what it moves from, before it is made.
             let record = |outcome| SettingsAuditRecord {
                 operation_id: operation.clone(),
                 caller: caller.clone(),
                 change: SettingsChange::ChannelPlacement {
                     channel: id.clone(),
-                    before: current.execution(),
-                    after: execution,
+                    before: current.execution().clone(),
+                    after: execution.clone(),
                     coordinator: coordinator.clone(),
                 },
                 outcome,
@@ -510,7 +519,7 @@ impl ConversationService {
             self.record_setting(record(SettingsOutcome::Requested))
                 .await
                 .map_err(|_| ChannelError::Unavailable)?;
-            let moved = match store.set_execution(id, execution).await {
+            let moved = match store.set_execution(id, execution.clone()).await {
                 Ok(Some(moved)) => moved,
                 failed => {
                     if self
@@ -538,6 +547,30 @@ impl ConversationService {
             "channel run location changed"
         );
         Ok(changed)
+    }
+
+    /// Whether every computer `asked` names that `kept` does not is one
+    /// this gateway can run on now: an SSH host it serves, or a paired
+    /// computer connected now. A place the channel already holds is not
+    /// asked about again, so a computer that went away does not stop the
+    /// person changing the other setting.
+    fn offers_places(
+        &self,
+        asked: &ChannelExecution,
+        kept: &ChannelExecution,
+    ) -> Result<(), ChannelError> {
+        let offered = |place: &Place, held: &Place| {
+            place == held
+                || !matches!(place, Place::Host(_) | Place::Peer(_))
+                || self.inner.environment.offers(place)
+        };
+        if offered(asked.coordinator(), kept.coordinator())
+            && offered(asked.threads(), kept.threads())
+        {
+            Ok(())
+        } else {
+            Err(ChannelError::PlaceUnavailable)
+        }
     }
 
     async fn channel_for_action(
