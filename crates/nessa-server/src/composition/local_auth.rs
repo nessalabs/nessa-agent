@@ -626,7 +626,7 @@ pub(super) async fn product_state(
                     .join("agents"),
             }));
     }
-    product.browser_http_allowed = config.browser_http_allowed();
+    product.browser.http_allowed = config.browser_http_allowed();
     #[cfg(unix)]
     {
         product = product.with_workspaces(workspace_service);
@@ -764,7 +764,7 @@ pub(super) async fn product_state(
             Uuid::new_v4(),
         )
         .map_err(|error| RunError::Agent(format!("review-notice audit unavailable: {error:?}")))?;
-        if product.webhooks.is_some() {
+        if product.accounts.webhooks.is_some() {
             webhook_delivery = Some(DeliveryDependencies {
                 metadata: metadata.clone(),
                 source: reader.clone(),

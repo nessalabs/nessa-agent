@@ -345,16 +345,18 @@ where
         Ok(handshake) => handshake,
         Err(code) => return Err((frame.id, code)),
     };
-    if let Some(id) = &state.browser_session_id {
+    if let Some(id) = &state.browser.session_id {
         if !params.credential.is_empty() {
             return Err((frame.id, "unauthorized"));
         }
         let store = state
-            .browser_sessions
+            .browser
+            .sessions
             .as_ref()
             .ok_or_else(|| (frame.id.clone(), "unauthorized"))?;
         let expected_origin = state
-            .browser_session_origin
+            .browser
+            .session_origin
             .as_deref()
             .ok_or_else(|| (frame.id.clone(), "unauthorized"))?;
         let _verified_record = ReadBrowserSession {
@@ -947,7 +949,7 @@ async fn run_authenticated<S>(
     // A waiting review is a snapshot on the ordinary lane. Abort this before
     // the lane's sender is dropped: the task holds one, and the writer
     // finishes only when every sender is gone.
-    let mut notice_task = state.permission_rules.clone().map(|board| {
+    let mut notice_task = state.conversation.permission_rules.clone().map(|board| {
         tokio::spawn(forward_review_notices(
             board,
             ordinary_send.clone(),
@@ -959,7 +961,7 @@ async fn run_authenticated<S>(
     });
     // This connection's place for its window (`workspace.publish`), withdrawn
     // when the socket goes and this is dropped.
-    let window = Arc::new(state.conversations.as_ref().map(|conversations| {
+    let window = Arc::new(state.conversation.service.as_ref().map(|conversations| {
         conversations.workspace_windows().open(
             session.context().organization_id().clone(),
             session.context().principal_id().clone(),
@@ -1502,7 +1504,7 @@ async fn forward_review_notices(
             // that row at this authority snapshot. The board is checked after
             // this await; checking it before would admit a candidate the board
             // drops while the token read waits.
-            let Some(metadata) = state.review_metadata.as_ref() else {
+            let Some(metadata) = state.reads.review_metadata.as_ref() else {
                 return Err(ReviewNoticePublicationFailure::Audit(
                     ReviewNoticeAuditFailure::Unavailable,
                 ));
@@ -1605,7 +1607,7 @@ async fn forward_review_notices(
 /// name a conversation its client has not listed yet: a review can reach a
 /// client before the list frame that names its conversation.
 async fn review_title(state: &ProductRouteState, conversation_id: &str) -> Option<String> {
-    let conversations = state.conversations.as_ref()?;
+    let conversations = state.conversation.service.as_ref()?;
     let id = super::conversation::conversation_id(conversation_id).ok()?;
     conversations.title(&id).await
 }
@@ -1899,7 +1901,7 @@ async fn set_native_hooks(
     use nessa_protocol::product::generated::{
         AgentsSetNativeHooksParams, AgentsSetNativeHooksResult,
     };
-    let Some(hooks) = state.native_hooks.as_ref() else {
+    let Some(hooks) = state.agents.native_hooks.as_ref() else {
         return failure(&frame.id, "conversations_not_configured");
     };
     let params: AgentsSetNativeHooksParams = match serde_json::from_value(frame.params) {
@@ -1916,6 +1918,7 @@ async fn set_native_hooks(
     let enabled = params.enabled;
     let request_id = params.request_id.clone();
     let caller_kind = state
+        .agents
         .caller_kinds
         .as_ref()
         .map(|source| {
@@ -2114,7 +2117,11 @@ async fn dispatch_authorized(
             if frame.params != json!({}) {
                 return failure(&frame.id, "invalid_request");
             }
-            let tunnel = state.tunnel.as_ref().and_then(|tunnel| tunnel.address());
+            let tunnel = state
+                .linking
+                .tunnel
+                .as_ref()
+                .and_then(|tunnel| tunnel.address());
             success(
                 &frame.id,
                 &nessa_protocol::product::generated::ServerReachResult {
@@ -2139,13 +2146,14 @@ async fn dispatch_authorized(
             else {
                 return failure(&frame.id, "invalid_request");
             };
-            let Some(devices) = state.devices.as_ref() else {
+            let Some(devices) = state.machines.devices.as_ref() else {
                 return failure(&frame.id, "devices_unavailable");
             };
             let mut list = device_list(devices.list(after).await);
             // The hosts this run serves and the default ride on the first page.
             if after.is_none() {
-                list = super::device_setup::listed(state.device_setup.as_ref(), list).await;
+                list =
+                    super::device_setup::listed(state.machines.device_setup.as_ref(), list).await;
             }
             fitted_devices(&frame.id, list)
         }
@@ -2161,12 +2169,16 @@ async fn dispatch_authorized(
             health_check_message(
                 &frame.id,
                 state.uptime_clock.elapsed_ms(),
-                state.webhooks.as_ref().map(|runtime| runtime.status()),
+                state
+                    .accounts
+                    .webhooks
+                    .as_ref()
+                    .map(|runtime| runtime.status()),
             )
             .unwrap_or_else(|_| failure(&frame.id, "internal_error"))
         }
         ProductMethod::CredentialIssue => {
-            let Some(admin) = state.admin.as_ref() else {
+            let Some(admin) = state.accounts.admin.as_ref() else {
                 return failure(&frame.id, "credential_store_unavailable");
             };
             let params: CredentialIssueParams = match serde_json::from_value(frame.params) {
@@ -2234,7 +2246,7 @@ async fn dispatch_authorized(
             }
         }
         ProductMethod::CredentialList => {
-            let Some(admin) = state.admin.as_ref() else {
+            let Some(admin) = state.accounts.admin.as_ref() else {
                 return failure(&frame.id, "credential_store_unavailable");
             };
             if serde_json::from_value::<CredentialListParams>(frame.params).is_err() {
@@ -2251,7 +2263,7 @@ async fn dispatch_authorized(
             }
         }
         ProductMethod::CredentialRevoke => {
-            let Some(admin) = state.admin.as_ref() else {
+            let Some(admin) = state.accounts.admin.as_ref() else {
                 return failure(&frame.id, "credential_store_unavailable");
             };
             let params: CredentialRevokeParams = match serde_json::from_value(frame.params) {
@@ -2290,7 +2302,7 @@ async fn dispatch_authorized(
                 .await
             {
                 Ok(RevokeCredentialOutcome { revision, .. }) => {
-                    if let Some(secrets) = state.tunnel_secrets.as_ref() {
+                    if let Some(secrets) = state.linking.tunnel_secrets.as_ref() {
                         if let Err(error) = secrets.revoke(
                             &params.credential_id,
                             crate::tunnel::application::SecretRevocation::CredentialRevoked,
@@ -2403,13 +2415,15 @@ async fn current_identity_inner(
     state: &ProductRouteState,
     session: &AuthenticatedSession,
 ) -> Result<(AuthenticatedSession, AccessSnapshot), AccessError> {
-    if let Some(id) = &state.browser_session_id {
+    if let Some(id) = &state.browser.session_id {
         let store = state
-            .browser_sessions
+            .browser
+            .sessions
             .as_ref()
             .ok_or(AccessError::InvalidCredential)?;
         let expected_origin = state
-            .browser_session_origin
+            .browser
+            .session_origin
             .as_deref()
             .ok_or(AccessError::InvalidCredential)?;
         let retained = ReadBrowserSession {
@@ -2469,11 +2483,12 @@ async fn ensure_browser_session_present(
     state: &ProductRouteState,
     session: &AuthenticatedSession,
 ) -> Result<(), AccessError> {
-    let Some(id) = &state.browser_session_id else {
+    let Some(id) = &state.browser.session_id else {
         return Ok(());
     };
     let store = state
-        .browser_sessions
+        .browser
+        .sessions
         .as_ref()
         .ok_or(AccessError::InvalidCredential)?;
     let retained = ReadBrowserSession {
@@ -6218,7 +6233,7 @@ mod tests {
                     first_failure: error,
                     reads: AtomicU64::new(0),
                 });
-                state.record_source = Some(Arc::new(UnreachableRecordSource));
+                state.reads.record_source = Some(Arc::new(UnreachableRecordSource));
                 state.settings = SessionSettings::new(
                     Duration::from_secs(20),
                     Duration::from_secs(5),
@@ -6296,7 +6311,7 @@ mod tests {
             let (mut state, _) = fixture(MembershipRole::Member);
             let session = authenticate(&state).await;
             state.access = Arc::new(PendingRecordAuthority);
-            state.record_source = Some(Arc::new(UnreachableRecordSource));
+            state.reads.record_source = Some(Arc::new(UnreachableRecordSource));
             let permits = Arc::new(Semaphore::new(1));
             let lease = RecordReadLease::new(permits.clone().try_acquire_owned().unwrap());
             let start = Instant::now();
@@ -6334,7 +6349,7 @@ mod tests {
             let (mut state, _) = fixture(MembershipRole::Member);
             let session = authenticate(&state).await;
             state.access = Arc::new(PendingRecordAuthority);
-            state.record_source = Some(Arc::new(UnreachableRecordSource));
+            state.reads.record_source = Some(Arc::new(UnreachableRecordSource));
             // Isolate frame admission from the separate periodic socket check.
             state.settings = SessionSettings::new(
                 Duration::from_secs(20),
@@ -6395,7 +6410,7 @@ mod tests {
                     first_read_delay: Duration::ZERO,
                 });
                 state.access = authority.clone();
-                state.record_source = Some(Arc::new(UnreachableRecordSource));
+                state.reads.record_source = Some(Arc::new(UnreachableRecordSource));
                 let permits = Arc::new(Semaphore::new(1));
                 let lease = RecordReadLease::new(permits.clone().try_acquire_owned().unwrap());
                 let deadline = Instant::now() + PASSIVE_READ_TIMEOUT;
@@ -6433,7 +6448,7 @@ mod tests {
             first_read_delay: PASSIVE_READ_TIMEOUT,
         });
         state.access = authority.clone();
-        state.record_source = Some(Arc::new(UnreachableRecordSource));
+        state.reads.record_source = Some(Arc::new(UnreachableRecordSource));
         let permits = Arc::new(Semaphore::new(1));
         let lease = RecordReadLease::new(permits.clone().try_acquire_owned().unwrap());
         let start = Instant::now();
@@ -7987,10 +8002,10 @@ mod tests {
                         fail_at,
                         error,
                     });
-                    state.browser_sessions = Some(store.clone());
-                    state.browser_session_id = Some("a".repeat(64));
-                    state.browser_session_origin = Some(origin.to_owned());
-                    state.record_source = Some(Arc::new(UnreachableRecordSource));
+                    state.browser.sessions = Some(store.clone());
+                    state.browser.session_id = Some("a".repeat(64));
+                    state.browser.session_origin = Some(origin.to_owned());
+                    state.reads.record_source = Some(Arc::new(UnreachableRecordSource));
                     let permits = Arc::new(Semaphore::new(1));
                     let (response, lease) = dispatch_passive_read(
                         &state,
@@ -8070,8 +8085,8 @@ mod tests {
             .unwrap(),
         });
         state = state.with_browser_sessions(store);
-        state.browser_session_id = Some("a".repeat(64));
-        state.browser_session_origin = Some("https://127.0.0.1:1443".into());
+        state.browser.session_id = Some("a".repeat(64));
+        state.browser.session_origin = Some("https://127.0.0.1:1443".into());
         state.policy = Arc::new(RemoveBrowserAfterAdmission {
             present,
             policy: CedarPolicyEvaluator::new().unwrap(),
@@ -8101,8 +8116,8 @@ mod tests {
             .unwrap(),
         });
         state = state.with_browser_sessions(store);
-        state.browser_session_id = Some("a".repeat(64));
-        state.browser_session_origin = Some("https://127.0.0.1:1443".into());
+        state.browser.session_id = Some("a".repeat(64));
+        state.browser.session_origin = Some("https://127.0.0.1:1443".into());
         state.access = Arc::new(RemoveBrowserAfterAuthorityRead { authority, present });
 
         let OutgoingMessage::Response(response) =

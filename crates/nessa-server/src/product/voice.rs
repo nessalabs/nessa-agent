@@ -25,7 +25,7 @@ pub(super) async fn dispatch(
     session: &AuthenticatedSession,
     frame: RequestFrame,
 ) -> OutgoingMessage {
-    let Some(voice) = state.voice.as_ref() else {
+    let Some(voice) = state.accounts.voice.as_ref() else {
         return failure(&frame.id, VoiceErrorCode::VoiceNotConfigured.as_str());
     };
     let caller = caller(session);
@@ -96,7 +96,7 @@ async fn admit_call(
     super::read_access::admit_conversation(state, session, &id).await?;
     super::read_access::admit_command_target(state, session, &id, AccessAction::Act).await?;
     // A gateway that keeps no conversations has none to call about.
-    let Some((_, conversations, _)) = state.passive_read.as_ref() else {
+    let Some((_, conversations, _)) = state.reads.passive_read.as_ref() else {
         return Err(ConversationErrorCode::ConversationsNotConfigured.as_str());
     };
     load_conversation(conversations.as_ref(), &id)

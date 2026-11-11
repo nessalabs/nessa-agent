@@ -68,22 +68,25 @@ pub(crate) async fn dispatch(
     let conversation =
         ConversationId::new(&conversation_id).map_err(|_| RecordReadErrorCode::InvalidRequest)?;
     let (receivers, repository, share_grants) = state
+        .reads
         .passive_read
         .as_ref()
         .ok_or(RecordReadErrorCode::TemporarilyUnavailable)?;
     let access_policy = state
+        .reads
         .conversation_access
         .as_ref()
         .ok_or(RecordReadErrorCode::TemporarilyUnavailable)?;
     let source = state
+        .reads
         .record_source
         .as_ref()
         .ok_or(RecordReadErrorCode::TemporarilyUnavailable)?;
     let use_case = ReadRecords {
         admission: AdmitPassiveRead {
-            owner_phone_purposes: state.owner_phone_purpose.as_ref(),
-            owner_phone_receivers: state.owner_phone_receivers.as_deref(),
-            owner_phone_policy: state.owner_phone_policy.clone(),
+            owner_phone_purposes: state.owner_phone.purpose.as_ref(),
+            owner_phone_receivers: state.owner_phone.receivers.as_deref(),
+            owner_phone_policy: state.owner_phone.policy.clone(),
             authorization: AuthorizeAction {
                 access: state.access.as_ref(),
                 clock: state.clock.as_ref(),

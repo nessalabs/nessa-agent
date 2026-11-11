@@ -547,7 +547,7 @@ mod attachment_gateway {
         assert_eq!(payload["digest"], digest_of(b"small jpeg").to_string());
         assert_eq!(payload["mimeType"], "image/jpeg");
         assert_eq!(payload["size"], 10);
-        assert_eq!(state.socket_uploads.in_progress(), 0);
+        assert_eq!(state.files.socket_uploads.in_progress(), 0);
 
         // The ticket was spent by its upload.
         let reply = chat_request(
@@ -590,7 +590,7 @@ mod attachment_gateway {
         )
         .await;
         assert_eq!(refused(reply), "upload_failed");
-        assert_eq!(state.socket_uploads.in_progress(), 0);
+        assert_eq!(state.files.socket_uploads.in_progress(), 0);
         // The piece that would have been right is now one of no upload.
         let reply = chat_request(
             &state,
@@ -610,7 +610,7 @@ mod attachment_gateway {
         )
         .await;
         assert_eq!(refused(reply), "upload_failed");
-        assert_eq!(state.socket_uploads.in_progress(), 0);
+        assert_eq!(state.files.socket_uploads.in_progress(), 0);
     }
 
     #[tokio::test]
@@ -666,7 +666,7 @@ mod attachment_gateway {
             let reply = chat_request(&state, &session, "attachment.write", params).await;
             assert_eq!(refused(reply), expected);
         }
-        assert_eq!(state.socket_uploads.in_progress(), 0);
+        assert_eq!(state.files.socket_uploads.in_progress(), 0);
         // Without the chat grant the method is not reachable at all.
         let reader = chat_session(&state, "reader").await;
         let reply =

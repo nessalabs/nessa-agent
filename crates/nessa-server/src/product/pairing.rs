@@ -42,7 +42,7 @@ pub(super) async fn dispatch(
     session: &AuthenticatedSession,
     frame: RequestFrame,
 ) -> OutgoingMessage {
-    let Some(pairing) = state.pairing.as_ref() else {
+    let Some(pairing) = state.linking.commands.as_ref() else {
         return failure(&frame.id, PairingErrorCode::PairingNotConfigured.as_str());
     };
     let id = frame.id;
@@ -233,7 +233,7 @@ pub(super) async fn set_linking(
     let Ok(params) = serde_json::from_value::<PairingSetLinkingParams>(frame.params) else {
         return failure(&frame.id, "invalid_request");
     };
-    let Some(linking) = state.native_linking.as_ref() else {
+    let Some(linking) = state.linking.native_linking.as_ref() else {
         return failure(&frame.id, PairingErrorCode::PairingUnavailable.as_str());
     };
     match linking.set(linking_caller(session), params.enabled).await {
@@ -303,7 +303,7 @@ pub(super) async fn set_tunnel(
         Ok(token) => token,
         Err(()) => return failure(&frame.id, "invalid_request"),
     };
-    let Some(linking) = state.native_linking.as_ref() else {
+    let Some(linking) = state.linking.native_linking.as_ref() else {
         return failure(&frame.id, PairingErrorCode::PairingUnavailable.as_str());
     };
     let request = TunnelRequest {
@@ -338,7 +338,7 @@ pub(super) async fn tunnel(state: &ProductRouteState, frame: RequestFrame) -> Ou
     if frame.params != json!({}) {
         return failure(&frame.id, "invalid_request");
     }
-    let Some(linking) = state.native_linking.as_ref() else {
+    let Some(linking) = state.linking.native_linking.as_ref() else {
         return failure(&frame.id, PairingErrorCode::PairingUnavailable.as_str());
     };
     let saved = match linking.tunnel().await {
@@ -346,6 +346,7 @@ pub(super) async fn tunnel(state: &ProductRouteState, frame: RequestFrame) -> Ou
         Err(error) => return failure(&frame.id, linking_refusal(error).as_str()),
     };
     let live = state
+        .linking
         .tunnel
         .as_ref()
         .map(|tunnel| tunnel.status.borrow().clone());

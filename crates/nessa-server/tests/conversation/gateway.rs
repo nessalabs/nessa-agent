@@ -310,7 +310,7 @@ policy: &nessa_auth::adapters::cedar::CedarPolicyEvaluator::new().unwrap(),
             hosts(chat_request(&state, &session, "agents.list", json!({})).await),
             json!([])
         );
-        let mut catalog = serde_json::to_value(state.agents_catalog.as_deref().unwrap()).unwrap();
+        let mut catalog = serde_json::to_value(state.agents.catalog.as_deref().unwrap()).unwrap();
         catalog["environments"] = json!(["agentbox", "build.example", "devbox"]);
         let root = tempfile::tempdir().unwrap();
         let service =

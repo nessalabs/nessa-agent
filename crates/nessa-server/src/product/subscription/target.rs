@@ -228,7 +228,7 @@ impl Sources {
         catalogue_owner: Option<&PrincipalId>,
     ) -> Result<Self, String> {
         let unavailable = || code_of(&ConversationError::Unavailable);
-        let records = || state.record_watches.as_ref().ok_or_else(unavailable);
+        let records = || state.reads.record_watches.as_ref().ok_or_else(unavailable);
         let closed = |ChangeWatchError::Closed| unavailable();
         Ok(match target {
             Target::Events { conversation, .. } => Self {
@@ -255,6 +255,7 @@ impl Sources {
             Target::List { .. } => {
                 let owner = caller(session, String::new());
                 let catalogue = state
+                    .reads
                     .catalogue_watches
                     .as_ref()
                     .ok_or_else(unavailable)?

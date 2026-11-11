@@ -33,7 +33,7 @@ impl ConnectionVault {
         state: &mut ProductRouteState,
         session: &AuthenticatedSession,
     ) -> Option<Self> {
-        let vault = state.vault.as_ref()?;
+        let vault = state.accounts.vault.as_ref()?;
         let context = session.context();
         let owner = vault.vault.session(
             uuid::Uuid::new_v4().to_string(),
@@ -42,10 +42,10 @@ impl ConnectionVault {
                 credential: context.credential_id().as_str().to_owned(),
             },
         );
-        state.vault_lease = Some(owner.lease());
+        state.accounts.vault_lease = Some(owner.lease());
         Some(Self {
             session: owner,
-            github: state.github.clone(),
+            github: state.accounts.github.clone(),
         })
     }
     pub(super) fn close(&mut self) {
@@ -68,10 +68,10 @@ pub(super) async fn dispatch(
     state: &ProductRouteState,
     mut frame: RequestFrame,
 ) -> OutgoingMessage {
-    let Some(routes) = state.vault.as_ref() else {
+    let Some(routes) = state.accounts.vault.as_ref() else {
         return failure(&frame.id, "vault_unavailable");
     };
-    let Some(lease) = state.vault_lease.clone() else {
+    let Some(lease) = state.accounts.vault_lease.clone() else {
         return failure(&frame.id, "vault_session_closed");
     };
     if frame.method == "vault.changePassphrase" {
@@ -107,6 +107,7 @@ pub(super) async fn dispatch(
         .unwrap_or(Err(Failure::Unavailable));
     let cleanup = if matches!(operation, Operation::Lock) {
         state
+            .accounts
             .github
             .as_ref()
             .map(|github| github.connections.clear_locked())
@@ -120,7 +121,7 @@ pub(super) async fn dispatch(
     match result {
         Ok(status) => {
             if matches!(operation, Operation::Setup | Operation::Unlock) {
-                if let Some(github) = &state.github {
+                if let Some(github) = &state.accounts.github {
                     if github.connections.restore().await.is_err() {
                         tracing::warn!(
                             "vault unlocked; saved GitHub connection could not be restored"
@@ -160,7 +161,7 @@ async fn change_passphrase(
         Ok(value) => value,
         Err(problem) => return failure(&frame.id, code(problem)),
     };
-    let github = state.github.clone();
+    let github = state.accounts.github.clone();
     let result = tokio::task::spawn_blocking(move || {
         let changed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             routes.vault.change_passphrase(&lease, passphrase)

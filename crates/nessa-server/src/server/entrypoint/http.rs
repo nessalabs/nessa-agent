@@ -70,10 +70,10 @@ async fn browser_upgrade(
     headers: HeaderMap,
     State(mut state): State<crate::product::ProductRouteState>,
 ) -> Response {
-    let Some(request_origin) = browser::origin(&headers, state.browser_http_allowed) else {
+    let Some(request_origin) = browser::origin(&headers, state.browser.http_allowed) else {
         return StatusCode::FORBIDDEN.into_response();
     };
-    let session = match (&state.browser_sessions, browser::cookie(&headers)) {
+    let session = match (&state.browser.sessions, browser::cookie(&headers)) {
         (Some(store), Some(id)) => match tokio::time::timeout(
             state.settings.handshake_timeout(),
             crate::browser_session::application::ReadBrowserSession {
@@ -94,8 +94,8 @@ async fn browser_upgrade(
     if request_origin != session.origin() {
         return StatusCode::FORBIDDEN.into_response();
     }
-    state.browser_session_id = browser::cookie(&headers).map(str::to_owned);
-    state.browser_session_origin = Some(request_origin.to_owned());
+    state.browser.session_id = browser::cookie(&headers).map(str::to_owned);
+    state.browser.session_origin = Some(request_origin.to_owned());
     ws.max_message_size(MAX_PAYLOAD_BYTES as usize)
         .max_frame_size(MAX_PAYLOAD_BYTES as usize)
         .on_upgrade(move |socket| crate::product::handle_socket(socket, state))

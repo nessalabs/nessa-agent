@@ -23,7 +23,7 @@ pub(super) async fn dispatch(
     session: &AuthenticatedSession,
     frame: RequestFrame,
 ) -> OutgoingMessage {
-    let Some(service) = &state.conversations else {
+    let Some(service) = &state.conversation.service else {
         return failure(&frame.id, "pool_unavailable");
     };
     let caller = super::conversation::caller(session, frame.id.clone());

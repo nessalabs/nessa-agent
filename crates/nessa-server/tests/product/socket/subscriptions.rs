@@ -544,7 +544,7 @@ impl SubscriptionFixture {
     /// nothing would send it, so it asks no receiver binding.
     async fn owner_turn(&self, execution: &str) {
         let mut owner = self.state.clone();
-        owner.passive_read = None;
+        owner.reads.passive_read = None;
         let params = json!({
             "conversationId": self.id.to_string(),
             "requestId": format!("send-{execution}"),
@@ -3496,7 +3496,7 @@ fn comment_params(method: &str, id: &ConversationId, request: &str) -> Value {
 /// devices: the fixture's session with no receiver binding.
 async fn owner_call(fixture: &SubscriptionFixture, method: &str, params: Value) -> Value {
     let mut owner = fixture.state.clone();
-    owner.passive_read = None;
+    owner.reads.passive_read = None;
     let frame = RequestFrame::new("call", method, &params).unwrap();
     let OutgoingMessage::Response(response) = dispatch(&owner, &fixture.session, frame).await
     else {
