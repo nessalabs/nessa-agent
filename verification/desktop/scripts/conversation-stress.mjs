@@ -7171,21 +7171,8 @@ const steps = {
 
   async huddle(run, step, failures) {
     const conversationId = randomUUID()
+    run.failureConversationId = conversationId
     const first = prompt(run, STRESS.huddle, step)
-    await run.client.conversation.create({ conversationId, agent: run.stack.agent })
-    run.checked.push(conversationId)
-    await run.client.conversation.submit(
-      run.client.conversation.prepare(conversationId, first),
-    )
-    const { view } = await settled(
-      run,
-      conversationId,
-      new Set(),
-      first,
-      "completed",
-      failures,
-    )
-    if (!view) return
     const page = run.page
     const shot = (what) =>
       run.evidence
@@ -7194,6 +7181,22 @@ const steps = {
             .catch(() => {})
         : undefined
     await run.exclusive(async () => {
+      // Drain background work before starting this app fixture. Otherwise its
+      // three-second idle lease can expire while exclusive waits (#1327).
+      await run.client.conversation.create({ conversationId, agent: run.stack.agent })
+      run.checked.push(conversationId)
+      await run.client.conversation.submit(
+        run.client.conversation.prepare(conversationId, first),
+      )
+      const { view } = await settled(
+        run,
+        conversationId,
+        new Set(),
+        first,
+        "completed",
+        failures,
+      )
+      if (!view) return
       try {
         await openStressConversation(
           page,
@@ -7202,6 +7205,8 @@ const steps = {
         )
         await talkBoard(run, step, conversationId, failures, shot)
       } finally {
+        if (failures.length)
+          await shot(`${run.engine}-${step.index}-failed-before-cleanup`)
         await openStressConversation(page, run.main.id, run.main.title)
       }
     })
