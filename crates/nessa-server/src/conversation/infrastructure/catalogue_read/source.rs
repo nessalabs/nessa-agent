@@ -9,8 +9,8 @@ use crate::conversation::application::{
     CatalogueReadOperation, CatalogueReadResponse, CatalogueReadSource,
     ConversationAccessPolicyEvaluator, ConversationCatalogue, RecordReadLease,
 };
-use crate::core::read_workers::{ReadWorkerError, ReadWorkers};
 use nessa_auth::domain::PrincipalId;
+use nessa_local_storage::read_workers::{ReadWorkerError, ReadWorkers};
 use nessa_sync::replication::domain::Id;
 use std::sync::Arc;
 

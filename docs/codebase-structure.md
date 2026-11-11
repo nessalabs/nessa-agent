@@ -1002,7 +1002,7 @@ encoding and size checks, before the first sink call, or when the response drops
 ([R61 and R64](design/authorized-record-reads.md)). The existing
 one-per-socket permit is shared with that physical lease, so delivering a read
 timeout cannot admit another source while the original worker remains live.
-`nessa_local_storage::read_workers` (re-exported as `core::read_workers`) owns
+`nessa_local_storage::read_workers` owns
 tracked blocking source threads, sticky faults and the retained join-all drain
 used by record/catalogue infrastructure and attachment range reads. It grants no
 source permission or socket capacity. Its lifecycle tests live beside it in
@@ -1915,7 +1915,7 @@ local `AttachmentArtifacts` facts/range/drain port and immutable range/byte type
 consumed by successful discard outcomes, reversal audit and saved retirement.
 `infrastructure/hold_record.rs` owns the typed Pending/Kept/Retired saved codec;
 `store/artifacts.rs` scans exact identities incrementally and archives retirement
-metadata. `store/source.rs` consumes `core::read_workers` with one shared,
+metadata. `store/source.rs` consumes `nessa_local_storage::read_workers` with one shared,
 nonwaiting manifest/range slot. The source is local and not composed into protected
 transport or gateway shutdown. State order and remaining activation boundaries
 are owned by [artifact sync](design/artifact-sync.md).

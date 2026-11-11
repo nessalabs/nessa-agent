@@ -4,10 +4,7 @@
 //! tracing setup, Linux process-local dump/inspection protection, the gateway
 //! log's size bound, fatal error reporting, the
 //! tokio runtime wrapper in `bootstrap`, and the trusted-origin predicate every
-//! context shares in `trusted_origin`. `read_workers` owns tracked blocking
-//! source work and retained drain shared by record and catalogue infrastructure.
-//! Source adapters retain authorization and capacity policy; attachment consumers
-//! are integrated separately. `local_timings` is the duration files kept in the
+//! context shares in `trusted_origin`. `local_timings` is the duration files kept in the
 //! log directory; `nessa doctor` reads them and nothing sends them.
 //!
 //! How a run ends is decided in `ending`, out of four facts: what went wrong
@@ -45,7 +42,6 @@ pub mod logging;
 mod open_files;
 #[cfg(target_os = "linux")]
 mod process_memory;
-pub(crate) mod read_workers;
 mod restart;
 #[cfg(unix)]
 pub(crate) mod self_restart;
