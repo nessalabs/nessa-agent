@@ -434,6 +434,7 @@ export const selectorFor = {
   linkedAction: (action) => `[data-linked-action="${action}"]`,
   stressTreeSessionFor: (id) => `.workspace-thread-row[data-session-row="${id}"]`,
   sessionListRowFor: (id) => `.workspace-list [data-session-row="${id}"]`, // one session's row in the session list
+  stressTreeSessionFor: (id) => `.workspace-thread-row[data-session-row="${id}"]`,
   shareAction: (action) => `[data-share-action="${action}"]`, // submit | change | revoke | confirm-revoke | cancel-revoke | restart | retry | close
   shareGrant: (credentialId) => `[data-share-grant="${credentialId}"]`,
   sharePattern: (list) => `[data-share-pattern="${list}"]`, // allow | deny

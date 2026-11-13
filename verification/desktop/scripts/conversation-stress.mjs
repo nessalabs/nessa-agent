@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+import { Run } from "./lib/stress-run.mjs"
+import { reportStressStep, withStepFailureEvidence } from "./lib/stress-step-evidence.mjs"
 import {
   boatProbe,
   channelPlacementSettings,
@@ -568,60 +570,6 @@ const fold = (text) =>
   String(text ?? "")
     .replace(/\s+/g, " ")
     .trim()
-
-/** Everything the run shares: the stack, the page, and the client in use now. */
-class Run {
-  constructor(stack, opened, knobs, restartConsole) {
-    this.restartConsole = restartConsole
-    this.stack = stack
-    this.acpRecording = stack.acpRecording
-    this.opened = opened
-    this.page = opened.page
-    this.knobs = knobs
-    this.client = stack.client
-    this.mode = "ask"
-    /** Gateway restarts so far: a request in flight across one may lose its answer. */
-    this.restarts = 0
-    this.main = null
-    /** Turns a background conversation has in flight; a restart waits for none. */
-    this.busy = 0
-    this.paused = null
-    this.background = []
-    /** Other conversations a step opened that the final rest check sweeps too. */
-    this.checked = []
-    /** Conversations a step deleted: followers let them go, and nothing sweeps them. */
-    this.deleted = new Set()
-    this.sent = new Map()
-    this.owned = new Set()
-    /** Where native linking listens once the `linking` step turns it on. */
-    this.nativeAddress = stack.nativeAddress
-    /** What config.json names for it: every interface, on the same port. */
-    this.nativeListen = stack.nativeListen
-  }
-
-  /** Waits while a restart holds the gateway. */
-  async enter() {
-    while (this.paused) await this.paused
-    this.busy += 1
-  }
-
-  leave() {
-    this.busy -= 1
-  }
-
-  /** Runs `body` with no background turn in flight and none starting. */
-  async exclusive(body) {
-    let release
-    this.paused = new Promise((resolve) => (release = resolve))
-    try {
-      await waitFor(() => this.busy === 0, 120_000)
-      return await body()
-    } finally {
-      this.paused = null
-      release()
-    }
-  }
-}
 
 /** An error with its code and cause, which a client failure keeps apart from its message. */
 const explain = (error) =>
@@ -7409,18 +7357,21 @@ const steps = {
         failures,
       )
       if (!view) return
-      try {
-        await openStressConversation(
-          page,
-          conversationId,
-          await titleOf(run, conversationId),
-        )
-        await talkBoard(run, step, conversationId, failures, shot)
-      } finally {
-        if (failures.length)
-          await shot(`${run.engine}-${step.index}-failed-before-cleanup`)
-        await openStressConversation(page, run.main.id, run.main.title)
-      }
+      await withStepFailureEvidence(
+        async () => {
+          await openStressConversation(
+            page,
+            conversationId,
+            await titleOf(run, conversationId),
+          )
+          await talkBoard(run, step, conversationId, failures, shot)
+        },
+        {
+          failures,
+          capture: () => shot(`${run.engine}-${step.index}-failed-before-cleanup`),
+          cleanup: () => openStressConversation(page, run.main.id, run.main.title),
+        },
+      )
     })
   },
 
@@ -11418,7 +11369,7 @@ await main(
       // The probe's own refusal is the console line it is expected to leave.
       opened.noteHarmless(/127\.0\.0\.1:9\/policy-probe/)
       await assertPolicyHolds(opened.page, contentPolicy)
-      const run = new Run(stack, opened, knobs, restartConsole)
+      const run = new Run(stack, opened, knobs, restartConsole, waitFor)
       run.reviewAnswers = reviewAnswers
       run.reviewAnswerEvidence = []
       run.accessRefusals = accessRefusals
@@ -11480,24 +11431,9 @@ await main(
             continue
           }
           run.failureConversationId = null
-          const at = Date.now()
-          const failures = []
-          let error
-          try {
-            await steps[step.kind](run, step, failures)
-          } catch (thrown) {
-            error = thrown
-          }
-          const entry = rep.add({
-            name,
-            ...base,
-            ms: Date.now() - at,
-            seen: step,
-            failures,
-            ...(error
-              ? { error: explain(error), cannotRun: error instanceof CannotRun }
-              : {}),
-          })
+          const entry = await reportStressStep(rep, { name, ...base }, step, (failures) =>
+            steps[step.kind](run, step, failures),
+          )
           if (!entry.ok) {
             stopped = `${name} did not hold`
             if (options.evidence) {

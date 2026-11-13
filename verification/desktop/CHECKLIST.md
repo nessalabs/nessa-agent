@@ -753,6 +753,13 @@ in its sandbox". Every row of the bridge's design table is a jsdom test
   exact reply id, mode and sandbox origin before opening can close its real
   transport; posting before retirement does not claim consumption by the
   retired iframe. No replacement frame is used as that caller's receipt.
+- [ ] **The real-gateway huddle starts after background turns drain.** An
+  expired drain refuses the step within the existing 120-second bound and
+  releases the pause. Assertion failures and thrown browser errors capture
+  the fixture before cleanup returns to the main conversation. _Checks:_
+  `conversation-stress.mjs --only huddle`, `lib/stress-run.test.mjs` and
+  `lib/stress-step-evidence.test.mjs`. The same identity/composer selection
+  contract applies in both layouts (`lib/stress-conversation.test.mjs`).
 - [ ] **`tools/call` is answered for an allowed tool and refused for a hidden
   one**, with the gateway's reason. _Check:_ `mcp-apps.mjs --only tools-call`.
 - [ ] **An app's message lands in its conversation as the person's, saying
