@@ -5,6 +5,7 @@ kind: "service"
 status: "implemented"
 summary: "The local gateway receives authenticated Nessa commands."
 parent: "nessa"
+sourceRevision: "bcf35e40891a99c3fc8042de49785bdf40e45b95"
 sources:
   - "crates/nessa-server/src/product/socket.rs"
   - "crates/nessa-server/src/conversation/application/service.rs"
@@ -91,3 +92,16 @@ models link back to the source that owns those decisions.
 occupied cache checkout, validation progress and the active work budget. An
 occupied stream waits for its own release rather than ending a watch or waiting
 for every unrelated stream.
+
+## Startup and process stop
+
+The Unix gateway prepares its termination future before listener binding and
+endpoint publication. The same future enters the existing stop and restart
+cleanup owner. [Mounting ordering S19](../../../design/auth/device-pairing.md#owner-routes-and-mounting-slice-2a)
+owns the successful-registration guarantee and the existing registration-error
+fallback; this component map introduces no separate shutdown owner.
+
+The source review at `bcf35e40891a99c3fc8042de49785bdf40e45b95` covered this component map, the
+product socket's authentication and route delegation, the conversation service's
+SDK ownership, and the composition root's Unix startup ordering. This checkpoint
+does not refresh child pages or their bounded models, and records no model run.
