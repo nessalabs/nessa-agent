@@ -91,8 +91,9 @@ how the folder is laid out and run is [`verification/README.md`](../verification
 The conversation stress runner's background pause and confirmed drain live in
 `verification/desktop/scripts/lib/stress-run.mjs`. Its step evidence helper,
 `stress-step-evidence.mjs`, captures assertion failures and thrown browser errors
-before navigation cleans up the fixture. Their sibling tests enforce the drain
-deadline, release paths, and capture order.
+before navigation cleans up the fixture, then reports outcomes through the CLI's
+failure owner. Their sibling tests enforce the drain deadline, release paths,
+capture order, and reporting of both step and cleanup failures.
 
 The Tauri command layer is an **adapter**, not a home for logic. A
 `#[tauri::command]` function should read like: deserialise, call one use case,

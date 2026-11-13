@@ -12,9 +12,15 @@ The huddle's diagnostic capture precedes navigation back to the main conversatio
 | Browser assertion fails | Retain its failures | Capture the fixture before returning to main |
 | Browser action throws | Retain that exception | Capture the fixture before returning to main |
 | Screenshot fails | Keep the original step result | Still return to main |
+| Step and cleanup both throw | Retain both errors in an aggregate | Report both through the canonical CLI formatter |
+| Cleanup alone throws | Retain that cleanup error | Report a failed step |
+| Step throws a falsy value | Retain the caught outcome, independently of its value | Emit a nonempty failure through the CLI result owner |
 
 These are harness contracts, separate from app transport delivery and the
 historical lifecycle model. They do not change workload counts or deadlines.
+The evidence helper records one returned-or-thrown outcome before cleanup; it
+does not throw from a finally block. The stress loop uses `resultOfThrown`, the
+existing CLI result owner, rather than classifying a caught value by truthiness.
 
 ## Original transport and live-view evidence
 
@@ -135,18 +141,18 @@ started its body, and a thrown browser error lost its fixture screenshot.
 The run coordinator now refuses an expired drain and releases waiting work;
 the evidence helper captures both assertion failures and exceptions before
 navigation. Their owning modules and eight focused regressions replace the
-previous inline coordinator. The120-second drain bound is unchanged.
+previous inline coordinator. The 120-second drain bound is unchanged.
 
 The canonical sidebar conversation helper and its tests are now included from
-#1296, not supplied as a verifier overlay. Exact identity and composer focus are
+#1296, not supplied as a verifier overlay. Exact identity and visible composer are
 observed together, and the helper discloses the actual sidebar tree and older
-rows before selecting it. Fixture/navigation tests pass22/22. Removing the drain
+rows before selecting it. Fixture/navigation tests pass 22/22. Removing the drain
 refusal, thrown-error capture, or sidebar route fails its regression; restoring
 each passes. [Probe summary](fixture-failure-probes.json).
 
 The current title-only Settings masthead shipped in #1282. The smoke assertion
-now uses #1296's exact-title/extra-copy contract: before29/33, fixed33/33,
-injected unexpected copy29/33 (all four Settings profiles fail), restored33/33.
+now uses #1296's exact-title/extra-copy contract: before 29/33, fixed 33/33,
+injected unexpected copy 29/33 (all four Settings profiles fail), restored 33/33.
 No deadline was extended. The initial mutation command used an unsupported
 `--only` option and did not execute; it is excluded from the semantic probe.
 Browser checks used headed bundled Chromium and WebKit with a user-local
@@ -155,8 +161,31 @@ user-local library; its native load and actual browser launch were verified.
 This is Playwright evidence, not native WKWebView.
 
 CI at source `8b5bc4b35` passed its required aggregate after the two DNS-failed
-jobs were retried: [run43034036328](https://github.com/nessalabs/nessa-agent/actions/runs/43034036328).
+jobs were retried: [run 43034036328](https://github.com/nessalabs/nessa-agent/actions/runs/43034036328).
 That result predates these repairs and current-main integration. New publication,
 exact-head CI, raised real-gateway stress, full browser and native qualification
 remain pending. The initial broad integration run's GitHub WebKit reload timeout
 is retained; later isolated headed execution passed, without establishing a cause.
+
+## Structural step-failure closure
+
+The next independent round at `d080fc820` found two related boundaries:
+cleanup could replace a browser exception, and the outer loop classified a
+falsy thrown value as success. The failure path was revised as one explicit
+returned-or-thrown outcome, followed by capture and cleanup. When both action
+and cleanup throw, an aggregate retains both identities and the action cause.
+A cleanup-only exception retains its original identity.
+
+Step reporting now goes through the existing CLI result owner. It emits a
+nonempty failure for falsy and unprintable throws, retains both aggregate
+members, and keeps typed RPC codes and immediate causes. Fatal recovery
+causes retain their existing representation. The measured step duration is
+captured before diagnostic formatting. No workload or deadline changes.
+
+The focused CLI/run/evidence/navigation/app suites pass 97 tests. Six deliberate
+mutations separately remove double-failure retention, falsy classification,
+aggregate reporting, empty-message classification, typed code retention and
+immediate-cause retention. Each fails its intended regression and passes after
+restoration. [Step-reporting probes](step-reporting-probes.json). This source
+review and unit evidence do not substitute for pending browser/native runs or
+exact-head CI. Historical receipts above retain their source cuts.

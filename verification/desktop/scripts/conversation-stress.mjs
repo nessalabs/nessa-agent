@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { Run } from "./lib/stress-run.mjs"
-import { withStepFailureEvidence } from "./lib/stress-step-evidence.mjs"
+import { reportStressStep, withStepFailureEvidence } from "./lib/stress-step-evidence.mjs"
 import {
   boatProbe,
   channelPlacementSettings,
@@ -11384,24 +11384,9 @@ await main(
             continue
           }
           run.failureConversationId = null
-          const at = Date.now()
-          const failures = []
-          let error
-          try {
-            await steps[step.kind](run, step, failures)
-          } catch (thrown) {
-            error = thrown
-          }
-          const entry = rep.add({
-            name,
-            ...base,
-            ms: Date.now() - at,
-            seen: step,
-            failures,
-            ...(error
-              ? { error: explain(error), cannotRun: error instanceof CannotRun }
-              : {}),
-          })
+          const entry = await reportStressStep(rep, { name, ...base }, step, (failures) =>
+            steps[step.kind](run, step, failures),
+          )
           if (!entry.ok) {
             stopped = `${name} did not hold`
             if (options.evidence) {

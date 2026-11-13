@@ -1,0 +1,40 @@
+{
+  "reviewedSourceBeforeRepairs": "d080fc820d15b096d6da20b6f6a1c0acfa9e401c",
+  "focusedTests": {
+    "passed": 97,
+    "failed": 0
+  },
+  "probes": [
+    {
+      "rule": "double-failure",
+      "mutationFailures": 2,
+      "restoredPassed": true
+    },
+    {
+      "rule": "falsy-report",
+      "mutationFailures": 1,
+      "restoredPassed": true
+    },
+    {
+      "rule": "aggregate-report",
+      "mutationFailures": 1,
+      "restoredPassed": true
+    },
+    {
+      "rule": "empty-report",
+      "mutationFailures": 1,
+      "restoredPassed": true
+    },
+    {
+      "rule": "typed-code",
+      "mutationFailures": 1,
+      "restoredPassed": true
+    },
+    {
+      "rule": "immediate-cause",
+      "mutationFailures": 1,
+      "restoredPassed": true
+    }
+  ],
+  "scope": "returned/thrown outcome, cleanup aggregation, real CLI report classification and retained diagnostic metadata; no native/browser execution claim"
+}
