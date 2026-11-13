@@ -5,7 +5,7 @@ kind: "service"
 status: "implemented"
 summary: "The local gateway receives authenticated Nessa commands."
 parent: "nessa"
-sourceRevision: "bcf35e40891a99c3fc8042de49785bdf40e45b95"
+sourceRevision: "87870b9be26bf73e6bf85a633e75a1c158765a92"
 sources:
   - "crates/nessa-server/src/product/socket.rs"
   - "crates/nessa-server/src/conversation/application/service.rs"
