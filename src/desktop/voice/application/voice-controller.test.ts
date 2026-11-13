@@ -51,7 +51,12 @@ class FakeConnection implements RealtimeConnection {
   setSpeaker(on: boolean) {
     this.speaker = on
   }
-  found: CallCheck = { answered: true, audioSent: true, microphoneSound: true }
+  found: CallCheck = {
+    answered: true,
+    microphoneLive: true,
+    audioSent: true,
+    microphoneSound: true,
+  }
   checks = 0
   check() {
     this.checks++
@@ -715,7 +720,12 @@ describe("VoiceController", () => {
     vi.spyOn(console, "warn").mockImplementation(() => {})
     await controller.start("s-1")
     expect(HEARING_CHECK_MS).toBe(12_000)
-    connection.found = { answered: true, audioSent: true, microphoneSound: false }
+    connection.found = {
+      answered: true,
+      microphoneLive: true,
+      audioSent: true,
+      microphoneSound: false,
+    }
     clock.fire()
     await settle()
     expect(connection.checks).toBe(1)
@@ -738,16 +748,30 @@ describe("VoiceController", () => {
   })
 
   it("V18: the far end is blamed first, then the sending, then the microphone", () => {
-    const quiet = { answered: false, audioSent: false, microphoneSound: false }
+    const quiet = {
+      answered: false,
+      microphoneLive: true,
+      audioSent: false,
+      microphoneSound: false,
+    }
     expect(hearingHint(quiet)).toMatch(/^OpenAI isn’t answering/)
     expect(hearingHint({ ...quiet, answered: true })).toMatch(
       /^Your voice isn’t being sent/,
+    )
+    // A microphone the system took away is said before what it leaves unsent.
+    expect(hearingHint({ ...quiet, answered: true, microphoneLive: false })).toMatch(
+      /^The system stopped giving Nessa the microphone/,
     )
     expect(hearingHint({ ...quiet, answered: true, audioSent: true })).toMatch(
       /^No sound is coming from the microphone/,
     )
     expect(
-      hearingHint({ answered: true, audioSent: true, microphoneSound: null }),
+      hearingHint({
+        answered: true,
+        microphoneLive: null,
+        audioSent: true,
+        microphoneSound: null,
+      }),
     ).toBeNull()
   })
 
@@ -755,7 +779,12 @@ describe("VoiceController", () => {
     const { controller, connection, clock } = setup()
     vi.spyOn(console, "warn").mockImplementation(() => {})
     await controller.start("s-1")
-    connection.found = { answered: true, audioSent: true, microphoneSound: false }
+    connection.found = {
+      answered: true,
+      microphoneLive: true,
+      audioSent: true,
+      microphoneSound: false,
+    }
     let answer: (found: CallCheck) => void = () => {}
     connection.check = () => {
       connection.checks++
@@ -804,14 +833,24 @@ describe("VoiceController", () => {
     controller.setMicrophone(false)
     controller.setMicrophone(true)
     // What it found was measured partly muted.
-    answer({ answered: true, audioSent: true, microphoneSound: false })
+    answer({
+      answered: true,
+      microphoneLive: true,
+      audioSent: true,
+      microphoneSound: false,
+    })
     await settle()
     expect(controller.snapshot().hint).toBeNull()
   })
 
   it("V18: a sending check that could not be read is no fault", () => {
     expect(
-      hearingHint({ answered: true, audioSent: null, microphoneSound: null }),
+      hearingHint({
+        answered: true,
+        microphoneLive: null,
+        audioSent: null,
+        microphoneSound: null,
+      }),
     ).toBeNull()
   })
 })
