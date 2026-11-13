@@ -12,10 +12,14 @@ import {
   pressCallPill,
   type CallPicture,
 } from "../../../host"
+import { useMotionInEffect } from "../../adapters/motion-preference"
 import "../../styles.css"
 import { CallPill } from "./call-pill"
 
 function CallPillPage() {
+  // The motion chosen in Settings governs this page too: the choice is kept
+  // in storage both windows share, and a change there reaches this one.
+  useMotionInEffect()
   const [picture, setPicture] = useState<CallPicture | null>(null)
   useEffect(() => {
     // Listening is asked for, and answers later: a page gone before then

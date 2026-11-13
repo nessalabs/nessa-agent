@@ -118,12 +118,6 @@ html:has(.call-pill-page) body {
   animation: none;
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .call-pill-light {
-    animation: none;
-  }
-}
-
 .call-pill-switch,
 .call-pill-end {
   display: inline-flex;

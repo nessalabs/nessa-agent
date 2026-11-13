@@ -4686,6 +4686,29 @@ const steps = {
           path: join(run.evidence, "voice-pill.png"),
           omitBackground: true,
         })
+      // The motion chosen in Settings is the pill's too: the choice is kept
+      // in storage both pages share, and the pill follows a change to it.
+      const pillMotion = () =>
+        pill.evaluate(() => document.documentElement.dataset.motion ?? null)
+      const chooseMotion = (choice) =>
+        run.page.evaluate((choice) => {
+          if (choice === null) localStorage.removeItem("nessa.desktop.motion")
+          else localStorage.setItem("nessa.desktop.motion", choice)
+        }, choice)
+      const motionBefore = await run.page.evaluate(() =>
+        localStorage.getItem("nessa.desktop.motion"),
+      )
+      await chooseMotion("reduced")
+      if (!(await waitFor(async () => (await pillMotion()) === "reduced", 5_000)))
+        failures.push(
+          `with Reduced motion chosen the pill's page is ${await pillMotion()}, not reduced`,
+        )
+      await chooseMotion("full")
+      if (!(await waitFor(async () => (await pillMotion()) === "full", 5_000)))
+        failures.push(
+          `with Full motion chosen the pill's page is ${await pillMotion()}, not full`,
+        )
+      await chooseMotion(motionBefore)
       // Its microphone switch is the call's own: the composer follows it,
       // and what the microphone half heard is thrown away as before.
       const pillCleared = clears()

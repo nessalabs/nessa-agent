@@ -857,7 +857,8 @@ in its sandbox". Every row of the bridge's design table is a jsdom test
   call open and the desktop window not in front, the pill names the chat and
   its state; its microphone, voice and End are the call's own, and the
   composer follows them. In front again, or with no call, the pill draws
-  nothing. _Check:_ `conversation-stress` step `voice` (the pill is a second
+  nothing. The motion chosen in Settings governs the pill's page as it does
+  the window's. _Check:_ `conversation-stress` step `voice` (the pill is a second
   page; the fake host carries the picture and presses as
   `src-tauri/src/call_pill.rs` does). Not checked by a script: the real
   window floating over other apps on macOS.
