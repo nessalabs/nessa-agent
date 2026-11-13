@@ -235,7 +235,16 @@ export function teardownEvidence(records, tabs, overflow = false, initial) {
       record.id === request.id,
   )
   const answer = answers[0]
+  const timestamped = (record) =>
+    record &&
+    Object.hasOwn(record, "at") &&
+    typeof record.at === "number" &&
+    Number.isFinite(record.at)
   const failures = []
+  if (!timestamped(request) || !timestamped(answer) || answer.at <= request.at)
+    failures.push(
+      `the teardown answer did not follow its original request in capture time: ${JSON.stringify({ requestAt: request?.at, answerAt: answer?.at })}`,
+    )
   if (overflow) failures.push("the bounded teardown observation overflowed")
   if (
     requests.length !== 1 ||

@@ -170,14 +170,56 @@ it("substituted proxies, wrong origins, inherited fields and requests are not an
   assert.equal(read.reports.length, 0)
   read.release()
 })
-const requested = { kind: "request", id: request.id, state: "tearing-down" }
-const answered = { kind: "answer", id: request.id, result: {}, tabs: 2, connected: true }
+const requested = { kind: "request", id: request.id, state: "tearing-down", at: 100 }
+const answered = {
+  kind: "answer",
+  id: request.id,
+  result: {},
+  tabs: 2,
+  connected: true,
+  at: 500,
+}
 it("accepts exact retained evidence after retirement, independent of callback delivery order", () => {
   for (const records of [
     [requested, answered],
     [answered, requested],
   ])
     assert.deepEqual(teardownEvidence(records, 2).failures, [])
+})
+const withoutCaptureTime = (record) => {
+  const copy = { ...record }
+  delete copy.at
+  return copy
+}
+for (const [name, records] of [
+  ["ACK before request", [requested, { ...answered, at: 99 }]],
+  ["equal capture times", [requested, { ...answered, at: 100 }]],
+  ["missing request time", [withoutCaptureTime(requested), answered]],
+  ["missing ACK time", [requested, withoutCaptureTime(answered)]],
+  ...[NaN, Infinity, -Infinity, undefined, "100"].flatMap((at) => [
+    [
+      `nonfinite or nonnumeric request time ${String(at)}`,
+      [{ ...requested, at }, answered],
+    ],
+    [`nonfinite or nonnumeric ACK time ${String(at)}`, [requested, { ...answered, at }]],
+  ]),
+])
+  it(`rejects ${name} even when identity, tab and reply fields agree`, () => {
+    assert.ok(
+      teardownEvidence(records, 2).failures.some((failure) =>
+        failure.startsWith(
+          "the teardown answer did not follow its original request in capture time",
+        ),
+      ),
+    )
+  })
+it("keeps valid physical chronology when callbacks arrive in reverse order", () => {
+  const answer = { ...answered, at: 500.25 }
+  const request = { ...requested, at: 100.25 }
+  const result = teardownEvidence([answer, request], 2)
+  assert.deepEqual(result.failures, [])
+  assert.equal(result.answer.at, 500.25)
+  assert.equal(result.request.at, 100.25)
 })
 for (const [name, records] of [
   ["no request", [answered]],
