@@ -432,7 +432,6 @@ export const selectorFor = {
   reviewOutput: (name) => `#${name}`, // what the review app heard back: result, first, hidden-no-ui, hidden-with-ui, again
   linkedCredential: (id) => `[data-credential="${id}"]`,
   linkedAction: (action) => `[data-linked-action="${action}"]`,
-  stressTreeSessionFor: (id) => `.workspace-thread-row[data-session-row="${id}"]`,
   sessionListRowFor: (id) => `.workspace-list [data-session-row="${id}"]`, // one session's row in the session list
   stressTreeSessionFor: (id) => `.workspace-thread-row[data-session-row="${id}"]`,
   shareAction: (action) => `[data-share-action="${action}"]`, // submit | change | revoke | confirm-revoke | cancel-revoke | restart | retry | close
