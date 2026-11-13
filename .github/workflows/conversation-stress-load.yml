@@ -16,6 +16,10 @@ on:
     - cron: "23 4 * * *"
   workflow_dispatch:
     inputs:
+      desktop-performance:
+        description: Run complete desktop browser and performance qualification on standard Mac.
+        type: boolean
+        default: false
       seed:
         description: The plan's seed. Empty picks one and prints it.
         required: false
@@ -75,60 +79,87 @@ concurrency:
 
 jobs:
   load:
-    name: Conversation stress at load
-    runs-on: ubuntu-latest
+    name: ${{ inputs['desktop-performance'] && 'Desktop browser qualification (macos-latest)' || 'Conversation stress at load' }}
+    runs-on: ${{ inputs['desktop-performance'] && 'macos-latest' || 'ubuntu-latest' }}
     # Planning bound: a cold gateway build, the browser download, and a check
     # whose length follows its numbers. The step bound below is what a run of
     # the default load numbers must fit.
     timeout-minutes: 210
     env:
       STRESS_EVIDENCE: ${{ github.workspace }}-stress-evidence
-      # A scheduled run has no inputs; each falls back to the same default
-      # the dispatch form shows.
-      # The iOS macOS workflow owns real Swift phone stress.
-      NESSA_STRESS_INPUTFILES: "0"
-      NESSA_STRESS_VMBACKGROUNDTASKS: ${{ inputs.vm-background-tasks || '3' }}
-      NESSA_STRESS_ROUNDS: ${{ inputs.rounds || '80' }}
-      NESSA_STRESS_PARALLEL: ${{ inputs.parallel || '12' }}
-      NESSA_STRESS_TURNS: ${{ inputs.turns || '8' }}
-      NESSA_STRESS_ASIDES: ${{ inputs.asides || '8' }}
-      NESSA_STRESS_SWITCHES: ${{ inputs.switches || '12' }}
-      NESSA_STRESS_STOPS: ${{ inputs.stops || '8' }}
-      NESSA_STRESS_PARENTSTOPS: ${{ inputs.parentstops || '4' }}
-      NESSA_STRESS_FAILS: ${{ inputs.fails || '6' }}
-      NESSA_STRESS_REVIEWS: ${{ inputs.reviews || '64' }}
-      NESSA_STRESS_LARGE: ${{ inputs.large || '3' }}
-      NESSA_STRESS_RESTARTS: ${{ inputs.restarts || '4' }}
-      NESSA_STRESS_THREADS: ${{ inputs.threads || '6' }}
-      NESSA_STRESS_RESTORES: "2"
-      # The chaos check's numbers; its seed is the stress seed.
-      NESSA_CHAOS_RUNS: ${{ inputs.chaos-runs || '8' }}
-      NESSA_CHAOS_WAVES: ${{ inputs.chaos-waves || '150' }}
-      NESSA_CHAOS_WIDTH: "10"
-      NESSA_CHAOS_CONVERSATIONS: "8"
-      NESSA_CHAOS_CLIENTS: "4"
-      NESSA_CHAOS_FOLLOWERS: "3"
-      NESSA_CHAOS_RESTARTS: "6"
-      NESSA_CHAOS_SHRINK: "20"
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/secret-service
+        if: runner.os == 'Linux'
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
           # Reads the pull request job's cache, written from main.
-          shared-key: conversation-stress
+          shared-key: ${{ inputs['desktop-performance'] && 'local-auth' || 'conversation-stress' }}
           save-if: false
       - uses: actions/setup-node@v4
         with:
           node-version: 24
       - uses: ./.github/actions/pnpm-install
       - name: Install the pinned Chromium and its runtime dependencies
+        if: ${{ !inputs['desktop-performance'] }}
         run: pnpm exec playwright install --with-deps chromium
+        timeout-minutes: 15
+      - name: Install the desktop qualification browsers
+        if: ${{ inputs['desktop-performance'] }}
+        run: pnpm exec playwright install chromium webkit
         timeout-minutes: 15
       # nessa-mcp: the `github` step runs commands through Nessa's own shell tool.
       - run: cargo build -p nessa-server -p nessa-mcp
+      # Prebuild above, then run the existing complete check in its own fixed
+      # window. This manual mode adds no native/stress waiver to PR CI.
+      - name: Record the desktop measurement host
+        if: ${{ inputs['desktop-performance'] }}
+        shell: bash
+        run: |
+          node --input-type=module <<'JS'
+          import { mkdirSync, writeFileSync } from 'node:fs'
+          import { arch, availableParallelism, cpus, loadavg, platform, release } from 'node:os'
+          import { join } from 'node:path'
+          import { launch } from './verification/desktop/scripts/lib/browser.mjs'
+          const browser = await launch('chromium', { channel: 'bundled', headed: true })
+          try {
+            const session = await browser.newBrowserCDPSession()
+            const { gpu } = await session.send('SystemInfo.getInfo')
+            const host = {
+              source: { commit: process.env.GITHUB_SHA, run: process.env.GITHUB_RUN_ID, attempt: process.env.GITHUB_RUN_ATTEMPT },
+              recordedAt: new Date().toISOString(), platform: platform(), arch: arch(), release: release(),
+              logicalCPUs: cpus().length, parallelism: availableParallelism(), cpuModels: [...new Set(cpus().map(cpu => cpu.model))],
+              loadAverage: loadavg(), browser: browser.version(), gpu,
+            }
+            mkdirSync(process.env.STRESS_EVIDENCE, { recursive: true })
+            writeFileSync(join(process.env.STRESS_EVIDENCE, 'desktop-host.json'), JSON.stringify(host))
+            console.log(JSON.stringify(host))
+          } finally { await browser.close() }
+          JS
+      - name: Measure the complete desktop matrix on Mac
+        if: ${{ inputs['desktop-performance'] }}
+        run: node verification/desktop/scripts/run-all.mjs --headed --layout columns,sidebar --channel bundled --runs 5 --out "$STRESS_EVIDENCE/desktop-performance.json"
+        timeout-minutes: 135
+      - name: Keep the desktop measurement in its job log
+        if: always() && inputs['desktop-performance']
+        shell: bash
+        run: |
+          if test -f "$STRESS_EVIDENCE/desktop-performance.json"; then
+            cat "$STRESS_EVIDENCE/desktop-performance.json"
+          fi
+          node verification/desktop/scripts/ci-receipt.mjs "$STRESS_EVIDENCE/desktop-performance.json" manifest
+      - name: Keep desktop result receipt 1
+        if: always() && inputs['desktop-performance']
+        run: node verification/desktop/scripts/ci-receipt.mjs "$STRESS_EVIDENCE/desktop-performance.json" group1
+      - name: Keep desktop result receipt 2
+        if: always() && inputs['desktop-performance']
+        run: node verification/desktop/scripts/ci-receipt.mjs "$STRESS_EVIDENCE/desktop-performance.json" group2
+      - name: Keep desktop result receipt 3
+        if: always() && inputs['desktop-performance']
+        run: node verification/desktop/scripts/ci-receipt.mjs "$STRESS_EVIDENCE/desktop-performance.json" group3
       - name: Pick the seed
+        if: ${{ !inputs['desktop-performance'] }}
         env:
           SEED: ${{ inputs.seed }}
         run: |
@@ -137,6 +168,26 @@ jobs:
           echo "NESSA_STRESS_SEED=$seed" >> "$GITHUB_ENV"
           echo "NESSA_CHAOS_SEED=$seed" >> "$GITHUB_ENV"
       - name: Run the conversation stress check at load
+        if: ${{ !inputs['desktop-performance'] }}
+        env:
+          # A scheduled run has no inputs; each falls back to the same default
+          # the dispatch form shows.
+          # The iOS macOS workflow owns real Swift phone stress.
+          NESSA_STRESS_INPUTFILES: "0"
+          NESSA_STRESS_VMBACKGROUNDTASKS: ${{ inputs.vm-background-tasks || '3' }}
+          NESSA_STRESS_ROUNDS: ${{ inputs.rounds || '80' }}
+          NESSA_STRESS_PARALLEL: ${{ inputs.parallel || '12' }}
+          NESSA_STRESS_TURNS: ${{ inputs.turns || '8' }}
+          NESSA_STRESS_ASIDES: ${{ inputs.asides || '8' }}
+          NESSA_STRESS_SWITCHES: ${{ inputs.switches || '12' }}
+          NESSA_STRESS_STOPS: ${{ inputs.stops || '8' }}
+          NESSA_STRESS_PARENTSTOPS: ${{ inputs.parentstops || '4' }}
+          NESSA_STRESS_FAILS: ${{ inputs.fails || '6' }}
+          NESSA_STRESS_REVIEWS: ${{ inputs.reviews || '64' }}
+          NESSA_STRESS_LARGE: ${{ inputs.large || '3' }}
+          NESSA_STRESS_RESTARTS: ${{ inputs.restarts || '4' }}
+          NESSA_STRESS_THREADS: ${{ inputs.threads || '6' }}
+          NESSA_STRESS_RESTORES: "2"
         shell: bash
         run: |
           set -o pipefail
@@ -144,7 +195,17 @@ jobs:
           pnpm test:e2e:stress -- --channel bundled --evidence "$STRESS_EVIDENCE" 2>&1 | tee "$STRESS_EVIDENCE/stress.log"
         timeout-minutes: 100
       - name: Run the conversation chaos check at load
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && !inputs['desktop-performance'] }}
+        env:
+          # The chaos check's numbers; its seed is the stress seed.
+          NESSA_CHAOS_RUNS: ${{ inputs.chaos-runs || '8' }}
+          NESSA_CHAOS_WAVES: ${{ inputs.chaos-waves || '150' }}
+          NESSA_CHAOS_WIDTH: "10"
+          NESSA_CHAOS_CONVERSATIONS: "8"
+          NESSA_CHAOS_CLIENTS: "4"
+          NESSA_CHAOS_FOLLOWERS: "3"
+          NESSA_CHAOS_RESTARTS: "6"
+          NESSA_CHAOS_SHRINK: "20"
         shell: bash
         run: |
           set -o pipefail
@@ -155,7 +216,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: conversation-stress-load-${{ github.run_id }}-${{ github.run_attempt }}
+          name: ${{ inputs['desktop-performance'] && 'desktop-browser-qualification' || 'conversation-stress-load' }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ env.STRESS_EVIDENCE }}
-          if-no-files-found: ignore
+          if-no-files-found: ${{ inputs['desktop-performance'] && 'error' || 'ignore' }}
           retention-days: 14

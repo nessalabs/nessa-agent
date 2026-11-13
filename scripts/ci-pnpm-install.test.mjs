@@ -26,18 +26,9 @@ test("workflow installs go through the shared pnpm action", () => {
     assert.equal(text.includes("pnpm install --frozen-lockfile"), false, path)
   }
   const localSteps = localAuth.split("\n      - ").slice(1)
-  const optional = localSteps.find((step) =>
-    step.startsWith("name: Install optional desktop measurement dependencies"),
-  )
-  assert.ok(optional)
-  assert.match(optional, /if: env\.NESSA_DESKTOP_PERFORMANCE == 'true'/)
-  assert.match(optional, /uses: \.\/\.github\/actions\/pnpm-install/)
-  assert.equal(optional.includes("save:"), false)
   assert.equal(
-    localSteps.filter(
-      (step) =>
-        step !== optional && step.includes("uses: ./.github/actions/pnpm-install"),
-    ).length,
+    localSteps.filter((step) => step.includes("uses: ./.github/actions/pnpm-install"))
+      .length,
     4,
   )
   assert.equal(
@@ -58,67 +49,161 @@ test("workflow installs go through the shared pnpm action", () => {
   assert.equal(step.includes("save:"), false)
 })
 
-test("desktop performance is manual, Mac-only, and keeps the existing budget", () => {
-  const workflow = readFileSync(".github/workflows/local-auth.yml", "utf8")
+function loadSteps() {
+  return readFileSync(".github/workflows/conversation-stress-load.yml", "utf8").split(
+    "\n      - ",
+  )
+}
+
+function named(steps, name) {
+  const step = steps.find((entry) => entry.startsWith(`name: ${name}\n`))
+  assert.ok(step, name)
+  return step
+}
+
+test("desktop qualification is an explicit mode of the existing load job", () => {
+  const workflow = readFileSync(".github/workflows/conversation-stress-load.yml", "utf8")
+  const native = readFileSync(".github/workflows/local-auth.yml", "utf8")
   assert.match(
     workflow,
     /desktop-performance:\n\s+description: [^\n]+\n\s+type: boolean\n\s+default: false/,
   )
   assert.match(
     workflow,
-    /NESSA_DESKTOP_PERFORMANCE: \$\{\{ github\.event_name == 'workflow_dispatch' && inputs\['desktop-performance'\] && matrix\.os == 'macos-latest' \}\}/,
-  )
-  for (const name of [
-    "Install optional desktop measurement dependencies",
-    "Install the optional desktop measurement browser",
-    "Record the desktop measurement host",
-    "Measure the desktop frame budget on Mac",
-  ]) {
-    const step = workflow
-      .split("\n      - ")
-      .find((entry) => entry.startsWith(`name: ${name}\n`))
-    assert.ok(step, name)
-    assert.match(step, /if: env\.NESSA_DESKTOP_PERFORMANCE == 'true'/, name)
-    assert.equal(step.includes("continue-on-error:"), false, name)
-  }
-  assert.match(
-    workflow,
-    /run-all\.mjs --headed --layout columns,sidebar --channel bundled --runs 5 --out/,
+    /name: \$\{\{ inputs\['desktop-performance'\] && 'Desktop browser qualification \(macos-latest\)' \|\| 'Conversation stress at load' \}\}/,
   )
   assert.match(
     workflow,
-    /name: Keep the desktop measurement in its job log\n\s+if: always\(\) && env\.NESSA_DESKTOP_PERFORMANCE == 'true'/,
+    /runs-on: \$\{\{ inputs\['desktop-performance'\] && 'macos-latest' \|\| 'ubuntu-latest' \}\}/,
   )
+  assert.match(workflow, /timeout-minutes: 210/)
+  assert.match(workflow, /cron: "23 4 \* \* \*"/)
+  const jobs = workflow.slice(workflow.indexOf("\njobs:\n"))
+  assert.deepEqual(jobs.match(/^ {2}[a-z-]+:/gm), ["  load:"])
+  assert.doesNotMatch(
+    native,
+    /desktop-performance|NESSA_DESKTOP_PERFORMANCE|Keep desktop result receipt/,
+  )
+  assert.match(native, /timeout-minutes: 140/)
 })
 
-test("manual Mac qualification retains the full browser matrix without weakening its gates", () => {
-  const workflow = readFileSync(".github/workflows/local-auth.yml", "utf8")
-  const entries = workflow.split("\n      - ")
-  const browser = entries.find((entry) =>
-    entry.startsWith("name: Install the optional desktop measurement browser\n"),
-  )
-  assert.match(browser, /playwright install chromium webkit/)
-  const matrix = entries.find((entry) =>
-    entry.startsWith("name: Measure the desktop frame budget on Mac\n"),
-  )
-  assert.ok(matrix)
-  assert.match(matrix, /if: env\.NESSA_DESKTOP_PERFORMANCE == 'true'/)
+test("manual Mac qualification retains the complete matrix and fixed check bound", () => {
+  const steps = loadSteps()
+  const browser = named(steps, "Install the desktop qualification browsers")
+  assert.match(browser, /if: \$\{\{ inputs\['desktop-performance'\] \}\}/)
+  assert.match(browser, /run: pnpm exec playwright install chromium webkit/)
+  assert.match(browser, /timeout-minutes: 15/)
+  const matrix = named(steps, "Measure the complete desktop matrix on Mac")
+  assert.match(matrix, /if: \$\{\{ inputs\['desktop-performance'\] \}\}/)
   assert.match(
     matrix,
-    /run-all\.mjs --headed --layout columns,sidebar --channel bundled --runs 5 --out/,
+    /run-all\.mjs --headed --layout columns,sidebar --channel bundled --runs 5 --out "\$STRESS_EVIDENCE\/desktop-performance\.json"/,
   )
+  assert.match(matrix, /timeout-minutes: 135/)
   for (const forbidden of [
     "continue-on-error",
     "--quick",
     "--only",
     "--skip",
     "--engine",
+    "tee ",
+    "2>&1",
   ])
     assert.equal(matrix.includes(forbidden), false, forbidden)
-  const evidence = entries.find((entry) =>
-    entry.startsWith("name: Keep the desktop measurement in its job log\n"),
+  const workflow = steps.join("\n      - ")
+  assert.ok(
+    workflow.indexOf("run: cargo build -p nessa-server -p nessa-mcp") <
+      workflow.indexOf("name: Record the desktop measurement host"),
   )
-  assert.match(evidence, /if: always\(\) && env\.NESSA_DESKTOP_PERFORMANCE == 'true'/)
-  assert.match(evidence, /cat "\$RUNNER_TEMP\/desktop-performance\.json"/)
-  assert.equal(evidence.includes("upload-artifact"), false)
+  assert.ok(
+    workflow.indexOf("name: Record the desktop measurement host") <
+      workflow.indexOf("name: Measure the complete desktop matrix on Mac"),
+  )
+  const host = named(steps, "Record the desktop measurement host")
+  assert.match(host, /if: \$\{\{ inputs\['desktop-performance'\] \}\}/)
+  assert.match(host, /desktop-host\.json/)
+  assert.match(host, /loadAverage: loadavg\(\)/)
+  assert.match(host, /SystemInfo\.getInfo/)
+  assert.match(host, /commit: process\.env\.GITHUB_SHA/)
+  assert.match(host, /finally \{ await browser\.close\(\) \}/)
+})
+
+test("default and scheduled load keep Ubuntu workloads, seeds, and failure-time chaos", () => {
+  const steps = loadSteps()
+  const workflow = steps.join("\n      - ")
+  const globalEnv = workflow.slice(
+    workflow.indexOf("    env:"),
+    workflow.indexOf("    steps:"),
+  )
+  assert.match(globalEnv, /STRESS_EVIDENCE:/)
+  assert.doesNotMatch(globalEnv, /NESSA_STRESS_|NESSA_CHAOS_/)
+  const secret = steps.find((step) =>
+    step.startsWith("uses: ./.github/actions/secret-service\n"),
+  )
+  assert.match(secret, /if: runner\.os == 'Linux'/)
+  assert.match(
+    workflow,
+    /shared-key: \$\{\{ inputs\['desktop-performance'\] && 'local-auth' \|\| 'conversation-stress' \}\}/,
+  )
+  assert.match(workflow, /save-if: false/)
+  assert.doesNotMatch(workflow, /save-if: true|save: true/)
+  const install = named(steps, "Install the pinned Chromium and its runtime dependencies")
+  assert.match(install, /if: \$\{\{ !inputs\['desktop-performance'\] \}\}/)
+  assert.match(install, /run: pnpm exec playwright install --with-deps chromium/)
+  assert.match(install, /timeout-minutes: 15/)
+  const seed = named(steps, "Pick the seed")
+  assert.match(seed, /if: \$\{\{ !inputs\['desktop-performance'\] \}\}/)
+  assert.match(seed, /NESSA_STRESS_SEED=\$seed/)
+  assert.match(seed, /NESSA_CHAOS_SEED=\$seed/)
+  const stress = named(steps, "Run the conversation stress check at load")
+  assert.match(stress, /if: \$\{\{ !inputs\['desktop-performance'\] \}\}/)
+  assert.match(
+    stress,
+    /pnpm test:e2e:stress -- --channel bundled --evidence "\$STRESS_EVIDENCE"/,
+  )
+  assert.match(stress, /timeout-minutes: 100/)
+  assert.match(stress, /NESSA_STRESS_ROUNDS: \$\{\{ inputs\.rounds \|\| '80' \}\}/)
+  assert.match(stress, /NESSA_STRESS_PARALLEL: \$\{\{ inputs\.parallel \|\| '12' \}\}/)
+  assert.match(stress, /NESSA_STRESS_REVIEWS: \$\{\{ inputs\.reviews \|\| '64' \}\}/)
+  assert.doesNotMatch(stress, /NESSA_CHAOS_/)
+  const chaos = named(steps, "Run the conversation chaos check at load")
+  assert.match(
+    chaos,
+    /if: \$\{\{ !cancelled\(\) && !inputs\['desktop-performance'\] \}\}/,
+  )
+  assert.match(chaos, /pnpm test:e2e:chaos -- --evidence "\$STRESS_EVIDENCE\/chaos"/)
+  assert.match(chaos, /timeout-minutes: 60/)
+  assert.match(chaos, /NESSA_CHAOS_RUNS: \$\{\{ inputs\.chaos-runs \|\| '8' \}\}/)
+  assert.match(chaos, /NESSA_CHAOS_WAVES: \$\{\{ inputs\.chaos-waves \|\| '150' \}\}/)
+  assert.doesNotMatch(chaos, /NESSA_STRESS_/)
+})
+
+test("desktop failures preserve source-bound structured receipts without a log workaround", () => {
+  const steps = loadSteps()
+  const log = named(steps, "Keep the desktop measurement in its job log")
+  assert.match(log, /if: always\(\) && inputs\['desktop-performance'\]/)
+  assert.match(log, /cat "\$STRESS_EVIDENCE\/desktop-performance\.json"/)
+  assert.match(
+    log,
+    /ci-receipt\.mjs "\$STRESS_EVIDENCE\/desktop-performance\.json" manifest/,
+  )
+  for (let group = 1; group <= 3; group++) {
+    const receipt = named(steps, `Keep desktop result receipt ${group}`)
+    assert.match(receipt, /if: always\(\) && inputs\['desktop-performance'\]/)
+    assert.ok(
+      receipt.includes(
+        `ci-receipt.mjs "$STRESS_EVIDENCE/desktop-performance.json" group${group}`,
+      ),
+    )
+    assert.doesNotMatch(receipt, /continue-on-error/)
+  }
+  const artifact = named(steps, "Keep the evidence")
+  assert.match(artifact, /if: always\(\)/)
+  assert.match(artifact, /path: \$\{\{ env\.STRESS_EVIDENCE \}\}/)
+  assert.match(
+    artifact,
+    /inputs\['desktop-performance'\] && 'desktop-browser-qualification' \|\| 'conversation-stress-load'/,
+  )
+  assert.match(artifact, /inputs\['desktop-performance'\] && 'error' \|\| 'ignore'/)
+  assert.match(artifact, /retention-days: 14/)
 })

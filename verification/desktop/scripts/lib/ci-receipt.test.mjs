@@ -466,6 +466,7 @@ test("real CI entrypoint and workflow groups preserve a failed producer and safe
       GITHUB_RUN_ID: source.run,
       GITHUB_RUN_ATTEMPT: source.attempt,
       RUNNER_TEMP: dir,
+      STRESS_EVIDENCE: dir,
       PATH: dirname(process.execPath) + delimiter + process.env.PATH,
     }
     const lines = []
@@ -510,7 +511,10 @@ test("real CI entrypoint and workflow groups preserve a failed producer and safe
     )
     assert.equal(largeManifest.reason, "raw-capacity-exceeded")
     assert.equal(largeManifest.rawBytesAtLeast, receiptMaxRawBytes + 1)
-    const workflow = readFileSync(join(root, ".github/workflows/local-auth.yml"), "utf8")
+    const workflow = readFileSync(
+      join(root, ".github/workflows/conversation-stress-load.yml"),
+      "utf8",
+    )
     const groups = [
       ...workflow.matchAll(
         /- name: Keep desktop result receipt ([123])\n\s+if: (.+)\n\s+run: (.+)/g,
@@ -519,7 +523,7 @@ test("real CI entrypoint and workflow groups preserve a failed producer and safe
     assert.equal(groups.length, receiptGroups)
     writeFileSync(join(dir, "desktop-performance.json"), JSON.stringify(example()))
     for (const group of groups) {
-      assert.equal(group[2], "always() && env.NESSA_DESKTOP_PERFORMANCE == 'true'")
+      assert.equal(group[2], "always() && inputs['desktop-performance']")
       // These workflow steps run only on Mac. Node entrypoint coverage above is portable.
       if (process.platform !== "win32") {
         const run = spawnSync("bash", ["-e", "-c", group[3]], {
@@ -533,7 +537,7 @@ test("real CI entrypoint and workflow groups preserve a failed producer and safe
         )
       }
     }
-    assert.match(workflow, /cat "\$RUNNER_TEMP\/desktop-performance.json"/)
+    assert.match(workflow, /cat "\$STRESS_EVIDENCE\/desktop-performance.json"/)
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }

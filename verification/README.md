@@ -356,6 +356,34 @@ The app-review fixture contract and ordering evidence are in
 
 ## CI measurement receipts
 
+Desktop qualification is an explicit manual mode of the existing
+`conversation-stress-load.yml` job:
+
+```sh
+gh workflow run conversation-stress-load.yml --ref <branch> -f desktop-performance=true
+```
+
+The mode uses standard Mac, prebuilds the native binaries, records structured
+host/GPU facts, then runs the complete `run-all` command with both engines and
+layouts and five performance runs. The check has a fixed 135-minute limit inside
+the load job's existing 210-minute limit. The clock starts after prebuilding;
+this is not a claim of stricter effective runtime than another job's total bound.
+A timeout is incomplete qualification, never a pass. Case waits, calibration,
+4× throttling and the 50 ms budget remain with their existing owners.
+
+| Event/mode | Workload and ownership |
+| --- | --- |
+| Scheduled or manual `desktop-performance=false` | Existing Ubuntu load stress, seeds and input values; stress keeps its 100-minute bound and chaos its 60-minute bound, including chaos after a stress failure |
+| Manual `desktop-performance=true` | Mac desktop qualification; no load-stress result is claimed; regular PR CI retains all native and conversation-stress gates |
+| Desktop failure or timeout | Available structured JSON and source-bound notices are preserved; missing or incomplete results do not qualify |
+
+The two modes keep their workload variables on the steps that consume them.
+The desktop result and pre-measurement host snapshot are under the existing
+artifact root. Host snapshots describe that moment, not continuous physical-host
+isolation. The workflow adds no raw-log capture or retrieval path. Native
+`local-auth` qualification does not contain a second copy of the matrix.
+
+
 The optional Mac measurement prints the complete run-all JSON to its job log.
 It also emits an API-readable projection through ordinary check notices. The
 projection copies the producer's verdict and entire summary, all failed/skipped
