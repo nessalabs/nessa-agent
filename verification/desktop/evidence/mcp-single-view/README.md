@@ -189,3 +189,11 @@ immediate-cause retention. Each fails its intended regression and passes after
 restoration. [Step-reporting probes](step-reporting-probes.json). This source
 review and unit evidence do not substitute for pending browser/native runs or
 exact-head CI. Historical receipts above retain their source cuts.
+
+The normal publication gate then rejected constructing the compound error inside
+the cleanup catch with the operation as its cause. The helper now records the
+cleanup outcome too, and composes the failure only after both outcomes are known.
+Both original identities and the operation cause are unchanged. No lint rule was
+disabled, and all 97 focused tests still pass. Removing double-failure retention
+again fails its regressions and restoring it passes. The scoped ESLint check
+passes; the earlier refused push left the remote unchanged.

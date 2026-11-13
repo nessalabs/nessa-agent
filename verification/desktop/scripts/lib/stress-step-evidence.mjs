@@ -15,16 +15,21 @@ export async function withStepFailureEvidence(action, { failures, capture, clean
       // Evidence is best effort; it must not replace the step's failure.
     }
   }
+  let cleanupOutcome
   try {
     await cleanup()
+    cleanupOutcome = { kind: "returned" }
   } catch (error) {
+    cleanupOutcome = { kind: "threw", error }
+  }
+  if (cleanupOutcome.kind === "threw") {
     if (outcome.kind === "threw")
       throw new AggregateError(
-        [outcome.error, error],
+        [outcome.error, cleanupOutcome.error],
         "the step and its cleanup failed",
         { cause: outcome.error },
       )
-    throw error
+    throw cleanupOutcome.error
   }
   if (outcome.kind === "threw") throw outcome.error
   return outcome.value
