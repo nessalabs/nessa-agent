@@ -755,6 +755,10 @@ in its sandbox". Every row of the bridge's design table is a jsdom test
   The retained original request must arrive within the unchanged 2000 ms
   observation bound, before the existing 3000 ms tab-close wait; a later valid
   request or answer stays visible without erasing an earlier bound failure.
+  Correlated request and ACK must carry own finite numeric capture times,
+  with the ACK strictly later. Reverse Node callback delivery remains valid.
+  This teardown fixture uses unmocked same-host browser `Date.now()` captures;
+  it does not establish order from callback-array position or across hosts.
   The bridge's L17a regression separately pins the original inline caller's
   exact reply id, mode and sandbox origin before opening can close its real
   transport; posting before retirement does not claim consumption by the
