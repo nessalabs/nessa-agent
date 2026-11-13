@@ -18,7 +18,6 @@
 //! leases without a copy kept anywhere.
 use crate::conversation::application::EnvironmentFuture;
 use crate::conversation::infrastructure::ssh_environment::{PeerEnvironments, ServingCredentials};
-use crate::device_pairing::infrastructure::{EnvironmentPeers, TlsCloser, TlsStream};
 use nessa_auth::{
     adapters::local::LocalCredentialStore,
     application::{
@@ -29,6 +28,7 @@ use nessa_auth::{
     },
     domain::{Action, AudienceId, Resource},
 };
+use nessa_device_pairing::infrastructure::{EnvironmentPeers, TlsCloser, TlsStream};
 use std::{future::Future, pin::Pin, sync::Arc};
 
 /// The action a paired environment's credential must be allowed.

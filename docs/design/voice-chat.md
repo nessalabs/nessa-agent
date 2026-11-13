@@ -92,7 +92,7 @@ conversation ends the one running.
 | V15 | any open | mute mic / speaker | the track or audio is off; the call stays |
 | V16 | any open | end, pane closed, conversation left | idle; the transport closed |
 | V17 | any open | transport closed or failed | ended, saying the call dropped |
-| V18 | listening | 12 s after it opened, or after the last unmute, the provider has not heard the person start speaking, and the microphone is on | the transport checks its own audio once over 1 s: any event back from the provider, audio bytes going out (which fails only when the connection itself is down, since silence is sent too), and sound from the microphone (unknown when the meter cannot run). The first thing found wrong is shown in place of "Listening" until the person is heard or the microphone changes; a check that ran into a mute is dropped |
+| V18 | listening | 12 s after it opened, or after the last unmute, the provider has not heard the person start speaking, and the microphone is on | the transport checks its own audio once over 1 s: any event back from the provider, whether the microphone's track is still live and not muted by the system, audio bytes going out (which fails only when the connection itself is down, since silence is sent too; unknown when the statistics hold no count for outgoing audio, under either name a web view gives its kind), and sound from the microphone (unknown when the meter cannot run). The first thing found wrong is shown in place of "Listening" until the person is heard or the microphone changes; a check that ran into a mute is dropped |
 
 A turn is open while its reply is being written, while the chat is at
 work, or while its message is held waiting for an agent (`waiting` on the
@@ -109,6 +109,55 @@ Known limits, accepted for now:
   `nothing_running`, as the composer's Stop would.
 - Always-on calls cost while open; ending the call between turns is a later
   change, not this one.
+
+## The call pill
+
+While a call is open and the desktop window is not the one in front, the
+call's switches float over the other apps on a pill: a small window of its
+own (`call`, declared hidden in `tauri.conf.json`), always on top, on every
+Space. It shows where the call stands and which chat it talks to, with the
+speaker, the microphone and End. Pressing the chat's name brings the desktop
+window forward; dragging it moves the pill.
+
+The pill holds no call. The call stays in the desktop window's page, and two
+things cross between the windows through the host (`src-tauri/src/call_pill.rs`):
+
+```mermaid
+sequenceDiagram
+    participant D as Desktop window (holds the call)
+    participant H as Host
+    participant P as Pill window
+    D->>H: a call opened, here is its picture
+    Note over H: the desktop window is in front, so the pill stays hidden
+    H->>H: the desktop window left the front
+    H->>P: show, and draw this picture
+    P->>H: the person pressed Mute
+    H->>D: Mute was pressed on the pill
+    D->>H: the call is muted now, here is its picture
+    H->>P: draw this picture
+    H->>H: the desktop window is in front again
+    H->>P: hide
+    D->>H: the call ended (no picture)
+```
+
+| Rule | Owner |
+| --- | --- |
+| What the pill draws for a call, and what each press asks of it | `voice/model/call-pill.ts` |
+| Telling the host what the call looks like, in order, and carrying presses out on it | `voice/application/call-pill.ts` |
+| Whether the pill is on screen: a call is open and the desktop window is not in front | the host (`call_pill.rs`), from the system's own focus events. The page is never asked: a page's idea of focus goes stale when its window is hidden |
+| Who may call what: only the desktop window says what the call looks like, only the pill presses | `call_pill.rs`, by the calling window's label |
+| The latest picture, for a pill page that loads late | the host; the pill reads it after it starts listening |
+| Where the pill stands | top centre of the main screen the first time, then wherever it was dragged, until the app quits |
+| Reaching the windows and the window server | `PillScreen` in `call_pill.rs`: the pill's lifecycle asks only this port, composition supplies the real one (`HostDependencies::call_pill`), and the host's tests stand in for it, failures included |
+| Showing without taking the keyboard, and floating beside a full-screen app | `platform` (`show_quietly`, `float_beside_fullscreen`); AppKit on macOS |
+
+A desktop page that loads again has no call, so the host puts the pill away
+when it does. A browser has no second window, and there no pill is shown.
+
+Not built: the pill does not yet stay out of the way of the app you are
+typing in. Pressing it makes Nessa the active app, as pressing any window
+does; a panel that takes presses without that needs AppKit work that has to
+be done on a Mac.
 
 ## The gateway's key
 

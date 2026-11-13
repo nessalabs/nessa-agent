@@ -19,6 +19,8 @@ import {
   onPathsDragged,
   host,
   loadAssignedGatewayEndpoint,
+  onCallPillPress,
+  setCallPill,
   onReviewNoticeOpened,
   reviewNoticeAccess,
   syncReviewNotices,
@@ -57,6 +59,7 @@ import { DesktopWindow } from "./ui/desktop-window"
 import { platformFor, sandboxFor, WidgetRegistryProvider } from "./widgets"
 import { SubagentsProvider } from "./subagents"
 import {
+  followCallWithPill,
   scriptedTransport,
   storeConversations,
   VoiceController,
@@ -69,7 +72,7 @@ import {
   openReviewEvent,
   showWaitingReviews,
 } from "./workspace/adapters/gateway/review-notices"
-import { followWorkspace, loadWorkspace, type PathPicker } from "./workspace"
+import { followWorkspace, loadWorkspace, openSession, type PathPicker } from "./workspace"
 
 import "@fontsource-variable/geist"
 import "@fontsource-variable/geist-mono"
@@ -215,6 +218,39 @@ const voice = dependencies.voice
       },
     })
   : undefined
+// While a call is open and this window is not the one in front, its switches
+// float over the other apps on a pill, the host's second window. A browser
+// has none, and there nothing is shown.
+if (voice)
+  followCallWithPill({
+    call: voice,
+    pill: {
+      set: setCallPill,
+      onPress: (handler) => {
+        // Listening is asked for, and answers later: a follow stopped before
+        // then stops the listener as soon as it is there.
+        let stop: (() => void) | null = null
+        let stopped = false
+        void onCallPillPress(handler).then(
+          (unlisten) => (stopped ? unlisten() : (stop = unlisten)),
+          (error: unknown) => console.warn("The call pill will not be heard", error),
+        )
+        return () => {
+          stopped = true
+          stop?.()
+        }
+      },
+    },
+    title: (sessionId) => {
+      const sessions = store.getState().workspace.sessions
+      return Object.hasOwn(sessions, sessionId) ? sessions[sessionId].title : null
+    },
+    onTitles: (listener) => store.subscribe(listener),
+    // The chat a call talks to is always in a pane (the call ends when it
+    // is not), so opening it focuses that pane. Not the notice's path, which
+    // opens a chat only while a review waits in it.
+    showChat: (sessionId) => void store.dispatch(openSession({ sessionId })),
+  })
 store.dispatch(followWorkspace())
 void store.dispatch(loadWorkspace())
 

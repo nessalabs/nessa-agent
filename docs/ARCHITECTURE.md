@@ -957,12 +957,12 @@ Both consume the JSON codec, framing and enrollment deadline socket in
 `crates/nessa-protocol` —
 owner create, PAKE claim over TLS, exact-key approval and pinned status recovery.
 Exact-key approval is followed by implemented receiver staging and Active
-publication. The server application [activation owner](../crates/nessa-server/src/device_pairing/application/activation.rs)
+publication. The server application [activation owner](../crates/nessa-device-pairing/src/application/activation.rs)
 commits approval, stages the credential, pairs and remembers the stage-correlated
 receiver, confirms its current holding, and asks Auth to publish with fresh
 admission. Approved and Staging can remain retained when a later step stops;
 approval acknowledgement alone does not prove Active publication.
-[Status projection](../crates/nessa-server/src/device_pairing/application/read_status.rs)
+[Status projection](../crates/nessa-device-pairing/src/application/read_status.rs)
 reports Active only with the current receiver holding and access epoch.
 [Activation regressions](../crates/nessa-server/tests/device_pairing/infrastructure/activation.rs)
 cover publication, retry joining, receiver revocation before publication and

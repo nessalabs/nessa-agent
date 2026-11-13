@@ -28,6 +28,11 @@ export interface RealtimeConnection {
 export interface CallCheck {
   /** The provider has sent at least one event since the call opened. */
   readonly answered: boolean
+  /**
+   * The microphone is still handing over sound: its track is live and the
+   * system has not muted it; null when it cannot tell.
+   */
+  readonly microphoneLive: boolean | null
   /** The call's audio is going out to the provider now; null when it cannot tell. */
   readonly audioSent: boolean | null
   /** Sound is coming from the microphone now; null when it cannot tell. */

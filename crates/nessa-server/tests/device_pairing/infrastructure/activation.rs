@@ -28,27 +28,25 @@ use nessa_auth::{
     },
 };
 use nessa_client_core::pairing::{NativeClientError, NativeEnrollmentClient};
+use nessa_device_pairing::{
+    application::{
+        ActivationError, Approval, CleanupError, PairingReceivers, PublicationGuard,
+        ReceiverDispatch, ReceiverError, ReceiverRequest,
+    },
+    infrastructure::{NativeConnectionFailure, NativeEnrollmentConnections, PairingRuntimeError},
+};
 use nessa_protocol::pairing::{
     wire::{
         decode_reply, encode_request, NativePairingReply, NativePairingRequest, NativePairingStatus,
     },
     EnrollmentChannel,
 };
+use nessa_server::device_pairing::ConversationReceivers;
 use nessa_server::{
     app::dependencies::RuntimeDependencies,
     conversation::{
         domain::{PairedReceiver, ReceiverBinding},
         infrastructure::LocalReceiverAuthority,
-    },
-    device_pairing::{
-        application::{
-            ActivationError, Approval, CleanupError, PairingReceivers, PublicationGuard,
-            ReceiverDispatch, ReceiverError, ReceiverRequest,
-        },
-        infrastructure::{
-            ConversationReceivers, NativeConnectionFailure, NativeEnrollmentConnections,
-            PairingRuntimeError,
-        },
     },
 };
 use std::{

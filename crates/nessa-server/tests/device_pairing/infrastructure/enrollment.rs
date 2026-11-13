@@ -24,6 +24,13 @@ use nessa_auth::{
     },
 };
 use nessa_client_core::pairing::{NativeClientError, NativeEnrollmentClient};
+use nessa_device_pairing::{
+    application::OwnerError,
+    infrastructure::{
+        BeginPairing, CreatedInvitation, NativeConnectionError, NativeConnectionFailure,
+        NativeEnrollmentConnections, PairingRuntimeError,
+    },
+};
 use nessa_protocol::{
     clock::Clock as ServerClock,
     pairing::{
@@ -34,16 +41,7 @@ use nessa_protocol::{
         EnrollmentChannel, NativeFrameError,
     },
 };
-use nessa_server::{
-    app::dependencies::RuntimeDependencies,
-    device_pairing::{
-        application::OwnerError,
-        infrastructure::{
-            BeginPairing, CreatedInvitation, NativeConnectionError, NativeConnectionFailure,
-            NativeEnrollmentConnections, PairingRuntimeError,
-        },
-    },
-};
+use nessa_server::app::dependencies::RuntimeDependencies;
 use std::{
     io::ErrorKind,
     net::TcpStream,

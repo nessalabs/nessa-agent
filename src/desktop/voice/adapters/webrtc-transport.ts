@@ -22,14 +22,40 @@ const CHECK_MS = 1_000
 /** A level the microphone counts as sound at, above a quiet room's hiss. */
 const SOUND_LEVEL = 0.02
 
-/** Audio bytes the call has sent so far, from the peer's own statistics. */
-async function audioBytesSent(peer: RTCPeerConnection): Promise<number> {
-  let sent = 0
-  for (const report of (await peer.getStats()).values()) {
-    const stat = report as { type?: string; kind?: string; bytesSent?: number }
-    if (stat.type === "outbound-rtp" && stat.kind === "audio") sent += stat.bytesSent ?? 0
+/**
+ * Audio bytes the call has sent so far, from the peer's own statistics; null
+ * when they hold no count for outgoing audio, which says nothing either way.
+ * Older WebKit names the stream's kind `mediaType`, and a report with neither
+ * name on a call that only carries audio is that audio.
+ */
+export function audioBytesIn(reports: Iterable<unknown>): number | null {
+  let sent: number | null = null
+  for (const report of reports) {
+    const stat = report as {
+      type?: unknown
+      kind?: unknown
+      mediaType?: unknown
+      bytesSent?: unknown
+    }
+    if (stat.type !== "outbound-rtp") continue
+    const kind = stat.kind ?? stat.mediaType
+    if (kind !== undefined && kind !== "audio") continue
+    if (typeof stat.bytesSent !== "number") continue
+    sent = (sent ?? 0) + stat.bytesSent
   }
   return sent
+}
+
+async function audioBytesSent(peer: RTCPeerConnection): Promise<number | null> {
+  return audioBytesIn((await peer.getStats()).values())
+}
+
+/** Whether every microphone track is live and not muted by the system; null with no track. */
+export function tracksLive(
+  tracks: readonly { readonly readyState: string; readonly muted: boolean }[],
+): boolean | null {
+  if (tracks.length === 0) return null
+  return tracks.every((track) => track.readyState === "live" && !track.muted)
 }
 
 /** How long the data channel has to open after the answer. */
@@ -267,7 +293,12 @@ export function webrtcTransport(): RealtimeTransport {
         check: async () => {
           const live = peer
           if (released || !live)
-            return { answered, audioSent: false, microphoneSound: false }
+            return {
+              answered,
+              microphoneLive: false,
+              audioSent: false,
+              microphoneSound: false,
+            }
           // A statistics read that fails says nothing either way.
           const before = await audioBytesSent(live).catch(() => null)
           let loudest = 0
@@ -279,6 +310,7 @@ export function webrtcTransport(): RealtimeTransport {
           const after = await audioBytesSent(live).catch(() => null)
           return {
             answered,
+            microphoneLive: tracksLive(microphone.getAudioTracks()),
             audioSent: before === null || after === null ? null : after > before,
             microphoneSound: context?.state === "running" ? loudest >= SOUND_LEVEL : null,
           }

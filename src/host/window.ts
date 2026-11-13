@@ -14,6 +14,12 @@ import {
   type AgentApiKeySaveRejectionReason,
 } from "../onboarding/application/ports"
 import type { GatewayStartup, HostStartup } from "../startup/application/ports"
+import {
+  parseCallPicture,
+  parseCallPress,
+  type CallPicture,
+  type CallPress,
+} from "./call-pill"
 import { saveInPage } from "./save-in-page"
 import { hostRefusalFromInvoke } from "./startup-refusals"
 export type { GatewayStartup, HostStartup } from "../startup/application/ports"
@@ -60,6 +66,8 @@ const HOST_EVENTS = {
   runtimeCopy: "nessa://runtime-copy",
   reviewNoticeOpened: "nessa://review-notice-opened",
   setupRecorded: "nessa://setup-recorded",
+  callPillPicture: "nessa://call-pill-picture",
+  callPillPress: "nessa://call-pill-press",
 } as const
 
 /** How many staged runtime files have finished `sync_all`.
@@ -982,6 +990,82 @@ export async function onReviewNoticeOpened(handler: (conversationId: string) => 
   return listen<unknown>(HOST_EVENTS.reviewNoticeOpened, ({ payload }) => {
     if (typeof payload === "string" && payload.length > 0) handler(payload)
   })
+}
+
+/*
+ * The call pill (`src-tauri/src/call_pill.rs`): a small window that floats
+ * over other apps while a voice call is open and the desktop window is not
+ * in front. The host carries the call's picture from the desktop window to
+ * it and its presses back. A plain browser has no second window to float,
+ * so there the pill is never shown.
+ */
+
+/**
+ * Says what the desktop window's call looks like now; null when no call is
+ * open. The host shows the pill while there is one and this window is not in
+ * front. Desktop window only.
+ */
+export async function setCallPill(picture: CallPicture | null): Promise<void> {
+  if (!inTauri) return
+  const { invoke } = await import("@tauri-apps/api/core")
+  await invoke("call_pill_set", { call: picture })
+}
+
+/** Subscribes the desktop window to presses on the pill. */
+export async function onCallPillPress(
+  handler: (press: CallPress) => void,
+): Promise<() => void> {
+  if (!inTauri) return () => undefined
+  const { listen } = await import("@tauri-apps/api/event")
+  return listen<unknown>(
+    HOST_EVENTS.callPillPress,
+    ({ payload }) => {
+      const press = parseCallPress(payload)
+      if (press) handler(press)
+    },
+    // Only what the host sends this window: not every page hears a press.
+    { target: { kind: "WebviewWindow", label: "desktop" } },
+  )
+}
+
+/**
+ * Subscribes the pill to its call's picture, starting with the one that
+ * stands now; null is no call. Listening comes first, so a change between
+ * the two cannot be lost, and a newer picture is never replaced by the read.
+ */
+export async function onCallPillPicture(
+  handler: (picture: CallPicture | null) => void,
+): Promise<() => void> {
+  if (!inTauri) return () => undefined
+  const { listen } = await import("@tauri-apps/api/event")
+  const { invoke } = await import("@tauri-apps/api/core")
+  let heard = false
+  const stop = await listen<unknown>(
+    HOST_EVENTS.callPillPicture,
+    ({ payload }) => {
+      heard = true
+      handler(parseCallPicture(payload))
+    },
+    // Only what the host sends the pill: a chat's title is no other page's.
+    { target: { kind: "WebviewWindow", label: "call" } },
+  )
+  const now = parseCallPicture(await invoke<unknown>("call_pill_read"))
+  if (!heard) handler(now)
+  return stop
+}
+
+/** Hands a press on the pill to the window that holds the call. Pill only. */
+export async function pressCallPill(press: CallPress): Promise<void> {
+  if (!inTauri) return
+  const { invoke } = await import("@tauri-apps/api/core")
+  await invoke("call_pill_press", { press })
+}
+
+/** Moves the pill with the drag that began on it. Pill only. */
+export async function dragCallPill(): Promise<void> {
+  if (!inTauri) return
+  const { invoke } = await import("@tauri-apps/api/core")
+  await invoke("call_pill_drag")
 }
 
 export { inTauri }

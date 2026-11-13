@@ -376,26 +376,14 @@
 }
 
 /*
- * In a narrow composer the choices step down, the least telling first: the
- * chevrons go and the project shows as its icon; the model keeps its mark and
- * a short name ("Opus 5", `shortModelName`), so two models still read apart,
- * ending in an ellipsis where even that does not fit — and, narrowest, its
- * mark alone. Each keeps its accessible name, and its menu still says
- * everything.
+ * In a narrow composer the model steps down: its chevron goes, and its short
+ * name ("Opus 5", `styles.css`) ends in an ellipsis where it does not fit —
+ * and, narrowest, it is its mark alone. It keeps its accessible name, and its
+ * menu still says everything.
  */
 @container (max-width: 420px) {
-  .workspace-pane .desktop-chip > .desktop-chip-chevron,
-  .workspace-pane .desktop-chip-model > svg:last-child,
-  .workspace-pane .desktop-chip-project > span {
+  .workspace-pane .desktop-chip-model > svg:last-child {
     display: none;
-  }
-
-  .workspace-pane .desktop-chip-model > span:not([aria-hidden]):not(:first-child) {
-    display: none;
-  }
-
-  .workspace-pane .desktop-chip-model::after {
-    content: var(--desktop-model-short);
   }
 
   .workspace-pane .desktop-chip {
@@ -405,19 +393,12 @@
 
 /*
  * Narrower still, the model is its mark alone — its name is in its tooltip and
- * menu — then the project goes; and where even the trailing controls fill the
- * row, the model takes a line of its own above them rather than lie under
- * them.
+ * menu; and where even the trailing controls fill the row, the model takes a
+ * line of its own above them rather than lie under them.
  */
 @container (max-width: 200px) {
   .workspace-pane .desktop-chip-model::after {
     content: none;
-  }
-}
-
-@container (max-width: 180px) {
-  .workspace-pane .desktop-chip-project {
-    display: none;
   }
 }
 

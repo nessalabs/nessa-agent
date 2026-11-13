@@ -8,9 +8,9 @@ summary: Approval of the exact claimed key precedes receiver staging and a fresh
   conditional credential publication.
 sourceRevision: "77a6b620af4d94b234294f6d273fd74b3dfb44c7"
 sources:
-  - crates/nessa-server/src/device_pairing/application/owner.rs
-  - crates/nessa-server/src/device_pairing/application/activation.rs
-  - crates/nessa-server/src/device_pairing/application/receivers.rs
+  - crates/nessa-device-pairing/src/application/owner.rs
+  - crates/nessa-device-pairing/src/application/activation.rs
+  - crates/nessa-device-pairing/src/application/receivers.rs
   - crates/nessa-auth/src/application/pairing/stage.rs
   - crates/nessa-auth/src/domain/pairing/aggregates/invitation.rs
   - crates/nessa-server/tests/device_pairing/infrastructure/activation.rs
@@ -60,7 +60,7 @@ Source inspection included the positive activation and retry controls, wrong-sta
 
 ## Bounded rule model
 
-Owns exact-key consent, fresh revision-bound stage/publication admission and canonical current receiver proof before Active. Two device keys, one immutable stage and three receiver-history alternatives bound the model. Receiver receipt correlation is the successful Receiver action contract; cryptography and cancellation cleanup remain excluded. This finite abstraction checks safety only. It does not execute or verify the implementation, promise eventual completion, or qualify external effects. Existing source checkpoints and historical test receipts retain their earlier scope. The scoped model review inspected `crates/nessa-server/src/device_pairing/application/activation.rs`, `crates/nessa-server/src/device_pairing/application/owner.rs`, `crates/nessa-auth/src/application/pairing/stage.rs`.
+Owns exact-key consent, fresh revision-bound stage/publication admission and canonical current receiver proof before Active. Two device keys, one immutable stage and three receiver-history alternatives bound the model. Receiver receipt correlation is the successful Receiver action contract; cryptography and cancellation cleanup remain excluded. This finite abstraction checks safety only. It does not execute or verify the implementation, promise eventual completion, or qualify external effects. Existing source checkpoints and historical test receipts retain their earlier scope. The scoped model review inspected `crates/nessa-device-pairing/src/application/activation.rs`, `crates/nessa-device-pairing/src/application/owner.rs`, `crates/nessa-auth/src/application/pairing/stage.rs`.
 
 ## Later attribution write
 

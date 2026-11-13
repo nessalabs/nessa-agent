@@ -4,6 +4,7 @@
 mod agent_credentials;
 mod app_sandbox;
 mod attachments;
+mod call_pill;
 mod channel_paths;
 mod composition;
 mod desktop_window;
@@ -101,6 +102,14 @@ fn main() {
         .on_page_load(move |webview, payload| match payload.event() {
             tauri::webview::PageLoadEvent::Started => {
                 observed.observe(webview.label(), payload.url().as_str());
+                // The call lives in the desktop window's page: a page loading
+                // again has no call, so a pill left from the last one goes.
+                if webview.label() == desktop_window::DESKTOP_WINDOW {
+                    let app = webview.app_handle();
+                    if let Some(deps) = app.try_state::<HostDependencies>() {
+                        deps.call_pill.desktop_page_reloading();
+                    }
+                }
             }
             tauri::webview::PageLoadEvent::Finished => {
                 tracing::info!(
@@ -156,8 +165,15 @@ fn main() {
             review_notices::infrastructure::review_notice_access,
             review_notices::infrastructure::review_notice_ask,
             review_notices::infrastructure::review_notice_sync,
+            call_pill::call_pill_set,
+            call_pill::call_pill_read,
+            call_pill::call_pill_press,
+            call_pill::call_pill_drag,
         ])
         .setup(move |app| {
+            if let Some(pill) = app.get_webview_window(call_pill::CALL_WINDOW) {
+                platform::current().float_beside_fullscreen(&pill);
+            }
             page_load::watch(
                 app.handle().clone(),
                 loads,
@@ -322,6 +338,15 @@ fn main() {
                     }
                 }
             }
+            // The pill has no close control, but the system can still ask
+            // (Cmd-W with it focused): it is hidden, never destroyed, so the
+            // next call finds it.
+            if window.label() == call_pill::CALL_WINDOW {
+                if let WindowEvent::CloseRequested { api, .. } = event {
+                    api.prevent_close();
+                    let _ = window.hide();
+                }
+            }
             // Closing the desktop window never destroys it while the app runs
             // on: `desktop_window::on_close` says whether it is dismissed (a
             // menu bar item opens it again), hidden with its Dock icon kept
@@ -331,6 +356,13 @@ fn main() {
                 // learns their paths (`channel_paths::dropped_on_desktop`).
                 if let WindowEvent::DragDrop(drag) = event {
                     channel_paths::dropped_on_desktop(window.app_handle(), drag);
+                }
+                // A call's pill floats only while this window is not in front.
+                if let WindowEvent::Focused(in_front) = event {
+                    let app = window.app_handle();
+                    if let Some(deps) = app.try_state::<HostDependencies>() {
+                        deps.call_pill.desktop_front_changed(*in_front);
+                    }
                 }
                 if let WindowEvent::CloseRequested { api, .. } = event {
                     let tray = window

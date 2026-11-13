@@ -20,7 +20,6 @@ use crate::conversation::infrastructure::ssh_environment::{
     DurableEnvironmentAudit, PeerEnvironments, ServingCredentials, SshTimings,
 };
 use crate::conversation::infrastructure::LocalReceiverAuthority;
-use crate::device_pairing::infrastructure::PairingOwnerCommands;
 use crate::env::{LEASE_PROTOCOL, VERSION};
 use crate::env_serve::application::{
     serve, CommandRan, CommandRunner, CommandStop, Runners, ServeTimings, Serving,
@@ -42,6 +41,7 @@ use nessa_auth::application::session::AuthenticatedSession;
 use nessa_auth::domain::pairing::ConsentClass;
 use nessa_auth::domain::{AudienceId, OrganizationId, Resource, ResourceId};
 use nessa_client_core::pairing::NativeEnrollmentClient;
+use nessa_device_pairing::infrastructure::PairingOwnerCommands;
 use nessa_protocol::lease::{Cleanup, CommandEnd};
 use nessa_protocol::pairing::wire::NativePairingStatus;
 use nessa_protocol::relay::{RelayAddress, RelayRefusal};
@@ -356,7 +356,7 @@ struct Machine {
 fn serving(
     root: &Path,
     pin: [u8; 44],
-    stream: crate::device_pairing::infrastructure::TlsStream,
+    stream: nessa_device_pairing::infrastructure::TlsStream,
 ) -> JoinHandle<()> {
     let host = Host::open(root, pin);
     let (from_gateway, to_gateway) = tokio::io::split(stream);

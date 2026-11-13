@@ -3857,6 +3857,36 @@ dependencies = [
 ]
 
 [[package]]
+name = "nessa-device-pairing"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "base64 0.22.1",
+ "flate2",
+ "futures-util",
+ "getrandom 0.3.4",
+ "libc",
+ "mdns-sd",
+ "nessa-agent-install",
+ "nessa-auth",
+ "nessa-client-core",
+ "nessa-local-storage",
+ "nessa-protocol",
+ "nessa-timer",
+ "serde",
+ "serde_json",
+ "sha2",
+ "shepherd",
+ "subtle",
+ "tar",
+ "tempfile",
+ "tokio",
+ "tokio-tungstenite",
+ "tracing",
+ "tungstenite",
+]
+
+[[package]]
 name = "nessa-gateway-endpoint"
 version = "0.1.0"
 dependencies = [
@@ -3979,6 +4009,7 @@ dependencies = [
 name = "nessa-protocol"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "base64 0.22.1",
  "hmac",
  "nessa-auth",
@@ -4054,6 +4085,7 @@ dependencies = [
  "nessa-auth",
  "nessa-client-core",
  "nessa-device-client",
+ "nessa-device-pairing",
  "nessa-gateway-endpoint",
  "nessa-images",
  "nessa-local-database",
