@@ -12,6 +12,10 @@ on:
           - restore
           - cold
         default: restore
+      desktop-performance:
+        description: Measure the desktop frame budget on the existing standard Mac runner.
+        type: boolean
+        default: false
 
 # Nothing here writes anything. Said out loud because the default for a token is
 # whatever the repository's default happens to be, and `changes` below reaches
@@ -573,6 +577,8 @@ jobs:
     # so 140 minutes lets both step bounds finish before the job does.
     # Windows, which does not install these packages, took at most 27.9.
     timeout-minutes: 140
+    env:
+      NESSA_DESKTOP_PERFORMANCE: ${{ github.event_name == 'workflow_dispatch' && inputs['desktop-performance'] && matrix.os == 'macos-latest' }}
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/native-crypto
@@ -591,6 +597,43 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
+      # Opt-in evidence uses the Mac already allocated to this matrix leg.
+      # It runs before Rust work, with the same browser/measurement owner as
+      # local verification. No second required job or weaker budget is added.
+      - name: Install optional desktop measurement dependencies
+        if: env.NESSA_DESKTOP_PERFORMANCE == 'true'
+        uses: ./.github/actions/pnpm-install
+      - name: Install the optional desktop measurement browser
+        if: env.NESSA_DESKTOP_PERFORMANCE == 'true'
+        run: pnpm exec playwright install chromium
+      - name: Record the desktop measurement host
+        if: env.NESSA_DESKTOP_PERFORMANCE == 'true'
+        shell: bash
+        run: |
+          sw_vers
+          sysctl -n hw.model hw.ncpu
+          uptime
+          node --input-type=module <<'JS'
+          import { launch } from './verification/desktop/scripts/lib/browser.mjs'
+          const browser = await launch('chromium', { channel: 'bundled', headed: true })
+          try {
+            const session = await browser.newBrowserCDPSession()
+            const { gpu } = await session.send('SystemInfo.getInfo')
+            console.log(JSON.stringify({ browser: browser.version(), gpu }))
+          } finally { await browser.close() }
+          JS
+      - name: Measure the desktop frame budget on Mac
+        if: env.NESSA_DESKTOP_PERFORMANCE == 'true'
+        run: node verification/desktop/scripts/perf-budget.mjs --mode prod --headed --engine chromium --layout columns,sidebar --channel bundled --runs 5 --out "${{ runner.temp }}/desktop-performance.json"
+      - name: Keep the desktop measurement in its job log
+        if: always() && env.NESSA_DESKTOP_PERFORMANCE == 'true'
+        shell: bash
+        run: |
+          # Logs retain the full measurements and LoAF attribution without
+          # creating a separate stored workflow artifact.
+          if test -f "$RUNNER_TEMP/desktop-performance.json"; then
+            cat "$RUNNER_TEMP/desktop-performance.json"
+          fi
       - run: node --test scripts/product-protocol/rust-types.test.mjs
       # Duplicated by `cargo fmt --all` in `gateway-contract`, and staying
       # anyway. `scripts/desktop/ci-harness.test.mjs` requires this exact line,
