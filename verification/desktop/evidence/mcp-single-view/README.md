@@ -1,5 +1,23 @@
 # MCP single-view handoff (#1327)
 
+## Stress fixture failure ordering
+
+The exclusive section owns background draining; its 120-second bound is unchanged.
+The huddle's diagnostic capture precedes navigation back to the main conversation.
+
+| Event | Fixture action | Release and evidence |
+| --- | --- | --- |
+| Background turns drain | Start the huddle once | Resume background work after the step |
+| Drain expires or throws | Do not start the huddle | Resume background work and report the failure |
+| Browser assertion fails | Retain its failures | Capture the fixture before returning to main |
+| Browser action throws | Retain that exception | Capture the fixture before returning to main |
+| Screenshot fails | Keep the original step result | Still return to main |
+
+These are harness contracts, separate from app transport delivery and the
+historical lifecycle model. They do not change workload counts or deadlines.
+
+## Original transport and live-view evidence
+
 The product source is `8ed0b24db6de14b836894cf5262c1dbc8225537d`, based on
 `edf3e028bf48748147ad2a0a35d028e2fc7cfca1`. Production changes post the original
 request's reply before opening the panel can retire the inline bridge. They do
@@ -108,3 +126,37 @@ MCP browser results above were executed before that reconciliation, with
 native source at `8ed0b24d`; they are not an exact-head CI result for the merged
 tree. Final native/CI qualification remains pending. The raised fixture runs
 preceded both reconciliation and the failure-filename-only correction.
+
+## November13 qualification repairs
+
+Main `826ea15fb` is integrated without replacing the composer/voice changes.
+Independent review at `75b51293` found that an expired background drain still
+started its body, and a thrown browser error lost its fixture screenshot.
+The run coordinator now refuses an expired drain and releases waiting work;
+the evidence helper captures both assertion failures and exceptions before
+navigation. Their owning modules and eight focused regressions replace the
+previous inline coordinator. The120-second drain bound is unchanged.
+
+The canonical sidebar conversation helper and its tests are now included from
+#1296, not supplied as a verifier overlay. Exact identity and composer focus are
+observed together, and the helper discloses the actual sidebar tree and older
+rows before selecting it. Fixture/navigation tests pass22/22. Removing the drain
+refusal, thrown-error capture, or sidebar route fails its regression; restoring
+each passes. [Probe summary](fixture-failure-probes.json).
+
+The current title-only Settings masthead shipped in #1282. The smoke assertion
+now uses #1296's exact-title/extra-copy contract: before29/33, fixed33/33,
+injected unexpected copy29/33 (all four Settings profiles fail), restored33/33.
+No deadline was extended. The initial mutation command used an unsupported
+`--only` option and did not execute; it is excluded from the semantic probe.
+Browser checks used headed bundled Chromium and WebKit with a user-local
+runtime library and Xvfb. The system-only dependency preflight could not see the
+user-local library; its native load and actual browser launch were verified.
+This is Playwright evidence, not native WKWebView.
+
+CI at source `8b5bc4b35` passed its required aggregate after the two DNS-failed
+jobs were retried: [run43034036328](https://github.com/nessalabs/nessa-agent/actions/runs/43034036328).
+That result predates these repairs and current-main integration. New publication,
+exact-head CI, raised real-gateway stress, full browser and native qualification
+remain pending. The initial broad integration run's GitHub WebKit reload timeout
+is retained; later isolated headed execution passed, without establishing a cause.

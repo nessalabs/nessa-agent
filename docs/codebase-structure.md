@@ -88,6 +88,12 @@ painted under the window's controls), and hold the contracts listed in
 is [browser verification for UI](../CODING_STANDARDS.md#browser-verification-for-ui);
 how the folder is laid out and run is [`verification/README.md`](../verification/README.md).
 
+The conversation stress runner's background pause and confirmed drain live in
+`verification/desktop/scripts/lib/stress-run.mjs`. Its step evidence helper,
+`stress-step-evidence.mjs`, captures assertion failures and thrown browser errors
+before navigation cleans up the fixture. Their sibling tests enforce the drain
+deadline, release paths, and capture order.
+
 The Tauri command layer is an **adapter**, not a home for logic. A
 `#[tauri::command]` function should read like: deserialise, call one use case,
 serialise. If it contains a decision, that decision belongs in a use case or a

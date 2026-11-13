@@ -4,6 +4,7 @@ title: "open a widget inline, in the panel, or over the window"
 kind: "statechart"
 status: "mixed"
 summary: "A widget can appear inside a message, as a tab in its chat's right panel, or over the desktop window."
+sourceRevision: "75b51293a6575662dd4fe68b8e3c0f57862d640a"
 parent: "desktop-workspace"
 sources:
   - "src/desktop/widgets/application/registry.ts"
@@ -91,3 +92,10 @@ or the linked models' source mapping. Historical checkpoints and model results
 are retained; TLC was not rerun for this prose and guard clarification.
 
 Source review scope: owner entry points and relevant regression declarations were inventoried against frozen source `77a6b620af4d94b234294f6d273fd74b3dfb44c7`. Existing source checkpoints are retained where this was a partial review. A model result establishes bounded design safety only. Browser appearance and interaction were not checked.
+
+Source review checkpoint: `75b51293a6575662dd4fe68b8e3c0f57862d640a`. The bridge,
+lifecycle, registry, host table and chat-panel owners were traced after current
+main reconciliation. Original reply posting, replacement-panel replies and
+retained Open ownership remain distinct. Historical model receipts keep their
+original scope and exclusions; no model mapping or checker result is refreshed.
+Browser and native execution receipts retain their own source cuts.

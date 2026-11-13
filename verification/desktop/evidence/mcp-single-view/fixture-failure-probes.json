@@ -1,0 +1,36 @@
+{
+  "reviewedSourceBeforeRepairs": "75b51293a6575662dd4fe68b8e3c0f57862d640a",
+  "main": "826ea15fb16bc42ba3bed28d9e43b0fd2b9cec31",
+  "fixtureAndNavigationTests": {
+    "passed": 22,
+    "failed": 0
+  },
+  "probes": [
+    {
+      "rule": "drain",
+      "mutationFailures": 1,
+      "restoredPassed": true
+    },
+    {
+      "rule": "thrown-evidence",
+      "mutationFailures": 2,
+      "restoredPassed": true
+    },
+    {
+      "rule": "navigation",
+      "mutationFailures": 1,
+      "restoredPassed": true
+    }
+  ],
+  "smoke": {
+    "fixedPassed": true,
+    "unexpectedCopyFailedProfiles": 4,
+    "restoredPassed": true
+  },
+  "browserRuntime": {
+    "headed": "user-local Xvfb",
+    "webkit": "bundled, with Debian libgles2 matching installed1.7.0-1+b2 via LD_LIBRARY_PATH",
+    "hostValidation": "ldconfig-only preflight skipped for the user-local library; native library load and actual browser launch verified"
+  },
+  "deadlinesUnchanged": true
+}

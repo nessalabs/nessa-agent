@@ -191,6 +191,11 @@ export const css = {
   listSearch: ".workspace-list .workspace-search", // class: the session list's search field
   listScroll: ".workspace-list-scroll", // class: the session list's scroller
   sessionListRow: ".workspace-list [data-session-row]", // a row of the session list, not a sidebar thread
+  stressSelectedSessionRow:
+    '.workspace-list [data-session-row][aria-selected="true"], .workspace-thread-row[aria-current="page"]',
+  stressTreeChannel: '[data-row="channel"][data-channel]',
+  stressTreeDisclosure: ".workspace-disclosure",
+  stressTreeMore: '[data-row="more"]',
   selectedSessionListRow: '.workspace-list [data-session-row][aria-selected="true"]', // the conversation the focused pane actually shows
   sessionRow: "[data-drag-item]", // a session a drag can carry to a pane
   sidebarEdge: '[role="separator"][aria-label="Resize Sidebar"]',
@@ -417,6 +422,7 @@ export const selectorFor = {
   reviewOutput: (name) => `#${name}`, // what the review app heard back: result, first, hidden-no-ui, hidden-with-ui, again
   linkedAction: (action) => `[data-linked-action="${action}"]`,
   sessionListRowFor: (id) => `.workspace-list [data-session-row="${id}"]`, // one session's row in the session list
+  stressTreeSessionFor: (id) => `.workspace-thread-row[data-session-row="${id}"]`,
   shareAction: (action) => `[data-share-action="${action}"]`, // submit | change | revoke | confirm-revoke | cancel-revoke | restart | retry | close
   shareGrant: (credentialId) => `[data-share-grant="${credentialId}"]`,
   sharePattern: (list) => `[data-share-pattern="${list}"]`, // allow | deny
