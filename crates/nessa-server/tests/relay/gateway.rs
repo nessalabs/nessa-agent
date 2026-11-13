@@ -114,7 +114,7 @@ fn serve(
         timer: timer.clone(),
         joined,
         address,
-        secrets: Arc::new(crate::tunnel::application::MemoryDeviceSecrets::new()),
+        secrets: Arc::new(nessa_device_pairing::tunnel::application::MemoryDeviceSecrets::new()),
     };
     // The sender stays so the registration does not see the watch close.
     std::mem::forget(origin);
@@ -522,8 +522,8 @@ async fn an_away_phone_is_told_the_new_tunnel_address_through_the_relay() {
     use crate::relay::gateway::infrastructure::TcpRelayDial;
     use crate::relay::infrastructure::serve_tcp;
     use crate::timer::TokioTimer;
-    use crate::tunnel::application::MemoryDeviceSecrets;
     use nessa_client_core::tunnel::published_address;
+    use nessa_device_pairing::tunnel::application::MemoryDeviceSecrets;
     use nessa_protocol::relay::{PublishedOrigin, RelayAddress};
     use nessa_protocol::tunnel::{TunnelAddress, TunnelSecret};
 

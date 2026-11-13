@@ -54,6 +54,25 @@
         "theme": "Dark",
         "backgroundColor": "#111111",
         "visible": false
+      },
+      {
+        "label": "call",
+        "url": "call.html",
+        "title": "Nessa call",
+        "width": 300,
+        "height": 48,
+        "resizable": false,
+        "maximizable": false,
+        "minimizable": false,
+        "transparent": true,
+        "decorations": false,
+        "shadow": false,
+        "alwaysOnTop": true,
+        "visibleOnAllWorkspaces": true,
+        "skipTaskbar": true,
+        "focus": false,
+        "acceptFirstMouse": true,
+        "visible": false
       }
     ]
   },

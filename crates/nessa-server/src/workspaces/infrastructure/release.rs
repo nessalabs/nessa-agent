@@ -13,7 +13,10 @@
 // crate::timer::clock, so this build is not main's 239c696fd0e0b3f4. The
 // frames and their meaning are unchanged; the image id stays the published
 // worker until a rebuilt image is published for this hash.
-const PROTOCOL: &str = "68607d55e45aebbc";
+// Device pairing moved into its own crate (#1311), so env serve's dial
+// imports its TLS stream from there, and this build is not main's
+// 68607d55e45aebbc. Again the frames and their meaning are unchanged.
+const PROTOCOL: &str = "9ebfca20fd69fe0f";
 const IMAGE: &str = "bsh_KC74wkwmxzdt57Y9MxwBdSJlBa75Lfjz0BvFC-6SuS4";
 pub(crate) fn worker_image() -> Option<&'static str> {
     (crate::env::LEASE_PROTOCOL == PROTOCOL).then_some(IMAGE)

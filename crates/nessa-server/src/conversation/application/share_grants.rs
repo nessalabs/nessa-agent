@@ -50,7 +50,7 @@ use super::metadata_target::load_conversation;
 use super::{
     AccessAction, AccessAsk, AccessDecision, AccessDenial, AccessResource, AccessSubject,
     ConversationAccessPolicyEvaluator, ConversationCaller, ConversationError, ConversationFuture,
-    ConversationRepository, FenceCapture, OwnerAccess, PairedRefusal, RequestShape, ShareTarget,
+    ConversationRepository, OwnerAccess, PairedRefusal, RequestShape, ShareTarget,
 };
 use crate::conversation::application::ReceiverAuthority;
 use crate::conversation::domain::{
@@ -59,6 +59,7 @@ use crate::conversation::domain::{
 use nessa_auth::application::ports::{AccessError, AccessHold, AccessReader};
 use nessa_auth::domain::{AuthContext, CredentialId, PrincipalId, Resource};
 use nessa_protocol::conversation::domain::ConversationId;
+use nessa_protocol::conversation::fence_capture::FenceCapture;
 use nessa_protocol::conversation::read_scope::ReadRefusal;
 use nessa_sdk::application::agent_execution::sessions::{NoteCandidates, NoteRecord};
 use nessa_sdk::domain::agent_execution::executions::Initiator;

@@ -7,6 +7,7 @@ publish = false
 description = "What any client of the Nessa gateway needs to speak to it: wire frames, generated product DTOs, codecs, native pairing framing, and the conversation read model"
 
 [dependencies]
+async-trait = "0.1"
 base64 = "0.22"
 hmac = "0.12"
 nessa-auth = { path = "../nessa-auth" }

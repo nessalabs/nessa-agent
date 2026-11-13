@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Require full source coverage for every nessa-sdk domain context.
 # Prerequisites: rustup component add llvm-tools-preview
-#               cargo install cargo-llvm-cov --version 0.6.16 --locked
+#               cargo install cargo-llvm-cov --version 0.9.1 --locked
 set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.."

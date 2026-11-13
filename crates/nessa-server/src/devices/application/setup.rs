@@ -27,7 +27,7 @@
 //! creation, so it applies at once. A connection's progress lives only in
 //! this run; the one that restarts for it shows the host as configured.
 use super::ssh_config::{resolved, suggestions, SshConfigSource, SshHost};
-use crate::device_pairing::application::{LinkingApply, LinkingCaller, LinkingError};
+use nessa_device_pairing::application::{LinkingApply, LinkingCaller, LinkingError};
 use nessa_sdk::domain::agent_execution::leases::{LeaseRefusal, PeerEnvironment, SshDestination};
 use std::{
     collections::BTreeMap,

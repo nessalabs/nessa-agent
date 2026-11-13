@@ -230,9 +230,9 @@ import {
  *               then says it is saved, with no key field), against a fake
  *               realtime provider on this machine: the key
  *               is never logged or audited, only the gateway asks the
- *               provider for a call. Talk opens a call above the composer
- *               (the orb, "Listening", and the speaker, microphone and End
- *               call buttons); the chat so far is handed to the voice; the
+ *               provider for a call. Talk opens a call on the composer
+ *               (a glow on its edge, "Listening", and the speaker, microphone
+ *               and End call buttons); the chat so far is handed to the voice; the
  *               person's spoken words, fillers and a repeated word dropped,
  *               are sent as their message and answered, and the reply is
  *               handed back to the voice to talk about; muting the
@@ -4613,8 +4613,7 @@ const steps = {
     if (failures.length) return
     if (!(await run.client.voice.status()).keySaved)
       failures.push("the gateway does not report the voice key saved")
-    const end = pane.getByRole("button", { name: "End call", exact: true })
-    const orb = run.page.locator(".voice-dock .voice-orb")
+    const rim = run.page.locator(".workspace-dock .voice-rim")
     const phase = () =>
       run.page
         .locator(".voice-dock")
@@ -4633,9 +4632,63 @@ const steps = {
     }
     if (realtime.calls() !== before + 1)
       failures.push(`Talk opened ${realtime.calls() - before} calls, not one`)
-    if (!(await orb.isVisible())) failures.push("the call shows no orb")
-    else if ((await orb.locator(".voice-orb-clouds").count()) !== 2)
-      failures.push("the orb is not the sky orb: its clouds are missing")
+    // The call is a glow on the composer's edge: its canvas lies over the
+    // composer's card and lights the page just outside it. No orb is left.
+    if ((await rim.count()) !== 1) failures.push("the call shows no glow on the composer")
+    else {
+      const boxes = await rim.evaluate((canvas) => {
+        const card = canvas
+          .closest(".workspace-dock")
+          ?.querySelector("form.desktop-composer")
+          ?.getBoundingClientRect()
+        const over = canvas.getBoundingClientRect()
+        const edges = (box) =>
+          box ? [box.left, box.top, box.right, box.bottom].map(Math.round) : null
+        return { rim: canvas.dataset.rim, over: edges(over), card: edges(card) }
+      })
+      // Chromium can always run the shader: a still ring there is a glow
+      // that failed to start. Elsewhere the canvas may not be drawn at all.
+      if (boxes.rim === "plain" && run.engine === "chromium")
+        failures.push("the call's glow fell back to the still ring")
+      if (
+        boxes.rim !== "plain" &&
+        !(
+          boxes.card &&
+          boxes.over[0] < boxes.card[0] &&
+          boxes.over[1] <= boxes.card[1] &&
+          boxes.over[2] > boxes.card[2] &&
+          boxes.over[3] >= boxes.card[3]
+        )
+      )
+        failures.push(
+          `the call's glow ${JSON.stringify(boxes.over)} does not reach around the composer ${JSON.stringify(boxes.card)}`,
+        )
+      // Lit is read off the screen: the strip of page just left of the card
+      // looks different with the glow than with it taken away, and the same
+      // twice without it, so nothing else there is moving.
+      const lit = await waitFor(async () => {
+        if ((await rim.getAttribute("data-rim")) === "plain") return true
+        const card = await pane.locator("form.desktop-composer").boundingBox()
+        if (!card) return false
+        const clip = {
+          x: Math.round(card.x) - 6,
+          y: Math.round(card.y + card.height / 2) - 10,
+          width: 5,
+          height: 20,
+        }
+        const hide = await run.page.addStyleTag({
+          content: ".voice-rim { visibility: hidden !important; }",
+        })
+        const without = await run.page.screenshot({ clip })
+        const again = await run.page.screenshot({ clip })
+        await hide.evaluate((style) => style.remove())
+        const withGlow = await run.page.screenshot({ clip })
+        return without.equals(again) && !withGlow.equals(without)
+      }, 5_000)
+      if (!lit) failures.push("the call's glow lights nothing beside the composer")
+    }
+    if ((await run.page.locator(".voice-orb").count()) > 0)
+      failures.push("the call still shows the orb")
     for (const name of ["Mute voice", "Mute microphone", "End call"])
       if (!(await pane.getByRole("button", { name, exact: true }).isVisible()))
         failures.push(`the composer shows no ${name} button during the call`)
@@ -4693,6 +4746,151 @@ const steps = {
     await pane.getByRole("button", { name: "Unmute microphone", exact: true }).click()
     await expectShown(run.page, "Listening", failures)
 
+    // Away from the window, the call's switches float on the pill: the same
+    // call, shown in `call.html`, which the host opens as a small window over
+    // other apps. Here it is another tab, and the fake host carries the
+    // picture and the presses between the two as the real one does. A
+    // browser's page cannot lose the front on its own, so the fake host is
+    // told the window has, as the real host hears it from the system.
+    const pill = await run.page.context().newPage()
+    await pill.setViewportSize({ width: 300, height: 48 })
+    await pill.addInitScript(gatewayHost, { endpoint: null, credential: null })
+    await pill.goto(`${new URL(run.page.url()).origin}/call.html`)
+    const face = pill.locator(".call-pill")
+    // The page is up before it is judged empty: a pill that has not drawn
+    // yet is not a pill that stayed away.
+    await pill
+      .locator(".call-pill-page")
+      .waitFor({ timeout: 10_000 })
+      .catch(() => failures.push("the pill's page did not load"))
+    await sleep(300)
+    if ((await face.count()) > 0)
+      failures.push("the pill shows while the window with the call is in front")
+    const front = (inFront) =>
+      run.page.evaluate((inFront) => window.__fakeHostDesktopInFront(inFront), inFront)
+    await front(false)
+    const pillSays = (words) =>
+      waitFor(
+        async () =>
+          (await face.count()) === 1 &&
+          (await face.locator(".call-pill-state").innerText()).trim() === words,
+        5_000,
+      )
+    if (!(await pillSays("Listening")))
+      failures.push("away from the window, the pill does not show the listening call")
+    else {
+      const named = (await face.locator(".call-pill-title").innerText()).trim()
+      if (named === "") failures.push("the pill names no chat")
+      if (run.evidence)
+        await pill.screenshot({
+          path: join(run.evidence, "voice-pill.png"),
+          omitBackground: true,
+        })
+      // The motion chosen in Settings is the pill's too: the choice is kept
+      // in storage both pages share, and the pill follows a change to it.
+      const pillMotion = () =>
+        pill.evaluate(() => document.documentElement.dataset.motion ?? null)
+      const chooseMotion = (choice) =>
+        run.page.evaluate((choice) => {
+          if (choice === null) localStorage.removeItem("nessa.desktop.motion")
+          else localStorage.setItem("nessa.desktop.motion", choice)
+        }, choice)
+      const motionBefore = await run.page.evaluate(() =>
+        localStorage.getItem("nessa.desktop.motion"),
+      )
+      await chooseMotion("reduced")
+      if (!(await waitFor(async () => (await pillMotion()) === "reduced", 5_000)))
+        failures.push(
+          `with Reduced motion chosen the pill's page is ${await pillMotion()}, not reduced`,
+        )
+      await chooseMotion("full")
+      if (!(await waitFor(async () => (await pillMotion()) === "full", 5_000)))
+        failures.push(
+          `with Full motion chosen the pill's page is ${await pillMotion()}, not full`,
+        )
+      await chooseMotion(motionBefore)
+      // The chat's name on the pill brings the call's chat to the front of
+      // the window: with another chat focused beside it, and no review
+      // waiting in it, the pane showing the call takes the focus.
+      await run.page.keyboard.press(keys.newSessionBeside)
+      const beside = await waitFor(
+        async () =>
+          (await run.page.locator(css.pane).count()) === 2 &&
+          (await run.page.locator(`${css.focusedPane} .voice-rim`).count()) === 0,
+        10_000,
+      )
+      if (!beside)
+        failures.push("a new session beside did not take the focus from the call's chat")
+      else {
+        await face.locator(".call-pill-name").click()
+        if (
+          !(await waitFor(
+            async () =>
+              (await run.page.locator(`${css.focusedPane} .voice-rim`).count()) === 1,
+            5_000,
+          ))
+        )
+          failures.push(
+            "pressing the chat's name on the pill did not focus the call's chat",
+          )
+        // Back to one pane: the new session is focused again and closed.
+        await run.page
+          .locator(css.pane)
+          .filter({ has: run.page.locator(css.paneHome) })
+          .locator(css.field)
+          .click()
+        await run.page.keyboard.press(keys.closePane)
+        if (
+          !(await waitFor(
+            async () =>
+              (await run.page.locator(css.pane).count()) === 1 &&
+              (await run.page.locator(`${css.focusedPane} .voice-rim`).count()) === 1,
+            10_000,
+          ))
+        )
+          failures.push("closing the session beside did not leave the call's chat alone")
+      }
+      // Its microphone switch is the call's own: the composer follows it,
+      // and what the microphone half heard is thrown away as before.
+      const pillCleared = clears()
+      await face.getByRole("button", { name: "Mute microphone", exact: true }).click()
+      if (!(await waitFor(() => clears() === pillCleared + 1, 5_000)))
+        failures.push("muting on the pill did not mute the call")
+      if (!(await pillSays("Muted"))) failures.push("the pill does not say Muted")
+      if (
+        !(await pane
+          .getByRole("button", { name: "Unmute microphone", exact: true })
+          .isVisible())
+      )
+        failures.push("the composer does not show the microphone the pill muted")
+      await face.getByRole("button", { name: "Unmute microphone", exact: true }).click()
+      if (!(await pillSays("Listening")))
+        failures.push("unmuting on the pill did not bring the call back to listening")
+      await face.getByRole("button", { name: "Mute voice", exact: true }).click()
+      if (
+        !(await pane
+          .getByRole("button", { name: "Unmute voice", exact: true })
+          .waitFor({ timeout: 5_000 })
+          .then(() => true)
+          .catch(() => false))
+      )
+        failures.push("the composer does not show the voice the pill muted")
+      await face.getByRole("button", { name: "Unmute voice", exact: true }).click()
+      await pane
+        .getByRole("button", { name: "Mute voice", exact: true })
+        .waitFor({ timeout: 5_000 })
+        .catch(() =>
+          failures.push("unmuting the voice on the pill did not reach the call"),
+        )
+    }
+    // Back in the window, the composer has the switches and the pill goes.
+    await front(true)
+    if (!(await waitFor(async () => (await face.count()) === 0, 5_000)))
+      failures.push("the pill stays while the window with the call is in front")
+    await front(false)
+    if (!(await pillSays("Listening")))
+      failures.push("the pill does not come back when the window leaves the front again")
+
     // Asked to stop, the voice stops the running turn and hears it stopped.
     const wait = prompt(run, `Okay ${STRESS.wait}`, step, " voice")
     const waiting = await seenTurns(run, run.main.id)
@@ -4740,9 +4938,23 @@ const steps = {
         `after the stop the call is ${await phase()} and was told ${JSON.stringify(realtime.told().slice(told))}`,
       )
 
-    await end.click()
+    // End on the pill ends the call, as End in the composer does, and with
+    // no call the pill has nothing to show.
+    await pill
+      .locator(".call-pill")
+      .getByRole("button", { name: "End call", exact: true })
+      .click()
     if (!(await waitFor(() => !realtime.open(), 10_000)))
       failures.push("End call left the call open")
+    if (
+      !(await waitFor(
+        async () => (await pill.locator(".call-pill").count()) === 0,
+        5_000,
+      ))
+    )
+      failures.push("the pill stays after its call ended")
+    await pill.close()
+    await front(true)
     if (
       !(await talk.isVisible().catch(() => false)) &&
       !(await talk
@@ -4752,7 +4964,7 @@ const steps = {
     )
       failures.push("Talk is not offered again after End call")
     if ((await run.page.locator(".voice-dock").count()) > 0)
-      failures.push("the call's orb stays after End call")
+      failures.push("the call's line and glow stay after End call")
     if (!realtime.received.some((event) => event.type === "response.create"))
       failures.push("the voice was never asked to speak")
 
@@ -8003,6 +8215,64 @@ const steps = {
       ))
     )
       failures.push("the run does not fold again")
+  },
+
+  /**
+   * The composer's row: attach and the model's short name at its start; at
+   * its end the access and thinking choices, a hairline, then what acts. No
+   * project is offered there, and nothing stands under the card.
+   */
+  async composer(run, step, failures) {
+    await run.exclusive(async () => {
+      const page = run.page
+      const dock = page.locator(css.focusedPane).locator(".workspace-dock")
+      const row = dock.locator(".desktop-composer-row")
+      await row.waitFor({ timeout: 10_000 })
+      // The chip draws the model's short name; its whole name stays its label.
+      const model = await row.locator(".desktop-chip-model").evaluate((chip) => ({
+        drawn: JSON.parse(getComputedStyle(chip, "::after").content || '""'),
+        label: chip.getAttribute("aria-label") ?? "",
+      }))
+      if (model.drawn === "" || /^(Claude|OpenAI)\s/.test(model.drawn))
+        failures.push(`the model chip draws ${JSON.stringify(model.drawn)}`)
+      if (!model.label.includes(model.drawn))
+        failures.push(
+          `the model chip draws ${JSON.stringify(model.drawn)}, which its name ${JSON.stringify(model.label)} does not hold`,
+        )
+      if ((await dock.locator('[aria-label^="Project"]').count()) > 0)
+        failures.push("the composer still offers a project")
+      // Left to right at the row's end: thinking, the hairline, Send.
+      const edges = await row.evaluate((element) => {
+        const left = (selector) =>
+          element.querySelector(selector)?.getBoundingClientRect().left ?? null
+        return {
+          thinking: left(".desktop-chip-thinking"),
+          divider: left(".desktop-composer-divider"),
+          send: left(".desktop-send"),
+        }
+      })
+      if (!(
+        edges.thinking !== null &&
+        edges.divider !== null &&
+        edges.send !== null &&
+        edges.thinking < edges.divider &&
+        edges.divider < edges.send
+      ))
+        failures.push(
+          `the row's end is not thinking, hairline, Send: ${JSON.stringify(edges)}`,
+        )
+      // Nothing under the card: the dock ends with the composer.
+      const under = await dock.evaluate((element) => {
+        const card = element.querySelector("form.desktop-composer")
+        return card?.nextElementSibling?.className ?? null
+      })
+      if (under !== null && !String(under).includes("voice-rim"))
+        failures.push(`something stands under the composer: ${JSON.stringify(under)}`)
+      if (run.evidence)
+        await dock.screenshot({
+          path: join(run.evidence, `composer-${run.engine}.png`),
+        })
+    })
   },
 
   async menu(run, step, failures) {

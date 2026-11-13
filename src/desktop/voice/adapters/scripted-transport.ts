@@ -65,7 +65,12 @@ export function scriptedTransport(
             setMicrophone: () => {},
             setSpeaker: () => {},
             // No audio is carried: only whether the provider has spoken.
-            check: async () => ({ answered, audioSent: true, microphoneSound: null }),
+            check: async () => ({
+              answered,
+              microphoneLive: null,
+              audioSent: true,
+              microphoneSound: null,
+            }),
             close: () => {
               closing = true
               socket.close()

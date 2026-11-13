@@ -9,11 +9,6 @@ use super::{
     socket::{failure, success},
     state::ProductRouteState,
 };
-use crate::device_pairing::{
-    application::OwnerError,
-    infrastructure::{PairingRuntimeError, RegistrationError},
-};
-use crate::tunnel::application::{TunnelMode, TunnelToken};
 use nessa_auth::{
     application::{
         dto::{CredentialGrantDto, ResourceDto},
@@ -25,6 +20,11 @@ use nessa_auth::{
         ConsentClass, DeviceKey, InvitationId, PairingError, PairingInitiator, PairingPhase,
         PairingRecord, TerminalCause,
     },
+};
+use nessa_device_pairing::tunnel::application::{TunnelMode, TunnelToken};
+use nessa_device_pairing::{
+    application::OwnerError,
+    infrastructure::{PairingRuntimeError, RegistrationError},
 };
 use nessa_protocol::product::generated::PairingTunnelMode;
 use nessa_protocol::product::generated::{
@@ -226,7 +226,7 @@ pub(super) async fn set_linking(
     session: &AuthenticatedSession,
     frame: RequestFrame,
 ) -> OutgoingMessage {
-    use crate::device_pairing::application::LinkingApply;
+    use nessa_device_pairing::application::LinkingApply;
     use nessa_protocol::product::generated::{
         PairingLinkingApply, PairingSetLinkingParams, PairingSetLinkingResult,
     };
@@ -252,8 +252,8 @@ pub(super) async fn set_linking(
 }
 
 /// The wire's code for a linking or tunnel refusal.
-fn linking_refusal(error: crate::device_pairing::application::LinkingError) -> PairingErrorCode {
-    use crate::device_pairing::application::LinkingError;
+fn linking_refusal(error: nessa_device_pairing::application::LinkingError) -> PairingErrorCode {
+    use nessa_device_pairing::application::LinkingError;
     match error {
         LinkingError::Busy => PairingErrorCode::PairingBusy,
         LinkingError::AddressInUse => PairingErrorCode::PairingAddressInUse,
@@ -284,7 +284,7 @@ pub(super) async fn set_tunnel(
     session: &AuthenticatedSession,
     frame: RequestFrame,
 ) -> OutgoingMessage {
-    use crate::device_pairing::application::{LinkingApply, TunnelRequest};
+    use nessa_device_pairing::application::{LinkingApply, TunnelRequest};
     use nessa_protocol::product::generated::{
         PairingLinkingApply, PairingSetTunnelParams, PairingSetTunnelResult,
     };
@@ -333,7 +333,7 @@ pub(super) async fn set_tunnel(
 
 /// `pairing.tunnel`: the saved tunnel (never its token) and this run's.
 pub(super) async fn tunnel(state: &ProductRouteState, frame: RequestFrame) -> OutgoingMessage {
-    use crate::tunnel::application::TunnelStatus;
+    use nessa_device_pairing::tunnel::application::TunnelStatus;
     use nessa_protocol::product::generated::{PairingTunnelResult, PairingTunnelStatus};
     if frame.params != json!({}) {
         return failure(&frame.id, "invalid_request");
@@ -382,9 +382,9 @@ pub(super) async fn tunnel(state: &ProductRouteState, frame: RequestFrame) -> Ou
 /// The authenticated caller, as the linking audit names it.
 pub(super) fn linking_caller(
     session: &AuthenticatedSession,
-) -> crate::device_pairing::application::LinkingCaller {
+) -> nessa_device_pairing::application::LinkingCaller {
     let context = session.context();
-    crate::device_pairing::application::LinkingCaller {
+    nessa_device_pairing::application::LinkingCaller {
         organization_id: context.organization_id().as_str().to_owned(),
         principal_id: context.principal_id().as_str().to_owned(),
         credential_id: context.credential_id().as_str().to_owned(),

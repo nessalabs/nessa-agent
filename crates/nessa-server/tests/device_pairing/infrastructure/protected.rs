@@ -23,6 +23,7 @@ use nessa_auth::{
     domain::{AudienceId, Credential, CredentialId, Grant, OrganizationId, Resource, ResourceId},
 };
 use nessa_client_core::pairing::NativeEnrollmentClient;
+use nessa_device_pairing::infrastructure::ProtectedSessions;
 use nessa_protocol::agents::AgentId;
 use nessa_protocol::conversation::domain::{
     ConversationApprovalMode, ConversationId, ConversationModelId,
@@ -38,16 +39,17 @@ use nessa_protocol::pairing::{
 use nessa_server::{
     agents::application::{AgentProbe, AgentProbeEvidence},
     app::dependencies::RuntimeDependencies,
-    conversation::application::{
-        ConversationCaller, ConversationError, ConversationRepository, RecordReadError,
-        RecordReadFuture, RecordReadLease, RecordReadOperation, RecordReadResponse,
-        RecordReadSource, ShareConversation, ShareGrants,
+    conversation::{
+        application::{
+            ConversationCaller, ConversationError, ConversationRepository, RecordReadError,
+            RecordReadFuture, RecordReadLease, RecordReadOperation, RecordReadResponse,
+            RecordReadSource, ShareConversation, ShareGrants,
+        },
+        domain::{Capabilities, Conversation},
+        infrastructure::{
+            CedarConversationAccessPolicy, LocalConversationStore, NessaCatalogueReadSource,
+        },
     },
-    conversation::domain::{Capabilities, Conversation},
-    conversation::infrastructure::{
-        CedarConversationAccessPolicy, LocalConversationStore, NessaCatalogueReadSource,
-    },
-    device_pairing::infrastructure::ProtectedSessions,
     product::{DeviceCredentials, NativeSessions, ProductDependencies, ProductRouteState},
 };
 use nessa_sync::replication::domain::Id;

@@ -16,7 +16,7 @@ use crate::backup::application::{
     capture_inventory, CaptureError, FenceSource, InventoryAction, InventoryCause, InventoryFacts,
 };
 use crate::backup::domain::{DeletionFence, DeletionLog};
-use crate::conversation::application::{FenceCapture, FenceCaptureError};
+use nessa_protocol::conversation::fence_capture::{FenceCapture, FenceCaptureError};
 
 /// The gateway's deletion inventory: the log beside `namespace/backup` and
 /// the Cedar policy that decides who may write it.

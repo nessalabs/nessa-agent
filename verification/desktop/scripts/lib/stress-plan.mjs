@@ -205,6 +205,10 @@ export const KNOBS = {
     default: 1,
     what: "times the pane's ⋯ menu and the overview's filter are opened: rows lead with their icons, a chosen filter's check sits before its number, and a number picks it",
   },
+  composers: {
+    default: 1,
+    what: "times the composer's row is read: the model is named without its family, thinking stands before the hairline and Send, no project is offered, and nothing stands under the card",
+  },
   menuPanels: {
     default: 1,
     what: "times the menu-bar panel is opened over the run: its tabs are page dots after the chat's name, a message sent there wears the chat accent and its rim, and a chat archived from Messages leaves a row card whose Undo brings it back",
@@ -219,7 +223,7 @@ export const KNOBS = {
   },
   voices: {
     default: 1,
-    what: "voice calls through a fake realtime provider: a key saved in Settings, Talk, spoken words sent tidied and the reply handed back, the microphone muted, a turn stopped by voice, End call",
+    what: "voice calls through a fake realtime provider: a key saved in Settings, Talk, spoken words sent tidied and the reply handed back, the microphone muted, a turn stopped by voice, and away from the window the floating pill: its mute and speaker switches, gone when the window is back in front, and End on it",
   },
   logins: {
     default: 1,
@@ -343,6 +347,7 @@ export function plan(knobs, accessScenario = "full") {
   add(knobs.launches, () => ({ kind: "launch" }))
   add(knobs.menuPanels, () => ({ kind: "menuPanel" }))
   add(knobs.menus, () => ({ kind: "menu" }))
+  add(knobs.composers, () => ({ kind: "composer" }))
   add(knobs.githubs, () => ({ kind: "github" }))
   add(knobs.voices, () => ({ kind: "voice" }))
   add(knobs.logins, () => ({ kind: "login" }))

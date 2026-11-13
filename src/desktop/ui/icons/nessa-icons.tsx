@@ -182,9 +182,8 @@ export const nessaIcons: DesktopIconFamily = {
   send: drawn(<path d="M10 15.5v-11M5.5 9 10 4.5 14.5 9" />, 1.6),
   // Filled, as a running turn's Stop sits on the same disc as send.
   stop: drawn(<rect x="6" y="6" width="8" height="8" rx="2" fill="currentColor" />),
-  attach: drawn(
-    <path d="M14.5 9.25l-4.9 4.9a3.2 3.2 0 0 1-4.5-4.5l5.4-5.4a2.1 2.1 0 0 1 3 3l-5.3 5.3a1.05 1.05 0 0 1-1.5-1.5l4.8-4.8" />,
-  ),
+  // A plus: files are added to the message, as a row is added to a list.
+  attach: drawn(<path d="M10 4.5v11M4.5 10h11" />),
   folder: drawn(folder),
   folderAdd: drawn(
     <>
@@ -192,8 +191,12 @@ export const nessaIcons: DesktopIconFamily = {
       <path d="M10 8.75v4M8 10.75h4" />
     </>,
   ),
+  // Four rising bars, the tallest faint: how much effort, not what it thinks.
   thinking: drawn(
-    <path d="M10 3.5c.45 3.55 2.95 6.05 6.5 6.5-3.55.45-6.05 2.95-6.5 6.5-.45-3.55-2.95-6.05-6.5-6.5 3.55-.45 6.05-2.95 6.5-6.5z" />,
+    <>
+      <path d="M4.5 15.500v-2.500M8.170 15.500V10M11.830 15.500V7" />
+      <path d="M15.500 15.500V4" opacity="0.4" />
+    </>,
   ),
   fast: drawn(<path d="M11.25 3.5 5 11.25h4.75L8.75 16.5 15 8.75h-4.75z" />),
   access: drawn(shield),
@@ -217,6 +220,10 @@ export const nessaIcons: DesktopIconFamily = {
       {speaker}
       <path d="M13 8l4 4M17 8l-4 4" />
     </>,
+  ),
+  // A handset laid down on its cradle.
+  endCall: drawn(
+    <path d="M3 11.500c4.200-3.700 9.800-3.700 14 0l-1.500 2.250-3-1.150v-1.900a8.200 8.200 0 0 0-5 0v1.900l-3 1.150z" />,
   ),
   enter: drawn(
     <path d="M15.5 4.5v4.75a2.25 2.25 0 0 1-2.25 2.25H4.75M8 8.25 4.75 11.5 8 14.75" />,
