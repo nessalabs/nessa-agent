@@ -139,7 +139,7 @@ jobs:
           JS
       - name: Measure the complete desktop matrix on Mac
         if: ${{ inputs['desktop-performance'] }}
-        run: node verification/desktop/scripts/run-all.mjs --headed --layout columns,sidebar --channel bundled --runs 5 --out "$STRESS_EVIDENCE/desktop-performance.json"
+        run: node verification/desktop/scripts/run-all.mjs --headed --layout columns,sidebar --channel bundled --runs 5 --out "$STRESS_EVIDENCE/desktop-performance.json" --reports "$STRESS_EVIDENCE/desktop-checks"
         timeout-minutes: 135
       - name: Keep the desktop measurement in its job log
         if: always() && inputs['desktop-performance']

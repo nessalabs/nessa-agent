@@ -97,7 +97,7 @@ test("manual Mac qualification retains the complete matrix and fixed check bound
   assert.match(matrix, /if: \$\{\{ inputs\['desktop-performance'\] \}\}/)
   assert.match(
     matrix,
-    /run-all\.mjs --headed --layout columns,sidebar --channel bundled --runs 5 --out "\$STRESS_EVIDENCE\/desktop-performance\.json"/,
+    /run-all\.mjs --headed --layout columns,sidebar --channel bundled --runs 5 --out "\$STRESS_EVIDENCE\/desktop-performance\.json" --reports "\$STRESS_EVIDENCE\/desktop-checks"/,
   )
   assert.match(matrix, /timeout-minutes: 135/)
   for (const forbidden of [

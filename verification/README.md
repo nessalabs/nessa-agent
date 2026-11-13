@@ -383,6 +383,21 @@ artifact root. Host snapshots describe that moment, not continuous physical-host
 isolation. The workflow adds no raw-log capture or retrieval path. Native
 `local-auth` qualification does not contain a second copy of the matrix.
 
+The Mac invocation also passes `--reports` under that artifact root. This keeps
+only each check's existing JSON output in a fresh child directory, whose path is
+printed. Inspect only that invocation's child, not earlier children under the
+same parent. Default invocations keep their existing temporary-report cleanup. An
+invalid requested parent fails explicitly; earlier children and sibling files
+are never read or removed. Browser profiles and global temporary files are not
+collected.
+
+These files are diagnostic, not qualification receipts. A child can write
+`ok: true` before its cleanup fails or its process exits nonzero; the aggregate
+still uses that exit outcome. Termination may leave partial or missing JSON,
+and cancellation may prevent artifact upload. A missing aggregate remains
+incomplete qualification. Retention promises only that already-written files
+are not deliberately removed, not that a report will be complete or published.
+
 
 The optional Mac measurement prints the complete run-all JSON to its job log.
 It also emits an API-readable projection through ordinary check notices. The
