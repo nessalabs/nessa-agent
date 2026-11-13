@@ -859,7 +859,7 @@ jobs:
           cache-on-failure: true
       - name: Install cargo-llvm-cov
         env:
-          VERSION: 0.6.16
+          VERSION: 0.9.1
         run: |
           set -euo pipefail
           curl -fsSL "https://github.com/taiki-e/cargo-llvm-cov/releases/download/v${VERSION}/cargo-llvm-cov-x86_64-unknown-linux-gnu.tar.gz" \
