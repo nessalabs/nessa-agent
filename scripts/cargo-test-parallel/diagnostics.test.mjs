@@ -1,5 +1,6 @@
 import assert from "node:assert/strict"
 import { createHash } from "node:crypto"
+import { readFileSync } from "node:fs"
 import test from "node:test"
 import { withFailureAnnotations } from "./diagnostics.mjs"
 
@@ -292,4 +293,28 @@ test("a reporting failure cannot replace the failed child's result or rejection"
     )("fixture", [], {}),
     (error) => error === getterFailure,
   )
+})
+
+test("Windows keeps default libtest capture and the full unchanged selection and deadlines", () => {
+  const workflow = readFileSync(
+    new URL("../../.github/workflows/local-auth.yml", import.meta.url),
+    "utf8",
+  )
+  const block = workflow
+    .split("\n  windows-server-tests:")[1]
+    ?.split("\n  local-auth:")[0]
+  assert.ok(block)
+  assert.doesNotMatch(
+    block,
+    /RUST_TEST_(?:NOCAPTURE|THREADS)|--nocapture|--show-output|--test-threads/,
+    "failed-test output must remain in libtest's final failure section",
+  )
+  assert.match(block, /timeout-minutes: 95/)
+  assert.match(block, /timeout-minutes: 90/)
+  assert.match(
+    block,
+    /run: node scripts\/cargo-test-parallel\.mjs --concurrency 2 --partition \$\{\{ matrix\.partition \}\} -- -p nessa-local-storage -p nessa-auth -p nessa-server/,
+  )
+  assert.match(block, /partition: \[server-conversation, server-other\]/)
+  assert.doesNotMatch(block, /continue-on-error/)
 })

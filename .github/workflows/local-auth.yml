@@ -532,9 +532,10 @@ jobs:
         with:
           node-version: 24
       - shell: bash
-        env:
-          # Emit panic details immediately even if later tests hit the step deadline.
-          RUST_TEST_NOCAPTURE: "1"
+        # Default libtest capture keeps failed-test assertions in the final
+        # failure section, where the bounded diagnostic tail can retain them.
+        # A later hang can delay those details; long-running notices and the
+        # existing deadline still name and bound the stalled test.
         # The step compiles before it tests. Cargo.lock is part of the cache
         # key, so a change that edits it compiles the graph cold: about 25
         # minutes on this runner. Run 41947356093 was still inside
