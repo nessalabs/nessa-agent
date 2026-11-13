@@ -13,7 +13,7 @@ on:
           - cold
         default: restore
       desktop-performance:
-        description: Measure the desktop frame budget on the existing standard Mac runner.
+        description: Measure the frame budget and full browser matrix on the existing standard Mac runner.
         type: boolean
         default: false
 
@@ -605,7 +605,7 @@ jobs:
         uses: ./.github/actions/pnpm-install
       - name: Install the optional desktop measurement browser
         if: env.NESSA_DESKTOP_PERFORMANCE == 'true'
-        run: pnpm exec playwright install chromium
+        run: pnpm exec playwright install chromium webkit
       - name: Record the desktop measurement host
         if: env.NESSA_DESKTOP_PERFORMANCE == 'true'
         shell: bash
@@ -622,15 +622,16 @@ jobs:
             console.log(JSON.stringify({ browser: browser.version(), gpu }))
           } finally { await browser.close() }
           JS
+      # run-all owns the complete functional set and its production-only perf
+      # child. Its five performance runs retain the default 4x/50ms contract.
       - name: Measure the desktop frame budget on Mac
         if: env.NESSA_DESKTOP_PERFORMANCE == 'true'
-        run: node verification/desktop/scripts/perf-budget.mjs --mode prod --headed --engine chromium --layout columns,sidebar --channel bundled --runs 5 --out "${{ runner.temp }}/desktop-performance.json"
+        run: node verification/desktop/scripts/run-all.mjs --headed --layout columns,sidebar --channel bundled --runs 5 --out "${{ runner.temp }}/desktop-performance.json"
       - name: Keep the desktop measurement in its job log
         if: always() && env.NESSA_DESKTOP_PERFORMANCE == 'true'
         shell: bash
         run: |
-          # Logs retain the full measurements and LoAF attribution without
-          # creating a separate stored workflow artifact.
+          # The full document retains functional results and perf attribution.
           if test -f "$RUNNER_TEMP/desktop-performance.json"; then
             cat "$RUNNER_TEMP/desktop-performance.json"
           fi

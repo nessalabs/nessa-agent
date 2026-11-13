@@ -83,10 +83,42 @@ test("desktop performance is manual, Mac-only, and keeps the existing budget", (
   }
   assert.match(
     workflow,
-    /perf-budget\.mjs --mode prod --headed --engine chromium --layout columns,sidebar --channel bundled --runs 5 --out/,
+    /run-all\.mjs --headed --layout columns,sidebar --channel bundled --runs 5 --out/,
   )
   assert.match(
     workflow,
     /name: Keep the desktop measurement in its job log\n\s+if: always\(\) && env\.NESSA_DESKTOP_PERFORMANCE == 'true'/,
   )
+})
+
+test("manual Mac qualification retains the full browser matrix without weakening its gates", () => {
+  const workflow = readFileSync(".github/workflows/local-auth.yml", "utf8")
+  const entries = workflow.split("\n      - ")
+  const browser = entries.find((entry) =>
+    entry.startsWith("name: Install the optional desktop measurement browser\n"),
+  )
+  assert.match(browser, /playwright install chromium webkit/)
+  const matrix = entries.find((entry) =>
+    entry.startsWith("name: Measure the desktop frame budget on Mac\n"),
+  )
+  assert.ok(matrix)
+  assert.match(matrix, /if: env\.NESSA_DESKTOP_PERFORMANCE == 'true'/)
+  assert.match(
+    matrix,
+    /run-all\.mjs --headed --layout columns,sidebar --channel bundled --runs 5 --out/,
+  )
+  for (const forbidden of [
+    "continue-on-error",
+    "--quick",
+    "--only",
+    "--skip",
+    "--engine",
+  ])
+    assert.equal(matrix.includes(forbidden), false, forbidden)
+  const evidence = entries.find((entry) =>
+    entry.startsWith("name: Keep the desktop measurement in its job log\n"),
+  )
+  assert.match(evidence, /if: always\(\) && env\.NESSA_DESKTOP_PERFORMANCE == 'true'/)
+  assert.match(evidence, /cat "\$RUNNER_TEMP\/desktop-performance\.json"/)
+  assert.equal(evidence.includes("upload-artifact"), false)
 })

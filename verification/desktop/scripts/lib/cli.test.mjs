@@ -266,6 +266,18 @@ describe("resultOfThrown", () => {
 })
 
 describe("run-all's sum", () => {
+  it("forces production and five requested runs for the performance child's own preview", () => {
+    const args = argsForCheck(
+      "perf-budget",
+      { mode: "dev", runs: "5" },
+      {
+        out: "perf.json",
+        sharesPage: false,
+        page: { mode: "dev", url: "http://dev.test" },
+      },
+    )
+    assert.deepEqual(args, ["--out", "perf.json", "--runs", "5", "--mode", "prod"])
+  })
   it("routes production Settings to its fixture preview owner", () => {
     assert.equal(ownsPreview("settings-page", "prod"), true)
     assert.equal(ownsPreview("settings-page", "dev"), false)
