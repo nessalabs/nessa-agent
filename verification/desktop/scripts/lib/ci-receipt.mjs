@@ -257,8 +257,10 @@ export function decodeDesktopReceipt(annotations, expectedSource) {
     !own(manifest, "encoding") ||
     manifest.encoding !== "gzip+base64" ||
     !own(manifest, "projectionSha256") ||
+    typeof manifest.projectionSha256 !== "string" ||
     !/^[a-f0-9]{64}$/.test(manifest.projectionSha256) ||
     !own(manifest, "rawSha256") ||
+    typeof manifest.rawSha256 !== "string" ||
     !/^[a-f0-9]{64}$/.test(manifest.rawSha256) ||
     !own(manifest, "parts") ||
     !Number.isSafeInteger(manifest.parts) ||

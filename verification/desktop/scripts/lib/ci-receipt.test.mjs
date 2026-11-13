@@ -283,6 +283,21 @@ test("decompression honors the declared byte bound before checking the resulting
   )
 })
 
+test("digest fields require strings rather than coercible arrays", () => {
+  const rows = annotations(desktopReceipt(JSON.stringify(example()), source))
+  for (const field of ["rawSha256", "projectionSha256"])
+    assert.throws(
+      () =>
+        decodeDesktopReceipt(
+          changeManifest(rows, (manifest) => {
+            manifest[field] = [manifest[field]]
+          }),
+          source,
+        ),
+      /invalid desktop receipt manifest/,
+    )
+})
+
 test("the notice selector accepts only the declared groups", () => {
   const receipt = desktopReceipt(JSON.stringify(example()), source)
   for (const group of ["group0", "group4", "group01", "group99999", "other", undefined])
