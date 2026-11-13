@@ -84,6 +84,7 @@ export const css = {
   titleText: ".workspace-pane-title", // class: a pane's title, in a pane or in the drag's copy of it
   paneBody: ".workspace-pane-body", // class: a pane's conversation and composer, below its header
   composer: "[data-pane-key] textarea",
+  runningComposer: ".desktop-composer[data-running]", // the composer while its conversation is replying
   sendFailure: "[data-send-failure]", // compact composer recovery, separate from transcript turns
   transcript: ".workspace-transcript", // class
   message: ".workspace-message[data-role]", // class: one message in a transcript; data-role is user, agent or note

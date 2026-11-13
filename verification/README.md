@@ -129,6 +129,8 @@ verification/
         cli.mjs             options, stderr diagnostics, JSON result, exit status
         server.mjs          reuse/start the dev server (warmed before the first page, a reused one too), or build + preview production
         browser.mjs         launch Chromium/WebKit, seed preferences, keep page diagnostic queues private
+        mcp-fixture.mjs     hold the sample reply timeline; retain original app teardown request, proxy answer and tab count before retirement
+        mcp-fixture.test.mjs source/origin/request correlation, acknowledgement ordering and clock release regressions
         resource-read-observer.mjs browser factory decorators: original consumed stream/client/mount observations, bounded transport and cutoff
         resource-read-liveness.test.mjs accepted/live ordering, later concurrent reads and original-owner stop/replacement controls
         resource-read-evidence.mjs Node incremental hash, exact Request correlation and bounded evidence ownership (#996)

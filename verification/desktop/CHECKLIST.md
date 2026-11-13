@@ -749,6 +749,12 @@ in its sandbox". Every row of the bridge's design table is a jsdom test
   Closing or tearing down the panel retires it and retains the Open row;
   Open starts a fresh panel mount. _Check:_
   `mcp-apps.mjs --only inline,panel,window,teardown`.
+  Teardown retains the original app's request and tearing-down state, then its
+  original proxy's exact answer and tab count before the host consumes it; a
+  retired document alone is not acknowledgement (`lib/mcp-fixture.test.mjs`).
+  The retained original request must arrive within the unchanged 2000 ms
+  observation bound, before the existing 3000 ms tab-close wait; a later valid
+  request or answer stays visible without erasing an earlier bound failure.
   The bridge's L17a regression separately pins the original inline caller's
   exact reply id, mode and sandbox origin before opening can close its real
   transport; posting before retirement does not claim consumption by the
@@ -771,7 +777,14 @@ in its sandbox". Every row of the bridge's design table is a jsdom test
   own `<bdi>`; `data-message-app` `server/tool` — above its bubble, over the
   bubble's right edge (within 6 px) and inside the column; the person's own
   messages carry none; another while the sample's reply runs is refused
-  (`isError: true`) and adds nothing; `ui/update-model-context` is refused
+  (`isError: true`) and adds nothing. Only this sample-message check holds
+  its reply timeline through the reads and refusal, using a clock installed
+  before page boot and resumed on every outcome; real Playwright deadlines
+  remain unchanged. The reply must still be running at the busy request, and
+  after actual clock resumption is observed, its remaining timers are driven
+  through 5000 logical milliseconds and it must finish and accept another message.
+  The virtual fixture clock is not a performance measurement. This is not a
+  protocol-timeout check. `ui/update-model-context` is refused
   "The sample has no model to give context to" (gate 7). The gateway's own
   path is `app-messages.test.ts`, `bridge.test.ts` and `app-review.mjs
   --only message`. _Check:_ `mcp-apps.mjs --only message`.
