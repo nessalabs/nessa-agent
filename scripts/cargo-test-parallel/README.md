@@ -66,6 +66,25 @@ before a real synthetic server-library assertion and recovers it from the bounde
 annotations while the runner still exits 1 for libtest's exit 101. It preserves
 all partition, build, harness, doctest and required-check assertions.
 
+
+The Windows server jobs use [default libtest capture](https://doc.rust-lang.org/book/ch11-02-running-tests.html#showing-function-output),
+as Linux/macOS do. Failed-test output is printed in the final failure section;
+successful-test output stays captured. Disabling capture lets later successful
+output push an earlier assertion outside the retained tail. The real-Cargo
+`default libtest capture` regression proves that distinction with the same
+one-passed/one-failed result in both modes. Only this disposable ordering fixture
+uses one test thread; the production job's thread and process concurrency, package
+selection, features, 90-minute step and 95-minute job bounds are unchanged.
+
+| Situation | Reporting limit |
+| --- | --- |
+| Tests finish with failures | Their output is printed in libtest's final failure section |
+| A later test hangs or the step is canceled | Earlier panic details may stay captured; long-running notices and the unchanged deadline remain |
+| Failure output exceeds the retained tail or annotation capacity | Assertion details can still be absent; no complete-history or delivery guarantee |
+
+Restoring capture is a reporting-mode change. It does not diagnose or repair a
+handoff failure, and a later pass in that mode does not explain an earlier failure.
+
 | Result | Next action |
 | --- | --- |
 | Build fails or emits no executable | Fail before running tests |
