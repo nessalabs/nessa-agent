@@ -359,3 +359,27 @@ it("offers Fast and the levels only where the catalogue records them for the mod
   expect(chip()?.disabled).toBe(true)
   await act(async () => root.unmount())
 })
+
+it("keeps Thinking in its row, and offers no project there", async () => {
+  const root = createRoot(host)
+  await act(async () =>
+    root.render(
+      <Composer
+        page={false}
+        onPageChange={() => {}}
+        text=""
+        onTextChange={() => {}}
+        placeholder="Reply"
+        model={undefined}
+        onModelChange={() => {}}
+      />,
+    ),
+  )
+  try {
+    const row = host.querySelector(".desktop-composer-row")
+    expect(row?.querySelector(".desktop-chip-thinking")).not.toBeNull()
+    expect(host.querySelector('[aria-label^="Project"]')).toBeNull()
+  } finally {
+    await act(async () => root.unmount())
+  }
+})
