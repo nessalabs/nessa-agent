@@ -1,4 +1,5 @@
 import assert from "node:assert/strict"
+import { createHash } from "node:crypto"
 import { spawnSync } from "node:child_process"
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import os from "node:os"
@@ -24,7 +25,9 @@ test("real Cargo partitions keep coverage and propagate build, harness, and doct
     let trace = std::env::var("NESSA_FIXTURE_TRACE").unwrap();
     use std::io::Write;
     writeln!(std::fs::OpenOptions::new().create(true).append(true).open(trace).unwrap(), "${id}").unwrap();
-    assert_ne!(std::env::var("NESSA_FIXTURE_FAIL").unwrap_or_default(), "${id}");
+    let fail = std::env::var("NESSA_FIXTURE_FAIL").unwrap_or_default();
+    if fail == "${id}" { eprintln!("fixture context: {}", "x".repeat(40_000)); }
+    assert_ne!(fail, "${id}");
   `
   write("Cargo.toml", '[workspace]\nmembers = ["server", "helper"]\nresolver = "2"\n')
   for (const [dir, name] of [
@@ -123,8 +126,37 @@ ${"}".repeat(cohortModule.split("::").length)}`
     const annotations = failedServer.stderr
       .split("\n")
       .filter((line) => line.startsWith("::error "))
-    assert.equal(annotations.length, 1, failedServer.stderr)
-    const message = decodeURIComponent(annotations[0].split("::").slice(2).join("::"))
+    assert.ok(
+      annotations.length > 1,
+      "the real assertion follows more than one receiver-sized chunk",
+    )
+    const parts = annotations.map((line) => {
+      const decoded = decodeURIComponent(line.split("::").slice(2).join("::"))
+      assert.ok(
+        decoded.length <= 3500,
+        "complete messages survive the 4096-character receiver",
+      )
+      const received = decoded.slice(0, 4096)
+      const header = /^Retained report ([a-f0-9]{64}) part (\d+)\/(\d+)\n/.exec(received)
+      assert.ok(header)
+      return {
+        hash: header[1],
+        index: Number(header[2]),
+        count: Number(header[3]),
+        data: received.slice(header[0].length),
+      }
+    })
+    assert.equal(parts[0].index, parts.length)
+    assert.match(parts[0].data, /assertion.*left != right.*failed/)
+    assert.ok(
+      parts.every((part) => part.hash === parts[0].hash && part.count === parts.length),
+    )
+    assert.equal(new Set(parts.map((part) => part.index)).size, parts.length)
+    const message = parts
+      .sort((a, b) => a.index - b.index)
+      .map((part) => part.data)
+      .join("")
+    assert.equal(createHash("sha256").update(message).digest("hex"), parts[0].hash)
     assert.match(message, /nessa_server/)
     assert.match(message, /exited with 101/)
     assert.match(message, /executes.*panicked/)
