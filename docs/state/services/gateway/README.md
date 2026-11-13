@@ -97,7 +97,7 @@ for every unrelated stream.
 
 The Unix gateway prepares its termination future before listener binding and
 endpoint publication. The same future enters the existing stop and restart
-cleanup owner. [Mounting ordering S19](../../../design/auth/device-pairing.md#owner-routes-and-mounting-slice-2a)
+cleanup owner. [Mounting ordering S20](../../../design/auth/device-pairing.md#owner-routes-and-mounting-slice-2a)
 owns the successful-registration guarantee and the existing registration-error
 fallback; this component map introduces no separate shutdown owner.
 

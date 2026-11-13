@@ -352,7 +352,7 @@ impl CompositionRoot {
             None
         };
         // Prepare Unix termination before a bound listener or its endpoint
-        // publication can be observed (device-pairing ordering S19).
+        // publication can be observed (device-pairing ordering S20).
         let shutdown = shutdown_signal();
         let listen_addr = config.listen_addr();
         let listener = tokio::net::TcpListener::bind(&listen_addr)
