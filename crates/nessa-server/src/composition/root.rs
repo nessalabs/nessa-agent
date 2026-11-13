@@ -351,6 +351,9 @@ impl CompositionRoot {
         } else {
             None
         };
+        // Prepare Unix termination before a bound listener or its endpoint
+        // publication can be observed (device-pairing ordering S19).
+        let shutdown = shutdown_signal();
         let listen_addr = config.listen_addr();
         let listener = tokio::net::TcpListener::bind(&listen_addr)
             .await
@@ -598,9 +601,9 @@ impl CompositionRoot {
         // A signal stops it for good, before the restart or during its drain
         // (`SelfRestart` owns that order).
         #[cfg(unix)]
-        let asked = crate::core::self_restart::stop_or_restart(shutdown_signal(), restart.clone());
+        let asked = crate::core::self_restart::stop_or_restart(shutdown, restart.clone());
         #[cfg(not(unix))]
-        let asked = shutdown_signal();
+        let asked = shutdown;
         let stop = stop_signal(asked, native_watch);
         // The native listener ending stops the run too: a restart not yet
         // asked for does not happen.
@@ -1011,10 +1014,14 @@ fn runtime_dependencies(config: &Environment) -> RuntimeDependencies {
     }
 }
 
-async fn shutdown_signal() {
-    #[cfg(unix)]
-    {
-        match signal(SignalKind::terminate()) {
+/// Prepare Unix termination now, rather than on the future's first poll.
+/// `termination_before_the_shutdown_future_is_polled_is_retained` exercises
+/// capture before polling in a fresh process.
+#[cfg(unix)]
+fn shutdown_signal() -> impl Future<Output = ()> {
+    let terminate = signal(SignalKind::terminate());
+    async move {
+        match terminate {
             Ok(mut terminate) => {
                 tokio::select! { _ = tokio::signal::ctrl_c() => {}, _ = terminate.recv() => {} }
             }
@@ -1023,10 +1030,11 @@ async fn shutdown_signal() {
             }
         }
     }
-    #[cfg(not(unix))]
-    {
-        let _ = tokio::signal::ctrl_c().await;
-    }
+}
+
+#[cfg(not(unix))]
+async fn shutdown_signal() {
+    let _ = tokio::signal::ctrl_c().await;
 }
 
 /// The startup warm-ups, as the work outside conversations a refused
@@ -1056,6 +1064,47 @@ mod tests {
     use tokio::net::TcpListener;
     use tokio::sync::oneshot::Sender;
     use tokio::sync::{oneshot, Notify};
+
+    #[cfg(unix)]
+    #[test]
+    fn termination_before_the_shutdown_future_is_polled_is_retained() {
+        const CHILD: &str = "NESSA_TEST_UNPOLLED_SHUTDOWN";
+        const OBSERVED: &str = "termination observed before the first poll";
+        if std::env::var_os(CHILD).is_some() {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap()
+                .block_on(async {
+                    let stopped = shutdown_signal();
+                    let pid = libc::pid_t::try_from(std::process::id()).unwrap();
+                    assert_eq!(unsafe { libc::kill(pid, libc::SIGTERM) }, 0);
+                    tokio::time::timeout(Duration::from_secs(3), stopped)
+                        .await
+                        .expect("the prepared shutdown must retain termination before polling");
+                });
+            println!("{OBSERVED}");
+            return;
+        }
+        // A fresh process keeps another test's process-wide Tokio handler
+        // from masking a missing handler here. The marker also refuses a
+        // child invocation whose exact filter accidentally selected no test.
+        let module = module_path!().split_once("::").unwrap().1;
+        let test =
+            format!("{module}::termination_before_the_shutdown_future_is_polled_is_retained");
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", &test, "--nocapture"])
+            .env(CHILD, "1")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "child exited {}: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(String::from_utf8_lossy(&output.stdout).contains(OBSERVED));
+    }
 
     /// The unconfirmed report a process result carries.
     pub(super) fn failure(result: Result<(), RunError>) -> ShutdownFailure {
