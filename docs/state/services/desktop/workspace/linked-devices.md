@@ -6,7 +6,7 @@ status: implemented
 summary: Settings shows the gateway's pairing state, approves the exact
   displayed device key, and rereads after uncertain changes.
 parent: desktop-workspace
-sourceRevision: "d5fb8be1166e016ea64dabf239ed8b11c504b08a"
+sourceRevision: "a2c1a915e58ca5c2514e4ba2fefc72b097731cd6"
 sources:
   - src/desktop/settings/model/linked-devices.ts
   - src/desktop/settings/model/linked-devices.test.ts
@@ -194,7 +194,7 @@ Excluded: All exclusions stated in the owning Bounded rule model section remain 
 
 Source review scope: the complete page was reconciled with the reducer, UI,
 adapter, metadata classifier, Settings layer and regression declarations at
-`d5fb8be1166e016ea64dabf239ed8b11c504b08a`. These desktop sources are unchanged since
+`a2c1a915e58ca5c2514e4ba2fefc72b097731cd6`. These desktop sources are unchanged since
 `ea66af43`; the integration retains main's named-computer placement beside the
 gateway-pairing stress entry. Quiet-poll cancellation, captured targets and keyed
 DOM controls keep their existing owner and ordering. The subsequent attachment
@@ -207,3 +207,10 @@ model source mapping, model files or checker receipt and makes no new execution
 claim. A model result establishes bounded design safety only.
 
 The gateway [pairing owner](../../gateway/device-pairing.md) separately models approval versus activation with current receiver proof. The desktop key-display/restart model does not certify activation or credential cleanup.
+
+The November 13 source review includes main `826ea15fb` and the device-pairing
+crate extraction. The Human adapter, immutable selection, cancellation and late
+completion boundaries were traced at this checkpoint; the native protocol,
+credential classes and share-grant authority remain separate. Main's composer
+and voice changes are retained. This checkpoint does not certify their UI,
+refresh a model receipt, or claim a new browser/native execution.

@@ -3,7 +3,7 @@ id: desktop-gateway-pairing
 title: Pair a gateway with explicit Human sign-in
 kind: flow
 status: implemented
-sourceRevision: "d5fb8be1166e016ea64dabf239ed8b11c504b08a"
+sourceRevision: "a2c1a915e58ca5c2514e4ba2fefc72b097731cd6"
 parent: desktop-workspace
 summary: Choose before creating a code, authenticate the Human separately, and recover canonical invitations after uncertain replies.
 sources:
@@ -114,7 +114,7 @@ connection completion closes before exposing commands. JavaScript
 string zeroization is not promised. An unfinished invitation stays with the
 registry and requires fresh explicit sign-in after reopening.
 
-Source review checkpoint: `d5fb8be1166e016ea64dabf239ed8b11c504b08a`. This page reconciles
+Source review checkpoint: `a2c1a915e58ca5c2514e4ba2fefc72b097731cd6`. This page reconciles
 the new Devices entry, immutable display selection, scoped adapter, composition,
 SDK endpoint and focused regressions. Current main's ambient elapsed clock is
 separate from this flow's injected `after` timer; the integration adds no pairing
@@ -137,3 +137,10 @@ The diagram bodies are unchanged. The earlier six-diagram Chromium rendering
 receipt keeps its original source cut; this review makes no new rendering or
 execution claim. The chart has no formal model. It does not refresh the separate
 OwnerPhone model or claim to verify native host IPC, WKWebView, or deployed gateways.
+
+The November 13 source review includes main `826ea15fb` and the device-pairing
+crate extraction. The Human adapter, immutable selection, cancellation and late
+completion boundaries were traced at this checkpoint; the native protocol,
+credential classes and share-grant authority remain separate. Main's composer
+and voice changes are retained. This checkpoint does not certify their UI,
+refresh a model receipt, or claim a new browser/native execution.

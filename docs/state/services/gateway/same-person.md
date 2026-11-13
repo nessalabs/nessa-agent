@@ -163,3 +163,9 @@ formal model; the older device activation model does not cover these two-store
 link obligations. No real device, account grant, live credential, physical phone
 or deployed gateway was used to verify this flow. Peer subscriptions, desktop
 choice controls and unrelated gateway lifecycle models are outside this change.
+
+Relocation-only review at `a2c1a915e58ca5c2514e4ba2fefc72b097731cd6`: activation and
+linking still route through `nessa-device-pairing`, with the registry and grant
+store retaining authority. The older behavioral checkpoint above is retained;
+this source-mapping review does not claim a complete native lifecycle re-audit
+or rerun native regressions.
