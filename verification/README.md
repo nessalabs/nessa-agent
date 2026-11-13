@@ -90,6 +90,7 @@ verification/
       attachments-races.mjs pending image admission and concurrent URL-drop refusals
       onboarding-readiness.mjs readiness deadline and retry in both browser engines
       run-all.mjs           every check, summarised
+      ci-receipt.mjs        CI adapter: bounded reads and result-notice groups
       committed-transcript.mjs history notices, permissions, re-enable and question-target identities
       local-tab-lifetimes.mjs restored local identities, follow and completion ownership
       lease-details.mjs     the details sheet's Where it runs, for every published lease state
@@ -131,6 +132,8 @@ verification/
         browser.mjs         launch Chromium/WebKit, seed preferences, keep page diagnostic queues private
         mcp-fixture.mjs     hold the sample reply timeline; retain original app teardown request, proxy answer and tab count before retirement
         mcp-fixture.test.mjs source/origin/request correlation, acknowledgement ordering and clock release regressions
+        ci-receipt.mjs      project existing desktop results into hashed notice parts; verify complete, source-bound annotation collections
+        ci-receipt.test.mjs producer failure/attribution retention, corruption, limits and actual CI command regressions
         resource-read-observer.mjs browser factory decorators: original consumed stream/client/mount observations, bounded transport and cutoff
         resource-read-liveness.test.mjs accepted/live ordering, later concurrent reads and original-owner stop/replacement controls
         resource-read-evidence.mjs Node incremental hash, exact Request correlation and bounded evidence ownership (#996)
@@ -350,6 +353,40 @@ Per [machine-readable command output](../CODING_STANDARDS.md#machine-readable-co
 
 The app-review fixture contract and ordering evidence are in
 [app review verification](../docs/design/app-review-verification.md).
+
+## CI measurement receipts
+
+The optional Mac measurement prints the complete run-all JSON to its job log.
+It also emits an API-readable projection through ordinary check notices. The
+projection copies the producer's verdict and entire summary, all failed/skipped
+functional records, calibration, unrounded performance results and every run
+field except the dense original sample buffer. Slow-frame attribution, including
+LoAF scripts, remains intact. Successful functional records retain their identity
+and status; their other details remain in the original document.
+
+Preparation is not confirmed delivery. The manifest binds the commit, workflow
+run and attempt to hashes of the raw document and projection. Three steps emit
+at most eight data notices each, with ASCII bodies of at most 3500 characters.
+This stays below the runner's per-step notice cap; it does not guarantee that
+GitHub retained every part. Oversized or malformed input produces an explicit
+incomplete manifest and a nonzero reporting step, never truncated attribution.
+The reader accepts at most 64 MiB of raw input and 32 MiB of projected data.
+
+Fetch every page of the terminal job's
+[check annotations](https://docs.github.com/en/rest/checks/runs#list-check-run-annotations).
+Pass the expected commit, run and attempt from trusted workflow metadata to
+decodeDesktopReceipt; do not derive that expected identity from the receipt.
+Use the job's execution attempt, not a newer workflow attempt that reran other
+jobs; run and attempt are the string values supplied by GitHub's environment.
+Missing, duplicate, mixed or corrupt parts fail collection. A decoded projection
+does not qualify the change by itself: the selected checks, production mode,
+calibration, run count and job conclusion still need to meet their own contracts.
+The receipt never recalculates a budget or converts a producer failure into a pass.
+
+The [notice protocol](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-commands#setting-a-notice-message)
+and [runner limits](https://github.com/actions/runner/blob/main/src/Runner.Worker/ExecutionContext.cs)
+own the external transport constraints. The measurement owner still owns its
+numbers and verdict.
 
 ## Hover evidence
 

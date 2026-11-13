@@ -635,6 +635,18 @@ jobs:
           if test -f "$RUNNER_TEMP/desktop-performance.json"; then
             cat "$RUNNER_TEMP/desktop-performance.json"
           fi
+          node verification/desktop/scripts/ci-receipt.mjs "$RUNNER_TEMP/desktop-performance.json" manifest
+      # Each step stays below the runner's ten-notice limit. The collector
+      # requires every hashed part; an incomplete receipt cannot qualify a run.
+      - name: Keep desktop result receipt 1
+        if: always() && env.NESSA_DESKTOP_PERFORMANCE == 'true'
+        run: node verification/desktop/scripts/ci-receipt.mjs "$RUNNER_TEMP/desktop-performance.json" group1
+      - name: Keep desktop result receipt 2
+        if: always() && env.NESSA_DESKTOP_PERFORMANCE == 'true'
+        run: node verification/desktop/scripts/ci-receipt.mjs "$RUNNER_TEMP/desktop-performance.json" group2
+      - name: Keep desktop result receipt 3
+        if: always() && env.NESSA_DESKTOP_PERFORMANCE == 'true'
+        run: node verification/desktop/scripts/ci-receipt.mjs "$RUNNER_TEMP/desktop-performance.json" group3
       - run: node --test scripts/product-protocol/rust-types.test.mjs
       # Duplicated by `cargo fmt --all` in `gateway-contract`, and staying
       # anyway. `scripts/desktop/ci-harness.test.mjs` requires this exact line,
