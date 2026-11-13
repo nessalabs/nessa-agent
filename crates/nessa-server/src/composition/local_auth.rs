@@ -66,8 +66,8 @@ use crate::{
     browser_session::adapters::PersistentSessions,
     conversation::{
         application::{
-            ConversationAccessPolicyEvaluator, ConversationService, FenceCapture, McpAppAudit,
-            ReceiverAuthority, ReviewNoticeAuditor, ShareGrants, WatchCatalogue, WatchRecords,
+            ConversationAccessPolicyEvaluator, ConversationService, McpAppAudit, ReceiverAuthority,
+            ReviewNoticeAuditor, ShareGrants, WatchCatalogue, WatchRecords,
         },
         infrastructure::{
             CedarConversationAccessPolicy, DurableReviewNoticeAudit, LocalConversationStore,
@@ -103,6 +103,7 @@ use nessa_projection::{McpToolUis, NoMcpToolUis};
 #[cfg(unix)]
 use nessa_protocol::agents::AgentId;
 use nessa_protocol::clock::Clock as ServerClock;
+use nessa_protocol::conversation::fence_capture::FenceCapture;
 use nessa_protocol::product::generated::AgentsListResult;
 #[cfg(unix)]
 use nessa_protocol::product::generated::{
@@ -659,7 +660,7 @@ pub(super) async fn product_state(
             },
             Arc::new(RuntimeClock::new()),
         );
-        let audit = crate::device_pairing::infrastructure::DurableLinkingAudit::new(
+        let audit = nessa_device_pairing::infrastructure::DurableLinkingAudit::new(
             conversation_root(namespace)
                 .join("audit")
                 .join("native-linking"),
@@ -672,7 +673,7 @@ pub(super) async fn product_state(
             restart.clone(),
         )
         .with_tunnel(
-            crate::tunnel::infrastructure::files::TunnelFiles::new(namespace),
+            nessa_device_pairing::tunnel::infrastructure::files::TunnelFiles::new(namespace),
             match &tunnel {
                 Some(tunnel) => tunnel.running(),
                 None => tokio::sync::watch::channel(None).1,
@@ -918,7 +919,7 @@ struct BuiltConversations {
 /// The paired environments as the native listener serves them, and the
 /// names of those connected now.
 type PairedParts = (
-    Arc<dyn crate::device_pairing::infrastructure::EnvironmentPeers>,
+    Arc<dyn nessa_device_pairing::infrastructure::EnvironmentPeers>,
     crate::product::ConnectedEnvironments,
     PairedWorkers,
 );
@@ -2074,7 +2075,7 @@ fn environments(
         );
         (
             Arc::new(ListenerEnvironments(peers))
-                as Arc<dyn crate::device_pairing::infrastructure::EnvironmentPeers>,
+                as Arc<dyn nessa_device_pairing::infrastructure::EnvironmentPeers>,
             crate::product::ConnectedEnvironments {
                 changes,
                 // The pool first, while any worker of it takes new work.

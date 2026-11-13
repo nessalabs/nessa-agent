@@ -79,6 +79,39 @@ impl Host for Macos {
         window_controls::hold(window)
     }
 
+    fn float_beside_fullscreen(&self, window: &WebviewWindow) {
+        // Called from setup, on the main thread. The live WebviewWindow owns
+        // this NSWindow; it is borrowed only for this configuration.
+        let handle = match window.ns_window() {
+            Ok(handle) => handle,
+            Err(error) => {
+                eprintln!("[nessa] could not float a window beside fullscreen apps: {error}");
+                return;
+            }
+        };
+        let native = unsafe { &*handle.cast::<NSWindow>() };
+        native.setCollectionBehavior(
+            native.collectionBehavior() | NSWindowCollectionBehavior::FullScreenAuxiliary,
+        );
+    }
+
+    fn show_quietly(&self, window: &WebviewWindow) -> Result<(), String> {
+        // Tauri's own show is `makeKeyAndOrderFront`, which takes the key
+        // window from whatever held it. Ordered front regardless, the window
+        // is on screen and nothing else changes. A command runs off the main
+        // thread, and AppKit is asked on it.
+        let shown = window.clone();
+        window
+            .run_on_main_thread(move || match shown.ns_window() {
+                Ok(handle) => {
+                    let native = unsafe { &*handle.cast::<NSWindow>() };
+                    native.orderFrontRegardless();
+                }
+                Err(error) => eprintln!("[nessa] could not show a window quietly: {error}"),
+            })
+            .map_err(|error| error.to_string())
+    }
+
     fn after_attach(&self, window: &WebviewWindow, _settings: &crate::settings::Settings) {
         // Setup runs on the main thread. The live WebviewWindow owns this
         // NSWindow; borrow it only for the duration of this configuration.

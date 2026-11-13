@@ -11,11 +11,11 @@ use super::ShutdownFailure;
 use crate::browser_session::adapters::JournalOpenError;
 #[cfg(test)]
 use crate::conversation::application::ConversationError;
-use crate::device_pairing::infrastructure::{GatewayIdentityError, PairingRuntimeError};
 use crate::env::EnvironmentError;
 use nessa_auth::adapters::local::LocalStoreError;
 use nessa_auth::application::credential_registry::CredentialRegistryAuditError;
 use nessa_auth::application::pairing::PrivateStateError;
+use nessa_device_pairing::infrastructure::{GatewayIdentityError, PairingRuntimeError};
 use nessa_local_database::{rusqlite, OpenError};
 use std::fmt;
 use std::io::{self, ErrorKind};

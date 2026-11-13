@@ -75,6 +75,7 @@ const desktopRoles = [
   "microphoneOff",
   "speaker",
   "speakerOff",
+  "endCall",
   // The home header's picture
   "customize",
   "zoomIn",

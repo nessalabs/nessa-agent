@@ -5,17 +5,15 @@ use nessa_auth::{
     adapters::pairing::{GatewayTrust, NativeIdentity, NativeTransport, OsEntropy},
     domain::pairing::AttemptId,
 };
+use nessa_device_pairing::infrastructure::{
+    Accepted, EnrollmentAccept, NativeConnectionFailure, NativeEnrollmentConnections,
+    NativeEnrollmentListener,
+};
 use nessa_protocol::pairing::{
     wire::{decode_reply, encode_request, NativePairingReply, NativePairingRequest},
     EnrollmentChannel,
 };
-use nessa_server::{
-    app::dependencies::RuntimeDependencies,
-    device_pairing::infrastructure::{
-        Accepted, EnrollmentAccept, NativeConnectionFailure, NativeEnrollmentConnections,
-        NativeEnrollmentListener,
-    },
-};
+use nessa_server::app::dependencies::RuntimeDependencies;
 use std::{
     collections::VecDeque,
     io::{Error as IoError, ErrorKind},
@@ -488,7 +486,7 @@ async fn a_tunneled_key_with_no_credential_is_closed_before_its_first_request() 
 
 /// Every key may serve: what a paired worker's or phone's key holds.
 struct EveryKeyServes;
-impl nessa_server::device_pairing::infrastructure::EnvironmentPeers for EveryKeyServes {
+impl nessa_device_pairing::infrastructure::EnvironmentPeers for EveryKeyServes {
     fn admits<'a>(
         &'a self,
         _proof: &'a nessa_auth::application::pairing::DeviceConnectionProof,
@@ -504,7 +502,7 @@ impl nessa_server::device_pairing::infrastructure::EnvironmentPeers for EveryKey
     }
     fn serve(
         &self,
-        _stream: nessa_server::device_pairing::infrastructure::TlsStream,
+        _stream: nessa_device_pairing::infrastructure::TlsStream,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> {
         Box::pin(async {})
     }

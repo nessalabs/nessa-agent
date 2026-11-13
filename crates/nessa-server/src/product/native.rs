@@ -11,7 +11,6 @@
 //! (design rows PR1, PR3, PR4).
 use super::socket::{serve_session, SessionProof};
 use super::state::ProductRouteState;
-use crate::device_pairing::infrastructure::{ProtectedConnection, ProtectedSessions};
 use axum::extract::ws::Message;
 use axum::Error;
 use futures_util::{Sink, Stream};
@@ -20,6 +19,7 @@ use nessa_auth::application::{
     ports::{AccessError, CredentialEvidence, CredentialVerifier, PortFuture, VerifiedCredential},
 };
 use nessa_auth::domain::AudienceId;
+use nessa_device_pairing::infrastructure::{ProtectedConnection, ProtectedSessions};
 use nessa_protocol::product::generated::product_event;
 use nessa_protocol::product::handshake::accepted_termination;
 use nessa_protocol::protocol::{EventFrame, OutgoingMessage};

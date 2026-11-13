@@ -16,10 +16,8 @@ use nessa_auth::{
     },
     domain::pairing::ConsentClass,
 };
+use nessa_device_pairing::infrastructure::{NativeEnrollmentConnections, PairingRuntimeError};
 use nessa_protocol::pairing::{EnrollmentChannel, NativeFrameError};
-use nessa_server::device_pairing::infrastructure::{
-    NativeEnrollmentConnections, PairingRuntimeError,
-};
 use std::{
     any::Any,
     future::Future,

@@ -150,22 +150,18 @@ pub fn is_replaced_file(error: &io::Error) -> bool {
 /// Ordinary absence and operating-system availability failures are deliberately
 /// distinct so callers may fall back only when no untrusted object was found.
 pub fn is_unsafe_file(error: &io::Error) -> bool {
-    if error
+    let named_unsafe = error
         .get_ref()
         .and_then(|cause| cause.downcast_ref::<UnsafeFile>())
         .is_some()
-        || is_replaced_file(error)
-    {
-        return true;
-    }
+        || is_replaced_file(error);
+    // What the system itself says of a path that is not what it should be.
     #[cfg(unix)]
-    {
-        matches!(error.raw_os_error(), Some(code) if code == libc::ELOOP || code == libc::ENOTDIR)
-    }
+    let refused_path =
+        matches!(error.raw_os_error(), Some(code) if code == libc::ELOOP || code == libc::ENOTDIR);
     #[cfg(not(unix))]
-    {
-        false
-    }
+    let refused_path = false;
+    named_unsafe || refused_path
 }
 
 /// Create a private directory tree one anchored component at a time beneath a

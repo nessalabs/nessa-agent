@@ -90,6 +90,16 @@ pub trait Host: Send + Sync {
     /// teaches would otherwise summon the panel out of sight behind it.
     fn set_above_overlay(&self, _window: &WebviewWindow, _above: bool) {}
 
+    /// Lets a small floating window stand beside full-screen apps as well as
+    /// on every desktop. A no-op where the window system has no such split.
+    fn float_beside_fullscreen(&self, _window: &WebviewWindow) {}
+
+    /// Puts a window on screen without handing it the keyboard: whatever the
+    /// person is typing in keeps it. Hosts with no quieter way show it plainly.
+    fn show_quietly(&self, window: &WebviewWindow) -> Result<(), String> {
+        window.show().map_err(|error| error.to_string())
+    }
+
     /// Native frost / clear. No-op on hosts where the shell paints frost in CSS.
     fn set_frosted(&self, _window: &WebviewWindow, _frosted: bool) -> Result<(), String> {
         Ok(())

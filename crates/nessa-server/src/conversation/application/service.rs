@@ -40,10 +40,10 @@ use super::{
     ConversationFileLinkState, ConversationListing, ConversationModeApplication,
     ConversationModeAudit, ConversationModeAuditPhase, ConversationModeRequest,
     ConversationModeRequestState, ConversationOwnershipState, ConversationRepository,
-    ConversationSummaries, DeletionFailures, FenceCapture, FetchRequests, ListedConversation,
-    ObservationCursor, ObservedConversations, OwnerAccess, PairedAccess, PairedParty,
-    PublishRequests, Reader, RevisionHold, RuntimeReadiness, ShareGrants, StopFailure,
-    SubmittedMessage, UnfinishedDeletions,
+    ConversationSummaries, DeletionFailures, FetchRequests, ListedConversation, ObservationCursor,
+    ObservedConversations, OwnerAccess, PairedAccess, PairedParty, PublishRequests, Reader,
+    RevisionHold, RuntimeReadiness, ShareGrants, StopFailure, SubmittedMessage,
+    UnfinishedDeletions,
 };
 use crate::conversation::domain::{
     Conversation, ConversationDeletion, Place, ProviderSessionErasure, ProviderSessionLink,
@@ -64,6 +64,7 @@ use nessa_protocol::conversation::domain::{
     ConversationApprovalMode, ConversationId, ConversationModelId, ConversationSummary,
     ConversationTitle,
 };
+use nessa_protocol::conversation::fence_capture::FenceCapture;
 use nessa_protocol::conversation::view::{
     ConversationApprovalModeChangeStatus, ConversationApprovalModeChangeView,
     ConversationAttachmentEvidenceFailure, ConversationAttachmentEvidenceFailureCode,

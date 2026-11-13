@@ -167,6 +167,9 @@ pub struct HostDependencies {
     /// Where the window server says the menu bar icon and the setup window
     /// are, so the finished setup window can fly onto the icon.
     pub tray_geometry: Arc<dyn crate::tray::TrayGeometry>,
+    /// The call pill: what the desktop window's call looks like, and the
+    /// small window that shows it over other apps (`crate::call_pill`).
+    pub call_pill: Arc<crate::call_pill::CallPill>,
 }
 
 impl HostDependencies {
@@ -363,6 +366,7 @@ impl HostDependencies {
             linger,
             review_notices: Arc::new(ReviewNotices::start(notice_center(app))),
             tray_geometry: crate::tray::tray_geometry(app),
+            call_pill: crate::call_pill::call_pill(app),
         })
     }
 }
