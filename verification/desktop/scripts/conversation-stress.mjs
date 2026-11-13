@@ -4709,6 +4709,47 @@ const steps = {
           `with Full motion chosen the pill's page is ${await pillMotion()}, not full`,
         )
       await chooseMotion(motionBefore)
+      // The chat's name on the pill brings the call's chat to the front of
+      // the window: with another chat focused beside it, and no review
+      // waiting in it, the pane showing the call takes the focus.
+      await run.page.keyboard.press(keys.newSessionBeside)
+      const beside = await waitFor(
+        async () =>
+          (await run.page.locator(css.pane).count()) === 2 &&
+          (await run.page.locator(`${css.focusedPane} .voice-rim`).count()) === 0,
+        10_000,
+      )
+      if (!beside)
+        failures.push("a new session beside did not take the focus from the call's chat")
+      else {
+        await face.locator(".call-pill-name").click()
+        if (
+          !(await waitFor(
+            async () =>
+              (await run.page.locator(`${css.focusedPane} .voice-rim`).count()) === 1,
+            5_000,
+          ))
+        )
+          failures.push(
+            "pressing the chat's name on the pill did not focus the call's chat",
+          )
+        // Back to one pane: the new session is focused again and closed.
+        await run.page
+          .locator(css.pane)
+          .filter({ has: run.page.locator(css.paneHome) })
+          .locator(css.field)
+          .click()
+        await run.page.keyboard.press(keys.closePane)
+        if (
+          !(await waitFor(
+            async () =>
+              (await run.page.locator(css.pane).count()) === 1 &&
+              (await run.page.locator(`${css.focusedPane} .voice-rim`).count()) === 1,
+            10_000,
+          ))
+        )
+          failures.push("closing the session beside did not leave the call's chat alone")
+      }
       // Its microphone switch is the call's own: the composer follows it,
       // and what the microphone half heard is thrown away as before.
       const pillCleared = clears()

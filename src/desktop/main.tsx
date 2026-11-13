@@ -72,7 +72,7 @@ import {
   openReviewEvent,
   showWaitingReviews,
 } from "./workspace/adapters/gateway/review-notices"
-import { followWorkspace, loadWorkspace, type PathPicker } from "./workspace"
+import { followWorkspace, loadWorkspace, openSession, type PathPicker } from "./workspace"
 
 import "@fontsource-variable/geist"
 import "@fontsource-variable/geist-mono"
@@ -246,7 +246,10 @@ if (voice)
       return Object.hasOwn(sessions, sessionId) ? sessions[sessionId].title : null
     },
     onTitles: (listener) => store.subscribe(listener),
-    showChat: (sessionId) => window.dispatchEvent(openReviewEvent(sessionId)),
+    // The chat a call talks to is always in a pane (the call ends when it
+    // is not), so opening it focuses that pane. Not the notice's path, which
+    // opens a chat only while a review waits in it.
+    showChat: (sessionId) => void store.dispatch(openSession({ sessionId })),
   })
 store.dispatch(followWorkspace())
 void store.dispatch(loadWorkspace())
