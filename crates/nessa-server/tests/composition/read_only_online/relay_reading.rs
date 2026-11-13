@@ -14,7 +14,6 @@ mod completion;
 #[path = "relay_reading/transport.rs"]
 mod transport;
 use super::fixtures::Gateway;
-use crate::device_pairing::infrastructure::RELAY_CAPACITY;
 use nessa_auth::{
     adapters::pairing::{relay_key, FilePairingState, NativeIdentity},
     application::{pairing::ClientPendingStore, ports::Clock as WallClock},
@@ -23,6 +22,7 @@ use nessa_client_core::retained::{
     ReadFailure, ReadReport, ReadStop, ReaderAccess, ReaderRole, RetainedCache,
     RetainedEnrollmentClient, RetainedTranscript,
 };
+use nessa_device_pairing::infrastructure::RELAY_CAPACITY;
 use nessa_protocol::{
     clock::Clock as MonotonicClock,
     conversation::domain::ConversationId,

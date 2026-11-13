@@ -1,8 +1,8 @@
 //! Outbound delivery of committed conversation records (issue 896).
 //!
-//! `application -> domain` owns delivery transitions; `infrastructure ->
-//! application` signs and posts exact bytes. Authorization is supplied by the
-//! conversation/auth owners, never inferred from an endpoint or a MAC key.
+//! The outbox, registrations, signing and HTTPS sending are the
+//! `nessa_webhooks` crate. This module keeps the parts that meet the
+//! conversation context: admission against current credential and share
+//! facts, the canonical record source, and the runtime that drives them.
 pub mod application;
-pub mod domain;
 pub mod infrastructure;

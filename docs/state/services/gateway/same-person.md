@@ -21,7 +21,7 @@ sources:
   - crates/nessa-auth/src/domain/pairing/aggregates/invitation.rs
   - crates/nessa-auth/src/adapters/local/registry/pairing/person_links.rs
   - crates/nessa-auth/src/adapters/local/registry/pairing/enrollment.rs
-  - crates/nessa-server/src/device_pairing/application/activation.rs
+  - crates/nessa-device-pairing/src/application/activation.rs
   - crates/nessa-server/src/conversation/infrastructure/store/person_links.rs
   - crates/nessa-server/src/conversation/infrastructure/store/grant_database.rs
   - crates/nessa-server/tests/device_pairing/infrastructure/person_links.rs

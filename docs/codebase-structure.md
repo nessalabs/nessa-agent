@@ -537,7 +537,7 @@ a live session's tool/permission consistency boundary into independent aggregate
 
 The auth pairing producer keeps invitation/consent values in `domain/pairing/`, orchestration and receiver/private-state ports in `application/pairing/`, and OPAQUE/TLS/private storage in `adapters/pairing/`; the local registry pairing module owns persistence and device proof verification. Its owning tests remain beside the adapters and domain fixtures under `tests/domain/pairing/`. Design: [device pairing](design/auth/device-pairing.md); a peer gateway enrolls through the same flow under its own consent class and principal kind ([peer gateways](design/auth/peer-gateways.md)). The immutable peer-only same-person choice belongs to those consent values. `domain/pairing/value_objects/person_link.rs` validates attribution against exact credential, enrollment and original revocation evidence; `application/pairing/person_links.rs` exposes the effect/source ports. The registry's `pairing/person_links.rs` supplies a coherent serialized cut, and `conversation/infrastructure/store/person_links.rs` owns the separate grant-file link and audit transaction, restart repair and consumed-removal receipts. `store/grant_database.rs` owns the production `<namespace>/access-grants/access-grants.sqlite3` path and version/shape validation for live and read-only snapshot openers; `grants.sql` owns the current schema. Root binds cleanup independently of native listener and agent configuration. Focused regressions live in `tests/device_pairing/infrastructure/person_links.rs`, composed-process `tests/device_pairing/mounted/same_person.rs`, retained peer `tests/peer_gateways/same_person.rs`, `tests/conversation/grant_database.rs`, backup `tests/backup/deletion.rs` and auth `tests/domain/pairing/person_link.rs`.
 
-The native server consumer is `nessa-server/src/device_pairing/`. `application/`
+The native server consumer is the `crates/nessa-device-pairing/` crate. `application/`
 holds the owner use cases (`owner.rs`), approval through to an issued credential
 (`activation.rs`), cleanup of ended stages (`cleanup.rs`), the receiver port
 (`receivers.rs`) and the device status query (`read_status.rs`), whose
@@ -551,10 +551,12 @@ wake-ups and worker-fault mapping (`socket/`), which reads the monotonic
 product phase after an `openProduct` envelope (`protected.rs`), the gateway runtime
 (`runtime.rs`, with the single code-registration worker in `registration.rs`),
 connection workers (`connection.rs`), the listener, gateway identity
-restore, `receivers.rs` (the receiver port over the conversation context's
-`LocalReceiverAuthority`), `owner_commands.rs`, the owner-only handle the
+restore, `owner_commands.rs`, the owner-only handle the
 product socket holds, and `owner_admission.rs`, the lease every owner command
-holds until shutdown drains it. The native device client is
+holds until shutdown drains it. The crate's `tunnel/` is the public URL a
+paired device reaches the gateway through. The receiver port over the
+conversation context's `LocalReceiverAuthority` stays in the server, as
+`nessa-server/src/device_pairing/conversation.rs`. The native device client is
 `crates/nessa-client-core/src/pairing/client.rs`; the gateway links it for a
 peer gateway's side, and gateway tests consume it.
 The owner product methods are `nessa-server/src/product/pairing.rs`, and the
@@ -568,11 +570,11 @@ native listen address. Public tests are under
 `tests/device_pairing/mounted.rs` (with `product_client.rs`), all registered by
 `tests/native_enrollment.rs`, which also registers the protected sessions in
 `tests/device_pairing/infrastructure/protected.rs`; the protected connection's
-write-wakeup unit test is `tests/device_pairing/infrastructure/protected_waker.rs`;
+write-wakeup unit test is the crate's `tests/protected_waker.rs`;
 codec tests are `crates/nessa-protocol/tests/pairing/wire.rs`, the
 frame reader's unit tests are `crates/nessa-protocol/tests/pairing/frames.rs`, the
 socket stream's unit tests are `crates/nessa-protocol/tests/pairing/socket/deadline_stream.rs`
-and owner admission's are `tests/device_pairing/infrastructure/owner_admission.rs`;
+and owner admission's are the crate's `tests/owner_admission.rs`;
 composition startup and shutdown tests are `tests/composition/native_pairing.rs`.
 Design: [device pairing](design/auth/device-pairing.md#native-enrollment-consumer-b1),
 [owner routes and mounting](design/auth/device-pairing.md#owner-routes-and-mounting-slice-2a)
@@ -1322,7 +1324,7 @@ real processes in `tests/mcp_servers/inspect.rs`) and
 (`client.mcpServers`), its refusals `NessaMcpServersError`
 (`application/mcp-servers-error.ts`) and its answers checked by
 `protocol/mcp-servers-validate.ts`;
-`src/mcp_authorization/` owns one remote server's consent, token
+`crates/nessa-mcp-authorization/` (crate `nessa-mcp-authorization`) owns one remote server's consent, token
 generation, refresh and revoke (ADR 392): the domain statechart, the
 owner that fences a URL change before the live set is replaced, the
 transport adapter that names an admitted token for the HTTP session, HTTPS
@@ -1332,7 +1334,7 @@ record beside the sealed token files. The optional local-storage
 with one physical slot per instance;
 `records/tests.rs` and `audit/tests.rs` exercise actual file effects and input cleanup.
 Manual ignored real-file benchmarks live under each crate’s `tests/` owning
-`session_storage` or `mcp_authorization/infrastructure` feature and link production
+`session_storage` feature, or in `crates/nessa-mcp-authorization/tests/`, and link production
 libraries without private test probes. The [bounded persistence ordering table](design/bounded-physical-persistence.md)
 names the adapter lifecycle boundary. `mcpServers.authorize` and
 `mcpServers.revoke` are the product methods. An app call that the remote
@@ -1677,10 +1679,13 @@ paths remain current until the coordinated TODO updates all consumers.
 ## Outbound webhook foundation
 
 The outbound [webhook foundation](design/webhook-delivery-implementation.md)
-lives under `crates/nessa-server/src/webhooks`: immutable delivery and destination
-values in `domain/value_objects`, message/transport ports in `application`, and
-JSON, HMAC, DNS and HTTPS in `infrastructure`. Tests use the same layer names
-under `tests/webhooks`. `application/admission.rs` combines current credential
+is the `crates/nessa-webhooks` crate: immutable delivery and destination
+values in `domain/value_objects`, message/transport ports, registrations and the
+outbox port in `application`, and JSON, HMAC, DNS, HTTPS and the private outbox
+in `infrastructure`. Its tests use the same layer names under the crate's
+`tests/`. The parts that meet the conversation context stay in
+`crates/nessa-server/src/webhooks`: admission, the principal share, the
+canonical record source and the runtime. There, `application/admission.rs` combines current credential
 effect holds, principal grant revision holds, checked conversation metadata and
 the existing conversation Cedar evaluator. Credential mutation fences live in
 the auth registry; principal/resource fences remain in the grant store.
@@ -1709,15 +1714,15 @@ then installs under a current credential hold. `infrastructure/outbox/intents.rs
 retains bounded immutable private proposal/configuration facts across uncertain
 auth and installation acknowledgements; they supply no permission verdict.
 The installed registration references that original intent, and transactional
-retirement deletes the private configuration together with the registration. Tests remain in
-`tests/webhooks/infrastructure/outbox.rs`, with shared reset ownership cases in
-`tests/webhooks/infrastructure/outbox/source_reset.rs`.
+retirement deletes the private configuration together with the registration. Tests are
+the crate's `tests/infrastructure/outbox.rs`, with shared reset ownership cases in
+`tests/infrastructure/outbox/source_reset.rs`.
 `composition/webhooks.rs` loads private registration configuration;
-`infrastructure/runtime.rs` owns public issue/revoke/grant commands and shutdown.
+the server's `webhooks/infrastructure/runtime.rs` owns public issue/revoke/grant commands and shutdown.
 `runtime/delivery.rs` composes canonical principal reads, contiguous durable
 queueing, fresh dispatch admission and signed HTTPS. `composition/root.rs` starts
 that worker after fallible startup and joins it through product cleanup.
-`tests/webhooks/infrastructure/product{,_delivery}.rs` exercises public product
+The server's `tests/webhooks/infrastructure/product{,_delivery}.rs` exercises public product
 commands with disposable authorities and an isolated TLS recipient. Whole-feature
 review, source-matched platform CI, browser and conversation stress qualification
 remain incomplete; mounted fixtures alone do not establish readiness. The outbox

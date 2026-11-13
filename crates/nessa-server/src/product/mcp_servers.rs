@@ -18,8 +18,6 @@ use super::{
     socket::{failure, failure_with_details, success},
     state::ProductRouteState,
 };
-use crate::mcp_authorization::application::{AuthorizationOwner, AuthorizeAnswer};
-use crate::mcp_authorization::domain::RemoteObservation;
 use crate::mcp_servers::{
     application::{
         EditProblem, Edited, InspectCut, InspectFailure, Inspection, LiveSetOutcome,
@@ -28,6 +26,8 @@ use crate::mcp_servers::{
     domain::{RemoteServerSave, ServerEdit, ServerSave, StdioServer},
 };
 use nessa_auth::application::session::AuthenticatedSession;
+use nessa_mcp_authorization::application::{AuthorizationOwner, AuthorizeAnswer};
+use nessa_mcp_authorization::domain::RemoteObservation;
 use nessa_protocol::product::generated::{
     McpAuthorizationPhase, McpInspectedTool, McpInspectedUi, McpRemoteObservation,
     McpServerAuthorization, McpServerInput, McpServerKind, McpServerListEntry,

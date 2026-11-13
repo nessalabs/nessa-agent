@@ -17,8 +17,8 @@ use crate::backup::domain::{DeletionFence, DeletionLog};
 use crate::backup::infrastructure::{CedarInventoryPolicy, CommittedInventory};
 use crate::conversation::application::{
     AccessAsk, AccessDecision, ConversationAccessPolicyEvaluator, ConversationCaller,
-    ConversationError, ConversationRepository, FenceCapture, FenceCaptureError, ReceiverAuthority,
-    ShareConversation, ShareGrantChange, ShareGrantTransition, ShareGrants,
+    ConversationError, ConversationRepository, ReceiverAuthority, ShareConversation,
+    ShareGrantChange, ShareGrantTransition, ShareGrants,
 };
 use crate::conversation::domain::{Capabilities, Conversation, ReceiverBinding, ShareAccess};
 use crate::conversation::infrastructure::LocalConversationStore;
@@ -32,6 +32,7 @@ use nessa_protocol::agents::AgentId;
 use nessa_protocol::conversation::domain::{
     ConversationApprovalMode, ConversationId, ConversationModelId,
 };
+use nessa_protocol::conversation::fence_capture::{FenceCapture, FenceCaptureError};
 use nessa_protocol::conversation::read_scope::ReadRefusal;
 
 const VERIFIER: &str = "VERIFIER-MUST-NOT-LEAK";

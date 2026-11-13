@@ -9,12 +9,12 @@
 use crate::conversation::application::{
     CatalogueReadError, ConversationError, RecordReadError, ReviewNoticeAuditFailure,
 };
-use crate::device_pairing::infrastructure::PairingRuntimeError;
 use crate::mcp_servers::application::Unfinished;
 use nessa_attachments::application::ArtifactReadError;
 use nessa_auth::application::{
     credential_admin::CredentialAdminError, pairing::PairingWorkerFault,
 };
+use nessa_device_pairing::infrastructure::PairingRuntimeError;
 use std::error::Error;
 use std::fmt::{Debug, Display, Formatter, Result as FmtResult};
 

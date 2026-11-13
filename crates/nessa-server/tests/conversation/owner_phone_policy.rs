@@ -2,10 +2,7 @@
 //! This child module is hooked by its owner under the Cedar evaluator.
 use super::*;
 use crate::conversation::{domain::ReceiverBinding, infrastructure::LocalReceiverAuthority};
-use crate::device_pairing::{
-    application::{PairingReceivers, ReceiverDispatch},
-    infrastructure::ConversationReceivers,
-};
+use crate::device_pairing::ConversationReceivers;
 use nessa_auth::{
     adapters::{
         cedar::CedarPolicyEvaluator,
@@ -20,6 +17,7 @@ use nessa_auth::{
     },
     domain::{pairing::*, *},
 };
+use nessa_device_pairing::application::{PairingReceivers, ReceiverDispatch};
 use std::{
     net::{TcpListener, TcpStream},
     sync::Arc,

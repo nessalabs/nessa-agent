@@ -79,7 +79,7 @@ test("local and CI aggregate the same named frontend and native checks", () => {
   }
   assert.match(
     workflow,
-    /cargo fmt -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-projection -p nessa-types -p nessa-client-core -p nessa-device-client -p nessa-sdk -p nessa-timer -p nessa-vault -p nessa-agent-install -p nessa-attachments -p nessa-peer-gateways -- --check/,
+    /cargo fmt -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-projection -p nessa-types -p nessa-client-core -p nessa-device-client -p nessa-sdk -p nessa-timer -p nessa-vault -p nessa-agent-install -p nessa-attachments -p nessa-peer-gateways -p nessa-mcp-authorization -p nessa-webhooks -p nessa-device-pairing -- --check/,
   )
   assert.equal(
     root.scripts.architecture,
@@ -91,17 +91,17 @@ test("local and CI aggregate the same named frontend and native checks", () => {
   // limit (#366). The package list is one build; the runner overlaps binaries.
   assert.match(
     workflow,
-    /run: node scripts\/cargo-test-parallel\.mjs --concurrency 2 --partition \$\{\{ matrix\.partition \}\} -- -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-projection -p nessa-types -p nessa-client-core -p nessa-device-client -p nessa-sdk -p nessa-timer -p nessa-vault -p nessa-agent-install -p nessa-attachments -p nessa-peer-gateways\r?\n\s+timeout-minutes: \d+\r?\n/,
+    /run: node scripts\/cargo-test-parallel\.mjs --concurrency 2 --partition \$\{\{ matrix\.partition \}\} -- -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-projection -p nessa-types -p nessa-client-core -p nessa-device-client -p nessa-sdk -p nessa-timer -p nessa-vault -p nessa-agent-install -p nessa-attachments -p nessa-peer-gateways -p nessa-mcp-authorization -p nessa-webhooks -p nessa-device-pairing\r?\n\s+timeout-minutes: \d+\r?\n/,
   )
   assert.doesNotMatch(
     workflow,
-    /run: cargo test -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-projection -p nessa-types -p nessa-client-core -p nessa-device-client -p nessa-sdk -p nessa-timer -p nessa-vault -p nessa-agent-install -p nessa-attachments -p nessa-peer-gateways\b/,
+    /run: cargo test -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-projection -p nessa-types -p nessa-client-core -p nessa-device-client -p nessa-sdk -p nessa-timer -p nessa-vault -p nessa-agent-install -p nessa-attachments -p nessa-peer-gateways -p nessa-mcp-authorization -p nessa-webhooks -p nessa-device-pairing\b/,
   )
   // Both Windows partitions compile the same package graph; the remaining
   // partition owns dependency crates' tests, including the vault's regressions.
   assert.match(
     workflow,
-    /run: node scripts\/cargo-test-parallel\.mjs --concurrency 2 --partition \$\{\{ matrix\.partition \}\} -- -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-projection -p nessa-types -p nessa-client-core -p nessa-device-client -p nessa-sdk -p nessa-timer -p nessa-vault -p nessa-agent-install -p nessa-attachments -p nessa-peer-gateways\r?\n/,
+    /run: node scripts\/cargo-test-parallel\.mjs --concurrency 2 --partition \$\{\{ matrix\.partition \}\} -- -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-projection -p nessa-types -p nessa-client-core -p nessa-device-client -p nessa-sdk -p nessa-timer -p nessa-vault -p nessa-agent-install -p nessa-attachments -p nessa-peer-gateways -p nessa-mcp-authorization -p nessa-webhooks -p nessa-device-pairing\r?\n/,
   )
   // The coverage gate runs the same SDK tests again, instrumented, in its own job.
   assert.match(
@@ -110,7 +110,7 @@ test("local and CI aggregate the same named frontend and native checks", () => {
   )
   assert.match(
     workflow,
-    /cargo clippy -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-projection -p nessa-types -p nessa-client-core -p nessa-device-client -p nessa-sdk -p nessa-timer -p nessa-vault -p nessa-agent-install -p nessa-attachments -p nessa-peer-gateways --all-targets -- -D warnings/,
+    /cargo clippy -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-projection -p nessa-types -p nessa-client-core -p nessa-device-client -p nessa-sdk -p nessa-timer -p nessa-vault -p nessa-agent-install -p nessa-attachments -p nessa-peer-gateways -p nessa-mcp-authorization -p nessa-webhooks -p nessa-device-pairing --all-targets -- -D warnings/,
   )
   // The database opener's privacy checks answer differently on each OS, so
   // they run in the matrix, as `pnpm check` runs them locally.

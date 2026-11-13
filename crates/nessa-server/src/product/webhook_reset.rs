@@ -10,10 +10,6 @@ use crate::conversation::application::{
     RecordReadValue,
 };
 use crate::conversation::domain::Conversation;
-use crate::webhooks::{
-    application::OutboxError,
-    infrastructure::{ResetCommand, ResetReceipt},
-};
 use nessa_auth::{
     application::{
         ports::{AccessAdmission, AccessReader},
@@ -30,6 +26,10 @@ use nessa_protocol::{
     protocol::{OutgoingMessage, RequestFrame},
 };
 use nessa_sync::replication::domain::Scope;
+use nessa_webhooks::{
+    application::OutboxError,
+    infrastructure::{ResetCommand, ResetReceipt},
+};
 use std::sync::{Arc, Mutex};
 use uuid::Uuid;
 

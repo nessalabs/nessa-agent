@@ -34,7 +34,6 @@ use crate::timer::clock;
 use crate::{
     app::dependencies::RuntimeDependencies,
     core::RunError,
-    device_pairing::infrastructure::TlsStream,
     env::LEASE_PROTOCOL,
     env_serve::{
         application::ServeEnd,
@@ -51,6 +50,7 @@ use crate::{
     timer::TokioTimer,
 };
 use nessa_auth::adapters::pairing::{ManualCode, NativeIdentity};
+use nessa_device_pairing::infrastructure::TlsStream;
 use nessa_protocol::{
     clock::Clock,
     relay::{host_port, RelayAddress},

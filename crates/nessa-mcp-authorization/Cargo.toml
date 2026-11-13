@@ -1,0 +1,38 @@
+[package]
+name = "nessa-mcp-authorization"
+version.workspace = true
+edition.workspace = true
+rust-version = "1.89"
+publish = false
+autotests = false
+description = "One remote MCP server's consent, token generation, refresh and revoke (ADR 392)"
+
+[dependencies]
+nessa-agent-install = { path = "../nessa-agent-install" }
+nessa-local-storage = { path = "../nessa-local-storage", features = ["physical-operation"] }
+nessa-sdk = { path = "../nessa-sdk" }
+nessa-timer = { path = "../nessa-timer", features = ["runtime"] }
+async-trait = "0.1"
+base64 = "0.22"
+futures-util = "0.3"
+getrandom = "0.3"
+hmac = "0.12"
+reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "http2", "json"] }
+serde_json = "1"
+sha2 = "0.10"
+subtle = "2.6"
+tempfile = "3"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "sync", "time", "io-util"] }
+url = "2"
+uuid = { version = "1", features = ["v4"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["test-util"] }
+
+[[test]]
+# Manual real-file benchmark over the production library; ignored by default.
+name = "bounded_persistence_benchmark"
+path = "tests/bounded_persistence_benchmark.rs"
+
+[lints]
+workspace = true

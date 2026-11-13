@@ -15,13 +15,6 @@ import {
 import { nextPageMode } from "../model/page-mode"
 import { CatalogueModelPicker, findComposerModel } from "./catalogue-model-picker"
 import { DesktopIcon } from "./icons"
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuTrigger,
-  MenuItem,
-  MenuLabel,
-} from "./menu"
 import { IconButton } from "./icon-button"
 import { ThinkingControl } from "./thinking-control"
 import { tooltip } from "./tooltip"
@@ -67,8 +60,8 @@ export interface ComposerImages {
 /**
  * A voice call from the composer, owned outside (`voice/ui/composer-voice.ts`):
  * the button that starts one, and while one talks to this conversation
- * (`active`) its speaker and microphone switches and the round end button,
- * in place of the voice button.
+ * (`active`) its speaker and microphone switches and End, in place of the
+ * voice button.
  */
 export interface ComposerVoice {
   readonly active: boolean
@@ -81,9 +74,10 @@ export interface ComposerVoice {
 }
 
 /**
- * The home composer: a message, and beneath it the three choices a turn is
- * sent with — model, thinking, and what the agent may do without asking.
- * Nothing is sent yet: the shell has no conversation wiring, and says so.
+ * The composer: a message, and in its row what a person sets for it — attach
+ * and the model at its start; at its end what the agent may do without
+ * asking and how hard it thinks, then, past a hairline, what acts: a voice
+ * call and send.
  */
 export function Composer({
   images: attached,
@@ -272,10 +266,10 @@ export function Composer({
       <div className="desktop-composer-row">
         <div className="desktop-composer-controls">
           {attached ? <AttachButton onFiles={attached.onPaste} /> : null}
-          <ProjectMenu />
           <span
             className="desktop-tip-anchor"
-            // In a narrow composer the chip shows this, in place of the whole name.
+            // The chip shows this in place of the whole name ("Opus 5"):
+            // the mark beside it already says whose model it is.
             style={
               {
                 "--desktop-model-short": JSON.stringify(
@@ -330,6 +324,8 @@ export function Composer({
               }
             />
           </span>
+          {/* Settings to its left, what acts to its right. */}
+          <span className="desktop-composer-divider" aria-hidden="true" />
           {voice ? <VoiceControls voice={voice} /> : null}
           {onStop ? (
             <button
@@ -405,39 +401,10 @@ function VoiceControls({ voice }: { voice: ComposerVoice }) {
         {...tooltip("End call", { side: "above" })}
         onClick={voice.end}
       >
-        <DesktopIcon name="close" />
+        <DesktopIcon name="endCall" />
+        <span>End</span>
       </button>
     </>
-  )
-}
-
-/**
- * Where the conversation will work. There is no native folder picker for this
- * window yet, so opening a folder is shown and disabled rather than faked.
- */
-function ProjectMenu() {
-  return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <button
-          type="button"
-          className="desktop-chip desktop-chip-project"
-          aria-label="Project: none chosen"
-          {...tooltip("Project", { side: "above" })}
-        >
-          <DesktopIcon name="folder" />
-          <span>Project</span>
-          <DesktopIcon name="chevronDown" className="desktop-chip-chevron" />
-        </button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent side="top" align="start" sideOffset={10}>
-        <MenuLabel>Project</MenuLabel>
-        <MenuItem disabled {...tooltip("Needs the native folder picker")}>
-          <DesktopIcon name="folderAdd" />
-          Open folder…
-        </MenuItem>
-      </DropdownMenuContent>
-    </DropdownMenu>
   )
 }
 

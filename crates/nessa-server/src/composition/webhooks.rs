@@ -1,17 +1,16 @@
 //! Private endpoint seeds for the existing product credential command.
 use super::runtime_config::RuntimeConfig;
 use crate::core::RunError;
-use crate::webhooks::{
-    application::{MacKey, RegistrationConfig, MAX_REGISTRATIONS},
-    domain::Destination,
-    infrastructure::{ConfiguredWebhook, SqlOutbox, WebhookRuntime},
-};
+use crate::webhooks::infrastructure::{ConfiguredWebhook, WebhookRuntime};
 use base64::{engine::general_purpose::STANDARD, Engine};
 use nessa_auth::{
     adapters::local::LocalCredentialStore,
     application::{credential_admin::CredentialAdmin, ports::Clock},
     domain::PrincipalId,
 };
+use nessa_webhooks::application::{MacKey, RegistrationConfig, MAX_REGISTRATIONS};
+use nessa_webhooks::domain::Destination;
+use nessa_webhooks::infrastructure::SqlOutbox;
 use serde::Deserialize;
 use std::{
     collections::HashSet,

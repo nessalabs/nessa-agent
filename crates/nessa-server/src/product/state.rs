@@ -6,13 +6,11 @@ use crate::agents::infrastructure::NativeHooksPreferences;
 use crate::attachments::http::UploadRoute;
 use crate::conversation::application::{
     CatalogueReadSource, ConversationAccessPolicyEvaluator, ConversationMetadataReader,
-    ConversationRepository, ConversationService, FenceCapture, McpAppAudit,
-    OwnerPhonePolicyEvaluator, OwnerPhoneReceiverAuthority, ReceiverAuthority, RecordReadSource,
-    ReviewNoticeAuditor, ShareGrants, WatchCatalogue, WatchRecords,
+    ConversationRepository, ConversationService, McpAppAudit, OwnerPhonePolicyEvaluator,
+    OwnerPhoneReceiverAuthority, ReceiverAuthority, RecordReadSource, ReviewNoticeAuditor,
+    ShareGrants, WatchCatalogue, WatchRecords,
 };
 pub(crate) use crate::core::limit_log::note_limit;
-use crate::device_pairing::application::NativeLinking;
-use crate::device_pairing::infrastructure::PairingOwnerCommands;
 use crate::mcp_servers::{
     application::McpServerSettings, entrypoint::http::ResourceRoute,
     infrastructure::ResourceTicketStore,
@@ -33,8 +31,11 @@ use nessa_auth::{
     },
     domain::{AudienceId, OrganizationId, Resource, ResourceId},
 };
+use nessa_device_pairing::application::NativeLinking;
+use nessa_device_pairing::infrastructure::PairingOwnerCommands;
 use nessa_peer_gateways::infrastructure::PeerCommands;
 use nessa_protocol::clock::Clock as UptimeClock;
+use nessa_protocol::conversation::fence_capture::FenceCapture;
 use nessa_protocol::product::generated::AgentsListResult;
 use serde_json::Value;
 use std::{sync::Arc, time::Duration};
@@ -215,8 +216,7 @@ pub(crate) struct McpRoutes {
     pub(crate) settings: Option<Arc<McpServerSettings>>,
     /// Remote MCP authorization. `None` when this gateway is not managing
     /// stored servers. `mcpServers.authorize` and `mcpServers.revoke` use it.
-    pub(crate) authorization:
-        Option<Arc<crate::mcp_authorization::application::AuthorizationOwner>>,
+    pub(crate) authorization: Option<Arc<nessa_mcp_authorization::application::AuthorizationOwner>>,
 }
 
 /// Pairing devices and peers, native linking, and the web tunnel.
@@ -232,10 +232,10 @@ pub(crate) struct LinkingRoutes {
     pub(crate) native_linking: Option<Arc<dyn NativeLinking>>,
     /// The web tunnel this run serves (`pairing.tunnel`, `server.reach`).
     /// `None` when it runs none.
-    pub(crate) tunnel: Option<crate::tunnel::application::TunnelView>,
+    pub(crate) tunnel: Option<nessa_device_pairing::tunnel::application::TunnelView>,
     /// Paired devices' tunnel secrets. `None` when this gateway does not pair devices.
     pub(crate) tunnel_secrets:
-        Option<std::sync::Arc<dyn crate::tunnel::application::DeviceTunnelSecrets>>,
+        Option<std::sync::Arc<dyn nessa_device_pairing::tunnel::application::DeviceTunnelSecrets>>,
     /// This gateway's peer commands, composed with native pairing: a peer is
     /// enrolled with the native key. `None` answers every peer method
     /// `peer_not_configured`.
@@ -463,7 +463,7 @@ impl ProductRouteState {
     /// revoke answer `mcp_servers_not_configured`.
     pub fn with_mcp_authorization(
         mut self,
-        authorization: Arc<crate::mcp_authorization::application::AuthorizationOwner>,
+        authorization: Arc<nessa_mcp_authorization::application::AuthorizationOwner>,
     ) -> Self {
         self.mcp.authorization = Some(authorization);
         self
@@ -499,7 +499,10 @@ impl ProductRouteState {
 
     /// Register the web tunnel this run serves (Unix only).
     #[cfg_attr(not(unix), allow(dead_code))]
-    pub(crate) fn with_tunnel(mut self, tunnel: crate::tunnel::application::TunnelView) -> Self {
+    pub(crate) fn with_tunnel(
+        mut self,
+        tunnel: nessa_device_pairing::tunnel::application::TunnelView,
+    ) -> Self {
         self.linking.tunnel = Some(tunnel);
         self
     }
@@ -507,7 +510,7 @@ impl ProductRouteState {
     /// Register the tunnel secrets issued at pairing.
     pub(crate) fn with_tunnel_secrets(
         mut self,
-        secrets: std::sync::Arc<dyn crate::tunnel::application::DeviceTunnelSecrets>,
+        secrets: std::sync::Arc<dyn nessa_device_pairing::tunnel::application::DeviceTunnelSecrets>,
     ) -> Self {
         self.linking.tunnel_secrets = Some(secrets);
         self

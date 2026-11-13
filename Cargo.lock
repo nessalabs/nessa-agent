@@ -3857,6 +3857,36 @@ dependencies = [
 ]
 
 [[package]]
+name = "nessa-device-pairing"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "base64 0.22.1",
+ "flate2",
+ "futures-util",
+ "getrandom 0.3.4",
+ "libc",
+ "mdns-sd",
+ "nessa-agent-install",
+ "nessa-auth",
+ "nessa-client-core",
+ "nessa-local-storage",
+ "nessa-protocol",
+ "nessa-timer",
+ "serde",
+ "serde_json",
+ "sha2",
+ "shepherd",
+ "subtle",
+ "tar",
+ "tempfile",
+ "tokio",
+ "tokio-tungstenite",
+ "tracing",
+ "tungstenite",
+]
+
+[[package]]
 name = "nessa-gateway-endpoint"
 version = "0.1.0"
 dependencies = [
@@ -3920,6 +3950,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "nessa-mcp-authorization"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "base64 0.22.1",
+ "futures-util",
+ "getrandom 0.3.4",
+ "hmac",
+ "nessa-agent-install",
+ "nessa-local-storage",
+ "nessa-sdk",
+ "nessa-timer",
+ "reqwest 0.13.4",
+ "serde_json",
+ "sha2",
+ "subtle",
+ "tempfile",
+ "tokio",
+ "url",
+ "uuid",
+]
+
+[[package]]
 name = "nessa-peer-gateways"
 version = "0.1.0"
 dependencies = [
@@ -3956,6 +4009,7 @@ dependencies = [
 name = "nessa-protocol"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "base64 0.22.1",
  "hmac",
  "nessa-auth",
@@ -4031,10 +4085,12 @@ dependencies = [
  "nessa-auth",
  "nessa-client-core",
  "nessa-device-client",
+ "nessa-device-pairing",
  "nessa-gateway-endpoint",
  "nessa-images",
  "nessa-local-database",
  "nessa-local-storage",
+ "nessa-mcp-authorization",
  "nessa-peer-gateways",
  "nessa-projection",
  "nessa-protocol",
@@ -4042,6 +4098,7 @@ dependencies = [
  "nessa-sync",
  "nessa-timer",
  "nessa-vault",
+ "nessa-webhooks",
  "rcgen",
  "regex",
  "reqwest 0.13.4",
@@ -4105,6 +4162,34 @@ dependencies = [
  "serde_json",
  "tempfile",
  "zeroize",
+]
+
+[[package]]
+name = "nessa-webhooks"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "fs2",
+ "hmac",
+ "nessa-agent-install",
+ "nessa-auth",
+ "nessa-local-database",
+ "nessa-local-storage",
+ "nessa-protocol",
+ "nessa-sync",
+ "nessa-timer",
+ "rcgen",
+ "reqwest 0.13.4",
+ "rustls",
+ "serde",
+ "serde_json",
+ "sha2",
+ "subtle",
+ "tempfile",
+ "time",
+ "tokio",
+ "url",
+ "uuid",
 ]
 
 [[package]]

@@ -23,7 +23,6 @@ pub mod github_relay;
 pub mod health;
 pub(crate) mod limits;
 pub mod logins;
-pub mod mcp_authorization;
 pub mod mcp_servers;
 pub mod product;
 pub(crate) mod relay;
@@ -31,7 +30,6 @@ pub mod secrets;
 pub mod server;
 pub(crate) mod settings;
 pub(crate) mod timer;
-pub mod tunnel;
 pub mod voice;
 pub mod webhooks;
 

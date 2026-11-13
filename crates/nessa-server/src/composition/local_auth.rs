@@ -36,6 +36,7 @@ use crate::conversation::infrastructure::NessaRecordWatches;
 use crate::mcp_servers::application::BuiltInServer;
 #[cfg(unix)]
 use crate::mcp_servers::infrastructure::{ConfigCheck, ConfigJson, OsConfigFiles};
+use crate::webhooks::infrastructure::DeliveryDependencies;
 #[cfg(unix)]
 use crate::{
     agent_warm_up::{
@@ -65,8 +66,8 @@ use crate::{
     browser_session::adapters::PersistentSessions,
     conversation::{
         application::{
-            ConversationAccessPolicyEvaluator, ConversationService, FenceCapture, McpAppAudit,
-            ReceiverAuthority, ReviewNoticeAuditor, ShareGrants, WatchCatalogue, WatchRecords,
+            ConversationAccessPolicyEvaluator, ConversationService, McpAppAudit, ReceiverAuthority,
+            ReviewNoticeAuditor, ShareGrants, WatchCatalogue, WatchRecords,
         },
         infrastructure::{
             CedarConversationAccessPolicy, DurableReviewNoticeAudit, LocalConversationStore,
@@ -78,7 +79,6 @@ use crate::{
     env::Environment,
     mcp_servers::infrastructure::ResourceTicketStore,
     product::{ProductDependencies, ProductRouteState},
-    webhooks::infrastructure::{DeliveryDependencies, HttpsWebhook, SystemResolver},
 };
 use nessa_agent_credentials::CredentialNamespace;
 use nessa_attachments::application::{AttachmentService, HeldReads};
@@ -103,6 +103,7 @@ use nessa_projection::{McpToolUis, NoMcpToolUis};
 #[cfg(unix)]
 use nessa_protocol::agents::AgentId;
 use nessa_protocol::clock::Clock as ServerClock;
+use nessa_protocol::conversation::fence_capture::FenceCapture;
 use nessa_protocol::product::generated::AgentsListResult;
 #[cfg(unix)]
 use nessa_protocol::product::generated::{
@@ -129,6 +130,7 @@ use nessa_sdk::{
     },
 };
 use nessa_sync::replication::domain::Id as RecordId;
+use nessa_webhooks::infrastructure::{HttpsWebhook, SystemResolver};
 #[cfg(unix)]
 use std::collections::{BTreeMap, HashSet};
 #[cfg(unix)]
@@ -658,7 +660,7 @@ pub(super) async fn product_state(
             },
             Arc::new(RuntimeClock::new()),
         );
-        let audit = crate::device_pairing::infrastructure::DurableLinkingAudit::new(
+        let audit = nessa_device_pairing::infrastructure::DurableLinkingAudit::new(
             conversation_root(namespace)
                 .join("audit")
                 .join("native-linking"),
@@ -671,7 +673,7 @@ pub(super) async fn product_state(
             restart.clone(),
         )
         .with_tunnel(
-            crate::tunnel::infrastructure::files::TunnelFiles::new(namespace),
+            nessa_device_pairing::tunnel::infrastructure::files::TunnelFiles::new(namespace),
             match &tunnel {
                 Some(tunnel) => tunnel.running(),
                 None => tokio::sync::watch::channel(None).1,
@@ -902,7 +904,7 @@ struct BuiltConversations {
     /// What manages the stored servers and replaces the live set, where this
     /// run holds one.
     mcp_server_settings: Option<Arc<crate::mcp_servers::application::McpServerSettings>>,
-    mcp_authorization: Option<Arc<crate::mcp_authorization::application::AuthorizationOwner>>,
+    mcp_authorization: Option<Arc<nessa_mcp_authorization::application::AuthorizationOwner>>,
     /// What `GET /mcp-resources` redeems on, and records each redemption
     /// in: the store the conversation service issues on, and the audit it
     /// records an app's calls in. `None` without MCP servers.
@@ -917,7 +919,7 @@ struct BuiltConversations {
 /// The paired environments as the native listener serves them, and the
 /// names of those connected now.
 type PairedParts = (
-    Arc<dyn crate::device_pairing::infrastructure::EnvironmentPeers>,
+    Arc<dyn nessa_device_pairing::infrastructure::EnvironmentPeers>,
     crate::product::ConnectedEnvironments,
     PairedWorkers,
 );
@@ -2073,7 +2075,7 @@ fn environments(
         );
         (
             Arc::new(ListenerEnvironments(peers))
-                as Arc<dyn crate::device_pairing::infrastructure::EnvironmentPeers>,
+                as Arc<dyn nessa_device_pairing::infrastructure::EnvironmentPeers>,
             crate::product::ConnectedEnvironments {
                 changes,
                 // The pool first, while any worker of it takes new work.

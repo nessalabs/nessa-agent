@@ -377,7 +377,7 @@ published model ceiling described above.
 
 ## Domain coverage gate
 
-Run from the repository root with `cargo-llvm-cov 0.6.16` and the current
+Run from the repository root with `cargo-llvm-cov 0.9.1` and the current
 Rust toolchain's `llvm-tools-preview` component installed:
 
 ```sh

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
 import type { VoiceCall } from "@nessa/client"
-import { webrtcTransport } from "./webrtc-transport"
+import { audioBytesIn, tracksLive, webrtcTransport } from "./webrtc-transport"
 
 const call = {
   transport: "webrtc",
@@ -138,7 +138,10 @@ describe("webrtcTransport", () => {
       }
       vi.stubGlobal("navigator", {
         mediaDevices: {
-          getUserMedia: async () => ({ getTracks: () => [{ stop() {} }] }),
+          getUserMedia: async () => ({
+            getTracks: () => [{ stop() {} }],
+            getAudioTracks: () => [{ readyState: "live", muted: false }],
+          }),
         },
       })
       vi.stubGlobal("Audio", class {})
@@ -189,6 +192,7 @@ describe("webrtcTransport", () => {
       await vi.advanceTimersByTimeAsync(1_100)
       expect(await sending).toEqual({
         answered: false,
+        microphoneLive: true,
         audioSent: true,
         microphoneSound: true,
       })
@@ -197,6 +201,7 @@ describe("webrtcTransport", () => {
       await vi.advanceTimersByTimeAsync(1_100)
       expect(await stalled).toEqual({
         answered: false,
+        microphoneLive: true,
         audioSent: false,
         microphoneSound: false,
       })
@@ -207,11 +212,39 @@ describe("webrtcTransport", () => {
       connection.close()
       expect(await connection.check()).toEqual({
         answered: false,
+        microphoneLive: false,
         audioSent: false,
         microphoneSound: false,
       })
     } finally {
       vi.useRealTimers()
     }
+  })
+})
+
+describe("the call's own audio statistics", () => {
+  it("counts outgoing audio bytes under either name for its kind", () => {
+    expect(
+      audioBytesIn([
+        { type: "outbound-rtp", kind: "audio", bytesSent: 100 },
+        { type: "outbound-rtp", mediaType: "audio", bytesSent: 20 },
+        { type: "outbound-rtp", bytesSent: 3 },
+        { type: "outbound-rtp", kind: "video", bytesSent: 999 },
+        { type: "inbound-rtp", kind: "audio", bytesSent: 999 },
+      ]),
+    ).toBe(123)
+  })
+
+  it("says nothing when no report counts outgoing audio", () => {
+    expect(audioBytesIn([])).toBeNull()
+    expect(audioBytesIn([{ type: "transport", bytesSent: 5 }])).toBeNull()
+    expect(audioBytesIn([{ type: "outbound-rtp", kind: "audio" }])).toBeNull()
+  })
+
+  it("calls a microphone live only while every track is live and unmuted", () => {
+    expect(tracksLive([])).toBeNull()
+    expect(tracksLive([{ readyState: "live", muted: false }])).toBe(true)
+    expect(tracksLive([{ readyState: "live", muted: true }])).toBe(false)
+    expect(tracksLive([{ readyState: "ended", muted: false }])).toBe(false)
   })
 })
