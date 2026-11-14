@@ -970,6 +970,46 @@ async fn failed_receipt_storage_attempts_cleanup_and_preserves_uncertainty() {
     assert_eq!(provider.creates.load(Ordering::SeqCst), 2);
 }
 
+/// ADR 1160 rows B16a and B16b: a receipt that could not be saved leaves the
+/// intent, whatever the rollback did. The next opening asks Boat again under
+/// the same key, and Boat's answer to that is a replay of the VM it remembers,
+/// so it is never rolled back again: a refusal keeps it, and no second VM is
+/// made while one may exist.
+#[tokio::test]
+async fn a_retry_after_a_lost_receipt_never_rolls_back_the_vm_boat_replays() {
+    for confirmed in [false, true] {
+        let (service, store, provider) = fixture();
+        provider.confirm_remove.store(confirmed, Ordering::SeqCst);
+        store.fail_receipt.store(true, Ordering::SeqCst);
+        provider.proceed.add_permits(1);
+        assert!(matches!(
+            service.open(id(1), true, None).await,
+            Err(Failure::ReceiptRecovery { cleanup, .. })
+                if cleanup == if confirmed { CleanupOutcome::Confirmed } else { CleanupOutcome::Unconfirmed }
+        ));
+        assert_eq!(provider.deletes.load(Ordering::SeqCst), 1);
+        assert!(matches!(
+            store.records.lock().unwrap().get(&id(1).to_string()),
+            Some(Assignment::Provisioning { .. })
+        ));
+        // Boat answers the same key with the VM it remembers ("ready"); this
+        // build refuses it, and the replayed VM is kept, never removed.
+        store.fail_receipt.store(false, Ordering::SeqCst);
+        *provider.created_disposition.lock().unwrap() = RefusalDisposition::RetainTarget;
+        *provider.refusal_on_connect.lock().unwrap() = Some(rejection());
+        provider.proceed.add_permits(1);
+        assert!(matches!(
+            service.open(id(1), true, None).await,
+            Err(Failure::AdmissionRecovery {
+                cleanup: CleanupOutcome::Retained,
+                ..
+            })
+        ));
+        assert_eq!(provider.creates.load(Ordering::SeqCst), 2);
+        assert_eq!(provider.deletes.load(Ordering::SeqCst), 1);
+    }
+}
+
 #[tokio::test]
 async fn receipt_recovery_keeps_target_and_attempts_cleanup_across_all_audit_failures() {
     for receipt_audit_failed in [false, true] {

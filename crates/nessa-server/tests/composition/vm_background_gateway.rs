@@ -183,15 +183,23 @@ impl Provider for FakeProvider {
         _: &VmSpec,
         thread: &str,
     ) -> Result<WorkspaceReceipt, Failure> {
-        // The driver makes Boat's answer to a thread's first creation get
-        // lost by leaving this file beside the threads' folders.
+        // Like Boat, a creation is keyed by its thread: asking again for a
+        // VM that already exists answers with that VM and makes nothing new.
+        let made = folder(thread).join(".boat-created");
+        if made.exists() {
+            event("create_replayed", thread);
+        } else {
+            std::fs::create_dir_all(folder(thread)).map_err(|_| Failure::Storage)?;
+            std::fs::write(&made, b"").map_err(|_| Failure::Storage)?;
+            event("created", thread);
+        }
+        // The driver makes Boat's answer get lost after the VM was made by
+        // leaving this file beside the threads' folders.
         let root = &FIXTURE.get().unwrap().root;
         if std::fs::remove_file(root.join(format!("lose-next-create-{thread}"))).is_ok() {
             event("create_lost", thread);
             return Err(Failure::Provider);
         }
-        std::fs::create_dir_all(folder(thread)).map_err(|_| Failure::Storage)?;
-        event("created", thread);
         Ok(WorkspaceReceipt {
             vm: thread.into(),
             admission: EnvironmentIdentity::new(

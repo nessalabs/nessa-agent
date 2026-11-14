@@ -2879,9 +2879,9 @@ const steps = {
     const original = run.main
     const id = randomUUID()
     const setup = `${STRESS.reply} VM background ${step.index}`
-    // Boat's answer to the first creation is lost: the opening is refused,
-    // and the next one asks Boat again for the same VM instead of leaving
-    // the thread with none.
+    // Boat makes the VM but its answer is lost: the opening is refused, and
+    // the next one asks Boat again with the same key and gets that same VM
+    // back instead of leaving the thread with none or making a second one.
     writeFileSync(join(run.stack.vmFixture.root, `lose-next-create-${id}`), "lose")
     const create = () =>
       run.client.conversation
@@ -2906,7 +2906,10 @@ const steps = {
       .filter((event) => event.thread === id)
       .map((event) => event.kind)
     if (
-      made[0] !== "create_lost" ||
+      made
+        .filter((kind) => kind.startsWith("create"))
+        .slice(0, 3)
+        .join(",") !== "created,create_lost,create_replayed" ||
       made.filter((kind) => kind === "created").length !== 1
     )
       failures.push(
