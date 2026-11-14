@@ -14,9 +14,12 @@
 //! `placements/<id>.json` (`{"schemaVersion":1,"host":"…"}`, absent for a
 //! conversation that runs here) and, for a `peer:any` conversation,
 //! `bindings/<id>.json` (`{"schemaVersion":1,"worker":"peer:…","context":"…"}`).
-//! For one release this build still writes them too, before the record, and
-//! never reads them once the record exists: a build put back then finds
-//! every conversation where it runs, never here in place of its host. The
+//! For one release this build still writes them too, before the record: a
+//! build put back then finds every conversation where it runs, never here
+//! in place of its host. Once the record exists only its binding is still
+//! read, and wins: this build writes it first, so it is never older than
+//! the record, and a build that was put back moves a pool conversation
+//! there alone. Coming back to this build then follows that move. The
 //! next release stops writing them, and the one after stops reading them
 //! once every conversation has a record. Erasing a conversation removes all
 //! three, the earlier files first, so a failed erase never leaves them as
@@ -209,18 +212,34 @@ fn earlier(placement: PathBuf, binding: PathBuf) -> Result<PlaceRecord, Placemen
     if placed != Place::Pool {
         return Ok(PlaceRecord::placed(placed));
     }
+    Ok(earlier_binding(binding)?.map_or(PlaceRecord::placed(Place::Pool), PlaceRecord::in_pool))
+}
+
+/// The worker an earlier build's binding file names, if there is one.
+fn earlier_binding(binding: PathBuf) -> Result<Option<WorkerBinding>, PlacementError> {
     let Some(bytes) = read_bytes(binding)? else {
-        return Ok(PlaceRecord::placed(Place::Pool));
+        return Ok(None);
     };
     let binding: Binding =
         serde_json::from_slice(&bytes).map_err(|_| PlacementError::Unreadable)?;
     if binding.schema_version != SCHEMA_VERSION {
         return Err(PlacementError::Unreadable);
     }
-    Ok(PlaceRecord::in_pool(worker_binding(
-        &binding.worker,
-        binding.context,
-    )?))
+    worker_binding(&binding.worker, binding.context).map(Some)
+}
+
+/// The record at `places/`, with the earlier binding winning for a pool
+/// conversation: never older than the record, and newer once a build put
+/// back moved the conversation.
+fn current(bytes: &[u8], binding: PathBuf) -> Result<PlaceRecord, PlacementError> {
+    let record = record(bytes)?;
+    if *record.place() != Place::Pool {
+        return Ok(record);
+    }
+    Ok(match earlier_binding(binding)? {
+        Some(binding) => PlaceRecord::in_pool(binding),
+        None => record,
+    })
 }
 
 async fn blocking<T: Send + 'static>(
@@ -286,7 +305,7 @@ impl ConversationPlaces for FilePlaces {
         let placement = Self::file(&self.placements, conversation);
         let binding = Self::file(&self.bindings, conversation);
         Box::pin(blocking(move || match read_bytes(path)? {
-            Some(bytes) => record(&bytes),
+            Some(bytes) => current(&bytes, binding),
             None => earlier(placement, binding),
         }))
     }

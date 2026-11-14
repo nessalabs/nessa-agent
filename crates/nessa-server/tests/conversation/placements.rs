@@ -228,6 +228,39 @@ async fn the_first_change_writes_the_new_record_and_the_earlier_files() {
     );
 }
 
+/// A build put back moves a pool conversation in its binding alone; coming
+/// back, that move wins over the record this build wrote before it. A
+/// record placed anywhere else ignores a binding, as earlier builds did.
+#[tokio::test]
+async fn a_move_made_by_a_build_put_back_wins_over_the_record() {
+    let (root, places) = store();
+    let first = PlaceRecord::in_pool(binding(1, Some("first")));
+    places.write(&conversation(), &first).await.unwrap();
+    put(
+        &root,
+        "bindings",
+        &format!(
+            "{{\"schemaVersion\":1,\"worker\":\"peer:{}\",\"context\":\"later\"}}",
+            "02".repeat(32)
+        ),
+    );
+    assert_eq!(
+        places.read(&conversation()).await,
+        Ok(PlaceRecord::in_pool(binding(2, Some("later"))))
+    );
+    let devbox = PlaceRecord::placed(named("devbox"));
+    places.write(&conversation(), &devbox).await.unwrap();
+    put(
+        &root,
+        "bindings",
+        &format!(
+            "{{\"schemaVersion\":1,\"worker\":\"peer:{}\"}}",
+            "02".repeat(32)
+        ),
+    );
+    assert_eq!(places.read(&conversation()).await, Ok(devbox));
+}
+
 #[tokio::test]
 async fn writing_here_replaces_what_a_failed_creation_left_and_erasing_twice_is_quiet() {
     let (root, places) = store();
