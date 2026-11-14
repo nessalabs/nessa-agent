@@ -322,11 +322,6 @@ pub(super) async fn product_state(
         Workspaces::new(
             Arc::new(VaultSettings(vault.vault.clone())),
             Arc::new(BoatProvider {
-                http: reqwest::Client::builder()
-                    .timeout(std::time::Duration::from_secs(45))
-                    .redirect(reqwest::redirect::Policy::none())
-                    .build()
-                    .map_err(setup_error)?,
                 api_base: workspace_sdk::boat_client::ClientConfig::DEFAULT_BASE_PATH.into(),
                 // SAFETY: geteuid has no preconditions.
                 relay_socket: super::mcp_servers::relay_socket(namespace, unsafe {

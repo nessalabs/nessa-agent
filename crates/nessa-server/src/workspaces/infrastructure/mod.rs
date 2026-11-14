@@ -2,8 +2,6 @@
 //! They implement the application ports; composition alone creates them.
 mod assignments;
 mod boat;
-mod boat_admission;
-mod boat_receipt_diagnostics;
 mod runtime;
 mod settings;
 mod ssh;

@@ -2846,11 +2846,14 @@ and shared bounds are `protocol/defaults/github-relays.json` and
 allocation receipts: `domain` contains values and failures; `application` orders
 allocation through Settings, Assignments, Provider and RecoveryAudit ports in
 `application/workspaces.rs`; `infrastructure`
-implements encrypted vault settings, private receipt files, Boat/workspace-sdk
-preparation and scoped SSH access. `domain/workspace.rs` owns legal receipt histories. `domain/environment.rs` owns the supported
-credential posture, immutable environment identity and bounded refusal evidence;
-`infrastructure/boat_admission.rs` checks complete current provider state and raw
-VM receipts before SDK authority. `assignments.rs` retains proof and terminal
+implements encrypted vault settings, private receipt files, and the Boat
+provider adapter `infrastructure/boat.rs` over workspace-sdk `BoatMachines`
+(create, admission checks, ready, stop, roll back) with the SDK workspace
+connection behind `infrastructure/ssh.rs`. `domain/workspace.rs` owns legal
+receipt histories. `domain/environment.rs` owns immutable environment identity,
+the environment name Nessa admits (`EnvironmentIdentity::admits`) and bounded
+refusal evidence; the SDK checks provider state and VM receipts, and the
+adapter maps its refusals into these values. `assignments.rs` retains proof and terminal
 refusals in private histories, while old receipts are read only as Unverified.
 Tests live in `tests/workspaces`; real-provider
 verification lives in `scripts/workspaces`, with the single-file local MCP fixture

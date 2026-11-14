@@ -71,6 +71,7 @@ enum StoredRefusal {
     InvalidReceipt,
     ReceiptUnavailable,
     LifetimeNotEnforced,
+    WipePending,
 }
 #[derive(Serialize, Deserialize)]
 #[serde(remote = "RefusalDisposition", rename_all = "snake_case")]

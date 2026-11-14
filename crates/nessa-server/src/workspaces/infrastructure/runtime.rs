@@ -1,5 +1,5 @@
-//! Workspace SDK prepares the workspace; the existing SSH lease protocol
-//! owns continuous agent IO and process cleanup inside it.
+//! The workspace SDK prepares the workspace and its connection; the lease
+//! protocol owns continuous agent IO over it.
 use crate::workspaces::{
     application::{ServedCopy, WorkspaceRuntime, WorkspaceStream},
     domain::Failure,
@@ -7,7 +7,7 @@ use crate::workspaces::{
 use async_trait::async_trait;
 use std::sync::Arc;
 pub(super) struct BoatRuntime {
-    pub(super) access: Arc<super::ssh::SshAccess>,
+    pub(super) access: Arc<super::ssh::VmLink>,
 }
 #[async_trait]
 impl WorkspaceRuntime for BoatRuntime {
