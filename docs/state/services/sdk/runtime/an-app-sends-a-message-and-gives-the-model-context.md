@@ -8,16 +8,16 @@ parent: "sdk-runtime"
 sourceRevision: "5ae45faa95fd88ae96c5f213e0e3fcd811284a91"
 sources:
   - "crates/nessa-server/src/product/mcp_apps.rs"
-  - "crates/nessa-server/src/conversation/application/service/app_calls.rs"
-  - "crates/nessa-server/src/conversation/application/app_reviews.rs"
-  - "crates/nessa-server/src/conversation/application/service.rs"
-  - "crates/nessa-server/src/conversation/infrastructure/context_drops.rs"
+  - "crates/nessa-conversation/src/application/service/app_calls.rs"
+  - "crates/nessa-conversation/src/application/app_reviews.rs"
+  - "crates/nessa-conversation/src/application/service.rs"
+  - "crates/nessa-conversation/src/infrastructure/context_drops.rs"
   - "crates/nessa-sdk/src/domain/agent_execution/prompts/value_objects/app_message.rs"
   - "packages/nessa-client/src/presentation/mcp-apps-api.ts"
   - "packages/nessa-client/src/protocol/mcp-app-validate.ts"
   - "docs/design/mcp-app-calls.md"
-  - "crates/nessa-server/tests/conversation/app_messages.rs"
-  - "crates/nessa-server/tests/conversation/context_drops.rs"
+  - "crates/nessa-conversation/tests/conversation/app_messages.rs"
+  - "crates/nessa-conversation/tests/conversation/context_drops.rs"
   - "crates/nessa-server/tests/mcp_servers/gateway.rs"
   - "packages/nessa-client/src/presentation/mcp-apps-api.test.ts"
   - "src/desktop/widgets/app/adapters/gateway/app-messages.ts"
@@ -67,7 +67,7 @@ stateDiagram-v2
 
 ## Further reading
 
-[Design](../../../../design/mcp-app-calls.md) · [Source](../../../../../crates/nessa-server/src/conversation/application/service/app_calls.rs) · [Related tests](../../../../../crates/nessa-server/tests/conversation/app_messages.rs) · [Desktop adapter](../../../../../src/desktop/widgets/app/adapters/gateway/app-messages.ts)
+[Design](../../../../design/mcp-app-calls.md) · [Source](../../../../../crates/nessa-conversation/src/application/service/app_calls.rs) · [Related tests](../../../../../crates/nessa-conversation/tests/conversation/app_messages.rs) · [Desktop adapter](../../../../../src/desktop/widgets/app/adapters/gateway/app-messages.ts)
 
 ## Model coverage
 

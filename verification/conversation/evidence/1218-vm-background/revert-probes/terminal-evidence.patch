@@ -1,4 +1,4 @@
---- /workspace/nessa-agent-1218/crates/nessa-server/src/conversation/infrastructure/background_tasks/transport.rs
+--- /workspace/nessa-agent-1218/crates/nessa-conversation/src/infrastructure/background_tasks/transport.rs
 +++ terminal-evidence
 @@ -6,7 +6,7 @@
      application::background_tasks::{

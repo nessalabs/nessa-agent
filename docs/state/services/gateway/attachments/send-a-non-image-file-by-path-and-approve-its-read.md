@@ -11,11 +11,11 @@ sources:
   - "crates/nessa-sdk/src/domain/agent_execution/prompts/value_objects/user_mes\
     sage.rs"
   - "packages/nessa-client/src/presentation/conversation-api.ts"
-  - "crates/nessa-server/src/conversation/application/service.rs"
-  - "crates/nessa-server/src/conversation/infrastructure/file_link_audit.rs"
+  - "crates/nessa-conversation/src/application/service.rs"
+  - "crates/nessa-conversation/src/infrastructure/file_link_audit.rs"
   - "crates/nessa-sdk/src/infrastructure/acp/executions/prompt_content.rs"
-  - "crates/nessa-server/tests/conversation/linked_files.rs"
-  - "crates/nessa-server/tests/conversation/file_link_audit.rs"
+  - "crates/nessa-conversation/tests/conversation/linked_files.rs"
+  - "crates/nessa-conversation/tests/conversation/file_link_audit.rs"
   - "crates/nessa-sdk/tests/infrastructure/acp/executions/prompt_link_attacks.rs"
   - "src/panel/ui/use-file-attachments-picker.test.ts"
 diagramLinks: {}
@@ -63,8 +63,8 @@ stateDiagram-v2
 
 ## Further reading
 
-[Source](../../../../adr/done/0013-files-by-path-not-by-payload.md) · [Related source](../../../../../src/conversation/model/attachments.ts) · [Related tests](../../../../../crates/nessa-server/tests/conversation/linked_files.rs)
+[Source](../../../../adr/done/0013-files-by-path-not-by-payload.md) · [Related source](../../../../../src/conversation/model/attachments.ts) · [Related tests](../../../../../crates/nessa-conversation/tests/conversation/linked_files.rs)
 
 ## Bounded rule model
 
-Owns durable path-naming evidence before submission. The model intentionally has no file-read action: path attachment does not prove permission, existence or read. LinkedFile path syntax is a pure contract; actual agent read and approval belong to the SDK/tool permission owner. This finite abstraction checks safety only. It does not execute or verify the implementation, promise eventual completion, or qualify external effects. Existing source checkpoints and historical test receipts retain their earlier scope. The scoped model review inspected `crates/nessa-server/src/conversation/infrastructure/file_link_audit.rs`, `crates/nessa-server/src/conversation/application/service.rs`.
+Owns durable path-naming evidence before submission. The model intentionally has no file-read action: path attachment does not prove permission, existence or read. LinkedFile path syntax is a pure contract; actual agent read and approval belong to the SDK/tool permission owner. This finite abstraction checks safety only. It does not execute or verify the implementation, promise eventual completion, or qualify external effects. Existing source checkpoints and historical test receipts retain their earlier scope. The scoped model review inspected `crates/nessa-conversation/src/infrastructure/file_link_audit.rs`, `crates/nessa-conversation/src/application/service.rs`.

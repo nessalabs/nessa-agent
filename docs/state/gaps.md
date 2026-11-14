@@ -5,7 +5,7 @@ kind: "guide"
 status: "reference"
 summary: "Evidence-backed integration gaps, operational limits and statechart-informed follow-ups"
 parent: "nessa"
-sources: ["src/desktop/dependencies.ts", "src/conversation/application/saved-tabs.ts", "crates/nessa-gateway-endpoint/src/infrastructure/file.rs", "crates/nessa-server/src/mcp_servers/infrastructure/resource_tickets.rs"]
+sources: ["src/desktop/dependencies.ts", "src/conversation/application/saved-tabs.ts", "crates/nessa-gateway-endpoint/src/infrastructure/file.rs", "crates/nessa-conversation/src/mcp_servers/infrastructure/resource_tickets.rs"]
 diagramLinks: {}
 ---
 
@@ -22,7 +22,7 @@ These findings came from the original [inspection snapshot](inventory.md#inspect
 | G03 | **Documentation correction.** Older maps called that renderer a placeholder. The [current lifecycle](../../src/desktop/widgets/app/model/lifecycle.ts) and bridge implement it. | Keep the renderer lifecycle separate from workspace connection mode and tool permission. Update the owning pages when composition changes. |
 | G04 | **Persistence limit.** [Saved tabs](../../src/conversation/application/saved-tabs.ts) retain IDs and titles, but not drafts or uncertain-send identity and content. | Decide whether crash-safe recovery is needed. If so, design retained exact requests before adding retry behavior. |
 | G05 | **Publication limit.** [Endpoint writing](../../crates/nessa-gateway-endpoint/src/infrastructure/file.rs) can fail after replacing the file. | Retain whether replacement happened, separately from final durability confirmation. An error must not imply rollback. |
-| G06 | **Audit backlog limit.** [Ticket expiry and release](../../crates/nessa-server/src/mcp_servers/infrastructure/resource_tickets.rs) free bytes separately from audit. End events use an unbounded channel. No memory exhaustion was reproduced. | Design a bounded or durable audit handoff. Test a stalled sink and shutdown without blocking cleanup or silently losing evidence. |
+| G06 | **Audit backlog limit.** [Ticket expiry and release](../../crates/nessa-conversation/src/mcp_servers/infrastructure/resource_tickets.rs) free bytes separately from audit. End events use an unbounded channel. No memory exhaustion was reproduced. | Design a bounded or durable audit handoff. Test a stalled sink and shutdown without blocking cleanup or silently losing evidence. |
 | G07 | **Waiting limit.** [Ticket redemption](../../crates/nessa-server/src/mcp_servers/entrypoint/http.rs) consumes the ticket before waiting for audit, with no independent audit deadline. No hang was reproduced. | Define a bounded wait. A timeout must keep the ticket consumed. |
 | G08 | **Schema compatibility boundary.** The [database](services/storage/storage-database.md) applies an explicit forward-only upgrade chain transactionally and refuses unsupported versions or invalid chains. Same-user file-name replacement remains outside its protection. | Supply and qualify each upgrade step through the owning database contract; do not infer that an arbitrary old schema is supported. |
 | G09 | **Platform limit.** [Private file publication](../design/retained-directory-publication.md) has different durability evidence on Unix and Windows. | Keep those qualifications and run target-specific checks when storage changes. Do not promise arbitrary power-loss survival. |

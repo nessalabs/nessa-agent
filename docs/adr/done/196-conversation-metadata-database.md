@@ -50,7 +50,7 @@ contexts.
 
 **The conversation store.** `LocalConversationStore` keeps
 `conversations/metadata.sqlite3` with three tables, defined once in
-`crates/nessa-server/src/conversation/infrastructure/schema.sql`. The server
+`crates/nessa-conversation/src/infrastructure/schema.sql`. The server
 includes that file:
 
 | Table | Key | Holds | Written |

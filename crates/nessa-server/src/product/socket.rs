@@ -6058,7 +6058,11 @@ mod tests {
         assert!(serde_json::to_vec(&document).unwrap().len() <= 65_536);
         let files = MemoryFiles::holding(document);
         let audit = Arc::new(RecordingAudit::default());
-        let (settings, _) = settings_at_full_size(files.clone(), audit.clone());
+        let (settings, _) = settings_at_full_size(
+            files.clone(),
+            audit.clone(),
+            crate::product::mcp_servers::list_fits,
+        );
         let (state, _) = fixture(MembershipRole::Admin);
         let state = state.with_mcp_server_settings(Arc::new(settings));
         let session = authenticate(&state).await;

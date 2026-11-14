@@ -81,6 +81,7 @@ export const RUST_TEST_PACKAGES = [
   "nessa-local-storage",
   "nessa-auth",
   "nessa-server",
+  "nessa-conversation",
   "nessa-protocol",
   "nessa-projection",
   "nessa-types",
@@ -187,6 +188,15 @@ export function workspaceGraph(members) {
       if (target) dependents.get(target.name).add(member.name)
     }
   }
+  // A member whose source reads another member's files by path (a lease
+  // fingerprint over them, a test scanning them) is reached by a change to
+  // them too, though it does not depend on that member.
+  for (const reader of byDir.values())
+    for (const read of byDir.values()) {
+      const folder = read.dir.split("/").at(-1)
+      if (reader !== read && reader.text.includes(`../${folder}/src`))
+        dependents.get(read.name).add(reader.name)
+    }
   return { members: [...byDir.values()], dependents }
 }
 

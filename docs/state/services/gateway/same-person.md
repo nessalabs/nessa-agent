@@ -22,10 +22,10 @@ sources:
   - crates/nessa-auth/src/adapters/local/registry/pairing/person_links.rs
   - crates/nessa-auth/src/adapters/local/registry/pairing/enrollment.rs
   - crates/nessa-device-pairing/src/application/activation.rs
-  - crates/nessa-server/src/conversation/infrastructure/store/person_links.rs
-  - crates/nessa-server/src/conversation/infrastructure/store/grant_database.rs
+  - crates/nessa-conversation/src/infrastructure/store/person_links.rs
+  - crates/nessa-conversation/src/infrastructure/store/grant_database.rs
   - crates/nessa-server/tests/device_pairing/infrastructure/person_links.rs
-  - crates/nessa-server/tests/conversation/grant_database.rs
+  - crates/nessa-conversation/tests/conversation/grant_database.rs
   - crates/nessa-peer-gateways/src/infrastructure/records.rs
   - crates/nessa-server/tests/device_pairing/mounted/same_person.rs
   - crates/nessa-server/tests/device_pairing/owner_routes.rs

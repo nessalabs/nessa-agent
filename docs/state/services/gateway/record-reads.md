@@ -10,12 +10,11 @@ parent: "gateway"
 sources:
   - "crates/nessa-server/src/product/socket.rs"
   - "crates/nessa-server/src/product/record_read/dispatch.rs"
-  - "crates/nessa-server/src/conversation/application/record_read/read.rs"
-  - "crates/nessa-server/src/conversation/infrastructure/record_read/operation.\
-    rs"
-  - "crates/nessa-server/src/conversation/application/record_read/principal.rs"
-  - "crates/nessa-server/src/conversation/infrastructure/record_read/source.rs"
-  - "crates/nessa-server/src/conversation/infrastructure/record_scope.rs"
+  - "crates/nessa-conversation/src/application/record_read/read.rs"
+  - "crates/nessa-conversation/src/infrastructure/record_read/operation.rs"
+  - "crates/nessa-conversation/src/application/record_read/principal.rs"
+  - "crates/nessa-conversation/src/infrastructure/record_read/source.rs"
+  - "crates/nessa-conversation/src/infrastructure/record_scope.rs"
   - "crates/nessa-server/src/core/read_workers/workers.rs"
   - "crates/nessa-server/src/webhooks/application/admission.rs"
   - "crates/nessa-server/src/webhooks/application/source.rs"
@@ -139,7 +138,7 @@ their previous source revisions.
 
 ## Bounded rule model
 
-Owns paired read capacity transfer, timeout retention until physical source join and writer release before network send. Fresh receiver access, exact physical scope, result byte bounds and unmounted principal read use case are excluded from these ownership invariants. This finite abstraction checks safety only. It does not execute or verify the implementation, promise eventual completion, or qualify external effects. Existing source checkpoints and historical test receipts retain their earlier scope. The scoped model review inspected `crates/nessa-server/src/conversation/application/record_read/read.rs`, `crates/nessa-server/src/conversation/infrastructure/record_read/operation.rs`, `crates/nessa-server/src/product/record_read/dispatch.rs`.
+Owns paired read capacity transfer, timeout retention until physical source join and writer release before network send. Fresh receiver access, exact physical scope, result byte bounds and unmounted principal read use case are excluded from these ownership invariants. This finite abstraction checks safety only. It does not execute or verify the implementation, promise eventual completion, or qualify external effects. Existing source checkpoints and historical test receipts retain their earlier scope. The scoped model review inspected `crates/nessa-conversation/src/application/record_read/read.rs`, `crates/nessa-conversation/src/infrastructure/record_read/operation.rs`, `crates/nessa-server/src/product/record_read/dispatch.rs`.
 
 ## Busy discovery source correction
 

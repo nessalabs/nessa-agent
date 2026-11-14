@@ -8,9 +8,9 @@ summary: A durable root digest binds exact captured Stop targets across retries
   and restart.
 sourceRevision: "77a6b620af4d94b234294f6d273fd74b3dfb44c7"
 sources:
-  - crates/nessa-server/src/conversation/application/service/parent_stop.rs
-  - crates/nessa-server/tests/conversation/parent_stop.rs
-  - crates/nessa-server/tests/conversation/parent_stop/confirmed_recovery.rs
+  - crates/nessa-conversation/src/application/service/parent_stop.rs
+  - crates/nessa-conversation/tests/conversation/parent_stop.rs
+  - crates/nessa-conversation/tests/conversation/parent_stop/confirmed_recovery.rs
 diagramLinks: {}
 model:
   spec: tla/services/gateway/ParentStop.tla
@@ -56,4 +56,4 @@ This source review inspected the owner, exact selection digest restoration, capt
 
 ## Bounded rule model
 
-Owns child-before-root persistence, exact aggregate selection proof on recovery, exclusion of later/unrelated turns and confirmed-receipt history decline. Identity digests are modeled as exact target sets, abstracting collision-resistant ordered hashes. Attempt sets preserve no-resend uncertainty; authority checks and report-withdrawal order remain external action prerequisites. This finite abstraction checks safety only. It does not execute or verify the implementation, promise eventual completion, or qualify external effects. Existing source checkpoints and historical test receipts retain their earlier scope. The scoped model review inspected `crates/nessa-server/src/conversation/application/service/parent_stop.rs`.
+Owns child-before-root persistence, exact aggregate selection proof on recovery, exclusion of later/unrelated turns and confirmed-receipt history decline. Identity digests are modeled as exact target sets, abstracting collision-resistant ordered hashes. Attempt sets preserve no-resend uncertainty; authority checks and report-withdrawal order remain external action prerequisites. This finite abstraction checks safety only. It does not execute or verify the implementation, promise eventual completion, or qualify external effects. Existing source checkpoints and historical test receipts retain their earlier scope. The scoped model review inspected `crates/nessa-conversation/src/application/service/parent_stop.rs`.

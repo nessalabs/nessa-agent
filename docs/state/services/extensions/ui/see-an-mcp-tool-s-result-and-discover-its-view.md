@@ -9,7 +9,7 @@ sources:
   - "docs/design/mcp-connections.md"
   - "crates/nessa-sdk/src/infrastructure/acp/sessions/forwarded.rs"
   - "crates/nessa-server/src/mcp_servers/mod.rs"
-  - "crates/nessa-server/src/mcp_servers/infrastructure/tool_uis.rs"
+  - "crates/nessa-conversation/src/mcp_servers/infrastructure/tool_uis.rs"
   - "crates/nessa-sdk/src/domain/mcp_apps/value_objects/tool_ui.rs"
   - "crates/nessa-sdk/tests/domain/mcp_apps.rs"
   - "crates/nessa-protocol/src/conversation/projection.rs"

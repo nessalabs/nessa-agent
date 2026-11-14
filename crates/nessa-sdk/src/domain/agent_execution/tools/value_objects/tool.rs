@@ -485,7 +485,7 @@ pub const MAX_STRUCTURED_RESULT_BYTES: usize = 64 * 1024;
 /// text. One bound for a review, for an app's own call, and for the arguments
 /// the gateway's connection carries on the conversation view: the product
 /// schema publishes it as `maxMcpArgumentsBytes`, and
-/// `nessa-server/tests/conversation/agreement.rs` holds the three together.
+/// `nessa-conversation/tests/conversation/agreement.rs` holds the three together.
 /// Past it the arguments are not kept. JSON cut short is not the call's
 /// arguments.
 pub const MAX_MCP_ARGUMENTS_BYTES: usize = 32 * 1024;
@@ -527,7 +527,7 @@ impl McpCallArguments {
 
 /// The most the input an agent reports for one tool call may be, in UTF-8
 /// bytes of its JSON text. The product schema states it as the bound of
-/// `ConversationTool.input`, and `nessa-server/tests/conversation/agreement.rs`
+/// `ConversationTool.input`, and `nessa-conversation/tests/conversation/agreement.rs`
 /// holds the two together. Past it the input is not kept: JSON cut short is
 /// not the call's input.
 pub const MAX_TOOL_INPUT_BYTES: usize = 32 * 1024;

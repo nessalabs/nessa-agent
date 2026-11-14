@@ -445,7 +445,7 @@ turn with no saved result clears it.
     after the turn, or hook failures after it keep the sentence and
     `requiredWorkFailed`.
 12. The schedule observes a usage limit only when the newest invocation is
-    that limit. [`observed_limit_index`](../../crates/nessa-server/src/conversation/domain/scheduled_message.rs)
+    that limit. [`observed_limit_index`](../../crates/nessa-conversation/src/domain/scheduled_message.rs)
     is the owner of that choice. A later invocation clears it, and the plan
     cancels an open row.
 13. `next_due` is the owner of the loop's next wait. A scheduled row at or

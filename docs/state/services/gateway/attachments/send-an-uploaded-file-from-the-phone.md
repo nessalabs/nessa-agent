@@ -16,16 +16,16 @@ sources:
   - "crates/nessa-sdk/src/application/agent_execution/agents/lifecycle.rs"
   - "crates/nessa-sdk/tests/application/agent_execution/agents/input_files.rs"
   - "crates/nessa-server/src/composition/agent.rs"
-  - "crates/nessa-server/src/conversation/application/service.rs"
-  - "crates/nessa-server/src/conversation/application/input_files.rs"
-  - "crates/nessa-server/src/conversation/infrastructure/input_files.rs"
-  - "crates/nessa-server/src/conversation/infrastructure/input_files/unix.rs"
+  - "crates/nessa-conversation/src/application/service.rs"
+  - "crates/nessa-conversation/src/application/input_files.rs"
+  - "crates/nessa-conversation/src/infrastructure/input_files.rs"
+  - "crates/nessa-conversation/src/infrastructure/input_files/unix.rs"
   - "crates/nessa-local-storage/src/retained_directory.rs"
   - "crates/nessa-local-storage/src/unix/retained_directory.rs"
   - "crates/nessa-local-storage/tests/retained_directory.rs"
   - "crates/nessa-sdk/tests/domain/agent_execution/uploaded_delivery.rs"
-  - "crates/nessa-server/tests/conversation/input_files.rs"
-  - "crates/nessa-server/tests/conversation/ssh_artifacts.rs"
+  - "crates/nessa-conversation/tests/conversation/input_files.rs"
+  - "crates/nessa-conversation/tests/conversation/ssh_artifacts.rs"
 diagramLinks: {}
 model:
   spec: tla/services/gateway/attachments/InputFilePlacement.tla
@@ -120,4 +120,4 @@ and scripted SFTP channel; it does not claim a live SSH daemon or model service.
 
 ## Bounded rule model
 
-Owns asked-before-placement evidence, retained execution lease identity and outcome ownership after waiter loss. Original uploaded references do not become execution paths. Exact hold verification, local/remote filesystem safety, deadline and provider dispatch correlation are excluded. This finite abstraction checks safety only. It does not execute or verify the implementation, promise eventual completion, or qualify external effects. Existing source checkpoints and historical test receipts retain their earlier scope. The scoped model review inspected `crates/nessa-server/src/conversation/application/input_files.rs`.
+Owns asked-before-placement evidence, retained execution lease identity and outcome ownership after waiter loss. Original uploaded references do not become execution paths. Exact hold verification, local/remote filesystem safety, deadline and provider dispatch correlation are excluded. This finite abstraction checks safety only. It does not execute or verify the implementation, promise eventual completion, or qualify external effects. Existing source checkpoints and historical test receipts retain their earlier scope. The scoped model review inspected `crates/nessa-conversation/src/application/input_files.rs`.

@@ -9,7 +9,7 @@ parent: "client"
 sources:
   - "packages/nessa-client/src/transport/wire-session.ts"
   - "crates/nessa-sdk/src/application/agent_execution/commands/mutation.rs"
-  - "crates/nessa-server/tests/conversation/mutation_commands.rs"
+  - "crates/nessa-conversation/tests/conversation/mutation_commands.rs"
   - "packages/nessa-client/src/application/conversation-mutation-error.ts"
   - "packages/nessa-client/src/presentation/conversation-api.ts"
   - "packages/nessa-client/src/presentation/conversation-api.test.ts"

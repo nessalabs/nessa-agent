@@ -302,7 +302,7 @@ jobs:
       # the cleanup step as well as by the credentials step.
       APPLE_API_KEY_FILE: ${{ github.workspace }}/.apple-api-key.p8
       # The host builds the gateway compiled here pins, and where they are
-      # published: crates/nessa-server/src/env/config.rs reads both.
+      # published: crates/nessa-conversation/src/env.rs reads both.
       NESSA_HOST_BUILDS: ${{ needs.host-pins.outputs.pins }}
       NESSA_HOST_BUILDS_FROM: https://github.com/${{ github.repository }}/releases/download/${{ needs.version.outputs.tag }}
     steps:

@@ -10,7 +10,7 @@ sources:
   - "crates/nessa-server/src/mcp_authorization/infrastructure/audit.rs"
   - "crates/nessa-local-storage/src/physical_operation.rs"
   - "crates/nessa-sdk/src/infrastructure/mcp/servers.rs"
-  - "crates/nessa-server/src/mcp_servers/infrastructure/grants.rs"
+  - "crates/nessa-conversation/src/mcp_servers/infrastructure/grants.rs"
   - "crates/nessa-mcp/src/shell/application/service.rs"
 diagramLinks:
   Sessions: "mcp-sessions"

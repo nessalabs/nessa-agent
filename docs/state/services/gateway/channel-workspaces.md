@@ -8,43 +8,43 @@ summary: A channel independently places its main agent and new threads on Local
   or Boat and can override the default Boat VM lifetime.
 parent: gateway
 sources:
-  - crates/nessa-server/src/conversation/application/placement.rs
-  - crates/nessa-server/src/conversation/domain/value_objects/place.rs
-  - crates/nessa-server/src/conversation/application/place_decision.rs
+  - crates/nessa-conversation/src/application/placement.rs
+  - crates/nessa-conversation/src/domain/value_objects/place.rs
+  - crates/nessa-conversation/src/application/place_decision.rs
   - crates/nessa-server/src/composition/local_auth.rs
-  - crates/nessa-server/src/conversation/infrastructure/ssh_environment/audit.rs
+  - crates/nessa-conversation/src/infrastructure/ssh_environment/audit.rs
   - crates/nessa-sdk/src/application/agent_execution/sessions/manager.rs
   - crates/nessa-sdk/src/infrastructure/claude_acp/sessions/binding.rs
   - crates/nessa-sdk/src/infrastructure/opencode_acp/sessions/binding.rs
   - crates/nessa-sdk/src/infrastructure/acp/sessions/config.rs
   - crates/nessa-sdk/src/application/agent_execution/providers/input_files.rs
-  - crates/nessa-server/src/conversation/application/input_files.rs
-  - crates/nessa-server/src/workspaces/infrastructure/settings.rs
-  - crates/nessa-server/src/workspaces/infrastructure/release.rs
-  - crates/nessa-server/src/workspaces/application/workspaces.rs
-  - crates/nessa-server/src/workspaces/application/runtime_settings.rs
-  - crates/nessa-server/src/workspaces/domain/workspace.rs
-  - crates/nessa-server/src/workspaces/domain/environment.rs
-  - crates/nessa-server/src/workspaces/infrastructure/assignments.rs
-  - crates/nessa-server/src/workspaces/infrastructure/boat.rs
+  - crates/nessa-conversation/src/application/input_files.rs
+  - crates/nessa-conversation/src/workspaces/infrastructure/settings.rs
+  - crates/nessa-conversation/src/workspaces/infrastructure/release.rs
+  - crates/nessa-conversation/src/workspaces/application/workspaces.rs
+  - crates/nessa-conversation/src/workspaces/application/runtime_settings.rs
+  - crates/nessa-conversation/src/workspaces/domain/workspace.rs
+  - crates/nessa-conversation/src/workspaces/domain/environment.rs
+  - crates/nessa-conversation/src/workspaces/infrastructure/assignments.rs
+  - crates/nessa-conversation/src/workspaces/infrastructure/boat.rs
   - crates/nessa-server/tests/workspaces/allocation.rs
-  - crates/nessa-server/tests/workspaces/assignments.rs
-  - crates/nessa-server/tests/workspaces/boat_admission.rs
-  - crates/nessa-server/tests/workspaces/environment.rs
-  - crates/nessa-server/src/workspaces/infrastructure/boat.rs
-  - crates/nessa-server/src/workspaces/infrastructure/boat_runtime_settings.rs
-  - crates/nessa-server/src/workspaces/infrastructure/runtime_settings_audit.rs
-  - crates/nessa-server/src/workspaces/infrastructure/ssh.rs
-  - crates/nessa-server/src/conversation/infrastructure/workspaces.rs
-  - crates/nessa-server/src/conversation/domain/value_objects/vm_lifetime.rs
-  - crates/nessa-server/src/settings/inheritance.rs
-  - crates/nessa-server/src/conversation/infrastructure/workspace_runtime_config.rs
-  - crates/nessa-server/src/conversation/infrastructure/channels.rs
+  - crates/nessa-conversation/tests/workspaces/assignments.rs
+  - crates/nessa-conversation/tests/workspaces/boat_admission.rs
+  - crates/nessa-conversation/tests/workspaces/environment.rs
+  - crates/nessa-conversation/src/workspaces/infrastructure/boat.rs
+  - crates/nessa-server/src/composition/boat_runtime_settings.rs
+  - crates/nessa-conversation/src/workspaces/infrastructure/runtime_settings_audit.rs
+  - crates/nessa-conversation/src/workspaces/infrastructure/ssh.rs
+  - crates/nessa-conversation/src/infrastructure/workspaces.rs
+  - crates/nessa-conversation/src/domain/value_objects/vm_lifetime.rs
+  - crates/nessa-conversation/src/settings.rs
+  - crates/nessa-conversation/src/infrastructure/workspace_runtime_config.rs
+  - crates/nessa-conversation/src/infrastructure/channels.rs
   - src/desktop/workspace/ui/channel-creation/new-channel.tsx
   - src/desktop/settings/ui/boat-row.tsx
   - src/desktop/settings/ui/boat-runtime-control.tsx
   - src/desktop/workspace/ui/channel-settings/channel-settings.tsx
-  - crates/nessa-server/src/workspaces/infrastructure/runtime.rs
+  - crates/nessa-conversation/src/workspaces/infrastructure/runtime.rs
   - src/provider-authentication/model/boat-sign-in.ts
   - src-tauri/src/platform/macos/claude_sign_in.rs
 diagramLinks: {}
@@ -284,6 +284,6 @@ placement, restoration and lifetime paths were not re-reviewed here.
 
 ## Bounded rule model
 
-Owns durable provisioning intent, single VM target, reconnect verification and terminal refusal. Uncertain creation cannot allocate again. Local placement, TTL settings, credential posture fields, SSH leases, rollback acknowledgement and main-chat replacement remain separate unmodeled contracts. This finite abstraction checks safety only. It does not execute or verify the implementation, promise eventual completion, or qualify external effects. Existing source checkpoints and historical test receipts retain their earlier scope. The scoped model review inspected `crates/nessa-server/src/workspaces/domain/workspace.rs`, `crates/nessa-server/src/workspaces/application/workspaces.rs`.
+Owns durable provisioning intent, single VM target, reconnect verification and terminal refusal. Uncertain creation cannot allocate again. Local placement, TTL settings, credential posture fields, SSH leases, rollback acknowledgement and main-chat replacement remain separate unmodeled contracts. This finite abstraction checks safety only. It does not execute or verify the implementation, promise eventual completion, or qualify external effects. Existing source checkpoints and historical test receipts retain their earlier scope. The scoped model review inspected `crates/nessa-conversation/src/workspaces/domain/workspace.rs`, `crates/nessa-conversation/src/workspaces/application/workspaces.rs`.
 
 The newer [channel run-location control](../desktop/workspace/change-channel-run-location.md) describes moving an existing channel, main creation locking and committed-but-unconfirmed audit outcomes. [Pool ordering](../desktop/workspace/choose-worker-pool-order.md) describes Any computer and cloud overflow. These source-only task guides do not extend this page’s allocation model.

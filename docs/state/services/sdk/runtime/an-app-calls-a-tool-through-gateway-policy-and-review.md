@@ -7,14 +7,14 @@ summary: "An app can ask the gateway to call a tool on its originating server."
 parent: "sdk-runtime"
 sources:
   - "crates/nessa-server/src/product/mcp_apps.rs"
-  - "crates/nessa-server/src/conversation/application/service/app_calls.rs"
-  - "crates/nessa-server/src/mcp_servers/domain/app_call.rs"
-  - "crates/nessa-server/src/conversation/application/app_reviews.rs"
-  - "crates/nessa-server/src/mcp_servers/infrastructure/apps.rs"
+  - "crates/nessa-conversation/src/application/service/app_calls.rs"
+  - "crates/nessa-conversation/src/mcp_servers/domain/app_call.rs"
+  - "crates/nessa-conversation/src/application/app_reviews.rs"
+  - "crates/nessa-conversation/src/mcp_servers/infrastructure/apps.rs"
   - "packages/nessa-client/src/presentation/mcp-apps-api.ts"
-  - "crates/nessa-server/tests/conversation/app_calls.rs"
-  - "crates/nessa-server/tests/conversation/app_reviews.rs"
-  - "crates/nessa-server/tests/conversation/mcp_app_audit.rs"
+  - "crates/nessa-conversation/tests/conversation/app_calls.rs"
+  - "crates/nessa-conversation/tests/conversation/app_reviews.rs"
+  - "crates/nessa-conversation/tests/conversation/mcp_app_audit.rs"
   - "packages/nessa-client/src/presentation/mcp-apps-api.test.ts"
 diagramLinks: {}
 ---
@@ -45,7 +45,7 @@ stateDiagram-v2
 
 ## Further reading
 
-[Source](../../../../../crates/nessa-server/src/product/mcp_apps.rs) · [Related source](../../../../../crates/nessa-server/src/conversation/application/service/app_calls.rs) · [Related tests](../../../../../crates/nessa-server/tests/conversation/app_calls.rs)
+[Source](../../../../../crates/nessa-server/src/product/mcp_apps.rs) · [Related source](../../../../../crates/nessa-conversation/src/application/service/app_calls.rs) · [Related tests](../../../../../crates/nessa-conversation/tests/conversation/app_calls.rs)
 
 ## Model coverage
 

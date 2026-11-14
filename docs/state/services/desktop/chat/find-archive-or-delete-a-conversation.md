@@ -12,14 +12,14 @@ sources:
   - "src/conversation/adapters/store/history.ts"
   - "src/conversation/adapters/gateway/effects.ts"
   - "packages/nessa-client/src/presentation/conversation-api.ts"
-  - "crates/nessa-server/src/conversation/application/service.rs"
-  - "crates/nessa-server/src/conversation/domain/value_objects/conversation_deletion.rs"
+  - "crates/nessa-conversation/src/application/service.rs"
+  - "crates/nessa-conversation/src/domain/value_objects/conversation_deletion.rs"
   - "src/conversation/adapters/store/history.test.ts"
   - "src/conversation/application/queries/roster.test.ts"
   - "src/panel/ui/use-messages-tab.test.ts"
-  - "crates/nessa-server/tests/conversation/listing.rs"
-  - "crates/nessa-server/tests/conversation/deletion.rs"
-  - "crates/nessa-server/tests/conversation/deletion_audit.rs"
+  - "crates/nessa-conversation/tests/conversation/listing.rs"
+  - "crates/nessa-conversation/tests/conversation/deletion.rs"
+  - "crates/nessa-conversation/tests/conversation/deletion_audit.rs"
 diagramLinks: {}
 ---
 

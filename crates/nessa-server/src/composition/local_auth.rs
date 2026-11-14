@@ -18,8 +18,7 @@ use crate::{
         application::{RecoveryAudit, RecoveryEvent, Workspaces},
         domain::Failure as WorkspaceFailure,
         infrastructure::{
-            worker_image, BoatProvider, ConfigBoatRuntimeSettings, FileAssignments,
-            RuntimeSettingsAudit, VaultSettings,
+            worker_image, BoatProvider, FileAssignments, RuntimeSettingsAudit, VaultSettings,
         },
     },
 };
@@ -289,7 +288,7 @@ pub(super) async fn product_state(
     .map_err(setup_error)?;
     #[cfg(unix)]
     let runtime_settings = {
-        Arc::new(ConfigBoatRuntimeSettings {
+        Arc::new(super::boat_runtime_settings::ConfigBoatRuntimeSettings {
             config: Arc::new(ConfigJson::new(
                 Arc::new(OsConfigFiles::new(super::runtime_config::config_path(
                     namespace,
@@ -1351,7 +1350,7 @@ async fn conversations(
     let environment_tools = command_policy
         .as_ref()
         .map(super::environment_tools::EnvironmentTools::new);
-    let conversation_tools = super::conversation_tools::ConversationTools::new();
+    let conversation_tools = crate::mcp_servers::conversation_tools::ConversationTools::new();
     let background_tools = super::background_tools::BackgroundTools::new();
     let mut built_in: Vec<Arc<dyn BuiltInServer>> =
         vec![conversation_tools.clone(), background_tools.clone()];
@@ -1709,7 +1708,7 @@ async fn conversations(
             },
             Arc::new(RuntimeClock::new()),
         ));
-        let settings = crate::conversation::infrastructure::ConfigPoolSettings::new(
+        let settings = super::pool_settings::ConfigPoolSettings::new(
             config,
             root.join("audit").join("pool-settings"),
             Arc::new(SystemClock),

@@ -33,7 +33,7 @@ mod ending;
 mod error;
 mod exit_code;
 pub mod launch;
-pub(crate) mod limit_log;
+pub(crate) use nessa_conversation::limit_log;
 pub(crate) mod local_timings;
 #[cfg(unix)]
 mod log_file;

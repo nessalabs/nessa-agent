@@ -10,7 +10,7 @@ sources:
   - "packages/nessa-client/src/presentation/conversation-api.test.ts"
   - "src/onboarding/adapters/agents.test.ts"
   - "src/onboarding/ui/onboarding-readiness-timeout.test.tsx"
-  - "crates/nessa-server/tests/conversation/projection.rs"
+  - "crates/nessa-conversation/tests/conversation/projection.rs"
   - "src/conversation/adapters/store/attachments.test.ts"
   - "src-tauri/src/gateway_endpoint/entrypoint/command.rs"
   - "src-tauri/src/surface_credential.rs"
@@ -33,7 +33,7 @@ This page keeps earlier findings and their evidence. R1–R5 were corrected in t
 | R3 | A lost reply to a structured-question answer offered unsafe replay after the answer was consumed. It now uses a non-retryable control path. | [Client regression](../../packages/nessa-client/src/presentation/conversation-api.test.ts) failed before and passed after. No duplicated provider execution was established; SDK consumption was a separate control. |
 | R4 | Enter sent text while a native image read was pending. The captured conversation now remains pending until the read settles. | The same [App regressions](../../src/panel/ui/use-file-attachments-races.test.ts) and both browser engines checked refusal before completion and a single text-plus-image send afterward. Native and gateway effects were controlled. |
 | R5 | A stalled readiness fetch or JSON body left Check again disabled. One ten-second deadline now covers both stages and releases Retry. | [Adapter](../../src/onboarding/adapters/agents.test.ts), [onboarding](../../src/onboarding/ui/onboarding-readiness-timeout.test.tsx) and browser checks covered delayed responses. This was a controlled stall, not a production outage. |
-| R6 | A stale empty tab was suspected of stopping another surface's work. Automatic close requires exact complete_empty, while both built-in stores report prepared empty sessions as complete. Closing therefore detaches. | [Projection](../../crates/nessa-server/tests/conversation/projection.rs) and [tab controls](../../src/conversation/adapters/store/attachments.test.ts) falsified the suspected path for both built-in stores. Custom producers of complete_empty remain a separate question. No product fix was made. |
+| R6 | A stale empty tab was suspected of stopping another surface's work. Automatic close requires exact complete_empty, while both built-in stores report prepared empty sessions as complete. Closing therefore detaches. | [Projection](../../crates/nessa-conversation/tests/conversation/projection.rs) and [tab controls](../../src/conversation/adapters/store/attachments.test.ts) falsified the suspected path for both built-in stores. Custom producers of complete_empty remain a separate question. No product fix was made. |
 
 ## App-wide model review observations (2026-11-02)
 

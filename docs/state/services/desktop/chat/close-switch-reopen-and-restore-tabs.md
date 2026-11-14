@@ -17,7 +17,7 @@ sources:
   - "src/session/adapters/lifecycle/session-lifecycle.tsx"
   - "crates/nessa-sdk/src/application/agent_execution/sessions/manager.rs"
   - "crates/nessa-sdk/src/infrastructure/session_storage/memory.rs"
-  - "crates/nessa-server/tests/conversation/projection.rs"
+  - "crates/nessa-conversation/tests/conversation/projection.rs"
   - "src/conversation/adapters/store/attachments.test.ts"
   - "src/conversation/application/usecases/usecases.test.ts"
   - "src/conversation/application/saved-tabs.test.ts"
@@ -76,7 +76,7 @@ stateDiagram-v2
 
 ## Further reading
 
-[Source](../../../../../src/panel/application/tab-navigation.ts) · [Related source](../../../../../src/conversation/application/usecases/close-conversation.ts) · [Related tests](../../../../../crates/nessa-server/tests/conversation/projection.rs)
+[Source](../../../../../src/panel/application/tab-navigation.ts) · [Related source](../../../../../src/conversation/application/usecases/close-conversation.ts) · [Related tests](../../../../../crates/nessa-conversation/tests/conversation/projection.rs)
 
 ## Bounded rule model
 

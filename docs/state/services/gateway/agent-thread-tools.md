@@ -8,9 +8,9 @@ summary: Agent tools derive authority from the live source turn before reaching
 parent: gateway
 sourceRevision: "77a6b620af4d94b234294f6d273fd74b3dfb44c7"
 sources:
-  - crates/nessa-server/src/conversation/application/service/agent_tools.rs
-  - crates/nessa-server/tests/conversation/agent_tools.rs
-  - crates/nessa-server/src/conversation/application/agent_tools.rs
+  - crates/nessa-conversation/src/application/service/agent_tools.rs
+  - crates/nessa-conversation/tests/conversation/agent_tools.rs
+  - crates/nessa-conversation/src/application/agent_tools.rs
   - docs/design/agent-thread-tools.md
 model:
   spec: tla/services/gateway/AgentThreadTools.tla
@@ -94,4 +94,4 @@ The model omits target scheduling, multi-source capacity, command receipt dedupl
 
 ## Further reading
 
-[agent_tools.rs](../../../../crates/nessa-server/src/conversation/application/service/agent_tools.rs) · [agent_tools.rs](../../../../crates/nessa-server/tests/conversation/agent_tools.rs) · [agent_tools.rs](../../../../crates/nessa-server/src/conversation/application/agent_tools.rs)
+[agent_tools.rs](../../../../crates/nessa-conversation/src/application/service/agent_tools.rs) · [agent_tools.rs](../../../../crates/nessa-conversation/tests/conversation/agent_tools.rs) · [agent_tools.rs](../../../../crates/nessa-conversation/src/application/agent_tools.rs)

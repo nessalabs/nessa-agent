@@ -1,4 +1,4 @@
---- /workspace/nessa-agent-1218/crates/nessa-server/src/conversation/infrastructure/ssh_environment/background_command.rs
+--- /workspace/nessa-agent-1218/crates/nessa-conversation/src/infrastructure/ssh_environment/background_command.rs
 +++ exact-shell-arguments
 @@ -13,7 +13,7 @@
      );

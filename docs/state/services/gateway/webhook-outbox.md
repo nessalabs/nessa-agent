@@ -9,7 +9,7 @@ summary: Private intents, canonical cursors and causal delivery outcomes compose
 sourceRevision: "4b33de21f7fd68df83e308de4134ef1dda82f01f"
 parent: gateway
 sources:
-  - crates/nessa-server/src/conversation/infrastructure/store/share_grants.rs
+  - crates/nessa-conversation/src/infrastructure/store/share_grants.rs
   - crates/nessa-server/tests/webhooks/infrastructure/product_delivery/discovery.rs
   - crates/nessa-webhooks/src/domain/value_objects/registration_lifecycle.rs
   - crates/nessa-webhooks/tests/domain/registration_lifecycle.rs
