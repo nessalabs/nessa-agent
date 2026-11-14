@@ -273,7 +273,16 @@ async fn unstored_discovery_authority_withdraws_live_registration_and_joins_atte
         .unwrap(),
     );
     let own = records.own_spki().unwrap();
-    let expected = record();
+    let installed = Discovery::Installed {
+        generation: [2; 32],
+        mac: [3; 32],
+    };
+    let expected = PeerRecord {
+        discovery_json: discovery_to_json(&installed, None),
+        discovery: installed,
+        ..record()
+    };
+    assert!(expected.credential_current() && expected.discovery().installed_mac().is_some());
     records.write(&expected, &own, false).unwrap();
     let (stop, stopped) = watch::channel(false);
     let (started, start) = oneshot::channel();
