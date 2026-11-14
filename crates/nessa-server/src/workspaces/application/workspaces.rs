@@ -1,6 +1,7 @@
 //! Allocation ordering. External effects and storage are injected; retries use
 //! the saved VM, and observer cancellation does not cancel accepted provisioning.
 use super::RuntimeSettings;
+pub(crate) use crate::conversation::domain::RestCause;
 use crate::conversation::domain::{ChannelId, SettingsScope};
 use crate::workspaces::domain::{
     AdmissionRefusal, AdmissionRejection, Assignment, BoatAccount, BoatConnection, CleanupOutcome,
@@ -10,14 +11,9 @@ use async_trait::async_trait;
 use futures_util::FutureExt;
 use nessa_protocol::conversation::domain::ConversationId;
 use std::panic::{catch_unwind, AssertUnwindSafe};
-use std::{
-    collections::BTreeMap,
-    sync::{Arc, Weak},
-};
-use tokio::{
-    io::{AsyncRead, AsyncWrite},
-    sync::Mutex,
-};
+use std::sync::Arc;
+use tokio::io::{AsyncRead, AsyncWrite};
+use workspace_sdk::{NamedUse, Uses};
 
 pub(crate) struct WorkspaceStream {
     pub(crate) files: Option<Arc<dyn crate::conversation::application::ArtifactChannels>>,
@@ -106,28 +102,27 @@ pub(crate) trait Provider: Send + Sync {
     async fn stop(&self, account: &BoatAccount, vm: &str, cause: RestCause) -> Result<(), Failure>;
 }
 
-/// A thread's workspace in use: held by each runtime [`Workspaces::open`]
-/// hands out and by every stream it serves, so [`Workspaces::rest`] never
-/// stops a VM something still uses.
-type InUse = Arc<()>;
-
 /// What [`Workspaces::open`] hands out: the provider's runtime, holding the
-/// thread's workspace in use for as long as it, or a stream it served, is
-/// kept.
+/// thread's VM in use, as an opening, for as long as it is kept. Each
+/// stream it serves, a connection or a background command, holds a use of
+/// its own until it is dropped. A connection with no lease on it is let go
+/// before a rest (`SshEnvironment::let_go`), which ends its use.
 struct HeldRuntime {
     runtime: Arc<dyn WorkspaceRuntime>,
-    in_use: InUse,
+    opening: NamedUse,
 }
 #[async_trait]
 impl WorkspaceRuntime for HeldRuntime {
     async fn serve(&self, copy: ServedCopy) -> Result<WorkspaceStream, Failure> {
+        let used = self.opening.also("connection");
         let mut stream = self.runtime.serve(copy).await?;
-        stream.owner = Box::new((stream.owner, self.in_use.clone()));
+        stream.owner = Box::new((stream.owner, used));
         Ok(stream)
     }
     async fn background(&self, command: String) -> std::io::Result<WorkspaceStream> {
+        let used = self.opening.also("background command");
         let mut stream = self.runtime.background(command).await?;
-        stream.owner = Box::new((stream.owner, self.in_use.clone()));
+        stream.owner = Box::new((stream.owner, used));
         Ok(stream)
     }
     async fn image_protocol(&self) -> Option<String> {
@@ -186,28 +181,6 @@ pub(crate) trait RecoveryAudit: Send + Sync {
     fn record(&self, event: &RecoveryEvent) -> Result<(), Failure>;
 }
 
-/// Why a thread's VM rests: how its agent's lease ended.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum RestCause {
-    /// The agent sat idle and was parked.
-    Idle,
-    /// The agent closed its thread.
-    Closed,
-    /// A VM this creation made is still wiping what its image carried:
-    /// waking it is the restart that ends the wipe, so it is stopped before
-    /// it is first connected.
-    Wiping,
-}
-impl RestCause {
-    pub(crate) fn as_str(self) -> &'static str {
-        match self {
-            Self::Idle => "idle",
-            Self::Closed => "closed",
-            Self::Wiping => "wiping",
-        }
-    }
-}
-
 /// What [`Workspaces::rest`] did: whether Boat accepted a stop of the VM
 /// (it archives after), and whether a
 /// record of that stop could not be kept. A failed record never holds the
@@ -228,9 +201,9 @@ pub(crate) struct Workspaces {
     provider: Arc<dyn Provider>,
     assignments: Arc<dyn Assignments>,
     recovery: Arc<dyn RecoveryAudit>,
-    locks: Arc<Mutex<BTreeMap<String, Weak<Mutex<()>>>>>,
-    /// Each thread's workspace while something uses it ([`InUse`]).
-    uses: Arc<std::sync::Mutex<BTreeMap<String, Weak<()>>>>,
+    /// Who uses each thread's VM, by name, and the turn that orders
+    /// opening it against resting it.
+    uses: Arc<Uses<String>>,
     image: Option<String>,
 }
 impl Workspaces {
@@ -249,7 +222,6 @@ impl Workspaces {
             provider,
             assignments,
             recovery,
-            locks: Arc::default(),
             uses: Arc::default(),
         }
     }
@@ -354,15 +326,22 @@ impl Workspaces {
     }
     async fn rest_owned(&self, thread: ConversationId, cause: RestCause) -> Rested {
         let id = thread.to_string();
-        let lock = self.thread_lock(&id).await;
-        let _guard = lock.lock().await;
+        let turn = self.uses.turn(&id).await;
+        if turn.in_use() {
+            return Rested {
+                stopped: Ok(false),
+                audit_failed: false,
+            };
+        }
         let (account, vm) = match self.resting(&id).await {
             Ok(Some(found)) => found,
             Ok(None) => {
+                // No VM to stop: nothing to keep for the thread either.
+                turn.rested();
                 return Rested {
                     stopped: Ok(false),
                     audit_failed: false,
-                }
+                };
             }
             Err(error) => {
                 return Rested {
@@ -371,7 +350,11 @@ impl Workspaces {
                 }
             }
         };
-        self.stop_recorded(&account, id, vm, cause).await
+        let rested = self.stop_recorded(&account, id.clone(), vm, cause).await;
+        if matches!(rested.stopped, Ok(true)) {
+            turn.rested();
+        }
+        rested
     }
     /// Stops thread `id`'s `vm` for `cause`, recording the stop before it
     /// is asked and once it answered.
@@ -406,12 +389,8 @@ impl Workspaces {
             audit_failed: requested_failed || observed_failed,
         }
     }
-    /// The account and VM a rest of thread `id` stops, if it has one and
-    /// nothing uses it now.
+    /// The account and VM a rest of thread `id` stops, if it has one.
     async fn resting(&self, id: &str) -> Result<Option<(BoatAccount, String)>, Failure> {
-        if self.in_use(id) {
-            return Ok(None);
-        }
         let Some(Assignment::Assigned {
             thread: assigned,
             vm,
@@ -425,36 +404,9 @@ impl Workspaces {
         }
         Ok(Some((self.settings.read().await?.account, vm)))
     }
-    fn in_use(&self, thread: &str) -> bool {
-        let mut uses = self
-            .uses
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        uses.retain(|_, used| used.strong_count() != 0);
-        uses.contains_key(thread)
-    }
-    /// `thread`'s workspace held in use, from now until the token goes.
-    fn hold(&self, thread: &str) -> InUse {
-        let mut uses = self
-            .uses
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if let Some(held) = uses.get(thread).and_then(Weak::upgrade) {
-            return held;
-        }
-        let held = Arc::new(());
-        uses.insert(thread.to_owned(), Arc::downgrade(&held));
-        held
-    }
-    async fn thread_lock(&self, id: &str) -> Arc<Mutex<()>> {
-        let mut locks = self.locks.lock().await;
-        locks.retain(|_, lock| lock.strong_count() != 0);
-        let lock = locks
-            .get(id)
-            .and_then(Weak::upgrade)
-            .unwrap_or_else(|| Arc::new(Mutex::new(())));
-        locks.insert(id.to_owned(), Arc::downgrade(&lock));
-        lock
+    /// The names of what uses `thread`'s VM now.
+    pub(crate) fn uses(&self, thread: &str) -> Vec<String> {
+        self.uses.names(&thread.to_owned())
     }
     async fn allocate(
         &self,
@@ -463,13 +415,12 @@ impl Workspaces {
         channel: Option<ChannelId>,
     ) -> Result<Arc<dyn WorkspaceRuntime>, Failure> {
         let id = thread.to_string();
-        let lock = self.thread_lock(&id).await;
-        let _guard = lock.lock().await;
-        // Held from before the VM is reached until the runtime, and every
-        // stream it serves, is gone: a rest waiting on the lock sees it.
-        let in_use = self.hold(&id);
+        let turn = self.uses.turn(&id).await;
+        // Held from before the VM is reached until the runtime is gone: a
+        // rest waiting for the turn sees it.
+        let opening = turn.hold("opening");
         let runtime = self.allocate_held(&id, channel, provision).await?;
-        Ok(Arc::new(HeldRuntime { runtime, in_use }))
+        Ok(Arc::new(HeldRuntime { runtime, opening }))
     }
     async fn allocate_held(
         &self,
