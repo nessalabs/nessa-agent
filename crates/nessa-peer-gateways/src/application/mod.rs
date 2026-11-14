@@ -16,6 +16,14 @@
 //! poller waits for it to be kept only after it gives the turn back. A
 //! record that cannot be kept is logged and the change stands: cleanup is
 //! never held back for its evidence.
+mod discovery;
+pub use discovery::{
+    announcement_bytes, announcement_txt, connection_allowed, decode_announcement,
+    discovery_from_json, discovery_to_json, exchange, instance_label, mac_key, match_announcement,
+    payload_from_txt, public_half, Announcement, Audit, Commit, Discovery, DiscoveryPipe,
+    DiscoveryRefusal, ExchangeError, GrantorDiscovery, Inbound, Outbound, Phase, PinnedMac, Role,
+    Session, TokenPeer, DISCOVERY_WINDOW,
+};
 use nessa_auth::domain::{pairing::DeviceKey, PrincipalId};
 use nessa_protocol::relay::{GatewayKey, RelayAddress};
 use std::{

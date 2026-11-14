@@ -4052,3 +4052,39 @@ fn ordinary_pairing_expiry_and_cancellation_serialize_with_a_held_noop_writer() 
     );
     eprintln!("holder=expiry-clock exited=true serialized-expiry=ok serialized-cancel=terminal");
 }
+
+#[test]
+fn discovery_on_an_active_peer_does_not_change_phase_or_enroll() {
+    let fixture = peer_claim();
+    let key = fixture.channel.device_proof().key();
+    let before = fixture.store.peer_discoveries(110).unwrap();
+    assert_eq!(before.len(), 1);
+    assert!(!before[0].phase_active);
+    assert!(fixture
+        .store
+        .write_peer_discovery(&key, Some("{\"field\":\"keyed\"}"))
+        .is_err());
+    let active = publish(&fixture);
+    assert_eq!(active.phase(), PairingPhase::Active);
+    assert_eq!(
+        active.claim_binding().map(|(_, claimed)| claimed),
+        Some(key)
+    );
+    let json = r#"{"field":"installed","generation":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=","mac":"AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA="}"#;
+    fixture
+        .store
+        .write_peer_discovery(&key, Some(json))
+        .unwrap();
+    let listed = fixture.store.peer_discoveries(110).unwrap();
+    assert_eq!(listed.len(), 1, "discovery does not add an enrollment");
+    assert!(listed[0].phase_active);
+    assert!(listed[0].credential_current);
+    assert_eq!(listed[0].discovery_json.as_deref(), Some(json));
+    let expired = fixture.store.peer_discoveries(0).unwrap();
+    assert!(expired[0].phase_active, "expiry does not revoke the phase");
+    assert!(!expired[0].credential_current);
+    assert_eq!(
+        fixture.store.peer_discoveries(110).unwrap()[0].phase_active,
+        true
+    );
+}

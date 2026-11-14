@@ -53,7 +53,8 @@ use nessa_auth::{
 use nessa_client_core::pairing::{NativeClientError, NativeEnrollmentClient};
 use nessa_client_core::retained::{ReadStop, HANDSHAKE};
 use nessa_protocol::clock::Clock as MonotonicClock;
-use nessa_protocol::pairing::socket::WAKE_TICK;
+use nessa_protocol::pairing::socket::{DeadlineStream, WAKE_TICK};
+use nessa_protocol::pairing::EnrollmentChannel;
 use nessa_protocol::product::generated::PeerErrorCode;
 use nessa_protocol::relay::{RelayAddress, DIRECT_HEAD_START};
 use nessa_timer::clock;
@@ -686,6 +687,40 @@ impl PeerCommands {
             let refused = refused.into_inner().unwrap_or_else(PoisonError::into_inner);
             Err(refused.unwrap_or_else(|| io::ErrorKind::TimedOut.into()))
         })
+    }
+
+    /// Run discovery on the pinned session of an already paired peer. This
+    /// does not enroll: the only request is `openDiscovery`.
+    pub async fn open_peer_discovery<T: Send + 'static>(
+        &self,
+        key: DeviceKey,
+        exchange: impl FnOnce(&mut EnrollmentChannel<DeadlineStream>) -> Result<T, NativeClientError>
+            + Send
+            + 'static,
+    ) -> Result<T, PeerError> {
+        let found = self
+            .blocking(move |records| records.get(&key))
+            .await?
+            .ok_or(PeerError::Unavailable)?;
+        let PeerEntry::Readable(record) = found else {
+            return Err(PeerError::Unavailable);
+        };
+        if !matches!(record.phase(), PeerPhase::Active { .. }) {
+            return Err(PeerError::Unavailable);
+        }
+        let stream = self
+            .dial_peer(&record)
+            .await
+            .map_err(|_| PeerError::Unreachable)?;
+        let client = NativeEnrollmentClient::enrolling(
+            ConsentClass::PeerRead,
+            Arc::new(self.records.slot(key)),
+            self.clock.clone(),
+        );
+        client
+            .open_discovery(stream, exchange)
+            .await
+            .map_err(|_| PeerError::Unavailable)
     }
     /// Ends once the injected clock has moved `limit` past now, read every
     /// [`WAKE_TICK`] as [`Self::within`] reads it.

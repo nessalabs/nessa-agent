@@ -74,6 +74,7 @@ mod native_linking;
 mod native_pairing;
 #[cfg(unix)]
 mod opencode_profile;
+mod peer_discovery;
 mod relay_command;
 #[cfg(unix)]
 mod tunnel;

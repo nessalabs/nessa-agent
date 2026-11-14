@@ -17,6 +17,7 @@ use crate::mcp_servers::infrastructure::{MAX_BUILT_IN_CALLS, MAX_BUILT_IN_LINE_B
 use crate::product::passive_read::deadlines::RECORD_SEND_TIMEOUT;
 use crate::product::{OperationalLimits, SessionSettings, RECORD_LANE, RECORD_SLOT, REFUSAL_LANE};
 use nessa_attachments::application::{AttachmentLimits, HeldReads};
+use nessa_peer_gateways::application::DISCOVERY_WINDOW;
 use nessa_peer_gateways::infrastructure::{
     AUDIT_QUEUE, POLL_BACKOFF_CAP, POLL_INTERVAL, PREEMPT, READS_AT_ONCE, READ_BUDGET,
     WITHDRAWN_PER_READ,
@@ -483,6 +484,12 @@ fn catalogue() -> &'static [Limit] {
             meaning: "the most conversations one read of a peer gateway withdraws, sixteen records of 64; a read that reaches it ends incomplete and the next cycle, soon, withdraws the rest",
         },
         Limit {
+            id: "peer.discovery_window",
+            tier: "fixed",
+            owner: "DISCOVERY_WINDOW in crates/nessa-peer-gateways/src/application/discovery.rs",
+            meaning: "how long one LAN announcement token is the token for its window; a paired peer also accepts the window on either side. The window index is Unix milliseconds divided by this, with integer division",
+        },
+        Limit {
             id: "command.default_timeout_ms",
             tier: "fixed",
             owner: "CommandWork::DEFAULT_TIMEOUT_MS",
@@ -750,6 +757,7 @@ pub(crate) fn effective_json(
     put("peer.preempt", millis(PREEMPT));
     put("peer.audit_queue", count(AUDIT_QUEUE));
     put("peer.withdrawn_per_read", count(WITHDRAWN_PER_READ));
+    put("peer.discovery_window", millis(DISCOVERY_WINDOW));
     put(
         "command.default_timeout_ms",
         CommandWork::DEFAULT_TIMEOUT_MS,

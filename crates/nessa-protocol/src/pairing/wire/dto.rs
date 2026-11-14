@@ -139,6 +139,9 @@ pub(super) enum WireRequest<'a> {
     },
     OpenProduct {},
     OpenEnvironment {},
+    /// Select discovery on this connection. It carries no credential and
+    /// grants nothing; pairing still requires the one-use code.
+    OpenDiscovery {},
 }
 #[derive(Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]

@@ -13,6 +13,7 @@ use nessa_auth::{
     application::pairing::{DeviceConnectionProof, PairingStoreError, PairingWorkerFault},
     domain::pairing::{AttemptFailure, PublicIntent},
 };
+use nessa_peer_gateways::application::{DiscoveryPipe, GrantorDiscovery};
 use nessa_protocol::clock::Clock;
 use nessa_protocol::pairing::socket::{
     begin_enrollment_phase, check_deadline, worker_fault, DeadlineError, DeadlineStream,
@@ -149,6 +150,9 @@ pub struct NativeEnrollmentConnections {
     peers: Option<Arc<dyn EnvironmentPeers>>,
     relay: Pool,
     tunnel: Pool,
+    /// Discovery on `openDiscovery`. Without it the envelope is refused and
+    /// nothing is enrolled.
+    discovery: Option<Arc<dyn GrantorDiscovery>>,
 }
 
 /// Where an admitted connection came from, and the permit it holds when that
@@ -210,7 +214,14 @@ impl NativeEnrollmentConnections {
             peers: None,
             relay: Pool::new(RELAY_CAPACITY),
             tunnel: Pool::new(TUNNEL_CAPACITY),
+            discovery: None,
         }
+    }
+    /// Serve `openDiscovery` with `discovery`. Without it the envelope is
+    /// refused. Discovery does not enroll and does not take a session permit.
+    pub fn with_discovery(mut self, discovery: Arc<dyn GrantorDiscovery>) -> Self {
+        self.discovery = Some(discovery);
+        self
     }
     /// Serve a connection whose first envelope is `openProduct` with
     /// `sessions`, on a product session permit (design rows PR1, PR10, PR13).
@@ -350,6 +361,7 @@ impl NativeEnrollmentConnections {
                 peers: peers.clone(),
                 pool: admission(&self.environment),
             }),
+            discovery: self.discovery.clone(),
         };
         let worker = tokio::task::spawn_blocking(move || {
             let _permit = permit;
@@ -549,6 +561,7 @@ impl std::fmt::Debug for TunnelPermit {
 struct Admissions {
     product: Option<ProductAdmission>,
     environment: Option<EnvironmentAdmission>,
+    discovery: Option<Arc<dyn GrantorDiscovery>>,
 }
 impl Admissions {
     /// The tunnel's edge: whether the key a connection proved holds an
@@ -789,6 +802,24 @@ fn exchange<R: RngCore + CryptoRng>(
                 .admit(NativeConnectionFailure::ProductCapacity)
                 .map(Exchanged::ProductSelected);
         }
+        NativePairingRequest::OpenDiscovery => {
+            let Some(discovery) = admissions.discovery.as_ref() else {
+                write_reply(channel, wire::encode_refused())?;
+                return Ok(Exchanged::Finished);
+            };
+            let peer = channel.transport().device_proof().key();
+            let served = {
+                let mut pipe = ChannelPipe { channel };
+                discovery.serve(peer, &mut pipe)
+            };
+            return match served {
+                Ok(()) => Ok(Exchanged::Finished),
+                Err(_) => {
+                    write_reply(channel, wire::encode_refused())?;
+                    Ok(Exchanged::Finished)
+                }
+            };
+        }
         NativePairingRequest::OpenEnvironment => {
             let environment = admissions
                 .environment
@@ -906,6 +937,31 @@ fn admit_confirmation(
         _ => Err(NativeConnectionFailure::Phase.into()),
     }
 }
+struct ChannelPipe<'a, S: Read + Write> {
+    channel: &'a mut EnrollmentChannel<S>,
+}
+
+impl<S: Read + Write> DiscoveryPipe for ChannelPipe<'_, S> {
+    fn send_frame(&mut self, bytes: &[u8]) -> std::io::Result<()> {
+        self.channel
+            .send_envelope(bytes)
+            .map_err(discovery_frame_error)
+    }
+    fn recv_frame(&mut self) -> std::io::Result<Vec<u8>> {
+        self.channel
+            .receive_envelope()
+            .map_err(discovery_frame_error)
+    }
+}
+
+fn discovery_frame_error(error: NativeFrameError) -> std::io::Error {
+    let kind = match error {
+        NativeFrameError::Io(kind) => kind,
+        NativeFrameError::Wire(_) => std::io::ErrorKind::InvalidData,
+    };
+    std::io::Error::new(kind, "discovery frame")
+}
+
 fn read_request<S: Read + Write>(
     channel: &mut EnrollmentChannel<S>,
 ) -> Result<NativePairingRequest, NativeConnectionError> {

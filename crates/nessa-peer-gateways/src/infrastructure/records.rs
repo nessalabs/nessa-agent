@@ -13,6 +13,7 @@
 //! Arrows are reads and writes. A record is the peer's own: one that cannot be
 //! read fails that peer's operations and nothing else
 //! (docs/adr/todo/202-versioned-local-datasets.md, record scope).
+use crate::application::{discovery_from_json, discovery_to_json, Audit, Discovery};
 use base64::{engine::general_purpose::STANDARD, Engine};
 use nessa_auth::{
     adapters::pairing::NativeIdentity,
@@ -84,6 +85,15 @@ pub struct PeerRecord {
     relay: Option<RelayAddress>,
     intent: PublicIntent,
     phase: PeerPhase,
+    /// `None` until this enrollment agrees a discovery key. A record written
+    /// before that field existed stays `None`; startup does not invent one.
+    discovery: Discovery,
+    /// The JSON of `discovery` and the audit of the write that stored it.
+    /// Absent while discovery is `None`.
+    discovery_json: Option<String>,
+    /// False once this gateway has seen the peer credential expire or be
+    /// revoked. That observation does not change `phase`.
+    credential_current: bool,
 }
 impl PeerRecord {
     /// The peer's key: what identifies it, whatever its address.
@@ -105,6 +115,15 @@ impl PeerRecord {
     /// Where the enrollment stands.
     pub fn phase(&self) -> &PeerPhase {
         &self.phase
+    }
+    /// The discovery field. `None` is a paired peer this build has no key for.
+    pub fn discovery(&self) -> &Discovery {
+        &self.discovery
+    }
+    /// Whether the peer credential is still current. Expiry does not revoke
+    /// the phase.
+    pub fn credential_current(&self) -> bool {
+        self.credential_current
     }
 }
 
@@ -353,6 +372,55 @@ impl PeerRecords {
             self.write(&left, &own, true).map(|()| left)
         };
         Ok(Some((found, written)))
+    }
+
+    /// Store the discovery field and, when `commit` says the write is durable,
+    /// its audit, in the same record write. The phase is not changed. `Ok(None)`
+    /// when this peer has no record. An unreadable record is `Corrupt`.
+    pub fn write_discovery(
+        &self,
+        key: &DeviceKey,
+        discovery: Discovery,
+        audit: Option<&Audit>,
+    ) -> Result<Option<PeerRecord>, PrivateStateError> {
+        let _guard = self.lock();
+        let own = self.own_spki()?;
+        let Some(found) = self.read(key, &own)? else {
+            return Ok(None);
+        };
+        if !matches!(found.phase, PeerPhase::Active { .. }) {
+            return Err(PrivateStateError::Conflict);
+        }
+        let left = PeerRecord {
+            discovery_json: discovery_to_json(&discovery, audit),
+            discovery,
+            ..found.clone()
+        };
+        self.write(&left, &own, true)?;
+        Ok(Some(left))
+    }
+
+    /// Record that the peer credential is or is not current. The phase stays
+    /// what it was, including `Active` when the credential has expired.
+    pub fn set_credential_current(
+        &self,
+        key: &DeviceKey,
+        current: bool,
+    ) -> Result<Option<PeerRecord>, PrivateStateError> {
+        let _guard = self.lock();
+        let own = self.own_spki()?;
+        let Some(found) = self.read(key, &own)? else {
+            return Ok(None);
+        };
+        if found.credential_current == current {
+            return Ok(Some(found));
+        }
+        let left = PeerRecord {
+            credential_current: current,
+            ..found.clone()
+        };
+        self.write(&left, &own, true)?;
+        Ok(Some(left))
     }
 
     /// Where the retained cache of what `key` granted this gateway lives:
@@ -732,6 +800,9 @@ impl ClientPendingStore for PeerSlot {
             relay,
             intent,
             phase: PeerPhase::Pending,
+            discovery: Discovery::None,
+            discovery_json: None,
+            credential_current: true,
         };
         if existing.as_ref() != Some(&record) {
             if let Err(error) = self.records.write(&record, &own, replace) {
@@ -845,6 +916,20 @@ struct Stored {
     credential: Option<StoredCredential>,
     /// The peer ended the enrollment; never with a credential.
     revoked: bool,
+    /// Absent means no discovery key. Startup does not fill one in.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    discovery: Option<String>,
+    /// Absent means the credential is still current.
+    #[serde(default = "credential_is_current", skip_serializing_if = "is_current")]
+    credential_current: bool,
+}
+
+fn credential_is_current() -> bool {
+    true
+}
+
+fn is_current(current: &bool) -> bool {
+    *current
 }
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -868,6 +953,8 @@ fn encode(record: &PeerRecord, own: &[u8; 44]) -> Result<Vec<u8>, PrivateStateEr
         expiry_ms: intent.expiry_ms(),
         same_person: intent.same_person(),
         revoked: record.phase == PeerPhase::Revoked,
+        discovery: record.discovery_json.clone(),
+        credential_current: record.credential_current,
         credential: match &record.phase {
             PeerPhase::Pending | PeerPhase::Revoked => None,
             PeerPhase::Active {
@@ -911,6 +998,10 @@ fn decode(bytes: &[u8], key: &DeviceKey, own: &[u8; 44]) -> Result<PeerRecord, P
     )
     .and_then(|intent| intent.with_same_person(stored.same_person))
     .map_err(|_| PrivateStateError::Corrupt)?;
+    let discovery = match stored.discovery.as_deref() {
+        None => Discovery::None,
+        Some(json) => discovery_from_json(json).ok_or(PrivateStateError::Corrupt)?,
+    };
     let phase = match (stored.revoked, stored.credential) {
         (true, None) => PeerPhase::Revoked,
         (true, Some(_)) => return Err(PrivateStateError::Corrupt),
@@ -932,6 +1023,9 @@ fn decode(bytes: &[u8], key: &DeviceKey, own: &[u8; 44]) -> Result<PeerRecord, P
         relay: stored.relay,
         intent,
         phase,
+        discovery_json: stored.discovery,
+        discovery,
+        credential_current: stored.credential_current,
     })
 }
 

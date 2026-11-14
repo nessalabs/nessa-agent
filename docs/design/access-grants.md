@@ -770,6 +770,7 @@ a POST.
 
 ## LAN announcement
 
+Implemented as [local discovery](auth/peer-gateways.md#local-discovery).
 Pairing phases and discovery install are the peer table in
 [Lifecycles](#lifecycles). This section does not add a pairing phase.
 
