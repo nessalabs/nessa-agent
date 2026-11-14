@@ -1100,7 +1100,9 @@ html:not(.dark) [data-surface] {
 .desktop-composer {
   container-type: inline-size;
   border-radius: 24px;
-  padding: 18px 14px 12px 22px;
+  /* Logical sides, so a notice's mark hangs in the start padding either way. */
+  padding-block: 18px 12px;
+  padding-inline: 22px 14px;
   /* Lit from above: a faint glow across the top, the way light sits on glass. */
   background:
     radial-gradient(
@@ -1322,10 +1324,40 @@ html:not(.dark) [data-surface] {
   outline-offset: 2px;
 }
 
-/* A refused access change, said on its own line above the controls. */
+/*
+ * What the composer says of the draft, its model or its access, on a quiet
+ * line of its own above the controls. Its words start where the draft's text
+ * starts; a warning's mark hangs in the padding to their left, and a neutral
+ * notice draws no mark at all, so the line reads as a hint, not a list item.
+ */
 .desktop-composer-notice {
   display: flex;
-  margin-top: 8px;
+  margin-top: 6px;
+  font-size: var(--desktop-text-footnote);
+  line-height: 1.5;
+  color: var(--muted-foreground);
+  animation: desktop-composer-notice-in var(--desktop-fast) ease-out;
+}
+
+.desktop-composer-notice[data-tone="warning"] {
+  color: var(--foreground);
+}
+
+.desktop-composer-notice [data-slot="status-label-mark"] {
+  /* The mark is 12px and sits 6px before the words. */
+  margin-inline-start: -18px;
+}
+
+@keyframes desktop-composer-notice-in {
+  from {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .desktop-composer-notice {
+    animation: none;
+  }
 }
 
 .desktop-composer-row {

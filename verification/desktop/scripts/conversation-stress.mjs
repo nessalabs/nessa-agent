@@ -3785,6 +3785,44 @@ const steps = {
       const { turn } = await untilTurn(run, run.main.id, { text }, () => true, 5)
       if (!held && turn && !ended(turn))
         failures.push("the composer did not say the change waits for the turn")
+      // Said as a quiet hint: no mark before it, its words starting where the
+      // draft's text starts, smaller than the draft (it read as a list item
+      // with a dash, out of line with the field above it).
+      if (held) {
+        const hint = await dock(run.page)
+          .locator(composerControls.notice)
+          .filter({ hasText: "Access changes when the agent stops" })
+          .evaluate((notice) => {
+            const field = notice
+              .closest(".desktop-composer")
+              ?.querySelector("textarea")
+            const word = notice.querySelector('[data-slot="status-label-word"]')
+            if (!field || !word) return null
+            const style = getComputedStyle(field)
+            return {
+              marks: notice.querySelectorAll('[data-slot="status-label-mark"]').length,
+              off: Math.round(
+                word.getBoundingClientRect().left -
+                  (field.getBoundingClientRect().left + parseFloat(style.paddingLeft)),
+              ),
+              smaller:
+                parseFloat(getComputedStyle(word).fontSize) < parseFloat(style.fontSize),
+            }
+          }, null, { timeout: 1_000 })
+          .catch(() => null)
+        // A notice gone by now went with the turn; there is nothing to measure.
+        if (hint && (hint.marks !== 0 || Math.abs(hint.off) > 1 || !hint.smaller))
+          failures.push(
+            `the held access change is not a quiet hint in line with the draft: ${JSON.stringify(hint)}`,
+          )
+        if (hint && run.evidence && !run.accessHintShot) {
+          run.accessHintShot = true
+          await dock(run.page)
+            .locator(".desktop-composer")
+            .screenshot({ path: join(run.evidence, `access-hint-${run.engine}.png`) })
+            .catch(() => {})
+        }
+      }
       await settled(run, run.main.id, seen, text, "completed", failures)
     } else {
       await pickAccess(run.page, step.to)
@@ -8821,6 +8859,64 @@ const steps = {
         )
       if (!table.within) failures.push(`table ${index + 1} is wider than the reply`)
     }
+    // The table reads as part of the reply, not as small print in a grid:
+    // its cells a step below the reply's own text (never under 85% of it),
+    // column names smaller still and set in capitals, the first column a step
+    // stronger, hairlines between columns fainter than the rules between
+    // rows, and the panel close under the block before it (the copy strip
+    // takes the place of that block's margin, not a second gap on top).
+    const look = await message.evaluate((element) => {
+      const alpha = (color) => {
+        const slash = color.match(/\/\s*([\d.]+)(%?)\s*\)/)
+        if (slash) return Number(slash[1]) / (slash[2] ? 100 : 1)
+        const rgba = color.match(/rgba\([^)]*,\s*([\d.]+)\s*\)/)
+        return rgba ? Number(rgba[1]) : 1
+      }
+      const prose = element.querySelector('[data-slot="message-markdown"] > p')
+      const table = element.querySelector('[data-slot="markdown-table"]')
+      const before = table.previousElementSibling
+      const cells = table.querySelectorAll("tbody td")
+      const first = getComputedStyle(cells[0])
+      const second = getComputedStyle(cells[1])
+      const head = getComputedStyle(table.querySelector("th"))
+      return {
+        prose: prose ? parseFloat(getComputedStyle(prose).fontSize) : null,
+        cell: parseFloat(second.fontSize),
+        head: parseFloat(head.fontSize),
+        caps: head.textTransform,
+        firstWeight: Number(first.fontWeight),
+        cellWeight: Number(second.fontWeight),
+        columnRule: alpha(second.borderInlineStartColor),
+        rowRule: alpha(getComputedStyle(cells[0].parentElement).borderBottomColor),
+        gap: before
+          ? Math.round(
+              table.querySelector('[data-slot="table-shell"]').getBoundingClientRect()
+                .top - before.getBoundingClientRect().bottom,
+            )
+          : null,
+      }
+    })
+    if (look.prose === null) failures.push("the table answer has no paragraph to size cells against")
+    else if (look.cell < look.prose * 0.85)
+      failures.push(
+        `table cells are ${look.cell}px beside ${look.prose}px prose: small print, not a step below`,
+      )
+    if (!(look.head < look.cell) || look.caps !== "uppercase")
+      failures.push(
+        `column names are ${look.head}px ${look.caps}, not smaller capitals above ${look.cell}px cells`,
+      )
+    if (!(look.firstWeight > look.cellWeight))
+      failures.push(
+        `the first column (${look.firstWeight}) is not a step stronger than the rest (${look.cellWeight})`,
+      )
+    if (!(look.columnRule < look.rowRule))
+      failures.push(
+        `column hairlines (${look.columnRule}) are not fainter than row rules (${look.rowRule})`,
+      )
+    // It used to sit 44px under a paragraph; now the strip and what is left
+    // of the paragraph's margin make 36px.
+    if (look.gap === null || look.gap > 40)
+      failures.push(`the table sits ${look.gap}px under the block before it, past 40px`)
     const [narrow, wide] = measured
     if (narrow.hidden > 1 || narrow.fadedRight)
       failures.push(`the narrow table scrolls (${narrow.hidden} px hidden)`)
@@ -8867,8 +8963,13 @@ const steps = {
     // Scrolled up, the way back to the latest sits on the composer's top
     // edge, half over it, rather than on a line of the reply (UI audit #28).
     const transcript = run.page.locator(css.focusedPane).locator(".workspace-transcript")
+    // The way back shows once the reader is more than half a screen from the
+    // end (`awayScreens` in transcript.tsx), so only a transcript that can
+    // scroll that far owes it.
     if (
-      await transcript.evaluate((each) => each.scrollHeight > each.clientHeight + 200)
+      await transcript.evaluate(
+        (each) => each.scrollHeight - each.clientHeight > each.clientHeight * 0.5 + 40,
+      )
     ) {
       const box = await transcript.boundingBox()
       await run.page.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
