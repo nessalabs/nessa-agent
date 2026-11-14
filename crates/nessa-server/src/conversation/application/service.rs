@@ -926,7 +926,8 @@ struct Inner {
     summaries: Arc<dyn ConversationSummaries>,
     listing: Arc<dyn ConversationListing>,
     /// What this run keeps about each conversation apart from its live
-    /// agent: its gates (summary writes, deletions, mode changes, creations)
+    /// agent: its gates (summary writes, deletions, mode changes, creation
+    /// commands, creation decisions)
     /// and what it is still owed, in one record behind one lock.
     records: records::ConversationRecords,
     /// Who is asked to delete an agent's own record of a provider session.

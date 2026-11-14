@@ -73,7 +73,7 @@ impl Gate {
 pub(super) struct ConversationRecord {
     /// Each gate exists while somebody holds it or waits for it. Once nobody
     /// does, its record is forgotten by the next sweep when nothing else is
-    /// kept in it (`records_nobody_holds_or_is_owed_are_swept`).
+    /// kept in it (`records_nobody_holds_are_swept`).
     gates: [Weak<Mutex<()>>; GATES],
     /// An applied model change whose continuation plan has not committed.
     /// [`super::ConversationService::commit_applied_model_plan`] is the only
@@ -137,11 +137,15 @@ impl Default for ConversationRecords {
 impl Table {
     /// `id`'s record, made when it has none.
     fn record(&mut self, id: &ConversationId) -> &mut ConversationRecord {
-        if !self.records.contains_key(id) && self.records.len() >= self.sweep_at {
-            self.records.retain(|_, record| !record.is_empty());
-            self.sweep_at = FIRST_SWEEP.max(self.records.len().saturating_mul(2));
+        if !self.records.contains_key(id) {
+            if self.records.len() >= self.sweep_at {
+                self.records.retain(|_, record| !record.is_empty());
+                self.sweep_at = FIRST_SWEEP.max(self.records.len().saturating_mul(2));
+            }
+            self.records
+                .insert(id.clone(), ConversationRecord::default());
         }
-        self.records.entry(id.clone()).or_default()
+        self.records.get_mut(id).expect("the record was made above")
     }
 
     /// After a change to `id`'s record: note whether it holds an unfinished
@@ -163,8 +167,10 @@ impl Table {
 
 impl ConversationRecords {
     fn table(&self) -> MutexGuard<'_, Table> {
-        // Nothing is awaited while this is held, so a poisoned table is one
-        // whose last change finished: taking it back is safe.
+        // Nothing is awaited while this is held. A change that panicked can
+        // leave at most an empty record or an index entry for a mark that is
+        // gone; the sweep removes the one and `each_unfinished` skips the
+        // other, so taking a poisoned table back is safe.
         self.table.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
@@ -371,7 +377,31 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn records_nobody_holds_or_is_owed_are_swept() {
+    async fn a_sweep_keeps_records_that_are_held_or_owed() {
+        let records = ConversationRecords::default();
+        let (held_id, marked, owed) = (id(5), id(6), id(7));
+        let held = records.mode_changes().lock(&held_id).await;
+        // A change to a held record settles it, and must not forget it.
+        records.with(&held_id, |_| ());
+        records.with(&marked, |record| record.unfinished = Some(Retry::default()));
+        records.with(&owed, |record| record.model_reconcile_owed = true);
+        for n in 1000..(1000 + FIRST_SWEEP as u32 * 4) {
+            drop(records.creation().lock(&id(n)).await);
+        }
+        assert!(records.mode_changes().try_lock(&held_id).is_none());
+        assert_eq!(records.mode_changes().holders_and_waiters(&held_id), 1);
+        assert!(records.read(&marked, |record| record
+            .is_some_and(|r| r.unfinished.is_some())));
+        assert!(records.read(&owed, |record| record
+            .is_some_and(|r| r.model_reconcile_owed)));
+        let mut walked = Vec::new();
+        records.each_unfinished(|id, _| walked.push(id.clone()));
+        assert_eq!(walked, vec![marked]);
+        drop(held);
+    }
+
+    #[tokio::test]
+    async fn records_nobody_holds_are_swept() {
         let records = ConversationRecords::default();
         for n in 0..(FIRST_SWEEP as u32 * 4) {
             drop(records.creation().lock(&id(n)).await);

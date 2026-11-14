@@ -7805,7 +7805,6 @@ const steps = {
         `every raced fork was refused: ${raced.map((each) => each.reason?.message).join("; ")}`,
       )
     const madeIds = raced
-      .slice(0, 2)
       .filter((each) => each.status === "fulfilled")
       .map((each) => each.value.conversationId)
     if (madeIds.some((made) => made !== racedId))

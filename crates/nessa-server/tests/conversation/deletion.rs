@@ -3922,6 +3922,10 @@ async fn a_conversation_lock_nobody_holds_is_let_go() {
     drop(held);
     drop(waiting.await);
     assert_eq!(records.in_use(), 0);
+    // A change that finds nothing held or owed forgets the record.
+    records.with(&one, |_| ());
+    records.with(&two, |_| ());
+    assert_eq!(records.kept(), 0);
 }
 
 /// Stands in for Claude's store: the first delete of a session removes it and
