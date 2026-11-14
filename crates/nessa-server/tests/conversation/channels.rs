@@ -24,9 +24,41 @@ use nessa_protocol::conversation::domain::{ConversationApprovalMode, Conversatio
 use nessa_sdk::application::agent_execution::providers::ApprovalMode;
 use nessa_sdk::infrastructure::session_storage::{RecordStorage, RuntimeMessageCommitClock};
 use std::collections::HashSet;
+use std::fmt::Debug;
+use std::sync::atomic::Ordering;
 use std::sync::Mutex;
 
 const CODEX_MODEL: &str = "gpt-5.6-terra";
+
+fn shutdown_failed(error: impl Debug, open_calls: usize, close_calls: usize) -> ! {
+    panic!(
+        "channel shutdown failed: {error:?}; independent post-return factory entry counts: open_calls={open_calls}, close_calls={close_calls}"
+    );
+}
+
+#[cfg(test)]
+mod shutdown_failure_context {
+    use super::shutdown_failed;
+    use std::panic::catch_unwind;
+
+    #[test]
+    fn original_error_and_independent_counts_remain_a_failure() {
+        for (open_calls, close_calls) in [(0, 0), (3, 7), (7, 3)] {
+            let failure = catch_unwind(|| {
+                shutdown_failed("original shutdown error", open_calls, close_calls)
+            })
+            .unwrap_err();
+            let failure = failure.downcast::<String>().expect("textual failure");
+            assert!(failure.contains("\"original shutdown error\""), "{failure}");
+            assert!(
+                failure.contains(&format!(
+                    "open_calls={open_calls}, close_calls={close_calls}"
+                )),
+                "{failure}"
+            );
+        }
+    }
+}
 
 /// What each resolution asked for, and where.
 type Asked = (AgentId, String, ConversationApprovalMode, Option<PathBuf>);
@@ -1367,5 +1399,12 @@ async fn a_channel_names_a_computer_the_gateway_serves_and_its_new_chats_run_the
             .unwrap(),
         devbox
     );
-    fixture.service.shutdown().await.unwrap();
+    fixture.service.shutdown().await.unwrap_or_else(|error| {
+        // Separate samples after Err: entries do not acknowledge cleanup.
+        shutdown_failed(
+            error,
+            fixture.source.factory.open_calls.load(Ordering::SeqCst),
+            fixture.source.factory.close_calls.load(Ordering::SeqCst),
+        )
+    });
 }
