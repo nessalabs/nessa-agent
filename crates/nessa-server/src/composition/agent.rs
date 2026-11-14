@@ -131,11 +131,7 @@ pub(super) struct AgentsConfig {
     pub review_deadlines: PermissionDeadlinePolicy,
 }
 
-/// How long a review other than a confined read waits for a person before
-/// the deadline denies it, unless `agents.reviewWaitSeconds` says otherwise.
-/// Long enough to take the phone out and answer there; the SDK's own thirty
-/// seconds is for a person at the desk.
-pub(crate) const REVIEW_WAIT: Duration = Duration::from_secs(5 * 60);
+pub(crate) use crate::limits::REVIEW_WAIT;
 
 pub(super) fn review_deadlines() -> PermissionDeadlinePolicy {
     PermissionDeadlinePolicy::standard_waiting(REVIEW_WAIT).expect("the default review wait")

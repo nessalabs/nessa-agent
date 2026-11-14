@@ -24,12 +24,12 @@ sources:
   - src/desktop/devices/ui/pool-order.tsx
   - src/desktop/devices/model/pool.ts
   - src/desktop/devices/ui/devices-view.test.tsx
-  - crates/nessa-server/src/conversation/application/placement.rs
-  - crates/nessa-server/src/conversation/application/service/pool_preferences.rs
-  - crates/nessa-server/src/conversation/infrastructure/pool_settings.rs
-  - crates/nessa-server/src/conversation/application/service/owned_threads.rs
-  - crates/nessa-server/tests/conversation/pool.rs
-  - crates/nessa-server/tests/conversation/pool_config.rs
+  - crates/nessa-conversation/src/application/placement.rs
+  - crates/nessa-conversation/src/application/service/pool_preferences.rs
+  - crates/nessa-server/src/composition/pool_settings.rs
+  - crates/nessa-conversation/src/application/service/owned_threads.rs
+  - crates/nessa-conversation/tests/conversation/pool.rs
+  - crates/nessa-conversation/tests/conversation/pool_config.rs
 ---
 
 # Choose where new threads run
@@ -73,7 +73,7 @@ The settings adapter records the requested scope, previous/requested values and 
 
 ## Implementation evidence
 
-[Pool regressions](../../../../../crates/nessa-server/tests/conversation/pool.rs) cover configured rank, busy fallback, exclusion of a previously bound worker and new-conversation cloud overflow. [Preference persistence](../../../../../crates/nessa-server/tests/conversation/pool_config.rs) covers config ownership. [Desktop ordering](../../../../../src/desktop/devices/ui/devices-view.test.tsx) exercises “orders the computers new threads go to, and leaves one out”; [row projection](../../../../../src/desktop/devices/model/pool.test.ts) covers missing workers and equal names. The adjacent [devices page](devices-dashboard.md) owns polling evidence.
+[Pool regressions](../../../../../crates/nessa-conversation/tests/conversation/pool.rs) cover configured rank, busy fallback, exclusion of a previously bound worker and new-conversation cloud overflow. [Preference persistence](../../../../../crates/nessa-conversation/tests/conversation/pool_config.rs) covers config ownership. [Desktop ordering](../../../../../src/desktop/devices/ui/devices-view.test.tsx) exercises “orders the computers new threads go to, and leaves one out”; [row projection](../../../../../src/desktop/devices/model/pool.test.ts) covers missing workers and equal names. The adjacent [devices page](devices-dashboard.md) owns polling evidence.
 
 ## Verification scope
 

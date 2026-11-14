@@ -224,14 +224,14 @@ relay/infrastructure/wake-room.ts SQLite DO hibernating sockets; wake-up only
 relay/infrastructure/http.ts    authenticated HTTP and watch adapter
 ```
 
-The [native relay module](../../crates/nessa-server/src/github_relay/mod.rs),
+The [native relay module](../../crates/nessa-gateway/src/github_relay/mod.rs),
 [composition](../../crates/nessa-server/src/composition/github_relay.rs) and
 [ADR 1117](../../docs/adr/todo/1117-github-relay.md) describe the local owner and
 ordering matrix. The local receiver remains optional in unconfigured stages.
 
 The [shared retention-gap receipt](../../protocol/fixtures/github-relay-gap.json)
 is checked against the bundled Worker's actual HTTP410 response and consumed by
-[native HTTP transport tests](../../crates/nessa-server/tests/github_relay/transport.rs).
+[native HTTP transport tests](../../crates/nessa-gateway/tests/github_relay/transport.rs).
 Those tests cross JSON decoding into the encrypted inbox, durable pause, explicit
 owner acceptance and later replay. Separate injected-source tests do not replace
 this producer/consumer boundary check.

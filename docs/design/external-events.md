@@ -93,11 +93,11 @@ than an enforced cross-principal deduplication guarantee.
 
 ## Source and regression map
 
-- [HTTP signature and resource boundary](../../crates/nessa-server/src/external_events/entrypoint/http.rs).
-- [Current authority and durable submit mapping](../../crates/nessa-server/src/external_events/application/admission.rs).
-- [Delivery identity value](../../crates/nessa-server/src/external_events/domain/value_objects/identity.rs).
-- [Loopback HTTP, failure, concurrency and reopen tests](../../crates/nessa-server/tests/external_events/ingress.rs).
-- [Existing command crash, caller-loss, permission and exact-stop regressions](../../crates/nessa-server/tests/conversation/mutation_commands.rs), including
+- [HTTP signature and resource boundary](../../crates/nessa-gateway/src/external_events/entrypoint/http.rs).
+- [Current authority and durable submit mapping](../../crates/nessa-gateway/src/external_events/application/admission.rs).
+- [Delivery identity value](../../crates/nessa-gateway/src/external_events/domain/value_objects/identity.rs).
+- [Loopback HTTP, failure, concurrency and reopen tests](../../crates/nessa-gateway/tests/external_events/ingress.rs).
+- [Existing command crash, caller-loss, permission and exact-stop regressions](../../crates/nessa-conversation/tests/conversation/mutation_commands.rs), including
   `an_interrupted_submit_does_not_enqueue_again`,
   `a_submit_admitted_before_retirement_does_not_hold_it_back`, and
   `an_owner_turn_offers_remember_only_when_the_membership_may`.

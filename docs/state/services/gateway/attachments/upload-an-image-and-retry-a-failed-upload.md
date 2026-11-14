@@ -13,8 +13,8 @@ sources:
   - "src/conversation/adapters/gateway/effects.ts"
   - "packages/nessa-client/src/presentation/attachment-api.ts"
   - "packages/nessa-client/src/transport/attachment-upload.ts"
-  - "crates/nessa-server/src/product/attachment.rs"
-  - "crates/nessa-server/src/attachments/http.rs"
+  - "crates/nessa-gateway/src/product/attachment.rs"
+  - "crates/nessa-gateway/src/attachments/http.rs"
   - "crates/nessa-attachments/src/domain/aggregates/ticket_book.rs"
   - "src/panel/application/upload-image.test.ts"
   - "src/panel/ui/use-attachment-uploads.test.ts"
@@ -23,9 +23,9 @@ sources:
   - "packages/nessa-client/src/presentation/attachment-api.test.ts"
   - "packages/nessa-client/src/transport/attachment-upload.test.ts"
   - "crates/nessa-attachments/tests/application.rs"
-  - "crates/nessa-server/tests/attachments/http.rs"
-  - "crates/nessa-server/tests/attachments/wire.rs"
-  - "crates/nessa-server/tests/attachments/gateway.rs"
+  - "crates/nessa-gateway/tests/attachments/http.rs"
+  - "crates/nessa-gateway/tests/attachments/wire.rs"
+  - "crates/nessa-gateway/tests/attachments/gateway.rs"
 diagramLinks: {}
 model:
   spec: tla/services/gateway/attachments/DraftUpload.tla

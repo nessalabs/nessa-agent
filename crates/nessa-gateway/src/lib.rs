@@ -1,0 +1,50 @@
+//! The Nessa gateway's request path: sockets, product routes, admission, and
+//! the gateway features they reach. `nessa-server` composes it and starts it.
+// The one clock: outside tests, time is read only through crate::timer::clock
+// (clippy.toml names the calls it replaces; CODING_STANDARDS.md says why).
+#![cfg_attr(not(test), warn(clippy::disallowed_methods))]
+pub mod agent_warm_up;
+pub mod agents;
+pub mod app;
+pub mod attachments;
+pub mod backup;
+pub mod browser_session;
+pub mod cli;
+pub use nessa_conversation as conversation;
+pub mod core;
+pub use nessa_conversation::desktop_runtime;
+pub mod device_pairing;
+pub mod devices;
+pub mod env;
+pub mod external_events;
+pub mod github;
+pub mod github_relay;
+pub mod health;
+pub mod limits;
+pub mod logins;
+pub mod mcp_servers;
+pub mod product;
+pub mod relay;
+pub mod secrets;
+pub mod server;
+pub use nessa_conversation::timer;
+pub mod voice;
+pub mod webhooks;
+
+#[cfg(any(test, feature = "test-support"))]
+#[path = "../tests/agents/support.rs"]
+pub mod agents_test_support;
+
+#[cfg(any(test, feature = "test-support"))]
+pub use nessa_conversation::conversation_test_support;
+
+#[cfg(test)]
+pub(crate) use nessa_conversation::app_call_test_support;
+
+#[cfg(test)]
+pub(crate) use nessa_conversation::catalogue_receiver_store;
+
+pub mod vault;
+
+#[cfg(unix)]
+pub use nessa_conversation::workspaces;

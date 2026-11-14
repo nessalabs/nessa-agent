@@ -19,6 +19,7 @@ import { useWorkspaceLayoutPreference } from "../../adapters/workspace-layout-pr
 import { type WorkspaceLayoutId, workspaceLayouts } from "../../model/workspace-layout"
 import { tooltip } from "../../ui/tooltip"
 import { IconButton, IconLink } from "../../ui/icon-button"
+import { ChoiceMenu, type ChoiceOption } from "../../ui/choice-menu"
 import type { DesktopIconRole } from "../../ui/icons"
 
 /**
@@ -435,6 +436,32 @@ export function Segmented<T extends string>({
         </SegmentedControlOption>
       ))}
     </SegmentedControl>
+  )
+}
+
+/**
+ * `Segmented`'s choices in a menu, for a row's end: the row's name names it,
+ * its description describes it, and it rests when the row is not available.
+ */
+export function Choice<T extends string>({
+  label,
+  ...props
+}: {
+  value: T | undefined
+  options: readonly ChoiceOption<T>[]
+  onChange: (next: T) => void
+  label: string
+  placeholder?: string
+} & { [data: `data-${string}`]: string | boolean | undefined }) {
+  const description = useContext(RowDescription)
+  const available = useContext(RowAvailable)
+  return (
+    <ChoiceMenu
+      {...props}
+      label={label}
+      disabled={!available}
+      describedBy={description}
+    />
   )
 }
 

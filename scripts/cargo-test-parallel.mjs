@@ -135,15 +135,30 @@ export function testExecutables(stdout) {
   return executables
 }
 
+/** The package whose library holds the planned server cases: the gateway's
+ * request path, split out of nessa-server with its tests. */
+export const CASE_LIBRARY = "nessa-gateway"
+
+/** A package's library test executables, by Cargo package ID and target kind. */
+function libraryExecutables(executables, metadata, name) {
+  const pkg = metadata.packages.find((candidate) => candidate.name === name)
+  return pkg
+    ? executables.filter(
+        (item) => item.packageId === pkg.id && item.targetKinds.includes("lib"),
+      )
+    : []
+}
+
 /** Resolve the server library by Cargo package/target identity, then partition once.
  * partition tests assert the union and intersection, including Windows paths.
  */
 export function partitionExecutables(executables, metadata) {
-  const packages = metadata.packages.filter((pkg) => pkg.name === "nessa-server")
-  if (packages.length !== 1) throw new Error("expected one nessa-server package")
+  const packages = metadata.packages.filter((pkg) => pkg.name === CASE_LIBRARY)
+  if (packages.length !== 1) throw new Error(`expected one ${CASE_LIBRARY} package`)
   const server = packages[0]
   const libraries = server.targets.filter((target) => target.kind.includes("lib"))
-  if (libraries.length !== 1) throw new Error("expected one nessa-server library target")
+  if (libraries.length !== 1)
+    throw new Error(`expected one ${CASE_LIBRARY} library target`)
   const library = libraries[0]
   const serverLib = executables.filter(
     (item) =>
@@ -153,10 +168,21 @@ export function partitionExecutables(executables, metadata) {
   )
   if (serverLib.length !== 1)
     throw new Error(
-      `expected one nessa-server library test executable, found ${serverLib.length}`,
+      `expected one ${CASE_LIBRARY} library test executable, found ${serverLib.length}`,
     )
-  const remaining = executables.filter((item) => item !== serverLib[0])
-  return { server: serverLib, remaining }
+  // The conversation crate's own library tests run beside the server's
+  // conversation cases: they were those cases before the crate was split out.
+  const conversation = libraryExecutables(executables, metadata, "nessa-conversation")
+  // nessa-server's library is composition only now; its tests were ordinary
+  // server cases before the gateway was split out, so they run with the others.
+  const composition = libraryExecutables(executables, metadata, "nessa-server")
+  const remaining = executables.filter(
+    (item) =>
+      item !== serverLib[0] &&
+      !conversation.includes(item) &&
+      !composition.includes(item),
+  )
+  return { server: serverLib, conversation, composition, remaining }
 }
 
 /**
@@ -331,7 +357,11 @@ export async function runParallelCargoTests({
       args: task.args,
     }))
     selected =
-      partition === "remaining" ? [...serverTasks, ...partitions.remaining] : serverTasks
+      partition === "remaining"
+        ? [...serverTasks, ...partitions.remaining]
+        : partition === "server-conversation"
+          ? [...serverTasks, ...partitions.conversation]
+          : [...serverTasks, ...partitions.composition]
     stderr.write(
       `partition ${partition}: ${plan[partition].names.length} server cases in ${serverTasks.length} executables, ${selected.length - serverTasks.length} other binaries; doctests ${partition === "remaining" ? "included" : "owned by remaining"}\n`,
     )

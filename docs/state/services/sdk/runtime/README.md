@@ -10,7 +10,7 @@ sources:
   - "docs/guides/gateway-chat.md"
   - "docs/ARCHITECTURE.md"
   - "crates/nessa-sdk/docs/agent_execution/agent.md"
-  - "crates/nessa-server/src/product/conversation.rs"
+  - "crates/nessa-gateway/src/product/conversation.rs"
   - "crates/nessa-sdk/src/application/agent_execution/sessions/message_commit_clock.rs"
   - "packages/nessa-client/src/presentation/conversation-api.test.ts"
   - "packages/nessa-client/src/application/conversation-mutation-error.ts"

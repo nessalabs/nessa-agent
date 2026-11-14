@@ -1,5 +1,5 @@
---- crates/nessa-server/src/conversation/application/service.rs
-+++ crates/nessa-server/src/conversation/application/service.rs (probe)
+--- crates/nessa-conversation/src/application/service.rs
++++ crates/nessa-conversation/src/application/service.rs (probe)
 @@ -2324,7 +2324,7 @@
                              let workspace = opening.workspace.clone().or_else(|| configured.workspace.clone()).or_else(|| place.as_ref().and_then(|place| place.folder.to_str().map(str::to_owned))).or_else(|| service.inner.workspace.clone());
                              let background_target = match &opening.terms.environment {

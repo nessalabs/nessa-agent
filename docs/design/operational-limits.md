@@ -1,7 +1,7 @@
 # Operational limits
 
 Every limit the gateway can refuse on is named in `docs/limits.md`, which
-`crates/nessa-server/src/limits.rs` renders from the owners. The registry
+`crates/nessa-gateway/src/limits.rs` renders from the owners. The registry
 states no number. A refusal that hits a limit logs that id; the wire response
 and the close code stay what they were. Putting the id on the wire is a
 later schema change and is not this catalogue.

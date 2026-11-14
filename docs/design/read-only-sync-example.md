@@ -53,7 +53,7 @@ The adapter consumes core9d ordering: record authorization precedes page acquisi
 ## Default elapsed budget
 
 The online example derives its 45-second whole-callback budget from the existing
-[passive source/read and queued delivery phases](../../crates/nessa-server/src/product/passive_read/deadlines.rs)
+[passive source/read and queued delivery phases](../../crates/nessa-gateway/src/product/passive_read/deadlines.rs)
 plus a five-second client scheduling/cache allowance. This allowance is not proof
 that arbitrary local work completes in five seconds. Handshake keeps its separate
 five-second budget. Discovery and the subsequent finite driver each begin their
