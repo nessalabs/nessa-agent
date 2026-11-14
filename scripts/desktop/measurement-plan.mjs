@@ -14,6 +14,12 @@ const plans = Object.freeze({
     buildGateway: false,
     artifactPrefix: "desktop-frame-budget",
   }),
+  "mcp-apps": Object.freeze({
+    scope: "mcp-apps",
+    check: "mcp-apps",
+    buildGateway: false,
+    artifactPrefix: "desktop-mcp-apps",
+  }),
 })
 
 export class DesktopMeasurementScopeError extends Error {

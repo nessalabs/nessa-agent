@@ -389,6 +389,7 @@ A timeout is incomplete qualification, never a pass. Case waits, calibration,
 | Scheduled or manual `desktop-performance=false` | Existing Ubuntu load stress, seeds and input values; stress keeps its 100-minute bound and chaos its 60-minute bound, including chaos after a stress failure |
 | Manual `desktop-performance=true`, `desktop-scope=full` (default) | Complete Mac desktop qualification, including native prebuild and performance; regular PR CI retains all native and conversation-stress gates |
 | Manual `desktop-performance=true`, `desktop-scope=frame-budget` | Isolated production frame-budget diagnostic, all existing budget scenarios, five runs and both layouts; the in-memory UI needs no gateway prebuild. This does not qualify the full browser matrix |
+| Manual `desktop-performance=true`, `desktop-scope=mcp-apps` | The complete `mcp-apps.mjs` browser suite in both engines/layouts, using the sandbox fixture without a gateway prebuild. This does not qualify the full browser matrix or supply performance results |
 | Unknown desktop scope | The planner fails before measurement; no result is qualified |
 | Desktop failure or timeout | Available structured JSON and source-bound notices are preserved; missing or incomplete results do not qualify |
 
@@ -410,6 +411,12 @@ calibration, 4× throttle and 50 ms budget. Its artifact identifies the scope an
 its aggregate lists the executed checks. Require the complete set of checks
 before calling any result full browser
 qualification; a passing isolated diagnostic supplies only performance evidence.
+
+For the MCP browser suite, use `-f desktop-scope=mcp-apps` instead. It retains
+the suite's existing waits, assertions, sandbox controls and cleanup, and saves
+its child report under the same source-bound evidence root. Its artifact prefix
+is `desktop-mcp-apps`; its aggregate names only that suite. Require full browser
+qualification separately.
 
 The modes keep their workload variables on the steps that consume them.
 The desktop result and pre-measurement host snapshot are under the existing

@@ -117,8 +117,8 @@ test("manual Mac qualification retains the complete matrix and fixed check bound
       false,
       forbidden,
     )
-  // measurement-plan.test.mjs executes this script with both published plans:
-  // full has no selector; the diagnostic retains every perf-budget scenario.
+  // measurement-plan.test.mjs executes this script with each published plan:
+  // full has no selector; diagnostics retain the whole selected suite.
   const workflow = steps.join("\n      - ")
   assert.ok(
     workflow.indexOf("run: cargo build -p nessa-server -p nessa-mcp") <

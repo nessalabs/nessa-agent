@@ -330,28 +330,29 @@ describe("run-all's sum", () => {
       assert.equal(ownsPreview("perf-budget", mode), true)
       assert.equal(ownsPreview("committed-transcript", mode), mode === "prod")
       assert.equal(ownsPreview("smoke", mode), false)
-      assert.deepEqual(
-        argsForCheck(
-          "smoke",
-          { runs: "3" },
-          {
-            base: ["--engine", "webkit"],
-            out: "smoke.json",
-            page: { url: "http://127.0.0.1:9000/desktop.html", mode },
-            sharesPage: true,
-          },
-        ),
-        [
-          "--engine",
-          "webkit",
-          "--out",
-          "smoke.json",
-          "--url",
-          "http://127.0.0.1:9000/desktop.html",
-          "--mode",
-          mode,
-        ],
-      )
+      for (const check of ["smoke", "mcp-apps"])
+        assert.deepEqual(
+          argsForCheck(
+            check,
+            { runs: "3" },
+            {
+              base: ["--engine", "webkit"],
+              out: "smoke.json",
+              page: { url: "http://127.0.0.1:9000/desktop.html", mode },
+              sharesPage: true,
+            },
+          ),
+          [
+            "--engine",
+            "webkit",
+            "--out",
+            "smoke.json",
+            "--url",
+            "http://127.0.0.1:9000/desktop.html",
+            "--mode",
+            mode,
+          ],
+        )
     }
   })
 

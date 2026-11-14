@@ -21,11 +21,12 @@ on:
         type: boolean
         default: false
       desktop-scope:
-        description: Full browser qualification, or an isolated frame-budget diagnostic.
+        description: Full qualification, or a frame-budget or MCP Apps diagnostic.
         type: choice
         options:
           - full
           - frame-budget
+          - mcp-apps
         default: full
       seed:
         description: The plan's seed. Empty picks one and prints it.
@@ -123,11 +124,11 @@ jobs:
         run: pnpm exec playwright install chromium webkit
         timeout-minutes: 15
       # Load and full desktop checks use gateway binaries; the isolated
-      # frame-budget diagnostic uses the in-memory UI.
+      # browser diagnostics use the in-memory workspace and sandbox fixture.
       - run: cargo build -p nessa-server -p nessa-mcp
         if: ${{ !inputs['desktop-performance'] || steps.desktop-plan.outputs.build-gateway == 'true' }}
-      # Full qualification keeps its prebuild and complete matrix. Both scopes
-      # use the fixed measurement window; PR native/stress gates remain separate.
+      # Full qualification keeps its prebuild and complete matrix. Desktop scopes
+      # share the fixed measurement window; PR native/stress gates remain separate.
       - name: Record the desktop measurement host
         if: ${{ inputs['desktop-performance'] }}
         shell: bash

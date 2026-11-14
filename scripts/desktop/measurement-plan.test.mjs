@@ -28,6 +28,12 @@ const expected = {
     buildGateway: false,
     artifactPrefix: "desktop-frame-budget",
   },
+  "mcp-apps": {
+    scope: "mcp-apps",
+    check: "mcp-apps",
+    buildGateway: false,
+    artifactPrefix: "desktop-mcp-apps",
+  },
 }
 
 for (const scope of Object.keys(expected)) {
@@ -112,7 +118,7 @@ const shell = body
 test("the workflow consumes one validated plan before deciding builds, selector and artifact", () => {
   assert.match(
     workflow,
-    /desktop-scope:\n\s+description: [^\n]+\n\s+type: choice\n\s+options:\n\s+- full\n\s+- frame-budget\n\s+default: full/,
+    /desktop-scope:\n\s+description: [^\n]+\n\s+type: choice\n\s+options:\n\s+- full\n\s+- frame-budget\n\s+- mcp-apps\n\s+default: full/,
   )
   const planner = step("Plan the desktop measurement")
   assert.match(planner, /if: \$\{\{ inputs\['desktop-performance'\] \}\}/)
@@ -201,7 +207,7 @@ for (const scope of Object.keys(expected))
         const { args, expectedBase } = execute(scope, status)
         assert.deepEqual(args, [
           ...expectedBase,
-          ...(scope === "frame-budget" ? ["--only", "perf-budget"] : []),
+          ...(scope === "full" ? [] : ["--only", expected[scope].check]),
         ])
       }
     },
