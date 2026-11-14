@@ -300,6 +300,7 @@ export const css = {
   settingsMasthead: ".settings-masthead", // class: the page's head: title, dek, tabs
   settingsDek: ".settings-dek", // class: the one line under a title, where a category has one
   settingsRow: '[data-slot="settings-row"]', // the UI kit's row, on any Settings page
+  settingsRowDetail: '[data-slot="settings-row-detail"]', // the row's status/explanation, separately from its label and control
   settingsFound: "[data-setting][data-found]", // where a search just landed
   settingsSearch: 'input[aria-label="Search settings"]',
   control: 'button, input, select, textarea, [role="switch"]',

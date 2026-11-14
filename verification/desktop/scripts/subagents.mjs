@@ -54,8 +54,9 @@ Checks, per engine and layout (--only <names> to pick):
   panel    the card opens a tab in the conversation's right panel, no pane
            added; the list order, in Ongoing and Ended sections with no
            avatars or summary, and the closed child; one breadcrumb, the
-           panel tab's, naming the open child; expanded, the chat surface
-           below the window toolbar with an opaque background and Back to Panel; a child opens, focus
+           panel tab's, naming the open child; expanded, the chat's bounds
+           and transparent ground, a header in the titlebar row, a body below
+           the toolbar and Back to Panel; a child opens, focus
            stays in the panel, the transcript follows then stays put when
            scrolled up; Escape returns to the list (the panel's next Escape
            changes nothing; the window's returns to the panes)
@@ -382,35 +383,74 @@ const checks = {
     if (!(await contentIs(page, content.widget)))
       failures.push("Open in Window did not show the window")
     await need(page, css.widgetWindow, "the window")
-    // Window widgets begin below the shared toolbar and cover the retained
-    // panes with the theme background (panes.css; styles.test.ts).
+    // The window shares the chat's ground, with its header in the titlebar
+    // row and its body below it (ADR 326; panes.css; styles.test.ts).
     const ground = await page.evaluate(
-      ({ widget, titlebar }) => {
+      ({ widget, titlebar, chat, paneHeader, paneBody }) => {
         const window_ = document.querySelector(widget)
         const toolbar = document.querySelector(titlebar)
+        const host = window_?.closest(chat)
+        const header = window_?.querySelector(paneHeader)
+        const body = window_?.querySelector(paneBody)
+        const missing = Object.entries({ window: window_, toolbar, host, header, body })
+          .filter(([, element]) => !element)
+          .map(([name]) => name)
+        if (missing.length) return { missing }
         const sample = document.createElement("span")
         sample.style.cssText =
-          "position:absolute;visibility:hidden;background:var(--background)"
+          "position:absolute;visibility:hidden;background:transparent"
         window_.append(sample)
-        const background = getComputedStyle(sample).backgroundColor
+        const transparent = getComputedStyle(sample).backgroundColor
         sample.remove()
         return {
+          missing,
           top: window_.getBoundingClientRect().top,
+          hostTop: host.getBoundingClientRect().top,
           toolbarBottom: toolbar.getBoundingClientRect().bottom,
+          headerTop: header.getBoundingClientRect().top,
+          headerBottom: header.getBoundingClientRect().bottom,
+          bodyTop: body.getBoundingClientRect().top,
           fill: getComputedStyle(window_).backgroundColor,
-          background,
+          transparent,
         }
       },
-      { widget: css.widgetWindow, titlebar: css.titlebar },
+      {
+        widget: css.widgetWindow,
+        titlebar: css.titlebar,
+        chat: css.chatArea,
+        paneHeader: css.paneHeader,
+        paneBody: css.paneBody,
+      },
     )
-    if (Math.abs(ground.top - ground.toolbarBottom) > 1)
-      failures.push(
-        `the widget starts at ${ground.top}, toolbar ends at ${ground.toolbarBottom}`,
+    if (ground.missing.length)
+      failures.push(`the window is missing ${ground.missing.join(", ")}`)
+    else {
+      if (Math.abs(ground.top - ground.hostTop) > 1)
+        failures.push(
+          `the widget starts at ${ground.top}, chat starts at ${ground.hostTop}`,
+        )
+      if (ground.fill !== ground.transparent)
+        failures.push(
+          `the widget is ${ground.fill}, transparent ground is ${ground.transparent}`,
+        )
+      if (
+        ground.headerTop < ground.top - 1 ||
+        ground.headerBottom > ground.toolbarBottom + 1
       )
-    if (ground.fill !== ground.background)
-      failures.push(
-        `the widget is ${ground.fill}, theme background is ${ground.background}`,
-      )
+        failures.push(
+          `the widget header spans ${ground.headerTop}..${ground.headerBottom}, titlebar spans ${ground.top}..${ground.toolbarBottom}`,
+        )
+      if (Math.abs(ground.bodyTop - ground.toolbarBottom) > 1)
+        failures.push(
+          `the widget body starts at ${ground.bodyTop}, toolbar ends at ${ground.toolbarBottom}`,
+        )
+    }
+    await shot(
+      page,
+      label,
+      `window-${label.engine}-${label.layout}.png`,
+      css.widgetWindow,
+    )
     const hidden = await page.evaluate(
       () => getComputedStyle(document.querySelector(".split-panes-grid")).visibility,
     )
@@ -448,7 +488,7 @@ const checks = {
       failures.push("Back to Panel did not return to the panes")
     if (!(await page.locator(css.panelWidget).count()))
       failures.push("Back to Panel left the widget in no tab of the panel")
-    return { namesInOrder, summary, failures }
+    return { namesInOrder, summary, ground, failures }
   },
 
   narrow: async (page, label) => {

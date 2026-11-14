@@ -342,19 +342,29 @@ const checks = {
    * Privacy & Permissions › Access: the browser owns permission; only its
    * default state offers an accessible Allow button.
    */
-  "review-notices": async (page) => {
+  "review-notices": async (page, { engine, shots }) => {
     await show(page, "Privacy & Permissions", "Access")
     const permission = await page.evaluate(() =>
       typeof Notification === "undefined" ? "unsupported" : Notification.permission,
     )
     const row = page.locator('[data-setting="review-notices"]')
+    const rows = await row.count()
+    const allowButtons = await row
+      .getByRole("button", { name: names.notificationAllow, exact: true })
+      .count()
+    const text = (await row.allTextContents()).join(" ")
+    const details = await row.locator(css.settingsRowDetail).allTextContents()
     const actual = {
       permission,
-      rows: await row.count(),
-      allowButtons: await row
-        .getByRole("button", { name: names.notificationAllow, exact: true })
-        .count(),
-      text: (await row.allTextContents()).join(" "),
+      rows,
+      allowButtons,
+      text,
+      details,
+      detail: details.length === 1 ? details[0].trim() : "",
+    }
+    if (shots && actual.rows === 1) {
+      mkdirSync(shots, { recursive: true })
+      await row.screenshot({ path: join(shots, `review-notices-${engine}.png`) })
     }
     return { ...actual, failures: reviewNoticeFailures(actual) }
   },
@@ -685,7 +695,12 @@ await main(
           const opened = await openPage(browser, { url, width: 1000, height: 700 })
           try {
             await openSettings(opened.page)
-            return await checks[name](opened.page, { browser, url, engine })
+            return await checks[name](opened.page, {
+              browser,
+              url,
+              engine,
+              shots: options.shots,
+            })
           } finally {
             await opened.close()
           }
