@@ -5,7 +5,7 @@ use nessa_vault::{
     infrastructure::{EncryptedFileVault, FileAudit, OsEntropy},
 };
 // These independent gateway fixtures run the real memory-hard KDF. Share one
-// machine's fixture capacity while preserving TestPeer's response deadlines;
+// machine's fixture capacity; replies that run the KDF wait VAULT_REPLY;
 // concurrency inside a fixture (owner races, cleanup and late replies) remains
 // exercised by its own tasks. This is not a production-wide admission policy.
 static VAULT_FIXTURE_CAPACITY: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
@@ -34,6 +34,12 @@ fn composed(root: &std::path::Path) -> Arc<crate::product::VaultRoutes> {
         )),
     })
 }
+/// How long one vault reply may take. A create, unlock or passphrase change
+/// runs the real memory-hard KDF before it answers: about half a second on a CI
+/// runner alone, and over TestPeer's one-second deadline when the runner's other
+/// test binaries share its cores. This still ends a hung fixture.
+const VAULT_REPLY: Duration = Duration::from_secs(10);
+
 async fn ask(peer: &mut TestPeer, id: &str, method: &str, params: Value) -> Value {
     peer.input
         .send(Ok(Message::Text(
@@ -43,7 +49,11 @@ async fn ask(peer: &mut TestPeer, id: &str, method: &str, params: Value) -> Valu
         )))
         .unwrap();
     loop {
-        let Message::Text(text) = peer.message().await else {
+        let message = timeout(VAULT_REPLY, peer.output.recv())
+            .await
+            .expect("a vault reply within its KDF budget")
+            .expect("the socket stays open");
+        let Message::Text(text) = message else {
             panic!("response")
         };
         let value: Value = serde_json::from_str(&text).unwrap();
