@@ -233,6 +233,10 @@ export async function channelRuntimeSettings(run, channel, failures) {
             panel.getBoundingClientRect().right - button.getBoundingClientRect().right,
         })),
         inset: titleLeft - panel.getBoundingClientRect().left,
+        // How Any picks a computer is not explained in a channel's settings.
+        notes: [...panel.querySelectorAll('[data-slot="settings-group-footnote"]')]
+          .map((node) => node.textContent.trim())
+          .filter(Boolean),
         tabs: panel.querySelectorAll(
           '[role="radiogroup"], [data-slot="segmented-control"]',
         ).length,
@@ -265,6 +269,10 @@ export async function channelRuntimeSettings(run, channel, failures) {
         failures.push(
           `channel settings menu "${each.text}" ends ${each.rightInset.toFixed(1)} px from the right edge, not ${layout.inset.toFixed(1)} px`,
         )
+    if (layout.notes.length > 0)
+      failures.push(
+        `channel settings explain the order for Any under it: "${layout.notes[0].slice(0, 40)}…"`,
+      )
     if (layout.tabs > 0)
       failures.push(`channel settings still show ${layout.tabs} row(s) of tabs`)
     if (layout.headings.length === 0)
