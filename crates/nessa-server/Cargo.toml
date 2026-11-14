@@ -39,6 +39,7 @@ nessa-mcp-authorization = { path = "../nessa-mcp-authorization" }
 nessa-webhooks = { path = "../nessa-webhooks" }
 nessa-device-pairing = { path = "../nessa-device-pairing" }
 nessa-env-serve = { path = "../nessa-env-serve" }
+nessa-backup = { path = "../nessa-backup" }
 base64 = "0.22"
 # The local-network announcement while native linking listens there
 # (device_pairing::infrastructure::announcer), so a phone that scanned the
@@ -102,12 +103,8 @@ sha2 = "0.10"
 # A resolved Windows path without the `\\?\` prefix, so a channel's folder is
 # kept, shown and handed to an agent as the person knows it.
 dunce = "1"
-# macOS compares composed and decomposed names as one path. The fold is pure
-# so the same rule can be checked on Linux.
-unicode-normalization = "0.1.25"
-# The tool policy's evaluator (conversation/infrastructure/tool_policy/cedar)
-# and the deletion inventory (backup/infrastructure/cedar), the same pinned
-# build nessa-auth and nessa-env-serve embed.
+# The tool policy's evaluator (conversation/infrastructure/tool_policy/cedar),
+# the same pinned build nessa-auth, nessa-env-serve and nessa-backup embed.
 cedar-policy = { version = "=4.12.0", default-features = false }
 # Keying each MCP server's configuration digest with a per-process secret,
 # so a stand-in's arguments say nothing about its variables' values.
@@ -164,6 +161,7 @@ nessa-peer-gateways = { path = "../nessa-peer-gateways", features = ["test-suppo
 nessa-webhooks = { path = "../nessa-webhooks", features = ["test-support"] }
 nessa-device-pairing = { path = "../nessa-device-pairing", features = ["test-support"] }
 nessa-env-serve = { path = "../nessa-env-serve", features = ["test-support"] }
+nessa-backup = { path = "../nessa-backup", features = ["test-support"] }
 # Plants an unmarked session record. A production build of this crate does not
 # enable it.
 nessa-sdk = { path = "../nessa-sdk", features = ["test-support"] }

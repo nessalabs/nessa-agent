@@ -96,6 +96,7 @@ export const RUST_TEST_PACKAGES = [
   "nessa-webhooks",
   "nessa-device-pairing",
   "nessa-env-serve",
+  "nessa-backup",
 ]
 
 /** The files API returns at most this many files; a list that long may be cut. */

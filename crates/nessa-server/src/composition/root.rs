@@ -283,7 +283,7 @@ impl CompositionRoot {
         let deferred_open = match (namespace, accepted_restore) {
             (Some(namespace), Some(binding)) => {
                 let policy =
-                    crate::backup::infrastructure::CedarInventoryPolicy::new().map_err(|_| {
+                    nessa_backup::infrastructure::CedarInventoryPolicy::new().map_err(|_| {
                         crate::core::RunError::Restore("restore policy could not be loaded".into())
                     })?;
                 Some(std::sync::Arc::new(super::GatewayDeferredOpen::new(

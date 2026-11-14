@@ -269,8 +269,8 @@ fn startup_environment(namespace: &Path) -> Environment {
 /// returning routes, while the replacement credentials remain active.
 #[tokio::test]
 async fn startup_records_offline_credential_rotations_once() {
-    use crate::backup::application::DeletionLogStore;
-    use crate::backup::infrastructure::{read_credentials, FileDeletionLog};
+    use nessa_backup::application::DeletionLogStore;
+    use nessa_backup::infrastructure::{read_credentials, FileDeletionLog};
 
     let (_directory, namespace, store) = namespace_with_registry();
     let now = SystemClock.unix_seconds();
@@ -342,8 +342,8 @@ async fn startup_records_offline_credential_rotations_once() {
 /// source is unreadable. The authenticated prior inventory remains intact.
 #[tokio::test]
 async fn startup_refuses_an_unreadable_committed_fence_source() {
-    use crate::backup::application::DeletionLogStore;
-    use crate::backup::infrastructure::FileDeletionLog;
+    use nessa_backup::application::DeletionLogStore;
+    use nessa_backup::infrastructure::FileDeletionLog;
 
     let (_directory, namespace, store) = namespace_with_registry();
     drop(store);
@@ -362,7 +362,7 @@ async fn startup_refuses_an_unreadable_committed_fence_source() {
     let log = FileDeletionLog::open(namespace.join("backup")).unwrap();
     let empty = log.load().await.unwrap();
     let (before, _) = empty
-        .append(crate::backup::domain::DeletionFence::conversation("previously-deleted").unwrap());
+        .append(nessa_backup::domain::DeletionFence::conversation("previously-deleted").unwrap());
     log.store(&empty, &before).await.unwrap();
     let result = product_state(
         &startup_environment(&namespace),

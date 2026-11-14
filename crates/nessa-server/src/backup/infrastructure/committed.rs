@@ -8,14 +8,14 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use nessa_auth::application::ports::Clock;
 
-use super::cedar::CedarInventoryPolicy;
-use super::decision_audit::FileInventoryDecisions;
 use super::gateway::read_committed_fences;
-use super::log::FileDeletionLog;
-use crate::backup::application::{
+use nessa_backup::application::{
     capture_inventory, CaptureError, FenceSource, InventoryAction, InventoryCause, InventoryFacts,
 };
-use crate::backup::domain::{DeletionFence, DeletionLog};
+use nessa_backup::domain::{DeletionFence, DeletionLog};
+use nessa_backup::infrastructure::CedarInventoryPolicy;
+use nessa_backup::infrastructure::FileDeletionLog;
+use nessa_backup::infrastructure::FileInventoryDecisions;
 use nessa_protocol::conversation::fence_capture::{FenceCapture, FenceCaptureError};
 
 /// The gateway's deletion inventory: the log beside `namespace/backup` and

@@ -8,13 +8,7 @@ use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 
-use crate::backup::application::{
-    capture_inventory, CaptureError, DecisionAuditError, DeletionLogStore, FenceSource,
-    InventoryAction, InventoryCapturePolicyEvaluator, InventoryCause, InventoryDecision,
-    InventoryDecisionAudit, InventoryDenial, InventoryFacts, InventoryFailure, LogStoreError,
-};
-use crate::backup::domain::{DeletionFence, DeletionLog};
-use crate::backup::infrastructure::{CedarInventoryPolicy, CommittedInventory};
+use crate::backup::infrastructure::CommittedInventory;
 use crate::conversation::application::{
     AccessAsk, AccessDecision, ConversationAccessPolicyEvaluator, ConversationCaller,
     ConversationError, ConversationRepository, ReceiverAuthority, ShareConversation,
@@ -28,6 +22,13 @@ use nessa_auth::domain::{
     Action, AudienceId, Credential, CredentialId, Grant, Membership, MembershipId, MembershipRole,
     MembershipStatus, OrganizationId, PrincipalId, Resource, ResourceId,
 };
+use nessa_backup::application::{
+    capture_inventory, CaptureError, DecisionAuditError, DeletionLogStore, FenceSource,
+    InventoryAction, InventoryCapturePolicyEvaluator, InventoryCause, InventoryDecision,
+    InventoryDecisionAudit, InventoryDenial, InventoryFacts, InventoryFailure, LogStoreError,
+};
+use nessa_backup::domain::{DeletionFence, DeletionLog};
+use nessa_backup::infrastructure::CedarInventoryPolicy;
 use nessa_protocol::agents::AgentId;
 use nessa_protocol::conversation::domain::{
     ConversationApprovalMode, ConversationId, ConversationModelId,
@@ -729,7 +730,7 @@ impl FenceSource for Order {
 impl DeletionLogStore for Order {
     async fn hold_reconciliation(
         &self,
-    ) -> Result<Box<dyn crate::backup::application::InventoryReconciliationLease>, ()> {
+    ) -> Result<Box<dyn nessa_backup::application::InventoryReconciliationLease>, ()> {
         Ok(Box::new(UncontendedReconciliation))
     }
 
@@ -766,7 +767,7 @@ struct MemLog(Mutex<DeletionLog>);
 impl DeletionLogStore for MemLog {
     async fn hold_reconciliation(
         &self,
-    ) -> Result<Box<dyn crate::backup::application::InventoryReconciliationLease>, ()> {
+    ) -> Result<Box<dyn nessa_backup::application::InventoryReconciliationLease>, ()> {
         Ok(Box::new(UncontendedReconciliation))
     }
 
@@ -920,7 +921,7 @@ fn resource() -> Resource {
 // These adapters are used by single-capture tests only.
 struct UncontendedReconciliation;
 
-impl crate::backup::application::InventoryReconciliationLease for UncontendedReconciliation {}
+impl nessa_backup::application::InventoryReconciliationLease for UncontendedReconciliation {}
 
 /// The same independent grant dataset production backup reads.
 fn namespace_grants(root: &std::path::Path) -> std::path::PathBuf {
