@@ -1,4 +1,35 @@
+import { createHash } from "node:crypto"
+
 const OUTPUT_LIMIT = 16_384
+const PREVIEW_LIMIT = 1024
+const PART_LIMIT = 3300
+const hash = (text) => createHash("sha256").update(text).digest("hex")
+
+// Do not split a valid surrogate pair at an annotation or preview boundary.
+function prefix(text, limit) {
+  let end = Math.min(text.length, limit)
+  const left = text.charCodeAt(end - 1)
+  const right = text.charCodeAt(end)
+  if (left >= 0xd800 && left <= 0xdbff && right >= 0xdc00 && right <= 0xdfff) end--
+  return text.slice(0, end)
+}
+
+function preview(value) {
+  const text = String(value)
+  return text.length <= PREVIEW_LIMIT
+    ? text
+    : `${prefix(text, PREVIEW_LIMIT)}\n[preview truncated; ${text.length} UTF-16 units; sha256=${hash(text)}]`
+}
+
+function parts(text) {
+  const result = []
+  for (let end = text.length; end > 0;) {
+    const start = prefix(text, Math.max(0, end - PART_LIMIT)).length
+    result.unshift(text.slice(start, end))
+    end = start
+  }
+  return result
+}
 
 // Workflow command data escapes keep test output inside one annotation, including
 // literal workflow commands. diagnostics.test.mjs exercises percent/CR/LF input.
@@ -25,12 +56,23 @@ export function withFailureAnnotations(run, write) {
       forward?.(chunk)
     }
     function report(outcome) {
-      write(
-        annotation(
-          `${command} ${JSON.stringify(args)} ${outcome}\n` +
-            `${truncated ? "Output truncated; last" : "Captured output; at most"} ${OUTPUT_LIMIT} characters:\n${tail}`,
-        ),
-      )
+      try {
+        const text =
+          `${preview(`${command} ${JSON.stringify(args)}`)} ${outcome()}\n` +
+          `${truncated ? "Output truncated; last" : "Captured output; at most"} ${OUTPUT_LIMIT} characters:\n${tail}`
+        const digest = hash(text)
+        const chunks = parts(text)
+        // Emit the last report part first so the retained tail has priority.
+        for (let index = chunks.length - 1; index >= 0; index--)
+          write(
+            annotation(
+              `Retained report ${digest} part ${index + 1}/${chunks.length}\n${chunks[index]}`,
+            ),
+          )
+      } catch {
+        // Reporting must not replace the failed child's result or rejection.
+        // diagnostics.test.mjs exercises throwing writers and rejection getters.
+      }
     }
     let code
     try {
@@ -40,10 +82,10 @@ export function withFailureAnnotations(run, write) {
         onStderr: (chunk) => capture(chunk, io.onStderr),
       })
     } catch (error) {
-      report(`failed: ${error.message}`)
+      report(() => `failed: ${preview(error?.message ?? error)}`)
       throw error
     }
-    if (code !== 0) report(`exited with ${code}`)
+    if (code !== 0) report(() => `exited with ${preview(code)}`)
     return code
   }
 }

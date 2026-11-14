@@ -5275,6 +5275,123 @@ async fn a_fetch_past_the_leases_budget_is_refused_before_the_host_is_asked() {
     go.send(()).unwrap();
 }
 
+/// What the fixture's bounded observation list says after a fetch join timed out.
+#[derive(Debug, PartialEq, Eq)]
+enum FetchEndRecordObservation {
+    Locked,
+    Poisoned,
+    NotSeenInTail { examined: usize, total: usize },
+    Seen { lease_ended: bool },
+}
+
+/// Failure-only observations from this fresh one-turn fixture, where `call-1`
+/// names its sole fetch. This list observes the wrapper before its inner save;
+/// seeing a record does not establish a successful storage receipt. Never wait
+/// for its lock or search an unbounded history while reporting a timeout.
+fn fetch_end_record_observation(saved: &SavedRecords) -> FetchEndRecordObservation {
+    let records = match saved.try_lock() {
+        Ok(records) => records,
+        Err(std::sync::TryLockError::WouldBlock) => return FetchEndRecordObservation::Locked,
+        Err(std::sync::TryLockError::Poisoned(_)) => {
+            return FetchEndRecordObservation::Poisoned;
+        }
+    };
+    for record in records.iter().rev().take(32) {
+        if let LeaseRecord::FetchEnded {
+            request, outcome, ..
+        } = record
+        {
+            if request == "call-1" {
+                return FetchEndRecordObservation::Seen {
+                    lease_ended: matches!(
+                        outcome,
+                        FetchOutcome::Refused(FetchRefusalReason::Environment(
+                            EnvironmentFetchRefusal::LeaseEnded
+                        ))
+                    ),
+                };
+            }
+        }
+    }
+    FetchEndRecordObservation::NotSeenInTail {
+        examined: records.len().min(32),
+        total: records.len(),
+    }
+}
+
+#[test]
+fn fetch_timeout_observations_distinguish_target_outcome_and_never_claim_a_receipt() {
+    let record = |request: &str, outcome| LeaseRecord::FetchEnded {
+        lease: LeaseId::new("diagnostic-fixture").unwrap(),
+        request: request.into(),
+        outcome,
+    };
+    let ended = FetchOutcome::Refused(FetchRefusalReason::Environment(
+        EnvironmentFetchRefusal::LeaseEnded,
+    ));
+    let saved = Arc::new(Mutex::new(vec![record("another-call", ended.clone())]));
+    assert_eq!(
+        fetch_end_record_observation(&saved),
+        FetchEndRecordObservation::NotSeenInTail {
+            examined: 1,
+            total: 1
+        }
+    );
+    saved.lock().unwrap().push(record("call-1", ended));
+    assert_eq!(
+        fetch_end_record_observation(&saved),
+        FetchEndRecordObservation::Seen { lease_ended: true }
+    );
+    saved.lock().unwrap().push(record(
+        "call-1",
+        FetchOutcome::Refused(FetchRefusalReason::TimedOut { delivered: false }),
+    ));
+    assert_eq!(
+        fetch_end_record_observation(&saved),
+        FetchEndRecordObservation::Seen { lease_ended: false }
+    );
+    let guard = saved.lock().unwrap();
+    assert_eq!(
+        fetch_end_record_observation(&saved),
+        FetchEndRecordObservation::Locked
+    );
+    drop(guard);
+    let _ = std::panic::catch_unwind(|| {
+        let _guard = saved.lock().unwrap();
+        panic!("poison the fixture's observation list");
+    });
+    assert_eq!(
+        fetch_end_record_observation(&saved),
+        FetchEndRecordObservation::Poisoned
+    );
+}
+
+#[test]
+fn fetch_timeout_observations_name_a_bounded_tail_instead_of_claiming_absence() {
+    let record = |request: &str| LeaseRecord::FetchEnded {
+        lease: LeaseId::new("diagnostic-fixture").unwrap(),
+        request: request.into(),
+        outcome: FetchOutcome::Refused(FetchRefusalReason::Environment(
+            EnvironmentFetchRefusal::LeaseEnded,
+        )),
+    };
+    let mut records = vec![record("call-1")];
+    records.extend((0..32).map(|_| record("another-call")));
+    let saved = Arc::new(Mutex::new(records));
+    assert_eq!(
+        fetch_end_record_observation(&saved),
+        FetchEndRecordObservation::NotSeenInTail {
+            examined: 32,
+            total: 33
+        }
+    );
+    saved.lock().unwrap().remove(1);
+    assert_eq!(
+        fetch_end_record_observation(&saved),
+        FetchEndRecordObservation::Seen { lease_ended: true }
+    );
+}
+
 /// The agent's lease ending while a file is written: refused as the lease
 /// ended, and the call told so.
 #[tokio::test]
@@ -5305,7 +5422,20 @@ async fn a_fetch_whose_lease_ends_mid_transfer_is_refused_lease_ended() {
     assert_eq!(
         tokio::time::timeout(Duration::from_secs(5), fetching)
             .await
-            .unwrap()
+            .unwrap_or_else(|error| {
+                // These independent reads happen only after the original
+                // timeout. They do not identify the state at the deadline,
+                // and the fixture's save-entry list is not durable receipt.
+                panic!(
+                    "fetch join elapsed at its original five-second bound: {error}; \
+                     post-timeout observations: host_end_calls={}, host_fetch_ended={}, \
+                     closing_finished={}, fetch_end_record={:?}; persistence receipt unknown",
+                    host.end_calls.load(Ordering::SeqCst),
+                    host.fetching.ended.load(Ordering::SeqCst),
+                    closing.is_finished(),
+                    fetch_end_record_observation(&harness.storage.saved),
+                )
+            })
             .unwrap(),
         FetchAnswer::Refused(FetchCallRefusal::NotPlaced(FetchRefusal::LeaseEnded))
     );
