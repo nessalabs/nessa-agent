@@ -19,6 +19,7 @@ import {
 import { useBesideKey } from "../session-actions"
 import { contextMenuFromKey } from "../../adapters/dom/context-menu-key"
 import { IdentityFooter } from "../chrome/identity-footer"
+import type { EdgePeekControls } from "../../../adapters/use-edge-peek"
 import { useSidebarPeek, useWorkspaceFrame } from "../workspace-frame"
 import { ChannelBranch } from "./channel-branch"
 import { ChannelRow } from "./channel-row"
@@ -26,6 +27,11 @@ import "./source-list.css"
 import { tooltip } from "../../../ui/tooltip"
 import { OverviewRow } from "./overview-row"
 import { useRowFocusKept } from "../row-focus"
+import {
+  slidingGuards,
+  useFocusLeavesOnFold,
+  useParkedAfterSlide,
+} from "../../adapters/dom/parked"
 
 /**
  * The sidebar's source list: sections of channels on a glass pane, with the
@@ -34,6 +40,13 @@ import { useRowFocusKept } from "../row-focus"
  * stands alone — search, the Agents overview's entry, then channels that
  * disclose their sessions inline. Window actions live in the shared top bar.
  */
+/** The peek's holders that only say the pointer or focus has left. */
+function departures(peek: EdgePeekControls | null) {
+  if (!peek) return {}
+  const { onPointerLeave, onBlur } = peek.holders
+  return { onPointerLeave, onBlur }
+}
+
 export const SourceList = memo(function SourceList({
   variant,
   open,
@@ -53,6 +66,12 @@ export const SourceList = memo(function SourceList({
   const besideKey = useBesideKey()
   const peek = useSidebarPeek()
   const revealed = peek !== null && peek.shown && !peek.handingOff
+  // Folded, it is only there while revealed from the window's edge. It is
+  // out of reach once it has slid away (`parked.ts`).
+  const away = !open && !revealed
+  const asideRef = useRef<HTMLElement>(null)
+  const parked = useParkedAfterSlide(asideRef, away)
+  useFocusLeavesOnFold(asideRef, away)
 
   // Arrow keys walk the tree's visible rows; right and left unfold and fold.
   const onTreeKeyDown = (event: ReactKeyboardEvent<HTMLElement>) => {
@@ -95,6 +114,7 @@ export const SourceList = memo(function SourceList({
 
   return (
     <aside
+      ref={asideRef}
       id="workspace-sidebar"
       className="workspace-sidebar"
       data-variant={variant}
@@ -102,10 +122,18 @@ export const SourceList = memo(function SourceList({
       data-flip="slide"
       data-flip-id="sidebar"
       aria-label="Sidebar"
-      // Folded, it is only there while revealed from the window's edge.
-      inert={!open && !revealed}
-      aria-hidden={(!open && !revealed) || undefined}
-      {...(open ? {} : peek?.holders)}
+      inert={parked}
+      data-parked={parked || undefined}
+      aria-hidden={away || undefined}
+      // Its reach has one owner at a time: the peek's holders while revealed,
+      // the guards while it slides away, `inert` once parked. Folded, the
+      // peek still hears the pointer and focus leave it, which is how a
+      // dismissed reveal stops being held (`use-edge-peek.ts`).
+      {...(away
+        ? { ...slidingGuards(!parked), ...departures(peek) }
+        : open
+          ? {}
+          : peek?.holders)}
     >
       <div className="workspace-sidebar-scroll">
         {variant === "channels" ? <ChannelsTop /> : <TreeTop />}
