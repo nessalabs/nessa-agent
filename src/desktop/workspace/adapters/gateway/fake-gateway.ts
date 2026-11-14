@@ -36,11 +36,13 @@ import {
   type Subscription,
   type SubscriptionEnd,
   type ViewSubscriptionHandlers,
+  type WorkspaceAnswerParams,
   type WorkspaceWindow,
 } from "@nessa/client"
 import type { GatewayClient } from "./gateway-source"
 import type { SharingClient } from "./sharing-gateway"
 import type { WindowPublishClient } from "./window-publisher"
+import type { WindowCommandClient } from "./window-commands"
 
 /**
  * The fake's client: the source's, sharing's conversation methods (which
@@ -52,7 +54,8 @@ import type { WindowPublishClient } from "./window-publisher"
 export type FakeGatewayClient = {
   readonly boat: import("@nessa/client").BoatApi
 } & GatewayClient &
-  WindowPublishClient & {
+  WindowPublishClient &
+  WindowCommandClient & {
     readonly conversation: GatewayClient["conversation"] &
       SharingClient["conversation"] &
       Pick<ConversationApi, "permissionRules" | "revokePermissionRule">
@@ -415,6 +418,8 @@ export interface FakeGateway {
   readonly calls: Call[]
   /** Each window the client was told, newest last, with its revision; `undefined` withdrew it. */
   readonly windows: { revision: number; window: WorkspaceWindow | undefined }[]
+  /** Every `workspace.answer` the window gave a command, in order. */
+  readonly windowAnswers: WorkspaceAnswerParams[]
   readonly rows: Map<string, ConversationSummary>
   readonly views: Map<string, ConversationView>
   /**
@@ -523,6 +528,7 @@ export function fakeGateway(
   }
   const calls: FakeGateway["calls"] = []
   const windows: FakeGateway["windows"] = []
+  const windowAnswers: FakeGateway["windowAnswers"] = []
   const rows = new Map<string, ConversationSummary>()
   const views = new Map<string, ConversationView>()
   const earlier: FakeGateway["earlier"] = new Map()
@@ -971,6 +977,10 @@ export function fakeGateway(
           applied: revision >= held,
         })
       },
+      answer: (answer) => {
+        windowAnswers.push(answer)
+        return Promise.resolve({ settled: true })
+      },
     },
     // The peek names the active execution; it ends cancelled, with what it waited on.
     stopThread: (...args) =>
@@ -1084,6 +1094,7 @@ export function fakeGateway(
     client,
     calls,
     windows,
+    windowAnswers,
     rows,
     views,
     earlier,

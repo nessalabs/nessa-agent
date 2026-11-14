@@ -12,6 +12,7 @@
  */
 import { configureStore } from "@reduxjs/toolkit"
 import {
+  carryOutWindowChange,
   initialWorkspaceFrom,
   workspaceEffects,
   workspaceReducer,
@@ -20,7 +21,7 @@ import {
 
 export function makeDesktopStore(dependencies: WorkspaceDependencies) {
   const effects = workspaceEffects(dependencies)
-  return configureStore({
+  const store = configureStore({
     reducer: { workspace: workspaceReducer },
     // What the window kept between launches, read once.
     preloadedState: { workspace: initialWorkspaceFrom(dependencies) },
@@ -29,6 +30,18 @@ export function makeDesktopStore(dependencies: WorkspaceDependencies) {
         effects.middleware,
       ),
   })
+  // The changes the person's agents, or their CLI, ask of this window are
+  // carried out as a click here would, for as long as the window runs.
+  dependencies.windowCommands?.listen((change) =>
+    carryOutWindowChange(store, change, after),
+  )
+  return store
+}
+
+/** The page's own timer, for how long a change waits on the layout. */
+function after(ms: number, run: () => void): () => void {
+  const timer = setTimeout(run, ms)
+  return () => clearTimeout(timer)
 }
 
 export type DesktopStore = ReturnType<typeof makeDesktopStore>

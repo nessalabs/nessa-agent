@@ -210,6 +210,13 @@ export interface WorkspaceState {
    * whether it is open stays the window's own (`use-workspace-window.ts`).
    */
   readonly panelAsked: number
+  /**
+   * The last time something set the right panel open or closed on purpose,
+   * as an agent's `arrange_window` does: the window sets it when `count`
+   * changes. Unlike `panelAsked` it moves no caret. Whether the panel is
+   * drawn stays the window's (`panelOpen`).
+   */
+  readonly panelSet: { readonly count: number; readonly open: boolean }
   readonly view: SessionView
   /**
    * What fills the content region: the panes, the Agents overview over
@@ -445,6 +452,7 @@ export const initialWorkspace: WorkspaceState = {
   panels: {},
   panelled: [],
   panelAsked: 0,
+  panelSet: { count: 0, open: false },
   view: { channelId: "" },
   content: "panes",
   overview: { selected: null, filter: defaultFilter, group: null },

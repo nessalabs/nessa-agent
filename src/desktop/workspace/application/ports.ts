@@ -1,6 +1,7 @@
 import type { BoatClaudeSignIn } from "../../../provider-authentication/model/boat-sign-in"
 import type { ModelReceipt } from "../model/model-choice"
 import type { ShownWindow } from "../model/shown-window"
+import type { WindowChange, WindowChangeOutcome } from "../model/window-change"
 import type { FailureDiagnostic } from "../model/failure"
 import type { DraftImage } from "../model/draft-images"
 /**
@@ -541,6 +542,12 @@ export interface WorkspaceDependencies {
    */
   readonly windowPublisher?: WindowPublisher
   /**
+   * Where the changes the person's agents, or their CLI, ask of this window
+   * arrive (`store.ts` carries them out). Absent where nobody could ask:
+   * beside no gateway.
+   */
+  readonly windowCommands?: WindowCommandInbox
+  /**
    * Where channels are made. Absent where the window cannot make one, and
    * the sidebar's add button then says so.
    */
@@ -555,8 +562,22 @@ export interface WorkspaceDependencies {
  * that could not say it shows the person nothing different.
  */
 export interface WindowPublisher {
+  /** This window's own id, the same on each of its connections. */
+  readonly windowId: string
   /** What the window shows now, or `null` when it draws no panes. */
   publish(window: ShownWindow | null): void
+  /**
+   * The revision the gateway holds for what the window shows now, once it
+   * holds it: after the last `publish` is taken, however many sends that
+   * needs. A change an agent asked for is answered with it.
+   */
+  settled(): Promise<number>
+}
+
+/** The changes asked of this window, each answered with what came of it. */
+export interface WindowCommandInbox {
+  /** Hands each change to `carryOut`, one at a time; the returned function stops. */
+  listen(carryOut: (change: WindowChange) => Promise<WindowChangeOutcome>): () => void
 }
 
 /** A filter kept outside the window's state, between launches. */

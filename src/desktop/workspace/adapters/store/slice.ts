@@ -72,6 +72,8 @@ const workspaceSlice = createSlice({
       state,
       { payload }: Payload<{ sessionId: string; widget: WidgetRef }>,
     ) => chatPanel.closePanelTab(state, payload),
+    panelSet: (state, { payload }: Payload<{ open: boolean }>) =>
+      chatPanel.setPanel(state, payload),
     // Panes
     focusPane: (state, { payload }: Payload<{ pane: PaneKey }>) =>
       panes.focusPane(state, payload.pane),
