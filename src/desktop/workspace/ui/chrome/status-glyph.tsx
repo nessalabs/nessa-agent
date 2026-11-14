@@ -1,6 +1,7 @@
 import type { SessionStatus } from "../../model/workspace-index"
 import { statusLabels } from "../../model/session-groups"
 import { tooltip } from "../../../ui/tooltip"
+import { useSettledWorking } from "./use-settled-working"
 
 /** What a glyph can say: a session's state, or that a row holds something not yet seen. */
 type GlyphKind = SessionStatus | "unread"
@@ -21,7 +22,7 @@ const glyphLabels: Readonly<Record<GlyphKind, string>> = {
  * a reader, beside words that already say it ("Needs you").
  */
 export function StatusGlyph({
-  status,
+  status: reported,
   idle = false,
   flush = false,
   decorative = false,
@@ -31,6 +32,9 @@ export function StatusGlyph({
   flush?: boolean
   decorative?: boolean
 }) {
+  // Running shows only once it lasts, so a turn refused at once never flickers.
+  const settled = useSettledWorking(reported === "running")
+  const status = reported === "running" && !settled ? "idle" : reported
   if (status === "idle")
     return idle ? (
       <span className="workspace-status" data-status="idle" aria-hidden="true" />

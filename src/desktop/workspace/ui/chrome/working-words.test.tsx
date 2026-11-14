@@ -1,36 +1,67 @@
 // @vitest-environment jsdom
-import { renderToStaticMarkup } from "react-dom/server"
-import { expect, it } from "vitest"
+import { act } from "react"
+import { createRoot } from "react-dom/client"
+import { afterEach, beforeEach, expect, it, vi } from "vitest"
 import { SidebarRow } from "../source-list/sidebar-row"
+import { workingHoldMs, workingShowAfterMs } from "./use-settled-working"
 import { WorkingWords } from "./working-words"
 
-const render = (node: React.ReactElement) => {
-  const host = document.createElement("div")
-  host.innerHTML = renderToStaticMarkup(node)
-  return host
-}
+;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
-it("shimmers the words at work, with no turning arc beside them", () => {
-  const host = render(<WorkingWords working>Working</WorkingWords>)
-  expect(host.querySelector(".workspace-shimmer[data-working]")?.textContent).toBe(
-    "Working",
-  )
+let host: HTMLDivElement
+let root: ReturnType<typeof createRoot>
+beforeEach(() => {
+  vi.useFakeTimers()
+  host = document.createElement("div")
+  document.body.append(host)
+  root = createRoot(host)
+})
+afterEach(() => {
+  act(() => root.unmount())
+  host.remove()
+  vi.useRealTimers()
+})
+
+const render = (node: React.ReactElement) => act(() => root.render(node))
+const wait = (ms: number) => act(() => vi.advanceTimersByTime(ms))
+const shimmer = () => host.querySelector(".workspace-shimmer[data-working]")
+
+it("shimmers the words once the work lasts, with no turning arc beside them", () => {
+  render(<WorkingWords working>Working</WorkingWords>)
+  expect(shimmer()).toBeNull()
+  wait(workingShowAfterMs)
+  expect(shimmer()?.textContent).toBe("Working")
   expect(host.querySelector(".workspace-status")).toBeNull()
   expect(host.textContent).toBe("Working")
 })
 
-it("draws plain words when nothing works, and says Running to a reader only when asked", () => {
-  expect(render(<WorkingWords working={false}>Idle</WorkingWords>).innerHTML).toBe("Idle")
-  const spoken = render(
+it("never shimmers for work that ends at once, and holds a shown shimmer a moment", () => {
+  render(<WorkingWords working>Chat</WorkingWords>)
+  wait(workingShowAfterMs - 50)
+  render(<WorkingWords working={false}>Chat</WorkingWords>)
+  wait(workingShowAfterMs)
+  expect(shimmer()).toBeNull()
+  render(<WorkingWords working>Chat</WorkingWords>)
+  wait(workingShowAfterMs)
+  render(<WorkingWords working={false}>Chat</WorkingWords>)
+  wait(workingHoldMs - 50)
+  expect(shimmer()).not.toBeNull()
+  wait(50)
+  expect(shimmer()).toBeNull()
+})
+
+it("says Running to a reader only when asked", () => {
+  render(
     <WorkingWords working spoken>
       A chat
     </WorkingWords>,
   )
-  expect(spoken.querySelector(".workspace-spoken")?.textContent).toBe(" Running")
+  wait(workingShowAfterMs)
+  expect(host.querySelector(".workspace-spoken")?.textContent).toBe(" Running")
 })
 
 it("shows a running channel by its name, not a glyph at its end", () => {
-  const host = render(
+  render(
     <SidebarRow
       icon="channel"
       label="general"
@@ -40,7 +71,8 @@ it("shows a running channel by its name, not a glyph at its end", () => {
       onClick={() => {}}
     />,
   )
-  expect(host.querySelector(".workspace-shimmer")?.textContent).toBe("general")
+  wait(workingShowAfterMs)
+  expect(shimmer()?.textContent).toBe("general")
   expect(host.querySelector('.workspace-status[data-status="running"]')).toBeNull()
   expect(host.querySelector("[data-trailing]")).toBeNull()
   expect(host.querySelector("[aria-label]")?.getAttribute("aria-label")).toBe(

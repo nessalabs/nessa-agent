@@ -26,5 +26,6 @@ it("says nothing beside words that already say it, and draws a point at its own 
   expect(point?.hasAttribute("aria-label")).toBe(false)
   expect(point?.hasAttribute("data-tooltip")).toBe(false)
   expect(point?.hasAttribute("data-flush")).toBe(true)
-  expect(glyph(<StatusGlyph status="running" />)?.hasAttribute("data-flush")).toBe(false)
+  // Running is drawn only once it lasts (`useSettledWorking`): at first, nothing.
+  expect(glyph(<StatusGlyph status="running" />)).toBeNull()
 })
