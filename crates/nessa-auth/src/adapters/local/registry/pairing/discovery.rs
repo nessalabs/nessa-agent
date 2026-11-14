@@ -1,7 +1,7 @@
 //! The discovery field on a peer pairing record. It is not a pairing phase
 //! and it does not enroll anyone.
 use super::super::{LocalCredentialStore, LocalStoreError, Registry};
-use crate::domain::pairing::{ConsentClass, DeviceKey, PairingPhase};
+use crate::domain::pairing::{ConsentClass, DeviceKey, InvitationId, PairingPhase};
 /// Largest discovery JSON stored on one pairing record.
 const DISCOVERY_JSON_BYTES: usize = 2048;
 
@@ -9,6 +9,7 @@ const DISCOVERY_JSON_BYTES: usize = 2048;
 #[derive(Clone, Debug)]
 pub struct GrantorPeer {
     pub key: DeviceKey,
+    pub invitation: InvitationId,
     /// `Active` only. Terminal and earlier phases are false. This read does
     /// not change the phase.
     pub phase_active: bool,
@@ -27,11 +28,27 @@ impl LocalCredentialStore {
         peers(registry, now_seconds)
     }
 
+    /// Resolve the latest Active enrollment with a current credential for this key.
+    /// The returned invitation binds later writes to this enrollment, not its recycled key.
+    pub fn peer_discovery(
+        &self,
+        key: &DeviceKey,
+        now_seconds: u64,
+    ) -> Result<Option<GrantorPeer>, LocalStoreError> {
+        Ok(self
+            .peer_discoveries(now_seconds)?
+            .into_iter()
+            .rev()
+            .find(|row| row.key == *key && row.phase_active && row.credential_current))
+    }
+
     /// Write the discovery JSON onto the Active peer pairing for `key`.
     /// The phase is not written. `None` clears the field back to absent.
     pub fn write_peer_discovery(
         &self,
+        invitation: &InvitationId,
         key: &DeviceKey,
+        now_seconds: u64,
         discovery_json: Option<&str>,
     ) -> Result<(), LocalStoreError> {
         if discovery_json.is_some_and(|json| json.len() > DISCOVERY_JSON_BYTES) {
@@ -39,11 +56,17 @@ impl LocalCredentialStore {
         }
         let mut slot = self.mutation_registry()?;
         let current = slot.as_ref().ok_or(LocalStoreError::NotInitialized)?;
-        let index = peer_index(current, key)?.ok_or(LocalStoreError::NotFound)?;
+        let index = peer_index(current, invitation, key)?.ok_or(LocalStoreError::NotFound)?;
         let record = current.pairings[index]
             .restore(&current.transitions)
             .map_err(|_| LocalStoreError::Corrupt)?;
-        if record.phase() != PairingPhase::Active {
+        if record.phase() != PairingPhase::Active
+            || !credential_current(
+                current,
+                record.credential().map(|id| id.as_str()),
+                now_seconds,
+            )
+        {
             return Err(LocalStoreError::Conflict);
         }
         let mut next = current.clone();
@@ -75,6 +98,7 @@ fn peers(registry: &Registry, now_seconds: u64) -> Result<Vec<GrantorPeer>, Loca
         };
         found.push(GrantorPeer {
             key,
+            invitation: record.id(),
             phase_active: record.phase() == PairingPhase::Active,
             credential_current: credential_current(
                 registry,
@@ -87,7 +111,11 @@ fn peers(registry: &Registry, now_seconds: u64) -> Result<Vec<GrantorPeer>, Loca
     Ok(found)
 }
 
-fn peer_index(registry: &Registry, key: &DeviceKey) -> Result<Option<usize>, LocalStoreError> {
+fn peer_index(
+    registry: &Registry,
+    invitation: &InvitationId,
+    key: &DeviceKey,
+) -> Result<Option<usize>, LocalStoreError> {
     for (index, stored) in registry.pairings.iter().enumerate() {
         if stored.class() != ConsentClass::PeerRead {
             continue;
@@ -95,9 +123,10 @@ fn peer_index(registry: &Registry, key: &DeviceKey) -> Result<Option<usize>, Loc
         let record = stored
             .restore(&registry.transitions)
             .map_err(|_| LocalStoreError::Corrupt)?;
-        if record
-            .claim_binding()
-            .is_some_and(|(_, claimed)| claimed == *key)
+        if record.id() == *invitation
+            && record
+                .claim_binding()
+                .is_some_and(|(_, claimed)| claimed == *key)
         {
             return Ok(Some(index));
         }

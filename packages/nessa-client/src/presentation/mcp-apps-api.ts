@@ -284,7 +284,7 @@ function hex(digest: ArrayBuffer): string {
 /**
  * The answer to `mcp.updateModelContext`: this action's acknowledgement, with
  * `applied: true`. The gateway answers a context it took no other way
- * (`crates/nessa-server/src/product/mcp_apps.rs`), so `applied: false` is no
+ * (`crates/nessa-gateway/src/product/mcp_apps.rs`), so `applied: false` is no
  * answer it could have given, and is refused as one this client does not
  * believe; other methods' `applied` stays {@link conversationMutation}'s.
  */

@@ -15,7 +15,7 @@ sources:
   - "src/session/adapters/lifecycle/supervisor.test.ts"
   - "src/session/adapters/lifecycle/session-lifecycle.tsx"
   - "src/session/adapters/client/authentication-failure.ts"
-  - "crates/nessa-server/src/product/socket.rs"
+  - "crates/nessa-gateway/src/product/socket.rs"
   - "crates/nessa-auth/src/application/session.rs"
 diagramLinks:
   Supervisor: surface-session-supervision

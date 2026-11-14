@@ -6,8 +6,8 @@ status: "implemented"
 summary: "The local gateway receives authenticated Nessa commands."
 parent: "nessa"
 sources:
-  - "crates/nessa-server/src/product/socket.rs"
-  - "crates/nessa-server/src/conversation/application/service.rs"
+  - "crates/nessa-gateway/src/product/socket.rs"
+  - "crates/nessa-conversation/src/application/service.rs"
   - "crates/nessa-server/src/composition/root.rs"
 diagramLinks:
   Product: "client-commands"

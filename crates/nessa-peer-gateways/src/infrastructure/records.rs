@@ -88,6 +88,8 @@ pub struct PeerRecord {
     /// `None` until this enrollment agrees a discovery key. A record written
     /// before that field existed stays `None`; startup does not invent one.
     discovery: Discovery,
+    /// Enrollment-time eligibility. Absent on pre-discovery records.
+    discovery_enabled: bool,
     /// The JSON of `discovery` and the audit of the write that stored it.
     /// Absent while discovery is `None`.
     discovery_json: Option<String>,
@@ -116,6 +118,14 @@ impl PeerRecord {
     pub fn phase(&self) -> &PeerPhase {
         &self.phase
     }
+    /// An eligible Active enrollment retries even after saving its own MAC.
+    /// Local installation does not confirm the grantor received it.
+    pub fn needs_discovery_exchange(&self) -> bool {
+        self.discovery_enabled
+            && self.credential_current
+            && matches!(self.phase, PeerPhase::Active { .. })
+    }
+
     /// The discovery field. `None` is a paired peer this build has no key for.
     pub fn discovery(&self) -> &Discovery {
         &self.discovery
@@ -801,6 +811,7 @@ impl ClientPendingStore for PeerSlot {
             intent,
             phase: PeerPhase::Pending,
             discovery: Discovery::None,
+            discovery_enabled: true,
             discovery_json: None,
             credential_current: true,
         };
@@ -919,6 +930,8 @@ struct Stored {
     /// Absent means no discovery key. Startup does not fill one in.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     discovery: Option<String>,
+    #[serde(default)]
+    discovery_enabled: bool,
     /// Absent means the credential is still current.
     #[serde(default = "credential_is_current", skip_serializing_if = "is_current")]
     credential_current: bool,
@@ -954,6 +967,7 @@ fn encode(record: &PeerRecord, own: &[u8; 44]) -> Result<Vec<u8>, PrivateStateEr
         same_person: intent.same_person(),
         revoked: record.phase == PeerPhase::Revoked,
         discovery: record.discovery_json.clone(),
+        discovery_enabled: record.discovery_enabled,
         credential_current: record.credential_current,
         credential: match &record.phase {
             PeerPhase::Pending | PeerPhase::Revoked => None,
@@ -1023,6 +1037,7 @@ fn decode(bytes: &[u8], key: &DeviceKey, own: &[u8; 44]) -> Result<PeerRecord, P
         relay: stored.relay,
         intent,
         phase,
+        discovery_enabled: stored.discovery_enabled,
         discovery_json: stored.discovery,
         discovery,
         credential_current: stored.credential_current,
@@ -1083,3 +1098,7 @@ fn storage_error(error: io::Error) -> PrivateStateError {
         PrivateStateError::Unavailable
     }
 }
+
+#[cfg(test)]
+#[path = "../../tests/discovery_records.rs"]
+mod discovery_tests;

@@ -21,10 +21,10 @@ sources:
   - src/desktop/workspace/ui/channel-settings/channel-settings.tsx
   - src/desktop/workspace/ui/channel-settings/channel-settings.test.tsx
   - src/desktop/workspace/adapters/store/channel-commands.ts
-  - crates/nessa-server/src/conversation/application/service/channels.rs
-  - crates/nessa-server/src/conversation/infrastructure/channels.rs
-  - crates/nessa-server/tests/conversation/channels.rs
-  - crates/nessa-server/tests/conversation/channel_store.rs
+  - crates/nessa-conversation/src/application/service/channels.rs
+  - crates/nessa-conversation/src/infrastructure/channels.rs
+  - crates/nessa-conversation/tests/conversation/channels.rs
+  - crates/nessa-conversation/tests/conversation/channel_store.rs
 ---
 
 # Change a channel’s run location
@@ -61,7 +61,7 @@ Closing settings does not move old conversations back. These controls do not cop
 
 ## Implementation evidence
 
-[Channel application tests](../../../../../crates/nessa-server/tests/conversation/channels.rs) include `only_the_owner_moves_a_made_channel_and_an_unchanged_one_stays_as_it_is` and `a_move_that_cannot_be_recorded_is_refused_and_changes_nothing`. [SQLite channel tests](../../../../../crates/nessa-server/tests/conversation/channel_store.rs) cover replacement identity and preserved memberships. [Rendered controls](../../../../../src/desktop/workspace/ui/channel-settings/channel-settings.test.tsx) cover Boat availability, holding both rows during a save and typed refusal copy.
+[Channel application tests](../../../../../crates/nessa-conversation/tests/conversation/channels.rs) include `only_the_owner_moves_a_made_channel_and_an_unchanged_one_stays_as_it_is` and `a_move_that_cannot_be_recorded_is_refused_and_changes_nothing`. [SQLite channel tests](../../../../../crates/nessa-conversation/tests/conversation/channel_store.rs) cover replacement identity and preserved memberships. [Rendered controls](../../../../../src/desktop/workspace/ui/channel-settings/channel-settings.test.tsx) cover Boat availability, holding both rows during a save and typed refusal copy.
 
 ## Verification scope
 

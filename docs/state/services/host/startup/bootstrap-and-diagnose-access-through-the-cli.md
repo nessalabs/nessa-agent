@@ -8,14 +8,14 @@ summary: "The CLI can diagnose an existing gateway, issue access tokens and
 parent: "host-startup"
 sources:
   - "docs/guides/local-auth.md"
-  - "crates/nessa-server/src/cli/entrypoint/arguments.rs"
-  - "crates/nessa-server/src/cli/application/commands.rs"
+  - "crates/nessa-gateway/src/cli/entrypoint/arguments.rs"
+  - "crates/nessa-gateway/src/cli/application/commands.rs"
   - "crates/nessa-server/src/composition/cli.rs"
   - "crates/nessa-server/src/composition/auth_command.rs"
   - "crates/nessa-server/src/composition/local_auth.rs"
   - "crates/nessa-server/src/composition/credential_registry.rs"
-  - "crates/nessa-server/tests/cli/application.rs"
-  - "crates/nessa-server/tests/cli/gateway.rs"
+  - "crates/nessa-gateway/tests/cli/application.rs"
+  - "crates/nessa-gateway/tests/cli/gateway.rs"
   - "crates/nessa-server/tests/composition/local_auth.rs"
   - "crates/nessa-server/tests/credential_registry_refusal.rs"
   - "scripts/smoke-auth.mjs"
@@ -63,8 +63,8 @@ stateDiagram-v2
 
 ## Further reading
 
-[Source](../../../../guides/local-auth.md) · [Related source](../../../../../crates/nessa-server/src/cli/entrypoint/arguments.rs) · [Related tests](../../../../../crates/nessa-server/tests/cli/application.rs)
+[Source](../../../../guides/local-auth.md) · [Related source](../../../../../crates/nessa-gateway/src/cli/entrypoint/arguments.rs) · [Related tests](../../../../../crates/nessa-gateway/tests/cli/application.rs)
 
 ## Bounded rule model
 
-Owns browser-token lifetime selection capped by the authenticated caller expiry and refusal when already expired. Current time is one and expiries range one through three. Offline credential recovery, exclusive locks, gateway identity and secret disclosure are excluded. This finite abstraction checks safety only. It does not execute or verify the implementation, promise eventual completion, or qualify external effects. Existing source checkpoints and historical test receipts retain their earlier scope. The scoped model review inspected `crates/nessa-server/src/cli/application/commands.rs`.
+Owns browser-token lifetime selection capped by the authenticated caller expiry and refusal when already expired. Current time is one and expiries range one through three. Offline credential recovery, exclusive locks, gateway identity and secret disclosure are excluded. This finite abstraction checks safety only. It does not execute or verify the implementation, promise eventual completion, or qualify external effects. Existing source checkpoints and historical test receipts retain their earlier scope. The scoped model review inspected `crates/nessa-gateway/src/cli/application/commands.rs`.

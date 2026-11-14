@@ -9,8 +9,8 @@ use nessa_client_core::pairing::NativeClientError;
 use nessa_peer_gateways::{
     application::{
         announcement_bytes, discovery_from_json, discovery_to_json, exchange, instance_label,
-        Discovery, DiscoveryPipe, DiscoveryRefusal, ExchangeError, GrantorDiscovery, Phase, Role,
-        Session, TokenPeer, DISCOVERY_WINDOW,
+        maintain_announcement, AnnouncementStep, Discovery, DiscoveryPipe, DiscoveryRefusal,
+        ExchangeError, GrantorDiscovery, Phase, Role, Session, TokenPeer, DISCOVERY_WINDOW,
     },
     infrastructure::{platform_lan_announcer, LanRegistration, PeerCommands, PeerEntry, PeerPhase},
 };
@@ -35,54 +35,37 @@ impl GrantorDiscovery for RegistryDiscovery {
         let now_seconds = self.clock.unix_milliseconds() / 1000;
         let found = self
             .store
-            .peer_discoveries(now_seconds)
-            .map_err(|_| DiscoveryRefusal::Unavailable)?
-            .into_iter()
-            .find(|row| row.key == peer);
+            .peer_discovery(&peer, now_seconds)
+            .map_err(|_| DiscoveryRefusal::Unavailable)?;
         let Some(found) = found else {
             return Err(DiscoveryRefusal::NotPaired);
         };
-        if !found.phase_active {
-            return Err(DiscoveryRefusal::NotPaired);
-        }
-        if !found.credential_current {
-            return Err(DiscoveryRefusal::NotCurrent);
-        }
         let discovery = match found.discovery_json.as_deref() {
             None => Discovery::None,
             Some(json) => discovery_from_json(json).ok_or(DiscoveryRefusal::Unavailable)?,
         };
         let mut session = Session::new(Role::Grantor, Phase::Active, discovery);
-        let entropy_failed = std::cell::Cell::new(false);
-        let mut entropy = || match random_bytes() {
-            Some(bytes) => bytes,
-            None => {
-                entropy_failed.set(true);
-                [0; 32]
-            }
-        };
         let store = &self.store;
         let exchanged = exchange(
             &mut session,
             pipe,
-            &mut entropy,
+            &mut random_bytes,
             &mut |commit| {
-                if entropy_failed.get() {
-                    return Err(io::Error::other("discovery entropy unavailable"));
-                }
                 if !commit.durable {
                     return Ok(());
                 }
                 let json = discovery_to_json(&commit.discovery, commit.audit.as_ref());
                 store
-                    .write_peer_discovery(&peer, json.as_deref())
+                    .write_peer_discovery(
+                        &found.invitation,
+                        &peer,
+                        self.clock.unix_milliseconds() / 1000,
+                        json.as_deref(),
+                    )
                     .map_err(|_| io::Error::other("discovery record"))
             },
             false,
         );
-        if entropy_failed.get() {
-            return Err(DiscoveryRefusal::Unavailable);
-        }
         exchanged.map_err(|_| DiscoveryRefusal::Unavailable)
     }
 }
@@ -106,7 +89,7 @@ impl LanTask {
         clock: Arc<dyn Clock>,
         address: Option<SocketAddr>,
     ) -> Self {
-        let (stop, mut stopped) = watch::channel(false);
+        let (stop, stopped) = watch::channel(false);
         let task = tokio::spawn(async move {
             let announcer = platform_lan_announcer();
             let mut instance = [0u8; 8];
@@ -117,11 +100,12 @@ impl LanTask {
             };
             let mut registration: Option<Box<dyn LanRegistration>> = None;
             let mut published: Option<Vec<u8>> = None;
-            loop {
-                if *stopped.borrow() {
-                    break;
+            let retries = discovery_cycles(&peers, stopped.clone());
+            maintain_announcement(stopped, retries, |step| {
+                if matches!(step, AnnouncementStep::Withdraw) {
+                    if let Some(registration) = registration.take() { registration.withdraw(); }
+                    return;
                 }
-                drive_dialers(&peers).await;
                 let payload = address
                     .and_then(|address| announce_payload(&peers, &store, clock.as_ref(), address));
                 if payload.as_ref() != published.as_ref() {
@@ -143,18 +127,7 @@ impl LanTask {
                         }
                     }
                 }
-                tokio::select! {
-                    changed = stopped.changed() => {
-                        if changed.is_err() || *stopped.borrow() {
-                            break;
-                        }
-                    }
-                    _ = crate::timer::clock::sleep(refresh_interval()) => {}
-                }
-            }
-            if let Some(registration) = registration.take() {
-                registration.withdraw();
-            }
+            }).await;
         });
         Self { stop, task }
     }
@@ -171,17 +144,37 @@ impl LanTask {
     }
 }
 
-async fn drive_dialers(peers: &PeerCommands) {
+async fn discovery_cycles(peers: &PeerCommands, mut stopped: watch::Receiver<bool>) {
+    loop {
+        if *stopped.borrow() {
+            return;
+        }
+        drive_dialers(peers, &stopped).await;
+        if *stopped.borrow() {
+            return;
+        }
+        tokio::select! {
+            _ = stopped.changed() => return,
+            _ = crate::timer::clock::sleep(refresh_interval()) => {}
+        }
+    }
+}
+
+// Each network attempt is CONNECT (5s) plus TLS_DEADLINE (10s) and the
+// single ENROLLMENT_DEADLINE (30s), not a new allowance per frame. Stop is
+// observed before the next peer; local storage/worker drain is still joined.
+async fn drive_dialers(peers: &PeerCommands, stopped: &watch::Receiver<bool>) {
     let Ok(entries) = peers.records().list() else {
         return;
     };
     for entry in entries {
+        if *stopped.borrow() {
+            return;
+        }
         let PeerEntry::Readable(record) = entry else {
             continue;
         };
-        if !matches!(record.phase(), PeerPhase::Active { .. })
-            || record.discovery().installed_mac().is_some()
-        {
+        if !record.needs_discovery_exchange() {
             continue;
         }
         let key = *record.key();
@@ -204,6 +197,9 @@ fn dial_discovery(
     let PeerEntry::Readable(record) = found else {
         return Err(NativeClientError::NoPending);
     };
+    if !record.needs_discovery_exchange() {
+        return Err(NativeClientError::NoPending);
+    }
     let mut session = Session::new(Role::Dialer, Phase::Active, record.discovery().clone());
     if matches!(session.discovery, Discovery::None) {
         let generation = random_bytes().ok_or(NativeClientError::Entropy)?;
@@ -220,7 +216,7 @@ fn dial_discovery(
     let exchanged = exchange(
         &mut session,
         &mut pipe,
-        &mut || random_bytes().unwrap_or([0; 32]),
+        &mut random_bytes,
         &mut |commit| {
             if commit.durable {
                 records
@@ -239,6 +235,7 @@ fn dial_discovery(
         }
         Err(ExchangeError::Io(error)) => Err(NativeClientError::Io(error.kind())),
         Err(ExchangeError::BadMessage) => Err(NativeClientError::Phase),
+        Err(ExchangeError::Entropy) => Err(NativeClientError::Entropy),
     }
 }
 

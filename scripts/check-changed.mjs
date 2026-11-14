@@ -75,6 +75,8 @@ const GROUPS = [
   {
     prefixes: [
       "crates/nessa-server/",
+      "crates/nessa-gateway/",
+      "crates/nessa-conversation/",
       "crates/nessa-protocol/",
       "crates/nessa-projection/",
       "crates/nessa-types/",

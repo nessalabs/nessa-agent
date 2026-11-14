@@ -220,3 +220,41 @@ export async function changeVaultPassphrase(page, passphrase, { locked } = {}) {
   await unlock.getByRole("button", { name: "Unlock", exact: true }).click()
   await unlock.waitFor({ state: "hidden" })
 }
+
+/**
+ * The vault dialog's content fills the dialog: the passphrase field and the
+ * primary button end one inset from the dialog's right edge, the same inset
+ * its words keep on the left (#1340). Measured in px; a fixed-width content
+ * box inside a wider dialog leaves the right inset larger than the left.
+ */
+export async function vaultDialogAlignment(page) {
+  return page.locator("[data-vault-dialog]").evaluate((content) => {
+    const panel = content.closest('[role="dialog"]')
+    const box = (node) => node.getBoundingClientRect()
+    const field = content.querySelector("input")
+    const submit = content.querySelector('button[type="submit"]')
+    const label = content.querySelector("label")
+    const edge = box(panel)
+    const leftInset = box(label).left - edge.left
+    return {
+      leftInset,
+      fieldRightInset: edge.right - box(field).right,
+      submitRightInset: edge.right - box(submit).right,
+    }
+  })
+}
+
+/** What `vaultDialogAlignment` measured that breaks its contract, within 1 px. */
+export function vaultAlignmentFailures(measured) {
+  const failures = []
+  const { leftInset, fieldRightInset, submitRightInset } = measured
+  if (Math.abs(fieldRightInset - leftInset) > 1)
+    failures.push(
+      `vault field ends ${fieldRightInset.toFixed(1)} px from the dialog's right edge, not ${leftInset.toFixed(1)} px as its words start`,
+    )
+  if (Math.abs(submitRightInset - fieldRightInset) > 1)
+    failures.push(
+      `vault primary button ends ${submitRightInset.toFixed(1)} px from the right edge, the field ${fieldRightInset.toFixed(1)} px`,
+    )
+  return failures
+}

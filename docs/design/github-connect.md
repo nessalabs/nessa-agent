@@ -187,7 +187,7 @@ read its app. See the [protocol table](../../protocol/README.md).
 
 ## Checks
 
-- Owner sign-in orderings: `crates/nessa-server/tests/github/mod.rs`, with a scripted
+- Owner sign-in orderings: `crates/nessa-gateway/tests/github/mod.rs`, with a scripted
   GitHub, a memory store and a recording audit on a manual clock.
 - Read cancellation and vault generations: `tests/github/reads.rs`; real loopback
   HTTP cancellation and Disconnect: `tests/github/read_http.rs` (both under

@@ -97,16 +97,16 @@ Policy bundles, each the decider for its question:
 | Question | Bundle |
 | --- | --- |
 | Which grants a credential may hold, and who may be issued one | `crates/nessa-auth/src/adapters/cedar/policies.cedar` (`hold.peer` allows a gateway `conversation.read` and `environment.serve`) |
-| What the owner may do with a conversation | `crates/nessa-server/src/conversation/infrastructure/access_policy/cedar/ownership.cedar` |
-| What a paired reader may do | `crates/nessa-server/src/conversation/infrastructure/access_policy/cedar/readers.cedar` |
-| Who may share | `crates/nessa-server/src/conversation/infrastructure/access_policy/cedar/shares.cedar` |
-| Which tools a turn may call | `crates/nessa-server/src/conversation/infrastructure/tool_policy/cedar/tools.cedar` |
-| Which host and program a command may use | `crates/nessa-server/src/conversation/infrastructure/tool_policy/cedar/commands.cedar` |
-| Who may edit a remembered permission rule | `crates/nessa-server/src/conversation/infrastructure/permission_rules/cedar/rules.cedar` (the owner; a grant is refused) |
+| What the owner may do with a conversation | `crates/nessa-conversation/src/infrastructure/access_policy/cedar/ownership.cedar` |
+| What a paired reader may do | `crates/nessa-conversation/src/infrastructure/access_policy/cedar/readers.cedar` |
+| Who may share | `crates/nessa-conversation/src/infrastructure/access_policy/cedar/shares.cedar` |
+| Which tools a turn may call | `crates/nessa-conversation/src/infrastructure/tool_policy/cedar/tools.cedar` |
+| Which host and program a command may use | `crates/nessa-conversation/src/infrastructure/tool_policy/cedar/commands.cedar` |
+| Who may edit a remembered permission rule | `crates/nessa-conversation/src/infrastructure/permission_rules/cedar/rules.cedar` (the owner; a grant is refused) |
 | Which agent or command a peer may lease on a host | `crates/nessa-env-serve/src/infrastructure/cedar/policies.cedar` |
 
 The socket has one admission, `admit_request` in
-`crates/nessa-server/src/product/read_access.rs`. A paired command is
+`crates/nessa-gateway/src/product/read_access.rs`. A paired command is
 returned as `Initiation::grant(receiver, policy_revision)`. The turn records
 that grant and that epoch. An owner surface is `Initiation::owner()`. A
 device signs in as the binding owner, so Drive works for the owner's phone.
@@ -131,7 +131,7 @@ through `shares.cedar`.
 and the policy and admitted nothing new. [#793](https://github.com/nessalabs/nessa-agent/issues/793)
 lets a party signed in as its grantor drive the one conversation, text only,
 through `admit_request`. Tool checking
-(`crates/nessa-server/src/conversation/application/drive_tools.rs`) keeps the
+(`crates/nessa-conversation/src/application/drive_tools.rs`) keeps the
 policy of the admitted epoch and holds that revision across the save. A
 change of policy applies to the next turn.
 
@@ -1443,7 +1443,7 @@ pin. The LAN section does not add a discovery step.
 | P-pending | no enrollment | Enrollment starts | The one-use code | Pending. No session and no grant stream. | Pairing | The peer record at `Pending`, and the invitation's same-person choice. The choice is true or false and does not change after this commit. No link row. The gateway principal is not known yet. | Target the invitation, before none, after Pending, cause enrollment, initiator the owner. The choice is part of that record. |
 | P-active | Pending | Enrollment completes | The credential id and the receiver are stored. The invitation's choice is the one P-pending stored. No link for this gateway key remains after a revoke. A remaining link is G-unlink-retry, and this commit waits. | Active. No phase is added. Subscriptions can open. Discovery field is `none` until P-key or P-accept. | Enrollment | The phase `Active`, the credential id, and the receiver, in the same write of the credential store. When the choice is true, the link row is the next grant-store write, as G-link. A failure of that next write is G-link-retry. Admission does not report the person until the link commits. When the choice is false, no link is written. A false choice does not clear a stale link by omission. The choice is not asked again. No phase besides `Pending`, `Active`, and `Revoked`. | Target the peer, before Pending, after Active, cause enrollment complete, initiator the owner |
 | P-revoke | Pending or Active | Enrollment revoke | The owner's revoke | Revoked. No announcement. | The owner | The phase `Revoked` commits in the credential store. The link removal is the next grant-store write, G-unlink. A failure of that next write is G-unlink-retry. The two stores are not one commit. | Target the peer, before Pending or Active, after Revoked, cause revoke, initiator the owner |
-| P-key | none, phase Active | The dialer mints one generation | This side is the dialer. The phase is Active. No generation is unfinished. A new generation does not start while one is unfinished. | keyed | The dialer | The generation id, 32 bytes, and this side's X25519 private key (RFC 7748), 32 bytes. The public half is X25519(private, basepoint 9), the 32-byte little-endian u-coordinate, not an encoding of the private key, and it is sent only after this commit. No peer public. No discovery byte is sent in this commit. | Target the peer, before none, after keyed, cause local key, initiator this gateway |
+| P-key | none, phase Active, enrollment created with discovery enabled | The dialer mints one generation | This side is the dialer. The phase is Active. No generation is unfinished. A new generation does not start while one is unfinished. | keyed | The dialer | The generation id, 32 bytes, and this side's X25519 private key (RFC 7748), 32 bytes. The public half is X25519(private, basepoint 9), the 32-byte little-endian u-coordinate, not an encoding of the private key, and it is sent only after this commit. No peer public. No discovery byte is sent in this commit. | Target the peer, before none, after keyed, cause local key, initiator this gateway |
 | P-publish | keyed or offered | Send this side's public half | The ephemeral private key for this generation is already durable. The bytes are X25519(private, basepoint 9), the RFC 7748 32-byte little-endian u-coordinate, and they are not 32 zero bytes. They are not an encoding of the private key. The private key is durable before its public half is sent. | The same state | This gateway | None | None |
 | P-offer | keyed | The peer's public key for this same generation is known | The `keyed` write has committed. The generation matches. The peer public is exactly 32 bytes and is not 32 zero bytes. Any other public key takes P-reject. | offered | This gateway | Add the peer's public key. `stored` is sent only after this commit. | Target the peer, before keyed, after offered, cause peer public, initiator this gateway |
 | P-accept | none, phase Active | The dialer's generation and public key arrive | This side is the granting gateway. It has not minted a generation. The phase is Active. The dialer's public key is exactly 32 bytes and is not 32 zero bytes. Any other public key takes P-reject. | offered | The granting gateway | That generation, this side's new X25519 private key (RFC 7748), 32 bytes, and the dialer's public key. The public half this side will send is X25519(private, basepoint 9), the 32-byte little-endian u-coordinate, not an encoding of the private key. This commit finishes before this side sends its public half. | Target the peer, before none, after offered, cause accept dialer generation, initiator this gateway |
@@ -2070,3 +2070,15 @@ Paired peer gateways (#705), which do not store the discovery key. This
 slice adds the agreement and the stored field. Sequenced after the grant
 slices so discovery does not become a second enrollment.
 ```
+
+#### Discovery scheduling and enrollment identity
+
+| Ordering | Required behavior |
+| --- | --- |
+| Restore a record without discovery eligibility | Keep it silent; only a newly saved enrollment opts in. |
+| An installed or offline peer stalls during discovery retry | Token refresh proceeds independently. Stop withdraws the publication before joining the current attempt; no further peer is attempted. |
+| Entropy fails while accepting or replacing a discovery generation | Refuse before any resulting transition is persisted or sent; retain the prior record. |
+| Restart after installed is saved but before delivery | Retry the pinned exchange for installed records too; local persistence is not remote confirmation. |
+| Re-pair the same gateway key after an earlier enrollment ends | Select the current Active credential and carry its invitation identity into each discovery write. Recheck its credential on commit; never write an older enrollment. |
+
+The scheduler periodically retries eligible Active records, including installed ones. This deliberately does not claim remote installation confirmation.

@@ -355,7 +355,7 @@ Slice A's regressions, by row. "Domain" is the lease aggregate's rule
 recorded stream's (`crates/nessa-sdk/tests/application/agent_execution/sessions/leases.rs`),
 and "in process" drives a real conversation through the port with the
 in-process adapter or a substitute, or for L9 also the lease's fence alone
-(`crates/nessa-server/tests/conversation/leases.rs` and
+(`crates/nessa-conversation/tests/conversation/leases.rs` and
 `environment.rs` beside it). The domain and in-process tests are named for
 their rows; the fold's are named for what they show.
 
@@ -516,7 +516,7 @@ never run somewhere else.
 | Lost connection | the lease ends as lost at once (no reconnect budget yet); its end is asked of a new connection with `Account` | the host ends every lease of a lost connection and records what that took |
 
 **Orderings the SSH adapter meets** (gate 15). Each row has its test, in
-`crates/nessa-server/tests/conversation/ssh_environment.rs` (adapter),
+`crates/nessa-conversation/tests/conversation/ssh_environment.rs` (adapter),
 `crates/nessa-env-serve/tests/serve.rs` (host), `tests/env_serve_binary.rs` (the real
 binary over pipes) and `tests/conversation/leases.rs` (service).
 

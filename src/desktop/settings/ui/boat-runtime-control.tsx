@@ -6,7 +6,7 @@ import type {
   BoatVmLifetime,
 } from "@nessa/client"
 import type { BoatGateway } from "../adapters/boat-gateway"
-import { ItemRow, Segmented } from "./settings-controls"
+import { Choice, ItemRow } from "./settings-controls"
 
 const durations = [3600, 14_400, 28_800, 86_400] as const
 function label(lifetime: BoatVmLifetime): string {
@@ -147,17 +147,18 @@ export function BoatRuntimeControl({
         label="Auto-stop VMs"
         detail={status}
         unavailable={!gateway || !settings || busy}
-      >
-        <Segmented
-          label="Auto-stop VMs"
-          value={selection}
-          options={options}
-          onChange={(next) => {
-            setSelection(next)
-            void submit(next)
-          }}
-        />
-      </ItemRow>
+        control={
+          <Choice
+            label="Auto-stop VMs"
+            value={selection || undefined}
+            options={options}
+            onChange={(next) => {
+              setSelection(next)
+              void submit(next)
+            }}
+          />
+        }
+      />
       {error && (
         <p role="alert" className="settings-boat-note">
           {error}{" "}

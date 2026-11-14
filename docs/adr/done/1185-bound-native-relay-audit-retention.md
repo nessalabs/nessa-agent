@@ -72,7 +72,7 @@ rolls the whole row back.
 | A failed insert or a failed trim commits nothing: gap, cursor, events, and both stores match the pre-transition rows. | The same test aborts the insert and, separately, the delete. Selection refusal stays `cleanup_audit_failure_refuses_disable`. Page refusal stays `failed_page_rolls_back_events_and_cursor_and_reopen_replays`. |
 | No later job is required for the cap to hold. | There is no sweep and no `COUNT(*)` in the transition. The delete is the statement above. |
 
-`auditRows >= storedEvents` in `crates/nessa-server/build.rs` keeps one bulk
+`auditRows >= storedEvents` in `crates/nessa-gateway/build.rs` keeps one bulk
 expiry inside the cap, so the expired identities are the rows the trim keeps.
 
 ## Alternatives considered
@@ -114,9 +114,9 @@ The tree under review is the committed head; do not restack it during the
 check. Intended behavior is the state table above.
 
 Scope: `SqliteRelayStore::gap` and `bind` in
-`crates/nessa-server/src/github_relay/infrastructure/sqlite.rs`, the single
+`crates/nessa-gateway/src/github_relay/infrastructure/sqlite.rs`, the single
 trim statement those transitions share with selection, page commit, and
-unbind, the regression in `crates/nessa-server/tests/github_relay/inbox.rs`,
+unbind, the regression in `crates/nessa-gateway/tests/github_relay/inbox.rs`,
 this record, and the retention paragraph in
 `docs/state/services/github-webhooks/README.md`. Out of scope: the HTTP gap
 decoder, Cloudflare quotas, desktop Settings rendering, and migration of

@@ -13,9 +13,11 @@ use hkdf::Hkdf;
 use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
+use std::future::Future;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::time::Duration;
 use subtle::ConstantTimeEq;
+use tokio::sync::watch;
 use x25519_dalek::{PublicKey, StaticSecret};
 use zeroize::Zeroize;
 
@@ -1062,6 +1064,8 @@ pub enum ExchangeError {
     Io(std::io::Error),
     Refused,
     BadMessage,
+    /// No key material was generated; no derived transition was committed.
+    Entropy,
 }
 
 /// Run one side of the exchange. `sends_first` is the dialer: it writes the
@@ -1072,7 +1076,7 @@ pub enum ExchangeError {
 pub fn exchange(
     session: &mut Session,
     pipe: &mut dyn DiscoveryPipe,
-    entropy: &mut dyn FnMut() -> [u8; 32],
+    entropy: &mut dyn FnMut() -> Option<[u8; 32]>,
     persist: &mut dyn FnMut(&Commit) -> Result<(), std::io::Error>,
     sends_first: bool,
 ) -> Result<(), ExchangeError> {
@@ -1142,7 +1146,7 @@ fn finish_or(session: &Session, error: ExchangeError) -> Result<(), ExchangeErro
 fn read_one(
     session: &mut Session,
     pipe: &mut dyn DiscoveryPipe,
-    entropy: &mut dyn FnMut() -> [u8; 32],
+    entropy: &mut dyn FnMut() -> Option<[u8; 32]>,
     persist: &mut dyn FnMut(&Commit) -> Result<(), std::io::Error>,
 ) -> Result<bool, ExchangeError> {
     let frame = pipe.recv_frame().map_err(ExchangeError::Io)?;
@@ -1151,7 +1155,17 @@ fn read_one(
     }
     let inbound = decode_message(&frame).ok_or(ExchangeError::BadMessage)?;
     let before = session.discovery.name();
-    let (next, commits) = session.receive(inbound, entropy);
+    let mut entropy_failed = false;
+    let (next, commits) = session.receive(inbound, &mut || match entropy() {
+        Some(bytes) => bytes,
+        None => {
+            entropy_failed = true;
+            [0; 32]
+        }
+    });
+    if entropy_failed {
+        return Err(ExchangeError::Entropy);
+    }
     for commit in &commits {
         if commit.durable {
             persist(commit).map_err(ExchangeError::Io)?;
@@ -1179,3 +1193,37 @@ fn unb64(text: &str) -> Option<[u8; 32]> {
 #[cfg(test)]
 #[path = "../../tests/discovery.rs"]
 mod tests;
+
+/// A publication effect, independent of the pinned discovery exchange.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AnnouncementStep {
+    Refresh,
+    Withdraw,
+}
+
+/// Refresh tokens while discovery runs. On stop, withdraw first, then join
+/// the owned discovery future so its physical worker is not detached.
+pub async fn maintain_announcement(
+    mut stopped: watch::Receiver<bool>,
+    discovery: impl Future<Output = ()>,
+    mut publication: impl FnMut(AnnouncementStep),
+) {
+    tokio::pin!(discovery);
+    let mut completed = false;
+    loop {
+        if *stopped.borrow() {
+            break;
+        }
+        publication(AnnouncementStep::Refresh);
+        tokio::select! {
+            biased;
+            _ = stopped.changed() => break,
+            _ = &mut discovery => { completed = true; break; }
+            _ = nessa_timer::clock::sleep(DISCOVERY_WINDOW / 4) => {}
+        }
+    }
+    publication(AnnouncementStep::Withdraw);
+    if !completed {
+        discovery.await;
+    }
+}

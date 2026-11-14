@@ -10,6 +10,9 @@ sourceRevision: "a4f787725cff7945c17850511685bd4f9825b049"
 sources:
   - crates/nessa-peer-gateways/src/application/discovery.rs
   - crates/nessa-peer-gateways/tests/discovery.rs
+  - crates/nessa-peer-gateways/tests/discovery_records.rs
+  - crates/nessa-peer-gateways/src/infrastructure/records.rs
+  - crates/nessa-auth/src/adapters/local/registry/pairing/discovery.rs
   - crates/nessa-server/src/composition/peer_discovery.rs
   - docs/design/auth/peer-gateways.md
 model:
@@ -35,19 +38,27 @@ With no such peer, or with a revoked or expired credential, nothing is sent. Exp
 ```mermaid
 stateDiagram-v2
     [*] --> None
-    None --> Keyed: dialer commits private key
+    None --> Keyed: new enrollment dialer commits private key
+    None --> None: legacy enrollment remains silent
     Keyed --> Offered: peer public for this generation
     Offered --> Keyed: public or shared secret rejected
     Offered --> Installed: both sides stored, MAC replaces private key
+    Installed --> Installed: retry delivery over pinned session
     Installed --> Quiet: credential not current
     Installed --> Announced: credential current
     Quiet --> Announced: credential current again
     Announced --> Quiet: credential not current or no installed peer
 ```
 
+## Restart and re-pairing
+
+New dialer enrollments retain discovery eligibility when their pending record is saved. Older records without that field stay silent after upgrade. Once Active, an eligible enrollment retries the pinned exchange even when its own MAC is installed: a saved local key does not prove the peer received the acknowledgement. Token refresh runs independently of retry progress. Stop withdraws the announcement before joining the current attempt, and the scheduler does not start another peer. Network phases share 5-second connect, 10-second TLS, and 30-second exchange budgets; physical storage and worker drain are joined rather than relabelled complete.
+
+On the granting gateway, discovery chooses the current Active enrollment for the peer key. Each write carries that enrollment’s invitation identity and rechecks its current credential. A historical pairing cannot capture a write meant for a later pairing of the same key.
+
 ## Model coverage
 
-The configured safety rules are `AnnounceOnlyInstalled` and `ExpiryKeepsPhase`. The model keeps the phase Active while the credential expires, and it allows an announcement only for an installed field with a current credential. It does not model the X25519 derivation, the HMAC bytes, or the DNS-SD registration. Those are held by the discovery tests.
+The configured safety rules are `AnnounceOnlyInstalled` and `ExpiryKeepsPhase`. The model keeps the phase Active while the credential expires, and it allows an announcement only for an installed field with a current credential. It does not model the X25519 derivation, the HMAC bytes, or the DNS-SD registration. Those are held by the discovery tests. The model also excludes legacy enrollment eligibility, scheduling retries, and selection among historical enrollments; the record and registry regressions cover those boundaries.
 
 ## Verification limits
 

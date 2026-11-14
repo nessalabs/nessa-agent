@@ -161,12 +161,14 @@ fn write_metadata(
     loaded: &[StressConversation],
     missing: &[StressConversation],
 ) -> Result<(), String> {
-    let schema = Schema::new(include_str!("../conversation/infrastructure/schema.sql"))
-        .map_err(|error| error.to_string())?;
+    let schema = Schema::new(include_str!(
+        "../../../nessa-conversation/src/infrastructure/schema.sql"
+    ))
+    .map_err(|error| error.to_string())?;
     let connection =
         nessa_local_database::open(path, &schema).map_err(|error| error.to_string())?;
     let grants_schema = Schema::new(include_str!(
-        "../conversation/infrastructure/store/grants.sql"
+        "../../../nessa-conversation/src/infrastructure/store/grants.sql"
     ))
     .map_err(|error| error.to_string())?;
     drop(nessa_local_database::open(grants, &grants_schema).map_err(|error| error.to_string())?);

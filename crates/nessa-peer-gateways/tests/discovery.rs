@@ -492,7 +492,7 @@ fn a_refusal_envelope_does_not_enroll() {
     let error = exchange(
         &mut refused,
         &mut pipe,
-        &mut || key(5),
+        &mut || Some(key(5)),
         &mut |_| Ok(()),
         true,
     );
@@ -564,4 +564,142 @@ impl DiscoveryBytes for Discovery {
             _ => None,
         }
     }
+}
+
+#[test]
+fn restarted_installed_dialer_delivers_the_missing_install_to_offered_grantor() {
+    let generation = key(21);
+    let dialer_private = key(22);
+    let grantor_private = key(23);
+    let offered = Session::new(
+        Role::Dialer,
+        Phase::Active,
+        Discovery::Offered {
+            generation,
+            private_key: dialer_private,
+            peer_public: public_half(&grantor_private),
+        },
+    );
+    let (installed, _) = offered.receive(Inbound::Stored { generation }, &mut || key(24));
+    // Crash after the durable MAC write, before either outgoing acknowledgement.
+    let mut dialer = Session::new(
+        Role::Dialer,
+        Phase::Active,
+        discovery_from_json(&discovery_to_json(&installed.discovery, None).unwrap()).unwrap(),
+    );
+    let mut grantor = Session::new(
+        Role::Grantor,
+        Phase::Active,
+        Discovery::Offered {
+            generation,
+            private_key: grantor_private,
+            peer_public: public_half(&dialer_private),
+        },
+    );
+    let (dialer_tx, grantor_rx) = std::sync::mpsc::channel();
+    let (grantor_tx, dialer_rx) = std::sync::mpsc::channel();
+    let mut dialer_pipe = Queue {
+        tx: dialer_tx,
+        rx: dialer_rx,
+    };
+    let mut grantor_pipe = Queue {
+        tx: grantor_tx,
+        rx: grantor_rx,
+    };
+    exchange(
+        &mut dialer,
+        &mut dialer_pipe,
+        &mut || Some(key(25)),
+        &mut |_| Ok(()),
+        true,
+    )
+    .unwrap();
+    let mut writes = Vec::new();
+    exchange(
+        &mut grantor,
+        &mut grantor_pipe,
+        &mut || Some(key(26)),
+        &mut |commit| {
+            writes.push(commit.clone());
+            Ok(())
+        },
+        false,
+    )
+    .unwrap();
+    assert_eq!(
+        grantor.discovery.installed_mac(),
+        dialer.discovery.installed_mac()
+    );
+    assert!(writes
+        .iter()
+        .any(|commit| commit.durable && commit.discovery.installed_mac().is_some()));
+}
+
+#[test]
+fn entropy_failure_refuses_before_persistence_or_outbound_messages() {
+    let (outbound, observed) = std::sync::mpsc::channel();
+    let (inbound, received) = std::sync::mpsc::channel();
+    inbound
+        .send(encode_message(&Outbound::Publish {
+            generation: key(30),
+            public_key: public_half(&key(31)),
+        }))
+        .unwrap();
+    let mut pipe = Queue {
+        tx: outbound,
+        rx: received,
+    };
+    let mut session = active(Role::Grantor);
+    let mut writes = 0;
+    let result = exchange(
+        &mut session,
+        &mut pipe,
+        &mut || None,
+        &mut |_| {
+            writes += 1;
+            Ok(())
+        },
+        false,
+    );
+    assert!(matches!(result, Err(super::ExchangeError::Entropy)));
+    assert_eq!(writes, 0);
+    assert!(observed.try_recv().is_err());
+    assert!(matches!(session.discovery, Discovery::None));
+}
+
+#[tokio::test(start_paused = true)]
+async fn stalled_discovery_does_not_block_refresh_or_withdraw_and_is_still_joined() {
+    let (stop, stopped) = tokio::sync::watch::channel(false);
+    let (steps, mut observed) = tokio::sync::mpsc::unbounded_channel();
+    let (release, held) = tokio::sync::oneshot::channel();
+    let task = tokio::spawn(super::maintain_announcement(
+        stopped,
+        async {
+            held.await.unwrap();
+        },
+        move |step| {
+            steps.send(step).unwrap();
+        },
+    ));
+    assert_eq!(
+        observed.recv().await,
+        Some(super::AnnouncementStep::Refresh)
+    );
+    tokio::time::advance(DISCOVERY_WINDOW).await;
+    assert_eq!(
+        observed.recv().await,
+        Some(super::AnnouncementStep::Refresh)
+    );
+    stop.send_replace(true);
+    assert_eq!(
+        observed.recv().await,
+        Some(super::AnnouncementStep::Withdraw)
+    );
+    assert!(
+        !task.is_finished(),
+        "withdrawal does not detach the owned discovery attempt"
+    );
+    release.send(()).unwrap();
+    task.await.unwrap();
+    assert!(observed.recv().await.is_none());
 }

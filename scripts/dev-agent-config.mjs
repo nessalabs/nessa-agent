@@ -147,7 +147,7 @@ function skip(reason, remedy) {
 
 /**
  * The stage/instance namespace, resolved the way the server resolves it in
- * `crates/nessa-server/src/env/paths.rs` — that file is the contract; this
+ * `crates/nessa-gateway/src/env/paths.rs` — that file is the contract; this
  * mirrors it because a `.mjs` script cannot call into the Rust crate.
  *
  * @returns {string} absolute namespace root, the directory holding `auth/`

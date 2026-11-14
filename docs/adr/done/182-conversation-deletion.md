@@ -278,7 +278,7 @@ A delete is also one of the requests the socket bounds per connection; that
 bound is the socket's rule for every request, not a deletion's, and is not
 specified here.
 
-**Each row's tests** (in `crates/nessa-server/tests/conversation/deletion.rs`
+**Each row's tests** (in `crates/nessa-conversation/tests/conversation/deletion.rs`
 unless named otherwise; SDK tests in
 `crates/nessa-sdk/tests/infrastructure/acp/contracts/deletion.rs`):
 

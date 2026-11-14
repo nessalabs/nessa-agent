@@ -23,17 +23,17 @@ sources:
   - crates/nessa-auth/src/adapters/cedar/evaluator_tests.rs
   - crates/nessa-auth/src/adapters/local/registry.rs
   - crates/nessa-auth/tests/adapters/local/webhook_issue.rs
-  - crates/nessa-server/src/product/socket.rs
-  - crates/nessa-server/src/product/state.rs
-  - crates/nessa-server/src/product/read_access.rs
+  - crates/nessa-gateway/src/product/socket.rs
+  - crates/nessa-gateway/src/product/state.rs
+  - crates/nessa-gateway/src/product/read_access.rs
   - crates/nessa-server/src/composition/webhooks.rs
   - crates/nessa-server/src/composition/runtime_config.rs
   - crates/nessa-server/src/composition/local_auth.rs
   - crates/nessa-server/src/composition/root.rs
-  - crates/nessa-server/src/core/shutdown.rs
-  - crates/nessa-server/src/webhooks/infrastructure/runtime.rs
+  - crates/nessa-gateway/src/core/shutdown.rs
+  - crates/nessa-gateway/src/webhooks/infrastructure/runtime.rs
   - crates/nessa-server/tests/webhooks/infrastructure/product.rs
-  - crates/nessa-server/tests/webhooks/infrastructure/runtime.rs
+  - crates/nessa-gateway/tests/webhooks/infrastructure/runtime.rs
   - crates/nessa-server/tests/composition/webhooks.rs
   - crates/nessa-webhooks/src/application/registration.rs
   - crates/nessa-webhooks/src/infrastructure/outbox/intents.rs
@@ -45,7 +45,7 @@ sources:
   - crates/nessa-webhooks/tests/infrastructure/outbox/registration_origin.rs
   - crates/nessa-webhooks/tests/infrastructure/outbox/intent_rows.rs
   - crates/nessa-webhooks/tests/infrastructure/outbox/schema.rs
-  - crates/nessa-server/src/webhooks/infrastructure/runtime/delivery.rs
+  - crates/nessa-gateway/src/webhooks/infrastructure/runtime/delivery.rs
   - crates/nessa-server/tests/webhooks/infrastructure/product_delivery.rs
 diagramLinks: {}
 diagramDetails:

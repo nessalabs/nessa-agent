@@ -13,10 +13,10 @@ sources:
   - "src/session/adapters/lifecycle/browser-renewal.test.ts"
   - "src/session/application/browser-session.ts"
   - "src/session/application/browser-session.test.ts"
-  - "crates/nessa-server/src/browser_session/entrypoint/http.rs"
-  - "crates/nessa-server/src/browser_session/application/session.rs"
-  - "crates/nessa-server/src/browser_session/domain/value_objects/lifetime.rs"
-  - "crates/nessa-server/tests/browser_session/persistence.rs"
+  - "crates/nessa-gateway/src/browser_session/entrypoint/http.rs"
+  - "crates/nessa-gateway/src/browser_session/application/session.rs"
+  - "crates/nessa-gateway/src/browser_session/domain/value_objects/lifetime.rs"
+  - "crates/nessa-gateway/tests/browser_session/persistence.rs"
 diagramLinks: {}
 model:
   spec: tla/services/host/startup/BrowserLogout.tla

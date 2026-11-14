@@ -413,36 +413,36 @@ const desktopRetirementBoundaries = [
     declaration: "use crate::desktop_runtime::{",
   },
   {
-    path: "crates/nessa-server/src/desktop_runtime/application/mod.rs",
+    path: "crates/nessa-conversation/src/desktop_runtime/application/mod.rs",
     declaration: "mod retirement;",
   },
   {
-    path: "crates/nessa-server/src/desktop_runtime/infrastructure/mod.rs",
+    path: "crates/nessa-conversation/src/desktop_runtime/infrastructure/mod.rs",
     declaration: "mod files;",
   },
   {
-    path: "crates/nessa-server/src/desktop_runtime/domain/mod.rs",
-    declaration: "pub(crate) use retirement::{",
+    path: "crates/nessa-conversation/src/desktop_runtime/domain/mod.rs",
+    declaration: "pub use retirement::{",
   },
   {
-    path: "crates/nessa-server/src/desktop_runtime/domain/retirement.rs",
-    declaration: "pub(crate) struct RetirementRequest",
+    path: "crates/nessa-conversation/src/desktop_runtime/domain/retirement.rs",
+    declaration: "pub struct RetirementRequest",
   },
   {
-    path: "crates/nessa-server/src/desktop_runtime/domain/retirement.rs",
-    declaration: "pub(crate) struct RetirementFence",
+    path: "crates/nessa-conversation/src/desktop_runtime/domain/retirement.rs",
+    declaration: "pub struct RetirementFence",
   },
   {
-    path: "crates/nessa-server/src/desktop_runtime/domain/retirement.rs",
-    declaration: "pub(crate) struct RetirementCause",
+    path: "crates/nessa-conversation/src/desktop_runtime/domain/retirement.rs",
+    declaration: "pub struct RetirementCause",
   },
   {
-    path: "crates/nessa-server/src/desktop_runtime/domain/retirement.rs",
-    declaration: "pub(crate) fn validate_retirement_evidence",
+    path: "crates/nessa-conversation/src/desktop_runtime/domain/retirement.rs",
+    declaration: "pub fn validate_retirement_evidence",
   },
   {
-    path: "crates/nessa-server/src/conversation/application/service.rs",
-    declaration: "pub(crate) fn retirement_cause",
+    path: "crates/nessa-conversation/src/application/service.rs",
+    declaration: "pub fn retirement_cause",
   },
   {
     path: "crates/nessa-server/src/composition/root.rs",
@@ -467,12 +467,12 @@ for (const boundary of desktopRetirementBoundaries) {
 
 const portableRuntimeBoundaries = [
   {
-    path: "crates/nessa-server/src/desktop_runtime/domain/mod.rs",
-    declaration: "pub(crate) use retirement::RunningRuntime;",
+    path: "crates/nessa-conversation/src/desktop_runtime/domain/mod.rs",
+    declaration: "pub use retirement::RunningRuntime;",
   },
   {
-    path: "crates/nessa-server/src/desktop_runtime/domain/retirement.rs",
-    declaration: "pub(crate) struct RunningRuntime",
+    path: "crates/nessa-conversation/src/desktop_runtime/domain/retirement.rs",
+    declaration: "pub struct RunningRuntime",
   },
 ]
 

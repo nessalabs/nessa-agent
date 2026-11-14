@@ -10,12 +10,12 @@ sources:
   - crates/nessa-vault/src/application/vault.rs
   - crates/nessa-client-core/src/local_product.rs
   - crates/nessa-vault/src/domain/passphrase.rs
-  - crates/nessa-server/src/core/process_memory.rs
+  - crates/nessa-gateway/src/core/process_memory.rs
   - crates/nessa-vault/tests/passphrase_change.rs
   - crates/nessa-vault/src/infrastructure/encrypted_file.rs
   - crates/nessa-vault/tests/lifecycle.rs
-  - crates/nessa-server/src/product/vault.rs
-  - crates/nessa-server/src/vault/infrastructure/legacy_github.rs
+  - crates/nessa-gateway/src/product/vault.rs
+  - crates/nessa-gateway/src/vault/infrastructure/legacy_github.rs
   - crates/nessa-server/src/composition/vault_session.rs
   - src-tauri/src/vault/infrastructure/process.rs
   - src/vault/ui/provider.tsx

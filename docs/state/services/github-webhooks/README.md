@@ -13,8 +13,8 @@ sources:
   - packages/github-webhooks/src/webhooks/infrastructure/signature.ts
   - packages/github-webhooks/src/relay/application/read.ts
   - packages/github-webhooks/src/relay/infrastructure/http.ts
-  - crates/nessa-server/src/github_relay/infrastructure/transport.rs
-  - crates/nessa-server/tests/github_relay/transport.rs
+  - crates/nessa-gateway/src/github_relay/infrastructure/transport.rs
+  - crates/nessa-gateway/tests/github_relay/transport.rs
   - protocol/fixtures/github-relay-gap.json
   - packages/github-webhooks/src/relay/infrastructure/cedar/evaluator.ts
   - packages/github-webhooks/src/relay/infrastructure/d1.ts
@@ -23,26 +23,26 @@ sources:
   - packages/github-webhooks/migrations/0003_fair_use.sql
   - packages/github-webhooks/src/relay/infrastructure/budget.ts
   - crates/nessa-local-database/src/encryption.rs
-  - crates/nessa-server/src/secrets/keychain.rs
-  - crates/nessa-server/src/secrets/macos.rs
-  - crates/nessa-server/src/secrets/linux.rs
-  - crates/nessa-server/src/github/infrastructure/token_vault.rs
-  - crates/nessa-server/src/github_relay/infrastructure/vault.rs
-  - crates/nessa-server/src/github_relay/application/ports.rs
-  - crates/nessa-server/src/github_relay/application/catch_up.rs
-  - crates/nessa-server/src/github_relay/application/follow.rs
-  - crates/nessa-server/src/github_relay/application/live_events.rs
-  - crates/nessa-server/src/github_relay/infrastructure/selection.rs
+  - crates/nessa-gateway/src/secrets/keychain.rs
+  - crates/nessa-gateway/src/secrets/macos.rs
+  - crates/nessa-gateway/src/secrets/linux.rs
+  - crates/nessa-gateway/src/github/infrastructure/token_vault.rs
+  - crates/nessa-gateway/src/github_relay/infrastructure/vault.rs
+  - crates/nessa-gateway/src/github_relay/application/ports.rs
+  - crates/nessa-gateway/src/github_relay/application/catch_up.rs
+  - crates/nessa-gateway/src/github_relay/application/follow.rs
+  - crates/nessa-gateway/src/github_relay/application/live_events.rs
+  - crates/nessa-gateway/src/github_relay/infrastructure/selection.rs
   - crates/nessa-vault/src/application/vault.rs
-  - crates/nessa-server/src/github_relay/infrastructure/credentials.rs
-  - crates/nessa-server/src/product/github.rs
-  - crates/nessa-server/tests/product/socket/vault.rs
-  - crates/nessa-server/src/github/application/connections.rs
+  - crates/nessa-gateway/src/github_relay/infrastructure/credentials.rs
+  - crates/nessa-gateway/src/product/github.rs
+  - crates/nessa-gateway/tests/product/socket/vault.rs
+  - crates/nessa-gateway/src/github/application/connections.rs
   - src/desktop/settings/ui/github-row.tsx
   - src/desktop/settings/ui/github-live-help.tsx
-  - crates/nessa-server/src/github_relay/application/catch_up.rs
-  - crates/nessa-server/src/github_relay/application/follow.rs
-  - crates/nessa-server/src/github_relay/infrastructure/sqlite.rs
+  - crates/nessa-gateway/src/github_relay/application/catch_up.rs
+  - crates/nessa-gateway/src/github_relay/application/follow.rs
+  - crates/nessa-gateway/src/github_relay/infrastructure/sqlite.rs
   - crates/nessa-server/src/composition/github_relay.rs
   - protocol/defaults/github-relays.json
   - protocol/defaults/github-relay-contract.json
@@ -304,6 +304,6 @@ bounds do not claim to erase third-party HTTP-library buffers or provide E2EE.
 
 ## Bounded rule model
 
-Owns expected-user verification before authorized relay reading, audit-before-inbox access and one local page/cursor atomic commit. Signature validation, quotas, live watch, vault state, retention windows and cross-page sequence validation are excluded and need their own models. This finite abstraction checks safety only. It does not execute or verify the implementation, promise eventual completion, or qualify external effects. Existing source checkpoints and historical test receipts retain their earlier scope. The scoped model review inspected `packages/github-webhooks/src/relay/application/read.ts`, `crates/nessa-server/src/github_relay/application/catch_up.rs`.
+Owns expected-user verification before authorized relay reading, audit-before-inbox access and one local page/cursor atomic commit. Signature validation, quotas, live watch, vault state, retention windows and cross-page sequence validation are excluded and need their own models. This finite abstraction checks safety only. It does not execute or verify the implementation, promise eventual completion, or qualify external effects. Existing source checkpoints and historical test receipts retain their earlier scope. The scoped model review inspected `packages/github-webhooks/src/relay/application/read.ts`, `crates/nessa-gateway/src/github_relay/application/catch_up.rs`.
 
 [Private live repository selection](live-selection.md) owns atomic local selection and removal evidence.
