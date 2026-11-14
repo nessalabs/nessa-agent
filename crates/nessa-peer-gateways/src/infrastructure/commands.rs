@@ -209,6 +209,9 @@ pub struct PeerCommands {
     peers: Mutex<PeerTurns>,
     /// What the poller last saw of each peer.
     syncs: Mutex<HashMap<DeviceKey, PeerSync>>,
+    /// Moves when a granted chat is added, withdrawn, or the cache is emptied.
+    /// The owner's conversation list reads again.
+    shared_chats: watch::Sender<u64>,
     /// Owner commands between their intent and their outcome: shutdown waits
     /// for them before it closes the audit.
     running: watch::Sender<Admission>,
@@ -372,8 +375,20 @@ impl PeerCommands {
                 first_cycles: HashMap::new(),
             }),
             syncs: Mutex::new(HashMap::new()),
+            shared_chats: watch::channel(0).0,
             running: watch::channel(Admission::default()).0,
         }
+    }
+    /// Wakes when the set of granted chats changes. The receiver has already
+    /// seen the current count, so the first wait is the next change.
+    pub fn shared_chat_changes(&self) -> watch::Receiver<u64> {
+        let mut changes = self.shared_chats.subscribe();
+        changes.borrow_and_update();
+        changes
+    }
+    pub(crate) fn note_shared_chats(&self) {
+        self.shared_chats
+            .send_modify(|generation| *generation = generation.saturating_add(1));
     }
     /// The records these commands are over.
     pub fn records(&self) -> &Arc<PeerRecords> {
@@ -870,6 +885,7 @@ impl PeerCommands {
         let (after, outcome) = match removed {
             Ok(Some(entry)) => {
                 self.set_sync(key, None);
+                self.note_shared_chats();
                 (PeerState::Absent, Ok(entry))
             }
             Ok(None) => (PeerState::Absent, Err(PeerError::NotFound)),
@@ -1132,6 +1148,12 @@ impl PeerCommands {
         after: PeerHolding,
         outcome: Result<(), &'static str>,
     ) -> PollerRecord<'_> {
+        if matches!(
+            cause,
+            PollerCause::Withdrawn { .. } | PollerCause::ResetRequired | PollerCause::CacheDamaged
+        ) {
+            self.note_shared_chats();
+        }
         let operation = Uuid::new_v4();
         let name = format!("{cause:?}");
         let kept = self.audit.record(PeerAuditRecord::PollerChanged {

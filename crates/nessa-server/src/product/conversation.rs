@@ -8,9 +8,9 @@ use super::{
 use crate::conversation::application::{
     error_code, rule_principal, CatalogueHead, ConversationCaller, ConversationError,
     ConversationService, ListedPermissionRule, PermissionRuleCatalog, PreferenceUpdate,
-    QuestionChoiceInput, ReadOpening, RequestedAgent, RequestedConversation, RuleCatalogError,
-    RuleChange, RulePrincipal, SubmissionMode, SubmittedFile, SubmittedImage, SubmittedMessage,
-    SubmittedUpload, UsageLimitPreferenceFacts, UsageLimitPreferenceGrant,
+    QuestionChoiceInput, ReadOpening, Reader, RequestedAgent, RequestedConversation,
+    RuleCatalogError, RuleChange, RulePrincipal, SubmissionMode, SubmittedFile, SubmittedImage,
+    SubmittedMessage, SubmittedUpload, UsageLimitPreferenceFacts, UsageLimitPreferenceGrant,
 };
 use base64::Engine as _;
 use nessa_auth::application::ports::{AccessError, AccessSnapshot};
@@ -155,6 +155,20 @@ async fn answer(
                 super::read_access::admit_command_target(state, session, &id, $when_deleted).await
             {
                 return Ok(failure(&frame.id, code));
+            }
+            // A granted chat is read from the peer cache. A command that
+            // would change it is refused here and is not sent to the grantor.
+            if !matches!(
+                frame.method.as_str(),
+                "conversation.read"
+                    | "conversation.readEarlier"
+                    | "conversation.peek"
+                    | "conversation.permissionReview"
+                    | "conversation.questionReview"
+                    | "conversation.receipt"
+                    | "conversation.messageStatus"
+            ) {
+                super::shared_chat::refuse_write(state, &id).await?;
             }
             value
         }};
@@ -415,9 +429,20 @@ async fn answer(
                     )
                     .await;
                 trace_conversation_observe(observed.as_ref().err());
-                let observed = observe_result(observed?);
+                let mut observed = observe_result(observed?);
                 super::read_access::admit_index_rows(state, session, &observed.conversations)
                     .await?;
+                // The client's finished walk replaces the list. Shared chats
+                // are named on that page, once.
+                if observed.complete {
+                    append_shared(
+                        state,
+                        &scope.reader,
+                        params.archived.unwrap_or(false),
+                        &mut observed.conversations,
+                    )
+                    .await;
+                }
                 Ok(success(&frame.id, &observed))
             }
             "conversation.send" | "conversation.steer" => {
@@ -1121,6 +1146,13 @@ pub(super) async fn read_view(
     request_id: &str,
     opening: ReadOpening,
 ) -> Result<(WireConversationView, Option<CommittedCursor>), ConversationError> {
+    if let Some(opened) = super::shared_chat::open_replica(state, id).await? {
+        state
+            .local_timings
+            .observe(&opened.view, state.clock.unix_milliseconds());
+        let view = wire_view(state, opened.view).await?;
+        return Ok((view, Some(opened.cursor)));
+    }
     let read = service
         .read_at(id.clone(), caller(session, request_id.to_owned()), opening)
         .await;
@@ -1158,9 +1190,35 @@ pub(super) async fn read_list(
     // as conversation.observe. The subject tells a list from a read.
     trace_conversation_index(listed.as_ref().err());
     let (listed, head) = listed?;
-    let listed = list_result(listed);
+    let mut listed = list_result(listed);
     super::read_access::admit_index_rows(state, session, &listed.conversations).await?;
+    append_shared(state, &scope.reader, archived, &mut listed.conversations).await;
     Ok((listed, head))
+}
+
+/// The owner's list also names chats a peer granted, from the peer cache.
+/// A cache that cannot be read leaves the local rows in place.
+async fn append_shared(
+    state: &ProductRouteState,
+    reader: &Reader,
+    archived: bool,
+    rows: &mut Vec<ConversationSummary>,
+) {
+    if !matches!(reader, Reader::Owner) {
+        return;
+    }
+    let Some(chats) = super::shared_chat::source(state) else {
+        return;
+    };
+    match chats.list(archived).await {
+        Ok(replicas) => super::shared_chat::append(rows, replicas),
+        Err(error) => {
+            tracing::warn!(
+                error = %error,
+                "shared chats were left out of the conversation list"
+            );
+        }
+    }
 }
 
 fn usage_limit_preference_facts(

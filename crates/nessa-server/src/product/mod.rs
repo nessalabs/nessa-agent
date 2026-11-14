@@ -28,6 +28,10 @@
 //!
 //! `turn_timing` notes, on this machine only, how long a send waited for the
 //! first reply text. `nessa doctor` reads that file; nothing is sent.
+//!
+//! `shared_chat` reads a peer cache into `conversation.list` and
+//! `conversation.read` for the owner's own surface. The cache stays its own
+//! database. A write on that chat is refused here; the grantor is not called.
 
 mod admission;
 mod attachment;
@@ -41,6 +45,7 @@ mod phone_endpoint;
 mod read_access;
 pub(crate) mod record_read;
 mod refusal_causes;
+pub(crate) mod shared_chat;
 mod socket;
 mod state;
 mod subscription;

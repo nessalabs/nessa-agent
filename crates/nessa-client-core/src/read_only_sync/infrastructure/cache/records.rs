@@ -131,6 +131,11 @@ impl ReadOnlyCache {
         }
         let schema = Schema::new(include_str!("schema.sql")).map_err(open_error)?;
         let connection = nessa_local_database::open(path, &schema).map_err(open_error)?;
+        // A poller write and a local open share this file. Wait out a short
+        // lock instead of treating the granted chat as missing.
+        connection
+            .busy_timeout(std::time::Duration::from_secs(5))
+            .map_err(rows::database_error)?;
         Self::from_connection(connection, policy, clock)
     }
 

@@ -785,6 +785,9 @@ impl Shared {
     }
 
     fn read_done(&self, key: DeviceKey, report: ReadReport) -> Pace {
+        if report.moved {
+            self.commands.note_shared_chats();
+        }
         self.commands.set_sync(
             key,
             Some(PeerSync {

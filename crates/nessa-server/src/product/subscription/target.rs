@@ -209,6 +209,8 @@ pub(super) struct Sources {
     hooks: Option<watch::Receiver<u64>>,
     /// The default device, saved from Devices, for the agent catalog.
     default_device: Option<watch::Receiver<Option<String>>>,
+    /// A granted chat was added or withdrawn from a peer cache.
+    shared_chats: Option<watch::Receiver<u64>>,
 }
 
 pub(super) enum Wake {
@@ -238,6 +240,7 @@ impl Sources {
                 environments: None,
                 hooks: None,
                 default_device: None,
+                shared_chats: None,
             },
             Target::View { conversation, .. } => Self {
                 records: Some(records()?.watch(conversation).map_err(closed)?),
@@ -251,6 +254,7 @@ impl Sources {
                 environments: None,
                 hooks: None,
                 default_device: None,
+                shared_chats: None,
             },
             Target::List { .. } => {
                 let owner = caller(session, String::new());
@@ -272,6 +276,11 @@ impl Sources {
                     environments: None,
                     hooks: None,
                     default_device: None,
+                    shared_chats: state
+                        .linking
+                        .peers
+                        .as_ref()
+                        .map(|peers| peers.shared_chat_changes()),
                 }
             }
             // Only the paired environments, the native hooks choice and the
@@ -285,6 +294,7 @@ impl Sources {
                 environments: state.agents_catalog_changes(),
                 hooks: state.native_hooks_changes(),
                 default_device: state.default_device_changes(),
+                shared_chats: None,
             },
         })
     }
@@ -343,6 +353,12 @@ impl Sources {
                 None => std::future::pending().await,
             }
         };
+        let shared_chats = async {
+            match self.shared_chats.as_mut() {
+                Some(shared) => shared.changed().await,
+                None => std::future::pending().await,
+            }
+        };
         tokio::select! {
             changed = default_device => match changed {
                 Ok(()) => Wake::Changed,
@@ -366,6 +382,10 @@ impl Sources {
             },
             changed = hooks => match changed {
                 Ok(()) => Wake::Changed,
+                Err(_) => Wake::Closed,
+            },
+            changed = shared_chats => match changed {
+                Ok(()) => Wake::Catalogue,
                 Err(_) => Wake::Closed,
             },
         }
@@ -1347,6 +1367,7 @@ mod tests {
             environments: None,
             hooks: None,
             default_device: None,
+            shared_chats: None,
         };
         assert!(!sources.drain().await, "nothing waiting");
         live.send(1).unwrap();
@@ -1378,6 +1399,7 @@ mod tests {
             environments: None,
             hooks: None,
             default_device: None,
+            shared_chats: None,
         };
         drop(changes);
         assert!(matches!(sources.changed().await, Wake::Closed));

@@ -1760,6 +1760,15 @@ two databases.
 The access-grant refactor.
 ```
 
+Implemented. On the follower, the owner's `conversation.list`,
+`conversation.observe`, `conversation.read`, and `conversation.subscribe`
+read the peer cache. The chat is that cache's saved projection, with
+read-only capabilities. A command that would change it is refused
+`capabilities_refused` and is not sent to the grantor. The conversation
+metadata file is not written. A paired device of the follower and the
+owner phone do not receive these rows. Live updates from the grantor,
+and a peer's own comment or drive, stay with the later slices.
+
 ### 3. Let a peer comment and drive under its grant
 
 ```markdown

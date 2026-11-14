@@ -240,6 +240,9 @@ pub(crate) struct LinkingRoutes {
     /// enrolled with the native key. `None` answers every peer method
     /// `peer_not_configured`.
     pub(crate) peers: Option<Arc<PeerCommands>>,
+    /// A stand-in for the peer cache, used by tests. Production leaves this
+    /// empty and reads `peers`.
+    pub(crate) shared_chats: Option<Arc<dyn super::shared_chat::SharedChats>>,
 }
 
 /// The hub's devices, the default device, and channel workspaces.
@@ -562,6 +565,15 @@ impl ProductRouteState {
     /// answer `peer_not_configured`.
     pub fn with_peers(mut self, peers: Arc<PeerCommands>) -> Self {
         self.linking.peers = Some(peers);
+        self
+    }
+
+    /// Answer granted chats from `chats` instead of the peer cache.
+    pub(crate) fn with_shared_chats(
+        mut self,
+        chats: Arc<dyn super::shared_chat::SharedChats>,
+    ) -> Self {
+        self.linking.shared_chats = Some(chats);
         self
     }
 
