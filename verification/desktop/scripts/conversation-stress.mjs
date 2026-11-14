@@ -3792,23 +3792,26 @@ const steps = {
         const hint = await dock(run.page)
           .locator(composerControls.notice)
           .filter({ hasText: "Access changes when the agent stops" })
-          .evaluate((notice) => {
-            const field = notice
-              .closest(".desktop-composer")
-              ?.querySelector("textarea")
-            const word = notice.querySelector('[data-slot="status-label-word"]')
-            if (!field || !word) return null
-            const style = getComputedStyle(field)
-            return {
-              marks: notice.querySelectorAll('[data-slot="status-label-mark"]').length,
-              off: Math.round(
-                word.getBoundingClientRect().left -
-                  (field.getBoundingClientRect().left + parseFloat(style.paddingLeft)),
-              ),
-              smaller:
-                parseFloat(getComputedStyle(word).fontSize) < parseFloat(style.fontSize),
-            }
-          }, null, { timeout: 1_000 })
+          .evaluate(
+            (notice) => {
+              const field = notice.closest(".desktop-composer")?.querySelector("textarea")
+              const word = notice.querySelector('[data-slot="status-label-word"]')
+              if (!field || !word) return null
+              const style = getComputedStyle(field)
+              return {
+                marks: notice.querySelectorAll('[data-slot="status-label-mark"]').length,
+                off: Math.round(
+                  word.getBoundingClientRect().left -
+                    (field.getBoundingClientRect().left + parseFloat(style.paddingLeft)),
+                ),
+                smaller:
+                  parseFloat(getComputedStyle(word).fontSize) <
+                  parseFloat(style.fontSize),
+              }
+            },
+            null,
+            { timeout: 1_000 },
+          )
           .catch(() => null)
         // A notice gone by now went with the turn; there is nothing to measure.
         if (hint && (hint.marks !== 0 || Math.abs(hint.off) > 1 || !hint.smaller))
@@ -8896,7 +8899,8 @@ const steps = {
           : null,
       }
     })
-    if (look.prose === null) failures.push("the table answer has no paragraph to size cells against")
+    if (look.prose === null)
+      failures.push("the table answer has no paragraph to size cells against")
     else if (look.cell < look.prose * 0.85)
       failures.push(
         `table cells are ${look.cell}px beside ${look.prose}px prose: small print, not a step below`,
