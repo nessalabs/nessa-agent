@@ -67,9 +67,9 @@
  *                   needs you" heads the list, the one looked at still listed
  *                   and chosen beneath; its count, let go at nought from the
  *                   keyboard, gives the keyboard to the list, whose arrows walk
- *   overview-row-answers a request row shows its title and time, its why and
- *                   its command, and no answers — nor room kept for them: the
- *                   why and the command run on to the time; pointed at (or the
+ *   overview-row-answers a request row shows its title and time, one explanatory
+ *                   line (its command or its why), and no answers — nor room
+ *                   kept for them: that line runs on to the time; pointed at (or the
  *                   keyboard visibly on it, even while another row is hovered;
  *                   never just the chosen one), Deny and Allow Once take the
  *                   time's place with the row's height and the list unchanged; no tooltips;
@@ -2018,8 +2018,8 @@ checks["overview-row-answers"] = async ({ page, engine, options }) => {
   await page.mouse.move(5, 890)
   await page.waitForTimeout(300)
 
-  // At rest: the title with its time, the why, the command — and no answers,
-  // nor room kept for them: the why and the command run on to the time.
+  // At rest: the title with its time and one explanatory line — its command
+  // or its why, as RequestRow renders — with no room kept for the answers.
   const rest = await requestRow(page, 1)
   const restList = await listRects(page)
   await shot(options, page, `overview-row-rest-${engine}`, rows.nth(1))
@@ -2034,8 +2034,10 @@ checks["overview-row-answers"] = async ({ page, engine, options }) => {
     .map((row) => row.id)
   if (unreachable.length > 1)
     failures.push(`at rest a screen reader finds no answers on [${unreachable}]`)
-  if (rest.why === null || rest.command === null)
-    failures.push("at rest the row does not show its why and its command")
+  if ((rest.why === null) === (rest.command === null))
+    failures.push(
+      "at rest the row does not show one explanatory line: its why or command",
+    )
   for (const [line, edge] of [
     ["why", rest.why],
     ["command", rest.command],
@@ -2155,6 +2157,7 @@ checks["overview-row-answers"] = async ({ page, engine, options }) => {
   return {
     measured: {
       rest: {
+        explanations: { why: rest.why !== null, command: rest.command !== null },
         reach: Math.round(rest.time.left - Math.max(rest.why, rest.command)),
         gap: rest.gap,
         height: rest.height,
