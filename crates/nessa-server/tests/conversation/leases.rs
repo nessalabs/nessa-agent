@@ -32,7 +32,9 @@ use super::{
     PublishAnswer, PublishAsk, PublishCall, PublishCallRefusal, PublishFailure, PUBLISH_CALL_WAIT,
 };
 use crate::conversation::application::EnvironmentToolConfig;
-use crate::conversation::domain::{CommandPolicy, Place};
+use crate::conversation::domain::CommandPolicy;
+#[cfg(unix)]
+use crate::conversation::domain::Place;
 use crate::conversation::infrastructure::{
     in_process_environment, DurableConversationCreationAudit, DurableConversationDeletionAudit,
     DurableConversationFileLinkAudit, DurableExecutionAudit, FilePlaces, LocalConversationStore,

@@ -39,22 +39,11 @@ fn file(root: &tempfile::TempDir, directory: &str) -> PathBuf {
 /// Write `body` as the conversation's file in `directory`, private, as a
 /// build writes it, so what is read is the content and not the file.
 fn put(root: &tempfile::TempDir, directory: &str, body: &str) {
-    std::fs::create_dir_all(root.path().join(directory)).unwrap();
-    std::fs::write(file(root, directory), body).unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(
-            file(root, directory),
-            std::fs::Permissions::from_mode(0o600),
-        )
-        .unwrap();
-        std::fs::set_permissions(
-            root.path().join(directory),
-            std::fs::Permissions::from_mode(0o700),
-        )
-        .unwrap();
-    }
+    use std::io::Write;
+    let mut temporary =
+        nessa_local_storage::PrivateTempFile::new_in(&root.path().join(directory)).unwrap();
+    temporary.as_file_mut().write_all(body.as_bytes()).unwrap();
+    temporary.persist(&file(root, directory)).unwrap();
 }
 
 fn binding(byte: u8, context: Option<&str>) -> WorkerBinding {

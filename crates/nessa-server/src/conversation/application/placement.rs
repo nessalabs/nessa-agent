@@ -146,6 +146,10 @@ impl PlaceRecord {
     /// # Errors
     /// [`PlacementError::Unreadable`] for a worker beside a place that is
     /// not the pool.
+    #[cfg_attr(
+        not(unix),
+        allow(dead_code, reason = "the Unix gateway reads place files")
+    )]
     pub(crate) fn read(
         placed: Place,
         worker: Option<WorkerBinding>,
@@ -161,6 +165,10 @@ impl PlaceRecord {
     }
 
     /// Where it was placed when it was made.
+    #[cfg_attr(
+        not(unix),
+        allow(dead_code, reason = "the Unix gateway writes place files")
+    )]
     pub(crate) fn place(&self) -> &Place {
         &self.placed
     }
