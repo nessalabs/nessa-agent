@@ -6,6 +6,7 @@ use crate::conversation::application::service::environment_tools::running_turn;
 use crate::conversation::application::{Environments, ThreadEnvironments};
 #[cfg(unix)]
 use crate::conversation::domain::Place;
+#[cfg(unix)]
 use crate::conversation::domain::RestCause;
 #[cfg(unix)]
 use crate::conversation::infrastructure::FilePlaces;
