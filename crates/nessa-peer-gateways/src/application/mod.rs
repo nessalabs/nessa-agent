@@ -171,6 +171,31 @@ pub enum PeerAuditRecord {
         after: PeerState,
         outcome: Result<(), &'static str>,
     },
+    /// `peer.follow` asked to store which conversations to replicate.
+    /// Nothing has been checked or written yet.
+    FollowRequested {
+        operation: Uuid,
+        initiator: PrincipalId,
+        peer: DeviceKey,
+        conversations: Vec<String>,
+        keep_bytes: u64,
+    },
+    /// That choice ended. `before` is the rule that was stored, `after` the
+    /// rule stored now; either is absent when no rule was stored.
+    /// `replica_reset` is whether the local replica was dropped.
+    FollowFinished {
+        operation: Uuid,
+        initiator: PrincipalId,
+        peer: DeviceKey,
+        before_conversations: Option<Vec<String>>,
+        before_keep_bytes: Option<u64>,
+        after_conversations: Option<Vec<String>>,
+        after_keep_bytes: Option<u64>,
+        replica_reset: bool,
+        before: PeerState,
+        after: PeerState,
+        outcome: Result<(), &'static str>,
+    },
     /// The poller changed what is held of `peer`, after the change was made.
     /// `outcome` is a refusal when the change did not fully land.
     PollerChanged {

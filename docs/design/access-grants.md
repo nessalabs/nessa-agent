@@ -465,6 +465,9 @@ subscribe to). The slice adds one grant target per connection beside the
 eight and does not raise the conversation cap. A second grant subscription
 on that socket is refused `subscription_capacity`.
 
+Peer gateways store the follow rule with `peer.follow` (default none, local only).
+The poller replicates the intersection into the retained cache. Replacing
+the poller with grant and chat subscriptions is the subscribe-follow slice.
 The follow rule may name more than eight chats. The live set on that
 connection is still eight. Before the follower subscribes another chat, it
 unsubscribes one it already opened. The chat it lets go is the least

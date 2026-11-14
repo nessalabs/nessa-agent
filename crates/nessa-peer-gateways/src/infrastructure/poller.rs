@@ -61,7 +61,7 @@ use super::audit::{AUDIT_HEADROOM, AUDIT_QUEUE};
 use super::commands::{
     CycleStop, CycleTurn, EnrollmentEntropySource, PeerCommands, PeerSync, PollerRecord, SyncState,
 };
-use super::records::{PeerEntry, PeerPhase, PeerRecord, SlotOutcome, SlotTransition};
+use super::records::{PeerEntry, PeerPhase, PeerRecord, PeerRecords, SlotOutcome, SlotTransition};
 use crate::application::{PeerHolding, PollerCause, WITHDRAWN_PER_RECORD};
 use nessa_auth::{
     adapters::pairing::NativeIdentity,
@@ -70,8 +70,10 @@ use nessa_auth::{
 };
 use nessa_client_core::pairing::{NativeClientError, NativeEnrollmentClient};
 use nessa_client_core::retained::{
-    ReadFailure, ReadReport, ReaderAccess, ReaderRole, RetainedCache,
+    FollowRule, ReadFailure, ReadReport, ReadStop, ReaderAccess, ReaderRole, RetainedCache,
 };
+use nessa_protocol::clock::Clock as MonotonicClock;
+use nessa_protocol::conversation::domain::ConversationId;
 use nessa_protocol::pairing::socket::WAKE_TICK;
 use nessa_protocol::pairing::wire::NativePairingStatus;
 use nessa_protocol::relay::RelayRefusal;
@@ -731,8 +733,23 @@ impl Shared {
             let id = credential.credential().as_str().to_owned();
             let (secret, pin, _) = credential.into_enrollment().into_parts();
             let identity = NativeIdentity::restore(secret).map_err(|_| ReadFailure::Cache)?;
-            let mut cache = RetainedCache::open(&records.cache_path(&key), wall, clock)?;
-            cache.read(
+            let loaded = records.load_follow(&key).map_err(|_| ReadFailure::Cache)?;
+            if loaded.as_ref().is_some_and(|follow| follow.reset_pending) {
+                records.remove_cache(&key).map_err(|_| ReadFailure::Cache)?;
+                records
+                    .mark_follow_reset(&key)
+                    .map_err(|_| ReadFailure::Cache)?;
+            }
+            let rule = loaded
+                .map(|follow| follow.rule)
+                .unwrap_or_else(FollowRule::none);
+            let mut cache = RetainedCache::open_keeping(
+                &records.cache_path(&key),
+                rule.keep_bytes(),
+                wall,
+                clock,
+            )?;
+            cache.read_followed(
                 ReaderAccess {
                     role: ReaderRole::GrantedPeer,
                     address,
@@ -744,6 +761,7 @@ impl Shared {
                     access_epoch,
                     client_id: CLIENT_ID,
                 },
+                &rule,
                 &stop,
                 budget,
                 WITHDRAWN_PER_READ,
@@ -1038,6 +1056,65 @@ fn spawn_read(
         move || read(&mut withdrawn.lock().unwrap_or_else(PoisonError::into_inner))
     });
     (work, withdrawn)
+}
+
+/// Read `conversation` from `record`'s peer without adding it to the follow
+/// rule. The transcript is removed before this returns, so the replica does
+/// not keep it. The peer is dialed for this one read. A chat the peer did
+/// not grant is `Refused`. The caller keeps this peer's poller off the cache
+/// for the call.
+pub fn open_granted(
+    records: &Arc<PeerRecords>,
+    record: &PeerRecord,
+    receiver: &str,
+    access_epoch: u64,
+    conversation: &ConversationId,
+    budget: Duration,
+    clocks: &(Arc<dyn WallClock>, Arc<dyn MonotonicClock>),
+) -> Result<(), ReadFailure> {
+    let key = *record.key();
+    let credential = records
+        .slot(key)
+        .load_credential()
+        .map_err(|_| ReadFailure::Cache)?
+        .ok_or(ReadFailure::Cache)?;
+    let id = credential.credential().as_str().to_owned();
+    let (secret, pin, _) = credential.into_enrollment().into_parts();
+    let identity = NativeIdentity::restore(secret).map_err(|_| ReadFailure::Cache)?;
+    let loaded = records.load_follow(&key).map_err(|_| ReadFailure::Cache)?;
+    if loaded.as_ref().is_some_and(|follow| follow.reset_pending) {
+        records.remove_cache(&key).map_err(|_| ReadFailure::Cache)?;
+        records
+            .mark_follow_reset(&key)
+            .map_err(|_| ReadFailure::Cache)?;
+    }
+    let keep = loaded
+        .as_ref()
+        .map(|follow| follow.rule.keep_bytes())
+        .unwrap_or(FollowRule::none().keep_bytes());
+    let mut cache = RetainedCache::open_keeping(
+        &records.cache_path(&key),
+        keep,
+        Arc::clone(&clocks.0),
+        Arc::clone(&clocks.1),
+    )?;
+    let stop = ReadStop::new();
+    cache.open_without_replicating(
+        ReaderAccess {
+            role: ReaderRole::GrantedPeer,
+            address: record.address(),
+            relay: record.relay(),
+            identity: &identity,
+            pin,
+            credential: &id,
+            receiver,
+            access_epoch,
+            client_id: CLIENT_ID,
+        },
+        conversation,
+        &stop,
+        budget,
+    )
 }
 
 /// How a read started by [`spawn_read`] ended, and what it withdrew, however

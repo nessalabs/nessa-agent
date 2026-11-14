@@ -462,13 +462,13 @@ fn catalogue() -> &'static [Limit] {
             id: "peer.preempt",
             tier: "fixed",
             owner: "PREEMPT in crates/nessa-peer-gateways/src/infrastructure/commands.rs",
-            meaning: "the longest peer.forget or peer.relay waits for the read of the peer it names to give back that peer's turn; peer.enroll does not stop a read. At least twice the read's unstoppable connect (the 5 s handshake), and the read only queues its audit records before it gives the turn back, so past it the command answers peer_busy only if local storage stalls",
+            meaning: "the longest peer.forget, peer.relay, or peer.follow waits for the read of the peer it names to give back that peer's turn; peer.enroll does not stop a read. At least twice the read's unstoppable connect (the 5 s handshake), and the read only queues its audit records before it gives the turn back, so past it the command answers peer_busy only if local storage stalls",
         },
         Limit {
             id: "peer.audit_queue",
             tier: "fixed",
             owner: "AUDIT_QUEUE in crates/nessa-peer-gateways/src/infrastructure/audit.rs",
-            meaning: "the most peer audit records waiting to be written, one at a time in the order they were handed over; sized for every read running at once plus two owner records, and a further owner command waits for a place inside its 5 s audit deadline; a record past it is refused at once, its sequence left as a gap, so peer.enroll, peer.forget or peer.relay answers peer_audit_unavailable before any effect and a peer read's change stands with its record logged as not kept",
+            meaning: "the most peer audit records waiting to be written, one at a time in the order they were handed over; sized for every read running at once plus two owner records, and a further owner command waits for a place inside its 5 s audit deadline; a record past it is refused at once, its sequence left as a gap, so peer.enroll, peer.forget, peer.relay, or peer.follow answers peer_audit_unavailable before any effect and a peer read's change stands with its record logged as not kept",
         },
         Limit {
             id: "peer.reads_at_once",

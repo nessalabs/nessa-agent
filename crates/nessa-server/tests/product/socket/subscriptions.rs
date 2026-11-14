@@ -1421,6 +1421,70 @@ async fn subscriptions_past_the_published_limit_are_refused() {
     client.close().await;
 }
 
+/// A follower that chooses nine granted chats unsubscribes one before it
+/// subscribes another. A raw ninth `conversation.subscribe` is refused and
+/// closes nothing that is already open.
+#[tokio::test]
+async fn following_nine_chats_unsubscribes_one_and_a_raw_ninth_closes_nothing() {
+    use nessa_client_core::retained::{LiveChoice, LiveFollow};
+
+    let fixture = SubscriptionFixture::new().await;
+    let mut client = fixture.connect();
+    let mut chats = vec![fixture.id.clone()];
+    while chats.len() < MAX_CONNECTION_CONVERSATION_SUBSCRIPTIONS + 1 {
+        chats.push(fixture.create().await);
+    }
+    let mut live = LiveFollow::new();
+    let mut subscriptions = std::collections::HashMap::<String, String>::new();
+    for (index, chat) in chats.iter().enumerate() {
+        match live.open(&chat.to_string()) {
+            LiveChoice::AlreadyOpen => panic!("a new chat was already open"),
+            LiveChoice::Subscribe { unsubscribe } => {
+                if let Some(previous) = unsubscribe {
+                    let id = subscriptions.remove(&previous).expect("the chat was open");
+                    let request = format!("drop-{index}");
+                    client.send(
+                        &request,
+                        "conversation.unsubscribe",
+                        json!({"subscriptionId": id}),
+                    );
+                    let (reply, _) = client.reply(&request).await;
+                    assert_eq!(reply["ok"], true, "{reply}");
+                }
+                let id = client
+                    .subscribe(&format!("open-{index}"), chat)
+                    .await;
+                subscriptions.insert(chat.to_string(), id);
+            }
+        }
+    }
+    assert_eq!(
+        subscriptions.len(),
+        MAX_CONNECTION_CONVERSATION_SUBSCRIPTIONS
+    );
+    assert!(!subscriptions.contains_key(&chats[0].to_string()));
+
+    client.send(
+        "raw-ninth",
+        "conversation.subscribe",
+        json!({"conversationId": chats[0].to_string()}),
+    );
+    let (reply, _) = client.reply("raw-ninth").await;
+    assert_eq!(reply["error"]["code"], "subscription_capacity");
+
+    for (index, id) in subscriptions.values().enumerate() {
+        let request = format!("still-open-{index}");
+        client.send(
+            &request,
+            "conversation.unsubscribe",
+            json!({"subscriptionId": id}),
+        );
+        let (reply, _) = client.reply(&request).await;
+        assert_eq!(reply["ok"], true, "{reply}");
+    }
+    client.close().await;
+}
+
 /// Row S18.
 #[tokio::test]
 async fn a_duplicate_subscription_is_refused() {

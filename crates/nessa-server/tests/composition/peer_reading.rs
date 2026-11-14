@@ -37,16 +37,18 @@ use nessa_auth::domain::pairing::{ConsentClass, DeviceKey};
 use nessa_auth::domain::{
     AudienceId, CredentialId, OrganizationId, PrincipalId, Resource, ResourceId,
 };
-use nessa_client_core::retained::{RetainedCache, HANDSHAKE};
+use nessa_client_core::retained::{
+    FollowRule, RetainedCache, FOLLOW_KEEP_MAX, FOLLOW_KEEP_MIN, HANDSHAKE,
+};
 use nessa_device_pairing::infrastructure::PairingOwnerCommands;
 use nessa_peer_gateways::application::{
     CacheState, PeerAudit, PeerAuditFuture, PeerAuditRecord, PeerAuditUnavailable, PeerHolding,
     PeerState, PollerCause,
 };
 use nessa_peer_gateways::infrastructure::{
-    DurablePeerAudit, EnrollmentEntropy, EnrollmentEntropySource, PeerCommands, PeerEntry,
-    PeerError, PeerPhase, PeerPoller, PeerSync, PollInputs, PollPolicy, SyncState,
-    TcpPeerConnector, AUDIT_DEADLINE, READS_AT_ONCE,
+    open_granted, DurablePeerAudit, EnrollmentEntropy, EnrollmentEntropySource, PeerCommands,
+    PeerEntry, PeerError, PeerPhase, PeerPoller, PeerRecord, PeerSync, PollInputs, PollPolicy,
+    SyncState, TcpPeerConnector, AUDIT_DEADLINE, READS_AT_ONCE,
 };
 use nessa_protocol::agents::AgentId;
 use nessa_protocol::conversation::domain::{
@@ -595,12 +597,14 @@ async fn a_cancelled_record_hold_controller_releases_the_worker() {
     });
     let b = Reader::prepare(&directory.path().join("b"), false).await;
     let relay = Relay::start(a.native).await;
-    let (_, reader) = enroll(&a, &b, &relay, true).await;
+    let (key, reader) = enroll(&a, &b, &relay, true).await;
+    let reader = reader.unwrap();
     let conversation = a.conversation().await;
+    follow_granted(&b, key, &[conversation.clone()]).await;
     a.grant(
         ShareGrantTransition::Grant(ShareAccess::read()),
         &conversation,
-        &reader.unwrap(),
+        &reader,
     )
     .await;
     let poller = b.poller(POLICY);
@@ -920,6 +924,15 @@ fn synced_since(since: u64) -> impl Fn(&PeerEntry, Option<&PeerSync>) -> bool {
 }
 
 /// Synced since now, holding `count` conversations.
+async fn follow_granted(b: &Reader, key: DeviceKey, ids: &[ConversationId]) {
+    let rule = FollowRule::new(
+        ids.iter().map(|id| id.to_string()).collect(),
+        FOLLOW_KEEP_MAX,
+    )
+    .unwrap();
+    b.peers.follow(key, rule, &b.owner).await.unwrap();
+}
+
 async fn synced_with(b: &Reader, count: u64) {
     let since = SystemClock.unix_milliseconds();
     b.poll_until(move |entry, sync| {
@@ -1020,6 +1033,9 @@ async fn reads(refuse: bool) {
         PeerEntry::Readable(record) if matches!(record.phase(), PeerPhase::Active { .. })
     ));
     assert!(b.cached(&key, &reader.0).is_empty());
+    // These rows are about what A grants. B follows every chat the test
+    // creates; a chat with no follow rule is not replicated.
+    follow_granted(&b, key, &[x.clone(), y.clone(), z.clone()]).await;
 
     // R2: A shares X and not Y; B's cache gets X only.
     a.grant(
@@ -1223,6 +1239,7 @@ async fn reads(refuse: bool) {
     // `peer_busy`: the record and the cache are gone.
     let (_, reader) = enroll(&a, &b, &relay, true).await;
     let reader = reader.unwrap();
+    follow_granted(&b, key, &[y.clone()]).await;
     a.grant(
         ShareGrantTransition::Grant(ShareAccess::read()),
         &y,
@@ -1333,6 +1350,7 @@ async fn a_peer_whose_address_stops_answering_is_read_through_its_relay() {
         .unwrap();
     assert!(matches!(&kept, PeerEntry::Readable(record) if record.relay() == Some(&relay_address)));
     let x = a.conversation().await;
+    follow_granted(&b, key, &[x.clone()]).await;
     a.grant(
         ShareGrantTransition::Grant(ShareAccess::read()),
         &x,
@@ -1476,11 +1494,21 @@ async fn stalled_audit(
     .await;
     let relay = Relay::start(a.native).await;
     let (key, reader) = enroll(&a, &b, &relay, true).await;
+    let reader = reader.unwrap();
     let conversation = a.conversation().await;
+    // Store the rule directly. `peer.follow` would take the stalled audit's
+    // next sequence and never return.
+    b.peers
+        .records()
+        .apply_follow(
+            &key,
+            &FollowRule::new(vec![conversation.to_string()], FOLLOW_KEEP_MAX).unwrap(),
+        )
+        .unwrap();
     a.grant(
         ShareGrantTransition::Grant(ShareAccess::read()),
         &conversation,
-        &reader.unwrap(),
+        &reader,
     )
     .await;
 
@@ -1933,8 +1961,12 @@ async fn first_sync_before_observation(
     peers.key_c = key_c;
     let (key_a, receiver_a) = enroll(&peers.a, &peers.b, &peers.relay_a, true).await;
     peers.key_a = key_a;
-    for (peer, receiver) in [(&peers.a, receiver_a), (&peers.c, receiver_c)] {
+    for (peer, key, receiver) in [
+        (&peers.a, peers.key_a, receiver_a),
+        (&peers.c, peers.key_c, receiver_c),
+    ] {
         let conversation = peer.conversation().await;
+        follow_granted(&peers.b, key, &[conversation.clone()]).await;
         peer.grant(
             ShareGrantTransition::Grant(ShareAccess::read()),
             &conversation,
@@ -2384,4 +2416,216 @@ async fn a_held_read_lists_when_the_records_change_not_on_every_tick() {
     tokio::time::timeout(WAIT, poller.join()).await.unwrap();
     stop(peers.a).await;
     stop(peers.c).await;
+}
+
+fn receiver_epoch(directory: &Path, receiver: &str) -> u64 {
+    let connection =
+        nessa_local_database::rusqlite::Connection::open(directory.join("receivers.sqlite3"))
+            .unwrap();
+    let epoch: i64 = connection
+        .query_row(
+            "SELECT access_epoch FROM receivers WHERE receiver_id = ?1",
+            [receiver],
+            |row| row.get(0),
+        )
+        .unwrap();
+    u64::try_from(epoch).unwrap()
+}
+
+fn grant_rows(directory: &Path) -> Vec<String> {
+    let path = directory.join("metadata.grants.sqlite3");
+    let connection = nessa_local_database::rusqlite::Connection::open(path).unwrap();
+    let mut statement = connection
+        .prepare("SELECT resource_id FROM share_grants ORDER BY resource_id")
+        .unwrap();
+    statement
+        .query_map([], |row| row.get(0))
+        .unwrap()
+        .map(|row| row.unwrap())
+        .collect()
+}
+
+/// Following one granted chat leaves the other out of the replica. Opening
+/// the other does not start replication. Shrinking the rule drops what it
+/// no longer names. The grantor's catalogue is unchanged, and the peer is
+/// not dialed to store the rule.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_follow_rule_replicates_only_the_chats_the_person_chose() {
+    let directory = tempfile::tempdir().unwrap();
+    let a = Peer::start(&directory.path().join("a")).await;
+    let b = Reader::prepare(&directory.path().join("b"), false).await;
+    let relay = Relay::start(a.native).await;
+    let (key, reader) = enroll(&a, &b, &relay, true).await;
+    let reader = reader.unwrap();
+    let (x, y) = (a.conversation().await, a.conversation().await);
+    a.grant(
+        ShareGrantTransition::Grant(ShareAccess::read()),
+        &x,
+        &reader,
+    )
+    .await;
+    a.grant(
+        ShareGrantTransition::Grant(ShareAccess::read()),
+        &y,
+        &reader,
+    )
+    .await;
+    let grants = grant_rows(&directory.path().join("a"));
+    assert_eq!(grants.len(), 2);
+
+    synced_with(&b, 0).await;
+    assert!(
+        b.cached(&key, &reader.0).is_empty(),
+        "no follow rule replicates nothing"
+    );
+
+    let chosen = FollowRule::new(vec![x.to_string()], FOLLOW_KEEP_MAX).unwrap();
+    let first = b.peers.follow(key, chosen, &b.owner).await.unwrap();
+    assert!(first.replica_reset);
+    synced_with(&b, 1).await;
+    assert_eq!(b.cached(&key, &reader.0), vec![x.to_string()]);
+
+    let again = b
+        .peers
+        .follow(
+            key,
+            FollowRule::new(vec![x.to_string()], FOLLOW_KEEP_MAX).unwrap(),
+            &b.owner,
+        )
+        .await
+        .unwrap();
+    assert!(!again.replica_reset);
+    assert_eq!(b.cached(&key, &reader.0), vec![x.to_string()]);
+    let tightened = b
+        .peers
+        .follow(
+            key,
+            FollowRule::new(vec![x.to_string()], FOLLOW_KEEP_MIN).unwrap(),
+            &b.owner,
+        )
+        .await
+        .unwrap();
+    assert!(tightened.replica_reset);
+    assert!(
+        !b.cache_path(&key).exists(),
+        "changing how much to keep drops the replica"
+    );
+    b.peers
+        .follow(
+            key,
+            FollowRule::new(vec![x.to_string()], FOLLOW_KEEP_MAX).unwrap(),
+            &b.owner,
+        )
+        .await
+        .unwrap();
+    synced_with(&b, 1).await;
+
+    let (entry, _) = b.peer().await;
+    let PeerEntry::Readable(record) = entry else {
+        panic!("the peer record is readable");
+    };
+    let record: PeerRecord = (*record).clone();
+    let records = b.peers.records().clone();
+    let receiver = reader.0.clone();
+    let opened = y.clone();
+    let clocks = (
+        Arc::new(SystemClock) as Arc<dyn Clock>,
+        RuntimeDependencies::default().clock,
+    );
+    let epoch = receiver_epoch(&directory.path().join("a"), &reader.0);
+    tokio::task::spawn_blocking(move || {
+        open_granted(
+            &records,
+            &record,
+            &receiver,
+            epoch,
+            &opened,
+            Duration::from_secs(30),
+            &clocks,
+        )
+        .unwrap()
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        b.cached(&key, &reader.0),
+        vec![x.to_string()],
+        "opening a granted chat does not replicate it"
+    );
+    synced_with(&b, 1).await;
+    assert_eq!(b.cached(&key, &reader.0), vec![x.to_string()]);
+
+    let dials = relay.accepted();
+    let shrunk = b
+        .peers
+        .follow(
+            key,
+            FollowRule::new(vec![], FOLLOW_KEEP_MAX).unwrap(),
+            &b.owner,
+        )
+        .await
+        .unwrap();
+    assert!(shrunk.replica_reset);
+    assert_eq!(relay.accepted(), dials, "the grantor is not dialed");
+    assert_eq!(grant_rows(&directory.path().join("a")), grants);
+    synced_with(&b, 0).await;
+    assert!(
+        b.cached(&key, &reader.0).is_empty(),
+        "shrinking the rule drops the replica"
+    );
+
+    b.peers
+        .follow(
+            key,
+            FollowRule::new(vec![y.to_string(), uuid()], FOLLOW_KEEP_MAX).unwrap(),
+            &b.owner,
+        )
+        .await
+        .unwrap();
+    synced_with(&b, 1).await;
+    assert_eq!(
+        b.cached(&key, &reader.0),
+        vec![y.to_string()],
+        "a rule cannot widen a grant"
+    );
+    assert_eq!(grant_rows(&directory.path().join("a")), grants);
+
+    let finished: Vec<_> = b
+        .changes
+        .kept
+        .lock()
+        .unwrap()
+        .iter()
+        .filter_map(|record| match record {
+            PeerAuditRecord::FollowFinished {
+                initiator,
+                replica_reset,
+                before_conversations,
+                after_conversations,
+                outcome,
+                ..
+            } => Some((
+                initiator.as_str().to_owned(),
+                *replica_reset,
+                before_conversations.clone(),
+                after_conversations.clone(),
+                *outcome,
+            )),
+            _ => None,
+        })
+        .collect();
+    assert!(finished.len() >= 2);
+    assert!(finished.iter().all(|(initiator, _, _, _, outcome)| {
+        initiator == b.owner.as_str() && *outcome == Ok(())
+    }));
+    assert!(finished.iter().any(|(_, reset, _, _, _)| *reset));
+    assert!(finished.iter().any(|(_, reset, before, after, _)| {
+        !reset
+            && before == after
+            && before
+                .as_ref()
+                .is_some_and(|ids| ids == &vec![x.to_string()])
+    }));
+
+    stop(a).await;
 }

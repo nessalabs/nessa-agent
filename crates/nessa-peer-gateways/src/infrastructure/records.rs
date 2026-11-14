@@ -7,6 +7,7 @@
 //!
 //! ```text
 //! PeerRecords --> peer-gateways/<peer key hex>.json   (one per peer)
+//!             --> peer-gateways/<peer key hex>.follow.json (the follower's rule)
 //!             --> GatewayKeyStore (the gateway's own key, by reference)
 //! PeerSlot    --> ClientPendingStore for one enrollment, over PeerRecords
 //! ```
@@ -30,6 +31,7 @@ use nessa_auth::{
         AudienceId, CredentialId, ResourceId,
     },
 };
+use nessa_client_core::retained::FollowRule;
 use nessa_local_storage::{is_unsafe_file, OpenMode, PrivateDirectory, PrivateFileType};
 use nessa_protocol::product::generated::MAX_PEERS;
 use nessa_protocol::relay::RelayAddress;
@@ -186,6 +188,36 @@ pub enum SlotOutcome {
     NotLanded,
 }
 
+/// A stored follow rule, and whether dropping the replica for it finished.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LoadedFollow {
+    pub rule: FollowRule,
+    /// The rule is stored and the replica has not yet been dropped.
+    pub reset_pending: bool,
+}
+
+/// What storing a follow rule did.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FollowStoreResult {
+    /// The rule that was stored, if the person had chosen one.
+    pub before: Option<FollowRule>,
+    pub after: FollowRule,
+    /// The replica was removed on this call.
+    pub replica_reset: bool,
+}
+
+/// Why a follow rule was not stored.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FollowFailure {
+    /// No record for that peer.
+    Missing,
+    /// The record is there and this build cannot read it.
+    Unreadable,
+    /// The rule or the replica could not be written. `Uncertain` means the
+    /// rule may already name the new choice and the reset may be unfinished.
+    Storage(PrivateStateError),
+}
+
 /// Why a forget did not finish, by the step that failed: the cache, which
 /// goes first and leaves the record untouched, or the record.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -311,6 +343,8 @@ impl PeerRecords {
         // nothing.
         self.remove_cache_locked(key)
             .map_err(ForgetFailure::Cache)?;
+        self.remove_follow_locked(key)
+            .map_err(ForgetFailure::Record)?;
         let name = file_name(key);
         let file = match self.directory.open_file(&name, OpenMode::ReadNonblocking) {
             Ok(file) => file,
@@ -366,6 +400,71 @@ impl PeerRecords {
         let _guard = self.lock();
         self.remove_cache_locked(key)
     }
+    /// The follow rule stored for `key`, if the person has chosen one.
+    /// `Ok(None)` is the default: follow nothing. A file this build cannot
+    /// read is `Corrupt`.
+    pub fn load_follow(&self, key: &DeviceKey) -> Result<Option<LoadedFollow>, PrivateStateError> {
+        let _guard = self.lock();
+        self.load_follow_locked(key)
+    }
+
+    /// Store `rule` for `key` and drop that peer's replica, unless the stored
+    /// rule is already `rule` and its replica reset finished. The peer must
+    /// have a readable record. A crash after the rule is stored and before
+    /// the reset is marked finished leaves [`LoadedFollow::reset_pending`].
+    pub fn apply_follow(
+        &self,
+        key: &DeviceKey,
+        rule: &FollowRule,
+    ) -> Result<FollowStoreResult, FollowFailure> {
+        let _guard = self.lock();
+        let own = self.own_spki().map_err(FollowFailure::Storage)?;
+        match self.read(key, &own) {
+            Ok(None) => return Err(FollowFailure::Missing),
+            Err(PrivateStateError::Corrupt) => return Err(FollowFailure::Unreadable),
+            Err(error) => return Err(FollowFailure::Storage(error)),
+            Ok(Some(_)) => {}
+        }
+        let before = self
+            .load_follow_locked(key)
+            .map_err(FollowFailure::Storage)?;
+        let same = before
+            .as_ref()
+            .is_some_and(|loaded| &loaded.rule == rule && !loaded.reset_pending);
+        if same {
+            return Ok(FollowStoreResult {
+                before: before.map(|loaded| loaded.rule),
+                after: rule.clone(),
+                replica_reset: false,
+            });
+        }
+        self.write_follow_locked(key, rule, false)
+            .map_err(FollowFailure::Storage)?;
+        self.remove_cache_locked(key)
+            .map_err(FollowFailure::Storage)?;
+        self.write_follow_locked(key, rule, true)
+            .map_err(FollowFailure::Storage)?;
+        Ok(FollowStoreResult {
+            before: before.map(|loaded| loaded.rule),
+            after: rule.clone(),
+            replica_reset: true,
+        })
+    }
+
+    /// The replica reset for `key`'s stored rule finished. No file, or a file
+    /// that is already finished, is success. A file this build cannot read
+    /// is `Corrupt`.
+    pub fn mark_follow_reset(&self, key: &DeviceKey) -> Result<(), PrivateStateError> {
+        let _guard = self.lock();
+        let Some(loaded) = self.load_follow_locked(key)? else {
+            return Ok(());
+        };
+        if !loaded.reset_pending {
+            return Ok(());
+        }
+        self.write_follow_locked(key, &loaded.rule, true)
+    }
+
     /// Whether `key` has a retained cache.
     pub fn has_cache(&self, key: &DeviceKey) -> Result<bool, PrivateStateError> {
         let _guard = self.lock();
@@ -948,6 +1047,121 @@ fn peer_key(pin: &[u8; 44]) -> DeviceKey {
     let mut key = [0; DeviceKey::LENGTH];
     key.copy_from_slice(&pin[SPKI_PREFIX_BYTES..]);
     DeviceKey::new(key)
+}
+
+const FOLLOW_FILE_BYTES: usize = 16 * 1024;
+const FOLLOW_SCHEMA: u32 = 1;
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct StoredFollow {
+    schema_version: u32,
+    conversations: Vec<String>,
+    keep_bytes: u64,
+    reset_done: bool,
+}
+
+impl PeerRecords {
+    fn load_follow_locked(
+        &self,
+        key: &DeviceKey,
+    ) -> Result<Option<LoadedFollow>, PrivateStateError> {
+        let Some(bytes) = self.read_named(&follow_name(key), FOLLOW_FILE_BYTES)? else {
+            return Ok(None);
+        };
+        let stored: StoredFollow =
+            serde_json::from_slice(&bytes).map_err(|_| PrivateStateError::Corrupt)?;
+        if stored.schema_version != FOLLOW_SCHEMA {
+            return Err(PrivateStateError::Corrupt);
+        }
+        let rule = FollowRule::new(stored.conversations, stored.keep_bytes)
+            .map_err(|_| PrivateStateError::Corrupt)?;
+        Ok(Some(LoadedFollow {
+            rule,
+            reset_pending: !stored.reset_done,
+        }))
+    }
+
+    fn write_follow_locked(
+        &self,
+        key: &DeviceKey,
+        rule: &FollowRule,
+        reset_done: bool,
+    ) -> Result<(), PrivateStateError> {
+        let stored = StoredFollow {
+            schema_version: FOLLOW_SCHEMA,
+            conversations: rule.conversations().to_vec(),
+            keep_bytes: rule.keep_bytes(),
+            reset_done,
+        };
+        let bytes = serde_json::to_vec(&stored).map_err(|_| PrivateStateError::Corrupt)?;
+        if bytes.len() > FOLLOW_FILE_BYTES {
+            return Err(PrivateStateError::Corrupt);
+        }
+        self.write_named(&follow_name(key), &bytes)
+    }
+
+    fn remove_follow_locked(&self, key: &DeviceKey) -> Result<(), PrivateStateError> {
+        self.remove_named(&follow_name(key))
+    }
+
+    fn read_named(&self, name: &OsStr, limit: usize) -> Result<Option<Vec<u8>>, PrivateStateError> {
+        let mut file = match self.directory.open_file(name, OpenMode::ReadNonblocking) {
+            Ok(file) => file,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(storage_error(error)),
+        };
+        let mut bytes = Vec::with_capacity(limit + 1);
+        (&mut file)
+            .take((limit + 1) as u64)
+            .read_to_end(&mut bytes)
+            .map_err(storage_error)?;
+        if bytes.len() > limit
+            || !self
+                .directory
+                .named_file_is(name, &file)
+                .map_err(storage_error)?
+        {
+            return Err(PrivateStateError::Corrupt);
+        }
+        Ok(Some(bytes))
+    }
+
+    fn write_named(&self, name: &OsStr, bytes: &[u8]) -> Result<(), PrivateStateError> {
+        let mut temporary = self.directory.reserve_temp().map_err(storage_error)?;
+        temporary
+            .as_file_mut()
+            .write_all(bytes)
+            .map_err(storage_error)?;
+        match temporary.replace(name) {
+            Ok(_) => Ok(()),
+            Err(failure) if failure.published().is_some() => Err(PrivateStateError::Uncertain),
+            Err(_) => Err(PrivateStateError::Unavailable),
+        }
+    }
+
+    fn remove_named(&self, name: &OsStr) -> Result<(), PrivateStateError> {
+        let file = match self.directory.open_file(name, OpenMode::ReadNonblocking) {
+            Ok(file) => file,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+            Err(error) => return Err(storage_error(error)),
+        };
+        self.directory
+            .remove_file(name, &file)
+            .map_err(storage_error)?;
+        self.directory
+            .sync()
+            .map_err(|_| PrivateStateError::Uncertain)
+    }
+}
+
+/// `<64 lowercase hex>.follow.json`: the follower's rule for that peer.
+/// The listing skips it: the suffix is not a bare record name.
+fn follow_name(key: &DeviceKey) -> OsString {
+    let mut name = file_name(key).into_string().unwrap_or_default();
+    name.truncate(2 * DeviceKey::LENGTH);
+    name.push_str(".follow.json");
+    OsString::from(name)
 }
 
 /// `<64 lowercase hex>.sqlite3`: the peer's retained cache, which the

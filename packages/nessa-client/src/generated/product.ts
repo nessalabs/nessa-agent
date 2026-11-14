@@ -2902,6 +2902,26 @@ export interface PeerRelayParams {
   /** Where to ask for the peer when its address does not answer: a relay's `host:port`, the host a name or an address (an IPv6 one in brackets), at most 255 UTF-8 bytes (`x-utf8MaxBytes`; `maxLength` counts code points and is only a coarse bound). Looked up at each dial. It carries no trust: the peer must still present its pinned key through it. Null clears it, so the peer is read only at its address. */
   relay: string | null
 }
+/** Wire input for peer.follow: which of the peer's granted conversations to replicate, and how much of the local replica to keep. The peer is not dialed. */
+export interface PeerFollowParams {
+  /** The peer's key, as peer.list shows it. */
+  peerKey: number[]
+  /** The granted conversations this gateway replicates from that peer, and keeps in its local replica. Empty follows none. Naming a conversation the peer did not grant does not grant it, and this list is not sent to the peer. */
+  conversations: string[]
+  /** How many bytes of that peer's local replica to keep. Changing the conversation list or this number drops the replica; the same choice again does not. 1048576 is the smallest replica, 268435456 the retained cache's own ceiling. */
+  keepBytes: number
+}
+/** Result of peer.follow. The grantor's catalogue is not in this result, and the peer is not told the rule. */
+export interface PeerFollowResult {
+  /** The peer the rule was stored for. */
+  peerKey: number[]
+  /** The conversations the stored rule replicates, in id order. */
+  conversations: string[]
+  /** The replica ceiling the stored rule keeps. */
+  keepBytes: number
+  /** The local replica was dropped because the rule changed. False when the stored rule was already this choice. */
+  replicaReset: boolean
+}
 /** Where this gateway's enrollment with a peer stands, as this gateway last heard. pending: claimed, waiting on the peer's owner to approve, or not yet confirmed. active: the peer issued this gateway a credential. revoked: the peer ended the enrollment (its owner revoked the credential, or denied, cancelled or let expire the claim), its retained cache is removed and it is no longer read; only peer.forget helps. unreadable: the peer's record is there but this build cannot read it, or it was made with a key that is no longer this gateway's; only peer.forget helps. */
 export const PeerPhase = {
   Pending: "pending",
@@ -3876,7 +3896,7 @@ export const channelRules = {
 export const bounds = {
   maxOrdinaryResponseBytes: 65536,
   maxRequestFrameBytes: 65536,
-  maxReadyMethods: 123,
+  maxReadyMethods: 124,
   maxAuthCredentialCharacters: 16384,
   maxProductClientIdCharacters: 256,
   maxProductSurfaceInstanceCharacters: 256,
@@ -4182,6 +4202,7 @@ export const ProductMethod = {
   PeerList: "peer.list",
   PeerForget: "peer.forget",
   PeerRelay: "peer.relay",
+  PeerFollow: "peer.follow",
   ConversationSubscribe: "conversation.subscribe",
   ConversationSubscribeList: "conversation.subscribeList",
   ConversationUnsubscribe: "conversation.unsubscribe",
@@ -4318,6 +4339,7 @@ export const productReadyMethods = [
   "peer.list",
   "peer.forget",
   "peer.relay",
+  "peer.follow",
   "conversation.subscribe",
   "conversation.subscribeList",
   "conversation.unsubscribe",
@@ -4445,6 +4467,7 @@ export const productMethodGrants = {
   "peer.list": "credential.manage",
   "peer.forget": "credential.manage",
   "peer.relay": "credential.manage",
+  "peer.follow": "credential.manage",
   "conversation.subscribe": "conversation.write",
   "conversation.subscribeList": "conversation.write",
   "conversation.unsubscribe": "conversation.write",

@@ -9,6 +9,7 @@
 //!   --> run_catalogue (manifest pass, resolve) --> the cache
 //!   --> per cached conversation: recordsHead
 //!         wrong_owner --> withdraw it (entry and transcript)
+//!         not in the follow rule (read_followed) --> withdraw it, locally
 //!         otherwise   --> run_records --> the cache
 //! ```
 //! Arrows are calls, in order, on one connection. The pinned status that
@@ -86,7 +87,12 @@ use std::time::{Duration, Instant};
 mod active;
 mod artifact;
 mod device;
+mod follow;
 mod owner;
+pub use follow::{
+    FollowRule, FollowRuleError, LiveChoice, LiveFollow, FOLLOW_CONVERSATIONS, FOLLOW_KEEP_MAX,
+    FOLLOW_KEEP_MIN,
+};
 pub use owner::RetainedOwnerStatus;
 mod phone;
 mod relay;
@@ -144,7 +150,7 @@ impl ReaderRole {
 }
 
 /// Largest private cache one reader keeps.
-const CACHE_BYTES: u64 = 256 * 1024 * 1024;
+const CACHE_BYTES: u64 = FOLLOW_KEEP_MAX;
 /// Largest saved transcript checkpoint.
 const CHECKPOINT_BYTES: usize = 16 * 1024 * 1024;
 /// Catalogue pages one read applies before it reports itself incomplete.
@@ -674,7 +680,21 @@ impl RetainedCache {
         wall: Arc<dyn WallClock>,
         clock: Arc<dyn MonotonicClock>,
     ) -> Result<Self, ReadFailure> {
-        let policy = retained_policy().map_err(|error| cache_failure(&error))?;
+        Self::open_keeping(path, CACHE_BYTES, wall, clock)
+    }
+
+    /// Open the cache with `keep_bytes` as its database ceiling. A follow
+    /// rule's keep is that ceiling. A file already larger than it is `Quota`.
+    pub fn open_keeping(
+        path: &Path,
+        keep_bytes: u64,
+        wall: Arc<dyn WallClock>,
+        clock: Arc<dyn MonotonicClock>,
+    ) -> Result<Self, ReadFailure> {
+        if !(FOLLOW_KEEP_MIN..=FOLLOW_KEEP_MAX).contains(&keep_bytes) {
+            return Err(ReadFailure::Cache);
+        }
+        let policy = retained_policy_bytes(keep_bytes).map_err(|error| cache_failure(&error))?;
         let cache = ReadOnlyCache::open(path, policy, wall.clone())
             .map_err(|error| cache_failure(&error))?;
         Ok(Self {
@@ -726,6 +746,36 @@ impl RetainedCache {
         max_withdrawn: usize,
         withdrawn: &mut Vec<String>,
     ) -> Result<ReadReport, ReadFailure> {
+        self.read_in(access, stop, budget, max_withdrawn, withdrawn, None)
+    }
+
+    /// Read like [`Self::read`], and keep a transcript only for a conversation
+    /// `follow` names. A granted chat the rule does not name is withdrawn
+    /// from this cache and is not read. The withdrawal is the follower's
+    /// choice, so it is not reported in `withdrawn` (that list is chats the
+    /// gateway no longer grants). A rule cannot add a chat the gateway did
+    /// not grant: the catalogue is still what the gateway serves.
+    pub fn read_followed(
+        &mut self,
+        access: ReaderAccess<'_>,
+        follow: &FollowRule,
+        stop: &Arc<ReadStop>,
+        budget: Duration,
+        max_withdrawn: usize,
+        withdrawn: &mut Vec<String>,
+    ) -> Result<ReadReport, ReadFailure> {
+        self.read_in(access, stop, budget, max_withdrawn, withdrawn, Some(follow))
+    }
+
+    fn read_in(
+        &mut self,
+        access: ReaderAccess<'_>,
+        stop: &Arc<ReadStop>,
+        budget: Duration,
+        max_withdrawn: usize,
+        withdrawn: &mut Vec<String>,
+        follow: Option<&FollowRule>,
+    ) -> Result<ReadReport, ReadFailure> {
         let receiver = access.receiver.to_owned();
         let ending = Arc::new(Stopping::new(
             stop.clone(),
@@ -737,7 +787,7 @@ impl RetainedCache {
         let before = withdrawn.len();
         self.progressed = false;
         let offline = Arc::new(AtomicBool::new(false));
-        let result = self.read_inner(access, &ending, &offline, max_withdrawn, withdrawn);
+        let result = self.read_inner(access, &ending, &offline, max_withdrawn, withdrawn, follow);
         stop.release();
         let progressed = self.progressed || withdrawn.len() > before;
         let end = read_end(result, stop.is_stopped(), ending.spent(), progressed);
@@ -759,6 +809,7 @@ impl RetainedCache {
         offline: &Arc<AtomicBool>,
         max_withdrawn: usize,
         withdrawn: &mut Vec<String>,
+        follow: Option<&FollowRule>,
     ) -> Result<ReadReport, ReadFailure> {
         let receiver = Id::new(access.receiver).map_err(|_| ReadFailure::Protocol)?;
         let session = self.open_session(&access, ending, offline)?;
@@ -798,11 +849,18 @@ impl RetainedCache {
             .retained_walk(&receiver, scope.origin(), scope.stream())
             .map_err(|error| cache_failure(&error))?;
         if settled(saved.as_ref(), walk, head) {
-            return Ok(ReadReport {
-                moved: false,
-                complete: true,
-                conversations: self.live(&scope)?.len(),
-            });
+            let live = self.live(&scope)?;
+            let covered = match follow {
+                None => true,
+                Some(rule) => rule.covers(live.iter().map(|id| id.as_str())),
+            };
+            if covered {
+                return Ok(ReadReport {
+                    moved: false,
+                    complete: true,
+                    conversations: live.len(),
+                });
+            }
         }
 
         let mut authorizer = catalogue.authorizer();
@@ -844,10 +902,12 @@ impl RetainedCache {
         };
 
         let ids = self.live(&scope)?;
+        let (ids, follow_complete, dropped) =
+            self.drop_unfollowed(&scope, ids, follow, max_withdrawn)?;
         let each = read_each(
             ids,
             held_back,
-            max_withdrawn,
+            max_withdrawn.saturating_sub(dropped),
             &mut Each {
                 reader: self,
                 connection: &connection,
@@ -858,7 +918,7 @@ impl RetainedCache {
             },
             withdrawn,
         )?;
-        let complete = walked(catalogue_complete && each, || {
+        let complete = walked(catalogue_complete && each && follow_complete, || {
             let progress = self
                 .cache
                 .retained_catalogue_progress(&receiver, scope.origin(), scope.stream())?
@@ -871,6 +931,83 @@ impl RetainedCache {
             complete,
             conversations: self.live(&scope)?.len(),
         })
+    }
+
+    /// Drop cached conversations `follow` does not name. They are not pushed
+    /// to the caller's withdrawal list: the gateway may still grant them.
+    /// `false` when `max_withdrawn` was reached before every such conversation
+    /// was dropped, so the walk is not noted and the next read continues.
+    fn drop_unfollowed(
+        &mut self,
+        scope: &Scope,
+        ids: Vec<Id>,
+        follow: Option<&FollowRule>,
+        max_withdrawn: usize,
+    ) -> Result<(Vec<Id>, bool, usize), ReadFailure> {
+        let Some(rule) = follow else {
+            return Ok((ids, true, 0));
+        };
+        let mut pending = ids.into_iter();
+        let mut keep = Vec::new();
+        let mut dropped = 0;
+        while let Some(id) = pending.next() {
+            if rule.contains(id.as_str()) {
+                keep.push(id);
+                continue;
+            }
+            if dropped >= max_withdrawn {
+                keep.extend(pending.filter(|id| rule.contains(id.as_str())));
+                return Ok((keep, false, dropped));
+            }
+            self.cache
+                .withdraw(scope, &id)
+                .map_err(|error| cache_failure(&error))?;
+            dropped += 1;
+            self.progressed = true;
+        }
+        Ok((keep, true, dropped))
+    }
+
+    /// Read `conversation` from the gateway, then drop it from this cache.
+    /// The caller can see that the grant admits it. The replica does not keep
+    /// it. A conversation the gateway does not grant is `Refused`.
+    pub fn open_without_replicating(
+        &mut self,
+        access: ReaderAccess<'_>,
+        conversation: &ConversationId,
+        stop: &Arc<ReadStop>,
+        budget: Duration,
+    ) -> Result<(), ReadFailure> {
+        let receiver = Id::new(access.receiver).map_err(|_| ReadFailure::Protocol)?;
+        let ending = Arc::new(Stopping::new(
+            stop.clone(),
+            self.clock.clone(),
+            self.clock
+                .elapsed_ms()
+                .saturating_add(u64::try_from(budget.as_millis()).unwrap_or(u64::MAX)),
+        ));
+        let offline = Arc::new(AtomicBool::new(false));
+        let session = self.open_session(&access, &ending, &offline)?;
+        let connection = GatewayConnection::new(session);
+        let found = self.records(
+            &connection,
+            &receiver,
+            access.access_epoch,
+            conversation.clone(),
+            false,
+        )?;
+        match found {
+            Conversation::Withdrawn => return Err(ReadFailure::Refused),
+            Conversation::Unread { .. } => return Err(ReadFailure::Unreachable),
+            Conversation::Read { .. } => {}
+        }
+        let Some(scope) = self.catalogue_scope(&receiver)? else {
+            return Err(ReadFailure::Cache);
+        };
+        let id = Id::new(conversation.to_string()).map_err(|_| ReadFailure::Protocol)?;
+        self.cache
+            .withdraw(&scope, &id)
+            .map_err(|error| cache_failure(&error))
     }
 
     /// A new pinned connection for this call. It uses the same key, pin,
@@ -1254,13 +1391,17 @@ fn unread(error: GatewayError) -> Result<Conversation, ReadFailure> {
 
 /// One policy publication for both retained reads and enrollment purges.
 fn retained_policy() -> Result<CachePolicy, CacheError> {
+    retained_policy_bytes(CACHE_BYTES)
+}
+
+fn retained_policy_bytes(database_bytes: u64) -> Result<CachePolicy, CacheError> {
     let limits = Limits::new(
         MAX_RECORD_PAGE_RECORDS,
         MAX_RECORD_PAGE_PAYLOAD_BYTES,
         MAX_PHYSICAL_RECORD_PAYLOAD_BYTES,
     )
     .map_err(|_| CacheError::InvalidPolicy)?;
-    CachePolicy::new(CACHE_BYTES, CHECKPOINT_BYTES, limits)
+    CachePolicy::new(database_bytes, CHECKPOINT_BYTES, limits)
 }
 
 /// A cache failure as the caller acts on it: a cache that cannot be read as
