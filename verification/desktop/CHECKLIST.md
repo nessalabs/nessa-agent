@@ -2634,7 +2634,8 @@ vault dialog blocking the main conversation click.
   then each connected computer by name, and a computer saved earlier but not
   connected is still listed. Every button ends one inset from the dialog's
   right edge (the title's left inset, within 1 px), and the dialog has no row
-  of tabs. _Check:_ `boat-runtime-settings.mjs` measures the four menus and
+  of tabs, and no note under the order explaining how Any picks a computer
+  (Devices keeps it). _Check:_ `boat-runtime-settings.mjs` measures the four menus and
   picks through them in Chromium and WebKit, columns and sidebar; the
   conversation stress `channel` and `place` steps pick Boat, This Mac and a
   paired worker from them; `channel-settings.test.tsx` lists the menu's items.
