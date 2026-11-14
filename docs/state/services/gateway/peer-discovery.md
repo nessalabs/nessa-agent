@@ -6,7 +6,7 @@ status: implemented
 summary: A paired gateway announces a dial address and a rotating token, and
   does not enroll from that announcement.
 parent: gateway
-sourceRevision: "4e4ff6cde5295f0f59ab60636895d52c99986a05"
+sourceRevision: "2763455c33c057c3c1da500827c540597b82e065"
 sources:
   - crates/nessa-peer-gateways/src/application/discovery.rs
   - crates/nessa-peer-gateways/src/application/discovery_authority.rs
@@ -15,6 +15,7 @@ sources:
   - crates/nessa-peer-gateways/src/infrastructure/records.rs
   - crates/nessa-auth/src/adapters/local/registry/pairing/discovery.rs
   - crates/nessa-server/src/composition/peer_discovery.rs
+  - crates/nessa-server/tests/composition/peer_reading.rs
   - crates/nessa-client-core/src/pairing/client.rs
   - crates/nessa-device-pairing/src/infrastructure/connection.rs
   - crates/nessa-protocol/src/pairing/wire/mod.rs
@@ -75,3 +76,5 @@ TLC 1.7.4 checked the corrected model with one worker: 205 generated states, 61 
 ## Verification limits
 
 The model does not execute the implementation. Window arithmetic, address canonicalization, reconnect of an offered record, and the refusal of `openDiscovery` from an unpaired key are in `crates/nessa-peer-gateways/tests/discovery.rs` and the grantor registry test.
+
+The native composition regression `native_discovery_agrees_keys_retries_installed_and_observes_revocation` enrolls two composed gateways, approves the real claim, runs the production discovery dial cycle over pinned TLS, compares both persisted MACs, retries the installed connection, and observes grantor revocation through discovery with the ordinary poller joined. Run it with `cargo test -p nessa-server --lib native_discovery_agrees_keys_retries_installed_and_observes_revocation`. It does not learn the endpoint through DNS-SD. Native Bonjour registration/removal was separately exercised on macOS with a random test instance and no real peer data; automatic LAN browsing-to-dial remains outside this evidence.
