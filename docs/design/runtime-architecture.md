@@ -481,10 +481,12 @@ sequenceDiagram
 empty when there are none, under the one-current-contract rule rather than
 an optional field — and the composer offers them under "Run on" only when
 there is at least one. A conversation
-is placed when it is created and never moves: one file per placed
-conversation, `conversations/placements/<id>.json`, written and synced
-before the conversation's record exists and erased with its history. No
-placement means here, so a gateway that names no host never reaches SSH
+is placed when it is created and never moves: one file per conversation,
+`conversations/places/<id>.json` (here included, written as `"here"`),
+written and synced before the conversation's record exists and erased with
+its history. A conversation with no record, or only an earlier build's
+`placements/<id>.json`, is read as that build wrote it; no record at all
+means here, so a gateway that names no host never reaches SSH
 code (gate 5). A placement this build cannot read refuses that
 conversation alone (`conversation_state_unreadable`); one naming a host the
 configuration no longer names is refused (`environment_not_configured`),

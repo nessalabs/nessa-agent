@@ -171,11 +171,14 @@ import {
  *               window to the existing conversation is answered
  *   pool        native linking is turned on in Settings and two real
  *               `nessa env dial` workers pair with the gateway; a
- *               conversation created on `peer:any` is bound to one of them
- *               and stays there while it serves; that worker is stopped with
+ *               conversation created on `peer:any` is bound to one of them;
+ *               its place record turned back into an older build's
+ *               placement and binding files, it stays there while it
+ *               serves, read from them; that worker is stopped with
  *               SIGTERM, drains and exits, and the next message sent in the
  *               window binds the conversation to the other, with new provider
- *               context, as the window's heading and the binding both say;
+ *               context, as the window's heading and the binding both say,
+ *               written as one place record beside the older files;
  *               a chat started from the window in a channel whose threads
  *               use the pool runs on that worker and is told the channel's
  *               notes but neither its folder nor its attached file, both
@@ -247,8 +250,9 @@ import {
  *               closes the call and Talk is back
  *   upgrade     the gateway is stopped, its conversation metadata turned
  *               back into the file an older build wrote (version 6, or 7
- *               when a newer table holds rows), and started again: it
- *               upgrades the file to the current version, lists every
+ *               when a newer table holds rows) and every place record into
+ *               an older build's placement and binding files, and started
+ *               again: it upgrades the file to the current version, lists every
  *               conversation it listed before, and the message sent in the
  *               window after it is answered
  *   channel     a channel is made from the sidebar's +, asked in the
@@ -410,7 +414,13 @@ import {
 import { startFakeRealtime } from "./lib/fake-realtime.mjs"
 import { freePort } from "./lib/server.mjs"
 import { Follower } from "./lib/stress-followers.mjs"
-import { asOlderBuild, metadataFile, schemaVersion } from "./lib/stress-upgrade.mjs"
+import {
+  asEarlierPlaces,
+  asOlderBuild,
+  metadataFile,
+  placeOf as placeRecordOf,
+  schemaVersion,
+} from "./lib/stress-upgrade.mjs"
 import { nextSshHosts, writeFakeSsh, writeSshConfig } from "./lib/stress-ssh-hosts.mjs"
 import {
   pairedCatalogue,
@@ -4993,12 +5003,19 @@ const steps = {
         const count = failures.length
         const old = run.client
         run.restarts += 1
+        let earlier
         await run.stack.gateway.restart("SIGTERM", async () => {
           older = asOlderBuild(path)
+          // And every place record as the two files an older build kept.
+          earlier = asEarlierPlaces(conversationsOf(run))
         })
         old.close()
         run.client = await connectClient(run.stack.gateway, INSTANCE, "panel")
-        log(`upgrade: restarted on a version ${older} file`)
+        log(
+          `upgrade: restarted on a version ${older} file and ${earlier.length} older place files`,
+        )
+        if (!earlier.includes(run.main.id))
+          failures.push("the main conversation had no place record to turn back")
         const version = schemaVersion(path)
         if (version !== CURRENT_METADATA_VERSION)
           failures.push(
@@ -5573,6 +5590,13 @@ const steps = {
         failures.push(`its lease runs on ${before.lease?.host}, not ${from.name}`)
       if (from === leftOut)
         failures.push(`the pool chose ${from.name}, which the person left out`)
+      // An older build kept where it runs in two files: a placement and a
+      // binding. Turned back into them, the gateway reads it from those
+      // until it moves.
+      const conversations = conversationsOf(run)
+      asEarlierPlaces(conversations, conversationId)
+      if (existsSync(join(conversations, "places", `${conversationId}.json`)))
+        failures.push("the place record was not turned back into an older build's files")
       // Let back in, it is where the conversation moves once its worker drains.
       const back = await run.exclusive(() =>
         setPoolInclusion(run, leftOut.name, true, failures),
@@ -5605,6 +5629,12 @@ const steps = {
       if (JSON.stringify(bindingOf(run, conversationId)) !== JSON.stringify(bound))
         failures.push(
           `a message moved the conversation off its serving worker: ${JSON.stringify(bindingOf(run, conversationId))}`,
+        )
+      // Nothing changed, so nothing was written: it is still read from the
+      // older build's files.
+      if (existsSync(join(conversations, "places", `${conversationId}.json`)))
+        failures.push(
+          "a message that did not move the conversation wrote its place record",
         )
       if (failures.length) return
       // Its worker is stopped the way a container runtime stops it: it
@@ -5664,6 +5694,15 @@ const steps = {
       const rebound = bindingOf(run, conversationId)
       if (rebound?.worker !== to.name)
         failures.push(`after the drain it is bound to ${rebound?.worker}, not ${to.name}`)
+      // The move is its record's first change: written as one record, and
+      // as the older build's binding too, so a build put back follows it.
+      if (!existsSync(join(conversations, "places", `${conversationId}.json`)))
+        failures.push("the move wrote no place record")
+      const earlier = JSON.parse(
+        readFileSync(join(conversations, "bindings", `${conversationId}.json`), "utf8"),
+      )
+      if (earlier.worker !== to.name)
+        failures.push(`the older build's binding names ${earlier.worker}, not ${to.name}`)
       if (!rebound?.context || rebound.context === bound.context)
         failures.push(
           `after the move its provider context is ${rebound?.context}, not a new one`,
@@ -10682,27 +10721,18 @@ const offers = (run, holds) =>
       environments ?? run.client.agents.list().then((each) => each.environments),
   )
 
+/** The gateway's conversations directory, where it keeps place records. */
+const conversationsOf = (run) =>
+  join(run.stack.gateway.directory, "ci", "instances", INSTANCE, "conversations")
+
 /**
  * Which worker of the pool holds `conversationId` now, as the gateway keeps
- * it: `bindings/<id>.json` beside its conversations, `{ worker, context }`.
- * `null` when it has none.
+ * it: its place record, `places/<id>.json`, or an older build's
+ * `bindings/<id>.json`, as `{ worker, context }`. `null` when it has none.
  */
 function bindingOf(run, conversationId) {
-  const file = join(
-    run.stack.gateway.directory,
-    "ci",
-    "instances",
-    INSTANCE,
-    "conversations",
-    "bindings",
-    `${conversationId}.json`,
-  )
-  try {
-    return JSON.parse(readFileSync(file, "utf8"))
-  } catch (error) {
-    if (error.code === "ENOENT") return null
-    throw error
-  }
+  const place = placeRecordOf(conversationsOf(run), conversationId)
+  return place?.worker ? { worker: place.worker, context: place.context } : null
 }
 
 /** What the window's heading names `worker` by, in the client's words. */

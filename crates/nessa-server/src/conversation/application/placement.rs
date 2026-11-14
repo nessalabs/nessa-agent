@@ -1,46 +1,47 @@
 //! Where each conversation runs: in this process, on an SSH host, on a
-//! paired environment, or on any of them, named when it was created (issues
-//! #699, #706, #791).
+//! paired environment, on any of them, or in a cloud VM of its own, named
+//! when it was created (issues #699, #706, #791).
 //!
 //! ```text
-//! create(environment?) ──▶ Environments::place ──▶ ConversationPlacements::place
-//!                            (refused unless the host is configured, (written before
-//!                             or the paired environment connected,   the record)
-//!                             or, for peer:any, some worker serves
+//! create(environment?) ──▶ Environments::place ──▶ ConversationPlaces::write
+//!                            (refused unless the host is configured, (its one record,
+//!                             or the paired environment connected,   before the
+//!                             or, for peer:any, some worker serves   conversation's)
 //!                             and is not draining)
-//! start_slot ──▶ Environments::for_lease(conversation) ──▶ placement
-//!   ──▶ here | that host | that peer
-//!   | peer:any ──▶ ConversationBindings::binding ──▶ the worker it is bound to,
+//! start_slot ──▶ Environments::for_lease(conversation) ──▶ ConversationPlaces::read
+//!   ──▶ here | that host | that peer | its cloud VM
+//!   | peer:any ──▶ the worker the record binds it to,
 //!       while that one serves and is not draining
 //!     otherwise ──▶ PoolSettingsStore::read (the conversation's channel, or
 //!       the Nessa default) ──▶ of the serving, not draining workers it does
 //!       not leave out, the first in its order that is not busy, fewest
 //!       agent leases among equals; every one busy, the first in order
-//!       ──▶ ConversationBindings::bind (written before the lease is asked)
+//!       ──▶ ConversationPlaces::write (written before the lease is asked)
 //!   the lease's fence restores the saved provider context only when the
-//!   binding says this worker opened it (WorkerContext); the context each
-//!   session opens there is written back to the binding
-//! delete ──▶ Environments::erase ──▶ ConversationPlacements::erase,
-//!   ConversationBindings::erase
+//!   record says this worker opened it (WorkerContext); the context each
+//!   session opens there is written back to the record
+//! delete ──▶ Environments::erase ──▶ ConversationPlaces::erase
 //! ```
 //!
-//! Arrows are calls, in order. A placement is written once, before the
-//! conversation's record exists, so a conversation never exists without
-//! knowing where it runs; it is never moved. A conversation with no
-//! placement runs here: that is every conversation unless a host was named,
-//! and a gateway whose configuration names none never reaches a host's code.
-//! A placement this build cannot read refuses that conversation's opening
-//! alone (ADR 202, record scope). A placement naming a host the configuration
-//! no longer names is refused the same way, never run somewhere else. A
-//! paired environment is placed on only while it is connected, so a name
-//! nobody serves is never kept; once placed, the conversation waits for it
-//! to dial in again, and its key's credential is asked before every lease.
+//! Arrows are calls, in order. A conversation has one place record
+//! ([`PlaceRecord`]): where it was placed, and for a `peer:any` one, which
+//! worker holds it now and what provider context it opened there. The
+//! record is written before the conversation's record exists, so a
+//! conversation never exists without knowing where it runs. Where it was
+//! placed never changes; only a pool conversation's worker does. A
+//! conversation with no record runs here, as one made before records were
+//! kept for here does. A record this build cannot read refuses that
+//! conversation's opening alone (ADR 202, record scope). A placement naming a
+//! host the configuration no longer names is refused the same way, never run
+//! somewhere else. A paired environment is placed on only while it is
+//! connected, so a name nobody serves is never kept; once placed, the
+//! conversation waits for it to dial in again, and its key's credential is
+//! asked before every lease.
 //!
 //! `peer:any` places a conversation on this gateway's pool: every paired
 //! environment that holds a credential to serve it, which is the registry's
 //! fact and is kept nowhere here. Which worker holds the conversation now is
-//! a separate fact, its binding, which moves where the placement never
-//! does: chosen when its agent's lease is asked, and kept while that worker
+//! chosen when its agent's lease is asked, and kept while that worker
 //! serves and is not draining. A conversation moves only when its agent is
 //! opened, which is only while no lease of it is live, so one worker holds
 //! it at a time. Provider sessions stay on the worker that opened them, so
@@ -102,29 +103,6 @@ impl From<PlacementError> for ConversationError {
     }
 }
 
-/// The durable record of which conversations run on a host, and which.
-/// Implemented in infrastructure.
-pub(crate) trait ConversationPlacements: Send + Sync {
-    /// Record that `conversation`, not yet created, runs on `place`; here
-    /// removes a placement a failed creation of the same identity left.
-    /// Durable before it answers.
-    fn place<'a>(
-        &'a self,
-        conversation: &'a ConversationId,
-        place: &'a Place,
-    ) -> EnvironmentFuture<'a, Result<(), PlacementError>>;
-    /// Where `conversation` runs: [`Place::Here`] when nothing was placed.
-    fn placement<'a>(
-        &'a self,
-        conversation: &'a ConversationId,
-    ) -> EnvironmentFuture<'a, Result<Place, PlacementError>>;
-    /// Forget `conversation`'s placement, once its history is erased.
-    fn erase<'a>(
-        &'a self,
-        conversation: &'a ConversationId,
-    ) -> EnvironmentFuture<'a, Result<(), PlacementError>>;
-}
-
 /// Which worker of the pool holds a `peer:any` conversation now, and the
 /// provider context its agent last opened there.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -135,22 +113,101 @@ pub(crate) struct WorkerBinding {
     pub(crate) context: Option<ExecutionSessionId>,
 }
 
-/// The durable record of which worker holds each `peer:any` conversation.
-/// Implemented in infrastructure.
-pub(crate) trait ConversationBindings: Send + Sync {
-    /// Record `binding` for `conversation`, in place of any it had. Durable
-    /// before it answers.
-    fn bind<'a>(
+/// Where one conversation runs: the place it was placed on, which never
+/// changes, and for a `peer:any` conversation the worker that holds it now.
+/// Only a pool conversation is ever bound to a worker.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct PlaceRecord {
+    placed: Place,
+    worker: Option<WorkerBinding>,
+}
+
+impl PlaceRecord {
+    /// A conversation placed on `placed`, bound to no worker yet.
+    pub(crate) fn placed(placed: Place) -> Self {
+        Self {
+            placed,
+            worker: None,
+        }
+    }
+
+    /// A `peer:any` conversation that `worker` holds now.
+    pub(crate) fn in_pool(worker: WorkerBinding) -> Self {
+        Self {
+            placed: Place::Pool,
+            worker: Some(worker),
+        }
+    }
+
+    /// A conversation placed on `placed` and, when that is the pool, bound to
+    /// `worker`; a worker named for any other place is a record this build
+    /// cannot read.
+    ///
+    /// # Errors
+    /// [`PlacementError::Unreadable`] for a worker beside a place that is
+    /// not the pool.
+    #[cfg_attr(
+        not(unix),
+        allow(dead_code, reason = "the Unix gateway reads place files")
+    )]
+    pub(crate) fn read(
+        placed: Place,
+        worker: Option<WorkerBinding>,
+    ) -> Result<Self, PlacementError> {
+        match (placed, worker) {
+            (Place::Pool, worker) => Ok(Self {
+                placed: Place::Pool,
+                worker,
+            }),
+            (placed, None) => Ok(Self::placed(placed)),
+            (_, Some(_)) => Err(PlacementError::Unreadable),
+        }
+    }
+
+    /// Where it was placed when it was made.
+    #[cfg_attr(
+        not(unix),
+        allow(dead_code, reason = "the Unix gateway writes place files")
+    )]
+    pub(crate) fn place(&self) -> &Place {
+        &self.placed
+    }
+
+    /// The worker of the pool that holds it now; `None` before its first
+    /// lease, and for a conversation placed anywhere but the pool.
+    pub(crate) fn worker(&self) -> Option<&WorkerBinding> {
+        self.worker.as_ref()
+    }
+
+    /// Where it runs now, as the environment tools name it: where it was
+    /// placed, but for a pool one the worker that holds it, and
+    /// [`Place::Pool`] itself, which names no environment, before any does.
+    pub(crate) fn now(&self) -> Place {
+        match &self.worker {
+            Some(binding) => Place::Peer(binding.worker),
+            None => self.placed.clone(),
+        }
+    }
+}
+
+/// The durable record of where each conversation runs. Implemented in
+/// infrastructure.
+pub(crate) trait ConversationPlaces: Send + Sync {
+    /// Record `record` for `conversation`, in place of whatever it had: before
+    /// the conversation exists, and each time a pool conversation's worker or
+    /// provider context changes. Durable before it answers.
+    fn write<'a>(
         &'a self,
         conversation: &'a ConversationId,
-        binding: &'a WorkerBinding,
+        record: &'a PlaceRecord,
     ) -> EnvironmentFuture<'a, Result<(), PlacementError>>;
-    /// The worker `conversation` is bound to, `None` before its first lease.
-    fn binding<'a>(
+    /// Where `conversation` runs: placed [`Place::Here`] when it has no
+    /// record.
+    fn read<'a>(
         &'a self,
         conversation: &'a ConversationId,
-    ) -> EnvironmentFuture<'a, Result<Option<WorkerBinding>, PlacementError>>;
-    /// Forget `conversation`'s binding, once its history is erased.
+    ) -> EnvironmentFuture<'a, Result<PlaceRecord, PlacementError>>;
+    /// Forget where `conversation` runs, once its history is erased.
     fn erase<'a>(
         &'a self,
         conversation: &'a ConversationId,
@@ -250,13 +307,6 @@ fn choose(
         .map(|(peer, _)| *peer)
 }
 
-/// The pool's workers, and where which of them holds each conversation is
-/// kept.
-type Pool<'a> = (
-    &'a Arc<dyn PairedEnvironments>,
-    &'a Arc<dyn ConversationBindings>,
-);
-
 /// Where a conversation's agent lease is asked: the environment, and for a
 /// `peer:any` conversation, what its worker holds of its provider context.
 pub(crate) struct LeasePlace {
@@ -327,10 +377,10 @@ impl Drop for Reservation {
 
 /// Which provider context the worker a `peer:any` conversation is bound to
 /// opened, as its lease's fence asks before restoring one, and told of each
-/// context a session opens there, which it writes to the binding.
+/// context a session opens there, which it writes to the place record.
 pub(crate) struct WorkerContext {
     conversation: ConversationId,
-    bindings: Arc<dyn ConversationBindings>,
+    places: Arc<dyn ConversationPlaces>,
     binding: std::sync::Mutex<WorkerBinding>,
 }
 
@@ -351,11 +401,11 @@ impl WorkerContext {
         self.lock().context.as_ref() == Some(saved)
     }
 
-    /// A session opened `context` on the worker: kept in the binding, so the
-    /// next agent there restores it. Written before the opening answers, so
-    /// it lands before anything can move or erase the conversation; a write
-    /// that fails costs only that context, opened anew next time, never a
-    /// restore of what the worker does not hold.
+    /// A session opened `context` on the worker: kept in the place record,
+    /// so the next agent there restores it. Written before the opening
+    /// answers, so it lands before anything can move or erase the
+    /// conversation; a write that fails costs only that context, opened anew
+    /// next time, never a restore of what the worker does not hold.
     pub(crate) async fn opened(&self, context: &ExecutionSessionId) {
         let binding = {
             let mut binding = self.lock();
@@ -365,7 +415,8 @@ impl WorkerContext {
             binding.context = Some(context.clone());
             binding.clone()
         };
-        if let Err(error) = self.bindings.bind(&self.conversation, &binding).await {
+        let record = PlaceRecord::in_pool(binding);
+        if let Err(error) = self.places.write(&self.conversation, &record).await {
             tracing::warn!(conversation_id = %self.conversation, ?error, "the provider context a worker opened could not be recorded; it opens anew next time");
         }
     }
@@ -402,11 +453,9 @@ pub(crate) struct Environments {
     hosts: BTreeMap<String, Arc<dyn Environment>>,
     /// `None` when this gateway pairs no environments.
     peers: Option<Arc<dyn PairedEnvironments>>,
-    /// Where each conversation was placed, written before it exists.
-    placements: Arc<dyn ConversationPlacements>,
-    /// Which worker holds each `peer:any` conversation; `None` where no
-    /// conversation can be placed so, with no paired environments.
-    bindings: Option<Arc<dyn ConversationBindings>>,
+    /// Where each conversation runs: written before it exists, and again
+    /// when a pool conversation's worker changes.
+    places: Arc<dyn ConversationPlaces>,
     /// Pool leases chosen for a worker and not yet asked there.
     reserved: Arc<Reserved>,
     /// The default device saved from Devices: where a new conversation that
@@ -420,36 +469,36 @@ pub(crate) struct Environments {
 #[cfg(test)]
 impl From<Arc<dyn Environment>> for Environments {
     /// Here alone: every conversation runs here, as nothing else is
-    /// offered. For tests; composition always keeps placements.
+    /// offered. For tests; composition always keeps place records.
     fn from(here: Arc<dyn Environment>) -> Self {
-        Self::new(here, BTreeMap::new(), Arc::new(HereOnlyPlacements))
+        Self::new(here, BTreeMap::new(), Arc::new(HereOnlyPlaces))
     }
 }
 
-/// A placement store for tests built with [`Environments::from`], where
-/// nothing but here is offered: every conversation reads as here, and
-/// anything else is refused as the store being unavailable.
+/// A place store for tests built with [`Environments::from`], where nothing
+/// but here is offered: every conversation reads as here, and anything else
+/// is refused as the store being unavailable.
 #[cfg(test)]
-struct HereOnlyPlacements;
+struct HereOnlyPlaces;
 
 #[cfg(test)]
-impl ConversationPlacements for HereOnlyPlacements {
-    fn place<'a>(
+impl ConversationPlaces for HereOnlyPlaces {
+    fn write<'a>(
         &'a self,
         _conversation: &'a ConversationId,
-        place: &'a Place,
+        record: &'a PlaceRecord,
     ) -> EnvironmentFuture<'a, Result<(), PlacementError>> {
-        let placed = match place {
+        let written = match record.place() {
             Place::Here => Ok(()),
             _ => Err(PlacementError::Unavailable),
         };
-        Box::pin(async move { placed })
+        Box::pin(async move { written })
     }
-    fn placement<'a>(
+    fn read<'a>(
         &'a self,
         _conversation: &'a ConversationId,
-    ) -> EnvironmentFuture<'a, Result<Place, PlacementError>> {
-        Box::pin(async { Ok(Place::Here) })
+    ) -> EnvironmentFuture<'a, Result<PlaceRecord, PlacementError>> {
+        Box::pin(async { Ok(PlaceRecord::placed(Place::Here)) })
     }
     fn erase<'a>(
         &'a self,
@@ -467,37 +516,29 @@ impl Environments {
     }
 
     /// Here, the configured hosts by the destination they are named by, and
-    /// where placements are kept.
+    /// where place records are kept.
     #[cfg_attr(not(unix), allow(dead_code, reason = "the Unix gateway composes it"))]
     pub(crate) fn new(
         here: Arc<dyn Environment>,
         hosts: BTreeMap<String, Arc<dyn Environment>>,
-        placements: Arc<dyn ConversationPlacements>,
+        places: Arc<dyn ConversationPlaces>,
     ) -> Self {
         Self {
             workspaces: None,
             here,
             hosts,
             peers: None,
-            placements,
-            bindings: None,
+            places,
             reserved: Arc::default(),
             default: None,
             pool_settings: None,
         }
     }
 
-    /// These environments, with the paired environments `peers`, and
-    /// `bindings`, where which of them holds each `peer:any` conversation is
-    /// kept.
+    /// These environments, with the paired environments `peers`.
     #[cfg_attr(not(unix), allow(dead_code, reason = "the Unix gateway composes it"))]
-    pub(crate) fn with_peers(
-        mut self,
-        peers: Arc<dyn PairedEnvironments>,
-        bindings: Arc<dyn ConversationBindings>,
-    ) -> Self {
+    pub(crate) fn with_peers(mut self, peers: Arc<dyn PairedEnvironments>) -> Self {
         self.peers = Some(peers);
-        self.bindings = Some(bindings);
         self
     }
 
@@ -684,7 +725,10 @@ impl Environments {
             named if self.offers(named) => named.clone(),
             _ => return Err(ConversationError::EnvironmentNotConfigured),
         };
-        Ok(self.placements.place(conversation, &placed).await?)
+        Ok(self
+            .places
+            .write(conversation, &PlaceRecord::placed(placed))
+            .await?)
     }
 
     /// Where a conversation that asked for the pool is placed, as
@@ -695,7 +739,7 @@ impl Environments {
         conversation: &ConversationId,
         channel: Option<&ChannelId>,
     ) -> Result<Place, ConversationError> {
-        let pool = match self.bindings {
+        let pool = match self.peers {
             Some(_) => {
                 let settings = self.pool_settings(channel).await?;
                 if self.pool_busy(&settings) {
@@ -728,12 +772,21 @@ impl Environments {
         }
     }
 
+    /// Where `conversation` runs: where it was placed and, for a pool one,
+    /// the worker that holds it now. One read of its record.
+    pub(crate) async fn record(
+        &self,
+        conversation: &ConversationId,
+    ) -> Result<PlaceRecord, ConversationError> {
+        Ok(self.places.read(conversation).await?)
+    }
+
     /// Where `conversation` was placed.
     pub(crate) async fn placement(
         &self,
         conversation: &ConversationId,
     ) -> Result<Place, ConversationError> {
-        Ok(self.placements.placement(conversation).await?)
+        Ok(self.record(conversation).await?.placed)
     }
 
     /// Whether `conversation` runs in a cloud workspace of its own
@@ -758,24 +811,18 @@ impl Environments {
         }
     }
 
-    /// Where `conversation` runs now, as the environment tools name it: its
-    /// placement, but for a pool one the worker it is bound to, and
-    /// [`Place::Pool`] itself, which names no environment, before it is
-    /// bound to any.
+    /// Where `conversation` runs now, as the environment tools name it
+    /// ([`PlaceRecord::now`]).
     pub(crate) async fn runs_on(
         &self,
         conversation: &ConversationId,
     ) -> Result<Place, ConversationError> {
-        match self.placement(conversation).await? {
-            Place::Pool => {
-                let (_, bindings) = self.pool()?;
-                Ok(bindings
-                    .binding(conversation)
-                    .await?
-                    .map_or(Place::Pool, |binding| Place::Peer(binding.worker)))
-            }
-            placed => Ok(placed),
+        let record = self.record(conversation).await?;
+        if record.placed == Place::Pool {
+            // A pool this gateway no longer has is not configured.
+            self.pool()?;
         }
+        Ok(record.now())
     }
 
     /// The environment `conversation` runs in: for a `peer:any` one, the
@@ -785,7 +832,18 @@ impl Environments {
         &self,
         conversation: &ConversationId,
     ) -> Result<Arc<dyn Environment>, ConversationError> {
-        match self.placement(conversation).await? {
+        let record = self.record(conversation).await?;
+        self.environment_for(conversation, &record)
+    }
+
+    /// The environment `record` says `conversation` runs in, as
+    /// [`Environments::of`] answers, without reading the record again.
+    pub(crate) fn environment_for(
+        &self,
+        conversation: &ConversationId,
+        record: &PlaceRecord,
+    ) -> Result<Arc<dyn Environment>, ConversationError> {
+        match &record.placed {
             Place::Here => Ok(self.here.clone()),
             Place::CloudVm => self
                 .workspaces
@@ -793,24 +851,20 @@ impl Environments {
                 .map(|factory| factory.environment(conversation))
                 .ok_or(ConversationError::EnvironmentNotConfigured)?,
             Place::Pool => {
-                let (peers, bindings) = self.pool()?;
-                let binding = bindings
-                    .binding(conversation)
-                    .await?
-                    .ok_or(ConversationError::Unavailable)?;
+                let peers = self.pool()?;
+                let binding = record.worker().ok_or(ConversationError::Unavailable)?;
                 Ok(peers.environment(&binding.worker))
             }
             named => self
-                .named(&named)
+                .named(named)
                 .ok_or(ConversationError::EnvironmentNotConfigured),
         }
     }
 
-    /// The pool's workers and where their bindings are kept.
-    fn pool(&self) -> Result<Pool<'_>, ConversationError> {
+    /// The pool's workers.
+    fn pool(&self) -> Result<&Arc<dyn PairedEnvironments>, ConversationError> {
         self.peers
             .as_ref()
-            .zip(self.bindings.as_ref())
             .ok_or(ConversationError::EnvironmentNotConfigured)
     }
 
@@ -830,20 +884,20 @@ impl Environments {
         avoid: &[PeerEnvironment],
         channel: Option<&ChannelId>,
     ) -> Result<LeasePlace, ConversationError> {
-        let placed = self.placement(conversation).await?;
-        if placed == Place::CloudVm && !self.boat_connected().await {
+        let record = self.record(conversation).await?;
+        if record.placed == Place::CloudVm && !self.boat_connected().await {
             return Err(ConversationError::EnvironmentNotConfigured);
         }
-        if placed != Place::Pool {
+        if record.placed != Place::Pool {
             return Ok(LeasePlace {
-                environment: self.of(conversation).await?,
+                environment: self.environment_for(conversation, &record)?,
                 context: None,
                 _reservation: None,
             });
         }
-        let (peers, bindings) = self.pool()?;
+        let peers = self.pool()?;
         let settings = self.pool_settings(channel).await?;
-        let bound = bindings.binding(conversation).await?;
+        let bound = record.worker;
         // A conversation stays on its worker while that one may take it,
         // busy or not: moving costs it the provider context held there.
         let stays = |serving: &[(PeerEnvironment, WorkerLoad)], bound: &WorkerBinding| {
@@ -866,8 +920,10 @@ impl Environments {
                         // What it held elsewhere is not on this worker.
                         context: None,
                     };
-                    // A binding not written lets the reservation go.
-                    bindings.bind(conversation, &binding).await?;
+                    // A record not written lets the reservation go.
+                    self.places
+                        .write(conversation, &PlaceRecord::in_pool(binding.clone()))
+                        .await?;
                     tracing::info!(
                         conversation_id = %conversation,
                         from = bound.as_ref().map(|bound| bound.worker.name()),
@@ -884,7 +940,7 @@ impl Environments {
             _reservation: reservation,
             context: Some(Arc::new(WorkerContext {
                 conversation: conversation.clone(),
-                bindings: bindings.clone(),
+                places: self.places.clone(),
                 binding: std::sync::Mutex::new(binding),
             })),
         })
@@ -898,12 +954,15 @@ impl Environments {
         &self,
         conversation: &ConversationId,
     ) -> Result<bool, ConversationError> {
+        let record = self.record(conversation).await?;
         // Any worker of the pool is another machine, bound yet or not.
-        if self.placement(conversation).await? == Place::Pool {
+        if record.placed == Place::Pool {
             return Ok(false);
         }
         Ok(matches!(
-            self.of(conversation).await?.declaration().environment,
+            self.environment_for(conversation, &record)?
+                .declaration()
+                .environment,
             EnvironmentRef::Here
         ))
     }
@@ -913,10 +972,7 @@ impl Environments {
         &self,
         conversation: &ConversationId,
     ) -> Result<(), ConversationError> {
-        if let Some(bindings) = &self.bindings {
-            bindings.erase(conversation).await?;
-        }
-        Ok(self.placements.erase(conversation).await?)
+        Ok(self.places.erase(conversation).await?)
     }
 }
 

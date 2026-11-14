@@ -222,12 +222,7 @@ impl Fixture {
                     "devbox".to_string(),
                     crate::conversation::infrastructure::in_process_environment(),
                 )]),
-                Arc::new(
-                    crate::conversation::infrastructure::FilePlacements::new(
-                        root.join("placements"),
-                    )
-                    .unwrap(),
-                ),
+                Arc::new(crate::conversation::infrastructure::FilePlaces::new(root).unwrap()),
             )
         })
     }

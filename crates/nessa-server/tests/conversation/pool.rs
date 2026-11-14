@@ -4,7 +4,7 @@
 //! context when it drains or leaves, and forgotten with the conversation.
 use super::*;
 use crate::conversation::domain::Place;
-use crate::conversation::infrastructure::{in_process_environment, FileBindings, FilePlacements};
+use crate::conversation::infrastructure::{in_process_environment, FilePlaces};
 use std::sync::Mutex;
 
 const CONVERSATION: &str = "5c0a9f2e-1d3b-4c7a-8e6f-2b9d4a1c7e30";
@@ -82,24 +82,20 @@ impl PairedEnvironments for Workers {
 struct Pool {
     _root: tempfile::TempDir,
     workers: Arc<Workers>,
-    bindings: Arc<FileBindings>,
+    places: Arc<FilePlaces>,
     environments: Environments,
 }
 
 fn pool() -> Pool {
     let root = tempfile::tempdir().unwrap();
     let workers = Arc::new(Workers::default());
-    let bindings = Arc::new(FileBindings::new(root.path().join("bindings")).unwrap());
-    let environments = Environments::new(
-        in_process_environment(),
-        BTreeMap::new(),
-        Arc::new(FilePlacements::new(root.path().join("placements")).unwrap()),
-    )
-    .with_peers(workers.clone(), bindings.clone());
+    let places = Arc::new(FilePlaces::new(root.path()).unwrap());
+    let environments = Environments::new(in_process_environment(), BTreeMap::new(), places.clone())
+        .with_peers(workers.clone());
     Pool {
         _root: root,
         workers,
-        bindings,
+        places,
         environments,
     }
 }
@@ -124,7 +120,12 @@ impl Pool {
     }
 
     async fn bound(&self) -> Option<WorkerBinding> {
-        self.bindings.binding(&conversation()).await.unwrap()
+        self.places
+            .read(&conversation())
+            .await
+            .unwrap()
+            .worker()
+            .cloned()
     }
 
     fn is(&self, place: &LeasePlace, peer: PeerEnvironment) -> bool {
@@ -189,12 +190,9 @@ async fn with_no_paired_computer_online_the_pool_runs_in_the_cloud_when_it_can()
         let environments = Environments::new(
             in_process_environment(),
             BTreeMap::new(),
-            Arc::new(FilePlacements::new(root.path().join("placements")).unwrap()),
+            Arc::new(FilePlaces::new(root.path()).unwrap()),
         )
-        .with_peers(
-            workers.clone(),
-            Arc::new(FileBindings::new(root.path().join("bindings")).unwrap()),
-        )
+        .with_peers(workers.clone())
         .with_workspaces(Arc::new(Cloud(connected)));
         let placed = environments.place(&conversation(), &asked, None).await;
         if connected {
@@ -218,12 +216,9 @@ async fn with_no_paired_computer_online_the_pool_runs_in_the_cloud_when_it_can()
     let environments = Environments::new(
         in_process_environment(),
         BTreeMap::new(),
-        Arc::new(FilePlacements::new(root.path().join("placements")).unwrap()),
+        Arc::new(FilePlaces::new(root.path()).unwrap()),
     )
-    .with_peers(
-        Arc::new(Workers::default()),
-        Arc::new(FileBindings::new(root.path().join("bindings")).unwrap()),
-    )
+    .with_peers(Arc::new(Workers::default()))
     .with_workspaces(Arc::new(Cloud(true)));
     assert!(matches!(
         environments
@@ -236,7 +231,7 @@ async fn with_no_paired_computer_online_the_pool_runs_in_the_cloud_when_it_can()
     let environments = Environments::new(
         in_process_environment(),
         BTreeMap::new(),
-        Arc::new(FilePlacements::new(root.path().join("placements")).unwrap()),
+        Arc::new(FilePlaces::new(root.path()).unwrap()),
     )
     .with_workspaces(Arc::new(Cloud(true)));
     assert!(matches!(
@@ -258,7 +253,7 @@ async fn boat_without_a_connected_account_is_not_configured() {
         Environments::new(
             in_process_environment(),
             BTreeMap::new(),
-            Arc::new(FilePlacements::new(root.path().join("placements")).unwrap()),
+            Arc::new(FilePlaces::new(root.path()).unwrap()),
         )
         .with_workspaces(Arc::new(Cloud(connected)))
     };
@@ -288,7 +283,7 @@ async fn a_gateway_that_pairs_no_environments_places_nothing_on_the_pool() {
     let environments = Environments::new(
         in_process_environment(),
         BTreeMap::new(),
-        Arc::new(FilePlacements::new(root.path().join("placements")).unwrap()),
+        Arc::new(FilePlaces::new(root.path()).unwrap()),
     );
     assert!(matches!(
         environments
@@ -370,13 +365,13 @@ async fn a_conversation_whose_worker_drains_or_leaves_moves_with_no_provider_con
         pool.placed().await;
         let first = pool.lease(&[]).await.unwrap();
         assert!(pool.is(&first, worker(1)));
-        pool.bindings
-            .bind(
+        pool.places
+            .write(
                 &conversation(),
-                &WorkerBinding {
+                &PlaceRecord::in_pool(WorkerBinding {
                     worker: worker(1),
                     context: Some(context("opened-on-one")),
-                },
+                }),
             )
             .await
             .unwrap();
@@ -454,7 +449,7 @@ async fn a_context_opened_again_is_not_written_again() {
     context_there.opened(&context("opened-on-one")).await;
     assert!(pool.bound().await.and_then(|bound| bound.context).is_some());
     // Erased under it: an opening of the same context writes nothing.
-    pool.bindings.erase(&conversation()).await.unwrap();
+    pool.places.erase(&conversation()).await.unwrap();
     context_there.opened(&context("opened-on-one")).await;
     assert_eq!(pool.bound().await, None);
 }
@@ -596,13 +591,13 @@ fn preferred(order: &[PeerEnvironment], excluded: &[PeerEnvironment], busy: u32)
     let Pool {
         _root,
         workers,
-        bindings,
+        places,
         environments,
     } = pool();
     Pool {
         _root,
         workers,
-        bindings,
+        places,
         environments: environments.with_pool_settings(Preferences::new(order, excluded, busy)),
     }
 }
@@ -684,13 +679,13 @@ async fn a_computer_left_out_is_never_chosen_and_a_bound_one_moves_off_it() {
     assert!(pool.is(&place, worker(2)));
     drop(place);
     // A binding to a computer that was later left out moves off it.
-    pool.bindings
-        .bind(
+    pool.places
+        .write(
             &conversation(),
-            &WorkerBinding {
+            &PlaceRecord::in_pool(WorkerBinding {
                 worker: worker(1),
                 context: None,
-            },
+            }),
         )
         .await
         .unwrap();
@@ -706,12 +701,9 @@ async fn with_every_computer_busy_a_new_pool_conversation_overflows_to_the_cloud
     let environments = Environments::new(
         in_process_environment(),
         BTreeMap::new(),
-        Arc::new(FilePlacements::new(root.path().join("placements")).unwrap()),
+        Arc::new(FilePlaces::new(root.path()).unwrap()),
     )
-    .with_peers(
-        workers.clone(),
-        Arc::new(FileBindings::new(root.path().join("bindings")).unwrap()),
-    )
+    .with_peers(workers.clone())
     .with_workspaces(Arc::new(Cloud(true)))
     .with_pool_settings(Preferences::new(&[], &[], 800));
     workers.set_busy(&[(worker(1), 0, 850), (worker(2), 0, 800)]);

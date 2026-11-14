@@ -1,28 +1,28 @@
 //! A refusal is acknowledged before another worker's placement can block.
 use super::*;
-use crate::conversation::application::{ConversationBindings, WorkerBinding};
+use crate::conversation::application::{ConversationPlaces, PlaceRecord};
 use crate::conversation::domain::Place;
-use crate::conversation::infrastructure::FileBindings;
+use crate::conversation::infrastructure::FilePlaces;
 
 struct PausedAfterRefusal {
-    inner: FileBindings,
+    inner: FilePlaces,
     worker: Mutex<Option<Arc<PoolWorker>>>,
     pause: AtomicBool,
     entered: Notify,
     release: Notify,
 }
-impl ConversationBindings for PausedAfterRefusal {
-    fn bind<'a>(
+impl ConversationPlaces for PausedAfterRefusal {
+    fn write<'a>(
         &'a self,
         id: &'a ConversationId,
-        binding: &'a WorkerBinding,
+        record: &'a PlaceRecord,
     ) -> EnvironmentFuture<'a, Result<(), PlacementError>> {
-        self.inner.bind(id, binding)
+        self.inner.write(id, record)
     }
-    fn binding<'a>(
+    fn read<'a>(
         &'a self,
         id: &'a ConversationId,
-    ) -> EnvironmentFuture<'a, Result<Option<WorkerBinding>, PlacementError>> {
+    ) -> EnvironmentFuture<'a, Result<PlaceRecord, PlacementError>> {
         Box::pin(async move {
             let refused = self
                 .worker
@@ -34,7 +34,7 @@ impl ConversationBindings for PausedAfterRefusal {
                 self.entered.notify_one();
                 self.release.notified().await;
             }
-            self.inner.binding(id).await
+            self.inner.read(id).await
         })
     }
     fn erase<'a>(
@@ -48,7 +48,7 @@ impl ConversationBindings for PausedAfterRefusal {
 async fn acknowledged_before_next_placement(fail_once: bool) {
     let root = tempfile::tempdir().unwrap();
     let bindings = Arc::new(PausedAfterRefusal {
-        inner: FileBindings::new(root.path().join("bindings")).unwrap(),
+        inner: FilePlaces::new(root.path()).unwrap(),
         worker: Mutex::default(),
         pause: AtomicBool::new(true),
         entered: Notify::new(),

@@ -7,7 +7,7 @@ use crate::conversation::application::{Environments, ThreadEnvironments, Workspa
 #[cfg(unix)]
 use crate::conversation::domain::Place;
 #[cfg(unix)]
-use crate::conversation::infrastructure::FilePlacements;
+use crate::conversation::infrastructure::FilePlaces;
 use crate::conversation::{
     application::{
         background_tasks::{
@@ -1025,8 +1025,7 @@ async fn vm_background_stress_holds_past_idle_then_rests_and_restart_does_not_re
         let provider = Arc::new(ProviderFactory::default());
         provider.session_resume.store(true, Ordering::SeqCst);
         let vms = Arc::new(FakeVmWorkspaces::default());
-        let placements =
-            Arc::new(FilePlacements::new(directory.path().join("placements")).unwrap());
+        let placements = Arc::new(FilePlaces::new(directory.path()).unwrap());
         let environment =
             Environments::new(in_process_environment(), Default::default(), placements)
                 .with_workspaces(vms.clone());
@@ -1154,8 +1153,7 @@ async fn vm_background_stress_holds_past_idle_then_rests_and_restart_does_not_re
         storage.shutdown().await.unwrap();
         drop(metadata);
         tasks.save(pending, None).await.unwrap();
-        let placements =
-            Arc::new(FilePlacements::new(directory.path().join("placements")).unwrap());
+        let placements = Arc::new(FilePlaces::new(directory.path()).unwrap());
         let environment =
             Environments::new(in_process_environment(), Default::default(), placements)
                 .with_workspaces(vms);
