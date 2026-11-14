@@ -6,7 +6,7 @@ mod runtime;
 mod settings;
 mod ssh;
 pub use assignments::FileAssignments;
-pub use boat::BoatProvider;
+pub use boat::{vm_config, BoatProvider};
 pub use settings::VaultSettings;
 
 mod release;
