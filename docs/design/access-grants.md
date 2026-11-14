@@ -668,7 +668,7 @@ events for those conversations only. The payload is what a reader with
 that capability set may see.
 
 The body is signed with HMAC-SHA256, the mac
-[backup manifests](../../crates/nessa-server/src/backup/application/ports.rs)
+[backup manifests](../../crates/nessa-backup/src/application/ports.rs)
 already compute. That helper does not define this message. The signed
 bytes are three length-prefixed fields, in order. Each field is a
 big-endian unsigned 64-bit length, then that many bytes. The length

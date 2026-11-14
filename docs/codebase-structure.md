@@ -1827,8 +1827,15 @@ or logs.
 
 ## Export cut
 
-`crates/nessa-server/src/backup/` is the gateway's export cut and deletion
-inventory (#271, the capture half of #272). The ordering table is
+The gateway's export cut and deletion inventory (#271, the capture half of
+#272) is the `crates/nessa-backup/` crate; paths below without a crate are
+in it. What meets the conversation context stays in
+`crates/nessa-server/src/backup/infrastructure/`: `gateway.rs`
+(`capture_namespace`, the sources over the namespace's stores),
+`outbox.rs` (both outboxes), `admission.rs` (the conversation service's
+admission lock) and `committed.rs` (`CommittedInventory`, the
+`FenceCapture` the conversation context calls), with the tests that drive
+a whole namespace in the server's `tests/backup/`. The ordering table is
 [the export cut](design/export-cut.md). `domain/` says what a cut may hold
 and which stores it names. `application/` holds the conversation service's
 admission lock only while it pins each store and appends fences already
@@ -1851,14 +1858,14 @@ peer, or worker. The ordering table is
 
 The separate `nessa-backup-verify` binary enters through `backup_verify_main.rs`
 and `composition/backup_verification.rs`, without gateway bootstrap.
-`backup/entrypoint/arguments.rs` parses explicit input paths; `application/verification.rs`
+`entrypoint/arguments.rs` parses explicit input paths; `application/verification.rs`
 authenticates and streams the supplied cut through read-only ports;
 `domain/verification.rs` owns validated cut metadata; `application/verification_format.rs`
 owns the typed decoding port and authentication offsets. `infrastructure/manifest_decode.rs`
 and `deletion_decode.rs` own persisted grammars, shared by live storage and the injected
 `ExportFormat` verification adapter. The directory and
 key readers live in `infrastructure/verification.rs`. Tests follow these owners
-under `tests/backup/verification*.rs`; `tests/backup_verifier.rs` exercises the
+under the crate's `tests/verification*.rs`; the server's `tests/backup_verifier.rs` exercises the
 actual binary. [Standalone verification](design/backup-verification.md) defines
 the limits and the remaining restore contracts (#270).
 
@@ -1868,7 +1875,7 @@ the application's format port to the verifier; composition supplies the shared
 `ExportFormat`. It reports omissions, unresolved prerequisites and unimplemented
 quarantine/import ordering; it acquires no activation or destination capability.
 `composition/backup_output.rs` owns JSON output for both offline commands.
-`tests/backup/restore_planning.rs` and `tests/backup_restore_plan.rs` cover the
+The crate's `tests/restore_planning.rs` and the server's `tests/backup_restore_plan.rs` cover the
 application decoder refusals and actual process. [Offline restore planning](design/offline-restore-planning.md)
 defines that command's boundary; #324 storage changes remain separately owned.
 `tests/backup/restore.rs` covers quarantine, acceptance, audit failure, and the

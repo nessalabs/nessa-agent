@@ -12,7 +12,13 @@ use std::sync::Mutex;
 
 use async_trait::async_trait;
 
-use crate::backup::application::{
+use crate::backup::infrastructure::capture_namespace;
+use crate::composition::{install_serving_stores, install_serving_stores_audited};
+use crate::conversation::application::{ConversationCreationDisposition, ConversationRepository};
+use crate::conversation::domain::Conversation;
+use crate::conversation::infrastructure::LocalConversationStore;
+use nessa_auth::domain::{OrganizationId, PrincipalId};
+use nessa_backup::application::{
     accept_quarantine, current_staging_id, open_deferred_conversation, ordered_roots, root_posture,
     stage_quarantine, AcceptRequest, AdmissionFailure, AdmissionLease, AnchoredRoot, Authenticator,
     DecisionAuditError, DeferredSessionSource, ExportClock, FetchProgress, InventoryCause,
@@ -23,23 +29,18 @@ use crate::backup::application::{
     SessionSourceError, StageReport, StageRequest, StagedTreeOwner, Staging, StagingIds,
     VerificationFailure, VerificationLimits, VerificationSource,
 };
-use crate::backup::domain::{
+use nessa_backup::domain::{
     encode_journal, read_journal, seal_staging_id, AuthenticatedManifest, CapturedRecord,
     CredentialKind, DeferredEntry, DeletionFence, DeletionLog, Fingerprint, Freshness, GrantRole,
     Manifest, Posture, RestoreFault, Sensitivity, SourceCut, StoreKind, VolumeCase, Watermark,
     WRITER_INVENTORY,
 };
-use crate::backup::infrastructure::snapshot::SESSION_EXPORT_LIMIT;
-use crate::backup::infrastructure::{
-    capture_namespace, CedarInventoryPolicy, DirectoryMaterializer, DirectoryPublisher,
-    DirectoryQuarantine, DirectoryVerificationSource, ExportFormat, FileDeletionLog,
-    FileRestoreAudit, KeyedInventory, OsPublicationIds, OsStagingIds, SqliteDeferredSource,
+use nessa_backup::infrastructure::snapshot::SESSION_EXPORT_LIMIT;
+use nessa_backup::infrastructure::{
+    CedarInventoryPolicy, DirectoryMaterializer, DirectoryPublisher, DirectoryQuarantine,
+    DirectoryVerificationSource, ExportFormat, FileDeletionLog, FileRestoreAudit, KeyedInventory,
+    OsPublicationIds, OsStagingIds, SqliteDeferredSource,
 };
-use crate::composition::{install_serving_stores, install_serving_stores_audited};
-use crate::conversation::application::{ConversationCreationDisposition, ConversationRepository};
-use crate::conversation::domain::Conversation;
-use crate::conversation::infrastructure::LocalConversationStore;
-use nessa_auth::domain::{OrganizationId, PrincipalId};
 use nessa_protocol::agents::AgentId;
 use nessa_protocol::conversation::domain::{
     ConversationApprovalMode, ConversationId, ConversationModelId,
@@ -199,7 +200,7 @@ impl RestoreAudit for MemoryAudit {
             line.after == "available"
                 && line.decision == "effect"
                 && line.attestations == publication
-                && crate::backup::application::fetch_names_conversation(
+                && nessa_backup::application::fetch_names_conversation(
                     &line.target,
                     conversation_id,
                 )
@@ -245,7 +246,7 @@ impl RestoreAudit for MemoryAudit {
             .lines
             .lock()
             .map_err(|_| DecisionAuditError::NotStored)?;
-        Ok(crate::backup::application::current_journal_is_trusted(
+        Ok(nessa_backup::application::current_journal_is_trusted(
             self.history
                 .iter()
                 .chain(lines.iter())
@@ -2401,7 +2402,7 @@ async fn an_unaudited_deferred_session_is_not_copied_into_the_serving_store() {
     let source_path = scratch.path().join("source.sqlite3");
     fs::write(&source_path, session_database(&[("conv-one", b"payload")])).unwrap();
     let inspected =
-        crate::backup::infrastructure::snapshot::inspect_conversation(&source_path, "conv-one")
+        nessa_backup::infrastructure::snapshot::inspect_conversation(&source_path, "conv-one")
             .unwrap();
     let bundle = publish(
         vec![],
@@ -2433,7 +2434,7 @@ async fn an_unaudited_deferred_session_is_not_copied_into_the_serving_store() {
     fs::write(&session, b"not-a-published-session").unwrap();
     let skipped = place.live.parent().unwrap().join("skipped");
     nessa_local_storage::create_directory(&skipped).unwrap();
-    let servable = crate::backup::application::servable_deferred_sessions(
+    let servable = nessa_backup::application::servable_deferred_sessions(
         &place.live,
         &audit,
         &DirectoryQuarantine,
@@ -2449,7 +2450,7 @@ async fn an_unaudited_deferred_session_is_not_copied_into_the_serving_store() {
     open_one(&place, "conv-one", &source, &audit).unwrap();
     let served = place.live.parent().unwrap().join("served");
     nessa_local_storage::create_directory(&served).unwrap();
-    let servable = crate::backup::application::servable_deferred_sessions(
+    let servable = nessa_backup::application::servable_deferred_sessions(
         &place.live,
         &audit,
         &DirectoryQuarantine,
@@ -2857,13 +2858,13 @@ fn open_one(
 fn replace_deferred_session(root: &Path, session: &SealedSession) {
     let deferred_path = root.join("deferred.txt");
     let mut lines =
-        crate::backup::domain::decode_deferred(&fs::read_to_string(&deferred_path).unwrap())
+        nessa_backup::domain::decode_deferred(&fs::read_to_string(&deferred_path).unwrap())
             .unwrap();
     for line in &mut lines {
         line.size = session.size;
         line.digest = session.digest;
     }
-    let deferred = crate::backup::domain::encode_deferred(&lines).unwrap();
+    let deferred = nessa_backup::domain::encode_deferred(&lines).unwrap();
     fs::write(&deferred_path, &deferred).unwrap();
     let journal_path = root.join("journal.txt");
     let journal = read_journal(&fs::read_to_string(&journal_path).unwrap()).unwrap();
@@ -5079,7 +5080,7 @@ async fn a_deferred_line_changed_after_loading_is_not_fetched() {
     )
     .unwrap();
     accept(&place, &audit, &NoReceipts).unwrap();
-    let mut lines = crate::backup::domain::decode_deferred(
+    let mut lines = nessa_backup::domain::decode_deferred(
         &fs::read_to_string(place.live.join("deferred.txt")).unwrap(),
     )
     .unwrap();
@@ -5088,7 +5089,7 @@ async fn a_deferred_line_changed_after_loading_is_not_fetched() {
         line.digest = replacement.digest;
     }
     let layout = SwapsDeferredAfterLoad {
-        replacement: crate::backup::domain::encode_deferred(&lines)
+        replacement: nessa_backup::domain::encode_deferred(&lines)
             .unwrap()
             .into_bytes(),
     };
@@ -5144,7 +5145,7 @@ impl QuarantineLayout for ReportsRetainedSource {
         loaded: &LoadedTree,
         generation: &str,
     ) -> Result<Promoted, RestoreFault> {
-        let promoted = crate::backup::infrastructure::promote_with_failed_source_retirement(
+        let promoted = nessa_backup::infrastructure::promote_with_failed_source_retirement(
             quarantine,
             live,
             loaded,
@@ -5282,7 +5283,7 @@ fn a_live_generation_supersedes_an_earlier_staging_at_the_same_path() {
     let audit = MemoryAudit::open();
     let digest_a = Fingerprint::of(b"journal-a").hex();
     let digest_b = Fingerprint::of(b"journal-b").hex();
-    let attestation = crate::backup::domain::seal_attestation(&digest_a, "stage-first");
+    let attestation = nessa_backup::domain::seal_attestation(&digest_a, "stage-first");
     let sealed = RestoreEvidence {
         target: "/restore",
         before: "absent",

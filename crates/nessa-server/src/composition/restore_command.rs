@@ -15,26 +15,26 @@ use super::serving_restore::{
     merge_published_session, namespace_is_restore_root, remove_imported_stream,
     restore_install_matches, serving_has_stream,
 };
-use crate::backup::application::{
+use crate::conversation::application::{ConversationError, OpenPreparation};
+use crate::core::RunError;
+use crate::timer::clock;
+use nessa_backup::application::{
     binding_from_pointer, confirm_accepted, deliver_historical_commands,
     list_accepted_conversations, open_accepted_conversation, stage_quarantine, AbsentSessionSource,
     AcceptReport, AcceptRequest, AcceptedBinding, AcceptedFetch, DeferredConversationOpen,
     DeferredOpenFailure, ExportClock, FetchProgress, InventoryCause, LeaseReceipts,
     QuarantineLayout, RestoreAction, RestoreFacts, StageRequest, VerificationLimits,
 };
-use crate::backup::domain::{
+use nessa_backup::domain::{
     credentials_imported_on_restore, decode_deferred, encode_accepted_restore, paths_are_distinct,
     read_journal, RestoreFault,
 };
-use crate::backup::entrypoint::{parse_restore, RestoreCommand, RestoreUsageError, RESTORE_HELP};
-use crate::backup::infrastructure::{
+use nessa_backup::entrypoint::{parse_restore, RestoreCommand, RestoreUsageError, RESTORE_HELP};
+use nessa_backup::infrastructure::{
     read_verification_key, CedarInventoryPolicy, DirectoryMaterializer, DirectoryQuarantine,
     DirectoryVerificationSource, ExportFormat, FileRestoreAudit, KeyedInventory, OsPublicationIds,
     OsStagingIds, SqliteDeferredSource,
 };
-use crate::conversation::application::{ConversationError, OpenPreparation};
-use crate::core::RunError;
-use crate::timer::clock;
 
 const LATER_INVENTORY_LIMIT: usize = 4 * 1024 * 1024;
 
@@ -364,7 +364,7 @@ fn accept(
         Ok(audit) => audit,
         Err(_) => return refused(output, RestoreFault::Unreadable),
     };
-    let report = crate::backup::application::accept_quarantine(
+    let report = nessa_backup::application::accept_quarantine(
         &AcceptRequest {
             facts: person(RestoreAction::Accept),
             quarantine: &roots.quarantine,
@@ -439,7 +439,7 @@ fn open_one(
         Ok(source) => source,
         Err(error) => return refused(output, error),
     };
-    let held: Box<dyn crate::backup::application::DeferredSessionSource> = match source {
+    let held: Box<dyn nessa_backup::application::DeferredSessionSource> = match source {
         Some(path) if path.is_file() => Box::new(SqliteDeferredSource::new(path)),
         _ => Box::new(AbsentSessionSource),
     };
@@ -578,7 +578,7 @@ pub(crate) fn startup_authority(namespace: &Path) -> Result<Option<AcceptedBindi
     }
     let audit = FileRestoreAudit::open(&binding.audit, WallClock)
         .map_err(|_| RunError::Restore("the restore audit could not be opened".into()))?;
-    crate::backup::application::confirm_accepted(&binding.live, &DirectoryQuarantine, &audit)
+    nessa_backup::application::confirm_accepted(&binding.live, &DirectoryQuarantine, &audit)
         .map_err(|error| {
             if error == RestoreFault::NotAccepted {
                 RunError::Restore(
@@ -591,7 +591,7 @@ pub(crate) fn startup_authority(namespace: &Path) -> Result<Option<AcceptedBindi
                 )
             }
         })?;
-    let servable = crate::backup::application::servable_deferred_sessions(
+    let servable = nessa_backup::application::servable_deferred_sessions(
         &binding.live,
         &audit,
         &DirectoryQuarantine,
@@ -653,7 +653,7 @@ fn outbox_commands(live: &Path) -> Vec<String> {
     names
 }
 
-struct DeferredPreparation(Arc<dyn crate::backup::application::DeferredConversationOpen>);
+struct DeferredPreparation(Arc<dyn nessa_backup::application::DeferredConversationOpen>);
 
 impl OpenPreparation for DeferredPreparation {
     fn prepare(&self, conversation_id: &str) -> Result<(), ConversationError> {
@@ -672,7 +672,7 @@ impl OpenPreparation for DeferredPreparation {
 
 /// The opener startup installs, also fetched before any serving session opens.
 pub(crate) fn preparation_for(
-    opener: Arc<dyn crate::backup::application::DeferredConversationOpen>,
+    opener: Arc<dyn nessa_backup::application::DeferredConversationOpen>,
 ) -> Arc<dyn OpenPreparation> {
     Arc::new(DeferredPreparation(opener))
 }
@@ -734,7 +734,7 @@ impl DeferredConversationOpen for GatewayDeferredOpen {
         }
         let audit = FileRestoreAudit::open(&self.binding.audit, WallClock)
             .map_err(|_| DeferredOpenFailure::Unavailable)?;
-        let held: Box<dyn crate::backup::application::DeferredSessionSource> =
+        let held: Box<dyn nessa_backup::application::DeferredSessionSource> =
             match &self.binding.source {
                 Some(path) if path.is_file() => Box::new(SqliteDeferredSource::new(path)),
                 _ => Box::new(AbsentSessionSource),

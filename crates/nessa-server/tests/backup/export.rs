@@ -7,12 +7,12 @@ use std::sync::{Arc, Mutex};
 use async_trait::async_trait;
 use tokio::sync::{OwnedRwLockWriteGuard, RwLock};
 
-use crate::backup::application::{
+use nessa_backup::application::{
     capture_export, AdmissionFailure, AdmissionLease, Authenticator, DeletionLogStore, ExportClock,
     ExportFailure, ExportRequest, ExportSource, LogStoreError, MacError, ManifestPublisher,
     MutationAdmission, PinnedStore, PublishedRecord,
 };
-use crate::backup::domain::{
+use nessa_backup::domain::{
     AuthenticatedManifest, CapturedRecord, DeletionLog, Fingerprint, Sensitivity, SkipReason,
     SkippedRecord, SourceCut, StoreKind, Watermark, WRITER_INVENTORY,
 };
@@ -572,7 +572,7 @@ async fn run_with_log(
 ) -> Result<AuthenticatedManifest, ExportFailure> {
     let refs: Vec<&dyn ExportSource> = sources.iter().map(|source| source.as_ref()).collect();
     let clock = Clock(4);
-    let mac = crate::backup::application::MacKey([3; 32]);
+    let mac = nessa_backup::application::MacKey([3; 32]);
     capture_export(ExportRequest {
         admission: &admission,
         sources: &refs,
@@ -592,7 +592,7 @@ async fn run(
 ) -> Result<AuthenticatedManifest, ExportFailure> {
     let refs: Vec<&dyn ExportSource> = sources.iter().map(|source| source.as_ref()).collect();
     let clock = Clock(4);
-    let mac = crate::backup::application::MacKey([3; 32]);
+    let mac = nessa_backup::application::MacKey([3; 32]);
     capture_export(ExportRequest {
         admission: &admission,
         sources: &refs,
@@ -894,7 +894,7 @@ impl ExportSource for Fixed {
         } else {
             self.cut.lock().unwrap().take().ok_or(())?
         };
-        Ok(Box::new(crate::backup::application::CopiedStore::new(cut)))
+        Ok(Box::new(nessa_backup::application::CopiedStore::new(cut)))
     }
 }
 
@@ -904,7 +904,7 @@ struct WatchLog(Arc<AtomicBool>);
 impl DeletionLogStore for WatchLog {
     async fn hold_reconciliation(
         &self,
-    ) -> Result<Box<dyn crate::backup::application::InventoryReconciliationLease>, ()> {
+    ) -> Result<Box<dyn nessa_backup::application::InventoryReconciliationLease>, ()> {
         Ok(Box::new(UncontendedReconciliation))
     }
 
@@ -924,7 +924,7 @@ struct EmptyLog;
 impl DeletionLogStore for EmptyLog {
     async fn hold_reconciliation(
         &self,
-    ) -> Result<Box<dyn crate::backup::application::InventoryReconciliationLease>, ()> {
+    ) -> Result<Box<dyn nessa_backup::application::InventoryReconciliationLease>, ()> {
         Ok(Box::new(UncontendedReconciliation))
     }
 
@@ -975,4 +975,4 @@ impl ExportClock for Clock {
 // These adapters are used by single-capture tests only.
 struct UncontendedReconciliation;
 
-impl crate::backup::application::InventoryReconciliationLease for UncontendedReconciliation {}
+impl nessa_backup::application::InventoryReconciliationLease for UncontendedReconciliation {}

@@ -8,7 +8,7 @@ summary: A backup pins the owning stores before it authenticates and publishes
 parent: gateway
 sourceRevision: "77a6b620af4d94b234294f6d273fd74b3dfb44c7"
 sources:
-  - crates/nessa-server/src/backup/application/export.rs
+  - crates/nessa-backup/src/application/export.rs
   - crates/nessa-server/tests/backup/export.rs
   - docs/design/export-cut.md
 model:
@@ -80,4 +80,4 @@ The model omits per-store serialization, secret detection, MAC cryptography, fil
 
 ## Further reading
 
-[export.rs](../../../../crates/nessa-server/src/backup/application/export.rs) · [export.rs](../../../../crates/nessa-server/tests/backup/export.rs) · [export-cut.md](../../../../docs/design/export-cut.md)
+[export.rs](../../../../crates/nessa-backup/src/application/export.rs) · [export.rs](../../../../crates/nessa-server/tests/backup/export.rs) · [export-cut.md](../../../../docs/design/export-cut.md)
