@@ -363,3 +363,13 @@ fn push_grantor(macs: &mut Vec<[u8; 32]>, peer: &GrantorPeer) {
         macs.push(mac);
     }
 }
+
+/// Exercise the actual native discovery dial path from the composed two-gateway
+/// fixture without waiting a whole publication interval or advertising on LAN.
+#[cfg(test)]
+pub(super) async fn discovery_cycle_for_test(peers: &PeerCommands) -> bool {
+    let (stop, stopped) = watch::channel(false);
+    drive_dialers(peers, &stopped, &stop).await;
+    let outcome = stopped.borrow();
+    *outcome
+}
