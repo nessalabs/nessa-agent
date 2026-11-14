@@ -187,13 +187,32 @@ controls — text, icons, images, code, or decorative art — in any frame.
   _Check:_ `columns.mjs --only pane-clipping` focuses an overflowing fixture
   with the pane's real styles; `conversation-stress.mjs` (`window`, full seeded
   sequence) records its offset and header geometry beside the list and panes alone.
-- [ ] **Column titles sit inline after the controls when they fit, below when
-  they do not**, and an inline title never overlaps a titlebar control.
+- [ ] **The session-list column's title sits inline after the controls when it
+  fits, below when it does not**, and an inline title never overlaps a titlebar control.
   _ADR 238 › The titlebar's safe area_ (`titlePlacement`).
   ResizeObserver delivery measures only; the latest placement commits before
   the next paint, with no ResizeObserver loop error (#693).
   _Check:_ `responsive.mjs --only column-title`; drag a column edge slowly
   across the flip point by hand and watch for a flicker (the 12px hold).
+  The columns layout measures placement wherever the title is visible across
+  the six-width sweep, requiring a visible title somewhere in that sweep.
+  CSS-hidden or fully transparent measured headings do not establish that presence.
+  The sidebar layout positively identifies its real tree, channel branches
+  and sessions, and requires no separate session-list column or title. Both
+  engine/layout profiles run; an empty title query alone is not evidence.
+
+  | Observed composition | Required evidence |
+  | --- | --- |
+  | Columns | Original visible-title presence across the sweep and title/control collision checks at every sampled width |
+  | Sidebar tree | Unique workspace and owned tree/navigation, real channel/session structure, consistent fold/visibility/accessibility facts, no separate session list or real column title, including hidden titles |
+  | Missing or contradictory context | Fails the check; never inferred to be an expected empty layout |
+
+  `column-title-composition.mjs` owns the sidebar observation/consistency
+  check; its bare-Node tests reject missing, inherited and contradictory facts.
+  SourceList owns input safety while folding: capture guards act before
+  parking sets `inert` (#1294), so an aria-hidden handoff may remain non-inert.
+  Its `parked.test.tsx` and `source-list.test.tsx` tests own those input guards;
+  this composition check does not infer interactivity from `inert=false`.
 - [ ] **Pane fitting starts after resize delivery.** Its first measurement may
   start another observer on the grid; it runs on the next animation frame,
   coalesces notifications, and retires with the source/grid. No native

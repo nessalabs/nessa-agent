@@ -775,9 +775,8 @@ reads as one band from the top, never cut off where the controls end. `--desktop
 is defined once, from the host's inset for its traffic lights and the width
 of our control cluster (sidebar toggle, Back, Forward, and the session list's
 toggle or New Session), and every titlebar-row element derives its start from
-it (`styles.test.ts` holds the rules to it). Every column's head — the
-session list's in both layouts, the sidebar's, Settings' page — is one
-component (`src/desktop/ui/column-header.tsx`): the titlebar row, holding the
+it (`styles.test.ts` holds the rules to it). The session-list column's head
+in the columns layout is `src/desktop/ui/column-header.tsx`: the titlebar row, holding the
 column's own action at its far end, and the column's title **inline in that
 row, after the controls where they stand over the column, when it fits there
 with room to breathe; on a row of its own below when it does not**
@@ -790,7 +789,10 @@ the row, by transform and opacity; if its column is sliding at that moment,
 an inline title holds still at its place (`holdStill`) rather than ride the
 slide from where the column began. A column's titlebar-row action hides at
 once as the column folds and shows once it has slid in. Pane headers keep
-rendering while their panes fly and change size (#914). A pane's header is its titlebar
+rendering while their panes fly and change size (#914). The sidebar arrangement
+discloses sessions in its tree and has no separate session-list column or
+`ColumnHeader` (`ShownWindow.sessionList` and `shownWindow`); Settings uses its
+own masthead and page header. A pane's header is its titlebar
 row, and what follows it begins below the titlebar's height wherever the pane
 is, so a scrolled transcript or a narrow pane's heading never passes under
 the controls; in the corner pane its name, menu and close start after them,

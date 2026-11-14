@@ -8,9 +8,11 @@
  *                   label wrapped, nothing overflowing the card
  *   composer-chips  four panes while the window narrows: no two composer
  *                   controls overlap
- *   column-title    each column's title inline in the titlebar row where it fits,
+ *   column-title    the session-list title inline in the titlebar row where it fits,
  *                   below it where it does not ("The titlebar's safe area"): an
- *                   inline title never overlaps a titlebar control
+ *                   inline title never overlaps a titlebar control. A requested
+ *                   sidebar profile identifies its real tree composition and
+ *                   requires no separate session-list column or title.
  *   settings-fold   Settings' sidebar folds for room below a page of 420px
  *   integrations-narrow Settings › MCP servers at 800 and 390px: nothing
  *                   outside its card, no sideways scroll, the fold held, and
@@ -111,6 +113,10 @@ import { join } from "node:path"
 import { attempt, CannotRun, chosen } from "./lib/cli.mjs"
 import { need, openPage, withEngines } from "./lib/browser.mjs"
 import { main } from "./lib/run.mjs"
+import {
+  sidebarTitleComposition,
+  sidebarTitleCompositionFailures,
+} from "./lib/column-title-composition.mjs"
 import { integrationsFit, openIntegrations } from "./lib/settings.mjs"
 import {
   catalogueFile,
@@ -316,6 +322,8 @@ const checks = {
   },
 
   "column-title": async ({ page, engine, layout, options }) => {
+    if (!layouts.includes(layout))
+      throw new CannotRun(`unknown column-title layout: ${String(layout)}`)
     const failures = []
     const seen = []
     for (const width of [1440, 1200, 1000, 900, 800, 700]) {
@@ -323,46 +331,71 @@ const checks = {
       // The resize reaches the page a frame or two later; then its motion runs out.
       await frames(page, 2)
       await settled(page)
-      const r = await page.evaluate((sel) => {
-        const titles = [...document.querySelectorAll(sel.columnTitle)].filter((t) =>
-          t.checkVisibility(),
-        )
-        const buttons = [...document.querySelectorAll(sel.titlebarButtons)].filter((b) =>
-          b.checkVisibility({ checkOpacity: true }),
-        )
-        return titles.map((t) => {
-          const heading = t.querySelector(sel.heading) ?? t
-          const range = document.createRange()
-          range.selectNodeContents(heading)
-          const tr = range.getBoundingClientRect()
-          const hits = buttons
-            .map((b) => [b, b.getBoundingClientRect()])
-            .filter(
-              ([, r]) =>
-                Math.min(r.right, tr.right) - Math.max(r.left, tr.left) > 1 &&
-                Math.min(r.bottom, tr.bottom) - Math.max(r.top, tr.top) > 1,
-            )
-            .map(([b]) =>
-              (b.getAttribute("aria-label") ?? b.textContent).trim().slice(0, 20),
-            )
-          return {
-            title: heading.textContent.trim().slice(0, 24),
-            placement: t.dataset.placement,
-            hits,
-          }
+      if (layout === "sidebar") {
+        const observed = await page.evaluate(sidebarTitleComposition, {
+          workspace: css.workspace,
+          sidebar: css.sidebar,
+          sessionList: css.sessionList,
         })
-      }, css)
-      seen.push({ width, titles: r.map((t) => `${t.title}:${t.placement}`) })
-      for (const t of r)
-        if (t.hits.length)
-          failures.push(
-            `${width}px: "${t.title}" (${t.placement}) overlaps ${t.hits.join(", ")}`,
+        seen.push({ width, composition: observed })
+        failures.push(
+          ...sidebarTitleCompositionFailures(observed).map(
+            (failure) => `${width}px: ${failure}`,
+          ),
+        )
+      } else {
+        const r = await page.evaluate((sel) => {
+          const titles = [...document.querySelectorAll(sel.columnTitle)]
+            .map((title) => ({
+              title,
+              heading: title.querySelector(sel.heading) ?? title,
+            }))
+            .filter(({ heading }) =>
+              heading.checkVisibility({
+                opacityProperty: true,
+                visibilityProperty: true,
+              }),
+            )
+          const buttons = [...document.querySelectorAll(sel.titlebarButtons)].filter(
+            (b) => b.checkVisibility({ checkOpacity: true }),
           )
+          return titles.map(({ title: t, heading }) => {
+            const range = document.createRange()
+            range.selectNodeContents(heading)
+            const tr = range.getBoundingClientRect()
+            const hits = buttons
+              .map((b) => [b, b.getBoundingClientRect()])
+              .filter(
+                ([, r]) =>
+                  Math.min(r.right, tr.right) - Math.max(r.left, tr.left) > 1 &&
+                  Math.min(r.bottom, tr.bottom) - Math.max(r.top, tr.top) > 1,
+              )
+              .map(([b]) =>
+                (b.getAttribute("aria-label") ?? b.textContent).trim().slice(0, 20),
+              )
+            return {
+              title: heading.textContent.trim().slice(0, 24),
+              placement: t.dataset.placement,
+              hits,
+            }
+          })
+        }, css)
+        seen.push({ width, titles: r.map((t) => `${t.title}:${t.placement}`) })
+        for (const t of r)
+          if (t.hits.length)
+            failures.push(
+              `${width}px: "${t.title}" (${t.placement}) overlaps ${t.hits.join(", ")}`,
+            )
+      }
       await shot(options, page, `titles-${engine}-${layout}-${width}`)
     }
-    if (!seen.some((s) => s.titles.length))
+    if (layout === "columns" && !seen.some((s) => s.titles.length))
       throw new CannotRun(`no column titles found (${css.columnTitle})`)
-    return { widths: seen, failures }
+    return {
+      contract: layout === "sidebar" ? "sidebar composition" : "column title placement",
+      widths: seen,
+      failures,
+    }
   },
 
   "settings-fold": async ({ page, engine, options }) => {
