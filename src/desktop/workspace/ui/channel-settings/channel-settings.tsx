@@ -1,25 +1,14 @@
 import { useRef, useState } from "react"
-import { Button } from "@nessa-ui/react/button"
 import { Dialog } from "@nessa-ui/react/dialog"
 import { IconButton } from "../../../ui/icon-button"
 import { useBoatConnection, useBoatGateway } from "../../../settings/ui/boat-row"
 import { BoatRuntimeControl } from "../../../settings/ui/boat-runtime-control"
-import { ItemRow, Segmented } from "../../../settings/ui/settings-controls"
+import { Choice, ItemRow } from "../../../settings/ui/settings-controls"
+import type { ChoiceOption } from "../../../ui/choice-menu"
 import { channelFailure, type ChannelPlacement } from "../../application/ports"
 import { gatewayChannelId } from "../../adapters/gateway/gateway-views"
 import { PoolOrder, useDevicesGateway } from "../../../devices"
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuTrigger,
-  MenuRadioGroup,
-  MenuRadioItem,
-} from "../../../ui/menu"
-import {
-  channelPlaceKind,
-  type ChannelPlace,
-  type ChannelPlaceKind,
-} from "../../model/channel-place"
+import { channelPlaceKind, type ChannelPlace } from "../../model/channel-place"
 import { channelPlaceWords } from "../channel-place-words"
 import { setChannelPlacement } from "../../adapters/store/commands"
 import { useComputers, type Computer } from "./computers"
@@ -27,10 +16,10 @@ import { useWorkspaceDispatch, useWorkspaceSelector } from "../../adapters/store
 import { selectChannel } from "../../adapters/store/selectors"
 
 /**
- * One of the two settings: a kind of place side by side, and, once
- * "Computer" is chosen, which computer, from a menu of the ones connected
- * now. Choosing "Computer" alone saves nothing: the place is saved when a
- * computer is chosen.
+ * One of the two settings: where its agents run, chosen from a menu at the
+ * row's end. This Mac, Boat and Any come first; then each computer connected
+ * now, by name. A computer saved earlier and not connected now is still
+ * listed, so the menu says where the channel runs.
  */
 function PlaceRow({
   row,
@@ -49,20 +38,25 @@ function PlaceRow({
   saving: boolean
   onChange: (next: ChannelPlace) => void
 }) {
-  const [picking, setPicking] = useState(false)
-  const kind = channelPlaceKind(value)
-  const shown: ChannelPlaceKind = picking ? "computer" : kind
-  const listed = computers.find((each) => each.environment === value)
-  const kinds: readonly { id: ChannelPlaceKind; label: string; disabled?: boolean }[] = [
+  const options: ChoiceOption<ChannelPlace>[] = [
     { id: "local", label: "This Mac" },
     { id: "boat", label: "Boat", disabled: !boatReady },
-    { id: "pool", label: "Any" },
-    {
-      id: "computer",
-      label: "Computer",
-      disabled: computers.length === 0 && kind !== "computer",
-    },
+    { id: "pool", label: "Any computer" },
+    ...computers.map((computer) => ({
+      id: computer.environment,
+      label: computer.name,
+      section: "Computers",
+    })),
   ]
+  if (
+    channelPlaceKind(value) === "computer" &&
+    !options.some((each) => each.id === value)
+  )
+    options.push({
+      id: value,
+      label: channelPlaceWords(value, undefined),
+      section: "Computers",
+    })
   return (
     <ItemRow
       label={label}
@@ -73,57 +67,10 @@ function PlaceRow({
       }
       data-placement-row={row}
       unavailable={saving}
-    >
-      <Segmented<ChannelPlaceKind>
-        label={label}
-        value={shown}
-        options={kinds}
-        onChange={(next) => {
-          if (next === "computer") {
-            setPicking(kind !== "computer")
-            return
-          }
-          setPicking(false)
-          onChange(next)
-        }}
-      />
-      {shown === "computer" ? (
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button
-              variant="secondary"
-              size="sm"
-              disabled={saving}
-              data-placement-computer={row}
-              aria-label={`${label}: which computer`}
-            >
-              {kind === "computer"
-                ? channelPlaceWords(value, listed?.name)
-                : "Choose a computer"}
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="start" sideOffset={6}>
-            <MenuRadioGroup
-              value={kind === "computer" ? value : ""}
-              onValueChange={(next) => {
-                setPicking(false)
-                onChange(next)
-              }}
-            >
-              {computers.map((computer) => (
-                <MenuRadioItem
-                  key={computer.environment}
-                  value={computer.environment}
-                  data-placement-choice={computer.environment}
-                >
-                  {computer.name}
-                </MenuRadioItem>
-              ))}
-            </MenuRadioGroup>
-          </DropdownMenuContent>
-        </DropdownMenu>
-      ) : null}
-    </ItemRow>
+      control={
+        <Choice label={label} value={value} options={options} onChange={onChange} />
+      }
+    />
   )
 }
 
@@ -183,8 +130,6 @@ export function ChannelPlacementControl({ channelId }: { channelId: string }) {
       data-thread-placement={placement.threadPlacement}
       className="settings-channel-placement"
     >
-      {/* Each setting stacks its name over its control, so neither is squeezed
-          in a narrow dialog. */}
       <PlaceRow
         row="coordinator"
         label="Main agent runs on"
@@ -221,6 +166,10 @@ export function ChannelSettingsButton({
   name: string
 }) {
   const [open, setOpen] = useState(false)
+  // The dialog opens inside the window's surface, as Settings' do, so its rows
+  // read the desktop's type and tones; portalled to the body they have none
+  // and fall back to the page's larger text.
+  const [home, setHome] = useState<HTMLElement | null>(null)
   const trigger = useRef<HTMLButtonElement>(null)
   const gateway = useBoatGateway()
   const devices = useDevicesGateway()
@@ -235,23 +184,25 @@ export function ChannelSettingsButton({
         size="sm"
         onClick={(event) => {
           event.stopPropagation()
+          setHome(event.currentTarget.closest<HTMLElement>("[data-surface]"))
           setOpen(true)
         }}
       />
       {open && (
         <Dialog
           open
+          container={home}
           data-channel-settings=""
           onOpenChange={setOpen}
           onCloseAutoFocus={(event) => {
             event.preventDefault()
             trigger.current?.focus()
           }}
-          size="sm"
+          size="md"
           title={`#${name} settings`}
           description={scope === undefined ? "The default for every channel." : undefined}
         >
-          <div className="settings-boat settings-surface">
+          <div className="settings-boat settings-surface channel-settings-section">
             {scope === undefined ? null : (
               <ChannelPlacementControl channelId={channelId} />
             )}
@@ -259,7 +210,11 @@ export function ChannelSettingsButton({
           </div>
           {/* The default channel follows Devices' order, set there. */}
           {scope !== undefined && devices ? (
-            <div className="settings-surface" data-channel-settings-pool="">
+            <div
+              className="settings-surface channel-settings-section"
+              data-channel-settings-pool=""
+            >
+              <h3 className="channel-settings-heading">Order for “Any”</h3>
               <PoolOrder gateway={devices} channelId={scope} />
             </div>
           ) : null}
