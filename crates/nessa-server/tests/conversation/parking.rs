@@ -196,7 +196,7 @@ impl Fixture {
     #[cfg(unix)]
     async fn in_workspace(rested: Arc<RestedWorkspaces>, placements: &Path) -> Self {
         let placements =
-            Arc::new(crate::conversation::infrastructure::FilePlaces::new(&placements).unwrap());
+            Arc::new(crate::conversation::infrastructure::FilePlaces::new(placements).unwrap());
         let environment = Environments::new(
             crate::conversation::infrastructure::in_process_environment(),
             BTreeMap::new(),
