@@ -2311,6 +2311,15 @@ impl RecoveryAudit for WorkspaceRecoveryAudit {
                     cause: cause.as_str().into(),
                 }
             }
+            RecoveryEvent::OpenRefused {
+                thread,
+                cause,
+                failure,
+            } => EnvironmentEvent::WorkspaceOpenRefused {
+                thread: thread.clone(),
+                cause: cause.as_str().into(),
+                failure: (*failure).into(),
+            },
             RecoveryEvent::StopAnswered {
                 thread,
                 vm,

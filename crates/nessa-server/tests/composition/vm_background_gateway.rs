@@ -39,13 +39,16 @@ struct Fixture {
 }
 static FIXTURE: OnceLock<Fixture> = OnceLock::new();
 fn event(kind: &str, thread: &str) {
+    record(serde_json::json!({"kind":kind,"thread":thread}));
+}
+fn record(event: serde_json::Value) {
     let Some(fixture) = FIXTURE.get() else { return };
     let mut file = OpenOptions::new()
         .create(true)
         .append(true)
         .open(fixture.root.join("events.jsonl"))
         .unwrap();
-    let mut record = serde_json::to_vec(&serde_json::json!({"kind":kind,"thread":thread})).unwrap();
+    let mut record = serde_json::to_vec(&event).unwrap();
     record.push(b'\n');
     file.write_all(&record).unwrap();
 }
@@ -146,17 +149,37 @@ impl Settings for Config {
 }
 struct Audit;
 impl RecoveryAudit for Audit {
-    fn record(&self, _: &RecoveryEvent) -> Result<(), Failure> {
+    fn record(&self, event: &RecoveryEvent) -> Result<(), Failure> {
+        // The stress driver reads each failed opening's cause from here, as
+        // the gateway's environment audit would keep it.
+        if let RecoveryEvent::OpenRefused {
+            thread,
+            cause,
+            failure,
+        } = event
+        {
+            record(serde_json::json!({
+                "kind": "open_refused",
+                "thread": thread,
+                "cause": cause.as_str(),
+                "failure": failure,
+            }));
+        }
         Ok(())
     }
 }
 struct FakeProvider;
 #[async_trait::async_trait]
 impl Provider for FakeProvider {
-    async fn validate(&self, _: &BoatConnection) -> Result<(), Failure> {
+    async fn validate(&self, _: &BoatAccount, _: &VmSpec) -> Result<(), Failure> {
         Ok(())
     }
-    async fn create(&self, _: &BoatConnection, thread: &str) -> Result<WorkspaceReceipt, Failure> {
+    async fn create(
+        &self,
+        _: &BoatAccount,
+        _: &VmSpec,
+        thread: &str,
+    ) -> Result<WorkspaceReceipt, Failure> {
         std::fs::create_dir_all(folder(thread)).map_err(|_| Failure::Storage)?;
         event("created", thread);
         Ok(WorkspaceReceipt {
@@ -174,22 +197,28 @@ impl Provider for FakeProvider {
     }
     async fn connect(
         &self,
-        _: &BoatConnection,
+        _: &BoatAccount,
+        _: &VmSpec,
         thread: &str,
         _: &str,
         _: &EnvironmentIdentity,
     ) -> Result<Arc<dyn WorkspaceRuntime>, Failure> {
+        // The driver makes Boat fail a thread's next opening by leaving
+        // this file in its folder.
+        if std::fs::remove_file(folder(thread).join("fail-next-open")).is_ok() {
+            return Err(Failure::Provider);
+        }
         Ok(Arc::new(FakeVm(thread.into())))
     }
     async fn remove(
         &self,
-        _: &BoatConnection,
+        _: &BoatAccount,
         _: &str,
         _: &EnvironmentIdentity,
     ) -> Result<(), Failure> {
         unreachable!()
     }
-    async fn stop(&self, _: &BoatConnection, vm: &str, _: RestCause) -> Result<(), Failure> {
+    async fn stop(&self, _: &BoatAccount, vm: &str, _: RestCause) -> Result<(), Failure> {
         event("rested", vm);
         Ok(())
     }

@@ -188,7 +188,11 @@ async fn open_workspace(
         .open(conversation.clone(), provision, channel)
         .await
         .map_err(|error| {
-            tracing::warn!(?error, "Boat workspace could not be prepared");
+            tracing::warn!(
+                cause = error.cause().as_str(),
+                ?error,
+                "Boat workspace could not be prepared"
+            );
             LeaseRefusal::EnvironmentUnreachable
         })
 }

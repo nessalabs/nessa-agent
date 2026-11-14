@@ -1,7 +1,10 @@
 //! Hostile provider responses cross real HTTP; no live account or VM is used.
 use crate::workspaces::{
     application::{Provider, RestCause},
-    domain::{AdmissionRefusal, AdmissionRejection, BoatConnection, Failure, RefusalDisposition},
+    domain::{
+        AdmissionRefusal, AdmissionRejection, BoatAccount, BoatConnection, Failure,
+        RefusalDisposition, VmSpec,
+    },
     infrastructure::BoatProvider,
 };
 use axum::{
@@ -73,7 +76,7 @@ async fn cold_receipt_diagnostics_distinguish_stages_without_values_or_unknown_k
             .finish();
         let receipt = server
             .provider
-            .create(&connection(), "fixture-thread")
+            .create(&account(), &spec(), "fixture-thread")
             .with_subscriber(subscriber)
             .await
             .unwrap();
@@ -103,7 +106,7 @@ async fn cold_creation_with_a_separate_valid_info_receipt_is_admitted() {
     }}));
     let receipt = server
         .provider
-        .create(&connection(), "fixture-thread")
+        .create(&account(), &spec(), "fixture-thread")
         .await
         .unwrap();
     assert!(receipt.refusal.is_none());
@@ -126,7 +129,7 @@ async fn cold_snapshot_waits_for_ready_then_requires_a_clean_security_receipt() 
     }
     let receipt = server
         .provider
-        .create(&connection(), "fixture-thread")
+        .create(&account(), &spec(), "fixture-thread")
         .await
         .unwrap();
     assert!(receipt.refusal.is_none());
@@ -155,7 +158,7 @@ async fn a_new_vm_still_wiping_is_reported_and_checked_when_woken() {
     server.state.lock().unwrap().receipt["sandbox"]["wipePendingUntilRestart"] = json!(true);
     let receipt = server
         .provider
-        .create(&connection(), "fixture-thread")
+        .create(&account(), &spec(), "fixture-thread")
         .with_subscriber(subscriber)
         .await
         .unwrap();
@@ -172,7 +175,7 @@ async fn a_new_vm_still_wiping_is_reported_and_checked_when_woken() {
     assert_eq!(server.state.lock().unwrap().stopped, 0);
     server
         .provider
-        .stop(&connection(), VM, RestCause::Wiping)
+        .stop(&account(), VM, RestCause::Wiping)
         .await
         .unwrap();
     {
@@ -185,7 +188,13 @@ async fn a_new_vm_still_wiping_is_reported_and_checked_when_woken() {
     assert_eq!(
         server
             .provider
-            .connect(&connection(), "fixture-thread", VM, &receipt.admission)
+            .connect(
+                &account(),
+                &spec(),
+                "fixture-thread",
+                VM,
+                &receipt.admission
+            )
             .await
             .err(),
         Some(Failure::Provider)
@@ -211,7 +220,7 @@ async fn a_replayed_vm_still_wiping_keeps_its_refusal() {
     }
     let receipt = server
         .provider
-        .create(&connection(), "fixture-thread")
+        .create(&account(), &spec(), "fixture-thread")
         .with_subscriber(subscriber)
         .await
         .unwrap();
@@ -232,8 +241,12 @@ async fn cold_snapshot_startup_deadline_preserves_target_and_rollback_without_co
     let server = Arc::new(server().await);
     server.state.lock().unwrap().receipt["sandbox"]["state"] = json!("provisioning");
     let owner = server.clone();
-    let opening =
-        tokio::spawn(async move { owner.provider.create(&connection(), "fixture-thread").await });
+    let opening = tokio::spawn(async move {
+        owner
+            .provider
+            .create(&account(), &spec(), "fixture-thread")
+            .await
+    });
     while server.state.lock().unwrap().info_reads == 0 {
         tokio::time::sleep(std::time::Duration::from_millis(1)).await;
     }
@@ -275,7 +288,7 @@ async fn fresh_snapshot_requires_operable_final_receipt_without_changing_replay_
         }
         let receipt = server
             .provider
-            .create(&connection(), "fixture-thread")
+            .create(&account(), &spec(), "fixture-thread")
             .await
             .unwrap();
         assert_eq!(receipt.vm, VM);
@@ -302,7 +315,7 @@ async fn replayed_archived_receipt_retains_existing_resume_path_without_startup_
     }
     let receipt = server
         .provider
-        .create(&connection(), "fixture-thread")
+        .create(&account(), &spec(), "fixture-thread")
         .await
         .unwrap();
     assert!(receipt.refusal.is_none());
@@ -410,11 +423,16 @@ async fn server() -> Server {
     }
 }
 fn connection() -> BoatConnection {
-    let mut connection =
-        BoatConnection::new("fixture-token".into(), "nessa".into(), "bsh_fixture".into()).unwrap();
-    connection.auto_stop =
-        crate::conversation::domain::VmLifetime::from_seconds(Some(3600)).unwrap();
-    connection
+    BoatConnection::new("fixture-token".into(), "nessa".into(), "bsh_fixture".into()).unwrap()
+}
+fn account() -> BoatAccount {
+    connection().account
+}
+fn spec() -> VmSpec {
+    connection().new_vm(
+        None,
+        crate::conversation::domain::VmLifetime::from_seconds(Some(3600)).unwrap(),
+    )
 }
 
 #[tokio::test]
@@ -425,11 +443,11 @@ async fn admitted_creation_sends_explicit_null_for_no_automatic_stop() {
         state.expected_ttl = None;
         state.receipt["sandbox"]["ttlSeconds"] = Value::Null;
     }
-    let mut unlimited = connection();
+    let mut unlimited = spec();
     unlimited.auto_stop = crate::conversation::domain::VmLifetime::Unlimited;
     let receipt = server
         .provider
-        .create(&unlimited, "fixture-thread")
+        .create(&account(), &unlimited, "fixture-thread")
         .await
         .unwrap();
     assert_eq!(receipt.vm, VM);
@@ -453,12 +471,12 @@ async fn finite_creation_refuses_unenforced_provider_lifetime_before_sdk_authori
                     .remove("ttlSeconds");
             }
         }
-        let mut finite = connection();
+        let mut finite = spec();
         finite.auto_stop =
             crate::conversation::domain::VmLifetime::from_seconds(Some(7_200)).unwrap();
         let receipt = server
             .provider
-            .create(&finite, "fixture-thread")
+            .create(&account(), &finite, "fixture-thread")
             .await
             .unwrap();
         assert_eq!(receipt.vm, VM);
@@ -476,11 +494,11 @@ async fn finite_creation_refuses_unenforced_provider_lifetime_before_sdk_authori
 async fn a_shorter_provider_lifetime_satisfies_the_selected_maximum() {
     let server = server().await;
     server.state.lock().unwrap().expected_ttl = Some(7_200);
-    let mut finite = connection();
+    let mut finite = spec();
     finite.auto_stop = crate::conversation::domain::VmLifetime::from_seconds(Some(7_200)).unwrap();
     let receipt = server
         .provider
-        .create(&finite, "fixture-thread")
+        .create(&account(), &finite, "fixture-thread")
         .await
         .unwrap();
     assert!(receipt.refusal.is_none());
@@ -490,7 +508,7 @@ async fn a_shorter_provider_lifetime_satisfies_the_selected_maximum() {
 #[tokio::test]
 async fn full_agent_only_posture_rejects_each_extra_credential_and_setup_path_before_create() {
     let server = server().await;
-    server.provider.validate(&connection()).await.unwrap();
+    server.provider.validate(&account(), &spec()).await.unwrap();
     for (field, value) in [
         ("safeForThirdParties", json!(true)),
         ("passAgentsCredentials", json!(false)),
@@ -522,7 +540,7 @@ async fn full_agent_only_posture_rejects_each_extra_credential_and_setup_path_be
         assert_eq!(
             server
                 .provider
-                .create(&connection(), "fixture-thread")
+                .create(&account(), &spec(), "fixture-thread")
                 .await
                 .err(),
             Some(Failure::EnvironmentUnavailable),
@@ -542,7 +560,7 @@ async fn full_agent_only_posture_rejects_each_extra_credential_and_setup_path_be
         assert_eq!(
             server
                 .provider
-                .create(&connection(), "fixture-thread")
+                .create(&account(), &spec(), "fixture-thread")
                 .await
                 .err(),
             Some(Failure::EnvironmentUnavailable),
@@ -561,7 +579,7 @@ async fn full_agent_only_posture_rejects_each_extra_credential_and_setup_path_be
         assert_eq!(
             server
                 .provider
-                .create(&connection(), "fixture-thread")
+                .create(&account(), &spec(), "fixture-thread")
                 .await
                 .err(),
             Some(Failure::EnvironmentUnavailable),
@@ -577,7 +595,7 @@ async fn post_create_environment_drift_retains_the_real_target_but_grants_no_aut
     server.state.lock().unwrap().drift_on_create = true;
     let receipt = server
         .provider
-        .create(&connection(), "fixture-thread")
+        .create(&account(), &spec(), "fixture-thread")
         .await
         .unwrap();
     assert_eq!(receipt.vm, VM);
@@ -649,7 +667,7 @@ async fn mismatched_vm_receipts_retain_targets_without_extending_workspace_autho
         server.state.lock().unwrap().receipt = body;
         let receipt = server
             .provider
-            .create(&connection(), "fixture-thread")
+            .create(&account(), &spec(), "fixture-thread")
             .await
             .unwrap();
         assert_eq!(receipt.vm, VM);
@@ -663,7 +681,7 @@ async fn reconnect_refuses_changed_environment_identity_before_resume() {
     let server = server().await;
     let receipt = server
         .provider
-        .create(&connection(), "fixture-thread")
+        .create(&account(), &spec(), "fixture-thread")
         .await
         .unwrap();
     assert_eq!(receipt.refusal, None);
@@ -675,7 +693,13 @@ async fn reconnect_refuses_changed_environment_identity_before_resume() {
     assert_eq!(
         server
             .provider
-            .connect(&connection(), "fixture-thread", VM, &receipt.admission)
+            .connect(
+                &account(),
+                &spec(),
+                "fixture-thread",
+                VM,
+                &receipt.admission
+            )
             .await
             .err(),
         Some(Failure::AdmissionRejected(
@@ -695,7 +719,7 @@ async fn resume_rechecks_environment_before_any_sdk_command_or_grant() {
     let server = server().await;
     let receipt = server
         .provider
-        .create(&connection(), "fixture-thread")
+        .create(&account(), &spec(), "fixture-thread")
         .await
         .unwrap();
     {
@@ -706,7 +730,13 @@ async fn resume_rechecks_environment_before_any_sdk_command_or_grant() {
     assert_eq!(
         server
             .provider
-            .connect(&connection(), "fixture-thread", VM, &receipt.admission)
+            .connect(
+                &account(),
+                &spec(),
+                "fixture-thread",
+                VM,
+                &receipt.admission
+            )
             .await
             .err(),
         Some(Failure::AdmissionRejected(
@@ -729,7 +759,7 @@ async fn a_vm_still_stopping_is_resumed_once_it_has_stopped() {
     let server = server().await;
     let receipt = server
         .provider
-        .create(&connection(), "fixture-thread")
+        .create(&account(), &spec(), "fixture-thread")
         .await
         .unwrap();
     {
@@ -742,7 +772,13 @@ async fn a_vm_still_stopping_is_resumed_once_it_has_stopped() {
     assert!(matches!(
         server
             .provider
-            .connect(&connection(), "fixture-thread", VM, &receipt.admission)
+            .connect(
+                &account(),
+                &spec(),
+                "fixture-thread",
+                VM,
+                &receipt.admission
+            )
             .await,
         Err(Failure::AdmissionRejected(_))
     ));
@@ -758,7 +794,7 @@ async fn archived_resume_sends_explicit_null_after_lifetime_changes() {
     let server = server().await;
     let receipt = server
         .provider
-        .create(&connection(), "fixture-thread")
+        .create(&account(), &spec(), "fixture-thread")
         .await
         .unwrap();
     {
@@ -767,12 +803,18 @@ async fn archived_resume_sends_explicit_null_after_lifetime_changes() {
         state.expected_ttl = None;
         state.drift_on_resume = true;
     }
-    let mut unlimited = connection();
+    let mut unlimited = spec();
     unlimited.auto_stop = crate::conversation::domain::VmLifetime::Unlimited;
     assert!(matches!(
         server
             .provider
-            .connect(&unlimited, "fixture-thread", VM, &receipt.admission)
+            .connect(
+                &account(),
+                &unlimited,
+                "fixture-thread",
+                VM,
+                &receipt.admission
+            )
             .await,
         Err(Failure::AdmissionRejected(_))
     ));
@@ -784,7 +826,7 @@ async fn archived_resume_refuses_an_unenforced_finite_lifetime_before_sdk_author
     let server = server().await;
     let receipt = server
         .provider
-        .create(&connection(), "fixture-thread")
+        .create(&account(), &spec(), "fixture-thread")
         .await
         .unwrap();
     {
@@ -793,11 +835,17 @@ async fn archived_resume_refuses_an_unenforced_finite_lifetime_before_sdk_author
         state.receipt["sandbox"]["ttlSeconds"] = Value::Null;
         state.expected_ttl = Some(7_200);
     }
-    let mut finite = connection();
+    let mut finite = spec();
     finite.auto_stop = crate::conversation::domain::VmLifetime::from_seconds(Some(7_200)).unwrap();
     let result = server
         .provider
-        .connect(&finite, "fixture-thread", VM, &receipt.admission)
+        .connect(
+            &account(),
+            &finite,
+            "fixture-thread",
+            VM,
+            &receipt.admission,
+        )
         .await;
     assert!(matches!(
         result,
@@ -815,14 +863,20 @@ async fn an_active_vm_keeps_its_original_lifetime_after_settings_change() {
     let server = server().await;
     let receipt = server
         .provider
-        .create(&connection(), "fixture-thread")
+        .create(&account(), &spec(), "fixture-thread")
         .await
         .unwrap();
-    let mut changed = connection();
+    let mut changed = spec();
     changed.auto_stop = crate::conversation::domain::VmLifetime::from_seconds(Some(7_200)).unwrap();
     let result = server
         .provider
-        .connect(&changed, "fixture-thread", VM, &receipt.admission)
+        .connect(
+            &account(),
+            &changed,
+            "fixture-thread",
+            VM,
+            &receipt.admission,
+        )
         .await;
     assert!(matches!(result, Err(Failure::Provider)));
     let state = server.state.lock().unwrap();
@@ -836,7 +890,7 @@ async fn a_personal_vm_without_stored_logins_does_not_gain_extra_authority() {
     server.state.lock().unwrap().receipt["sandbox"]["holdsCreatorLogins"] = json!(false);
     let receipt = server
         .provider
-        .create(&connection(), "fixture-thread")
+        .create(&account(), &spec(), "fixture-thread")
         .await
         .unwrap();
     assert_eq!(receipt.refusal, None);
@@ -846,7 +900,7 @@ async fn a_personal_vm_without_stored_logins_does_not_gain_extra_authority() {
         .remove("holdsCreatorLogins");
     let receipt = server
         .provider
-        .create(&connection(), "fixture-thread")
+        .create(&account(), &spec(), "fixture-thread")
         .await
         .unwrap();
     assert_eq!(
@@ -875,7 +929,7 @@ async fn replayed_or_unrecognized_creation_receipts_do_not_authorize_rollback() 
         }
         let receipt = server
             .provider
-            .create(&connection(), "fixture-thread")
+            .create(&account(), &spec(), "fixture-thread")
             .await
             .unwrap();
         assert_eq!(receipt.vm, VM);
@@ -894,7 +948,7 @@ async fn oversized_vm_bodies_are_bounded_without_losing_a_previously_received_ta
     assert_eq!(
         server
             .provider
-            .create(&connection(), "fixture-thread")
+            .create(&account(), &spec(), "fixture-thread")
             .await
             .err(),
         Some(Failure::ProvisioningUncertain)
@@ -906,7 +960,7 @@ async fn oversized_vm_bodies_are_bounded_without_losing_a_previously_received_ta
     }
     let receipt = server
         .provider
-        .create(&connection(), "fixture-thread")
+        .create(&account(), &spec(), "fixture-thread")
         .await
         .unwrap();
     assert_eq!(receipt.vm, VM);
@@ -922,19 +976,18 @@ async fn oversized_vm_bodies_are_bounded_without_losing_a_previously_received_ta
 #[tokio::test]
 async fn another_environment_is_refused_before_anything_is_asked() {
     let server = server().await;
-    let mut other = BoatConnection::new(
-        "fixture-token".into(),
-        "agents".into(),
-        "bsh_fixture".into(),
-    )
-    .unwrap();
-    other.auto_stop = connection().auto_stop;
+    let mut other = spec();
+    other.environment = "agents".into();
     assert_eq!(
-        server.provider.validate(&other).await,
+        server.provider.validate(&account(), &other).await,
         Err(Failure::EnvironmentUnavailable)
     );
     assert_eq!(
-        server.provider.create(&other, "fixture-thread").await.err(),
+        server
+            .provider
+            .create(&account(), &other, "fixture-thread")
+            .await
+            .err(),
         Some(Failure::EnvironmentUnavailable)
     );
     let state = server.state.lock().unwrap();
@@ -950,18 +1003,18 @@ async fn rest_stops_and_rollback_deletes_without_confirming() {
     let server = server().await;
     let receipt = server
         .provider
-        .create(&connection(), "fixture-thread")
+        .create(&account(), &spec(), "fixture-thread")
         .await
         .unwrap();
     server
         .provider
-        .stop(&connection(), VM, RestCause::Idle)
+        .stop(&account(), VM, RestCause::Idle)
         .await
         .unwrap();
     assert_eq!(server.state.lock().unwrap().stopped, 1);
     assert!(server
         .provider
-        .remove(&connection(), VM, &receipt.admission)
+        .remove(&account(), VM, &receipt.admission)
         .await
         .is_err());
     let state = server.state.lock().unwrap();

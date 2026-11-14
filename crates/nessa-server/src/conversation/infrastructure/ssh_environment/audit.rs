@@ -59,6 +59,14 @@ pub(crate) enum EnvironmentEvent {
         accepted: bool,
         failure: Option<String>,
     },
+    /// A thread's VM could not be opened. `cause` is what can be done about
+    /// it (`not_connected`, `locked`, `provider_failed`, `refused`,
+    /// `uncertain`); `failure` is the kind it came from.
+    WorkspaceOpenRefused {
+        thread: String,
+        cause: String,
+        failure: String,
+    },
     /// A host answered with this lease protocol's hello.
     Connected { host: String, workspace: String },
     /// A host answered with another lease protocol's hello, or none: refused.

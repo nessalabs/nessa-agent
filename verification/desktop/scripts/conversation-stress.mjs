@@ -2956,6 +2956,33 @@ const steps = {
         ))
       )
         failures.push("the completed VM background task did not permit idle rest")
+      // Boat fails the rested VM's next opening: the send is refused as the
+      // environment being unavailable, and the workspace records why, as one
+      // of the causes a person acts on.
+      writeFileSync(join(run.stack.vmFixture.root, id, "fail-next-open"), "fail")
+      const after = `${STRESS.reply} VM open fails ${step.index}`
+      const refusal = await run.client.conversation
+        .submit(run.client.conversation.prepare(id, after))
+        .then(
+          () => null,
+          (error) => error,
+        )
+      if (refusal?.code !== "environment_unavailable")
+        failures.push(
+          `a send whose VM could not be opened was ${refusal ? `refused ${refusal.code}` : "accepted"}, not refused environment_unavailable`,
+        )
+      if (
+        !run.stack.vmFixture
+          .events()
+          .some(
+            (event) =>
+              event.thread === id &&
+              event.kind === "open_refused" &&
+              event.cause === "provider_failed" &&
+              event.failure === "provider",
+          )
+      )
+        failures.push("a failed VM opening was not recorded with its cause")
       if (run.evidence)
         writeView(run.evidence, `views/vm-background-${run.engine}-${step.index}.json`, {
           lease: leaseEvidence,

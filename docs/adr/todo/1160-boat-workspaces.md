@@ -12,6 +12,10 @@ Nessa does not implement provider OAuth or copy local provider login files.
 ## Ownership
 
 `workspaces` owns encrypted connection settings and durable allocation receipts.
+A saved connection is a `BoatAccount` (the token, which says nothing about any
+VM) plus the environment and image new VMs are made from; each VM is driven by
+its own `VmSpec`, taken from the connection when it is made and from its
+receipt afterwards, so a changed connection never relocates existing work.
 Receipt rejection diagnostics distinguish creation decoding, info validation,
 and info decoding using compiled field names and JSON kinds. Wipe refusals
 also classify startup as starting, operable or other; raw state strings are not
@@ -92,6 +96,7 @@ sequenceDiagram
 | B17 | Fresh creation acknowledgement names a starting VM | The SDK waits for that VM within the ready budget; no attached workspace, SSH, MCP or agent command yet | Preserve the named VM and rollback disposition on timeout or rejection |
 | B18 | Fresh VM becomes ready | The SDK re-reads the dedicated environment and the complete receipt, including exact `wipePendingUntilRestart: false`, before admission | Ready alone never authorizes attachment |
 | B19 | New VM still wiping at creation | `Workspaces` records StopRequested, stops it (cause `wiping`), records StopAnswered; waking it is the restart that ends the wipe | A stop not accepted or not recorded leaves it refused and rolled back; a replayed VM still wiping stays refused |
+| B20 | An opening fails | `Workspaces` records `WorkspaceOpenRefused` with the thread, the failure's kind and its cause: `not_connected`, `locked`, `provider_failed`, `refused` or `uncertain` | The chat still says the environment is unreachable until the lease protocol carries the cause (#1290) |
 
 Boat documents [asynchronous API readiness](https://docs.boat.dev/readiness) and
 [credential removal before a snapshot deploy can be used](https://docs.boat.dev/snapshots/templates).

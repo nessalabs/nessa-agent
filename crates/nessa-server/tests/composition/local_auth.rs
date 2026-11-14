@@ -934,6 +934,33 @@ fn workspace_recovery_records_the_target_and_unconfirmed_cleanup_in_durable_evid
 }
 
 #[test]
+fn a_failed_workspace_opening_keeps_its_thread_cause_and_kind_in_the_real_audit() {
+    use crate::workspaces::domain::OpenFailure;
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("audit");
+    let audit = WorkspaceRecoveryAudit(
+        DurableEnvironmentAudit::new(root.clone(), Arc::new(SystemClock)).unwrap(),
+    );
+    audit
+        .record(&RecoveryEvent::OpenRefused {
+            thread: "d49640a4-fd71-40a4-b3e9-a35e8753db78".into(),
+            cause: OpenFailure::ProviderFailed,
+            failure: "provider",
+        })
+        .unwrap();
+    let paths = std::fs::read_dir(&root)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .collect::<Vec<_>>();
+    assert_eq!(paths.len(), 1);
+    let value: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&paths[0]).unwrap()).unwrap();
+    assert_eq!(value["kind"], "workspace_open_refused");
+    assert_eq!(value["thread"], "d49640a4-fd71-40a4-b3e9-a35e8753db78");
+    assert_eq!(value["cause"], "provider_failed");
+    assert_eq!(value["failure"], "provider");
+}
+#[test]
 fn workspace_admission_refusal_retains_expected_and_observed_identity_in_the_real_audit() {
     use crate::workspaces::domain::{
         AdmissionRefusal, AdmissionRejection, EnvironmentIdentity, ObservedEnvironment,

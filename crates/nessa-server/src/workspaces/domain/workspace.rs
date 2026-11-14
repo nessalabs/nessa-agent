@@ -39,13 +39,46 @@ pub(crate) enum Failure {
     },
 }
 
-/// The user's infrastructure credential is transient, redacted and zeroizing.
+/// Who Nessa is on Boat: the user's infrastructure token. Transient,
+/// redacted and zeroizing. It says nothing about any VM.
+#[derive(Clone)]
+pub(crate) struct BoatAccount {
+    pub(crate) token: Secret,
+}
+
+/// What one VM is made from and how long Boat lets it run unattended. A new
+/// VM takes it from the saved connection ([`BoatConnection::new_vm`]); an
+/// existing VM takes it from its receipt ([`VmSpec::of_receipt`]). The two
+/// are never mixed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct VmSpec {
+    pub(crate) image: String,
+    pub(crate) environment: String,
+    pub(crate) auto_stop: crate::conversation::domain::VmLifetime,
+}
+impl VmSpec {
+    /// The spec of a VM already made: the image and environment it was
+    /// admitted with, whatever the saved connection says now.
+    pub(crate) fn of_receipt(
+        image: String,
+        admission: &EnvironmentIdentity,
+        auto_stop: crate::conversation::domain::VmLifetime,
+    ) -> Self {
+        Self {
+            image,
+            environment: admission.name().into(),
+            auto_stop,
+        }
+    }
+}
+
+/// The saved Boat connection: the account, and the environment and image
+/// chosen when it was connected.
 #[derive(Clone)]
 pub(crate) struct BoatConnection {
-    pub(crate) token: Secret,
+    pub(crate) account: BoatAccount,
     pub(crate) environment: String,
     pub(crate) image: String,
-    pub(crate) auto_stop: crate::conversation::domain::VmLifetime,
 }
 impl BoatConnection {
     pub(crate) fn new(token: String, environment: String, image: String) -> Result<Self, Failure> {
@@ -65,11 +98,25 @@ impl BoatConnection {
             return Err(Failure::InvalidInput);
         }
         Ok(Self {
-            token: Secret::new(token.into_bytes()),
+            account: BoatAccount {
+                token: Secret::new(token.into_bytes()),
+            },
             environment,
             image,
-            auto_stop: Default::default(),
         })
+    }
+    /// The spec a new VM is made with: this connection's environment, and
+    /// `pinned` (the image this build pins) or else the image saved here.
+    pub(crate) fn new_vm(
+        &self,
+        pinned: Option<&str>,
+        auto_stop: crate::conversation::domain::VmLifetime,
+    ) -> VmSpec {
+        VmSpec {
+            image: pinned.unwrap_or(&self.image).to_owned(),
+            environment: self.environment.clone(),
+            auto_stop,
+        }
     }
 }
 
@@ -132,7 +179,67 @@ pub(crate) enum Assignment {
         environment: String,
     },
 }
+/// What a caller can do about a failed opening: the few cases a failure
+/// comes down to. Each [`Failure`] is exactly one of them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum OpenFailure {
+    /// No Boat connection is saved, it was not valid, or its environment
+    /// cannot run Nessa's agents: connect Boat again.
+    NotConnected,
+    /// The vault is locked: unlock it.
+    Locked,
+    /// Boat, or the gateway's own storage, failed: try again.
+    ProviderFailed,
+    /// The VM was refused by admission, or is gone, and never will be used:
+    /// start the thread again.
+    Refused,
+    /// A VM may or may not exist or be cleaned up; nothing is created again
+    /// on its own.
+    Uncertain,
+}
+impl OpenFailure {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::NotConnected => "not_connected",
+            Self::Locked => "locked",
+            Self::ProviderFailed => "provider_failed",
+            Self::Refused => "refused",
+            Self::Uncertain => "uncertain",
+        }
+    }
+}
+
 impl Failure {
+    /// Which of the few cases a caller acts on this failure is.
+    pub(crate) fn cause(&self) -> OpenFailure {
+        match self {
+            Self::Locked => OpenFailure::Locked,
+            Self::NotConfigured
+            | Self::InvalidInput
+            | Self::WorkerUnavailable
+            | Self::EnvironmentUnavailable => OpenFailure::NotConnected,
+            Self::Storage | Self::Provider => OpenFailure::ProviderFailed,
+            // A thread with no VM to reopen, or one Boat no longer has, is
+            // never fixed by trying again.
+            Self::Missing
+            | Self::AdmissionRejected(_)
+            | Self::RefusedWorkspace { .. }
+            | Self::UnverifiedWorkspace { .. } => OpenFailure::Refused,
+            // A refusal is only settled once it is saved, recorded, and its
+            // VM kept or confirmed gone.
+            Self::AdmissionRecovery {
+                receipt_failed: false,
+                audit_failed: false,
+                cleanup: CleanupOutcome::Retained | CleanupOutcome::Confirmed,
+                cleanup_audit_failed: false,
+                ..
+            } => OpenFailure::Refused,
+            Self::AdmissionRecovery { .. }
+            | Self::ProvisioningUncertain
+            | Self::CleanupUncertain
+            | Self::ReceiptRecovery { .. } => OpenFailure::Uncertain,
+        }
+    }
     /// Its kind in a record: never what it carries.
     pub(crate) fn kind(&self) -> &'static str {
         match self {
