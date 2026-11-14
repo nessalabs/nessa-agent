@@ -1637,7 +1637,36 @@ html:not(.dark) :is(.settings, .settings-surface) .settings-card {
 .settings-channel-placement {
   display: flex;
   flex-direction: column;
-  margin-block-end: 12px;
+}
+
+/*
+ * A channel's settings dialog: each part is a section under the dialog's
+ * title, its words starting where the title's do, and a hairline between
+ * one part and the next.
+ */
+.channel-settings-section {
+  display: grid;
+  gap: 4px;
+  padding-block: 0;
+}
+
+.channel-settings-section + .channel-settings-section {
+  margin-top: 12px;
+  padding-top: 16px;
+  border-top: 1px solid var(--settings-hairline);
+}
+
+.channel-settings-section :is(.settings-row, [data-slot="settings-row"]) {
+  padding-inline: 0;
+  padding-block: 10px;
+}
+
+.channel-settings-heading {
+  margin: 0 0 8px;
+  color: var(--desktop-muted);
+  font-size: var(--desktop-text-footnote);
+  font-weight: 500;
+  line-height: 1.4;
 }
 
 /* Auto-stop is its own row, wrapped for its checks: it takes a row's hairline. */

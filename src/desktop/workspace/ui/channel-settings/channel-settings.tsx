@@ -221,6 +221,10 @@ export function ChannelSettingsButton({
   name: string
 }) {
   const [open, setOpen] = useState(false)
+  // The dialog opens inside the window's surface, as Settings' do, so its rows
+  // read the desktop's type and tones; portalled to the body they have none
+  // and fall back to the page's larger text.
+  const [home, setHome] = useState<HTMLElement | null>(null)
   const trigger = useRef<HTMLButtonElement>(null)
   const gateway = useBoatGateway()
   const devices = useDevicesGateway()
@@ -235,23 +239,25 @@ export function ChannelSettingsButton({
         size="sm"
         onClick={(event) => {
           event.stopPropagation()
+          setHome(event.currentTarget.closest<HTMLElement>("[data-surface]"))
           setOpen(true)
         }}
       />
       {open && (
         <Dialog
           open
+          container={home}
           data-channel-settings=""
           onOpenChange={setOpen}
           onCloseAutoFocus={(event) => {
             event.preventDefault()
             trigger.current?.focus()
           }}
-          size="sm"
+          size="md"
           title={`#${name} settings`}
           description={scope === undefined ? "The default for every channel." : undefined}
         >
-          <div className="settings-boat settings-surface">
+          <div className="settings-boat settings-surface channel-settings-section">
             {scope === undefined ? null : (
               <ChannelPlacementControl channelId={channelId} />
             )}
@@ -259,7 +265,11 @@ export function ChannelSettingsButton({
           </div>
           {/* The default channel follows Devices' order, set there. */}
           {scope !== undefined && devices ? (
-            <div className="settings-surface" data-channel-settings-pool="">
+            <div
+              className="settings-surface channel-settings-section"
+              data-channel-settings-pool=""
+            >
+              <h3 className="channel-settings-heading">Order for “Any”</h3>
               <PoolOrder gateway={devices} channelId={scope} />
             </div>
           ) : null}

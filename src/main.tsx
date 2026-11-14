@@ -121,7 +121,9 @@ function renderApplication() {
       <StartupMounted />
       {windowSurface() === "setup" ? (
         <Provider store={store}>
-          <VaultProvider source={hasNativeHost() ? nativeVault : undefined} setup>
+          {/* Onboarding does not ask for the passphrase up front: the vault is
+              set up or unlocked when something first needs it. */}
+          <VaultProvider source={hasNativeHost() ? nativeVault : undefined}>
             <SetupGate
               agents={dependencies.agents}
               apiKeys={nativeAgentApiKeys}
