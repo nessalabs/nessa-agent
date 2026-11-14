@@ -11,7 +11,8 @@ built: the build and the doctests keep the full package arguments, so Cargo
 unifies features exactly as a full run does. The Linux leg passes the crates
 `scripts/ci-plan.mjs` says a pull request can reach; an empty value runs all.
 
-The Windows jobs build the same eight packages with the same flags. The
+The Windows jobs build the full `RUST_TEST_PACKAGES` selection declared in
+`scripts/ci-plan.mjs`, with the same flags. The
 `server-conversation` and `server-other` partitions resolve `nessa-gateway` and
 its library target from `cargo metadata`, match the artifact's package ID,
 target name and kind, and require exactly one library executable. The four seeded paired-catalogue
