@@ -14,7 +14,7 @@ sources:
   - "src/conversation/adapters/gateway/effects.ts"
   - "packages/nessa-client/src/presentation/conversation-api.ts"
   - "crates/nessa-server/src/product/conversation.rs"
-  - "crates/nessa-server/src/conversation/application/service.rs"
+  - "crates/nessa-conversation/src/application/service.rs"
   - "crates/nessa-sdk/src/application/agent_execution/agents/submissions.rs"
   - "src/panel/ui/use-composer.test.ts"
   - "src/panel/ui/use-composer-ordering.test.tsx"
@@ -23,7 +23,7 @@ sources:
   - "docs/guides/gateway-chat.md"
   - "src/conversation/application/usecases/usecases.test.ts"
   - "packages/nessa-client/src/presentation/conversation-api.test.ts"
-  - "crates/nessa-server/tests/conversation/application.rs"
+  - "crates/nessa-conversation/tests/conversation/application.rs"
 diagramLinks: {}
 diagramDetails:
   - diagram: 2

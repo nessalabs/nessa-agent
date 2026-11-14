@@ -3805,6 +3805,50 @@ dependencies = [
 ]
 
 [[package]]
+name = "nessa-conversation"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "axum",
+ "base64 0.22.1",
+ "cedar-policy",
+ "dunce",
+ "futures-util",
+ "getrandom 0.3.4",
+ "hmac",
+ "libc",
+ "nessa-agent-install",
+ "nessa-attachments",
+ "nessa-auth",
+ "nessa-device-pairing",
+ "nessa-env-serve",
+ "nessa-local-database",
+ "nessa-local-storage",
+ "nessa-mcp-authorization",
+ "nessa-projection",
+ "nessa-protocol",
+ "nessa-sdk",
+ "nessa-sync",
+ "nessa-timer",
+ "nessa-vault",
+ "regex",
+ "reqwest 0.13.4",
+ "rustls",
+ "serde",
+ "serde_json",
+ "sha2",
+ "shepherd",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "url",
+ "uuid",
+ "workspace_sdk",
+ "zeroize",
+]
+
+[[package]]
 name = "nessa-device-client"
 version = "0.1.0"
 dependencies = [
@@ -4077,6 +4121,7 @@ dependencies = [
  "nessa-auth",
  "nessa-backup",
  "nessa-client-core",
+ "nessa-conversation",
  "nessa-device-client",
  "nessa-device-pairing",
  "nessa-env-serve",

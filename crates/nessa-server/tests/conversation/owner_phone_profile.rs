@@ -2,7 +2,9 @@
 use super::*;
 use crate::conversation::{
     application::{AdmitPassiveRead, PassiveRead, ReceiverAuthority},
-    infrastructure::{CedarConversationAccessPolicy, LocalConversationStore},
+    infrastructure::{
+        CedarConversationAccessPolicy, LocalConversationStore, LocalReceiverAuthority,
+    },
 };
 use nessa_auth::application::authorization::AuthorizeAction;
 use nessa_protocol::conversation::read_scope::ReadRefusal;

@@ -6,10 +6,10 @@ status: "implemented"
 summary: "An agent and its app need to talk to the same configured tool server."
 parent: "mcp"
 sources:
-  - "crates/nessa-server/src/mcp_servers/infrastructure/grants.rs"
+  - "crates/nessa-conversation/src/mcp_servers/infrastructure/grants.rs"
   - "crates/nessa-sdk/src/infrastructure/mcp/servers.rs"
   - "crates/nessa-sdk/src/infrastructure/mcp/stand_in.rs"
-  - "crates/nessa-server/tests/mcp_servers/mod.rs"
+  - "crates/nessa-conversation/tests/mcp_servers/mod.rs"
   - "crates/nessa-sdk/tests/infrastructure/mcp/sessions.rs"
 diagramLinks: {}
 model:
@@ -63,7 +63,7 @@ stateDiagram-v2
 
 ## Further reading
 
-[Source](../../../../crates/nessa-server/src/mcp_servers/infrastructure/grants.rs) · [Related source](../../../../crates/nessa-sdk/src/infrastructure/mcp/servers.rs) · [Related tests](../../../../crates/nessa-server/tests/mcp_servers/mod.rs)
+[Source](../../../../crates/nessa-conversation/src/mcp_servers/infrastructure/grants.rs) · [Related source](../../../../crates/nessa-sdk/src/infrastructure/mcp/servers.rs) · [Related tests](../../../../crates/nessa-conversation/tests/mcp_servers/mod.rs)
 
 ## Model coverage
 

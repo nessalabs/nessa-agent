@@ -16,7 +16,8 @@ use nessa_backup::domain::{
     decode_deferred, decode_identity, deferred_session_name, Fingerprint, JOURNAL_HEADER,
 };
 
-const METADATA_SCHEMA: &str = include_str!("../conversation/infrastructure/schema.sql");
+const METADATA_SCHEMA: &str =
+    include_str!("../../../nessa-conversation/src/infrastructure/schema.sql");
 
 /// `namespace` is itself a staged or accepted restore tree.
 pub(crate) fn namespace_is_restore_root(namespace: &Path) -> bool {

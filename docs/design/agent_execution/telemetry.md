@@ -56,7 +56,7 @@ Facts that matter for the design:
 - The broadcast channel has capacity 256 and returns `AgentError::Backpressure`
   to a lagging subscriber (`agents/agent.rs:137`, `:1154-1160`). It is lossy by
   contract. The gateway's projection loop already handles `lagged()`
-  (`crates/nessa-server/src/conversation/application/service.rs:818-829`).
+  (`crates/nessa-conversation/src/application/service.rs:818-829`).
 - Every publish site saves first, then broadcasts (`agent.rs:603`, `:882`).
 - `InvocationHook` (`hooks/invocation.rs:40-67`) sees only before/after of one
   invocation. It does not see attachment, close, tool, or permission events, and
@@ -87,8 +87,9 @@ Facts that matter for the design:
 
 ### 2.2 The gateway logs to one file and streams nothing
 
-- One `tracing_subscriber::fmt` on stderr with `RUST_LOG` or the default
-  `nessa_server=info,nessa_sdk=warn,nessa_gateway_endpoint=error`
+- One `tracing_subscriber::fmt` on stderr with `RUST_LOG` or the default:
+  `info` for the gateway and each crate split out of it, `nessa_sdk=warn`,
+  `nessa_gateway_endpoint=error`, and every other Nessa library off
   (`crates/nessa-server/src/core/logging.rs:15-30`). Plain text. Under launchd
   stderr is `<data>/logs/gateway.log`, truncated once at start
   (`core/log_file.rs`). The plist never sets `RUST_LOG`, so production is always

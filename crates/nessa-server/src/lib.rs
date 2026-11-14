@@ -10,9 +10,9 @@ pub mod backup;
 pub mod browser_session;
 pub mod cli;
 pub mod composition;
-pub mod conversation;
+pub use nessa_conversation as conversation;
 pub mod core;
-mod desktop_runtime;
+use nessa_conversation::desktop_runtime;
 pub mod device_pairing;
 pub(crate) mod devices;
 pub mod env;
@@ -27,8 +27,7 @@ pub mod product;
 pub(crate) mod relay;
 pub mod secrets;
 pub mod server;
-pub(crate) mod settings;
-pub(crate) mod timer;
+pub(crate) use nessa_conversation::timer;
 pub mod voice;
 pub mod webhooks;
 
@@ -39,18 +38,15 @@ pub use core::run;
 pub(crate) mod agents_test_support;
 
 #[cfg(test)]
-#[path = "../tests/conversation/support.rs"]
-pub(crate) mod conversation_test_support;
+pub(crate) use nessa_conversation::conversation_test_support;
 
 #[cfg(test)]
-#[path = "../tests/conversation/app_call_support.rs"]
-pub(crate) mod app_call_test_support;
+pub(crate) use nessa_conversation::app_call_test_support;
 
 #[cfg(test)]
-#[path = "../tests/conversation/catalogue_receiver/store.rs"]
-pub(crate) mod catalogue_receiver_store;
+pub(crate) use nessa_conversation::catalogue_receiver_store;
 
 pub mod vault;
 
 #[cfg(unix)]
-pub(crate) mod workspaces;
+pub(crate) use nessa_conversation::workspaces;

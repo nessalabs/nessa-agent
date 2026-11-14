@@ -6,10 +6,10 @@ status: "implemented"
 summary: "A resource ticket lets an app fetch one prepared HTML resource."
 parent: "mcp"
 sources:
-  - "crates/nessa-server/src/mcp_servers/infrastructure/resource_tickets.rs"
-  - "crates/nessa-server/src/conversation/application/service/app_calls.rs"
+  - "crates/nessa-conversation/src/mcp_servers/infrastructure/resource_tickets.rs"
+  - "crates/nessa-conversation/src/application/service/app_calls.rs"
   - "crates/nessa-server/src/mcp_servers/entrypoint/http.rs"
-  - "crates/nessa-server/tests/mcp_servers/resource_tickets.rs"
+  - "crates/nessa-conversation/tests/mcp_servers/resource_tickets.rs"
   - "crates/nessa-server/tests/mcp_servers/http.rs"
 sourceRevision: "77a6b620af4d94b234294f6d273fd74b3dfb44c7"
 model:
@@ -107,4 +107,4 @@ Run the catalog and models with the [state verification commands](../../../../sc
 
 ## Further reading
 
-[Source](../../../../crates/nessa-server/src/mcp_servers/infrastructure/resource_tickets.rs) · [Related source](../../../../crates/nessa-server/src/conversation/application/service/app_calls.rs) · [Related tests](../../../../crates/nessa-server/tests/mcp_servers/resource_tickets.rs)
+[Source](../../../../crates/nessa-conversation/src/mcp_servers/infrastructure/resource_tickets.rs) · [Related source](../../../../crates/nessa-conversation/src/application/service/app_calls.rs) · [Related tests](../../../../crates/nessa-conversation/tests/mcp_servers/resource_tickets.rs)

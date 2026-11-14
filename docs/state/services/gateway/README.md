@@ -8,7 +8,7 @@ parent: "nessa"
 sourceRevision: "87870b9be26bf73e6bf85a633e75a1c158765a92"
 sources:
   - "crates/nessa-server/src/product/socket.rs"
-  - "crates/nessa-server/src/conversation/application/service.rs"
+  - "crates/nessa-conversation/src/application/service.rs"
   - "crates/nessa-server/src/composition/root.rs"
 diagramLinks:
   Product: "client-commands"

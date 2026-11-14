@@ -6,7 +6,7 @@ import { reportVerb, threadReportOf } from "./thread-report"
 const shared = JSON.parse(
   readFileSync(
     new URL(
-      "../../../../crates/nessa-server/tests/fixtures/thread-report.json",
+      "../../../../crates/nessa-conversation/tests/fixtures/thread-report.json",
       import.meta.url,
     ),
     "utf8",

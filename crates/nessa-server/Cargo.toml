@@ -40,6 +40,7 @@ nessa-webhooks = { path = "../nessa-webhooks" }
 nessa-device-pairing = { path = "../nessa-device-pairing" }
 nessa-env-serve = { path = "../nessa-env-serve" }
 nessa-backup = { path = "../nessa-backup" }
+nessa-conversation = { path = "../nessa-conversation" }
 base64 = "0.22"
 # The local-network announcement while native linking listens there
 # (device_pairing::infrastructure::announcer), so a phone that scanned the
@@ -144,6 +145,8 @@ security-framework = "3.7"
 security-framework-sys = "2.17"
 
 [dev-dependencies]
+# The conversation fixtures the gateway's own tests build conversations with.
+nessa-conversation = { path = "../nessa-conversation", features = ["test-support"] }
 # Ephemeral isolated TLS recipients use real platform verification with a
 # fresh CA and short-lived server-auth leaf, including on macOS.
 rcgen = { version = "=0.14.10", default-features = false, features = ["crypto", "ring"] }
