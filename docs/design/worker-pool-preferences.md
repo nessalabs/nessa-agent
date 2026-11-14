@@ -36,9 +36,10 @@ validated whole by `RuntimeConfig` before any write:
 
 ## How a computer is chosen
 
-The placement record (`placements/`) says `peer:any` and never changes. The
-binding record (`bindings/`) says which worker holds the conversation now and
-is what moves.
+The conversation's place record (`places/<id>.json`) says `peer:any`, which
+never changes, and which worker holds the conversation now, which is what
+moves. Records written by earlier builds in `placements/` and `bindings/` are
+still read until the record is first written anew.
 
 ```mermaid
 sequenceDiagram

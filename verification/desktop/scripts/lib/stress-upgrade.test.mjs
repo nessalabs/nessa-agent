@@ -1,11 +1,25 @@
 import { strict as assert } from "node:assert"
-import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs"
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { DatabaseSync } from "node:sqlite"
 import { test } from "node:test"
 
-import { asOlderBuild, metadataFile, schemaVersion } from "./stress-upgrade.mjs"
+import {
+  asEarlierPlaces,
+  asOlderBuild,
+  metadataFile,
+  placeOf,
+  schemaVersion,
+} from "./stress-upgrade.mjs"
 
 const definition = readFileSync(
   new URL(
@@ -97,3 +111,56 @@ test("a file with a closed thread is left as the newest build's", (t) => {
   assert.equal(schemaVersion(path), 10)
   assert.ok(tables(path).includes("closed_threads"))
 })
+
+test("place records turn back into an older build's placement and binding files", () => {
+  const conversations = mkdtempSync(join(tmpdir(), "stress-places-"))
+  try {
+    const worker = `peer:${"01".repeat(32)}`
+    mkdirSync(join(conversations, "places"))
+    const put = (id, record) =>
+      writeFileSync(
+        join(conversations, "places", `${id}.json`),
+        `${JSON.stringify({ schemaVersion: 1, ...record })}\n`,
+      )
+    put("here", { placed: "here" })
+    put("host", { placed: "devbox" })
+    // Older files the record no longer agrees with are not left to be read.
+    mkdirSync(join(conversations, "placements"), { recursive: true })
+    mkdirSync(join(conversations, "bindings"), { recursive: true })
+    writeFileSync(join(conversations, "placements", "here.json"), "{}")
+    writeFileSync(join(conversations, "bindings", "host.json"), "{}")
+    put("pool", { placed: "peer:any", worker, context: "c" })
+    assert.deepEqual(placeOf(conversations, "pool"), {
+      placed: "peer:any",
+      worker,
+      context: "c",
+    })
+    assert.deepEqual(asEarlierPlaces(conversations, "pool"), ["pool"])
+    assert.deepEqual(placeOf(conversations, "pool"), {
+      placed: "peer:any",
+      worker,
+      context: "c",
+    })
+    assert.deepEqual(asEarlierPlaces(conversations).sort(), ["here", "host"])
+    assert.equal(placeOf(conversations, "here"), null)
+    assert.deepEqual(placeOf(conversations, "host"), {
+      placed: "devbox",
+      worker: undefined,
+      context: undefined,
+    })
+    const file = (directory, id) =>
+      JSON.parse(readFileSync(join(conversations, directory, `${id}.json`), "utf8"))
+    assert.deepEqual(file("placements", "host"), { schemaVersion: 1, host: "devbox" })
+    assert.deepEqual(file("placements", "pool"), { schemaVersion: 1, host: "peer:any" })
+    assert.deepEqual(file("bindings", "pool"), { schemaVersion: 1, worker, context: "c" })
+    assert.equal(existsSync(join(conversations, "placements", "here.json")), false)
+    assert.equal(existsSync(join(conversations, "bindings", "host.json")), false)
+    assert.deepEqual(readdirOf(join(conversations, "places")), [])
+  } finally {
+    rmSync(conversations, { recursive: true, force: true })
+  }
+})
+
+function readdirOf(directory) {
+  return existsSync(directory) ? readdirSync(directory).sort() : []
+}

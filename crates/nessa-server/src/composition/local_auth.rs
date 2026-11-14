@@ -1979,12 +1979,9 @@ fn environments(
             DurableEnvironmentAudit, OpenSshConnector, PeerEnvironments, PeerUpdates,
             SshEnvironment, SshTimings,
         },
-        CedarCommandPolicyEvaluator, FileBindings, FilePlacements,
+        CedarCommandPolicyEvaluator, FilePlaces,
     };
-    let placements = FilePlacements::new(root.join("placements"))
-        .map_err(|error| RunError::Agent(error.to_string()))?;
-    let bindings = FileBindings::new(root.join("bindings"))
-        .map_err(|error| RunError::Agent(error.to_string()))?;
+    let places = FilePlaces::new(root).map_err(|error| RunError::Agent(error.to_string()))?;
     let mut environments: BTreeMap<String, Arc<dyn crate::conversation::application::Environment>> =
         BTreeMap::new();
     let audit = if hosts.is_empty() && serving.is_none() {
@@ -2046,10 +2043,10 @@ fn environments(
     let mut environments = Environments::new(
         crate::conversation::infrastructure::in_process_environment(),
         environments,
-        Arc::new(placements),
+        Arc::new(places),
     );
     if let Some(peers) = &peers {
-        environments = environments.with_peers(peers.clone(), Arc::new(bindings));
+        environments = environments.with_peers(peers.clone());
     }
     // Who may run which commands where is the command policy's, answered by
     // Cedar over the configured hosts and programs (ADR 803 step 4).

@@ -1,8 +1,7 @@
 //! A lifetime can seal while the current-main placement owner is awaited.
 use super::*;
-use crate::conversation::application::{ConversationPlacements, Environments, PlacementError};
-use crate::conversation::domain::Place;
-use crate::conversation::infrastructure::{in_process_environment, FilePlacements};
+use crate::conversation::application::{ConversationPlaces, Environments, PlacementError};
+use crate::conversation::infrastructure::{in_process_environment, FilePlaces};
 use nessa_sdk::application::agent_execution::sessions::{
     CommittedCompleteness, CommittedFreshness, CommittedSession, CommittedStatus, SessionStorage,
     SessionStorageLease, StorageFuture,
@@ -12,29 +11,30 @@ use std::collections::BTreeMap;
 use std::sync::atomic::AtomicUsize;
 
 struct PausedPlacement {
-    inner: FilePlacements,
+    inner: FilePlaces,
     pause: AtomicBool,
     entered: Notify,
     release: Notify,
 }
-impl ConversationPlacements for PausedPlacement {
-    fn place<'a>(
+impl ConversationPlaces for PausedPlacement {
+    fn write<'a>(
         &'a self,
         conversation: &'a ConversationId,
-        place: &'a Place,
+        record: &'a crate::conversation::application::PlaceRecord,
     ) -> EnvironmentFuture<'a, Result<(), PlacementError>> {
-        self.inner.place(conversation, place)
+        self.inner.write(conversation, record)
     }
-    fn placement<'a>(
+    fn read<'a>(
         &'a self,
         conversation: &'a ConversationId,
-    ) -> EnvironmentFuture<'a, Result<Place, PlacementError>> {
+    ) -> EnvironmentFuture<'a, Result<crate::conversation::application::PlaceRecord, PlacementError>>
+    {
         Box::pin(async move {
             if self.pause.swap(false, Ordering::SeqCst) {
                 self.entered.notify_one();
                 self.release.notified().await;
             }
-            self.inner.placement(conversation).await
+            self.inner.read(conversation).await
         })
     }
     fn erase<'a>(
@@ -73,7 +73,7 @@ async fn an_owned_opening_sealed_during_placement_does_not_acquire_a_lease() {
     let root = directory.path().join("data");
     let provider = Arc::new(ProviderFactory::default());
     let placements = Arc::new(PausedPlacement {
-        inner: FilePlacements::new(root.join("placements")).unwrap(),
+        inner: FilePlaces::new(&root).unwrap(),
         pause: AtomicBool::new(false),
         entered: Notify::new(),
         release: Notify::new(),
@@ -209,7 +209,7 @@ async fn a_root_sealed_during_first_placement_closes_from_its_actual_opening() {
     let root = directory.path().join("data");
     let provider = Arc::new(ProviderFactory::default());
     let placements = Arc::new(PausedPlacement {
-        inner: FilePlacements::new(root.join("placements")).unwrap(),
+        inner: FilePlaces::new(&root).unwrap(),
         pause: AtomicBool::new(false),
         entered: Notify::new(),
         release: Notify::new(),

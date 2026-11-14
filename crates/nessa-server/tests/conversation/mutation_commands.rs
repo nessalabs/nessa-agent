@@ -1443,9 +1443,7 @@ async fn a_submit_linking_a_file_is_refused_on_a_host_before_it_is_staged() {
     let root = directory.path().join("data");
     let provider = Arc::new(ProviderFactory::default());
     nessa_local_storage::create_directory(&root).unwrap();
-    let placements = Arc::new(
-        crate::conversation::infrastructure::FilePlacements::new(root.join("placements")).unwrap(),
-    );
+    let placements = Arc::new(crate::conversation::infrastructure::FilePlaces::new(&root).unwrap());
     let environments = crate::conversation::application::Environments::new(
         crate::conversation::infrastructure::in_process_environment(),
         std::collections::BTreeMap::from([(
@@ -1498,9 +1496,7 @@ async fn a_fork_of_a_conversation_here_runs_here_whatever_the_default_device() {
     let root = directory.path().join("data");
     let provider = Arc::new(ProviderFactory::default());
     nessa_local_storage::create_directory(&root).unwrap();
-    let placements = Arc::new(
-        crate::conversation::infrastructure::FilePlacements::new(root.join("placements")).unwrap(),
-    );
+    let placements = Arc::new(crate::conversation::infrastructure::FilePlaces::new(&root).unwrap());
     let (default, default_device) = tokio::sync::watch::channel(None);
     let environments = crate::conversation::application::Environments::new(
         crate::conversation::infrastructure::in_process_environment(),
