@@ -110,11 +110,7 @@ impl BoatConnection {
     }
     /// The spec a new VM is made with: this connection's environment, and
     /// `pinned` (the image this build pins) or else the image saved here.
-    pub fn new_vm(
-        &self,
-        pinned: Option<&str>,
-        auto_stop: crate::domain::VmLifetime,
-    ) -> VmSpec {
+    pub fn new_vm(&self, pinned: Option<&str>, auto_stop: crate::domain::VmLifetime) -> VmSpec {
         VmSpec {
             image: pinned.unwrap_or(&self.image).to_owned(),
             environment: self.environment.clone(),

@@ -472,8 +472,7 @@ async fn finite_creation_refuses_unenforced_provider_lifetime_before_sdk_authori
             }
         }
         let mut finite = spec();
-        finite.auto_stop =
-            crate::domain::VmLifetime::from_seconds(Some(7_200)).unwrap();
+        finite.auto_stop = crate::domain::VmLifetime::from_seconds(Some(7_200)).unwrap();
         let receipt = server
             .provider
             .create(&account(), &finite, "fixture-thread")
