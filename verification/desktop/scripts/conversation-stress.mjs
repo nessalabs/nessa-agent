@@ -7809,6 +7809,92 @@ const steps = {
         path: join(run.evidence, `handoff-${run.engine}-fork.png`),
         scale: "css",
       })
+    // Forks into one id raced from three requests: one request sent twice at
+    // once, and another request. The id keeps one fork seed, so the retry is
+    // the same fork (or told to wait while the first runs), and the other
+    // request is refused; the fork records its copied turns once.
+    const racedId = randomUUID()
+    const racedRequest = randomUUID()
+    const raced = await Promise.allSettled([
+      run.client.conversation.fork(conversationId, {
+        conversationId: racedId,
+        requestId: racedRequest,
+      }),
+      run.client.conversation.fork(conversationId, {
+        conversationId: racedId,
+        requestId: racedRequest,
+      }),
+      run.client.conversation.fork(conversationId, {
+        conversationId: racedId,
+        requestId: randomUUID(),
+      }),
+    ])
+    if (
+      raced[2].status === "fulfilled" &&
+      raced.slice(0, 2).some((each) => each.status === "fulfilled")
+    )
+      failures.push("two requests both made the raced fork")
+    if (raced.every((each) => each.status === "rejected"))
+      failures.push(
+        `every raced fork was refused: ${raced.map((each) => each.reason?.message).join("; ")}`,
+      )
+    const madeIds = raced
+      .filter((each) => each.status === "fulfilled")
+      .map((each) => each.value.conversationId)
+    if (madeIds.some((made) => made !== racedId))
+      failures.push(`a raced fork request opened ${madeIds.join(", ")}, not ${racedId}`)
+    // A retry turned away while the first ran is let in once it has ended.
+    const again = await run.client.conversation
+      .fork(conversationId, { conversationId: racedId, requestId: racedRequest })
+      .then(
+        (made) => made,
+        (error) => error,
+      )
+    const owner = raced[2].status === "fulfilled" ? "other" : "first"
+    if (owner === "first" && again instanceof Error)
+      failures.push(
+        `a retry of the raced fork was refused after it was made: ${again.message}`,
+      )
+    if (
+      owner === "first" &&
+      !(again instanceof Error) &&
+      again.conversationId !== racedId
+    )
+      failures.push(
+        `a retry of the raced fork opened ${again.conversationId}, not ${racedId}`,
+      )
+    run.checked.push(racedId)
+    const racedView = await run.client.conversation.read(racedId)
+    const racedForks = racedView.handoffs.filter((each) => each.kind === "fork")
+    if (racedForks.length !== 1 || (racedForks[0].turns?.length ?? 0) !== 2)
+      failures.push(
+        `the raced fork recorded ${racedForks.length} forks with ${racedForks[0]?.turns?.length ?? "no"} turns, not one with the source's 2`,
+      )
+    // The raced fork is a chat like any other: opened from its row and
+    // talked to through the composer, its reply in the window and the view.
+    await openStressConversation(run.page, racedId, racedView.title ?? "")
+    if (
+      !(await run.page
+        .locator(`${css.handoffLine}[data-handoff="fork"]`)
+        .first()
+        .waitFor({ timeout: 10_000 })
+        .then(() => true)
+        .catch(() => false))
+    )
+      failures.push("the window did not open the raced fork on its copied turns")
+    const inRaced = prompt(run, STRESS.reply, step, " in raced fork")
+    const racedSeen = await send(run, racedId, inRaced, failures, new Set())
+    const { turn: racedTurn } = await settled(
+      run,
+      racedId,
+      racedSeen,
+      inRaced,
+      "completed",
+      failures,
+    )
+    carriedBy(racedTurn, target.modelId, "the raced fork", first, failures)
+    if (!(await carriedShown(run.page, target.modelId, inRaced)))
+      failures.push("the window does not show the raced fork's own reply")
     // The source is as it was.
     const source = await run.client.conversation.read(conversationId)
     if (source.messages.length !== 2)

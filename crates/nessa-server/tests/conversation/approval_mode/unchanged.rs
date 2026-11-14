@@ -30,7 +30,7 @@ async fn an_unchanged_preset_pending_read_keeps_its_publication() {
         requested_at_ms: 1,
     };
     repository.begin_mode_change(intent).await.unwrap();
-    let guard = service.inner.mode_changes.lock(&id).await;
+    let guard = service.inner.records.mode_changes().lock(&id).await;
     for opening in [ReadOpening::Open, ReadOpening::LiveOnly] {
         let pending = tokio::time::timeout(
             Duration::from_secs(5),

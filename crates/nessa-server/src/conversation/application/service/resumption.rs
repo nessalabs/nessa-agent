@@ -190,21 +190,17 @@ impl ConversationService {
         let count = marked.len();
         let now = self.inner.clock.unix_milliseconds();
         let mut due = Vec::with_capacity(count);
-        {
-            let mut known = self.unfinished_marked();
-            for mark in marked {
-                // A retry still waiting is the retry loop's to run.
-                let waiting = mark.retry_at_ms.filter(|at| *at > now);
-                known.insert(
-                    mark.conversation_id.clone(),
-                    Retry {
-                        failures: mark.failures,
-                        at_ms: waiting,
-                    },
-                );
-                if waiting.is_none() {
-                    due.push(mark.conversation_id);
-                }
+        for mark in marked {
+            // A retry still waiting is the retry loop's to run.
+            let waiting = mark.retry_at_ms.filter(|at| *at > now);
+            self.inner.records.with(&mark.conversation_id, |kept| {
+                kept.unfinished = Some(Retry {
+                    failures: mark.failures,
+                    at_ms: waiting,
+                });
+            });
+            if waiting.is_none() {
+                due.push(mark.conversation_id);
             }
         }
         self.inner.retry_scheduled.notify_one();
@@ -233,24 +229,20 @@ impl ConversationService {
             }
         };
         let spent = self.inner.failure_backoff.get().is_some_and(|backoff| {
-            self.unfinished_marked()
-                .get(id)
+            self.marked(id)
                 .is_some_and(|retry| retry.failures >= backoff.attempts)
         });
         if spent {
             tracing::warn!(conversation_id = %id, "a conversation that cannot take its retry is left to its next opening");
         }
-        if spent
-            || self.inner.retirement.get().is_some()
-            || !self.unfinished_marked().contains_key(id)
-        {
+        if spent || self.inner.retirement.get().is_some() || self.marked(id).is_none() {
             return;
         }
         let mut failed = true;
         if let Some(waiting) = blocked {
             // Under the submission lock, as `after_settle` releases, so a
             // person's message that closes the same agent is ordered with it.
-            let _submissions = self.inner.mode_changes.lock(id).await;
+            let _submissions = self.inner.records.mode_changes().lock(id).await;
             if let Some(live) = waiting.upgrade() {
                 if stuck(&live).await {
                     // Released before the retry is due, so the retry never
@@ -310,8 +302,7 @@ impl ConversationService {
         id: &ConversationId,
         live: Arc<LiveConversation>,
     ) -> bool {
-        if self.inner.unfinished_turns.get().is_none() || !self.unfinished_marked().contains_key(id)
-        {
+        if self.inner.unfinished_turns.get().is_none() || self.marked(id).is_none() {
             return false;
         }
         let _ = live.join_attachment_owner().await;
@@ -334,7 +325,7 @@ impl ConversationService {
         let Ok(_admission) = self.admit().await else {
             return false;
         };
-        let _submissions = self.inner.mode_changes.lock(id).await;
+        let _submissions = self.inner.records.mode_changes().lock(id).await;
         let Some(live) = waiting.upgrade() else {
             return false;
         };
@@ -556,12 +547,13 @@ impl ConversationService {
         let Some(marks) = self.inner.unfinished_turns.get() else {
             return Ok(());
         };
-        if self.unfinished_marked().contains_key(id) {
+        if self.marked(id).is_some() {
             return Ok(());
         }
         marks.mark(id).await?;
-        self.unfinished_marked()
-            .insert(id.clone(), Retry::default());
+        self.inner
+            .records
+            .with(id, |kept| kept.unfinished = Some(Retry::default()));
         Ok(())
     }
 
@@ -583,7 +575,7 @@ impl ConversationService {
         .await;
         if self.inner.unfinished_turns.get().is_none()
             || self.inner.retirement.get().is_some()
-            || !self.unfinished_marked().contains_key(id)
+            || self.marked(id).is_none()
         {
             return;
         }
@@ -591,7 +583,7 @@ impl ConversationService {
         // waits for this agent's history to be let go.
         let waiting = Arc::downgrade(&live);
         drop(live);
-        let _submissions = self.inner.mode_changes.lock(id).await;
+        let _submissions = self.inner.records.mode_changes().lock(id).await;
         let Some(live) = waiting.upgrade() else {
             return;
         };
@@ -687,7 +679,7 @@ impl ConversationService {
         ) else {
             return;
         };
-        let failures = match self.unfinished_marked().get(id) {
+        let failures = match self.marked(id) {
             None | Some(Retry { at_ms: Some(_), .. }) => return,
             Some(retry) => retry.failures.saturating_add(u32::from(failed)),
         };
@@ -698,12 +690,14 @@ impl ConversationService {
         }
         tracing::info!(conversation_id = %id, failures, delay_ms = delay, "work is still owed; retrying after a backoff");
         // A clear that raced the deferral wins: the conversation owes nothing.
-        if let Some(retry) = self.unfinished_marked().get_mut(id) {
-            *retry = Retry {
-                failures,
-                at_ms: Some(at_ms),
-            };
-        }
+        self.inner.records.with(id, |kept| {
+            if let Some(retry) = kept.unfinished.as_mut() {
+                *retry = Retry {
+                    failures,
+                    at_ms: Some(at_ms),
+                };
+            }
+        });
         self.inner.retry_scheduled.notify_one();
     }
 
@@ -722,16 +716,16 @@ impl ConversationService {
             let now = self.inner.clock.unix_milliseconds();
             let mut due = Vec::new();
             let mut next = None::<u64>;
-            for (id, retry) in self.unfinished_marked().iter_mut() {
-                match retry.at_ms {
+            self.inner
+                .records
+                .each_unfinished(|id, retry| match retry.at_ms {
                     Some(at) if at <= now => {
                         retry.at_ms = None;
                         due.push(id.clone());
                     }
                     Some(at) => next = Some(next.map_or(at, |next| next.min(at))),
                     None => {}
-                }
-            }
+                });
             stream::iter(due)
                 .for_each_concurrent(RESUME_CONCURRENCY, |id| async move {
                     self.resume_or_retry(&id).await;
@@ -757,7 +751,7 @@ impl ConversationService {
         &self,
         id: &ConversationId,
     ) -> Result<(), ConversationError> {
-        if !self.unfinished_marked().contains_key(id) {
+        if self.marked(id).is_none() {
             return Ok(());
         }
         self.clear_mark(id).await
@@ -768,16 +762,14 @@ impl ConversationService {
             return Ok(());
         };
         marks.clear(id).await?;
-        self.unfinished_marked().remove(id);
+        self.inner.records.with(id, |kept| kept.unfinished = None);
         Ok(())
     }
 
-    fn unfinished_marked(
-        &self,
-    ) -> std::sync::MutexGuard<'_, std::collections::HashMap<ConversationId, Retry>> {
+    /// `id`'s unfinished mark and retry, when this run has written or read one.
+    fn marked(&self, id: &ConversationId) -> Option<Retry> {
         self.inner
-            .unfinished_marked
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .records
+            .read(id, |kept| kept.and_then(|kept| kept.unfinished))
     }
 }

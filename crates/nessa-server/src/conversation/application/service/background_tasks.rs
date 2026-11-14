@@ -145,7 +145,7 @@ impl ConversationService {
                 .admit()
                 .await
                 .map_err(|_| BackgroundTaskError::Unavailable)?;
-            let _deleting = service.inner.deletions.lock(&conversation).await;
+            let _deleting = service.inner.records.deletions().lock(&conversation).await;
             let source = service
                 .authorize_admitted_agent_tool(
                     conversation.clone(),
