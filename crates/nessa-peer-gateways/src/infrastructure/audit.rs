@@ -74,9 +74,9 @@ pub const AUDIT_HEADROOM: usize = 2;
 /// owner headroom ([`AUDIT_HEADROOM`]) still fits behind that; the poller
 /// asserts the fit. Each record waits for the ones before it, so an owner
 /// command's record can wait behind this many: at about 20 ms a synced
-/// write, about 2.8 s, inside the command's own [`super::AUDIT_DEADLINE`]
+/// write, about 2.9 s, inside the command's own [`super::AUDIT_DEADLINE`]
 /// (5 s).
-pub const AUDIT_QUEUE: usize = 142;
+pub const AUDIT_QUEUE: usize = 146;
 
 /// Called by the writer with each record's sequence before it writes it; a
 /// test stalls the store with it.
@@ -425,6 +425,7 @@ fn cause(cause: &PollerCause) -> (&'static str, Option<&str>) {
         PollerCause::Ended { detail } => ("peer_ended", detail.as_deref()),
         PollerCause::ResetRequired => ("cache_reset_required", None),
         PollerCause::CacheDamaged => ("cache_damaged", None),
+        PollerCause::FollowReset { .. } => ("local_follow_reset", None),
         PollerCause::Withdrawn { .. } => ("peer_withdrew", None),
     }
 }
@@ -554,6 +555,7 @@ pub(super) fn record_value(record: &PeerAuditRecord) -> Value {
             after_conversations,
             after_keep_bytes,
             replica_reset,
+            replica_reset_durable,
             before,
             after,
             outcome: result,
@@ -572,6 +574,7 @@ pub(super) fn record_value(record: &PeerAuditRecord) -> Value {
                     "conversations": after_conversations,
                     "keepBytes": after_keep_bytes,
                     "replicaReset": replica_reset,
+                    "replicaResetDurable": replica_reset_durable,
                 },
             },
             "outcome": outcome(result),
@@ -596,7 +599,12 @@ pub(super) fn record_value(record: &PeerAuditRecord) -> Value {
                 "operationId": operation.to_string(),
                 "target": {"peerKey": hex(peer), "conversationIds": conversations},
                 "transition": {"before": holding(before), "after": holding(after)},
-                "outcome": outcome(result),
+                "follow": match why {
+                PollerCause::FollowReset { default, conversations, keep_bytes, replica_reset, replica_reset_durable } =>
+                    Some(json!({"default":default,"conversations":conversations,"keepBytes":keep_bytes,"replicaReset":replica_reset,"replicaResetDurable":replica_reset_durable})),
+                _ => None,
+            },
+            "outcome": outcome(result),
                 "cause": name,
                 "causeDetail": detail,
                 "initiator": {"kind": "system", "component": "peer_poller"},

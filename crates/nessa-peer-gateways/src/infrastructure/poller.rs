@@ -25,7 +25,8 @@
 //!   free the read slot
 //! ```
 //! Arrows are calls, in order. No read happens without a fresh Active
-//! status, and nothing is removed without a Terminal one: a refused
+//! status. Local follow selection may drop a replica before dialing;
+//! remote authorization is removed only after a Terminal status: a refused
 //! `openProduct` is redacted, so a revoked credential and a full pool look
 //! alike until the status is asked (design row PC5, which the device follows
 //! too). Each read has a budget on the injected clock and ends incomplete
@@ -110,9 +111,9 @@ const _: () = assert!(READS_AT_ONCE >= 1);
 /// every cycle running at once without a cycle growing with it. A read that
 /// reaches it ends incomplete and the next cycle, soon, withdraws the rest.
 pub const WITHDRAWN_PER_READ: usize = 16 * WITHDRAWN_PER_RECORD;
-/// The most records one cycle hands the audit: two status steps, a reset,
+/// The most records one cycle hands the audit: two status steps, a remote reset, a local follow reset,
 /// and the two reads around it.
-const RECORDS_PER_CYCLE: usize = 3 + 2 * WITHDRAWN_PER_READ.div_ceil(WITHDRAWN_PER_RECORD);
+const RECORDS_PER_CYCLE: usize = 4 + 2 * WITHDRAWN_PER_READ.div_ceil(WITHDRAWN_PER_RECORD);
 /// The queue holds every cycle that can be enqueueing plus
 /// [`AUDIT_HEADROOM`] owner records. A cycle keeps its read slot until
 /// those records leave the queue
@@ -540,6 +541,9 @@ impl Shared {
             }
             _ => return Some(self.unread(key, &Unread::Storage)),
         };
+        if !self.reconcile_follow(key, changes).await {
+            return Some(self.unread(key, &Unread::Storage));
+        }
         let Some(status) = self.status(&record, cycle, changes).await else {
             return self.stopped_short();
         };
@@ -597,6 +601,39 @@ impl Shared {
             }
         };
         Some(pace)
+    }
+
+    /// Local retention is settled before any remote availability decision.
+    async fn reconcile_follow<'a>(
+        &'a self,
+        key: DeviceKey,
+        changes: &mut Vec<PollerRecord<'a>>,
+    ) -> bool {
+        let before = self.commands.holding(key).await;
+        let records = self.commands.records().clone();
+        let recovered = tokio::task::spawn_blocking(move || records.reconcile_follow(&key)).await;
+        let Ok(Ok(recovered)) = recovered else {
+            return false;
+        };
+        let Some(recovered) = recovered else {
+            return true;
+        };
+        let after = self.commands.holding(key).await;
+        let success = recovered.outcome.is_ok();
+        changes.push(self.commands.poller_changed(
+            key,
+            PollerCause::FollowReset {
+                default: recovered.default,
+                conversations: recovered.rule.conversations().to_vec(),
+                keep_bytes: recovered.rule.keep_bytes(),
+                replica_reset: recovered.replica_reset,
+                replica_reset_durable: recovered.replica_reset_durable,
+            },
+            before,
+            after,
+            recovered.outcome.map_err(|_| "peer_unavailable"),
+        ));
+        success
     }
 
     /// A cycle cut short: by the poller stopping (`None`), or by an owner
@@ -734,15 +771,16 @@ impl Shared {
             let (secret, pin, _) = credential.into_enrollment().into_parts();
             let identity = NativeIdentity::restore(secret).map_err(|_| ReadFailure::Cache)?;
             let loaded = records.load_follow(&key).map_err(|_| ReadFailure::Cache)?;
-            if loaded.as_ref().is_some_and(|follow| follow.reset_pending) {
-                records.remove_cache(&key).map_err(|_| ReadFailure::Cache)?;
-                records
-                    .mark_follow_reset(&key)
-                    .map_err(|_| ReadFailure::Cache)?;
-            }
             let rule = loaded
                 .map(|follow| follow.rule)
                 .unwrap_or_else(FollowRule::none);
+            if rule.conversations().is_empty() {
+                return Ok(ReadReport {
+                    moved: false,
+                    complete: true,
+                    conversations: 0,
+                });
+            }
             let mut cache = RetainedCache::open_keeping(
                 &records.cache_path(&key),
                 rule.keep_bytes(),
@@ -1059,8 +1097,10 @@ fn spawn_read(
 }
 
 /// Read `conversation` from `record`'s peer without adding it to the follow
-/// rule. The transcript is removed before this returns, so the replica does
-/// not keep it. The peer is dialed for this one read. A chat the peer did
+/// rule. The transcript is read into a bounded in-memory cache, separate from
+/// the retained replica, and discarded on return. This validates/downloads the
+/// read; it does not return a transcript to a UI. The peer is dialed for this
+/// one read. A chat the peer did
 /// not grant is `Refused`. The caller keeps this peer's poller off the cache
 /// for the call.
 pub fn open_granted(
@@ -1082,24 +1122,12 @@ pub fn open_granted(
     let (secret, pin, _) = credential.into_enrollment().into_parts();
     let identity = NativeIdentity::restore(secret).map_err(|_| ReadFailure::Cache)?;
     let loaded = records.load_follow(&key).map_err(|_| ReadFailure::Cache)?;
-    if loaded.as_ref().is_some_and(|follow| follow.reset_pending) {
-        records.remove_cache(&key).map_err(|_| ReadFailure::Cache)?;
-        records
-            .mark_follow_reset(&key)
-            .map_err(|_| ReadFailure::Cache)?;
-    }
     let keep = loaded
         .as_ref()
         .map(|follow| follow.rule.keep_bytes())
         .unwrap_or(FollowRule::none().keep_bytes());
-    let mut cache = RetainedCache::open_keeping(
-        &records.cache_path(&key),
-        keep,
-        Arc::clone(&clocks.0),
-        Arc::clone(&clocks.1),
-    )?;
     let stop = ReadStop::new();
-    cache.open_without_replicating(
+    RetainedCache::open_without_replicating(
         ReaderAccess {
             role: ReaderRole::GrantedPeer,
             address: record.address(),
@@ -1114,6 +1142,8 @@ pub fn open_granted(
         conversation,
         &stop,
         budget,
+        keep,
+        clocks,
     )
 }
 

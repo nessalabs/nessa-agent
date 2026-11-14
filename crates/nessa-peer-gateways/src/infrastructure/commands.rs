@@ -978,6 +978,7 @@ impl PeerCommands {
                             before: result.before,
                             after: Some(result.after),
                             replica_reset: result.replica_reset,
+                            replica_reset_durable: result.replica_reset,
                         }),
                     },
                 )
@@ -992,6 +993,7 @@ impl PeerCommands {
                         before: None,
                         after: None,
                         replica_reset: false,
+                        replica_reset_durable: false,
                     }),
                 },
             ),
@@ -1002,8 +1004,28 @@ impl PeerCommands {
                         before: stored.clone(),
                         after: stored,
                         replica_reset: false,
+                        replica_reset_durable: false,
                     }),
                     ..Evidence::unchanged(key, PeerState::Unreadable)
+                },
+            ),
+            Err(FollowFailure::Transition {
+                before,
+                replica_reset,
+                replica_reset_durable,
+                ..
+            }) => (
+                Err(PeerError::Unavailable),
+                Evidence {
+                    peer: Some(key),
+                    before: PeerState::Unknown,
+                    after: PeerState::Unknown,
+                    follow: Some(FollowAudit {
+                        before,
+                        after: stored,
+                        replica_reset,
+                        replica_reset_durable,
+                    }),
                 },
             ),
             Err(FollowFailure::Storage(_)) => (
@@ -1016,6 +1038,7 @@ impl PeerCommands {
                         before: None,
                         after: stored,
                         replica_reset: false,
+                        replica_reset_durable: false,
                     }),
                 },
             ),
@@ -1242,7 +1265,8 @@ impl PeerCommands {
                         .as_ref()
                         .and_then(|item| item.after.as_ref())
                         .map(|rule| rule.keep_bytes()),
-                    replica_reset: follow.is_some_and(|item| item.replica_reset),
+                    replica_reset: follow.as_ref().is_some_and(|item| item.replica_reset),
+                    replica_reset_durable: follow.is_some_and(|item| item.replica_reset_durable),
                     before: evidence.before,
                     after: evidence.after.clone(),
                     outcome: answer,
@@ -1526,6 +1550,7 @@ struct FollowAudit {
     before: Option<FollowRule>,
     after: Option<FollowRule>,
     replica_reset: bool,
+    replica_reset_durable: bool,
 }
 
 /// A record as the audit names its state.

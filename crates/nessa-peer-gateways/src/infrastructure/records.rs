@@ -207,7 +207,7 @@ pub struct FollowStoreResult {
 }
 
 /// Why a follow rule was not stored.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum FollowFailure {
     /// No record for that peer.
     Missing,
@@ -216,6 +216,28 @@ pub enum FollowFailure {
     /// The rule or the replica could not be written. `Uncertain` means the
     /// rule may already name the new choice and the reset may be unfinished.
     Storage(PrivateStateError),
+    /// A transition started; retain its known prior rule and completed effects.
+    Transition {
+        cause: PrivateStateError,
+        before: Option<FollowRule>,
+        replica_reset: bool,
+        replica_reset_durable: bool,
+    },
+}
+
+/// The physical reset can precede its failed durability acknowledgement.
+struct CacheRemovalFailure {
+    cause: PrivateStateError,
+    replica_reset: bool,
+}
+
+/// Local follow recovery, including effects that preceded a failed acknowledgement.
+pub struct FollowRecovery {
+    pub rule: FollowRule,
+    pub default: bool,
+    pub replica_reset: bool,
+    pub replica_reset_durable: bool,
+    pub outcome: Result<(), PrivateStateError>,
 }
 
 /// Why a forget did not finish, by the step that failed: the cache, which
@@ -244,6 +266,10 @@ pub struct PeerRecords {
     /// Bumped when a record is written or removed, so a reader can notice a
     /// change without scanning the directory.
     listed: AtomicU64,
+    #[cfg(test)]
+    fail_follow_marker: std::sync::atomic::AtomicBool,
+    #[cfg(test)]
+    fail_cache_sync: std::sync::atomic::AtomicBool,
 }
 impl PeerRecords {
     /// Open `directory`, already private, beneath the trusted absolute `root`.
@@ -263,6 +289,10 @@ impl PeerRecords {
             clock,
             operation: Mutex::new(()),
             listed: AtomicU64::new(0),
+            #[cfg(test)]
+            fail_follow_marker: std::sync::atomic::AtomicBool::new(false),
+            #[cfg(test)]
+            fail_cache_sync: std::sync::atomic::AtomicBool::new(false),
         })
     }
     /// How many times a record has been written or removed. A listing taken
@@ -438,17 +468,59 @@ impl PeerRecords {
                 replica_reset: false,
             });
         }
-        self.write_follow_locked(key, rule, false)
-            .map_err(FollowFailure::Storage)?;
-        self.remove_cache_locked(key)
-            .map_err(FollowFailure::Storage)?;
-        self.write_follow_locked(key, rule, true)
-            .map_err(FollowFailure::Storage)?;
-        Ok(FollowStoreResult {
-            before: before.map(|loaded| loaded.rule),
-            after: rule.clone(),
-            replica_reset: true,
-        })
+        apply_follow_transition(
+            before.map(|loaded| loaded.rule),
+            rule,
+            |done| self.write_follow_locked(key, rule, done),
+            || self.reset_cache_locked(key).map(|_| ()),
+        )
+    }
+
+    /// Reconcile local default-none or a pending reset before dialing a peer.
+    /// The caller owns the peer turn and publishes the returned system evidence.
+    pub fn reconcile_follow(
+        &self,
+        key: &DeviceKey,
+    ) -> Result<Option<FollowRecovery>, PrivateStateError> {
+        let _guard = self.lock();
+        let loaded = self.load_follow_locked(key)?;
+        let default = loaded.is_none();
+        let has_cache = match self
+            .directory
+            .open_file(&cache_name(key), OpenMode::ReadNonblocking)
+        {
+            Ok(_) => true,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => false,
+            Err(error) => return Err(storage_error(error)),
+        };
+        if !loaded
+            .as_ref()
+            .map_or(has_cache, |follow| follow.reset_pending)
+        {
+            return Ok(None);
+        }
+        let rule = loaded
+            .as_ref()
+            .map(|follow| follow.rule.clone())
+            .unwrap_or_else(FollowRule::none);
+        let (replica_reset, replica_reset_durable, outcome) = match self.reset_cache_locked(key) {
+            Ok(removed) => {
+                let outcome = if default {
+                    Ok(())
+                } else {
+                    self.write_follow_locked(key, &rule, true)
+                };
+                (removed, removed, outcome)
+            }
+            Err(failure) => (failure.replica_reset, false, Err(failure.cause)),
+        };
+        Ok(Some(FollowRecovery {
+            rule,
+            default,
+            replica_reset,
+            replica_reset_durable,
+            outcome,
+        }))
     }
 
     /// The replica reset for `key`'s stored rule finished. No file, or a file
@@ -478,6 +550,11 @@ impl PeerRecords {
         }
     }
     fn remove_cache_locked(&self, key: &DeviceKey) -> Result<(), PrivateStateError> {
+        self.reset_cache_locked(key)
+            .map(|_| ())
+            .map_err(|failure| failure.cause)
+    }
+    fn reset_cache_locked(&self, key: &DeviceKey) -> Result<bool, CacheRemovalFailure> {
         let cache = cache_name(key);
         let mut journal = cache.clone();
         journal.push("-journal");
@@ -486,19 +563,35 @@ impl PeerRecords {
             let file = match self.directory.open_file(&name, OpenMode::ReadNonblocking) {
                 Ok(file) => file,
                 Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
-                Err(error) => return Err(storage_error(error)),
+                Err(error) => {
+                    return Err(CacheRemovalFailure {
+                        cause: storage_error(error),
+                        replica_reset: false,
+                    })
+                }
             };
             self.directory
                 .remove_file(&name, &file)
-                .map_err(storage_error)?;
+                .map_err(|error| CacheRemovalFailure {
+                    cause: storage_error(error),
+                    replica_reset: false,
+                })?;
             removed = true;
         }
         if removed {
-            self.directory
-                .sync()
-                .map_err(|_| PrivateStateError::Uncertain)?;
+            #[cfg(test)]
+            if self.fail_cache_sync.swap(false, Ordering::SeqCst) {
+                return Err(CacheRemovalFailure {
+                    cause: PrivateStateError::Uncertain,
+                    replica_reset: true,
+                });
+            }
+            self.directory.sync().map_err(|_| CacheRemovalFailure {
+                cause: PrivateStateError::Uncertain,
+                replica_reset: true,
+            })?;
         }
-        Ok(())
+        Ok(removed)
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, ()> {
@@ -1082,12 +1175,26 @@ impl PeerRecords {
         }))
     }
 
+    #[cfg(test)]
+    pub(crate) fn fail_next_cache_sync(&self) {
+        self.fail_cache_sync.store(true, Ordering::SeqCst);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn fail_next_follow_marker(&self) {
+        self.fail_follow_marker.store(true, Ordering::SeqCst);
+    }
+
     fn write_follow_locked(
         &self,
         key: &DeviceKey,
         rule: &FollowRule,
         reset_done: bool,
     ) -> Result<(), PrivateStateError> {
+        #[cfg(test)]
+        if reset_done && self.fail_follow_marker.swap(false, Ordering::SeqCst) {
+            return Err(PrivateStateError::Unavailable);
+        }
         let stored = StoredFollow {
             schema_version: FOLLOW_SCHEMA,
             conversations: rule.conversations().to_vec(),
@@ -1203,3 +1310,31 @@ fn storage_error(error: io::Error) -> PrivateStateError {
         PrivateStateError::Unavailable
     }
 }
+
+/// Keep completed effects beside any failure; reloading the new rule cannot
+/// recover the previous rule after the first write.
+fn apply_follow_transition(
+    before: Option<FollowRule>,
+    rule: &FollowRule,
+    write: impl Fn(bool) -> Result<(), PrivateStateError>,
+    remove: impl FnOnce() -> Result<(), CacheRemovalFailure>,
+) -> Result<FollowStoreResult, FollowFailure> {
+    let failure = |cause, replica_reset, replica_reset_durable| FollowFailure::Transition {
+        cause,
+        before: before.clone(),
+        replica_reset,
+        replica_reset_durable,
+    };
+    write(false).map_err(|cause| failure(cause, false, false))?;
+    remove().map_err(|effect| failure(effect.cause, effect.replica_reset, false))?;
+    write(true).map_err(|cause| failure(cause, true, true))?;
+    Ok(FollowStoreResult {
+        before,
+        after: rule.clone(),
+        replica_reset: true,
+    })
+}
+
+#[cfg(test)]
+#[path = "../../tests/follow_transition.rs"]
+mod follow_transition_tests;

@@ -715,6 +715,7 @@ fn change(record: &PeerAuditRecord) -> Option<String> {
         format!("{phase}+{cache}")
     };
     let cause = match cause {
+        PollerCause::FollowReset { .. } => "local_follow_reset".to_owned(),
         PollerCause::Approved => "approved".to_owned(),
         PollerCause::Ended { detail } => format!("ended({})", detail.as_deref().unwrap_or("?")),
         PollerCause::ResetRequired => "reset_required".to_owned(),
@@ -2445,6 +2446,47 @@ fn grant_rows(directory: &Path) -> Vec<String> {
         .collect()
 }
 
+/// More than one retained-driver slice (16 pages of 16 records). A single
+/// explicit open must resume its transient checkpoint rather than start over.
+async fn long_follow_transcript(peer: &Peer, conversation: &ConversationId) {
+    use nessa_sdk::application::agent_execution::providers::ProviderIdentity;
+    use nessa_sdk::application::agent_execution::sessions::{SessionChange, SessionSaveUnit};
+    use nessa_sdk::domain::agent_execution::sessions::{
+        ExecutionSessionId, ProviderContext, SessionId,
+    };
+    let id = SessionId::new(conversation.to_string()).unwrap();
+    let lease = peer.storage.open(id.clone()).await.unwrap();
+    let mut units = vec![SessionSaveUnit::new(vec![SessionChange::Opened {
+        id,
+        provider: ProviderIdentity::new("fixture", "model", "workspace").unwrap(),
+        context: ProviderContext::Absent,
+    }])
+    .unwrap()];
+    let mut before = ProviderContext::Absent;
+    for index in 0..300 {
+        let after = ProviderContext::recorded_after(
+            ExecutionSessionId::new(format!("context-{index}")).unwrap(),
+            0,
+        );
+        units.push(
+            SessionSaveUnit::new(vec![SessionChange::ProviderContext {
+                before,
+                after: after.clone(),
+            }])
+            .unwrap(),
+        );
+        before = after;
+    }
+    let receipt = lease
+        .save_changes(lease.load().await.unwrap().binding().clone(), units)
+        .await
+        .unwrap();
+    assert!(
+        receipt.next().base() > 256,
+        "the fixture must exceed one record-driver slice"
+    );
+}
+
 /// Following one granted chat leaves the other out of the replica. Opening
 /// the other does not start replication. Shrinking the rule drops what it
 /// no longer names. The grantor's catalogue is unchanged, and the peer is
@@ -2458,6 +2500,7 @@ async fn a_follow_rule_replicates_only_the_chats_the_person_chose() {
     let (key, reader) = enroll(&a, &b, &relay, true).await;
     let reader = reader.unwrap();
     let (x, y) = (a.conversation().await, a.conversation().await);
+    long_follow_transcript(&a, &y).await;
     a.grant(
         ShareGrantTransition::Grant(ShareAccess::read()),
         &x,
@@ -2518,8 +2561,17 @@ async fn a_follow_rule_replicates_only_the_chats_the_person_chose() {
         )
         .await
         .unwrap();
-    synced_with(&b, 1).await;
-
+    // A corrupt retained cache is unrelated to explicit one-shot reads.
+    drop(
+        RetainedCache::open(
+            &b.cache_path(&key),
+            Arc::new(SystemClock),
+            RuntimeDependencies::default().clock,
+        )
+        .unwrap(),
+    );
+    let damaged = b"not a sqlite database";
+    std::fs::write(b.cache_path(&key), damaged).unwrap();
     let (entry, _) = b.peer().await;
     let PeerEntry::Readable(record) = entry else {
         panic!("the peer record is readable");
@@ -2528,6 +2580,7 @@ async fn a_follow_rule_replicates_only_the_chats_the_person_chose() {
     let records = b.peers.records().clone();
     let receiver = reader.0.clone();
     let opened = y.clone();
+    let followed = x.clone();
     let clocks = (
         Arc::new(SystemClock) as Arc<dyn Clock>,
         RuntimeDependencies::default().clock,
@@ -2543,15 +2596,128 @@ async fn a_follow_rule_replicates_only_the_chats_the_person_chose() {
             Duration::from_secs(30),
             &clocks,
         )
-        .unwrap()
+        .unwrap();
+        // Even an explicitly opened followed chat must not modify retention.
+        open_granted(
+            &records,
+            &record,
+            &receiver,
+            epoch,
+            &followed,
+            Duration::from_secs(30),
+            &clocks,
+        )
+        .unwrap();
     })
     .await
     .unwrap();
-    assert_eq!(
-        b.cached(&key, &reader.0),
-        vec![x.to_string()],
-        "opening a granted chat does not replicate it"
+    assert_eq!(std::fs::read(b.cache_path(&key)).unwrap(), damaged);
+    assert!(
+        !b.peers
+            .records()
+            .load_follow(&key)
+            .unwrap()
+            .unwrap()
+            .reset_pending
     );
+
+    // Nor may an explicit open take over the poller's pending-reset recovery.
+    let follow_path = b.cache_path(&key).with_extension("follow.json");
+    let mut stored: Value = serde_json::from_slice(&std::fs::read(&follow_path).unwrap()).unwrap();
+    stored["resetDone"] = Value::Bool(false);
+    std::fs::write(&follow_path, serde_json::to_vec(&stored).unwrap()).unwrap();
+    let (entry, _) = b.peer().await;
+    let PeerEntry::Readable(record) = entry else {
+        panic!("the peer record is readable");
+    };
+    let record: PeerRecord = (*record).clone();
+    let records = b.peers.records().clone();
+    let receiver = reader.0.clone();
+    let opened = y.clone();
+    let followed = x.clone();
+    let clocks = (
+        Arc::new(SystemClock) as Arc<dyn Clock>,
+        RuntimeDependencies::default().clock,
+    );
+    let epoch = receiver_epoch(&directory.path().join("a"), &reader.0);
+    tokio::task::spawn_blocking(move || {
+        open_granted(
+            &records,
+            &record,
+            &receiver,
+            epoch,
+            &opened,
+            Duration::from_secs(30),
+            &clocks,
+        )
+        .unwrap();
+        // Even an explicitly opened followed chat must not modify retention.
+        open_granted(
+            &records,
+            &record,
+            &receiver,
+            epoch,
+            &followed,
+            Duration::from_secs(30),
+            &clocks,
+        )
+        .unwrap();
+    })
+    .await
+    .unwrap();
+    assert_eq!(std::fs::read(b.cache_path(&key)).unwrap(), damaged);
+    assert!(
+        b.peers
+            .records()
+            .load_follow(&key)
+            .unwrap()
+            .unwrap()
+            .reset_pending
+    );
+    synced_with(&b, 1).await;
+    assert_eq!(b.cached(&key, &reader.0), vec![x.to_string()]);
+
+    // Populated retention must survive explicit opens too.
+    let (entry, _) = b.peer().await;
+    let PeerEntry::Readable(record) = entry else {
+        panic!("the peer record is readable");
+    };
+    let record: PeerRecord = (*record).clone();
+    let records = b.peers.records().clone();
+    let receiver = reader.0.clone();
+    let opened = y.clone();
+    let followed = x.clone();
+    let clocks = (
+        Arc::new(SystemClock) as Arc<dyn Clock>,
+        RuntimeDependencies::default().clock,
+    );
+    let epoch = receiver_epoch(&directory.path().join("a"), &reader.0);
+    tokio::task::spawn_blocking(move || {
+        open_granted(
+            &records,
+            &record,
+            &receiver,
+            epoch,
+            &opened,
+            Duration::from_secs(30),
+            &clocks,
+        )
+        .unwrap();
+        // Even an explicitly opened followed chat must not modify retention.
+        open_granted(
+            &records,
+            &record,
+            &receiver,
+            epoch,
+            &followed,
+            Duration::from_secs(30),
+            &clocks,
+        )
+        .unwrap();
+    })
+    .await
+    .unwrap();
+    assert_eq!(b.cached(&key, &reader.0), vec![x.to_string()]);
     synced_with(&b, 1).await;
     assert_eq!(b.cached(&key, &reader.0), vec![x.to_string()]);
 
@@ -2627,5 +2793,26 @@ async fn a_follow_rule_replicates_only_the_chats_the_person_chose() {
                 .is_some_and(|ids| ids == &vec![x.to_string()])
     }));
 
+    // Restore an old replicate-all cache with no local rule while the grantor
+    // is offline. Local default-none must win before any network admission.
+    assert_eq!(b.cached(&key, &reader.0), vec![y.to_string()]);
     stop(a).await;
+    std::fs::remove_file(&follow_path).unwrap();
+    b.poll_until(|_, _| !b.cache_path(&key).exists()).await;
+    assert!(
+        b.changes.kept.lock().unwrap().iter().any(|record| matches!(
+            record,
+            PeerAuditRecord::PollerChanged {
+                cause: PollerCause::FollowReset {
+                    default: true,
+                    replica_reset: true,
+                    replica_reset_durable: true,
+                    ..
+                },
+                outcome: Ok(()),
+                ..
+            }
+        )),
+        "offline local cleanup must retain system-attributed effect evidence"
+    );
 }
