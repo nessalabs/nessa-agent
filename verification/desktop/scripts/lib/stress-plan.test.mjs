@@ -168,6 +168,7 @@ test("the legacy seed preserves the existing non-model work's relative order", (
         backgroundTasks: "0",
         vmBackgroundTasks: "0",
         windows: "0",
+        controls: "0",
         linkings: "0",
         mcpServers: "0",
         rails: "0",

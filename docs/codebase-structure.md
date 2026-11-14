@@ -2759,7 +2759,12 @@ windows `product/workspace.rs` holds for each connection — panes and the
 focused chat's right panel — in
 `application/workspace_windows.rs` (domain shape in
 `domain/value_objects/workspace_window.rs`), through
-`service/workspace_windows.rs`; see [the window an agent
+`service/workspace_windows.rs`. The window tools (`arrange_window`,
+`show_panel_tab`, `open_thread`, `focus_pane`, `close_pane`) call
+`control_window` there, which sends a `WindowAction`
+(`domain/value_objects/window_action.rs`) to the window and records it with
+`application/window_control_audit.rs` (`infrastructure/window_control_audit.rs`
+persists it); see [the window an agent
 shares](design/agent-window.md).
 
 Gateway parent/child Stop orchestration lives in

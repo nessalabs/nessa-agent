@@ -88,6 +88,7 @@ import {
   setOption,
 } from "./scripted-frames.mjs"
 import {
+  promptArguments,
   promptFiles,
   promptImages,
   promptText,
@@ -601,6 +602,7 @@ async function scenarioTurn({ sessionId, prompt: blocks }) {
           {
             text,
             id: randomUUID(),
+            arguments: promptArguments(text),
             images: promptImages(blocks),
             files: promptFiles(blocks),
           },

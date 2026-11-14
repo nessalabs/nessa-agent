@@ -6930,6 +6930,117 @@ const steps = {
     )
   },
 
+  async control(run, step, failures) {
+    // A second conversation, for the agent in the main one to open beside it.
+    const other = randomUUID()
+    const first = prompt(run, STRESS.reply, step, " controlled")
+    await run.client.conversation.create({
+      conversationId: other,
+      agent: run.stack.agent,
+    })
+    run.checked.push(other)
+    await run.client.conversation.submit(run.client.conversation.prepare(other, first))
+    await settled(run, other, new Set(), first, "completed", failures)
+    if (failures.length) return
+    const panes = () => run.page.locator(css.pane).count()
+    const hidden = (selector) =>
+      run.page.evaluate(
+        (selector) => document.querySelector(selector)?.getAttribute("aria-hidden"),
+        selector,
+      )
+    // Each change is the main conversation's agent calling the tool: the
+    // window showing it carries it out by its own rules and says what came
+    // of it once it shows it, so the tool's answer is already on screen.
+    const asked = (phrase, args, extra) =>
+      windowControl(run, phrase, args, step, extra, failures)
+
+    // Folding the sidebar makes room for a pane beside, as ⌘B does.
+    let said = await asked(STRESS.arrangeWindow, { sidebar: "closed" }, " fold")
+    if (said?.window?.windows?.[0]?.sidebar !== "closed")
+      failures.push(`arrange_window said ${JSON.stringify(said)}`)
+    if (!(await waitFor(async () => (await hidden(css.sidebar)) === "true", 5_000)))
+      failures.push("arrange_window left the sidebar shown")
+    said = await asked(STRESS.openThread, { threadId: other, where: "beside" }, " open")
+    if (said?.changed !== true || (await panes()) !== 2)
+      failures.push(
+        `open_thread beside said ${JSON.stringify(said)} with ${await panes()} panes on screen`,
+      )
+    if (failures.length) return
+    said = await asked(STRESS.arrangeWindow, { panel: "open" }, " panel")
+    if (said?.changed !== true)
+      failures.push(`opening the panel said ${JSON.stringify(said)}`)
+    if ((await hidden(css.panel)) === "true")
+      failures.push("arrange_window left the right panel hidden")
+    // Asked again, nothing changes, and the agent is told so.
+    said = await asked(STRESS.arrangeWindow, { sidebar: "closed" }, " again")
+    if (said?.changed !== false)
+      failures.push(`a repeated arrange said ${JSON.stringify(said)}`)
+    said = await asked(
+      STRESS.arrangeWindow,
+      { sidebar: "open", panel: "closed" },
+      " unfold",
+    )
+    if (said?.changed !== true)
+      failures.push(`arrange_window back said ${JSON.stringify(said)}`)
+    await sidebarParks(run.page, failures, true)
+    if (!(await waitFor(async () => (await hidden(css.panel)) === "true", 5_000)))
+      failures.push("arrange_window left the right panel shown")
+    if (failures.length) return
+    // The Agents overview over the panes, then the panes again.
+    await asked(STRESS.arrangeWindow, { view: "agents" }, " overview")
+    if (
+      !(await waitFor(
+        async () => (await run.page.locator(css.overview).count()) === 1,
+        5_000,
+      ))
+    )
+      failures.push("arrange_window did not show the Agents overview")
+    await asked(STRESS.arrangeWindow, { view: "panes" }, " panes")
+    if ((await panes()) !== 2)
+      failures.push(`back on the panes, ${await panes()} are on screen`)
+    // A tab the focused chat's panel does not hold is refused, not guessed.
+    said = await asked(
+      STRESS.showPanelTab,
+      { plugin: "stress", id: "no-such-tab" },
+      " missing",
+    )
+    if (said?.error !== "tab_not_found")
+      failures.push(`show_panel_tab of a missing tab said ${JSON.stringify(said)}`)
+    said = await asked(STRESS.focusPane, { threadId: run.main.id }, " focus")
+    const focused = said?.window?.windows?.[0]?.panes?.find((pane) => pane.focused)
+    if (focused?.threadId !== run.main.id)
+      failures.push(`focus_pane said ${JSON.stringify(said)}`)
+    if (failures.length) return
+    // Closing takes the other conversation's pane away; a second close finds
+    // it no longer on screen.
+    said = await asked(STRESS.closePane, { threadId: other }, " close")
+    if (said?.changed !== true || (await panes()) !== 1)
+      failures.push(`close_pane said ${JSON.stringify(said)} with ${await panes()} panes`)
+    said = await asked(STRESS.closePane, { threadId: other }, " gone")
+    if (said?.error !== "not_on_screen")
+      failures.push(`closing a pane not on screen said ${JSON.stringify(said)}`)
+    // Every change is on record: asked, then what came of it.
+    const namespace = join(run.stack.gateway.directory, "ci", "instances", INSTANCE)
+    const audit = join(namespace, "conversations", "audit", "window-control")
+    const records = existsSync(audit)
+      ? readdirSync(audit).map((name) =>
+          JSON.parse(readFileSync(join(audit, name), "utf8")),
+        )
+      : []
+    const closes = records.filter(
+      (record) =>
+        record.action?.kind === "close_pane" && record.action.conversationId === other,
+    )
+    const outcomes = closes.filter((record) => record.phase === "outcome")
+    if (
+      closes.filter((record) => record.phase === "requested").length < 1 ||
+      !outcomes.some((record) => record.outcome?.outcome === "applied") ||
+      !outcomes.some((record) => record.outcome?.code === "not_on_screen") ||
+      closes.some((record) => record.severity !== "destructive")
+    )
+      failures.push(`the window-control audit holds ${JSON.stringify(closes)}`)
+  },
+
   async webhook(run, step, failures) {
     // The panel creates this conversation and holds the default owner grants,
     // including credential.manage. Sharing must use that same conversation owner.
@@ -9474,6 +9585,27 @@ async function homeBesideNamed(page, failures) {
  * before the gateway has the change. Resolves with the answer that met
  * `holds`, else `null`; the window shows each answer.
  */
+/**
+ * The main conversation's agent calls a window tool (`phrase` names which)
+ * with `args`; what the tool answered, its error included, or null.
+ */
+async function windowControl(run, phrase, args, step, extra, failures) {
+  const text = prompt(run, phrase, step, `${extra} args:${JSON.stringify(args)} :args`)
+  await run.client.conversation.submit(run.client.conversation.prepare(run.main.id, text))
+  const { turn } = await settled(run, run.main.id, new Set(), text, "completed", failures)
+  if (!turn) return null
+  const reply = (turn.parts ?? []).map((part) => part.text ?? "").join("")
+  const at = reply.indexOf(SAYS.control)
+  try {
+    return JSON.parse(reply.slice(at + SAYS.control.length))
+  } catch {
+    failures.push(
+      `the window tool turn did not say what came of it: ${reply.slice(0, 120)}`,
+    )
+    return null
+  }
+}
+
 async function windowRead(run, conversationId, step, extra, failures, holds) {
   let said
   for (let attempt = 1; attempt <= 3; attempt += 1) {
