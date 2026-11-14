@@ -46,6 +46,8 @@ pub use root::CompositionRoot;
 #[cfg(unix)]
 mod artifact_command;
 mod auth_command;
+#[cfg(unix)]
+mod boat_runtime_settings;
 mod credential_registry;
 #[cfg(unix)]
 mod current_agent;
@@ -74,6 +76,8 @@ mod native_linking;
 mod native_pairing;
 #[cfg(unix)]
 mod opencode_profile;
+#[cfg(unix)]
+mod pool_settings;
 mod relay_command;
 #[cfg(unix)]
 mod tunnel;
@@ -82,8 +86,6 @@ mod voice;
 mod runtime_config;
 
 mod agent;
-#[cfg(test)]
-pub(crate) use agent::REVIEW_WAIT;
 
 // Where its consumers are: the provider's agent budgets and the conversation
 // service's deletion budgets are both built only with Unix process supervision.
@@ -99,8 +101,6 @@ mod background_command;
 #[cfg(unix)]
 mod background_tools;
 #[cfg(unix)]
-pub(crate) mod conversation_tools;
-#[cfg(unix)]
 mod environment_tools;
 #[cfg(unix)]
 mod mcp_servers;
@@ -112,6 +112,12 @@ mod provisioning;
 #[cfg(unix)]
 mod warm_up;
 
+#[cfg(test)]
+#[path = "../../tests/backup/gateway_restore.rs"]
+mod backup_gateway_restore_tests;
+#[cfg(test)]
+#[path = "../../tests/backup/restore.rs"]
+mod backup_restore_tests;
 mod cli;
 #[cfg(all(test, unix))]
 #[path = "../../tests/composition/paired_environment.rs"]
@@ -122,6 +128,9 @@ mod peer_reading_tests;
 #[cfg(test)]
 #[path = "../../tests/composition/read_only_online.rs"]
 mod read_only_online_tests;
+#[cfg(test)]
+#[path = "../../tests/webhooks/infrastructure/product.rs"]
+mod webhook_product_tests;
 
 mod webhooks;
 

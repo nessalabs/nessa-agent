@@ -147,7 +147,7 @@ fn segment(value: &str) -> bool {
 /// environment read is exempt from the seam rule, the interpretation of what it
 /// said is not.
 ///
-/// Mirrors `crates/nessa-server/src/env/paths.rs`, which is what actually
+/// Mirrors `crates/nessa-gateway/src/env/paths.rs`, which is what actually
 /// writes the file.
 pub(crate) fn service_namespace(
     base: Option<PathBuf>,

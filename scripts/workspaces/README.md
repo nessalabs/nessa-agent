@@ -68,7 +68,7 @@ was interrupted. Do not delete unrelated account VMs. This command is intentiona
 excluded from default CI: subscription access and cloud spending are required.
 
 Sanitized real provider response fixtures live under
-`crates/nessa-server/tests/workspaces/fixtures`; allocation interruption and
+`crates/nessa-conversation/tests/workspaces/fixtures`; allocation interruption and
 concurrency checks run in the normal Rust suite. Channel placement is covered by
 the desktop conversation stress test's `channel` step.
 

@@ -1846,7 +1846,7 @@ async fn a_composed_gateways_dropped_context_is_written_by_its_recorder() {
 
 #[test]
 fn agent_and_environment_built_ins_are_distinct_without_requiring_ssh_commands() {
-    let agent_tools = super::super::conversation_tools::ConversationTools::new();
+    let agent_tools = crate::mcp_servers::conversation_tools::ConversationTools::new();
     let environment_tools = super::super::environment_tools::EnvironmentTools::new(
         &crate::conversation::domain::CommandPolicy::new(["devbox".to_owned()], None, Vec::new()),
     );
@@ -1869,7 +1869,7 @@ fn agent_and_environment_built_ins_are_distinct_without_requiring_ssh_commands()
 #[tokio::test]
 async fn duplicate_built_in_names_are_refused_before_configured_servers_are_taken() {
     let namespace = tempfile::tempdir().unwrap();
-    let tools = super::super::conversation_tools::ConversationTools::new();
+    let tools = crate::mcp_servers::conversation_tools::ConversationTools::new();
     let mut config = agents(vec![server("configured", &[])]);
     let result = compose(
         &mut config,

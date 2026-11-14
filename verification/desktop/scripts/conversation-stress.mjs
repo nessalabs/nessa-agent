@@ -6,6 +6,7 @@ import {
   channelPlacementSettings,
   channelRuntimeSettings,
   openAccounts,
+  pickChoice,
 } from "./lib/boat-runtime-settings.mjs"
 import {
   changeVaultPassphrase,
@@ -467,7 +468,7 @@ const CURRENT_METADATA_VERSION = Number(
   /PRAGMA user_version = (\d+);\s*$/.exec(
     readFileSync(
       new URL(
-        "../../../crates/nessa-server/src/conversation/infrastructure/schema.sql",
+        "../../../crates/nessa-conversation/src/infrastructure/schema.sql",
         import.meta.url,
       ),
       "utf8",
@@ -476,7 +477,7 @@ const CURRENT_METADATA_VERSION = Number(
 )
 /**
  * The environment that places a conversation on any of the gateway's paired
- * workers (`POOL` in crates/nessa-server/src/conversation/application/placement.rs).
+ * workers (`POOL` in crates/nessa-conversation/src/application/placement.rs).
  */
 const POOL = "peer:any"
 /**
@@ -5876,9 +5877,8 @@ const steps = {
           .locator(css.channelSettingsDialog)
           .locator(`[data-channel-placement="${channel.channelId}"]`)
         const row = control.locator('[data-placement-row="threads"]')
-        await row.getByRole("button", { name: "Computer", exact: true }).click()
-        await control.locator('[data-placement-computer="threads"]').click()
-        await run.page.locator(`[data-placement-choice="${worker.name}"]`).click()
+        // Each connected computer is listed in the row's menu (#1340).
+        await pickChoice(run.page, row, worker.name)
         const shown = await waitFor(
           async () =>
             (await control.getAttribute("data-thread-placement")) === worker.name,
@@ -7535,6 +7535,14 @@ const steps = {
       )
       return
     }
+    // The gateway log carries what the conversation service said about this
+    // thread. Those lines come from a crate split out of the gateway, and a
+    // default log filter that named only the server crate dropped them all.
+    const said = parkingEvidence(run.stack.gateway.log(), parkingOffset, conversationId)
+    if (!said.accepted || said.targetParking === 0)
+      failures.push(
+        `the gateway log does not carry the conversation service's lines for this thread: ${JSON.stringify(said)}`,
+      )
     // A read opens its agent, as a read does, and the thread is still
     // closed: that agent is parked again once idle, though the window
     // follows it. Only a message opens the thread.
@@ -7809,6 +7817,92 @@ const steps = {
         path: join(run.evidence, `handoff-${run.engine}-fork.png`),
         scale: "css",
       })
+    // Forks into one id raced from three requests: one request sent twice at
+    // once, and another request. The id keeps one fork seed, so the retry is
+    // the same fork (or told to wait while the first runs), and the other
+    // request is refused; the fork records its copied turns once.
+    const racedId = randomUUID()
+    const racedRequest = randomUUID()
+    const raced = await Promise.allSettled([
+      run.client.conversation.fork(conversationId, {
+        conversationId: racedId,
+        requestId: racedRequest,
+      }),
+      run.client.conversation.fork(conversationId, {
+        conversationId: racedId,
+        requestId: racedRequest,
+      }),
+      run.client.conversation.fork(conversationId, {
+        conversationId: racedId,
+        requestId: randomUUID(),
+      }),
+    ])
+    if (
+      raced[2].status === "fulfilled" &&
+      raced.slice(0, 2).some((each) => each.status === "fulfilled")
+    )
+      failures.push("two requests both made the raced fork")
+    if (raced.every((each) => each.status === "rejected"))
+      failures.push(
+        `every raced fork was refused: ${raced.map((each) => each.reason?.message).join("; ")}`,
+      )
+    const madeIds = raced
+      .filter((each) => each.status === "fulfilled")
+      .map((each) => each.value.conversationId)
+    if (madeIds.some((made) => made !== racedId))
+      failures.push(`a raced fork request opened ${madeIds.join(", ")}, not ${racedId}`)
+    // A retry turned away while the first ran is let in once it has ended.
+    const again = await run.client.conversation
+      .fork(conversationId, { conversationId: racedId, requestId: racedRequest })
+      .then(
+        (made) => made,
+        (error) => error,
+      )
+    const owner = raced[2].status === "fulfilled" ? "other" : "first"
+    if (owner === "first" && again instanceof Error)
+      failures.push(
+        `a retry of the raced fork was refused after it was made: ${again.message}`,
+      )
+    if (
+      owner === "first" &&
+      !(again instanceof Error) &&
+      again.conversationId !== racedId
+    )
+      failures.push(
+        `a retry of the raced fork opened ${again.conversationId}, not ${racedId}`,
+      )
+    run.checked.push(racedId)
+    const racedView = await run.client.conversation.read(racedId)
+    const racedForks = racedView.handoffs.filter((each) => each.kind === "fork")
+    if (racedForks.length !== 1 || (racedForks[0].turns?.length ?? 0) !== 2)
+      failures.push(
+        `the raced fork recorded ${racedForks.length} forks with ${racedForks[0]?.turns?.length ?? "no"} turns, not one with the source's 2`,
+      )
+    // The raced fork is a chat like any other: opened from its row and
+    // talked to through the composer, its reply in the window and the view.
+    await openStressConversation(run.page, racedId, racedView.title ?? "")
+    if (
+      !(await run.page
+        .locator(`${css.handoffLine}[data-handoff="fork"]`)
+        .first()
+        .waitFor({ timeout: 10_000 })
+        .then(() => true)
+        .catch(() => false))
+    )
+      failures.push("the window did not open the raced fork on its copied turns")
+    const inRaced = prompt(run, STRESS.reply, step, " in raced fork")
+    const racedSeen = await send(run, racedId, inRaced, failures, new Set())
+    const { turn: racedTurn } = await settled(
+      run,
+      racedId,
+      racedSeen,
+      inRaced,
+      "completed",
+      failures,
+    )
+    carriedBy(racedTurn, target.modelId, "the raced fork", first, failures)
+    if (!(await carriedShown(run.page, target.modelId, inRaced)))
+      failures.push("the window does not show the raced fork's own reply")
     // The source is as it was.
     const source = await run.client.conversation.read(conversationId)
     if (source.messages.length !== 2)
@@ -9575,7 +9669,11 @@ async function setupWindow(run, prepare) {
   })
   await page.goto(`${new URL(run.page.url()).origin}/index.html?surface=setup`)
   await page.locator(".nessa-setup-window").waitFor()
-  await unlockRequestedVault(run.client, page)
+  // Onboarding does not ask for the vault on its own (#1340), locked or not:
+  // nothing in it needs protected data, so no unlock dialog is drawn.
+  await page.waitForTimeout(1500)
+  if ((await page.locator("[data-vault-dialog]").count()) !== 0)
+    throw new Error("the setup window opened a vault dialog on its own")
   return page
 }
 

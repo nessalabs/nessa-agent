@@ -15,10 +15,10 @@ crate=Path(workspace.name)
 (crate/'src').mkdir()
 (crate/'Cargo.toml').write_text((HERE/'Cargo.toml.template').read_text())
 http_copy=crate/'src/http.rs'
-identity=ROOT/'crates/nessa-server/src/external_events/domain/value_objects/identity.rs'
+identity=ROOT/'crates/nessa-gateway/src/external_events/domain/value_objects/identity.rs'
 harness=(HERE/'harness.rs').read_text().replace('@IDENTITY_SOURCE@',identity.as_posix()).replace('@HTTP_COPY@',http_copy.as_posix())
 (crate/'src/lib.rs').write_text(harness)
-source=(ROOT/'crates/nessa-server/src/external_events/entrypoint/http.rs').read_text()
+source=(ROOT/'crates/nessa-gateway/src/external_events/entrypoint/http.rs').read_text()
 tests=(HERE/'http-tests.rs').read_text()
 path=http_copy
 cmd=['cargo','test','--offline','--manifest-path',str(crate/'Cargo.toml'),'--lib','probe_tests','--','--test-threads=1']

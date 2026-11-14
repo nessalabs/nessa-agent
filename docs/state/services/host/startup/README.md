@@ -33,7 +33,7 @@ sources:
   - "src/onboarding/adapters/agents.ts"
   - "src/onboarding/adapters/agents.test.ts"
   - "src/onboarding/ui/onboarding-readiness-timeout.test.tsx"
-  - "crates/nessa-server/src/agents/application/shared_readiness.rs"
+  - "crates/nessa-gateway/src/agents/application/shared_readiness.rs"
   - "verification/desktop/scripts/onboarding-readiness.mjs"
   - "src-tauri/src/agent_credentials/infrastructure/mod.rs"
   - "src-tauri/src/agent_credentials/infrastructure/unsupported.rs"

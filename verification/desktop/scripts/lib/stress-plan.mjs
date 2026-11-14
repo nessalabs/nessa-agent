@@ -103,7 +103,7 @@ export const KNOBS = {
   },
   handoffs: {
     default: 1,
-    what: "conversations switched to the other agent from the composer's picker (staged, taken back, picked again, made by the next send), then forked from a row's More menu, each talked to after",
+    what: "conversations switched to the other agent from the composer's picker (staged, taken back, picked again, made by the next send), then forked from a row's More menu, and forked again into one id by three racing requests (one fork made, its copied turns recorded once), each talked to after",
   },
   deletes: {
     default: 1,

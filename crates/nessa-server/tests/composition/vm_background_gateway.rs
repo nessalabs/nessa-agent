@@ -75,6 +75,9 @@ async fn serve() {
     };
     std::fs::create_dir_all(&fixture.root).unwrap();
     assert!(FIXTURE.set(fixture).is_ok());
+    // The driver reads this gateway's log as it reads the real one's, so it
+    // logs the same lines under the same filter.
+    crate::core::logging::init();
     CompositionRoot::serve(LocalProvisioning::Manual, &Launch::Standalone)
         .await
         .unwrap();

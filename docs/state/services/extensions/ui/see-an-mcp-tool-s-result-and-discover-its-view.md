@@ -8,8 +8,8 @@ parent: "extensions-ui"
 sources:
   - "docs/design/mcp-connections.md"
   - "crates/nessa-sdk/src/infrastructure/acp/sessions/forwarded.rs"
-  - "crates/nessa-server/src/mcp_servers/mod.rs"
-  - "crates/nessa-server/src/mcp_servers/infrastructure/tool_uis.rs"
+  - "crates/nessa-gateway/src/mcp_servers/mod.rs"
+  - "crates/nessa-conversation/src/mcp_servers/infrastructure/tool_uis.rs"
   - "crates/nessa-sdk/src/domain/mcp_apps/value_objects/tool_ui.rs"
   - "crates/nessa-sdk/tests/domain/mcp_apps.rs"
   - "crates/nessa-protocol/src/conversation/projection.rs"
@@ -48,7 +48,7 @@ stateDiagram-v2
 
 ## Further reading
 
-[Source](../../../../design/mcp-connections.md) · [Related source](../../../../../crates/nessa-server/src/mcp_servers/mod.rs) · [Related tests](../../../../../crates/nessa-sdk/tests/domain/mcp_apps.rs)
+[Source](../../../../design/mcp-connections.md) · [Related source](../../../../../crates/nessa-gateway/src/mcp_servers/mod.rs) · [Related tests](../../../../../crates/nessa-sdk/tests/domain/mcp_apps.rs)
 
 ## Model coverage
 

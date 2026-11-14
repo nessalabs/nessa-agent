@@ -8,20 +8,20 @@ summary: A local or cloud command can outlive its calling agent turn and resume 
 parent: gateway
 sourceRevision: "b957e8bdf5225ce6aabe3e6c7bf2228022851603"
 sources:
-  - crates/nessa-server/src/conversation/application/service/background_tasks.rs
-  - crates/nessa-server/src/conversation/domain/background_task/lifecycle.rs
-  - crates/nessa-server/src/conversation/infrastructure/background_tasks/mod.rs
-  - crates/nessa-server/src/conversation/infrastructure/background_tasks/runner.rs
+  - crates/nessa-conversation/src/application/service/background_tasks.rs
+  - crates/nessa-conversation/src/domain/background_task/lifecycle.rs
+  - crates/nessa-conversation/src/infrastructure/background_tasks/mod.rs
+  - crates/nessa-conversation/src/infrastructure/background_tasks/runner.rs
   - crates/nessa-server/src/composition/background_tools.rs
   - crates/nessa-server/src/composition/background_command.rs
-  - crates/nessa-server/src/conversation/infrastructure/background_tasks/io.rs
-  - crates/nessa-server/tests/conversation/background_io.rs
-  - crates/nessa-server/src/conversation/infrastructure/background_tasks/transport.rs
-  - crates/nessa-server/tests/conversation/background_transport.rs
+  - crates/nessa-conversation/src/infrastructure/background_tasks/io.rs
+  - crates/nessa-conversation/tests/conversation/background_io.rs
+  - crates/nessa-conversation/src/infrastructure/background_tasks/transport.rs
+  - crates/nessa-conversation/tests/conversation/background_transport.rs
   - crates/nessa-server/tests/background_run_binary.rs
-  - crates/nessa-server/tests/conversation/background_tasks.rs
-  - crates/nessa-server/src/conversation/infrastructure/workspaces.rs
-  - crates/nessa-server/tests/conversation/workspace_copies.rs
+  - crates/nessa-conversation/tests/conversation/background_tasks.rs
+  - crates/nessa-conversation/src/infrastructure/workspaces.rs
+  - crates/nessa-conversation/tests/conversation/workspace_copies.rs
   - src/desktop/workspace/adapters/gateway/gateway-steps.ts
   - src/desktop/workspace/model/transcript.ts
 diagramLinks: {}
@@ -203,7 +203,7 @@ retain these limits and the browser regression controls.
 
 ## Bounded rule model
 
-Owns one admitted task's first stop, immutable terminal outcome, interrupted cleanup uncertainty and one-way continuation disposition. Process execution, capacity admission, persistence CAS and delivery deduplication remain separate unmodeled boundaries. This finite abstraction checks safety only. It does not execute or verify the implementation, promise eventual completion, or qualify external effects. Existing source checkpoints and historical test receipts retain their earlier scope. The scoped model review inspected `crates/nessa-server/src/conversation/domain/background_task/lifecycle.rs`.
+Owns one admitted task's first stop, immutable terminal outcome, interrupted cleanup uncertainty and one-way continuation disposition. Process execution, capacity admission, persistence CAS and delivery deduplication remain separate unmodeled boundaries. This finite abstraction checks safety only. It does not execute or verify the implementation, promise eventual completion, or qualify external effects. Existing source checkpoints and historical test receipts retain their earlier scope. The scoped model review inspected `crates/nessa-conversation/src/domain/background_task/lifecycle.rs`.
 
 ## Source review checkpoint
 

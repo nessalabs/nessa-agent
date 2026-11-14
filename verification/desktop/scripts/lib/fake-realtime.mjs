@@ -1,6 +1,6 @@
 /**
  * A realtime voice provider, on this machine, for the stress check's `voice`
- * step: the one HTTP call the gateway makes (`crates/nessa-server/src/voice`)
+ * step: the one HTTP call the gateway makes (`crates/nessa-gateway/src/voice`)
  * answered as OpenAI documents it, and the call itself as a WebSocket that
  * speaks the same realtime events with no audio (the window's `scripted`
  * transport).

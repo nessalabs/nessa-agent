@@ -9,9 +9,9 @@ sourceRevision: "aa91831b5331d3461969f6a7be723a6d3325f29b"
 parent: sdk-runtime
 sources:
   - crates/nessa-sdk/src/application/agent_execution/agents/error.rs
-  - crates/nessa-server/src/conversation/application/service/scheduled_messages.rs
-  - crates/nessa-server/src/conversation/domain/scheduled_message.rs
-  - crates/nessa-server/src/conversation/infrastructure/scheduled_messages.rs
+  - crates/nessa-conversation/src/application/service/scheduled_messages.rs
+  - crates/nessa-conversation/src/domain/scheduled_message.rs
+  - crates/nessa-conversation/src/infrastructure/scheduled_messages.rs
   - docs/design/usage-limit-continuation.md
 diagramLinks: {}
 model:
@@ -70,7 +70,7 @@ The diagram follows one continuation row, not the preference command or the runn
 
 ## Further reading
 
-[Scheduling owner](../../../../../crates/nessa-server/src/conversation/application/service/scheduled_messages.rs) · [Durable row adapter](../../../../../crates/nessa-server/src/conversation/infrastructure/scheduled_messages.rs) · [Design and evidence](../../../../design/usage-limit-continuation.md)
+[Scheduling owner](../../../../../crates/nessa-conversation/src/application/service/scheduled_messages.rs) · [Durable row adapter](../../../../../crates/nessa-conversation/src/infrastructure/scheduled_messages.rs) · [Design and evidence](../../../../design/usage-limit-continuation.md)
 
 ## Model coverage
 

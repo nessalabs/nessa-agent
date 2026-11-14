@@ -11,12 +11,12 @@ sources:
   - crates/nessa-server/src/composition/github_tools.rs
   - crates/nessa-server/src/composition/github.rs
   - crates/nessa-server/src/composition/local_auth.rs
-  - crates/nessa-server/src/github/application/connections.rs
-  - crates/nessa-server/src/github/application/ports.rs
-  - crates/nessa-server/src/github/domain/repository.rs
-  - crates/nessa-server/src/github/infrastructure/api.rs
-  - crates/nessa-server/tests/github/reads.rs
-  - crates/nessa-server/tests/github/read_http.rs
+  - crates/nessa-gateway/src/github/application/connections.rs
+  - crates/nessa-gateway/src/github/application/ports.rs
+  - crates/nessa-gateway/src/github/domain/repository.rs
+  - crates/nessa-gateway/src/github/infrastructure/api.rs
+  - crates/nessa-gateway/tests/github/reads.rs
+  - crates/nessa-gateway/tests/github/read_http.rs
   - verification/desktop/scripts/conversation-stress.mjs
 diagramLinks: {}
 diagramDetails: []
@@ -107,4 +107,4 @@ remaining environment limits are recorded in [the credential evidence](../../../
 
 ## Bounded rule model
 
-Owns one brokered read's captured vault generation, stop-priority gates and stale response refusal. Replacement after an already returned answer does not retract it. Cedar source admission, response schema bounds and GitHub sign-in mutation lifecycle are separate obligations. This finite abstraction checks safety only. It does not execute or verify the implementation, promise eventual completion, or qualify external effects. Existing source checkpoints and historical test receipts retain their earlier scope. The scoped model review inspected `crates/nessa-server/src/github/application/connections.rs`.
+Owns one brokered read's captured vault generation, stop-priority gates and stale response refusal. Replacement after an already returned answer does not retract it. Cedar source admission, response schema bounds and GitHub sign-in mutation lifecycle are separate obligations. This finite abstraction checks safety only. It does not execute or verify the implementation, promise eventual completion, or qualify external effects. Existing source checkpoints and historical test receipts retain their earlier scope. The scoped model review inspected `crates/nessa-gateway/src/github/application/connections.rs`.

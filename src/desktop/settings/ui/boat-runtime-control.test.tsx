@@ -18,12 +18,22 @@ afterEach(async () => {
   host.remove()
 })
 const unlimited: BoatRuntimeSettings = { defaultLifetime: { mode: "never" } }
+/** Opens the lifetime menu by keyboard, as a person can, and picks `value`. */
 async function select(value: string) {
+  const button = host.querySelector<HTMLButtonElement>("[data-choice-trigger]")
+  if (!button) throw new Error("missing lifetime menu")
+  if (button.disabled) return
   await act(async () => {
-    const option = host.querySelector<HTMLButtonElement>(`[data-value="${value}"]`)
-    if (!option) throw new Error(`missing lifetime choice ${value}`)
-    option.click()
+    button.focus()
+    button.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }),
+    )
   })
+  const option = document.querySelector<HTMLElement>(
+    `[role="menuitemradio"][data-value="${value}"]`,
+  )
+  if (!option) throw new Error(`missing lifetime choice ${value}`)
+  await act(async () => option.click())
 }
 /** The choice the control shows as made. */
 function chosen() {

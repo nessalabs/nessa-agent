@@ -18,7 +18,7 @@ const PORT_UNDER_TEST: u16 = 7420;
 const RUNNING_GENERATION: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const TARGET_GENERATION: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 const INSTANCE: &str = "550e8400-e29b-41d4-a716-446655440000";
-/// The bytes `crates/nessa-server/src/core/startup_failure.rs` writes.
+/// The bytes `crates/nessa-gateway/src/core/startup_failure.rs` writes.
 fn gave_up_record(reason: &str, generation: &str) -> String {
     json!({
         "reason": reason,

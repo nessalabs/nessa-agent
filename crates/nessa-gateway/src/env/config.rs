@@ -1,0 +1,25 @@
+//! Env var names, default values, and build-time version for [`super::environment`].
+
+/// Process environment variable names (`NESSA_*`).
+pub mod key {
+    pub const DATA_DIR: &str = "NESSA_DATA_DIR";
+    pub const INSTANCE: &str = "NESSA_INSTANCE";
+    pub const HOME: &str = "HOME";
+    pub const UPTIME_BACKEND: &str = "NESSA_UPTIME_BACKEND";
+    pub const UPTIME_FIXED_MS: &str = "NESSA_UPTIME_FIXED_MS";
+    pub const STAGE: &str = "NESSA_STAGE";
+    pub const HOST: &str = "NESSA_HOST";
+    pub const PORT: &str = "NESSA_PORT";
+    /// The launchd service generation the desktop host registered a managed
+    /// gateway under. Set only in that plist, so its presence is what tells a
+    /// process it is the desktop's background service rather than a hand-run one.
+    pub const SERVICE_GENERATION: &str = "NESSA_SERVICE_GENERATION";
+}
+
+/// Fallback values when a var is unset.
+///
+/// The port is not here: it depends on the stage, and its one table lives in
+/// `protocol/defaults/gateway-ports.json` behind [`super::stage_port`].
+pub mod default {
+    pub const HOST: &str = "127.0.0.1";
+}

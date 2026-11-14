@@ -238,7 +238,7 @@ impl RecordedFailure {
 }
 
 /// The record's name, beside `gateway.log` in the stage's log directory. The
-/// server writes this same name; `crates/nessa-server/src/core/startup_failure.rs`
+/// server writes this same name; `crates/nessa-gateway/src/core/startup_failure.rs`
 /// is the other half of it.
 const RECORD_FILE: &str = "gateway-startup-failure.json";
 /// A record is a handful of fields. Anything larger is not one.
