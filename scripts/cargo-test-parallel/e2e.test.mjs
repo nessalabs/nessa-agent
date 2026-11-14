@@ -16,7 +16,7 @@ import test from "node:test"
 import { fileURLToPath } from "node:url"
 
 import { testExecutables } from "../cargo-test-parallel.mjs"
-import { withFailureAnnotations } from "./diagnostics.mjs"
+import { withFailureAnnotations } from "../process-failure.mjs"
 
 const runner = fileURLToPath(new URL("../cargo-test-parallel.mjs", import.meta.url))
 const cohortModule = "product::socket::tests::subscriptions::paired_lists::stress"

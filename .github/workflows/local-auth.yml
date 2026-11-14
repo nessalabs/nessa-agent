@@ -176,7 +176,7 @@ jobs:
           node-version: 24
       - name: Check portable Rust dependency graphs
         run: node scripts/check-runtime-dependencies.mjs --verify-fixture
-      - run: node --test scripts/cargo-test-parallel/e2e.test.mjs scripts/cargo-test-parallel/diagnostics.test.mjs
+      - run: node --test scripts/cargo-test-parallel/e2e.test.mjs scripts/process-failure.test.mjs
       - run: cargo fmt --all -- --check
       # This pure shared domain is small enough to report denied warnings
       # before its tests without paying a second workspace compile.
@@ -728,7 +728,7 @@ jobs:
         # install ceiling.
         run: bash scripts/desktop/install-linux-build-deps.sh webkit2gtk-driver xvfb
         timeout-minutes: 65
-      - run: node scripts/check-desktop.mjs
+      - run: node scripts/process-failure.mjs node scripts/check-desktop.mjs
       # Hosted Windows runners are administrators with UAC off, so this leg can
       # prove the Task Scheduler identity and cleanup agreement only for an
       # elevated caller, and declares that. The product's standard-user model

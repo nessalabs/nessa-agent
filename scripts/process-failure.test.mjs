@@ -1,12 +1,16 @@
 import assert from "node:assert/strict"
 import { createHash } from "node:crypto"
-import { readFileSync } from "node:fs"
+import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
+import { spawnSync } from "node:child_process"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
+import { fileURLToPath } from "node:url"
 import test from "node:test"
-import { withFailureAnnotations } from "./diagnostics.mjs"
+import { spawnProcess, withFailureAnnotations } from "./process-failure.mjs"
 
 function message(line) {
   assert.equal(line.split("\n").length, 2, "one workflow command line")
-  assert.match(line, /^::error title=Cargo test process failed::/)
+  assert.match(line, /^::error title=Check process failed::/)
   return decodeURIComponent(line.slice(line.indexOf("::", 2) + 2, -1))
 }
 
@@ -295,26 +299,190 @@ test("a reporting failure cannot replace the failed child's result or rejection"
   )
 })
 
-test("Windows keeps default libtest capture and the full unchanged selection and deadlines", () => {
+const cli = fileURLToPath(new URL("./process-failure.mjs", import.meta.url))
+
+function fixture(action) {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "nessa process failure-")))
+  try {
+    return action(root)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+}
+
+for (const code of [0, 1, 2, 101])
+  test(`actual CLI preserves child exit ${code}, argv, cwd, environment and streams`, () => {
+    fixture((root) => {
+      const child = join(root, "child.mjs")
+      writeFileSync(
+        child,
+        `console.log(JSON.stringify({args:process.argv.slice(2),cwd:process.cwd(),marker:process.env.NESSA_PROCESS_FAILURE_FIXTURE}));console.error('child stderr: 100%');process.exitCode=${code};\n`,
+      )
+      const args = ["space argument", "literal $(echo inert)", "🙂", "--flag"]
+      const result = spawnSync(
+        process.execPath,
+        [cli, process.execPath, child, ...args],
+        {
+          cwd: root,
+          env: {
+            ...process.env,
+            GITHUB_ACTIONS: "true",
+            NESSA_PROCESS_FAILURE_FIXTURE: "inherited without changing the child",
+          },
+          encoding: "utf8",
+          timeout: 30_000,
+        },
+      )
+      assert.equal(result.error, undefined)
+      assert.equal(result.status, code, result.stderr)
+      assert.deepEqual(JSON.parse(result.stdout), {
+        args,
+        cwd: root,
+        marker: "inherited without changing the child",
+      })
+      assert.ok(result.stderr.startsWith("child stderr: 100%\n"))
+      const annotations = result.stderr
+        .split("\n")
+        .filter((line) => line.startsWith("::error title=Check process failed::"))
+        .map((line) => line + "\n")
+      if (code === 0) assert.deepEqual(annotations, [])
+      else {
+        const report = assemble(annotations)
+        assert.ok(report.includes(`exited with ${code}`))
+        assert.ok(report.includes("child stderr: 100%"))
+        assert.ok(report.includes(JSON.stringify(args)))
+      }
+    })
+  })
+
+test("local CLI forwards a failure without producing CI annotations", () => {
+  const result = spawnSync(
+    process.execPath,
+    [cli, process.execPath, "-e", "console.error('local failure');process.exitCode=2"],
+    {
+      env: { ...process.env, GITHUB_ACTIONS: "false" },
+      encoding: "utf8",
+      timeout: 30_000,
+    },
+  )
+  assert.equal(result.error, undefined)
+  assert.equal(result.status, 2)
+  assert.equal(result.stdout, "")
+  assert.equal(result.stderr, "local failure\n")
+})
+
+test("CLI spawn rejection remains failure and missing executable prints usage", () => {
+  fixture((root) => {
+    const command = join(root, "executable-that-does-not-exist")
+    const result = spawnSync(process.execPath, [cli, command], {
+      env: { ...process.env, GITHUB_ACTIONS: "true" },
+      encoding: "utf8",
+      timeout: 30_000,
+    })
+    assert.equal(result.error, undefined)
+    assert.equal(result.status, 1)
+    assert.equal(result.stdout, "")
+    assert.match(result.stderr, /::error title=Check process failed::/)
+    assert.ok(result.stderr.includes(command))
+    const missing = spawnSync(process.execPath, [cli], {
+      env: { ...process.env, GITHUB_ACTIONS: "true" },
+      encoding: "utf8",
+      timeout: 30_000,
+    })
+    assert.equal(missing.error, undefined)
+    assert.equal(missing.status, 1)
+    assert.equal(missing.stdout, "")
+    assert.equal(
+      missing.stderr,
+      "usage: process-failure.mjs <executable> [arguments...]\n",
+    )
+  })
+})
+
+test("the real adapter waits for inherited streams to close after the direct child exits", async () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "nessa process close-")))
+  try {
+    const grandchild = join(root, "late.mjs"),
+      child = join(root, "child.mjs")
+    writeFileSync(
+      grandchild,
+      "setTimeout(()=>{process.stdout.write('late stdout');process.stderr.write('late stderr')},50)\n",
+    )
+    writeFileSync(
+      child,
+      "import{spawn}from'node:child_process';const child=spawn(process.execPath,[process.argv[2]],{stdio:['ignore',process.stdout,process.stderr]});child.unref();process.exitCode=7\n",
+    )
+    let stdout = "",
+      stderr = ""
+    const code = await spawnProcess(process.execPath, [child, grandchild], {
+      cwd: root,
+      onStdout: (chunk) => {
+        stdout += chunk
+      },
+      onStderr: (chunk) => {
+        stderr += chunk
+      },
+    })
+    assert.equal(code, 7)
+    assert.equal(stdout, "late stdout")
+    assert.equal(stderr, "late stderr")
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test("the existing desktop workflow wraps its unchanged checker and runs portable process tests", () => {
   const workflow = readFileSync(
-    new URL("../../.github/workflows/local-auth.yml", import.meta.url),
+    new URL("../.github/workflows/local-auth.yml", import.meta.url),
     "utf8",
   )
-  const block = workflow
-    .split("\n  windows-server-tests:")[1]
-    ?.split("\n  local-auth:")[0]
-  assert.ok(block)
-  assert.doesNotMatch(
-    block,
-    /RUST_TEST_(?:NOCAPTURE|THREADS)|--nocapture|--show-output|--test-threads/,
-    "failed-test output must remain in libtest's final failure section",
+  assert.equal(
+    workflow.split("run: node scripts/process-failure.mjs node scripts/check-desktop.mjs")
+      .length - 1,
+    1,
   )
-  assert.match(block, /timeout-minutes: 95/)
-  assert.match(block, /timeout-minutes: 90/)
+  assert.equal(workflow.includes("run: node scripts/check-desktop.mjs"), false)
   assert.match(
-    block,
-    /run: node scripts\/cargo-test-parallel\.mjs --concurrency 2 --partition \$\{\{ matrix\.partition \}\} -- -p nessa-local-storage -p nessa-auth -p nessa-server/,
+    workflow,
+    /^ {6}- run: node scripts\/process-failure\.mjs node scripts\/check-desktop\.mjs\r?$/m,
   )
-  assert.match(block, /partition: \[server-conversation, server-other\]/)
-  assert.doesNotMatch(block, /continue-on-error/)
+  const desktop = workflow
+    .split("run: node scripts/process-failure.mjs node scripts/check-desktop.mjs")[1]
+    ?.split("\n      - ")[0]
+  assert.ok(desktop !== undefined)
+  assert.doesNotMatch(desktop, /continue-on-error|if:/)
+  const checker = readFileSync(new URL("./check-desktop.mjs", import.meta.url), "utf8")
+  assert.ok(checker.includes('"scripts/process-failure.test.mjs"'))
+})
+
+test("actual CLI bounds and escapes the failed tail while forwarding complete output", () => {
+  fixture((root) => {
+    const child = join(root, "large failure.mjs")
+    const output =
+      "discarded-prefix" +
+      "x".repeat(50_000) +
+      "\n100%\r\n::error title=Injected::payload%0A\nassertion failed: actual retained tail"
+    writeFileSync(
+      child,
+      `process.stdout.write(${JSON.stringify(output)});process.exitCode=101;\n`,
+    )
+    const result = spawnSync(process.execPath, [cli, process.execPath, child], {
+      env: { ...process.env, GITHUB_ACTIONS: "true" },
+      encoding: "utf8",
+      timeout: 30_000,
+    })
+    assert.equal(result.error, undefined)
+    assert.equal(result.status, 101)
+    assert.equal(result.stdout, output)
+    const annotations = result.stderr
+      .trimEnd()
+      .split("\n")
+      .map((line) => line + "\n")
+    assert.ok(annotations.every((line) => line.length < 3500))
+    const report = assemble(annotations)
+    assert.match(report, /Output truncated; last 16384 characters:/)
+    assert.doesNotMatch(report, /discarded-prefix/)
+    assert.ok(report.includes("100%\r\n::error title=Injected::payload%0A"))
+    assert.ok(report.endsWith(output.slice(-16_384)))
+  })
 })

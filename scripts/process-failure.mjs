@@ -1,3 +1,5 @@
+import { spawn } from "node:child_process"
+import { pathToFileURL } from "node:url"
 import { createHash } from "node:crypto"
 
 const OUTPUT_LIMIT = 16_384
@@ -32,13 +34,13 @@ function parts(text) {
 }
 
 // Workflow command data escapes keep test output inside one annotation, including
-// literal workflow commands. diagnostics.test.mjs exercises percent/CR/LF input.
+// literal workflow commands. process-failure.test.mjs exercises percent/CR/LF input.
 function annotation(message) {
   const data = message
     .replaceAll("%", "%25")
     .replaceAll("\r", "%0D")
     .replaceAll("\n", "%0A")
-  return `::error title=Cargo test process failed::${data}\n`
+  return `::error title=Check process failed::${data}\n`
 }
 
 /** Decorate execution with bounded diagnostics; the child owns its exit/result.
@@ -71,7 +73,7 @@ export function withFailureAnnotations(run, write) {
           )
       } catch {
         // Reporting must not replace the failed child's result or rejection.
-        // diagnostics.test.mjs exercises throwing writers and rejection getters.
+        // process-failure.test.mjs exercises throwing writers and rejection getters.
       }
     }
     let code
@@ -87,5 +89,47 @@ export function withFailureAnnotations(run, write) {
     }
     if (code !== 0) report(() => `exited with ${preview(code)}`)
     return code
+  }
+}
+
+export function spawnProcess(command, args, io) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, {
+      cwd: io.cwd,
+      stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: true,
+    })
+    child.stdout.setEncoding("utf8")
+    child.stderr.setEncoding("utf8")
+    child.stdout.on("data", (chunk) => io.onStdout?.(chunk))
+    child.stderr.on("data", (chunk) => io.onStderr?.(chunk))
+    child.on("error", reject)
+    child.on("close", (code) => resolve(code ?? 1))
+  })
+}
+
+/** The one owner of CI-only annotation activation for process callers. */
+export function runProcess(command, args, io) {
+  const run =
+    process.env.GITHUB_ACTIONS === "true"
+      ? withFailureAnnotations(spawnProcess, (line) => process.stderr.write(line))
+      : spawnProcess
+  return run(command, args, io)
+}
+
+const invoked = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href
+if (invoked) {
+  try {
+    const [command, ...args] = process.argv.slice(2)
+    if (!command)
+      throw new Error("usage: process-failure.mjs <executable> [arguments...]")
+    process.exitCode = await runProcess(command, args, {
+      cwd: process.cwd(),
+      onStdout: (chunk) => process.stdout.write(chunk),
+      onStderr: (chunk) => process.stderr.write(chunk),
+    })
+  } catch (error) {
+    process.stderr.write(`${error.message}\n`)
+    process.exitCode = 1
   }
 }

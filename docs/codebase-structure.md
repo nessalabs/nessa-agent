@@ -1204,6 +1204,13 @@ the complete selection. The [execution map and failure table](../scripts/cargo-t
 link unit, real-process and workflow-contract coverage; `scripts/ci-result.mjs`
 owns the required-check decision.
 
+[`scripts/process-failure.mjs`](../scripts/process-failure.mjs) owns the shared
+streaming child adapter and bounded CI failure annotations. The Cargo runner
+uses it; the existing desktop CI step wraps its unchanged checker with its CLI.
+The [execution and reporting contract](../scripts/process-failure/README.md)
+keeps diagnostic failure separate from the child result. Portable actual-process
+tests in `scripts/process-failure.test.mjs` also run through the desktop checker.
+
 ## Cloud development preparation
 
 [`scripts/cloud-startup.sh`](../scripts/cloud-startup.sh) owns Cloud setup and

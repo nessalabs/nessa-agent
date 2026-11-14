@@ -11,7 +11,8 @@ built: the build and the doctests keep the full package arguments, so Cargo
 unifies features exactly as a full run does. The Linux leg passes the crates
 `scripts/ci-plan.mjs` says a pull request can reach; an empty value runs all.
 
-The Windows jobs build the same eight packages with the same flags. The
+The Windows jobs build the same declared package selection with the same flags
+(`RUST_TEST_PACKAGES` in `../ci-plan.mjs`). The
 `server-conversation` and `server-other` partitions resolve `nessa-server` and
 its library target from `cargo metadata`, match the artifact's package ID,
 target name and kind, and require exactly one library executable. The four seeded paired-catalogue
@@ -25,46 +26,11 @@ with three complementary filters across the jobs. Linux/macOS use `all`, unchang
 Unit and real process tests assert the case union and intersection; workflow-contract
 tests hold the build arguments, platform coverage, guards and aggregate needs.
 
-On GitHub Actions, `diagnostics.mjs` retains the existing last 16,384 output
-characters from each failed child and forwards the original chunks unchanged.
-It reports that retained tail in escaped error annotations, each at most 3500
-UTF-16 units including its header. The bounded parts split on Unicode code
-point boundaries. The invocation and rejection previews each retain at most
-1024 UTF-16 units; a longer preview names its original length and SHA-256. These
-preview bounds do not crowd out the captured output tail or change the child's
-command, argument references, exit result or rejected error.
-
-| Event | Reporting action | Execution outcome |
-| --- | --- | --- |
-| Output arrives | Retain the bounded tail and forward the original chunk | Unchanged |
-| Child succeeds | Emit nothing, including for failure-shaped output | Return the same result |
-| Child fails | Emit correlated chunks, final part first | Return the same result |
-| Child rejects | Emit correlated chunks, final part first | Rethrow the same rejection |
-| Formatting or writing the report fails | Stop reporting | Preserve the child's failure |
-
-Every part names its natural index, total and the SHA-256 of the retained
-report's UTF-8 representation. Reconstruct only after receiving every index once,
-with one count and hash, and verifying that hash over the ordered content. The
-final part is emitted first so libtest's final failure section has priority.
-Content hashes correlate report parts, not process executions: identical reports
-cannot establish two distinct executions. No test output is interpreted to decide
-success, retry, selection, concurrency or a deadline.
-
-GitHub's runner caps each message at 4096 characters and retains ten errors per
-step ([runner implementation](https://github.com/actions/runner/blob/main/src/Runner.Worker/ExecutionContext.cs)).
-Several failed processes can therefore exhaust the step's annotation allowance.
-Cancellation, missing parts and GitHub masking can also leave incomplete evidence;
-a changed hash is incomplete evidence, not a reason to recover masked text. No
-annotation delivery or complete process-history guarantee is made. An assertion
-outside the retained tail is not captured. The full prefixed output remains in
-the normal log. Reporting failures cannot turn a failed child into a success.
-
-`diagnostics.test.mjs` simulates the 4096-character receiver, verifies complete
-tail reconstruction, bounded metadata, Unicode and command escaping, and rejects
-incomplete or conflicting parts. `e2e.test.mjs` puts 40,000 context characters
-before a real synthetic server-library assertion and recovers it from the bounded
-annotations while the runner still exits 1 for libtest's exit 101. It preserves
-all partition, build, harness, doctest and required-check assertions.
+The shared [process failure diagnostics](../process-failure/README.md) own
+streaming output and bounded failure annotations. This runner uses that owner
+on GitHub Actions; command selection and execution remain here. The real-Cargo
+`e2e.test.mjs` recovers an actual synthetic assertion from those annotations
+without changing the failed process result.
 
 
 The Windows server jobs use [default libtest capture](https://doc.rust-lang.org/book/ch11-02-running-tests.html#showing-function-output),
