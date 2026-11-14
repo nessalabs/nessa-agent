@@ -171,7 +171,7 @@ impl crate::application::ThreadEnvironments for Cloud {
     fn rest<'a>(
         &'a self,
         _: &'a ConversationId,
-        _: crate::application::WorkspaceRest,
+        _: crate::domain::RestCause,
     ) -> crate::application::EnvironmentFuture<'a, bool> {
         Box::pin(async { false })
     }
