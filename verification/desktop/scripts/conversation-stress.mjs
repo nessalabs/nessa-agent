@@ -467,7 +467,7 @@ const CURRENT_METADATA_VERSION = Number(
   /PRAGMA user_version = (\d+);\s*$/.exec(
     readFileSync(
       new URL(
-        "../../../crates/nessa-server/src/conversation/infrastructure/schema.sql",
+        "../../../crates/nessa-conversation/src/infrastructure/schema.sql",
         import.meta.url,
       ),
       "utf8",
@@ -476,7 +476,7 @@ const CURRENT_METADATA_VERSION = Number(
 )
 /**
  * The environment that places a conversation on any of the gateway's paired
- * workers (`POOL` in crates/nessa-server/src/conversation/application/placement.rs).
+ * workers (`POOL` in crates/nessa-conversation/src/application/placement.rs).
  */
 const POOL = "peer:any"
 /**

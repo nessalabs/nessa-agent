@@ -523,7 +523,7 @@ Each row above has at least one test, named after it:
   stay when a later update of the same server and tool does not repeat them
   (V1); past the view's budget they yield after the history and before the
   tool row (V2, V3) (`crates/nessa-protocol/tests/conversation/projection.rs`).
-  The schema bound is the SDK's (`nessa-server/tests/conversation/agreement.rs`).
+  The schema bound is the SDK's (`nessa-conversation/tests/conversation/agreement.rs`).
 - Desktop: a gateway tool with a `resourceUri` maps to a `widget` part. A
   running call with no arguments sends no `tool-input`; the arguments the
   connection carried are `tool-input` before `tool-result`

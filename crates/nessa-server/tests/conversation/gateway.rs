@@ -314,7 +314,7 @@ policy: &nessa_auth::adapters::cedar::CedarPolicyEvaluator::new().unwrap(),
         catalog["environments"] = json!(["agentbox", "build.example", "devbox"]);
         let root = tempfile::tempdir().unwrap();
         let service =
-            crate::conversation::application::lease_tests::service_with_command_hosts(root.path());
+            crate::conversation_test_support::service_with_command_hosts(root.path());
         let state = state
             .with_agents_catalog(serde_json::from_value(catalog).unwrap())
             .with_conversations(Arc::new(service));

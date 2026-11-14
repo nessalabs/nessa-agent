@@ -3,8 +3,8 @@ import test from "node:test"
 import { environmentPortViolations } from "./environment-port.mjs"
 
 const adapters = [
-  "crates/nessa-server/src/conversation/infrastructure/environment.rs",
-  "crates/nessa-server/src/conversation/infrastructure/ssh_environment/environment.rs",
+  "crates/nessa-conversation/src/infrastructure/environment.rs",
+  "crates/nessa-conversation/src/infrastructure/ssh_environment/environment.rs",
 ]
 
 test("each adapter implements the port and the service and composition name it", () => {
@@ -18,7 +18,7 @@ test("each adapter implements the port and the service and composition name it",
     )
   assert.deepEqual(
     environmentPortViolations(
-      "crates/nessa-server/src/conversation/application/service.rs",
+      "crates/nessa-conversation/src/application/service.rs",
       "environment: Arc<dyn Environment>,",
     ),
     [],
@@ -35,7 +35,7 @@ test("each adapter implements the port and the service and composition name it",
 test("a third adapter in product source is refused, wherever it is", () => {
   for (const path of [
     "crates/nessa-server/src/conversation/infrastructure/ssh.rs",
-    "crates/nessa-server/src/conversation/infrastructure/ssh_environment/link.rs",
+    "crates/nessa-conversation/src/infrastructure/ssh_environment/link.rs",
     "crates/nessa-env-serve/src/application/serve.rs",
     "crates/nessa-server/src/product/environments.rs",
   ])
@@ -100,7 +100,7 @@ test("the configuration's own Environment, a comment, and tests are not the port
   )
   assert.deepEqual(
     environmentPortViolations(
-      "crates/nessa-server/tests/conversation/leases.rs",
+      "crates/nessa-conversation/tests/conversation/leases.rs",
       "impl Environment for Substitute {}",
     ),
     [],

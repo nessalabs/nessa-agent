@@ -35,7 +35,7 @@ export const PORTABLE_RUST_PACKAGES = Object.freeze([
  * both name values from, so it reaches neither, nor a runtime.
  */
 export const PACKAGE_DENYLISTS = Object.freeze({
-  "nessa-client-core": Object.freeze(["nessa-server"]),
+  "nessa-client-core": Object.freeze(["nessa-server", "nessa-conversation"]),
   "nessa-protocol": Object.freeze([
     "axum",
     "hyper",

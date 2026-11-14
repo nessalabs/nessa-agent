@@ -978,8 +978,8 @@ row's tests are named by the row: the transitions in
 ## State and order table
 
 Each row has at least one test. Store tests are in
-`crates/nessa-server/tests/conversation/store.rs`, admission tests in
-`crates/nessa-server/tests/conversation/passive_read.rs`, socket tests in
+`crates/nessa-conversation/tests/conversation/store.rs`, admission tests in
+`crates/nessa-conversation/tests/conversation/passive_read.rs`, socket tests in
 `crates/nessa-server/tests/product/socket/subscriptions.rs`, unless named
 otherwise.
 

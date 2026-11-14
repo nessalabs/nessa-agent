@@ -10,16 +10,16 @@ sources:
   - "src/panel/ui/app.tsx"
   - "src/conversation/ui/conversation-queue.tsx"
   - "src/conversation/adapters/store/slice.ts"
-  - "crates/nessa-server/src/conversation/application/service.rs"
+  - "crates/nessa-conversation/src/application/service.rs"
   - "crates/nessa-sdk/src/application/agent_execution/agents/scheduling.rs"
   - "crates/nessa-sdk/src/application/agent_execution/agents/coordination.rs"
   - "crates/nessa-sdk/src/application/agent_execution/providers/steering.rs"
   - "crates/nessa-sdk/docs/agent_execution/scheduling.md"
   - "src/conversation/adapters/store/reorder.test.ts"
-  - "crates/nessa-server/tests/conversation/reorder.rs"
+  - "crates/nessa-conversation/tests/conversation/reorder.rs"
   - "crates/nessa-sdk/tests/application/agent_execution/agents/conformance/queue_order.rs"
   - "crates/nessa-sdk/tests/application/agent_execution/agents/scheduling.rs"
-  - "crates/nessa-server/tests/conversation/application.rs"
+  - "crates/nessa-conversation/tests/conversation/application.rs"
 diagramLinks: {}
 ---
 

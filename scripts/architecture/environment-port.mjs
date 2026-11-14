@@ -3,14 +3,14 @@ import { normalizedPath } from "./rust-boundaries.mjs"
 /** The files that may implement the port in product source: the in-process
  * adapter, and the SSH one (issue #699). */
 const ADAPTERS = [
-  "crates/nessa-server/src/conversation/infrastructure/environment.rs",
-  "crates/nessa-server/src/conversation/infrastructure/ssh_environment/environment.rs",
+  "crates/nessa-conversation/src/infrastructure/environment.rs",
+  "crates/nessa-conversation/src/infrastructure/ssh_environment/environment.rs",
 ]
 
 /** Where product source may name the port: the service, its adapter, and composition. */
 const HOLDERS = [
-  "crates/nessa-server/src/conversation/application/",
-  "crates/nessa-server/src/conversation/infrastructure/",
+  "crates/nessa-conversation/src/application/",
+  "crates/nessa-conversation/src/infrastructure/",
   "crates/nessa-server/src/composition/",
 ]
 

@@ -1,0 +1,289 @@
+use crate::domain::ConversationRefusal;
+use nessa_sdk::application::agent_execution::{
+    agents::AgentError, permissions::PermissionSelectionState, sessions::StorageError,
+};
+use std::{error::Error, fmt};
+
+/// Service errors retain internal SDK evidence. Each is answered by one safe
+/// protocol code (`error_code`), which the wire adapters expose.
+#[derive(Clone, Debug)]
+pub enum ConversationError {
+    InvalidInput,
+    /// The connected agent, or this gateway's configuration, takes no images.
+    ImagesUnsupported,
+    /// The message refers to an image this conversation has not uploaded.
+    AttachmentNotFound,
+    /// The conversation closed, but letting go of its uploads did not complete.
+    AttachmentRelease(Box<ConversationError>),
+    /// What a release of uploads could not complete, after all of it was
+    /// tried. The two are different failures and are kept apart: files still
+    /// in place, and transitions that happened without acknowledged evidence.
+    AttachmentCleanup {
+        storage_failures: usize,
+        audit_failures: usize,
+    },
+    /// Closing failed twice over: the agent did not close (or could not be
+    /// reached to close), and letting go of the uploads did not complete
+    /// either. Neither replaces the other.
+    CloseIncomplete {
+        agent: Box<ConversationError>,
+        release: Box<ConversationError>,
+    },
+    NotFound,
+    /// A restored conversation's recorded source is gone. Nothing was fetched
+    /// and no agent was started. Other conversations are unchanged.
+    DeferredSourceUnavailable,
+    /// The source no longer matches the version the backup recorded. Nothing
+    /// was fetched and no agent was started. Other conversations are unchanged.
+    DeferredSourceChanged,
+    /// The caller's conversation was deleted. Every command on it is refused
+    /// for good, a creation of its identity included
+    /// (`a_deleted_conversation_refuses_every_command_on_it`).
+    Deleted,
+    /// A share named a credential that is not an active paired device of
+    /// the conversation's owner.
+    ShareTargetNotPaired,
+    /// Cedar refused the capabilities this share would write. Nothing was
+    /// written. `policies` are the ids Cedar named; empty when no permit
+    /// matched.
+    CapabilitiesRefused {
+        policies: Vec<String>,
+    },
+    /// A share or revoke named the policy revision it was built on, and the
+    /// party's grant no longer holds it: changed or revoked since. Nothing
+    /// was changed.
+    ShareGrantChanged,
+    /// A note's request already left another note in the conversation:
+    /// another text, delivery, surface or authority under the same request.
+    /// Nothing was saved; the first note stands.
+    IdempotencyConflict,
+    /// The conversation keeps its most notes, or the note's author left its
+    /// most for now. Nothing was saved.
+    MessageQuotaExceeded,
+    /// A Drive grant's turn sent where its tools cannot all be checked
+    /// against the grant's policy: an agent that runs tools without asking
+    /// (OpenCode), an approval mode other than Ask, native hooks allowed, or
+    /// the policy unreadable. Nothing was saved or sent.
+    DrivePolicyUnenforceable,
+    /// A Drive grant's turn whose grant was revoked, or whose revision moved,
+    /// before the turn was saved. A queued turn saves nothing. A steer that
+    /// is queued rather than injected saves nothing. The command receipt is
+    /// settled as no effect, and retrying that same request is answered
+    /// `revoked` again. A new request is admitted only under the grant as it
+    /// stands now (row J31).
+    Revoked,
+    /// A native steer that was saved, then refused because the grant moved
+    /// before injection. The saved attempt is settled as refused and nothing
+    /// reached the agent. The command receipt is settled as refused after
+    /// save, and a retry of that same request is answered the same way and
+    /// is not admitted again (row J31).
+    RevokedAfterSave,
+    /// A native steer that was saved, then could not be checked because the
+    /// grant record could not be read before injection. Nothing reached the
+    /// agent. The command receipt is settled as unavailable after save, and
+    /// a retry of that same request is answered the same way and is not
+    /// admitted again (row J31).
+    UnavailableAfterSave,
+    /// A delete that happened — the conversation is tombstoned, left out of
+    /// every list, and refused — and did not finish. Repeating the delete
+    /// finishes it.
+    DeletionIncomplete(Box<DeletionFailures>),
+    /// The agent asked for is one this server has no configuration to start.
+    /// Kept apart from an invalid request because the request was valid and the
+    /// answer is about this installation, which is something setup can fix.
+    AgentNotConfigured,
+    /// A creation named a channel the caller has no channel under, or one
+    /// the policy does not let them use. Nothing was created.
+    ChannelNotFound,
+    /// The conversation on disk names an agent this build has no adapter for.
+    ///
+    /// Apart from [`Self::Metadata`] because the record was read perfectly well
+    /// and storage is working: what cannot be done is open it, and never on
+    /// this build. Telling the caller storage was unavailable would invite a
+    /// retry that can only fail the same way.
+    AgentUnsupported,
+    /// No lease could be granted to run this conversation's agent: here, the
+    /// sandbox profile it asks for is not one both its binding and the
+    /// environment can hold (row L2). Nothing ran, and the refusal is in the
+    /// conversation's records.
+    LeaseRefused(nessa_sdk::domain::agent_execution::leases::LeaseRefusal),
+    /// The conversation's latest lease is one this build cannot read, so its
+    /// agent is not opened under a new one (row L21): it may be a later
+    /// build's lease still running, and this build will never read it.
+    LeaseUnreadable,
+    /// The environment asked for, or the one the conversation was placed in,
+    /// is not an SSH host this gateway's `config.json` names. Nothing was
+    /// created or opened; adding the host to the configuration fixes it.
+    EnvironmentNotConfigured,
+    /// The message links a file by its path on this machine, and the
+    /// conversation runs somewhere that cannot read this machine's files (an
+    /// SSH host). Nothing was recorded or sent; images carry their bytes and
+    /// are taken.
+    LinkedFileUnreachable,
+    /// The conversation's placement record exists but this build cannot read
+    /// it, so where it runs is not known and it is not opened anywhere
+    /// (ADR 202, record scope).
+    PlacementUnreadable,
+    /// A v1 ownership row has not yet been assigned a model from verified
+    /// saved-session evidence or a recorded prospective default.
+    /// The selected or saved model cannot be run by this agent on this gateway.
+    ModelUnavailable,
+    /// The binding has not verified this approval preset for the model.
+    ApprovalModeUnavailable,
+    RequestConflict,
+    /// The new-child creation owner refused before acquiring the target.
+    /// Retains the original cause without claiming another slot as cleanup.
+    ChildCreationRefused(Box<ConversationError>),
+    TurnRunning,
+    ModelChangeNotApplied,
+    ModelChangeUncertain,
+    ApprovalModeNotApplied,
+    ApprovalModeUncertain,
+    Capacity,
+    /// The agent asking for a new thread already has as many of its threads
+    /// at work as the configuration lets one agent have
+    /// (`subagents.maxLiveThreads`). Its next report frees a place.
+    ThreadLimit,
+    Unavailable,
+    Metadata,
+    /// Catalogue request names another database incarnation.
+    CatalogueIdentityChanged,
+    /// Catalogue page or payload bound is outside the supported range.
+    CatalogueInvalidRequest,
+    Audit,
+    /// The SDK owns the submission receipt, but one or both mandatory evidence
+    /// stores did not acknowledge admission.
+    AdmissionEvidence {
+        audit: Option<AgentError>,
+        storage: Option<StorageError>,
+    },
+    /// Every failed owner is retained; successful cleanup of another owner never erases it.
+    Retirement(Vec<(String, AgentError)>),
+    /// Retirement attempted cleanup despite an unsettled admitted command.
+    RetirementAdmission {
+        cleanup_error: Option<Box<ConversationError>>,
+    },
+    Agent(AgentError),
+    /// A permission-answer failure retains whether the domain review was consumed.
+    PermissionAnswer {
+        error: AgentError,
+        selection: PermissionSelectionState,
+    },
+    Storage(StorageError),
+    /// An MCP App's call refused, or failed once sent.
+    McpApp(super::mcp_apps::McpAppError),
+}
+impl fmt::Display for ConversationError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "conversation service: {self:?}")
+    }
+}
+impl Error for ConversationError {}
+impl From<ConversationRefusal> for ConversationError {
+    fn from(refusal: ConversationRefusal) -> Self {
+        match refusal {
+            ConversationRefusal::NotFound => Self::NotFound,
+            ConversationRefusal::Deleted => Self::Deleted,
+            ConversationRefusal::Unavailable => Self::Metadata,
+        }
+    }
+}
+impl From<AgentError> for ConversationError {
+    fn from(error: AgentError) -> Self {
+        Self::Agent(error)
+    }
+}
+impl From<StorageError> for ConversationError {
+    fn from(error: StorageError) -> Self {
+        Self::Storage(error)
+    }
+}
+
+/// Why a conversation's agent could not be confirmed stopped.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum StopFailure {
+    /// The stop budget ran out while the stop was still under way: it may yet
+    /// be confirmed, so a deletion waiting on it is carried on.
+    OverBudget,
+    /// The stop itself failed, whatever the error — a close that answered
+    /// [`AgentError::Deadline`] of its own included.
+    Failed(AgentError),
+}
+
+/// What a delete that happened could not finish, each part kept apart.
+///
+/// The order is the delete's own. An agent not confirmed stopped means nothing
+/// after it was tried. A history that could not be read, an agent whose own
+/// record of the session could not be asked about, or a deletion record the
+/// sink did not take, means the history and summary were kept; uploads were
+/// still let go, since the stopped agent that could have used them is gone.
+/// A history still leased elsewhere is kept too, and so is its summary unless
+/// the tombstone had already settled the provider session.
+/// Otherwise each store was tried and each field says what remains in it.
+#[derive(Clone, Debug, Default)]
+pub struct DeletionFailures {
+    /// Background command cleanup or its durable evidence remains unresolved.
+    pub background_tasks: Option<super::background_tasks::BackgroundTaskError>,
+    /// The conversation's agent could not be confirmed stopped.
+    pub stop: Option<StopFailure>,
+    /// The saved history could not be read or erased: storage failed, or
+    /// retirement ended the wait for its lease. What was read and could not
+    /// be kept in the tombstone is [`Self::tombstone`]'s; a history
+    /// leased elsewhere is [`Self::history_leased_elsewhere`].
+    pub history: Option<ConversationError>,
+    /// The history was still leased elsewhere once the delete's wait
+    /// for it ran out, so the history was neither read nor erased. That wait
+    /// sets this, and so does discarding history this build cannot read when
+    /// its writer reservation is already held. Storage answering `Busy`
+    /// under the deletion's own lease does not
+    /// (`busy_under_the_deletion_s_own_lease_is_left_not_carried_on`) — and
+    /// it is what a deletion is carried on for until the lease is let go
+    /// (`a_deletion_left_for_a_held_lease_is_finished_once_it_is_let_go`).
+    pub history_leased_elsewhere: bool,
+    /// The agent could not be asked to delete its own record of the provider
+    /// session, or refused: `ConversationError::Agent` with the typed cause.
+    pub provider: Option<ConversationError>,
+    /// Every agent slot on this gateway was taken, so the agent was not asked.
+    /// Only the gateway's own slot bound sets this — no agent's answer can —
+    /// and it is what a deletion is carried on for until a slot frees.
+    pub no_agent_slot: bool,
+    /// The deletion record was not acknowledged.
+    pub audit: Option<ConversationError>,
+    /// Letting go of uploads did not complete.
+    pub attachments: Option<ConversationError>,
+    /// The summary could not be erased.
+    pub summary: Option<ConversationError>,
+    /// A scheduled continuation still held this conversation's prompt, or
+    /// the scrub of that payload did not finish.
+    pub schedule: Option<ConversationError>,
+    /// How far the deletion got could not be written to its tombstone, or
+    /// the tombstone could not be read back, so the next attempt repeats
+    /// what this one did.
+    pub tombstone: Option<ConversationError>,
+    /// A step after the fence panicked: the attempt ended there, and what it
+    /// left is what the tombstone says.
+    pub interrupted: bool,
+    /// Another attempt was carrying this deletion when the request arrived,
+    /// and it did not finish. The request waited for it and answered from
+    /// the tombstone it left, without a second attempt: what is left is
+    /// whatever that attempt left.
+    pub another_attempt: bool,
+}
+impl DeletionFailures {
+    /// Whether every part finished.
+    pub fn is_empty(&self) -> bool {
+        self.stop.is_none()
+            && self.background_tasks.is_none()
+            && self.history.is_none()
+            && !self.history_leased_elsewhere
+            && self.provider.is_none()
+            && !self.no_agent_slot
+            && self.audit.is_none()
+            && self.attachments.is_none()
+            && self.summary.is_none()
+            && self.schedule.is_none()
+            && self.tombstone.is_none()
+            && !self.interrupted
+            && !self.another_attempt
+    }
+}

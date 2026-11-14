@@ -10,10 +10,10 @@ sources:
   - "Cargo.toml"
   - "crates/nessa-client-core/src/read_only_sync/infrastructure/gateway/sources.rs"
   - "crates/nessa-client-core/src/read_only_sync/infrastructure/cache/records.rs"
-  - "crates/nessa-server/src/conversation/application/passive_read.rs"
-  - "crates/nessa-server/src/conversation/application/record_read/read.rs"
-  - "crates/nessa-server/src/conversation/infrastructure/record_read/source.rs"
-  - "crates/nessa-server/src/conversation/infrastructure/record_read/operation.rs"
+  - "crates/nessa-conversation/src/application/passive_read.rs"
+  - "crates/nessa-conversation/src/application/record_read/read.rs"
+  - "crates/nessa-conversation/src/infrastructure/record_read/source.rs"
+  - "crates/nessa-conversation/src/infrastructure/record_read/operation.rs"
   - "crates/nessa-server/src/product/socket.rs"
   - "crates/nessa-server/src/product/record_read/dispatch.rs"
   - "crates/nessa-protocol/src/product/record_read.rs"
@@ -21,8 +21,8 @@ sources:
   - "crates/nessa-protocol/src/product/generated.rs"
   - "protocol/product/v1.json"
   - "crates/nessa-server/src/product/state.rs"
-  - "crates/nessa-server/tests/conversation/passive_read.rs"
-  - "crates/nessa-server/tests/conversation/record_read/source.rs"
+  - "crates/nessa-conversation/tests/conversation/passive_read.rs"
+  - "crates/nessa-conversation/tests/conversation/record_read/source.rs"
   - "crates/nessa-client-core/tests/read_only_sync/gateway/session.rs"
   - "crates/nessa-client-core/tests/read_only_sync/gateway/deadline_stream.rs"
   - "crates/nessa-client-core/tests/read_only_sync/infrastructure/cache.rs"
@@ -79,7 +79,7 @@ The [gateway source adapters](../../../../../crates/nessa-client-core/src/read_o
 
 ## Further reading
 
-[Source](../../../../../crates/nessa-server/src/conversation/application/passive_read.rs) · [Related source](../../../../../crates/nessa-server/src/conversation/application/record_read/read.rs) · [Related tests](../../../../../crates/nessa-server/tests/conversation/passive_read.rs)
+[Source](../../../../../crates/nessa-conversation/src/application/passive_read.rs) · [Related source](../../../../../crates/nessa-conversation/src/application/record_read/read.rs) · [Related tests](../../../../../crates/nessa-conversation/tests/conversation/passive_read.rs)
 
 ## Model coverage
 

@@ -97,12 +97,12 @@ Policy bundles, each the decider for its question:
 | Question | Bundle |
 | --- | --- |
 | Which grants a credential may hold, and who may be issued one | `crates/nessa-auth/src/adapters/cedar/policies.cedar` (`hold.peer` allows a gateway `conversation.read` and `environment.serve`) |
-| What the owner may do with a conversation | `crates/nessa-server/src/conversation/infrastructure/access_policy/cedar/ownership.cedar` |
-| What a paired reader may do | `crates/nessa-server/src/conversation/infrastructure/access_policy/cedar/readers.cedar` |
-| Who may share | `crates/nessa-server/src/conversation/infrastructure/access_policy/cedar/shares.cedar` |
-| Which tools a turn may call | `crates/nessa-server/src/conversation/infrastructure/tool_policy/cedar/tools.cedar` |
-| Which host and program a command may use | `crates/nessa-server/src/conversation/infrastructure/tool_policy/cedar/commands.cedar` |
-| Who may edit a remembered permission rule | `crates/nessa-server/src/conversation/infrastructure/permission_rules/cedar/rules.cedar` (the owner; a grant is refused) |
+| What the owner may do with a conversation | `crates/nessa-conversation/src/infrastructure/access_policy/cedar/ownership.cedar` |
+| What a paired reader may do | `crates/nessa-conversation/src/infrastructure/access_policy/cedar/readers.cedar` |
+| Who may share | `crates/nessa-conversation/src/infrastructure/access_policy/cedar/shares.cedar` |
+| Which tools a turn may call | `crates/nessa-conversation/src/infrastructure/tool_policy/cedar/tools.cedar` |
+| Which host and program a command may use | `crates/nessa-conversation/src/infrastructure/tool_policy/cedar/commands.cedar` |
+| Who may edit a remembered permission rule | `crates/nessa-conversation/src/infrastructure/permission_rules/cedar/rules.cedar` (the owner; a grant is refused) |
 | Which agent or command a peer may lease on a host | `crates/nessa-env-serve/src/infrastructure/cedar/policies.cedar` |
 
 The socket has one admission, `admit_request` in
@@ -131,7 +131,7 @@ through `shares.cedar`.
 and the policy and admitted nothing new. [#793](https://github.com/nessalabs/nessa-agent/issues/793)
 lets a party signed in as its grantor drive the one conversation, text only,
 through `admit_request`. Tool checking
-(`crates/nessa-server/src/conversation/application/drive_tools.rs`) keeps the
+(`crates/nessa-conversation/src/application/drive_tools.rs`) keeps the
 policy of the admitted epoch and holds that revision across the save. A
 change of policy applies to the next turn.
 

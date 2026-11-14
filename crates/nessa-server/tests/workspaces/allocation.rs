@@ -1,8 +1,9 @@
 //! Allocation is tested through the application ports with controllable provider
 //! admission. No real account or secret is used in these ordering fixtures.
+use super::ConfigBoatRuntimeSettings;
 use crate::conversation::domain::{ChannelId, SettingsScope, VmLifetime, VmLifetimeSettings};
 use crate::mcp_servers::infrastructure::{ConfigCheck, ConfigJson, OsConfigFiles};
-use crate::workspaces::infrastructure::{ConfigBoatRuntimeSettings, RuntimeSettingsAudit};
+use crate::workspaces::infrastructure::RuntimeSettingsAudit;
 use crate::workspaces::{application::*, domain::*};
 use async_trait::async_trait;
 use nessa_auth::{

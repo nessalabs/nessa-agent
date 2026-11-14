@@ -294,6 +294,7 @@ fn frame_list(request_id: &str, list: McpServersListResult) -> OutgoingMessage {
 // Its callers are the settings' composition, Unix-only as the MCP relay is,
 // and the settings' test support on every platform.
 #[cfg(any(unix, test))]
+#[cfg_attr(not(unix), allow(dead_code, reason = "the Unix gateway composes it"))]
 pub(crate) fn list_fits(list: &ServerList) -> bool {
     // The longest request id a frame is taken with (`socket`): 256 bytes,
     // each written as six (`\u0001`).

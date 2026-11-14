@@ -8,11 +8,11 @@ summary: An occupied cache waits without spending validation steps; worker queue
 parent: gateway
 sourceRevision: "719dfce93892e09dcb95e86a060b6d2f42c8f3cc"
 sources:
-  - crates/nessa-server/src/conversation/infrastructure/record_read/operation.rs
-  - crates/nessa-server/src/conversation/infrastructure/record_read/source.rs
+  - crates/nessa-conversation/src/infrastructure/record_read/operation.rs
+  - crates/nessa-conversation/src/infrastructure/record_read/source.rs
   - crates/nessa-sdk/src/infrastructure/session_storage/terminal_discovery.rs
   - crates/nessa-sdk/src/infrastructure/session_storage/record_source.rs
-  - crates/nessa-server/tests/conversation/record_read/source.rs
+  - crates/nessa-conversation/tests/conversation/record_read/source.rs
   - docs/adr/done/746-a-busy-source-does-not-end-the-watch.md
   - docs/design/bounded-terminal-discovery.md
 diagramLinks: {}
@@ -64,4 +64,4 @@ This source checkpoint covers this narrow read/wait policy at the integrated mai
 
 ## Bounded rule model
 
-Owns bounded physical discovery queue timing, occupied-versus-validating work accounting and same-stream retry availability. Two validating steps stand for the unchanged 128-step bound; elapsed time is an environment event, not measured milliseconds. A busy unrelated stream stays checked out throughout. Caller/worker stop wakeups and client retry budgets are described source boundaries, not additional liveness claims. This finite abstraction checks safety only. It does not execute or verify the implementation, promise eventual completion, or qualify external effects. Existing source checkpoints and historical test receipts retain their earlier scope. The scoped model review inspected `crates/nessa-server/src/conversation/infrastructure/record_read/operation.rs`, `crates/nessa-server/src/conversation/infrastructure/record_read/source.rs`, `crates/nessa-sdk/src/infrastructure/session_storage/terminal_discovery.rs`.
+Owns bounded physical discovery queue timing, occupied-versus-validating work accounting and same-stream retry availability. Two validating steps stand for the unchanged 128-step bound; elapsed time is an environment event, not measured milliseconds. A busy unrelated stream stays checked out throughout. Caller/worker stop wakeups and client retry budgets are described source boundaries, not additional liveness claims. This finite abstraction checks safety only. It does not execute or verify the implementation, promise eventual completion, or qualify external effects. Existing source checkpoints and historical test receipts retain their earlier scope. The scoped model review inspected `crates/nessa-conversation/src/infrastructure/record_read/operation.rs`, `crates/nessa-conversation/src/infrastructure/record_read/source.rs`, `crates/nessa-sdk/src/infrastructure/session_storage/terminal_discovery.rs`.

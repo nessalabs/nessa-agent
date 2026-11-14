@@ -434,6 +434,32 @@ function splitArtifacts() {
     .join("\n")
 }
 
+test("the conversation crate's library tests go with the server's conversation cases", () => {
+  const all = testExecutables(splitArtifacts())
+  const conversation = {
+    ...all[0],
+    executable: "conversation.exe",
+    packageId: "conversation-id",
+    targetName: "nessa_conversation",
+  }
+  const integration = { ...conversation, executable: "it.exe", targetKinds: ["test"] }
+  const withCrate = {
+    packages: [
+      ...metadata.packages,
+      {
+        name: "nessa-conversation",
+        id: "conversation-id",
+        targets: [{ name: "nessa_conversation", kind: ["lib"] }],
+      },
+    ],
+  }
+  const split = partitionExecutables([...all, conversation, integration], withCrate)
+  assert.deepEqual(split.conversation, [conversation])
+  assert.ok(split.remaining.includes(integration))
+  assert.ok(!split.remaining.includes(conversation))
+  assert.deepEqual(partitionExecutables(all, metadata).conversation, [])
+})
+
 test("Cargo identity partitions exhaustively and disjointly, including Windows paths and colliding names", () => {
   const all = testExecutables(splitArtifacts())
   const split = partitionExecutables(all, metadata)

@@ -47,7 +47,7 @@ size and payload size consume sync-engine's exported `MAX_CATALOGUE_ENTRIES`
 and `MAX_CATALOGUE_PAYLOAD_BYTES`. The source stores no per-receiver state or
 history.
 
-The metadata tests in `crates/nessa-server/tests/conversation/store.rs` cover
+The metadata tests in `crates/nessa-conversation/tests/conversation/store.rs` cover
 creation, summary, archive, deletion and mode revisions; failure rollback;
 version refusal; owner isolation; damaged rows; a manifest/deletion race; and a
 620-entry pass with changes from a second open store between pages. The sync
