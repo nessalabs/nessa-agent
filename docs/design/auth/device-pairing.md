@@ -184,7 +184,7 @@ The auth PairingRecord is the one durable owner of invitation, attempt receipts,
 | `crates/nessa-auth/src/application/pairing/` | Current authorization/conditional-commit orchestration and caller-owned effect ports |
 | `crates/nessa-auth/src/adapters/local/registry/pairing/` | Pairing representation and atomic persistence in the existing registry authority |
 | `crates/nessa-auth/src/adapters/pairing/` | The selected OPAQUE implementation and canonical bounded crypto/wire conversion and retained private key/pending codec |
-| `crates/nessa-server/src/device_pairing/` | Native bounded transport adapter, owner commands and scoped status dispatch |
+| `crates/nessa-gateway/src/device_pairing/` | Native bounded transport adapter, owner commands and scoped status dispatch |
 | `crates/nessa-conversation/src/infrastructure/receiver_authority.rs` | Canonical receiver ensure/resume/fence, correlated once-only effects |
 | `crates/nessa-server/examples/` | Thin consuming native Rust client composition consuming the injected private pending port |
 

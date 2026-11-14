@@ -39,7 +39,7 @@ has not been run. The SDK
 (`crates/nessa-sdk/src/infrastructure/mcp/`) owns the protocol: the
 handshake, `tools/list` with each tool's `_meta.ui`, `resources/read` of an
 MCP App resource, forwarding a stand-in's traffic, and each session's
-process. The gateway (`crates/nessa-server/src/mcp_servers/`) owns the
+process. The gateway (`crates/nessa-gateway/src/mcp_servers/`) owns the
 socket, the `mcp-relay` command, and the lookup the conversation view asks.
 
 **Which conversation a stand-in belongs to.** What a harness is launched
@@ -1017,7 +1017,7 @@ not hash the MCP servers. Its inputs are listed once, on `fingerprint` in
   earlier fingerprint (one current contract). The same release re-runs the
   agent warm-up once, since the restoration fingerprint is part of the
   warm-up's key
-  ([`RuntimeFingerprint`](../../crates/nessa-server/src/agent_warm_up/domain/value_objects/runtime_fingerprint.rs));
+  ([`RuntimeFingerprint`](../../crates/nessa-gateway/src/agent_warm_up/domain/value_objects/runtime_fingerprint.rs));
   that costs one background launch and is harmless. The warm-up also keeps
   the launch fingerprint — the executable, the arguments, and the runtime
   environment — so a later release that only moves the staged runtime

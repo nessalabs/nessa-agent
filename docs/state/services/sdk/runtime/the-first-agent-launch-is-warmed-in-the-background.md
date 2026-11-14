@@ -7,13 +7,13 @@ summary: "Nessa can prepare the first agent launch by opening and closing a
   disposable session without sending a prompt."
 parent: "sdk-runtime"
 sources:
-  - "crates/nessa-server/src/agent_warm_up/application/service.rs"
-  - "crates/nessa-server/src/agent_warm_up/application/terminal.rs"
-  - "crates/nessa-server/src/agent_warm_up/domain/value_objects/runtime_fingerp\
+  - "crates/nessa-gateway/src/agent_warm_up/application/service.rs"
+  - "crates/nessa-gateway/src/agent_warm_up/application/terminal.rs"
+  - "crates/nessa-gateway/src/agent_warm_up/domain/value_objects/runtime_fingerp\
     rint.rs"
-  - "crates/nessa-server/src/agent_warm_up/infrastructure/records.rs"
+  - "crates/nessa-gateway/src/agent_warm_up/infrastructure/records.rs"
   - "crates/nessa-server/src/composition/warm_up.rs"
-  - "crates/nessa-server/tests/agent_warm_up/service.rs"
+  - "crates/nessa-gateway/tests/agent_warm_up/service.rs"
   - "crates/nessa-server/tests/composition/current_warm_up.rs"
   - "crates/nessa-server/tests/conversation/prepared_runtime.rs"
 diagramLinks: {}
@@ -60,7 +60,7 @@ stateDiagram-v2
 
 ## Further reading
 
-[Source](../../../../../crates/nessa-server/src/agent_warm_up/application/service.rs) · [Related source](../../../../../crates/nessa-server/src/agent_warm_up/application/terminal.rs) · [Related tests](../../../../../crates/nessa-server/tests/agent_warm_up/service.rs)
+[Source](../../../../../crates/nessa-gateway/src/agent_warm_up/application/service.rs) · [Related source](../../../../../crates/nessa-gateway/src/agent_warm_up/application/terminal.rs) · [Related tests](../../../../../crates/nessa-gateway/tests/agent_warm_up/service.rs)
 
 ## Model coverage
 

@@ -14,7 +14,7 @@ sources:
   - crates/nessa-sdk/src/application/agent_execution/providers/ports.rs
   - crates/nessa-sdk/src/domain/agent_execution/sessions/value_objects/attachment.rs
   - crates/nessa-sdk/src/infrastructure/claude_acp/sessions/binding.rs
-  - crates/nessa-server/src/agents/infrastructure/credentialed_claude.rs
+  - crates/nessa-gateway/src/agents/infrastructure/credentialed_claude.rs
   - crates/nessa-sdk/tests/infrastructure/acp/contracts/current_context.rs
   - docs/design/durable-sessions-resume.md
 model:

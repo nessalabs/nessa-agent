@@ -231,11 +231,11 @@ stateDiagram-v2
     end note
 ```
 
-The enforcers are [the authenticated gateway dispatcher](../../../crates/nessa-server/src/product/agent_install.rs),
+The enforcers are [the authenticated gateway dispatcher](../../../crates/nessa-gateway/src/product/agent_install.rs),
 [the shared installer](../../../crates/nessa-agent-install/src/application/install.rs),
 [managed adapter composition](../../../crates/nessa-server/src/composition/managed_adapter.rs),
 [the current-agent resolver](../../../crates/nessa-server/src/composition/current_agent.rs),
-and [Codex status-process cleanup](../../../crates/nessa-server/src/agents/infrastructure/codex.rs).
+and [Codex status-process cleanup](../../../crates/nessa-gateway/src/agents/infrastructure/codex.rs).
 The following table connects these diagrams' failure orderings to regression evidence.
 
 ## States and ordering

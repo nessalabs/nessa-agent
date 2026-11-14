@@ -195,7 +195,7 @@ the tested platform/storage guarantees and limits.
 
 Status of each gate on 2026-10-09 (tests are in the session storage files named
 above unless stated; the subscription tests are in
-`crates/nessa-server/tests/product/socket/subscriptions.rs`):
+`crates/nessa-gateway/tests/product/socket/subscriptions.rs`):
 
 | Gate | Evidence or remaining gap |
 | --- | --- |

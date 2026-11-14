@@ -31,6 +31,7 @@ fn every_source_of_the_lease_contract_names_the_protocol() {
     let mut found = Vec::new();
     sources(&crate_root.join("src"), false, &mut found);
     sources(&crate_root.join("../nessa-server/src"), false, &mut found);
+    sources(&crate_root.join("../nessa-gateway/src"), false, &mut found);
     sources(&crate_root.join("../nessa-env-serve/src"), true, &mut found);
     sources(&crate_root.join("../nessa-protocol/src"), false, &mut found);
     sources(&crate_root.join("../nessa-sdk/src"), false, &mut found);

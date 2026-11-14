@@ -414,22 +414,22 @@ test("concurrency is a bound, not a thread-count increase", async () => {
 const metadata = {
   packages: [
     {
-      name: "nessa-server",
+      name: "nessa-gateway",
       id: "server-id",
-      targets: [{ name: "nessa_server", kind: ["lib"] }],
+      targets: [{ name: "nessa_gateway", kind: ["lib"] }],
     },
   ],
 }
 function splitArtifacts() {
   const server = JSON.parse(
     artifact({
-      manifest: "C:\\repo\\crates\\nessa-server\\Cargo.toml",
-      name: "nessa_server",
+      manifest: "C:\\repo\\crates\\nessa-gateway\\Cargo.toml",
+      name: "nessa_gateway",
       executable: "C:\\repo\\target\\unpredictable.exe",
     }),
   )
   server.package_id = "server-id"
-  return [server, JSON.parse(artifact({ name: "nessa_server", kind: ["test"] }))]
+  return [server, JSON.parse(artifact({ name: "nessa_gateway", kind: ["test"] }))]
     .map((item) => JSON.stringify(item))
     .join("\n")
 }
@@ -460,6 +460,32 @@ test("the conversation crate's library tests go with the server's conversation c
   assert.deepEqual(partitionExecutables(all, metadata).conversation, [])
 })
 
+test("the composition library's tests go with the server's other cases", () => {
+  const all = testExecutables(splitArtifacts())
+  const composition = {
+    ...all[0],
+    executable: "composition.exe",
+    packageId: "composition-id",
+    targetName: "nessa_server",
+  }
+  const binary = { ...composition, executable: "bin.exe", targetKinds: ["bin"] }
+  const withCrate = {
+    packages: [
+      ...metadata.packages,
+      {
+        name: "nessa-server",
+        id: "composition-id",
+        targets: [{ name: "nessa_server", kind: ["lib"] }],
+      },
+    ],
+  }
+  const split = partitionExecutables([...all, composition, binary], withCrate)
+  assert.deepEqual(split.composition, [composition])
+  assert.ok(split.remaining.includes(binary))
+  assert.ok(!split.remaining.includes(composition))
+  assert.deepEqual(partitionExecutables(all, metadata).composition, [])
+})
+
 test("Cargo identity partitions exhaustively and disjointly, including Windows paths and colliding names", () => {
   const all = testExecutables(splitArtifacts())
   const split = partitionExecutables(all, metadata)
@@ -480,11 +506,11 @@ test("Cargo identity partitions exhaustively and disjointly, including Windows p
   for (const packages of [[], [...metadata.packages, ...metadata.packages]])
     assert.throws(
       () => partitionExecutables(all, { packages }),
-      /expected one nessa-server package/,
+      /expected one nessa-gateway package/,
     )
   for (const targets of [
     [],
-    [{ name: "nessa_server", kind: ["bin"] }],
+    [{ name: "nessa_gateway", kind: ["bin"] }],
     [...metadata.packages[0].targets, ...metadata.packages[0].targets],
   ])
     assert.throws(

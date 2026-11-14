@@ -213,7 +213,7 @@ const mcpServerRules = {}
 // generation fails, so the service and a client admit the same values.
 for (const [file, constant, published, name] of [
   [
-    "crates/nessa-server/src/logins/domain.rs",
+    "crates/nessa-gateway/src/logins/domain.rs",
     "MAX_SWITCHED_ON",
     schema.$defs.LoginsStatus.properties.devicesOn.maxItems,
     "LoginsStatus.devicesOn.maxItems",

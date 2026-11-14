@@ -8,10 +8,10 @@ parent: "sdk-runtime"
 sources:
   - "crates/nessa-conversation/src/application/mcp_apps.rs"
   - "crates/nessa-conversation/src/mcp_servers/infrastructure/resource_tickets.rs"
-  - "crates/nessa-server/src/mcp_servers/entrypoint/http.rs"
+  - "crates/nessa-gateway/src/mcp_servers/entrypoint/http.rs"
   - "crates/nessa-sdk/src/domain/mcp_apps/value_objects/ui_resource.rs"
   - "crates/nessa-conversation/tests/mcp_servers/resource_tickets.rs"
-  - "crates/nessa-server/tests/mcp_servers/http.rs"
+  - "crates/nessa-gateway/tests/mcp_servers/http.rs"
   - "crates/nessa-conversation/tests/conversation/app_calls.rs"
 diagramLinks:
   Consumed: "mcp-resource-tickets"

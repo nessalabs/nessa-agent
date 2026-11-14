@@ -167,7 +167,7 @@ initiator anywhere in the model.
 ### The ready-now piece: origin predicate
 
 Move `is_trusted_origin_value` and its tests to
-`crates/nessa-server/src/core/trusted_origin.rs` (`core` already holds
+`crates/nessa-gateway/src/core/trusted_origin.rs` (`core` already holds
 cross-context helpers like `error` and `logging`). `server/entrypoint/origin.rs`
 keeps `is_trusted_ws_origin` and calls the shared function. Update the three
 callers. No behaviour change.
@@ -265,7 +265,7 @@ sequenceDiagram
 
 Four commits, each leaving `cargo test --workspace` green:
 
-1. **Origin predicate** moved to `crates/nessa-server/src/core/trusted_origin.rs`;
+1. **Origin predicate** moved to `crates/nessa-gateway/src/core/trusted_origin.rs`;
    the two request entrypoints and the browser-session journal call it there.
 2. **Domain transitions** in `crates/nessa-auth/src/domain/transition.rs`, and
    `Credential::issued / revoke / supersede / restore_revoked_at` in `models.rs`.

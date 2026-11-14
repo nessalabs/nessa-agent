@@ -12,7 +12,7 @@ unifies features exactly as a full run does. The Linux leg passes the crates
 `scripts/ci-plan.mjs` says a pull request can reach; an empty value runs all.
 
 The Windows jobs build the same eight packages with the same flags. The
-`server-conversation` and `server-other` partitions resolve `nessa-server` and
+`server-conversation` and `server-other` partitions resolve `nessa-gateway` and
 its library target from `cargo metadata`, match the artifact's package ID,
 target name and kind, and require exactly one library executable. The four seeded paired-catalogue
 cases run together in the existing `remaining` job, alongside the other
@@ -20,7 +20,8 @@ executables and all doctests. The two server jobs run complementary cases
 on separate Windows runners: names containing `conversation::`, and all other
 ordinary names. The `nessa-conversation` library's tests, once those
 conversation cases, run in `server-conversation` too, matched by package ID
-and kind. All three jobs discover the complete server registry and validate all three actual
+and kind. The `nessa-server` library's tests, now composition only, run in
+`server-other` the same way. All three jobs discover the complete server registry and validate all three actual
 libtest filters before executing anything. Coverage is disjoint by artifact
 identity and case name, not executable: the same server executable is invoked
 with three complementary filters across the jobs. Linux/macOS use `all`, unchanged.

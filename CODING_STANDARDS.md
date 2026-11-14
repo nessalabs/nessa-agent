@@ -665,7 +665,7 @@ likely to be exercised any other way, so a double that can only succeed leaves
 them as unverified as no seam at all. Write the double; do not add a dependency
 for something that is a few lines of code.
 
-`crates/nessa-server/src/agents/application/ports.rs` is the precedent to copy.
+`crates/nessa-gateway/src/agents/application/ports.rs` is the precedent to copy.
 `AgentProbe` asks two narrow questions, answers with a typed `ProbeFailure`, and
 is injected from composition; the tests supply `StubAgentProbe`, `CountingProbe`,
 and `PanickingProbe`. That is what let the readiness endpoint be tested for

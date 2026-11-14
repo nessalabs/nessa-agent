@@ -1259,7 +1259,7 @@ phone's scanner is not this screen.
   repository. Disconnect removes the saved sign-in; a later agent still has no
   Nessa credential. _Check:_ `conversation-stress.mjs` (`github`, default and
   raised count), `crates/nessa-mcp/src/main.rs`'s command environment test, and
-  `crates/nessa-server/tests/github/mod.rs`'s read/disconnect tests.
+  `crates/nessa-gateway/tests/github/mod.rs`'s read/disconnect tests.
 
 ### MCP servers: the gateway's MCP servers
 

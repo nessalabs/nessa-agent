@@ -1,6 +1,6 @@
 # Calls `clippy::disallowed_methods` names. The lint is off in the workspace
-# table and turned on by the crates that hold the rule (nessa-server, outside
-# its tests), so this list binds only there.
+# table and turned on by the crates that hold the rule, in their lib.rs and outside
+# their tests, so this list binds only there.
 disallowed-methods = [
   # The one clock (CODING_STANDARDS.md): crate::timer::clock reads the time
   # and waits for it, so a paused test moves every deadline the code measures.

@@ -7535,6 +7535,14 @@ const steps = {
       )
       return
     }
+    // The gateway log carries what the conversation service said about this
+    // thread. Those lines come from a crate split out of the gateway, and a
+    // default log filter that named only the server crate dropped them all.
+    const said = parkingEvidence(run.stack.gateway.log(), parkingOffset, conversationId)
+    if (!said.accepted || said.targetParking === 0)
+      failures.push(
+        `the gateway log does not carry the conversation service's lines for this thread: ${JSON.stringify(said)}`,
+      )
     // A read opens its agent, as a read does, and the thread is still
     // closed: that agent is parked again once idle, though the window
     // follows it. Only a message opens the thread.
