@@ -2324,7 +2324,23 @@ async fn a_failing_peer_is_reported_and_the_other_is_read() {
 async fn a_read_past_the_cap_waits_for_a_slot() {
     let directory = tempfile::tempdir().unwrap();
     let mut peers = TwoPeers::start(directory.path()).await;
-    peers.enroll_both().await;
+    // These slots must contain actual reads: default-none legitimately stops
+    // after status and would never reach the relay's second-connection gate.
+    for (peer, relay, key) in [
+        (&peers.a, &peers.relay_a, &mut peers.key_a),
+        (&peers.c, &peers.relay_c, &mut peers.key_c),
+    ] {
+        let (enrolled, receiver) = enroll(peer, &peers.b, relay, true).await;
+        *key = enrolled;
+        let conversation = peer.conversation().await;
+        peer.grant(
+            ShareGrantTransition::Grant(ShareAccess::read()),
+            &conversation,
+            &receiver.unwrap(),
+        )
+        .await;
+        follow_granted(&peers.b, enrolled, &[conversation]).await;
+    }
     let (accepted_a, accepted_c) = (peers.relay_a.accepted(), peers.relay_c.accepted());
     peers.relay_a.hold_after(1);
     peers.relay_c.hold_after(1);
@@ -2373,8 +2389,18 @@ async fn a_read_past_the_cap_waits_for_a_slot() {
 async fn a_held_read_lists_when_the_records_change_not_on_every_tick() {
     let directory = tempfile::tempdir().unwrap();
     let mut peers = TwoPeers::start(directory.path()).await;
-    let (key_c, _) = enroll(&peers.c, &peers.b, &peers.relay_c, true).await;
+    let (key_c, receiver) = enroll(&peers.c, &peers.b, &peers.relay_c, true).await;
     peers.key_c = key_c;
+    let conversation = peers.c.conversation().await;
+    peers
+        .c
+        .grant(
+            ShareGrantTransition::Grant(ShareAccess::read()),
+            &conversation,
+            &receiver.unwrap(),
+        )
+        .await;
+    follow_granted(&peers.b, key_c, &[conversation]).await;
     peers.relay_c.hold_after(1);
     let poller = peers.b.poller(PollPolicy {
         interval: Duration::from_secs(60),
