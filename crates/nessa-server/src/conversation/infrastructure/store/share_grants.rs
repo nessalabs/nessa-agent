@@ -1354,14 +1354,15 @@ impl LocalConversationStore {
     }
 }
 
-/// The first admission of this request stands. A later call with the same
-/// conversation, action, and request keeps that file, including when the
-/// person link or the epoch has since changed.
+/// The first admission of this receiver's command stands. A later call with
+/// the same conversation, receiver, command, and request keeps that file,
+/// including when the person link or the epoch has since changed. Another
+/// receiver, or another command, is a different record.
 fn commit_grant_use(directory: &Path, admitted: &GrantUse) -> Result<(), ConversationError> {
     create_directory(directory).map_err(|_| ConversationError::Audit)?;
     let correlation = format!(
-        "{}:{}:{}",
-        admitted.conversation_id, admitted.action, admitted.request_id
+        "{}:{}:{}:{}",
+        admitted.conversation_id, admitted.receiver_id, admitted.command, admitted.request_id
     );
     let digest = Sha256::digest(correlation.as_bytes());
     let id = format!("grant-use-{digest:x}");
@@ -1375,6 +1376,7 @@ fn commit_grant_use(directory: &Path, admitted: &GrantUse) -> Result<(), Convers
         "target": {
             "conversationId": admitted.conversation_id.to_string(),
             "action": admitted.action,
+            "command": admitted.command,
         },
         "grant": {
             "principalId": admitted.principal_id.as_str(),
@@ -1438,6 +1440,7 @@ mod grant_use_audit {
         GrantUse {
             conversation_id: ConversationId::new("00000000-0000-4000-8000-000000000891").unwrap(),
             action: "conversation.comment",
+            command: "conversation.message".into(),
             principal_id: PrincipalId::new("gateway:peer").unwrap(),
             receiver_id: "receiver".into(),
             policy_revision: revision,
@@ -1465,6 +1468,27 @@ mod grant_use_audit {
         assert_eq!(stored["grant"]["policyRevision"], 3);
         assert!(stored["grant"]["personId"].is_null());
         assert_eq!(stored["requestId"], "note-1");
+        assert_eq!(stored["target"]["command"], "conversation.message");
+    }
+
+    #[test]
+    fn another_receiver_or_command_is_its_own_admission() {
+        let root = tempfile::tempdir().unwrap();
+        let directory = root.path().join("grant-uses");
+        let mut other_receiver = admitted(None, 3);
+        other_receiver.receiver_id = "other-receiver".into();
+        other_receiver.principal_id = PrincipalId::new("gateway:other").unwrap();
+        let mut other_command = admitted(None, 3);
+        other_command.command = "conversation.steer".into();
+        other_command.action = "conversation.drive";
+        commit_grant_use(&directory, &admitted(None, 3)).unwrap();
+        commit_grant_use(&directory, &other_receiver).unwrap();
+        commit_grant_use(&directory, &other_command).unwrap();
+        let files: Vec<_> = std::fs::read_dir(&directory)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .collect();
+        assert_eq!(files.len(), 3);
     }
 
     #[test]

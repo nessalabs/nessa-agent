@@ -552,11 +552,14 @@ pub(super) async fn admit_request(
     if matches!(action, AccessAction::Comment | AccessAction::Drive) {
         // The audit names the grant's principal and the epoch just read, and
         // the person when a same-person link is committed. A failure refuses
-        // the command before it runs. A retry keeps the first record.
+        // the command before it runs. A retry of this receiver's command
+        // keeps the first record. Another receiver, or another command, is
+        // recorded on its own.
         grants
             .record_use(GrantUse {
                 conversation_id: id,
                 action: action.name(),
+                command: method.to_owned(),
                 principal_id: held.principal_id.clone(),
                 receiver_id: binding.receiver_id.clone(),
                 policy_revision: held.policy_revision,

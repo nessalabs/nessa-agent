@@ -227,13 +227,18 @@ async fn deliverable(
 
 /// One comment or drive admission, written before the command runs.
 ///
-/// The first record for a conversation, action, and request stands. A retry
-/// keeps that principal, epoch, and person. The capability is not copied
+/// The first record for one receiver, one command, and one request on a
+/// conversation stands. A retry of that same call keeps its principal,
+/// epoch, and person. Another receiver, or another command, is its own
+/// record even when the request text matches. The capability is not copied
 /// here: Cedar read it from the grant.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GrantUse {
     pub conversation_id: ConversationId,
+    /// The Cedar action, `conversation.comment` or `conversation.drive`.
     pub action: &'static str,
+    /// The socket method, such as `conversation.send` or `conversation.steer`.
+    pub command: String,
     pub principal_id: PrincipalId,
     pub receiver_id: String,
     pub policy_revision: u64,
