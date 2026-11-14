@@ -4068,6 +4068,7 @@ fn discovery_on_an_active_peer_does_not_change_phase_or_enroll() {
             &before[0].invitation,
             &key,
             110,
+            None,
             Some("{\"field\":\"keyed\"}")
         )
         .is_err());
@@ -4080,7 +4081,7 @@ fn discovery_on_an_active_peer_does_not_change_phase_or_enroll() {
     let json = r#"{"field":"installed","generation":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=","mac":"AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA="}"#;
     fixture
         .store
-        .write_peer_discovery(&before[0].invitation, &key, 110, Some(json))
+        .write_peer_discovery(&before[0].invitation, &key, 110, None, Some(json))
         .unwrap();
     let listed = fixture.store.peer_discoveries(110).unwrap();
     assert_eq!(listed.len(), 1, "discovery does not add an enrollment");
@@ -4105,43 +4106,135 @@ fn discovery_selects_current_enrollment_and_binds_writes_to_its_invitation() {
         .end_pairing(old.record.id(), RuntimeEnd::Restarted, &Time)
         .unwrap();
     let current = peer_claim();
-    publish(&current);
+    let active = publish(&current);
+    let intent = PublicIntent::from_record(&active, active.claim_binding().unwrap().0).unwrap();
+    let credential = active.credential().unwrap();
     let historical = old.store.registry().unwrap().as_ref().unwrap().pairings[0].clone();
     {
         let mut guard = current.store.mutation_registry().unwrap();
         guard.as_mut().unwrap().pairings.insert(0, historical);
     }
     let key = current.channel.device_proof().key();
-    let selected = current.store.peer_discovery(&key, 110).unwrap().unwrap();
+    let selected = current
+        .store
+        .peer_discovery(&key, &intent, credential, 110)
+        .unwrap()
+        .unwrap();
     assert_eq!(selected.invitation, current.record.id());
     assert!(matches!(
         current
             .store
-            .write_peer_discovery(&old.record.id(), &key, 110, Some("historical")),
+            .write_peer_discovery(&old.record.id(), &key, 110, None, Some("historical")),
         Err(LocalStoreError::Conflict)
     ));
     current
         .store
-        .write_peer_discovery(&selected.invitation, &key, 110, Some("current"))
+        .write_peer_discovery(&selected.invitation, &key, 110, None, Some("current"))
         .unwrap();
+    assert!(matches!(
+        current.store.write_peer_discovery(
+            &selected.invitation,
+            &key,
+            110,
+            None,
+            Some("stale-overwrite")
+        ),
+        Err(LocalStoreError::Conflict)
+    ));
     let rows = current.store.peer_discoveries(110).unwrap();
     assert_eq!(rows[0].discovery_json, None);
     assert_eq!(rows[1].discovery_json.as_deref(), Some("current"));
     assert!(matches!(
-        current
-            .store
-            .write_peer_discovery(&selected.invitation, &key, 0, Some("expired")),
+        current.store.write_peer_discovery(
+            &selected.invitation,
+            &key,
+            0,
+            Some("current"),
+            Some("expired")
+        ),
         Err(LocalStoreError::Conflict)
     ));
     assert_eq!(
         current
             .store
-            .peer_discovery(&key, 110)
+            .peer_discovery(&key, &intent, credential, 110)
             .unwrap()
             .unwrap()
             .discovery_json
             .as_deref(),
         Some("current")
     );
-    assert!(current.store.peer_discovery(&key, 0).unwrap().is_none());
+    assert!(
+        !current
+            .store
+            .peer_discovery(&key, &intent, credential, 0)
+            .unwrap()
+            .unwrap()
+            .credential_current
+    );
+    assert!(current
+        .store
+        .peer_discovery(
+            &key,
+            &intent.with_attempt(AttemptId::new([71; 16])),
+            credential,
+            110
+        )
+        .unwrap()
+        .is_none());
+    assert!(current
+        .store
+        .peer_discovery(
+            &key,
+            &intent,
+            &CredentialId::new("different-credential").unwrap(),
+            110
+        )
+        .unwrap()
+        .is_none());
+}
+
+#[test]
+fn discovery_revocation_evidence_is_scoped_to_the_exact_issued_enrollment() {
+    let fixture = peer_claim();
+    let active = publish(&fixture);
+    let key = fixture.channel.device_proof().key();
+    let intent = PublicIntent::from_record(&active, active.claim_binding().unwrap().0).unwrap();
+    let credential = active.credential().unwrap();
+    assert!(
+        fixture
+            .store
+            .peer_discovery(&key, &intent, credential, 110)
+            .unwrap()
+            .unwrap()
+            .credential_current
+    );
+    cancel_stage(&fixture);
+    let ended = fixture
+        .store
+        .peer_discovery(&key, &intent, credential, 110)
+        .unwrap()
+        .unwrap();
+    assert!(!ended.credential_current);
+    assert!(!ended.phase_active);
+    assert!(fixture
+        .store
+        .peer_discovery(
+            &key,
+            &intent.with_attempt(AttemptId::new([99; 16])),
+            credential,
+            110
+        )
+        .unwrap()
+        .is_none());
+    assert!(fixture
+        .store
+        .peer_discovery(
+            &key,
+            &intent,
+            &CredentialId::new("not-this-credential").unwrap(),
+            110
+        )
+        .unwrap()
+        .is_none());
 }

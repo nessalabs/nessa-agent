@@ -694,7 +694,10 @@ impl PeerCommands {
     pub async fn open_peer_discovery<T: Send + 'static>(
         &self,
         key: DeviceKey,
-        exchange: impl FnOnce(&mut EnrollmentChannel<DeadlineStream>) -> Result<T, NativeClientError>
+        exchange: impl FnOnce(
+                &PeerRecord,
+                &mut EnrollmentChannel<DeadlineStream>,
+            ) -> Result<T, NativeClientError>
             + Send
             + 'static,
     ) -> Result<T, PeerError> {
@@ -705,9 +708,10 @@ impl PeerCommands {
         let PeerEntry::Readable(record) = found else {
             return Err(PeerError::Unavailable);
         };
-        if !matches!(record.phase(), PeerPhase::Active { .. }) {
+        let PeerPhase::Active { credential, .. } = record.phase() else {
             return Err(PeerError::Unavailable);
-        }
+        };
+        let credential = credential.clone();
         let stream = self
             .dial_peer(&record)
             .await
@@ -718,7 +722,9 @@ impl PeerCommands {
             self.clock.clone(),
         );
         client
-            .open_discovery(stream, exchange)
+            .open_discovery(stream, record.intent(), credential, move |channel| {
+                exchange(&record, channel)
+            })
             .await
             .map_err(|_| PeerError::Unavailable)
     }

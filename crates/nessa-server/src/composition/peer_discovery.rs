@@ -3,7 +3,10 @@
 use nessa_auth::{
     adapters::local::{GrantorPeer, LocalCredentialStore},
     application::ports::Clock,
-    domain::pairing::DeviceKey,
+    domain::{
+        pairing::{DeviceKey, PublicIntent},
+        CredentialId,
+    },
 };
 use nessa_client_core::pairing::NativeClientError;
 use nessa_peer_gateways::{
@@ -12,7 +15,9 @@ use nessa_peer_gateways::{
         maintain_announcement, AnnouncementStep, Discovery, DiscoveryPipe, DiscoveryRefusal,
         ExchangeError, GrantorDiscovery, Phase, Role, Session, TokenPeer, DISCOVERY_WINDOW,
     },
-    infrastructure::{platform_lan_announcer, LanRegistration, PeerCommands, PeerEntry, PeerPhase},
+    infrastructure::{
+        platform_lan_announcer, LanRegistration, PeerCommands, PeerEntry, PeerPhase, PeerRecord,
+    },
 };
 use nessa_protocol::pairing::socket::DeadlineStream;
 use nessa_protocol::pairing::EnrollmentChannel;
@@ -31,21 +36,34 @@ pub(super) struct RegistryDiscovery {
 }
 
 impl GrantorDiscovery for RegistryDiscovery {
-    fn serve(&self, peer: DeviceKey, pipe: &mut dyn DiscoveryPipe) -> Result<(), DiscoveryRefusal> {
+    fn serve(
+        &self,
+        peer: DeviceKey,
+        intent: PublicIntent,
+        credential: &CredentialId,
+        pipe: &mut dyn DiscoveryPipe,
+    ) -> Result<(), DiscoveryRefusal> {
         let now_seconds = self.clock.unix_milliseconds() / 1000;
         let found = self
             .store
-            .peer_discovery(&peer, now_seconds)
+            .peer_discovery(&peer, &intent, credential, now_seconds)
             .map_err(|_| DiscoveryRefusal::Unavailable)?;
         let Some(found) = found else {
             return Err(DiscoveryRefusal::NotPaired);
         };
+        if !found.credential_current {
+            return Err(DiscoveryRefusal::NotCurrent);
+        }
+        if !found.phase_active {
+            return Err(DiscoveryRefusal::NotPaired);
+        }
         let discovery = match found.discovery_json.as_deref() {
             None => Discovery::None,
             Some(json) => discovery_from_json(json).ok_or(DiscoveryRefusal::Unavailable)?,
         };
         let mut session = Session::new(Role::Grantor, Phase::Active, discovery);
         let store = &self.store;
+        let mut expected_discovery = found.discovery_json.clone();
         let exchanged = exchange(
             &mut session,
             pipe,
@@ -60,9 +78,12 @@ impl GrantorDiscovery for RegistryDiscovery {
                         &found.invitation,
                         &peer,
                         self.clock.unix_milliseconds() / 1000,
+                        expected_discovery.as_deref(),
                         json.as_deref(),
                     )
-                    .map_err(|_| io::Error::other("discovery record"))
+                    .map_err(|_| io::Error::other("discovery record"))?;
+                expected_discovery = json;
+                Ok(())
             },
             false,
         );
@@ -180,35 +201,38 @@ async fn drive_dialers(peers: &PeerCommands, stopped: &watch::Receiver<bool>) {
         let key = *record.key();
         let records = peers.records().clone();
         let _ = peers
-            .open_peer_discovery(key, move |channel| dial_discovery(&records, key, channel))
+            .open_peer_discovery(key, move |expected, channel| {
+                dial_discovery(&records, expected, channel)
+            })
             .await;
     }
 }
 
 fn dial_discovery(
     records: &Arc<nessa_peer_gateways::infrastructure::PeerRecords>,
-    key: DeviceKey,
+    expected: &PeerRecord,
     channel: &mut EnrollmentChannel<DeadlineStream>,
 ) -> Result<(), NativeClientError> {
     let found = records
-        .get(&key)
+        .get(expected.key())
         .map_err(|_| NativeClientError::Io(ErrorKind::Other))?
         .ok_or(NativeClientError::NoPending)?;
     let PeerEntry::Readable(record) = found else {
         return Err(NativeClientError::NoPending);
     };
-    if !record.needs_discovery_exchange() {
+    if !record.same_enrollment(expected) || !record.needs_discovery_exchange() {
         return Err(NativeClientError::NoPending);
     }
-    let mut session = Session::new(Role::Dialer, Phase::Active, record.discovery().clone());
+    let mut snapshot = *record;
+    let mut session = Session::new(Role::Dialer, Phase::Active, snapshot.discovery().clone());
     if matches!(session.discovery, Discovery::None) {
         let generation = random_bytes().ok_or(NativeClientError::Entropy)?;
         let private_key = random_bytes().ok_or(NativeClientError::Entropy)?;
         let commit = session
             .mint(generation, private_key)
             .ok_or(NativeClientError::Phase)?;
-        records
-            .write_discovery(&key, commit.discovery.clone(), commit.audit.as_ref())
+        snapshot = records
+            .write_discovery(&snapshot, commit.discovery.clone(), commit.audit.as_ref())
             .map_err(|_| NativeClientError::Io(ErrorKind::Other))?;
         session.discovery = commit.discovery;
     }
@@ -219,8 +243,8 @@ fn dial_discovery(
         &mut random_bytes,
         &mut |commit| {
             if commit.durable {
-                records
-                    .write_discovery(&key, commit.discovery.clone(), commit.audit.as_ref())
+                snapshot = records
+                    .write_discovery(&snapshot, commit.discovery.clone(), commit.audit.as_ref())
                     .map_err(|_| io::Error::other("discovery"))?;
             }
             Ok(())
@@ -229,10 +253,13 @@ fn dial_discovery(
     );
     match exchanged {
         Ok(()) => Ok(()),
-        Err(ExchangeError::Refused) => {
-            let _ = records.set_credential_current(&key, false);
+        Err(ExchangeError::NotCurrent) => {
+            records
+                .record_discovery_not_current(expected)
+                .map_err(NativeClientError::Storage)?;
             Err(NativeClientError::Refused)
         }
+        Err(ExchangeError::Refused | ExchangeError::Unavailable) => Err(NativeClientError::Refused),
         Err(ExchangeError::Io(error)) => Err(NativeClientError::Io(error.kind())),
         Err(ExchangeError::BadMessage) => Err(NativeClientError::Phase),
         Err(ExchangeError::Entropy) => Err(NativeClientError::Entropy),

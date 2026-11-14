@@ -5,7 +5,10 @@ use nessa_auth::{
         PairingCryptoError, RngCore,
     },
     application::pairing::{ClientPendingStore, PairingWorkerFault, PrivateStateError},
-    domain::pairing::{AttemptId, ConsentClass, DisclosedConsent, PublicIntent},
+    domain::{
+        pairing::{AttemptId, ConsentClass, DisclosedConsent, PublicIntent},
+        CredentialId,
+    },
 };
 use nessa_protocol::clock::Clock;
 use nessa_protocol::pairing::{
@@ -350,6 +353,8 @@ impl NativeEnrollmentClient {
     pub async fn open_discovery<T: Send + 'static>(
         &self,
         stream: TcpStream,
+        expected: PublicIntent,
+        credential: CredentialId,
         exchange: impl FnOnce(&mut EnrollmentChannel<DeadlineStream>) -> Result<T, NativeClientError>
             + Send
             + 'static,
@@ -362,6 +367,9 @@ impl NativeEnrollmentClient {
                 .load_credential()
                 .map_err(NativeClientError::Storage)?
                 .ok_or(NativeClientError::NoPending)?;
+            if saved.intent() != expected || saved.credential() != &credential {
+                return Err(NativeClientError::Storage(PrivateStateError::Conflict));
+            }
             let (key, pin, _) = saved.into_enrollment().into_parts();
             let identity = NativeIdentity::restore(key).map_err(NativeClientError::Crypto)?;
             stream.blocking().map_err(physical_error)?;
@@ -369,7 +377,13 @@ impl NativeEnrollmentClient {
                 .map_err(NativeClientError::Handshake)?;
             let mut channel = EnrollmentChannel::new(channel);
             begin_enrollment_phase(&deadline).map_err(physical_error)?;
-            send(&mut channel, NativePairingRequest::OpenDiscovery)?;
+            send(
+                &mut channel,
+                NativePairingRequest::OpenDiscovery {
+                    public: expected,
+                    credential,
+                },
+            )?;
             let result = exchange(&mut channel)?;
             check_deadline(&deadline).map_err(physical_error)?;
             Ok(result)

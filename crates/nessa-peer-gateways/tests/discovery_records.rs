@@ -73,3 +73,102 @@ fn installed_dialer_retries_after_restart_until_remote_effect_can_be_delivered()
     }
     .needs_discovery_exchange());
 }
+
+struct Keys;
+impl GatewayKeyStore for Keys {
+    fn restore_gateway_key(
+        &self,
+        _: &AudienceId,
+        _: &dyn Clock,
+    ) -> Result<Option<PrivateKeyMaterial>, PrivateStateError> {
+        Ok(Some(PrivateKeyMaterial::new(zeroize::Zeroizing::new(
+            [7; 32],
+        ))))
+    }
+    fn save_gateway_key(
+        &self,
+        _: &PrivateKeyMaterial,
+        _: &AudienceId,
+        _: &dyn Clock,
+    ) -> Result<(), PrivateStateError> {
+        Ok(())
+    }
+}
+struct Time;
+impl Clock for Time {
+    fn unix_milliseconds(&self) -> u64 {
+        1000
+    }
+}
+
+#[test]
+fn delayed_discovery_and_noncurrent_evidence_cannot_change_replacement_enrollment() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("root");
+    nessa_local_storage::create_directory(&path).unwrap();
+    nessa_local_storage::create_directory_beneath(&path, Path::new("peers")).unwrap();
+    let records = PeerRecords::open(
+        &path,
+        Path::new("peers"),
+        Arc::new(Keys),
+        AudienceId::new("gateway").unwrap(),
+        Arc::new(Time),
+    )
+    .unwrap();
+    let own = records.own_spki().unwrap();
+    let old = record();
+    records.write(&old, &own, false).unwrap();
+    let replacement = PeerRecord {
+        intent: PublicIntent::new(
+            InvitationId::new([9; 16]),
+            AttemptId::new([10; 16]),
+            ConsentIntentId::new([11; 16]),
+            1,
+            5000,
+            ConsentClass::PeerRead,
+        )
+        .unwrap(),
+        ..old.clone()
+    };
+    records.write(&replacement, &own, true).unwrap();
+    let installed = Discovery::Installed {
+        generation: [12; 32],
+        mac: [13; 32],
+    };
+    assert!(matches!(
+        records.write_discovery(&old, installed.clone(), None),
+        Err(PrivateStateError::Conflict)
+    ));
+    assert!(matches!(
+        records.record_discovery_not_current(&old),
+        Err(PrivateStateError::Conflict)
+    ));
+    let restored = records.read(&old.key, &own).unwrap().unwrap();
+    assert!(matches!(restored.discovery, Discovery::None));
+    assert!(restored.credential_current);
+    records
+        .write_discovery(&replacement, installed.clone(), None)
+        .unwrap();
+    // Simulate a committed write whose acknowledgement was lost: stale retry cannot overwrite it.
+    assert!(matches!(
+        records.write_discovery(
+            &replacement,
+            Discovery::Keyed {
+                generation: [22; 32],
+                private_key: [23; 32]
+            },
+            None
+        ),
+        Err(PrivateStateError::Conflict)
+    ));
+    let refreshed = records.read(&old.key, &own).unwrap().unwrap();
+    assert_eq!(refreshed.discovery, installed);
+    records
+        .write_discovery(&refreshed, installed, None)
+        .unwrap();
+    records.record_discovery_not_current(&replacement).unwrap();
+    let restored = records.read(&old.key, &own).unwrap().unwrap();
+    assert!(!restored.credential_current);
+    assert!(!restored.needs_discovery_exchange());
+    assert_eq!(restored.intent, replacement.intent);
+}

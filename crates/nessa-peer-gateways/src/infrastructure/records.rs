@@ -118,6 +118,16 @@ impl PeerRecord {
     pub fn phase(&self) -> &PeerPhase {
         &self.phase
     }
+    /// Immutable enrollment identity captured by a discovery attempt.
+    pub fn intent(&self) -> PublicIntent {
+        self.intent
+    }
+
+    /// Compare the enrollment and its issued credential, not just the reusable key.
+    pub fn same_enrollment(&self, expected: &Self) -> bool {
+        self.key == expected.key && self.intent == expected.intent && self.phase == expected.phase
+    }
+
     /// An eligible Active enrollment retries even after saving its own MAC.
     /// Local installation does not confirm the grantor received it.
     pub fn needs_discovery_exchange(&self) -> bool {
@@ -385,20 +395,23 @@ impl PeerRecords {
     }
 
     /// Store the discovery field and, when `commit` says the write is durable,
-    /// its audit, in the same record write. The phase is not changed. `Ok(None)`
-    /// when this peer has no record. An unreadable record is `Corrupt`.
+    /// its audit, in the same record write. The phase is not changed. A missing
+    /// or replaced enrollment is a conflict; an unreadable record is corrupt.
     pub fn write_discovery(
         &self,
-        key: &DeviceKey,
+        expected: &PeerRecord,
         discovery: Discovery,
         audit: Option<&Audit>,
-    ) -> Result<Option<PeerRecord>, PrivateStateError> {
+    ) -> Result<PeerRecord, PrivateStateError> {
         let _guard = self.lock();
         let own = self.own_spki()?;
-        let Some(found) = self.read(key, &own)? else {
-            return Ok(None);
+        let Some(found) = self.read(&expected.key, &own)? else {
+            return Err(PrivateStateError::Conflict);
         };
-        if !matches!(found.phase, PeerPhase::Active { .. }) {
+        if !found.same_enrollment(expected)
+            || found.discovery != expected.discovery
+            || !matches!(found.phase, PeerPhase::Active { .. })
+        {
             return Err(PrivateStateError::Conflict);
         }
         let left = PeerRecord {
@@ -407,30 +420,32 @@ impl PeerRecords {
             ..found.clone()
         };
         self.write(&left, &own, true)?;
-        Ok(Some(left))
+        Ok(left)
     }
 
-    /// Record that the peer credential is or is not current. The phase stays
-    /// what it was, including `Active` when the credential has expired.
-    pub fn set_credential_current(
+    /// Store definitive discovery NotCurrent evidence for this exact enrollment.
+    /// The phase stays what it was, including Active when the credential expired.
+    pub fn record_discovery_not_current(
         &self,
-        key: &DeviceKey,
-        current: bool,
-    ) -> Result<Option<PeerRecord>, PrivateStateError> {
+        expected: &PeerRecord,
+    ) -> Result<PeerRecord, PrivateStateError> {
         let _guard = self.lock();
         let own = self.own_spki()?;
-        let Some(found) = self.read(key, &own)? else {
-            return Ok(None);
+        let Some(found) = self.read(&expected.key, &own)? else {
+            return Err(PrivateStateError::Conflict);
         };
-        if found.credential_current == current {
-            return Ok(Some(found));
+        if !found.same_enrollment(expected) {
+            return Err(PrivateStateError::Conflict);
+        }
+        if !found.credential_current {
+            return Ok(found);
         }
         let left = PeerRecord {
-            credential_current: current,
+            credential_current: false,
             ..found.clone()
         };
         self.write(&left, &own, true)?;
-        Ok(Some(left))
+        Ok(left)
     }
 
     /// Where the retained cache of what `key` granted this gateway lives:

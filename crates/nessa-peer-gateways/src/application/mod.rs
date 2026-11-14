@@ -19,10 +19,10 @@
 mod discovery;
 pub use discovery::{
     announcement_bytes, announcement_txt, connection_allowed, decode_announcement,
-    discovery_from_json, discovery_to_json, exchange, instance_label, mac_key,
-    maintain_announcement, match_announcement, payload_from_txt, public_half, Announcement,
-    AnnouncementStep, Audit, Commit, Discovery, DiscoveryPipe, DiscoveryRefusal, ExchangeError,
-    GrantorDiscovery, Inbound, Outbound, Phase, PinnedMac, Role, Session, TokenPeer,
+    discovery_from_json, discovery_to_json, encode_discovery_refusal, exchange, instance_label,
+    mac_key, maintain_announcement, match_announcement, payload_from_txt, public_half,
+    Announcement, AnnouncementStep, Audit, Commit, Discovery, DiscoveryPipe, DiscoveryRefusal,
+    ExchangeError, GrantorDiscovery, Inbound, Outbound, Phase, PinnedMac, Role, Session, TokenPeer,
     DISCOVERY_WINDOW,
 };
 use nessa_auth::domain::{pairing::DeviceKey, PrincipalId};

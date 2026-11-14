@@ -1645,12 +1645,12 @@ remove the discovery key. A peer row with no discovery key is left out; alpha
 does not invent one.
 
 The discovery key is agreed after enrollment is `Active`, on the pinned
-session (`openDiscovery`). The dialer stores the field on the peer file. The
+session (`openDiscovery`, carrying the exact public enrollment intent and issued credential ID, not a bearer secret). Both stores compare the expected previous discovery state before each write, so overlapping attempts cannot replace a newer committed generation. The dialer stores the field on the peer file. The
 granting gateway stores it on the pairing record that already keeps that
 peer's pin and `class: "peer"`. The public half is X25519(private, basepoint
 9). The MAC key is HKDF-SHA256 of the shared secret, not the raw secret and
 not the enrollment PAKE. `openDiscovery` from a key that is not an Active
-paired gateway is refused and writes no enrollment.
+paired gateway is refused and writes no enrollment. Only a typed NotCurrent answer after the full request identity matches can stop the dialer’s announcement. Unknown enrollment, unsupported discovery, storage failure, and network loss do not infer revocation. Installed dialers read the grantor response on reconnect, not merely send their local installed state.
 
 ## What this part does not do
 

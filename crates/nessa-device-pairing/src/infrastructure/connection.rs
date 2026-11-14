@@ -13,7 +13,9 @@ use nessa_auth::{
     application::pairing::{DeviceConnectionProof, PairingStoreError, PairingWorkerFault},
     domain::pairing::{AttemptFailure, PublicIntent},
 };
-use nessa_peer_gateways::application::{DiscoveryPipe, GrantorDiscovery};
+use nessa_peer_gateways::application::{
+    encode_discovery_refusal, DiscoveryPipe, DiscoveryRefusal, GrantorDiscovery,
+};
 use nessa_protocol::clock::Clock;
 use nessa_protocol::pairing::socket::{
     begin_enrollment_phase, check_deadline, worker_fault, DeadlineError, DeadlineStream,
@@ -802,20 +804,24 @@ fn exchange<R: RngCore + CryptoRng>(
                 .admit(NativeConnectionFailure::ProductCapacity)
                 .map(Exchanged::ProductSelected);
         }
-        NativePairingRequest::OpenDiscovery => {
+        NativePairingRequest::OpenDiscovery { public, credential } => {
             let Some(discovery) = admissions.discovery.as_ref() else {
-                write_reply(channel, wire::encode_refused())?;
+                channel
+                    .send_envelope(&encode_discovery_refusal(DiscoveryRefusal::Unavailable))
+                    .map_err(frame_error)?;
                 return Ok(Exchanged::Finished);
             };
             let peer = channel.transport().device_proof().key();
             let served = {
                 let mut pipe = ChannelPipe { channel };
-                discovery.serve(peer, &mut pipe)
+                discovery.serve(peer, public, &credential, &mut pipe)
             };
             return match served {
                 Ok(()) => Ok(Exchanged::Finished),
-                Err(_) => {
-                    write_reply(channel, wire::encode_refused())?;
+                Err(reason) => {
+                    channel
+                        .send_envelope(&encode_discovery_refusal(reason))
+                        .map_err(frame_error)?;
                     Ok(Exchanged::Finished)
                 }
             };

@@ -2082,3 +2082,20 @@ slices so discovery does not become a second enrollment.
 | Re-pair the same gateway key after an earlier enrollment ends | Select the current Active credential and carry its invitation identity into each discovery write. Recheck its credential on commit; never write an older enrollment. |
 
 The scheduler periodically retries eligible Active records, including installed ones. This deliberately does not claim remote installation confirmation.
+
+#### Exact discovery attempt and authority
+
+A discovery attempt names the peer key, full enrollment public intent, and issued credential ID. The ID is not a bearer secret. `openDiscovery` carries the latter two over the pinned TLS connection, whose actual device proof supplies the key. This is the current discovery protocol, not a compatibility layer. The granting registry owns current credential evidence; transport diagnostics do not own it.
+
+| Ordering | Admission and durable effects | Retry / publication |
+| --- | --- | --- |
+| Dialer reads enrollment, then forget/re-enroll replaces the same key before opening | Native client compares the saved full intent and credential against the attempt snapshot before sending. Mismatch refuses the attempt. | The new enrollment is unchanged. |
+| Two streams for the same enrollment overlap | Discovery writes compare the exact previously observed discovery field under the store lock. Only a successful commit advances the stream’s expected snapshot; a stale stream returns conflict without replacing the winner. | Retry restores the committed state rather than overwriting a newer generation. |
+| Replacement occurs after opening or while an old answer is pending | Every local discovery commit and noncurrent-credential update compares the same full intent and credential under the record lock. Mismatch is a typed conflict; missing record is not a successful save. | No old generation or refusal changes the replacement. |
+| Grantor receives an exact enrollment/credential/key request | Resolve that invitation, verify public intent and credential binding against actual TLS key, and read its current credential evidence. | Only the matching current Active enrollment runs key agreement. |
+| Grantor knows that exact credential is revoked or expired | Return typed `NotCurrent`. Dialer records noncurrent only if its attempt identity still matches. | Stop that enrollment's announcement and discovery retries. Pairing phase is not rewritten. |
+| Unknown/mismatched enrollment, unsupported discovery, failed entropy/storage, or network loss | Return `NotPaired`, `Unavailable`, or the physical error. Generic JSON refusal is not credential evidence. No credential-current mutation follows. | Preserve prior state and retry. Do not claim remote completion. |
+| Installed dialer reconnects | Send installed, then read the grantor's response; local installation alone does not complete the exchange. | A definitive matching `NotCurrent` is observed even after installation. A healthy grantor acknowledges; a temporarily unavailable grantor does not poison the credential. |
+| Shutdown while a retry is pending | Withdraw publication independently, finish/join the current owned attempt, check stop before another peer. | No detached native worker and no new attempt after stop. |
+
+Discovery is not a new enrollment and does not repair a mismatched enrollment. Current credential evidence is admission-time evidence, not a promise that the peer remains reachable or authorized forever. Network loss is uncertainty, not proof of revocation.

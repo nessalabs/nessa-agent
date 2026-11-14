@@ -14,6 +14,9 @@ sources:
   - crates/nessa-peer-gateways/src/infrastructure/records.rs
   - crates/nessa-auth/src/adapters/local/registry/pairing/discovery.rs
   - crates/nessa-server/src/composition/peer_discovery.rs
+  - crates/nessa-client-core/src/pairing/client.rs
+  - crates/nessa-device-pairing/src/infrastructure/connection.rs
+  - crates/nessa-protocol/src/pairing/wire/mod.rs
   - docs/design/auth/peer-gateways.md
 model:
   spec: tla/services/gateway/PeerDiscovery.tla
@@ -54,7 +57,7 @@ stateDiagram-v2
 
 New dialer enrollments retain discovery eligibility when their pending record is saved. Older records without that field stay silent after upgrade. Once Active, an eligible enrollment retries the pinned exchange even when its own MAC is installed: a saved local key does not prove the peer received the acknowledgement. Token refresh runs independently of retry progress. Stop withdraws the announcement before joining the current attempt, and the scheduler does not start another peer. Network phases share 5-second connect, 10-second TLS, and 30-second exchange budgets; physical storage and worker drain are joined rather than relabelled complete.
 
-On the granting gateway, discovery chooses the current Active enrollment for the peer key. Each write carries that enrollment’s invitation identity and rechecks its current credential. A historical pairing cannot capture a write meant for a later pairing of the same key.
+The pinned discovery request carries the full enrollment intent and its non-secret credential ID. The granting gateway validates both against the actual TLS key before returning any credential evidence. Only a definitive NotCurrent answer for that exact enrollment stops its announcement; unsupported discovery, mismatched history, storage failures and lost connections remain uncertain and retryable. Installed dialers read the answer too. Every delayed local commit compares the same enrollment identity under the record lock, so an old attempt cannot write into a replacement pairing.
 
 ## Model coverage
 

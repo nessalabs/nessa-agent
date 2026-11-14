@@ -606,14 +606,17 @@ fn restarted_installed_dialer_delivers_the_missing_install_to_offered_grantor() 
         tx: grantor_tx,
         rx: grantor_rx,
     };
-    exchange(
-        &mut dialer,
-        &mut dialer_pipe,
-        &mut || Some(key(25)),
-        &mut |_| Ok(()),
-        true,
-    )
-    .unwrap();
+    let worker = std::thread::spawn(move || {
+        exchange(
+            &mut dialer,
+            &mut dialer_pipe,
+            &mut || Some(key(25)),
+            &mut |_| Ok(()),
+            true,
+        )
+        .unwrap();
+        dialer
+    });
     let mut writes = Vec::new();
     exchange(
         &mut grantor,
@@ -626,6 +629,7 @@ fn restarted_installed_dialer_delivers_the_missing_install_to_offered_grantor() 
         false,
     )
     .unwrap();
+    let dialer = worker.join().unwrap();
     assert_eq!(
         grantor.discovery.installed_mac(),
         dialer.discovery.installed_mac()
@@ -702,4 +706,102 @@ async fn stalled_discovery_does_not_block_refresh_or_withdraw_and_is_still_joine
     release.send(()).unwrap();
     task.await.unwrap();
     assert!(observed.recv().await.is_none());
+}
+
+#[test]
+fn installed_dialer_reads_definitive_refusal_but_does_not_infer_authority_from_other_failures() {
+    for (response, expected) in [
+        (
+            super::encode_discovery_refusal(super::DiscoveryRefusal::NotCurrent),
+            "not_current",
+        ),
+        (
+            super::encode_discovery_refusal(super::DiscoveryRefusal::Unavailable),
+            "unavailable",
+        ),
+        (
+            super::encode_discovery_refusal(super::DiscoveryRefusal::NotPaired),
+            "refused",
+        ),
+        (br#"{"kind":"refused"}"#.to_vec(), "refused"),
+        (vec![0, 2, 99], "malformed"),
+    ] {
+        let (outbound, _observed) = std::sync::mpsc::channel();
+        let (inbound, received) = std::sync::mpsc::channel();
+        inbound.send(response).unwrap();
+        let mut pipe = Queue {
+            tx: outbound,
+            rx: received,
+        };
+        let mut session = Session::new(
+            Role::Dialer,
+            Phase::Active,
+            Discovery::Installed {
+                generation: key(40),
+                mac: key(41),
+            },
+        );
+        let result = exchange(
+            &mut session,
+            &mut pipe,
+            &mut || Some(key(42)),
+            &mut |_| panic!("no transition"),
+            true,
+        );
+        assert!(matches!(
+            (expected, result),
+            ("not_current", Err(super::ExchangeError::NotCurrent))
+                | ("unavailable", Err(super::ExchangeError::Unavailable))
+                | ("refused", Err(super::ExchangeError::Refused))
+                | ("malformed", Err(super::ExchangeError::BadMessage))
+        ));
+        assert_eq!(session.discovery.installed_mac(), Some(&key(41)));
+    }
+}
+
+#[test]
+fn unavailable_does_not_poison_a_later_healthy_installed_retry() {
+    let (outbound, _observed) = std::sync::mpsc::channel();
+    let (inbound, received) = std::sync::mpsc::channel();
+    inbound
+        .send(super::encode_discovery_refusal(
+            super::DiscoveryRefusal::Unavailable,
+        ))
+        .unwrap();
+    inbound
+        .send(encode_message(&Outbound::Installed {
+            generation: key(50),
+        }))
+        .unwrap();
+    let mut pipe = Queue {
+        tx: outbound,
+        rx: received,
+    };
+    let mut session = Session::new(
+        Role::Dialer,
+        Phase::Active,
+        Discovery::Installed {
+            generation: key(50),
+            mac: key(51),
+        },
+    );
+    assert!(matches!(
+        exchange(
+            &mut session,
+            &mut pipe,
+            &mut || Some(key(52)),
+            &mut |_| Ok(()),
+            true
+        ),
+        Err(super::ExchangeError::Unavailable)
+    ));
+    exchange(
+        &mut session,
+        &mut pipe,
+        &mut || Some(key(52)),
+        &mut |_| Ok(()),
+        true,
+    )
+    .unwrap();
+    assert_eq!(session.discovery.installed_mac(), Some(&key(51)));
 }

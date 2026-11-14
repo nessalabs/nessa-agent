@@ -11,6 +11,10 @@
 use base64::Engine;
 use hkdf::Hkdf;
 use hmac::{Hmac, Mac};
+use nessa_auth::domain::{
+    pairing::{DeviceKey, PublicIntent},
+    CredentialId,
+};
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 use std::future::Future;
@@ -1046,7 +1050,9 @@ pub enum DiscoveryRefusal {
 pub trait GrantorDiscovery: Send + Sync {
     fn serve(
         &self,
-        peer: nessa_auth::domain::pairing::DeviceKey,
+        peer: DeviceKey,
+        intent: PublicIntent,
+        credential: &CredentialId,
         pipe: &mut dyn DiscoveryPipe,
     ) -> Result<(), DiscoveryRefusal>;
 }
@@ -1063,6 +1069,10 @@ pub trait DiscoveryPipe {
 pub enum ExchangeError {
     Io(std::io::Error),
     Refused,
+    /// The grantor proved the exact enrollment credential is not current.
+    NotCurrent,
+    /// Discovery is temporarily unavailable; credential state is unknown.
+    Unavailable,
     BadMessage,
     /// No key material was generated; no derived transition was committed.
     Entropy,
@@ -1071,8 +1081,8 @@ pub enum ExchangeError {
 /// Run one side of the exchange. `sends_first` is the dialer: it writes the
 /// resume messages before it reads. Each durable commit is handed to
 /// `persist` before its messages are sent. A `{` frame is the enrollment
-/// refusal envelope, not a discovery message. Once this side is installed
-/// and has sent `installed`, the peer closing the session ends the exchange.
+/// refusal envelope, not current-credential evidence. An installed dialer reads
+/// the grantor response before completing; transport loss remains an error.
 pub fn exchange(
     session: &mut Session,
     pipe: &mut dyn DiscoveryPipe,
@@ -1081,26 +1091,29 @@ pub fn exchange(
     sends_first: bool,
 ) -> Result<(), ExchangeError> {
     let mut need_send = true;
+    let mut received = !sends_first;
     if !sends_first {
         match read_one(session, pipe, entropy, persist) {
             Ok(_) => need_send = true,
-            Err(error) => return finish_or(session, error),
+            Err(error) => return Err(error),
         }
     }
     for _ in 0..12 {
         if need_send {
             for message in session.reconnect() {
-                send_frame(session, pipe, &encode_message(&message))?;
+                send_frame(pipe, &encode_message(&message))?;
             }
             need_send = false;
         }
-        if session.discovery.installed_mac().is_some() {
+        if received && session.discovery.installed_mac().is_some() {
             return Ok(());
         }
         match read_one(session, pipe, entropy, persist) {
-            Ok(true) => need_send = true,
-            Ok(false) => {}
-            Err(error) => return finish_or(session, error),
+            Ok(changed) => {
+                need_send = changed;
+                received = true;
+            }
+            Err(error) => return Err(error),
         }
     }
     if session.discovery.installed_mac().is_some() {
@@ -1110,36 +1123,21 @@ pub fn exchange(
     }
 }
 
-fn send_frame(
-    session: &Session,
-    pipe: &mut dyn DiscoveryPipe,
-    bytes: &[u8],
-) -> Result<(), ExchangeError> {
-    match pipe.send_frame(bytes) {
-        Ok(()) => Ok(()),
-        Err(error) if session.discovery.installed_mac().is_some() => {
-            finish_or(session, ExchangeError::Io(error))
-        }
-        Err(error) => Err(ExchangeError::Io(error)),
-    }
+fn send_frame(pipe: &mut dyn DiscoveryPipe, bytes: &[u8]) -> Result<(), ExchangeError> {
+    pipe.send_frame(bytes).map_err(ExchangeError::Io)
 }
 
-fn finish_or(session: &Session, error: ExchangeError) -> Result<(), ExchangeError> {
-    match error {
-        ExchangeError::Io(ref io)
-            if session.discovery.installed_mac().is_some()
-                && matches!(
-                    io.kind(),
-                    std::io::ErrorKind::UnexpectedEof
-                        | std::io::ErrorKind::BrokenPipe
-                        | std::io::ErrorKind::TimedOut
-                        | std::io::ErrorKind::ConnectionReset
-                ) =>
-        {
-            Ok(())
-        }
-        other => Err(other),
-    }
+/// A discovery refusal is distinct from generic enrollment or transport failure.
+/// Only NotCurrent carries a definitive result for the exact request identity.
+pub fn encode_discovery_refusal(reason: DiscoveryRefusal) -> Vec<u8> {
+    vec![
+        0,
+        match reason {
+            DiscoveryRefusal::NotPaired => 1,
+            DiscoveryRefusal::NotCurrent => 2,
+            DiscoveryRefusal::Unavailable => 3,
+        },
+    ]
 }
 
 /// `Ok(true)` when the field changed and the resume messages should be sent.
@@ -1150,6 +1148,12 @@ fn read_one(
     persist: &mut dyn FnMut(&Commit) -> Result<(), std::io::Error>,
 ) -> Result<bool, ExchangeError> {
     let frame = pipe.recv_frame().map_err(ExchangeError::Io)?;
+    match frame.as_slice() {
+        [0, 1] => return Err(ExchangeError::Refused),
+        [0, 2] => return Err(ExchangeError::NotCurrent),
+        [0, 3] => return Err(ExchangeError::Unavailable),
+        _ => {}
+    }
     if frame.first() == Some(&b'{') {
         return Err(ExchangeError::Refused);
     }
@@ -1171,7 +1175,7 @@ fn read_one(
             persist(commit).map_err(ExchangeError::Io)?;
         }
         for message in &commit.send {
-            send_frame(session, pipe, &encode_message(message))?;
+            send_frame(pipe, &encode_message(message))?;
         }
     }
     let changed = next.discovery.name() != before;
@@ -1189,10 +1193,6 @@ fn unb64(text: &str) -> Option<[u8; 32]> {
         .ok()?;
     <[u8; 32]>::try_from(bytes).ok()
 }
-
-#[cfg(test)]
-#[path = "../../tests/discovery.rs"]
-mod tests;
 
 /// A publication effect, independent of the pinned discovery exchange.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1227,3 +1227,7 @@ pub async fn maintain_announcement(
         discovery.await;
     }
 }
+
+#[cfg(test)]
+#[path = "../../tests/discovery.rs"]
+mod tests;
