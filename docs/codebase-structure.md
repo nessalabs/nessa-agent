@@ -1195,6 +1195,12 @@ the complete selection. The [execution map and failure table](../scripts/cargo-t
 link unit, real-process and workflow-contract coverage; `scripts/ci-result.mjs`
 owns the required-check decision.
 
+[`scripts/workflow-source.mjs`](../scripts/workflow-source.mjs) owns the LF text
+view used by workflow and action structure checks. Measurement and pnpm-install
+contracts consume that reader. `scripts/workflow-source.test.mjs` executes their
+actual suites against LF and CRLF checkout fixtures, including through the desktop
+checker. Provenance owners hash the original checkout bytes.
+
 ## Cloud development preparation
 
 [`scripts/cloud-startup.sh`](../scripts/cloud-startup.sh) owns Cloud setup and

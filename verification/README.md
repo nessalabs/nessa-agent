@@ -360,3 +360,117 @@ The sampler pins the input, visual control and pointer owner before moving the p
 | Pointer moved away | Record the away state, then remove the listener and dispose the pinned handles |
 
 `NESSA_HOVER_BROWSER=bundled node --test verification/desktop/scripts/lib/hover-state.test.mjs` runs the sibling-action and reparenting regression with Playwright's installed Chromium. An executable path selects an existing local Chromium instead. The existing browser CI job runs this after installing the pinned browsers; ordinary browser-free helper runs explicitly skip that browser case.
+
+## CI measurement receipts
+
+Desktop qualification is an explicit manual mode of the existing
+`conversation-stress-load.yml` job:
+
+```sh
+gh workflow run conversation-stress-load.yml --ref <branch> -f desktop-performance=true
+```
+
+The full scope uses standard Mac, prebuilds the native binaries, records structured
+host/GPU facts, then runs the complete `run-all` command with both engines and
+layouts and five performance runs. The check has a fixed 135-minute limit inside
+the load job's existing 210-minute limit. The clock starts after prebuilding;
+this is not a claim of stricter effective runtime than another job's total bound.
+A timeout is incomplete qualification, never a pass. Case waits, calibration,
+4× throttling and the 50 ms budget remain with their existing owners.
+
+| Event/mode | Workload and ownership |
+| --- | --- |
+| Scheduled or manual `desktop-performance=false` | Existing Ubuntu load stress, seeds and input values; stress keeps its 100-minute bound and chaos its 60-minute bound, including chaos after a stress failure |
+| Manual `desktop-performance=true`, `desktop-scope=full` (default) | Complete Mac desktop qualification, including native prebuild and performance; regular PR CI retains all native and conversation-stress gates |
+| Manual `desktop-performance=true`, `desktop-scope=frame-budget` | Isolated production frame-budget diagnostic, all existing budget scenarios, five runs and both layouts; the in-memory UI needs no gateway prebuild. This does not qualify the full browser matrix |
+| Manual `desktop-performance=true`, `desktop-scope=mcp-apps` | The complete `mcp-apps.mjs` browser suite in both engines/layouts, using the sandbox fixture without a gateway prebuild. This does not qualify the full browser matrix or supply performance results |
+| Unknown desktop scope | The planner fails before measurement; no result is qualified |
+| Desktop failure or timeout | Available structured JSON and source-bound notices are preserved; missing or incomplete results do not qualify |
+
+The desktop scope is owned by
+[`measurement-plan.mjs`](../scripts/desktop/measurement-plan.mjs), with its
+workflow/CLI regressions beside it in `measurement-plan.test.mjs`. Its
+validated plan publishes the check selector, gateway-build requirement and
+artifact prefix together. The workflow consumes that plan; it does not infer a
+full-matrix pass from a frame-budget result.
+
+[`workflow-source.mjs`](../scripts/workflow-source.mjs) gives structural checks
+one LF text view of workflow and action YAML. The measurement and pnpm-install
+contract suites use that reader. `workflow-source.test.mjs` executes both actual
+suites against LF and CRLF checkout fixtures; their existing assertions and
+per-command deadlines decide the result. Provenance hashes are over original
+checkout bytes, rather than this text view.
+
+For an isolated diagnostic:
+
+```sh
+gh workflow run conversation-stress-load.yml --ref <branch> -f desktop-performance=true -f desktop-scope=frame-budget
+```
+
+`full` keeps the existing complete invocation. The diagnostic selects only
+`perf-budget` through `run-all`'s existing `--only` interface; it retains the
+producer's actual exit and measurements, the 135-minute measurement bound,
+calibration, 4× throttle and 50 ms budget. Its artifact identifies the scope and
+its aggregate lists the executed checks. Require the complete set of checks
+before calling any result full browser
+qualification; a passing isolated diagnostic supplies only performance evidence.
+
+For the MCP browser suite, use `-f desktop-scope=mcp-apps` instead. It retains
+the suite's existing waits, assertions, sandbox controls and cleanup, and saves
+its child report under the same source-bound evidence root. Its artifact prefix
+is `desktop-mcp-apps`; its aggregate names only that suite. Require full browser
+qualification separately.
+
+The modes keep their workload variables on the steps that consume them.
+The desktop result and pre-measurement host snapshot are under the existing
+artifact root. Host snapshots describe that moment, not continuous physical-host
+isolation. The workflow adds no raw-log capture or retrieval path. Native
+`local-auth` qualification does not contain a second copy of the matrix.
+
+The Mac invocation also passes `--reports` under that artifact root. This keeps
+only each check's existing JSON output in a fresh child directory, whose path is
+printed. Inspect only that invocation's child, not earlier children under the
+same parent. Default invocations keep their existing temporary-report cleanup. An
+invalid requested parent fails explicitly; earlier children and sibling files
+are never read or removed. Browser profiles and global temporary files are not
+collected.
+
+These files are diagnostic, not qualification receipts. A child can write
+`ok: true` before its cleanup fails or its process exits nonzero; the aggregate
+still uses that exit outcome. Termination may leave partial or missing JSON,
+and cancellation may prevent artifact upload. A missing aggregate remains
+incomplete qualification. Retention promises only that already-written files
+are not deliberately removed, not that a report will be complete or published.
+
+
+The optional Mac measurement prints the complete run-all JSON to its job log.
+It also emits an API-readable projection through ordinary check notices. The
+projection copies the producer's verdict and entire summary, all failed/skipped
+functional records, calibration, unrounded performance results and every run
+field except the dense original sample buffer. Slow-frame attribution, including
+LoAF scripts, remains intact. Successful functional records retain their identity
+and status; their other details remain in the original document.
+
+Preparation is not confirmed delivery. The manifest binds the commit, workflow
+run and attempt to hashes of the raw document and projection. Three steps emit
+at most eight data notices each, with ASCII bodies of at most 3500 characters.
+This stays below the runner's per-step notice cap; it does not guarantee that
+GitHub retained every part. Oversized or malformed input produces an explicit
+incomplete manifest and a nonzero reporting step, never truncated attribution.
+The reader accepts at most 64 MiB of raw input and 32 MiB of projected data.
+
+Fetch every page of the terminal job's
+[check annotations](https://docs.github.com/en/rest/checks/runs#list-check-run-annotations).
+Pass the expected commit, run and attempt from trusted workflow metadata to
+decodeDesktopReceipt; do not derive that expected identity from the receipt.
+Use the job's execution attempt, not a newer workflow attempt that reran other
+jobs; run and attempt are the string values supplied by GitHub's environment.
+Missing, duplicate, mixed or corrupt parts fail collection. A decoded projection
+does not qualify the change by itself: the selected checks, production mode,
+calibration, run count and job conclusion still need to meet their own contracts.
+The receipt never recalculates a budget or converts a producer failure into a pass.
+
+The [notice protocol](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-commands#setting-a-notice-message)
+and [runner limits](https://github.com/actions/runner/blob/main/src/Runner.Worker/ExecutionContext.cs)
+own the external transport constraints. The measurement owner still owns its
+numbers and verdict.
