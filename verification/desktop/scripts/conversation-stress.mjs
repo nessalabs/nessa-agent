@@ -2956,20 +2956,21 @@ const steps = {
         ))
       )
         failures.push("the completed VM background task did not permit idle rest")
-      // Boat fails the rested VM's next opening: the send is refused as the
-      // environment being unavailable, and the workspace records why, as one
-      // of the causes a person acts on.
-      writeFileSync(join(run.stack.vmFixture.root, id, "fail-next-open"), "fail")
+      // Boat fails the rested VM's next opening. Sent from the composer, the
+      // message is shown not sent, and the workspace records why, as one of
+      // the causes a person acts on. Send Again then opens the VM and the
+      // message goes through. A read of the rested conversation would open
+      // its VM itself, so its turns are the ones read before it rested.
       const after = `${STRESS.reply} VM open fails ${step.index}`
-      const refusal = await run.client.conversation
-        .submit(run.client.conversation.prepare(id, after))
-        .then(
-          () => null,
-          (error) => error,
-        )
-      if (refusal?.code !== "environment_unavailable")
+      const seen = new Set(view.messages.map((each) => each.executionId))
+      writeFileSync(join(run.stack.vmFixture.root, id, "fail-next-open"), "fail")
+      await send(run, id, after, failures, seen)
+      const unsent = run.page.locator("[data-send-failure]")
+      if (!(await waitFor(async () => (await unsent.count()) === 1, 60_000)))
+        failures.push("a send whose VM could not be opened was not shown as not sent")
+      else if (!(await unsent.textContent())?.includes("Error sending"))
         failures.push(
-          `a send whose VM could not be opened was ${refusal ? `refused ${refusal.code}` : "accepted"}, not refused environment_unavailable`,
+          `a send whose VM could not be opened says ${JSON.stringify(await unsent.textContent())}`,
         )
       if (
         !run.stack.vmFixture
@@ -2983,6 +2984,12 @@ const steps = {
           )
       )
         failures.push("a failed VM opening was not recorded with its cause")
+      if ((await unsent.count()) === 1) {
+        await unsent.getByRole("button", { name: "Send Again" }).click()
+        await settled(run, id, seen, after, "completed", failures)
+        if (!(await waitFor(async () => (await unsent.count()) === 0, 10_000)))
+          failures.push("the message sent again still shows as not sent")
+      }
       if (run.evidence)
         writeView(run.evidence, `views/vm-background-${run.engine}-${step.index}.json`, {
           lease: leaseEvidence,

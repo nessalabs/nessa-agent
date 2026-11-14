@@ -150,6 +150,8 @@ struct Audit {
     fail_cleanup: AtomicBool,
     panic_receipt: AtomicBool,
     fail_stop: AtomicBool,
+    fail_open: AtomicBool,
+    panic_open: AtomicBool,
 }
 impl RecoveryAudit for Audit {
     fn record(&self, event: &RecoveryEvent) -> Result<(), Failure> {
@@ -159,6 +161,13 @@ impl RecoveryAudit for Audit {
             failure,
         } = event
         {
+            assert!(
+                !self.panic_open.load(Ordering::SeqCst),
+                "injected opening audit panic"
+            );
+            if self.fail_open.load(Ordering::SeqCst) {
+                return Err(Failure::Storage);
+            }
             self.refused_opens
                 .lock()
                 .unwrap()
@@ -736,6 +745,52 @@ async fn each_failed_opening_is_recorded_with_what_can_be_done_about_it() {
         ]
     );
 }
+#[tokio::test]
+async fn a_failed_opening_whose_record_is_lost_says_so_and_keeps_its_own_failure() {
+    let (service, _, _, audit) = fixture_with_audit();
+    audit.fail_open.store(true, Ordering::SeqCst);
+    let rejected = service.open(id(2), false, None).await.err().unwrap();
+    assert_eq!(
+        rejected,
+        Failure::OpeningUnrecorded(Box::new(Failure::Missing))
+    );
+    assert_eq!(rejected.kind(), "opening_unrecorded");
+    assert_eq!(rejected.cause(), OpenFailure::Refused);
+    audit.fail_open.store(false, Ordering::SeqCst);
+    audit.panic_open.store(true, Ordering::SeqCst);
+    assert_eq!(
+        service.open(id(2), false, None).await.err(),
+        Some(Failure::OpeningUnrecorded(Box::new(Failure::Missing)))
+    );
+    assert!(audit.refused_opens.lock().unwrap().is_empty());
+}
+#[tokio::test]
+async fn a_failed_opening_is_recorded_after_its_waiter_left() {
+    let (service, _, provider, audit) = fixture_with_audit();
+    *provider.refusal_on_create.lock().unwrap() = Some(rejection());
+    let task = {
+        let service = service.clone();
+        tokio::spawn(async move { service.open(id(1), true, None).await })
+    };
+    provider.entered.acquire().await.unwrap().forget();
+    task.abort();
+    provider.proceed.add_permits(1);
+    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        while audit.refused_opens.lock().unwrap().is_empty() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        *audit.refused_opens.lock().unwrap(),
+        [(
+            id(1).to_string(),
+            OpenFailure::Uncertain,
+            "admission_recovery"
+        )]
+    );
+}
 fn recovery(
     receipt_failed: bool,
     audit_failed: bool,
@@ -813,6 +868,10 @@ fn every_failure_comes_down_to_one_thing_a_caller_can_do() {
         ),
         (Failure::ProvisioningUncertain, OpenFailure::Uncertain),
         (Failure::CleanupUncertain, OpenFailure::Uncertain),
+        (
+            Failure::OpeningUnrecorded(Box::new(Failure::Locked)),
+            OpenFailure::Locked,
+        ),
     ] {
         assert_eq!(failure.cause(), cause, "{failure:?}");
     }

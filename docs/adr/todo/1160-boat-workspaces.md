@@ -96,7 +96,7 @@ sequenceDiagram
 | B17 | Fresh creation acknowledgement names a starting VM | The SDK waits for that VM within the ready budget; no attached workspace, SSH, MCP or agent command yet | Preserve the named VM and rollback disposition on timeout or rejection |
 | B18 | Fresh VM becomes ready | The SDK re-reads the dedicated environment and the complete receipt, including exact `wipePendingUntilRestart: false`, before admission | Ready alone never authorizes attachment |
 | B19 | New VM still wiping at creation | `Workspaces` records StopRequested, stops it (cause `wiping`), records StopAnswered; waking it is the restart that ends the wipe | A stop not accepted or not recorded leaves it refused and rolled back; a replayed VM still wiping stays refused |
-| B20 | An opening fails | `Workspaces` records `WorkspaceOpenRefused` with the thread, the failure's kind and its cause: `not_connected`, `locked`, `provider_failed`, `refused` or `uncertain` | The chat still says the environment is unreachable until the lease protocol carries the cause (#1290) |
+| B20 | An opening fails | `Workspaces` records `WorkspaceOpenRefused` with the thread, the failure's kind and its cause: `not_connected`, `locked`, `provider_failed`, `refused` or `uncertain`. The opening's own task records it, so it is kept when nobody waits any more; a record that could not be saved turns the failure into `opening_unrecorded`, which still carries it | The chat still says the environment is unreachable until the lease protocol carries the cause (#1290) |
 
 Boat documents [asynchronous API readiness](https://docs.boat.dev/readiness) and
 [credential removal before a snapshot deploy can be used](https://docs.boat.dev/snapshots/templates).

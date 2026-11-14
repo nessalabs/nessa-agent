@@ -300,23 +300,40 @@ impl Workspaces {
         channel: Option<ChannelId>,
     ) -> Result<Arc<dyn WorkspaceRuntime>, Failure> {
         let this = self.clone();
-        let id = thread.to_string();
-        // The admitted task owns allocation through receipt persistence, even if
-        // its initiating conversation/open waiter disappears.
-        let opened = tokio::spawn(async move { this.allocate(thread, provision, channel).await })
-            .await
-            .map_err(|_| Failure::ProvisioningUncertain)
-            .and_then(|opened| opened);
-        if let Err(error) = &opened {
-            // Kept beside the receipt's own records; a failed record never
-            // changes the answer.
-            let _ = self.record_recovery(&RecoveryEvent::OpenRefused {
-                thread: id,
-                cause: error.cause(),
-                failure: error.kind(),
-            });
-        }
-        opened
+        // The admitted task owns allocation through receipt persistence, and
+        // the record of a failed opening, even if its initiating
+        // conversation/open waiter disappears.
+        tokio::spawn(async move {
+            let id = thread.to_string();
+            let opened = AssertUnwindSafe(this.allocate(thread, provision, channel))
+                .catch_unwind()
+                .await
+                .unwrap_or(Err(Failure::ProvisioningUncertain));
+            this.record_opening(id, opened)
+        })
+        .await
+        .unwrap_or(Err(Failure::ProvisioningUncertain))
+    }
+    /// Record why an opening failed, beside the receipt's own records. The
+    /// failure stays the answer; one whose record was not saved says so too.
+    fn record_opening(
+        &self,
+        thread: String,
+        opened: Result<Arc<dyn WorkspaceRuntime>, Failure>,
+    ) -> Result<Arc<dyn WorkspaceRuntime>, Failure> {
+        let error = match opened {
+            Ok(runtime) => return Ok(runtime),
+            Err(error) => error,
+        };
+        let recorded = self.record_recovery(&RecoveryEvent::OpenRefused {
+            thread,
+            cause: error.cause(),
+            failure: error.kind(),
+        });
+        Err(match recorded {
+            Ok(()) => error,
+            Err(_) => Failure::OpeningUnrecorded(Box::new(error)),
+        })
     }
     /// Stop `thread`'s VM, keeping its disk, unless something still uses
     /// it: a runtime [`Workspaces::open`] handed out, or a stream it served.

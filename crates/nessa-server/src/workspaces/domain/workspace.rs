@@ -37,6 +37,9 @@ pub(crate) enum Failure {
         cleanup: CleanupOutcome,
         cleanup_audit_failed: bool,
     },
+    /// An opening failed with the failure inside, and the record of why
+    /// could not be saved.
+    OpeningUnrecorded(Box<Failure>),
 }
 
 /// Who Nessa is on Boat: the user's infrastructure token. Transient,
@@ -238,6 +241,9 @@ impl Failure {
             | Self::ProvisioningUncertain
             | Self::CleanupUncertain
             | Self::ReceiptRecovery { .. } => OpenFailure::Uncertain,
+            // What the caller can do is still what the opening's own
+            // failure says.
+            Self::OpeningUnrecorded(failure) => failure.cause(),
         }
     }
     /// Its kind in a record: never what it carries.
@@ -258,6 +264,7 @@ impl Failure {
             Self::Missing => "missing",
             Self::CleanupUncertain => "cleanup_uncertain",
             Self::ReceiptRecovery { .. } => "receipt_recovery",
+            Self::OpeningUnrecorded(_) => "opening_unrecorded",
         }
     }
 }
