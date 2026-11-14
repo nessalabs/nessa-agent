@@ -60,9 +60,12 @@ function beside(node: Element, list: HTMLElement): HTMLElement | null {
   return null
 }
 
-/** A row focus can land on: still in the document, and not under `inert`. */
+/**
+ * A row focus can land on: still in the document, and not under `inert` or
+ * in a column folding away (`aria-hidden` until it parks, `parked.ts`).
+ */
 function canTakeFocus(row: HTMLElement): boolean {
-  return row.isConnected && row.closest("[inert]") === null
+  return row.isConnected && row.closest('[inert], [aria-hidden="true"]') === null
 }
 
 /**

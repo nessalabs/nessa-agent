@@ -818,6 +818,57 @@ async function studioWithTheCorner(page, failures) {
 const LIGHTS_END = 76
 
 /**
+ * The folded sidebar parks once its slide has ended (#1177): hidden from
+ * assistive tech from the fold, then inert, unpainted and skipped by style
+ * (`content-visibility: hidden`) in one change, so its rows are never
+ * restyled on a frame of the fold. Opened again, it is reachable at once.
+ */
+async function sidebarParks(page, failures, open) {
+  const read = () =>
+    page.evaluate((selector) => {
+      const aside = document.querySelector(selector)
+      if (!aside) return null
+      return {
+        hidden: aside.getAttribute("aria-hidden") === "true",
+        inert: aside.hasAttribute("inert"),
+        parked: aside.hasAttribute("data-parked"),
+        skipped: getComputedStyle(aside).contentVisibility === "hidden",
+        visible: getComputedStyle(aside).visibility === "visible",
+      }
+    }, css.sidebar)
+  if (open) {
+    const now = await read()
+    if (!now || now.hidden || now.inert || now.parked || now.skipped || !now.visible)
+      failures.push(`the opened sidebar is not reachable: ${JSON.stringify(now)}`)
+    return
+  }
+  // Sliding (340 ms): hidden from assistive tech, focus already out of it,
+  // but not parked yet — parking on the key restyled every row (#1177).
+  let folding = await read()
+  if (!(await waitFor(async () => (folding = await read())?.hidden === true, 1_000)))
+    failures.push(
+      `the folding sidebar is not hidden from assistive tech: ${JSON.stringify(folding)}`,
+    )
+  else if (folding.inert || folding.parked)
+    failures.push(
+      `the sidebar parked on the fold's key, not after its slide: ${JSON.stringify(folding)}`,
+    )
+  if (
+    await page.evaluate(
+      (selector) => document.querySelector(selector)?.contains(document.activeElement),
+      css.sidebar,
+    )
+  )
+    failures.push("focus stayed inside the folding sidebar")
+  const parked = async () => {
+    const now = await read()
+    return Boolean(now?.inert && now.parked && now.skipped && !now.visible)
+  }
+  if (!(await waitFor(parked, 5_000)))
+    failures.push(`the folded sidebar never parked: ${JSON.stringify(await read())}`)
+}
+
+/**
  * Choosing a channel shows its sessions: with the session list hidden, a
  * click on the main conversation's channel in the sidebar shows the list
  * again and leaves the one pane as it was. The person can hide it again.
@@ -6742,6 +6793,7 @@ const steps = {
     // ⌘B hides the sidebar, which makes room for a pane beside; ⌘-click on a
     // row in the session list then opens it there, focused. The page is a Mac's.
     await run.page.keyboard.press(keys.toggleSidebar)
+    await sidebarParks(run.page, failures, false)
     await run.page
       .locator(selectorFor.sessionListRowFor(conversationId), {
         hasText: await titleOf(run, conversationId),
@@ -6835,6 +6887,7 @@ const steps = {
     await noHistoryButtons(run.page, failures, "the window")
     if (failures.length) return
     await run.page.keyboard.press(keys.toggleSidebar)
+    await sidebarParks(run.page, failures, true)
     await channelShowsList(run.page, failures)
     if (failures.length) return
     // The main conversation is the pane left. Not opened from its row: the

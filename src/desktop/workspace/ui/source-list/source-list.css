@@ -58,17 +58,27 @@
      resize edge's gutter — so the two move as one, with no gap opening
      between them; the workspace clips what passes its edge. */
   transform: translateX(calc(-100% - var(--desktop-gutter)));
+}
+
+/*
+ * Once it has slid away, it is parked (`adapters/dom/parked.ts`): out of
+ * reach, unpainted, and skipped by style and layout. The three land in one
+ * style change, so its rows are skipped rather than restyled; hiding it on
+ * the fold's key, or at the end of the slide on its own, restyled every row
+ * in one frame (#1177).
+ */
+.workspace-sidebar[data-parked] {
   visibility: hidden;
-  transition:
-    transform var(--desktop-drawer) var(--desktop-ease),
-    visibility 0s linear var(--desktop-drawer);
+  content-visibility: hidden;
 }
 
 /*
  * A pane change folds the sidebar a frame before the grid paints the new
  * boxes (`data-spare-held`, `split-panes.tsx`). Leaving the row on that
  * frame widens the one pane. It stays in the row, hidden, until the boxes
- * paint, and the two changes share one layout.
+ * paint, and the two changes share one layout. It never parks while held
+ * (`parked.ts` waits the hold out), so this rule never meets
+ * `[data-parked]`'s `content-visibility: hidden`.
  */
 .workspace[data-spare-held][data-folding][data-sidebar="closed"] .workspace-sidebar {
   position: relative;
