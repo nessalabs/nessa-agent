@@ -556,10 +556,10 @@ caret waits for its target's first layout to paint before landing
 
 | pending focus | next frame | result |
 | --- | --- | --- |
-| target absent, inert, or pane body waiting for layout | look again, up to 30 attempts | no geometry or focus read |
+| target absent, inert, or pane body waiting for layout | retry; stop if still absent once `focusBudgetMs` expires | no geometry or focus read |
 | target found | let this frame paint | retain the target identity |
 | target painted, still current | focus with `preventScroll` | finish |
-| target replaced | find the current target | wait for its paint |
+| target replaced | find the current target within the same time budget | wait for its paint |
 | modal or inert target, or deliberate focus elsewhere | leave the pending landing | keep that focus |
 | cancelled or owner removed | cancel the pending frame | leave focus alone |
 

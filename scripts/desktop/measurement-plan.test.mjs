@@ -28,6 +28,12 @@ const expected = {
     buildGateway: false,
     artifactPrefix: "desktop-frame-budget",
   },
+  focus: {
+    scope: "focus",
+    check: "focus",
+    buildGateway: false,
+    artifactPrefix: "desktop-focus",
+  },
   "mcp-apps": {
     scope: "mcp-apps",
     check: "mcp-apps",
@@ -118,7 +124,7 @@ const shell = body
 test("the workflow consumes one validated plan before deciding builds, selector and artifact", () => {
   assert.match(
     workflow,
-    /desktop-scope:\n\s+description: [^\n]+\n\s+type: choice\n\s+options:\n\s+- full\n\s+- frame-budget\n\s+- mcp-apps\n\s+default: full/,
+    /desktop-scope:\n\s+description: [^\n]+\n\s+type: choice\n\s+options:\n\s+- full\n\s+- frame-budget\n\s+- mcp-apps\n\s+- focus\n\s+default: full/,
   )
   const planner = step("Plan the desktop measurement")
   assert.match(planner, /if: \$\{\{ inputs\['desktop-performance'\] \}\}/)

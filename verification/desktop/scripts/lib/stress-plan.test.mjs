@@ -10,6 +10,13 @@ test("the same numbers and seed give the same plan, and another seed another", (
   assert.equal(random(7)(), random(7)())
 })
 
+test("default and raised plans exercise gateway pairing", () => {
+  const pairings = (knobs) =>
+    plan(knobs).filter((step) => step.kind === "gatewayPairing").length
+  assert.ok(pairings(knobsFrom({}, {})) > 0)
+  assert.equal(pairings(knobsFrom({ gatewayPairings: "4" }, {})), 4)
+})
+
 test("every required step appears as often as its number says", () => {
   const knobs = knobsFrom({ rounds: "40", seed: "9" }, {})
   const steps = plan(knobs)

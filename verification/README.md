@@ -163,6 +163,8 @@ verification/
         page-lines.test.mjs queue-free page API, classification, once-only reporting and concurrent attribution
         workspace.mjs       open panes and completed tool work, read pane rects and focus, lift a pane, rect containment, a model rule or value read in the page
         workspace.test.mjs  a measured drop must change pane order and remove its carried copy (#370)
+        fast-frames.mjs     the focus probe's 8 ms frame timers, sharing the native handle allocator in a fresh page
+        fast-frames.test.mjs native/shim cancellation, retired handles and reentrant callback regressions
         hover-state.mjs     pinned visual control and pointer owner, finite-animation samples and action hits captured before the pointer leaves
         hover-state.test.mjs strict hover evidence; NESSA_HOVER_BROWSER=bundled (or a local executable path) runs the sibling-action browser regression, also required by the pinned Chromium CI job
         safe-area.mjs       the per-frame safe-area sampler
@@ -391,6 +393,7 @@ A timeout is incomplete qualification, never a pass. Case waits, calibration,
 | Manual `desktop-performance=true`, `desktop-scope=full` (default) | Complete Mac desktop qualification, including native prebuild and performance; regular PR CI retains all native and conversation-stress gates |
 | Manual `desktop-performance=true`, `desktop-scope=frame-budget` | Isolated production frame-budget diagnostic, all existing budget scenarios, five runs and both layouts; the in-memory UI needs no gateway prebuild. This does not qualify the full browser matrix |
 | Manual `desktop-performance=true`, `desktop-scope=mcp-apps` | The complete `mcp-apps.mjs` browser suite in both engines/layouts, using the sandbox fixture without a gateway prebuild. This does not qualify the full browser matrix or supply performance results |
+| Manual `desktop-performance=true`, `desktop-scope=focus` | The complete `focus.mjs` Playwright browser suite on standard Mac in both engines/layouts, without a gateway prebuild. Existing case clocks, assertions and waits remain unchanged; this does not qualify the full browser matrix, performance or native WKWebView |
 | Unknown desktop scope | The planner fails before measurement; no result is qualified |
 | Desktop failure or timeout | Available structured JSON and source-bound notices are preserved; missing or incomplete results do not qualify |
 
@@ -427,6 +430,13 @@ the suite's existing waits, assertions, sandbox controls and cleanup, and saves
 its child report under the same source-bound evidence root. Its artifact prefix
 is `desktop-mcp-apps`; its aggregate names only that suite. Require full browser
 qualification separately.
+
+For the complete focus browser suite, use `-f desktop-scope=focus`. Its artifact
+prefix is `desktop-focus`; the aggregate lists only the focus check and records
+its actual child result. Existing fast-frame probes retain their own clock
+controls. The shared `--runs 5` argument does not repeat focus five times; it
+belongs to the performance producer. This supplies Playwright browser evidence
+on Mac, not native WKWebView, performance or full-matrix qualification.
 
 The modes keep their workload variables on the steps that consume them.
 The desktop result and pre-measurement host snapshot are under the existing

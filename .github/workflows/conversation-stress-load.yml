@@ -21,12 +21,13 @@ on:
         type: boolean
         default: false
       desktop-scope:
-        description: Full qualification, or a frame-budget or MCP Apps diagnostic.
+        description: Full qualification, or a frame-budget, MCP Apps or focus diagnostic.
         type: choice
         options:
           - full
           - frame-budget
           - mcp-apps
+          - focus
         default: full
       seed:
         description: The plan's seed. Empty picks one and prints it.

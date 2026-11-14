@@ -14,6 +14,12 @@ const plans = Object.freeze({
     buildGateway: false,
     artifactPrefix: "desktop-frame-budget",
   }),
+  focus: Object.freeze({
+    scope: "focus",
+    check: "focus",
+    buildGateway: false,
+    artifactPrefix: "desktop-focus",
+  }),
   "mcp-apps": Object.freeze({
     scope: "mcp-apps",
     check: "mcp-apps",
