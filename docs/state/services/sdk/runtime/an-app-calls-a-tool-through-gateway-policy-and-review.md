@@ -6,7 +6,7 @@ status: "mixed"
 summary: "An app can ask the gateway to call a tool on its originating server."
 parent: "sdk-runtime"
 sources:
-  - "crates/nessa-server/src/product/mcp_apps.rs"
+  - "crates/nessa-gateway/src/product/mcp_apps.rs"
   - "crates/nessa-conversation/src/application/service/app_calls.rs"
   - "crates/nessa-conversation/src/mcp_servers/domain/app_call.rs"
   - "crates/nessa-conversation/src/application/app_reviews.rs"
@@ -45,7 +45,7 @@ stateDiagram-v2
 
 ## Further reading
 
-[Source](../../../../../crates/nessa-server/src/product/mcp_apps.rs) · [Related source](../../../../../crates/nessa-conversation/src/application/service/app_calls.rs) · [Related tests](../../../../../crates/nessa-conversation/tests/conversation/app_calls.rs)
+[Source](../../../../../crates/nessa-gateway/src/product/mcp_apps.rs) · [Related source](../../../../../crates/nessa-conversation/src/application/service/app_calls.rs) · [Related tests](../../../../../crates/nessa-conversation/tests/conversation/app_calls.rs)
 
 ## Model coverage
 

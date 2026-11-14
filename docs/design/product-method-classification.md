@@ -76,13 +76,13 @@ does not implement or enlarge that work.
 Current source owners (reviewed at `9812c3c`):
 [manifest](../../protocol/product/manifest.json),
 [generator](../../scripts/generate-product-protocol.mjs),
-[socket](../../crates/nessa-server/src/product/socket.rs),
-[paired access](../../crates/nessa-server/src/product/read_access.rs),
-[subscriptions](../../crates/nessa-server/src/product/subscription/mod.rs), and
-[writer tests](../../crates/nessa-server/tests/product/socket/writer.rs),
-[artifact reader](../../crates/nessa-server/src/product/attachment.rs),
-[record admission](../../crates/nessa-server/src/product/record_read/dispatch.rs), and
-[catalogue admission](../../crates/nessa-server/src/product/catalogue_read/dispatch.rs).
+[socket](../../crates/nessa-gateway/src/product/socket.rs),
+[paired access](../../crates/nessa-gateway/src/product/read_access.rs),
+[subscriptions](../../crates/nessa-gateway/src/product/subscription/mod.rs), and
+[writer tests](../../crates/nessa-gateway/tests/product/socket/writer.rs),
+[artifact reader](../../crates/nessa-gateway/src/product/attachment.rs),
+[record admission](../../crates/nessa-gateway/src/product/record_read/dispatch.rs), and
+[catalogue admission](../../crates/nessa-gateway/src/product/catalogue_read/dispatch.rs).
 
 ## Proposed admission taxonomy
 

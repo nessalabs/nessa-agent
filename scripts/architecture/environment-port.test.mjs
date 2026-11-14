@@ -66,8 +66,10 @@ test("a surface that names the port is refused", () => {
     "use super::super::application::{Environment, ConversationService};",
   ]) {
     assert.equal(
-      environmentPortViolations("crates/nessa-server/src/product/conversation.rs", source)
-        .length,
+      environmentPortViolations(
+        "crates/nessa-gateway/src/product/conversation.rs",
+        source,
+      ).length,
       1,
     )
     assert.equal(
@@ -87,13 +89,13 @@ test("the configuration's own Environment, a comment, and tests are not the port
     "use nessa_sdk::application::{SessionManager, Environment};",
   ])
     assert.deepEqual(
-      environmentPortViolations("crates/nessa-server/src/app/state.rs", source),
+      environmentPortViolations("crates/nessa-gateway/src/app/state.rs", source),
       [],
       source,
     )
   assert.deepEqual(
     environmentPortViolations(
-      "crates/nessa-server/src/product/conversation.rs",
+      "crates/nessa-gateway/src/product/conversation.rs",
       "// never holds a dyn Environment",
     ),
     [],

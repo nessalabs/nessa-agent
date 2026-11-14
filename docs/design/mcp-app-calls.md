@@ -806,7 +806,7 @@ Each row has at least one test, named after it.
   (`a_message_naming_an_app_the_session_never_saw_is_an_invalid_request`),
   and each app refusal on the wire by the `ConversationErrorCode` audit names
   it with (`each_app_refusal_is_on_the_wire_by_the_code_audit_names_it_with`).
-- `crates/nessa-server/tests/mcp_servers/gateway.rs`: M3 at the wire, an
+- `crates/nessa-gateway/tests/mcp_servers/gateway.rs`: M3 at the wire, an
   empty message refused with nothing recorded and a blank one on record
   (`m3_an_empty_message_is_refused_at_the_wire_and_a_blank_one_on_record`);
   both methods on the
@@ -1179,7 +1179,7 @@ Each row above has a test, named after it:
 - Tickets and the route: `crates/nessa-conversation/tests/mcp_servers/resource_tickets.rs`,
   `http.rs`, and `gateway.rs` (a redeemed ticket in no log line or trace).
 - Lanes over the socket: `mcp_app_lane` in
-  `crates/nessa-server/tests/mcp_servers/gateway.rs`.
+  `crates/nessa-gateway/tests/mcp_servers/gateway.rs`.
   L1 `a_burst_of_reads_and_releases_refuses_the_rest_and_keeps_the_socket`.
   L2 `releases_behind_a_burst_of_refused_reads_are_still_answered`.
   L3 `a_release_is_admitted_while_an_app_refusal_waits`.

@@ -7,11 +7,11 @@ summary: Signed HTTP events can queue one turn in a configured conversation.
 parent: gateway
 sourceRevision: "7763614c1998cc428a9b6043cbe1ab10cebe6ec4"
 sources:
-  - crates/nessa-server/src/external_events/entrypoint/http.rs
-  - crates/nessa-server/src/external_events/application/admission.rs
-  - crates/nessa-server/src/external_events/domain/value_objects/identity.rs
+  - crates/nessa-gateway/src/external_events/entrypoint/http.rs
+  - crates/nessa-gateway/src/external_events/application/admission.rs
+  - crates/nessa-gateway/src/external_events/domain/value_objects/identity.rs
   - crates/nessa-conversation/src/application/service/mutation.rs
-  - crates/nessa-server/tests/external_events/ingress.rs
+  - crates/nessa-gateway/tests/external_events/ingress.rs
   - docs/design/external-events.md
 diagramLinks:
   Auth: auth
@@ -164,4 +164,4 @@ navigation only; unrelated state pages were not re-audited.
 
 ## Bounded rule model
 
-Owns fixed binding/event request identity, current access check before each submit or replay and dispatch receipt distinct from turn completion. HMAC validation, bounded ingress slots and durable command lease internals are external shared owners. This optional router remains unmounted in production. This finite abstraction checks safety only. It does not execute or verify the implementation, promise eventual completion, or qualify external effects. Existing source checkpoints and historical test receipts retain their earlier scope. The scoped model review inspected `crates/nessa-server/src/external_events/application/admission.rs`.
+Owns fixed binding/event request identity, current access check before each submit or replay and dispatch receipt distinct from turn completion. HMAC validation, bounded ingress slots and durable command lease internals are external shared owners. This optional router remains unmounted in production. This finite abstraction checks safety only. It does not execute or verify the implementation, promise eventual completion, or qualify external effects. Existing source checkpoints and historical test receipts retain their earlier scope. The scoped model review inspected `crates/nessa-gateway/src/external_events/application/admission.rs`.

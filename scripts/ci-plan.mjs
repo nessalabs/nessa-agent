@@ -82,6 +82,7 @@ export const RUST_TEST_PACKAGES = [
   "nessa-auth",
   "nessa-server",
   "nessa-conversation",
+  "nessa-gateway",
   "nessa-protocol",
   "nessa-projection",
   "nessa-types",

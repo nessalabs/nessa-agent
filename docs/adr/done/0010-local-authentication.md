@@ -282,7 +282,7 @@ before the gateway was ready to accept the session.
 | [NessaClient.connect](../../../packages/nessa-client/src/presentation/nessa-client.ts) | Public client entry point, returns a client after setup succeeds |
 | [establishSession](../../../packages/nessa-client/src/composition/root.ts) | Creates the socket, subscribes for the challenge, and runs the handshake |
 | [waitForSessionChallenge and runProductHandshake](../../../packages/nessa-client/src/application/product-connect-flow.ts) | Receive the challenge, check versions, send the token and nonce, and validate the response |
-| [handle_socket and receive_authentication](../../../crates/nessa-server/src/product/socket.rs) | Create the challenge, check the reply, enforce the timeout, and send SessionReady |
+| [handle_socket and receive_authentication](../../../crates/nessa-gateway/src/product/socket.rs) | Create the challenge, check the reply, enforce the timeout, and send SessionReady |
 | [AuthenticateSession and ReadCurrentSession](../../../crates/nessa-auth/src/application/session.rs) | Check identity and lifetime, then check current access again |
 | [LocalCredentialStore](../../../crates/nessa-auth/src/adapters/local/mod.rs) | Verify the token secret and return the saved access records |
 
@@ -497,7 +497,7 @@ access checks. There is no global object that every module looks up on its own.
 | Code | Responsibility |
 | --- | --- |
 | [Local composition](../../../crates/nessa-server/src/composition/local_auth.rs) | Connect the components and run file-writing administration work outside socket workers |
-| [Gateway](../../../crates/nessa-server/src/product/socket.rs) | Handle connection setup, map requests to permissions, and authorize operation admission |
+| [Gateway](../../../crates/nessa-gateway/src/product/socket.rs) | Handle connection setup, map requests to permissions, and authorize operation admission |
 | [Session checks](../../../crates/nessa-auth/src/application/session.rs) | Authenticate a token and recheck an existing session |
 | [Action checks](../../../crates/nessa-auth/src/application/authorization.rs) | Read current access and ask the policy evaluator for a decision |
 | [Local store](../../../crates/nessa-auth/src/adapters/local/mod.rs) | Create and verify tokens, save access records, and publish the updated memory copy |

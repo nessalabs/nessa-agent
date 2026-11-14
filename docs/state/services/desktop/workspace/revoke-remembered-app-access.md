@@ -21,11 +21,11 @@ sources:
   - src/desktop/settings/ui/permission-rule-rows.tsx
   - src/desktop/settings/ui/permission-rule-rows.test.tsx
   - src/desktop/settings/adapters/permission-rules-gateway.ts
-  - crates/nessa-server/src/product/trusted_apps.rs
+  - crates/nessa-gateway/src/product/trusted_apps.rs
   - crates/nessa-conversation/src/application/service/app_calls.rs
   - crates/nessa-conversation/src/infrastructure/trusted_apps.rs
   - crates/nessa-conversation/src/infrastructure/settings_audit.rs
-  - crates/nessa-server/tests/product/trusted_apps.rs
+  - crates/nessa-gateway/tests/product/trusted_apps.rs
   - crates/nessa-conversation/tests/conversation/settings_audit.rs
 ---
 
@@ -62,7 +62,7 @@ An applied audit failure returns an error after trust has already changed. The p
 
 ## Implementation evidence
 
-[Product tests](../../../../../crates/nessa-server/tests/product/trusted_apps.rs) cover request validation. [Settings audit tests](../../../../../crates/nessa-conversation/tests/conversation/settings_audit.rs) retain server identity and reject contradictory rewrites. [App-message tests](../../../../../crates/nessa-conversation/tests/conversation/app_messages.rs) exercise remembered trust and removal. [Access rows](../../../../../src/desktop/settings/ui/permission-rule-rows.test.tsx) cover app listing, revoke ownership and stale reads. No new proof is attributed to the existing permission-rule model.
+[Product tests](../../../../../crates/nessa-gateway/tests/product/trusted_apps.rs) cover request validation. [Settings audit tests](../../../../../crates/nessa-conversation/tests/conversation/settings_audit.rs) retain server identity and reject contradictory rewrites. [App-message tests](../../../../../crates/nessa-conversation/tests/conversation/app_messages.rs) exercise remembered trust and removal. [Access rows](../../../../../src/desktop/settings/ui/permission-rule-rows.test.tsx) cover app listing, revoke ownership and stale reads. No new proof is attributed to the existing permission-rule model.
 
 ## Verification scope
 

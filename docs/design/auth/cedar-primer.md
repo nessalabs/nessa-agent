@@ -441,7 +441,7 @@ method mapping, resource lookup, grants, and enforcement must agree.
 | [Schema](../../../crates/nessa-auth/src/adapters/cedar/schema.json) | Actor/resource attributes and the supported actions |
 | [Cedar adapter](../../../crates/nessa-auth/src/adapters/cedar/mod.rs) | Trusted fact projection, exact grant matching, and error handling |
 | [AuthorizeAction](../../../crates/nessa-auth/src/application/authorization.rs) | Current state and credential checks before policy evaluation |
-| [Gateway](../../../crates/nessa-server/src/product/socket.rs) | Method mapping, enforcement, and output rechecks |
+| [Gateway](../../../crates/nessa-gateway/src/product/socket.rs) | Method mapping, enforcement, and output rechecks |
 | [Library flow tests](../../../crates/nessa-auth/tests/cedar_flow.rs) | Allowed requests and changes that must turn them into denials |
 | [Live lifecycle test](../../../scripts/smoke-auth.mjs) | Real server, SDK, CLI, revocation, expiry, and restart |
 

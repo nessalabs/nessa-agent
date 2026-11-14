@@ -8,9 +8,9 @@ parent: "mcp"
 sources:
   - "crates/nessa-conversation/src/mcp_servers/infrastructure/resource_tickets.rs"
   - "crates/nessa-conversation/src/application/service/app_calls.rs"
-  - "crates/nessa-server/src/mcp_servers/entrypoint/http.rs"
+  - "crates/nessa-gateway/src/mcp_servers/entrypoint/http.rs"
   - "crates/nessa-conversation/tests/mcp_servers/resource_tickets.rs"
-  - "crates/nessa-server/tests/mcp_servers/http.rs"
+  - "crates/nessa-gateway/tests/mcp_servers/http.rs"
 sourceRevision: "77a6b620af4d94b234294f6d273fd74b3dfb44c7"
 model:
   spec: tla/services/mcp/ResourceTickets.tla

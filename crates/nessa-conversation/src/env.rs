@@ -79,7 +79,7 @@ lease_protocol!(
     "../../nessa-env-serve/src/infrastructure/cedar/schema.json",
     "../../nessa-env-serve/src/infrastructure/cedar/policies.cedar",
     "../../nessa-env-serve/src/machine.rs",
-    "../../nessa-server/src/devices/infrastructure/machine.rs",
+    "../../nessa-gateway/src/devices/infrastructure/machine.rs",
     "../../nessa-env-serve/src/install.rs",
     "infrastructure/ssh_environment/link.rs",
     "infrastructure/ssh_environment/environment.rs",
