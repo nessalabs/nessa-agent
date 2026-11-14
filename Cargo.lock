@@ -616,7 +616,7 @@ dependencies = [
 [[package]]
 name = "boat_client"
 version = "0.1.0"
-source = "git+https://github.com/nessalabs/workspace-sdk?rev=3d080310209ef055361a3c3efa5e206f7fe8a003#3d080310209ef055361a3c3efa5e206f7fe8a003"
+source = "git+https://github.com/nessalabs/workspace-sdk?rev=7501f6b2fda1212fa118698f1bbd599a28459eea#7501f6b2fda1212fa118698f1bbd599a28459eea"
 dependencies = [
  "base64 0.22.1",
  "fastrand",
@@ -8861,7 +8861,7 @@ dependencies = [
 [[package]]
 name = "workspace_sdk"
 version = "0.2.0"
-source = "git+https://github.com/nessalabs/workspace-sdk?rev=3d080310209ef055361a3c3efa5e206f7fe8a003#3d080310209ef055361a3c3efa5e206f7fe8a003"
+source = "git+https://github.com/nessalabs/workspace-sdk?rev=7501f6b2fda1212fa118698f1bbd599a28459eea#7501f6b2fda1212fa118698f1bbd599a28459eea"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
