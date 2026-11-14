@@ -128,6 +128,7 @@ verification/
       focus.mjs             where the caret lands after each pane and dialog change
       lib/overview-keyboard.mjs atomic observation/action for incrementally mounted overview rows
       responsive.mjs        approval card, composer controls and thinking control, column titles, Settings widths and MCP servers narrow, a pane's home
+      lib/column-title-composition.mjs real sidebar tree observations and expected title/list absence; bare-Node tests reject incomplete/contradictory evidence
       widgets.mjs           widget hosts: a card, its pane, the window, Escape's order, focus, drag over the window
       message-sync.mjs      active DOM delivery, stalled list/read independence and idle cost
       app-review.mjs        an MCP App's review: read while the app's call waits, drawn and answered, the card and the overview row naming the app (dev server)
