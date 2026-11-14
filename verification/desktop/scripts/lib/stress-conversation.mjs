@@ -1,4 +1,4 @@
-import { css, selectorFor } from "./selectors.mjs"
+import { css, names, selectorFor } from "./selectors.mjs"
 
 /** Read semantic chat identities even after the renderer replaces UUIDs with titles. */
 export function chatIdentityTexts(nodes) {
@@ -26,7 +26,7 @@ export async function selectStressModel(page, trigger, displayName) {
 /** Reads the focused window conversation's identity, once its row is published. */
 export async function selectedStressConversation(page, title) {
   return page
-    .locator(css.selectedSessionListRow, { hasText: title })
+    .locator(css.stressSelectedSessionRow, { hasText: title })
     .evaluateAll((rows) =>
       rows.length === 1 ? rows[0].getAttribute("data-session-row") : null,
     )
@@ -34,9 +34,31 @@ export async function selectedStressConversation(page, title) {
 
 /** Opens a stress conversation, awaiting its selection and a composer together. */
 export async function openStressConversation(page, conversationId, title) {
-  await page
-    .locator(selectorFor.sessionListRowFor(conversationId), { hasText: title })
-    .click({ timeout: 15_000 })
+  const columns = await page.locator(css.sessionList).count()
+  const row = () =>
+    page.locator(
+      columns
+        ? selectorFor.sessionListRowFor(conversationId)
+        : selectorFor.stressTreeSessionFor(conversationId),
+      { hasText: title },
+    )
+  if (!columns && !(await row().count())) {
+    // Sessions-in-sidebar has no workspace-list. Disclose the actual tree,
+    // then its bounded older rows, without opening an unrelated conversation.
+    const branches = page.locator(css.stressTreeChannel)
+    for (let index = 0; index < (await branches.count()); index += 1) {
+      const branch = branches.nth(index)
+      if ((await branch.getAttribute("aria-expanded")) === "false")
+        await branch.locator(css.stressTreeDisclosure).click({ timeout: 15_000 })
+    }
+    if (!(await row().count())) {
+      const more = page.locator(css.stressTreeMore).filter({ hasText: names.showAll })
+      const count = await branches.count()
+      for (let shown = 0; shown < count && (await more.count()); shown += 1)
+        await more.first().click({ timeout: 15_000 })
+    }
+  }
+  await row().click({ timeout: 15_000 })
   // A composer can still belong to the previous chat. Read both facts in
   // one observation: a selection that later reverted cannot satisfy a
   // composer that only appeared afterward. Never retry the click.
@@ -62,7 +84,7 @@ export async function openStressConversation(page, conversationId, title) {
     },
     {
       conversationId,
-      selected: css.selectedSessionListRow,
+      selected: css.stressSelectedSessionRow,
       composer: `${css.conversationDock} textarea`,
     },
     { timeout: 15_000 },

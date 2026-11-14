@@ -104,6 +104,7 @@ export const css = {
 
   // Widgets (ADR 326) and the sample plugin that shows them (src/desktop/widgets/fixture/)
   widgetCard: "[data-widget-inline]", // a widget's card in a message; its value says what it draws
+  widgetCardRow: '[data-widget-inline="row"]', // an Open row while the app is live in its panel
   panel: "#workspace-panel", // the right panel: each chat's own; inert while hidden
   chatPanelTabs: ".workspace-panel-tabs", // class: the panel's tabs, one per widget open for the chat in front
   panelWidget: "[data-panel-widget]", // the panel's tab in front: a widget's trail, Open in Window and body
@@ -190,6 +191,11 @@ export const css = {
   listSearch: ".workspace-list .workspace-search", // class: the session list's search field
   listScroll: ".workspace-list-scroll", // class: the session list's scroller
   sessionListRow: ".workspace-list [data-session-row]", // a row of the session list, not a sidebar thread
+  stressSelectedSessionRow:
+    '.workspace-list [data-session-row][aria-selected="true"], .workspace-thread-row[aria-current="page"]',
+  stressTreeChannel: '[data-row="channel"][data-channel]',
+  stressTreeDisclosure: ".workspace-disclosure",
+  stressTreeMore: '[data-row="more"]',
   selectedSessionListRow: '.workspace-list [data-session-row][aria-selected="true"]', // the conversation the focused pane actually shows
   sessionRow: "[data-drag-item]", // a session a drag can carry to a pane
   sidebarEdge: '[role="separator"][aria-label="Resize Sidebar"]',
@@ -416,6 +422,7 @@ export const selectorFor = {
   reviewOutput: (name) => `#${name}`, // what the review app heard back: result, first, hidden-no-ui, hidden-with-ui, again
   linkedAction: (action) => `[data-linked-action="${action}"]`,
   sessionListRowFor: (id) => `.workspace-list [data-session-row="${id}"]`, // one session's row in the session list
+  stressTreeSessionFor: (id) => `.workspace-thread-row[data-session-row="${id}"]`,
   shareAction: (action) => `[data-share-action="${action}"]`, // submit | change | revoke | confirm-revoke | cancel-revoke | restart | retry | close
   shareGrant: (credentialId) => `[data-share-grant="${credentialId}"]`,
   sharePattern: (list) => `[data-share-pattern="${list}"]`, // allow | deny

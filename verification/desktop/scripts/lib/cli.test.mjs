@@ -241,6 +241,28 @@ describe("resultOfThrown", () => {
     )
     assert.equal(written, "obj\n")
   })
+
+  it("retains both aggregate failures and an original fatal recovery cause", async () => {
+    const original = new Error("original acknowledgement")
+    const action = new UnsafeToContinueError("browser recovery", { cause: original })
+    const cleanup = new Error("navigation cleanup")
+    let result
+    const written = await stderrOf(() => {
+      result = resultOfThrown(
+        { name: "s" },
+        new AggregateError([action, cleanup], "step and cleanup failed"),
+      )
+    })
+    for (const text of [
+      "browser recovery",
+      "original acknowledgement",
+      "navigation cleanup",
+    ]) {
+      assert.ok(result.error.includes(text))
+      assert.ok(written.includes(text))
+    }
+    assert.equal(result.cannotRun, false)
+  })
 })
 
 describe("run-all's sum", () => {

@@ -155,8 +155,8 @@ await main(meta, async ({ options, rep, url }) => {
         if (!shown) failures.push(`Settings (${css.settings}) not visible after ⌘,`)
         // Advanced › Experimental: the home of previews, each a switch — the
         // subagents preview (on unless turned off) and the side rail (off until
-        // turned on). The catalogue owns which tabs are offered; its dek says
-        // what the page is for.
+        // turned on). The catalogue owns which tabs are offered. Its
+        // title-only masthead has no subtitle.
         await page.locator(css.settingsCategory, { hasText: "Advanced" }).click()
         await page
           .locator(css.settingsHeading, { hasText: "Advanced" })
@@ -165,11 +165,19 @@ await main(meta, async ({ options, rep, url }) => {
             failures.push("Advanced's page did not open from its sidebar entry"),
           )
         const advanced = await page.evaluate(
-          ({ tab, panel, control, dek }) => {
+          ({ tab, panel, control, masthead, heading }) => {
             const page = document.querySelector(panel)
+            const head = document.querySelector(masthead)
+            const remaining = head?.cloneNode(true)
+            remaining
+              ?.querySelectorAll(`${heading}, ${tab}`)
+              .forEach((allowed) => allowed.remove())
             return {
               tabs: [...document.querySelectorAll(tab)].map((each) => each.innerText),
-              dek: document.querySelector(dek)?.textContent ?? "",
+              titles: [...(head?.querySelectorAll(heading) ?? [])].map((each) =>
+                each.textContent?.trim(),
+              ),
+              extraCopy: remaining?.textContent?.trim() ?? "",
               text: page?.textContent ?? "",
               controls: page?.querySelectorAll(control).length ?? -1,
               offered: [...(page?.querySelectorAll('[role="switch"]') ?? [])].map(
@@ -181,12 +189,17 @@ await main(meta, async ({ options, rep, url }) => {
             tab: css.settingsTab,
             panel: css.settingsPanel,
             control: css.control,
-            dek: css.settingsDek,
+            masthead: css.settingsMasthead,
+            heading: css.settingsHeading,
           },
         )
         failures.push(...settingsTabFailures("advanced", advanced.tabs))
-        if (!advanced.dek)
-          failures.push("Advanced has no line under its title saying what it is for")
+        if (advanced.titles.length !== 1 || advanced.titles[0] !== "Advanced")
+          failures.push("Advanced does not have its single catalogue title")
+        if (advanced.extraCopy)
+          failures.push(
+            `Advanced's title-only masthead has extra copy: ${advanced.extraCopy}`,
+          )
         for (const preview of ["Subagents", "Side rail"])
           if (!advanced.text.includes(preview))
             failures.push(`Experimental's page says "${advanced.text}", not ${preview}`)

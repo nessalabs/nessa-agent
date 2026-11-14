@@ -1,13 +1,13 @@
 /**
  * How an app's display modes map onto the window's places (ADR 344): `inline`
  * is a card in the message; `fullscreen` is a tab in the conversation's panel,
- * and the window — where a sidebar entry opens an app — is drawn as
- * fullscreen too; `pip` is never offered.
+ * and `pip` is never offered. The generic window-place mapping below is
+ * fullscreen too; apps do not offer that destination (`offeredBy`).
  *
- * Each place draws its own view, so a request changes where *another* view
- * is drawn, never this one: an inline view asking for fullscreen opens a
- * panel tab and stays inline, and says so in its answer, as the spec asks
- * ("Host MUST return the resulting mode").
+ * A reply describes its requesting view's mode. Before an inline request
+ * opens a panel tab, the bridge posts that caller's inline answer (L17a).
+ * The host then retires the inline copy: the app has one live view (#1220,
+ * `host-table.test.ts`), not two copies of the app and its microphone.
  */
 import type { OpenPlace, WidgetPlace } from "../../model/widget-state"
 import type { DisplayMode } from "./messages"

@@ -1,0 +1,1438 @@
+[
+  {
+    "name": "smoke",
+    "command": [
+      "python3",
+      "/workspace/scratch/893-test-init.py",
+      "node",
+      "verification/desktop/scripts/smoke.mjs",
+      "--engine",
+      "chromium,webkit",
+      "--layout",
+      "columns,sidebar",
+      "--channel",
+      "bundled",
+      "--out",
+      "/workspace/scratch/1327-probes/smoke.json"
+    ],
+    "exit": 1,
+    "log": "/workspace/scratch/1327-probes/smoke.log",
+    "expected": [0, 1],
+    "finished": 1794400815.2268155
+  },
+  {
+    "name": "fixed-focused",
+    "command": [
+      "python3",
+      "/workspace/scratch/893-test-init.py",
+      "node",
+      "verification/desktop/scripts/mcp-apps.mjs",
+      "--only",
+      "inline,panel,window,teardown,moving-frame",
+      "--engine",
+      "chromium,webkit",
+      "--layout",
+      "columns,sidebar",
+      "--channel",
+      "bundled",
+      "--out",
+      "/workspace/scratch/1327-probes/fixed-focused.json",
+      "--shots",
+      "/workspace/scratch/1327-shots"
+    ],
+    "exit": 0,
+    "log": "/workspace/scratch/1327-probes/fixed-focused.log",
+    "expected": [0],
+    "finished": 1794400945.461953,
+    "result": "/workspace/scratch/1327-probes/fixed-focused.json",
+    "rows": [
+      {
+        "name": "inline",
+        "engine": "chromium",
+        "layout": "columns",
+        "ok": true,
+        "failures": [],
+        "error": null
+      },
+      {
+        "name": "panel",
+        "engine": "chromium",
+        "layout": "columns",
+        "ok": true,
+        "failures": [],
+        "error": null
+      },
+      {
+        "name": "window",
+        "engine": "chromium",
+        "layout": "columns",
+        "ok": true,
+        "failures": [],
+        "error": null
+      },
+      {
+        "name": "teardown",
+        "engine": "chromium",
+        "layout": "columns",
+        "ok": true,
+        "failures": [],
+        "error": null
+      },
+      {
+        "name": "moving-frame-cleanup",
+        "engine": "chromium",
+        "layout": "columns",
+        "ok": true,
+        "failures": [],
+        "error": null
+      },
+      {
+        "name": "moving-frame",
+        "engine": "chromium",
+        "layout": "columns",
+        "ok": true,
+        "failures": [],
+        "error": null
+      },
+      {
+        "name": "inline",
+        "engine": "chromium",
+        "layout": "sidebar",
+        "ok": true,
+        "failures": [],
+        "error": null
+      },
+      {
+        "name": "panel",
+        "engine": "chromium",
+        "layout": "sidebar",
+        "ok": true,
+        "failures": [],
+        "error": null
+      },
+      {
+        "name": "window",
+        "engine": "chromium",
+        "layout": "sidebar",
+        "ok": true,
+        "failures": [],
+        "error": null
+      },
+      {
+        "name": "teardown",
+        "engine": "chromium",
+        "layout": "sidebar",
+        "ok": true,
+        "failures": [],
+        "error": null
+      },
+      {
+        "name": "moving-frame-cleanup",
+        "engine": "chromium",
+        "layout": "sidebar",
+        "ok": true,
+        "failures": [],
+        "error": null
+      },
+      {
+        "name": "moving-frame",
+        "engine": "chromium",
+        "layout": "sidebar",
+        "ok": true,
+        "failures": [],
+        "error": null
+      },
+      {
+        "name": "inline",
+        "engine": "webkit",
+        "layout": "columns",
+        "ok": true,
+        "failures": [],
+        "error": null
+      },
+      {
+        "name": "panel",
+        "engine": "webkit",
+        "layout": "columns",
+        "ok": true,
+        "failures": [],
+        "error": null
+      },
+      {
+        "name": "window",
+        "engine": "webkit",
+        "layout": "columns",
+        "ok": true,
+        "failures": [],
+        "error": null
+      },
+      {
+        "name": "teardown",
+        "engine": "webkit",
+        "layout": "columns",
+        "ok": true,
+        "failures": [],
+        "error": null
+      },
+      {
+        "name": "moving-frame-cleanup",
+        "engine": "webkit",
+        "layout": "columns",
+        "ok": true,
+        "failures": [],
+        "error": null
+      },
+      {
+        "name": "moving-frame",
+        "engine": "webkit",
+        "layout": "columns",
+        "ok": true,
+        "failures": [],
+        "error": null
+      },
+      {
+        "name": "inline",
+        "engine": "webkit",
+        "layout": "sidebar",
+        "ok": true,
+        "failures": [],
+        "error": null
+      },
+      {
+        "name": "panel",
+        "engine": "webkit",
+        "layout": "sidebar",
+        "ok": true,
+        "failures": [],
+        "error": null
+      },
+      {
+        "name": "window",
+        "engine": "webkit",
+        "layout": "sidebar",
+        "ok": true,
+        "failures": [],
+        "error": null
+      },
+      {
+        "name": "teardown",
+        "engine": "webkit",
+        "layout": "sidebar",
+        "ok": true,
+        "failures": [],
+        "error": null
+      },
+      {
+        "name": "moving-frame-cleanup",
+        "engine": "webkit",
+        "layout": "sidebar",
+        "ok": true,
+        "failures": [],
+        "error": null
+      },
+      {
+        "name": "moving-frame",
+        "engine": "webkit",
+        "layout": "sidebar",
+        "ok": true,
+        "failures": [],
+        "error": null
+      }
+    ]
+  },
+  {
+    "mutation": "old-reply-order",
+    "path": "src/desktop/widgets/app/application/bridge.ts",
+    "originalSha256": "2aa957d5243fb8cf3aa5420dc2d1aef5278d8f7d0be6d077398ab02c308252fd",
+    "mutantSha256": "4230980c9f2e8e3b56e89b6c28a254a3273f134d79b062ec1f8ab39ceddaa100",
+    "diff": "/workspace/scratch/1327-probes/old-reply-order.diff"
+  },
+  {
+    "name": "old-reply-order",
+    "command": [
+      "pnpm",
+      "exec",
+      "vitest",
+      "run",
+      "src/desktop/widgets/app/application/bridge.test.ts",
+      "-t",
+      "L17a"
+    ],
+    "exit": 1,
+    "log": "/workspace/scratch/1327-probes/old-reply-order.log",
+    "expected": [1],
+    "finished": 1794400948.346811,
+    "sourceRestored": true
+  },
+  {
+    "name": "restored-reply-unit",
+    "command": [
+      "pnpm",
+      "exec",
+      "vitest",
+      "run",
+      "src/desktop/widgets/app/application/bridge.test.ts",
+      "src/desktop/widgets/app/model/places.test.ts"
+    ],
+    "exit": 0,
+    "log": "/workspace/scratch/1327-probes/restored-reply-unit.log",
+    "expected": [0],
+    "finished": 1794400952.6823733
+  },
+  {
+    "mutation": "wrong-reply-id",
+    "path": "src/desktop/widgets/app/application/bridge.ts",
+    "originalSha256": "2aa957d5243fb8cf3aa5420dc2d1aef5278d8f7d0be6d077398ab02c308252fd",
+    "mutantSha256": "5ebb0377d2f24642c2994a2eb83f0f426d5e9c51a5325223709ed9e618adcc8f",
+    "diff": "/workspace/scratch/1327-probes/wrong-reply-id.diff"
+  },
+  {
+    "name": "wrong-reply-id",
+    "command": [
+      "python3",
+      "/workspace/scratch/893-test-init.py",
+      "node",
+      "verification/desktop/scripts/mcp-apps.mjs",
+      "--only",
+      "panel",
+      "--engine",
+      "chromium,webkit",
+      "--layout",
+      "columns",
+      "--channel",
+      "bundled",
+      "--out",
+      "/workspace/scratch/1327-probes/wrong-reply-id.json"
+    ],
+    "exit": 1,
+    "log": "/workspace/scratch/1327-probes/wrong-reply-id.log",
+    "expected": [1],
+    "finished": 1794400978.9709113,
+    "result": "/workspace/scratch/1327-probes/wrong-reply-id.json",
+    "rows": [
+      {
+        "name": "panel",
+        "engine": "chromium",
+        "layout": "columns",
+        "ok": false,
+        "failures": ["the panel's own fullscreen request was answered "],
+        "error": null
+      },
+      {
+        "name": "panel",
+        "engine": "webkit",
+        "layout": "columns",
+        "ok": false,
+        "failures": ["the panel's own fullscreen request was answered "],
+        "error": null
+      }
+    ],
+    "sourceRestored": true
+  },
+  {
+    "name": "restored-reply-browser",
+    "command": [
+      "python3",
+      "/workspace/scratch/893-test-init.py",
+      "node",
+      "verification/desktop/scripts/mcp-apps.mjs",
+      "--only",
+      "panel",
+      "--engine",
+      "chromium,webkit",
+      "--layout",
+      "columns,sidebar",
+      "--channel",
+      "bundled",
+      "--out",
+      "/workspace/scratch/1327-probes/restored-reply-browser.json"
+    ],
+    "exit": 0,
+    "log": "/workspace/scratch/1327-probes/restored-reply-browser.log",
+    "expected": [0],
+    "finished": 1794401011.3229382,
+    "result": "/workspace/scratch/1327-probes/restored-reply-browser.json",
+    "rows": [
+      {
+        "name": "panel",
+        "engine": "chromium",
+        "layout": "columns",
+        "ok": true,
+        "failures": [],
+        "error": null
+      },
+      {
+        "name": "panel",
+        "engine": "chromium",
+        "layout": "sidebar",
+        "ok": true,
+        "failures": [],
+        "error": null
+      },
+      {
+        "name": "panel",
+        "engine": "webkit",
+        "layout": "columns",
+        "ok": true,
+        "failures": [],
+        "error": null
+      },
+      {
+        "name": "panel",
+        "engine": "webkit",
+        "layout": "sidebar",
+        "ok": true,
+        "failures": [],
+        "error": null
+      }
+    ]
+  },
+  {
+    "mutation": "two-live-apps",
+    "path": "src/desktop/widgets/model/host-table.ts",
+    "originalSha256": "7780cf99b026f9754dfc2a94ae442c680b8103bd7268833911db5348c3612ec9",
+    "mutantSha256": "64a7dbe1411269f346d24fbd4745a1dff78eaee3e582b5d2c2a57d3c5304abed",
+    "diff": "/workspace/scratch/1327-probes/two-live-apps.diff"
+  },
+  {
+    "name": "two-live-apps",
+    "command": [
+      "python3",
+      "/workspace/scratch/893-test-init.py",
+      "node",
+      "verification/desktop/scripts/mcp-apps.mjs",
+      "--only",
+      "panel",
+      "--engine",
+      "chromium,webkit",
+      "--layout",
+      "columns",
+      "--channel",
+      "bundled",
+      "--out",
+      "/workspace/scratch/1327-probes/two-live-apps.json"
+    ],
+    "exit": 1,
+    "log": "/workspace/scratch/1327-probes/two-live-apps.log",
+    "expected": [1],
+    "finished": 1794401026.9098942,
+    "result": "/workspace/scratch/1327-probes/two-live-apps.json",
+    "rows": [
+      {
+        "name": "panel",
+        "engine": "chromium",
+        "layout": "columns",
+        "ok": false,
+        "failures": [
+          "an inline app is running beside its panel copy",
+          "the retired app has 0 Open rows, expected one",
+          "the original inline proxy or app survived opening its panel"
+        ],
+        "error": null
+      },
+      {
+        "name": "panel",
+        "engine": "webkit",
+        "layout": "columns",
+        "ok": false,
+        "failures": [
+          "an inline app is running beside its panel copy",
+          "the retired app has 0 Open rows, expected one",
+          "the original inline proxy or app survived opening its panel"
+        ],
+        "error": null
+      }
+    ],
+    "sourceRestored": true
+  },
+  {
+    "name": "restored-single-view",
+    "command": [
+      "python3",
+      "/workspace/scratch/893-test-init.py",
+      "node",
+      "verification/desktop/scripts/mcp-apps.mjs",
+      "--only",
+      "panel",
+      "--engine",
+      "chromium,webkit",
+      "--layout",
+      "columns,sidebar",
+      "--channel",
+      "bundled",
+      "--out",
+      "/workspace/scratch/1327-probes/restored-single-view.json"
+    ],
+    "exit": 0,
+    "log": "/workspace/scratch/1327-probes/restored-single-view.log",
+    "expected": [0],
+    "finished": 1794401058.317901,
+    "result": "/workspace/scratch/1327-probes/restored-single-view.json",
+    "rows": [
+      {
+        "name": "panel",
+        "engine": "chromium",
+        "layout": "columns",
+        "ok": true,
+        "failures": [],
+        "error": null
+      },
+      {
+        "name": "panel",
+        "engine": "chromium",
+        "layout": "sidebar",
+        "ok": true,
+        "failures": [],
+        "error": null
+      },
+      {
+        "name": "panel",
+        "engine": "webkit",
+        "layout": "columns",
+        "ok": true,
+        "failures": [],
+        "error": null
+      },
+      {
+        "name": "panel",
+        "engine": "webkit",
+        "layout": "sidebar",
+        "ok": true,
+        "failures": [],
+        "error": null
+      }
+    ]
+  },
+  {
+    "mutation": "app-window-offer",
+    "path": "src/desktop/widgets/ui/widget-answer.tsx",
+    "originalSha256": "d34ca42e79742003eb5613a9768d512202ac4a9b10d911076353379d1caab9dd",
+    "mutantSha256": "af3903297ddda4a753f37c2a32ef14b2a334f3c0d45c75235e93671e60d6e720",
+    "diff": "/workspace/scratch/1327-probes/app-window-offer.diff"
+  },
+  {
+    "name": "app-window-offer",
+    "command": [
+      "python3",
+      "/workspace/scratch/893-test-init.py",
+      "node",
+      "verification/desktop/scripts/mcp-apps.mjs",
+      "--only",
+      "window",
+      "--engine",
+      "chromium,webkit",
+      "--layout",
+      "columns",
+      "--channel",
+      "bundled",
+      "--out",
+      "/workspace/scratch/1327-probes/app-window-offer.json"
+    ],
+    "exit": 1,
+    "log": "/workspace/scratch/1327-probes/app-window-offer.log",
+    "expected": [1],
+    "finished": 1794401079.726684,
+    "result": "/workspace/scratch/1327-probes/app-window-offer.json",
+    "rows": [
+      {
+        "name": "window",
+        "engine": "chromium",
+        "layout": "columns",
+        "ok": false,
+        "failures": ["the app offers Open in Window"],
+        "error": null
+      },
+      {
+        "name": "window",
+        "engine": "webkit",
+        "layout": "columns",
+        "ok": false,
+        "failures": ["the app offers Open in Window"],
+        "error": null
+      }
+    ],
+    "sourceRestored": true
+  },
+  {
+    "name": "restored-window-offer",
+    "command": [
+      "python3",
+      "/workspace/scratch/893-test-init.py",
+      "node",
+      "verification/desktop/scripts/mcp-apps.mjs",
+      "--only",
+      "window",
+      "--engine",
+      "chromium,webkit",
+      "--layout",
+      "columns,sidebar",
+      "--channel",
+      "bundled",
+      "--out",
+      "/workspace/scratch/1327-probes/restored-window-offer.json"
+    ],
+    "exit": 0,
+    "log": "/workspace/scratch/1327-probes/restored-window-offer.log",
+    "expected": [0],
+    "finished": 1794401123.225521,
+    "result": "/workspace/scratch/1327-probes/restored-window-offer.json",
+    "rows": [
+      {
+        "name": "window",
+        "engine": "chromium",
+        "layout": "columns",
+        "ok": true,
+        "failures": [],
+        "error": null
+      },
+      {
+        "name": "window",
+        "engine": "chromium",
+        "layout": "sidebar",
+        "ok": true,
+        "failures": [],
+        "error": null
+      },
+      {
+        "name": "window",
+        "engine": "webkit",
+        "layout": "columns",
+        "ok": true,
+        "failures": [],
+        "error": null
+      },
+      {
+        "name": "window",
+        "engine": "webkit",
+        "layout": "sidebar",
+        "ok": true,
+        "failures": [],
+        "error": null
+      }
+    ]
+  },
+  {
+    "name": "restored-full-mcp",
+    "command": [
+      "python3",
+      "/workspace/scratch/893-test-init.py",
+      "node",
+      "verification/desktop/scripts/mcp-apps.mjs",
+      "--engine",
+      "chromium,webkit",
+      "--layout",
+      "columns,sidebar",
+      "--channel",
+      "bundled",
+      "--out",
+      "/workspace/scratch/1327-probes/restored-full-mcp.json"
+    ],
+    "exit": 0,
+    "log": "/workspace/scratch/1327-probes/restored-full-mcp.log",
+    "expected": [0],
+    "finished": 1794401678.793834,
+    "result": "/workspace/scratch/1327-probes/restored-full-mcp.json",
+    "rows": [
+      {
+        "name": "moving-frame-cleanup",
+        "engine": "chromium",
+        "layout": "columns",
+        "ok": true,
+        "failures": [],
+        "error": null
+      },
+      {
+        "name": "moving-frame",
+        "engine": "chromium",
+        "layout": "columns",
+        "ok": true,
+        "failures": [],
+        "error": null
+      },
+      {
+        "name": "inline",
+        "engine": "chromium",
+        "layout": "columns",
+        "ok": true,
+        "failures": [],
+        "error": null
+      },
+      {
+        "name": "panel",
+        "engine": "chromium",
+        "layout": "columns",
+        "ok": true,
+        "failures": [],
+        "error": null
+      },
+      {
+        "name": "window",
+        "engine": "chromium",
+        "layout": "columns",
+        "ok": true,
+        "failures": [],
+        "error": null
+      },
+      {
+        "name": "tools-call",
+        "engine": "chromium",
+        "layout": "columns",
+        "ok": true,
+        "failures": [],
+        "error": null
+      },
+      {
+        "name": "message",
+        "engine": "chromium",
+        "layout": "columns",
+        "ok": true,
+        "failures": [],
+        "error": null
+      },
+      {
+        "name": "csp",
+        "engine": "chromium",
+        "layout": "columns",
+        "ok": true,
+        "failures": [],
+        "error": null
+      },
+      {
+        "name": "console",
+        "engine": "chromium",
+        "layout": "columns",
+        "ok": true,
+        "failures": [],
+        "error": null
+      },
+      {
+        "name": "isolation",
+        "engine": "chromium",
+        "layout": "columns",
+        "ok": true,
+        "failures": [],
+        "error": null
+      },
+      {
+        "name": "escape-navigate",
+        "engine": "chromium",
+        "layout": "columns",
+        "ok": true,
+        "failures": [],
+        "error": null
+      },
+      {
+        "name": "console",
+        "engine": "chromium",
+        "layout": "columns",
+        "ok": true,
+        "failures": [],
+        "error": null
+      },
+      {
+        "name": "escape-refresh",
+        "engine": "chromium",
+        "layout": "columns",
+        "ok": true,
+        "failures": [],
+        "error": null
+      },
+      {
+        "name": "console",
+        "engine": "chromium",
+        "layout": "columns",
+        "ok": true,
+        "failures": [],
+        "error": null
+      },
+      {
+        "name": "escape-rewrite",
+        "engine": "chromium",
+        "layout": "columns",
+        "ok": true,
+        "failures": [],
+        "error": null
+      },
+      {
+        "name": "console",
+        "engine": "chromium",
+        "layout": "columns",
+        "ok": true,
+        "failures": [],
+        "error": null
+      },
+      {
+        "name": "departures-cleanup",
+        "engine": "chromium",
+        "layout": "columns",
+        "ok": true,
+        "failures": [],
+        "error": null
+      },
+      {
+        "name": "departures",
+        "engine": "chromium",
+        "layout": "columns",
+        "ok": true,
+        "failures": [],
+        "error": null
+      },
+      {
+        "name": "console",
+        "engine": "chromium",
+        "layout": "columns",
+        "ok": true,
+        "failures": [],
+        "error": null
+      },
+      {
+        "name": "departures-back-cleanup",
+        "engine": "chromium",
+        "layout": "columns",
+        "ok": true,
+        "failures": [],
+        "error": null
+      },
+      {
+        "name": "departures-back",
+        "engine": "chromium",
+        "layout": "columns",
+        "ok": true,
+        "failures": [],
+        "error": null
+      },
+      {
+        "name": "chart-cleanup",
+        "engine": "chromium",
+        "layout": "columns",
+        "ok": true,
+        "failures": [],
+        "error": null
+      },
+      {
+        "name": "chart",
+        "engine": "chromium",
+        "layout": "columns",
+        "ok": true,
+        "failures": [],
+        "error": null
+      },
+      {
+        "name": "forge",
+        "engine": "chromium",
+        "layout": "columns",
+        "ok": true,
+        "failures": [],
+        "error": null
+      },
+      {
+        "name": "teardown",
+        "engine": "chromium",
+        "layout": "columns",
+        "ok": true,
+        "failures": [],
+        "error": null
+      },
+      {
+        "name": "moving-frame-cleanup",
+        "engine": "chromium",
+        "layout": "sidebar",
+        "ok": true,
+        "failures": [],
+        "error": null
+      },
+      {
+        "name": "moving-frame",
+        "engine": "chromium",
+        "layout": "sidebar",
+        "ok": true,
+        "failures": [],
+        "error": null
+      },
+      {
+        "name": "inline",
+        "engine": "chromium",
+        "layout": "sidebar",
+        "ok": true,
+        "failures": [],
+        "error": null
+      },
+      {
+        "name": "panel",
+        "engine": "chromium",
+        "layout": "sidebar",
+        "ok": true,
+        "failures": [],
+        "error": null
+      },
+      {
+        "name": "window",
+        "engine": "chromium",
+        "layout": "sidebar",
+        "ok": true,
+        "failures": [],
+        "error": null
+      },
+      {
+        "name": "tools-call",
+        "engine": "chromium",
+        "layout": "sidebar",
+        "ok": true,
+        "failures": [],
+        "error": null
+      },
+      {
+        "name": "message",
+        "engine": "chromium",
+        "layout": "sidebar",
+        "ok": true,
+        "failures": [],
+        "error": null
+      },
+      {
+        "name": "csp",
+        "engine": "chromium",
+        "layout": "sidebar",
+        "ok": true,
+        "failures": [],
+        "error": null
+      },
+      {
+        "name": "console",
+        "engine": "chromium",
+        "layout": "sidebar",
+        "ok": true,
+        "failures": [],
+        "error": null
+      },
+      {
+        "name": "isolation",
+        "engine": "chromium",
+        "layout": "sidebar",
+        "ok": true,
+        "failures": [],
+        "error": null
+      },
+      {
+        "name": "escape-navigate",
+        "engine": "chromium",
+        "layout": "sidebar",
+        "ok": true,
+        "failures": [],
+        "error": null
+      },
+      {
+        "name": "console",
+        "engine": "chromium",
+        "layout": "sidebar",
+        "ok": true,
+        "failures": [],
+        "error": null
+      },
+      {
+        "name": "escape-refresh",
+        "engine": "chromium",
+        "layout": "sidebar",
+        "ok": true,
+        "failures": [],
+        "error": null
+      },
+      {
+        "name": "console",
+        "engine": "chromium",
+        "layout": "sidebar",
+        "ok": true,
+        "failures": [],
+        "error": null
+      },
+      {
+        "name": "escape-rewrite",
+        "engine": "chromium",
+        "layout": "sidebar",
+        "ok": true,
+        "failures": [],
+        "error": null
+      },
+      {
+        "name": "console",
+        "engine": "chromium",
+        "layout": "sidebar",
+        "ok": true,
+        "failures": [],
+        "error": null
+      },
+      {
+        "name": "departures-cleanup",
+        "engine": "chromium",
+        "layout": "sidebar",
+        "ok": true,
+        "failures": [],
+        "error": null
+      },
+      {
+        "name": "departures",
+        "engine": "chromium",
+        "layout": "sidebar",
+        "ok": true,
+        "failures": [],
+        "error": null
+      },
+      {
+        "name": "console",
+        "engine": "chromium",
+        "layout": "sidebar",
+        "ok": true,
+        "failures": [],
+        "error": null
+      },
+      {
+        "name": "departures-back-cleanup",
+        "engine": "chromium",
+        "layout": "sidebar",
+        "ok": true,
+        "failures": [],
+        "error": null
+      },
+      {
+        "name": "departures-back",
+        "engine": "chromium",
+        "layout": "sidebar",
+        "ok": true,
+        "failures": [],
+        "error": null
+      },
+      {
+        "name": "chart-cleanup",
+        "engine": "chromium",
+        "layout": "sidebar",
+        "ok": true,
+        "failures": [],
+        "error": null
+      },
+      {
+        "name": "chart",
+        "engine": "chromium",
+        "layout": "sidebar",
+        "ok": true,
+        "failures": [],
+        "error": null
+      },
+      {
+        "name": "forge",
+        "engine": "chromium",
+        "layout": "sidebar",
+        "ok": true,
+        "failures": [],
+        "error": null
+      },
+      {
+        "name": "teardown",
+        "engine": "chromium",
+        "layout": "sidebar",
+        "ok": true,
+        "failures": [],
+        "error": null
+      },
+      {
+        "name": "moving-frame-cleanup",
+        "engine": "webkit",
+        "layout": "columns",
+        "ok": true,
+        "failures": [],
+        "error": null
+      },
+      {
+        "name": "moving-frame",
+        "engine": "webkit",
+        "layout": "columns",
+        "ok": true,
+        "failures": [],
+        "error": null
+      },
+      {
+        "name": "inline",
+        "engine": "webkit",
+        "layout": "columns",
+        "ok": true,
+        "failures": [],
+        "error": null
+      },
+      {
+        "name": "panel",
+        "engine": "webkit",
+        "layout": "columns",
+        "ok": true,
+        "failures": [],
+        "error": null
+      },
+      {
+        "name": "window",
+        "engine": "webkit",
+        "layout": "columns",
+        "ok": true,
+        "failures": [],
+        "error": null
+      },
+      {
+        "name": "tools-call",
+        "engine": "webkit",
+        "layout": "columns",
+        "ok": true,
+        "failures": [],
+        "error": null
+      },
+      {
+        "name": "message",
+        "engine": "webkit",
+        "layout": "columns",
+        "ok": true,
+        "failures": [],
+        "error": null
+      },
+      {
+        "name": "csp",
+        "engine": "webkit",
+        "layout": "columns",
+        "ok": true,
+        "failures": [],
+        "error": null
+      },
+      {
+        "name": "console",
+        "engine": "webkit",
+        "layout": "columns",
+        "ok": true,
+        "failures": [],
+        "error": null
+      },
+      {
+        "name": "isolation",
+        "engine": "webkit",
+        "layout": "columns",
+        "ok": true,
+        "failures": [],
+        "error": null
+      },
+      {
+        "name": "escape-navigate",
+        "engine": "webkit",
+        "layout": "columns",
+        "ok": true,
+        "failures": [],
+        "error": null
+      },
+      {
+        "name": "console",
+        "engine": "webkit",
+        "layout": "columns",
+        "ok": true,
+        "failures": [],
+        "error": null
+      },
+      {
+        "name": "escape-refresh",
+        "engine": "webkit",
+        "layout": "columns",
+        "ok": true,
+        "failures": [],
+        "error": null
+      },
+      {
+        "name": "console",
+        "engine": "webkit",
+        "layout": "columns",
+        "ok": true,
+        "failures": [],
+        "error": null
+      },
+      {
+        "name": "escape-rewrite",
+        "engine": "webkit",
+        "layout": "columns",
+        "ok": true,
+        "failures": [],
+        "error": null
+      },
+      {
+        "name": "console",
+        "engine": "webkit",
+        "layout": "columns",
+        "ok": true,
+        "failures": [],
+        "error": null
+      },
+      {
+        "name": "departures-cleanup",
+        "engine": "webkit",
+        "layout": "columns",
+        "ok": true,
+        "failures": [],
+        "error": null
+      },
+      {
+        "name": "departures",
+        "engine": "webkit",
+        "layout": "columns",
+        "ok": true,
+        "failures": [],
+        "error": null
+      },
+      {
+        "name": "console",
+        "engine": "webkit",
+        "layout": "columns",
+        "ok": true,
+        "failures": [],
+        "error": null
+      },
+      {
+        "name": "departures-back-cleanup",
+        "engine": "webkit",
+        "layout": "columns",
+        "ok": true,
+        "failures": [],
+        "error": null
+      },
+      {
+        "name": "departures-back",
+        "engine": "webkit",
+        "layout": "columns",
+        "ok": true,
+        "failures": [],
+        "error": null
+      },
+      {
+        "name": "chart-cleanup",
+        "engine": "webkit",
+        "layout": "columns",
+        "ok": true,
+        "failures": [],
+        "error": null
+      },
+      {
+        "name": "chart",
+        "engine": "webkit",
+        "layout": "columns",
+        "ok": true,
+        "failures": [],
+        "error": null
+      },
+      {
+        "name": "forge",
+        "engine": "webkit",
+        "layout": "columns",
+        "ok": true,
+        "failures": [],
+        "error": null
+      },
+      {
+        "name": "teardown",
+        "engine": "webkit",
+        "layout": "columns",
+        "ok": true,
+        "failures": [],
+        "error": null
+      },
+      {
+        "name": "moving-frame-cleanup",
+        "engine": "webkit",
+        "layout": "sidebar",
+        "ok": true,
+        "failures": [],
+        "error": null
+      },
+      {
+        "name": "moving-frame",
+        "engine": "webkit",
+        "layout": "sidebar",
+        "ok": true,
+        "failures": [],
+        "error": null
+      },
+      {
+        "name": "inline",
+        "engine": "webkit",
+        "layout": "sidebar",
+        "ok": true,
+        "failures": [],
+        "error": null
+      },
+      {
+        "name": "panel",
+        "engine": "webkit",
+        "layout": "sidebar",
+        "ok": true,
+        "failures": [],
+        "error": null
+      },
+      {
+        "name": "window",
+        "engine": "webkit",
+        "layout": "sidebar",
+        "ok": true,
+        "failures": [],
+        "error": null
+      },
+      {
+        "name": "tools-call",
+        "engine": "webkit",
+        "layout": "sidebar",
+        "ok": true,
+        "failures": [],
+        "error": null
+      },
+      {
+        "name": "message",
+        "engine": "webkit",
+        "layout": "sidebar",
+        "ok": true,
+        "failures": [],
+        "error": null
+      },
+      {
+        "name": "csp",
+        "engine": "webkit",
+        "layout": "sidebar",
+        "ok": true,
+        "failures": [],
+        "error": null
+      },
+      {
+        "name": "console",
+        "engine": "webkit",
+        "layout": "sidebar",
+        "ok": true,
+        "failures": [],
+        "error": null
+      },
+      {
+        "name": "isolation",
+        "engine": "webkit",
+        "layout": "sidebar",
+        "ok": true,
+        "failures": [],
+        "error": null
+      },
+      {
+        "name": "escape-navigate",
+        "engine": "webkit",
+        "layout": "sidebar",
+        "ok": true,
+        "failures": [],
+        "error": null
+      },
+      {
+        "name": "console",
+        "engine": "webkit",
+        "layout": "sidebar",
+        "ok": true,
+        "failures": [],
+        "error": null
+      },
+      {
+        "name": "escape-refresh",
+        "engine": "webkit",
+        "layout": "sidebar",
+        "ok": true,
+        "failures": [],
+        "error": null
+      },
+      {
+        "name": "console",
+        "engine": "webkit",
+        "layout": "sidebar",
+        "ok": true,
+        "failures": [],
+        "error": null
+      },
+      {
+        "name": "escape-rewrite",
+        "engine": "webkit",
+        "layout": "sidebar",
+        "ok": true,
+        "failures": [],
+        "error": null
+      },
+      {
+        "name": "console",
+        "engine": "webkit",
+        "layout": "sidebar",
+        "ok": true,
+        "failures": [],
+        "error": null
+      },
+      {
+        "name": "departures-cleanup",
+        "engine": "webkit",
+        "layout": "sidebar",
+        "ok": true,
+        "failures": [],
+        "error": null
+      },
+      {
+        "name": "departures",
+        "engine": "webkit",
+        "layout": "sidebar",
+        "ok": true,
+        "failures": [],
+        "error": null
+      },
+      {
+        "name": "console",
+        "engine": "webkit",
+        "layout": "sidebar",
+        "ok": true,
+        "failures": [],
+        "error": null
+      },
+      {
+        "name": "departures-back-cleanup",
+        "engine": "webkit",
+        "layout": "sidebar",
+        "ok": true,
+        "failures": [],
+        "error": null
+      },
+      {
+        "name": "departures-back",
+        "engine": "webkit",
+        "layout": "sidebar",
+        "ok": true,
+        "failures": [],
+        "error": null
+      },
+      {
+        "name": "chart-cleanup",
+        "engine": "webkit",
+        "layout": "sidebar",
+        "ok": true,
+        "failures": [],
+        "error": null
+      },
+      {
+        "name": "chart",
+        "engine": "webkit",
+        "layout": "sidebar",
+        "ok": true,
+        "failures": [],
+        "error": null
+      },
+      {
+        "name": "forge",
+        "engine": "webkit",
+        "layout": "sidebar",
+        "ok": true,
+        "failures": [],
+        "error": null
+      },
+      {
+        "name": "teardown",
+        "engine": "webkit",
+        "layout": "sidebar",
+        "ok": true,
+        "failures": [],
+        "error": null
+      }
+    ]
+  }
+]
