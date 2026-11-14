@@ -31,7 +31,9 @@ import {
 } from "../../application/workspace-state"
 import type { WindowChange, WindowChangeOutcome } from "../../model/window-change"
 import {
+  closePane,
   focusPane,
+  openBeside,
   openSession,
   setPanel,
   showContent,
@@ -40,7 +42,6 @@ import {
   toggleSidebar,
   type WorkspaceCommand,
 } from "./commands"
-import { closePane, openBeside } from "./pane-commands"
 
 /** How long the layout has to draw the right panel once it is set open. */
 export const PANEL_DRAWN_MS = 1500
