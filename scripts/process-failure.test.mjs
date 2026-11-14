@@ -410,7 +410,9 @@ test("the real adapter waits for inherited streams to close after the direct chi
     )
     writeFileSync(
       child,
-      "import{spawn}from'node:child_process';const child=spawn(process.execPath,[process.argv[2]],{stdio:['ignore',process.stdout,process.stderr]});child.unref();process.exitCode=7\n",
+      // Windows libuv otherwise kills the writer with this direct child's job
+      // (Node v24.19.0, deps/uv/src/win/process.c, UV_PROCESS_DETACHED).
+      "import{spawn}from'node:child_process';const child=spawn(process.execPath,[process.argv[2]],{detached:true,stdio:['ignore',process.stdout,process.stderr]});child.unref();process.exitCode=7\n",
     )
     let stdout = "",
       stderr = ""
