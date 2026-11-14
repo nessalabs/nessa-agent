@@ -27,9 +27,12 @@ model:
     Key: The dialer stores its private key before any public half is sent.
     Offer: The peer public is stored for the same generation.
     Install: The MAC key replaces the private key.
-    Expire: The credential is no longer current and the phase stays Active.
-    Announce: Announce only an installed field with a current credential.
-    Quiet: Send nothing.
+    Expire: Remote expiry does not create local evidence.
+    ObserveNotCurrent: A matching remote decision becomes local evidence.
+    Forget: The enrollment disappears before the next refresh.
+    Stop: Owner shutdown or an unstored authority observation stops publication.
+    Refresh: Publish only from present installed locally current evidence.
+    Withdraw: Stopped publication withdraws its registration.
 diagramLinks: {}
 ---
 
@@ -63,7 +66,11 @@ The exact NotCurrent observation is retained atomically beside the private peer 
 
 ## Model coverage
 
-The configured safety rules are `AnnounceOnlyInstalled` and `ExpiryKeepsPhase`. The model keeps the phase Active while the credential expires, and it allows an announcement only for an installed field with a current credential. It does not model the X25519 derivation, the HMAC bytes, or the DNS-SD registration. Those are held by the discovery tests. The model also excludes legacy enrollment eligibility, scheduling retries, and selection among historical enrollments; the record and registry regressions cover those boundaries.
+The model separates remote expiry from locally observed authority. `AnnounceOnlyInstalled` covers installed/Active provenance; `PublishOnlyObservedCurrent` forbids a new publication after local noncurrent evidence, forgetting, or stop. An already registered token can remain until refresh. `ObservedNoncurrentEventuallyQuiet` checks eventual logical withdrawal after observation, forget, or stop under explicitly stated scheduler progress, not eventual arrival of a remote response. Expiry leaves the pairing phase Active.
+
+The live refresh interval is 75 seconds after the last refresh, assuming the scheduler and publication adapter make progress. Remote detection is not bounded when the peer is unreachable, and this model does not assert immediate or eventual detection of every remote expiry. Its fairness assumptions cover the live refresh loop or stopped withdrawal only; they do not prove OS DNS-SD withdrawal, native worker completion, disk durability, or behavior under a permanently stalled scheduler. Those require implementation tests and platform verification. The model excludes cryptography, concurrent enrollment/CAS writes, and audit restoration; focused regressions cover those boundaries.
+
+TLC 1.7.4 checked the corrected model with one worker: 205 generated states, 61 distinct states, and no safety or temporal violation. Removing the local-current publication guard violates `PublishOnlyObservedCurrent`; disabling stopped withdrawal violates the temporal property. The original combined remote/local expiry model failed after publication followed by expiry. These are model checks, not implementation or network proofs.
 
 ## Verification limits
 
