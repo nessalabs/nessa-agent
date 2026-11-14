@@ -70,8 +70,8 @@
 //! gateway, and of a lease it is asked about after a restart it can say only
 //! that it holds nothing for it. `ssh_environment::SshEnvironment` is the
 //! other, one per host `config.json` names (#699): the harness runs on the
-//! host under `nessa env serve`, the binding stays here. `FilePlacements`
-//! keeps which conversations were placed on which host.
+//! host under `nessa env serve`, the binding stays here. `FilePlaces`
+//! keeps where each conversation runs.
 //! `CedarToolPolicyEvaluator` answers the `ToolPolicyEvaluator` port: may a
 //! turn's initiator call a tool (`tool_policy/cedar/`). Beside it in the same
 //! bundle, `CedarCommandPolicyEvaluator` answers `CommandPolicyEvaluator`
@@ -118,7 +118,7 @@ pub(crate) use environment::in_process as in_process_environment;
 #[cfg(any(unix, test))]
 mod placements;
 #[cfg(any(unix, test))]
-pub(crate) use placements::{FileBindings, FilePlacements};
+pub(crate) use placements::FilePlaces;
 mod catalogue_changes;
 mod receiver_authority;
 // Only the Unix gateway composes it, and only a Unix host serves it: it is

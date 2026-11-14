@@ -830,10 +830,12 @@ A conversation can name one worker, as it names one SSH host, or
 `peer:any`: any worker of this gateway's pool. The pool is every paired
 environment whose credential serves this gateway, which is the registry's
 fact; nothing else keeps a member list. Which worker holds a pool
-conversation now is a separate fact, its **binding**, kept in
-`conversations/bindings/<id>.json` as
-`{"schemaVersion":1,"worker":"peer:…","context":"…"}`. The placement is
-written once and never moves; the binding may.
+conversation now is its **binding**, kept beside the placement in the
+conversation's one place record, `conversations/places/<id>.json`, as
+`{"schemaVersion":1,"placed":"peer:any","worker":"peer:…","context":"…"}`.
+The placement never moves; the binding may. Earlier builds kept the binding
+in `conversations/bindings/<id>.json`, still read until the record is next
+written.
 
 ```mermaid
 sequenceDiagram

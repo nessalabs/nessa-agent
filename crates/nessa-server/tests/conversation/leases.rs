@@ -19,7 +19,7 @@ use super::{
     ArtifactAnswer, ArtifactAnswering, ArtifactBytes, ArtifactChunk, ArtifactOffer,
     ConversationAgent, ConversationAgents, ConversationAttachments, ConversationCaller,
     ConversationDeletionBudgets, ConversationDependencies, ConversationError, ConversationLimits,
-    ConversationPlacements, ConversationService, Environment, EnvironmentDeclaration,
+    ConversationPlaces, ConversationService, Environment, EnvironmentDeclaration,
     EnvironmentFuture, EnvironmentLease, Environments, GrantedCommand, GrantedTerms, LeaseHold,
     LeaseRelease, PlacementError, RequestedConversation, SubmissionMode, SubmittedFile,
     SubmittedMessage,
@@ -35,8 +35,7 @@ use crate::conversation::application::EnvironmentToolConfig;
 use crate::conversation::domain::{CommandPolicy, Place};
 use crate::conversation::infrastructure::{
     in_process_environment, DurableConversationCreationAudit, DurableConversationDeletionAudit,
-    DurableConversationFileLinkAudit, DurableExecutionAudit, FilePlacements,
-    LocalConversationStore,
+    DurableConversationFileLinkAudit, DurableExecutionAudit, FilePlaces, LocalConversationStore,
 };
 use crate::conversation_test_support::{
     claude_erasers, AcceptingModeAudit, MemoryAttachments, Provider, ProviderFactory, TestClock,
@@ -2098,8 +2097,7 @@ fn with_host(root: &Path, here: Arc<Substitute>, host: Option<Arc<Host>>) -> Har
     if let Some(host) = host {
         hosts.insert("devbox".into(), host);
     }
-    let placements =
-        Arc::new(FilePlacements::new(root.join("conversations").join("placements")).unwrap());
+    let placements = Arc::new(FilePlaces::new(&root.join("conversations")).unwrap());
     let provider = Arc::new(ProviderFactory::default());
     let binding = Arc::new(Provider::new(provider.clone()));
     harness_in(
@@ -2129,8 +2127,7 @@ fn with_publishing_host_waiting(
     attachments: Arc<MemoryAttachments>,
     wait: Duration,
 ) -> Harness {
-    let placements =
-        Arc::new(FilePlacements::new(root.join("conversations").join("placements")).unwrap());
+    let placements = Arc::new(FilePlaces::new(&root.join("conversations")).unwrap());
     with_publishing_host_waiting_and_placements(root, host, attachments, wait, placements)
 }
 
@@ -2140,7 +2137,7 @@ fn with_publishing_host_waiting_and_placements(
     host: Arc<Host>,
     attachments: Arc<MemoryAttachments>,
     wait: Duration,
-    placements: Arc<dyn ConversationPlacements>,
+    placements: Arc<dyn ConversationPlaces>,
 ) -> Harness {
     let hosts: BTreeMap<String, Arc<dyn Environment>> =
         BTreeMap::from([("devbox".into(), host as _)]);
@@ -2341,31 +2338,32 @@ async fn d_a_file_its_lease_ended_before_recording_is_not_kept() {
 
 fn placement_file(root: &Path) -> std::path::PathBuf {
     root.join("conversations")
-        .join("placements")
+        .join("places")
         .join(format!("{CONVERSATION}.json"))
 }
 
 /// A file placement store whose armed reads stop only when their caller drops them.
 struct PendingPlacements {
-    inner: FilePlacements,
+    inner: FilePlaces,
     read_entered: mpsc::UnboundedSender<()>,
     stall_reads: Arc<AtomicBool>,
 }
 
-impl ConversationPlacements for PendingPlacements {
-    fn place<'a>(
+impl ConversationPlaces for PendingPlacements {
+    fn write<'a>(
         &'a self,
         conversation: &'a ConversationId,
-        place: &'a Place,
+        record: &'a crate::conversation::application::PlaceRecord,
     ) -> EnvironmentFuture<'a, Result<(), PlacementError>> {
-        self.inner.place(conversation, place)
+        self.inner.write(conversation, record)
     }
 
-    fn placement<'a>(
+    fn read<'a>(
         &'a self,
         conversation: &'a ConversationId,
-    ) -> EnvironmentFuture<'a, Result<Place, PlacementError>> {
-        let placement = self.inner.placement(conversation);
+    ) -> EnvironmentFuture<'a, Result<crate::conversation::application::PlaceRecord, PlacementError>>
+    {
+        let placement = self.inner.read(conversation);
         if !self.stall_reads.load(Ordering::SeqCst) {
             return placement;
         }
@@ -2483,9 +2481,7 @@ async fn b_a_conversation_on_a_host_shows_the_hosts_workspace() {
         let root = tempfile::tempdir().unwrap();
         let mut hosts: BTreeMap<String, Arc<dyn Environment>> = BTreeMap::new();
         hosts.insert("devbox".into(), Arc::new(Host::new()));
-        let placements = Arc::new(
-            FilePlacements::new(root.path().join("conversations").join("placements")).unwrap(),
-        );
+        let placements = Arc::new(FilePlaces::new(&root.path().join("conversations")).unwrap());
         let provider = Arc::new(ProviderFactory::default());
         let binding = Arc::new(Provider::new(provider.clone()));
         let harness = harness_working_in(
@@ -2665,7 +2661,11 @@ async fn b_gate5_a_conversation_naming_no_host_never_reaches_one() {
         .unwrap();
     assert_eq!(here.opened.load(Ordering::SeqCst), 1);
     assert_eq!(host.opened.load(Ordering::SeqCst), 0);
-    assert!(!placement_file(root.path()).exists());
+    // Here is written as here, like any other place.
+    assert_eq!(
+        std::fs::read_to_string(placement_file(root.path())).unwrap(),
+        "{\"schemaVersion\":1,\"placed\":\"here\"}\n"
+    );
     let view = nessa_projection::lease_view(&harness.lease().await);
     assert_eq!(view.environment, Some(ConversationLeaseEnvironment::Here));
     assert_eq!(view.host, None);
@@ -3096,8 +3096,7 @@ fn with_command_host_keeping(
 ) -> Harness {
     let mut hosts: BTreeMap<String, Arc<dyn Environment>> = BTreeMap::new();
     hosts.insert("devbox".into(), host);
-    let placements =
-        Arc::new(FilePlacements::new(root.join("conversations").join("placements")).unwrap());
+    let placements = Arc::new(FilePlaces::new(&root.join("conversations")).unwrap());
     let provider = Arc::new(ProviderFactory::default());
     let binding = Arc::new(Provider::new(provider.clone()));
     let environments = Environments::new(in_process_environment(), hosts, placements);
@@ -3855,8 +3854,7 @@ pub(crate) fn service_with_command_hosts(root: &Path) -> ConversationService {
     let mut hosts: BTreeMap<String, Arc<dyn Environment>> = BTreeMap::new();
     hosts.insert("devbox".into(), CommandHost::new());
     hosts.insert("agentbox".into(), in_process_environment());
-    let placements =
-        Arc::new(FilePlacements::new(root.join("conversations").join("placements")).unwrap());
+    let placements = Arc::new(FilePlaces::new(&root.join("conversations")).unwrap());
     let provider = Arc::new(ProviderFactory::default());
     let binding = Arc::new(Provider::new(provider.clone()));
     let policy = CommandPolicy::new(["devbox".to_owned(), "agentbox".to_owned()], None, vec![]);
@@ -5329,7 +5327,7 @@ async fn a_fetch_whose_placement_read_stalls_is_timed_out_or_cancelled() {
     let (read_entered, mut reads) = mpsc::unbounded_channel();
     let stall_reads = Arc::new(AtomicBool::new(false));
     let placements = Arc::new(PendingPlacements {
-        inner: FilePlacements::new(root.path().join("conversations").join("placements")).unwrap(),
+        inner: FilePlaces::new(&root.path().join("conversations")).unwrap(),
         read_entered,
         stall_reads: stall_reads.clone(),
     });
@@ -6137,21 +6135,11 @@ async fn k3_the_agents_tools_reach_only_this_gateways_own_worker() {
     let root = tempfile::tempdir().unwrap();
     let (w, x) = (PeerEnvironment::new([1; 32]), PeerEnvironment::new([2; 32]));
     let host = CommandHost::new();
-    let placements = Arc::new(
-        FilePlacements::new(root.path().join("conversations").join("placements")).unwrap(),
-    );
+    let placements = Arc::new(FilePlaces::new(&root.path().join("conversations")).unwrap());
     let provider = Arc::new(ProviderFactory::default());
     let binding = Arc::new(Provider::new(provider.clone()));
     let environments = Environments::new(in_process_environment(), BTreeMap::new(), placements)
-        .with_peers(
-            k3_own_worker(root.path(), w, host.clone()),
-            Arc::new(
-                crate::conversation::infrastructure::FileBindings::new(
-                    root.path().join("conversations").join("bindings"),
-                )
-                .unwrap(),
-            ),
-        );
+        .with_peers(k3_own_worker(root.path(), w, host.clone()));
     let tools = EnvironmentToolConfig::with_commands(commands(&CommandPolicy::new(
         [w.name(), x.name()],
         None,
@@ -6236,9 +6224,7 @@ async fn k3_artifacts_move_only_on_this_gateways_own_worker() {
         .store(true, Ordering::SeqCst);
     let host = Arc::new(host);
     let attachments = Arc::new(MemoryAttachments::default());
-    let placements = Arc::new(
-        FilePlacements::new(root.path().join("conversations").join("placements")).unwrap(),
-    );
+    let placements = Arc::new(FilePlaces::new(&root.path().join("conversations")).unwrap());
     let provider = Arc::new(ProviderFactory::default());
     let binding = Arc::new(Provider::new(provider.clone()));
     let harness = harness_working_in(
@@ -6248,15 +6234,7 @@ async fn k3_artifacts_move_only_on_this_gateways_own_worker() {
             BTreeMap::new(),
             placements,
         )
-        .with_peers(
-            k3_own_worker(root.path(), w, host.clone()),
-            Arc::new(
-                crate::conversation::infrastructure::FileBindings::new(
-                    root.path().join("conversations").join("bindings"),
-                )
-                .unwrap(),
-            ),
-        ),
+        .with_peers(k3_own_worker(root.path(), w, host.clone())),
         EnvironmentToolConfig {
             publish_wait: PUBLISH_CALL_WAIT,
             fetch_wait: PUBLISH_CALL_WAIT,
@@ -7921,37 +7899,24 @@ impl crate::conversation::application::PairedEnvironments for TwoWorkers {
 }
 
 #[cfg(unix)]
-fn pool_harness(
-    root: &Path,
-) -> (
-    Harness,
-    [Arc<PoolWorker>; 2],
-    Arc<crate::conversation::infrastructure::FileBindings>,
-) {
-    let bindings = Arc::new(
-        crate::conversation::infrastructure::FileBindings::new(
-            root.join("conversations").join("bindings"),
-        )
-        .unwrap(),
-    );
-    let (harness, workers) = pool_harness_with(root, bindings.clone());
-    (harness, workers, bindings)
+fn pool_harness(root: &Path) -> (Harness, [Arc<PoolWorker>; 2], Arc<FilePlaces>) {
+    let places = Arc::new(FilePlaces::new(&root.join("conversations")).unwrap());
+    let (harness, workers) = pool_harness_with(root, places.clone());
+    (harness, workers, places)
 }
 
 #[cfg(unix)]
 fn pool_harness_with(
     root: &Path,
-    bindings: Arc<dyn crate::conversation::application::ConversationBindings>,
+    places: Arc<dyn ConversationPlaces>,
 ) -> (Harness, [Arc<PoolWorker>; 2]) {
     let workers = [PoolWorker::new(1), PoolWorker::new(2)];
-    let placements =
-        Arc::new(FilePlacements::new(root.join("conversations").join("placements")).unwrap());
     let provider = Arc::new(ProviderFactory::default());
     let binding = Arc::new(Provider::new(provider.clone()));
     let harness = harness_in(
         root,
-        Environments::new(in_process_environment(), BTreeMap::new(), placements)
-            .with_peers(Arc::new(TwoWorkers(workers.clone())), bindings),
+        Environments::new(in_process_environment(), BTreeMap::new(), places)
+            .with_peers(Arc::new(TwoWorkers(workers.clone()))),
         EnvironmentToolConfig::default(),
         DELETION_BUDGETS.stop,
         provider,
@@ -7960,44 +7925,44 @@ fn pool_harness_with(
     (harness, workers)
 }
 
-/// Bindings whose every write after the first fails.
+/// Place records whose every write of a bound worker after the first fails.
 #[cfg(unix)]
 struct BindsOnce {
-    bindings: crate::conversation::infrastructure::FileBindings,
+    places: FilePlaces,
     written: AtomicBool,
 }
 
 #[cfg(unix)]
-impl crate::conversation::application::ConversationBindings for BindsOnce {
-    fn bind<'a>(
+impl ConversationPlaces for BindsOnce {
+    fn write<'a>(
         &'a self,
         conversation: &'a ConversationId,
-        binding: &'a crate::conversation::application::WorkerBinding,
+        record: &'a crate::conversation::application::PlaceRecord,
     ) -> EnvironmentFuture<'a, Result<(), crate::conversation::application::PlacementError>> {
-        if self.written.swap(true, Ordering::SeqCst) {
+        if record.worker().is_some() && self.written.swap(true, Ordering::SeqCst) {
             return Box::pin(async {
                 Err(crate::conversation::application::PlacementError::Unavailable)
             });
         }
-        self.bindings.bind(conversation, binding)
+        self.places.write(conversation, record)
     }
-    fn binding<'a>(
+    fn read<'a>(
         &'a self,
         conversation: &'a ConversationId,
     ) -> EnvironmentFuture<
         'a,
         Result<
-            Option<crate::conversation::application::WorkerBinding>,
+            crate::conversation::application::PlaceRecord,
             crate::conversation::application::PlacementError,
         >,
     > {
-        self.bindings.binding(conversation)
+        self.places.read(conversation)
     }
     fn erase<'a>(
         &'a self,
         conversation: &'a ConversationId,
     ) -> EnvironmentFuture<'a, Result<(), crate::conversation::application::PlacementError>> {
-        self.bindings.erase(conversation)
+        self.places.erase(conversation)
     }
 }
 
@@ -8005,10 +7970,9 @@ impl crate::conversation::application::ConversationBindings for BindsOnce {
 impl Harness {
     async fn bound(
         &self,
-        bindings: &crate::conversation::infrastructure::FileBindings,
+        places: &FilePlaces,
     ) -> Option<crate::conversation::application::WorkerBinding> {
-        use crate::conversation::application::ConversationBindings;
-        bindings.binding(&self.id).await.unwrap()
+        places.read(&self.id).await.unwrap().worker().cloned()
     }
 
     fn last_open(
@@ -8141,10 +8105,7 @@ async fn a_pool_worker_that_refuses_and_still_serves_is_not_left_for_another() {
 async fn a_refusal_left_for_a_worker_that_cannot_be_bound_is_still_recorded() {
     let root = tempfile::tempdir().unwrap();
     let bindings = Arc::new(BindsOnce {
-        bindings: crate::conversation::infrastructure::FileBindings::new(
-            root.path().join("conversations").join("bindings"),
-        )
-        .unwrap(),
+        places: FilePlaces::new(&root.path().join("conversations")).unwrap(),
         written: AtomicBool::new(false),
     });
     let (harness, [w1, w2]) = pool_harness_with(root.path(), bindings.clone());
@@ -8159,9 +8120,8 @@ async fn a_refusal_left_for_a_worker_that_cannot_be_bound_is_still_recorded() {
     let lease = harness.lease().await;
     assert_eq!(kinds(&lease), ["refused"]);
     assert_eq!((w1.asked(), w2.asked()), (1, 0));
-    use crate::conversation::application::ConversationBindings;
     assert_eq!(
-        bindings.binding(&harness.id).await.unwrap().unwrap().worker,
+        harness.bound(&bindings.places).await.unwrap().worker,
         w1.peer
     );
 }

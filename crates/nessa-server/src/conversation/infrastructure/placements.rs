@@ -1,24 +1,32 @@
-//! Where each conversation placed on an SSH host, a paired environment, the
-//! pool (`peer:any`) or a cloud VM of its own (`boat:thread`) runs: one small
-//! file per such conversation, `placements/<conversation id>.json` under the
-//! conversations directory, holding `{"schemaVersion":1,"host":"…"}`. A
-//! conversation that runs here has none.
+//! Where each conversation runs: one small file per conversation,
+//! `places/<conversation id>.json` under the conversations directory,
+//! holding `{"schemaVersion":1,"placed":"…"}`, and for a `peer:any`
+//! conversation the worker that holds it now and the provider context it
+//! opened there: `"worker":"peer:…","context":"…"`, `context` absent until a
+//! session opened one there. Here is written as `"here"`.
 //!
-//! Which worker holds a `peer:any` conversation now is its binding
-//! ([`FileBindings`]): `bindings/<conversation id>.json`, holding
-//! `{"schemaVersion":1,"worker":"peer:…","context":"…"}`, `context` absent
-//! until a session opened one there. Written whole and synced, replaced
-//! when the conversation moves or opens new context, removed with its
-//! history. A binding this build cannot read refuses that conversation's
-//! opening alone, as a placement does.
+//! Written whole and synced: before the conversation's record exists, and
+//! again each time a pool conversation's worker or context changes; removed
+//! with its history.
+//!
+//! Earlier builds kept the same facts in two files, read here as they were
+//! written until the conversation's record is first written anew:
+//! `placements/<id>.json` (`{"schemaVersion":1,"host":"…"}`, absent for a
+//! conversation that runs here) and, for a `peer:any` conversation,
+//! `bindings/<id>.json` (`{"schemaVersion":1,"worker":"peer:…","context":"…"}`).
+//! For one release this build still writes them too, before the record, and
+//! never reads them once the record exists: a build put back then finds
+//! every conversation where it runs, never here in place of its host. The
+//! next release stops writing them, and the one after stops reading them
+//! once every conversation has a record. Erasing a conversation removes all
+//! three, the earlier files first, so a failed erase never leaves them as
+//! the only answer.
 //!
 //! A record-scope dataset (ADR 202): a file this build cannot read refuses
-//! that conversation's opening alone. Written whole and synced before the
-//! conversation's record exists; never changed after; removed with the
-//! conversation's history. The metadata database is not touched, so its
-//! schema and version stay as they are.
+//! that conversation's opening alone. The metadata database is not touched,
+//! so its schema and version stay as they are.
 use crate::conversation::application::{
-    ConversationBindings, ConversationPlacements, EnvironmentFuture, PlacementError, WorkerBinding,
+    ConversationPlaces, EnvironmentFuture, PlaceRecord, PlacementError, WorkerBinding,
 };
 use crate::conversation::domain::Place;
 use nessa_local_storage::{
@@ -31,7 +39,7 @@ use nessa_sdk::domain::agent_execution::sessions::ExecutionSessionId;
 use serde::{Deserialize, Serialize};
 use std::{
     io::{self, Read, Write},
-    path::PathBuf,
+    path::{Path, PathBuf},
 };
 
 /// The only shape this build writes or reads.
@@ -39,6 +47,19 @@ const SCHEMA_VERSION: u32 = 1;
 /// Most bytes a placement file may have.
 const MAX_BYTES: u64 = 1024;
 
+/// One conversation's record, as this build writes it.
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct Record {
+    schema_version: u32,
+    placed: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    worker: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    context: Option<String>,
+}
+
+/// An earlier build's placement file.
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Placement {
@@ -46,23 +67,45 @@ struct Placement {
     host: String,
 }
 
-/// The placement files, in one private directory.
-pub(crate) struct FilePlacements {
-    directory: PathBuf,
+/// An earlier build's binding file.
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct Binding {
+    schema_version: u32,
+    worker: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    context: Option<String>,
 }
 
-impl FilePlacements {
-    /// The placements kept in `directory`, created if absent.
+/// The place records, in one private directory, and the two directories
+/// earlier builds kept the same facts in.
+pub(crate) struct FilePlaces {
+    places: PathBuf,
+    placements: PathBuf,
+    bindings: PathBuf,
+}
+
+impl FilePlaces {
+    /// The place records kept under `conversations`, the conversations
+    /// directory: `places/`, read before the earlier builds' `placements/`
+    /// and `bindings/`, each created if absent.
     ///
     /// # Errors
-    /// The directory could not be created privately.
-    pub(crate) fn new(directory: PathBuf) -> io::Result<Self> {
-        create_directory(&directory)?;
-        Ok(Self { directory })
+    /// A directory could not be created privately.
+    pub(crate) fn new(conversations: &Path) -> io::Result<Self> {
+        let places = Self {
+            places: conversations.join("places"),
+            placements: conversations.join("placements"),
+            bindings: conversations.join("bindings"),
+        };
+        for directory in [&places.places, &places.placements, &places.bindings] {
+            create_directory(directory)?;
+        }
+        Ok(places)
     }
 
-    fn path(&self, conversation: &ConversationId) -> PathBuf {
-        self.directory.join(format!("{conversation}.json"))
+    fn file(directory: &Path, conversation: &ConversationId) -> PathBuf {
+        directory.join(format!("{conversation}.json"))
     }
 }
 
@@ -71,6 +114,17 @@ fn remove(directory: PathBuf, path: PathBuf) -> Result<(), PlacementError> {
         Ok(()) => sync_directory(&directory).map_err(|_| PlacementError::Unavailable),
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
         Err(_) => Err(PlacementError::Unavailable),
+    }
+}
+
+/// An earlier build's file: `value` written whole, or the file removed.
+fn earlier_file(
+    (directory, path): (PathBuf, PathBuf),
+    value: Option<&impl Serialize>,
+) -> Result<(), PlacementError> {
+    match value {
+        Some(value) => write(directory, path, value),
+        None => remove(directory, path),
     }
 }
 
@@ -111,20 +165,62 @@ fn read_bytes(path: PathBuf) -> Result<Option<Vec<u8>>, PlacementError> {
     Ok(Some(bytes))
 }
 
-fn read(path: PathBuf) -> Result<Place, PlacementError> {
-    let Some(bytes) = read_bytes(path)? else {
-        return Ok(Place::Here);
+fn worker_binding(worker: &str, context: Option<String>) -> Result<WorkerBinding, PlacementError> {
+    let worker = PeerEnvironment::parse(worker).map_err(|_| PlacementError::Unreadable)?;
+    let context = context
+        .map(ExecutionSessionId::new)
+        .transpose()
+        .map_err(|_| PlacementError::Unreadable)?;
+    Ok(WorkerBinding { worker, context })
+}
+
+fn record(bytes: &[u8]) -> Result<PlaceRecord, PlacementError> {
+    let record: Record = serde_json::from_slice(bytes).map_err(|_| PlacementError::Unreadable)?;
+    if record.schema_version != SCHEMA_VERSION {
+        return Err(PlacementError::Unreadable);
+    }
+    let placed = Place::named(&record.placed).map_err(|_| PlacementError::Unreadable)?;
+    let worker = match (record.worker, record.context) {
+        (Some(worker), context) => Some(worker_binding(&worker, context)?),
+        (None, None) => None,
+        // A context is a worker's.
+        (None, Some(_)) => return Err(PlacementError::Unreadable),
+    };
+    PlaceRecord::read(placed, worker)
+}
+
+/// Where an earlier build placed the conversation and, for the pool, which
+/// worker held it: here when it kept no placement.
+fn earlier(placement: PathBuf, binding: PathBuf) -> Result<PlaceRecord, PlacementError> {
+    let Some(bytes) = read_bytes(placement)? else {
+        return Ok(PlaceRecord::placed(Place::Here));
     };
     let placement: Placement =
         serde_json::from_slice(&bytes).map_err(|_| PlacementError::Unreadable)?;
     if placement.schema_version != SCHEMA_VERSION {
         return Err(PlacementError::Unreadable);
     }
-    // Anywhere but here, which has no placement.
-    match Place::named(&placement.host) {
-        Ok(Place::Here) | Err(_) => Err(PlacementError::Unreadable),
-        Ok(place) => Ok(place),
+    // Anywhere but here, which had no placement.
+    let placed = match Place::named(&placement.host) {
+        Ok(Place::Here) | Err(_) => return Err(PlacementError::Unreadable),
+        Ok(place) => place,
+    };
+    // Only a pool conversation's binding was ever read.
+    if placed != Place::Pool {
+        return Ok(PlaceRecord::placed(placed));
     }
+    let Some(bytes) = read_bytes(binding)? else {
+        return Ok(PlaceRecord::placed(Place::Pool));
+    };
+    let binding: Binding =
+        serde_json::from_slice(&bytes).map_err(|_| PlacementError::Unreadable)?;
+    if binding.schema_version != SCHEMA_VERSION {
+        return Err(PlacementError::Unreadable);
+    }
+    Ok(PlaceRecord::in_pool(worker_binding(
+        &binding.worker,
+        binding.context,
+    )?))
 }
 
 async fn blocking<T: Send + 'static>(
@@ -135,129 +231,78 @@ async fn blocking<T: Send + 'static>(
         .map_err(|_| PlacementError::Unavailable)?
 }
 
-impl ConversationPlacements for FilePlacements {
-    fn place<'a>(
+impl ConversationPlaces for FilePlaces {
+    fn write<'a>(
         &'a self,
         conversation: &'a ConversationId,
-        place: &'a Place,
+        record: &'a PlaceRecord,
     ) -> EnvironmentFuture<'a, Result<(), PlacementError>> {
-        let directory = self.directory.clone();
-        let path = self.path(conversation);
-        // Here is the absence of a placement.
-        let host = place.remote_name();
-        Box::pin(blocking(move || match host {
-            Some(host) => write(
-                directory,
-                path,
-                &Placement {
-                    schema_version: SCHEMA_VERSION,
-                    host,
-                },
-            ),
-            None => remove(directory, path),
+        let placed = record.place().name();
+        let worker = record.worker().map(|binding| binding.worker.name());
+        let context = record
+            .worker()
+            .and_then(|binding| binding.context.as_ref())
+            .map(|context| context.as_str().to_owned());
+        // What an earlier build reads, each file written when it has
+        // something to say and removed when not: no placement for here, a
+        // binding only once a worker holds the conversation.
+        let placement = (*record.place() != Place::Here).then(|| Placement {
+            schema_version: SCHEMA_VERSION,
+            host: placed.clone(),
+        });
+        let binding = worker.clone().map(|worker| Binding {
+            schema_version: SCHEMA_VERSION,
+            worker,
+            context: context.clone(),
+        });
+        let placements = (
+            self.placements.clone(),
+            Self::file(&self.placements, conversation),
+        );
+        let bindings = (
+            self.bindings.clone(),
+            Self::file(&self.bindings, conversation),
+        );
+        let directory = self.places.clone();
+        let path = Self::file(&self.places, conversation);
+        let written = Record {
+            schema_version: SCHEMA_VERSION,
+            placed,
+            worker,
+            context,
+        };
+        Box::pin(blocking(move || {
+            earlier_file(placements, placement.as_ref())?;
+            earlier_file(bindings, binding.as_ref())?;
+            write(directory, path, &written)
         }))
     }
 
-    fn placement<'a>(
+    fn read<'a>(
         &'a self,
         conversation: &'a ConversationId,
-    ) -> EnvironmentFuture<'a, Result<Place, PlacementError>> {
-        let path = self.path(conversation);
-        Box::pin(blocking(move || read(path)))
+    ) -> EnvironmentFuture<'a, Result<PlaceRecord, PlacementError>> {
+        let path = Self::file(&self.places, conversation);
+        let placement = Self::file(&self.placements, conversation);
+        let binding = Self::file(&self.bindings, conversation);
+        Box::pin(blocking(move || match read_bytes(path)? {
+            Some(bytes) => record(&bytes),
+            None => earlier(placement, binding),
+        }))
     }
 
     fn erase<'a>(
         &'a self,
         conversation: &'a ConversationId,
     ) -> EnvironmentFuture<'a, Result<(), PlacementError>> {
-        let directory = self.directory.clone();
-        let path = self.path(conversation);
-        Box::pin(blocking(move || remove(directory, path)))
-    }
-}
-
-#[derive(Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct Binding {
-    schema_version: u32,
-    worker: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    context: Option<String>,
-}
-
-fn read_binding(path: PathBuf) -> Result<Option<WorkerBinding>, PlacementError> {
-    let Some(bytes) = read_bytes(path)? else {
-        return Ok(None);
-    };
-    let binding: Binding =
-        serde_json::from_slice(&bytes).map_err(|_| PlacementError::Unreadable)?;
-    if binding.schema_version != SCHEMA_VERSION {
-        return Err(PlacementError::Unreadable);
-    }
-    let worker = PeerEnvironment::parse(&binding.worker).map_err(|_| PlacementError::Unreadable)?;
-    let context = binding
-        .context
-        .map(ExecutionSessionId::new)
-        .transpose()
-        .map_err(|_| PlacementError::Unreadable)?;
-    Ok(Some(WorkerBinding { worker, context }))
-}
-
-/// Which worker holds each `peer:any` conversation, in one private
-/// directory.
-pub(crate) struct FileBindings {
-    directory: PathBuf,
-}
-
-impl FileBindings {
-    /// The bindings kept in `directory`, created if absent.
-    ///
-    /// # Errors
-    /// The directory could not be created privately.
-    pub(crate) fn new(directory: PathBuf) -> io::Result<Self> {
-        create_directory(&directory)?;
-        Ok(Self { directory })
-    }
-
-    fn path(&self, conversation: &ConversationId) -> PathBuf {
-        self.directory.join(format!("{conversation}.json"))
-    }
-}
-
-impl ConversationBindings for FileBindings {
-    fn bind<'a>(
-        &'a self,
-        conversation: &'a ConversationId,
-        binding: &'a WorkerBinding,
-    ) -> EnvironmentFuture<'a, Result<(), PlacementError>> {
-        let directory = self.directory.clone();
-        let path = self.path(conversation);
-        let binding = Binding {
-            schema_version: SCHEMA_VERSION,
-            worker: binding.worker.name(),
-            context: binding
-                .context
-                .as_ref()
-                .map(|context| context.as_str().to_owned()),
-        };
-        Box::pin(blocking(move || write(directory, path, &binding)))
-    }
-
-    fn binding<'a>(
-        &'a self,
-        conversation: &'a ConversationId,
-    ) -> EnvironmentFuture<'a, Result<Option<WorkerBinding>, PlacementError>> {
-        let path = self.path(conversation);
-        Box::pin(blocking(move || read_binding(path)))
-    }
-
-    fn erase<'a>(
-        &'a self,
-        conversation: &'a ConversationId,
-    ) -> EnvironmentFuture<'a, Result<(), PlacementError>> {
-        let directory = self.directory.clone();
-        let path = self.path(conversation);
-        Box::pin(blocking(move || remove(directory, path)))
+        let files = [&self.placements, &self.bindings, &self.places]
+            .map(|directory| (directory.clone(), Self::file(directory, conversation)));
+        Box::pin(blocking(move || {
+            for (directory, path) in files {
+                remove(directory, path)?;
+            }
+            Ok(())
+        }))
     }
 }
 

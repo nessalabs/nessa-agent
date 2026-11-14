@@ -293,9 +293,7 @@ pub use command_policy::{
 #[cfg(any(unix, test))]
 pub(crate) use placement::Environments;
 #[cfg(any(unix, test))]
-pub(crate) use placement::{
-    ConversationBindings, ConversationPlacements, PlacementError, WorkerBinding,
-};
+pub(crate) use placement::{ConversationPlaces, PlaceRecord, PlacementError, WorkerBinding};
 // For the paired environment adapter, which lives with the Unix-only SSH one.
 pub use agent_switches::{ConversationAgentSwitch, ConversationAgentSwitchState};
 pub(crate) use drive_tools::MAX_ADMITTED_POLICIES;

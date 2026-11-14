@@ -173,7 +173,8 @@ impl ConversationService {
         id: &ConversationId,
     ) -> Result<Vec<EnvironmentListing>, ConversationError> {
         let environments = &self.inner.environment;
-        let current = environments.runs_on(id).await?;
+        let record = environments.record(id).await?;
+        let current = record.now();
         let initiator = match self.live(id).await {
             Some(live) => {
                 let snapshot = live.agent.session_manager().snapshot().await;
@@ -205,7 +206,7 @@ impl ConversationService {
             .iter()
             .map(|(name, environment)| (name.clone(), environment.clone()));
         let workspace = if current == Place::CloudVm {
-            vec![(current.name(), environments.of(id).await?)]
+            vec![(current.name(), environments.environment_for(id, &record)?)]
         } else {
             Vec::new()
         };
@@ -332,13 +333,13 @@ impl ConversationService {
         let place = Place::from(named);
         let environment: Option<Arc<dyn Environment>> = match &place {
             Place::Here => None,
-            Place::CloudVm => {
-                if self.inner.environment.runs_on(id).await.ok() == Some(Place::CloudVm) {
-                    self.inner.environment.of(id).await.ok()
-                } else {
-                    None
+            // Its own VM, and only while it runs there.
+            Place::CloudVm => match self.inner.environment.record(id).await {
+                Ok(record) if record.now() == Place::CloudVm => {
+                    self.inner.environment.environment_for(id, &record).ok()
                 }
-            }
+                _ => None,
+            },
             named => self.inner.environment.named(named),
         };
         let Some(environment) = environment else {
