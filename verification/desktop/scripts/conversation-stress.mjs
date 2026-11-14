@@ -7836,12 +7836,31 @@ const steps = {
       failures.push(
         `the raced fork recorded ${racedForks.length} forks with ${racedForks[0]?.turns?.length ?? "no"} turns, not one with the source's 2`,
       )
-    const inRaced = prompt(run, STRESS.reply, step, " in raced fork")
-    // The window shows the other fork, so this one is talked to by the client.
-    await run.client.conversation.submit(
-      run.client.conversation.prepare(racedId, inRaced),
+    // The raced fork is a chat like any other: opened from its row and
+    // talked to through the composer, its reply in the window and the view.
+    await openStressConversation(run.page, racedId, racedView.title ?? "")
+    if (
+      !(await run.page
+        .locator(`${css.handoffLine}[data-handoff="fork"]`)
+        .first()
+        .waitFor({ timeout: 10_000 })
+        .then(() => true)
+        .catch(() => false))
     )
-    await settled(run, racedId, new Set(), inRaced, "completed", failures)
+      failures.push("the window did not open the raced fork on its copied turns")
+    const inRaced = prompt(run, STRESS.reply, step, " in raced fork")
+    const racedSeen = await send(run, racedId, inRaced, failures, new Set())
+    const { turn: racedTurn } = await settled(
+      run,
+      racedId,
+      racedSeen,
+      inRaced,
+      "completed",
+      failures,
+    )
+    carriedBy(racedTurn, target.modelId, "the raced fork", first, failures)
+    if (!(await carriedShown(run.page, target.modelId, inRaced)))
+      failures.push("the window does not show the raced fork's own reply")
     // The source is as it was.
     const source = await run.client.conversation.read(conversationId)
     if (source.messages.length !== 2)
