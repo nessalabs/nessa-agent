@@ -9,22 +9,22 @@ use std::process::{Command, Output, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use nessa_backup as backup;
 use nessa_local_storage::create_directory;
-use nessa_server as server;
 use serde_json::{json, Value};
 
-use server::backup::application::{Authenticator, ManifestPublisher, PublishedRecord};
-use server::backup::domain::{
+use nessa_backup::application::{Authenticator, ManifestPublisher, PublishedRecord};
+use nessa_backup::domain::{
     AuthenticatedManifest, CapturedRecord, DeferredEntry, Fingerprint, Manifest, Sensitivity,
     SkipReason, SkippedRecord, SourceCut, StoreKind, Watermark, WRITER_INVENTORY,
 };
-use server::backup::infrastructure::DirectoryPublisher;
+use nessa_backup::infrastructure::DirectoryPublisher;
 
-#[path = "backup/verification_fixture.rs"]
+#[path = "../../nessa-backup/tests/verification_fixture.rs"]
 mod fixture;
 use fixture::{private_file, Fixture, BODY};
 
-#[path = "backup/planning_assertions.rs"]
+#[path = "../../nessa-backup/tests/planning_assertions.rs"]
 mod planning_assertions;
 use planning_assertions::assert_unavailable;
 
@@ -287,11 +287,11 @@ fn output_failure_is_observable_without_bootstrap() {
         }
     }
     assert_eq!(
-        server::composition::run_restore_planner(&["--help".into()], &mut Broken),
+        nessa_server::composition::run_restore_planner(&["--help".into()], &mut Broken),
         1
     );
     assert_eq!(
-        server::composition::run_restore_planner(&[], &mut Broken),
+        nessa_server::composition::run_restore_planner(&[], &mut Broken),
         1
     );
 }

@@ -103,7 +103,7 @@ export const KNOBS = {
   },
   handoffs: {
     default: 1,
-    what: "conversations switched to the other agent from the composer's picker (staged, taken back, picked again, made by the next send), then forked from a row's More menu, each talked to after",
+    what: "conversations switched to the other agent from the composer's picker (staged, taken back, picked again, made by the next send), then forked from a row's More menu, and forked again into one id by three racing requests (one fork made, its copied turns recorded once), each talked to after",
   },
   deletes: {
     default: 1,
@@ -115,7 +115,7 @@ export const KNOBS = {
   },
   windows: {
     default: 1,
-    what: "turns where an agent reads the window: beside another pane, the focused chat's panel (two tabs, the front tab, hidden and shown, then the other chat), then alone",
+    what: "turns where an agent reads the window: beside another pane, the focused chat's panel (two tabs, the front tab, hidden and shown, then the other chat), then alone; the sidebar it folds parks once its slide ends and is reachable again when opened",
   },
   rails: {
     default: 1,
@@ -171,7 +171,7 @@ export const KNOBS = {
   },
   pools: {
     default: 1,
-    what: "times a conversation placed on any worker goes where Devices › Thread order lets it (one worker left out there, then let back in) and moves to another when its worker drains",
+    what: "times a conversation placed on any worker goes where Devices › Thread order lets it (one worker left out there, then let back in), is read from an older build's placement and binding files, and moves to another when its worker drains",
   },
   places: {
     default: 1,
@@ -195,7 +195,7 @@ export const KNOBS = {
   },
   upgrades: {
     default: 1,
-    what: "gateway restarts onto conversation metadata turned back into an older build's file, which it upgrades and keeps",
+    what: "gateway restarts onto conversation metadata turned back into an older build's file, which it upgrades and keeps, and onto every place record turned back into an older build's placement and binding files",
   },
   menus: {
     default: 1,

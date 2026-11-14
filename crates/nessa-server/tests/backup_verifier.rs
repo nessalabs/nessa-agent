@@ -7,11 +7,11 @@ use std::process::{Command, Output, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use nessa_backup as backup;
 use nessa_local_storage::create_directory;
-use nessa_server as server;
 use serde_json::Value;
 
-#[path = "backup/verification_fixture.rs"]
+#[path = "../../nessa-backup/tests/verification_fixture.rs"]
 mod fixture;
 use fixture::{private_file, Fixture, BODY};
 

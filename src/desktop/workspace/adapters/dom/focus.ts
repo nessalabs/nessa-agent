@@ -77,7 +77,8 @@ export function retireHomeFocus(
       held.isConnected &&
       home.contains(held) &&
       !inModal(held) &&
-      held.closest("[inert]") === null &&
+      // Not under `inert`, nor in a column folding away (`parked.ts`).
+      held.closest('[inert], [aria-hidden="true"]') === null &&
       document.activeElement === document.body
     )
       held.focus({ preventScroll: true })

@@ -23,6 +23,7 @@ function windowWith(
     composerCount = 1,
     composerWidth = 200,
     composerHeight = 40,
+    tree = false,
   } = {},
 ) {
   const rows = ids.map((id) => ({ id, title }))
@@ -30,14 +31,72 @@ function windowWith(
   let publish
   const clicks = []
   const waits = []
+  const navigation = []
+  let folded = tree
+  let hidden = tree
   const page = {
     locator(selector, options) {
+      if (selector === css.sessionList)
+        return {
+          async count() {
+            return tree ? 0 : 1
+          },
+        }
+      if (selector === css.stressTreeChannel)
+        return {
+          async count() {
+            return 1
+          },
+          nth() {
+            return {
+              async getAttribute() {
+                return String(!folded)
+              },
+              locator(disclosure) {
+                assert.equal(disclosure, css.stressTreeDisclosure)
+                return {
+                  async click() {
+                    folded = false
+                    navigation.push("disclose")
+                  },
+                }
+              },
+            }
+          },
+        }
+      if (selector === css.stressTreeMore) {
+        const more = {
+          filter() {
+            return more
+          },
+          async count() {
+            return !folded && hidden ? 1 : 0
+          },
+          first() {
+            return {
+              async click() {
+                hidden = false
+                navigation.push("show-all")
+              },
+            }
+          },
+        }
+        return more
+      }
       const selected = rows.filter(
         (row) =>
-          selector === selectorFor.sessionListRowFor(row.id) &&
+          selector ===
+            (tree
+              ? selectorFor.stressTreeSessionFor(row.id)
+              : selectorFor.sessionListRowFor(row.id)) &&
+          !folded &&
+          !hidden &&
           (!options?.hasText || row.title.includes(options.hasText)),
       )
       return {
+        async count() {
+          return selected.length
+        },
         async click(options) {
           assert.equal(selected.length, 1, "the requested row must be unique")
           if (!deferSelection) active = selected[0].id
@@ -51,7 +110,7 @@ function windowWith(
         runInNewContext(`(${read.toString()})`, {
           document: {
             querySelectorAll(selector) {
-              if (selector === css.selectedSessionListRow)
+              if (selector === css.stressSelectedSessionRow)
                 return active ? [{ getAttribute: () => active }] : []
               assert.equal(selector, `${css.conversationDock} textarea`)
               return Array.from({ length: composerCount }, () => ({
@@ -75,6 +134,7 @@ function windowWith(
     },
   }
   return {
+    navigation,
     clicks,
     waits,
     page,
@@ -192,7 +252,7 @@ function listedWindow(rows) {
           const matching = rows.filter(
             (row) =>
               (selector === css.sessionListRow ||
-                (selector === css.selectedSessionListRow && row.selected)) &&
+                (selector === css.stressSelectedSessionRow && row.selected)) &&
               (!options.hasText || row.title.includes(options.hasText)),
           )
           return read(
@@ -342,4 +402,15 @@ test("a matching label cannot conceal the wrong target or substitute an earlier 
   } finally {
     dom.window.close()
   }
+})
+
+test("sidebar navigation discloses actual channels and older rows before selecting the exact identity", async () => {
+  const window = windowWith([earlier, intended], { tree: true })
+  await openStressConversation(window.page, intended, title)
+  assert.deepEqual(window.navigation, ["disclose", "show-all"])
+  assert.deepEqual(
+    window.clicks.map((each) => each.id),
+    [intended],
+  )
+  assert.equal(window.waits.length, 1)
 })

@@ -8,11 +8,11 @@ summary: The conversation saves granted command terms before running and keeps
   artifact ownership separate.
 sourceRevision: "77a6b620af4d94b234294f6d273fd74b3dfb44c7"
 sources:
-  - crates/nessa-server/src/conversation/application/service/environment_tools.rs
-  - crates/nessa-server/src/conversation/application/artifacts.rs
-  - crates/nessa-server/tests/conversation/leases.rs
-  - crates/nessa-server/tests/conversation/command_policy_cedar.rs
-  - crates/nessa-server/tests/conversation/environment.rs
+  - crates/nessa-conversation/src/application/service/environment_tools.rs
+  - crates/nessa-conversation/src/application/artifacts.rs
+  - crates/nessa-conversation/tests/conversation/leases.rs
+  - crates/nessa-conversation/tests/conversation/command_policy_cedar.rs
+  - crates/nessa-conversation/tests/conversation/environment.rs
 diagramLinks: {}
 model:
   spec: tla/services/gateway/EnvironmentTools.tla
@@ -61,4 +61,4 @@ The model uses one original live parent, one command, requested and returned tim
 
 ## Bounded rule model
 
-Owns source-to-command admission, timeout/sandbox narrowing, saved issue before invocation and one artifact hold/record relationship. One lease and artifact plus two independent timeout bounds keep exploration finite. PolicyAllows abstracts actual current Cedar admission, not a policy implementation; process release, end-audit retries and physical artifact rollback are excluded. This finite abstraction checks safety only. It does not execute or verify the implementation, promise eventual completion, or qualify external effects. Existing source checkpoints and historical test receipts retain their earlier scope. The scoped model review inspected `crates/nessa-server/src/conversation/application/service/environment_tools.rs`, `crates/nessa-server/src/conversation/application/artifacts.rs`.
+Owns source-to-command admission, timeout/sandbox narrowing, saved issue before invocation and one artifact hold/record relationship. One lease and artifact plus two independent timeout bounds keep exploration finite. PolicyAllows abstracts actual current Cedar admission, not a policy implementation; process release, end-audit retries and physical artifact rollback are excluded. This finite abstraction checks safety only. It does not execute or verify the implementation, promise eventual completion, or qualify external effects. Existing source checkpoints and historical test receipts retain their earlier scope. The scoped model review inspected `crates/nessa-conversation/src/application/service/environment_tools.rs`, `crates/nessa-conversation/src/application/artifacts.rs`.

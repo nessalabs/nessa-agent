@@ -1,0 +1,224 @@
+[
+  {
+    "name": "huddle-default-columns",
+    "receipt": "/workspace/scratch/1327-live-qualification/huddle-default-columns.json",
+    "held": 10,
+    "total": 10,
+    "failures": [],
+    "knobs": null
+  },
+  {
+    "name": "huddle-default-sidebar",
+    "receipt": "/workspace/scratch/1327-live-qualification/huddle-default-sidebar.json",
+    "held": 1,
+    "total": 2,
+    "failures": [
+      {
+        "name": "conversation-stress",
+        "cannotRun": false,
+        "error": "locator.click: Timeout 15000ms exceeded.",
+        "failures": [],
+        "ok": false
+      }
+    ],
+    "knobs": null
+  },
+  {
+    "name": "huddle-overlay-default-sidebar",
+    "receipt": "/workspace/scratch/1327-live-qualification/huddle-overlay-default-sidebar.json",
+    "held": 10,
+    "total": 10,
+    "failures": []
+  },
+  {
+    "name": "huddle-overlay-raised-columns",
+    "receipt": "/workspace/scratch/1327-live-qualification/huddle-overlay-raised-columns.json",
+    "held": 10,
+    "total": 14,
+    "failures": [
+      {
+        "name": "037 huddle",
+        "engine": "chromium",
+        "layout": "columns",
+        "scope": "selected:huddle",
+        "ms": 26699,
+        "seen": {
+          "index": 37,
+          "kind": "huddle"
+        },
+        "failures": ["the talk board's turn drew no app"],
+        "ok": false
+      },
+      {
+        "name": "055 huddle",
+        "engine": "chromium",
+        "layout": "columns",
+        "scope": "selected:huddle",
+        "cannotRun": true,
+        "error": "not run: 037 huddle did not hold",
+        "failures": [],
+        "ok": false
+      },
+      {
+        "name": "037 huddle",
+        "engine": "webkit",
+        "layout": "columns",
+        "scope": "selected:huddle",
+        "ms": 28161,
+        "seen": {
+          "index": 37,
+          "kind": "huddle"
+        },
+        "failures": ["the talk board's turn drew no app"],
+        "ok": false
+      },
+      {
+        "name": "055 huddle",
+        "engine": "webkit",
+        "layout": "columns",
+        "scope": "selected:huddle",
+        "cannotRun": true,
+        "error": "not run: 037 huddle did not hold",
+        "failures": [],
+        "ok": false
+      }
+    ],
+    "knobs": null
+  },
+  {
+    "name": "huddle-old-bridge-control-raised-columns",
+    "receipt": "/workspace/scratch/1327-live-qualification/huddle-old-bridge-control-raised-columns.json",
+    "held": 9,
+    "total": 14,
+    "failures": [
+      {
+        "name": "037 huddle",
+        "engine": "chromium",
+        "layout": "columns",
+        "scope": "selected:huddle",
+        "ms": 26517,
+        "seen": {
+          "index": 37,
+          "kind": "huddle"
+        },
+        "failures": ["the talk board's turn drew no app"],
+        "ok": false
+      },
+      {
+        "name": "055 huddle",
+        "engine": "chromium",
+        "layout": "columns",
+        "scope": "selected:huddle",
+        "cannotRun": true,
+        "error": "not run: 037 huddle did not hold",
+        "failures": [],
+        "ok": false
+      },
+      {
+        "name": "002 huddle",
+        "engine": "webkit",
+        "layout": "columns",
+        "scope": "selected:huddle",
+        "ms": 25956,
+        "seen": {
+          "index": 2,
+          "kind": "huddle"
+        },
+        "failures": ["the talk board's turn drew no app"],
+        "ok": false
+      },
+      {
+        "name": "037 huddle",
+        "engine": "webkit",
+        "layout": "columns",
+        "scope": "selected:huddle",
+        "cannotRun": true,
+        "error": "not run: 002 huddle did not hold",
+        "failures": [],
+        "ok": false
+      },
+      {
+        "name": "055 huddle",
+        "engine": "webkit",
+        "layout": "columns",
+        "scope": "selected:huddle",
+        "cannotRun": true,
+        "error": "not run: 002 huddle did not hold",
+        "failures": [],
+        "ok": false
+      }
+    ],
+    "knobs": null
+  },
+  {
+    "name": "huddle-diagnostic-raised-columns",
+    "receipt": "/workspace/scratch/1327-live-qualification/huddle-diagnostic-raised-columns.json",
+    "held": 10,
+    "total": 14,
+    "failures": [
+      {
+        "name": "037 huddle",
+        "engine": "chromium",
+        "layout": "columns",
+        "scope": "selected:huddle",
+        "ms": 27998,
+        "seen": {
+          "index": 37,
+          "kind": "huddle"
+        },
+        "failures": ["the talk board's turn drew no app"],
+        "ok": false
+      },
+      {
+        "name": "055 huddle",
+        "engine": "chromium",
+        "layout": "columns",
+        "scope": "selected:huddle",
+        "cannotRun": true,
+        "error": "not run: 037 huddle did not hold",
+        "failures": [],
+        "ok": false
+      },
+      {
+        "name": "037 huddle",
+        "engine": "webkit",
+        "layout": "columns",
+        "scope": "selected:huddle",
+        "ms": 30807,
+        "seen": {
+          "index": 37,
+          "kind": "huddle"
+        },
+        "failures": ["the talk board's turn drew no app"],
+        "ok": false
+      },
+      {
+        "name": "055 huddle",
+        "engine": "webkit",
+        "layout": "columns",
+        "scope": "selected:huddle",
+        "cannotRun": true,
+        "error": "not run: 037 huddle did not hold",
+        "failures": [],
+        "ok": false
+      }
+    ],
+    "knobs": null
+  },
+  {
+    "name": "huddle-drain-before-create-raised-columns",
+    "receipt": "/workspace/scratch/1327-live-qualification/huddle-drain-before-create-raised-columns.json",
+    "held": 14,
+    "total": 14,
+    "failures": [],
+    "knobs": null
+  },
+  {
+    "name": "huddle-drain-before-create-raised-sidebar",
+    "receipt": "/workspace/scratch/1327-live-qualification/huddle-drain-before-create-raised-sidebar.json",
+    "held": 14,
+    "total": 14,
+    "failures": [],
+    "knobs": null
+  }
+]

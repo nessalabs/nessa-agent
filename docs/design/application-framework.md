@@ -68,15 +68,15 @@ binding, so every session reads as the owner.
 A paired device is the other path. It has a receiver. Its credential holds
 `conversation.read`. Comment and drive are the share row, and Cedar's
 `grant.comment` and `grant.drive` also require `signedInAs == bindingOwner`
-(`crates/nessa-server/src/conversation/infrastructure/access_policy/cedar/readers.cedar`).
+(`crates/nessa-conversation/src/infrastructure/access_policy/cedar/readers.cedar`).
 A device meets that because it signs in as the owner. A peer gateway signs
 in as itself, so those two permits do not match it. The grant lookup is
 `receiver_id`. A row with no receiver is not that lookup
-(`crates/nessa-server/src/conversation/infrastructure/store/share_grants.rs`).
+(`crates/nessa-conversation/src/infrastructure/store/share_grants.rs`).
 
 `owner.read` and `owner.act` permit the principal whose id is the
 conversation's owner
-(`crates/nessa-server/src/conversation/infrastructure/access_policy/cedar/ownership.cedar`).
+(`crates/nessa-conversation/src/infrastructure/access_policy/cedar/ownership.cedar`).
 The no-binding success returns before that question is asked.
 
 `mcp.callTool`, `mcp.readResource`, `mcp.sendMessage`, and
@@ -109,7 +109,7 @@ conversation, the execution, and the tool call. The desktop registers the
 plugin when a conversation view has a tool with UI
 (`src/desktop/widgets/app/adapters/gateway/gateway-apps.ts`). The gateway
 refuses `mcp.callTool` unless that call exists and declared a UI
-(`crates/nessa-server/src/mcp_servers/domain/app_call.rs`,
+(`crates/nessa-conversation/src/mcp_servers/domain/app_call.rs`,
 `AppRefusal::AppUnknown`). `app_facts` selects the call by `executionId`
 and `toolId`. Policy and audit name the app by those two.
 `instanceId` is one mount
@@ -134,7 +134,7 @@ conversation share a capability set: `read`, `read+comment`, or
 epoch (`policy_revision`). Cedar's `grant.read`, `grant.comment`, and
 `grant.drive` decide. `ShareGrant.receiver_id` is optional in the struct
 for an integration
-(`crates/nessa-server/src/conversation/application/share_grants.rs`).
+(`crates/nessa-conversation/src/application/share_grants.rs`).
 `conversation.share` still refuses a target that is not an active paired
 device or peer gateway (`share_target_not_paired`).
 
@@ -639,7 +639,7 @@ registry close, before a credential replacement, and before the signal. It also 
 
 A stored stdio server is a different process: one child per harness
 session, ended with that session (`open_admitted` in
-`crates/nessa-server/src/mcp_servers/infrastructure/relay.rs`). The
+`crates/nessa-conversation/src/mcp_servers/infrastructure/relay.rs`). The
 application process is not that child.
 
 ## One record
@@ -2549,7 +2549,7 @@ it lands before any view. A signed feed is out of scope.
 
 A stored stdio server is one process per harness session, ended with
 that session (`open_admitted` in
-`crates/nessa-server/src/mcp_servers/infrastructure/relay.rs`). The
+`crates/nessa-conversation/src/mcp_servers/infrastructure/relay.rs`). The
 application process is not that child. Its tools are a remote server
 the gateway dials at the row's endpoint. The harness does not receive
 that socket name or the endpoint capability. If that endpoint is not live, R2

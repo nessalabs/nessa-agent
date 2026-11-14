@@ -32,25 +32,21 @@
 use super::env_serve_command::{compose, environment_directory, Composed};
 use crate::timer::clock;
 use crate::{
-    app::dependencies::RuntimeDependencies,
-    core::RunError,
-    env::LEASE_PROTOCOL,
-    env_serve::{
-        application::ServeEnd,
-        application::{
-            self, enroll_once, redial, stop_past_deadline, Backoff, EnrolledOnce, NotApproved,
-            NotEnrolled,
-        },
-        domain::Peer,
-        infrastructure::{
-            dial, fetch, kept_for, run_in_place, this_build, Approved, FileEnrollmentCode,
-            FilePairingEnvironment, FETCH_DEADLINE,
-        },
-    },
-    timer::TokioTimer,
+    app::dependencies::RuntimeDependencies, core::RunError, env::LEASE_PROTOCOL, timer::TokioTimer,
 };
 use nessa_auth::adapters::pairing::{ManualCode, NativeIdentity};
 use nessa_device_pairing::infrastructure::TlsStream;
+use nessa_env_serve::{
+    application::{
+        self, enroll_once, redial, stop_past_deadline, Backoff, EnrolledOnce, NotApproved,
+        NotEnrolled, ServeEnd,
+    },
+    domain::Peer,
+    infrastructure::{
+        dial, fetch, kept_for, run_in_place, this_build, Approved, FileEnrollmentCode,
+        FilePairingEnvironment, FETCH_DEADLINE,
+    },
+};
 use nessa_protocol::{
     clock::Clock,
     relay::{host_port, RelayAddress},
@@ -384,17 +380,17 @@ async fn recover_secret_at(
             return Ok(());
         }
         match answer {
-            crate::env_serve::application::Answer::Ended => {
+            nessa_env_serve::application::Answer::Ended => {
                 return Err(RunError::Agent(
                     "the gateway ended this pairing without approving it".into(),
                 ));
             }
-            crate::env_serve::application::Answer::NotPaired => {
+            nessa_env_serve::application::Answer::NotPaired => {
                 return Err(RunError::Agent(
                     "this machine is not paired: run nessa env enroll first".into(),
                 ));
             }
-            crate::env_serve::application::Answer::Unusable(reason) => {
+            nessa_env_serve::application::Answer::Unusable(reason) => {
                 return Err(RunError::Agent(reason));
             }
             _ => {
@@ -413,8 +409,8 @@ async fn recover_secret_at(
 async fn status_unless_stopped(
     pairing: &FilePairingEnvironment,
     stop: &watch::Receiver<bool>,
-) -> Option<crate::env_serve::application::Answer> {
-    use crate::env_serve::application::EnvironmentPairing;
+) -> Option<nessa_env_serve::application::Answer> {
+    use nessa_env_serve::application::EnvironmentPairing;
     tokio::select! {
         biased;
         () = stopped(stop.clone()) => None,
@@ -759,7 +755,7 @@ mod tunnel_secret_gate {
     /// so the dial would poll forever.
     #[tokio::test]
     async fn env_dial_proceeds_to_serve_after_the_owner_recovers_the_secret() {
-        use crate::env_serve::infrastructure::FilePairingEnvironment;
+        use nessa_env_serve::infrastructure::FilePairingEnvironment;
 
         let root = tempfile::tempdir().unwrap();
         let path = root.path().canonicalize().unwrap().join("root");

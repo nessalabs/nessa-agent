@@ -155,8 +155,21 @@ export function partitionExecutables(executables, metadata) {
     throw new Error(
       `expected one nessa-server library test executable, found ${serverLib.length}`,
     )
-  const remaining = executables.filter((item) => item !== serverLib[0])
-  return { server: serverLib, remaining }
+  // The conversation crate's own library tests run beside the server's
+  // conversation cases: they were those cases before the crate was split out.
+  const conversationPackage = metadata.packages.find(
+    (pkg) => pkg.name === "nessa-conversation",
+  )
+  const conversation = conversationPackage
+    ? executables.filter(
+        (item) =>
+          item.packageId === conversationPackage.id && item.targetKinds.includes("lib"),
+      )
+    : []
+  const remaining = executables.filter(
+    (item) => item !== serverLib[0] && !conversation.includes(item),
+  )
+  return { server: serverLib, conversation, remaining }
 }
 
 /**
@@ -331,7 +344,11 @@ export async function runParallelCargoTests({
       args: task.args,
     }))
     selected =
-      partition === "remaining" ? [...serverTasks, ...partitions.remaining] : serverTasks
+      partition === "remaining"
+        ? [...serverTasks, ...partitions.remaining]
+        : partition === "server-conversation"
+          ? [...serverTasks, ...partitions.conversation]
+          : serverTasks
     stderr.write(
       `partition ${partition}: ${plan[partition].names.length} server cases in ${serverTasks.length} executables, ${selected.length - serverTasks.length} other binaries; doctests ${partition === "remaining" ? "included" : "owned by remaining"}\n`,
     )

@@ -10,7 +10,7 @@ use crate::{core::log_file, env::Environment};
 pub fn run() -> std::process::ExitCode {
     // Read while this is the only thread: reading the umask sets it.
     #[cfg(unix)]
-    crate::env_serve::infrastructure::note_umask();
+    nessa_env_serve::infrastructure::note_umask();
     logging::init();
     // A refused protection can be retried by the service supervisor. Bound the
     // existing stderr log before that failure emits its first line.

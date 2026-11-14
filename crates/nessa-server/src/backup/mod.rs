@@ -1,55 +1,9 @@
-//! A consistent export cut of the gateway's stores, and the deletion
-//! inventory captured beside it.
-//!
-//! ```text
-//! capture ──▶ MutationAdmission.hold     (conversation admission, write)
-//!               │
-//!               ├── ExportSource.pin         watermark, sqlite snapshot, small files,
-//!               │                            and both outboxes' rows
-//!               └── DeletionLog.append       fences already committed
-//!             hold drops
-//!               ├── PinnedStore.read         records from those snapshots
-//!               └── ManifestPublisher.put    only after the mac succeeds
-//!
-//! committed fence ──▶ FenceCapture::capture
-//!                       ├── Cedar: who may write
-//!                       ├── decision audit
-//!                       └── reconciliation lease  no admission, no bundle
-//!                             ├── load and read current fences
-//!                             └── no-op or DeletionLog replacement
-//! ```
-//!
-//! Arrows are calls, in order. The export path is one capture. The fence
-//! path is a deletion, unshare, credential revocation, or pairing
-//! cancellation, a successful share retry, or startup after offline rotation:
-//! it asks Cedar, stores that
-//! decision, then reconciles the log. It does not take admission and does
-//! not publish a bundle. The domain decides what a cut
-//! may contain. The application runs that order. Infrastructure reads
-//! stores and writes the bundle. Export takes admission and never a per-grant
-//! gate. Restore is a separate use case in this module: stage into a quarantine
-//! directory, accept by renaming onto an empty live path, and fetch one deferred
-//! conversation when it is opened. It does not take admission and it does not
-//! start a harness.
-//!
-//! The ordering table is [the export cut](../../../../docs/design/export-cut.md).
-//! The standalone reader enters through `entrypoint`, verifies through
-//! `application::verify_bundle`, and reads only supplied bundle/key paths through
-//! infrastructure. Its contract is [backup verification](../../../../docs/design/backup-verification.md).
-//! Offline restore planning reuses that verifier and reports unresolved prerequisites
-//! and proposed ordering without importing, quarantining or activating a gateway.
-//! Its contract is [offline planning](../../../../docs/design/offline-restore-planning.md).
-//! Quarantine, acceptance, and deferred fetch are
-//! [quarantined restore](../../../../docs/design/quarantined-restore.md).
+//! The parts of the export cut that meet the conversation context: the
+//! export sources over its stores ([`infrastructure::capture_namespace`]),
+//! its admission lock, and the committed-fence capture. The cut itself,
+//! verification and restore are the `nessa-backup` crate.
 
-pub mod application;
-pub mod domain;
-pub mod entrypoint;
 pub mod infrastructure;
-
-#[cfg(test)]
-#[path = "../../tests/backup/verification.rs"]
-mod verification_tests;
 
 #[cfg(test)]
 #[path = "../../tests/backup/export.rs"]
@@ -70,22 +24,6 @@ mod file_tests;
 #[cfg(test)]
 #[path = "../../tests/backup/lease.rs"]
 mod lease_tests;
-
-#[cfg(test)]
-#[path = "../../tests/backup/verification_format.rs"]
-mod verification_format_tests;
-
-#[cfg(test)]
-#[path = "../../tests/backup/verification_directory.rs"]
-mod verification_directory_tests;
-
-#[cfg(test)]
-#[path = "../../tests/backup/verification_metadata.rs"]
-mod verification_metadata_tests;
-
-#[cfg(test)]
-#[path = "../../tests/backup/restore_planning.rs"]
-mod restore_planning_tests;
 
 #[cfg(test)]
 #[path = "../../tests/backup/restore.rs"]

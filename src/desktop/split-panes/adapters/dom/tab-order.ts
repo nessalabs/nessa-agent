@@ -18,7 +18,8 @@ function stops(scope: ParentNode): HTMLElement[] {
   return [...scope.querySelectorAll<HTMLElement>(tabbable)].filter(
     (element) =>
       element.tabIndex >= 0 &&
-      !element.closest("[inert]") &&
+      // A host's column folding away is aria-hidden before it is inert.
+      !element.closest('[inert], [aria-hidden="true"]') &&
       element.getClientRects().length > 0,
   )
 }

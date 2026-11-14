@@ -8,14 +8,14 @@ summary: Backup verification, staged readiness and live activation are separate
 parent: gateway
 sourceRevision: "79ac9f9d87235002fc63b7ab7bfd77b936031d50"
 sources:
-  - crates/nessa-server/src/backup/application/restore.rs
-  - crates/nessa-server/src/backup/application/gateway_restore.rs
+  - crates/nessa-backup/src/application/restore.rs
+  - crates/nessa-backup/src/application/gateway_restore.rs
   - crates/nessa-server/src/composition/restore_command.rs
   - crates/nessa-server/src/composition/serving_restore.rs
   - crates/nessa-server/tests/backup/restore.rs
   - crates/nessa-server/tests/backup/gateway_restore.rs
   - docs/design/quarantined-restore.md
-  - crates/nessa-server/src/backup/application/restore_planning.rs
+  - crates/nessa-backup/src/application/restore_planning.rs
 model:
   spec: tla/services/gateway/BackupRestore.tla
   config: tla/services/gateway/BackupRestore.cfg
@@ -139,4 +139,4 @@ The abstraction assumes successful policy/audit admission before staging. It omi
 
 ## Further reading
 
-[restore.rs](../../../../crates/nessa-server/src/backup/application/restore.rs) · [gateway_restore.rs](../../../../crates/nessa-server/src/backup/application/gateway_restore.rs) · [restore_command.rs](../../../../crates/nessa-server/src/composition/restore_command.rs) · [serving_restore.rs](../../../../crates/nessa-server/src/composition/serving_restore.rs) · [restore.rs](../../../../crates/nessa-server/tests/backup/restore.rs) · [gateway_restore.rs](../../../../crates/nessa-server/tests/backup/gateway_restore.rs) · [quarantined-restore.md](../../../../docs/design/quarantined-restore.md)
+[restore.rs](../../../../crates/nessa-backup/src/application/restore.rs) · [gateway_restore.rs](../../../../crates/nessa-backup/src/application/gateway_restore.rs) · [restore_command.rs](../../../../crates/nessa-server/src/composition/restore_command.rs) · [serving_restore.rs](../../../../crates/nessa-server/src/composition/serving_restore.rs) · [restore.rs](../../../../crates/nessa-server/tests/backup/restore.rs) · [gateway_restore.rs](../../../../crates/nessa-server/tests/backup/gateway_restore.rs) · [quarantined-restore.md](../../../../docs/design/quarantined-restore.md)

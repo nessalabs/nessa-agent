@@ -10,7 +10,7 @@ sources:
   - crates/nessa-server/src/external_events/entrypoint/http.rs
   - crates/nessa-server/src/external_events/application/admission.rs
   - crates/nessa-server/src/external_events/domain/value_objects/identity.rs
-  - crates/nessa-server/src/conversation/application/service/mutation.rs
+  - crates/nessa-conversation/src/application/service/mutation.rs
   - crates/nessa-server/tests/external_events/ingress.rs
   - docs/design/external-events.md
 diagramLinks:

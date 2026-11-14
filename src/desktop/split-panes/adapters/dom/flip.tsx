@@ -186,8 +186,10 @@ function play(root: HTMLElement, from: Rects, motion: Motion) {
   const slides: { element: HTMLElement; own: number }[] = []
   landed.forEach(({ element, after }) => {
     const before = from.slides.get(element.dataset.flipId ?? "")
-    // Only what is on screen slides; a column folding away has its own transition.
-    if (!before || element.closest("[inert]")) return
+    // Only what is on screen slides; a column folding away has its own
+    // transition. A host marks it hidden from assistive tech as it folds,
+    // and may make it inert only once it has slid away.
+    if (!before || element.closest('[inert], [aria-hidden="true"]')) return
     const outer = element.parentElement?.closest<HTMLElement>('[data-flip="slide"]')
     const carried = (outer && shifted.get(outer)) ?? 0
     const dx = before.left - after.left

@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+import { Run } from "./lib/stress-run.mjs"
+import { reportStressStep, withStepFailureEvidence } from "./lib/stress-step-evidence.mjs"
 import {
   boatProbe,
   channelPlacementSettings,
@@ -169,11 +171,14 @@ import {
  *               window to the existing conversation is answered
  *   pool        native linking is turned on in Settings and two real
  *               `nessa env dial` workers pair with the gateway; a
- *               conversation created on `peer:any` is bound to one of them
- *               and stays there while it serves; that worker is stopped with
+ *               conversation created on `peer:any` is bound to one of them;
+ *               its place record turned back into an older build's
+ *               placement and binding files, it stays there while it
+ *               serves, read from them; that worker is stopped with
  *               SIGTERM, drains and exits, and the next message sent in the
  *               window binds the conversation to the other, with new provider
- *               context, as the window's heading and the binding both say;
+ *               context, as the window's heading and the binding both say,
+ *               written as one place record beside the older files;
  *               a chat started from the window in a channel whose threads
  *               use the pool runs on that worker and is told the channel's
  *               notes but neither its folder nor its attached file, both
@@ -245,8 +250,9 @@ import {
  *               closes the call and Talk is back
  *   upgrade     the gateway is stopped, its conversation metadata turned
  *               back into the file an older build wrote (version 6, or 7
- *               when a newer table holds rows), and started again: it
- *               upgrades the file to the current version, lists every
+ *               when a newer table holds rows) and every place record into
+ *               an older build's placement and binding files, and started
+ *               again: it upgrades the file to the current version, lists every
  *               conversation it listed before, and the message sent in the
  *               window after it is answered
  *   channel     a channel is made from the sidebar's +, asked in the
@@ -408,7 +414,13 @@ import {
 import { startFakeRealtime } from "./lib/fake-realtime.mjs"
 import { freePort } from "./lib/server.mjs"
 import { Follower } from "./lib/stress-followers.mjs"
-import { asOlderBuild, metadataFile, schemaVersion } from "./lib/stress-upgrade.mjs"
+import {
+  asEarlierPlaces,
+  asOlderBuild,
+  metadataFile,
+  placeOf as placeRecordOf,
+  schemaVersion,
+} from "./lib/stress-upgrade.mjs"
 import { nextSshHosts, writeFakeSsh, writeSshConfig } from "./lib/stress-ssh-hosts.mjs"
 import {
   pairedCatalogue,
@@ -455,7 +467,7 @@ const CURRENT_METADATA_VERSION = Number(
   /PRAGMA user_version = (\d+);\s*$/.exec(
     readFileSync(
       new URL(
-        "../../../crates/nessa-server/src/conversation/infrastructure/schema.sql",
+        "../../../crates/nessa-conversation/src/infrastructure/schema.sql",
         import.meta.url,
       ),
       "utf8",
@@ -464,7 +476,7 @@ const CURRENT_METADATA_VERSION = Number(
 )
 /**
  * The environment that places a conversation on any of the gateway's paired
- * workers (`POOL` in crates/nessa-server/src/conversation/application/placement.rs).
+ * workers (`POOL` in crates/nessa-conversation/src/application/placement.rs).
  */
 const POOL = "peer:any"
 /**
@@ -568,60 +580,6 @@ const fold = (text) =>
   String(text ?? "")
     .replace(/\s+/g, " ")
     .trim()
-
-/** Everything the run shares: the stack, the page, and the client in use now. */
-class Run {
-  constructor(stack, opened, knobs, restartConsole) {
-    this.restartConsole = restartConsole
-    this.stack = stack
-    this.acpRecording = stack.acpRecording
-    this.opened = opened
-    this.page = opened.page
-    this.knobs = knobs
-    this.client = stack.client
-    this.mode = "ask"
-    /** Gateway restarts so far: a request in flight across one may lose its answer. */
-    this.restarts = 0
-    this.main = null
-    /** Turns a background conversation has in flight; a restart waits for none. */
-    this.busy = 0
-    this.paused = null
-    this.background = []
-    /** Other conversations a step opened that the final rest check sweeps too. */
-    this.checked = []
-    /** Conversations a step deleted: followers let them go, and nothing sweeps them. */
-    this.deleted = new Set()
-    this.sent = new Map()
-    this.owned = new Set()
-    /** Where native linking listens once the `linking` step turns it on. */
-    this.nativeAddress = stack.nativeAddress
-    /** What config.json names for it: every interface, on the same port. */
-    this.nativeListen = stack.nativeListen
-  }
-
-  /** Waits while a restart holds the gateway. */
-  async enter() {
-    while (this.paused) await this.paused
-    this.busy += 1
-  }
-
-  leave() {
-    this.busy -= 1
-  }
-
-  /** Runs `body` with no background turn in flight and none starting. */
-  async exclusive(body) {
-    let release
-    this.paused = new Promise((resolve) => (release = resolve))
-    try {
-      await waitFor(() => this.busy === 0, 120_000)
-      return await body()
-    } finally {
-      this.paused = null
-      release()
-    }
-  }
-}
 
 /** An error with its code and cause, which a client failure keeps apart from its message. */
 const explain = (error) =>
@@ -816,6 +774,57 @@ async function studioWithTheCorner(page, failures) {
 
 /** The macOS traffic lights end at x=76 (`traffic_lights.rs`). */
 const LIGHTS_END = 76
+
+/**
+ * The folded sidebar parks once its slide has ended (#1177): hidden from
+ * assistive tech from the fold, then inert, unpainted and skipped by style
+ * (`content-visibility: hidden`) in one change, so its rows are never
+ * restyled on a frame of the fold. Opened again, it is reachable at once.
+ */
+async function sidebarParks(page, failures, open) {
+  const read = () =>
+    page.evaluate((selector) => {
+      const aside = document.querySelector(selector)
+      if (!aside) return null
+      return {
+        hidden: aside.getAttribute("aria-hidden") === "true",
+        inert: aside.hasAttribute("inert"),
+        parked: aside.hasAttribute("data-parked"),
+        skipped: getComputedStyle(aside).contentVisibility === "hidden",
+        visible: getComputedStyle(aside).visibility === "visible",
+      }
+    }, css.sidebar)
+  if (open) {
+    const now = await read()
+    if (!now || now.hidden || now.inert || now.parked || now.skipped || !now.visible)
+      failures.push(`the opened sidebar is not reachable: ${JSON.stringify(now)}`)
+    return
+  }
+  // Sliding (340 ms): hidden from assistive tech, focus already out of it,
+  // but not parked yet — parking on the key restyled every row (#1177).
+  let folding = await read()
+  if (!(await waitFor(async () => (folding = await read())?.hidden === true, 1_000)))
+    failures.push(
+      `the folding sidebar is not hidden from assistive tech: ${JSON.stringify(folding)}`,
+    )
+  else if (folding.inert || folding.parked)
+    failures.push(
+      `the sidebar parked on the fold's key, not after its slide: ${JSON.stringify(folding)}`,
+    )
+  if (
+    await page.evaluate(
+      (selector) => document.querySelector(selector)?.contains(document.activeElement),
+      css.sidebar,
+    )
+  )
+    failures.push("focus stayed inside the folding sidebar")
+  const parked = async () => {
+    const now = await read()
+    return Boolean(now?.inert && now.parked && now.skipped && !now.visible)
+  }
+  if (!(await waitFor(parked, 5_000)))
+    failures.push(`the folded sidebar never parked: ${JSON.stringify(await read())}`)
+}
 
 /**
  * Choosing a channel shows its sessions: with the session list hidden, a
@@ -2956,6 +2965,40 @@ const steps = {
         ))
       )
         failures.push("the completed VM background task did not permit idle rest")
+      // Boat fails the rested VM's next opening. Sent from the composer, the
+      // message is shown not sent, and the workspace records why, as one of
+      // the causes a person acts on. Send Again then opens the VM and the
+      // message goes through. A read of the rested conversation would open
+      // its VM itself, so its turns are the ones read before it rested.
+      const after = `${STRESS.reply} VM open fails ${step.index}`
+      const seen = new Set(view.messages.map((each) => each.executionId))
+      writeFileSync(join(run.stack.vmFixture.root, id, "fail-next-open"), "fail")
+      await send(run, id, after, failures, seen)
+      const unsent = run.page.locator("[data-send-failure]")
+      if (!(await waitFor(async () => (await unsent.count()) === 1, 60_000)))
+        failures.push("a send whose VM could not be opened was not shown as not sent")
+      else if (!(await unsent.textContent())?.includes("Error sending"))
+        failures.push(
+          `a send whose VM could not be opened says ${JSON.stringify(await unsent.textContent())}`,
+        )
+      if (
+        !run.stack.vmFixture
+          .events()
+          .some(
+            (event) =>
+              event.thread === id &&
+              event.kind === "open_refused" &&
+              event.cause === "provider_failed" &&
+              event.failure === "provider",
+          )
+      )
+        failures.push("a failed VM opening was not recorded with its cause")
+      if ((await unsent.count()) === 1) {
+        await unsent.getByRole("button", { name: "Send Again" }).click()
+        await settled(run, id, seen, after, "completed", failures)
+        if (!(await waitFor(async () => (await unsent.count()) === 0, 10_000)))
+          failures.push("the message sent again still shows as not sent")
+      }
       if (run.evidence)
         writeView(run.evidence, `views/vm-background-${run.engine}-${step.index}.json`, {
           lease: leaseEvidence,
@@ -4994,12 +5037,19 @@ const steps = {
         const count = failures.length
         const old = run.client
         run.restarts += 1
+        let earlier
         await run.stack.gateway.restart("SIGTERM", async () => {
           older = asOlderBuild(path)
+          // And every place record as the two files an older build kept.
+          earlier = asEarlierPlaces(conversationsOf(run))
         })
         old.close()
         run.client = await connectClient(run.stack.gateway, INSTANCE, "panel")
-        log(`upgrade: restarted on a version ${older} file`)
+        log(
+          `upgrade: restarted on a version ${older} file and ${earlier.length} older place files`,
+        )
+        if (!earlier.includes(run.main.id))
+          failures.push("the main conversation had no place record to turn back")
         const version = schemaVersion(path)
         if (version !== CURRENT_METADATA_VERSION)
           failures.push(
@@ -5574,6 +5624,13 @@ const steps = {
         failures.push(`its lease runs on ${before.lease?.host}, not ${from.name}`)
       if (from === leftOut)
         failures.push(`the pool chose ${from.name}, which the person left out`)
+      // An older build kept where it runs in two files: a placement and a
+      // binding. Turned back into them, the gateway reads it from those
+      // until it moves.
+      const conversations = conversationsOf(run)
+      asEarlierPlaces(conversations, conversationId)
+      if (existsSync(join(conversations, "places", `${conversationId}.json`)))
+        failures.push("the place record was not turned back into an older build's files")
       // Let back in, it is where the conversation moves once its worker drains.
       const back = await run.exclusive(() =>
         setPoolInclusion(run, leftOut.name, true, failures),
@@ -5606,6 +5663,12 @@ const steps = {
       if (JSON.stringify(bindingOf(run, conversationId)) !== JSON.stringify(bound))
         failures.push(
           `a message moved the conversation off its serving worker: ${JSON.stringify(bindingOf(run, conversationId))}`,
+        )
+      // Nothing changed, so nothing was written: it is still read from the
+      // older build's files.
+      if (existsSync(join(conversations, "places", `${conversationId}.json`)))
+        failures.push(
+          "a message that did not move the conversation wrote its place record",
         )
       if (failures.length) return
       // Its worker is stopped the way a container runtime stops it: it
@@ -5665,6 +5728,15 @@ const steps = {
       const rebound = bindingOf(run, conversationId)
       if (rebound?.worker !== to.name)
         failures.push(`after the drain it is bound to ${rebound?.worker}, not ${to.name}`)
+      // The move is its record's first change: written as one record, and
+      // as the older build's binding too, so a build put back follows it.
+      if (!existsSync(join(conversations, "places", `${conversationId}.json`)))
+        failures.push("the move wrote no place record")
+      const earlier = JSON.parse(
+        readFileSync(join(conversations, "bindings", `${conversationId}.json`), "utf8"),
+      )
+      if (earlier.worker !== to.name)
+        failures.push(`the older build's binding names ${earlier.worker}, not ${to.name}`)
       if (!rebound?.context || rebound.context === bound.context)
         failures.push(
           `after the move its provider context is ${rebound?.context}, not a new one`,
@@ -6742,6 +6814,7 @@ const steps = {
     // ⌘B hides the sidebar, which makes room for a pane beside; ⌘-click on a
     // row in the session list then opens it there, focused. The page is a Mac's.
     await run.page.keyboard.press(keys.toggleSidebar)
+    await sidebarParks(run.page, failures, false)
     await run.page
       .locator(selectorFor.sessionListRowFor(conversationId), {
         hasText: await titleOf(run, conversationId),
@@ -6835,6 +6908,7 @@ const steps = {
     await noHistoryButtons(run.page, failures, "the window")
     if (failures.length) return
     await run.page.keyboard.press(keys.toggleSidebar)
+    await sidebarParks(run.page, failures, true)
     await channelShowsList(run.page, failures)
     if (failures.length) return
     // The main conversation is the pane left. Not opened from its row: the
@@ -7336,21 +7410,8 @@ const steps = {
 
   async huddle(run, step, failures) {
     const conversationId = randomUUID()
+    run.failureConversationId = conversationId
     const first = prompt(run, STRESS.huddle, step)
-    await run.client.conversation.create({ conversationId, agent: run.stack.agent })
-    run.checked.push(conversationId)
-    await run.client.conversation.submit(
-      run.client.conversation.prepare(conversationId, first),
-    )
-    const { view } = await settled(
-      run,
-      conversationId,
-      new Set(),
-      first,
-      "completed",
-      failures,
-    )
-    if (!view) return
     const page = run.page
     const shot = (what) =>
       run.evidence
@@ -7359,16 +7420,37 @@ const steps = {
             .catch(() => {})
         : undefined
     await run.exclusive(async () => {
-      try {
-        await openStressConversation(
-          page,
-          conversationId,
-          await titleOf(run, conversationId),
-        )
-        await talkBoard(run, step, conversationId, failures, shot)
-      } finally {
-        await openStressConversation(page, run.main.id, run.main.title)
-      }
+      // Drain background work before starting this app fixture. Otherwise its
+      // three-second idle lease can expire while exclusive waits (#1327).
+      await run.client.conversation.create({ conversationId, agent: run.stack.agent })
+      run.checked.push(conversationId)
+      await run.client.conversation.submit(
+        run.client.conversation.prepare(conversationId, first),
+      )
+      const { view } = await settled(
+        run,
+        conversationId,
+        new Set(),
+        first,
+        "completed",
+        failures,
+      )
+      if (!view) return
+      await withStepFailureEvidence(
+        async () => {
+          await openStressConversation(
+            page,
+            conversationId,
+            await titleOf(run, conversationId),
+          )
+          await talkBoard(run, step, conversationId, failures, shot)
+        },
+        {
+          failures,
+          capture: () => shot(`${run.engine}-${step.index}-failed-before-cleanup`),
+          cleanup: () => openStressConversation(page, run.main.id, run.main.title),
+        },
+      )
     })
   },
 
@@ -7727,6 +7809,92 @@ const steps = {
         path: join(run.evidence, `handoff-${run.engine}-fork.png`),
         scale: "css",
       })
+    // Forks into one id raced from three requests: one request sent twice at
+    // once, and another request. The id keeps one fork seed, so the retry is
+    // the same fork (or told to wait while the first runs), and the other
+    // request is refused; the fork records its copied turns once.
+    const racedId = randomUUID()
+    const racedRequest = randomUUID()
+    const raced = await Promise.allSettled([
+      run.client.conversation.fork(conversationId, {
+        conversationId: racedId,
+        requestId: racedRequest,
+      }),
+      run.client.conversation.fork(conversationId, {
+        conversationId: racedId,
+        requestId: racedRequest,
+      }),
+      run.client.conversation.fork(conversationId, {
+        conversationId: racedId,
+        requestId: randomUUID(),
+      }),
+    ])
+    if (
+      raced[2].status === "fulfilled" &&
+      raced.slice(0, 2).some((each) => each.status === "fulfilled")
+    )
+      failures.push("two requests both made the raced fork")
+    if (raced.every((each) => each.status === "rejected"))
+      failures.push(
+        `every raced fork was refused: ${raced.map((each) => each.reason?.message).join("; ")}`,
+      )
+    const madeIds = raced
+      .filter((each) => each.status === "fulfilled")
+      .map((each) => each.value.conversationId)
+    if (madeIds.some((made) => made !== racedId))
+      failures.push(`a raced fork request opened ${madeIds.join(", ")}, not ${racedId}`)
+    // A retry turned away while the first ran is let in once it has ended.
+    const again = await run.client.conversation
+      .fork(conversationId, { conversationId: racedId, requestId: racedRequest })
+      .then(
+        (made) => made,
+        (error) => error,
+      )
+    const owner = raced[2].status === "fulfilled" ? "other" : "first"
+    if (owner === "first" && again instanceof Error)
+      failures.push(
+        `a retry of the raced fork was refused after it was made: ${again.message}`,
+      )
+    if (
+      owner === "first" &&
+      !(again instanceof Error) &&
+      again.conversationId !== racedId
+    )
+      failures.push(
+        `a retry of the raced fork opened ${again.conversationId}, not ${racedId}`,
+      )
+    run.checked.push(racedId)
+    const racedView = await run.client.conversation.read(racedId)
+    const racedForks = racedView.handoffs.filter((each) => each.kind === "fork")
+    if (racedForks.length !== 1 || (racedForks[0].turns?.length ?? 0) !== 2)
+      failures.push(
+        `the raced fork recorded ${racedForks.length} forks with ${racedForks[0]?.turns?.length ?? "no"} turns, not one with the source's 2`,
+      )
+    // The raced fork is a chat like any other: opened from its row and
+    // talked to through the composer, its reply in the window and the view.
+    await openStressConversation(run.page, racedId, racedView.title ?? "")
+    if (
+      !(await run.page
+        .locator(`${css.handoffLine}[data-handoff="fork"]`)
+        .first()
+        .waitFor({ timeout: 10_000 })
+        .then(() => true)
+        .catch(() => false))
+    )
+      failures.push("the window did not open the raced fork on its copied turns")
+    const inRaced = prompt(run, STRESS.reply, step, " in raced fork")
+    const racedSeen = await send(run, racedId, inRaced, failures, new Set())
+    const { turn: racedTurn } = await settled(
+      run,
+      racedId,
+      racedSeen,
+      inRaced,
+      "completed",
+      failures,
+    )
+    carriedBy(racedTurn, target.modelId, "the raced fork", first, failures)
+    if (!(await carriedShown(run.page, target.modelId, inRaced)))
+      failures.push("the window does not show the raced fork's own reply")
     // The source is as it was.
     const source = await run.client.conversation.read(conversationId)
     if (source.messages.length !== 2)
@@ -10626,27 +10794,18 @@ const offers = (run, holds) =>
       environments ?? run.client.agents.list().then((each) => each.environments),
   )
 
+/** The gateway's conversations directory, where it keeps place records. */
+const conversationsOf = (run) =>
+  join(run.stack.gateway.directory, "ci", "instances", INSTANCE, "conversations")
+
 /**
  * Which worker of the pool holds `conversationId` now, as the gateway keeps
- * it: `bindings/<id>.json` beside its conversations, `{ worker, context }`.
- * `null` when it has none.
+ * it: its place record, `places/<id>.json`, or an older build's
+ * `bindings/<id>.json`, as `{ worker, context }`. `null` when it has none.
  */
 function bindingOf(run, conversationId) {
-  const file = join(
-    run.stack.gateway.directory,
-    "ci",
-    "instances",
-    INSTANCE,
-    "conversations",
-    "bindings",
-    `${conversationId}.json`,
-  )
-  try {
-    return JSON.parse(readFileSync(file, "utf8"))
-  } catch (error) {
-    if (error.code === "ENOENT") return null
-    throw error
-  }
+  const place = placeRecordOf(conversationsOf(run), conversationId)
+  return place?.worker ? { worker: place.worker, context: place.context } : null
 }
 
 /** What the window's heading names `worker` by, in the client's words. */
@@ -11366,7 +11525,7 @@ await main(
       // The probe's own refusal is the console line it is expected to leave.
       opened.noteHarmless(/127\.0\.0\.1:9\/policy-probe/)
       await assertPolicyHolds(opened.page, contentPolicy)
-      const run = new Run(stack, opened, knobs, restartConsole)
+      const run = new Run(stack, opened, knobs, restartConsole, waitFor)
       run.reviewAnswers = reviewAnswers
       run.reviewAnswerEvidence = []
       run.accessRefusals = accessRefusals
@@ -11428,24 +11587,9 @@ await main(
             continue
           }
           run.failureConversationId = null
-          const at = Date.now()
-          const failures = []
-          let error
-          try {
-            await steps[step.kind](run, step, failures)
-          } catch (thrown) {
-            error = thrown
-          }
-          const entry = rep.add({
-            name,
-            ...base,
-            ms: Date.now() - at,
-            seen: step,
-            failures,
-            ...(error
-              ? { error: explain(error), cannotRun: error instanceof CannotRun }
-              : {}),
-          })
+          const entry = await reportStressStep(rep, { name, ...base }, step, (failures) =>
+            steps[step.kind](run, step, failures),
+          )
           if (!entry.ok) {
             stopped = `${name} did not hold`
             if (options.evidence) {

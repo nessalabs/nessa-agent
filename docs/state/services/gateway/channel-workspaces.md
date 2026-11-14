@@ -8,43 +8,43 @@ summary: A channel independently places its main agent and new threads on Local
   or Boat and can override the default Boat VM lifetime.
 parent: gateway
 sources:
-  - crates/nessa-server/src/conversation/application/placement.rs
-  - crates/nessa-server/src/conversation/domain/value_objects/place.rs
-  - crates/nessa-server/src/conversation/application/place_decision.rs
+  - crates/nessa-conversation/src/application/placement.rs
+  - crates/nessa-conversation/src/domain/value_objects/place.rs
+  - crates/nessa-conversation/src/application/place_decision.rs
   - crates/nessa-server/src/composition/local_auth.rs
-  - crates/nessa-server/src/conversation/infrastructure/ssh_environment/audit.rs
+  - crates/nessa-conversation/src/infrastructure/ssh_environment/audit.rs
   - crates/nessa-sdk/src/application/agent_execution/sessions/manager.rs
   - crates/nessa-sdk/src/infrastructure/claude_acp/sessions/binding.rs
   - crates/nessa-sdk/src/infrastructure/opencode_acp/sessions/binding.rs
   - crates/nessa-sdk/src/infrastructure/acp/sessions/config.rs
   - crates/nessa-sdk/src/application/agent_execution/providers/input_files.rs
-  - crates/nessa-server/src/conversation/application/input_files.rs
-  - crates/nessa-server/src/workspaces/infrastructure/settings.rs
-  - crates/nessa-server/src/workspaces/infrastructure/release.rs
-  - crates/nessa-server/src/workspaces/application/workspaces.rs
-  - crates/nessa-server/src/workspaces/application/runtime_settings.rs
-  - crates/nessa-server/src/workspaces/domain/workspace.rs
-  - crates/nessa-server/src/workspaces/domain/environment.rs
-  - crates/nessa-server/src/workspaces/infrastructure/assignments.rs
-  - crates/nessa-server/src/workspaces/infrastructure/boat_admission.rs
+  - crates/nessa-conversation/src/application/input_files.rs
+  - crates/nessa-conversation/src/workspaces/infrastructure/settings.rs
+  - crates/nessa-conversation/src/workspaces/infrastructure/release.rs
+  - crates/nessa-conversation/src/workspaces/application/workspaces.rs
+  - crates/nessa-conversation/src/workspaces/application/runtime_settings.rs
+  - crates/nessa-conversation/src/workspaces/domain/workspace.rs
+  - crates/nessa-conversation/src/workspaces/domain/environment.rs
+  - crates/nessa-conversation/src/workspaces/infrastructure/assignments.rs
+  - crates/nessa-conversation/src/workspaces/infrastructure/boat.rs
   - crates/nessa-server/tests/workspaces/allocation.rs
-  - crates/nessa-server/tests/workspaces/assignments.rs
-  - crates/nessa-server/tests/workspaces/boat_admission.rs
-  - crates/nessa-server/tests/workspaces/environment.rs
-  - crates/nessa-server/src/workspaces/infrastructure/boat.rs
-  - crates/nessa-server/src/workspaces/infrastructure/boat_runtime_settings.rs
-  - crates/nessa-server/src/workspaces/infrastructure/runtime_settings_audit.rs
-  - crates/nessa-server/src/workspaces/infrastructure/ssh.rs
-  - crates/nessa-server/src/conversation/infrastructure/workspaces.rs
-  - crates/nessa-server/src/conversation/domain/value_objects/vm_lifetime.rs
-  - crates/nessa-server/src/settings/inheritance.rs
-  - crates/nessa-server/src/conversation/infrastructure/workspace_runtime_config.rs
-  - crates/nessa-server/src/conversation/infrastructure/channels.rs
+  - crates/nessa-conversation/tests/workspaces/assignments.rs
+  - crates/nessa-conversation/tests/workspaces/boat_admission.rs
+  - crates/nessa-conversation/tests/workspaces/environment.rs
+  - crates/nessa-conversation/src/workspaces/infrastructure/boat.rs
+  - crates/nessa-server/src/composition/boat_runtime_settings.rs
+  - crates/nessa-conversation/src/workspaces/infrastructure/runtime_settings_audit.rs
+  - crates/nessa-conversation/src/workspaces/infrastructure/ssh.rs
+  - crates/nessa-conversation/src/infrastructure/workspaces.rs
+  - crates/nessa-conversation/src/domain/value_objects/vm_lifetime.rs
+  - crates/nessa-conversation/src/settings.rs
+  - crates/nessa-conversation/src/infrastructure/workspace_runtime_config.rs
+  - crates/nessa-conversation/src/infrastructure/channels.rs
   - src/desktop/workspace/ui/channel-creation/new-channel.tsx
   - src/desktop/settings/ui/boat-row.tsx
   - src/desktop/settings/ui/boat-runtime-control.tsx
   - src/desktop/workspace/ui/channel-settings/channel-settings.tsx
-  - crates/nessa-server/src/workspaces/infrastructure/runtime.rs
+  - crates/nessa-conversation/src/workspaces/infrastructure/runtime.rs
   - src/provider-authentication/model/boat-sign-in.ts
   - src-tauri/src/platform/macos/claude_sign_in.rs
 diagramLinks: {}
@@ -76,7 +76,10 @@ for both channel choices. The main agent runs on messages and worker reports.
 track moved where a new conversation's place is decided into `place.rs` and
 `place_decision.rs` without changing the Local and Boat flow below; a thread
 or fork that names its own place stays in its channel. Those two sources are
-not yet reviewed against this page.
+not yet reviewed against this page. The Boat adapter now runs over the
+workspace SDK (`boat.rs` replaces `boat_admission.rs`); the paragraphs on
+readiness, wiping VMs and failed openings were updated with it, and the rest of
+the page was not re-reviewed.
 
 ```mermaid
 stateDiagram-v2
@@ -104,9 +107,10 @@ checked at creation and reconnection, with a concrete VM receipt check before
 any workspace SDK, harness, SSH or MCP authority.
 
 A fresh creation acknowledgement can arrive while the snapshot is still starting
-and inherited credentials are being removed. Nessa polls that new VM for at most
-90 seconds, then rechecks the environment and complete security receipt. A ready
-VM with a pending credential wipe still refuses. This wait runs no workspace,
+and inherited credentials are being removed. The workspace SDK waits for that
+new VM within its ready budget, then rechecks the environment and complete
+security receipt. A new VM still wiping is stopped on the record and checked in
+full when woken; a ready VM with a pending credential wipe still refuses. This wait runs no workspace,
 SSH, MCP or agent command and does not restart an idempotent replay. A timeout
 preserves the named VM and the original rollback disposition; it does not prove
 cleanup or authorize another allocation.
@@ -121,7 +125,13 @@ and old Unverified receipts cannot reconnect, upgrade themselves or allocate a
 replacement. Refusal storage, audit and cleanup failures are reported separately;
 if persistence fails, no durable refusal or confirmed deletion is claimed.
 Future openings must still verify the same saved identity; they never select a
-new target.
+new target. A changed connection token may reach an existing VM, but the image
+and environment it is opened with come from its receipt, never from the saved
+connection. Every opening the workspace service refuses is recorded in the
+environment audit with its kind and the one cause a person acts on (not
+connected, locked, provider failed, refused, uncertain); the chat still shows
+the environment as unavailable until the lease protocol can carry that cause
+(#1290).
 A create intent is written first; uncertainty is retained rather than creating a
 second resource. An observer disappearing does not cancel the allocation task's
 receipt publication. Closing or deleting chat history preserves workspace files
@@ -274,6 +284,6 @@ placement, restoration and lifetime paths were not re-reviewed here.
 
 ## Bounded rule model
 
-Owns durable provisioning intent, single VM target, reconnect verification and terminal refusal. Uncertain creation cannot allocate again. Local placement, TTL settings, credential posture fields, SSH leases, rollback acknowledgement and main-chat replacement remain separate unmodeled contracts. This finite abstraction checks safety only. It does not execute or verify the implementation, promise eventual completion, or qualify external effects. Existing source checkpoints and historical test receipts retain their earlier scope. The scoped model review inspected `crates/nessa-server/src/workspaces/domain/workspace.rs`, `crates/nessa-server/src/workspaces/application/workspaces.rs`.
+Owns durable provisioning intent, single VM target, reconnect verification and terminal refusal. Uncertain creation cannot allocate again. Local placement, TTL settings, credential posture fields, SSH leases, rollback acknowledgement and main-chat replacement remain separate unmodeled contracts. This finite abstraction checks safety only. It does not execute or verify the implementation, promise eventual completion, or qualify external effects. Existing source checkpoints and historical test receipts retain their earlier scope. The scoped model review inspected `crates/nessa-conversation/src/workspaces/domain/workspace.rs`, `crates/nessa-conversation/src/workspaces/application/workspaces.rs`.
 
 The newer [channel run-location control](../desktop/workspace/change-channel-run-location.md) describes moving an existing channel, main creation locking and committed-but-unconfirmed audit outcomes. [Pool ordering](../desktop/workspace/choose-worker-pool-order.md) describes Any computer and cloud overflow. These source-only task guides do not extend this page’s allocation model.

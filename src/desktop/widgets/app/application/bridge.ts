@@ -493,8 +493,10 @@ export function createAppBridge(options: BridgeOptions): AppBridge {
       }
       case "ui/request-display-mode": {
         const decision = requestMode(place, message.mode, initialize.displayModes)
+        // Opening the panel can retire this bridge (#1327, L17a).
+        send(reply(id, { mode: decision.answer }))
         if (decision.open) options.host.open(decision.open)
-        return send(reply(id, { mode: decision.answer }))
+        return
       }
     }
   }

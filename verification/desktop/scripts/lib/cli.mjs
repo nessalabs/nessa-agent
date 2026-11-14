@@ -383,6 +383,39 @@ const thrownDiagnostic = (error) => {
   }
 }
 
+const thrownMessage = (error) => {
+  try {
+    return (
+      String(error?.message ?? error).split("\n")[0] || "step threw without a message"
+    )
+  } catch {
+    return "unprintable error"
+  }
+}
+
+const recoveryCause = (error) =>
+  !(error instanceof CannotRun) &&
+  error instanceof UnsafeToContinueError &&
+  error.cause !== undefined
+    ? thrownDiagnostic(error.cause).split("\n")[0]
+    : undefined
+
+const thrownDescription = (error) => {
+  const details = [thrownMessage(error)]
+  try {
+    if (error?.code !== undefined) details.push(String(error.code))
+    if (!(error instanceof UnsafeToContinueError) && !(error instanceof AggregateError)) {
+      const cause = error?.cause?.message ?? error?.cause?.code
+      if (cause !== undefined) details.push(String(cause).split("\n")[0])
+    }
+  } catch {
+    // The thrown outcome remains a fault even when its optional metadata cannot be read.
+  }
+  const message = details.join(" · ")
+  const cause = recoveryCause(error)
+  return cause === undefined ? message : `${message} (caused by: ${cause})`
+}
+
 /**
  * The result a step that threw earns (`attempt`). The result keeps only the
  * error's first line. A throw that is not a `CannotRun` is a fault, so its
@@ -392,16 +425,21 @@ const thrownDiagnostic = (error) => {
  */
 export function resultOfThrown(base, error) {
   const cannotRun = error instanceof CannotRun
-  const cause =
-    !cannotRun && error instanceof UnsafeToContinueError && error.cause !== undefined
-      ? thrownDiagnostic(error.cause).split("\n")[0]
-      : undefined
+  const contained = error instanceof AggregateError ? error.errors : []
+  const cause = recoveryCause(error)
   if (!cannotRun) {
     log(thrownDiagnostic(error))
     if (cause !== undefined) log("caused by:", thrownDiagnostic(error.cause))
+    for (const failure of contained) {
+      log("contained failure:", thrownDiagnostic(failure))
+      if (recoveryCause(failure) !== undefined)
+        log("caused by:", thrownDiagnostic(failure.cause))
+    }
   }
-  const message = String(error?.message ?? error).split("\n")[0]
-  const description = cause === undefined ? message : `${message} (caused by: ${cause})`
+  const description = [
+    thrownDescription(error),
+    ...contained.map(thrownDescription),
+  ].join(" · ")
   return {
     ...base,
     cannotRun,

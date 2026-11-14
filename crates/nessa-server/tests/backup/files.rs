@@ -7,23 +7,7 @@ use std::path::Path;
 use async_trait::async_trait;
 use nessa_protocol::lease::MAX_ARTIFACT_BYTES;
 
-use crate::backup::application::{
-    accepted_tree_matches, QuarantineLayout, RestoreAudit, RestoreEvidence,
-};
-use crate::backup::application::{
-    verify_bundle, ExportClock, ExportFailure, ManifestPublisher, MutationAdmission,
-    PublishedRecord, VerificationLimits,
-};
-use crate::backup::domain::{
-    audit_path, encode_accepted_restore, encode_deferred, encode_journal, outbox_watermark,
-    seal_attestation, DeferredLine, Fingerprint, Freshness, SealedFile, Sensitivity, SkipReason,
-    StoreKind, IDENTITY_BODY, REPLAY_BODY,
-};
-use crate::backup::infrastructure::ExportFormat;
-use crate::backup::infrastructure::{
-    capture_namespace, jsonl_cut, path_sensitivity, DirectoryPublisher, DirectoryQuarantine,
-    DirectoryVerificationSource, FileDeletionLog, FileRestoreAudit,
-};
+use crate::backup::infrastructure::capture_namespace;
 use crate::conversation::application::{ArtifactBudget, ChannelStore};
 use crate::conversation::domain::{
     Channel, ChannelDefaults, ChannelExecution, ChannelFolder, ChannelId, ChannelName,
@@ -31,6 +15,23 @@ use crate::conversation::domain::{
 };
 use crate::conversation::infrastructure::LocalChannelStore;
 use nessa_auth::domain::{OrganizationId, PrincipalId};
+use nessa_backup::application::{
+    accepted_tree_matches, QuarantineLayout, RestoreAudit, RestoreEvidence,
+};
+use nessa_backup::application::{
+    verify_bundle, ExportClock, ExportFailure, ManifestPublisher, MutationAdmission,
+    PublishedRecord, VerificationLimits,
+};
+use nessa_backup::domain::{
+    audit_path, encode_accepted_restore, encode_deferred, encode_journal, outbox_watermark,
+    seal_attestation, DeferredLine, Fingerprint, Freshness, SealedFile, Sensitivity, SkipReason,
+    StoreKind, IDENTITY_BODY, REPLAY_BODY,
+};
+use nessa_backup::infrastructure::ExportFormat;
+use nessa_backup::infrastructure::{
+    jsonl_cut, path_sensitivity, DirectoryPublisher, DirectoryQuarantine,
+    DirectoryVerificationSource, FileDeletionLog, FileRestoreAudit,
+};
 use nessa_protocol::agents::AgentId;
 use nessa_protocol::conversation::domain::{
     ConversationApprovalMode, ConversationId, ConversationModelId,
@@ -1063,7 +1064,7 @@ async fn a_public_file_over_the_bound_is_named_and_not_read() {
     fs::create_dir_all(&environment).unwrap();
     let audit = environment.join("grants-audit.jsonl");
     let file = fs::File::create(&audit).unwrap();
-    file.set_len(crate::backup::infrastructure::snapshot::PUBLIC_FILE_LIMIT + 1)
+    file.set_len(nessa_backup::infrastructure::snapshot::PUBLIC_FILE_LIMIT + 1)
         .unwrap();
     drop(file);
     fs::write(
@@ -1091,7 +1092,7 @@ async fn an_oversized_non_database_session_is_not_read() {
     let path = sessions.join("records.sqlite3");
     fs::write(&path, b"RAW-SESSION-MUST-NOT-PUBLISH").unwrap();
     let file = fs::File::options().write(true).open(&path).unwrap();
-    file.set_len(crate::backup::infrastructure::snapshot::SESSION_EXPORT_LIMIT + 1)
+    file.set_len(nessa_backup::infrastructure::snapshot::SESSION_EXPORT_LIMIT + 1)
         .unwrap();
     drop(file);
     let published = publish_cut(root).await;
@@ -1315,7 +1316,7 @@ async fn an_oversized_session_is_deferred_and_the_cut_continues() {
     let bulk_incarnation = [0x22u8; 16];
     let tail = [0u8, 0, 0, 0, 0, 0, 0, 1];
     let offset = [0u8, 0, 0, 0, 0, 0, 0, 1];
-    let bulk_len = usize::try_from(crate::backup::infrastructure::snapshot::SESSION_EXPORT_LIMIT)
+    let bulk_len = usize::try_from(nessa_backup::infrastructure::snapshot::SESSION_EXPORT_LIMIT)
         .unwrap()
         + 4096;
     let database =
@@ -1640,7 +1641,7 @@ async fn concurrent_publishes_of_one_root_do_not_mix() {
 }
 
 struct PublishedCut {
-    manifest: crate::backup::domain::AuthenticatedManifest,
+    manifest: nessa_backup::domain::AuthenticatedManifest,
     _bundle: tempfile::TempDir,
     root: std::path::PathBuf,
     text: String,
@@ -2033,8 +2034,8 @@ impl MutationAdmission for AppendOnRelease {
     async fn hold(
         &self,
     ) -> Result<
-        Box<dyn crate::backup::application::AdmissionLease + Send + Sync>,
-        crate::backup::application::AdmissionFailure,
+        Box<dyn nessa_backup::application::AdmissionLease + Send + Sync>,
+        nessa_backup::application::AdmissionFailure,
     > {
         Ok(Box::new(AppendHold {
             appends: self.appends.clone(),
@@ -2060,7 +2061,7 @@ impl Drop for AppendHold {
     }
 }
 
-impl crate::backup::application::AdmissionLease for AppendHold {
+impl nessa_backup::application::AdmissionLease for AppendHold {
     fn retirement_signaled(&self) -> bool {
         false
     }
@@ -2076,8 +2077,8 @@ impl MutationAdmission for RewriteOnRelease {
     async fn hold(
         &self,
     ) -> Result<
-        Box<dyn crate::backup::application::AdmissionLease + Send + Sync>,
-        crate::backup::application::AdmissionFailure,
+        Box<dyn nessa_backup::application::AdmissionLease + Send + Sync>,
+        nessa_backup::application::AdmissionFailure,
     > {
         Ok(Box::new(RewriteHold {
             path: self.path.clone(),
@@ -2099,7 +2100,7 @@ impl Drop for RewriteHold {
     }
 }
 
-impl crate::backup::application::AdmissionLease for RewriteHold {
+impl nessa_backup::application::AdmissionLease for RewriteHold {
     fn retirement_signaled(&self) -> bool {
         false
     }
@@ -2112,8 +2113,8 @@ impl MutationAdmission for OpenAdmission {
     async fn hold(
         &self,
     ) -> Result<
-        Box<dyn crate::backup::application::AdmissionLease + Send + Sync>,
-        crate::backup::application::AdmissionFailure,
+        Box<dyn nessa_backup::application::AdmissionLease + Send + Sync>,
+        nessa_backup::application::AdmissionFailure,
     > {
         Ok(Box::new(OpenHold))
     }
@@ -2121,7 +2122,7 @@ impl MutationAdmission for OpenAdmission {
 
 struct OpenHold;
 
-impl crate::backup::application::AdmissionLease for OpenHold {
+impl nessa_backup::application::AdmissionLease for OpenHold {
     fn retirement_signaled(&self) -> bool {
         false
     }
@@ -2141,7 +2142,7 @@ fn a_sqlite_snapshot_excludes_a_later_write() {
 
     use nessa_local_database::rusqlite::Connection;
 
-    use crate::backup::infrastructure::snapshot::SqliteSnapshot;
+    use nessa_backup::infrastructure::snapshot::SqliteSnapshot;
 
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("records.sqlite3");
@@ -2160,8 +2161,8 @@ fn a_sqlite_snapshot_excludes_a_later_write() {
         connection.execute("UPDATE t SET v = 2", []).unwrap();
     });
     let bytes = match snapshot.backup_bytes().unwrap() {
-        crate::backup::infrastructure::snapshot::SnapshotCopy::Ready(bytes) => bytes,
-        crate::backup::infrastructure::snapshot::SnapshotCopy::Deferred(_) => {
+        nessa_backup::infrastructure::snapshot::SnapshotCopy::Ready(bytes) => bytes,
+        nessa_backup::infrastructure::snapshot::SnapshotCopy::Deferred(_) => {
             panic!("the fixture is within the session export limit");
         }
     };

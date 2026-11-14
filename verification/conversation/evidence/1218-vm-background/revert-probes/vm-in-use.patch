@@ -1,4 +1,4 @@
---- /workspace/nessa-agent-1218/crates/nessa-server/src/workspaces/application/workspaces.rs
+--- /workspace/nessa-agent-1218/crates/nessa-conversation/src/workspaces/application/workspaces.rs
 +++ vm-in-use
 @@ -125,8 +125,7 @@
          Ok(stream)

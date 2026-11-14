@@ -226,7 +226,7 @@ fn catalogue() -> &'static [Limit] {
         Limit {
             id: "conversation.share_grants",
             tier: "fixed",
-            owner: "MAX_SHARE_GRANTS_PER_CONVERSATION in crates/nessa-server/src/conversation/application/share_grants.rs, the schema's ConversationSharesResult x-maxGrants",
+            owner: "MAX_SHARE_GRANTS_PER_CONVERSATION in crates/nessa-conversation/src/application/share_grants.rs, the schema's ConversationSharesResult x-maxGrants",
             meaning: "the paired parties one conversation is shared with, any role; one more conversation.share is refused invalid_request. conversation.shares returns them a page at a time",
         },
         Limit {
@@ -238,13 +238,13 @@ fn catalogue() -> &'static [Limit] {
         Limit {
             id: "conversation.drive_grants",
             tier: "fixed",
-            owner: "MAX_DRIVE_GRANTS_PER_CONVERSATION in crates/nessa-server/src/conversation/application/share_grants.rs",
+            owner: "MAX_DRIVE_GRANTS_PER_CONVERSATION in crates/nessa-conversation/src/application/share_grants.rs",
             meaning: "the drive grants one conversation holds; one more conversation.share naming drive is refused invalid_request",
         },
         Limit {
             id: "conversation.drive_policies",
             tier: "fixed",
-            owner: "MAX_ADMITTED_POLICIES in crates/nessa-server/src/conversation/application/drive_tools.rs",
+            owner: "MAX_ADMITTED_POLICIES in crates/nessa-conversation/src/application/drive_tools.rs",
             meaning: "the Drive grant policies one open conversation keeps for the turns it admitted, by grant and revision; past this the least recently admitted is let go, and a turn still needing it has its tool calls refused, never allowed",
         },
         Limit {
@@ -286,25 +286,25 @@ fn catalogue() -> &'static [Limit] {
         Limit {
             id: "conversation.tool_policy_rules",
             tier: "fixed",
-            owner: "ToolRules::MAX_RULES in crates/nessa-server/src/conversation/domain/value_objects/share_access.rs, the schema's ConversationToolPolicy",
+            owner: "ToolRules::MAX_RULES in crates/nessa-conversation/src/domain/value_objects/share_access.rs, the schema's ConversationToolPolicy",
             meaning: "the patterns each of a drive grant's allow and deny lists holds; a conversation.share with more in either is refused invalid_request",
         },
         Limit {
             id: "conversation.tool_policy_rule_bytes",
             tier: "fixed",
-            owner: "ToolRules::MAX_RULE_BYTES in crates/nessa-server/src/conversation/domain/value_objects/share_access.rs, the schema's ConversationToolPolicy",
+            owner: "ToolRules::MAX_RULE_BYTES in crates/nessa-conversation/src/domain/value_objects/share_access.rs, the schema's ConversationToolPolicy",
             meaning: "the longest tool policy pattern, in UTF-8 bytes; a conversation.share with a longer one is refused invalid_request",
         },
         Limit {
             id: "conversation.tool_policy_command_hosts",
             tier: "fixed",
-            owner: "CommandHosts::MAX_HOSTS in crates/nessa-server/src/conversation/domain/value_objects/share_access.rs, the schema's ConversationToolPolicy",
+            owner: "CommandHosts::MAX_HOSTS in crates/nessa-conversation/src/domain/value_objects/share_access.rs, the schema's ConversationToolPolicy",
             meaning: "the hosts a drive grant's policy names for its turns' commands, apart from its allow and deny patterns; a conversation.share with more is refused invalid_request, and a grant naming none runs commands nowhere",
         },
         Limit {
             id: "conversation.tool_policy_command_host_bytes",
             tier: "fixed",
-            owner: "CommandHosts::MAX_HOST_BYTES in crates/nessa-server/src/conversation/domain/value_objects/share_access.rs, the schema's ConversationToolPolicy",
+            owner: "CommandHosts::MAX_HOST_BYTES in crates/nessa-conversation/src/domain/value_objects/share_access.rs, the schema's ConversationToolPolicy",
             meaning: "the longest command host a drive grant's policy names, in bytes, the longest SSH destination config.json accepts; a conversation.share with a longer one is refused invalid_request",
         },
         Limit {
@@ -545,19 +545,19 @@ fn catalogue() -> &'static [Limit] {
         Limit {
             id: "agent_tools.waiting_reads",
             tier: "fixed",
-            owner: "MAX_EVENT_READERS in crates/nessa-server/src/conversation/application/agent_tools.rs",
+            owner: "MAX_EVENT_READERS in crates/nessa-conversation/src/application/agent_tools.rs",
             meaning: "a `subscribe` past this many running for one source conversation is refused subscription_capacity; other sources are not counted against it",
         },
         Limit {
             id: "boat.retained_environments",
             tier: "fixed",
-            owner: "MAX_RETAINED_ENVIRONMENTS in crates/nessa-server/src/conversation/application/placement.rs",
+            owner: "MAX_RETAINED_ENVIRONMENTS in crates/nessa-conversation/src/application/placement.rs",
             meaning: "when full, release only environments with no opening caller, command or lease owner; if all are retained, refuse new opens as unavailable rather than grow or evict active work",
         },
         Limit {
             id: "agent_tools.source_admissions",
             tier: "fixed",
-            owner: "MAX_AGENT_TOOL_ADMISSIONS in crates/nessa-server/src/conversation/application/agent_tools.rs",
+            owner: "MAX_AGENT_TOOL_ADMISSIONS in crates/nessa-conversation/src/application/agent_tools.rs",
             meaning: "an agent tool call past this many detached admissions retained by one source conversation is refused unavailable; other sources are not counted against it",
         },
         Limit {

@@ -20,7 +20,14 @@
  *
  * The gateway must be stopped: this writes the file it holds.
  */
-import { readdirSync } from "node:fs"
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs"
 import { join, sep } from "node:path"
 import { DatabaseSync } from "node:sqlite"
 
@@ -72,4 +79,68 @@ export function asOlderBuild(path) {
   } finally {
     database.close()
   }
+}
+
+/** A JSON file the gateway reads, private as it writes them. */
+function writePrivate(directory, name, value) {
+  mkdirSync(directory, { recursive: true, mode: 0o700 })
+  writeFileSync(join(directory, name), `${JSON.stringify(value)}\n`, { mode: 0o600 })
+}
+
+/**
+ * Where conversation `id` runs, as the gateway keeps it under its
+ * `conversations` directory: `places/<id>.json`, else an older build's
+ * `placements/<id>.json` and, for the pool, `bindings/<id>.json`. `null`
+ * when none is kept, which is here.
+ */
+export function placeOf(conversations, id) {
+  const read = (directory) => {
+    const path = join(conversations, directory, `${id}.json`)
+    return existsSync(path) ? JSON.parse(readFileSync(path, "utf8")) : null
+  }
+  const record = read("places")
+  if (record)
+    return { placed: record.placed, worker: record.worker, context: record.context }
+  const placement = read("placements")
+  if (!placement) return null
+  const binding = placement.host === "peer:any" ? read("bindings") : null
+  return { placed: placement.host, worker: binding?.worker, context: binding?.context }
+}
+
+/**
+ * Turn the place records under a stopped gateway's `conversations`
+ * directory back into the files an older build kept (all of them, or the
+ * one of `only`): here as no file at all, anywhere else as
+ * `placements/<id>.json` `{schemaVersion, host}`, and a pool conversation's
+ * worker as `bindings/<id>.json` `{schemaVersion, worker, context}`. The
+ * place records are removed, so the gateway must read the older files.
+ * Answers the ids it turned back.
+ */
+export function asEarlierPlaces(conversations, only) {
+  const places = join(conversations, "places")
+  if (!existsSync(places)) return []
+  const ids = readdirSync(places)
+    .filter((name) => name.endsWith(".json"))
+    .map((name) => name.slice(0, -".json".length))
+    .filter((id) => only === undefined || id === only)
+  for (const id of ids) {
+    const record = JSON.parse(readFileSync(join(places, `${id}.json`), "utf8"))
+    // Each older file says what the record does, or is gone: no placement
+    // for here, no binding before a worker holds it.
+    if (record.placed !== "here")
+      writePrivate(join(conversations, "placements"), `${id}.json`, {
+        schemaVersion: 1,
+        host: record.placed,
+      })
+    else rmSync(join(conversations, "placements", `${id}.json`), { force: true })
+    if (record.worker)
+      writePrivate(join(conversations, "bindings"), `${id}.json`, {
+        schemaVersion: 1,
+        worker: record.worker,
+        ...(record.context ? { context: record.context } : {}),
+      })
+    else rmSync(join(conversations, "bindings", `${id}.json`), { force: true })
+    rmSync(join(places, `${id}.json`))
+  }
+  return ids
 }

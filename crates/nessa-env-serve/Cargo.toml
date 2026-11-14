@@ -1,0 +1,45 @@
+[package]
+name = "nessa-env-serve"
+version.workspace = true
+edition.workspace = true
+rust-version = "1.89"
+publish = false
+autotests = false
+description = "The environment role of the one binary: `nessa env serve` runs the harnesses a gateway's leases start on a host, keeps its own audit of them, and installs the build there"
+
+[features]
+# Lets nessa-server's tests drive a serving host and its grants directly.
+test-support = []
+
+[dependencies]
+nessa-auth = { path = "../nessa-auth" }
+# The client's dial and enrollment, without its command line.
+nessa-client-core = { path = "../nessa-client-core", default-features = false }
+nessa-device-pairing = { path = "../nessa-device-pairing" }
+nessa-local-storage = { path = "../nessa-local-storage" }
+nessa-protocol = { path = "../nessa-protocol" }
+nessa-sdk = { path = "../nessa-sdk" }
+nessa-timer = { path = "../nessa-timer", features = ["runtime"] }
+base64 = "0.22"
+cedar-policy = { version = "=4.12.0", default-features = false }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+tempfile = "3"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "sync", "time", "io-util", "io-std", "process", "signal"] }
+toml_edit = { version = "=0.25.13", default-features = false, features = ["parse", "display"] }
+tracing = "0.1"
+uuid = { version = "1", features = ["v4"] }
+zeroize = "=1.9.0"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+shepherd = { git = "https://github.com/nessalabs/shepherd", rev = "85ee0d55acabf5f91b8cac2e925872d044514864" }
+
+[dev-dependencies]
+nessa-sdk = { path = "../nessa-sdk", features = ["test-support"] }
+nessa-timer = { path = "../nessa-timer", features = ["test-support"] }
+tokio = { version = "1", features = ["test-util"] }
+
+[lints]
+workspace = true

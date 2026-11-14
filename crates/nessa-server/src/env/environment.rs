@@ -1,4 +1,4 @@
-use super::config::{self, default, key};
+use super::config::{default, key};
 use super::error::EnvironmentError;
 use super::source::EnvSource;
 use super::stage::Stage;
@@ -60,7 +60,7 @@ impl Environment {
             stage,
             bind_host,
             port,
-            version: config::VERSION,
+            version: super::VERSION,
             uptime_backend,
             auth_directory,
             instance,

@@ -1,8 +1,9 @@
 //! Allocation is tested through the application ports with controllable provider
 //! admission. No real account or secret is used in these ordering fixtures.
+use super::ConfigBoatRuntimeSettings;
 use crate::conversation::domain::{ChannelId, SettingsScope, VmLifetime, VmLifetimeSettings};
 use crate::mcp_servers::infrastructure::{ConfigCheck, ConfigJson, OsConfigFiles};
-use crate::workspaces::infrastructure::{ConfigBoatRuntimeSettings, RuntimeSettingsAudit};
+use crate::workspaces::infrastructure::RuntimeSettingsAudit;
 use crate::workspaces::{application::*, domain::*};
 use async_trait::async_trait;
 use nessa_auth::{
@@ -143,14 +144,37 @@ enum RecoveryStep {
 #[derive(Default)]
 struct Audit {
     events: Mutex<Vec<RecoveryEvent>>,
+    /// Failed openings, kept apart so the receipt histories above stay exact.
+    refused_opens: Mutex<Vec<(String, OpenFailure, &'static str)>>,
     steps: Arc<Mutex<Vec<RecoveryStep>>>,
     fail_receipt: AtomicBool,
     fail_cleanup: AtomicBool,
     panic_receipt: AtomicBool,
     fail_stop: AtomicBool,
+    fail_open: AtomicBool,
+    panic_open: AtomicBool,
 }
 impl RecoveryAudit for Audit {
     fn record(&self, event: &RecoveryEvent) -> Result<(), Failure> {
+        if let RecoveryEvent::OpenRefused {
+            thread,
+            cause,
+            failure,
+        } = event
+        {
+            assert!(
+                !self.panic_open.load(Ordering::SeqCst),
+                "injected opening audit panic"
+            );
+            if self.fail_open.load(Ordering::SeqCst) {
+                return Err(Failure::Storage);
+            }
+            self.refused_opens
+                .lock()
+                .unwrap()
+                .push((thread.clone(), *cause, failure));
+            return Ok(());
+        }
         self.steps
             .lock()
             .unwrap()
@@ -168,6 +192,7 @@ impl RecoveryAudit for Audit {
             RecoveryEvent::StopRequested { .. } | RecoveryEvent::StopAnswered { .. } => {
                 &self.fail_stop
             }
+            RecoveryEvent::OpenRefused { .. } => unreachable!("kept above"),
         };
         if fail.load(Ordering::SeqCst) {
             return Err(Failure::Storage);
@@ -200,6 +225,7 @@ struct FakeProvider {
     created_lifetimes: Mutex<Vec<VmLifetime>>,
     created_images: Mutex<Vec<String>>,
     connected_lifetimes: Mutex<Vec<VmLifetime>>,
+    connected_images: Mutex<Vec<String>>,
     connects: Mutex<Vec<String>>,
     deletes: AtomicUsize,
     stops: Mutex<Vec<String>>,
@@ -224,6 +250,7 @@ impl FakeProvider {
             created_lifetimes: Mutex::new(vec![]),
             created_images: Mutex::new(vec![]),
             connected_lifetimes: Mutex::new(vec![]),
+            connected_images: Mutex::new(vec![]),
             connects: Mutex::new(vec![]),
             deletes: AtomicUsize::new(0),
             stops: Mutex::new(vec![]),
@@ -234,12 +261,13 @@ impl FakeProvider {
 }
 #[async_trait]
 impl Provider for FakeProvider {
-    async fn validate(&self, _: &BoatConnection) -> Result<(), Failure> {
+    async fn validate(&self, _: &BoatAccount, _: &VmSpec) -> Result<(), Failure> {
         Ok(())
     }
     async fn create(
         &self,
-        connection: &BoatConnection,
+        _: &BoatAccount,
+        connection: &VmSpec,
         thread: &str,
     ) -> Result<WorkspaceReceipt, Failure> {
         self.created_lifetimes
@@ -262,7 +290,8 @@ impl Provider for FakeProvider {
     }
     async fn connect(
         &self,
-        connection: &BoatConnection,
+        _: &BoatAccount,
+        connection: &VmSpec,
         _: &str,
         vm: &str,
         _: &EnvironmentIdentity,
@@ -271,13 +300,17 @@ impl Provider for FakeProvider {
             .lock()
             .unwrap()
             .push(connection.auto_stop);
+        self.connected_images
+            .lock()
+            .unwrap()
+            .push(connection.image.clone());
         if let Some(rejection) = self.refusal_on_connect.lock().unwrap().clone() {
             return Err(Failure::AdmissionRejected(rejection));
         }
         self.connects.lock().unwrap().push(vm.into());
         Ok(Arc::new(Runtime))
     }
-    async fn stop(&self, _: &BoatConnection, vm: &str) -> Result<(), Failure> {
+    async fn stop(&self, _: &BoatAccount, vm: &str, _: RestCause) -> Result<(), Failure> {
         self.recovery_steps
             .lock()
             .unwrap()
@@ -288,7 +321,12 @@ impl Provider for FakeProvider {
         self.stops.lock().unwrap().push(vm.into());
         Ok(())
     }
-    async fn remove(&self, _: &BoatConnection, vm: &str) -> Result<(), Failure> {
+    async fn remove(
+        &self,
+        _: &BoatAccount,
+        vm: &str,
+        _: &EnvironmentIdentity,
+    ) -> Result<(), Failure> {
         self.recovery_steps
             .lock()
             .unwrap()
@@ -599,6 +637,33 @@ async fn a_new_vm_is_made_from_the_pinned_image_not_the_one_saved_with_the_accou
     ));
 }
 #[tokio::test]
+async fn an_existing_vm_is_opened_with_its_receipts_image_whatever_is_saved_or_pinned() {
+    let store = Arc::new(Store::default());
+    let audit = Arc::new(Audit::default());
+    let provider = Arc::new(FakeProvider::new(audit.steps.clone()));
+    let service = Workspaces::new(
+        Arc::new(Config),
+        provider.clone(),
+        store.clone(),
+        audit,
+        Arc::new(Config),
+    )
+    .with_image(Some("pinned-image"));
+    store.records.lock().unwrap().insert(
+        id(1).to_string(),
+        Assignment::Assigned {
+            thread: id(1).to_string(),
+            vm: "vm-old".into(),
+            image: "old-image".into(),
+            admission: admission(),
+        },
+    );
+    assert_ne!(connection().image, "old-image");
+    assert!(service.open(id(1), false, None).await.is_ok());
+    assert_eq!(*provider.connected_images.lock().unwrap(), ["old-image"]);
+    assert_eq!(provider.creates.load(Ordering::SeqCst), 0);
+}
+#[tokio::test]
 async fn a_rest_waiting_behind_an_opening_keeps_the_vm_it_opens() {
     let (service, _, provider) = fixture();
     // The opening holds the thread's lock while it creates the VM; a rest
@@ -646,6 +711,171 @@ async fn an_uncertain_intent_and_accounting_never_create_a_replacement() {
         Err(Failure::Missing)
     ));
     assert_eq!(provider.creates.load(Ordering::SeqCst), 0);
+}
+#[tokio::test]
+async fn each_failed_opening_is_recorded_with_what_can_be_done_about_it() {
+    let (service, store, provider, audit) = fixture_with_audit();
+    store.records.lock().unwrap().insert(
+        id(1).to_string(),
+        Assignment::Provisioning {
+            thread: id(1).to_string(),
+        },
+    );
+    assert!(service.open(id(1), true, None).await.is_err());
+    assert!(service.open(id(2), false, None).await.is_err());
+    provider.proceed.add_permits(1);
+    assert!(service.open(id(3), true, None).await.is_ok());
+    *provider.refusal_on_connect.lock().unwrap() = Some(rejection());
+    assert!(service.open(id(3), false, None).await.is_err());
+    assert!(service.open(id(3), false, None).await.is_err());
+    assert_eq!(
+        *audit.refused_opens.lock().unwrap(),
+        [
+            (
+                id(1).to_string(),
+                OpenFailure::Uncertain,
+                "provisioning_uncertain"
+            ),
+            (id(2).to_string(), OpenFailure::Refused, "missing"),
+            (
+                id(3).to_string(),
+                OpenFailure::Refused,
+                "admission_recovery"
+            ),
+            (id(3).to_string(), OpenFailure::Refused, "refused_workspace"),
+        ]
+    );
+}
+#[tokio::test]
+async fn a_failed_opening_whose_record_is_lost_says_so_and_keeps_its_own_failure() {
+    let (service, _, _, audit) = fixture_with_audit();
+    audit.fail_open.store(true, Ordering::SeqCst);
+    let rejected = service.open(id(2), false, None).await.err().unwrap();
+    assert_eq!(
+        rejected,
+        Failure::OpeningUnrecorded(Box::new(Failure::Missing))
+    );
+    assert_eq!(rejected.kind(), "opening_unrecorded");
+    assert_eq!(rejected.cause(), OpenFailure::Refused);
+    audit.fail_open.store(false, Ordering::SeqCst);
+    audit.panic_open.store(true, Ordering::SeqCst);
+    assert_eq!(
+        service.open(id(2), false, None).await.err(),
+        Some(Failure::OpeningUnrecorded(Box::new(Failure::Missing)))
+    );
+    assert!(audit.refused_opens.lock().unwrap().is_empty());
+}
+#[tokio::test]
+async fn a_failed_opening_is_recorded_after_its_waiter_left() {
+    let (service, _, provider, audit) = fixture_with_audit();
+    *provider.refusal_on_create.lock().unwrap() = Some(rejection());
+    let task = {
+        let service = service.clone();
+        tokio::spawn(async move { service.open(id(1), true, None).await })
+    };
+    provider.entered.acquire().await.unwrap().forget();
+    task.abort();
+    provider.proceed.add_permits(1);
+    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        while audit.refused_opens.lock().unwrap().is_empty() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        *audit.refused_opens.lock().unwrap(),
+        [(
+            id(1).to_string(),
+            OpenFailure::Uncertain,
+            "admission_recovery"
+        )]
+    );
+}
+fn recovery(
+    receipt_failed: bool,
+    audit_failed: bool,
+    cleanup: CleanupOutcome,
+    cleanup_audit_failed: bool,
+) -> Failure {
+    Failure::AdmissionRecovery {
+        vm: "vm".into(),
+        rejection: rejection(),
+        receipt_failed,
+        audit_failed,
+        cleanup,
+        cleanup_audit_failed,
+    }
+}
+#[test]
+fn every_failure_comes_down_to_one_thing_a_caller_can_do() {
+    for (failure, cause) in [
+        (Failure::NotConfigured, OpenFailure::NotConnected),
+        (Failure::WorkerUnavailable, OpenFailure::NotConnected),
+        (Failure::InvalidInput, OpenFailure::NotConnected),
+        (Failure::Locked, OpenFailure::Locked),
+        (Failure::Provider, OpenFailure::ProviderFailed),
+        (Failure::Storage, OpenFailure::ProviderFailed),
+        (Failure::EnvironmentUnavailable, OpenFailure::NotConnected),
+        (Failure::Missing, OpenFailure::Refused),
+        (
+            Failure::RefusedWorkspace {
+                vm: "vm".into(),
+                rejection: rejection(),
+                disposition: RefusalDisposition::RetainTarget,
+            },
+            OpenFailure::Refused,
+        ),
+        (
+            recovery(false, false, CleanupOutcome::Retained, false),
+            OpenFailure::Refused,
+        ),
+        (
+            recovery(false, false, CleanupOutcome::Confirmed, false),
+            OpenFailure::Refused,
+        ),
+        (
+            recovery(true, false, CleanupOutcome::Retained, false),
+            OpenFailure::Uncertain,
+        ),
+        (
+            recovery(false, true, CleanupOutcome::Retained, false),
+            OpenFailure::Uncertain,
+        ),
+        (
+            recovery(false, false, CleanupOutcome::Unconfirmed, false),
+            OpenFailure::Uncertain,
+        ),
+        (
+            recovery(false, false, CleanupOutcome::Confirmed, true),
+            OpenFailure::Uncertain,
+        ),
+        (
+            Failure::ReceiptRecovery {
+                vm: "vm".into(),
+                receipt_audit_failed: false,
+                cleanup: CleanupOutcome::Confirmed,
+                cleanup_audit_failed: false,
+            },
+            OpenFailure::Uncertain,
+        ),
+        (
+            Failure::AdmissionRejected(rejection()),
+            OpenFailure::Refused,
+        ),
+        (
+            Failure::UnverifiedWorkspace { vm: "vm".into() },
+            OpenFailure::Refused,
+        ),
+        (Failure::ProvisioningUncertain, OpenFailure::Uncertain),
+        (Failure::CleanupUncertain, OpenFailure::Uncertain),
+        (
+            Failure::OpeningUnrecorded(Box::new(Failure::Locked)),
+            OpenFailure::Locked,
+        ),
+    ] {
+        assert_eq!(failure.cause(), cause, "{failure:?}");
+    }
 }
 #[tokio::test]
 async fn lost_waiter_does_not_abandon_the_creation_receipt() {
@@ -1227,5 +1457,76 @@ async fn a_background_stream_holds_the_vm_after_its_runtime_is_dropped() {
     assert!(provider.stops.lock().unwrap().is_empty());
     drop(stream);
     assert_eq!(service.rest(id(1), RestCause::Idle).await.stopped, Ok(true));
+    assert_eq!(provider.deletes.load(Ordering::SeqCst), 0);
+}
+
+fn wiping() -> AdmissionRejection {
+    AdmissionRejection::new(AdmissionRefusal::WipePending, None)
+}
+#[tokio::test]
+async fn a_new_vm_still_wiping_is_stopped_on_the_record_and_then_connected() {
+    let (service, store, provider, audit) = fixture_with_audit();
+    *provider.refusal_on_create.lock().unwrap() = Some(wiping());
+    provider.proceed.add_permits(1);
+    assert!(service.open(id(7), true, None).await.is_ok());
+    let thread = id(7).to_string();
+    let vm = format!("vm-{thread}");
+    assert_eq!(
+        *audit.steps.lock().unwrap(),
+        vec![
+            RecoveryStep::Audit(RecoveryEvent::StopRequested {
+                thread: thread.clone(),
+                vm: vm.clone(),
+                cause: RestCause::Wiping,
+            }),
+            RecoveryStep::Stop(vm.clone()),
+            RecoveryStep::Audit(RecoveryEvent::StopAnswered {
+                thread: thread.clone(),
+                vm: vm.clone(),
+                cause: RestCause::Wiping,
+                failure: None,
+            }),
+        ]
+    );
+    assert!(matches!(
+        store.records.lock().unwrap().get(&thread),
+        Some(Assignment::Assigned { .. })
+    ));
+    assert_eq!(*provider.connects.lock().unwrap(), vec![vm]);
+}
+#[tokio::test]
+async fn a_wiping_vm_whose_stop_is_not_accepted_or_not_recorded_is_rolled_back() {
+    for stop_refused in [false, true] {
+        let (service, store, provider, audit) = fixture_with_audit();
+        *provider.refusal_on_create.lock().unwrap() = Some(wiping());
+        provider.refuse_stop.store(stop_refused, Ordering::SeqCst);
+        audit.fail_stop.store(!stop_refused, Ordering::SeqCst);
+        provider.confirm_remove.store(true, Ordering::SeqCst);
+        provider.proceed.add_permits(1);
+        let result = service.open(id(8), true, None).await;
+        assert!(
+            matches!(
+                &result,
+                Err(Failure::AdmissionRecovery { rejection, .. }) if *rejection == wiping()
+            ),
+            "{:?}",
+            result.err()
+        );
+        assert_eq!(provider.deletes.load(Ordering::SeqCst), 1);
+        assert!(provider.connects.lock().unwrap().is_empty());
+        assert!(matches!(
+            store.records.lock().unwrap().get(&id(8).to_string()),
+            Some(Assignment::Refused { .. })
+        ));
+    }
+}
+#[tokio::test]
+async fn a_replayed_vm_still_wiping_is_refused_and_never_stopped() {
+    let (service, _, provider, _) = fixture_with_audit();
+    *provider.refusal_on_create.lock().unwrap() = Some(wiping());
+    *provider.created_disposition.lock().unwrap() = RefusalDisposition::RetainTarget;
+    provider.proceed.add_permits(1);
+    assert!(service.open(id(9), true, None).await.is_err());
+    assert!(provider.stops.lock().unwrap().is_empty());
     assert_eq!(provider.deletes.load(Ordering::SeqCst), 0);
 }

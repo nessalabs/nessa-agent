@@ -1,0 +1,31 @@
+//! `nessa env serve`: the environment role of the one binary (ADR 252,
+//! issue #699). A gateway runs the copy of its own build it installed on the
+//! host (`install`, issue #703) as `env serve` over `ssh`, and speaks lease
+//! frames over its standard input and output; this side starts and stops the
+//! agent harnesses those leases run, keeps its own audit of them, and keeps
+//! no conversation.
+//!
+//! ```text
+//! nessa-server's env_serve_command ──▶ infrastructure (launcher, ledger, lock,
+//!                                     grants)
+//!                                 ──▶ application::serve (the frame loop)
+//! application::serve ──▶ domain (what a peer is granted, and the terms)
+//! the gateway's SSH environment   ──▶ install (where this build lives on a
+//!                                     host, and the commands that put it there)
+//! ```
+//!
+//! Arrows are construction and the call that runs it. Unix only, as
+//! launching a harness is. `machine` (what a host has) is on every platform,
+//! since `devices.list` reads it too.
+// The one clock rule nessa-server holds (clippy.toml), kept here since this
+// code moved out of it.
+#![cfg_attr(not(test), warn(clippy::disallowed_methods))]
+#[cfg(unix)]
+pub mod application;
+#[cfg(unix)]
+pub mod domain;
+#[cfg(unix)]
+pub mod infrastructure;
+#[cfg(unix)]
+pub mod install;
+pub mod machine;

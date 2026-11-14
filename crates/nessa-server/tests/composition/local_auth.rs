@@ -269,8 +269,8 @@ fn startup_environment(namespace: &Path) -> Environment {
 /// returning routes, while the replacement credentials remain active.
 #[tokio::test]
 async fn startup_records_offline_credential_rotations_once() {
-    use crate::backup::application::DeletionLogStore;
-    use crate::backup::infrastructure::{read_credentials, FileDeletionLog};
+    use nessa_backup::application::DeletionLogStore;
+    use nessa_backup::infrastructure::{read_credentials, FileDeletionLog};
 
     let (_directory, namespace, store) = namespace_with_registry();
     let now = SystemClock.unix_seconds();
@@ -342,8 +342,8 @@ async fn startup_records_offline_credential_rotations_once() {
 /// source is unreadable. The authenticated prior inventory remains intact.
 #[tokio::test]
 async fn startup_refuses_an_unreadable_committed_fence_source() {
-    use crate::backup::application::DeletionLogStore;
-    use crate::backup::infrastructure::FileDeletionLog;
+    use nessa_backup::application::DeletionLogStore;
+    use nessa_backup::infrastructure::FileDeletionLog;
 
     let (_directory, namespace, store) = namespace_with_registry();
     drop(store);
@@ -362,7 +362,7 @@ async fn startup_refuses_an_unreadable_committed_fence_source() {
     let log = FileDeletionLog::open(namespace.join("backup")).unwrap();
     let empty = log.load().await.unwrap();
     let (before, _) = empty
-        .append(crate::backup::domain::DeletionFence::conversation("previously-deleted").unwrap());
+        .append(nessa_backup::domain::DeletionFence::conversation("previously-deleted").unwrap());
     log.store(&empty, &before).await.unwrap();
     let result = product_state(
         &startup_environment(&namespace),
@@ -933,6 +933,33 @@ fn workspace_recovery_records_the_target_and_unconfirmed_cleanup_in_durable_evid
     );
 }
 
+#[test]
+fn a_failed_workspace_opening_keeps_its_thread_cause_and_kind_in_the_real_audit() {
+    use crate::workspaces::domain::OpenFailure;
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("audit");
+    let audit = WorkspaceRecoveryAudit(
+        DurableEnvironmentAudit::new(root.clone(), Arc::new(SystemClock)).unwrap(),
+    );
+    audit
+        .record(&RecoveryEvent::OpenRefused {
+            thread: "d49640a4-fd71-40a4-b3e9-a35e8753db78".into(),
+            cause: OpenFailure::ProviderFailed,
+            failure: "provider",
+        })
+        .unwrap();
+    let paths = std::fs::read_dir(&root)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .collect::<Vec<_>>();
+    assert_eq!(paths.len(), 1);
+    let value: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&paths[0]).unwrap()).unwrap();
+    assert_eq!(value["kind"], "workspace_open_refused");
+    assert_eq!(value["thread"], "d49640a4-fd71-40a4-b3e9-a35e8753db78");
+    assert_eq!(value["cause"], "provider_failed");
+    assert_eq!(value["failure"], "provider");
+}
 #[test]
 fn workspace_admission_refusal_retains_expected_and_observed_identity_in_the_real_audit() {
     use crate::workspaces::domain::{

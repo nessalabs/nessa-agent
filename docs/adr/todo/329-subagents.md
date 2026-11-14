@@ -440,7 +440,7 @@ not execute another model loop or schedule their individual turns.
 | SDK application | Spawn supervision, ownership persistence, admission ordering, recursive close and recovery through ports | `crates/nessa-sdk/src/application/agent_execution/subagents/` |
 | SDK infrastructure | Ownership records and leases using the shared SQLite runtime | Feature child under `crates/nessa-sdk/src/infrastructure/session_storage/` |
 | Agent lifecycle | Individual invocation, controls and provider cleanup; common stop transition used by tree closure | Existing `application/agent_execution/agents/` |
-| Gateway conversation | Current access, metadata, configuration selection and product mapping of SDK relationships | Existing `crates/nessa-server/src/conversation/` layers |
+| Gateway conversation | Current access, metadata, configuration selection and product mapping of SDK relationships | Existing `crates/nessa-conversation/src/` layers |
 | Product protocol/client | Current typed command/read shapes and generated vocabulary | `protocol/product/v1.json`, `nessa-protocol`, `packages/nessa-client` |
 | Nessa tool adapter | Model-facing delegation over authenticated gateway operations | Feature module under `crates/nessa-mcp/src/` |
 | Desktop | Joined source, selection, panel and parent-header accessory | `src/desktop/subagents/` |

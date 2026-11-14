@@ -18,8 +18,7 @@ use crate::{
         application::{RecoveryAudit, RecoveryEvent, Workspaces},
         domain::Failure as WorkspaceFailure,
         infrastructure::{
-            worker_image, BoatProvider, ConfigBoatRuntimeSettings, FileAssignments,
-            RuntimeSettingsAudit, VaultSettings,
+            worker_image, BoatProvider, FileAssignments, RuntimeSettingsAudit, VaultSettings,
         },
     },
 };
@@ -289,7 +288,7 @@ pub(super) async fn product_state(
     .map_err(setup_error)?;
     #[cfg(unix)]
     let runtime_settings = {
-        Arc::new(ConfigBoatRuntimeSettings {
+        Arc::new(super::boat_runtime_settings::ConfigBoatRuntimeSettings {
             config: Arc::new(ConfigJson::new(
                 Arc::new(OsConfigFiles::new(super::runtime_config::config_path(
                     namespace,
@@ -322,11 +321,6 @@ pub(super) async fn product_state(
         Workspaces::new(
             Arc::new(VaultSettings(vault.vault.clone())),
             Arc::new(BoatProvider {
-                http: reqwest::Client::builder()
-                    .timeout(std::time::Duration::from_secs(45))
-                    .redirect(reqwest::redirect::Policy::none())
-                    .build()
-                    .map_err(setup_error)?,
                 api_base: workspace_sdk::boat_client::ClientConfig::DEFAULT_BASE_PATH.into(),
                 // SAFETY: geteuid has no preconditions.
                 relay_socket: super::mcp_servers::relay_socket(namespace, unsafe {
@@ -1303,7 +1297,7 @@ pub(crate) fn conversation_root(namespace: &Path) -> std::path::PathBuf {
 fn accepted_restore_live(namespace: &Path) -> Option<std::path::PathBuf> {
     let text =
         std::fs::read_to_string(namespace.join("backup").join("accepted-restore.txt")).ok()?;
-    let pointer = crate::backup::domain::decode_accepted_restore(&text).ok()?;
+    let pointer = nessa_backup::domain::decode_accepted_restore(&text).ok()?;
     Some(std::path::PathBuf::from(pointer.live))
 }
 
@@ -1356,7 +1350,7 @@ async fn conversations(
     let environment_tools = command_policy
         .as_ref()
         .map(super::environment_tools::EnvironmentTools::new);
-    let conversation_tools = super::conversation_tools::ConversationTools::new();
+    let conversation_tools = crate::mcp_servers::conversation_tools::ConversationTools::new();
     let background_tools = super::background_tools::BackgroundTools::new();
     let mut built_in: Vec<Arc<dyn BuiltInServer>> =
         vec![conversation_tools.clone(), background_tools.clone()];
@@ -1714,7 +1708,7 @@ async fn conversations(
             },
             Arc::new(RuntimeClock::new()),
         ));
-        let settings = crate::conversation::infrastructure::ConfigPoolSettings::new(
+        let settings = super::pool_settings::ConfigPoolSettings::new(
             config,
             root.join("audit").join("pool-settings"),
             Arc::new(SystemClock),
@@ -1984,12 +1978,9 @@ fn environments(
             DurableEnvironmentAudit, OpenSshConnector, PeerEnvironments, PeerUpdates,
             SshEnvironment, SshTimings,
         },
-        CedarCommandPolicyEvaluator, FileBindings, FilePlacements,
+        CedarCommandPolicyEvaluator, FilePlaces,
     };
-    let placements = FilePlacements::new(root.join("placements"))
-        .map_err(|error| RunError::Agent(error.to_string()))?;
-    let bindings = FileBindings::new(root.join("bindings"))
-        .map_err(|error| RunError::Agent(error.to_string()))?;
+    let places = FilePlaces::new(root).map_err(|error| RunError::Agent(error.to_string()))?;
     let mut environments: BTreeMap<String, Arc<dyn crate::conversation::application::Environment>> =
         BTreeMap::new();
     let audit = if hosts.is_empty() && serving.is_none() {
@@ -2051,10 +2042,10 @@ fn environments(
     let mut environments = Environments::new(
         crate::conversation::infrastructure::in_process_environment(),
         environments,
-        Arc::new(placements),
+        Arc::new(places),
     );
     if let Some(peers) = &peers {
-        environments = environments.with_peers(peers.clone(), Arc::new(bindings));
+        environments = environments.with_peers(peers.clone());
     }
     // Who may run which commands where is the command policy's, answered by
     // Cedar over the configured hosts and programs (ADR 803 step 4).
@@ -2316,6 +2307,15 @@ impl RecoveryAudit for WorkspaceRecoveryAudit {
                     cause: cause.as_str().into(),
                 }
             }
+            RecoveryEvent::OpenRefused {
+                thread,
+                cause,
+                failure,
+            } => EnvironmentEvent::WorkspaceOpenRefused {
+                thread: thread.clone(),
+                cause: cause.as_str().into(),
+                failure: (*failure).into(),
+            },
             RecoveryEvent::StopAnswered {
                 thread,
                 vm,

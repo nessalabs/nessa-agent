@@ -24,26 +24,26 @@ use serde_json::Value;
 #[path = "../../../tests/backup/publication_lock.rs"]
 mod publication_lock_tests;
 
-use super::credentials::{read_credentials, CredentialRead, CredentialReadError};
-use super::jsonl::jsonl_cut;
-use super::sensitivity::path_sensitivity;
-use super::snapshot::{
-    DatabaseImage, DeferredStream, SnapshotCopy, SqliteSnapshot, PUBLIC_FILE_LIMIT,
-    SESSION_EXPORT_LIMIT,
-};
-use crate::backup::application::{
-    accepted_tree_matches, capture_export, Authenticator, CopiedStore, DeletionLogStore,
-    ExportClock, ExportFailure, ExportRequest, ExportSource, FenceSource, ManifestPublisher,
-    MutationAdmission, PinnedStore,
-};
-use crate::backup::domain::{
-    decode_deferred, CapturedRecord, CredentialKind, DeferredEntry, DeletionFence, Fingerprint,
-    GrantRole, Sensitivity, SkipReason, SkippedRecord, SourceCut, StoreKind,
-};
 use crate::conversation::infrastructure::{
     BoatRuntimeConfig, ExportFences, ExportSkip, MetadataSnapshot, NamedRecord, ReceiverSnapshot,
     ReceiverSnapshotError,
 };
+use nessa_backup::application::{
+    accepted_tree_matches, capture_export, Authenticator, CopiedStore, DeletionLogStore,
+    ExportClock, ExportFailure, ExportRequest, ExportSource, FenceSource, ManifestPublisher,
+    MutationAdmission, PinnedStore,
+};
+use nessa_backup::domain::{
+    decode_deferred, CapturedRecord, CredentialKind, DeferredEntry, DeletionFence, Fingerprint,
+    GrantRole, Sensitivity, SkipReason, SkippedRecord, SourceCut, StoreKind,
+};
+use nessa_backup::infrastructure::jsonl_cut;
+use nessa_backup::infrastructure::path_sensitivity;
+use nessa_backup::infrastructure::snapshot::{
+    DatabaseImage, DeferredStream, SnapshotCopy, SqliteSnapshot, PUBLIC_FILE_LIMIT,
+    SESSION_EXPORT_LIMIT,
+};
+use nessa_backup::infrastructure::{read_credentials, CredentialRead, CredentialReadError};
 
 /// Hold admission, read `namespace`, and publish the cut.
 ///
@@ -56,7 +56,7 @@ pub async fn capture_namespace(
     publisher: &dyn ManifestPublisher,
     clock: &dyn ExportClock,
     authenticator: &dyn Authenticator,
-) -> Result<crate::backup::domain::AuthenticatedManifest, ExportFailure> {
+) -> Result<nessa_backup::domain::AuthenticatedManifest, ExportFailure> {
     let facts = Arc::new(FactsCache::new(
         namespace.join("conversations").join("metadata.sqlite3"),
         crate::conversation::infrastructure::access_grants_path(namespace),
@@ -804,7 +804,7 @@ impl PinnedStore for ChannelPin {
 }
 
 fn publish_channel_image(bytes: Vec<u8>) -> Result<SourceCut, ()> {
-    let watermark = crate::backup::domain::Fingerprint::of(&bytes).hex();
+    let watermark = nessa_backup::domain::Fingerprint::of(&bytes).hex();
     if content_is_secret(&bytes) {
         let mut records = Vec::new();
         let mut skipped = Vec::new();
@@ -854,7 +854,7 @@ impl PinnedStore for NotesPin {
             SessionView::Unreadable => skipped_file(StoreKind::Notes, "records.sqlite3"),
             SessionView::Deferred(streams) => finish_deferred(StoreKind::Notes, &streams),
             SessionView::Bytes(bytes, _) => {
-                let fingerprint = crate::backup::domain::Fingerprint::of(bytes.as_slice());
+                let fingerprint = nessa_backup::domain::Fingerprint::of(bytes.as_slice());
                 finish(StoreKind::Notes, &fingerprint.hex(), vec![], vec![])
             }
         }
@@ -2339,7 +2339,7 @@ fn outstanding_deferred(namespace: &Path) -> Result<Vec<DeferredEntry>, ExportFa
         }
         Err(_) => return Err(ExportFailure::Inventory),
     };
-    let binding = crate::backup::application::binding_from_pointer(&text)
+    let binding = nessa_backup::application::binding_from_pointer(&text)
         .map_err(|_| ExportFailure::Inventory)?;
     // Startup's accepted-authority check, then the file seal. A journal
     // rewritten to match a new `deferred.txt` still fails the audit. A
@@ -2347,15 +2347,20 @@ fn outstanding_deferred(namespace: &Path) -> Result<Vec<DeferredEntry>, ExportFa
     if !binding.audit.join("restore.jsonl").is_file() {
         return Err(ExportFailure::Inventory);
     }
-    let audit = super::FileRestoreAudit::open(&binding.audit, AuditReadClock)
-        .map_err(|_| ExportFailure::Inventory)?;
-    if crate::backup::application::confirm_accepted(
+    let audit =
+        nessa_backup::infrastructure::FileRestoreAudit::open(&binding.audit, AuditReadClock)
+            .map_err(|_| ExportFailure::Inventory)?;
+    if nessa_backup::application::confirm_accepted(
         &binding.live,
-        &super::DirectoryQuarantine,
+        &nessa_backup::infrastructure::DirectoryQuarantine,
         &audit,
     )
     .is_err()
-        || accepted_tree_matches(&binding.live, &super::DirectoryQuarantine).is_err()
+        || accepted_tree_matches(
+            &binding.live,
+            &nessa_backup::infrastructure::DirectoryQuarantine,
+        )
+        .is_err()
     {
         return Err(ExportFailure::Inventory);
     }
@@ -2435,7 +2440,7 @@ fn finish_deferred(kind: StoreKind, streams: &[DeferredStream]) -> Result<Source
             .map_err(|_| ())?,
         );
     }
-    let watermark = crate::backup::domain::Watermark::new("deferred").map_err(|_| ())?;
+    let watermark = nessa_backup::domain::Watermark::new("deferred").map_err(|_| ())?;
     SourceCut::with_deferred(kind, watermark, vec![], vec![], deferred).map_err(|_| ())
 }
 
@@ -2449,6 +2454,6 @@ fn finish(
     records: Vec<CapturedRecord>,
     skipped: Vec<SkippedRecord>,
 ) -> Result<SourceCut, ()> {
-    let watermark = crate::backup::domain::Watermark::new(watermark).map_err(|_| ())?;
+    let watermark = nessa_backup::domain::Watermark::new(watermark).map_err(|_| ())?;
     SourceCut::new(kind, watermark, records, skipped).map_err(|_| ())
 }

@@ -7,13 +7,13 @@ use serde::Serialize;
 
 use super::backup_output::print;
 
-use crate::backup::application::{
+use nessa_backup::application::{
     verify_bundle, VerificationFailure, VerificationLimits, VerificationReport,
 };
-use crate::backup::entrypoint::{
+use nessa_backup::entrypoint::{
     parse_verification, VerificationCommand, VerificationUsageError, VERIFY_HELP,
 };
-use crate::backup::infrastructure::{
+use nessa_backup::infrastructure::{
     read_verification_key, DirectoryVerificationSource, ExportFormat,
 };
 

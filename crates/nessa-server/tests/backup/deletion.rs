@@ -6,13 +6,7 @@ use std::sync::Mutex;
 
 use async_trait::async_trait;
 
-use crate::backup::application::{
-    capture_fences, DeletionLogStore, ExportClock, FenceSource, InventoryFailure, LogStoreError,
-    MutationAdmission,
-};
-use crate::backup::domain::{CredentialKind, DeletionFence, DeletionLog, Fingerprint, GrantRole};
-use crate::backup::infrastructure::read_credentials;
-use crate::backup::infrastructure::{capture_namespace, DirectoryPublisher, FileDeletionLog};
+use crate::backup::infrastructure::capture_namespace;
 use crate::conversation::application::{
     ConversationRepository, ShareGrantChange, ShareGrantTransition, ShareGrants,
 };
@@ -22,6 +16,13 @@ use crate::conversation::domain::{
 use crate::conversation::infrastructure::{ExportSkip, LocalConversationStore, MetadataSnapshot};
 use nessa_auth::application::dto::{CredentialGrantDto, CredentialMetadataDto, ResourceDto};
 use nessa_auth::domain::{CredentialId, OrganizationId, PrincipalId};
+use nessa_backup::application::{
+    capture_fences, DeletionLogStore, ExportClock, FenceSource, InventoryFailure, LogStoreError,
+    MutationAdmission,
+};
+use nessa_backup::domain::{CredentialKind, DeletionFence, DeletionLog, Fingerprint, GrantRole};
+use nessa_backup::infrastructure::read_credentials;
+use nessa_backup::infrastructure::{DirectoryPublisher, FileDeletionLog};
 use nessa_protocol::agents::AgentId;
 use nessa_protocol::conversation::domain::{
     ConversationApprovalMode, ConversationId, ConversationModelId,
@@ -382,8 +383,8 @@ impl MutationAdmission for FenceAdmission {
     async fn hold(
         &self,
     ) -> Result<
-        Box<dyn crate::backup::application::AdmissionLease + Send + Sync>,
-        crate::backup::application::AdmissionFailure,
+        Box<dyn nessa_backup::application::AdmissionLease + Send + Sync>,
+        nessa_backup::application::AdmissionFailure,
     > {
         Ok(Box::new(FenceHold))
     }
@@ -391,7 +392,7 @@ impl MutationAdmission for FenceAdmission {
 
 struct FenceHold;
 
-impl crate::backup::application::AdmissionLease for FenceHold {
+impl nessa_backup::application::AdmissionLease for FenceHold {
     fn retirement_signaled(&self) -> bool {
         false
     }
@@ -415,11 +416,11 @@ async fn a_repeated_fence_does_not_advance_the_sequence() {
     assert_eq!(twice.entries().len(), 1);
     assert_eq!(
         first,
-        crate::backup::domain::Append::Recorded { sequence: 1 }
+        nessa_backup::domain::Append::Recorded { sequence: 1 }
     );
     assert_eq!(
         second,
-        crate::backup::domain::Append::AlreadyRecorded { sequence: 1 }
+        nessa_backup::domain::Append::AlreadyRecorded { sequence: 1 }
     );
 }
 
@@ -475,7 +476,7 @@ struct RefusedReconciliation;
 impl DeletionLogStore for RefusedReconciliation {
     async fn hold_reconciliation(
         &self,
-    ) -> Result<Box<dyn crate::backup::application::InventoryReconciliationLease>, ()> {
+    ) -> Result<Box<dyn nessa_backup::application::InventoryReconciliationLease>, ()> {
         Err(())
     }
 
@@ -603,7 +604,7 @@ impl FenceSource for RevokeLandsOnLoad {
 impl DeletionLogStore for RevokeLandsOnLoad {
     async fn hold_reconciliation(
         &self,
-    ) -> Result<Box<dyn crate::backup::application::InventoryReconciliationLease>, ()> {
+    ) -> Result<Box<dyn nessa_backup::application::InventoryReconciliationLease>, ()> {
         Ok(Box::new(UncontendedReconciliation))
     }
 
@@ -647,7 +648,7 @@ impl StaleOnce {
 impl DeletionLogStore for StaleOnce {
     async fn hold_reconciliation(
         &self,
-    ) -> Result<Box<dyn crate::backup::application::InventoryReconciliationLease>, ()> {
+    ) -> Result<Box<dyn nessa_backup::application::InventoryReconciliationLease>, ()> {
         Ok(Box::new(UncontendedReconciliation))
     }
 
@@ -724,7 +725,7 @@ struct MemLog {
 impl DeletionLogStore for MemLog {
     async fn hold_reconciliation(
         &self,
-    ) -> Result<Box<dyn crate::backup::application::InventoryReconciliationLease>, ()> {
+    ) -> Result<Box<dyn nessa_backup::application::InventoryReconciliationLease>, ()> {
         Ok(Box::new(HeldReconciliation {
             _guard: self.reconciliation.clone().lock_owned().await,
         }))
@@ -840,7 +841,7 @@ trait CanonicalProbe {
     fn canonical_probe(&self) -> String;
 }
 
-impl CanonicalProbe for crate::backup::domain::FenceKind {
+impl CanonicalProbe for nessa_backup::domain::FenceKind {
     fn canonical_probe(&self) -> String {
         format!("{self:?}")
     }
@@ -849,13 +850,13 @@ impl CanonicalProbe for crate::backup::domain::FenceKind {
 // These adapters are used by single-capture tests only.
 struct UncontendedReconciliation;
 
-impl crate::backup::application::InventoryReconciliationLease for UncontendedReconciliation {}
+impl nessa_backup::application::InventoryReconciliationLease for UncontendedReconciliation {}
 
 struct HeldReconciliation {
     _guard: tokio::sync::OwnedMutexGuard<()>,
 }
 
-impl crate::backup::application::InventoryReconciliationLease for HeldReconciliation {}
+impl nessa_backup::application::InventoryReconciliationLease for HeldReconciliation {}
 
 /// The same independent grant dataset production backup reads.
 fn namespace_grants(root: &std::path::Path) -> std::path::PathBuf {
@@ -866,8 +867,8 @@ fn namespace_grants(root: &std::path::Path) -> std::path::PathBuf {
 
 #[tokio::test]
 async fn production_capture_and_inventory_read_independent_grants_not_a_decoy_sibling() {
-    use crate::backup::domain::StoreKind;
     use crate::backup::infrastructure::CommittedInventory;
+    use nessa_backup::domain::StoreKind;
     use std::sync::Arc;
     struct Time;
     impl nessa_auth::application::ports::Clock for Time {

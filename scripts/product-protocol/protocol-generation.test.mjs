@@ -78,8 +78,8 @@ function fixture(run) {
       "crates/nessa-sdk/src/infrastructure/session_storage/record_source.rs",
       "crates/nessa-sdk/src/infrastructure/acp/sessions/config.rs",
       "crates/nessa-sdk/src/infrastructure/mcp/servers.rs",
-      "crates/nessa-server/src/conversation/domain/value_objects/channel.rs",
-      "crates/nessa-server/src/conversation/domain/value_objects/vm_lifetime.rs",
+      "crates/nessa-conversation/src/domain/value_objects/channel.rs",
+      "crates/nessa-conversation/src/domain/value_objects/vm_lifetime.rs",
       "crates/nessa-server/src/logins/domain.rs",
       "crates/nessa-protocol/src/lease.rs",
       "crates/nessa-sdk/src/domain/agent_execution/permissions/value_objects/review_limits.rs",
@@ -385,7 +385,7 @@ for (const [field, constant, old, replacement] of [
     fixture((path) => {
       const source = join(
         path,
-        "crates/nessa-server/src/conversation/domain/value_objects/vm_lifetime.rs",
+        "crates/nessa-conversation/src/domain/value_objects/vm_lifetime.rs",
       )
       const before = readFileSync(source, "utf8")
       const after = before.replace(
@@ -440,7 +440,7 @@ test("a channel rule changed in the gateway alone refuses to publish", () =>
   fixture((path) => {
     const source = join(
       path,
-      "crates/nessa-server/src/conversation/domain/value_objects/channel.rs",
+      "crates/nessa-conversation/src/domain/value_objects/channel.rs",
     )
     const before = readFileSync(source, "utf8")
     const after = before.replace(

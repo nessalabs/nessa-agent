@@ -133,6 +133,7 @@ fn code(error: Failure) -> &'static str {
         Failure::EnvironmentUnavailable => "boat_environment_blocks_credentials",
         Failure::ProvisioningUncertain => "boat_provisioning_uncertain",
         Failure::ReceiptRecovery { .. } | Failure::CleanupUncertain => "boat_cleanup_uncertain",
+        Failure::OpeningUnrecorded(failure) => code(*failure),
     }
 }
 

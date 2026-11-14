@@ -726,7 +726,8 @@ on.
 
 _ADR 344_ ([`docs/adr/done/344-mcp-ui.md`](../../docs/adr/done/344-mcp-ui.md)),
 #349: an MCP server's app is drawn behind a sandbox proxy on another origin,
-inline, in its chat's right panel (its fullscreen) and in the window, and spoken to over the
+inline or in its chat's right panel (its fullscreen), one live view at a time,
+never over the chat area (#1220), and spoken to over the
 `ui/*` bridge. The script drives the fixture app the sample workspace
 registers (`src/desktop/widgets/app/fixture/`), on its session "An MCP App,
 in its sandbox". Every row of the bridge's design table is a jsdom test
@@ -738,12 +739,27 @@ in its sandbox". Every row of the bridge's design table is a jsdom test
   settlement on those same handles makes Close receive exactly one trusted
   click. This checks the demonstrated automation gap in #906, not the unproved
   cause of its original teardown failure. _Check:_ `mcp-apps.mjs --only moving-frame`.
-- [ ] **It renders in all three places, told its mode and its call** — the
+- [ ] **It renders in its offered place, told its mode and its call** — the
   card's app live, told `inline`, its call's input and result, its frame as
   tall as the app says; its fullscreen request opens a tab in the chat's right
-  panel, no pane (answered `inline`: the card stays), whose app is told
-  `fullscreen` and fills its body; Open in Window shows it in the window,
-  filling it. _Check:_ `mcp-apps.mjs --only inline,panel,window`.
+  panel, no pane, retiring the inline copy and leaving an Open row. The panel
+  is the sole app frame, told `fullscreen`, fills its body, and receives its
+  own fullscreen request's reply. The Open row focuses that same mount and
+  tab. Apps offer no Open in Window action and leave chat panes in place.
+  Closing or tearing down the panel retires it and retains the Open row;
+  Open starts a fresh panel mount. _Check:_
+  `mcp-apps.mjs --only inline,panel,window,teardown`.
+  The bridge's L17a regression separately pins the original inline caller's
+  exact reply id, mode and sandbox origin before opening can close its real
+  transport; posting before retirement does not claim consumption by the
+  retired iframe. No replacement frame is used as that caller's receipt.
+- [ ] **The real-gateway huddle starts after background turns drain.** An
+  expired drain refuses the step within the existing 120-second bound and
+  releases the pause. Assertion failures and thrown browser errors capture
+  the fixture before cleanup returns to the main conversation. _Checks:_
+  `conversation-stress.mjs --only huddle`, `lib/stress-run.test.mjs` and
+  `lib/stress-step-evidence.test.mjs`. The same identity/composer selection
+  contract applies in both layouts (`lib/stress-conversation.test.mjs`).
 - [ ] **`tools/call` is answered for an allowed tool and refused for a hidden
   one**, with the gateway's reason. _Check:_ `mcp-apps.mjs --only tools-call`.
 - [ ] **An app's message lands in its conversation as the person's, saying

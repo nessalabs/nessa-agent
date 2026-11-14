@@ -2,7 +2,7 @@
 /**
  * MCP Apps (ADR 344, #349), through the fixture app the sample workspace
  * registers (`src/desktop/widgets/app/fixture/`): it renders inline, in its
- * chat's right panel (its own fullscreen request) and in the window, each place told its
+ * chat's right panel (its own fullscreen request), one live view at a time, each told its
  * display mode and given its tool call; `tools/call` is answered for an
  * allowed tool and refused for a hidden one; `ui/message` lands in the
  * transcript labelled with the app that wrote it, and a context is refused
@@ -49,10 +49,10 @@ Checks, per engine and layout (--only <names> to pick):
   inline       the card's app is live, told inline, its call's input and result,
                and its frame as tall as the app said
   panel        the app's fullscreen request opens a tab in the chat's right panel,
-               no pane, whose app is live and told fullscreen; the card's stays
-               inline
-  window       the panel tab's Open in Window shows the app in the window, live,
-               told fullscreen, filling it
+               no pane, whose app is live and told fullscreen; its retired card
+               becomes Open, which focuses that same panel without remounting
+  window       an app offers no Open in Window action, leaves the chat's panes
+               in place and has only its panel frame
   tools-call   tools/call answered for the allowed tool, refused for the hidden one
   message      ui/message answered {} and landing in the transcript as one message
                of the person's with the app's words, labelled "Sent by
@@ -1013,8 +1013,10 @@ async function expectLive(page, place, mode, failures) {
  */
 async function openPanel(page, failures) {
   const before = await paneCount(page)
-  const { app } = await appFrame(page, "inline")
+  const original = await appFrame(page, "inline")
+  const { app } = original
   await appState(app, "live")
+  await settleAppFrame(page, original)
   await app.click(selectorFor.fixtureControl("fullscreen"))
   await need(
     page,
@@ -1023,10 +1025,30 @@ async function openPanel(page, failures) {
   )
   if ((await paneCount(page)) !== before)
     failures.push("the app's fullscreen request opened a pane, not a tab in the panel")
-  const answer = await output(app, selectorFor.fixtureOutput("mode"))
-  if (answer !== 'ok: {"mode":"inline"}')
-    failures.push(`the card's fullscreen request was answered ${answer}, expected inline`)
-  return expectLive(page, "panel", "fullscreen", failures)
+  const panel = await expectPanel(page, failures)
+  const rows = await page.locator(css.widgetCardRow).count()
+  if (rows !== 1) failures.push(`the retired app has ${rows} Open rows, expected one`)
+  if (!original.proxy.isDetached() || !app.isDetached())
+    failures.push("the original inline proxy or app survived opening its panel")
+  return panel
+}
+
+/** A live panel is the only app view; its reply belongs to that surviving caller. */
+async function expectPanel(page, failures) {
+  if (await page.locator(selectorFor.appFrameIn("inline")).count())
+    failures.push("an inline app is running beside its panel copy")
+  const panelFrames = await page.locator(selectorFor.appFrameIn("panel")).count()
+  if (panelFrames !== 1)
+    failures.push(`the app has ${panelFrames} panel frames, expected one`)
+  const panel = await expectLive(page, "panel", "fullscreen", failures)
+  // The original caller retires during open (#1220). L17a pins its reply on
+  // the original transport before retirement; it is not a receipt in this
+  // replacement frame. This request belongs to the surviving panel itself.
+  await panel.app.click(selectorFor.fixtureControl("fullscreen"))
+  const answer = await output(panel.app, selectorFor.fixtureOutput("mode"))
+  if (answer !== 'ok: {"mode":"fullscreen"}')
+    failures.push(`the panel's own fullscreen request was answered ${answer}`)
+  return panel
 }
 
 /** The panel's tabs drawn now. */
@@ -1263,11 +1285,33 @@ const checks = {
     return { frame: box, drawn, appHeight: height, told: told.styles, failures }
   },
 
-  panel: async (page) => {
+  panel: async (page, layout, shots) => {
     const failures = []
-    const { box } = await openPanel(page, failures)
-    const card = await appState((await appFrame(page, "inline")).app, "live")
-    if (card.mode !== "inline") failures.push(`the card's app is told ${card.mode} after`)
+    const engine = page.context().browser().browserType().name()
+    if (shots) {
+      mkdirSync(shots, { recursive: true })
+      await page
+        .locator(css.widgetCard)
+        .first()
+        .screenshot({
+          path: join(shots, `inline-${engine}-${layout}.png`),
+        })
+    }
+    const { box, app, proxy } = await openPanel(page, failures)
+    if (failures.length) return { frame: box, failures }
+    const tabs = await panelTabCount(page)
+    await page
+      .locator(css.widgetCardRow)
+      .getByRole("button", { name: names.openWidget, exact: true })
+      .click()
+    await settled(page)
+    const focused = await appFrame(page, "panel")
+    if (focused.app !== app || focused.proxy !== proxy)
+      failures.push(
+        "the Open row remounted the app instead of focusing its existing panel",
+      )
+    if ((await panelTabCount(page)) !== tabs)
+      failures.push("the Open row added another tab for the same app")
     const measured = await fills(
       page,
       `${css.panelWidget} ${css.widgetBody}`,
@@ -1277,30 +1321,34 @@ const checks = {
       failures.push(
         `the panel's frame does not fill its body: ${JSON.stringify(measured)}`,
       )
+    if (shots) {
+      await page
+        .locator(css.panelWidget)
+        .first()
+        .screenshot({
+          path: join(shots, `panel-${engine}-${layout}.png`),
+        })
+      await page.locator(css.widgetCardRow).screenshot({
+        path: join(shots, `open-row-${engine}-${layout}.png`),
+      })
+    }
     return { frame: box, measured, failures }
   },
 
   window: async (page) => {
     const failures = []
-    await openPanel(page, failures)
-    await page
+    const { box, app } = await openPanel(page, failures)
+    const offered = await page
       .locator(css.panelWidgetHead)
       .first()
       .getByRole("button", { name: names.openInWindow })
-      .first()
-      .click()
-    await contentIs(page, content.widget)
-    const { box } = await expectLive(page, "window", "fullscreen", failures)
-    const measured = await fills(
-      page,
-      `${css.widgetWindow} ${css.widgetBody}`,
-      selectorFor.appFrameIn("window"),
-    )
-    if (!measured.fit)
-      failures.push(
-        `the window's frame does not fill its body: ${JSON.stringify(measured)}`,
-      )
-    return { frame: box, measured, failures }
+      .count()
+    if (offered) failures.push("the app offers Open in Window")
+    await contentIs(page, content.panes)
+    const windowFrames = await page.locator(selectorFor.appFrameIn("window")).count()
+    if (windowFrames) failures.push("an app frame took the chat's window surface")
+    if (app.isDetached()) failures.push("checking the window offer retired the panel app")
+    return { frame: box, offered, windowFrames, failures }
   },
 
   "tools-call": async (page) => {
@@ -1564,8 +1612,17 @@ const checks = {
       failures.push("the panel's frame is still on the page after its tab closed")
     if (!proxy.isDetached() || !app.isDetached())
       failures.push("the panel's proxy or app document outlived its tab's close")
+    await need(page, css.widgetCardRow, "the closed app's retained Open row")
+    if (await page.locator(selectorFor.appFrameIn("inline")).count())
+      failures.push("closing the panel restarted an app whose Open row must remain")
     // By its own request: teardown is sent, answered, and the tab closes.
-    const second = await openPanel(page, failures)
+    await page
+      .locator(css.widgetCardRow)
+      .getByRole("button", { name: names.openWidget, exact: true })
+      .click()
+    const second = await expectPanel(page, failures)
+    if (second.app === app || second.proxy === proxy)
+      failures.push("reopening the panel reused its retired app or proxy")
     const tabs = await panelTabCount(page)
     // The fixture answers its teardown 400ms after it is asked: until then
     // the tab stays, and the app is still on the page saying so.
@@ -1586,8 +1643,11 @@ const checks = {
       failures.push("the app's tab closed before the app answered its teardown")
     if ((await panelTabCount(page)) !== tabs - 1)
       failures.push("the app's tab did not close after its teardown")
-    if (!second.app.isDetached())
-      failures.push("the app's document outlived its teardown")
+    if (!second.app.isDetached() || !second.proxy.isDetached())
+      failures.push("the app's document or proxy outlived its teardown")
+    await need(page, css.widgetCardRow, "the torn-down app's retained Open row")
+    if (await page.locator(selectorFor.appFrameIn("inline")).count())
+      failures.push("teardown restarted an app whose Open row must remain")
     return { said: said.state, failures }
   },
 }
