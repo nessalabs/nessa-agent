@@ -11,11 +11,11 @@ sources:
   - protocol/product/surface-exclusions.json
   - protocol/product/surface-hints.json
   - protocol/product/surface-catalog.generated.json
-  - crates/nessa-server/src/cli/application/call.rs
-  - crates/nessa-server/src/cli/application/surface.rs
-  - crates/nessa-server/src/cli/infrastructure/mcp.rs
+  - crates/nessa-gateway/src/cli/application/call.rs
+  - crates/nessa-gateway/src/cli/application/surface.rs
+  - crates/nessa-gateway/src/cli/infrastructure/mcp.rs
   - crates/nessa-client-core/src/local_product.rs
-  - crates/nessa-server/src/product/socket.rs
+  - crates/nessa-gateway/src/product/socket.rs
 diagramLinks: {}
 diagramDetails:
   - diagram: 0

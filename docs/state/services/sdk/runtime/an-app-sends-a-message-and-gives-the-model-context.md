@@ -7,7 +7,7 @@ summary: "An app can send a message into its conversation as the person, after t
 parent: "sdk-runtime"
 sourceRevision: "5ae45faa95fd88ae96c5f213e0e3fcd811284a91"
 sources:
-  - "crates/nessa-server/src/product/mcp_apps.rs"
+  - "crates/nessa-gateway/src/product/mcp_apps.rs"
   - "crates/nessa-conversation/src/application/service/app_calls.rs"
   - "crates/nessa-conversation/src/application/app_reviews.rs"
   - "crates/nessa-conversation/src/application/service.rs"
@@ -18,7 +18,7 @@ sources:
   - "docs/design/mcp-app-calls.md"
   - "crates/nessa-conversation/tests/conversation/app_messages.rs"
   - "crates/nessa-conversation/tests/conversation/context_drops.rs"
-  - "crates/nessa-server/tests/mcp_servers/gateway.rs"
+  - "crates/nessa-gateway/tests/mcp_servers/gateway.rs"
   - "packages/nessa-client/src/presentation/mcp-apps-api.test.ts"
   - "src/desktop/widgets/app/adapters/gateway/app-messages.ts"
   - "src/desktop/widgets/app/application/bridge.ts"

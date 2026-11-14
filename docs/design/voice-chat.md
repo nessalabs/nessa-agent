@@ -196,11 +196,11 @@ whether one is saved.
 
 ## Checks
 
-- Gateway: `crates/nessa-server/tests/voice` — K1–K9 with a scripted provider,
+- Gateway: `crates/nessa-gateway/tests/voice` — K1–K9 with a scripted provider,
   a memory secret and a recording audit, and a caller gone mid-mint; the
   OpenAI request and answer beside the adapter; the methods at the socket
   (grants, shapes, no key in any answer) in
-  `crates/nessa-server/tests/product/socket/voice.rs`.
+  `crates/nessa-gateway/tests/product/socket/voice.rs`.
 - Window: `src/desktop/voice/**/*.test.ts` — V1–V17 on a fake transport and a
   fake workspace; tidy's cases.
 - End to end: the stress check's `voice` step (`pnpm test:e2e:stress`, knob

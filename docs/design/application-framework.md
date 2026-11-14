@@ -52,14 +52,14 @@ The webhook proposal's one-registration refusal is not this registry.
 
 `nessa auth token` is already an integration. The CLI issues one with
 `server.read` and `conversation.write`, a new member, and no receiver
-(`crates/nessa-server/src/cli/infrastructure/gateway.rs`). It is admitted
+(`crates/nessa-gateway/src/cli/infrastructure/gateway.rs`). It is admitted
 by the no-binding owner path. An application cannot be "an integration"
 with that path turned off, or those tokens stop being able to write.
 
 ### Admission when nothing is paired
 
 `admit_conversation` returns success when the session has no receiver
-binding (`crates/nessa-server/src/product/read_access.rs`). `reader` maps
+binding (`crates/nessa-gateway/src/product/read_access.rs`). `reader` maps
 that absence to `Reader::Owner`. `admit_request` then takes the owner
 path: the credential's manifest grant, and `Initiation::owner()`. The
 comment on that module records why: a gateway that pairs no device has no
@@ -86,7 +86,7 @@ The no-binding success returns before that question is asked.
 
 Revoking or expiring the credential closes a live socket with
 `CredentialRevoked` or `CredentialExpired`
-(`crates/nessa-server/src/product/socket.rs`).
+(`crates/nessa-gateway/src/product/socket.rs`).
 
 ### A plugin view is a widget, and an MCP App is a tool call
 
@@ -267,7 +267,7 @@ the child. The slice tests that outcome and chooses the platform
 primitive.
 
 The auth directory is the one `Environment::auth_directory_from_system`
-resolves (`crates/nessa-server/src/env/environment.rs`). It holds
+resolves (`crates/nessa-gateway/src/env/environment.rs`). It holds
 `credentials.v1.json`, `credentials.v1.lock`, and `auth/surfaces`.
 Offline `nessa auth init`, `nessa auth recover-owner`, and `nessa auth
 provision-surface` are never gateway commands
@@ -619,7 +619,7 @@ gateway socket. A harness session ending closes its dial. The process
 stays. The capability stays until E7 or the next committed rotation.
 
 The application credential has one session slot. `serve_session`
-(`crates/nessa-server/src/product/socket.rs`) admits each connection on
+(`crates/nessa-gateway/src/product/socket.rs`) admits each connection on
 its own. For this credential the slot is taken in one step before the
 socket is admitted. A second handshake, including one that races the
 first, finds the slot taken and is refused (A6x). The first session

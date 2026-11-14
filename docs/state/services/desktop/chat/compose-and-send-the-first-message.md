@@ -13,7 +13,7 @@ sources:
   - "src/conversation/application/usecases/send-draft.ts"
   - "src/conversation/adapters/gateway/effects.ts"
   - "packages/nessa-client/src/presentation/conversation-api.ts"
-  - "crates/nessa-server/src/product/conversation.rs"
+  - "crates/nessa-gateway/src/product/conversation.rs"
   - "crates/nessa-conversation/src/application/service.rs"
   - "crates/nessa-sdk/src/application/agent_execution/agents/submissions.rs"
   - "src/panel/ui/use-composer.test.ts"

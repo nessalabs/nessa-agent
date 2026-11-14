@@ -19,6 +19,19 @@ export async function openAccounts(page) {
 /** Edit the global default and one saved channel through the actual UI,
  * without a Boat token. The client readbacks prove config persistence and
  * distinguish inheritance from an explicit no-auto-stop override. */
+/**
+ * A row's choice is a menu (`ChoiceMenu`, #1340): open it from the button in
+ * `scope`, then pick the item whose `data-value` is `value`.
+ */
+export async function pickChoice(page, scope, value) {
+  await scope.locator("[data-choice-trigger]").click()
+  await page.locator(`[role="menuitemradio"][data-value="${value}"]`).click()
+  await page.locator('[role="menu"]').waitFor({ state: "hidden", timeout: 5_000 })
+}
+
+/** The menu's button in `scope` can be pressed: the last choice has landed. */
+const choiceReady = (scope) => () => scope.locator("[data-choice-trigger]").isEnabled()
+
 export async function channelRuntimeSettings(run, channel, failures) {
   const { page, client } = run
   const before = await client.boat.runtimeSettings()
@@ -109,7 +122,7 @@ export async function channelRuntimeSettings(run, channel, failures) {
       await dialog.waitFor({ state: "hidden", timeout: 5_000 })
     }
     const global = page.locator(css.boatRuntimeSettings)
-    await global.locator('[data-value="14400"]').click()
+    await pickChoice(page, global, "14400")
     const defaultSaved = await waitFor(
       async () =>
         (await client.boat.runtimeSettings()).defaultLifetime.seconds === 14_400,
@@ -119,7 +132,7 @@ export async function channelRuntimeSettings(run, channel, failures) {
       failures.push("the global VM lifetime was not saved through settings")
     receipts.default = await client.boat.runtimeSettings()
     // A choice saves as it is made; the choices are live again once it lands.
-    await waitFor(() => global.locator('[data-value="never"]').isEnabled(), 10_000)
+    await waitFor(choiceReady(global), 10_000)
     if (run.evidence)
       await page.screenshot({
         path: join(run.evidence, `boat-default-${channel.channelId}.png`),
@@ -184,8 +197,88 @@ export async function channelRuntimeSettings(run, channel, failures) {
     if (fit.squeezed.length > 0)
       failures.push(`channel settings names wrap: ${fit.squeezed.join(", ")}`)
     if (fit.selects > 0) failures.push("channel settings still use a native select")
+    // One left edge and the desktop's type (#1340): every setting's name, its
+    // detail and each section's heading start where the dialog's title does,
+    // within 1 px, and read the desktop's body and footnote sizes. Portalled
+    // outside the window's surface the sizes had no value and the rows fell
+    // back to the page's larger text; Settings' row inset put their names
+    // 16 px right of the order's.
+    const layout = await dialog.evaluate((box) => {
+      const panel = box.closest('[role="dialog"]') ?? box
+      const title = document.getElementById(panel.getAttribute("aria-labelledby"))
+      const titleLeft = title.getBoundingClientRect().left
+      const tokens = getComputedStyle(panel)
+      const px = (node) => parseFloat(getComputedStyle(node).fontSize)
+      const off = (selector) =>
+        [...panel.querySelectorAll(selector)]
+          .filter((node) => node.getBoundingClientRect().width > 0)
+          .map((node) => ({
+            text: node.textContent.trim().slice(0, 32),
+            offset: node.getBoundingClientRect().left - titleLeft,
+            size: px(node),
+          }))
+      return {
+        width: panel.getBoundingClientRect().width,
+        body: parseFloat(tokens.getPropertyValue("--desktop-text-body")),
+        footnote: parseFloat(tokens.getPropertyValue("--desktop-text-footnote")),
+        labels: off('[data-slot="settings-row-label"]'),
+        details: off('[data-slot="settings-row-detail"]'),
+        headings: off(".channel-settings-heading"),
+        // Each choice is a menu at its row's end (#1340): its button ends one
+        // inset from the dialog's right edge, the inset the title keeps on
+        // the left; no choice is a row of tabs.
+        menus: [...panel.querySelectorAll("[data-choice-trigger]")].map((button) => ({
+          text: button.getAttribute("aria-label"),
+          rightInset:
+            panel.getBoundingClientRect().right - button.getBoundingClientRect().right,
+        })),
+        inset: titleLeft - panel.getBoundingClientRect().left,
+        // How Any picks a computer is not explained in a channel's settings.
+        notes: [...panel.querySelectorAll('[data-slot="settings-group-footnote"]')]
+          .map((node) => node.textContent.trim())
+          .filter(Boolean),
+        tabs: panel.querySelectorAll(
+          '[role="radiogroup"], [data-slot="segmented-control"]',
+        ).length,
+      }
+    })
+    receipts.layout = layout
+    if (!Number.isFinite(layout.body) || !Number.isFinite(layout.footnote))
+      failures.push("channel settings dialog does not read the desktop's type sizes")
+    for (const each of [...layout.labels, ...layout.details, ...layout.headings])
+      if (Math.abs(each.offset) > 1)
+        failures.push(
+          `channel settings "${each.text}" starts ${each.offset.toFixed(1)} px from the title's edge`,
+        )
+    for (const each of layout.labels)
+      if (Math.abs(each.size - layout.body) > 0.5)
+        failures.push(
+          `channel settings name "${each.text}" is ${each.size} px, not the body's ${layout.body} px`,
+        )
+    for (const each of [...layout.details, ...layout.headings])
+      if (Math.abs(each.size - layout.footnote) > 0.5)
+        failures.push(
+          `channel settings note "${each.text}" is ${each.size} px, not the footnote's ${layout.footnote} px`,
+        )
+    if (layout.menus.length < 4)
+      failures.push(
+        `channel settings show ${layout.menus.length} choice menus, not one for each of its 4 choices`,
+      )
+    for (const each of layout.menus)
+      if (Math.abs(each.rightInset - layout.inset) > 1)
+        failures.push(
+          `channel settings menu "${each.text}" ends ${each.rightInset.toFixed(1)} px from the right edge, not ${layout.inset.toFixed(1)} px`,
+        )
+    if (layout.notes.length > 0)
+      failures.push(
+        `channel settings explain the order for Any under it: "${layout.notes[0].slice(0, 40)}…"`,
+      )
+    if (layout.tabs > 0)
+      failures.push(`channel settings still show ${layout.tabs} row(s) of tabs`)
+    if (layout.headings.length === 0)
+      failures.push("channel settings order for Any has no heading")
     const chosen = () => control.getAttribute("data-selection")
-    const choose = (value) => control.locator(`[data-value="${value}"]`).click()
+    const choose = (value) => pickChoice(page, control, value)
     await waitFor(async () => (await chosen()) === "default", 10_000)
     if ((await chosen()) !== "default")
       failures.push("a new channel did not inherit the VM lifetime default")
@@ -199,7 +292,7 @@ export async function channelRuntimeSettings(run, channel, failures) {
       ))
     )
       failures.push("the channel's explicit unlimited lifetime was not saved")
-    await waitFor(() => control.locator('[data-value="default"]').isEnabled(), 10_000)
+    await waitFor(choiceReady(control), 10_000)
     receipts.override = await client.boat.runtimeSettings({
       channelId: channel.channelId,
     })
@@ -335,34 +428,33 @@ export async function channelPlacementSettings(run, channel, failures) {
     coordinator: "data-coordinator-placement",
     threads: "data-thread-placement",
   }
-  // Each option is found by its button's label. A role query for that
-  // exact name missed Boat in a stress run while the dialog already showed it.
-  const option = (row, name) =>
-    control
-      .locator(`[data-placement-row="${row}"]`)
-      .locator("button")
-      .filter({ hasText: new RegExp(`^${name}$`) })
+  // Each row's place is a menu: an option is its item, found by `data-value`.
+  const rowOf = (row) => control.locator(`[data-placement-row="${row}"]`)
+  const choosable = async (row, place) => {
+    await rowOf(row).locator("[data-choice-trigger]").click()
+    const item = page.locator(`[role="menuitemradio"][data-value="${place}"]`)
+    const can =
+      (await item.count()) > 0 && (await item.getAttribute("aria-disabled")) !== "true"
+    await page.keyboard.press("Escape")
+    await page.locator('[role="menu"]').waitFor({ state: "hidden", timeout: 5_000 })
+    return can
+  }
   // A choice is done when the dialog shows it, not when it stops being busy:
   // a save not started yet is not busy either.
   const shows = (row, place) =>
     waitFor(async () => (await control.getAttribute(attribute[row])) === place, 10_000)
   await control.waitFor({ timeout: 10_000 })
   // Boat is connected, so the dialog offers it once it has read that.
-  const offered = await waitFor(
-    async () =>
-      (await option("threads", "Boat").count()) > 0 &&
-      !(await option("threads", "Boat").isDisabled()),
-    10_000,
-  )
+  const offered = await waitFor(() => choosable("threads", "boat"), 10_000)
   const toBoat = async (row) => {
-    await option(row, "Boat").click()
+    await pickChoice(page, rowOf(row), "boat")
     if (!(await shows(row, "boat")))
       failures.push(
         `the channel settings do not show ${row === "threads" ? "new threads" : "the main agent"} on Boat`,
       )
   }
   const toMac = async (row) => {
-    await option(row, "This Mac").click()
+    await pickChoice(page, rowOf(row), "local")
     if (!(await shows(row, "local")))
       failures.push(`choosing This Mac for ${row} did not show in the channel settings`)
   }

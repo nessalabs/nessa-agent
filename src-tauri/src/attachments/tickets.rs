@@ -27,7 +27,7 @@
 //! **Unguessable.** Thirty-two bytes from the operating system's random source,
 //! written as sixty-four lowercase hexadecimal digits — the same strength and
 //! the same shape as the upload tickets in
-//! `crates/nessa-server/src/attachments`, deliberately, because a second,
+//! `crates/nessa-gateway/src/attachments`, deliberately, because a second,
 //! weaker way of being unguessable in the same product is a hole waiting to be
 //! found. The book keeps the SHA-256 fingerprint rather than the secret, so the
 //! secret exists on its way out to the panel and on its way back and nowhere

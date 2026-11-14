@@ -42,7 +42,7 @@ test("real Cargo partitions keep coverage and propagate build, harness, and doct
   `
   write("Cargo.toml", '[workspace]\nmembers = ["server", "helper"]\nresolver = "2"\n')
   for (const [dir, name] of [
-    ["server", "nessa-server"],
+    ["server", "nessa-gateway"],
     ["helper", "helper"],
   ]) {
     write(
@@ -69,7 +69,7 @@ ${"}".repeat(cohortModule.split("::").length)}`
     "server/src/main.rs",
     `fn main() {}\n#[test]\nfn executes() { ${body("server-bin")} }\n`,
   )
-  const packages = ["-p", "nessa-server", "-p", "helper"]
+  const packages = ["-p", "nessa-gateway", "-p", "helper"]
   function run(partition, fail = "", args = packages, actions = true) {
     rmSync(trace, { force: true })
     const result = spawnSync(
@@ -168,7 +168,7 @@ ${"}".repeat(cohortModule.split("::").length)}`
       .map((part) => part.data)
       .join("")
     assert.equal(createHash("sha256").update(message).digest("hex"), parts[0].hash)
-    assert.match(message, /nessa_server/)
+    assert.match(message, /nessa_gateway/)
     assert.match(message, /exited with 101/)
     assert.match(message, /executes.*panicked/)
     assert.match(message, /assertion.*left != right.*failed/)
@@ -230,7 +230,7 @@ ${"}".repeat(cohortModule.split("::").length)}`
     for (const partition of ["server-conversation", "server-other", "remaining"]) {
       const absent = run(partition, "", ["-p", "helper"])
       check(absent, [], 1)
-      assert.match(absent.stderr, /expected one nessa-server library test executable/)
+      assert.match(absent.stderr, /expected one nessa-gateway library test executable/)
     }
     write("server/src/lib.rs", serverLib + seededModule(seeds.slice(0, -1)))
     for (const part of ["server-conversation", "server-other", "remaining"]) {

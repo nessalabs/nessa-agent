@@ -9,7 +9,7 @@ sources:
   - "src/conversation/model/attachments.ts"
   - "src/panel/adapters/attachment-resources.ts"
   - "crates/nessa-attachments/src/application/service.rs"
-  - "crates/nessa-server/src/attachments/mod.rs"
+  - "crates/nessa-gateway/src/attachments/mod.rs"
   - "crates/nessa-sdk/src/infrastructure/acp/executions/prompt_content.rs"
   - "src/panel/ui/use-file-attachments-races.test.ts"
 diagramLinks:

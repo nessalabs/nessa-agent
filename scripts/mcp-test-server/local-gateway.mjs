@@ -142,7 +142,7 @@ export function agentCommand(agent) {
  * what it needs rather than by removing the credentials it might find.
  * `ANTHROPIC_API_KEY` is a placeholder: with no credential in the
  * environment, the gateway reads Claude's from the login keychain
- * (`crates/nessa-server/src/agents/infrastructure/agent_credentials.rs`).
+ * (`crates/nessa-gateway/src/agents/infrastructure/agent_credentials.rs`).
  */
 export function signedOutEnvironment(directory, path) {
   const kept = Object.fromEntries(

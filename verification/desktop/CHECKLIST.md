@@ -1259,7 +1259,7 @@ phone's scanner is not this screen.
   repository. Disconnect removes the saved sign-in; a later agent still has no
   Nessa credential. _Check:_ `conversation-stress.mjs` (`github`, default and
   raised count), `crates/nessa-mcp/src/main.rs`'s command environment test, and
-  `crates/nessa-server/tests/github/mod.rs`'s read/disconnect tests.
+  `crates/nessa-gateway/tests/github/mod.rs`'s read/disconnect tests.
 
 ### MCP servers: the gateway's MCP servers
 
@@ -2578,6 +2578,19 @@ Chromium within the default run and alone in WebKit in CI (`local-auth.yml`).
 
 ## Local vault
 
+- [ ] **Onboarding asks for no passphrase (#1340).** The setup window
+  (`index.html?surface=setup`) opens with no vault dialog, whether the vault
+  is not yet set up or locked; it is asked for when something first needs it.
+  _Check:_ `vault.mjs` (`onboarding-quiet`) waits 3 s after the setup window
+  draws and counts `[data-vault-dialog]` as 0, in Chromium and WebKit; the
+  conversation stress setup window asserts the same before each onboarding
+  replay.
+- [ ] **The vault dialog's field and button end at its inset (#1340).** The
+  passphrase field and the primary button end as far from the dialog's right
+  edge as its words start from the left, within 1 px. _Check:_ `vault.mjs`
+  (`session-lifetime`) measures the first setup or unlock dialog in Chromium
+  and WebKit.
+
 `vault.mjs` exercises setup strength and confirmation, wrong passphrase refusal,
 transient input clearing, concise help, reload without re-unlock, and pipe EOF
 locking through the actual gateway and native child. Check keyboard focus and
@@ -2606,6 +2619,26 @@ vault dialog blocking the main conversation click.
   It says nothing beyond "Auto-stop VMs" and the choice, except under Never,
   which adds that VMs keep billing until stopped in Boat. _Check:_ manual
   screenshot/focus review and the settings control's rendered tests.
+- [ ] **A channel's settings read as one column in the desktop's type
+  (#1340).** Every setting's name, its detail line and the "Order for “Any”"
+  heading start at the dialog title's left edge, within 1 px; names are the
+  desktop's body size (`--desktop-text-body`) and details and headings its
+  footnote size (`--desktop-text-footnote`), both resolved inside the dialog;
+  the order for Any has its heading. _Check:_ `boat-runtime-settings.mjs`
+  (`default-override-reset`) measures each in Chromium and WebKit, columns and
+  sidebar; with `src` at the parent commit it fails on the unresolved type
+  tokens and the 16 px row inset.
+- [ ] **Each of a channel's choices is a menu at its row's end (#1340).** Main
+  agent, new threads, auto-stop and the order for Any are each a button that
+  says the choice and opens a menu; This Mac, Boat and Any computer come first,
+  then each connected computer by name, and a computer saved earlier but not
+  connected is still listed. Every button ends one inset from the dialog's
+  right edge (the title's left inset, within 1 px), and the dialog has no row
+  of tabs, and no note under the order explaining how Any picks a computer
+  (Devices keeps it). _Check:_ `boat-runtime-settings.mjs` measures the four menus and
+  picks through them in Chromium and WebKit, columns and sidebar; the
+  conversation stress `channel` and `place` steps pick Boat, This Mac and a
+  paired worker from them; `channel-settings.test.tsx` lists the menu's items.
 
 
 ## Background tasks
