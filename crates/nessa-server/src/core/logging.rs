@@ -12,8 +12,23 @@ use tracing_subscriber::fmt::MakeWriter;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::EnvFilter;
 
-const DEFAULT_FILTER: &str =
-    "nessa_server=info,nessa_sdk=warn,nessa_sdk::timing=info,nessa_gateway_endpoint=error";
+/// Every Nessa crate the gateway is built from has its own directive here: a
+/// filter made of named targets drops every target it does not name, errors
+/// included, so a crate split out of the gateway would otherwise go silent
+/// (`every_nessa_crate_the_gateway_is_built_from_has_a_directive`).
+const DEFAULT_FILTER: &str = concat!(
+    // The gateway, and the crates split out of it: their lines are its lines.
+    "nessa_server=info,nessa_conversation=info,nessa_agent_install=info,",
+    "nessa_attachments=info,nessa_backup=info,nessa_device_pairing=info,",
+    "nessa_env_serve=info,nessa_mcp_authorization=info,nessa_peer_gateways=info,",
+    "nessa_webhooks=info,",
+    "nessa_sdk=warn,nessa_sdk::timing=info,nessa_gateway_endpoint=error,",
+    // Libraries it uses, quiet unless RUST_LOG asks for them.
+    "nessa_agent_credentials=off,nessa_auth=off,nessa_client_core=off,",
+    "nessa_device_client=off,nessa_images=off,nessa_local_database=off,",
+    "nessa_local_storage=off,nessa_projection=off,nessa_protocol=off,",
+    "nessa_timer=off,nessa_vault=off",
+);
 
 /// Install the process-global tracing subscriber. Call once at startup, before any log line.
 pub fn init() {
@@ -22,7 +37,7 @@ pub fn init() {
 
 /// What is logged when the environment names nothing.
 ///
-/// The SDK is where an agent actually runs, and the endpoint crate owns the
+/// The gateway's own crates log at info. The SDK is where an agent actually runs, and the endpoint crate owns the
 /// publication steps required before the gateway can announce that it is
 /// listening. Their warnings and errors are the operator's to see. Info and
 /// debug lines stay off, except the bounded startup and first-response timings.
@@ -101,6 +116,48 @@ mod tests {
         // A terminal still gets its colour: this is one decision, not the
         // removal of a feature.
         assert!(written(true).contains('\u{1b}'));
+    }
+
+    /// A Nessa crate this one depends on, with no directive of its own,
+    /// would have its errors dropped by the default filter.
+    #[test]
+    fn every_nessa_crate_the_gateway_is_built_from_has_a_directive() {
+        let manifest = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.toml"));
+        let named: Vec<&str> = DEFAULT_FILTER
+            .split(',')
+            .map(|directive| directive.split('=').next().unwrap_or_default())
+            .collect();
+        let mut crates: Vec<String> = manifest
+            .lines()
+            .filter(|line| line.starts_with("nessa-") && line.contains("path = \"../"))
+            .filter_map(|line| line.split_whitespace().next())
+            .map(|name| name.replace('-', "_"))
+            .collect();
+        crates.push(env!("CARGO_CRATE_NAME").to_owned());
+        assert!(crates.len() > 10, "the manifest's Nessa crates: {crates:?}");
+        for name in crates {
+            assert!(named.contains(&name.as_str()), "no directive for {name}");
+        }
+    }
+
+    /// A crate split out of the gateway keeps the gateway's logs: an error the
+    /// conversation crate logs is written.
+    #[test]
+    fn the_default_filter_writes_a_split_crates_errors() {
+        let captured = Captured::default();
+        let writer = captured.clone();
+        tracing::subscriber::with_default(
+            subscriber(move || writer.clone(), false, default_filter()),
+            || {
+                tracing::error!(target: "nessa_conversation::application", "a turn failed");
+                tracing::info!(target: "nessa_webhooks::infrastructure", "a delivery started");
+                tracing::info!(target: "nessa_auth::adapters", "a credential was read");
+            },
+        );
+        let log = captured.text();
+        assert!(log.contains("a turn failed"), "{log}");
+        assert!(log.contains("a delivery started"), "{log}");
+        assert!(!log.contains("a credential was read"), "{log}");
     }
 
     #[test]

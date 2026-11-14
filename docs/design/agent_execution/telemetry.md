@@ -87,8 +87,9 @@ Facts that matter for the design:
 
 ### 2.2 The gateway logs to one file and streams nothing
 
-- One `tracing_subscriber::fmt` on stderr with `RUST_LOG` or the default
-  `nessa_server=info,nessa_sdk=warn,nessa_gateway_endpoint=error`
+- One `tracing_subscriber::fmt` on stderr with `RUST_LOG` or the default:
+  `info` for the gateway and each crate split out of it, `nessa_sdk=warn`,
+  `nessa_gateway_endpoint=error`, and every other Nessa library off
   (`crates/nessa-server/src/core/logging.rs:15-30`). Plain text. Under launchd
   stderr is `<data>/logs/gateway.log`, truncated once at start
   (`core/log_file.rs`). The plist never sets `RUST_LOG`, so production is always
