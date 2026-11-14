@@ -1031,7 +1031,13 @@ async fn m10_a_close_that_took_the_lock_first_refuses_an_allowed_message_and_ope
     let (message, review) = fixture.held_message(INSTANCE, "across a close").await;
     // Something holds the conversation's submission lock; the person's close
     // waits on it, and then the app's message, once allowed.
-    let held = fixture.service.inner.mode_changes.lock(&fixture.id).await;
+    let held = fixture
+        .service
+        .inner
+        .records
+        .mode_changes()
+        .lock(&fixture.id)
+        .await;
     let closing = {
         let service = fixture.service.clone();
         let id = fixture.id.clone();
@@ -1074,7 +1080,13 @@ async fn m10_a_release_while_the_message_waits_for_the_lock_stops_it() {
         .unwrap();
     let executions = fixture.provider.executions.lock().unwrap().len();
     let (message, review) = fixture.held_message(INSTANCE, "after its release").await;
-    let held = fixture.service.inner.mode_changes.lock(&fixture.id).await;
+    let held = fixture
+        .service
+        .inner
+        .records
+        .mode_changes()
+        .lock(&fixture.id)
+        .await;
     let from = fixture.audit.phases().len();
     fixture.answer(&review, ALLOW).await;
     approved_on_record(&fixture, from).await;
@@ -1133,7 +1145,8 @@ async fn lock_reaches(fixture: &Fixture, count: usize) {
         while fixture
             .service
             .inner
-            .mode_changes
+            .records
+            .mode_changes()
             .holders_and_waiters(&fixture.id)
             < count
         {
@@ -1152,7 +1165,7 @@ async fn queued_holder(fixture: &Fixture, waiting: usize) -> oneshot::Sender<()>
     let service = fixture.service.clone();
     let id = fixture.id.clone();
     tokio::spawn(async move {
-        let _held = service.inner.mode_changes.lock(&id).await;
+        let _held = service.inner.records.mode_changes().lock(&id).await;
         let _ = gate.await;
     });
     lock_reaches(fixture, waiting + 1).await;
@@ -1169,7 +1182,13 @@ async fn queued_holder(fixture: &Fixture, waiting: usize) -> oneshot::Sender<()>
 async fn m13b_a_desktop_stop_past_the_messages_check_waits_for_it_and_the_message_settles() {
     let fixture = Fixture::new().await;
     let (message, review) = fixture.held_message(INSTANCE, "before the stop").await;
-    let held = fixture.service.inner.mode_changes.lock(&fixture.id).await;
+    let held = fixture
+        .service
+        .inner
+        .records
+        .mode_changes()
+        .lock(&fixture.id)
+        .await;
     let from = fixture.audit.phases().len();
     fixture.answer(&review, ALLOW).await;
     approved_on_record(&fixture, from).await;
@@ -1202,7 +1221,13 @@ async fn m10_a_message_after_a_desktop_stops_mark_is_refused_and_opens_nothing()
     let fixture = Fixture::new().await;
     let executions = fixture.provider.executions.lock().unwrap().len();
     let (message, review) = fixture.held_message(INSTANCE, "after the mark").await;
-    let held = fixture.service.inner.mode_changes.lock(&fixture.id).await;
+    let held = fixture
+        .service
+        .inner
+        .records
+        .mode_changes()
+        .lock(&fixture.id)
+        .await;
     let (release_close, close_gate) = oneshot::channel();
     *fixture.provider.close_gate.lock().unwrap() = Some(close_gate);
     let stopping = {
@@ -1238,7 +1263,13 @@ async fn m10_a_message_admitted_in_one_opening_is_not_sent_into_another() {
     let fixture = Fixture::new().await;
     let executions = fixture.provider.executions.lock().unwrap().len();
     let (message, review) = fixture.held_message(INSTANCE, "into the old opening").await;
-    let held = fixture.service.inner.mode_changes.lock(&fixture.id).await;
+    let held = fixture
+        .service
+        .inner
+        .records
+        .mode_changes()
+        .lock(&fixture.id)
+        .await;
     // The desktop stop takes the lock before the message (#528), and
     // something else holds it after the stop and before the message.
     let stopping = {
@@ -1313,7 +1344,13 @@ async fn m10_a_delete_that_took_the_lock_first_refuses_an_allowed_message() {
     let (message, review) = fixture.held_message(INSTANCE, "across a delete").await;
     // Something holds the conversation's submission lock; the person's
     // delete waits on it, and then the app's message, once allowed.
-    let held = fixture.service.inner.mode_changes.lock(&fixture.id).await;
+    let held = fixture
+        .service
+        .inner
+        .records
+        .mode_changes()
+        .lock(&fixture.id)
+        .await;
     let deleting = {
         let service = fixture.service.clone();
         let id = fixture.id.clone();
@@ -1601,7 +1638,13 @@ async fn m10_a_stop_that_ended_the_messages_opening_before_the_enqueue_is_m10_by
     let (message, review) = fixture
         .held_message(INSTANCE, "into a failed opening")
         .await;
-    let held = fixture.service.inner.mode_changes.lock(&fixture.id).await;
+    let held = fixture
+        .service
+        .inner
+        .records
+        .mode_changes()
+        .lock(&fixture.id)
+        .await;
     // The desktop stop takes the lock before the message (#528), and
     // something else holds it after the stop and before the message.
     let stopping = {
@@ -1719,7 +1762,13 @@ async fn m10_a_release_after_a_turn_running_refusal_keeps_turn_running() {
     };
     // Its submission waits on the conversation's lock while its caller
     // waits on the submission.
-    let held = fixture.service.inner.mode_changes.lock(&fixture.id).await;
+    let held = fixture
+        .service
+        .inner
+        .records
+        .mode_changes()
+        .lock(&fixture.id)
+        .await;
     let gate = Arc::new(Gate::default());
     let message = tokio::spawn(Gated {
         inner: Box::pin({

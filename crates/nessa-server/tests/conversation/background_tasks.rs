@@ -797,7 +797,7 @@ async fn background_start_reuses_admission_when_export_has_queued() {
         vec![update("one", "export", "make")],
     )
     .await;
-    let deleting = service.inner.deletions.lock(&target).await;
+    let deleting = service.inner.records.deletions().lock(&target).await;
     let worker = service.clone();
     let task_target = target.clone();
     let starting =

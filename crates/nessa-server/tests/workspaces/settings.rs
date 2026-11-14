@@ -69,7 +69,7 @@ async fn tokens_are_encrypted_and_stale_unlocks_cannot_publish_or_clear_the_new_
         Err(Failure::Locked)
     );
     let saved = settings.read().await.unwrap();
-    assert_eq!(saved.token.as_slice(), b"boat-fixture-secret-token");
+    assert_eq!(saved.account.token.as_slice(), b"boat-fixture-secret-token");
     assert_eq!(saved.environment, "nessa");
     session.close().unwrap();
     assert!(matches!(settings.read().await, Err(Failure::Locked)));

@@ -335,7 +335,7 @@ async fn submit_commits_the_attempt_before_enqueue() {
     let (service, storage, metadata) = fixture(&root, provider.clone());
     let target = id();
     opened(&service, &provider, &target).await;
-    let mode = service.inner.mode_changes.lock(&target).await;
+    let mode = service.inner.records.mode_changes().lock(&target).await;
     let task = {
         let service = service.clone();
         let storage = storage.clone();
@@ -726,7 +726,7 @@ fn submit_crash_child() {
         let (service, storage, _metadata) = fixture(&root, provider.clone());
         let target = ConversationId::new(&target).unwrap();
         opened(&service, &provider, &target).await;
-        let _mode = service.inner.mode_changes.lock(&target).await;
+        let _mode = service.inner.records.mode_changes().lock(&target).await;
         let storage_for_submit = storage.clone();
         let service_for_submit = service.clone();
         let target_for_submit = target.clone();

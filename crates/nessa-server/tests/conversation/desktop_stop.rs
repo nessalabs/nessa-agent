@@ -279,7 +279,8 @@ impl Fixture {
             while self
                 .service
                 .inner
-                .mode_changes
+                .records
+                .mode_changes()
                 .holders_and_waiters(&self.id)
                 < 2
                 && !stopping.is_finished()
@@ -576,7 +577,8 @@ async fn a_desktop_stop_waits_for_a_message_waiting_in_the_enqueue() {
         while fixture
             .service
             .inner
-            .mode_changes
+            .records
+            .mode_changes()
             .holders_and_waiters(&fixture.id)
             == 0
         {
@@ -811,7 +813,8 @@ async fn desktop_stop_after_reopening(attachment_waits: bool) {
         fixture
             .service
             .inner
-            .mode_changes
+            .records
+            .mode_changes()
             .holders_and_waiters(&fixture.id),
         2,
         "the polled submission retains the held lock"
@@ -822,7 +825,8 @@ async fn desktop_stop_after_reopening(attachment_waits: bool) {
         while fixture
             .service
             .inner
-            .mode_changes
+            .records
+            .mode_changes()
             .holders_and_waiters(&fixture.id)
             < 3
         {

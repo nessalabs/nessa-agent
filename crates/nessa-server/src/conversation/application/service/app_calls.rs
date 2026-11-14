@@ -329,22 +329,20 @@ impl ConversationService {
     /// report each context they drop to the drop recorder; with no MCP
     /// servers there is no app to hold one, and a drop is only logged.
     pub(super) fn apps_of(&self, id: &ConversationId) -> Arc<AppReviews> {
-        self.inner
-            .apps
-            .lock()
-            .expect("conversations' apps")
-            .entry(id.clone())
-            .or_insert_with(|| {
-                let dropped = self.inner.mcp_apps.as_ref().map_or_else(
-                    || Arc::new(NoAppsToDrop) as _,
-                    |ports| ports.dropped.clone(),
-                );
-                Arc::new(AppReviews::new(
-                    dropped,
-                    self.inner.live_changes.publisher(id),
-                ))
-            })
-            .clone()
+        self.inner.records.with(id, |kept| {
+            kept.apps
+                .get_or_insert_with(|| {
+                    let dropped = self.inner.mcp_apps.as_ref().map_or_else(
+                        || Arc::new(NoAppsToDrop) as _,
+                        |ports| ports.dropped.clone(),
+                    );
+                    Arc::new(AppReviews::new(
+                        dropped,
+                        self.inner.live_changes.publisher(id),
+                    ))
+                })
+                .clone()
+        })
     }
 
     /// `by` deleted the conversation `id`, and its agent's stop was tried:

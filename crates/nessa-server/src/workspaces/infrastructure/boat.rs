@@ -13,8 +13,8 @@
 use crate::workspaces::{
     application::{Provider, RestCause, WorkspaceReceipt, WorkspaceRuntime},
     domain::{
-        AdmissionRefusal, AdmissionRejection, BoatConnection, EnvironmentIdentity, Failure,
-        ObservedEnvironment, RefusalDisposition,
+        AdmissionRefusal, AdmissionRejection, BoatAccount, EnvironmentIdentity, Failure,
+        ObservedEnvironment, RefusalDisposition, VmSpec,
     },
 };
 use async_trait::async_trait;
@@ -58,9 +58,9 @@ pub(crate) struct BoatProvider {
     pub(crate) relay_program: std::path::PathBuf,
 }
 impl BoatProvider {
-    fn machines(&self, connection: &BoatConnection) -> Result<BoatMachines, Failure> {
+    fn machines(&self, account: &BoatAccount) -> Result<BoatMachines, Failure> {
         let token =
-            std::str::from_utf8(connection.token.as_slice()).map_err(|_| Failure::InvalidInput)?;
+            std::str::from_utf8(account.token.as_slice()).map_err(|_| Failure::InvalidInput)?;
         let _ = rustls::crypto::ring::default_provider().install_default();
         let mut config = ClientConfig::new(token)
             .map_err(|_| Failure::InvalidInput)?
@@ -130,18 +130,18 @@ impl BoatProvider {
     }
 }
 
-/// The VM `connection` makes for `thread`, or, without a thread, the spec
-/// its existing VMs are checked and woken with: variables are only sent
-/// when one is made.
-fn spec(connection: &BoatConnection, thread: Option<&str>) -> Result<MachineSpec, Failure> {
+/// The VM made from `vm` for `thread`, or, without a thread, the spec an
+/// existing VM is checked and woken with: variables are only sent when one
+/// is made.
+fn spec(vm: &VmSpec, thread: Option<&str>) -> Result<MachineSpec, Failure> {
     let variables = thread
         .map(|thread| BTreeMap::from([("NESSA_THREAD_ID".to_owned(), thread.to_owned())]))
         .unwrap_or_default();
     MachineSpec::new(
-        connection.image.clone(),
-        connection.environment.clone(),
+        vm.image.clone(),
+        vm.environment.clone(),
         MACHINE_TYPE,
-        connection.auto_stop.seconds(),
+        vm.auto_stop.seconds(),
         variables,
     )
     .map_err(|_| Failure::InvalidInput)
@@ -149,24 +149,25 @@ fn spec(connection: &BoatConnection, thread: Option<&str>) -> Result<MachineSpec
 
 #[async_trait]
 impl Provider for BoatProvider {
-    async fn validate(&self, connection: &BoatConnection) -> Result<(), Failure> {
+    async fn validate(&self, account: &BoatAccount, vm: &VmSpec) -> Result<(), Failure> {
         // Nessa admits only its own environment: a name it would refuse on
         // every creation is refused before anything is made for it.
-        nessa_environment(&connection.environment)?;
-        let spec = spec(connection, None)?;
-        self.machines(connection)?
+        nessa_environment(&vm.environment)?;
+        let spec = spec(vm, None)?;
+        self.machines(account)?
             .prepare(&spec)
             .await
             .map_err(failure)
     }
     async fn create(
         &self,
-        connection: &BoatConnection,
+        account: &BoatAccount,
+        vm: &VmSpec,
         thread: &str,
     ) -> Result<WorkspaceReceipt, Failure> {
-        nessa_environment(&connection.environment)?;
-        let spec = spec(connection, Some(thread))?;
-        let machines = self.machines(connection)?;
+        nessa_environment(&vm.environment)?;
+        let spec = spec(vm, Some(thread))?;
+        let machines = self.machines(account)?;
         let created = machines
             .create(&spec, &format!("nessa-thread-{thread}"))
             .await
@@ -186,15 +187,16 @@ impl Provider for BoatProvider {
     }
     async fn connect(
         &self,
-        connection: &BoatConnection,
+        account: &BoatAccount,
+        made: &VmSpec,
         thread: &str,
         vm: &str,
         admission: &EnvironmentIdentity,
     ) -> Result<Arc<dyn WorkspaceRuntime>, Failure> {
         let deadline = crate::timer::clock::now() + CONNECT_BUDGET;
-        let machines = self.machines(connection)?;
+        let machines = self.machines(account)?;
         machines
-            .ready(&spec(connection, None)?, vm, &identity_to(admission)?)
+            .ready(&spec(made, None)?, vm, &identity_to(admission)?)
             .await
             .map_err(failure)?;
         // What follows the VM being ready is bounded by what is left; a
@@ -204,12 +206,7 @@ impl Provider for BoatProvider {
             .await
             .map_err(|_| Failure::Provider)?
     }
-    async fn stop(
-        &self,
-        connection: &BoatConnection,
-        vm: &str,
-        cause: RestCause,
-    ) -> Result<(), Failure> {
+    async fn stop(&self, account: &BoatAccount, vm: &str, cause: RestCause) -> Result<(), Failure> {
         // Boat archives it: its disk is kept as a snapshot, nothing runs or
         // is billed, and `connect` resumes it.
         let cause = match cause {
@@ -217,14 +214,14 @@ impl Provider for BoatProvider {
             RestCause::Closed => StopCause::Closed,
             RestCause::Wiping => StopCause::NotAdmitted,
         };
-        self.machines(connection)?
+        self.machines(account)?
             .stop(vm, cause)
             .await
             .map_err(failure)
     }
     async fn remove(
         &self,
-        connection: &BoatConnection,
+        account: &BoatAccount,
         vm: &str,
         admission: &EnvironmentIdentity,
     ) -> Result<(), Failure> {
@@ -237,7 +234,7 @@ impl Provider for BoatProvider {
             Disposition::RollbackNewVm,
         )
         .map_err(failure)?;
-        self.machines(connection)?
+        self.machines(account)?
             .roll_back(&created)
             .await
             .map_err(failure)

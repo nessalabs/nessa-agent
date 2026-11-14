@@ -707,7 +707,13 @@ async fn a_close_cleared_before_the_park_takes_the_lock_keeps_the_thread() {
     let slot = fixture.slot().await.unwrap();
     // What a message does on its way in.
     slot.closing.store(false, Ordering::SeqCst);
-    let submissions = fixture.service.inner.mode_changes.lock(&fixture.id).await;
+    let submissions = fixture
+        .service
+        .inner
+        .records
+        .mode_changes()
+        .lock(&fixture.id)
+        .await;
     assert!(
         !fixture
             .service
@@ -1153,7 +1159,13 @@ async fn past_the_bound_the_one_used_longest_ago_is_parked_and_one_in_use_is_pas
     assert!(live(fixture.id.clone()).await, "the one read since stays");
     fixture.wait(Duration::from_secs(1));
     // The first is now the one used longest ago, but in use: the third goes.
-    let held = fixture.service.inner.mode_changes.lock(&fixture.id).await;
+    let held = fixture
+        .service
+        .inner
+        .records
+        .mode_changes()
+        .lock(&fixture.id)
+        .await;
     let fourth = fixture.create_another().await.expect("room is made");
     drop(held);
     assert!(
@@ -1163,7 +1175,13 @@ async fn past_the_bound_the_one_used_longest_ago_is_parked_and_one_in_use_is_pas
     assert!(!live(third).await, "the next was parked");
     // A window follows the first, and the fourth is in use: nothing can go.
     let follower = fixture.service.live_changes(&fixture.id);
-    let held = fixture.service.inner.mode_changes.lock(&fourth).await;
+    let held = fixture
+        .service
+        .inner
+        .records
+        .mode_changes()
+        .lock(&fourth)
+        .await;
     assert!(matches!(
         fixture.create_another().await,
         Err(ConversationError::Capacity)
