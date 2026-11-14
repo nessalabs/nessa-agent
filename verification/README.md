@@ -12,6 +12,19 @@ They are **not a CI gate** ([adding a check to CI](../CODING_STANDARDS.md#adding
 they need a browser, a server and minutes. Run them before handing off UI work,
 when reviewing it, and after anything performance-sensitive.
 
+### Headed Linux displays
+
+Give an isolated virtual display enough room for the verifier's configured
+viewport and device scale. The default 1440×900 viewport at scale 2 fits a
+3840×2160 display:
+
+```sh
+xvfb-run --auto-servernum --server-args="-screen 0 3840x2160x24" node verification/desktop/scripts/responsive.mjs --headed --engine chromium,webkit --layout columns,sidebar --only overview-row-answers
+```
+
+Increase the display dimensions for larger configured viewports. Keep the
+verifier's viewport, interactions and deadlines as specified by its contract.
+
 ### Concurrent dev servers
 
 `startDevServer({ isolateCache: true }, env)` gives its Vite process a private

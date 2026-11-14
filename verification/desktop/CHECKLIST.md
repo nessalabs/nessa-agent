@@ -510,8 +510,9 @@ _ADR 238 › What fills the content region_ (the overview is workspace state).
   (`focus-overview`, the walk); `perf-budget.mjs --only overview-answer` (answer lands); ⌘⌫ and ⌘R by hand.
 - [ ] **Each request shows its answers when pointed at or reached by the
   keyboard**: at rest a request row shows its title and time,
-  its why and its command, and no answers — nor room kept for them: the why
-  and the command run on to the time (the row's 12px gap before it, ±4).
+  one explanatory line (the agent's command, otherwise its why), and no
+  answers — nor room kept for them. That line runs on to the time (the
+  row's 12px gap before it, ±4).
   Pointed at, or with the keyboard visibly on it (`:focus-visible`), Deny and
   Allow Once (⌥ turns it into Always Allow where offered) take the time's
   place at its end, sliding in (at once with less motion); the row's height
