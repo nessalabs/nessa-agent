@@ -60,7 +60,7 @@ impl Settings for VaultSettings {
     async fn save(&self, generation: u64, connection: BoatConnection) -> Result<(), Failure> {
         let vault = self.0.clone();
         tokio::task::spawn_blocking(move || {
-            let token = std::str::from_utf8(connection.token.as_slice())
+            let token = std::str::from_utf8(connection.account.token.as_slice())
                 .map_err(|_| Failure::InvalidInput)?;
             let bytes = Zeroizing::new(
                 serde_json::to_vec(&Borrowed {

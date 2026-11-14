@@ -3,8 +3,8 @@
 use super::RuntimeSettings;
 use crate::conversation::domain::{ChannelId, SettingsScope};
 use crate::workspaces::domain::{
-    AdmissionRefusal, AdmissionRejection, Assignment, BoatConnection, CleanupOutcome,
-    EnvironmentIdentity, Failure, RefusalDisposition,
+    AdmissionRefusal, AdmissionRejection, Assignment, BoatAccount, BoatConnection, CleanupOutcome,
+    EnvironmentIdentity, Failure, OpenFailure, RefusalDisposition, VmSpec,
 };
 use async_trait::async_trait;
 use futures_util::FutureExt;
@@ -75,15 +75,19 @@ pub(crate) struct WorkspaceReceipt {
 }
 #[async_trait]
 pub(crate) trait Provider: Send + Sync {
-    async fn validate(&self, connection: &BoatConnection) -> Result<(), Failure>;
+    /// Check a connection about to be saved: its account, and that a VM
+    /// made from `spec` could be.
+    async fn validate(&self, account: &BoatAccount, spec: &VmSpec) -> Result<(), Failure>;
     async fn create(
         &self,
-        connection: &BoatConnection,
+        account: &BoatAccount,
+        spec: &VmSpec,
         thread: &str,
     ) -> Result<WorkspaceReceipt, Failure>;
     async fn connect(
         &self,
-        connection: &BoatConnection,
+        account: &BoatAccount,
+        spec: &VmSpec,
         thread: &str,
         vm: &str,
         admission: &EnvironmentIdentity,
@@ -93,18 +97,13 @@ pub(crate) trait Provider: Send + Sync {
     /// `admission` is what the VM was admitted under when it was made.
     async fn remove(
         &self,
-        connection: &BoatConnection,
+        account: &BoatAccount,
         vm: &str,
         admission: &EnvironmentIdentity,
     ) -> Result<(), Failure>;
     /// Stop `vm`, keeping its disk: it costs nothing while stopped, and
     /// [`Provider::connect`] resumes it.
-    async fn stop(
-        &self,
-        connection: &BoatConnection,
-        vm: &str,
-        cause: RestCause,
-    ) -> Result<(), Failure>;
+    async fn stop(&self, account: &BoatAccount, vm: &str, cause: RestCause) -> Result<(), Failure>;
 }
 
 /// A thread's workspace in use: held by each runtime [`Workspaces::open`]
@@ -165,6 +164,13 @@ pub(crate) enum RecoveryEvent {
         thread: String,
         vm: String,
         cause: RestCause,
+    },
+    /// A thread's VM could not be opened: `cause` is what can be done about
+    /// it, `failure` the kind of failure it came from.
+    OpenRefused {
+        thread: String,
+        cause: OpenFailure,
+        failure: &'static str,
     },
     /// What Boat answered that stop: accepted, the VM archives after it
     /// (`connect` waits that out); a `failure` (its kind) means it may
@@ -283,7 +289,8 @@ impl Workspaces {
     }
     pub(crate) async fn save(&self, connection: BoatConnection) -> Result<(), Failure> {
         let generation = self.settings.generation()?;
-        self.provider.validate(&connection).await?;
+        let spec = connection.new_vm(None, Default::default());
+        self.provider.validate(&connection.account, &spec).await?;
         self.settings.save(generation, connection).await
     }
     pub(crate) async fn open(
@@ -293,11 +300,40 @@ impl Workspaces {
         channel: Option<ChannelId>,
     ) -> Result<Arc<dyn WorkspaceRuntime>, Failure> {
         let this = self.clone();
-        // The admitted task owns allocation through receipt persistence, even if
-        // its initiating conversation/open waiter disappears.
-        tokio::spawn(async move { this.allocate(thread, provision, channel).await })
-            .await
-            .map_err(|_| Failure::ProvisioningUncertain)?
+        // The admitted task owns allocation through receipt persistence, and
+        // the record of a failed opening, even if its initiating
+        // conversation/open waiter disappears.
+        tokio::spawn(async move {
+            let id = thread.to_string();
+            let opened = AssertUnwindSafe(this.allocate(thread, provision, channel))
+                .catch_unwind()
+                .await
+                .unwrap_or(Err(Failure::ProvisioningUncertain));
+            this.record_opening(id, opened)
+        })
+        .await
+        .unwrap_or(Err(Failure::ProvisioningUncertain))
+    }
+    /// Record why an opening failed, beside the receipt's own records. The
+    /// failure stays the answer; one whose record was not saved says so too.
+    fn record_opening(
+        &self,
+        thread: String,
+        opened: Result<Arc<dyn WorkspaceRuntime>, Failure>,
+    ) -> Result<Arc<dyn WorkspaceRuntime>, Failure> {
+        let error = match opened {
+            Ok(runtime) => return Ok(runtime),
+            Err(error) => error,
+        };
+        let recorded = self.record_recovery(&RecoveryEvent::OpenRefused {
+            thread,
+            cause: error.cause(),
+            failure: error.kind(),
+        });
+        Err(match recorded {
+            Ok(()) => error,
+            Err(_) => Failure::OpeningUnrecorded(Box::new(error)),
+        })
     }
     /// Stop `thread`'s VM, keeping its disk, unless something still uses
     /// it: a runtime [`Workspaces::open`] handed out, or a stream it served.
@@ -320,7 +356,7 @@ impl Workspaces {
         let id = thread.to_string();
         let lock = self.thread_lock(&id).await;
         let _guard = lock.lock().await;
-        let (connection, vm) = match self.resting(&id).await {
+        let (account, vm) = match self.resting(&id).await {
             Ok(Some(found)) => found,
             Ok(None) => {
                 return Rested {
@@ -335,13 +371,13 @@ impl Workspaces {
                 }
             }
         };
-        self.stop_recorded(&connection, id, vm, cause).await
+        self.stop_recorded(&account, id, vm, cause).await
     }
     /// Stops thread `id`'s `vm` for `cause`, recording the stop before it
     /// is asked and once it answered.
     async fn stop_recorded(
         &self,
-        connection: &BoatConnection,
+        account: &BoatAccount,
         id: String,
         vm: String,
         cause: RestCause,
@@ -353,7 +389,7 @@ impl Workspaces {
                 cause,
             })
             .is_err();
-        let stopped = AssertUnwindSafe(self.provider.stop(connection, &vm, cause))
+        let stopped = AssertUnwindSafe(self.provider.stop(account, &vm, cause))
             .catch_unwind()
             .await
             .unwrap_or(Err(Failure::Provider));
@@ -370,17 +406,16 @@ impl Workspaces {
             audit_failed: requested_failed || observed_failed,
         }
     }
-    /// The connection and VM a rest of thread `id` stops, if it has one
-    /// and nothing uses it now.
-    async fn resting(&self, id: &str) -> Result<Option<(BoatConnection, String)>, Failure> {
+    /// The account and VM a rest of thread `id` stops, if it has one and
+    /// nothing uses it now.
+    async fn resting(&self, id: &str) -> Result<Option<(BoatAccount, String)>, Failure> {
         if self.in_use(id) {
             return Ok(None);
         }
         let Some(Assignment::Assigned {
             thread: assigned,
             vm,
-            image,
-            admission,
+            ..
         }) = self.assignments.read(id).await?
         else {
             return Ok(None);
@@ -388,12 +423,7 @@ impl Workspaces {
         if assigned != id {
             return Ok(None);
         }
-        let connection = BoatConnection {
-            image,
-            environment: admission.name().into(),
-            ..self.settings.read().await?
-        };
-        Ok(Some((connection, vm)))
+        Ok(Some((self.settings.read().await?.account, vm)))
     }
     fn in_use(&self, thread: &str) -> bool {
         let mut uses = self
@@ -448,14 +478,15 @@ impl Workspaces {
         provision: bool,
     ) -> Result<Arc<dyn WorkspaceRuntime>, Failure> {
         let id = id.to_owned();
-        let mut connection = self.settings.read().await?;
+        let connection = self.settings.read().await?;
         let scope = channel.map_or(SettingsScope::Global, SettingsScope::Channel);
         let lifetimes = self.runtime_settings.read(&scope).await?;
         if lifetimes.scope() != &scope {
             return Err(Failure::Storage);
         }
-        connection.auto_stop = lifetimes.effective();
-        let vm = match self.assignments.read(&id).await? {
+        let auto_stop = lifetimes.effective();
+        let account = &connection.account;
+        let (spec, vm, admission, disposition) = match self.assignments.read(&id).await? {
             Some(Assignment::Assigned {
                 thread,
                 vm,
@@ -464,14 +495,11 @@ impl Workspaces {
             }) if thread == id => {
                 // Existing work retains its original image and environment. A
                 // changed connection token may access it, but cannot relocate it.
-                let connection = BoatConnection {
-                    image,
-                    environment: admission.name().into(),
-                    ..connection
-                };
+                let spec = VmSpec::of_receipt(image, &admission, auto_stop);
                 return self
                     .connect(
-                        &connection,
+                        account,
+                        &spec,
                         &id,
                         &vm,
                         &admission,
@@ -500,13 +528,11 @@ impl Workspaces {
                 // A new VM is made from the image this build pins, whatever
                 // image was pinned when the account was connected: that one
                 // may speak a lease protocol this build no longer does.
-                if let Some(image) = &self.image {
-                    connection.image.clone_from(image);
-                }
+                let spec = connection.new_vm(self.image.as_deref(), auto_stop);
                 self.assignments
                     .save(Assignment::Provisioning { thread: id.clone() })
                     .await?;
-                let created = self.provider.create(&connection, &id).await?;
+                let created = self.provider.create(account, &spec, &id).await?;
                 let vm = created.vm;
                 let mut refusal = created.refusal;
                 // A new VM still wiping is clean once it restarts, and the
@@ -520,7 +546,7 @@ impl Workspaces {
                         == Some(AdmissionRefusal::WipePending)
                 {
                     let rested = self
-                        .stop_recorded(&connection, id.clone(), vm.clone(), RestCause::Wiping)
+                        .stop_recorded(account, id.clone(), vm.clone(), RestCause::Wiping)
                         .await;
                     if rested.stopped == Ok(true) && !rested.audit_failed {
                         refusal = None;
@@ -529,7 +555,8 @@ impl Workspaces {
                 if let Some(rejection) = refusal {
                     return self
                         .refuse(
-                            &connection,
+                            account,
+                            &spec,
                             &id,
                             &vm,
                             &created.admission,
@@ -541,7 +568,7 @@ impl Workspaces {
                 let receipt = Assignment::Assigned {
                     thread: id.clone(),
                     vm: vm.clone(),
-                    image: connection.image.clone(),
+                    image: spec.image.clone(),
                     admission: created.admission.clone(),
                 };
                 let publication = AssertUnwindSafe(async { self.assignments.save(receipt).await })
@@ -560,13 +587,7 @@ impl Workspaces {
                         })
                         .is_err();
                     let (cleanup, cleanup_audit_failed) = self
-                        .cleanup(
-                            &connection,
-                            &id,
-                            &vm,
-                            &created.admission,
-                            created.disposition,
-                        )
+                        .cleanup(account, &id, &vm, &created.admission, created.disposition)
                         .await;
                     return Err(Failure::ReceiptRecovery {
                         vm,
@@ -575,14 +596,16 @@ impl Workspaces {
                         cleanup_audit_failed,
                     });
                 }
-                (vm, created.admission, created.disposition)
+                (spec, vm, created.admission, created.disposition)
             }
         };
-        self.connect(&connection, &id, &vm.0, &vm.1, vm.2).await
+        self.connect(account, &spec, &id, &vm, &admission, disposition)
+            .await
     }
     async fn connect(
         &self,
-        connection: &BoatConnection,
+        account: &BoatAccount,
+        spec: &VmSpec,
         thread: &str,
         vm: &str,
         admission: &EnvironmentIdentity,
@@ -590,19 +613,21 @@ impl Workspaces {
     ) -> Result<Arc<dyn WorkspaceRuntime>, Failure> {
         match self
             .provider
-            .connect(connection, thread, vm, admission)
+            .connect(account, spec, thread, vm, admission)
             .await
         {
             Err(Failure::AdmissionRejected(rejection)) => {
-                self.refuse(connection, thread, vm, admission, rejection, disposition)
+                self.refuse(account, spec, thread, vm, admission, rejection, disposition)
                     .await
             }
             result => result,
         }
     }
+    #[allow(clippy::too_many_arguments)]
     async fn refuse(
         &self,
-        connection: &BoatConnection,
+        account: &BoatAccount,
+        spec: &VmSpec,
         thread: &str,
         vm: &str,
         admission: &EnvironmentIdentity,
@@ -612,7 +637,7 @@ impl Workspaces {
         let refusal = Assignment::Refused {
             thread: thread.into(),
             vm: vm.into(),
-            image: connection.image.clone(),
+            image: spec.image.clone(),
             admission: admission.clone(),
             rejection: rejection.clone(),
             disposition,
@@ -632,7 +657,7 @@ impl Workspaces {
             })
             .is_err();
         let (cleanup, cleanup_audit_failed) = self
-            .cleanup(connection, thread, vm, admission, disposition)
+            .cleanup(account, thread, vm, admission, disposition)
             .await;
         Err(Failure::AdmissionRecovery {
             vm: vm.into(),
@@ -645,7 +670,7 @@ impl Workspaces {
     }
     async fn cleanup(
         &self,
-        connection: &BoatConnection,
+        account: &BoatAccount,
         thread: &str,
         vm: &str,
         admission: &EnvironmentIdentity,
@@ -656,7 +681,7 @@ impl Workspaces {
         match disposition {
             RefusalDisposition::RetainTarget => (CleanupOutcome::Retained, false),
             RefusalDisposition::RollbackNewVm => {
-                let confirmed = AssertUnwindSafe(self.provider.remove(connection, vm, admission))
+                let confirmed = AssertUnwindSafe(self.provider.remove(account, vm, admission))
                     .catch_unwind()
                     .await
                     .unwrap_or(Err(Failure::CleanupUncertain))

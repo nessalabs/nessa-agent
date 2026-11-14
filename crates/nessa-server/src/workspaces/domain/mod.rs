@@ -5,5 +5,6 @@ pub(crate) use environment::{
     AdmissionRefusal, AdmissionRejection, EnvironmentIdentity, ObservedEnvironment,
 };
 pub(crate) use workspace::{
-    Assignment, BoatConnection, ClaudeSignIn, CleanupOutcome, Failure, RefusalDisposition,
+    Assignment, BoatAccount, BoatConnection, ClaudeSignIn, CleanupOutcome, Failure, OpenFailure,
+    RefusalDisposition, VmSpec,
 };
