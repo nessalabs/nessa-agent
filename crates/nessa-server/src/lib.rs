@@ -1,52 +1,53 @@
 //! Nessa gateway with mandatory credential authentication and per-operation authorization.
+//!
+//! This crate is composition only: it reads configuration, wires the gateway
+//! (`nessa-gateway`) to its stores and features, and starts it. The gateway's
+//! modules are re-exported under their old paths.
 // The one clock: outside tests, time is read only through crate::timer::clock
 // (clippy.toml names the calls it replaces; CODING_STANDARDS.md says why).
 #![cfg_attr(not(test), warn(clippy::disallowed_methods))]
-pub mod agent_warm_up;
-pub mod agents;
-pub mod app;
-pub mod attachments;
-pub mod backup;
-pub mod browser_session;
-pub mod cli;
+mod bootstrap;
 pub mod composition;
 pub use nessa_conversation as conversation;
-pub mod core;
-use nessa_conversation::desktop_runtime;
-pub mod device_pairing;
-pub(crate) mod devices;
-pub mod env;
-pub mod external_events;
-pub mod github;
-pub mod github_relay;
-pub mod health;
-pub(crate) mod limits;
-pub mod logins;
-pub mod mcp_servers;
-pub mod product;
-pub(crate) mod relay;
-pub mod secrets;
-pub mod server;
-pub(crate) use nessa_conversation::timer;
-pub mod voice;
-pub mod webhooks;
+#[cfg(unix)]
+pub use nessa_gateway::workspaces;
+pub use nessa_gateway::{
+    agent_warm_up, agents, app, attachments, backup, browser_session, cli, core, desktop_runtime,
+    device_pairing, devices, env, external_events, github, github_relay, health, limits, logins,
+    mcp_servers, product, relay, secrets, server, timer, vault, voice, webhooks,
+};
 
-pub use core::run;
-
-#[cfg(test)]
-#[path = "../tests/agents/support.rs"]
-pub(crate) mod agents_test_support;
+pub use bootstrap::run;
 
 #[cfg(test)]
 pub(crate) use nessa_conversation::conversation_test_support;
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 pub(crate) use nessa_conversation::app_call_test_support;
 
 #[cfg(test)]
-pub(crate) use nessa_conversation::catalogue_receiver_store;
-
-pub mod vault;
-
-#[cfg(unix)]
-pub(crate) use nessa_conversation::workspaces;
+mod logging_tests {
+    /// The `nessa` binary is this crate: every Nessa crate it is built from,
+    /// and its own composition lines, need a directive in the gateway's
+    /// default filter, or a filter of named targets drops them, errors
+    /// included.
+    #[test]
+    fn every_nessa_crate_the_binary_is_built_from_has_a_directive() {
+        let manifest = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.toml"));
+        let named: Vec<&str> = crate::core::logging::DEFAULT_FILTER
+            .split(',')
+            .map(|directive| directive.split('=').next().unwrap_or_default())
+            .collect();
+        let mut crates: Vec<String> = manifest
+            .lines()
+            .filter(|line| line.starts_with("nessa-") && line.contains("path = \"../"))
+            .filter_map(|line| line.split_whitespace().next())
+            .map(|name| name.replace('-', "_"))
+            .collect();
+        crates.push(env!("CARGO_CRATE_NAME").to_owned());
+        assert!(crates.contains(&"nessa_gateway".to_owned()), "{crates:?}");
+        for name in crates {
+            assert!(named.contains(&name.as_str()), "no directive for {name}");
+        }
+    }
+}

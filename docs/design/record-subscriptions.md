@@ -262,7 +262,7 @@ queue behind a walk, so frames during a walk cost one more walk, not one each.
 ## State and order table
 
 Each row has one test. Server tests are in
-`crates/nessa-server/tests/product/socket/subscriptions.rs` unless named
+`crates/nessa-gateway/tests/product/socket/subscriptions.rs` unless named
 otherwise.
 
 S8 separates the shared loop’s coalescing from durable view replay. Its catalog

@@ -88,18 +88,65 @@ async function shown(
   await act(settle)
 }
 
-const option = (row: string, label: string) => {
-  const found = [...host.querySelectorAll(`[data-placement-row="${row}"] button`)].find(
-    (each) => each.textContent === label,
-  )
-  if (!(found instanceof HTMLButtonElement)) throw new Error(`no ${label} in ${row}`)
+/** Each row's menu is opened from its button, by keyboard as a person can. */
+const trigger = (row: string) => {
+  const found = host.querySelector(`[data-placement-row="${row}"] [data-choice-trigger]`)
+  if (!(found instanceof HTMLButtonElement)) throw new Error(`no menu for ${row}`)
   return found
+}
+
+const openMenus = () => document.querySelectorAll('[role="menu"]').length
+
+async function closeMenus() {
+  if (openMenus() === 0) return
+  await act(async () => {
+    ;(document.activeElement ?? document.body).dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
+    )
+  })
+}
+
+/** A row's choice by its words: whether it can be chosen, and choosing it. */
+async function option(row: string, label: string) {
+  await closeMenus()
+  const button = trigger(row)
+  if (button.disabled) return { disabled: true, click: () => {} }
+  await act(async () => {
+    button.focus()
+    button.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }),
+    )
+  })
+  const found = [
+    ...document.querySelectorAll<HTMLElement>('[role="menuitemradio"]'),
+  ].find((each) => each.textContent === label)
+  if (!found) throw new Error(`no ${label} in ${row}`)
+  return {
+    disabled:
+      found.getAttribute("aria-disabled") === "true" ||
+      found.hasAttribute("data-disabled"),
+    click: () => found.click(),
+  }
+}
+
+/** The words in a row's menu, in order. */
+async function listed(row: string) {
+  await closeMenus()
+  await act(async () => {
+    trigger(row).focus()
+    trigger(row).dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }),
+    )
+  })
+  return [...document.querySelectorAll('[role="menuitemradio"]')].map(
+    (each) => each.textContent,
+  )
 }
 
 it("offers Boat only once it is connected", async () => {
   await shown(async () => channel, "disconnected" as BoatStatus["state"])
-  expect(option("threads", "Boat").disabled).toBe(true)
-  expect(option("threads", "This Mac").disabled).toBe(false)
+  expect((await option("threads", "Boat")).disabled).toBe(true)
+  expect((await option("threads", "This Mac")).disabled).toBe(false)
 })
 
 it("holds both rows while a change is on its way, then shows it", async () => {
@@ -118,10 +165,16 @@ it("holds both rows while a change is on its way, then shows it", async () => {
         }
       }),
   )
-  await act(async () => option("threads", "Boat").click())
+  {
+    const chosen = await option("threads", "Boat")
+    await act(async () => chosen.click())
+  }
   expect(asked).toEqual([{ coordinatorPlacement: "local", threadPlacement: "boat" }])
-  expect(option("coordinator", "Boat").disabled).toBe(true)
-  await act(async () => option("coordinator", "Boat").click())
+  expect((await option("coordinator", "Boat")).disabled).toBe(true)
+  {
+    const chosen = await option("coordinator", "Boat")
+    await act(async () => chosen.click())
+  }
   expect(asked).toHaveLength(1)
   await act(async () => {
     land()
@@ -129,18 +182,24 @@ it("holds both rows while a change is on its way, then shows it", async () => {
   })
   const group = host.querySelector("[data-channel-placement]")
   expect(group?.getAttribute("data-thread-placement")).toBe("boat")
-  expect(option("coordinator", "Boat").disabled).toBe(false)
+  expect((await option("coordinator", "Boat")).disabled).toBe(false)
 })
 
 it("says a refusal is not the person's to make, and any other failure is passing", async () => {
   await shown(() => Promise.reject(new ChannelCreationError("forbidden")))
-  await act(async () => option("threads", "Boat").click())
+  {
+    const chosen = await option("threads", "Boat")
+    await act(async () => chosen.click())
+  }
   await act(settle)
   expect(host.querySelector("[role=alert]")?.textContent).toBe(
     "You can’t change where this channel runs.",
   )
   await shown(() => Promise.reject(new Error("offline")))
-  await act(async () => option("threads", "Boat").click())
+  {
+    const chosen = await option("threads", "Boat")
+    await act(async () => chosen.click())
+  }
   await act(settle)
   expect(host.querySelector("[role=alert]")?.textContent).toBe(
     "Couldn’t save that. Try again in a moment.",
@@ -149,12 +208,12 @@ it("says a refusal is not the person's to make, and any other failure is passing
 
 it("shows a channel on one computer by that computer, and offers none it cannot reach", async () => {
   await shown(async () => channel)
-  // No computer is connected, so one cannot be chosen.
-  expect(option("threads", "Computer").disabled).toBe(true)
+  // No computer is connected, so none is listed to choose.
+  expect(await listed("threads")).toEqual(["This Mac", "Boat", "Any computer"])
+  await closeMenus()
   await shown(async () => channel, "connected", { threadPlacement: "devbox" })
-  const on = host.querySelector('[data-placement-row="threads"] [aria-pressed="true"]')
-  expect(on?.textContent).toBe("Computer")
-  expect(host.querySelector('[data-placement-computer="threads"]')?.textContent).toBe(
-    "devbox",
-  )
+  // Saved on a computer not connected now: the menu still says where it runs.
+  expect(trigger("threads").dataset.choice).toBe("devbox")
+  expect(trigger("threads").textContent).toBe("devbox")
+  expect(await listed("threads")).toEqual(["This Mac", "Boat", "Any computer", "devbox"])
 })

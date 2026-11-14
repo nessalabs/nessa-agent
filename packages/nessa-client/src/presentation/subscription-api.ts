@@ -161,7 +161,7 @@ export function createSubscriptionApi(session: SubscriptionPort): SubscriptionAp
   // A late frame of a
   // subscription already closed is kept too, never claimed (the gateway
   // never reuses an identity on a connection: `minted` in
-  // `crates/nessa-server/src/product/subscription/connection.rs`): at most one frame for each
+  // `crates/nessa-gateway/src/product/subscription/connection.rs`): at most one frame for each
   // identity, and all of them let go once no open is on its way.
   let opening = 0
   const unclaimed = new Map<string, Unclaimed>()

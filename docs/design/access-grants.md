@@ -106,7 +106,7 @@ Policy bundles, each the decider for its question:
 | Which agent or command a peer may lease on a host | `crates/nessa-env-serve/src/infrastructure/cedar/policies.cedar` |
 
 The socket has one admission, `admit_request` in
-`crates/nessa-server/src/product/read_access.rs`. A paired command is
+`crates/nessa-gateway/src/product/read_access.rs`. A paired command is
 returned as `Initiation::grant(receiver, policy_revision)`. The turn records
 that grant and that epoch. An owner surface is `Initiation::owner()`. A
 device signs in as the binding owner, so Drive works for the owner's phone.

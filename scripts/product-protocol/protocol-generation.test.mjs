@@ -80,7 +80,7 @@ function fixture(run) {
       "crates/nessa-sdk/src/infrastructure/mcp/servers.rs",
       "crates/nessa-conversation/src/domain/value_objects/channel.rs",
       "crates/nessa-conversation/src/domain/value_objects/vm_lifetime.rs",
-      "crates/nessa-server/src/logins/domain.rs",
+      "crates/nessa-gateway/src/logins/domain.rs",
       "crates/nessa-protocol/src/lease.rs",
       "crates/nessa-sdk/src/domain/agent_execution/permissions/value_objects/review_limits.rs",
       "crates/nessa-sdk/src/domain/agent_execution/questions/value_objects/question.rs",
@@ -469,7 +469,7 @@ test("a channel rule retyped in the schema alone refuses to publish", () =>
 // side alone publishes nothing.
 test("a saved-login device bound changed on one side alone refuses to publish", () =>
   fixture((path) => {
-    const source = join(path, "crates/nessa-server/src/logins/domain.rs")
+    const source = join(path, "crates/nessa-gateway/src/logins/domain.rs")
     const before = readFileSync(source, "utf8")
     const after = before.replace(
       "pub const MAX_SWITCHED_ON: usize = 256;",

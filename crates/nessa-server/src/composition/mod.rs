@@ -86,8 +86,6 @@ mod voice;
 mod runtime_config;
 
 mod agent;
-#[cfg(test)]
-pub(crate) use agent::REVIEW_WAIT;
 
 // Where its consumers are: the provider's agent budgets and the conversation
 // service's deletion budgets are both built only with Unix process supervision.
@@ -114,6 +112,12 @@ mod provisioning;
 #[cfg(unix)]
 mod warm_up;
 
+#[cfg(test)]
+#[path = "../../tests/backup/gateway_restore.rs"]
+mod backup_gateway_restore_tests;
+#[cfg(test)]
+#[path = "../../tests/backup/restore.rs"]
+mod backup_restore_tests;
 mod cli;
 #[cfg(all(test, unix))]
 #[path = "../../tests/composition/paired_environment.rs"]
@@ -124,6 +128,9 @@ mod peer_reading_tests;
 #[cfg(test)]
 #[path = "../../tests/composition/read_only_online.rs"]
 mod read_only_online_tests;
+#[cfg(test)]
+#[path = "../../tests/webhooks/infrastructure/product.rs"]
+mod webhook_product_tests;
 
 mod webhooks;
 

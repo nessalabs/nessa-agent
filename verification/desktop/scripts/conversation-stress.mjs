@@ -6,6 +6,7 @@ import {
   channelPlacementSettings,
   channelRuntimeSettings,
   openAccounts,
+  pickChoice,
 } from "./lib/boat-runtime-settings.mjs"
 import {
   changeVaultPassphrase,
@@ -5876,9 +5877,8 @@ const steps = {
           .locator(css.channelSettingsDialog)
           .locator(`[data-channel-placement="${channel.channelId}"]`)
         const row = control.locator('[data-placement-row="threads"]')
-        await row.getByRole("button", { name: "Computer", exact: true }).click()
-        await control.locator('[data-placement-computer="threads"]').click()
-        await run.page.locator(`[data-placement-choice="${worker.name}"]`).click()
+        // Each connected computer is listed in the row's menu (#1340).
+        await pickChoice(run.page, row, worker.name)
         const shown = await waitFor(
           async () =>
             (await control.getAttribute("data-thread-placement")) === worker.name,
@@ -7582,6 +7582,14 @@ const steps = {
       )
       return
     }
+    // The gateway log carries what the conversation service said about this
+    // thread. Those lines come from a crate split out of the gateway, and a
+    // default log filter that named only the server crate dropped them all.
+    const said = parkingEvidence(run.stack.gateway.log(), parkingOffset, conversationId)
+    if (!said.accepted || said.targetParking === 0)
+      failures.push(
+        `the gateway log does not carry the conversation service's lines for this thread: ${JSON.stringify(said)}`,
+      )
     // A read opens its agent, as a read does, and the thread is still
     // closed: that agent is parked again once idle, though the window
     // follows it. Only a message opens the thread.
@@ -9708,7 +9716,11 @@ async function setupWindow(run, prepare) {
   })
   await page.goto(`${new URL(run.page.url()).origin}/index.html?surface=setup`)
   await page.locator(".nessa-setup-window").waitFor()
-  await unlockRequestedVault(run.client, page)
+  // Onboarding does not ask for the vault on its own (#1340), locked or not:
+  // nothing in it needs protected data, so no unlock dialog is drawn.
+  await page.waitForTimeout(1500)
+  if ((await page.locator("[data-vault-dialog]").count()) !== 0)
+    throw new Error("the setup window opened a vault dialog on its own")
   return page
 }
 

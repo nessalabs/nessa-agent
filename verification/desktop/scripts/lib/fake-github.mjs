@@ -1,6 +1,6 @@
 /**
  * GitHub's device flow, on this machine, for the stress check's `github`
- * step: the three calls the gateway makes (`crates/nessa-server/src/github`)
+ * step: the three calls the gateway makes (`crates/nessa-gateway/src/github`)
  * answered as GitHub documents them, with the person's side — entering the
  * code on github.com — done by `approve()`.
  *

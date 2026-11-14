@@ -23,7 +23,10 @@
 // SSH environment's sources name their crate's items by its own paths and
 // are public to nessa-server, and the timer it reads is that crate's, so
 // this build is not 67da1d599b21a89f. The frames are unchanged again.
-const PROTOCOL: &str = "8106b187bf6402ee";
+// The request path then moved into nessa-gateway (#1313): the machine
+// report it lists is public to nessa-server from there, so this build is
+// not 8106b187bf6402ee. The frames are unchanged again.
+const PROTOCOL: &str = "f1318337c23960c2";
 const IMAGE: &str = "bsh_KC74wkwmxzdt57Y9MxwBdSJlBa75Lfjz0BvFC-6SuS4";
 pub fn worker_image() -> Option<&'static str> {
     (crate::env::LEASE_PROTOCOL == PROTOCOL).then_some(IMAGE)

@@ -3,7 +3,11 @@
 import { TEXT_REPLY_SCENARIO } from "../../../scripts/mcp-test-server/scenarios.mjs"
 import { startGatewayStack, waitFor } from "./lib/gateway-stack.mjs"
 import { gatewayHost } from "./lib/fake-host.mjs"
-import { VAULT_PASSPHRASE } from "./lib/vault.mjs"
+import {
+  VAULT_PASSPHRASE,
+  vaultAlignmentFailures,
+  vaultDialogAlignment,
+} from "./lib/vault.mjs"
 import { attempt } from "./lib/cli.mjs"
 import { openPage, withEngines } from "./lib/browser.mjs"
 import { main } from "./lib/run.mjs"
@@ -16,6 +20,39 @@ await main(
   },
   async ({ options, rep, target: stack }) => {
     await withEngines(options, rep, async (engine, browser) => {
+      // Onboarding asks for nothing it does not need: the setup window opens
+      // with no vault dialog, locked or not yet set up (#1340). The vault is
+      // asked for when something first needs it.
+      await attempt(rep, { engine, name: "onboarding-quiet" }, async () => {
+        const state = (await stack.client.vault.status()).state
+        if (state === "unlocked")
+          throw new Error("the vault was unlocked before onboarding")
+        // Built as the stress setup window is: the host's native vault, and
+        // the gateway host told this is the setup window.
+        const context = await browser.newContext({
+          viewport: { width: 1000, height: 800 },
+        })
+        const page = await context.newPage()
+        try {
+          await stack.vault.install(page)
+          await page.addInitScript(gatewayHost, {
+            endpoint: stack.gateway.url.replace(/^http/, "ws"),
+            credential: stack.token(),
+            setup: true,
+          })
+          await page.goto(new URL("/index.html?surface=setup", stack.url).href)
+          await page.locator(".nessa-setup-window").waitFor({ timeout: 15_000 })
+          // Long enough for a request made as the window mounts to be read
+          // and drawn; the dialog drew within a second before #1340.
+          await page.waitForTimeout(3000)
+          const prompts = await page.locator("[data-vault-dialog]").count()
+          if (prompts !== 0)
+            throw new Error(`onboarding opened ${prompts} vault dialog(s) on its own`)
+          return { state, prompts }
+        } finally {
+          await context.close()
+        }
+      })
       let loseChangeReply = false
       let changeRequests = 0
       const opened = await openPage(browser, {
@@ -55,6 +92,8 @@ await main(
             throw new Error(
               `Vault unavailable: ${await dialog.innerText()}; ${JSON.stringify(await stack.vault.command({ operation: "status" }))}`,
             )
+          const misaligned = vaultAlignmentFailures(await vaultDialogAlignment(page))
+          if (misaligned.length) throw new Error(misaligned.join("; "))
           if ((await dialog.getAttribute("data-vault-dialog")) === "setup") {
             if (options.shots)
               await page
