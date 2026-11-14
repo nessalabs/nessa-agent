@@ -107,6 +107,13 @@ import {
  *   delete      another conversation is deleted from its row's More menu,
  *               once asked; the gateway refuses it as deleted, and neither
  *               list nor the window holds it
+ *   swipe       with the rail on and every side column open, two-finger
+ *               swipes over the chat fold the session list, the sidebar and
+ *               the rail, one per swipe, a fling's momentum included, then
+ *               open them back rail, sidebar, list; each move gives one
+ *               haptic tick and a swipe with nothing left to move gives
+ *               none; over a wide table the swipe scrolls the table and a
+ *               vertical scroll that drifts sideways folds nothing
  *   rail        the side rail is turned on in Settings › Advanced ›
  *               Experimental and opened: the window's traffic lights stay
  *               where the host puts them above a compact rail; the top bar
@@ -650,6 +657,139 @@ async function untilView(run, conversationId, ready, seconds = 60) {
 }
 
 const ended = (turn) => turnEnded(turn.status)
+
+/**
+ * The `swipe` step's swipes, with the rail on and the wide table drawn in
+ * `message` (its scroller `port`): every column open, folded one per swipe
+ * left, nothing more to fold, the table scrolled and a vertical scroll left
+ * alone, then opened one per swipe right, a haptic tick for each move.
+ */
+async function swipeColumns(run, step, message, port, failures) {
+  const page = run.page
+  const columns = () =>
+    page.evaluate(
+      ({ frame, workspace }) => ({
+        rail: document.querySelector(frame)?.dataset.rail,
+        sidebar: document.querySelector(workspace)?.dataset.sidebar,
+        list: document.querySelector(workspace)?.dataset.list,
+        haptics: window.__fakeHostHaptics,
+      }),
+      { frame: css.workspaceWindow, workspace: css.workspace },
+    )
+  // Every column open to start: the sidebar and the list by their keys.
+  const start = await columns()
+  if (start.sidebar !== "open") await page.keyboard.press(keys.toggleSidebar)
+  if (start.list !== "open") await page.keyboard.press(keys.toggleSessionList)
+  const all = { rail: "open", sidebar: "open", list: "open" }
+  const at = async (want) => {
+    const now = await columns()
+    return ["rail", "sidebar", "list"].every((each) => now[each] === want[each])
+  }
+  if (!(await waitFor(() => at(all), 5_000))) {
+    failures.push(`the side columns did not all open: ${JSON.stringify(await columns())}`)
+    return
+  }
+  // Two fingers over the reply's words: `x` positive is the fingers
+  // moving left (the Mac's natural scrolling, which Chromium assumes).
+  // On Chromium the events go in through the browser's input with their
+  // own times 16 ms apart, as a trackpad sends them, so a slow machine
+  // cannot split one gesture in two; elsewhere they are sent as they
+  // come. The pause after outlasts the gesture's end, so each is its own
+  // swipe.
+  const words = message.locator("p").first()
+  const input =
+    run.engine === "chromium" || run.engine === undefined
+      ? await page.context().newCDPSession(page)
+      : null
+  let clock = Date.now() / 1000
+  const swipe = async (over, x, y = 0, events = 8) => {
+    await over.scrollIntoViewIfNeeded()
+    const box = await over.boundingBox()
+    const point = box && {
+      x: Math.round(box.x + Math.min(box.width / 2, 120)),
+      y: Math.round(box.y + Math.min(box.height / 2, 12)),
+    }
+    const onIt =
+      point &&
+      (await over.evaluate(
+        (element, { x, y }) =>
+          element.contains(document.elementFromPoint(x, y)) &&
+          document.elementFromPoint(x, y)?.closest(".workspace-chat") !== null,
+        point,
+      ))
+    if (!onIt) {
+      failures.push(`nothing to swipe over in the chat at ${JSON.stringify(point)}`)
+      return
+    }
+    await page.mouse.move(point.x, point.y)
+    clock = Math.max(clock + 1, Date.now() / 1000)
+    for (let i = 0; i < events; i += 1) {
+      if (input)
+        await input.send("Input.dispatchMouseEvent", {
+          type: "mouseWheel",
+          x: point.x,
+          y: point.y,
+          deltaX: x,
+          deltaY: y,
+          timestamp: clock + i * 0.016,
+        })
+      else await page.mouse.wheel(x, y)
+    }
+    await page.waitForTimeout(400)
+  }
+  let ticks = (await columns()).haptics
+  const expect = async (label, want, ticked) => {
+    const landed = await waitFor(() => at(want), 5_000)
+    const now = await columns()
+    if (!landed)
+      failures.push(
+        `${label}: the columns are ${JSON.stringify(now)}, not ${JSON.stringify(want)}`,
+      )
+    if (now.haptics !== ticks + ticked)
+      failures.push(`${label}: ${now.haptics - ticks} haptic ticks, not ${ticked}`)
+    ticks = now.haptics
+  }
+  // Over the wide table the swipe is the table's: it scrolls, nothing folds.
+  // First, with every column open, where the reply is narrowest.
+  const hidden = await port.evaluate((each) => each.scrollWidth - each.clientWidth)
+  if (hidden <= 1) failures.push(`the wide table does not scroll (${hidden} px hidden)`)
+  const scrolled = await port.evaluate((each) => each.scrollLeft)
+  await swipe(port, 15)
+  await expect("a swipe over the wide table", all, 0)
+  if ((await port.evaluate((each) => each.scrollLeft)) <= scrolled)
+    failures.push("a swipe over the wide table did not scroll it")
+  // Left: the column nearest the chat goes first, one per swipe; a
+  // fling's momentum is the same swipe.
+  await swipe(words, 15, 0, 30)
+  await expect("a fling left", { ...all, list: "closed" }, 1)
+  await swipe(words, 15)
+  await expect(
+    "a second swipe left",
+    { rail: "open", sidebar: "closed", list: "closed" },
+    1,
+  )
+  await swipe(words, 15)
+  const none = { rail: "closed", sidebar: "closed", list: "closed" }
+  await expect("a third swipe left", none, 1)
+  await swipe(words, 15)
+  await expect("a swipe left with nothing open", none, 0)
+  // Right: back in the order they went, the rail first.
+  await swipe(words, -15)
+  await expect("a swipe right", { ...none, rail: "open" }, 1)
+  // A vertical scroll that drifts sideways is a scroll.
+  await swipe(words, 4, 30)
+  await expect("a vertical scroll", { ...none, rail: "open" }, 0)
+  await swipe(words, -15)
+  await expect("a second swipe right", { ...all, list: "closed" }, 1)
+  await swipe(words, -15)
+  await expect("a third swipe right", all, 1)
+  await swipe(words, -15)
+  await expect("a swipe right with everything open", all, 0)
+  if (run.evidence)
+    await page.screenshot({ path: join(run.evidence, "swipe-all-open.png") })
+  // The conversation still takes a message.
+  await steps.reply(run, { ...step, extra: " after swiping" }, failures)
+}
 
 /**
  * Turns the side rail preview on or off where a person does: Settings ›
@@ -8909,6 +9049,37 @@ const steps = {
     if (!(await faded(true, false)))
       failures.push("scrolled to its end, the wide table did not fade its left side")
     await codeStaysDark(run.page, message, failures)
+  },
+
+  async swipe(run, step, failures) {
+    await run.exclusive(async () => {
+      const page = run.page
+      // An answer with a table wider than the reply: its panel scrolls
+      // sideways, which a swipe begun over it must leave to it.
+      const text = prompt(run, STRESS.table, step)
+      const seen = await send(run, run.main.id, text, failures)
+      const { turn } = await settled(run, run.main.id, seen, text, "completed", failures)
+      if (!turn) return
+      const message = page
+        .locator('.workspace-message[data-role="agent"]')
+        .filter({ hasText: `${SAYS.table}${text}` })
+      const port = message
+        .locator('[data-slot="markdown-table"]')
+        .nth(1)
+        .locator('[data-slot="table-container"]')
+      if (!(await waitFor(async () => (await port.count()) === 1, 15_000))) {
+        failures.push("the wide table to swipe over was not drawn")
+        return
+      }
+      await setSideRail(page, true, failures)
+      if (failures.length) return
+      try {
+        await swipeColumns(run, step, message, port, failures)
+      } finally {
+        // Back as the other steps expect it, whatever failed: the rail off.
+        await setSideRail(page, false, failures)
+      }
+    })
   },
 
   async long(run, step, failures) {

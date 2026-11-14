@@ -65,7 +65,13 @@ window-vibrancy = "0.6"
 # only so `platform/macos` can observe AppKit's live resize notifications and
 # place the webview inside the window. Nothing new is compiled into the binary.
 objc2 = "0.6"
-objc2-app-kit = { version = "0.3", features = ["NSWindow", "NSResponder", "NSView"] }
+objc2-app-kit = { version = "0.3", features = [
+  "NSWindow",
+  "NSResponder",
+  "NSView",
+  # The trackpad tick a swipe across the chat gives (`platform/macos/haptics`).
+  "NSHapticFeedback",
+] }
 # `NSURL`, `NSString` and `NSError` are the added features: `attachments`
 # asks the filesystem for a path's content type through `NSURLContentTypeKey`,
 # which answers with a `UTType` and reports its failure as an `NSError`.

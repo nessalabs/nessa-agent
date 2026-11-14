@@ -358,6 +358,17 @@ export async function flushCompositor() {
   await invoke("flush_compositor")
 }
 
+/**
+ * One haptic tick on the trackpad, for a gesture that changed something by
+ * one step. The host has the haptics (macOS); elsewhere, and outside Tauri,
+ * nothing is felt.
+ */
+export async function performHaptic() {
+  if (!inTauri) return
+  const { invoke } = await import("@tauri-apps/api/core")
+  await invoke("perform_haptic")
+}
+
 /** Stage-scoped shortcuts cache (or null outside Tauri — use bundled defaults). */
 export async function loadShortcuts(): Promise<
   import("@nessa/client").ShortcutsDocument | null
