@@ -4102,9 +4102,7 @@ fn discovery_selects_current_enrollment_and_binds_writes_to_its_invitation() {
         None,
         InvitationId::new([70; 16]),
     );
-    old.store
-        .end_pairing(old.record.id(), RuntimeEnd::Restarted, &Time)
-        .unwrap();
+    cancel_stage(&old);
     let current = peer_claim();
     let active = publish(&current);
     let intent = PublicIntent::from_record(&active, active.claim_binding().unwrap().0).unwrap();
