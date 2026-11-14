@@ -9661,7 +9661,11 @@ async function setupWindow(run, prepare) {
   })
   await page.goto(`${new URL(run.page.url()).origin}/index.html?surface=setup`)
   await page.locator(".nessa-setup-window").waitFor()
-  await unlockRequestedVault(run.client, page)
+  // Onboarding does not ask for the vault on its own (#1340), locked or not:
+  // nothing in it needs protected data, so no unlock dialog is drawn.
+  await page.waitForTimeout(1500)
+  if ((await page.locator("[data-vault-dialog]").count()) !== 0)
+    throw new Error("the setup window opened a vault dialog on its own")
   return page
 }
 

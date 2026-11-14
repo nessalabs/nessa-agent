@@ -184,6 +184,55 @@ export async function channelRuntimeSettings(run, channel, failures) {
     if (fit.squeezed.length > 0)
       failures.push(`channel settings names wrap: ${fit.squeezed.join(", ")}`)
     if (fit.selects > 0) failures.push("channel settings still use a native select")
+    // One left edge and the desktop's type (#1340): every setting's name, its
+    // detail and each section's heading start where the dialog's title does,
+    // within 1 px, and read the desktop's body and footnote sizes. Portalled
+    // outside the window's surface the sizes had no value and the rows fell
+    // back to the page's larger text; Settings' row inset put their names
+    // 16 px right of the order's.
+    const layout = await dialog.evaluate((box) => {
+      const panel = box.closest('[role="dialog"]') ?? box
+      const title = document.getElementById(panel.getAttribute("aria-labelledby"))
+      const titleLeft = title.getBoundingClientRect().left
+      const tokens = getComputedStyle(panel)
+      const px = (node) => parseFloat(getComputedStyle(node).fontSize)
+      const off = (selector) =>
+        [...panel.querySelectorAll(selector)]
+          .filter((node) => node.getBoundingClientRect().width > 0)
+          .map((node) => ({
+            text: node.textContent.trim().slice(0, 32),
+            offset: node.getBoundingClientRect().left - titleLeft,
+            size: px(node),
+          }))
+      return {
+        width: panel.getBoundingClientRect().width,
+        body: parseFloat(tokens.getPropertyValue("--desktop-text-body")),
+        footnote: parseFloat(tokens.getPropertyValue("--desktop-text-footnote")),
+        labels: off('[data-slot="settings-row-label"]'),
+        details: off('[data-slot="settings-row-detail"]'),
+        headings: off(".channel-settings-heading"),
+      }
+    })
+    receipts.layout = layout
+    if (!Number.isFinite(layout.body) || !Number.isFinite(layout.footnote))
+      failures.push("channel settings dialog does not read the desktop's type sizes")
+    for (const each of [...layout.labels, ...layout.details, ...layout.headings])
+      if (Math.abs(each.offset) > 1)
+        failures.push(
+          `channel settings "${each.text}" starts ${each.offset.toFixed(1)} px from the title's edge`,
+        )
+    for (const each of layout.labels)
+      if (Math.abs(each.size - layout.body) > 0.5)
+        failures.push(
+          `channel settings name "${each.text}" is ${each.size} px, not the body's ${layout.body} px`,
+        )
+    for (const each of [...layout.details, ...layout.headings])
+      if (Math.abs(each.size - layout.footnote) > 0.5)
+        failures.push(
+          `channel settings note "${each.text}" is ${each.size} px, not the footnote's ${layout.footnote} px`,
+        )
+    if (layout.headings.length === 0)
+      failures.push("channel settings order for Any has no heading")
     const chosen = () => control.getAttribute("data-selection")
     const choose = (value) => control.locator(`[data-value="${value}"]`).click()
     await waitFor(async () => (await chosen()) === "default", 10_000)
