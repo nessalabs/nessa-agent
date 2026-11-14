@@ -363,7 +363,7 @@ Desktop qualification is an explicit manual mode of the existing
 gh workflow run conversation-stress-load.yml --ref <branch> -f desktop-performance=true
 ```
 
-The mode uses standard Mac, prebuilds the native binaries, records structured
+The full scope uses standard Mac, prebuilds the native binaries, records structured
 host/GPU facts, then runs the complete `run-all` command with both engines and
 layouts and five performance runs. The check has a fixed 135-minute limit inside
 the load job's existing 210-minute limit. The clock starts after prebuilding;
@@ -374,10 +374,31 @@ A timeout is incomplete qualification, never a pass. Case waits, calibration,
 | Event/mode | Workload and ownership |
 | --- | --- |
 | Scheduled or manual `desktop-performance=false` | Existing Ubuntu load stress, seeds and input values; stress keeps its 100-minute bound and chaos its 60-minute bound, including chaos after a stress failure |
-| Manual `desktop-performance=true` | Mac desktop qualification; no load-stress result is claimed; regular PR CI retains all native and conversation-stress gates |
+| Manual `desktop-performance=true`, `desktop-scope=full` (default) | Complete Mac desktop qualification, including native prebuild and performance; regular PR CI retains all native and conversation-stress gates |
+| Manual `desktop-performance=true`, `desktop-scope=frame-budget` | Isolated production frame-budget diagnostic, all existing budget scenarios, five runs and both layouts; the in-memory UI needs no gateway prebuild. This does not qualify the full browser matrix |
+| Unknown desktop scope | The planner fails before measurement; no result is qualified |
 | Desktop failure or timeout | Available structured JSON and source-bound notices are preserved; missing or incomplete results do not qualify |
 
-The two modes keep their workload variables on the steps that consume them.
+The desktop scope is owned by
+[`measurement-plan.mjs`](../scripts/desktop/measurement-plan.mjs), with its
+workflow/CLI regressions beside it in `measurement-plan.test.mjs`. Its
+validated plan publishes the check selector, gateway-build requirement and
+artifact prefix together. The workflow consumes that plan; it does not infer a
+full-matrix pass from a frame-budget result. For an isolated diagnostic:
+
+```sh
+gh workflow run conversation-stress-load.yml --ref <branch> -f desktop-performance=true -f desktop-scope=frame-budget
+```
+
+`full` keeps the existing complete invocation. The diagnostic selects only
+`perf-budget` through `run-all`'s existing `--only` interface; it retains the
+producer's actual exit and measurements, the 135-minute measurement bound,
+calibration, 4× throttle and 50 ms budget. Its artifact identifies the scope and
+its aggregate lists the executed checks. Require the complete set of checks
+before calling any result full browser
+qualification; a passing isolated diagnostic supplies only performance evidence.
+
+The modes keep their workload variables on the steps that consume them.
 The desktop result and pre-measurement host snapshot are under the existing
 artifact root. Host snapshots describe that moment, not continuous physical-host
 isolation. The workflow adds no raw-log capture or retrieval path. Native

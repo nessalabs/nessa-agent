@@ -70,7 +70,7 @@ test("desktop qualification is an explicit mode of the existing load job", () =>
   )
   assert.match(
     workflow,
-    /name: \$\{\{ inputs\['desktop-performance'\] && 'Desktop browser qualification \(macos-latest\)' \|\| 'Conversation stress at load' \}\}/,
+    /name: \$\{\{ inputs\['desktop-performance'\] && 'Desktop measurement \(macos-latest\)' \|\| 'Conversation stress at load' \}\}/,
   )
   assert.match(
     workflow,
@@ -93,7 +93,7 @@ test("manual Mac qualification retains the complete matrix and fixed check bound
   assert.match(browser, /if: \$\{\{ inputs\['desktop-performance'\] \}\}/)
   assert.match(browser, /run: pnpm exec playwright install chromium webkit/)
   assert.match(browser, /timeout-minutes: 15/)
-  const matrix = named(steps, "Measure the complete desktop matrix on Mac")
+  const matrix = named(steps, "Measure the selected desktop checks on Mac")
   assert.match(matrix, /if: \$\{\{ inputs\['desktop-performance'\] \}\}/)
   assert.match(
     matrix,
@@ -109,7 +109,16 @@ test("manual Mac qualification retains the complete matrix and fixed check bound
     "tee ",
     "2>&1",
   ])
-    assert.equal(matrix.includes(forbidden), false, forbidden)
+    assert.equal(
+      matrix
+        .split("\n")
+        .find((line) => line.includes("node verification/desktop/scripts/run-all.mjs"))
+        .includes(forbidden),
+      false,
+      forbidden,
+    )
+  // measurement-plan.test.mjs executes this script with both published plans:
+  // full has no selector; the diagnostic retains every perf-budget scenario.
   const workflow = steps.join("\n      - ")
   assert.ok(
     workflow.indexOf("run: cargo build -p nessa-server -p nessa-mcp") <
@@ -117,7 +126,7 @@ test("manual Mac qualification retains the complete matrix and fixed check bound
   )
   assert.ok(
     workflow.indexOf("name: Record the desktop measurement host") <
-      workflow.indexOf("name: Measure the complete desktop matrix on Mac"),
+      workflow.indexOf("name: Measure the selected desktop checks on Mac"),
   )
   const host = named(steps, "Record the desktop measurement host")
   assert.match(host, /if: \$\{\{ inputs\['desktop-performance'\] \}\}/)
@@ -162,6 +171,10 @@ test("default and scheduled load keep Ubuntu workloads, seeds, and failure-time 
     /pnpm test:e2e:stress -- --channel bundled --evidence "\$STRESS_EVIDENCE"/,
   )
   assert.match(stress, /timeout-minutes: 100/)
+  assert.match(
+    stress,
+    /NESSA_STRESS_VMBACKGROUNDTASKS: \$\{\{ inputs\.vm-background-tasks \|\| '3' \}\}/,
+  )
   assert.match(stress, /NESSA_STRESS_ROUNDS: \$\{\{ inputs\.rounds \|\| '80' \}\}/)
   assert.match(stress, /NESSA_STRESS_PARALLEL: \$\{\{ inputs\.parallel \|\| '12' \}\}/)
   assert.match(stress, /NESSA_STRESS_REVIEWS: \$\{\{ inputs\.reviews \|\| '64' \}\}/)
@@ -202,7 +215,7 @@ test("desktop failures preserve source-bound structured receipts without a log w
   assert.match(artifact, /path: \$\{\{ env\.STRESS_EVIDENCE \}\}/)
   assert.match(
     artifact,
-    /inputs\['desktop-performance'\] && 'desktop-browser-qualification' \|\| 'conversation-stress-load'/,
+    /inputs\['desktop-performance'\] && \(steps\.desktop-plan\.outputs\.artifact-prefix \|\| 'desktop-measurement-incomplete'\) \|\| 'conversation-stress-load'/,
   )
   assert.match(artifact, /inputs\['desktop-performance'\] && 'error' \|\| 'ignore'/)
   assert.match(artifact, /retention-days: 14/)

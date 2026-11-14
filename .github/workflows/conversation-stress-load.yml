@@ -17,9 +17,16 @@ on:
   workflow_dispatch:
     inputs:
       desktop-performance:
-        description: Run complete desktop browser and performance qualification on standard Mac.
+        description: Run the selected desktop measurement on standard Mac.
         type: boolean
         default: false
+      desktop-scope:
+        description: Full browser qualification, or an isolated frame-budget diagnostic.
+        type: choice
+        options:
+          - full
+          - frame-budget
+        default: full
       seed:
         description: The plan's seed. Empty picks one and prints it.
         required: false
@@ -79,7 +86,7 @@ concurrency:
 
 jobs:
   load:
-    name: ${{ inputs['desktop-performance'] && 'Desktop browser qualification (macos-latest)' || 'Conversation stress at load' }}
+    name: ${{ inputs['desktop-performance'] && 'Desktop measurement (macos-latest)' || 'Conversation stress at load' }}
     runs-on: ${{ inputs['desktop-performance'] && 'macos-latest' || 'ubuntu-latest' }}
     # Planning bound: a cold gateway build, the browser download, and a check
     # whose length follows its numbers. The step bound below is what a run of
@@ -100,6 +107,12 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
+      - name: Plan the desktop measurement
+        id: desktop-plan
+        if: ${{ inputs['desktop-performance'] }}
+        env:
+          DESKTOP_SCOPE: ${{ inputs['desktop-scope'] }}
+        run: node scripts/desktop/measurement-plan.mjs "$DESKTOP_SCOPE" >> "$GITHUB_OUTPUT"
       - uses: ./.github/actions/pnpm-install
       - name: Install the pinned Chromium and its runtime dependencies
         if: ${{ !inputs['desktop-performance'] }}
@@ -109,10 +122,12 @@ jobs:
         if: ${{ inputs['desktop-performance'] }}
         run: pnpm exec playwright install chromium webkit
         timeout-minutes: 15
-      # nessa-mcp: the `github` step runs commands through Nessa's own shell tool.
+      # Load and full desktop checks use gateway binaries; the isolated
+      # frame-budget diagnostic uses the in-memory UI.
       - run: cargo build -p nessa-server -p nessa-mcp
-      # Prebuild above, then run the existing complete check in its own fixed
-      # window. This manual mode adds no native/stress waiver to PR CI.
+        if: ${{ !inputs['desktop-performance'] || steps.desktop-plan.outputs.build-gateway == 'true' }}
+      # Full qualification keeps its prebuild and complete matrix. Both scopes
+      # use the fixed measurement window; PR native/stress gates remain separate.
       - name: Record the desktop measurement host
         if: ${{ inputs['desktop-performance'] }}
         shell: bash
@@ -137,9 +152,16 @@ jobs:
             console.log(JSON.stringify(host))
           } finally { await browser.close() }
           JS
-      - name: Measure the complete desktop matrix on Mac
+      - name: Measure the selected desktop checks on Mac
         if: ${{ inputs['desktop-performance'] }}
-        run: node verification/desktop/scripts/run-all.mjs --headed --layout columns,sidebar --channel bundled --runs 5 --out "$STRESS_EVIDENCE/desktop-performance.json" --reports "$STRESS_EVIDENCE/desktop-checks"
+        env:
+          DESKTOP_CHECK: ${{ steps.desktop-plan.outputs.check }}
+        run: |
+          extra=()
+          if test -n "$DESKTOP_CHECK"; then
+            extra=(--only "$DESKTOP_CHECK")
+          fi
+          node verification/desktop/scripts/run-all.mjs --headed --layout columns,sidebar --channel bundled --runs 5 --out "$STRESS_EVIDENCE/desktop-performance.json" --reports "$STRESS_EVIDENCE/desktop-checks" "${extra[@]}"
         timeout-minutes: 135
       - name: Keep the desktop measurement in its job log
         if: always() && inputs['desktop-performance']
@@ -216,7 +238,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ inputs['desktop-performance'] && 'desktop-browser-qualification' || 'conversation-stress-load' }}-${{ github.run_id }}-${{ github.run_attempt }}
+          name: ${{ inputs['desktop-performance'] && (steps.desktop-plan.outputs.artifact-prefix || 'desktop-measurement-incomplete') || 'conversation-stress-load' }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ env.STRESS_EVIDENCE }}
           if-no-files-found: ${{ inputs['desktop-performance'] && 'error' || 'ignore' }}
           retention-days: 14
