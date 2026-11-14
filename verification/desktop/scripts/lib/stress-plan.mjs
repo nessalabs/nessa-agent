@@ -171,7 +171,7 @@ export const KNOBS = {
   },
   pools: {
     default: 1,
-    what: "times a conversation placed on any worker goes where Devices › Thread order lets it (one worker left out there, then let back in) and moves to another when its worker drains",
+    what: "times a conversation placed on any worker goes where Devices › Thread order lets it (one worker left out there, then let back in), is read from an older build's placement and binding files, and moves to another when its worker drains",
   },
   places: {
     default: 1,
@@ -195,7 +195,7 @@ export const KNOBS = {
   },
   upgrades: {
     default: 1,
-    what: "gateway restarts onto conversation metadata turned back into an older build's file, which it upgrades and keeps",
+    what: "gateway restarts onto conversation metadata turned back into an older build's file, which it upgrades and keeps, and onto every place record turned back into an older build's placement and binding files",
   },
   menus: {
     default: 1,

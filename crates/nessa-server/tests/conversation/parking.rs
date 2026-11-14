@@ -195,10 +195,8 @@ impl Fixture {
     /// otherwise.
     #[cfg(unix)]
     async fn in_workspace(rested: Arc<RestedWorkspaces>, placements: &Path) -> Self {
-        let placements = Arc::new(
-            crate::conversation::infrastructure::FilePlacements::new(placements.join("placements"))
-                .unwrap(),
-        );
+        let placements =
+            Arc::new(crate::conversation::infrastructure::FilePlaces::new(placements).unwrap());
         let environment = Environments::new(
             crate::conversation::infrastructure::in_process_environment(),
             BTreeMap::new(),
