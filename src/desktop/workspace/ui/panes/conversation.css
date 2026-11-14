@@ -358,6 +358,42 @@
       display: none;
     }
 
+    /*
+     * Nothing typed or attached, no turn to stop and no notice to read: the
+     * composer folds to a circle in the dock's corner, its model's mark on
+     * it. A press (or Tab) focuses the pane, and the whole composer grows
+     * back out of the circle.
+     */
+    .split-panes-grid[data-split-multi]
+      .workspace-pane:not([data-focused])
+      .workspace-dock
+      .desktop-composer[data-empty]:not(
+        [data-running],
+        :has(> .desktop-composer-notice)
+      ) {
+      width: 36px;
+      height: 36px;
+      margin-left: auto;
+      padding: 0;
+      border-radius: var(--desktop-radius-pill);
+    }
+
+    .split-panes-grid[data-split-multi]
+      .workspace-pane:not([data-focused])
+      .workspace-dock
+      .desktop-composer[data-empty]:not([data-running], :has(> .desktop-composer-notice))
+      > :not(.desktop-composer-wake) {
+      display: none;
+    }
+
+    .split-panes-grid[data-split-multi]
+      .workspace-pane:not([data-focused])
+      .workspace-dock
+      .desktop-composer[data-empty]:not([data-running], :has(> .desktop-composer-notice))
+      > .desktop-composer-wake {
+      display: flex;
+    }
+
     /* Back in the pane: the whole composer, grown out of the corner. */
     .split-panes-grid[data-split-multi]
       .workspace-pane[data-focused]

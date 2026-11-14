@@ -203,7 +203,7 @@ export const KNOBS = {
   },
   composers: {
     default: 1,
-    what: "times the composer's row is read: the model is named without its family, thinking stands before the hairline and Send, no project is offered, and nothing stands under the card",
+    what: "times the composer's row is read: the model is named without its family, thinking stands before the hairline and Send, no project is offered, nothing stands under the card, the model menu's provider tiles are square, and in three short stacked panes an empty composer you are not in folds to a circle that opens it",
   },
   menuPanels: {
     default: 1,

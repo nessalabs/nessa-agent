@@ -34,9 +34,12 @@
  *                    room is the window's drag region, not a workspace card.
  *   quiet-composer   three stacked panes: in a short window a pane you are not
  *                    in has a one-line composer, Stop alone while its turn
- *                    runs; going into one grows its composer out of the
- *                    corner over several frames while the others stay quiet;
- *                    in a tall window every composer is whole.
+ *                    runs, and a circle alone while nothing is typed; going
+ *                    into one grows its composer out of the corner over
+ *                    several frames while the others stay quiet; a pane left
+ *                    with a draft keeps its line; pressing a circle puts the
+ *                    caret in that pane's field; in a tall window every
+ *                    composer is whole.
  *   overview-narrow  the Agents overview at the size checked: its cover meets
  *                    the sidebar with no strip of what lies beneath; at rest
  *                    each group's card starts below the list's top fade; a
@@ -722,7 +725,17 @@ const body = {
             key: pane.dataset.paneKey,
             focused: pane.hasAttribute("data-focused"),
             running: form?.hasAttribute("data-running") ?? false,
+            // A notice keeps the line: there is something to read.
+            empty:
+              (form?.hasAttribute("data-empty") ?? false) &&
+              !form.querySelector(":scope > .desktop-composer-notice"),
+            width: form?.getBoundingClientRect().width ?? 0,
             height: form?.getBoundingClientRect().height ?? 0,
+            wake: (() => {
+              const wake = form?.querySelector(".desktop-composer-wake")
+              return wake ? getComputedStyle(wake).display : "none"
+            })(),
+            typing: document.activeElement === field,
             field: field
               ? getComputedStyle(field.closest(".desktop-composer-body")).display
               : "none",
@@ -760,7 +773,16 @@ const body = {
         failures.push(
           `pane ${c.key}, not focused, has a ${c.height}px composer, not one line`,
         )
+      // Nothing typed: a circle alone, its mark the only thing on it.
+      if (!c.running && c.empty && (c.wake === "none" || c.width > 40 || c.height > 40))
+        failures.push(
+          `pane ${c.key}, empty and not focused, is a ${c.width}x${c.height}px composer, not a circle`,
+        )
+      if (!c.running && c.empty && c.field !== "none")
+        failures.push(`pane ${c.key}, folded to a circle, still shows its field`)
     }
+    if (short.some((c) => c.focused && c.wake !== "none"))
+      failures.push("the focused pane shows the circle")
     // Into a quiet pane: its composer grows, over several frames, from the corner.
     const quiet = short.find((c) => !c.focused)
     await page.evaluate((key) => {
@@ -786,6 +808,54 @@ const body = {
       failures.push(`pane ${quiet.key}, focused, does not show its whole composer`)
     if (after.filter((c) => !c.focused).some((c) => c.choices))
       failures.push("a pane left behind kept its whole composer")
+    // A draft keeps its line when the pane is left: only an empty one folds.
+    // A pane whose turn runs shows Stop alone whatever is typed, so the draft
+    // goes in one that is not running.
+    const focusOn = async (key) => {
+      await page.locator(`[data-pane-key="${key}"] ${css.paneHeader}`).click()
+      await settled(page)
+      await frames(page, 6)
+    }
+    const idle = after.filter((c) => !c.running)
+    if (idle.length < 2) throw new CannotRun(`only ${idle.length} idle panes stacked`)
+    const [drafted, away] = idle
+    await focusOn(drafted.key)
+    const field = page.locator(`[data-pane-key="${drafted.key}"] textarea`)
+    await field.fill("kept")
+    try {
+      await focusOn(away.key)
+      const left = (await composers()).find((c) => c.key === drafted.key)
+      if (left?.wake !== "none" || !(left.width > 100))
+        failures.push(
+          `pane ${drafted.key}, left with a draft, is a ${left?.width}px composer showing ${left?.wake === "none" ? "its line" : "the circle"}`,
+        )
+      // Pressing a circle: the caret lands in that pane's field. Leave the pane
+      // just used for one with a turn, or the draft, so it folds to a circle.
+      await focusOn(
+        after.find((c) => c.key !== away.key && c.key !== drafted.key)?.key ??
+          drafted.key,
+      )
+      const circled = (await composers()).find(
+        (c) => !c.focused && c.empty && c.wake !== "none",
+      )
+      if (!circled) failures.push("no empty pane left to press the circle of")
+      else {
+        await page
+          .locator(`[data-pane-key="${circled.key}"] .desktop-composer-wake`)
+          .click()
+        await settled(page)
+        await frames(page, 6)
+        const pressed = (await composers()).find((c) => c.key === circled.key)
+        if (!pressed?.focused || !pressed.typing || !pressed.choices)
+          failures.push(
+            `pressing pane ${circled.key}'s circle left it ${JSON.stringify(pressed)}`,
+          )
+      }
+    } finally {
+      // The draft goes again, whatever happened above.
+      await focusOn(drafted.key)
+      await field.fill("")
+    }
     // Tall: room for every composer.
     await page.setViewportSize({ width: 1200, height: 1500 })
     await settled(page)
