@@ -183,6 +183,13 @@ impl Provider for FakeProvider {
         _: &VmSpec,
         thread: &str,
     ) -> Result<WorkspaceReceipt, Failure> {
+        // The driver makes Boat's answer to a thread's first creation get
+        // lost by leaving this file beside the threads' folders.
+        let root = &FIXTURE.get().unwrap().root;
+        if std::fs::remove_file(root.join(format!("lose-next-create-{thread}"))).is_ok() {
+            event("create_lost", thread);
+            return Err(Failure::Provider);
+        }
         std::fs::create_dir_all(folder(thread)).map_err(|_| Failure::Storage)?;
         event("created", thread);
         Ok(WorkspaceReceipt {

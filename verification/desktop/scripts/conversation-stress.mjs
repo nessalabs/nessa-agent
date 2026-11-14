@@ -2879,13 +2879,39 @@ const steps = {
     const original = run.main
     const id = randomUUID()
     const setup = `${STRESS.reply} VM background ${step.index}`
-    await run.client.conversation.create({
-      conversationId: id,
-      agent: run.stack.agent,
-      environment: "boat:thread",
-    })
+    // Boat's answer to the first creation is lost: the opening is refused,
+    // and the next one asks Boat again for the same VM instead of leaving
+    // the thread with none.
+    writeFileSync(join(run.stack.vmFixture.root, `lose-next-create-${id}`), "lose")
+    const create = () =>
+      run.client.conversation
+        .create({
+          conversationId: id,
+          agent: run.stack.agent,
+          environment: "boat:thread",
+        })
+        .then(
+          () => null,
+          (error) => error,
+        )
+    if (!(await create()))
+      failures.push("a conversation whose VM creation was lost was not refused")
+    const retried = await create()
+    if (retried)
+      failures.push(`the opening after a lost VM creation failed: ${retried.message}`)
     await run.client.conversation.submit(run.client.conversation.prepare(id, setup))
     await settled(run, id, new Set(), setup, "completed", failures)
+    const made = run.stack.vmFixture
+      .events()
+      .filter((event) => event.thread === id)
+      .map((event) => event.kind)
+    if (
+      made[0] !== "create_lost" ||
+      made.filter((kind) => kind === "created").length !== 1
+    )
+      failures.push(
+        `a lost VM creation was not finished by the next opening: ${made.join(", ")}`,
+      )
     run.checked.push(id)
     run.main = { id, title: await titleOf(run, id) }
     await openStressConversation(run.page, id, run.main.title)
