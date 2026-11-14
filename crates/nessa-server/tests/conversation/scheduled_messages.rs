@@ -1253,7 +1253,8 @@ async fn the_outcome_clock_is_read_after_submission() {
                 _admission: service.inner.admission.clone().read_owned().await,
                 _selection: service
                     .inner
-                    .mode_changes
+                    .records
+                    .mode_changes()
                     .lock(&ConversationId::new(conversation).unwrap())
                     .await,
             }),
@@ -1346,7 +1347,8 @@ async fn a_failed_execution_read_does_not_settle_the_submission() {
                 _admission: service.inner.admission.clone().read_owned().await,
                 _selection: service
                     .inner
-                    .mode_changes
+                    .records
+                    .mode_changes()
                     .lock(&ConversationId::new(conversation).unwrap())
                     .await,
             }),
@@ -4018,7 +4020,8 @@ async fn a_thread_admission_precedes_the_scheduled_selection_permit() {
     assert_eq!(store.submits.load(Ordering::SeqCst), 0);
     let selection = service
         .inner
-        .mode_changes
+        .records
+        .mode_changes()
         .try_lock(&id)
         .expect("a delivery waiting for thread admission must not hold selection");
     drop(selection);
@@ -4036,7 +4039,7 @@ async fn a_selection_lock_blocks_the_durable_submit_claim() {
     let service = delivering(&clock, &store, "owner");
     let row = store.due_row.lock().unwrap().clone().unwrap();
     let id = ConversationId::new(&row.conversation).unwrap();
-    let permit = service.inner.mode_changes.lock(&id).await;
+    let permit = service.inner.records.mode_changes().lock(&id).await;
     let delivery = service.deliver_due_scheduled();
     tokio::pin!(delivery);
     assert!(futures_util::poll!(&mut delivery).is_pending());
@@ -4078,7 +4081,7 @@ async fn a_detached_scheduled_command_keeps_its_submission_permit() {
     let permit = Arc::new(SubmissionPermit {
         _threads: service.inner.thread_admission.clone().lock_owned().await,
         _admission: service.inner.admission.clone().read_owned().await,
-        _selection: service.inner.mode_changes.lock(&id).await,
+        _selection: service.inner.records.mode_changes().lock(&id).await,
     });
     let commands = Arc::new(GatedCommandAdmission {
         entered: Notify::new(),
@@ -4105,14 +4108,16 @@ async fn a_detached_scheduled_command_keeps_its_submission_permit() {
     assert!(futures_util::poll!(&mut waiting).is_pending());
     commands.entered.notified().await;
     drop(waiting);
-    assert!(service.inner.mode_changes.try_lock(&id).is_none());
+    assert!(service.inner.records.mode_changes().try_lock(&id).is_none());
     assert!(service.inner.admission.try_write().is_err());
     assert!(service.inner.thread_admission.try_lock().is_err());
     commands.release.notify_one();
-    let _released =
-        tokio::time::timeout(Duration::from_secs(5), service.inner.mode_changes.lock(&id))
-            .await
-            .unwrap();
+    let _released = tokio::time::timeout(
+        Duration::from_secs(5),
+        service.inner.records.mode_changes().lock(&id),
+    )
+    .await
+    .unwrap();
     assert!(service.inner.admission.try_write().is_ok());
     assert!(service.inner.thread_admission.try_lock().is_ok());
 }

@@ -106,7 +106,7 @@
 //! by that gateway, through the same finish, without waiting for a restart
 //! (`a_delete_turned_away_for_want_of_an_agent_slot_is_finished_once_one_frees`).
 //! Deletes of one conversation, and summary writes of one conversation, are
-//! serialized per conversation (`ConversationLocks`), and a delete that waits
+//! serialized per conversation (`ConversationRecords`), and a delete that waits
 //! behind another attempt answers from its tombstone without one of its own.
 //!
 //! A view subscription (`docs/design/record-subscriptions.md`) reads through
@@ -171,7 +171,6 @@ mod environment;
 mod error;
 mod error_code;
 mod live_changes;
-mod locks;
 mod mcp_apps;
 mod metadata_target;
 pub(crate) use metadata_target::load_conversation;

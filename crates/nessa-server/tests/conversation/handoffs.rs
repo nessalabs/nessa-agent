@@ -811,7 +811,7 @@ async fn a_fork_of_a_source_not_its_own_or_into_a_conversation_with_turns_is_ref
         "{refused:?}"
     );
     assert!(fixture.snapshot(&target).await.handoffs.is_empty());
-    assert!(fixture.service.inner.forks.lock().unwrap().is_empty());
+    assert_eq!(fixture.service.inner.records.forks_waiting(), 0);
     fixture.retire().await;
 }
 

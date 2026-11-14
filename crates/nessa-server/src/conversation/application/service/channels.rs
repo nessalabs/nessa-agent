@@ -510,7 +510,7 @@ impl ConversationService {
                 return Ok(found);
             }
             let coordinator = found.coordinator_id();
-            let _creation = self.inner.creation.lock(&coordinator).await;
+            let _creation = self.inner.records.creation().lock(&coordinator).await;
             let current = store.get(id).await?.ok_or(ChannelError::Forbidden)?;
             if current.coordinator_id() != coordinator {
                 continue;

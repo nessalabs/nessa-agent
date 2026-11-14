@@ -221,7 +221,7 @@ impl ConversationService {
         };
         // Held until the slot is released: what arrives meanwhile waits for
         // it, and opens the conversation again once it is gone.
-        let submissions = self.inner.mode_changes.lock(id).await;
+        let submissions = self.inner.records.mode_changes().lock(id).await;
         self.park_held(id, slot, ParkWhen::IdleFor(park_after), submissions)
             .await
     }

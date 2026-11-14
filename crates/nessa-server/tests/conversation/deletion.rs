@@ -1147,7 +1147,7 @@ async fn delete_behind_another(
     id: &ConversationId,
 ) -> Result<bool, ConversationError> {
     let queued = repository.loads.lock().unwrap().len();
-    let held = service.inner.deletions.lock(id).await;
+    let held = service.inner.records.deletions().lock(id).await;
     let waiting = tokio::spawn({
         let service = service.clone();
         let id = id.clone();
@@ -1549,7 +1549,7 @@ async fn a_delete_whose_predecessor_never_fenced_fences_it_itself() {
     let fixture = deleting();
     let id = talked_in(&fixture).await;
     // Another delete holds the conversation and ends without fencing it.
-    let held = fixture.service.inner.deletions.lock(&id).await;
+    let held = fixture.service.inner.records.deletions().lock(&id).await;
     let waiting = tokio::spawn({
         let service = fixture.service.clone();
         let id = id.clone();
@@ -3828,7 +3828,13 @@ async fn a_reply_waiting_to_be_summarized_does_not_keep_a_deleted_history_leased
         )
         .await
         .unwrap();
-    let held = fixture.service.inner.summary_writes.lock(&id).await;
+    let held = fixture
+        .service
+        .inner
+        .records
+        .summary_writes()
+        .lock(&id)
+        .await;
     finish.send(()).unwrap();
     tokio::time::timeout(Duration::from_secs(3), async {
         loop {
@@ -3876,7 +3882,13 @@ async fn summary_writes_of_one_conversation_do_not_wait_for_another() {
     let fixture = deleting();
     let busy = talked_in(&fixture).await;
     let other = talked_in(&fixture).await;
-    let held = fixture.service.inner.summary_writes.lock(&busy).await;
+    let held = fixture
+        .service
+        .inner
+        .records
+        .summary_writes()
+        .lock(&busy)
+        .await;
     tokio::time::timeout(
         Duration::from_secs(1),
         fixture.service.summarize_reply(&other, "a reply elsewhere"),
@@ -3897,18 +3909,19 @@ async fn summary_writes_of_one_conversation_do_not_wait_for_another() {
 
 #[tokio::test]
 async fn a_conversation_lock_nobody_holds_is_forgotten() {
-    let locks = ConversationLocks::default();
+    let records = records::ConversationRecords::default();
+    let locks = records.summary_writes();
     let (one, two) = (new_id(), new_id());
     let held = locks.lock(&one).await;
     drop(locks.lock(&two).await);
-    assert_eq!(locks.in_use(), 1);
+    assert_eq!(records.in_use(), 1);
     // A waiter keeps it in use too, and gets it once it is let go.
     let waiting = locks.lock(&one);
     tokio::pin!(waiting);
     assert!(futures_util::poll!(waiting.as_mut()).is_pending());
     drop(held);
     drop(waiting.await);
-    assert_eq!(locks.in_use(), 0);
+    assert_eq!(records.in_use(), 0);
 }
 
 /// Stands in for Claude's store: the first delete of a session removes it and
@@ -5152,7 +5165,7 @@ async fn a_release_wait_found_held_elsewhere_spends_no_try_and_finishes_once_let
     let (service, id, lease) = left_for_a_held_lease(&fixture).await;
     drop(lease);
     // Its timer fires while something else holds the deletion.
-    let held = service.inner.deletions.lock(&id).await;
+    let held = service.inner.records.deletions().lock(&id).await;
     tokio::time::sleep(DELETION_RETRY_DELAY * 3 / 2).await;
     assert!(!tombstone(&fixture, &id).erased());
     assert_eq!(
@@ -5649,7 +5662,13 @@ async fn a_claim_found_held_is_tried_again_once_its_holder_lets_go() {
         )
         .await
         .unwrap();
-    let held = fixture.service.inner.deletions.lock(&target).await;
+    let held = fixture
+        .service
+        .inner
+        .records
+        .deletions()
+        .lock(&target)
+        .await;
     let started = tokio::time::Instant::now();
     assert!(fixture
         .service

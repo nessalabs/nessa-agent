@@ -92,7 +92,7 @@ impl ConversationService {
         let _admission = self.admit().await?;
         // Held to the end: no message is admitted to the agent being left,
         // and none to the new one before its history holds the switch.
-        let _submissions = self.inner.mode_changes.lock(id).await;
+        let _submissions = self.inner.records.mode_changes().lock(id).await;
         let actor = caller.actor()?;
         let record = load_conversation(self.inner.metadata.as_ref(), id)
             .await?
@@ -410,17 +410,16 @@ impl ConversationService {
         }
         // Only the creation that asked for the fork takes its seed: another
         // request's creation of the same id records no copy it never asked for.
-        let handoff = {
-            let mut seeds = self.inner.forks.lock().expect("fork seeds");
-            let asked = seeds.get(record.id()).is_some_and(|seed| {
+        let handoff = self.inner.records.with(record.id(), |kept| {
+            let asked = kept.fork.as_ref().is_some_and(|seed| {
                 seed.request == record.creation_action() && seed.surface == record.creator_surface()
             });
             if asked {
-                seeds.remove(record.id()).map(|seed| seed.intent)
+                kept.fork.take().map(|seed| seed.intent)
             } else {
                 None
             }
-        };
+        });
         Ok(OpeningPlan {
             agent: record.agent().ok_or(ConversationError::AgentUnsupported)?,
             model: record.model().clone(),
@@ -541,27 +540,21 @@ impl ConversationService {
         let seeded = NEXT_SEED.fetch_add(1, Ordering::Relaxed);
         // One fork into an id at a time: another request's seed is never
         // replaced, so an opening records the fork its creation asked for.
-        match self
-            .inner
-            .forks
-            .lock()
-            .expect("fork seeds")
-            .entry(id.clone())
-        {
+        let placed = self.inner.records.with(&id, |kept| match &kept.fork {
             // This request's own, still waiting, is a retry while the
             // first runs: answered as a request still running is, never
             // a creation of its own that could open the target without
             // the seed once the first has let it go.
-            std::collections::hash_map::Entry::Occupied(seed) => {
-                let own = seed.get().request == request && seed.get().surface == caller.surface_id;
-                return Err(if own {
+            Some(seed) => {
+                let own = seed.request == request && seed.surface == caller.surface_id;
+                Err(if own {
                     CreationFailure::Storage(CreationStorageError::Storage(StorageError::Busy))
                 } else {
                     CreationFailure::Conflict
-                });
+                })
             }
-            std::collections::hash_map::Entry::Vacant(seed) => {
-                seed.insert(ForkSeed {
+            None => {
+                kept.fork = Some(ForkSeed {
                     token: seeded,
                     request: request.clone(),
                     surface: caller.surface_id.clone(),
@@ -572,8 +565,10 @@ impl ConversationService {
                         at_ms,
                     },
                 });
+                Ok(())
             }
-        }
+        });
+        placed?;
         let created = self
             .create_command(
                 storage,
@@ -593,12 +588,11 @@ impl ConversationService {
         // seed for a later one: a retry of this fork seeds it again.
         // Only this call's own: once an opening took it, a retry may have
         // placed another, which is that retry's to let go.
-        {
-            let mut seeds = self.inner.forks.lock().expect("fork seeds");
-            if seeds.get(&id).is_some_and(|seed| seed.token == seeded) {
-                seeds.remove(&id);
+        self.inner.records.with(&id, |kept| {
+            if kept.fork.as_ref().is_some_and(|seed| seed.token == seeded) {
+                kept.fork = None;
             }
-        }
+        });
         let created = created?;
         self.copy_summary(&source, &id, at_ms).await;
         Ok(created)

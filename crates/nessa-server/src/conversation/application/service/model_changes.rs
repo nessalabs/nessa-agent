@@ -50,7 +50,7 @@ impl ConversationService {
         model: ConversationModelId,
     ) -> Result<ConversationModelSelection, ConversationError> {
         let _admission = self.admit().await?;
-        let _selection = self.inner.mode_changes.lock(id).await;
+        let _selection = self.inner.records.mode_changes().lock(id).await;
         let actor = caller.actor()?;
         let record = load_conversation(self.inner.metadata.as_ref(), id)
             .await?
@@ -326,26 +326,20 @@ impl ConversationService {
 
     fn note_model_reconcile(&self, id: &ConversationId) {
         self.inner
-            .model_reconcile_owed
-            .lock()
-            .expect("model reconciliation")
-            .insert(id.clone());
+            .records
+            .with(id, |kept| kept.model_reconcile_owed = true);
     }
 
     fn clear_model_reconcile(&self, id: &ConversationId) {
         self.inner
-            .model_reconcile_owed
-            .lock()
-            .expect("model reconciliation")
-            .remove(id);
+            .records
+            .with(id, |kept| kept.model_reconcile_owed = false);
     }
 
     fn model_reconcile_owed(&self, id: &ConversationId) -> bool {
-        self.inner
-            .model_reconcile_owed
-            .lock()
-            .expect("model reconciliation")
-            .contains(id)
+        self.inner.records.read(id, |kept| {
+            kept.is_some_and(|kept| kept.model_reconcile_owed)
+        })
     }
 
     async fn retire_uncertain_model(&self, id: &ConversationId) -> Result<(), ConversationError> {

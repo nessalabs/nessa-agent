@@ -1911,7 +1911,7 @@ impl ConversationService {
         let selection = Arc::new(SubmissionPermit {
             _threads: threads,
             _admission: admission,
-            _selection: self.inner.mode_changes.lock(&id).await,
+            _selection: self.inner.records.mode_changes().lock(&id).await,
         });
         let enabled = match store.preference().await {
             Ok(reading) => reading.enabled,

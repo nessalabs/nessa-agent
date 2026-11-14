@@ -68,7 +68,7 @@ impl ConversationService {
         // another request waits for it: this same request, still running,
         // is answered `Busy` by its own command history, never queued
         // behind itself.
-        let creation = match self.inner.creations.try_lock(&id) {
+        let creation = match self.inner.records.creations().try_lock(&id) {
             Some(creation) => creation,
             None => {
                 let actor = binding.actor();
@@ -82,7 +82,7 @@ impl ConversationService {
                         .await
                         .map_err(CreationFailure::Storage)?,
                 );
-                self.inner.creations.lock(&id).await
+                self.inner.records.creations().lock(&id).await
             }
         };
         if !new_only {

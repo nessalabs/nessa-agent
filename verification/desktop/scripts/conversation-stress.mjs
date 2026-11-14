@@ -7775,6 +7775,64 @@ const steps = {
         path: join(run.evidence, `handoff-${run.engine}-fork.png`),
         scale: "css",
       })
+    // Forks into one id raced from three requests: one request sent twice at
+    // once, and another request. The id keeps one fork seed, so the retry is
+    // the same fork (or told to wait while the first runs), and the other
+    // request is refused; the fork records its copied turns once.
+    const racedId = randomUUID()
+    const racedRequest = randomUUID()
+    const raced = await Promise.allSettled([
+      run.client.conversation.fork(conversationId, {
+        conversationId: racedId,
+        requestId: racedRequest,
+      }),
+      run.client.conversation.fork(conversationId, {
+        conversationId: racedId,
+        requestId: racedRequest,
+      }),
+      run.client.conversation.fork(conversationId, {
+        conversationId: racedId,
+        requestId: randomUUID(),
+      }),
+    ])
+    if (
+      raced[2].status === "fulfilled" &&
+      raced.slice(0, 2).some((each) => each.status === "fulfilled")
+    )
+      failures.push("two requests both made the raced fork")
+    // A retry turned away while the first ran is let in once it has ended.
+    const again = await run.client.conversation
+      .fork(conversationId, { conversationId: racedId, requestId: racedRequest })
+      .then(
+        (made) => made,
+        (error) => error,
+      )
+    const owner = raced[2].status === "fulfilled" ? "other" : "first"
+    if (owner === "first" && again instanceof Error)
+      failures.push(
+        `a retry of the raced fork was refused after it was made: ${again.message}`,
+      )
+    if (
+      owner === "first" &&
+      !(again instanceof Error) &&
+      again.conversationId !== racedId
+    )
+      failures.push(
+        `a retry of the raced fork opened ${again.conversationId}, not ${racedId}`,
+      )
+    run.checked.push(racedId)
+    const racedView = await run.client.conversation.read(racedId)
+    const racedForks = racedView.handoffs.filter((each) => each.kind === "fork")
+    if (racedForks.length !== 1 || (racedForks[0].turns?.length ?? 0) !== 2)
+      failures.push(
+        `the raced fork recorded ${racedForks.length} forks with ${racedForks[0]?.turns?.length ?? "no"} turns, not one with the source's 2`,
+      )
+    const inRaced = prompt(run, STRESS.reply, step, " in raced fork")
+    // The window shows the other fork, so this one is talked to by the client.
+    await run.client.conversation.submit(
+      run.client.conversation.prepare(racedId, inRaced),
+    )
+    await settled(run, racedId, new Set(), inRaced, "completed", failures)
     // The source is as it was.
     const source = await run.client.conversation.read(conversationId)
     if (source.messages.length !== 2)

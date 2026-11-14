@@ -9,6 +9,7 @@ mod owned_threads;
 use opening_resources::OpeningResources;
 mod parent_stop;
 mod pool_preferences;
+mod records;
 mod scheduled_messages;
 mod thread_report_admission;
 mod thread_reports;
@@ -25,7 +26,6 @@ use super::{
         confirmed_despite, issue, open_lease_on, AgentEnd, LeaseIssueError, LeaseRequest, LiveLease,
     },
     live_changes::LiveChanges,
-    locks::ConversationLocks,
     mcp_apps::{McpAppError, McpAppInitiator, McpAppPorts, McpAppRef},
     place_decision::{decide_place, Creation, PlaceAsk},
     placement::Environments,
@@ -925,27 +925,10 @@ struct Inner {
     attachments: Option<Arc<dyn ConversationAttachments>>,
     summaries: Arc<dyn ConversationSummaries>,
     listing: Arc<dyn ConversationListing>,
-    // One summary change at a time per conversation, so a turn's reply and
-    // the next message cannot each read the same summary and have the later
-    // write lose the other's change. Per conversation, so one conversation's
-    // summary never waits behind another's
-    // (`summary_writes_of_one_conversation_do_not_wait_for_another`). An
-    // archive and a delete's erasure of the summary take it too, and each
-    // writer asks whether the conversation was deleted while holding it, so a
-    // summary is not written back after its erasure
-    // (`a_late_reply_cannot_write_back_a_deleted_summary`).
-    summary_writes: ConversationLocks,
-    // One delete of a conversation at a time, from its fence to its last
-    // erasure, so a second delete waits for the first and answers from the
-    // tombstone it left (`concurrent_deletes_of_one_conversation_run_one_after_the_other`).
-    deletions: ConversationLocks,
-    mode_changes: ConversationLocks,
-    // One create command of a conversation at a time, from its reopen check
-    // to its saved readiness. Each request keeps its own command history, so
-    // without it two requests for one new conversation could both find it
-    // missing and the second open it as a conflict
-    // (`two_requests_creating_one_conversation_both_open_it`).
-    creations: ConversationLocks,
+    /// What this run keeps about each conversation apart from its live
+    /// agent: its gates (summary writes, deletions, mode changes, creations)
+    /// and what it is still owed, in one record behind one lock.
+    records: records::ConversationRecords,
     /// Who is asked to delete an agent's own record of a provider session.
     provider_sessions: ProviderSessionErasers,
     deletion_budgets: ConversationDeletionBudgets,
@@ -982,10 +965,6 @@ struct Inner {
         OnceLock<Arc<dyn super::usage_limit_policy::UsageLimitPreferencePolicyEvaluator>>,
     /// Wakes the continuation loop when a row is accepted or the preference changes.
     schedule_wakeup: Arc<Notify>,
-    /// Applied model changes whose continuation plan has not committed.
-    /// [`ConversationService::commit_applied_model_plan`] is the only writer.
-    /// A crash drops the set; catch-up runs the same plan while the preference is on.
-    model_reconcile_owed: std::sync::Mutex<HashSet<ConversationId>>,
     /// Settlement plans that did not commit. The schedule database holds the
     /// same debt when it accepted the write. This map is the copy written
     /// when that write failed, so this process still retries it. A crash
@@ -1005,10 +984,6 @@ struct Inner {
     /// check and one then be refused after it was saved. Taken only under the
     /// `conversations` lock, and counted by every capacity check there.
     creating: AtomicUsize,
-    /// One conversation's create, reopen and deletion decisions, in turn.
-    /// Per conversation, so creating one never waits behind another's
-    /// metadata and audit writes.
-    creation: ConversationLocks,
     retirement: OnceLock<ActionContext>,
     admission: Arc<RwLock<()>>,
     // Counts stop passes, bumped the moment one is decided and before it waits
@@ -1033,10 +1008,6 @@ struct Inner {
     tool_uis: Arc<dyn McpToolUis>,
     /// What an MCP App's calls go through; `None` with no MCP servers.
     mcp_apps: Option<McpAppPorts>,
-    /// Each conversation's MCP Apps, kept for the conversation rather than
-    /// its live agent: a release is kept across openings and before one.
-    /// Let go of when the conversation is deleted.
-    apps: std::sync::Mutex<HashMap<ConversationId, Arc<AppReviews>>>,
     /// Wakes view subscriptions when a live fact of a view changes; committed
     /// records wake them through the SDK's own watch.
     live_changes: Arc<LiveChanges>,
@@ -1058,11 +1029,6 @@ struct Inner {
     /// Where a conversation that may have unfinished turns is marked
     /// (`resumption`). Unbound, nothing is marked or resumed.
     unfinished_turns: OnceLock<Arc<dyn super::UnfinishedTurns>>,
-    /// The marks this run has written or read, so a busy conversation's
-    /// turns write one mark, not one each. Set under the conversation's
-    /// submission lock, and cleared under it too, except where nothing can
-    /// still run there: an agent closed for good, a conversation deleted.
-    unfinished_marked: std::sync::Mutex<HashMap<ConversationId, resumption::Retry>>,
     /// How long a failure's retry waits (`resumption`), bound with the marks.
     failure_backoff: OnceLock<resumption::FailureBackoff>,
     /// Woken when a failure retry is scheduled, so the retry loop waits for
@@ -1077,9 +1043,6 @@ struct Inner {
     /// The deletion inventory, asked after a tombstone commits. Unbound, a
     /// delete still fences and finishes; the inventory is unchanged.
     fence_capture: Arc<OnceLock<Arc<dyn FenceCapture>>>,
-    /// Forks being created, each the history its first opening records
-    /// (`handoffs`). Taken by that opening; let go of when the creation ends.
-    forks: std::sync::Mutex<HashMap<ConversationId, handoffs::ForkSeed>>,
 }
 /// Fetches one conversation's restored history before its serving session exists.
 pub(crate) trait OpenPreparation: Send + Sync {
@@ -1521,10 +1484,7 @@ impl ConversationService {
                 attachments,
                 summaries,
                 listing,
-                summary_writes: ConversationLocks::default(),
-                deletions: ConversationLocks::default(),
-                mode_changes: ConversationLocks::default(),
-                creations: ConversationLocks::default(),
+                records: Default::default(),
                 provider_sessions,
                 deletion_budgets,
                 environment,
@@ -1546,14 +1506,12 @@ impl ConversationService {
                 scheduled_messages: OnceLock::new(),
                 preference_policy: OnceLock::new(),
                 schedule_wakeup: Arc::new(Notify::new()),
-                model_reconcile_owed: std::sync::Mutex::default(),
                 reconcile_retry_owed: std::sync::Mutex::default(),
                 submit_retry_owed: std::sync::Mutex::default(),
                 access_policy,
                 limits,
                 conversations: Mutex::new(HashMap::new()),
                 creating: AtomicUsize::new(0),
-                creation: ConversationLocks::default(),
                 retirement: OnceLock::new(),
                 admission: Arc::new(RwLock::new(())),
                 stops: watch::channel(0).0,
@@ -1562,20 +1520,17 @@ impl ConversationService {
                 retries: Arc::new(DeletionRetries::default()),
                 tool_uis,
                 mcp_apps,
-                apps: std::sync::Mutex::default(),
                 live_changes: Arc::default(),
                 app_calls: Arc::new(Semaphore::new(app_calls::MAX_APP_CALLS)),
                 fetch_reads: Arc::new(Semaphore::new(artifact_fetch::FETCH_READS)),
                 commands: Arc::new(OnceLock::new()),
                 note_authors: Arc::new(OnceLock::new()),
                 unfinished_turns: OnceLock::new(),
-                unfinished_marked: std::sync::Mutex::default(),
                 failure_backoff: OnceLock::new(),
                 retry_scheduled: tokio::sync::Notify::new(),
                 drive: Arc::new(OnceLock::new()),
                 permission_rules: Arc::new(OnceLock::new()),
                 fence_capture: Arc::new(OnceLock::new()),
-                forks: std::sync::Mutex::default(),
             }),
         })
     }
@@ -1625,7 +1580,7 @@ impl ConversationService {
         // Serialize create/reopen decisions without holding the live-owner map
         // across repository or audit I/O. Existing ownership is checked before
         // this request can reserve capacity or open a provider.
-        let creation_guard = service.inner.creation.lock(&id).await;
+        let creation_guard = service.inner.records.creation().lock(&id).await;
         if let Some(record) = load_conversation(service.inner.metadata.as_ref(), &id).await? {
             // A deleted conversation is not created again under its
             // identity, whoever asks; only its owner is told why
@@ -1655,7 +1610,7 @@ impl ConversationService {
                 // finished since the check above leaves no reopen
                 // recorded after its deletion
                 // (`a_reopen_racing_a_delete_is_not_recorded_after_the_deletion`).
-                let _creation = service.inner.creation.lock(&id).await;
+                let _creation = service.inner.records.creation().lock(&id).await;
                 let current = load_conversation(service.inner.metadata.as_ref(), &id)
                     .await?
                     .ok_or(ConversationError::NotFound)?;
@@ -2066,7 +2021,7 @@ impl ConversationService {
             // A submission or read holds this while it uses the agent; one
             // held now is a use. Never waited for: two openings at the bound
             // would each wait for the other's.
-            let Some(submissions) = self.inner.mode_changes.try_lock(&id) else {
+            let Some(submissions) = self.inner.records.mode_changes().try_lock(&id) else {
                 continue;
             };
             if self
@@ -3056,7 +3011,7 @@ impl ConversationService {
         supervised(async move {
             let result = async move {
             let _admission = service.admit().await?;
-            let _mode = service.inner.mode_changes.lock(&id).await;
+            let _mode = service.inner.records.mode_changes().lock(&id).await;
             let actor = caller.actor()?;
             let record = load_conversation(service.inner.metadata.as_ref(), &id)
                 .await?
@@ -3320,7 +3275,7 @@ impl ConversationService {
         // An explicit Open can recover a stopped owner; a follower may only
         // publish a readable owner. The same ordering applies to both controls.
         let ready = if matches!(opening, ReadOpening::Open) {
-            self.inner.mode_changes.try_lock(&id)
+            self.inner.records.mode_changes().try_lock(&id)
         } else {
             None
         };
@@ -3330,7 +3285,7 @@ impl ConversationService {
             if let Some(read) = self.pending_change_view(&id, &caller).await? {
                 return Ok(read);
             }
-            self.inner.mode_changes.lock(&id).await
+            self.inner.records.mode_changes().lock(&id).await
         };
         match opening {
             ReadOpening::Open => {
@@ -4163,7 +4118,7 @@ impl ConversationService {
             let _mode = if selection.is_some() {
                 None
             } else {
-                Some(service.inner.mode_changes.lock(&id).await)
+                Some(service.inner.records.mode_changes().lock(&id).await)
             };
             let _selection = selection;
             service.recover_mode_change(&id, &caller).await?;
@@ -5092,7 +5047,7 @@ impl ConversationService {
         id: &ConversationId,
         change: impl FnOnce(Option<&ConversationSummary>) -> Option<ConversationSummary>,
     ) {
-        let _writes = self.inner.summary_writes.lock(id).await;
+        let _writes = self.inner.records.summary_writes().lock(id).await;
         match load_conversation(self.inner.metadata.as_ref(), id).await {
             Ok(Some(record)) if record.deletion().is_none() => {}
             Ok(_) => return,
@@ -5444,7 +5399,7 @@ impl ConversationService {
         let closing = id.clone();
         let closed = supervised(async move {
             let _admission = service.admit().await?;
-            let _mode = service.inner.mode_changes.lock(&id).await;
+            let _mode = service.inner.records.mode_changes().lock(&id).await;
             let actor = caller.actor()?;
             // Whose conversation this is comes from the ownership record, before
             // anything else. Letting go of files must not depend on being able
@@ -5596,7 +5551,7 @@ impl ConversationService {
             // Access is decided under the summary lock, which a delete erases
             // the summary under: an archive either lands before that erasure
             // or finds the tombstone.
-            let _writes = service.inner.summary_writes.lock(&id).await;
+            let _writes = service.inner.records.summary_writes().lock(&id).await;
             let record = load_conversation(service.inner.metadata.as_ref(), &id)
                 .await?
                 .ok_or(ConversationError::NotFound)?;
@@ -5640,7 +5595,7 @@ impl ConversationService {
             let _admission = service.admit().await?;
             caller.actor()?;
             // Under the summary lock, for the reason `archive` gives.
-            let _writes = service.inner.summary_writes.lock(&id).await;
+            let _writes = service.inner.records.summary_writes().lock(&id).await;
             let record = load_conversation(service.inner.metadata.as_ref(), &id)
                 .await?
                 .ok_or(ConversationError::NotFound)?;
@@ -5687,7 +5642,7 @@ impl ConversationService {
         let service = self.clone();
         supervised(async move {
             let _admission = service.admit().await?;
-            let mode = service.inner.mode_changes.lock(&id).await;
+            let mode = service.inner.records.mode_changes().lock(&id).await;
             let fenced = service.fence(&id, &caller).await?;
             // The tombstone now rejects new mode changes. Release the mode
             // admission lock before cleanup so repeat deletes preserve their
@@ -5815,9 +5770,9 @@ impl ConversationService {
         // (`a_delete_queued_behind_another_attempt_answers_from_its_tombstone`).
         // If that attempt never fenced it, this one does
         // (`a_delete_whose_predecessor_never_fenced_fences_it_itself`).
-        let (deleting, waited) = match self.inner.deletions.try_lock(id) {
+        let (deleting, waited) = match self.inner.records.deletions().try_lock(id) {
             Some(guard) => (guard, false),
-            None => (self.inner.deletions.lock(id).await, true),
+            None => (self.inner.records.deletions().lock(id).await, true),
         };
         if waited {
             let current = load_conversation(self.inner.metadata.as_ref(), id)
@@ -5834,7 +5789,7 @@ impl ConversationService {
             }
         }
         let record = {
-            let _creation = self.inner.creation.lock(id).await;
+            let _creation = self.inner.records.creation().lock(id).await;
             self.inner
                 .metadata
                 .record_deletion(id, proposed.clone())
@@ -5977,7 +5932,7 @@ impl ConversationService {
         let id = id.clone();
         supervised(async move {
             let _admission = service.admit().await?;
-            let Some(_deleting) = service.inner.deletions.try_lock(&id) else {
+            let Some(_deleting) = service.inner.records.deletions().try_lock(&id) else {
                 return Ok(BackgroundTry::HeldElsewhere);
             };
             let record = load_conversation(service.inner.metadata.as_ref(), &id)
@@ -6261,7 +6216,7 @@ impl ConversationService {
                     failures.summary.get_or_insert(error);
                 }
             }
-            let _writes = self.inner.summary_writes.lock(&id).await;
+            let _writes = self.inner.records.summary_writes().lock(&id).await;
             if let Err(error) = self.inner.summaries.erase(&id).await {
                 failures.summary = Some(error);
             }
@@ -6901,7 +6856,7 @@ impl ConversationService {
         let id = id.clone();
         let actor = actor.clone();
         let stop = tokio::spawn(async move {
-            let submissions = service.inner.mode_changes.lock(&id).await;
+            let submissions = service.inner.records.mode_changes().lock(&id).await;
             // The owner the lock's last holder left: a submission may have
             // released it or opened the conversation again.
             let Some(slot) = service.inner.conversations.lock().await.get(&id).cloned() else {
