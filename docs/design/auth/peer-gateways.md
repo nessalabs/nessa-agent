@@ -949,7 +949,7 @@ sequenceDiagram
 - **A policy decides, the file holds facts.** Whether a peer may lease an
   agent or run a command is decided by Cedar (ADR 803), over the peer and
   the grant it holds (below): the checked-in bundle in
-  `env_serve/infrastructure/cedar/`, validated strictly when serving starts
+  `nessa-env-serve/src/infrastructure/cedar/`, validated strictly when serving starts
   (a bundle that does not validate refuses to serve). What a yes comes with,
   the timeout narrowed and the lease's longest, stays with the grant in
   Rust.

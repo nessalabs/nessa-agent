@@ -5070,9 +5070,10 @@ mod tests {
     #[tokio::test]
     async fn devices_list_names_the_hub_and_its_workers() {
         use crate::devices::application::{
-            Devices, LiveWorker, LiveWorkers, MachineProbe, PairedKeys, WorkerSightings,
+            Devices, LiveWorker, LiveWorkers, PairedKeys, WorkerSightings,
         };
         use crate::devices::infrastructure::{FileSightings, SystemWallClock};
+        use nessa_env_serve::machine::MachineProbe;
         use nessa_protocol::lease::MachineReport;
         use nessa_sdk::domain::agent_execution::leases::PeerEnvironment;
         fn report(hostname: &str) -> MachineReport {

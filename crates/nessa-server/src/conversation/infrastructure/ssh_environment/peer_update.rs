@@ -25,8 +25,8 @@
 //! is ever sent a build.
 use super::audit::{EnvironmentAudit, EnvironmentEvent, InstallRefusal};
 use super::install::{Build, HostInstaller, NotOpened, OpenedCopy};
-use crate::env_serve::install::Platform;
 use crate::timer::clock;
+use nessa_env_serve::install::Platform;
 use nessa_protocol::build_update::{
     encode, part, FromGateway, UPDATE_PART_BYTES, UPDATE_SEND_DEADLINE,
 };

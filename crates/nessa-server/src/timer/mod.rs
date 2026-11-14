@@ -7,10 +7,6 @@
 
 pub(crate) use nessa_timer::{clock, within, Moment, Timer, TokioTimer};
 
-/// A deadline measured from now. Only the Unix environment role calls it.
-#[cfg(unix)]
-pub(crate) use nessa_timer::timeout;
-
 #[cfg(test)]
 pub(crate) mod manual {
     pub(crate) use nessa_timer::manual::ManualTimer;

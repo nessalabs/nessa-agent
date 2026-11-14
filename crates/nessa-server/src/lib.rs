@@ -16,7 +16,6 @@ mod desktop_runtime;
 pub mod device_pairing;
 pub(crate) mod devices;
 pub mod env;
-pub mod env_serve;
 pub mod external_events;
 pub mod github;
 pub mod github_relay;

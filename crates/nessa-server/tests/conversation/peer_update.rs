@@ -3,7 +3,7 @@
 use super::super::install::{BuildSource, InstallTimings};
 use super::*;
 #[cfg(target_os = "linux")]
-use crate::env_serve::infrastructure::{fetch, kept_for};
+use nessa_env_serve::infrastructure::{fetch, kept_for};
 use nessa_protocol::build_update::{from_gateway, part_bytes};
 use std::fs::File;
 use std::io::{Seek, SeekFrom, Write};
@@ -197,7 +197,7 @@ async fn a_host_fetches_this_build_and_keeps_it_in_place_of_its_own() {
     let builds = home.path().join("builds");
     let old = "a".repeat(64);
     let sending = tokio::spawn(async move {
-        let mut stream = crate::env_serve::application::FrameStream::new(from_host);
+        let mut stream = nessa_env_serve::application::FrameStream::new(from_host);
         let first = stream.next().await.unwrap().unwrap();
         let Some(nessa_protocol::build_update::FromEnvironment::UpdateWanted { os, arch, libc }) =
             nessa_protocol::build_update::from_environment(&first)

@@ -28,18 +28,18 @@ use crate::conversation::application::{
     HeldSource, HeldSourceFailure, PublishAsk, PublishFailure, PublishedArtifact,
 };
 use crate::env::{LEASE_PROTOCOL, VERSION};
-use crate::env_serve::application::{
+use nessa_attachments::application::{AttachmentAuditRecord, AttachmentLimits};
+use nessa_attachments::test_support::{self as attachments, Fixture, CONVERSATION};
+use nessa_env_serve::application::{
     serve, HarnessLauncher, PeerGrants, PublishAnswer, PublishRequest, Runners, ServeTimings,
     Serving,
 };
-use crate::env_serve::domain::{Peer, PeerGrant};
-use crate::env_serve::infrastructure::{FileInbox, FileLedger, FileOutbox};
-use nessa_attachments::application::{AttachmentAuditRecord, AttachmentLimits};
-use nessa_attachments::test_support::{self as attachments, Fixture, CONVERSATION};
+use nessa_env_serve::domain::{Peer, PeerGrant};
+use nessa_env_serve::infrastructure::{FileInbox, FileLedger, FileOutbox};
 use nessa_sdk::application::agent_execution::providers::HarnessHostIdentity;
 
-use crate::env_serve::install::Platform;
 use crate::timer::TokioTimer;
+use nessa_env_serve::install::Platform;
 use nessa_protocol::lease::{Collection, CollectionRefusal, FetchRefusal, PublishRefusal};
 use nessa_sdk::application::agent_execution::{
     agents::AgentError,
@@ -367,9 +367,7 @@ impl LeaseConnector for Connector {
             Serving {
                 peer: Peer::Ssh,
                 grants: Arc::new(NoGrants),
-                policy: Arc::new(
-                    crate::env_serve::infrastructure::CedarLeasePolicy::new().unwrap(),
-                ),
+                policy: Arc::new(nessa_env_serve::infrastructure::CedarLeasePolicy::new().unwrap()),
                 machine: None,
             },
             Runners {

@@ -5302,7 +5302,7 @@ fn a_mount_point_with_a_space_is_that_filesystem() {
 #[cfg(all(test, unix))]
 #[test]
 fn an_interrupted_lease_line_is_the_ledger_ended_record() {
-    use crate::env_serve::application::{EndCause, LedgerEntry};
+    use nessa_env_serve::application::{EndCause, LedgerEntry};
     use nessa_protocol::lease::Cleanup;
 
     let line = ended_lease_line("lease-1").unwrap();

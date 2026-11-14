@@ -6,8 +6,8 @@ use crate::conversation::domain::TaskInitiator;
 use crate::conversation::infrastructure::ssh_environment::{
     Build, BuildSource, EnvironmentEvent, InstallTimings,
 };
-use crate::env_serve::install::Platform;
 use crate::workspaces::{application::WorkspaceStream, domain::Failure};
+use nessa_env_serve::install::Platform;
 use std::io;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;

@@ -5,18 +5,15 @@
 //! [`SightingStore`]. `ssh_config.rs` reads the machines an SSH
 //! configuration names ([`SshConfigSource`]); `setup.rs` connects them and
 //! keeps the default device ([`DeviceSetup`]).
-mod machine;
 #[cfg_attr(not(unix), allow(dead_code, reason = "the Unix gateway composes it"))]
 mod setup;
 mod sightings;
 #[cfg_attr(not(unix), allow(dead_code, reason = "the Unix gateway composes it"))]
 mod ssh_config;
 
-#[cfg(all(test, unix))]
-pub(crate) use machine::MACHINE_READ_LIMIT;
-pub(crate) use machine::{read_machine, MachineProbe};
 pub(crate) use setup::{Connect, ConnectRefusal, ConnectState, DefaultRefusal, DeviceSetup};
 // What only the Unix gateway composes a setup from.
+use nessa_env_serve::machine::{read_machine, MachineProbe};
 #[cfg(unix)]
 pub(crate) use setup::{DeviceSettings, HostInstall, SetupFuture};
 #[cfg(test)]

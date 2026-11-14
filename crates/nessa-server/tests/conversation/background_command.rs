@@ -5,7 +5,7 @@ use std::{
     process::{Command, Stdio},
 };
 fn installed(home: &Path, digest: &str) -> std::path::PathBuf {
-    home.join(crate::env_serve::install::INSTALL_DIRECTORY)
+    home.join(nessa_env_serve::install::INSTALL_DIRECTORY)
         .join(digest)
         .join("nessa")
 }

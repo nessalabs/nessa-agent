@@ -21,13 +21,6 @@ use crate::conversation::infrastructure::ssh_environment::{
 };
 use crate::conversation::infrastructure::LocalReceiverAuthority;
 use crate::env::{LEASE_PROTOCOL, VERSION};
-use crate::env_serve::application::{
-    serve, CommandRan, CommandRunner, CommandStop, Runners, ServeTimings, Serving,
-};
-use crate::env_serve::domain::{Agents, CommandGrant, MaxLease, Peer, PeerGrant};
-use crate::env_serve::infrastructure::{
-    dial, ConfiguredLauncher, FileGrants, FileLedger, FileOutbox, LaunchSpec,
-};
 use crate::product::{ProductDependencies, ProductRouteState};
 use crate::timer::{manual::ManualTimer, TokioTimer};
 use nessa_auth::adapters::cedar::CedarPolicyEvaluator;
@@ -42,6 +35,13 @@ use nessa_auth::domain::pairing::ConsentClass;
 use nessa_auth::domain::{AudienceId, OrganizationId, Resource, ResourceId};
 use nessa_client_core::pairing::NativeEnrollmentClient;
 use nessa_device_pairing::infrastructure::PairingOwnerCommands;
+use nessa_env_serve::application::{
+    serve, CommandRan, CommandRunner, CommandStop, Runners, ServeTimings, Serving,
+};
+use nessa_env_serve::domain::{Agents, CommandGrant, MaxLease, Peer, PeerGrant};
+use nessa_env_serve::infrastructure::{
+    dial, ConfiguredLauncher, FileGrants, FileLedger, FileOutbox, LaunchSpec,
+};
 use nessa_protocol::lease::{Cleanup, CommandEnd};
 use nessa_protocol::pairing::wire::NativePairingStatus;
 use nessa_protocol::relay::{RelayAddress, RelayRefusal};
@@ -379,7 +379,7 @@ struct Host {
     /// Asks it to drain, as `env dial`'s signal does.
     drain: Arc<watch::Sender<bool>>,
     /// What it reports of its machine; nothing unless a test says.
-    machine: Option<Arc<dyn crate::devices::application::MachineProbe>>,
+    machine: Option<Arc<dyn nessa_env_serve::machine::MachineProbe>>,
 }
 
 impl Host {
@@ -450,9 +450,7 @@ impl Host {
             Serving {
                 peer: self.peer,
                 grants: self.grants.clone(),
-                policy: Arc::new(
-                    crate::env_serve::infrastructure::CedarLeasePolicy::new().unwrap(),
-                ),
+                policy: Arc::new(nessa_env_serve::infrastructure::CedarLeasePolicy::new().unwrap()),
                 machine: self.machine.clone(),
             },
             Runners {
@@ -775,8 +773,8 @@ async fn a_lease_asked_across_a_reconnect_runs_on_the_new_connection() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn an_enrolled_environment_waits_for_approval_then_stays_dialed_in() {
     use super::env_dial_command::serve_until_stopped;
-    use crate::env_serve::application::{approval, redial, Backoff};
-    use crate::env_serve::infrastructure::FilePairingEnvironment;
+    use nessa_env_serve::application::{approval, redial, Backoff};
+    use nessa_env_serve::infrastructure::FilePairingEnvironment;
     use std::sync::Mutex;
 
     let directory = tempfile::tempdir().unwrap();
@@ -791,7 +789,7 @@ async fn an_enrolled_environment_waits_for_approval_then_stays_dialed_in() {
     let native = a.native;
     let pairing = FilePairingEnvironment::open(&environment, &native.to_string(), clock()).unwrap();
     let code = ManualCode::parse(created.code().expose_bytes()).unwrap();
-    tokio::time::timeout(WAIT, crate::env_serve::application::enroll(&pairing, code))
+    tokio::time::timeout(WAIT, nessa_env_serve::application::enroll(&pairing, code))
         .await
         .unwrap()
         .unwrap();
@@ -896,9 +894,9 @@ async fn an_enrolled_environment_waits_for_approval_then_stays_dialed_in() {
 /// gateway out of reach.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn waiting_for_approval_ends_when_denied_or_never_paired() {
-    use crate::env_serve::application::{approval, NotApproved};
-    use crate::env_serve::infrastructure::FilePairingEnvironment;
     use nessa_auth::application::pairing::OwnerDecision;
+    use nessa_env_serve::application::{approval, NotApproved};
+    use nessa_env_serve::infrastructure::FilePairingEnvironment;
 
     let directory = tempfile::tempdir().unwrap();
     let a = Gateway::start(&directory.path().join("a")).await;
@@ -933,7 +931,7 @@ async fn waiting_for_approval_ends_when_denied_or_never_paired() {
     nessa_local_storage::create_directory(&denied).unwrap();
     let pairing = FilePairingEnvironment::open(&denied, &native, clock()).unwrap();
     let code = ManualCode::parse(created.code().expose_bytes()).unwrap();
-    tokio::time::timeout(WAIT, crate::env_serve::application::enroll(&pairing, code))
+    tokio::time::timeout(WAIT, nessa_env_serve::application::enroll(&pairing, code))
         .await
         .unwrap()
         .unwrap();
@@ -1021,8 +1019,8 @@ fn nowhere() -> String {
 /// A command run each way leaves the same command-ledger checkpoint.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn an_environment_with_only_a_relay_path_is_approved_and_serves_through_it() {
-    use crate::env_serve::application::approval;
-    use crate::env_serve::infrastructure::FilePairingEnvironment;
+    use nessa_env_serve::application::approval;
+    use nessa_env_serve::infrastructure::FilePairingEnvironment;
 
     let directory = tempfile::tempdir().unwrap();
     let relay = relay().await;
@@ -1038,7 +1036,7 @@ async fn an_environment_with_only_a_relay_path_is_approved_and_serves_through_it
     let pairing =
         FilePairingEnvironment::open(&environment, &a.native.to_string(), clock()).unwrap();
     let code = ManualCode::parse(created.code().expose_bytes()).unwrap();
-    tokio::time::timeout(WAIT, crate::env_serve::application::enroll(&pairing, code))
+    tokio::time::timeout(WAIT, nessa_env_serve::application::enroll(&pairing, code))
         .await
         .unwrap()
         .unwrap();
@@ -1211,9 +1209,9 @@ async fn a_relay_without_the_gateway_answers_offline_to_an_environments_dial() {
 /// approval ends as unusable rather than asking forever.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_pending_pin_that_is_not_a_key_ends_waiting_through_a_relay() {
-    use crate::env_serve::application::{approval, NotApproved};
-    use crate::env_serve::infrastructure::FilePairingEnvironment;
     use nessa_auth::domain::pairing::{AttemptId, ConsentIntentId, InvitationId, PublicIntent};
+    use nessa_env_serve::application::{approval, NotApproved};
+    use nessa_env_serve::infrastructure::FilePairingEnvironment;
 
     let directory = tempfile::tempdir().unwrap();
     let environment = directory.path().join("e-environment");
@@ -1903,7 +1901,7 @@ fn sha256_hex(bytes: &[u8]) -> String {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_paired_environment_publishes_a_file_and_the_gateway_reads_it_back() {
     use crate::conversation::application::{ArtifactOffer, PublishAsk};
-    use crate::env_serve::application::{PublishAnswer, PublishRequest};
+    use nessa_env_serve::application::{PublishAnswer, PublishRequest};
     use nessa_protocol::lease::Collection;
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
 
@@ -2204,7 +2202,7 @@ async fn connection_changes_are_said_as_a_paired_environment_connects_ends_and_i
 }
 
 struct BuildBox;
-impl crate::devices::application::MachineProbe for BuildBox {
+impl nessa_env_serve::machine::MachineProbe for BuildBox {
     fn read(&self) -> Option<nessa_protocol::lease::MachineReport> {
         Some(nessa_protocol::lease::MachineReport {
             hostname: "build-box".into(),
@@ -2231,7 +2229,7 @@ impl crate::devices::application::MachineProbe for BuildBox {
 /// it is told the last report, to keep.
 #[tokio::test]
 async fn a_paired_environment_reports_its_machine_and_its_departure_keeps_it() {
-    use crate::devices::application::MachineProbe;
+    use nessa_env_serve::machine::MachineProbe;
     let directory = tempfile::tempdir().unwrap();
     let a = Gateway::start(&directory.path().join("a")).await;
     let e = a
@@ -2363,8 +2361,8 @@ fn code_file(directory: &Path, name: &str, code: &ManualCode) -> std::path::Path
 /// same command each time.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn k2_a_code_file_enrolls_once_then_dials() {
-    use crate::env_serve::application::{approval, enroll_once, EnrolledOnce};
-    use crate::env_serve::infrastructure::{FileEnrollmentCode, FilePairingEnvironment};
+    use nessa_env_serve::application::{approval, enroll_once, EnrolledOnce};
+    use nessa_env_serve::infrastructure::{FileEnrollmentCode, FilePairingEnvironment};
 
     let directory = tempfile::tempdir().unwrap();
     let a = Gateway::start(&directory.path().join("a")).await;
@@ -2424,8 +2422,8 @@ async fn k2_a_code_file_enrolls_once_then_dials() {
 /// recorded no gateway refuses too, and a file holding no code says so.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn k2_a_volume_paired_to_one_gateway_refuses_enrolling_with_another() {
-    use crate::env_serve::application::{enroll_once, NotEnrolled};
-    use crate::env_serve::infrastructure::{FileEnrollmentCode, FilePairingEnvironment};
+    use nessa_env_serve::application::{enroll_once, NotEnrolled};
+    use nessa_env_serve::infrastructure::{FileEnrollmentCode, FilePairingEnvironment};
 
     let directory = tempfile::tempdir().unwrap();
     let a = Gateway::start(&directory.path().join("a")).await;
