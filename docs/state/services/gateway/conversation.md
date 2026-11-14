@@ -6,21 +6,20 @@ status: "implemented"
 summary: "A conversation belongs to its original creator and organization."
 parent: "gateway"
 sources:
-  - "crates/nessa-server/src/conversation/application/service.rs"
-  - "crates/nessa-server/src/conversation/application/service/model_changes.rs"
-  - "crates/nessa-server/src/conversation/infrastructure/store/model_changes.rs"
-  - "crates/nessa-server/src/conversation/infrastructure/audit_mapping.rs"
-  - "crates/nessa-server/tests/conversation/audit.rs"
-  - "crates/nessa-server/tests/conversation/local_golden.rs"
-  - "crates/nessa-server/tests/conversation/golden/local_conversation.txt"
-  - "crates/nessa-server/tests/conversation/model_changes.rs"
-  - "crates/nessa-server/tests/conversation/model_changes/retained_identity.rs"
-  - "crates/nessa-server/tests/conversation/store/model_changes.rs"
-  - "crates/nessa-server/src/conversation/domain/value_objects/conversation_del\
-    etion.rs"
-  - "crates/nessa-server/src/conversation/domain/entities/conversation.rs"
-  - "crates/nessa-server/tests/conversation/deletion.rs"
-  - "crates/nessa-server/tests/conversation/retirement.rs"
+  - "crates/nessa-conversation/src/application/service.rs"
+  - "crates/nessa-conversation/src/application/service/model_changes.rs"
+  - "crates/nessa-conversation/src/infrastructure/store/model_changes.rs"
+  - "crates/nessa-conversation/src/infrastructure/audit_mapping.rs"
+  - "crates/nessa-conversation/tests/conversation/audit.rs"
+  - "crates/nessa-conversation/tests/conversation/local_golden.rs"
+  - "crates/nessa-conversation/tests/conversation/golden/local_conversation.txt"
+  - "crates/nessa-conversation/tests/conversation/model_changes.rs"
+  - "crates/nessa-conversation/tests/conversation/model_changes/retained_identity.rs"
+  - "crates/nessa-conversation/tests/conversation/store/model_changes.rs"
+  - "crates/nessa-conversation/src/domain/value_objects/conversation_deletion.rs"
+  - "crates/nessa-conversation/src/domain/entities/conversation.rs"
+  - "crates/nessa-conversation/tests/conversation/deletion.rs"
+  - "crates/nessa-conversation/tests/conversation/retirement.rs"
 diagramLinks: {}
 model:
   spec: tla/services/gateway/ConversationDeletion.tla
@@ -112,7 +111,7 @@ sequenceDiagram
 
 ## Further reading
 
-[Source](../../../../crates/nessa-server/src/conversation/application/service.rs) · [Related source](../../../../crates/nessa-server/src/conversation/domain/value_objects/conversation_deletion.rs) · [Related tests](../../../../crates/nessa-server/tests/conversation/deletion.rs)
+[Source](../../../../crates/nessa-conversation/src/application/service.rs) · [Related source](../../../../crates/nessa-conversation/src/domain/value_objects/conversation_deletion.rs) · [Related tests](../../../../crates/nessa-conversation/tests/conversation/deletion.rs)
 
 ## Live model selection
 
@@ -308,4 +307,4 @@ and production rename/delete defaults remain unchanged.
 
 ## Bounded rule model
 
-Owns delete-before-cleanup fencing, stop-before-reading provider identity, unknown versus absent history, actual external disposition and audit-before-local erasure. Failures stutter at retained progress. Model switching, permissions, archive, first request actor attribution and physical provider effects remain outside this deletion model. This finite abstraction checks safety only. It does not execute or verify the implementation, promise eventual completion, or qualify external effects. Existing source checkpoints and historical test receipts retain their earlier scope. The scoped model review inspected `crates/nessa-server/src/conversation/domain/value_objects/conversation_deletion.rs`, `crates/nessa-server/src/conversation/application/service.rs`.
+Owns delete-before-cleanup fencing, stop-before-reading provider identity, unknown versus absent history, actual external disposition and audit-before-local erasure. Failures stutter at retained progress. Model switching, permissions, archive, first request actor attribution and physical provider effects remain outside this deletion model. This finite abstraction checks safety only. It does not execute or verify the implementation, promise eventual completion, or qualify external effects. Existing source checkpoints and historical test receipts retain their earlier scope. The scoped model review inspected `crates/nessa-conversation/src/domain/value_objects/conversation_deletion.rs`, `crates/nessa-conversation/src/application/service.rs`.

@@ -8,9 +8,9 @@ parent: nessa
 sourceRevision: "31d023ed3e4cd60053f771d44137f6af1e1b92ca"
 diagramLinks: {}
 sources:
-  - crates/nessa-server/src/conversation/application/placement.rs
-  - crates/nessa-server/src/conversation/application/service/channels.rs
-  - crates/nessa-server/src/conversation/application/service/app_calls.rs
+  - crates/nessa-conversation/src/application/placement.rs
+  - crates/nessa-conversation/src/application/service/channels.rs
+  - crates/nessa-conversation/src/application/service/app_calls.rs
 ---
 
 # Placement and access refresh evidence

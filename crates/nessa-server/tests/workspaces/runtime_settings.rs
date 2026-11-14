@@ -1,16 +1,13 @@
 //! Real private config files and audit records; only the whole-file parse port
 //! uses a small fixture grammar, independent of gateway startup configuration.
+use super::ConfigBoatRuntimeSettings;
 use crate::{
     conversation::domain::{ChannelId, SettingsScope, VmLifetime},
     mcp_servers::{
         application::StoreLock,
         infrastructure::{ConfigCheck, ConfigFiles, ConfigJson, OsConfigFiles, Published},
     },
-    workspaces::{
-        application::*,
-        domain::Failure,
-        infrastructure::{ConfigBoatRuntimeSettings, RuntimeSettingsAudit},
-    },
+    workspaces::{application::*, domain::Failure, infrastructure::RuntimeSettingsAudit},
 };
 use nessa_auth::{
     application::ports::Clock,

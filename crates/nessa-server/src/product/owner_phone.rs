@@ -108,3 +108,7 @@ async fn admit_operation(
     phone.admit_operation(operation).map_err(refusal_code)?;
     Ok(Some(phone))
 }
+
+#[cfg(test)]
+#[path = "../../tests/conversation/owner_phone_routes.rs"]
+mod routes_tests;

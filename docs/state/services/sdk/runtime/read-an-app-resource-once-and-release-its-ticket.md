@@ -6,13 +6,13 @@ status: "mixed"
 summary: "The gateway reads an app's HTML once and returns metadata with a single-use download ticket."
 parent: "sdk-runtime"
 sources:
-  - "crates/nessa-server/src/conversation/application/mcp_apps.rs"
-  - "crates/nessa-server/src/mcp_servers/infrastructure/resource_tickets.rs"
+  - "crates/nessa-conversation/src/application/mcp_apps.rs"
+  - "crates/nessa-conversation/src/mcp_servers/infrastructure/resource_tickets.rs"
   - "crates/nessa-server/src/mcp_servers/entrypoint/http.rs"
   - "crates/nessa-sdk/src/domain/mcp_apps/value_objects/ui_resource.rs"
-  - "crates/nessa-server/tests/mcp_servers/resource_tickets.rs"
+  - "crates/nessa-conversation/tests/mcp_servers/resource_tickets.rs"
   - "crates/nessa-server/tests/mcp_servers/http.rs"
-  - "crates/nessa-server/tests/conversation/app_calls.rs"
+  - "crates/nessa-conversation/tests/conversation/app_calls.rs"
 diagramLinks:
   Consumed: "mcp-resource-tickets"
 ---
@@ -45,7 +45,7 @@ stateDiagram-v2
 
 ## Further reading
 
-[Source](../../../../../crates/nessa-server/src/conversation/application/mcp_apps.rs) · [Related source](../../../../../crates/nessa-server/src/mcp_servers/infrastructure/resource_tickets.rs) · [Related tests](../../../../../crates/nessa-server/tests/mcp_servers/resource_tickets.rs)
+[Source](../../../../../crates/nessa-conversation/src/application/mcp_apps.rs) · [Related source](../../../../../crates/nessa-conversation/src/mcp_servers/infrastructure/resource_tickets.rs) · [Related tests](../../../../../crates/nessa-conversation/tests/mcp_servers/resource_tickets.rs)
 
 ## Model coverage
 

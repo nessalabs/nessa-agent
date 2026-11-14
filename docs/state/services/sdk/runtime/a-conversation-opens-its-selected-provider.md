@@ -7,7 +7,7 @@ summary: "A conversation restores its last acknowledged agent and model selectio
 sourceRevision: "aa91831b5331d3461969f6a7be723a6d3325f29b"
 parent: "sdk-runtime"
 sources:
-  - "crates/nessa-server/src/conversation/application/service.rs"
+  - "crates/nessa-conversation/src/application/service.rs"
   - "crates/nessa-server/src/composition/current_agent.rs"
   - "crates/nessa-server/src/composition/installed_launch.rs"
   - "crates/nessa-sdk/src/application/agent_execution/agents/agent.rs"
@@ -18,7 +18,7 @@ sources:
   - "crates/nessa-sdk/src/infrastructure/acp/sessions/identity.rs"
   - "crates/nessa-sdk/tests/application/agent_execution/agents/initialization/startup_control.rs"
   - "crates/nessa-sdk/tests/application/agent_execution/providers/opening.rs"
-  - "crates/nessa-server/tests/conversation/opening_diagnostics.rs"
+  - "crates/nessa-conversation/tests/conversation/opening_diagnostics.rs"
   - "crates/nessa-server/tests/composition/current_agent.rs"
   - "docs/design/conversation-admission.md"
 diagramLinks:
@@ -73,7 +73,7 @@ sequenceDiagram
 
 ## Further reading
 
-[Source](../../../../../crates/nessa-server/src/conversation/application/service.rs) · [Related source](../../../../../crates/nessa-server/src/composition/current_agent.rs) · [Related tests](../../../../../crates/nessa-sdk/tests/application/agent_execution/agents/initialization/startup_control.rs)
+[Source](../../../../../crates/nessa-conversation/src/application/service.rs) · [Related source](../../../../../crates/nessa-server/src/composition/current_agent.rs) · [Related tests](../../../../../crates/nessa-sdk/tests/application/agent_execution/agents/initialization/startup_control.rs)
 
 ## Model coverage
 

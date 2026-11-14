@@ -11,7 +11,7 @@ sources:
   - "src/conversation/ui/notification.ts"
   - "packages/nessa-client/src/application/conversation-mutation-error.ts"
   - "packages/nessa-client/src/presentation/conversation-api.ts"
-  - "crates/nessa-server/src/conversation/application/service.rs"
+  - "crates/nessa-conversation/src/application/service.rs"
   - "crates/nessa-sdk/src/application/agent_execution/agents/submissions.rs"
   - "crates/nessa-sdk/docs/agent_execution/scheduling.md"
   - "src/conversation/adapters/store/unsent.test.ts"

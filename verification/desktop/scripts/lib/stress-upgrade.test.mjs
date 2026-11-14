@@ -23,7 +23,7 @@ import {
 
 const definition = readFileSync(
   new URL(
-    "../../../../crates/nessa-server/src/conversation/infrastructure/schema.sql",
+    "../../../../crates/nessa-conversation/src/infrastructure/schema.sql",
     import.meta.url,
   ),
   "utf8",

@@ -8,7 +8,7 @@
  * build before sending it. So a release builds each target's `nessa` first,
  * publishes those files, and compiles the app's own gateway with each one's
  * SHA-256 and length (`NESSA_HOST_BUILDS`, read by
- * `crates/nessa-server/src/env/config.rs`):
+ * `crates/nessa-conversation/src/env.rs`):
  *
  *   host-builds (one per target) ──▶ stage: nessa-<target>
  *                                        │

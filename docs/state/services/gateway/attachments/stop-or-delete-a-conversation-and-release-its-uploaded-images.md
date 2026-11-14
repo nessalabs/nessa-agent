@@ -8,14 +8,14 @@ sourceRevision: "aa91831b5331d3461969f6a7be723a6d3325f29b"
 parent: "gateway-attachments"
 sources:
   - "src/conversation/adapters/store/slice.ts"
-  - "crates/nessa-server/src/conversation/application/service.rs"
+  - "crates/nessa-conversation/src/application/service.rs"
   - "crates/nessa-attachments/src/application/service.rs"
   - "crates/nessa-attachments/src/infrastructure/store.rs"
   - "crates/nessa-attachments/src/infrastructure/audit.rs"
   - "crates/nessa-attachments/tests/application.rs"
   - "crates/nessa-attachments/tests/store.rs"
   - "crates/nessa-attachments/tests/service_over_store.rs"
-  - "crates/nessa-server/tests/conversation/attachments.rs"
+  - "crates/nessa-conversation/tests/conversation/attachments.rs"
 diagramLinks: {}
 ---
 
@@ -44,7 +44,7 @@ stateDiagram-v2
 
 ## Further reading
 
-[Source](../../../../../src/conversation/adapters/store/slice.ts) · [Related source](../../../../../crates/nessa-server/src/conversation/application/service.rs) · [Related tests](../../../../../crates/nessa-attachments/tests/application.rs)
+[Source](../../../../../src/conversation/adapters/store/slice.ts) · [Related source](../../../../../crates/nessa-conversation/src/application/service.rs) · [Related tests](../../../../../crates/nessa-attachments/tests/application.rs)
 
 ## Model coverage
 

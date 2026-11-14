@@ -7,8 +7,8 @@ summary: "The agent's tool calls and an app from that tool share the conversatio
 parent: "sdk-runtime"
 sources:
   - "crates/nessa-server/src/composition/mcp_servers.rs"
-  - "crates/nessa-server/src/mcp_servers/infrastructure/grants.rs"
-  - "crates/nessa-server/src/mcp_servers/infrastructure/relay.rs"
+  - "crates/nessa-conversation/src/mcp_servers/infrastructure/grants.rs"
+  - "crates/nessa-conversation/src/mcp_servers/infrastructure/relay.rs"
   - "crates/nessa-sdk/src/infrastructure/acp/sessions/stand_ins.rs"
   - "crates/nessa-sdk/src/infrastructure/mcp/servers.rs"
   - "crates/nessa-sdk/src/infrastructure/mcp/connection.rs"
@@ -17,9 +17,9 @@ sources:
   - "docs/design/mcp-connections.md"
   - "src/desktop/dependencies.ts"
   - "src/desktop/widgets/app/ui/app-view.tsx"
-  - "crates/nessa-server/src/mcp_servers/infrastructure/tool_uis.rs"
+  - "crates/nessa-conversation/src/mcp_servers/infrastructure/tool_uis.rs"
   - "crates/nessa-sdk/src/domain/agent_execution/tools/value_objects/mcp.rs"
-  - "crates/nessa-server/tests/mcp_servers/mod.rs"
+  - "crates/nessa-conversation/tests/mcp_servers/mod.rs"
   - "crates/nessa-sdk/tests/infrastructure/mcp/sessions.rs"
   - "crates/nessa-sdk/tests/infrastructure/mcp/stand_in.rs"
   - "crates/nessa-sdk/tests/infrastructure/mcp/protocol.rs"
@@ -51,7 +51,7 @@ stateDiagram-v2
 
 ## Further reading
 
-[Source](../../../../../crates/nessa-server/src/composition/mcp_servers.rs) · [Related source](../../../../../crates/nessa-server/src/mcp_servers/infrastructure/grants.rs) · [Related tests](../../../../../crates/nessa-server/tests/mcp_servers/mod.rs)
+[Source](../../../../../crates/nessa-server/src/composition/mcp_servers.rs) · [Related source](../../../../../crates/nessa-conversation/src/mcp_servers/infrastructure/grants.rs) · [Related tests](../../../../../crates/nessa-conversation/tests/mcp_servers/mod.rs)
 
 ## Model coverage
 

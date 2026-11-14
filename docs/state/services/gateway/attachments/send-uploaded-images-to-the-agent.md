@@ -9,13 +9,13 @@ sources:
   - "src/conversation/application/usecases/send-draft.ts"
   - "src/conversation/adapters/store/slice.ts"
   - "src/conversation/model/attachments.ts"
-  - "crates/nessa-server/src/conversation/application/service.rs"
-  - "crates/nessa-server/src/attachments/conversation.rs"
+  - "crates/nessa-conversation/src/application/service.rs"
+  - "crates/nessa-conversation/src/attachments.rs"
   - "crates/nessa-attachments/src/infrastructure/images.rs"
   - "crates/nessa-sdk/src/application/agent_execution/providers/images.rs"
   - "crates/nessa-sdk/src/infrastructure/acp/executions/prompt_content.rs"
   - "crates/nessa-sdk/src/infrastructure/acp/executions/worker.rs"
-  - "crates/nessa-server/tests/conversation/attachments.rs"
+  - "crates/nessa-conversation/tests/conversation/attachments.rs"
   - "src/conversation/adapters/store/attachments.test.ts"
   - "crates/nessa-sdk/tests/infrastructure/acp/contracts/images.rs"
   - "crates/nessa-attachments/tests/agreement.rs"
@@ -51,7 +51,7 @@ stateDiagram-v2
 
 ## Further reading
 
-[Source](../../../../../src/conversation/application/usecases/send-draft.ts) · [Related source](../../../../../src/conversation/adapters/store/slice.ts) · [Related tests](../../../../../crates/nessa-server/tests/conversation/attachments.rs)
+[Source](../../../../../src/conversation/application/usecases/send-draft.ts) · [Related source](../../../../../src/conversation/adapters/store/slice.ts) · [Related tests](../../../../../crates/nessa-conversation/tests/conversation/attachments.rs)
 
 ## Model coverage
 

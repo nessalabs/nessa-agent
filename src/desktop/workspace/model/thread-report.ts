@@ -5,7 +5,7 @@
  * and how its turn ended, never the reply or the ids.
  *
  * The report's first line is the gateway's own heading, a contract both sides
- * test against the same cases (`crates/nessa-server/tests/fixtures/
+ * test against the same cases (`crates/nessa-conversation/tests/fixtures/
  * thread-report.json`). Only that line is read: nothing of the reply below it.
  */
 

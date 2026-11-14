@@ -7,14 +7,14 @@ summary: "An app inside a conversation can ask Nessa to call a tool."
 parent: "extensions-ui"
 sources:
   - "docs/design/mcp-app-calls.md"
-  - "crates/nessa-server/src/mcp_servers/domain/app_call.rs"
-  - "crates/nessa-server/src/conversation/application/service/app_calls.rs"
-  - "crates/nessa-server/src/conversation/application/service.rs"
-  - "crates/nessa-server/src/conversation/application/app_reviews.rs"
-  - "crates/nessa-server/src/conversation/application/mcp_apps.rs"
-  - "crates/nessa-server/src/conversation/infrastructure/mcp_app_audit.rs"
-  - "crates/nessa-server/src/mcp_servers/infrastructure/apps.rs"
-  - "crates/nessa-server/src/mcp_servers/infrastructure/resource_tickets.rs"
+  - "crates/nessa-conversation/src/mcp_servers/domain/app_call.rs"
+  - "crates/nessa-conversation/src/application/service/app_calls.rs"
+  - "crates/nessa-conversation/src/application/service.rs"
+  - "crates/nessa-conversation/src/application/app_reviews.rs"
+  - "crates/nessa-conversation/src/application/mcp_apps.rs"
+  - "crates/nessa-conversation/src/infrastructure/mcp_app_audit.rs"
+  - "crates/nessa-conversation/src/mcp_servers/infrastructure/apps.rs"
+  - "crates/nessa-conversation/src/mcp_servers/infrastructure/resource_tickets.rs"
   - "crates/nessa-server/src/mcp_servers/entrypoint/http.rs"
   - "crates/nessa-server/src/product/mcp_apps.rs"
   - "crates/nessa-server/src/product/socket.rs"
@@ -24,11 +24,11 @@ sources:
   - "packages/nessa-client/src/presentation/mcp-apps-api.ts"
   - "packages/nessa-client/src/application/mcp-app-call.ts"
   - "src/desktop/dependencies.ts"
-  - "crates/nessa-server/tests/mcp_servers/app_call.rs"
-  - "crates/nessa-server/tests/conversation/app_calls.rs"
-  - "crates/nessa-server/tests/conversation/app_reviews.rs"
-  - "crates/nessa-server/tests/conversation/mcp_app_audit.rs"
-  - "crates/nessa-server/tests/mcp_servers/resource_tickets.rs"
+  - "crates/nessa-conversation/tests/mcp_servers/app_call.rs"
+  - "crates/nessa-conversation/tests/conversation/app_calls.rs"
+  - "crates/nessa-conversation/tests/conversation/app_reviews.rs"
+  - "crates/nessa-conversation/tests/conversation/mcp_app_audit.rs"
+  - "crates/nessa-conversation/tests/mcp_servers/resource_tickets.rs"
   - "crates/nessa-server/tests/mcp_servers/http.rs"
   - "crates/nessa-server/tests/mcp_servers/gateway.rs"
   - "packages/nessa-client/src/presentation/mcp-apps-api.test.ts"
@@ -254,7 +254,7 @@ The explanations are based on reading the implementation and its existing tests.
 
 ## Further reading
 
-[Source](../../../../design/mcp-app-calls.md) · [Related source](../../../../../crates/nessa-server/src/mcp_servers/domain/app_call.rs) · [Related tests](../../../../../crates/nessa-server/tests/mcp_servers/app_call.rs)
+[Source](../../../../design/mcp-app-calls.md) · [Related source](../../../../../crates/nessa-conversation/src/mcp_servers/domain/app_call.rs) · [Related tests](../../../../../crates/nessa-conversation/tests/mcp_servers/app_call.rs)
 
 ## Model coverage
 

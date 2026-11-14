@@ -8,10 +8,10 @@ sourceRevision: "aa91831b5331d3461969f6a7be723a6d3325f29b"
 parent: "sdk-runtime"
 sources:
   - "src/conversation/adapters/store/slice.ts"
-  - "crates/nessa-server/src/conversation/application/service/mutation.rs"
-  - "crates/nessa-server/tests/conversation/mutation_commands.rs"
-  - "crates/nessa-server/src/conversation/application/provider_sessions.rs"
-  - "crates/nessa-server/src/conversation/infrastructure/provider_sessions.rs"
+  - "crates/nessa-conversation/src/application/service/mutation.rs"
+  - "crates/nessa-conversation/tests/conversation/mutation_commands.rs"
+  - "crates/nessa-conversation/src/application/provider_sessions.rs"
+  - "crates/nessa-conversation/src/infrastructure/provider_sessions.rs"
   - "docs/adr/done/182-conversation-deletion.md"
   - "crates/nessa-sdk/src/application/agent_execution/agents/lifecycle.rs"
   - "crates/nessa-sdk/src/infrastructure/acp/executions/worker.rs"
@@ -19,14 +19,14 @@ sources:
   - "crates/nessa-sdk/src/infrastructure/acp/sessions/cleanup.rs"
   - "crates/nessa-sdk/src/application/agent_execution/providers/close.rs"
   - "crates/nessa-sdk/src/application/agent_execution/providers/reports.rs"
-  - "crates/nessa-server/src/conversation/application/service.rs"
+  - "crates/nessa-conversation/src/application/service.rs"
   - "crates/nessa-sdk/docs/agent_execution/transport.md"
   - "crates/nessa-sdk/tests/infrastructure/process.rs"
   - "crates/nessa-sdk/tests/application/agent_execution/agents/conformance/automatic_cleanup.rs"
   - "crates/nessa-sdk/tests/application/agent_execution/agents/conformance/local_cancellation.rs"
   - "crates/nessa-sdk/tests/application/agent_execution/agents/review_regressions/cleanup_audit.rs"
   - "crates/nessa-sdk/tests/application/agent_execution/agents/coordination/first_stop.rs"
-  - "crates/nessa-server/tests/conversation/retirement.rs"
+  - "crates/nessa-conversation/tests/conversation/retirement.rs"
   - "crates/nessa-mcp/src/shell/application/service.rs"
   - "crates/nessa-mcp/src/shell/infrastructure/runner.rs"
   - "crates/nessa-mcp/tests/mcp/shutdown.rs"
@@ -67,7 +67,7 @@ A cleanup record can fail after physical release is confirmed. The gateway then 
 
 ## Turn cancellation and ownership
 
-[The command owner](../../../../../crates/nessa-server/src/conversation/application/service/mutation.rs) checks the exact turn and saves its attempt before effects. [Agent cancellation](../../../../../crates/nessa-sdk/src/application/agent_execution/agents/agent.rs) accepts only the active turn on a capable attached provider. Moving from queue to execution is retried within a bounded wait; a concurrent close is answered from the turn's eventual final state. A saved attempted Stop without a terminal receipt stays interrupted after restart and is not sent again.
+[The command owner](../../../../../crates/nessa-conversation/src/application/service/mutation.rs) checks the exact turn and saves its attempt before effects. [Agent cancellation](../../../../../crates/nessa-sdk/src/application/agent_execution/agents/agent.rs) accepts only the active turn on a capable attached provider. Moving from queue to execution is retried within a bounded wait; a concurrent close is answered from the turn's eventual final state. A saved attempted Stop without a terminal receipt stays interrupted after restart and is not sent again.
 
 The SDK's [parent and child close settlement](../README.md#parent-and-child-close-settlement) is a separate ownership lifecycle. Product parent Stop has now landed in [PR #981](https://github.com/nessalabs/nessa-agent/pull/981): by default it captures unfinished owned descendant turns and uses durable exact Stop bindings. It does not seal those lifetimes or close their attachments. The [turn Stop flow](../../desktop/chat/stop-active-and-queued-work.md#owned-descendants) owns the current selection, recovery and opt-out rules. This 2026-11-02 correction reviewed the product Stop boundary only; the remaining process-cleanup sections retain their existing evidence.
 
@@ -168,7 +168,7 @@ PID namespace, including its intentionally unreaped zombies.
 
 ## Further reading
 
-[Source](../../../../../src/conversation/adapters/store/slice.ts) · [Related source](../../../../../crates/nessa-server/src/conversation/application/provider_sessions.rs) · [Related tests](../../../../../crates/nessa-sdk/tests/infrastructure/process.rs)
+[Source](../../../../../src/conversation/adapters/store/slice.ts) · [Related source](../../../../../crates/nessa-conversation/src/application/provider_sessions.rs) · [Related tests](../../../../../crates/nessa-sdk/tests/infrastructure/process.rs)
 
 ## Model coverage
 

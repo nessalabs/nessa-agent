@@ -56,7 +56,7 @@ Facts that matter for the design:
 - The broadcast channel has capacity 256 and returns `AgentError::Backpressure`
   to a lagging subscriber (`agents/agent.rs:137`, `:1154-1160`). It is lossy by
   contract. The gateway's projection loop already handles `lagged()`
-  (`crates/nessa-server/src/conversation/application/service.rs:818-829`).
+  (`crates/nessa-conversation/src/application/service.rs:818-829`).
 - Every publish site saves first, then broadcasts (`agent.rs:603`, `:882`).
 - `InvocationHook` (`hooks/invocation.rs:40-67`) sees only before/after of one
   invocation. It does not see attachment, close, tool, or permission events, and

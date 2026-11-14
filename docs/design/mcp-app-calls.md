@@ -723,7 +723,7 @@ sequenceDiagram
 
 Each row has at least one test, named after it.
 
-- `crates/nessa-server/tests/conversation/app_messages.rs`:
+- `crates/nessa-conversation/tests/conversation/app_messages.rs`:
   - M1, C1 `m1_c1_messages_and_contexts_take_one_of_the_gateways_app_call_slots`
   - M2 `m2_a_message_from_no_app_or_for_another_server_is_refused_on_record`
   - M3 (blank, on record), M4 (the service's bound) `m3_m4_a_blank_message_or_one_past_the_input_bound_is_refused`; M3 at the wire: `gateway.rs` below
@@ -760,7 +760,7 @@ Each row has at least one test, named after it.
   - C15c `c15c_a_delete_giving_way_before_its_stop_reached_the_apps_drops_once_as_the_deleters`
   - C16 `c16_an_update_that_cannot_be_recorded_changes_nothing`
   - C17 `c17_a_release_between_the_record_and_the_hold_holds_nothing`
-- `crates/nessa-server/tests/conversation/app_reviews.rs`: `ReviewAsk::SendMessage`
+- `crates/nessa-conversation/tests/conversation/app_reviews.rs`: `ReviewAsk::SendMessage`
   (`a_message_review_says_what_it_asks`,
   `every_message_is_its_own_review_and_allowing_one_allows_no_other`); the
   held contexts (`c5_c7_…`, `c6_a_fifth_mount_finds_no_room_…`, `c8_one_context_update_…`,
@@ -774,7 +774,7 @@ Each row has at least one test, named after it.
   reports once
   (`c11_what_a_message_took_is_reported_dropped_as_it_goes_unless_the_agent_was_asked`); the executions in flight
   (`m6b_a_messages_turn_is_in_flight_once_until_its_call_ends`).
-- `crates/nessa-server/tests/conversation/context_drops.rs`: the drop
+- `crates/nessa-conversation/tests/conversation/context_drops.rs`: the drop
   recorder writes every drop reported before it stops, in order
   (`a_stopping_recorder_writes_every_drop_already_reported_in_order`,
   `a_recorder_ends_once_every_sender_is_gone_having_written_what_they_sent`),
@@ -792,16 +792,16 @@ Each row has at least one test, named after it.
   and the exit finishes both under the one bound, not one after the other
   (`recorders_finish_together_under_one_bound`). The order — recorders after
   the conversations — is `passive_cleanup`'s, by reading.
-- `crates/nessa-server/tests/conversation/mcp_app_audit.rs`: the new phases
+- `crates/nessa-conversation/tests/conversation/mcp_app_audit.rs`: the new phases
   (`every_phase_of_one_request_is_its_own_record`), each drop's cause and
   each message outcome's code
   (`each_context_drop_keeps_its_cause_and_each_message_outcome_its_code`),
   and asks
   (`an_apps_message_and_its_context_record_what_they_asked_and_turn_running`).
-- `crates/nessa-server/tests/conversation/agreement.rs`: the bounds the
+- `crates/nessa-conversation/tests/conversation/agreement.rs`: the bounds the
   schema states
   (`an_apps_message_and_context_schemas_state_the_bounds_the_gateway_keeps`).
-- `crates/nessa-server/tests/conversation/error_code.rs`, beside
+- `crates/nessa-conversation/tests/conversation/error_code.rs`, beside
   `application/error_code.rs`: R1-8
   (`a_message_naming_an_app_the_session_never_saw_is_an_invalid_request`),
   and each app refusal on the wire by the `ConversationErrorCode` audit names
@@ -1110,7 +1110,7 @@ Each row has at least one test, named after it.
 - `packages/nessa-client/src/protocol/conversation-validate.test.ts`: D19
   (`ask` a closed set; missing or unknown refuses the view; the agent's
   review asking `message` refuses it).
-- `crates/nessa-server/tests/conversation/app_reviews.rs`: D19, from
+- `crates/nessa-conversation/tests/conversation/app_reviews.rs`: D19, from
   `ReviewAsk` (`a_review_is_shown_with_its_app_origin_and_ends_as_answered`,
   `a_message_review_says_what_it_asks`);
   `crates/nessa-protocol/tests/conversation/projection.rs`: the agent's
@@ -1169,14 +1169,14 @@ leave a release unread.
 
 Each row above has a test, named after it:
 
-- Policy, one per row: `crates/nessa-server/tests/mcp_servers/app_call.rs`
-  for the pure rules, and `crates/nessa-server/tests/conversation/app_call_policy.rs`
+- Policy, one per row: `crates/nessa-conversation/tests/mcp_servers/app_call.rs`
+  for the pure rules, and `crates/nessa-conversation/tests/conversation/app_call_policy.rs`
   for each Cedar policy id.
-- Reviews: `crates/nessa-server/tests/conversation/app_reviews.rs`.
+- Reviews: `crates/nessa-conversation/tests/conversation/app_reviews.rs`.
 - The flow, each row of "A tool call" and "A resource read":
-  `crates/nessa-server/tests/conversation/app_calls.rs`.
-- Audit records: `crates/nessa-server/tests/conversation/mcp_app_audit.rs`.
-- Tickets and the route: `crates/nessa-server/tests/mcp_servers/resource_tickets.rs`,
+  `crates/nessa-conversation/tests/conversation/app_calls.rs`.
+- Audit records: `crates/nessa-conversation/tests/conversation/mcp_app_audit.rs`.
+- Tickets and the route: `crates/nessa-conversation/tests/mcp_servers/resource_tickets.rs`,
   `http.rs`, and `gateway.rs` (a redeemed ticket in no log line or trace).
 - Lanes over the socket: `mcp_app_lane` in
   `crates/nessa-server/tests/mcp_servers/gateway.rs`.
@@ -1186,7 +1186,7 @@ Each row above has a test, named after it:
   A second call past one mount's cap, while the writer is inside a release:
   `a_mount_cap_refusal_waits_and_keeps_the_socket`.
 - Bounds and codes the schema states again:
-  `crates/nessa-server/tests/conversation/agreement.rs` and `error_code.rs`.
+  `crates/nessa-conversation/tests/conversation/agreement.rs` and `error_code.rs`.
 - The client: `packages/nessa-client/src/presentation/mcp-apps-api.test.ts`;
   an app in its conversation, K1–K9, under
   ["Tests (client)"](#tests-client) above.

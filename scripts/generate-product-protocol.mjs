@@ -252,7 +252,7 @@ const channelRules = {}
   if (!rules || Object.keys(rules).length !== Object.keys(owners).length)
     throw new Error("Channel rules must name exactly the gateway's bounds")
   const source = readFileSync(
-    resolve(root, "crates/nessa-server/src/conversation/domain/value_objects/channel.rs"),
+    resolve(root, "crates/nessa-conversation/src/domain/value_objects/channel.rs"),
     "utf8",
   )
   for (const [name, constant] of Object.entries(owners)) {
@@ -275,10 +275,7 @@ const channelRules = {}
 // checked before any generated artifact is written.
 {
   const source = readFileSync(
-    resolve(
-      root,
-      "crates/nessa-server/src/conversation/domain/value_objects/vm_lifetime.rs",
-    ),
+    resolve(root, "crates/nessa-conversation/src/domain/value_objects/vm_lifetime.rs"),
     "utf8",
   )
   for (const [field, constant] of [

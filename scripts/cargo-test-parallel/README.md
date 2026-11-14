@@ -18,7 +18,9 @@ target name and kind, and require exactly one library executable. The four seede
 cases run together in the existing `remaining` job, alongside the other
 executables and all doctests. The two server jobs run complementary cases
 on separate Windows runners: names containing `conversation::`, and all other
-ordinary names. All three jobs discover the complete server registry and validate all three actual
+ordinary names. The `nessa-conversation` library's tests, once those
+conversation cases, run in `server-conversation` too, matched by package ID
+and kind. All three jobs discover the complete server registry and validate all three actual
 libtest filters before executing anything. Coverage is disjoint by artifact
 identity and case name, not executable: the same server executable is invoked
 with three complementary filters across the jobs. Linux/macOS use `all`, unchanged.

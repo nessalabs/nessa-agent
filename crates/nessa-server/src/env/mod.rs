@@ -26,9 +26,11 @@ mod stage;
 mod stage_port;
 
 pub use config::key::{HOST, PORT, STAGE};
-pub use config::{BUNDLED_HOST_BUILDS, HOST_BUILDS, HOST_BUILDS_FROM, LEASE_PROTOCOL, VERSION};
 pub use environment::{home_folder_from_system, Environment};
 pub use error::EnvironmentError;
+pub use nessa_conversation::env::{
+    BUNDLED_HOST_BUILDS, HOST_BUILDS, HOST_BUILDS_FROM, LEASE_PROTOCOL, VERSION,
+};
 pub use source::MockEnv;
 pub use stage::Stage;
 pub use stage_port::stage_port;

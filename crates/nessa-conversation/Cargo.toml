@@ -1,0 +1,79 @@
+[package]
+name = "nessa-conversation"
+version.workspace = true
+edition.workspace = true
+rust-version = "1.89"
+publish = false
+description = "Product conversations: the conversation service, its domain, and the stores and environments it runs agents through"
+
+[features]
+# Lets nessa-server's tests use the conversation fixtures these tests use.
+test-support = [
+    "nessa-agent-install/test-support",
+    "nessa-attachments/test-support",
+    "nessa-device-pairing/test-support",
+    "nessa-env-serve/test-support",
+    "nessa-sdk/test-support",
+    "nessa-timer/test-support",
+]
+
+[dependencies]
+nessa-agent-install = { path = "../nessa-agent-install" }
+nessa-attachments = { path = "../nessa-attachments" }
+nessa-device-pairing = { path = "../nessa-device-pairing" }
+nessa-auth = { path = "../nessa-auth" }
+nessa-env-serve = { path = "../nessa-env-serve" }
+nessa-mcp-authorization = { path = "../nessa-mcp-authorization" }
+nessa-local-database = { path = "../nessa-local-database", features = ["encryption"] }
+nessa-local-storage = { path = "../nessa-local-storage", features = ["physical-operation"] }
+nessa-projection = { path = "../nessa-projection" }
+nessa-protocol = { path = "../nessa-protocol" }
+nessa-sdk = { path = "../nessa-sdk" }
+nessa-sync = { workspace = true }
+nessa-timer = { path = "../nessa-timer", features = ["runtime"] }
+nessa-vault = { path = "../nessa-vault" }
+async-trait = "0.1"
+base64 = "0.22"
+# The tool, access, owner-phone and usage-limit policies' evaluators, the
+# same pinned build nessa-auth, nessa-env-serve and nessa-backup embed.
+cedar-policy = { version = "=4.12.0", default-features = false }
+# A resolved Windows path without the `\\?\` prefix, so a channel's folder is
+# kept, shown and handed to an agent as the person knows it.
+dunce = "1"
+getrandom = "0.3"
+futures-util = "0.3"
+# Keying each MCP server's configuration digest with a per-process secret.
+hmac = "0.12"
+regex = "1"
+# Fetching a pinned host build for a foreign machine; blocking and without a
+# TLS backend of its own, as nessa-server takes it.
+reqwest = { version = "0.13", default-features = false, features = ["blocking", "rustls-no-provider", "http2", "stream", "json"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["raw_value"] }
+sha2 = "0.10"
+tempfile = "3"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "sync", "time", "signal", "io-util", "io-std", "process"] }
+tracing = "0.1"
+url = "2"
+uuid = { version = "1", features = ["v4"] }
+zeroize = "=1.9.0"
+
+[target.'cfg(unix)'.dependencies]
+workspace_sdk = { git = "https://github.com/nessalabs/workspace-sdk", rev = "3d080310209ef055361a3c3efa5e206f7fe8a003" }
+libc = "0.2"
+shepherd = { git = "https://github.com/nessalabs/shepherd", rev = "85ee0d55acabf5f91b8cac2e925872d044514864" }
+
+[dev-dependencies]
+nessa-agent-install = { path = "../nessa-agent-install", features = ["test-support"] }
+nessa-attachments = { path = "../nessa-attachments", features = ["test-support"] }
+nessa-device-pairing = { path = "../nessa-device-pairing", features = ["test-support"] }
+nessa-env-serve = { path = "../nessa-env-serve", features = ["test-support"] }
+nessa-sdk = { path = "../nessa-sdk", features = ["test-support"] }
+nessa-timer = { path = "../nessa-timer", features = ["test-support"] }
+tokio = { version = "1", features = ["test-util", "io-util"] }
+axum = { version = "0.8", features = ["ws"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[lints]
+workspace = true

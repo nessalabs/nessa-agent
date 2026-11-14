@@ -46,6 +46,8 @@ pub use root::CompositionRoot;
 #[cfg(unix)]
 mod artifact_command;
 mod auth_command;
+#[cfg(unix)]
+mod boat_runtime_settings;
 mod credential_registry;
 #[cfg(unix)]
 mod current_agent;
@@ -74,6 +76,8 @@ mod native_linking;
 mod native_pairing;
 #[cfg(unix)]
 mod opencode_profile;
+#[cfg(unix)]
+mod pool_settings;
 mod relay_command;
 #[cfg(unix)]
 mod tunnel;
@@ -98,8 +102,6 @@ mod desktop;
 mod background_command;
 #[cfg(unix)]
 mod background_tools;
-#[cfg(unix)]
-pub(crate) mod conversation_tools;
 #[cfg(unix)]
 mod environment_tools;
 #[cfg(unix)]

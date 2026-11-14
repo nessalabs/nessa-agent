@@ -1,0 +1,868 @@
+use super::{
+    ArtifactBytes, CatalogueHead, ConversationAgentSwitch, ConversationAgentSwitchState,
+    ConversationError, ConversationModelApplication, ConversationModelRequest,
+    ConversationModelRequestState, Reader,
+};
+use crate::domain::{Capabilities, Conversation, ConversationDeletion, ProviderSessionErasure};
+use nessa_auth::domain::{OrganizationId, PrincipalId};
+use nessa_protocol::conversation::domain::{
+    ConversationApprovalMode, ConversationId, ConversationSummary,
+};
+use nessa_protocol::lease::{CollectionRefusal, StagedArtifact};
+use nessa_sdk::application::agent_execution::permissions::ActionContext;
+use nessa_sdk::application::agent_execution::sessions::PublishedFile;
+use nessa_sdk::domain::agent_execution::{prompts::ImageReference, sessions::ExecutionSessionId};
+use std::{future::Future, pin::Pin};
+
+pub type ConversationFuture<'a, T> =
+    Pin<Box<dyn Future<Output = Result<T, ConversationError>> + Send + 'a>>;
+
+/// Opaque admission evidence read with the conversation row.
+///
+/// Catalogue incarnation, conversation identity and `change_revision` come
+/// from one store read. A later validation read must match all three. Cedar
+/// does not see this token.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ConversationAdmissionToken {
+    incarnation: String,
+    conversation_id: ConversationId,
+    change_revision: u64,
+}
+
+impl ConversationAdmissionToken {
+    pub fn new(
+        incarnation: impl Into<String>,
+        conversation_id: ConversationId,
+        change_revision: u64,
+    ) -> Self {
+        Self {
+            incarnation: incarnation.into(),
+            conversation_id,
+            change_revision,
+        }
+    }
+
+    pub fn conversation_id(&self) -> &ConversationId {
+        &self.conversation_id
+    }
+}
+
+/// Conversation metadata and the admission token from the same store read.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ConversationAdmissionSnapshot {
+    conversation: Conversation,
+    token: ConversationAdmissionToken,
+}
+
+impl ConversationAdmissionSnapshot {
+    pub fn new(conversation: Conversation, token: ConversationAdmissionToken) -> Self {
+        Self {
+            conversation,
+            token,
+        }
+    }
+
+    pub fn conversation(&self) -> &Conversation {
+        &self.conversation
+    }
+
+    pub fn into_conversation(self) -> Conversation {
+        self.conversation
+    }
+
+    pub fn token(&self) -> &ConversationAdmissionToken {
+        &self.token
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ConversationCreationDisposition {
+    Created,
+    Existing,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ConversationCreation {
+    pub conversation: Conversation,
+    pub disposition: ConversationCreationDisposition,
+}
+
+/// Immutable evidence for one acknowledged create or reopen request.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ConversationCreationAuditRecord {
+    pub conversation_id: ConversationId,
+    pub organization_id: OrganizationId,
+    pub owner_id: PrincipalId,
+    pub before: ConversationOwnershipState,
+    pub after: ConversationOwnershipState,
+    pub cause: ConversationCreationCause,
+    pub initiator_principal_id: PrincipalId,
+    pub initiator_surface_id: String,
+    pub correlation_id: String,
+    pub requested_at_ms: u64,
+    pub observed_at_ms: u64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ConversationOwnershipState {
+    Absent,
+    Owned,
+    /// Deleted for good. The identity keeps a tombstone and is not reused
+    /// (`a_deleted_conversation_refuses_every_command_on_it`).
+    Deleted,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ConversationCreationCause {
+    CallerRequested,
+    IdempotentReopen,
+}
+
+/// Commits creation evidence before the application reports success.
+/// Caller-requested creation records are idempotent by conversation identity so
+/// an interrupted first audit delivery can be safely retried from stored evidence.
+pub trait ConversationCreationAudit: Send + Sync {
+    fn record(&self, record: ConversationCreationAuditRecord) -> ConversationFuture<'_, ()>;
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ConversationModeRequestState {
+    Pending,
+    Applied,
+    NotApplied,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ConversationModeApplication {
+    Deferred,
+    Applied,
+    Refused,
+    Uncertain,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ConversationModeRequest {
+    pub conversation_id: ConversationId,
+    pub organization_id: OrganizationId,
+    pub request_id: String,
+    pub initiator_principal_id: PrincipalId,
+    pub initiator_surface_id: String,
+    pub prior: ConversationApprovalMode,
+    pub requested: ConversationApprovalMode,
+    pub state: ConversationModeRequestState,
+    pub application: Option<ConversationModeApplication>,
+    pub requested_at_ms: u64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ConversationModeAuditPhase {
+    Application,
+    RecoveryRestored,
+    RecoveryApplied,
+}
+
+pub trait ConversationModeAudit: Send + Sync {
+    fn record(
+        &self,
+        request: ConversationModeRequest,
+        phase: ConversationModeAuditPhase,
+    ) -> ConversationFuture<'_, ()>;
+}
+
+/// Immutable evidence that a conversation was deleted, committed before any of
+/// its history is erased.
+///
+/// Built from the stored tombstone, not from whichever request is asking: a
+/// delete repeated to finish an incomplete erasure — or the gateway finishing
+/// it after a restart — records the one deletion in the name of the request
+/// that decided it, so the record is the same each time
+/// (`a_deleted_conversation_refuses_every_command_on_it`,
+/// `an_unfinished_deletion_is_finished_and_recorded_when_the_gateway_starts`).
+/// `correlation_id` names that request, which is allowed for the reason
+/// [`ConversationFileLinkAuditRecord`] gives: the record is *of* it.
+///
+/// `provider_session_id` is what the conversation's saved history named as the
+/// provider's own session, read after the agent was confirmed stopped and
+/// before the history is erased. It is the only link that survives from this
+/// conversation to execution evidence keyed by that session, and to whatever
+/// the agent kept of it. `None` means the history named none: the agent never
+/// attached.
+///
+/// `provider_erasure` is what became of the agent's own record of that
+/// session, as the exchange with the agent confirmed it — never more: an
+/// agent that acknowledged a delete may have archived rather than erased
+/// (`the_agents_own_record_is_asked_to_go_after_the_stop_and_before_the_history`).
+/// The record is written only once that is settled, so it says one thing and
+/// is never contradicted by a retry.
+///
+/// There is no observation time here: the sink assigns it when it commits the
+/// record, from its own clock. `requested_at_ms` is the service's reading when
+/// the deciding request arrived.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ConversationDeletionAuditRecord {
+    pub conversation_id: ConversationId,
+    pub organization_id: OrganizationId,
+    pub owner_id: PrincipalId,
+    pub before: ConversationOwnershipState,
+    pub after: ConversationOwnershipState,
+    pub cause: ConversationDeletionCause,
+    pub initiator_principal_id: PrincipalId,
+    pub initiator_surface_id: String,
+    pub correlation_id: String,
+    pub provider_session_id: Option<ExecutionSessionId>,
+    pub provider_erasure: ProviderSessionErasure,
+    pub requested_at_ms: u64,
+}
+
+/// Why a conversation was deleted.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ConversationDeletionCause {
+    /// A verified caller who owns it asked. Nothing deletes a conversation on
+    /// its own.
+    CallerRequested,
+}
+
+/// Commits deletion evidence before a conversation's history is erased.
+///
+/// Records are idempotent by conversation identity: one conversation is
+/// deleted once, so the same record repeated is acknowledged again, and a
+/// record contradicting the one stored is refused. An unavailable sink leaves
+/// the history where it is.
+pub trait ConversationDeletionAudit: Send + Sync {
+    fn record(&self, record: ConversationDeletionAuditRecord) -> ConversationFuture<'_, ()>;
+}
+/// Waits for one-time runtime preparation to finish before this context opens a
+/// provider on a request path.
+///
+/// The first launch of a newly installed runtime is scanned by the operating
+/// system, and that cost belongs to whoever pays it first. When something else
+/// is already paying it, a conversation joins that work instead of starting a
+/// second cold launch of its own.
+///
+/// Waiting is all this promises. Preparation failing is not evidence that this
+/// conversation's launch will fail, so there is no failure to return: the
+/// conversation opens its provider and reports its own outcome either way.
+pub trait RuntimeReadiness: Send + Sync {
+    fn wait(&self) -> Pin<Box<dyn Future<Output = ()> + Send + '_>>;
+}
+
+/// Stores only conversation ownership, and the tombstone of one that was
+/// deleted. The SDK stores execution history separately.
+///
+/// A conversation read back carries its tombstone when it has one, so a reader
+/// does not see a deleted conversation as a live one: `load` returns it with
+/// its [`Conversation::deletion`], and `create` for its identity
+/// returns it as [`ConversationCreationDisposition::Existing`] rather than
+/// creating it again
+/// (`a_tombstone_outlives_reopening_and_its_identity_is_never_created_again`).
+pub trait ConversationRepository: Send + Sync {
+    /// The conversation as it is recorded, or `None` when there is no record
+    /// of it. [`ConversationError::AgentUnsupported`] for a record written
+    /// before records named their agent; [`ConversationError::Metadata`] for
+    /// one that cannot be read.
+    fn load(&self, id: &ConversationId) -> ConversationFuture<'_, Option<Conversation>>;
+    /// The conversation and its admission token from one read.
+    ///
+    /// Custom stores must take catalogue incarnation, conversation identity
+    /// and the row's monotonic `change_revision` together. A first tombstone
+    /// advances that revision before inventory work. Replacing the catalogue
+    /// changes the incarnation. There is no second policy check here.
+    fn load_admission_snapshot(
+        &self,
+        id: &ConversationId,
+    ) -> ConversationFuture<'_, Option<ConversationAdmissionSnapshot>>;
+    /// Create once: Created acknowledges this exact immutable proposal.
+    /// Existing returns the retained owner unchanged, including its historical
+    /// creation surface, action and time.
+    /// The service correlates Created before effects:
+    /// `creation_created_acknowledgement_preserves_the_admitted_origin` and
+    /// `creation_mislabeled_historical_created_refuses_before_audit_and_recovers`.
+    fn create(&self, conversation: Conversation) -> ConversationFuture<'_, ConversationCreation>;
+    /// Persist intent under the conversation row's write lock. An existing
+    /// request is returned unchanged; a different request cannot supersede a
+    /// pending one. No provider call precedes acknowledgement of this write.
+    fn begin_mode_change(
+        &self,
+        request: ConversationModeRequest,
+    ) -> ConversationFuture<'_, ConversationModeRequest>;
+    /// Read the one unfinished request before opening or admitting work.
+    fn pending_mode_change(
+        &self,
+        id: &ConversationId,
+    ) -> ConversationFuture<'_, Option<ConversationModeRequest>>;
+    fn mode_change(
+        &self,
+        id: &ConversationId,
+        request_id: &str,
+    ) -> ConversationFuture<'_, Option<ConversationModeRequest>>;
+    /// Acknowledge the exact model intent before a native control is sent.
+    fn begin_model_change(
+        &self,
+        request: ConversationModelRequest,
+    ) -> ConversationFuture<'_, ConversationModelRequest>;
+    fn pending_model_change(
+        &self,
+        id: &ConversationId,
+    ) -> ConversationFuture<'_, Option<ConversationModelRequest>>;
+    fn model_change(
+        &self,
+        id: &ConversationId,
+        request_id: &str,
+    ) -> ConversationFuture<'_, Option<ConversationModelRequest>>;
+    fn observe_model_application(
+        &self,
+        id: &ConversationId,
+        request_id: &str,
+        application: ConversationModelApplication,
+    ) -> ConversationFuture<'_, ConversationModelRequest>;
+    /// Commit the acknowledged model and approval selection in one transaction.
+    fn finish_model_change(
+        &self,
+        id: &ConversationId,
+        request_id: &str,
+        state: ConversationModelRequestState,
+    ) -> ConversationFuture<'_, ConversationModelRequest>;
+    /// Persist an admitted switch to another agent before the agent it runs
+    /// on is stopped. The same request is returned as it was saved; another
+    /// is refused while one, or a model or approval-mode change, is pending.
+    fn begin_agent_switch(
+        &self,
+        request: ConversationAgentSwitch,
+    ) -> ConversationFuture<'_, ConversationAgentSwitch>;
+    /// The one unsettled switch, which the next opening runs.
+    fn pending_agent_switch(
+        &self,
+        id: &ConversationId,
+    ) -> ConversationFuture<'_, Option<ConversationAgentSwitch>>;
+    fn agent_switch(
+        &self,
+        id: &ConversationId,
+        request_id: &str,
+    ) -> ConversationFuture<'_, Option<ConversationAgentSwitch>>;
+    /// Settle a pending switch as the history decided it, committing the
+    /// requested agent and model in the same transaction when it was
+    /// applied. A settled one is returned as it stands when `state` agrees.
+    fn finish_agent_switch(
+        &self,
+        id: &ConversationId,
+        request_id: &str,
+        state: ConversationAgentSwitchState,
+    ) -> ConversationFuture<'_, ConversationAgentSwitch>;
+    /// Whether a committed choice was made without an open provider session.
+    /// A cold owner must verify its attachment before admitting a turn.
+    fn requires_mode_verification(&self, id: &ConversationId) -> ConversationFuture<'_, bool>;
+    /// Record that `id`'s agent closed its thread (`close_thread`): every
+    /// opening of it parks its agent once idle, until [`Self::open_thread`].
+    /// Durable before it returns; closing a closed one is not an error.
+    fn close_thread(&self, id: &ConversationId) -> ConversationFuture<'_, ()>;
+    /// A new message opened `id`'s thread again: its close is gone. Durable
+    /// before it returns; one not closed is not an error.
+    fn open_thread(&self, id: &ConversationId) -> ConversationFuture<'_, ()>;
+    /// Whether `id`'s agent closed its thread and no message has opened it
+    /// since.
+    fn thread_closed(&self, id: &ConversationId) -> ConversationFuture<'_, bool>;
+    /// Retain the observed provider/deferred outcome before delivering it to
+    /// the independent audit sink. Repeated identical observations agree.
+    fn observe_mode_application(
+        &self,
+        id: &ConversationId,
+        request_id: &str,
+        application: ConversationModeApplication,
+    ) -> ConversationFuture<'_, ConversationModeRequest>;
+    /// Commit the chosen mode and the request's terminal state atomically.
+    fn finish_mode_change(
+        &self,
+        id: &ConversationId,
+        request_id: &str,
+        state: ConversationModeRequestState,
+    ) -> ConversationFuture<'_, ConversationModeRequest>;
+    /// Write the conversation's tombstone, or carry the one it has further,
+    /// and return the conversation as it now stands.
+    ///
+    /// What is stored is what [`Conversation::deleted`] makes of the stored
+    /// conversation and `deletion` — the domain's rule that the first decision
+    /// stands; an implementation only persists it. Durable before it
+    /// returns. [`ConversationError::NotFound`] when there is no ownership
+    /// record to delete; [`ConversationError::AgentUnsupported`] for a record
+    /// written before records named their agent, as [`Self::load`] answers
+    /// it; [`ConversationError::Metadata`] for a record that cannot be read,
+    /// a tombstone that could not stand beside it
+    /// ([`Conversation::deleted`]), which is not written, or a write that
+    /// could not be made durable. That last may already have landed — a
+    /// tombstone published whose directory could not then be synced — so a
+    /// caller cannot take any error here to mean nothing was written.
+    fn record_deletion(
+        &self,
+        id: &ConversationId,
+        deletion: ConversationDeletion,
+    ) -> ConversationFuture<'_, Conversation>;
+    /// Every conversation whose tombstone says its erasure has not finished,
+    /// whoever owns it: the startup finish's question
+    /// ([`super::ConversationService::finish_deletions`]).
+    ///
+    /// A tombstone whose conversation cannot even be named is left out and
+    /// counted, since it may be one of them. Only being unable to ask at all
+    /// is an error.
+    fn unfinished_deletions(&self) -> ConversationFuture<'_, UnfinishedDeletions>;
+}
+
+/// Which conversations may have a turn that a restart would leave unfinished:
+/// the startup sweep's question
+/// ([`super::ConversationService::resume_unfinished`]).
+///
+/// A mark only says where to look. The conversation's own history decides
+/// what is owed (`Agent::owed_turns`), so a mark left behind costs one opening
+/// that finds nothing, and is cleared; a mark missing would lose a turn, so
+/// one is written, durably, before the agent is given a turn.
+pub trait UnfinishedTurns: Send + Sync {
+    /// Mark `id`. Durable before it returns; marking a marked one is not an
+    /// error.
+    fn mark(&self, id: &ConversationId) -> ConversationFuture<'_, ()>;
+    /// Remove `id`'s mark. Durable before it returns; one already gone is
+    /// not an error.
+    fn clear(&self, id: &ConversationId) -> ConversationFuture<'_, ()>;
+    /// Mark `id` with a retry due at `retry_at_ms` (Unix milliseconds), the
+    /// `failures`th in a row. Durable before it returns; it marks `id` if it
+    /// was not, and replaces any retry it had.
+    fn defer(
+        &self,
+        id: &ConversationId,
+        failures: u32,
+        retry_at_ms: u64,
+    ) -> ConversationFuture<'_, ()>;
+    /// Every marked conversation. A mark whose conversation cannot be named
+    /// is left out and logged: there is nothing it could open.
+    fn marked(&self) -> ConversationFuture<'_, Vec<UnfinishedMark>>;
+}
+
+/// One conversation [`UnfinishedTurns`] holds a mark for.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UnfinishedMark {
+    /// The conversation that may have unfinished turns.
+    pub conversation_id: ConversationId,
+    /// How many failure retries in a row it has had; zero when none.
+    pub failures: u32,
+    /// When its next failure retry is due, in Unix milliseconds; `None` when
+    /// it waits for none and is resumed at once.
+    pub retry_at_ms: Option<u64>,
+}
+
+/// What [`ConversationRepository::unfinished_deletions`] found.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct UnfinishedDeletions {
+    /// Each conversation whose tombstone says its erasure has not finished.
+    pub conversations: Vec<ConversationId>,
+    /// Tombstones of unfinished deletions whose conversation could not be
+    /// named, so are not among [`Self::conversations`].
+    pub unreadable: usize,
+}
+
+/// Answers what a list of one owner's conversations shows, from ownership,
+/// tombstones and summaries together, reading only that owner's.
+///
+/// A port of its own because the answer spans [`ConversationRepository`] and
+/// [`ConversationSummaries`]: a store that keeps both answers it in one
+/// question, without reading anybody else's conversations
+/// (docs/adr/done/196-conversation-metadata-database.md).
+pub trait ConversationListing: Send + Sync {
+    /// The conversations `organization` and `owner` hold, narrowed by `reader`,
+    /// that are not deleted
+    /// and have a summary whose archived flag is `archived`: most recently
+    /// updated first, then by identity, at most `limit` of them.
+    ///
+    /// Whose a conversation is, is [`Conversation::allows`]'s answer, and a
+    /// store gives the same one while reading only this owner's rows
+    /// (`the_list_asks_whose_a_conversation_is_as_the_domain_answers_it`,
+    /// `the_list_query_reads_only_its_owners_rows_however_many_others_there_are`).
+    /// A row of this owner's that cannot be read back is left out and counted,
+    /// since it may belong in the list. Only being unable to ask at all is an
+    /// error.
+    fn list(
+        &self,
+        organization: &OrganizationId,
+        owner: &PrincipalId,
+        archived: bool,
+        limit: usize,
+        reader: &Reader,
+    ) -> ConversationFuture<'_, ListedConversations>;
+    /// One page of the reader-scoped catalogue, creation order, under the same
+    /// archived filter as [`Self::list`].
+    ///
+    /// `cursor` is absent on the first page. A later page echoes the cursor
+    /// the previous page returned: the same incarnation and boundary, then
+    /// the next descriptor. Deleted rows, rows with no summary, and the other
+    /// archived flag are left out of [`ObservedConversations::conversations`]
+    /// and still advance the cursor. A row that cannot be read back is left
+    /// out, the page is not complete, and it names no cursor, so the pass
+    /// does not skip it and later claim to be finished
+    /// (`an_unreadable_summary_leaves_the_page_unfinished_and_keeps_the_others`).
+    /// [`ObservedConversations::complete`] is true only when the pass has
+    /// returned every matching summary up to the captured head. This does not
+    /// open a provider. The page size is the catalogue's. It is not the
+    /// newest-first list bound.
+    fn observe(
+        &self,
+        organization: &OrganizationId,
+        owner: &PrincipalId,
+        archived: bool,
+        cursor: Option<ObservationCursor>,
+        reader: &Reader,
+    ) -> ConversationFuture<'_, ObservedConversations>;
+    /// Every catalogue owner. The usage-limit preference scans these, not the
+    /// caller who changed it. An owner id that cannot be read is an error:
+    /// skipping it would report the walk finished.
+    fn owners(&self) -> ConversationFuture<'_, Vec<(OrganizationId, PrincipalId)>>;
+}
+
+/// Where an observation pass resumes.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ObservationCursor {
+    /// Catalogue database incarnation captured with this pass.
+    pub incarnation: String,
+    /// Reader-scoped head captured when the pass began.
+    pub boundary: u64,
+    /// Creation revision of the last descriptor already returned.
+    pub creation: u64,
+    /// Identity of that descriptor.
+    pub id: ConversationId,
+}
+
+/// What [`ConversationListing::observe`] read from one catalogue page.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ObservedConversations {
+    /// Matching summaries from this page, creation order.
+    pub conversations: Vec<ListedConversation>,
+    /// Whether the pass is finished. False when further descriptors remain,
+    /// or when this page cannot say where to resume.
+    pub complete: bool,
+    /// Present when [`Self::complete`] is false and another page can be asked.
+    pub cursor: Option<ObservationCursor>,
+}
+
+/// What [`ConversationListing::list`] read.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ListedConversations {
+    /// A paired reader's head from the same metadata snapshot as its rows.
+    /// Owner-only substitutes may omit it; a paired read requires it.
+    pub head: Option<CatalogueHead>,
+    /// In the order listed.
+    pub conversations: Vec<ListedConversation>,
+    /// How many rows among the ones asked for could not be read, so are not
+    /// among [`Self::conversations`].
+    pub unreadable: usize,
+}
+
+/// One conversation in a list, with what the list shows about it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ListedConversation {
+    /// The conversation, as its ownership record reads.
+    pub conversation: Conversation,
+    /// Its title, last line said, time and archived flag.
+    pub summary: ConversationSummary,
+    /// The grant capabilities read with this row, absent for owner reads.
+    pub held: Option<Capabilities>,
+}
+
+/// Keeps what a list of conversations shows about each one: its title, the
+/// last thing said, and when.
+///
+/// Apart from [`ConversationRepository`] on purpose. Ownership is written once
+/// and is evidence; a summary is rewritten on every turn and is a projection
+/// of what was said. A conversation with no summary is still a conversation,
+/// and a summary that could not be written leaves the list stale, never the
+/// conversation broken.
+pub trait ConversationSummaries: Send + Sync {
+    fn load(&self, id: &ConversationId) -> ConversationFuture<'_, Option<ConversationSummary>>;
+    /// Replace the conversation's summary with `summary`. A deleted identity
+    /// refuses late writes, preserving its catalogue deletion marker.
+    fn record(
+        &self,
+        id: &ConversationId,
+        summary: ConversationSummary,
+    ) -> ConversationFuture<'_, ()>;
+    /// Remove the conversation's summary, if it has one. Durable before it
+    /// returns; a summary that is already gone is not an error.
+    fn erase(&self, id: &ConversationId) -> ConversationFuture<'_, ()>;
+}
+
+/// An image as a caller submitted it, before any of it has been checked.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SubmittedImage {
+    pub digest: String,
+    pub media_type: String,
+    pub size: u64,
+}
+
+/// One message as a caller submitted it, before any of it has been checked.
+///
+/// Grouped rather than passed one by one, for the same reason
+/// `ConversationDependencies` is: the three parts of a message change together,
+/// and a caller that forgets one should not compile.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SubmittedMessage {
+    /// Non-image uploads held by this conversation.
+    pub uploads: Vec<SubmittedUpload>,
+    pub text: String,
+    /// Images already uploaded into this conversation, in attachment order.
+    pub images: Vec<SubmittedImage>,
+    /// Files on this machine the message points the agent at, in attachment
+    /// order. Nothing was uploaded for these.
+    pub files: Vec<SubmittedFile>,
+}
+
+/// A path as a caller submitted it, before any of it has been checked.
+///
+/// Unlike an image, nothing was uploaded for this and there is nothing for the
+/// conversation to hold, so there is no ownership to verify: the whole of what
+/// the gateway can check is whether the path can be said, which is the domain's
+/// rule. See [`ConversationFileLinkAuditRecord`] for what it records instead.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SubmittedFile {
+    pub path: String,
+}
+
+/// Immutable evidence that a verified caller submitted a message naming files
+/// on this machine.
+///
+/// This is recorded because it is the only trace of it. An image is uploaded
+/// first, so the attachments context already records who put it there; a path
+/// is uploaded nowhere, and the reach it asks for — the agent may open these
+/// files, anywhere on the disk, once the reader approves each read — would
+/// otherwise exist only inside a prompt nobody keeps.
+///
+/// **This is intent, not a confirmed effect, and the field names say so.**
+/// `before` and `after` are about the submission and nothing else: a message
+/// that named no files now names these. Three things it deliberately does not
+/// claim, in increasing order of how far away they are:
+///
+/// - that the message was admitted. The record is written first, because the
+///   failure worth avoiding is an agent holding a path with no record of who
+///   pointed it there. A submission refused after this — over its token budget,
+///   or conflicting with one the agent already has — leaves a record that is
+///   still true: somebody did submit it.
+/// - that the agent received the files. It receives a link, as text.
+/// - that anything was read. Every read is a separate tool call the reader
+///   approves one at a time, and the agent may never make one.
+///
+/// Because it records a naming rather than a grant, there is nothing for a
+/// later queue removal, cancellation, close, or restoration to transition: none
+/// of those makes it untrue that the message named these files, and none of
+/// them un-names them. Evidence of what the agent actually did with a link
+/// belongs to the permission audit, which records each approved read.
+///
+/// There is no separate correlation identifier, and its absence is deliberate.
+/// `execution_id` is what correlates this: the record is about one submission,
+/// and that is the submission's name. The wire's `requestId` identifies one
+/// *attempt* at it, and a submission can be attempted more than once — a send
+/// whose dispatch failed comes back under the same execution identity and a
+/// fresh request identity. Recording the attempt inside a record keyed by the
+/// submission made those two disagree: the second attempt built a differing
+/// document, the sink refused it as contradictory evidence, and the submission
+/// became permanently unsendable while reporting a sink failure that had not
+/// happened.
+///
+/// Nothing is lost by it. `conversation.send` carries `requestId` and
+/// `executionId` together, so a stored record still joins to the requests that
+/// produced it — through the submission they were all attempts at, rather than
+/// through whichever attempt happened to be the one that wrote. That is the
+/// more useful join anyway: the interesting question about a naming is which
+/// message named it, and the interesting question about a *failed* attempt is
+/// answered by the transport log, which has every request identity and this
+/// never did.
+///
+/// [`ConversationCreationAuditRecord`] and [`AttachmentRelease`] do carry one,
+/// and the asymmetry is the rule rather than an exception to it: a record may
+/// name the request when the record is *of* that request, and may not when the
+/// record is of something a caller may attempt more than once. Creation writes
+/// a record per transition — an original and a later reopen are two records
+/// with two causes — and a release happens once per close. This one is keyed by
+/// a submission that is deliberately retryable, so the request identity is the
+/// one field about it that is not stable.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ConversationFileLinkAuditRecord {
+    pub conversation_id: ConversationId,
+    pub organization_id: OrganizationId,
+    /// The submission whose message names these files.
+    pub execution_id: String,
+    /// Every path, in attachment order, exactly as the message carries it.
+    pub paths: Vec<String>,
+    pub before: ConversationFileLinkState,
+    pub after: ConversationFileLinkState,
+    pub cause: ConversationFileLinkCause,
+    pub initiator_principal_id: PrincipalId,
+    pub initiator_surface_id: String,
+    pub observed_at_ms: u64,
+}
+
+/// Whether a submission names files. Not whether the agent has them, and not
+/// whether anything was opened; see [`ConversationFileLinkAuditRecord`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ConversationFileLinkState {
+    NotNamed,
+    Named,
+}
+
+/// Why a submission came to name files.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ConversationFileLinkCause {
+    /// A verified caller sent a message naming them. There is no automatic
+    /// cause: nothing but a person's own submission puts a path in a prompt.
+    CallerSubmitted,
+}
+
+/// Commits file-naming evidence before the submission is admitted.
+///
+/// Records are idempotent by conversation and submission identity, so a retry
+/// of the same submission reconciles the same evidence rather than writing a
+/// second record — and a submission claiming *different* paths under an
+/// identity already recorded is a contradiction the sink refuses, which is what
+/// keeps the trail from being made to name a file nobody sent. An unavailable
+/// sink refuses the submission: an agent given a path with no record of who
+/// pointed it there is the thing this prevents.
+pub trait ConversationFileLinkAudit: Send + Sync {
+    /// Stored-input submission and automatic delivery evidence. An adapter that
+    /// cannot commit this evidence refuses uploaded input rather than faking success.
+    fn record_input(&self, _record: super::InputFileAudit) -> ConversationFuture<'_, ()> {
+        Box::pin(async { Err(ConversationError::Audit) })
+    }
+
+    fn record(&self, record: ConversationFileLinkAuditRecord) -> ConversationFuture<'_, ()>;
+}
+
+/// Why a conversation let go of the files uploaded into it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AttachmentReleaseCause {
+    /// The verified caller closed the conversation.
+    ConversationClosed,
+    /// The verified caller deleted the conversation.
+    ConversationDeleted,
+}
+
+/// A verified caller's release of one conversation's uploaded files.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AttachmentRelease {
+    pub organization_id: OrganizationId,
+    pub conversation_id: ConversationId,
+    pub cause: AttachmentReleaseCause,
+    pub initiator_principal_id: PrincipalId,
+    pub initiator_surface_id: String,
+    pub correlation_id: String,
+}
+
+/// What a conversation needs from wherever uploaded files are kept.
+///
+/// A message refers to images by digest. Before accepting one, the service asks
+/// whether *this* conversation holds exactly those bytes, so a digest learned
+/// elsewhere cannot be used to read another owner's upload.
+pub trait ConversationAttachments: Send + Sync {
+    /// Exact held stored input. An adapter without general-file support refuses it.
+    fn holds_file<'a>(
+        &'a self,
+        _organization: &'a OrganizationId,
+        _conversation: &'a ConversationId,
+        _file: &'a nessa_sdk::domain::agent_execution::prompts::UploadedFileReference,
+    ) -> ConversationFuture<'a, bool> {
+        Box::pin(async { Ok(false) })
+    }
+
+    /// Whether the configured upload store prepares images for conversations.
+    fn offers_images(&self) -> bool;
+    /// Whether the conversation holds an upload whose digest, media type, and
+    /// size all agree with `image`.
+    fn holds<'a>(
+        &'a self,
+        organization_id: &'a OrganizationId,
+        conversation_id: &'a ConversationId,
+        image: &'a ImageReference,
+    ) -> ConversationFuture<'a, bool>;
+    /// Let go of everything the conversation holds. The implementation records
+    /// the release with its cause and initiator; an `Err` reports that some of
+    /// it, or its evidence, could not be completed after every part was tried.
+    fn release(&self, release: AttachmentRelease) -> ConversationFuture<'_, ()>;
+    /// Keep a file an environment published under a lease (issue #701):
+    /// held as the conversation's once its bytes are exactly what the host
+    /// published and the conversation recorded it, with the lease as its
+    /// cause; nothing is read when the conversation already holds that
+    /// file. A refusal leaves no hold.
+    fn keep_published(
+        &self,
+        published: PublishedArtifact,
+    ) -> Pin<Box<dyn Future<Output = Result<ArtifactKept, CollectionRefusal>> + Send + '_>>;
+    /// One range of a file the conversation holds, read for the person a
+    /// fetch is for (issue #701, slice D3b): at most `range.max_bytes` and at
+    /// most one of the store's own ranges, from `range.offset`, and only
+    /// while the conversation is that person's and still holds exactly that
+    /// file — asked again for every range, so a hold let go between two
+    /// ranges stops the read there.
+    fn read_held(
+        &self,
+        range: HeldRange,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<u8>, HeldRangeError>> + Send + '_>>;
+}
+
+/// One range of a held file, asked for a person.
+#[derive(Clone, Debug)]
+pub struct HeldRange {
+    pub organization_id: OrganizationId,
+    /// Whose read it is: the conversation must be theirs.
+    pub principal_id: String,
+    pub conversation_id: ConversationId,
+    /// Exactly which file: its digest, media type and size together.
+    pub file: PublishedFile,
+    pub offset: u64,
+    pub max_bytes: usize,
+}
+
+/// Why a range of a held file was not read.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HeldRangeError {
+    /// The conversation is not that person's, or no longer holds exactly
+    /// that file.
+    NotHeld,
+    /// The store's one read slot stayed taken by reads ahead of this one;
+    /// the same range may be asked again.
+    Busy,
+    /// The store could not say, or could not read the bytes, or the range
+    /// is not one of the file's.
+    Unavailable,
+}
+
+/// A file published under a lease, to be kept by its conversation.
+pub struct PublishedArtifact {
+    pub organization_id: OrganizationId,
+    pub conversation_id: ConversationId,
+    /// The lease it was published under.
+    pub lease: String,
+    /// Who asked for the work the lease runs.
+    pub requested_by: ActionContext,
+    /// What the host says the file is.
+    pub file: StagedArtifact,
+    /// Its bytes, read only if they are needed.
+    pub bytes: Box<dyn ArtifactBytes>,
+    /// Asked once the file is held, before anything says it is kept:
+    /// whether the conversation recorded it under the lease. `false`, and
+    /// the file is not kept.
+    pub record: ArtifactRecordGate,
+}
+
+/// Whether the conversation recorded a published file under its lease.
+pub type ArtifactRecordGate =
+    Box<dyn FnOnce() -> Pin<Box<dyn Future<Output = bool> + Send>> + Send>;
+
+/// What keeping a published file found.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ArtifactKept {
+    /// Read, checked, and now held under the lease.
+    Held,
+    /// The conversation already held exactly this file; nothing was read.
+    AlreadyHeld,
+}
+
+/// Original stored input, before domain validation.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SubmittedUpload {
+    pub digest: String,
+    pub media_type: String,
+    pub size: u64,
+    pub name: String,
+}

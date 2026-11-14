@@ -20,6 +20,9 @@ use super::domain::{DeviceSwitches, InvalidSwitches, MAX_SWITCHED_ON};
 use super::infrastructure::{cedar::CedarLoginPolicyEvaluator, DurableLoginAudit};
 use crate::secrets::{SecretStore, SecretUnavailable};
 
+#[cfg(unix)]
+mod vault_entries;
+
 #[derive(Default)]
 struct MemorySecret {
     value: Mutex<Option<Vec<u8>>>,
@@ -753,4 +756,53 @@ async fn a_change_the_vault_made_and_then_refused_is_read_back() {
         Some(&LoginEvent::SaveFailed { agent: codex })
     );
     assert_eq!(*told.lock().unwrap(), [agent, agent, agent]);
+}
+
+/// A handoff the audit cannot record withholds the login and says so in the
+/// log, naming the lease and never the login itself.
+#[tokio::test(flavor = "current_thread")]
+async fn an_unrecordable_handoff_is_logged_without_the_login() {
+    #[derive(Clone, Default)]
+    struct Capture(Arc<Mutex<Vec<u8>>>);
+    impl std::io::Write for Capture {
+        fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(buffer);
+            Ok(buffer.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for Capture {
+        type Writer = Self;
+        fn make_writer(&'a self) -> Self {
+            self.clone()
+        }
+    }
+    const SECRET: &str = "sk-ant-oat-audit-down";
+
+    let fixture = fixture();
+    *fixture.logins[&AgentId::Claude].value.lock().unwrap() = Some(SECRET.as_bytes().to_vec());
+    *fixture.audit.refuses.lock().unwrap() = true;
+    let captured = Capture::default();
+    let subscriber = tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::ERROR)
+        .with_writer(captured.clone())
+        .with_ansi(false)
+        .finish();
+    let _traced = tracing::subscriber::set_default(subscriber);
+
+    assert_eq!(
+        fixture
+            .service
+            .login_for(&ssh(), AgentId::Claude, "lease-audit-down"),
+        None
+    );
+    let log = String::from_utf8(captured.0.lock().unwrap().clone()).unwrap();
+    assert!(
+        log.contains("a saved login was not handed: its handoff could not be recorded"),
+        "{log}"
+    );
+    assert!(log.contains("lease-audit-down"), "{log}");
+    assert!(!log.contains(SECRET), "{log}");
 }

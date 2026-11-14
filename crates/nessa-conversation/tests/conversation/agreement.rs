@@ -1,0 +1,279 @@
+//! Numbers this context enforces and the published protocol schema states
+//! again. Each is valid on its own; these check that they describe the same
+//! gateway, so changing one without the other fails here.
+use crate::application::{MAX_LISTED_CONVERSATIONS, MAX_POLICY_REVISION};
+use nessa_protocol::conversation::domain::{
+    ConversationPreview, ConversationTitle, LATEST_TIME_MS,
+};
+use nessa_protocol::conversation::view::{
+    MAX_STRUCTURED_CONTENT_BYTES, MAX_TOOL_CHANGES, MAX_TOOL_CHANGE_PATH_BYTES,
+    MAX_TOOL_CHANGE_SIDE_BYTES,
+};
+use nessa_sdk::domain::agent_execution::tools::{MAX_MCP_NAME_BYTES, MAX_TOOL_INPUT_BYTES};
+use nessa_sdk::domain::mcp_apps::MAX_UI_URI_BYTES;
+use nessa_sync::replication::catalogue::MAX_CATALOGUE_ENTRIES;
+use serde_json::Value;
+
+fn schema() -> Value {
+    serde_json::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../protocol/product/v1.json"
+    )))
+    .expect("the product schema is valid JSON")
+}
+
+#[test]
+fn the_list_schema_states_the_bounds_the_summary_rules_keep() {
+    let schema = schema();
+    let summary = &schema["$defs"]["ConversationSummary"]["properties"];
+    assert_eq!(
+        summary["preview"]["x-utf8MaxBytes"].as_u64(),
+        Some(ConversationPreview::MAX_BYTES as u64)
+    );
+    // A title is bounded in characters; at four bytes each it still fits.
+    let title_bytes = summary["title"]["x-utf8MaxBytes"].as_u64().unwrap();
+    assert!(ConversationTitle::MAX_CHARS as u64 * 4 <= title_bytes);
+    // Every time a row carries is one the domain can hold, and no later.
+    for field in ["createdAtMs", "updatedAtMs"] {
+        assert_eq!(
+            summary[field]["maximum"].as_u64(),
+            Some(LATEST_TIME_MS),
+            "{field}"
+        );
+    }
+    // The gateway's time a view is stamped with is held to the same range.
+    assert_eq!(
+        schema["$defs"]["ConversationView"]["properties"]["serverNowMs"]["maximum"].as_u64(),
+        Some(LATEST_TIME_MS)
+    );
+    assert_eq!(
+        schema["$defs"]["ConversationListResult"]["properties"]["conversations"]["maxItems"]
+            .as_u64(),
+        Some(MAX_LISTED_CONVERSATIONS as u64)
+    );
+    assert_eq!(
+        schema["$defs"]["ConversationObserveResult"]["properties"]["conversations"]["maxItems"]
+            .as_u64(),
+        Some(MAX_CATALOGUE_ENTRIES as u64)
+    );
+}
+
+#[test]
+fn a_read_states_the_same_title_bound_as_the_list() {
+    let schema = schema();
+    let view = &schema["$defs"]["ConversationView"];
+    let summary = &schema["$defs"]["ConversationSummary"]["properties"];
+    // One title, shown by both: the same bound, and required on a read so a
+    // conversation with no title yet says `null` rather than leaving it out.
+    assert_eq!(
+        view["properties"]["title"]["x-utf8MaxBytes"],
+        summary["title"]["x-utf8MaxBytes"]
+    );
+    let title_bytes = view["properties"]["title"]["x-utf8MaxBytes"]
+        .as_u64()
+        .unwrap();
+    assert!(ConversationTitle::MAX_CHARS as u64 * 4 <= title_bytes);
+    assert!(view["required"]
+        .as_array()
+        .unwrap()
+        .contains(&Value::from("title")));
+}
+
+#[test]
+fn a_rename_states_the_title_bound_the_domain_keeps() {
+    let schema = schema();
+    let title = &schema["$defs"]["ConversationRenameParams"]["properties"]["title"];
+    // Both count characters (code points): the schema's `maxLength` is the
+    // domain's own bound, and the byte bound fits it at four bytes each.
+    assert_eq!(
+        title["maxLength"].as_u64(),
+        Some(ConversationTitle::MAX_CHARS as u64)
+    );
+    assert_eq!(
+        title["x-utf8MaxBytes"].as_u64(),
+        Some(ConversationTitle::MAX_CHARS as u64 * 4)
+    );
+    // And a renamed title fits wherever a title is shown.
+    let shown = schema["$defs"]["ConversationSummary"]["properties"]["title"]["x-utf8MaxBytes"]
+        .as_u64()
+        .unwrap();
+    assert!(title["x-utf8MaxBytes"].as_u64().unwrap() <= shown);
+}
+
+#[test]
+fn a_tool_states_the_mcp_name_and_structured_result_bounds_the_view_keeps() {
+    let schema = schema();
+    let tool = &schema["$defs"]["ConversationTool"]["properties"];
+    assert_eq!(
+        tool["structuredContent"]["x-utf8MaxBytes"].as_u64(),
+        Some(MAX_STRUCTURED_CONTENT_BYTES as u64)
+    );
+    // The input an agent reports is the SDK's to bound; the row says the same.
+    assert_eq!(
+        tool["input"]["x-utf8MaxBytes"].as_u64(),
+        Some(MAX_TOOL_INPUT_BYTES as u64)
+    );
+    // The files a call changed are the view's to bound; the schema says the same.
+    assert_eq!(
+        tool["changes"]["maxItems"].as_u64(),
+        Some(MAX_TOOL_CHANGES as u64)
+    );
+    let change = &schema["$defs"]["ConversationToolChange"]["properties"];
+    assert_eq!(
+        change["path"]["x-utf8MaxBytes"].as_u64(),
+        Some(MAX_TOOL_CHANGE_PATH_BYTES as u64)
+    );
+    for side in ["before", "after"] {
+        assert_eq!(
+            change[side]["x-utf8MaxBytes"].as_u64(),
+            Some(MAX_TOOL_CHANGE_SIDE_BYTES as u64),
+            "{side}"
+        );
+    }
+    // The names are the SDK domain's, which bounds them; the schema says the same.
+    let mcp = &schema["$defs"]["ConversationMcpTool"]["properties"];
+    for field in ["server", "tool"] {
+        assert_eq!(
+            mcp[field]["x-utf8MaxBytes"].as_u64(),
+            Some(MAX_MCP_NAME_BYTES as u64),
+            "{field}"
+        );
+    }
+    // The UI resource's URI is the SDK domain's too, bounded the same.
+    assert_eq!(
+        mcp["resourceUri"]["x-utf8MaxBytes"].as_u64(),
+        Some(MAX_UI_URI_BYTES as u64)
+    );
+    // The call's arguments are the SDK's one bound, the same a review and an
+    // app's own call already state.
+    assert_eq!(
+        mcp["argumentsJson"]["x-utf8MaxBytes"].as_u64(),
+        Some(nessa_sdk::domain::agent_execution::tools::MAX_MCP_ARGUMENTS_BYTES as u64)
+    );
+}
+
+#[test]
+fn an_app_calls_schema_states_the_bounds_the_gateway_keeps() {
+    use crate::application::RESOURCE_TICKET_LIFETIME_MS;
+    use crate::mcp_servers::domain::{MAX_APP_ARGUMENTS_BYTES, MAX_APP_RESULT_BYTES};
+    use nessa_sdk::domain::mcp_apps::MAX_UI_HTML_BYTES;
+    let schema = schema();
+    let defs = &schema["$defs"];
+    let arguments = &defs["McpCallToolParams"]["properties"]["argumentsJson"];
+    assert_eq!(
+        arguments["x-utf8MaxBytes"].as_u64(),
+        Some(MAX_APP_ARGUMENTS_BYTES as u64)
+    );
+    // An app's arguments are shown whole in its review, which takes any
+    // input the agent's reviews may, and the view carries the same text for
+    // a call the connection saw.
+    assert!(
+        arguments["x-utf8MaxBytes"].as_u64()
+            <= defs["ConversationPermission"]["properties"]["argumentsJson"]["x-utf8MaxBytes"]
+                .as_u64()
+    );
+    assert_eq!(
+        arguments["x-utf8MaxBytes"],
+        defs["ConversationMcpTool"]["properties"]["argumentsJson"]["x-utf8MaxBytes"]
+    );
+    assert_eq!(
+        defs["McpCallToolResult"]["properties"]["resultJson"]["x-utf8MaxBytes"].as_u64(),
+        Some(MAX_APP_RESULT_BYTES as u64)
+    );
+    let read = &defs["McpReadResourceResult"]["properties"];
+    assert_eq!(
+        read["size"]["maximum"].as_u64(),
+        Some(MAX_UI_HTML_BYTES as u64)
+    );
+    assert_eq!(
+        read["expiresInMs"]["const"].as_u64(),
+        Some(RESOURCE_TICKET_LIFETIME_MS)
+    );
+}
+
+#[test]
+fn an_apps_message_and_context_schemas_state_the_bounds_the_gateway_keeps() {
+    use crate::application::ConversationLimits;
+    use nessa_sdk::domain::agent_execution::{
+        executions::ExecutionId,
+        prompts::{AppModelContext, McpAppSource, UserMessage},
+        tools::MAX_MCP_NAME_BYTES,
+    };
+    let schema = schema();
+    let defs = &schema["$defs"];
+    let bytes = |value: &Value| value["x-utf8MaxBytes"].as_u64().unwrap() as usize;
+    // A message from an app is held to what the person's own may take.
+    let text = &defs["McpSendMessageParams"]["properties"]["text"];
+    assert_eq!(bytes(text), ConversationLimits::default().max_input_bytes);
+    assert_eq!(
+        bytes(text),
+        bytes(&defs["ConversationSendParams"]["properties"]["text"])
+    );
+    // What the description says of a first message's review is the room an
+    // app's review has, as the gateway keeps it.
+    let described = text["description"].as_str().unwrap();
+    assert!(described.contains(&format!(
+        "at most {} UTF-8 bytes",
+        ConversationLimits::default().max_input_bytes
+    )));
+    let room = crate::application::MAX_APP_REVIEW_BYTES;
+    let spelled = format!("{} {:03}", room / 1000, room % 1000);
+    assert!(
+        described.contains(&format!("the {spelled} bytes")),
+        "{described}"
+    );
+    let context = &defs["McpUpdateModelContextParams"];
+    assert_eq!(
+        bytes(&context["properties"]["text"]),
+        AppModelContext::MAX_BYTES
+    );
+    assert_eq!(
+        bytes(&context["properties"]["structuredContentJson"]),
+        AppModelContext::MAX_BYTES
+    );
+    let description = context["description"].as_str().unwrap();
+    assert!(description.contains(&format!(
+        "at most {} UTF-8 bytes",
+        AppModelContext::MAX_BYTES
+    )));
+    // As many as one message carries, which is as many as are held.
+    assert!(description.contains(&format!(
+        "at most {} mounts",
+        UserMessage::MAX_APP_MODEL_CONTEXTS
+    )));
+    let app = &defs["ConversationMessageApp"]["properties"];
+    assert_eq!(bytes(&app["executionId"]), ExecutionId::MAX_BYTES);
+    assert_eq!(bytes(&app["toolId"]), McpAppSource::MAX_TOOL_ID_BYTES);
+    assert_eq!(bytes(&app["server"]), MAX_MCP_NAME_BYTES);
+    assert_eq!(bytes(&app["tool"]), MAX_MCP_NAME_BYTES);
+}
+
+#[test]
+fn a_share_states_the_policy_revision_bound_the_gateway_keeps() {
+    let schema = schema();
+    let defs = &schema["$defs"];
+    // The revision a change names, refused past this bound at the socket, and
+    // the revision a share answers: one bound for both.
+    for params in ["ConversationShareParams", "ConversationUnshareParams"] {
+        assert_eq!(
+            defs[params]["properties"]["expectedPolicyRevision"]["maximum"].as_u64(),
+            Some(MAX_POLICY_REVISION),
+            "{params}"
+        );
+    }
+    assert_eq!(
+        defs["ConversationShareResult"]["properties"]["policyRevision"]["maximum"].as_u64(),
+        Some(MAX_POLICY_REVISION)
+    );
+    // A revision is a journal sequence, which starts at 1: a share never
+    // answers 0, which a change names only for "no grant held".
+    assert_eq!(
+        defs["ConversationShareResult"]["properties"]["policyRevision"]["minimum"].as_u64(),
+        Some(1)
+    );
+    // A listed grant holds a journal sequence too, never 0.
+    assert_eq!(
+        defs["ConversationShare"]["properties"]["policyRevision"]["minimum"].as_u64(),
+        Some(1)
+    );
+}

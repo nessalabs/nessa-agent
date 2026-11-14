@@ -613,7 +613,7 @@ restored fence reuses its original validated principal, lifecycle cause, and
 correlation instead of reconstructing attribution from the later upgrade attempt.
 Unknown launchctl output fails closed; legacy headerless health additionally
 requires a sole matching listening PID.
-For a managed update, `crates/nessa-server/src/desktop_runtime/` validates the
+For a managed update, `crates/nessa-conversation/src/desktop_runtime/` validates the
 correlated request, closes conversation admission, joins admitted commands,
 attempts owner cleanup, and persists upgrade audit evidence. Only a successful
 private result, correlated to that runtime instance and synced with its directory,

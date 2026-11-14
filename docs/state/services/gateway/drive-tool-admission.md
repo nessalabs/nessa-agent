@@ -8,11 +8,11 @@ summary: Drive turns retain their exact grant policy and recheck native steering
   after saving.
 sourceRevision: "77a6b620af4d94b234294f6d273fd74b3dfb44c7"
 sources:
-  - crates/nessa-server/src/conversation/application/drive_tools.rs
-  - crates/nessa-server/src/conversation/application/service.rs
-  - crates/nessa-server/src/conversation/application/service/environment_tools.rs
-  - crates/nessa-server/tests/conversation/drive_tools.rs
-  - crates/nessa-server/tests/conversation/leases.rs
+  - crates/nessa-conversation/src/application/drive_tools.rs
+  - crates/nessa-conversation/src/application/service.rs
+  - crates/nessa-conversation/src/application/service/environment_tools.rs
+  - crates/nessa-conversation/tests/conversation/drive_tools.rs
+  - crates/nessa-conversation/tests/conversation/leases.rs
   - docs/design/read-grants.md
 diagramLinks: {}
 model:
@@ -62,4 +62,4 @@ The finite model follows one admitted grant revision, a possible replacement, qu
 
 ## Bounded rule model
 
-Owns exact revision retention through save, native after-save revision recheck and one gateway-tool Cedar result audited before effect. Two grant revisions and queued/native modes bound the model. PolicyRead abstracts the supported-provider/Ask/no-native-hooks admission checks; review-hook persistence and provider-internal operations remain outside this gateway-tool audit abstraction. This finite abstraction checks safety only. It does not execute or verify the implementation, promise eventual completion, or qualify external effects. Existing source checkpoints and historical test receipts retain their earlier scope. The scoped model review inspected `crates/nessa-server/src/conversation/application/drive_tools.rs`, `crates/nessa-server/src/conversation/application/service.rs`, `crates/nessa-server/src/conversation/application/service/environment_tools.rs`.
+Owns exact revision retention through save, native after-save revision recheck and one gateway-tool Cedar result audited before effect. Two grant revisions and queued/native modes bound the model. PolicyRead abstracts the supported-provider/Ask/no-native-hooks admission checks; review-hook persistence and provider-internal operations remain outside this gateway-tool audit abstraction. This finite abstraction checks safety only. It does not execute or verify the implementation, promise eventual completion, or qualify external effects. Existing source checkpoints and historical test receipts retain their earlier scope. The scoped model review inspected `crates/nessa-conversation/src/application/drive_tools.rs`, `crates/nessa-conversation/src/application/service.rs`, `crates/nessa-conversation/src/application/service/environment_tools.rs`.

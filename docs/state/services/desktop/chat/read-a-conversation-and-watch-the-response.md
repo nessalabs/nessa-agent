@@ -10,7 +10,7 @@ sources:
   - "src/conversation/adapters/gateway/effects.ts"
   - "src/conversation/adapters/store/slice.ts"
   - "src/conversation/application/usecases/apply-view.ts"
-  - "crates/nessa-server/src/conversation/application/service.rs"
+  - "crates/nessa-conversation/src/application/service.rs"
   - "crates/nessa-protocol/src/conversation/projection.rs"
   - "crates/nessa-protocol/src/conversation/view.rs"
   - "crates/nessa-server/src/product/conversation.rs"
@@ -22,7 +22,7 @@ sources:
   - "src/conversation/adapters/gateway/effects.test.ts"
   - "src/conversation/application/usecases/apply-view-terminal.test.ts"
   - "src/conversation/adapters/agent-stream/transcript.test.ts"
-  - "crates/nessa-server/tests/conversation/projection.rs"
+  - "crates/nessa-conversation/tests/conversation/projection.rs"
 diagramLinks: {}
 ---
 

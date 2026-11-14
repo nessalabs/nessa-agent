@@ -1,5 +1,5 @@
---- crates/nessa-server/src/conversation/infrastructure/workspaces.rs
-+++ crates/nessa-server/src/conversation/infrastructure/workspaces.rs (probe)
+--- crates/nessa-conversation/src/infrastructure/workspaces.rs
++++ crates/nessa-conversation/src/infrastructure/workspaces.rs (probe)
 @@ -412,10 +412,5 @@
          .background_command(workspace, command)
          .await
