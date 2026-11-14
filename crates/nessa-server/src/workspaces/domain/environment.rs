@@ -9,6 +9,12 @@ pub(crate) struct EnvironmentIdentity {
     version: u32,
 }
 impl EnvironmentIdentity {
+    /// Whether Nessa makes VMs in the environment named `name`: only in its
+    /// own. Owned here, so a check before anything is made and the identity
+    /// a VM's receipt carries hold the same rule.
+    pub(crate) fn admits(name: &str) -> bool {
+        name == "nessa"
+    }
     pub(crate) fn new(
         id: String,
         name: String,
@@ -17,7 +23,7 @@ impl EnvironmentIdentity {
     ) -> Result<Self, Failure> {
         let uuid =
             |s: &str| uuid::Uuid::parse_str(s).is_ok_and(|id| id.to_string() == s && !id.is_nil());
-        if !uuid(&id) || !uuid(&version_id) || name != "nessa" || version == 0 {
+        if !uuid(&id) || !uuid(&version_id) || !Self::admits(&name) || version == 0 {
             return Err(Failure::EnvironmentUnavailable);
         }
         Ok(Self {
@@ -39,15 +45,6 @@ impl EnvironmentIdentity {
     pub(crate) fn version(&self) -> u32 {
         self.version
     }
-    pub(crate) fn check(&self, observed: &ObservedEnvironment) -> Result<(), AdmissionRefusal> {
-        match (&observed.name, observed.version) {
-            (None, _) => Err(AdmissionRefusal::MissingEnvironment),
-            (Some(name), _) if name != &self.name => Err(AdmissionRefusal::WrongEnvironment),
-            (_, None) => Err(AdmissionRefusal::MissingVersion),
-            (_, Some(version)) if version != self.version => Err(AdmissionRefusal::WrongVersion),
-            _ => Ok(()),
-        }
-    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -66,6 +63,8 @@ pub(crate) enum AdmissionRefusal {
     InvalidReceipt,
     ReceiptUnavailable,
     LifetimeNotEnforced,
+    /// Boat still has to wipe credentials the VM's image carried.
+    WipePending,
 }
 impl AdmissionRefusal {
     pub(crate) fn as_str(self) -> &'static str {
@@ -79,39 +78,8 @@ impl AdmissionRefusal {
             Self::InvalidReceipt => "invalid_receipt",
             Self::ReceiptUnavailable => "receipt_unavailable",
             Self::LifetimeNotEnforced => "lifetime_not_enforced",
+            Self::WipePending => "wipe_pending",
         }
-    }
-}
-
-/// Immutable observed configuration facts; admission owns their one supported posture.
-pub(crate) struct EnvironmentConfiguration {
-    pub(crate) safe_for_third_parties: bool,
-    pub(crate) pass_github: bool,
-    pub(crate) pass_secrets: bool,
-    pub(crate) pass_sandbox_credentials: bool,
-    pub(crate) pass_agents_credentials: bool,
-    pub(crate) has_contents: bool,
-    pub(crate) has_secret_files: bool,
-    pub(crate) has_repositories: bool,
-    pub(crate) owner_default_profile: bool,
-    pub(crate) proxy_ai_credentials: bool,
-}
-impl EnvironmentConfiguration {
-    pub(crate) fn admit(self) -> Result<(), Failure> {
-        if self.safe_for_third_parties
-            || self.pass_github
-            || self.pass_secrets
-            || self.pass_sandbox_credentials
-            || !self.pass_agents_credentials
-            || self.has_contents
-            || self.has_secret_files
-            || self.has_repositories
-            || !self.owner_default_profile
-            || self.proxy_ai_credentials
-        {
-            return Err(Failure::EnvironmentUnavailable);
-        }
-        Ok(())
     }
 }
 

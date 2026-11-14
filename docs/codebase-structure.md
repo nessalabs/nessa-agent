@@ -617,6 +617,21 @@ wait, and the record of that cause, in the crate's `tests/poller.rs`.
 Design: [peer gateways](design/auth/peer-gateways.md#the-dialing-side),
 [reading a peer](design/auth/peer-gateways.md#reading-a-peer).
 
+The environment role of the one binary, `nessa env serve`, is its own crate,
+`crates/nessa-env-serve/` (Unix only, apart from `machine.rs`).
+`application/serve.rs` is the frame loop a gateway's leases run over;
+`domain/` says what a leasing peer is granted; `infrastructure/` holds the
+harness launcher, the lease ledger, the host lock, the grants file and its
+Cedar policy (`infrastructure/cedar/`), the outbox and inbox, and the dial and
+pairing of a host that calls its gateway; `install.rs` names where a build
+lives on a host and the commands that put it there. `machine.rs` reads what a
+machine has (`MachineProbe`), for `env serve` and for `devices.list` alike.
+The server keeps the command line (`composition/env_serve_command.rs`,
+`env_dial_command.rs`, `env_grant_command.rs`) and the lease protocol's
+fingerprint (`env/config.rs`), which names every source of the contract in
+this crate. Its unit tests are in the crate's `tests/`; the real binary is
+driven by the server's `tests/env_serve_binary.rs`.
+
 `crates/nessa-auth` is a workspace library with pure domain models and
 application-owned DTOs/ports. See its [module and collaboration guide](../crates/nessa-auth/README.md).
 The local backend, embedded Cedar, and `/session` gateway are implemented.
@@ -2847,11 +2862,14 @@ and shared bounds are `protocol/defaults/github-relays.json` and
 allocation receipts: `domain` contains values and failures; `application` orders
 allocation through Settings, Assignments, Provider and RecoveryAudit ports in
 `application/workspaces.rs`; `infrastructure`
-implements encrypted vault settings, private receipt files, Boat/workspace-sdk
-preparation and scoped SSH access. `domain/workspace.rs` owns legal receipt histories. `domain/environment.rs` owns the supported
-credential posture, immutable environment identity and bounded refusal evidence;
-`infrastructure/boat_admission.rs` checks complete current provider state and raw
-VM receipts before SDK authority. `assignments.rs` retains proof and terminal
+implements encrypted vault settings, private receipt files, and the Boat
+provider adapter `infrastructure/boat.rs` over workspace-sdk `BoatMachines`
+(create, admission checks, ready, stop, roll back) with the SDK workspace
+connection behind `infrastructure/ssh.rs`. `domain/workspace.rs` owns legal
+receipt histories. `domain/environment.rs` owns immutable environment identity,
+the environment name Nessa admits (`EnvironmentIdentity::admits`) and bounded
+refusal evidence; the SDK checks provider state and VM receipts, and the
+adapter maps its refusals into these values. `assignments.rs` retains proof and terminal
 refusals in private histories, while old receipts are read only as Unverified.
 Tests live in `tests/workspaces`; real-provider
 verification lives in `scripts/workspaces`, with the single-file local MCP fixture

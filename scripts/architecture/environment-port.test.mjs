@@ -36,7 +36,7 @@ test("a third adapter in product source is refused, wherever it is", () => {
   for (const path of [
     "crates/nessa-server/src/conversation/infrastructure/ssh.rs",
     "crates/nessa-server/src/conversation/infrastructure/ssh_environment/link.rs",
-    "crates/nessa-server/src/env_serve/application/serve.rs",
+    "crates/nessa-env-serve/src/application/serve.rs",
     "crates/nessa-server/src/product/environments.rs",
   ])
     for (const source of [

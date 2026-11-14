@@ -3,8 +3,8 @@
 use super::RuntimeSettings;
 use crate::conversation::domain::{ChannelId, SettingsScope};
 use crate::workspaces::domain::{
-    AdmissionRejection, Assignment, BoatConnection, CleanupOutcome, EnvironmentIdentity, Failure,
-    RefusalDisposition,
+    AdmissionRefusal, AdmissionRejection, Assignment, BoatConnection, CleanupOutcome,
+    EnvironmentIdentity, Failure, RefusalDisposition,
 };
 use async_trait::async_trait;
 use futures_util::FutureExt;
@@ -90,10 +90,21 @@ pub(crate) trait Provider: Send + Sync {
     ) -> Result<Arc<dyn WorkspaceRuntime>, Failure>;
     /// Best effort rollback of a received creation receipt that could not be saved.
     /// Acceptance alone cannot be returned as confirmed cleanup.
-    async fn remove(&self, connection: &BoatConnection, vm: &str) -> Result<(), Failure>;
+    /// `admission` is what the VM was admitted under when it was made.
+    async fn remove(
+        &self,
+        connection: &BoatConnection,
+        vm: &str,
+        admission: &EnvironmentIdentity,
+    ) -> Result<(), Failure>;
     /// Stop `vm`, keeping its disk: it costs nothing while stopped, and
     /// [`Provider::connect`] resumes it.
-    async fn stop(&self, connection: &BoatConnection, vm: &str) -> Result<(), Failure>;
+    async fn stop(
+        &self,
+        connection: &BoatConnection,
+        vm: &str,
+        cause: RestCause,
+    ) -> Result<(), Failure>;
 }
 
 /// A thread's workspace in use: held by each runtime [`Workspaces::open`]
@@ -176,12 +187,17 @@ pub(crate) enum RestCause {
     Idle,
     /// The agent closed its thread.
     Closed,
+    /// A VM this creation made is still wiping what its image carried:
+    /// waking it is the restart that ends the wipe, so it is stopped before
+    /// it is first connected.
+    Wiping,
 }
 impl RestCause {
     pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::Idle => "idle",
             Self::Closed => "closed",
+            Self::Wiping => "wiping",
         }
     }
 }
@@ -319,6 +335,17 @@ impl Workspaces {
                 }
             }
         };
+        self.stop_recorded(&connection, id, vm, cause).await
+    }
+    /// Stops thread `id`'s `vm` for `cause`, recording the stop before it
+    /// is asked and once it answered.
+    async fn stop_recorded(
+        &self,
+        connection: &BoatConnection,
+        id: String,
+        vm: String,
+        cause: RestCause,
+    ) -> Rested {
         let requested_failed = self
             .record_recovery(&RecoveryEvent::StopRequested {
                 thread: id.clone(),
@@ -326,7 +353,7 @@ impl Workspaces {
                 cause,
             })
             .is_err();
-        let stopped = AssertUnwindSafe(self.provider.stop(&connection, &vm))
+        let stopped = AssertUnwindSafe(self.provider.stop(connection, &vm, cause))
             .catch_unwind()
             .await
             .unwrap_or(Err(Failure::Provider));
@@ -481,7 +508,25 @@ impl Workspaces {
                     .await?;
                 let created = self.provider.create(&connection, &id).await?;
                 let vm = created.vm;
-                if let Some(rejection) = created.refusal {
+                let mut refusal = created.refusal;
+                // A new VM still wiping is clean once it restarts, and the
+                // next wake is that restart: it is stopped, on the record,
+                // and `connect` checks it in full once ready. A stop not
+                // accepted, or not recorded, leaves it refused, so it is
+                // rolled back. A VM Boat replayed may be in use elsewhere,
+                // so its refusal always stands.
+                if created.disposition == RefusalDisposition::RollbackNewVm
+                    && refusal.as_ref().map(AdmissionRejection::cause)
+                        == Some(AdmissionRefusal::WipePending)
+                {
+                    let rested = self
+                        .stop_recorded(&connection, id.clone(), vm.clone(), RestCause::Wiping)
+                        .await;
+                    if rested.stopped == Ok(true) && !rested.audit_failed {
+                        refusal = None;
+                    }
+                }
+                if let Some(rejection) = refusal {
                     return self
                         .refuse(
                             &connection,
@@ -515,7 +560,13 @@ impl Workspaces {
                         })
                         .is_err();
                     let (cleanup, cleanup_audit_failed) = self
-                        .cleanup(&connection, &id, &vm, created.disposition)
+                        .cleanup(
+                            &connection,
+                            &id,
+                            &vm,
+                            &created.admission,
+                            created.disposition,
+                        )
                         .await;
                     return Err(Failure::ReceiptRecovery {
                         vm,
@@ -580,8 +631,9 @@ impl Workspaces {
                 disposition,
             })
             .is_err();
-        let (cleanup, cleanup_audit_failed) =
-            self.cleanup(connection, thread, vm, disposition).await;
+        let (cleanup, cleanup_audit_failed) = self
+            .cleanup(connection, thread, vm, admission, disposition)
+            .await;
         Err(Failure::AdmissionRecovery {
             vm: vm.into(),
             rejection: rejection.clone(),
@@ -596,6 +648,7 @@ impl Workspaces {
         connection: &BoatConnection,
         thread: &str,
         vm: &str,
+        admission: &EnvironmentIdentity,
         disposition: RefusalDisposition,
     ) -> (CleanupOutcome, bool) {
         // Never delete an existing/replayed workspace or a target named by an
@@ -603,7 +656,7 @@ impl Workspaces {
         match disposition {
             RefusalDisposition::RetainTarget => (CleanupOutcome::Retained, false),
             RefusalDisposition::RollbackNewVm => {
-                let confirmed = AssertUnwindSafe(self.provider.remove(connection, vm))
+                let confirmed = AssertUnwindSafe(self.provider.remove(connection, vm, admission))
                     .catch_unwind()
                     .await
                     .unwrap_or(Err(Failure::CleanupUncertain))

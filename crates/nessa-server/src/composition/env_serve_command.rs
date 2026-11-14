@@ -20,20 +20,21 @@
 use super::{agent::launch_environment, runtime_config::RuntimeConfig};
 use crate::{
     core::RunError,
-    devices::{application::MachineProbe, infrastructure::SystemMachine},
+    devices::infrastructure::SystemMachine,
     env::{Environment, LEASE_PROTOCOL, VERSION},
-    env_serve::{
-        application::{
-            admit_update, refuse, serve, ArtifactInbox, CommandRunner, HarnessLauncher,
-            LeasePolicyEvaluator, Runners, ServeEnd, ServeTimings, Serving,
-        },
-        domain::Peer,
-        infrastructure::{
-            CedarLeasePolicy, ConfiguredLauncher, FileGrants, FileInbox, FileLedger, FileOutbox,
-            LaunchSpec, ServeLock, ServeLockError, ShepherdCommands, COMMAND_VARIABLES,
-        },
-    },
     timer::{Timer, TokioTimer},
+};
+use nessa_env_serve::machine::MachineProbe;
+use nessa_env_serve::{
+    application::{
+        admit_update, refuse, serve, ArtifactInbox, CommandRunner, HarnessLauncher,
+        LeasePolicyEvaluator, Runners, ServeEnd, ServeTimings, Serving,
+    },
+    domain::Peer,
+    infrastructure::{
+        CedarLeasePolicy, ConfiguredLauncher, FileGrants, FileInbox, FileLedger, FileOutbox,
+        LaunchSpec, ServeLock, ServeLockError, ShepherdCommands, COMMAND_VARIABLES,
+    },
 };
 use nessa_protocol::lease::{Hello, Unavailability};
 use shepherd::{ProcessSupervisor, SupervisorBuilder};

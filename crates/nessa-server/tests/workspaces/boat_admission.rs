@@ -1,7 +1,7 @@
 //! Hostile provider responses cross real HTTP; no live account or VM is used.
 use crate::workspaces::{
-    application::Provider,
-    domain::{AdmissionRefusal, BoatConnection, Failure},
+    application::{Provider, RestCause},
+    domain::{AdmissionRefusal, AdmissionRejection, BoatConnection, Failure, RefusalDisposition},
     infrastructure::BoatProvider,
 };
 use axum::{
@@ -114,7 +114,6 @@ async fn cold_creation_with_a_separate_valid_info_receipt_is_admitted() {
 /// command is issued while the inherited disk is still being sanitized.
 #[tokio::test]
 async fn cold_snapshot_waits_for_ready_then_requires_a_clean_security_receipt() {
-    use crate::workspaces::domain::RefusalDisposition;
     let server = server().await;
     {
         let mut state = server.state.lock().unwrap();
@@ -139,8 +138,11 @@ async fn cold_snapshot_waits_for_ready_then_requires_a_clean_security_receipt() 
     assert_eq!(state.info_reads, 5); // three pending, ready, final strict receipt
 }
 
+/// A new VM still wiping what its image carried is stopped, not refused:
+/// waking it is the restart that ends the wipe, and the wake checks it in
+/// full before anything runs in it. One Boat replayed keeps its refusal.
 #[tokio::test]
-async fn ready_snapshot_with_pending_wipe_is_still_refused_without_commands() {
+async fn a_new_vm_still_wiping_is_reported_and_checked_when_woken() {
     use tracing::instrument::WithSubscriber;
     let output = Arc::new(Mutex::new(Vec::new()));
     let writer = output.clone();
@@ -157,29 +159,77 @@ async fn ready_snapshot_with_pending_wipe_is_still_refused_without_commands() {
         .with_subscriber(subscriber)
         .await
         .unwrap();
+    // The adapter only reports it: the workspace decides on the stop, and
+    // records it.
     assert_eq!(
-        receipt.refusal.unwrap().cause(),
-        AdmissionRefusal::InvalidReceipt
+        receipt.refusal.as_ref().map(AdmissionRejection::cause),
+        Some(AdmissionRefusal::WipePending)
     );
+    assert_eq!(receipt.disposition, RefusalDisposition::RollbackNewVm);
     let text = String::from_utf8(output.lock().unwrap().clone()).unwrap();
     assert!(text.contains("startup_phase=\"operable\""), "{text}");
     assert!(!text.contains("fixture-token"));
+    assert_eq!(server.state.lock().unwrap().stopped, 0);
+    server
+        .provider
+        .stop(&connection(), VM, RestCause::Wiping)
+        .await
+        .unwrap();
+    {
+        let state = server.state.lock().unwrap();
+        assert_eq!(state.stopped, 1);
+        assert_eq!(state.receipt["sandbox"]["state"], json!("archived"));
+    }
+    // Waking resumes it, which ends the wipe, and it passes its check: what
+    // fails is only this fixture's missing workspace supervisor.
+    assert_eq!(
+        server
+            .provider
+            .connect(&connection(), "fixture-thread", VM, &receipt.admission)
+            .await
+            .err(),
+        Some(Failure::Provider)
+    );
     let state = server.state.lock().unwrap();
-    assert_eq!(state.resumed, 0);
+    assert_eq!(state.resumed, 1);
+    assert_eq!(state.stopped, 1, "a VM that passed is not put back");
+}
+
+#[tokio::test]
+async fn a_replayed_vm_still_wiping_keeps_its_refusal() {
+    use tracing::instrument::WithSubscriber;
+    // Under a subscriber too: the other wiping test reads this log line, and
+    // a callsite first met with no subscriber may be left switched off.
+    let subscriber = tracing_subscriber::fmt()
+        .with_writer(std::io::sink)
+        .finish();
+    let server = server().await;
+    {
+        let mut state = server.state.lock().unwrap();
+        state.receipt["sandbox"]["wipePendingUntilRestart"] = json!(true);
+        state.creation_ack = json!({"ok":true,"type":"sandbox.created","status":"ready"});
+    }
+    let receipt = server
+        .provider
+        .create(&connection(), "fixture-thread")
+        .with_subscriber(subscriber)
+        .await
+        .unwrap();
+    assert_eq!(
+        receipt.refusal.map(|r| r.cause()),
+        Some(AdmissionRefusal::WipePending)
+    );
+    assert_eq!(receipt.disposition, RefusalDisposition::RetainTarget);
+    let state = server.state.lock().unwrap();
+    assert_eq!(state.stopped, 0);
     assert_eq!(state.commands, 0);
 }
 
 #[tokio::test]
 async fn cold_snapshot_startup_deadline_preserves_target_and_rollback_without_commands() {
-    use crate::workspaces::domain::RefusalDisposition;
-    let mut fixture = server().await;
-    // Keep the HTTP timeout longer than the startup budget, so this test
-    // proves the lifecycle deadline rather than an incidental request timeout.
-    fixture.provider.http = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(3600))
-        .build()
-        .unwrap();
-    let server = Arc::new(fixture);
+    // The request timeout (45 s) is shorter than the budget, but each read
+    // here answers at once: what ends it is the budget.
+    let server = Arc::new(server().await);
     server.state.lock().unwrap().receipt["sandbox"]["state"] = json!("provisioning");
     let owner = server.clone();
     let opening =
@@ -188,10 +238,10 @@ async fn cold_snapshot_startup_deadline_preserves_target_and_rollback_without_co
         tokio::time::sleep(std::time::Duration::from_millis(1)).await;
     }
     tokio::time::pause();
-    tokio::time::advance(std::time::Duration::from_secs(91)).await;
+    tokio::time::advance(std::time::Duration::from_secs(86)).await;
     let receipt = tokio::time::timeout(std::time::Duration::from_millis(50), opening)
         .await
-        .expect("fresh startup exceeded its 90 second budget")
+        .expect("fresh startup exceeded its 85 second budget")
         .unwrap()
         .unwrap();
     assert_eq!(receipt.vm, VM);
@@ -208,7 +258,6 @@ async fn cold_snapshot_startup_deadline_preserves_target_and_rollback_without_co
 
 #[tokio::test]
 async fn fresh_snapshot_requires_operable_final_receipt_without_changing_replay_resume() {
-    use crate::workspaces::domain::RefusalDisposition;
     for state_name in [
         "error",
         "cancelled",
@@ -245,7 +294,6 @@ async fn fresh_snapshot_requires_operable_final_receipt_without_changing_replay_
 
 #[tokio::test]
 async fn replayed_archived_receipt_retains_existing_resume_path_without_startup_wait() {
-    use crate::workspaces::domain::RefusalDisposition;
     let server = server().await;
     {
         let mut state = server.state.lock().unwrap();
@@ -293,6 +341,9 @@ struct State {
     /// Reads that still find an archiving VM archiving; the next finds it
     /// archived.
     archiving_reads: usize,
+    /// Stops asked: the SDK puts back a VM it resumed and could not admit.
+    stopped: usize,
+    deleted: usize,
 }
 struct Server {
     provider: BoatProvider,
@@ -320,6 +371,8 @@ async fn server() -> Server {
         info_reads: 0,
         expected_ttl: Some(3600),
         archiving_reads: 0,
+        stopped: 0,
+        deleted: 0,
     }));
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base = format!("http://{}/api/v1", listener.local_addr().unwrap());
@@ -328,6 +381,8 @@ async fn server() -> Server {
     let read = state.clone();
     let resume = state.clone();
     let commands = state.clone();
+    let stop = state.clone();
+    let delete = state.clone();
     let router = Router::new()
         .route("/api/v1/me", get(|| async move { Json(json!({"ok":true,"type":"me","user":{"id":"11111111-1111-4111-8111-111111111111"}})) }))
         .route("/api/v1/environments", get(move || { let env=env.lock().unwrap().environment.clone(); async move { Json(json!({"ok":true,"type":"environments.list","environments":[env]})) } }))
@@ -338,26 +393,13 @@ async fn server() -> Server {
             let mut state=create.lock().unwrap();
             assert_eq!(request,json!({"type":"small","ttlSeconds":state.expected_ttl,"environment":"nessa","env":{"NESSA_THREAD_ID":"fixture-thread"},"from":"bsh_fixture","snapshots":true}));
             state.created+=1; if state.drift_on_create { state.environment["passGithub"]=json!(true); } let mut body=state.creation_receipt.as_ref().unwrap_or(&state.receipt).clone(); for field in ["ok","type","status"] {body.as_object_mut().unwrap().remove(field);} for (field,value) in state.creation_ack.as_object().unwrap() {body[field.as_str()]=value.clone();} body["ttlSeconds"]=json!(state.expected_ttl); async { Json(body) } }))
-        .route("/api/v1/sandboxes/{id}", get(move || { let mut state=read.lock().unwrap(); state.info_reads+=1; if state.receipt["sandbox"]["state"]==json!("archiving") { if state.archiving_reads==0 { state.receipt["sandbox"]["state"]=json!("archived"); } else { state.archiving_reads-=1; } } let body=state.startup_receipts.pop_front().unwrap_or_else(|| state.read_override.as_ref().unwrap_or(&state.receipt).clone()); async { Json(body) } }))
-        .route("/api/v1/sandboxes/{id}/resume", post(move |Json(request):Json<Value>| { let mut state=resume.lock().unwrap(); assert_eq!(request["ttlSeconds"],json!(state.expected_ttl)); state.resumed+=1; if state.drift_on_resume { state.environment["passSecrets"]=json!(true); } state.receipt["sandbox"]["state"]=json!("ready"); async move { Json(json!({"ok":true,"type":"sandbox.resumed","id":VM,"status":"ready"})) } }))
+        .route("/api/v1/sandboxes/{id}", get(move || { let mut state=read.lock().unwrap(); state.info_reads+=1; if state.receipt["sandbox"]["state"]==json!("archiving") { if state.archiving_reads==0 { state.receipt["sandbox"]["state"]=json!("archived"); } else { state.archiving_reads-=1; } } let body=state.startup_receipts.pop_front().unwrap_or_else(|| state.read_override.as_ref().unwrap_or(&state.receipt).clone()); async { Json(body) } }).delete(move |headers:axum::http::HeaderMap| { assert_eq!(headers.get("x-ascii-confirm-delete").unwrap(),VM); delete.lock().unwrap().deleted+=1; async { axum::http::StatusCode::FORBIDDEN } }))
+        .route("/api/v1/sandboxes/{id}/resume", post(move |Json(request):Json<Value>| { let mut state=resume.lock().unwrap(); assert_eq!(request["ttlSeconds"],json!(state.expected_ttl)); state.resumed+=1; state.receipt["sandbox"]["wipePendingUntilRestart"]=json!(false); if state.drift_on_resume { state.environment["passSecrets"]=json!(true); } state.receipt["sandbox"]["state"]=json!("ready"); async move { Json(json!({"ok":true,"type":"sandbox.resumed","id":VM,"status":"ready"})) } }))
+        .route("/api/v1/sandboxes/{id}/stop", post(move || { let mut state=stop.lock().unwrap(); state.stopped+=1; state.receipt["sandbox"]["state"]=json!("archived"); async { Json(json!({"ok":true,"type":"sandbox.stopped","id":VM,"status":"archived"})) } }))
         .fallback(move || { commands.lock().unwrap().commands+=1; async { axum::http::StatusCode::FORBIDDEN } });
     let task = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
-    let tls = rustls::ClientConfig::builder_with_provider(Arc::new(
-        rustls::crypto::ring::default_provider(),
-    ))
-    .with_safe_default_protocol_versions()
-    .unwrap()
-    .with_root_certificates(rustls::RootCertStore::empty())
-    .with_no_client_auth();
     let provider = BoatProvider {
         api_base: base,
-        http: reqwest::Client::builder()
-            .tls_backend_preconfigured(tls)
-            .no_proxy()
-            .redirect(reqwest::redirect::Policy::none())
-            .timeout(std::time::Duration::from_secs(5))
-            .build()
-            .unwrap(),
         relay_socket: "unused".into(),
         relay_program: "unused".into(),
     };
@@ -597,11 +639,6 @@ async fn mismatched_vm_receipts_retain_targets_without_extending_workspace_autho
             AdmissionRefusal::InvalidReceipt,
         ),
         (
-            "wipePendingUntilRestart",
-            json!(true),
-            AdmissionRefusal::InvalidReceipt,
-        ),
-        (
             "setupStatus",
             json!("running"),
             AdmissionRefusal::InvalidReceipt,
@@ -681,6 +718,7 @@ async fn resume_rechecks_environment_before_any_sdk_command_or_grant() {
     );
     let state = server.state.lock().unwrap();
     assert_eq!(state.resumed, 1);
+    assert_eq!(state.stopped, 1, "the VM it woke and refused is put back");
     assert_eq!(state.commands, 0);
 }
 
@@ -711,6 +749,7 @@ async fn a_vm_still_stopping_is_resumed_once_it_has_stopped() {
     let state = server.state.lock().unwrap();
     assert_eq!(state.archiving_reads, 0, "it waited while the VM stopped");
     assert_eq!(state.resumed, 1, "then resumed it");
+    assert_eq!(state.stopped, 1, "the VM it woke and refused is put back");
     assert_eq!(state.commands, 0);
 }
 
@@ -767,6 +806,7 @@ async fn archived_resume_refuses_an_unenforced_finite_lifetime_before_sdk_author
     ));
     let state = server.state.lock().unwrap();
     assert_eq!(state.resumed, 1);
+    assert_eq!(state.stopped, 1, "the VM it woke and refused is put back");
     assert_eq!(state.commands, 0);
 }
 
@@ -818,7 +858,6 @@ async fn a_personal_vm_without_stored_logins_does_not_gain_extra_authority() {
 
 #[tokio::test]
 async fn replayed_or_unrecognized_creation_receipts_do_not_authorize_rollback() {
-    use crate::workspaces::domain::RefusalDisposition;
     let server = server().await;
     for ack in [
         json!({"ok":true,"type":"sandbox.created","status":"ready"}),
@@ -876,4 +915,56 @@ async fn oversized_vm_bodies_are_bounded_without_losing_a_previously_received_ta
         Some(AdmissionRefusal::InvalidReceipt)
     );
     assert_eq!(server.state.lock().unwrap().commands, 0);
+}
+
+/// Nessa admits only its own environment: another name is refused before
+/// Boat is asked anything, so nothing is made for it.
+#[tokio::test]
+async fn another_environment_is_refused_before_anything_is_asked() {
+    let server = server().await;
+    let mut other = BoatConnection::new(
+        "fixture-token".into(),
+        "agents".into(),
+        "bsh_fixture".into(),
+    )
+    .unwrap();
+    other.auto_stop = connection().auto_stop;
+    assert_eq!(
+        server.provider.validate(&other).await,
+        Err(Failure::EnvironmentUnavailable)
+    );
+    assert_eq!(
+        server.provider.create(&other, "fixture-thread").await.err(),
+        Some(Failure::EnvironmentUnavailable)
+    );
+    let state = server.state.lock().unwrap();
+    assert_eq!(state.created, 0);
+    assert_eq!(state.info_reads, 0);
+}
+
+/// A rest stops the VM through the SDK's machines; a rollback deletes only
+/// by the VM it names, and is never reported as confirmed.
+#[tokio::test]
+async fn rest_stops_and_rollback_deletes_without_confirming() {
+    use crate::workspaces::application::RestCause;
+    let server = server().await;
+    let receipt = server
+        .provider
+        .create(&connection(), "fixture-thread")
+        .await
+        .unwrap();
+    server
+        .provider
+        .stop(&connection(), VM, RestCause::Idle)
+        .await
+        .unwrap();
+    assert_eq!(server.state.lock().unwrap().stopped, 1);
+    assert!(server
+        .provider
+        .remove(&connection(), VM, &receipt.admission)
+        .await
+        .is_err());
+    let state = server.state.lock().unwrap();
+    assert_eq!(state.deleted, 1);
+    assert_eq!(state.commands, 0);
 }

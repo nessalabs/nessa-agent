@@ -1,7 +1,7 @@
 //! [`MachineProbe`] over `sysinfo`: the host's name, system, processors,
 //! memory, and its local disks.
-use crate::devices::application::MachineProbe;
 use crate::timer::clock;
+use nessa_env_serve::machine::MachineProbe;
 use nessa_protocol::lease::{MachineDisk, MachineReport, MAX_MACHINE_DISKS, MAX_MACHINE_FIGURE};
 use std::{
     path::PathBuf,

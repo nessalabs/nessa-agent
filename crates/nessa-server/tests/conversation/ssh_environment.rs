@@ -16,14 +16,14 @@ use super::{
 };
 use crate::conversation::application::{Environment, GrantedTerms, LeaseRelease};
 use crate::env::{LEASE_PROTOCOL, VERSION};
-use crate::env_serve::application::FrameStream;
-use crate::env_serve::application::{
+use crate::timer::TokioTimer;
+use nessa_env_serve::application::FrameStream;
+use nessa_env_serve::application::{
     serve, CommandRan, CommandRunner, CommandStop, EndCause, HarnessLauncher, LeaseLedger,
     LedgerEntry, PeerGrants, Runners, ServeTimings, Serving,
 };
-use crate::env_serve::domain::{Agents, CommandGrant, Peer, PeerGrant};
-use crate::env_serve::install::Platform;
-use crate::timer::TokioTimer;
+use nessa_env_serve::domain::{Agents, CommandGrant, Peer, PeerGrant};
+use nessa_env_serve::install::Platform;
 use nessa_protocol::lease::{
     decode, encode, Cleanup, Collection, CommandEnd, Data, FromEnvironment,
     GrantedTerms as WireTerms, Sandbox, StagedArtifact, ToEnvironment, COMMAND_STOP_WAIT,
@@ -311,7 +311,7 @@ impl LeaseConnector for Connector {
                         peer: Peer::Ssh,
                         grants: self.grants.clone(),
                         policy: Arc::new(
-                            crate::env_serve::infrastructure::CedarLeasePolicy::new().unwrap(),
+                            nessa_env_serve::infrastructure::CedarLeasePolicy::new().unwrap(),
                         ),
                         machine: None,
                     },
@@ -1416,7 +1416,7 @@ async fn a_grant_not_answered_in_time_is_ended_on_the_host() {
 fn ssh_is_run_with_the_destination_after_its_options() {
     let host = devbox();
     let digest = "ab".repeat(32);
-    let arguments = ssh_arguments(&host, crate::env_serve::install::serve_command(&[&digest]));
+    let arguments = ssh_arguments(&host, nessa_env_serve::install::serve_command(&[&digest]));
     let separator = arguments.iter().position(|word| word == "--").unwrap();
     assert_eq!(
         &arguments[separator + 1..],
@@ -2059,15 +2059,15 @@ async fn a_loss_whose_audit_fails_leaves_the_lease_unanswered() {
 
 /// A host that stages nothing: its leases run without a publish point.
 pub(crate) struct NoOutbox;
-impl crate::env_serve::application::ArtifactOutbox for NoOutbox {
-    fn open(&self, _lease: &str) -> std::io::Result<crate::env_serve::application::PublishPoint> {
+impl nessa_env_serve::application::ArtifactOutbox for NoOutbox {
+    fn open(&self, _lease: &str) -> std::io::Result<nessa_env_serve::application::PublishPoint> {
         Err(std::io::Error::other("no outbox"))
     }
     fn stage(
         &self,
         _lease: &str,
         _artifact: u32,
-        _request: &crate::env_serve::application::PublishRequest,
+        _request: &nessa_env_serve::application::PublishRequest,
     ) -> Result<nessa_protocol::lease::StagedArtifact, nessa_protocol::lease::PublishRefusal> {
         Err(nessa_protocol::lease::PublishRefusal::StagingFailed)
     }
@@ -2669,19 +2669,19 @@ async fn a_host_without_this_build_gets_it_installed_and_then_serves() {
     assert_eq!(
         runs[0],
         (
-            crate::env_serve::install::probe_command(LEASE_PROTOCOL, &[&this_digest()]),
+            nessa_env_serve::install::probe_command(LEASE_PROTOCOL, &[&this_digest()]),
             None
         )
     );
     assert_eq!(
         runs[1],
         (
-            crate::env_serve::install::upload_command(LEASE_PROTOCOL, &this_digest()),
+            nessa_env_serve::install::upload_command(LEASE_PROTOCOL, &this_digest()),
             Some(THIS_BUILD.to_vec())
         )
     );
     assert_eq!(connector.connects.load(Ordering::SeqCst), 2);
-    let serve = crate::env_serve::install::serve_command(&[&this_digest()]);
+    let serve = nessa_env_serve::install::serve_command(&[&this_digest()]);
     assert_eq!(*connector.commands.lock().unwrap(), [serve.clone(), serve]);
     let installed = |started: bool| {
         let (protocol, digest) = (LEASE_PROTOCOL.to_owned(), this_digest());
@@ -3194,16 +3194,16 @@ async fn a_host_of_another_platform_gets_the_release_build_pinned_for_it() {
         shell.runs(),
         [
             (
-                crate::env_serve::install::probe_command(LEASE_PROTOCOL, &builds),
+                nessa_env_serve::install::probe_command(LEASE_PROTOCOL, &builds),
                 None
             ),
             (
-                crate::env_serve::install::upload_command(LEASE_PROTOCOL, &release_digest()),
+                nessa_env_serve::install::upload_command(LEASE_PROTOCOL, &release_digest()),
                 Some(RELEASE_BUILD.to_vec())
             ),
         ]
     );
-    let serve = crate::env_serve::install::serve_command(&builds);
+    let serve = nessa_env_serve::install::serve_command(&builds);
     assert_eq!(*connector.commands.lock().unwrap(), [serve.clone(), serve]);
     let (host, lease, protocol) = (
         "devbox".to_owned(),

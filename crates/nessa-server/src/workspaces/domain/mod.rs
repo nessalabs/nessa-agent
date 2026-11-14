@@ -2,8 +2,7 @@
 mod environment;
 mod workspace;
 pub(crate) use environment::{
-    AdmissionRefusal, AdmissionRejection, EnvironmentConfiguration, EnvironmentIdentity,
-    ObservedEnvironment,
+    AdmissionRefusal, AdmissionRejection, EnvironmentIdentity, ObservedEnvironment,
 };
 pub(crate) use workspace::{
     Assignment, BoatConnection, ClaudeSignIn, CleanupOutcome, Failure, RefusalDisposition,

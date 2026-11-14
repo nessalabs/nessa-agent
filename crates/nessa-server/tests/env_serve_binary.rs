@@ -375,10 +375,10 @@ fn on_host(home: &Path, command: &str) -> Command {
 /// that copy, whose hello names this build's lease protocol.
 #[test]
 fn this_build_installs_on_a_host_without_it_and_then_serves_there() {
-    use nessa_server::env::LEASE_PROTOCOL;
-    use nessa_server::env_serve::install::{
+    use nessa_env_serve::install::{
         probe_command, serve_command, upload_command, Platform, Probe, Upload,
     };
+    use nessa_server::env::LEASE_PROTOCOL;
     use sha2::{Digest, Sha256};
     let home = tempfile::tempdir().unwrap();
     let root = tempfile::tempdir().unwrap();

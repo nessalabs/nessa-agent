@@ -515,7 +515,7 @@ never run somewhere else.
 
 **Orderings the SSH adapter meets** (gate 15). Each row has its test, in
 `crates/nessa-server/tests/conversation/ssh_environment.rs` (adapter),
-`tests/env_serve/serve.rs` (host), `tests/env_serve_binary.rs` (the real
+`crates/nessa-env-serve/tests/serve.rs` (host), `tests/env_serve_binary.rs` (the real
 binary over pipes) and `tests/conversation/leases.rs` (service).
 
 | Row | Input or order | Decision | Test |
@@ -716,7 +716,7 @@ together.
 
 | Row | Input or order | Decision | Test |
 | --- | --- | --- | --- |
-| C1 (L14) | `run` during a turn, on a granted host, with an allowed program | `command_issued` naming the turn's person and the call, the command runs on the host, `command_ended` with its exit and output; the view counts it while it runs | service `l14_a_command_runs_for_the_persons_turn_under_its_agent_lease_and_its_end_is_recorded`, adapter `a_command_runs_on_the_host_and_answers_how_it_ended_and_what_it_printed`, host `tests/env_serve/serve.rs` command tests |
+| C1 (L14) | `run` during a turn, on a granted host, with an allowed program | `command_issued` naming the turn's person and the call, the command runs on the host, `command_ended` with its exit and output; the view counts it while it runs | service `l14_a_command_runs_for_the_persons_turn_under_its_agent_lease_and_its_end_is_recorded`, adapter `a_command_runs_on_the_host_and_answers_how_it_ended_and_what_it_printed`, host `crates/nessa-env-serve/tests/serve.rs` command tests |
 | C2 | An environment not granted or not named, `here`, a denied program, a sandbox other than `none`, a fifth command, an unreachable host | Refused, typed, and recorded with who asked; nothing runs | service `l14_each_refusal_is_typed_recorded_for_the_turns_person_and_runs_nothing`, adapter `a_command_is_refused_by_a_host_that_runs_none_or_cannot_be_reached` |
 | C3 (L15) | The call cancelled, or its stand-in gone | The command is stopped on the host, and ends `stopped` with the parent's cause when the parent is ending, else `closed` | service `l15_a_command_whose_caller_went_away_is_stopped_and_its_end_recorded`, adapter `a_stopped_command_is_stopped_on_the_host_and_answers_the_stops_cause`, relay `a_cancelled_call_is_stopped_and_not_answered` |
 | C4 | The conversation's grant revoked while a call runs | Every call on that stand-in is stopped and its connection ends | relay `a_stand_in_gone_or_a_grant_revoked_stops_every_call_and_ends_the_connection` |
@@ -813,7 +813,7 @@ sequenceDiagram
 
 **Orderings.** Each row has its test, in
 `tests/conversation/ssh_environment.rs` (the installer against a scripted
-host), `tests/env_serve/install.rs` (the host's commands, run by this
+host), `crates/nessa-env-serve/tests/install.rs` (the host's commands, run by this
 machine's own `sh` with its own tools, so on Linux and macOS in CI) and
 `tests/env_serve_binary.rs` (the real binary installed and served).
 

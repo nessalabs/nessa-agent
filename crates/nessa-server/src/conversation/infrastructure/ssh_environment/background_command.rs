@@ -14,7 +14,7 @@ pub(super) fn command(builds: &[&str], cwd: &str, timeout: u64, command: &str) -
     );
     let builds = builds.join(" ");
     let encode = |value: &str| base64::engine::general_purpose::STANDARD.encode(value);
-    format!("sh -c 'c=$(printf %s {} | base64 --decode; printf .); c=${{c%?}}; w=$(printf %s {} | base64 --decode; printf .); w=${{w%?}}; for d in {}; do p=\"$HOME/{directory}/$d/nessa\"; if [ -x \"$p\" ]; then exec \"$p\" background-run --cwd \"$w\" --timeout {} -- bash --noprofile --norc -c \"$c\"; fi; done'", encode(command), encode(cwd), builds, timeout, directory = crate::env_serve::install::INSTALL_DIRECTORY)
+    format!("sh -c 'c=$(printf %s {} | base64 --decode; printf .); c=${{c%?}}; w=$(printf %s {} | base64 --decode; printf .); w=${{w%?}}; for d in {}; do p=\"$HOME/{directory}/$d/nessa\"; if [ -x \"$p\" ]; then exec \"$p\" background-run --cwd \"$w\" --timeout {} -- bash --noprofile --norc -c \"$c\"; fi; done'", encode(command), encode(cwd), builds, timeout, directory = nessa_env_serve::install::INSTALL_DIRECTORY)
 }
 
 #[cfg(test)]
