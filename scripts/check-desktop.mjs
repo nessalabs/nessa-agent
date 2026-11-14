@@ -9,6 +9,7 @@ const tests = [
   "scripts/dev-agent-config.test.mjs",
   "scripts/e2e-verdict.test.mjs",
   "scripts/gateway-port.test.mjs",
+  "scripts/workflow-source.test.mjs",
   "scripts/process-failure.test.mjs",
   ...readdirSync("scripts/desktop")
     .filter((name) => name.endsWith(".test.mjs"))

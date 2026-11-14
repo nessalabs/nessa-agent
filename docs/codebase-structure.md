@@ -1211,6 +1211,12 @@ The [execution and reporting contract](../scripts/process-failure/README.md)
 keeps diagnostic failure separate from the child result. Portable actual-process
 tests in `scripts/process-failure.test.mjs` also run through the desktop checker.
 
+[`scripts/workflow-source.mjs`](../scripts/workflow-source.mjs) owns the LF text
+view used by workflow and action structure checks. Measurement and pnpm-install
+contracts consume that reader. `scripts/workflow-source.test.mjs` executes their
+actual suites against LF and CRLF checkout fixtures, including through the desktop
+checker. Provenance owners hash the original checkout bytes.
+
 ## Cloud development preparation
 
 [`scripts/cloud-startup.sh`](../scripts/cloud-startup.sh) owns Cloud setup and

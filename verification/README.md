@@ -399,7 +399,16 @@ The desktop scope is owned by
 workflow/CLI regressions beside it in `measurement-plan.test.mjs`. Its
 validated plan publishes the check selector, gateway-build requirement and
 artifact prefix together. The workflow consumes that plan; it does not infer a
-full-matrix pass from a frame-budget result. For an isolated diagnostic:
+full-matrix pass from a frame-budget result.
+
+[`workflow-source.mjs`](../scripts/workflow-source.mjs) gives structural checks
+one LF text view of workflow and action YAML. The measurement and pnpm-install
+contract suites use that reader. `workflow-source.test.mjs` executes both actual
+suites against LF and CRLF checkout fixtures; their existing assertions and
+per-command deadlines decide the result. Provenance hashes are over original
+checkout bytes, rather than this text view.
+
+For an isolated diagnostic:
 
 ```sh
 gh workflow run conversation-stress-load.yml --ref <branch> -f desktop-performance=true -f desktop-scope=frame-budget

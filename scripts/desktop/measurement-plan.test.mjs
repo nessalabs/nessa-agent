@@ -5,15 +5,15 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { fileURLToPath, URL } from "node:url"
 import { test } from "node:test"
+import { readWorkflowSource } from "../workflow-source.mjs"
 import {
   desktopMeasurementPlan,
   DesktopMeasurementScopeError,
 } from "./measurement-plan.mjs"
 
 const modulePath = fileURLToPath(new URL("./measurement-plan.mjs", import.meta.url))
-const workflow = readFileSync(
+const workflow = readWorkflowSource(
   new URL("../../.github/workflows/conversation-stress-load.yml", import.meta.url),
-  "utf8",
 )
 const expected = {
   full: {

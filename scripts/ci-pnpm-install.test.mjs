@@ -1,9 +1,9 @@
 import assert from "node:assert/strict"
-import { readFileSync } from "node:fs"
 import test from "node:test"
+import { readWorkflowSource } from "./workflow-source.mjs"
 
 test("workflow installs go through the shared pnpm action", () => {
-  const action = readFileSync(".github/actions/pnpm-install/action.yml", "utf8")
+  const action = readWorkflowSource(".github/actions/pnpm-install/action.yml")
   assert.match(action, /pnpm install --frozen-lockfile --prefer-offline/)
   assert.match(action, /inputs\.save == 'true'/)
   assert.match(action, /steps\.cache\.outputs\.cache-hit != 'true'/)
@@ -16,8 +16,8 @@ test("workflow installs go through the shared pnpm action", () => {
   assert.equal(install.includes("continue-on-error"), false)
   assert.match(save, /continue-on-error: true/)
 
-  const localAuth = readFileSync(".github/workflows/local-auth.yml", "utf8")
-  const release = readFileSync(".github/workflows/release.yml", "utf8")
+  const localAuth = readWorkflowSource(".github/workflows/local-auth.yml")
+  const release = readWorkflowSource(".github/workflows/release.yml")
   for (const [path, text] of [
     [".github/workflows/local-auth.yml", localAuth],
     [".github/workflows/release.yml", release],
@@ -50,7 +50,7 @@ test("workflow installs go through the shared pnpm action", () => {
 })
 
 function loadSteps() {
-  return readFileSync(".github/workflows/conversation-stress-load.yml", "utf8").split(
+  return readWorkflowSource(".github/workflows/conversation-stress-load.yml").split(
     "\n      - ",
   )
 }
@@ -62,8 +62,8 @@ function named(steps, name) {
 }
 
 test("desktop qualification is an explicit mode of the existing load job", () => {
-  const workflow = readFileSync(".github/workflows/conversation-stress-load.yml", "utf8")
-  const native = readFileSync(".github/workflows/local-auth.yml", "utf8")
+  const workflow = readWorkflowSource(".github/workflows/conversation-stress-load.yml")
+  const native = readWorkflowSource(".github/workflows/local-auth.yml")
   assert.match(
     workflow,
     /desktop-performance:\n\s+description: [^\n]+\n\s+type: boolean\n\s+default: false/,
