@@ -502,8 +502,17 @@ export type {
 } from "./generated/product.js"
 export { ChannelErrorCode } from "./generated/product.js"
 export type {
+  WorkspaceAction,
+  WorkspaceActionKind,
+  WorkspaceAnswerOutcome,
+  WorkspaceAnswerParams,
+  WorkspaceAnswerResult,
   WorkspaceArrangement,
   WorkspaceColumn,
+  WorkspaceCommand,
+  WorkspaceCommandRefusal,
+  WorkspaceOpenPlace,
+  WorkspaceView,
   WorkspacePane,
   WorkspacePaneItem,
   WorkspacePaneKind,
