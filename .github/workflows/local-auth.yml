@@ -403,7 +403,7 @@ jobs:
         run: |
           set -o pipefail
           mkdir -p "$STRESS_EVIDENCE"
-          pnpm test:e2e:stress -- --inputFiles 0 --channel bundled --evidence "$STRESS_EVIDENCE" 2>&1 | tee "$STRESS_EVIDENCE/stress.log"
+          pnpm test:e2e:stress -- --inputFiles 0 --channel bundled --evidence "$STRESS_EVIDENCE" --out "$STRESS_EVIDENCE/result.json" 2>&1 | tee "$STRESS_EVIDENCE/stress.log"
         timeout-minutes: 20
       # Focused webhook coverage supplements the complete default run above.
       # Reuse installed browsers and gateway; other knobs are zero so the
