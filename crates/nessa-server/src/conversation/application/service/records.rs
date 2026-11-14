@@ -18,7 +18,7 @@
 use super::{handoffs::ForkSeed, resumption::Retry, AppReviews};
 use nessa_protocol::conversation::domain::ConversationId;
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     sync::{Arc, Mutex as StdMutex, MutexGuard, PoisonError, Weak},
 };
 use tokio::sync::{Mutex, OwnedMutexGuard};
@@ -71,8 +71,9 @@ impl Gate {
 /// What this run keeps about one conversation.
 #[derive(Default)]
 pub(super) struct ConversationRecord {
-    /// Each gate exists while somebody holds it or waits for it, and is
-    /// forgotten once nobody does (`a_conversation_lock_nobody_holds_is_forgotten`).
+    /// Each gate exists while somebody holds it or waits for it. Once nobody
+    /// does, its record is forgotten by the next sweep when nothing else is
+    /// kept in it (`records_nobody_holds_or_is_owed_are_swept`).
     gates: [Weak<Mutex<()>>; GATES],
     /// An applied model change whose continuation plan has not committed.
     /// [`super::ConversationService::commit_applied_model_plan`] is the only
@@ -112,6 +113,10 @@ pub(super) struct ConversationRecords {
 
 struct Table {
     records: HashMap<ConversationId, ConversationRecord>,
+    /// The conversations whose record holds an unfinished mark, so the
+    /// failure-retry loop walks those alone, not every conversation opened.
+    /// Kept by [`Table::settle`] after every change to a record.
+    unfinished: HashSet<ConversationId>,
     /// The size at which the next sweep runs: twice what the last sweep
     /// kept, so sweeping costs a constant share of the work that grew it.
     sweep_at: usize,
@@ -122,6 +127,7 @@ impl Default for ConversationRecords {
         Self {
             table: StdMutex::new(Table {
                 records: HashMap::new(),
+                unfinished: HashSet::new(),
                 sweep_at: FIRST_SWEEP,
             }),
         }
@@ -138,15 +144,20 @@ impl Table {
         self.records.entry(id.clone()).or_default()
     }
 
-    /// Forget `id`'s record when it holds nothing any more.
+    /// After a change to `id`'s record: note whether it holds an unfinished
+    /// mark, and forget the record when it holds nothing any more.
     fn settle(&mut self, id: &ConversationId) {
-        if self
-            .records
-            .get(id)
-            .is_some_and(ConversationRecord::is_empty)
-        {
-            self.records.remove(id);
+        match self.records.get(id) {
+            Some(record) if record.unfinished.is_some() => {
+                self.unfinished.insert(id.clone());
+                return;
+            }
+            Some(record) if record.is_empty() => {
+                self.records.remove(id);
+            }
+            _ => {}
         }
+        self.unfinished.remove(id);
     }
 }
 
@@ -207,14 +218,24 @@ impl ConversationRecords {
         read(self.table().records.get(id))
     }
 
-    /// Read or change every record. `change` must not reach back into the
-    /// records: the table's lock is held while it runs.
-    pub(super) fn each(&self, mut change: impl FnMut(&ConversationId, &mut ConversationRecord)) {
+    /// Change the failure retry of every conversation holding an unfinished
+    /// mark. `change` must not reach back into the records: the table's lock
+    /// is held while it runs. It changes the retry, never whether there is one.
+    pub(super) fn each_unfinished(&self, mut change: impl FnMut(&ConversationId, &mut Retry)) {
         let mut table = self.table();
-        for (id, record) in &mut table.records {
-            change(id, record);
+        let Table {
+            records,
+            unfinished,
+            ..
+        } = &mut *table;
+        for id in unfinished.iter() {
+            if let Some(retry) = records
+                .get_mut(id)
+                .and_then(|record| record.unfinished.as_mut())
+            {
+                change(id, retry);
+            }
         }
-        table.records.retain(|_, record| !record.is_empty());
     }
 
     fn gate_lock(&self, id: &ConversationId, gate: Gate) -> Arc<Mutex<()>> {
@@ -357,6 +378,22 @@ mod tests {
         }
         assert_eq!(records.in_use(), 0);
         assert!(records.kept() <= FIRST_SWEEP, "kept {}", records.kept());
+    }
+
+    #[test]
+    fn only_marked_conversations_are_walked_for_retries() {
+        let records = ConversationRecords::default();
+        let (marked, other) = (id(3), id(4));
+        records.with(&other, |record| record.model_reconcile_owed = true);
+        records.with(&marked, |record| record.unfinished = Some(Retry::default()));
+        let mut walked = Vec::new();
+        records.each_unfinished(|id, _| walked.push(id.clone()));
+        assert_eq!(walked, vec![marked.clone()]);
+        records.with(&marked, |record| record.unfinished = None);
+        let mut walked = 0;
+        records.each_unfinished(|_, _| walked += 1);
+        assert_eq!(walked, 0);
+        assert_eq!(records.kept(), 1);
     }
 
     #[test]

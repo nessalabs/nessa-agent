@@ -3908,7 +3908,7 @@ async fn summary_writes_of_one_conversation_do_not_wait_for_another() {
 }
 
 #[tokio::test]
-async fn a_conversation_lock_nobody_holds_is_forgotten() {
+async fn a_conversation_lock_nobody_holds_is_let_go() {
     let records = records::ConversationRecords::default();
     let locks = records.summary_writes();
     let (one, two) = (new_id(), new_id());

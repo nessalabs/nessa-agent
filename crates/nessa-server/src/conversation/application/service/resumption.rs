@@ -235,7 +235,7 @@ impl ConversationService {
         if spent {
             tracing::warn!(conversation_id = %id, "a conversation that cannot take its retry is left to its next opening");
         }
-        if spent || self.inner.retirement.get().is_some() || !self.marked(id).is_some() {
+        if spent || self.inner.retirement.get().is_some() || self.marked(id).is_none() {
             return;
         }
         let mut failed = true;
@@ -302,7 +302,7 @@ impl ConversationService {
         id: &ConversationId,
         live: Arc<LiveConversation>,
     ) -> bool {
-        if self.inner.unfinished_turns.get().is_none() || !self.marked(id).is_some() {
+        if self.inner.unfinished_turns.get().is_none() || self.marked(id).is_none() {
             return false;
         }
         let _ = live.join_attachment_owner().await;
@@ -575,7 +575,7 @@ impl ConversationService {
         .await;
         if self.inner.unfinished_turns.get().is_none()
             || self.inner.retirement.get().is_some()
-            || !self.marked(id).is_some()
+            || self.marked(id).is_none()
         {
             return;
         }
@@ -716,19 +716,16 @@ impl ConversationService {
             let now = self.inner.clock.unix_milliseconds();
             let mut due = Vec::new();
             let mut next = None::<u64>;
-            self.inner.records.each(|id, kept| {
-                let Some(retry) = kept.unfinished.as_mut() else {
-                    return;
-                };
-                match retry.at_ms {
+            self.inner
+                .records
+                .each_unfinished(|id, retry| match retry.at_ms {
                     Some(at) if at <= now => {
                         retry.at_ms = None;
                         due.push(id.clone());
                     }
                     Some(at) => next = Some(next.map_or(at, |next| next.min(at))),
                     None => {}
-                }
-            });
+                });
             stream::iter(due)
                 .for_each_concurrent(RESUME_CONCURRENCY, |id| async move {
                     self.resume_or_retry(&id).await;
@@ -754,7 +751,7 @@ impl ConversationService {
         &self,
         id: &ConversationId,
     ) -> Result<(), ConversationError> {
-        if !self.marked(id).is_some() {
+        if self.marked(id).is_none() {
             return Ok(());
         }
         self.clear_mark(id).await

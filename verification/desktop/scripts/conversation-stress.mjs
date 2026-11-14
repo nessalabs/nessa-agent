@@ -7800,6 +7800,16 @@ const steps = {
       raced.slice(0, 2).some((each) => each.status === "fulfilled")
     )
       failures.push("two requests both made the raced fork")
+    if (raced.every((each) => each.status === "rejected"))
+      failures.push(
+        `every raced fork was refused: ${raced.map((each) => each.reason?.message).join("; ")}`,
+      )
+    const madeIds = raced
+      .slice(0, 2)
+      .filter((each) => each.status === "fulfilled")
+      .map((each) => each.value.conversationId)
+    if (madeIds.some((made) => made !== racedId))
+      failures.push(`a raced fork request opened ${madeIds.join(", ")}, not ${racedId}`)
     // A retry turned away while the first ran is let in once it has ended.
     const again = await run.client.conversation
       .fork(conversationId, { conversationId: racedId, requestId: racedRequest })
