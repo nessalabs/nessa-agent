@@ -271,26 +271,22 @@ fn peer_rows(
     let stream = scope.stream().as_str().to_owned();
     let mut after: Option<EntryKey> = None;
     let mut rows = Vec::new();
-    loop {
-        let Some(page) = cache.catalogue_page(
-            &peer.receiver,
-            &origin,
-            &stream,
-            after.as_ref(),
-            MAX_CATALOGUE_ENTRIES,
-        )?
-        else {
-            break;
-        };
+    while let Some(page) = cache.catalogue_page(
+        &peer.receiver,
+        &origin,
+        &stream,
+        after.as_ref(),
+        MAX_CATALOGUE_ENTRIES,
+    )? {
         for entry in page.entries() {
             if let Some(row) = summary_of(entry, archived) {
                 rows.push(row);
             }
         }
-        match page.next().cloned() {
-            Some(next) => after = Some(next),
-            None => break,
-        }
+        let Some(next) = page.next().cloned() else {
+            break;
+        };
+        after = Some(next);
     }
     Ok(rows)
 }
@@ -380,17 +376,13 @@ fn selection_for(
     id: &ConversationId,
 ) -> Result<Option<ConversationSelectionView>, ReadFailure> {
     let mut after: Option<EntryKey> = None;
-    loop {
-        let Some(page) = cache.catalogue_page(
-            receiver,
-            origin,
-            stream,
-            after.as_ref(),
-            MAX_CATALOGUE_ENTRIES,
-        )?
-        else {
-            return Ok(None);
-        };
+    while let Some(page) = cache.catalogue_page(
+        receiver,
+        origin,
+        stream,
+        after.as_ref(),
+        MAX_CATALOGUE_ENTRIES,
+    )? {
         for entry in page.entries() {
             let Some(metadata) = entry.metadata() else {
                 continue;
@@ -407,11 +399,12 @@ fn selection_for(
                 approval_mode: metadata.approval_mode(),
             }));
         }
-        match page.next().cloned() {
-            Some(next) => after = Some(next),
-            None => return Ok(None),
-        }
+        let Some(next) = page.next().cloned() else {
+            return Ok(None);
+        };
+        after = Some(next);
     }
+    Ok(None)
 }
 
 fn project_transcript(

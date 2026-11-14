@@ -569,6 +569,7 @@ impl ProductRouteState {
     }
 
     /// Answer granted chats from `chats` instead of the peer cache.
+    #[cfg(test)]
     pub(crate) fn with_shared_chats(
         mut self,
         chats: Arc<dyn super::shared_chat::SharedChats>,
