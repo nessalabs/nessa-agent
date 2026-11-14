@@ -251,7 +251,8 @@ import {
  *               line that keeps its newest words; with another chat opened in the
  *               call's pane the call goes on, its pill shows over the
  *               front window, what is said still reaches the agent and
- *               the reply the voice, and the chat's name on the pill
+ *               the reply the voice, a stop said there stops the agent's
+ *               turn, and the chat's name on the pill
  *               brings the chat back and puts the pill away; Talk in
  *               another chat asks before it ends the open call, Cancel
  *               leaves it and Talk here moves it; a call that drops
@@ -5031,6 +5032,37 @@ const steps = {
         )
       if (!(await pillSays("Listening")))
         failures.push("the pill is not listening again after the reply off screen")
+      // Asked to stop off screen, the voice stops the agent's running turn.
+      const awayWait = prompt(run, `Okay ${STRESS.wait}`, step, " voice away")
+      const awayWaiting = await seenTurns(run, run.main.id)
+      realtime.say(awayWait)
+      run.sent.set(run.main.id, (run.sent.get(run.main.id) ?? 0) + 1)
+      if (!(await pillSays("Working")))
+        failures.push("the pill does not show the call working off screen")
+      // Stopped once the agent is at work on it, as the person would hear it.
+      await waitFor(async () => {
+        const { view } = await readWithReviews(run.client, run.main.id).then(
+          (view) => ({ view }),
+          () => ({ view: null }),
+        )
+        const turn = view?.messages.find((each) => each.userText === awayWait)
+        return turn !== undefined && !ended(turn)
+      }, 15_000)
+      await sleep(1_000)
+      const awayStop = realtime.outputs().length
+      realtime.ask("stop_agent")
+      await settled(run, run.main.id, awayWaiting, awayWait, "cancelled", failures)
+      if (
+        !(await waitFor(
+          () => realtime.outputs().slice(awayStop).includes("stopped"),
+          10_000,
+        ))
+      )
+        failures.push(
+          `with its chat in no pane, stop_agent answered ${JSON.stringify(realtime.outputs().slice(awayStop))}`,
+        )
+      if (!(await waitFor(() => pillSays("Listening"), 30_000)))
+        failures.push("the pill is not listening again after the stop off screen")
       if (run.evidence)
         await run.page
           .screenshot({ path: join(run.evidence, "voice-other-chat.png") })

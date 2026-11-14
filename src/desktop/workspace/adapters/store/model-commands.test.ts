@@ -459,6 +459,33 @@ describe("model choices", () => {
     expect(asked(source, "setModel")).toHaveLength(0)
   })
 
+  it("stops a turn in a session held off screen, and in no other off screen", async () => {
+    const { source, store } = await ready()
+    for (const sessionId of ["a", "c"])
+      source.emit({
+        kind: "transcript",
+        transcript: {
+          ...emptyTranscript(sessionId),
+          revision: 2,
+          activity: { label: "Working", since: 1 },
+        },
+      })
+    await settle()
+    // "a" is held by a call; "c" is not; neither is in a pane.
+    store.dispatch(workspaceActions.sessionHeld({ sessionId: "a" }))
+    store.dispatch(newSession())
+    await settle()
+    expect(store.getState().workspace.transcripts.a).toBeDefined()
+    expect(await store.dispatch(stopTurn({ sessionId: "c", initiator: "person" }))).toBe(
+      "not-asked",
+    )
+    // Asked of the source (this fake refuses a stop, which is its answer to give).
+    expect(
+      await store.dispatch(stopTurn({ sessionId: "a", initiator: "person" })),
+    ).not.toBe("not-asked")
+    expect(asked(source, "stop").map((call) => call[1])).toEqual(["a"])
+  })
+
   it("clears an acknowledged choice once the source's frame confirms it", async () => {
     const { source, store } = await ready()
     source.setModel = async (_id, _model, id) => receipt(id)
