@@ -264,12 +264,6 @@
 }
 
 .workspace-sidebar
-  :where([data-slot="sidebar-menu-item-row"] > [data-size])[data-trailing="glyph"] {
-  --workspace-row-decoration-width: 10px;
-  padding-right: calc(16px + var(--workspace-row-decoration-width));
-}
-
-.workspace-sidebar
   :where([data-slot="sidebar-menu-item-row"] > [data-size])[data-trailing="count"] {
   --workspace-row-decoration-width: 18px;
   padding-right: calc(16px + var(--workspace-row-decoration-width));
@@ -523,4 +517,13 @@
 /* Less motion, as Settings › Appearance › Motion or the system asks (`data-motion`). */
 :root[data-motion="reduced"] .workspace-rise {
   animation: none;
+}
+
+/*
+ * A session or channel at work: its name shimmers (`WorkingWords`), resting
+ * in the sidebar's quieter ink so the sweep to full ink shows on a chosen
+ * row too.
+ */
+.workspace-sidebar .workspace-shimmer {
+  --shimmer-rest: var(--desktop-muted);
 }

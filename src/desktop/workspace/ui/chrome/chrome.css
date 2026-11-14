@@ -259,6 +259,56 @@
   }
 }
 
+/*
+ * Words at work (`working-words.tsx`): the one way the window says an agent
+ * is working, a highlight sweeping across the words that name it — the line
+ * under a running turn, a session or channel in the sidebar. No turning arc
+ * beside them. A row sets its own resting ink (`--shimmer-rest`), so its
+ * words keep their weight and only the sweep says it works.
+ */
+.workspace-shimmer {
+  --shimmer-rest: var(--desktop-faint);
+  background: linear-gradient(
+      90deg,
+      var(--shimmer-rest) 0%,
+      var(--shimmer-rest) 35%,
+      var(--foreground) 50%,
+      var(--shimmer-rest) 65%,
+      var(--shimmer-rest) 100%
+    )
+    0 0 / 250% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: workspace-shimmer 2.4s linear infinite;
+}
+
+@keyframes workspace-shimmer {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: -150% 0;
+  }
+}
+
+/* Said to a reader only (`WorkingWords` › `spoken`). */
+.workspace-spoken {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* Less motion, as Settings › Appearance › Motion or the system asks: plain words. */
+:root[data-motion="reduced"] .workspace-shimmer {
+  animation: none;
+  background: none;
+  color: var(--shimmer-rest);
+}
+
 /* ——— Resize edges (`src/desktop/ui/resize-edge.tsx`) ——— */
 
 /*
