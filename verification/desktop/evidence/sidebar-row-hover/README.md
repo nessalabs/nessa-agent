@@ -72,3 +72,24 @@ segmented-control profiles time out at the unchanged 2000 ms bound. All four
 rows profiles pass in that run. Identity, badges, rims, empty states, keys and
 list measurements also pass. These adjacent failures remain qualification
 blockers; their assertions and deadlines were preserved.
+
+## Rerun on main 826e07ff (#1337)
+
+The fix was re-opened alone on current main. In the cloud sandbox (headless
+Chromium; WebKit cannot be downloaded there):
+
+- Rows check, Chromium, columns + sidebar: `2/2 held`; selector reverted:
+  `1/2 held` (`kit row under its glyph: its fill is rgba(0, 0, 0, 0)`);
+  restored: `2/2 held`.
+- `run-all.mjs --skip-perf --engine chromium`: smoke `16/16` and
+  shared-controls `16/16` hold, as do 29 more checks. Seven checks fail and two
+  cannot run: drag, responsive, columns, linked-devices, subagents, app-review,
+  message-sync, mode-publication and panel-list-follow. The same nine fail or
+  cannot run on main 826e07ff without this change, with the same cases
+  (main also failed one more drag case and one more message-sync case), so
+  none of them is this change's.
+- `pnpm test:e2e:scripted`: every Chromium check passes (resize-observers,
+  mcp-apps-gateway, gateway-window, scripted-scenarios, parent-stop); the
+  verdict is `could-not-run` only because WebKit is missing.
+
+Still not run for this change: WebKit, and native WKWebView on a Mac.
