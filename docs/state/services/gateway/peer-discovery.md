@@ -36,7 +36,7 @@ diagramLinks: {}
 
 A gateway with a paired peer whose discovery field is installed and whose credential is current may announce a dial address, a port, and one rotating token for that peer. The token is an HMAC of the time window, the address, and the port, keyed by the discovery MAC both sides stored beside the pinned key. The announcement does not carry the pinned key, a fingerprint, or another stable gateway id. Hearing it does not enroll anyone. The connection is still the pinned credential, and pairing still requires the one-use code.
 
-With no such peer, or with a revoked or expired credential, nothing is sent. Expiry does not change the phase and does not remove the discovery key. A peer with no discovery key is left out.
+With no such peer, or after definitive observation that its credential is revoked or expired, nothing is sent. Expiry does not change the phase and does not remove the discovery key. A peer with no discovery key is left out.
 
 ```mermaid
 stateDiagram-v2
@@ -49,7 +49,6 @@ stateDiagram-v2
     Installed --> Installed: retry delivery over pinned session
     Installed --> Quiet: credential not current
     Installed --> Announced: credential current
-    Quiet --> Announced: credential current again
     Announced --> Quiet: credential not current or no installed peer
 ```
 
@@ -58,6 +57,8 @@ stateDiagram-v2
 New dialer enrollments retain discovery eligibility when their pending record is saved. Older records without that field stay silent after upgrade. Once Active, an eligible enrollment retries the pinned exchange even when its own MAC is installed: a saved local key does not prove the peer received the acknowledgement. Token refresh runs independently of retry progress. Stop withdraws the announcement before joining the current attempt, and the scheduler does not start another peer. Network phases share 5-second connect, 10-second TLS, and 30-second exchange budgets; physical storage and worker drain are joined rather than relabelled complete.
 
 The pinned discovery request carries the full enrollment intent and its non-secret credential ID. The granting gateway validates both against the actual TLS key before returning any credential evidence. Only a definitive NotCurrent answer for that exact enrollment stops its announcement; unsupported discovery, mismatched history, storage failures and lost connections remain uncertain and retryable. Installed dialers read the answer too. Every delayed local commit compares the same enrollment identity under the record lock, so an old attempt cannot write into a replacement pairing.
+
+The exact NotCurrent observation is retained atomically beside the private peer record, with its full enrollment and credential identity, grantor-system initiator, current-to-noncurrent outcome and injected observation time. Eligibility derives from that observation, not a separate flag. Repeated responses and later pairing revocation preserve the first evidence. Restore rejects mismatched identities and illegal pending-state evidence. Storage rejection is returned to the caller; no successful durable observation is claimed.
 
 ## Model coverage
 

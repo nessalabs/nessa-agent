@@ -1063,8 +1063,8 @@ pub trait DiscoveryPipe {
     fn recv_frame(&mut self) -> std::io::Result<Vec<u8>>;
 }
 
-/// Why a discovery exchange stopped. `Refused` is the gateway's redacted
-/// refusal: the listener is not enrolled and the credential is not accepted.
+/// Why a discovery exchange stopped. `Refused` is a diagnostic refusal,
+/// not evidence that the exact enrollment credential is no longer current.
 #[derive(Debug)]
 pub enum ExchangeError {
     Io(std::io::Error),
@@ -1103,7 +1103,6 @@ pub fn exchange(
             for message in session.reconnect() {
                 send_frame(pipe, &encode_message(&message))?;
             }
-            need_send = false;
         }
         if received && session.discovery.installed_mac().is_some() {
             return Ok(());

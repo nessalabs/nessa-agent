@@ -2099,3 +2099,12 @@ A discovery attempt names the peer key, full enrollment public intent, and issue
 | Shutdown while a retry is pending | Withdraw publication independently, finish/join the current owned attempt, check stop before another peer. | No detached native worker and no new attempt after stop. |
 
 Discovery is not a new enrollment and does not repair a mismatched enrollment. Current credential evidence is admission-time evidence, not a promise that the peer remains reachable or authorized forever. Network loss is uncertainty, not proof of revocation.
+
+#### Durable credential authority observation
+
+| Ordering | Evidence and state owner |
+| --- | --- |
+| Exact pinned grantor returns NotCurrent | The immutable observation records full intent, credential ID, grantor key as system initiator, prior current decision, noncurrent outcome and matching-grantor-refusal cause. The private record adapter adds its injected observation time and atomically persists the observation before returning; eligibility derives from absence of that observation, not a second boolean. |
+| Repeated NotCurrent / later pairing revocation | Preserve the first observation and its time. Revocation may remove the active credential but retains the observation's original credential and exact intent. |
+| Restore mismatched evidence or pending enrollment with withdrawal | Reject as corrupt; do not silently repair identity, cause, before/after or initiator. |
+| Durable write fails | Return the storage error, never claim evidence was kept; physical publication cleanup remains independent. |

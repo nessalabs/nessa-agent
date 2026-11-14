@@ -17,6 +17,7 @@
 //! record that cannot be kept is logged and the change stands: cleanup is
 //! never held back for its evidence.
 mod discovery;
+mod discovery_authority;
 pub use discovery::{
     announcement_bytes, announcement_txt, connection_allowed, decode_announcement,
     discovery_from_json, discovery_to_json, encode_discovery_refusal, exchange, instance_label,
@@ -25,6 +26,7 @@ pub use discovery::{
     ExchangeError, GrantorDiscovery, Inbound, Outbound, Phase, PinnedMac, Role, Session, TokenPeer,
     DISCOVERY_WINDOW,
 };
+pub(crate) use discovery_authority::NotCurrentEvidence;
 use nessa_auth::domain::{pairing::DeviceKey, PrincipalId};
 use nessa_protocol::relay::{GatewayKey, RelayAddress};
 use std::{
