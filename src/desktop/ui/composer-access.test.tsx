@@ -53,16 +53,7 @@ it("shows the owner's access and the sentence for a refused change", async () =>
   await act(async () => root.unmount())
 })
 
-it("says a held change as a quiet hint with no mark, and marks only a refusal", async () => {
-  const held = await shown({
-    value: "auto-approval",
-    onChange: () => {},
-    notice: { tone: "neutral", text: "Access changes when the agent stops." },
-  })
-  const hint = host.querySelector('[role="status"]')
-  expect(hint?.textContent).toBe("Access changes when the agent stops.")
-  expect(hint?.querySelector('[data-slot="status-label-mark"]')).toBeNull()
-  await act(async () => held.root.unmount())
+it("hangs a refusal's mark before its words", async () => {
   const refused = await shown({
     value: "ask-approval",
     onChange: () => {},

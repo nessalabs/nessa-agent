@@ -3771,60 +3771,37 @@ const steps = {
       if (!(await stopShown(run.page)))
         failures.push("Send did not turn into Stop while the turn ran")
       await pickAccess(run.page, step.to)
-      const held = await waitFor(
+      // A change the running turn holds back says nothing: the shield shows
+      // the choice at once and the composer adds no line about it (Saurav
+      // asked for the "Access changes when the agent stops." line to go).
+      const chosen = await waitFor(
         async () =>
-          fold(
-            await dock(run.page)
-              .locator(composerControls.notice)
-              .innerText()
-              .catch(() => ""),
-          ).includes("Access changes when the agent stops"),
-        10_000,
+          (await dock(run.page)
+            .locator(composerControls.access)
+            .getAttribute("data-access-mode")
+            .catch(() => null)) === composerControls.accessValue[step.to],
+        5_000,
       )
-      // The turn can end before the notice is read; only a running one owes it.
-      const { turn } = await untilTurn(run, run.main.id, { text }, () => true, 5)
-      if (!held && turn && !ended(turn))
-        failures.push("the composer did not say the change waits for the turn")
-      // Said as a quiet hint: no mark before it, its words starting where the
-      // draft's text starts, smaller than the draft (it read as a list item
-      // with a dash, out of line with the field above it).
-      if (held) {
-        const hint = await dock(run.page)
+      if (!chosen) failures.push("the shield did not show the choice while the turn ran")
+      let said = null
+      for (const _ of Array.from({ length: 6 })) {
+        const notices = await dock(run.page)
           .locator(composerControls.notice)
-          .filter({ hasText: "Access changes when the agent stops" })
-          .evaluate(
-            (notice) => {
-              const field = notice.closest(".desktop-composer")?.querySelector("textarea")
-              const word = notice.querySelector('[data-slot="status-label-word"]')
-              if (!field || !word) return null
-              const style = getComputedStyle(field)
-              return {
-                marks: notice.querySelectorAll('[data-slot="status-label-mark"]').length,
-                off: Math.round(
-                  word.getBoundingClientRect().left -
-                    (field.getBoundingClientRect().left + parseFloat(style.paddingLeft)),
-                ),
-                smaller:
-                  parseFloat(getComputedStyle(word).fontSize) <
-                  parseFloat(style.fontSize),
-              }
-            },
-            null,
-            { timeout: 1_000 },
-          )
-          .catch(() => null)
-        // A notice gone by now went with the turn; there is nothing to measure.
-        if (hint && (hint.marks !== 0 || Math.abs(hint.off) > 1 || !hint.smaller))
-          failures.push(
-            `the held access change is not a quiet hint in line with the draft: ${JSON.stringify(hint)}`,
-          )
-        if (hint && run.evidence && !run.accessHintShot) {
-          run.accessHintShot = true
-          await dock(run.page)
-            .locator(".desktop-composer")
-            .screenshot({ path: join(run.evidence, `access-hint-${run.engine}.png`) })
-            .catch(() => {})
-        }
+          .allInnerTexts()
+          .catch(() => [])
+        if (notices.length) said = notices
+        await run.page.waitForTimeout(250)
+      }
+      if (said)
+        failures.push(
+          `the composer spoke of the held access change: ${JSON.stringify(said)}`,
+        )
+      if (run.evidence && !run.accessHintShot) {
+        run.accessHintShot = true
+        await dock(run.page)
+          .locator(".desktop-composer")
+          .screenshot({ path: join(run.evidence, `access-held-${run.engine}.png`) })
+          .catch(() => {})
       }
       await settled(run, run.main.id, seen, text, "completed", failures)
     } else {
