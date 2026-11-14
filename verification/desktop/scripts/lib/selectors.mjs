@@ -19,6 +19,17 @@ const committedQuestions = "[data-committed-questions]"
 
 /** CSS selectors, grouped by the part of the window they belong to. */
 export const css = {
+  gatewayPairingPage: '[data-devices-page="add-gateway"]',
+  gatewayPairingCommand: ".devices-gateway-command",
+  gatewayPairingCode: "[data-gateway-code]",
+  gatewayPairingChoice: "[data-gateway-choice]",
+  gatewayPairingPhase: "[data-gateway-phase]",
+  gatewayPairingFingerprint: "[data-gateway-fingerprint]",
+  gatewayPairingInvitation: "[data-gateway-invitation]",
+  devicesAddAction: '[data-devices-action="add"]',
+  devicesBackAction: '[data-devices-action="back"]',
+  devicesGatewayTile: '[data-devices-add="gateway"]',
+  devicesPhoneTile: '[data-devices-add="phone"]',
   boatRuntimeSettings: "[data-boat-runtime-settings]",
   channelSettingsOpen: "[data-channel-settings-open]",
   channelSettingsDialog: "[data-channel-settings]",
@@ -73,6 +84,7 @@ export const css = {
   titleText: ".workspace-pane-title", // class: a pane's title, in a pane or in the drag's copy of it
   paneBody: ".workspace-pane-body", // class: a pane's conversation and composer, below its header
   composer: "[data-pane-key] textarea",
+  runningComposer: ".desktop-composer[data-running]", // the composer while its conversation is replying
   sendFailure: "[data-send-failure]", // compact composer recovery, separate from transcript turns
   transcript: ".workspace-transcript", // class
   message: ".workspace-message[data-role]", // class: one message in a transcript; data-role is user, agent or note
@@ -303,9 +315,9 @@ export const css = {
   settingsBar: ".settings-bar", // class: the page's titlebar row (drag strip); data-condensed on .settings-content once the masthead's title has scrolled under it
   settingsBarTitle: ".settings-bar-title", // class: the page's name, small, in that row
   settingsContent: ".settings-content", // class
-  settingsMasthead: ".settings-masthead", // class: the page's head: title, dek, tabs
-  settingsDek: ".settings-dek", // class: the one line under a title, where a category has one
+  settingsMasthead: ".settings-masthead", // class: the page's head: title and tabs
   settingsRow: '[data-slot="settings-row"]', // the UI kit's row, on any Settings page
+  settingsRowDetail: '[data-slot="settings-row-detail"]', // the row's status/explanation, separately from its label and control
   settingsFound: "[data-setting][data-found]", // where a search just landed
   settingsSearch: 'input[aria-label="Search settings"]',
   control: 'button, input, select, textarea, [role="switch"]',
@@ -420,6 +432,7 @@ export const selectorFor = {
   reviewState: (state) => `body[data-review-state="${state}"]`, // the review app saying where it is
   chartState: (state) => `body[data-chart-state="${state}"]`, // the chart app saying where it is
   reviewOutput: (name) => `#${name}`, // what the review app heard back: result, first, hidden-no-ui, hidden-with-ui, again
+  linkedCredential: (id) => `[data-credential="${id}"]`,
   linkedAction: (action) => `[data-linked-action="${action}"]`,
   sessionListRowFor: (id) => `.workspace-list [data-session-row="${id}"]`, // one session's row in the session list
   stressTreeSessionFor: (id) => `.workspace-thread-row[data-session-row="${id}"]`,

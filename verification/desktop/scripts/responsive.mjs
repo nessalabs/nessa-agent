@@ -8,9 +8,11 @@
  *                   label wrapped, nothing overflowing the card
  *   composer-chips  four panes while the window narrows: no two composer
  *                   controls overlap
- *   column-title    each column's title inline in the titlebar row where it fits,
+ *   column-title    the session-list title inline in the titlebar row where it fits,
  *                   below it where it does not ("The titlebar's safe area"): an
- *                   inline title never overlaps a titlebar control
+ *                   inline title never overlaps a titlebar control. A requested
+ *                   sidebar profile identifies its real tree composition and
+ *                   requires no separate session-list column or title.
  *   settings-fold   Settings' sidebar folds for room below a page of 420px
  *   integrations-narrow Settings › MCP servers at 800 and 390px: nothing
  *                   outside its card, no sideways scroll, the fold held, and
@@ -67,9 +69,9 @@
  *                   needs you" heads the list, the one looked at still listed
  *                   and chosen beneath; its count, let go at nought from the
  *                   keyboard, gives the keyboard to the list, whose arrows walk
- *   overview-row-answers a request row shows its title and time, its why and
- *                   its command, and no answers — nor room kept for them: the
- *                   why and the command run on to the time; pointed at (or the
+ *   overview-row-answers a request row shows its title and time, one explanatory
+ *                   line (its command or its why), and no answers — nor room
+ *                   kept for them: that line runs on to the time; pointed at (or the
  *                   keyboard visibly on it, even while another row is hovered;
  *                   never just the chosen one), Deny and Allow Once take the
  *                   time's place with the row's height and the list unchanged; no tooltips;
@@ -111,6 +113,10 @@ import { join } from "node:path"
 import { attempt, CannotRun, chosen } from "./lib/cli.mjs"
 import { need, openPage, withEngines } from "./lib/browser.mjs"
 import { main } from "./lib/run.mjs"
+import {
+  sidebarTitleComposition,
+  sidebarTitleCompositionFailures,
+} from "./lib/column-title-composition.mjs"
 import { integrationsFit, openIntegrations } from "./lib/settings.mjs"
 import {
   catalogueFile,
@@ -316,6 +322,8 @@ const checks = {
   },
 
   "column-title": async ({ page, engine, layout, options }) => {
+    if (!layouts.includes(layout))
+      throw new CannotRun(`unknown column-title layout: ${String(layout)}`)
     const failures = []
     const seen = []
     for (const width of [1440, 1200, 1000, 900, 800, 700]) {
@@ -323,46 +331,71 @@ const checks = {
       // The resize reaches the page a frame or two later; then its motion runs out.
       await frames(page, 2)
       await settled(page)
-      const r = await page.evaluate((sel) => {
-        const titles = [...document.querySelectorAll(sel.columnTitle)].filter((t) =>
-          t.checkVisibility(),
-        )
-        const buttons = [...document.querySelectorAll(sel.titlebarButtons)].filter((b) =>
-          b.checkVisibility({ checkOpacity: true }),
-        )
-        return titles.map((t) => {
-          const heading = t.querySelector(sel.heading) ?? t
-          const range = document.createRange()
-          range.selectNodeContents(heading)
-          const tr = range.getBoundingClientRect()
-          const hits = buttons
-            .map((b) => [b, b.getBoundingClientRect()])
-            .filter(
-              ([, r]) =>
-                Math.min(r.right, tr.right) - Math.max(r.left, tr.left) > 1 &&
-                Math.min(r.bottom, tr.bottom) - Math.max(r.top, tr.top) > 1,
-            )
-            .map(([b]) =>
-              (b.getAttribute("aria-label") ?? b.textContent).trim().slice(0, 20),
-            )
-          return {
-            title: heading.textContent.trim().slice(0, 24),
-            placement: t.dataset.placement,
-            hits,
-          }
+      if (layout === "sidebar") {
+        const observed = await page.evaluate(sidebarTitleComposition, {
+          workspace: css.workspace,
+          sidebar: css.sidebar,
+          sessionList: css.sessionList,
         })
-      }, css)
-      seen.push({ width, titles: r.map((t) => `${t.title}:${t.placement}`) })
-      for (const t of r)
-        if (t.hits.length)
-          failures.push(
-            `${width}px: "${t.title}" (${t.placement}) overlaps ${t.hits.join(", ")}`,
+        seen.push({ width, composition: observed })
+        failures.push(
+          ...sidebarTitleCompositionFailures(observed).map(
+            (failure) => `${width}px: ${failure}`,
+          ),
+        )
+      } else {
+        const r = await page.evaluate((sel) => {
+          const titles = [...document.querySelectorAll(sel.columnTitle)]
+            .map((title) => ({
+              title,
+              heading: title.querySelector(sel.heading) ?? title,
+            }))
+            .filter(({ heading }) =>
+              heading.checkVisibility({
+                opacityProperty: true,
+                visibilityProperty: true,
+              }),
+            )
+          const buttons = [...document.querySelectorAll(sel.titlebarButtons)].filter(
+            (b) => b.checkVisibility({ checkOpacity: true }),
           )
+          return titles.map(({ title: t, heading }) => {
+            const range = document.createRange()
+            range.selectNodeContents(heading)
+            const tr = range.getBoundingClientRect()
+            const hits = buttons
+              .map((b) => [b, b.getBoundingClientRect()])
+              .filter(
+                ([, r]) =>
+                  Math.min(r.right, tr.right) - Math.max(r.left, tr.left) > 1 &&
+                  Math.min(r.bottom, tr.bottom) - Math.max(r.top, tr.top) > 1,
+              )
+              .map(([b]) =>
+                (b.getAttribute("aria-label") ?? b.textContent).trim().slice(0, 20),
+              )
+            return {
+              title: heading.textContent.trim().slice(0, 24),
+              placement: t.dataset.placement,
+              hits,
+            }
+          })
+        }, css)
+        seen.push({ width, titles: r.map((t) => `${t.title}:${t.placement}`) })
+        for (const t of r)
+          if (t.hits.length)
+            failures.push(
+              `${width}px: "${t.title}" (${t.placement}) overlaps ${t.hits.join(", ")}`,
+            )
+      }
       await shot(options, page, `titles-${engine}-${layout}-${width}`)
     }
-    if (!seen.some((s) => s.titles.length))
+    if (layout === "columns" && !seen.some((s) => s.titles.length))
       throw new CannotRun(`no column titles found (${css.columnTitle})`)
-    return { widths: seen, failures }
+    return {
+      contract: layout === "sidebar" ? "sidebar composition" : "column title placement",
+      widths: seen,
+      failures,
+    }
   },
 
   "settings-fold": async ({ page, engine, options }) => {
@@ -2018,8 +2051,8 @@ checks["overview-row-answers"] = async ({ page, engine, options }) => {
   await page.mouse.move(5, 890)
   await page.waitForTimeout(300)
 
-  // At rest: the title with its time, the why, the command — and no answers,
-  // nor room kept for them: the why and the command run on to the time.
+  // At rest: the title with its time and one explanatory line — its command
+  // or its why, as RequestRow renders — with no room kept for the answers.
   const rest = await requestRow(page, 1)
   const restList = await listRects(page)
   await shot(options, page, `overview-row-rest-${engine}`, rows.nth(1))
@@ -2034,8 +2067,10 @@ checks["overview-row-answers"] = async ({ page, engine, options }) => {
     .map((row) => row.id)
   if (unreachable.length > 1)
     failures.push(`at rest a screen reader finds no answers on [${unreachable}]`)
-  if (rest.why === null || rest.command === null)
-    failures.push("at rest the row does not show its why and its command")
+  if ((rest.why === null) === (rest.command === null))
+    failures.push(
+      "at rest the row does not show one explanatory line: its why or command",
+    )
   for (const [line, edge] of [
     ["why", rest.why],
     ["command", rest.command],
@@ -2155,6 +2190,7 @@ checks["overview-row-answers"] = async ({ page, engine, options }) => {
   return {
     measured: {
       rest: {
+        explanations: { why: rest.why !== null, command: rest.command !== null },
         reach: Math.round(rest.time.left - Math.max(rest.why, rest.command)),
         gap: rest.gap,
         height: rest.height,

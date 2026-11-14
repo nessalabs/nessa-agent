@@ -176,7 +176,7 @@ jobs:
           node-version: 24
       - name: Check portable Rust dependency graphs
         run: node scripts/check-runtime-dependencies.mjs --verify-fixture
-      - run: node --test scripts/cargo-test-parallel/e2e.test.mjs scripts/cargo-test-parallel/diagnostics.test.mjs
+      - run: node --test scripts/cargo-test-parallel/e2e.test.mjs scripts/process-failure.test.mjs
       - run: cargo fmt --all -- --check
       # This pure shared domain is small enough to report denied warnings
       # before its tests without paying a second workspace compile.
@@ -403,7 +403,7 @@ jobs:
         run: |
           set -o pipefail
           mkdir -p "$STRESS_EVIDENCE"
-          pnpm test:e2e:stress -- --inputFiles 0 --channel bundled --evidence "$STRESS_EVIDENCE" 2>&1 | tee "$STRESS_EVIDENCE/stress.log"
+          pnpm test:e2e:stress -- --inputFiles 0 --channel bundled --evidence "$STRESS_EVIDENCE" --out "$STRESS_EVIDENCE/result.json" 2>&1 | tee "$STRESS_EVIDENCE/stress.log"
         timeout-minutes: 20
       # Focused webhook coverage supplements the complete default run above.
       # Reuse installed browsers and gateway; other knobs are zero so the
@@ -528,9 +528,10 @@ jobs:
         with:
           node-version: 24
       - shell: bash
-        env:
-          # Emit panic details immediately even if later tests hit the step deadline.
-          RUST_TEST_NOCAPTURE: "1"
+        # Default libtest capture keeps failed-test assertions in the final
+        # failure section, where the bounded diagnostic tail can retain them.
+        # A later hang can delay those details; long-running notices and the
+        # existing deadline still name and bound the stalled test.
         # The step compiles before it tests. Cargo.lock is part of the cache
         # key, so a change that edits it compiles the graph cold: about 25
         # minutes on this runner. Run 41947356093 was still inside
@@ -727,7 +728,7 @@ jobs:
         # install ceiling.
         run: bash scripts/desktop/install-linux-build-deps.sh webkit2gtk-driver xvfb
         timeout-minutes: 65
-      - run: node scripts/check-desktop.mjs
+      - run: node scripts/process-failure.mjs node scripts/check-desktop.mjs
       # Hosted Windows runners are administrators with UAC off, so this leg can
       # prove the Task Scheduler identity and cleanup agreement only for an
       # elevated caller, and declares that. The product's standard-user model

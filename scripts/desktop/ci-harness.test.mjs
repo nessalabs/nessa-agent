@@ -58,6 +58,7 @@ test("local and CI aggregate the same named frontend and native checks", () => {
   const root = JSON.parse(readFileSync("package.json", "utf8"))
   const workflow = readFileSync(".github/workflows/local-auth.yml", "utf8")
   assert.match(root.scripts.check, /pnpm frontend:check/)
+  assert.equal(root.scripts["desktop:check"], "node scripts/check-desktop.mjs")
   for (const script of ["server:fmt:check", "server:clippy", "server:test"]) {
     assert.ok(
       root.scripts[script].includes("-p nessa-device-client"),
@@ -72,7 +73,11 @@ test("local and CI aggregate the same named frontend and native checks", () => {
     ["check", "frontend:check", "pnpm frontend:check"],
     ["sdk:check", "sdk:docs:check", "node scripts/check-sdk-docs.mjs"],
     ["check", "mcp:check", "node scripts/check-mcp.mjs"],
-    ["check", "desktop:check", "node scripts/check-desktop.mjs"],
+    [
+      "check",
+      "desktop:check",
+      "node scripts/process-failure.mjs node scripts/check-desktop.mjs",
+    ],
   ]) {
     assert.ok(root.scripts[aggregate].includes(`pnpm ${script}`))
     assert.ok(workflow.includes(`run: ${command}`), `CI is missing ${script}`)
@@ -214,7 +219,10 @@ test("native Linux verification matches the release distribution and retains smo
       native,
       /run: bash scripts\/desktop\/install-linux-build-deps\.sh webkit2gtk-driver xvfb/,
     )
-    assert.match(native, /run: node scripts\/check-desktop\.mjs/)
+    assert.match(
+      native,
+      /run: node scripts\/process-failure\.mjs node scripts\/check-desktop\.mjs/,
+    )
     assert.match(native, /run: node scripts\/desktop\/prepare\.mjs/)
     assert.match(native, /run: xvfb-run --auto-servernum pnpm desktop:smoke/)
   }

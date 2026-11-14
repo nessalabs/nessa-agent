@@ -403,6 +403,83 @@ expiry can be observed while the Active-to-link write is still owed. The
 ordering is tested by
 `expiry_before_the_first_link_consumes_the_choice_without_replay`.
 
+### Desktop Human reauthentication
+
+The Devices gateway invitation uses explicit Human reauthentication for a true
+choice. It does not establish an Integration-to-Human relation. The ordinary
+panel connection keeps its credential; the person supplies an owner access token
+for a separate `/session` connection to that connection’s current gateway URL.
+No address is accepted beside the token. The authenticated gateway and organization
+must match the panel before an invitation command is sent. The registry remains
+the owner of Human eligibility; the view does not infer it from a role or label.
+The Human is both invitation owner and audit actor.
+
+This is a privileged operation: the supplied credential retains its existing
+permissions. Only the pairing port reaches that client. The input clears on
+submission and pagehide. The connection disables reconnect and closes on completion,
+explicit sign-out, navigation or its scheduled ten-minute UI deadline. That timer
+depends on the browser event loop; it is not credential expiry or a server session TTL.
+Closing releases references;
+JavaScript strings are not claimed to be zeroized. No token is persisted, placed
+in a URL, or sent to browser login. A fresh page asks for authentication again.
+Codes exist only in the create reply. Recovery reads canonical pending/status;
+it cannot recover a lost code or change an invitation’s saved choice.
+
+| State / event | Ordered behavior | Evidence |
+| --- | --- | --- |
+| Choice before create | No invitation until explicit create; false uses panel, true asks Human sign-in | Desktop gateway pairing tests |
+| Sign-in fails or gateway/org differs | Pin the product endpoint including route/query, translating only `/browser/session` to `/session`; close a mismatched temporary client before any invitation command | Scoped pairing adapter tests |
+| Panel reconnects while its identity is read | Pin its endpoint first; refuse a changed endpoint before sending owner evidence | Scoped pairing adapter tests |
+| Sign-in completes after page closes | Close late client before any command | Scoped pairing adapter tests |
+| Abort while primary/identity/setup is pending | Reject the scope promptly without closing shared panel work; close a late owned client before exposing commands | Scoped pairing adapter tests |
+| Double submit or read overlaps mutation | One operation at a time; reads cannot replace a newer command answer | Gateway pairing view tests |
+| Create answer is lost | Show unconfirmed outcome, read pending; no automatic create replay | Gateway pairing adapter/view tests |
+| Refresh / reopen | Resume owner invitations reauthenticates without asking the choice again; resume panel invitations uses the panel; both read saved choices | Gateway pairing browser check |
+| Claim / approve | Compare claimed key fingerprint, approve exact key; render canonical status and activationStopped | Gateway pairing adapter/browser tests |
+| Approval stops retryably / permanently | Keep the protocol discriminant; retryable offers another approval, permanent offers cancellation/new pairing and no retry. Polling the same invitation does not erase that result | Gateway pairing view/browser tests |
+| An operation answer is unavailable | Say unconfirmed and direct the person through the always-visible Back action to reopen Gateway and resume canonical invitations; no inferred delivery result or mutation replay | Gateway pairing view tests |
+| Fingerprint cannot be computed | Say it is unavailable and withhold approval; never substitute a key | Gateway pairing view tests |
+| Active with owed link | Discard the consumed code, offer activation retry and do not claim committed person attribution | Existing canonical link failure probes plus desktop status test |
+| Terminal learned by polling or an approval reply | Retire old scope, discard code and activation notice, stop polling; retain cleanupPending without claiming cleanup completed | Gateway pairing view tests |
+| Explicitly resume an unfinished terminal receipt | Read status again; retain the fresh scope only for cleanupPending and explicit Finish removal (canonical cancel retry); retire a complete terminal receipt | Gateway pairing view tests |
+| Cancel / completion / navigation / pagehide / deadline | Close temporary client and discard code and token references; keep canonical records recoverable | Scoped pairing lifecycle tests |
+
+This flow invites a PeerRead gateway. OwnerPhone and Environment entries keep
+their existing consent classes. A saved true choice is historical consent;
+neither it nor Active is presented as proof of a committed person link or a share.
+Peer enrollment and read admission remain the existing native pairing and grant
+owners, including the commit and cleanup order above.
+
+The second desktop review found another lifecycle case in the same view, so the
+view design was re-evaluated before its next patch. The protocol already owns
+`retryable | permanent`; a local boolean had thrown that distinction away. The
+correction retains that exact typed outcome and removes the permanent retry
+branch, rather than adding a second activation classifier. Likewise, uncertain
+operations use one Back/reopen recovery instruction valid in every view instead
+of inferring which control or delivery result exists. A fresh resume has only
+canonical status, which does not carry an earlier session's activation stop;
+the next explicit approval obtains a current result from the existing owner.
+
+The third round exposed the remaining structural ownership error: canonical
+status, one-use code and the last approval stop were separate view states, so
+clearing the invitation could leave its stop behind. The selected invitation is
+now one immutable presentation value. Create and explicit resume replace its
+facts; reads retain code/approval evidence only for the same invitation; approval
+replaces its stop with that reply's exact result. Active consumes the code, and
+terminal consumes code, stop and fingerprint. Clearing selection drops every
+selected fact together on End, deadline and pagehide. A computed fingerprint is
+correlated to both invitation id and claimed key. This is a projection of the
+registry's records and replies, not a second identity or admission machine.
+
+| Selected-value input | Result | Evidence |
+| --- | --- | --- |
+| End, deadline or pagehide, then a different invitation | Clear the whole value; new invitation cannot inherit code, stop or fingerprint | Three lifecycle regressions |
+| Same-invitation status poll | Retain its approval result; preserve a fingerprint only for the exact claimed key | Permanent-stop and fingerprint regressions |
+| Create or explicit resume | New value; only create carries its returned code; neither inherits a prior approval stop | Creation/recovery regressions |
+| Approval result | One value from canonical status and exact retryable/permanent result; terminal discards old details | Approval/terminal regressions |
+| Create/resume, permanent stop or completed receipt changes the view | Focus the visible page region; a new ready invitation focuses Create. Repeated reads of the same invitation leave the selected control alone | Browser focus assertions and view regression |
+| Late fingerprint for a different invitation or key | Ignore it; never approve a new key under an old fingerprint | Selected-value ordering regressions |
+
 ## Live follow
 
 [#851](https://github.com/nessalabs/nessa-agent/issues/851) already follows

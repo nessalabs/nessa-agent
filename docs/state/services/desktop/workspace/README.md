@@ -20,6 +20,7 @@ diagramLinks:
   Notices: desktop-review-notice-permission
   Permissions: desktop-permission-rule-revocation
   Devices: desktop-linked-devices
+  GatewayPairing: desktop-gateway-pairing
   Sharing: desktop-conversation-sharing
 
   SettingsActions: desktop-settings-action-owners
@@ -68,6 +69,8 @@ flowchart TB
     Devices["Pair, approve and revoke linked devices"]
     Sharing["Share a conversation and revoke access"]
     Feature --> Devices
+    GatewayPairing["Pair a gateway with explicit Human sign-in"]
+    Feature --> GatewayPairing
     Feature --> Sharing
 
     SettingsActions["Finish or retire a settings action"]

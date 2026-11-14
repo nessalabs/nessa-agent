@@ -341,6 +341,15 @@ against a private scripted gateway.
   (`dependencies.ts`, `main.tsx`) only where the window has a gateway.
   A remote row shows its URL and redacted authorization facts, and
   Authorize and Revoke call `mcpServers.authorize` and `mcpServers.revoke`.
+  Devices' PeerRead gateway entry (#893) is `devices/ui/add-gateway.tsx`,
+  with an explicitly bounded Human reauthentication scope in
+  `devices/adapters/gateway-pairing.ts`. Composition injects the connector,
+  stage, ids and timers. `devices/ui/gateway-invitation.ts` owns the immutable
+  selected page value (status, code, approval result and keyed fingerprint).
+  `devices/model/gateway-pairing.ts` formats the enrollment command as one quoted
+  JSON argument. The normal panel session supplies the pinned endpoint;
+  only pairing methods reach the view. Its orderings are in
+  [Same person](design/access-grants.md#desktop-human-reauthentication).
   Linked devices (#462) is the same shape: `model/linked-devices.ts` and
   `model/device-key.ts`, `adapters/linked-devices-gateway.ts`, and
   `ui/linked-devices-tab.tsx`, which composes the UI kit's settings rows,
@@ -1194,6 +1203,19 @@ library runs in a parallel job; its complement owns doctests. Linux/macOS keep
 the complete selection. The [execution map and failure table](../scripts/cargo-test-parallel/README.md)
 link unit, real-process and workflow-contract coverage; `scripts/ci-result.mjs`
 owns the required-check decision.
+
+[`scripts/process-failure.mjs`](../scripts/process-failure.mjs) owns the shared
+streaming child adapter and bounded CI failure annotations. The Cargo runner
+uses it; the existing desktop CI step wraps its unchanged checker with its CLI.
+The [execution and reporting contract](../scripts/process-failure/README.md)
+keeps diagnostic failure separate from the child result. Portable actual-process
+tests in `scripts/process-failure.test.mjs` also run through the desktop checker.
+
+[`scripts/workflow-source.mjs`](../scripts/workflow-source.mjs) owns the LF text
+view used by workflow and action structure checks. Measurement and pnpm-install
+contracts consume that reader. `scripts/workflow-source.test.mjs` executes their
+actual suites against LF and CRLF checkout fixtures, including through the desktop
+checker. Provenance owners hash the original checkout bytes.
 
 ## Cloud development preparation
 

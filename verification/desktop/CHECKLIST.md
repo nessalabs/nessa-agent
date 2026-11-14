@@ -187,13 +187,32 @@ controls — text, icons, images, code, or decorative art — in any frame.
   _Check:_ `columns.mjs --only pane-clipping` focuses an overflowing fixture
   with the pane's real styles; `conversation-stress.mjs` (`window`, full seeded
   sequence) records its offset and header geometry beside the list and panes alone.
-- [ ] **Column titles sit inline after the controls when they fit, below when
-  they do not**, and an inline title never overlaps a titlebar control.
+- [ ] **The session-list column's title sits inline after the controls when it
+  fits, below when it does not**, and an inline title never overlaps a titlebar control.
   _ADR 238 › The titlebar's safe area_ (`titlePlacement`).
   ResizeObserver delivery measures only; the latest placement commits before
   the next paint, with no ResizeObserver loop error (#693).
   _Check:_ `responsive.mjs --only column-title`; drag a column edge slowly
   across the flip point by hand and watch for a flicker (the 12px hold).
+  The columns layout measures placement wherever the title is visible across
+  the six-width sweep, requiring a visible title somewhere in that sweep.
+  CSS-hidden or fully transparent measured headings do not establish that presence.
+  The sidebar layout positively identifies its real tree, channel branches
+  and sessions, and requires no separate session-list column or title. Both
+  engine/layout profiles run; an empty title query alone is not evidence.
+
+  | Observed composition | Required evidence |
+  | --- | --- |
+  | Columns | Original visible-title presence across the sweep and title/control collision checks at every sampled width |
+  | Sidebar tree | Unique workspace and owned tree/navigation, real channel/session structure, consistent fold/visibility/accessibility facts, no separate session list or real column title, including hidden titles |
+  | Missing or contradictory context | Fails the check; never inferred to be an expected empty layout |
+
+  `column-title-composition.mjs` owns the sidebar observation/consistency
+  check; its bare-Node tests reject missing, inherited and contradictory facts.
+  SourceList owns input safety while folding: capture guards act before
+  parking sets `inert` (#1294), so an aria-hidden handoff may remain non-inert.
+  Its `parked.test.tsx` and `source-list.test.tsx` tests own those input guards;
+  this composition check does not infer interactivity from `inert=false`.
 - [ ] **Pane fitting starts after resize delivery.** Its first measurement may
   start another observer on the grid; it runs on the next animation frame,
   coalesces notifications, and retires with the source/grid. No native
@@ -510,8 +529,9 @@ _ADR 238 › What fills the content region_ (the overview is workspace state).
   (`focus-overview`, the walk); `perf-budget.mjs --only overview-answer` (answer lands); ⌘⌫ and ⌘R by hand.
 - [ ] **Each request shows its answers when pointed at or reached by the
   keyboard**: at rest a request row shows its title and time,
-  its why and its command, and no answers — nor room kept for them: the why
-  and the command run on to the time (the row's 12px gap before it, ±4).
+  one explanatory line (the agent's command, otherwise its why), and no
+  answers — nor room kept for them. That line runs on to the time (the
+  row's 12px gap before it, ±4).
   Pointed at, or with the keyboard visibly on it (`:focus-visible`), Deny and
   Allow Once (⌥ turns it into Always Allow where offered) take the time's
   place at its end, sliding in (at once with less motion); the row's height
@@ -701,8 +721,10 @@ on.
 
 - [ ] **The card opens a tab in the chat's right panel, no pane**, the list in activity
   order with a closed child called closed, and a child opens on its
-  transcript. Focus stays in the panel. Expanded, the widget starts below the
-  shared window toolbar and covers retained panes with the theme background.
+  transcript. Focus stays in the panel. Expanded, the widget shares the chat's
+  bounds and transparent ground; its header sits in the shared titlebar row,
+  with its body below the shared toolbar. The retained panes stay hidden beneath it
+  (`panes.css`, `styles.test.ts`, ADR 326).
   _Check:_ `subagents.mjs --only panel`.
 - [ ] **The transcript follows a new line while it is at the end, and stays
   put when scrolled up.** _Check:_ `subagents.mjs --only panel`.
@@ -749,6 +771,16 @@ in its sandbox". Every row of the bridge's design table is a jsdom test
   Closing or tearing down the panel retires it and retains the Open row;
   Open starts a fresh panel mount. _Check:_
   `mcp-apps.mjs --only inline,panel,window,teardown`.
+  Teardown retains the original app's request and tearing-down state, then its
+  original proxy's exact answer and tab count before the host consumes it; a
+  retired document alone is not acknowledgement (`lib/mcp-fixture.test.mjs`).
+  The retained original request must arrive within the unchanged 2000 ms
+  observation bound, before the existing 3000 ms tab-close wait; a later valid
+  request or answer stays visible without erasing an earlier bound failure.
+  Correlated request and ACK must carry own finite numeric capture times,
+  with the ACK strictly later. Reverse Node callback delivery remains valid.
+  This teardown fixture uses unmocked same-host browser `Date.now()` captures;
+  it does not establish order from callback-array position or across hosts.
   The bridge's L17a regression separately pins the original inline caller's
   exact reply id, mode and sandbox origin before opening can close its real
   transport; posting before retirement does not claim consumption by the
@@ -771,7 +803,14 @@ in its sandbox". Every row of the bridge's design table is a jsdom test
   own `<bdi>`; `data-message-app` `server/tool` — above its bubble, over the
   bubble's right edge (within 6 px) and inside the column; the person's own
   messages carry none; another while the sample's reply runs is refused
-  (`isError: true`) and adds nothing; `ui/update-model-context` is refused
+  (`isError: true`) and adds nothing. Only this sample-message check holds
+  its reply timeline through the reads and refusal, using a clock installed
+  before page boot and resumed on every outcome; real Playwright deadlines
+  remain unchanged. The reply must still be running at the busy request, and
+  after actual clock resumption is observed, its remaining timers are driven
+  through 5000 logical milliseconds and it must finish and accept another message.
+  The virtual fixture clock is not a performance measurement. This is not a
+  protocol-timeout check. `ui/update-model-context` is refused
   "The sample has no model to give context to" (gate 7). The gateway's own
   path is `app-messages.test.ts`, `bridge.test.ts` and `app-review.mjs
   --only message`. _Check:_ `mcp-apps.mjs --only message`.
@@ -1160,6 +1199,14 @@ phone's scanner is not this screen.
   `linked-devices.test.ts`, `linked-devices-gateway.test.ts`,
   `device-key.test.ts`.
 
+- [ ] **A phone-code Cancel survives a quiet poll during its pointer gesture.**
+  Modal and hidden-row controls keep the captured invitation; late poll replies
+  cannot resurrect it. Replacing A with B removes the pressed A control, and only
+  a fresh B gesture may cancel B. Initial/reconciliation reads and mutations keep
+  Cancel held. _Check:_ `linked-devices.mjs` (`cancel-during-poll-modal`,
+  `cancel-during-poll-row`, `cancel-retarget`), both engines;
+  `linked-devices-cancel.test.ts`, `linked-devices-tab.test.tsx`, rows L29–L33.
+
 - [ ] **Settings opens and leaves**; the window under it is inert while open.
   _Check:_ `smoke.mjs` (`settings`); inertness by hand (click under it).
 - [ ] **Its sidebar folds for room below a 420px page.** _Check:_
@@ -1222,8 +1269,12 @@ phone's scanner is not this screen.
   controls (not a fill). _Check:_ `settings-page.mjs --only focus-ring`
   (WebKit walks with ⌥Tab, as Safari does).
 - [ ] **Review notifications ask from Allow.** Access shows the row and
-  does not prompt before that button is pressed. _Check:_
-  `settings-page.mjs --only review-notices`.
+  does not prompt before that button is pressed. Its detail is `Off` with
+  one Allow button before permission, `On` without Allow once granted, or
+  the browser's blocking explanation without Allow when denied. Without
+  browser support, neither the row nor its control is shown. Measure the
+  detail itself, separately from its label and button. _Check:_
+  `settings-page.mjs --only review-notices`; `lib/review-notices.test.mjs`.
 - [ ] **Remembered rules rest without a gateway.** Access shows one
   remembered-rules row, disabled, and says it is not available in this
   window. _Check:_ `settings-page.mjs --only remembered-rules`; unit test
@@ -2634,3 +2685,59 @@ vault dialog blocking the main conversation click.
 - The conversation stress `passphrases` step changes through Settings, verifies
   Locked, explicitly unlocks, restores its disposable phrase and sends a reply.
   Run default1 and raised3. `vault.mjs`, `conversation-stress.mjs` own these checks.
+
+### Gateway invitations
+
+- [ ] **Focus and command layout follow the new page.** Entry, creation, resume,
+  permanent stop and completion focus the visible region; ready creation focuses
+  Create, and polling preserves the chosen control. While an exact native status
+  response is held, the selected Cancel/Approve remains focusable and ARIA
+  unavailable; keyboard activation sends no mutation. Releasing that response
+  preserves focus with zero focusout events. The command fits its normal
+  surface and a test-constrained 240px surface. _Check:_ `gateway-pairing.mjs`,
+  Chromium/WebKit, both layouts; view focus regressions.
+- [ ] **Choose before creating a PeerRead code.** Devices → Add device → Gateway
+  keeps both true and false immutable after create; recovery reads the saved
+  choice and does not reconstruct a code. The normal panel remains an Integration;
+  true requires explicit Human sign-in on a separate pairing scope. _Check:_
+  `gateway-pairing.mjs`, Chromium/WebKit and columns/sidebar: two choices, one
+  Integration refusal without registration, one refresh/recovery, one native
+  claim/approval per case. The production scripted runner includes this check.
+- [ ] **Active can precede attribution.** A fixture audit insertion failure leaves
+  the credential Active and no person link; retry keeps its credential and
+  receiver, then the exact Human link commits. There are zero implicit share rows.
+  Existing UI credential revoke removes that link. _Check:_ `gateway-pairing.mjs`;
+  native admission/cleanup regressions remain the authority for no-share refusal,
+  expiry, stale credentials and wire binding.
+- [ ] **Permanent activation requires a new pairing.** Preserve the exact stop
+  returned by approval. A retryable write offers retry; a permanent conflict
+  offers cancellation, with no retry action. The disposable receiver-write collision
+  rolls back before canonical cancellation; its reserved credential never
+  publishes, no person link is inserted, and the terminal receipt names the Human. _Check:_ `gateway-pairing.mjs` and
+  `add-gateway.test.tsx` (including preservation across polls).
+- [ ] **Pairing sign-in ends.** Input clears on submission, no token in app storage
+  or URL, no managed reconnect, and explicit end/completion closes the temporary
+  socket while the panel stays connected. Unit tests cover deadline, pagehide,
+  unmount, late connect and rejected commands after close. _Check:_
+  `add-gateway.test.tsx`, `gateway-pairing.test.ts` and `gateway-pairing.mjs`.
+- [ ] **Ended invitations retire the old session.** A terminal poll discards
+  the code and closes the temporary socket. A fresh explicit resume reads status
+  again and keeps a scope only for unfinished removal. Aborting any pending
+  connection or identity read settles promptly without closing shared panel work;
+  a late owned client closes before it exposes a command. _Check:_
+  `gateway-pairing.mjs` (terminal poll), `add-gateway.test.tsx` (terminal replies,
+  stale pending reads and Finish removal), and adapter abort regressions.
+- [ ] **New invitations do not inherit old display facts.** End sign-in after a
+  permanent stop, retire its stage through the disposable fixture owner, then
+  create and claim a different invitation. Approval remains available. Status,
+  code, stop and keyed fingerprint are one selected value; End, pagehide and
+  deadline clear it together. _Check:_ `gateway-pairing.mjs`, all three teardown
+  regressions in `add-gateway.test.tsx`, and selected-value ordering tests.
+- [ ] **Uncertain reads have executable recovery.** One private status send fails;
+  the page directs Back/reopen, then fresh sign-in resumes and cancels the same
+  invitation without reconstructing a code. Setup and selected-view failures
+  share that guidance. _Check:_ `gateway-pairing.mjs`, `add-gateway.test.tsx`.
+- [ ] **A conversation continues after both choices.** Conversation stress's
+  `gatewayPairings` knob defaults to one true/false/cancel cycle, turns native
+  linking off again, and sends another message, retaining background, follower,
+  at-rest and console checks. Run both layouts explicitly and raise the count.

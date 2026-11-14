@@ -1,10 +1,22 @@
 import assert from "node:assert/strict"
+import { createHash } from "node:crypto"
 import { spawnSync } from "node:child_process"
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import {
+  closeSync,
+  mkdtempSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import test from "node:test"
 import { fileURLToPath } from "node:url"
+
+import { testExecutables } from "../cargo-test-parallel.mjs"
+import { withFailureAnnotations } from "../process-failure.mjs"
 
 const runner = fileURLToPath(new URL("../cargo-test-parallel.mjs", import.meta.url))
 const cohortModule = "product::socket::tests::subscriptions::paired_lists::stress"
@@ -24,7 +36,9 @@ test("real Cargo partitions keep coverage and propagate build, harness, and doct
     let trace = std::env::var("NESSA_FIXTURE_TRACE").unwrap();
     use std::io::Write;
     writeln!(std::fs::OpenOptions::new().create(true).append(true).open(trace).unwrap(), "${id}").unwrap();
-    assert_ne!(std::env::var("NESSA_FIXTURE_FAIL").unwrap_or_default(), "${id}");
+    let fail = std::env::var("NESSA_FIXTURE_FAIL").unwrap_or_default();
+    if fail == "${id}" { eprintln!("fixture context: {}", "x".repeat(40_000)); }
+    assert_ne!(fail, "${id}");
   `
   write("Cargo.toml", '[workspace]\nmembers = ["server", "helper"]\nresolver = "2"\n')
   for (const [dir, name] of [
@@ -123,8 +137,37 @@ ${"}".repeat(cohortModule.split("::").length)}`
     const annotations = failedServer.stderr
       .split("\n")
       .filter((line) => line.startsWith("::error "))
-    assert.equal(annotations.length, 1, failedServer.stderr)
-    const message = decodeURIComponent(annotations[0].split("::").slice(2).join("::"))
+    assert.ok(
+      annotations.length > 1,
+      "the real assertion follows more than one receiver-sized chunk",
+    )
+    const parts = annotations.map((line) => {
+      const decoded = decodeURIComponent(line.split("::").slice(2).join("::"))
+      assert.ok(
+        decoded.length <= 3500,
+        "complete messages survive the 4096-character receiver",
+      )
+      const received = decoded.slice(0, 4096)
+      const header = /^Retained report ([a-f0-9]{64}) part (\d+)\/(\d+)\n/.exec(received)
+      assert.ok(header)
+      return {
+        hash: header[1],
+        index: Number(header[2]),
+        count: Number(header[3]),
+        data: received.slice(header[0].length),
+      }
+    })
+    assert.equal(parts[0].index, parts.length)
+    assert.match(parts[0].data, /assertion.*left != right.*failed/)
+    assert.ok(
+      parts.every((part) => part.hash === parts[0].hash && part.count === parts.length),
+    )
+    assert.equal(new Set(parts.map((part) => part.index)).size, parts.length)
+    const message = parts
+      .sort((a, b) => a.index - b.index)
+      .map((part) => part.data)
+      .join("")
+    assert.equal(createHash("sha256").update(message).digest("hex"), parts[0].hash)
     assert.match(message, /nessa_server/)
     assert.match(message, /exited with 101/)
     assert.match(message, /executes.*panicked/)
@@ -199,6 +242,93 @@ ${"}".repeat(cohortModule.split("::").length)}`
     const failedBuild = run("server-conversation")
     check(failedBuild, [], 1)
     assert.match(failedBuild.stderr, /cargo test --no-run exited with/)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+// Both descriptors share one file offset, so the fixture proves ordering rather
+// than depending on when Node happens to drain separate stdout/stderr pipes.
+test("default libtest capture retains an early assertion after a later noisy success", async () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), "nessa-ci-capture-"))
+  try {
+    mkdirSync(path.join(root, "src"))
+    writeFileSync(
+      path.join(root, "Cargo.toml"),
+      '[package]\nname="capture-evidence"\nversion="0.1.0"\nedition="2021"\n[workspace]\n',
+    )
+    writeFileSync(
+      path.join(root, "src/lib.rs"),
+      `
+#[test] fn a_early_failure() { panic!("CONTROL_EARLY_ASSERTION"); }
+#[test] fn z_later_noisy_success() { println!("LATER_SUCCESS_CONTEXT {}", "x".repeat(40_000)); }
+`,
+    )
+    const environment = { ...process.env, CARGO_TARGET_DIR: path.join(root, "target") }
+    const build = spawnSync(
+      "cargo",
+      ["test", "--no-run", "--offline", "--message-format=json"],
+      { cwd: root, env: environment, encoding: "utf8", timeout: 120_000 },
+    )
+    assert.ifError(build.error)
+    assert.equal(build.status, 0, build.stderr)
+    const executables = testExecutables(build.stdout)
+    assert.equal(executables.length, 1)
+    for (const uncaptured of [true, false]) {
+      const outputFile = path.join(root, `output-${uncaptured}.txt`)
+      const descriptor = openSync(outputFile, "w")
+      const env = { ...environment }
+      delete env.RUST_TEST_NOCAPTURE
+      if (uncaptured) env.RUST_TEST_NOCAPTURE = "1"
+      let result
+      try {
+        result = spawnSync(executables[0].executable, ["--test-threads=1"], {
+          cwd: root,
+          env,
+          stdio: ["ignore", descriptor, descriptor],
+          timeout: 120_000,
+        })
+      } finally {
+        closeSync(descriptor)
+      }
+      assert.ifError(result.error)
+      assert.equal(result.status, 101)
+      const output = readFileSync(outputFile, "utf8")
+      assert.match(output, /test result: FAILED\. 1 passed; 1 failed;/)
+      assert.match(output, /CONTROL_EARLY_ASSERTION/)
+      assert.ok(
+        output.indexOf("test a_early_failure") <
+          output.indexOf("test z_later_noisy_success"),
+      )
+      assert.equal(output.includes("LATER_SUCCESS_CONTEXT"), uncaptured)
+      if (uncaptured)
+        assert.ok(
+          output.indexOf("CONTROL_EARLY_ASSERTION") <
+            output.indexOf("LATER_SUCCESS_CONTEXT"),
+        )
+      const annotations = []
+      let forwarded = ""
+      const code = await withFailureAnnotations(
+        async (_command, _args, io) => {
+          io.onStdout(output)
+          return result.status
+        },
+        (line) => annotations.push(line),
+      )(executables[0].executable, ["--test-threads=1"], {
+        onStdout: (chunk) => {
+          forwarded += chunk
+        },
+      })
+      assert.equal(code, 101)
+      assert.equal(forwarded, output)
+      const evidence = annotations
+        .map((line) =>
+          decodeURIComponent(line.split("::").slice(2).join("::").slice(0, -1)),
+        )
+        .join("\n")
+      assert.equal(evidence.includes("CONTROL_EARLY_ASSERTION"), !uncaptured)
+      assert.equal(annotations.length > 1, uncaptured)
+    }
   } finally {
     rmSync(root, { recursive: true, force: true })
   }

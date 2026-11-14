@@ -50,7 +50,7 @@ For example, the owner's laptop and desktop can each have a separate read grant
 on one conversation. Their shared person does not collapse those grants. Device
 and owner-phone consent retain their own classes and cannot select this choice.
 
-## Supported API and remaining desktop work
+## Supported API and desktop entry
 
 The [local auth guide](../../../guides/local-auth.md) explains that
 `auth init --local` creates the Human owner credential and by default writes it
@@ -75,22 +75,16 @@ restart. Non-peer replies omit it; absence on a legacy response remains unknown,
 not an inferred false. This is historical consent, never evidence that a person
 link committed or a read is authorized.
 
-This completes the API choice; the desktop pairing flow still sends the default
-false choice and has no control for true. Completing that flow requires an
-authoritative Human-proof path: an explicit panel attribution relation or a
-specified Human reauthentication flow in the existing authority, then a
-creation-only choice control and browser coverage of that
-immutable choice, admission after link commit, refusal without a share, and
-cleanup/retry. Inferring a person from SurfaceProvision issuance history, copying
-the owner token into the panel, or using owner-phone consent would change a
-separate contract. Those changes are not implemented here. #1282's current UI
-audit owns changes in the overlapping desktop surfaces. Settings currently
-creates OwnerPhone invitations; Add Computer creates Environment workers and
-eagerly makes a code before a choice. No PeerRead gateway creation UI was found.
-The [desktop completion handoff](../../../reviews/893-desktop-handoff.md) gives
-the exact actor/provenance decisions, ownership boundaries and integration/test
-sequence. Shared filenames alone do not prohibit independent hunks; the missing
-Human-proof contract is the primary dependency.
+The [desktop gateway invitation](../desktop/workspace/gateway-pairing.md) now
+provides a separate PeerRead entry and a creation-only same-person choice. Its
+selected proof is explicit Human reauthentication through the existing credential
+authority. The ordinary panel keeps its Integration credential; no durable
+Integration-to-Human relation is inferred or established. Phone and Computer
+retain their OwnerPhone and Environment classes. The desktop page owns the
+separate session's consent, teardown and recovery; this page's native lifecycle
+checkpoint remains unchanged. Desktop evidence and its source checkpoint are
+recorded on that page and in the
+[completion evidence](../../../reviews/893-desktop-completion.md).
 
 ## Choice, activation and recovery
 
@@ -169,3 +163,9 @@ formal model; the older device activation model does not cover these two-store
 link obligations. No real device, account grant, live credential, physical phone
 or deployed gateway was used to verify this flow. Peer subscriptions, desktop
 choice controls and unrelated gateway lifecycle models are outside this change.
+
+Relocation-only review at `a2c1a915e58ca5c2514e4ba2fefc72b097731cd6`: activation and
+linking still route through `nessa-device-pairing`, with the registry and grant
+store retaining authority. The older behavioral checkpoint above is retained;
+this source-mapping review does not claim a complete native lifecycle re-audit
+or rerun native regressions.

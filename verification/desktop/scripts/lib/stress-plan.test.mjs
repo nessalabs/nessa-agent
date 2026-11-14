@@ -56,6 +56,7 @@ test("every required step appears as often as its number says", () => {
   assert.equal(count("pool"), knobs.pools)
   assert.equal(count("place"), knobs.places)
   assert.equal(count("devices"), knobs.devices)
+  assert.equal(count("gatewayPairing"), knobs.gatewayPairings)
   assert.equal(count("ssh"), knobs.sshHosts)
   assert.equal(count("tunnel"), knobs.tunnels)
   assert.equal(count("drift"), knobs.drifts)
@@ -182,6 +183,7 @@ test("the legacy seed preserves the existing non-model work's relative order", (
         pools: "0",
         places: "0",
         devices: "0",
+        gatewayPairings: "0",
         sshHosts: "0",
         tunnels: "0",
         drifts: "0",

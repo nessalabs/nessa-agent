@@ -1,0 +1,15 @@
+{
+  "beforeRevision": "491d9359234aa1218cdcb6d0fde19bfb3719e11f",
+  "afterRevision": "92ef76a3c8ea3f6d3c38d617ed32710f7db522bc",
+  "productCodeChanged": false,
+  "sameOutputComparisons": [
+    "railItem(devices)",
+    "railItem(agents)",
+    "linkedAction(revoke)",
+    "linkedAction(confirm-revoke)",
+    "linkedCredential(fixture-credential)"
+  ],
+  "hiddenCheckboxCoverage": "getByRole checkbox includeHidden:true",
+  "harnessTestsPassed": 28,
+  "freshClosureReview": "no findings"
+}

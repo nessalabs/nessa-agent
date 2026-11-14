@@ -5984,6 +5984,50 @@ const steps = {
     }
   },
 
+  async gatewayPairing(run, step, failures) {
+    // The worker entry enables the same native listener; its invitation is
+    // cancelled by its own page before this distinct PeerRead entry starts.
+    if (!(await run.exclusive(() => reachFromDevices(run, failures)))) return
+    const page = run.page
+    await setSideRail(page, true, failures)
+    if (failures.length) return
+    await page.locator(selectorFor.railItem("devices")).click()
+    for (const samePerson of [false, true]) {
+      await page.locator(css.devicesAddAction).click()
+      await page.locator(css.devicesGatewayTile).click()
+      if (samePerson) {
+        await page.getByRole("checkbox", { name: "Both gateways belong to me" }).check()
+        await page.getByLabel("Owner access token").fill(run.stack.token())
+      }
+      await page.getByRole("button", { name: "Continue", exact: true }).click()
+      await page.getByRole("button", { name: "Create invitation", exact: true }).click()
+      await page.locator(css.gatewayPairingCode).waitFor({ timeout: 15_000 })
+      const choice = await page.locator(css.gatewayPairingChoice).innerText()
+      if (!choice.includes(samePerson ? "same person" : "no person link"))
+        failures.push("gateway invitation lost its saved choice")
+      if (await page.getByRole("checkbox").count())
+        failures.push("gateway invitation choice remained editable after creation")
+      await page.getByRole("button", { name: "Cancel invitation", exact: true }).click()
+      await page
+        .getByRole("button", { name: "End pairing sign-in" })
+        .waitFor({ state: "hidden" })
+      await page.getByRole("button", { name: "Back", exact: true }).click()
+    }
+    // The in-place phone page exposes the existing native-linking switch;
+    // opening Accounts on the way through Settings would ask for the vault.
+    await page.locator(css.devicesAddAction).click()
+    await page.locator(css.devicesPhoneTile).click()
+    await run.exclusive(async () => {
+      await switchLinking(run, false, failures)
+    })
+    await page.locator(css.devicesBackAction).click()
+    await page.locator(selectorFor.railItem("agents")).click()
+    await setSideRail(page, false, failures)
+    await openStressConversation(page, run.main.id, run.main.title)
+    const text = `${STRESS.reply}gateway-pairing-${step.index}`
+    const seen = await send(run, run.main.id, text, failures)
+    await settled(run, run.main.id, seen, text, "completed", failures)
+  },
   async devices(run, step, failures) {
     // A worker dials the native listener, off until a step turns it on:
     // here Add a computer does, as a person with linking off would.
@@ -6226,7 +6270,10 @@ const steps = {
           .evaluateAll((each) =>
             each.map((button) => button.getAttribute("data-devices-add")),
           )
-        if (JSON.stringify(kinds) !== JSON.stringify(["computer", "phone", "cloud"]))
+        if (
+          JSON.stringify(kinds) !==
+          JSON.stringify(["computer", "gateway", "phone", "cloud"])
+        )
           failures.push(`Add device offers ${JSON.stringify(kinds)}`)
         // A phone pairs right here: Settings' rows, drawn as cards on Devices,
         // and the code's modal on top of the page, giving focus back on Escape.

@@ -32,10 +32,9 @@
  * Diagnostics go to stderr. Test output goes to stdout, one binary per prefix.
  * The process exits non-zero when the build, a binary, or doctests fail.
  */
-import { spawn } from "node:child_process"
 import path from "node:path"
 import { pathToFileURL } from "node:url"
-import { withFailureAnnotations } from "./cargo-test-parallel/diagnostics.mjs"
+import { runProcess } from "./process-failure.mjs"
 import {
   serverCasePlan,
   testRegistry,
@@ -381,22 +380,6 @@ export async function runParallelCargoTests({
   if (doctestCode !== 0) throw new Error(`cargo test --doc exited with ${doctestCode}`)
 }
 
-function spawnProcess(command, args, io) {
-  return new Promise((resolve, reject) => {
-    const child = spawn(command, args, {
-      cwd: io.cwd,
-      stdio: ["ignore", "pipe", "pipe"],
-      windowsHide: true,
-    })
-    child.stdout.setEncoding("utf8")
-    child.stderr.setEncoding("utf8")
-    child.stdout.on("data", (chunk) => io.onStdout?.(chunk))
-    child.stderr.on("data", (chunk) => io.onStderr?.(chunk))
-    child.on("error", reject)
-    child.on("close", (code) => resolve(code ?? 1))
-  })
-}
-
 const invoked = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href
 if (invoked) {
   try {
@@ -408,10 +391,7 @@ if (invoked) {
       concurrency,
       partition,
       runPackages,
-      run:
-        process.env.GITHUB_ACTIONS === "true"
-          ? withFailureAnnotations(spawnProcess, (line) => process.stderr.write(line))
-          : spawnProcess,
+      run: runProcess,
       cwd: process.cwd(),
     })
   } catch (error) {

@@ -11,7 +11,8 @@ built: the build and the doctests keep the full package arguments, so Cargo
 unifies features exactly as a full run does. The Linux leg passes the crates
 `scripts/ci-plan.mjs` says a pull request can reach; an empty value runs all.
 
-The Windows jobs build the same eight packages with the same flags. The
+The Windows jobs build the same declared package selection with the same flags
+(`RUST_TEST_PACKAGES` in `../ci-plan.mjs`). The
 `server-conversation` and `server-other` partitions resolve `nessa-server` and
 its library target from `cargo metadata`, match the artifact's package ID,
 target name and kind, and require exactly one library executable. The four seeded paired-catalogue
@@ -25,15 +26,30 @@ with three complementary filters across the jobs. Linux/macOS use `all`, unchang
 Unit and real process tests assert the case union and intersection; workflow-contract
 tests hold the build arguments, platform coverage, guards and aggregate needs.
 
-On GitHub Actions, `diagnostics.mjs` copies the last 16,384 output characters
-from each failed child into one escaped error annotation. This exposes the
-executable, exit code and bounded output (including libtest's failure section)
-through the checks API when full logs are unavailable. Truncation is explicit;
-the full prefixed output remains in the normal log. The decorator forwards the
-same command, arguments, output callbacks, result and thrown error. It adds no
-retry, timeout, test filter or interpretation of whether output means success.
-The real-Cargo regression asserts that a synthetic server-library assertion
-appears in the annotation while the runner still exits 1 for libtest's exit 101.
+The shared [process failure diagnostics](../process-failure/README.md) own
+streaming output and bounded failure annotations. This runner uses that owner
+on GitHub Actions; command selection and execution remain here. The real-Cargo
+`e2e.test.mjs` recovers an actual synthetic assertion from those annotations
+without changing the failed process result.
+
+
+The Windows server jobs use [default libtest capture](https://doc.rust-lang.org/book/ch11-02-running-tests.html#showing-function-output),
+as Linux/macOS do. Failed-test output is printed in the final failure section;
+successful-test output stays captured. Disabling capture lets later successful
+output push an earlier assertion outside the retained tail. The real-Cargo
+`default libtest capture` regression proves that distinction with the same
+one-passed/one-failed result in both modes. Only this disposable ordering fixture
+uses one test thread; the production job's thread and process concurrency, package
+selection, features, 90-minute step and 95-minute job bounds are unchanged.
+
+| Situation | Reporting limit |
+| --- | --- |
+| Tests finish with failures | Their output is printed in libtest's final failure section |
+| A later test hangs or the step is canceled | Earlier panic details may stay captured; long-running notices and the unchanged deadline remain |
+| Failure output exceeds the retained tail or annotation capacity | Assertion details can still be absent; no complete-history or delivery guarantee |
+
+Restoring capture is a reporting-mode change. It does not diagnose or repair a
+handoff failure, and a later pass in that mode does not explain an earlier failure.
 
 | Result | Next action |
 | --- | --- |

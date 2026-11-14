@@ -60,6 +60,7 @@ function gateway(
     value: tunnelOff,
   }),
 ): LinkedDevicesGateway & {
+  pollMs: number
   switchWaitMs: number
   creates: number
   linkings: boolean[]
@@ -387,6 +388,131 @@ describe("Linked devices", () => {
     expect(document.querySelector("[data-slot='dialog']")).toBeNull()
     expect(host.querySelector("[data-linked-action='pair']")).not.toBeNull()
     expect(document.activeElement?.getAttribute("data-linked-action")).toBe("pair")
+  })
+
+  it("L29–L30: Cancel stays actionable during a quiet poll and late polling cannot reopen it", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] })
+    try {
+      const invitationId = "00112233445566778899aabbccddeeff"
+      const available = {
+        invitationId,
+        phase: "available" as const,
+        expiresAtMs: Date.now() + 60_000,
+      }
+      const withCode: Outcome<ReadValue> = {
+        ok: true,
+        value: { kind: "on", enrollments: [available], devices: [] },
+      }
+      const empty: Outcome<ReadValue> = {
+        ok: true,
+        value: { kind: "on", enrollments: [], devices: [] },
+      }
+      let reads = 0
+      let finishPoll: (outcome: Outcome<ReadValue>) => void = () => {
+        throw new Error("poll was not admitted")
+      }
+      let finishRead: (outcome: Outcome<ReadValue>) => void = () => {
+        throw new Error("reconciliation was not admitted")
+      }
+      const gate = gateway(async () => {
+        reads += 1
+        if (reads === 3) return new Promise((resolve) => (finishPoll = resolve))
+        if (reads === 4) return new Promise((resolve) => (finishRead = resolve))
+        return reads === 2 ? withCode : empty
+      })
+      gate.pollMs = 4_000
+      const cancel = vi.spyOn(gate, "cancel").mockResolvedValue({
+        ok: true,
+        value: { ...available, phase: "terminal", terminal: "cancelled" },
+      })
+      await mount(
+        <LinkedDevicesProvider gateway={gate}>
+          <LinkedDevicesTab />
+        </LinkedDevicesProvider>,
+      )
+      await act(async () =>
+        host.querySelector<HTMLButtonElement>("[data-linked-action='pair']")?.click(),
+      )
+      await act(async () => vi.advanceTimersByTimeAsync(4_000))
+      expect(reads).toBe(3)
+      const button = document.querySelector<HTMLButtonElement>(
+        "[data-slot='dialog'] [data-linked-action='cancel']",
+      )
+      expect(button?.disabled).toBe(false)
+      expect(
+        document.querySelector<HTMLButtonElement>(
+          "[data-slot='dialog'] [data-linked-action='refresh']",
+        )?.disabled,
+      ).toBe(true)
+      await act(async () => button?.click())
+      expect(cancel).toHaveBeenCalledExactlyOnceWith(invitationId)
+      expect(document.querySelector("[data-slot='dialog']")).toBeNull()
+      expect(reads).toBe(4)
+      await act(async () => finishPoll(withCode))
+      expect(document.querySelector("[data-slot='dialog']")).toBeNull()
+      expect(host.querySelector("[data-linked-action='show']")).toBeNull()
+      expect(reads).toBe(4)
+      await act(async () => finishRead(empty))
+      expect(
+        host.querySelector<HTMLButtonElement>("[data-linked-action='pair']")?.disabled,
+      ).toBe(false)
+      expect(gate.creates).toBe(1)
+      expect(cancel).toHaveBeenCalledTimes(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it("L31: a replacement code gets a different Cancel target", async () => {
+    const first = {
+      invitationId: "00112233445566778899aabbccddeeff",
+      phase: "available" as const,
+      expiresAtMs: Date.now() + 60_000,
+    }
+    const second = { ...first, invitationId: "ffeeddccbbaa99887766554433221100" }
+    let reads = 0
+    const gate = gateway(async () => ({
+      ok: true,
+      value: {
+        kind: "on",
+        enrollments: ++reads === 2 ? [first] : reads === 3 ? [second] : [],
+        devices: [],
+      },
+    }))
+    vi.spyOn(gate, "refresh").mockResolvedValue({
+      ok: true,
+      value: { code: "WXYZ-6789", enrollment: second },
+    })
+    const cancelled = vi.spyOn(gate, "cancel").mockResolvedValue({
+      ok: true,
+      value: { ...second, phase: "terminal", terminal: "cancelled" },
+    })
+    await mount(
+      <LinkedDevicesProvider gateway={gate}>
+        <LinkedDevicesTab />
+      </LinkedDevicesProvider>,
+    )
+    await act(async () =>
+      host.querySelector<HTMLButtonElement>("[data-linked-action='pair']")?.click(),
+    )
+    const selector = "[data-slot='dialog'] [data-linked-action='cancel']"
+    const original = document.querySelector<HTMLButtonElement>(selector)
+    expect(original).not.toBeNull()
+    await act(async () =>
+      document
+        .querySelector<HTMLButtonElement>(
+          "[data-slot='dialog'] [data-linked-action='refresh']",
+        )
+        ?.click(),
+    )
+    const replacement = document.querySelector<HTMLButtonElement>(selector)
+    expect(replacement).not.toBeNull()
+    expect(replacement).not.toBe(original)
+    expect(original?.isConnected).toBe(false)
+    await act(async () => original?.click())
+    expect(cancelled).not.toHaveBeenCalled()
+    await act(async () => replacement?.click())
+    expect(cancelled).toHaveBeenCalledExactlyOnceWith(second.invitationId)
   })
 
   it("focus waits on the row while the read after a cancel is out, then takes Pair", async () => {

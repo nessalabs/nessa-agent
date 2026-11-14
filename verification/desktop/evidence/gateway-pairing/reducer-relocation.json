@@ -1,0 +1,9 @@
+{
+  "oldSourceRevision": "41cec9e2121cb420c67d8036334840c4832b903c",
+  "newSourceRevision": "491d9359234aa1218cdcb6d0fde19bfb3719e11f",
+  "oldPath": "src/desktop/devices/model/gateway-pairing.ts",
+  "newPath": "src/desktop/devices/ui/gateway-invitation.ts",
+  "identicalReducerAndTypes": true,
+  "bodySha256": "f6b8c4c41113508a98531cf40cafdb14bdcd76b3e12648f688b9924efb2bc75e",
+  "scope": "Type/reducer body; file header and owning layer changed. Formatter remains in model."
+}

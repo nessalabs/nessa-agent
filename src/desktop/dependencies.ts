@@ -1,3 +1,6 @@
+import { gatewayPairing } from "./devices/adapters/gateway-pairing"
+import { NessaClient } from "@nessa/client"
+import type { Stage } from "@nessa/client"
 import { boatClaudeSignIn } from "../provider-authentication/model/boat-sign-in"
 import { boatGateway, type BoatGateway } from "./settings/adapters/boat-gateway"
 import { devicesGateway, type DevicesClient, type DevicesGateway } from "./devices"
@@ -181,6 +184,8 @@ export function createDesktopDependencies(
      */
     vault?: VaultSource
     gateway?: () => Promise<WindowGatewayClient>
+    /** Stage for explicit Human pairing sign-in; production unless composition says otherwise. */
+    stage?: Stage
     now?: () => number
     newId?: () => string
     measure?: WorkspaceDependencies["measure"]
@@ -275,7 +280,18 @@ export function createDesktopDependencies(
     linkedDevices: source
       ? linkedDevicesGateway({ connected: () => source.connected(), after })
       : undefined,
-    devices: source ? devicesGateway({ connected: () => source.connected() }) : undefined,
+    devices: source
+      ? devicesGateway({
+          connected: () => source.connected(),
+          gatewayPairing: gatewayPairing({
+            connected: () => source.connected(),
+            stage: options.stage ?? "prod",
+            connect: NessaClient.connect,
+            newId,
+            after,
+          }),
+        })
+      : undefined,
     nativeHooks: source
       ? nativeHooksGateway({ connected: () => source.connected() })
       : undefined,
@@ -332,7 +348,7 @@ export function createDesktopDependencies(
 }
 
 /** A gateway client the window can show conversations, draw apps, read held files, manage MCP servers, pair devices, set native hooks, sign in to GitHub, share sessions and start voice calls through. */
-type WindowGatewayClient = GatewayClient &
+type WindowGatewayClient = { readonly sessionUrl?: string } & GatewayClient &
   DevicesClient &
   VoiceClient &
   SavedLoginsClient &

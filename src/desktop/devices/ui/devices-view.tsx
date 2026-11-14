@@ -56,7 +56,8 @@ import {
   type Usage,
   type WorkerCard,
 } from "../model/devices"
-import { AddComputer } from "./add-computer"
+import { AddGateway } from "./add-gateway"
+import { AddComputer, listeningPort } from "./add-computer"
 import { PoolOrder } from "./pool-order"
 import "./devices.css"
 
@@ -145,6 +146,7 @@ type Page =
   | { readonly kind: "add" }
   | { readonly kind: "add-computer" }
   | { readonly kind: "add-phone" }
+  | { readonly kind: "add-gateway" }
   | { readonly kind: "pool" }
 
 export function DevicesView() {
@@ -160,18 +162,29 @@ export function DevicesView() {
       </div>
     )
   const list = () => setPage({ kind: "list" })
+  if (page.kind === "add-gateway" && gateway.gatewayPairing)
+    return (
+      <AddGateway
+        gateway={gateway.gatewayPairing}
+        onBack={list}
+        port={listeningPort(devices.listening ?? undefined)}
+      />
+    )
   if (page.kind === "add")
     return (
       <AddDevice
         onBack={list}
+        gateways={gateway.gatewayPairing !== undefined}
         onPick={(kind) =>
           setPage({
             kind:
               kind === "computer"
                 ? "add-computer"
-                : kind === "phone"
-                  ? "add-phone"
-                  : "cloud",
+                : kind === "gateway"
+                  ? "add-gateway"
+                  : kind === "phone"
+                    ? "add-phone"
+                    : "cloud",
           })
         }
       />
@@ -736,7 +749,7 @@ function LinkedTiles({ linked }: { linked: readonly LinkedDevice[] | null | unde
   ))
 }
 
-type AddKind = "computer" | "phone" | "cloud"
+type AddKind = "computer" | "phone" | "cloud" | "gateway"
 
 const addKinds: readonly {
   kind: AddKind
@@ -750,6 +763,12 @@ const addKinds: readonly {
     name: "Computer",
     detail: "Runs agents the hub sends it",
   },
+  {
+    kind: "gateway",
+    art: "laptop",
+    name: "Gateway",
+    detail: "Reads only conversations you share",
+  },
   { kind: "phone", art: "phone", name: "Phone", detail: "Talk to the hub from anywhere" },
   {
     kind: "cloud",
@@ -761,11 +780,13 @@ const addKinds: readonly {
 
 /** "Add device": which kind, then that kind's own way in. */
 function AddDevice({
+  gateways,
   onBack,
   onPick,
 }: {
   onBack: () => void
   onPick: (kind: AddKind) => void
+  gateways: boolean
 }) {
   return (
     <div className="devices-page" data-devices-page="add-device">
@@ -775,23 +796,25 @@ function AddDevice({
         <p className="devices-muted">What would you like to add?</p>
       </div>
       <div className="devices-grid">
-        {addKinds.map((each) => (
-          <button
-            key={each.kind}
-            type="button"
-            className="devices-tile"
-            onClick={() => onPick(each.kind)}
-            data-devices-add={each.kind}
-          >
-            <div className="devices-stage">
-              <DeviceFigure kind={each.art} className="devices-tile-figure" />
-            </div>
-            <div className="devices-tile-body">
-              <span className="devices-tile-name">{each.name}</span>
-              <span className="devices-muted">{each.detail}</span>
-            </div>
-          </button>
-        ))}
+        {addKinds
+          .filter((each) => each.kind !== "gateway" || gateways)
+          .map((each) => (
+            <button
+              key={each.kind}
+              type="button"
+              className="devices-tile"
+              onClick={() => onPick(each.kind)}
+              data-devices-add={each.kind}
+            >
+              <div className="devices-stage">
+                <DeviceFigure kind={each.art} className="devices-tile-figure" />
+              </div>
+              <div className="devices-tile-body">
+                <span className="devices-tile-name">{each.name}</span>
+                <span className="devices-muted">{each.detail}</span>
+              </div>
+            </button>
+          ))}
       </div>
     </div>
   )

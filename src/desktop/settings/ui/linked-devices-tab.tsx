@@ -30,6 +30,7 @@ import type { LinkedDevicesGateway } from "../adapters/linked-devices-gateway"
 import {
   approvable,
   canAct,
+  canCancel,
   canPair,
   canPoll,
   canReplace,
@@ -408,9 +409,10 @@ function PairingGroup({
                 type="button"
                 className="settings-button"
                 data-linked-action="cancel"
+                key={open}
                 data-invitation={open}
-                disabled={!canReplace(state)}
-                onClick={() => dispatch({ type: "cancel" })}
+                disabled={!canCancel(state)}
+                onClick={() => dispatch({ type: "cancel", invitationId: open })}
               >
                 {sentences.cancel}
               </button>
@@ -505,8 +507,11 @@ function PairingDialog({
                     type="button"
                     className="settings-button"
                     data-linked-action="cancel"
-                    disabled={!canReplace(state)}
-                    onClick={() => dispatch({ type: "cancel" })}
+                    key={shown.invitationId}
+                    disabled={!canCancel(state)}
+                    onClick={() =>
+                      dispatch({ type: "cancel", invitationId: shown.invitationId })
+                    }
                   >
                     {sentences.cancel}
                   </button>

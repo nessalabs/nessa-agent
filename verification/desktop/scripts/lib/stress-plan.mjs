@@ -177,6 +177,10 @@ export const KNOBS = {
     default: 1,
     what: "times a channel's new threads are put on one paired worker from its settings (a computer not connected is refused) and a thread made in it runs there",
   },
+  gatewayPairings: {
+    default: 1,
+    what: "same-person PeerRead gateway choices through Devices, with explicit Human sign-in and cancellation before returning to the conversation",
+  },
   devices: {
     default: 1,
     what: "times a paired worker is shown in the side rail's Devices with its machine in one list beside the cloud, opened, Boat's page opened, offered by Add device's computer commands, and kept as offline with when it was last seen once it stops",
@@ -334,6 +338,7 @@ export function plan(knobs, accessScenario = "full") {
   add(knobs.notices, () => ({ kind: "notice" }))
   add(knobs.pools, () => ({ kind: "pool" }))
   add(knobs.places, () => ({ kind: "place" }))
+  add(knobs.gatewayPairings, () => ({ kind: "gatewayPairing" }))
   add(knobs.devices, () => ({ kind: "devices" }))
   add(knobs.sshHosts, () => ({ kind: "ssh" }))
   add(knobs.tunnels, () => ({ kind: "tunnel" }))

@@ -256,6 +256,15 @@ export class NessaClient {
     return this.threadCommands.stopThread(threadId, options)
   }
 
+  /** Current connected WebSocket endpoint. SDK authentication evidence is sent
+   * separately by session.authenticate, not added to this URL. Undefined during
+   * recovery or after close. A scoped operation can pin this endpoint rather
+   * than rediscovering a different gateway; authenticate and compare gateway /
+   * organization identity before sending a mutation on the new connection. */
+  get sessionUrl(): string | undefined {
+    return this.wire.url
+  }
+
   /** Current authenticated handshake snapshot; available only while connected. */
   get productSession(): ProductSessionReady {
     const ready = this.wire.ready
