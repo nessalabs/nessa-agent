@@ -1,5 +1,7 @@
+/* The dialog sets the width; its content fills it, so the field and the
+   buttons end where the close button does. */
 .vault-dialog {
-  width: min(360px, calc(100vw - 64px));
+  width: 100%;
   color: var(--foreground);
 }
 .vault-dialog form {
