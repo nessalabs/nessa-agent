@@ -4,7 +4,7 @@
 use crate::conversation::{
     application::{
         ConversationError, ConversationLimits, Environment, EnvironmentDeclaration,
-        EnvironmentFuture, EnvironmentLease, ThreadEnvironments, WorkspaceRest,
+        EnvironmentFuture, EnvironmentLease, ThreadEnvironments,
     },
     infrastructure::{
         in_process_environment,
@@ -276,20 +276,10 @@ impl ThreadEnvironments for FakeEnvironments {
     fn available(&self) -> EnvironmentFuture<'_, bool> {
         Box::pin(async { true })
     }
-    fn rest<'a>(
-        &'a self,
-        id: &'a ConversationId,
-        cause: WorkspaceRest,
-    ) -> EnvironmentFuture<'a, bool> {
+    fn rest<'a>(&'a self, id: &'a ConversationId, cause: RestCause) -> EnvironmentFuture<'a, bool> {
         Box::pin(async move {
             self.0
-                .rest(
-                    id.clone(),
-                    match cause {
-                        WorkspaceRest::Idle => RestCause::Idle,
-                        WorkspaceRest::Closed => RestCause::Closed,
-                    },
-                )
+                .rest(id.clone(), cause)
                 .await
                 .stopped
                 .unwrap_or(false)

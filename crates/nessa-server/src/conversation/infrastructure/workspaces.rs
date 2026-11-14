@@ -7,13 +7,11 @@ use crate::timer::clock;
 use crate::{
     conversation::application::{
         ChannelStore, ConversationError, Environment, EnvironmentFuture, ThreadEnvironments,
-        WorkspaceRest, MAX_RETAINED_ENVIRONMENTS,
+        MAX_RETAINED_ENVIRONMENTS,
     },
-    conversation::domain::{BackgroundCommand, TaskStop},
+    conversation::domain::{BackgroundCommand, RestCause, TaskStop},
     env::LEASE_PROTOCOL,
-    workspaces::application::{
-        RestCause, ServedCopy, WorkspaceRuntime, WorkspaceStream, Workspaces,
-    },
+    workspaces::application::{ServedCopy, WorkspaceRuntime, WorkspaceStream, Workspaces},
 };
 use futures_util::future::{BoxFuture, FutureExt, Shared};
 use nessa_protocol::conversation::domain::ConversationId;
@@ -321,13 +319,9 @@ impl ThreadEnvironments for ThreadWorkspaces {
     fn rest<'a>(
         &'a self,
         conversation: &'a ConversationId,
-        cause: WorkspaceRest,
+        cause: RestCause,
     ) -> EnvironmentFuture<'a, bool> {
         Box::pin(async move {
-            let cause = match cause {
-                WorkspaceRest::Idle => RestCause::Idle,
-                WorkspaceRest::Closed => RestCause::Closed,
-            };
             let environment = self
                 .environments
                 .lock()
@@ -342,7 +336,7 @@ impl ThreadEnvironments for ThreadWorkspaces {
                 let mut wait = Duration::from_secs(1);
                 while !environment.let_go().await {
                     if wait > LET_GO_PATIENCE {
-                        tracing::warn!(conversation_id = %conversation, "the conversation's connection is still in use; its VM keeps running");
+                        tracing::warn!(conversation_id = %conversation, uses = ?self.service.uses(&conversation.to_string()), "the conversation's connection is still in use; its VM keeps running");
                         return false;
                     }
                     clock::sleep(wait).await;

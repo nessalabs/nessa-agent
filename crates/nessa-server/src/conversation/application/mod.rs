@@ -411,9 +411,9 @@ mod local_golden_tests;
 #[path = "../../../tests/conversation/leases.rs"]
 pub(crate) mod lease_tests;
 
+pub(crate) use placement::rest_cause;
 #[cfg(unix)]
 pub(crate) use placement::ThreadEnvironments;
-pub(crate) use placement::WorkspaceRest;
 pub(crate) use placement::MAX_RETAINED_ENVIRONMENTS;
 
 #[cfg(unix)]

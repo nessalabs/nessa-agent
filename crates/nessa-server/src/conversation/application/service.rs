@@ -7176,7 +7176,7 @@ impl ConversationService {
                             if on_confirm != ConfirmedClose::HoldSlot {
                                 self.release_slot(id, &slot).await;
                             }
-                            if let Some(rest) = super::WorkspaceRest::of(cause) {
+                            if let Some(rest) = super::rest_cause(cause) {
                                 self.rest_workspace(id, rest);
                             }
                         }
@@ -7207,7 +7207,7 @@ impl ConversationService {
     /// Stop `id`'s VM, keeping its disk, on a task of its own, once its
     /// agent has stopped: nothing for a conversation that has none, nor
     /// while anything still uses it. The next message resumes it.
-    fn rest_workspace(&self, id: &ConversationId, cause: super::WorkspaceRest) {
+    fn rest_workspace(&self, id: &ConversationId, cause: crate::conversation::domain::RestCause) {
         let service = self.clone();
         let id = id.clone();
         tokio::spawn(async move { service.inner.environment.rest(&id, cause).await });

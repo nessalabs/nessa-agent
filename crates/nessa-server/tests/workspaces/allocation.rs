@@ -517,6 +517,30 @@ async fn a_rest_stops_the_vm_only_once_nothing_uses_it_and_never_deletes_it() {
     assert_eq!(provider.connects.lock().unwrap().len(), 2);
 }
 #[tokio::test]
+async fn each_use_of_a_vm_is_named_and_a_rest_waits_for_the_last_one() {
+    let (service, _, provider) = fixture();
+    provider.proceed.add_permits(1);
+    let thread = id(1).to_string();
+    let runtime = service.open(id(1), true, None).await.unwrap();
+    assert_eq!(service.uses(&thread), ["opening"]);
+    let command = runtime.background("true".into()).await.unwrap();
+    let mut uses = service.uses(&thread);
+    uses.sort();
+    assert_eq!(uses, ["background command", "opening"]);
+    // A connection that could not be served keeps no use.
+    assert!(runtime.serve(ServedCopy::Image).await.is_err());
+    drop(runtime);
+    assert_eq!(service.uses(&thread), ["background command"]);
+    assert_eq!(
+        service.rest(id(1), RestCause::Idle).await.stopped,
+        Ok(false)
+    );
+    assert!(provider.stops.lock().unwrap().is_empty());
+    drop(command);
+    assert!(service.uses(&thread).is_empty());
+    assert_eq!(service.rest(id(1), RestCause::Idle).await.stopped, Ok(true));
+}
+#[tokio::test]
 async fn each_stop_is_recorded_with_its_cause_before_and_after_and_a_failed_record_never_holds_it_back(
 ) {
     let (service, _, provider, audit) = fixture_with_audit();

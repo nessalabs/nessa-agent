@@ -36,13 +36,13 @@ pub use value_objects::{
     ChannelName, ChannelNotes, ChannelParts, ChannelPath, ChannelRefusal, ChannelRequest,
     ChannelResources, CommandHosts, ConversationDeletion, DeletionContradiction, PaneContent,
     PanePlace, Place, PoolPreference, PoolRefusal, PoolSettings, ProviderSessionErasure,
-    ProviderSessionLink, SettingsScope, ShareAccess, ShareAccessError, ToolCall, ToolChoice,
-    ToolPolicy, ToolPolicyError, ToolPreset, ToolRules, ToolSource, UnknownChannelPlace,
-    UnknownPlace, VmLifetime, VmLifetimeSettings, WidgetRef, WindowArrangement, WindowColumn,
-    WindowPane, WindowPanel, WindowRefusal, WindowShowing, WorkspaceWindow, MAX_CHANNELS_PER_OWNER,
-    MAX_CHANNEL_NAME_CHARS, MAX_CHANNEL_NOTES_BYTES, MAX_CHANNEL_PATH_BYTES,
-    MAX_CHANNEL_REQUEST_ID_BYTES, MAX_CHANNEL_RESOURCES, MAX_CHANNEL_RESOURCE_BYTES,
-    MAX_PANEL_TABS, MAX_POOL_ENTRIES,
+    ProviderSessionLink, RestCause, SettingsScope, ShareAccess, ShareAccessError, ToolCall,
+    ToolChoice, ToolPolicy, ToolPolicyError, ToolPreset, ToolRules, ToolSource,
+    UnknownChannelPlace, UnknownPlace, VmLifetime, VmLifetimeSettings, WidgetRef,
+    WindowArrangement, WindowColumn, WindowPane, WindowPanel, WindowRefusal, WindowShowing,
+    WorkspaceWindow, MAX_CHANNELS_PER_OWNER, MAX_CHANNEL_NAME_CHARS, MAX_CHANNEL_NOTES_BYTES,
+    MAX_CHANNEL_PATH_BYTES, MAX_CHANNEL_REQUEST_ID_BYTES, MAX_CHANNEL_RESOURCES,
+    MAX_CHANNEL_RESOURCE_BYTES, MAX_PANEL_TABS, MAX_POOL_ENTRIES,
 };
 
 #[cfg(test)]
