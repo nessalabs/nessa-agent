@@ -540,13 +540,26 @@ impl ConversationService {
         let seeded = NEXT_SEED.fetch_add(1, Ordering::Relaxed);
         // One fork into an id at a time: another request's seed is never
         // replaced, so an opening records the fork its creation asked for.
+        // Made, and let go of when it is not placed, outside the records'
+        // lock: it holds the source's whole copied history.
+        let mut seed = Some(ForkSeed {
+            token: seeded,
+            request: request.clone(),
+            surface: caller.surface_id.clone(),
+            intent: HandoffIntent::Fork {
+                source: super::conversation_session(&source),
+                history,
+                actor,
+                at_ms,
+            },
+        });
         let placed = self.inner.records.with(&id, |kept| match &kept.fork {
             // This request's own, still waiting, is a retry while the
             // first runs: answered as a request still running is, never
             // a creation of its own that could open the target without
             // the seed once the first has let it go.
-            Some(seed) => {
-                let own = seed.request == request && seed.surface == caller.surface_id;
+            Some(waiting) => {
+                let own = waiting.request == request && waiting.surface == caller.surface_id;
                 Err(if own {
                     CreationFailure::Storage(CreationStorageError::Storage(StorageError::Busy))
                 } else {
@@ -554,20 +567,11 @@ impl ConversationService {
                 })
             }
             None => {
-                kept.fork = Some(ForkSeed {
-                    token: seeded,
-                    request: request.clone(),
-                    surface: caller.surface_id.clone(),
-                    intent: HandoffIntent::Fork {
-                        source: super::conversation_session(&source),
-                        history,
-                        actor,
-                        at_ms,
-                    },
-                });
+                kept.fork = seed.take();
                 Ok(())
             }
         });
+        drop(seed);
         placed?;
         let created = self
             .create_command(
@@ -588,11 +592,15 @@ impl ConversationService {
         // seed for a later one: a retry of this fork seeds it again.
         // Only this call's own: once an opening took it, a retry may have
         // placed another, which is that retry's to let go.
-        self.inner.records.with(&id, |kept| {
+        // Taken out and let go of after the records' lock, like the seed above.
+        let unused = self.inner.records.with(&id, |kept| {
             if kept.fork.as_ref().is_some_and(|seed| seed.token == seeded) {
-                kept.fork = None;
+                kept.fork.take()
+            } else {
+                None
             }
         });
+        drop(unused);
         let created = created?;
         self.copy_summary(&source, &id, at_ms).await;
         Ok(created)

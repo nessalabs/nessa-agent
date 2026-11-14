@@ -153,7 +153,9 @@ impl Table {
     fn settle(&mut self, id: &ConversationId) {
         match self.records.get(id) {
             Some(record) if record.unfinished.is_some() => {
-                self.unfinished.insert(id.clone());
+                if !self.unfinished.contains(id) {
+                    self.unfinished.insert(id.clone());
+                }
                 return;
             }
             Some(record) if record.is_empty() => {
@@ -167,10 +169,10 @@ impl Table {
 
 impl ConversationRecords {
     fn table(&self) -> MutexGuard<'_, Table> {
-        // Nothing is awaited while this is held. A change that panicked can
-        // leave at most an empty record or an index entry for a mark that is
-        // gone; the sweep removes the one and `each_unfinished` skips the
-        // other, so taking a poisoned table back is safe.
+        // Nothing is awaited while this is held, and no change made under it
+        // can panic today: each is a plain assignment or an `Arc` built. A
+        // change that did panic would skip `settle`, leaving its record's
+        // index entry as it was before the change.
         self.table.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
