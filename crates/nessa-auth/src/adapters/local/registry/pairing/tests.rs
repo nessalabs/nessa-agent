@@ -4083,8 +4083,5 @@ fn discovery_on_an_active_peer_does_not_change_phase_or_enroll() {
     let expired = fixture.store.peer_discoveries(0).unwrap();
     assert!(expired[0].phase_active, "expiry does not revoke the phase");
     assert!(!expired[0].credential_current);
-    assert_eq!(
-        fixture.store.peer_discoveries(110).unwrap()[0].phase_active,
-        true
-    );
+    assert!(fixture.store.peer_discoveries(110).unwrap()[0].phase_active);
 }

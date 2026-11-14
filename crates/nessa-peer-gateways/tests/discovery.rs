@@ -347,7 +347,7 @@ fn offered_retries_keep_the_key_and_a_split_pair_finishes_without_rederiving() {
         reloaded_dialer.receive(Inbound::Stored { generation }, &mut || key(9));
     let (grantor, grantor_commits) =
         reloaded_grantor.receive(Inbound::Stored { generation }, &mut || key(8));
-    let mac = dialer.discovery.installed_mac().unwrap().clone();
+    let mac = *dialer.discovery.installed_mac().unwrap();
     assert_eq!(grantor.discovery.installed_mac(), Some(&mac));
     assert!(dialer_commits
         .iter()
@@ -359,7 +359,7 @@ fn offered_retries_keep_the_key_and_a_split_pair_finishes_without_rederiving() {
         Phase::Active,
         Discovery::Installed { generation, mac },
     );
-    let before = installed.discovery.installed_mac().unwrap().clone();
+    let before = *installed.discovery.installed_mac().unwrap();
     let resent = installed.reconnect();
     assert_eq!(resent, vec![Outbound::Installed { generation }]);
     assert_eq!(installed.discovery.installed_mac(), Some(&before));
