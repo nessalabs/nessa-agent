@@ -145,7 +145,9 @@ fn delayed_discovery_and_noncurrent_evidence_cannot_change_replacement_enrollmen
     ));
     assert!(matches!(
         records.record_discovery_not_current(&old),
-        Err(PrivateStateError::Conflict)
+        Err(DiscoveryAuthoritySaveError::Unobserved(
+            PrivateStateError::Conflict
+        ))
     ));
     let restored = records.read(&old.key, &own).unwrap().unwrap();
     assert!(matches!(restored.discovery, Discovery::None));
@@ -179,7 +181,10 @@ fn delayed_discovery_and_noncurrent_evidence_cannot_change_replacement_enrollmen
         std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o500)).unwrap();
         let result = records.record_discovery_not_current(&replacement);
         std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700)).unwrap();
-        assert!(result.is_err());
+        assert!(matches!(
+            result,
+            Err(DiscoveryAuthoritySaveError::Unstored(_))
+        ));
         assert!(records
             .read(&old.key, &own)
             .unwrap()
@@ -235,4 +240,100 @@ fn discovery_authority_observation_restores_exact_identity_and_survives_revocati
         decode(&encode(&record, &own).unwrap(), &record.key, &own),
         Err(PrivateStateError::Corrupt)
     ));
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn unstored_discovery_authority_withdraws_live_registration_and_joins_attempt() {
+    use crate::application::{maintain_announcement, AnnouncementStep};
+    use crate::infrastructure::LanRegistration;
+    use std::{
+        os::unix::fs::PermissionsExt,
+        sync::atomic::{AtomicBool, Ordering},
+    };
+    use tokio::sync::{oneshot, watch};
+    struct Registration(Arc<AtomicBool>);
+    impl LanRegistration for Registration {
+        fn withdraw(self: Box<Self>) {
+            self.0.store(false, Ordering::SeqCst);
+        }
+    }
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("root");
+    nessa_local_storage::create_directory(&path).unwrap();
+    nessa_local_storage::create_directory_beneath(&path, Path::new("peers")).unwrap();
+    let records = Arc::new(
+        PeerRecords::open(
+            &path,
+            Path::new("peers"),
+            Arc::new(Keys),
+            AudienceId::new("gateway").unwrap(),
+            Arc::new(Time),
+        )
+        .unwrap(),
+    );
+    let own = records.own_spki().unwrap();
+    let expected = record();
+    records.write(&expected, &own, false).unwrap();
+    let (stop, stopped) = watch::channel(false);
+    let (started, start) = oneshot::channel();
+    let (failed, failure) = oneshot::channel();
+    let (release, released) = oneshot::channel();
+    let live = Arc::new(AtomicBool::new(false));
+    let registration_live = live.clone();
+    let worker_records = records.clone();
+    let worker_expected = expected.clone();
+    let work = async move {
+        start.await.unwrap();
+        let directory = path.join("peers");
+        std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o500)).unwrap();
+        let result = worker_records.record_discovery_not_current(&worker_expected);
+        std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700)).unwrap();
+        match result {
+            Err(DiscoveryAuthoritySaveError::Unstored(_)) => {
+                stop.send_replace(true);
+            }
+            other => panic!("expected admitted authority with rejected sink: {other:?}"),
+        }
+        failed.send(()).unwrap();
+        released.await.unwrap(); // The owned attempt has not physically returned yet.
+    };
+    let task = tokio::spawn(async move {
+        let mut started = Some(started);
+        let mut registration: Option<Box<dyn LanRegistration>> = None;
+        maintain_announcement(stopped, work, |step| match step {
+            AnnouncementStep::Refresh => {
+                assert!(registration.is_none());
+                registration_live.store(true, Ordering::SeqCst);
+                registration = Some(Box::new(Registration(registration_live.clone())));
+                started.take().unwrap().send(()).unwrap();
+            }
+            AnnouncementStep::Withdraw => {
+                registration.take().unwrap().withdraw();
+            }
+        })
+        .await;
+    });
+    failure.await.unwrap();
+    for _ in 0..10 {
+        if !live.load(Ordering::SeqCst) {
+            break;
+        }
+        tokio::task::yield_now().await;
+    }
+    assert!(
+        !live.load(Ordering::SeqCst),
+        "known invalid authority remained published"
+    );
+    assert!(
+        !task.is_finished(),
+        "owned attempt was detached instead of joined"
+    );
+    assert!(records
+        .read(&expected.key, &own)
+        .unwrap()
+        .unwrap()
+        .credential_current());
+    release.send(()).unwrap();
+    task.await.unwrap();
 }

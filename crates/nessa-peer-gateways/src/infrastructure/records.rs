@@ -77,6 +77,19 @@ pub enum PeerPhase {
     Revoked,
 }
 
+/// Distinguish failure before exact authority admission from failure to keep
+/// already-known noncurrent evidence. Only the latter requires publication stop.
+#[derive(Debug)]
+pub enum DiscoveryAuthoritySaveError {
+    Unobserved(PrivateStateError),
+    Unstored(PrivateStateError),
+}
+impl From<PrivateStateError> for DiscoveryAuthoritySaveError {
+    fn from(error: PrivateStateError) -> Self {
+        Self::Unobserved(error)
+    }
+}
+
 /// One readable peer record.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PeerRecord {
@@ -430,20 +443,20 @@ impl PeerRecords {
     pub fn record_discovery_not_current(
         &self,
         expected: &PeerRecord,
-    ) -> Result<PeerRecord, PrivateStateError> {
+    ) -> Result<PeerRecord, DiscoveryAuthoritySaveError> {
         let _guard = self.lock();
         let own = self.own_spki()?;
         let Some(found) = self.read(&expected.key, &own)? else {
-            return Err(PrivateStateError::Conflict);
+            return Err(PrivateStateError::Conflict.into());
         };
         if !found.same_enrollment(expected) {
-            return Err(PrivateStateError::Conflict);
+            return Err(PrivateStateError::Conflict.into());
         }
         if found.not_current.is_some() {
             return Ok(found);
         }
         let PeerPhase::Active { credential, .. } = &found.phase else {
-            return Err(PrivateStateError::Conflict);
+            return Err(PrivateStateError::Conflict.into());
         };
         let left = PeerRecord {
             not_current: Some(NotCurrentObservation::new(
@@ -453,7 +466,8 @@ impl PeerRecords {
             )),
             ..found.clone()
         };
-        self.write(&left, &own, true)?;
+        self.write(&left, &own, true)
+            .map_err(DiscoveryAuthoritySaveError::Unstored)?;
         Ok(left)
     }
 

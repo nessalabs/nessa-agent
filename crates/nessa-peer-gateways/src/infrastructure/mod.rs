@@ -24,6 +24,6 @@ pub use poller::{
     READ_BUDGET, WITHDRAWN_PER_READ,
 };
 pub use records::{
-    ForgetFailure, PeerEntry, PeerPhase, PeerRecord, PeerRecords, PeerSlot, SlotFound, SlotOutcome,
-    SlotRefusal, SlotSave, SlotTransition,
+    DiscoveryAuthoritySaveError, ForgetFailure, PeerEntry, PeerPhase, PeerRecord, PeerRecords,
+    PeerSlot, SlotFound, SlotOutcome, SlotRefusal, SlotSave, SlotTransition,
 };

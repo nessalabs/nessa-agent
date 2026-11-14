@@ -16,7 +16,8 @@ use nessa_peer_gateways::{
         ExchangeError, GrantorDiscovery, Phase, Role, Session, TokenPeer, DISCOVERY_WINDOW,
     },
     infrastructure::{
-        platform_lan_announcer, LanRegistration, PeerCommands, PeerEntry, PeerPhase, PeerRecord,
+        platform_lan_announcer, DiscoveryAuthoritySaveError, LanRegistration, PeerCommands,
+        PeerEntry, PeerPhase, PeerRecord,
     },
 };
 use nessa_protocol::pairing::socket::DeadlineStream;
@@ -111,6 +112,7 @@ impl LanTask {
         address: Option<SocketAddr>,
     ) -> Self {
         let (stop, stopped) = watch::channel(false);
+        let publication_stop = stop.clone();
         let task = tokio::spawn(async move {
             let announcer = platform_lan_announcer();
             let mut instance = [0u8; 8];
@@ -121,7 +123,7 @@ impl LanTask {
             };
             let mut registration: Option<Box<dyn LanRegistration>> = None;
             let mut published: Option<Vec<u8>> = None;
-            let retries = discovery_cycles(&peers, stopped.clone());
+            let retries = discovery_cycles(&peers, stopped.clone(), publication_stop);
             maintain_announcement(stopped, retries, |step| {
                 if matches!(step, AnnouncementStep::Withdraw) {
                     if let Some(registration) = registration.take() { registration.withdraw(); }
@@ -165,12 +167,16 @@ impl LanTask {
     }
 }
 
-async fn discovery_cycles(peers: &PeerCommands, mut stopped: watch::Receiver<bool>) {
+async fn discovery_cycles(
+    peers: &PeerCommands,
+    mut stopped: watch::Receiver<bool>,
+    publication_stop: watch::Sender<bool>,
+) {
     loop {
         if *stopped.borrow() {
             return;
         }
-        drive_dialers(peers, &stopped).await;
+        drive_dialers(peers, &stopped, &publication_stop).await;
         if *stopped.borrow() {
             return;
         }
@@ -184,7 +190,11 @@ async fn discovery_cycles(peers: &PeerCommands, mut stopped: watch::Receiver<boo
 // Each network attempt is CONNECT (5s) plus TLS_DEADLINE (10s) and the
 // single ENROLLMENT_DEADLINE (30s), not a new allowance per frame. Stop is
 // observed before the next peer; local storage/worker drain is still joined.
-async fn drive_dialers(peers: &PeerCommands, stopped: &watch::Receiver<bool>) {
+async fn drive_dialers(
+    peers: &PeerCommands,
+    stopped: &watch::Receiver<bool>,
+    publication_stop: &watch::Sender<bool>,
+) {
     let Ok(entries) = peers.records().list() else {
         return;
     };
@@ -200,9 +210,10 @@ async fn drive_dialers(peers: &PeerCommands, stopped: &watch::Receiver<bool>) {
         }
         let key = *record.key();
         let records = peers.records().clone();
+        let publication_stop = publication_stop.clone();
         let _ = peers
             .open_peer_discovery(key, move |expected, channel| {
-                dial_discovery(&records, expected, channel)
+                dial_discovery(&records, expected, channel, &publication_stop)
             })
             .await;
     }
@@ -212,6 +223,7 @@ fn dial_discovery(
     records: &Arc<nessa_peer_gateways::infrastructure::PeerRecords>,
     expected: &PeerRecord,
     channel: &mut EnrollmentChannel<DeadlineStream>,
+    publication_stop: &watch::Sender<bool>,
 ) -> Result<(), NativeClientError> {
     let found = records
         .get(expected.key())
@@ -254,9 +266,20 @@ fn dial_discovery(
     match exchanged {
         Ok(()) => Ok(()),
         Err(ExchangeError::NotCurrent) => {
-            records
-                .record_discovery_not_current(expected)
-                .map_err(NativeClientError::Storage)?;
+            match records.record_discovery_not_current(expected) {
+                Ok(_) => {}
+                Err(DiscoveryAuthoritySaveError::Unobserved(error)) => {
+                    return Err(NativeClientError::Storage(error));
+                }
+                Err(DiscoveryAuthoritySaveError::Unstored(error)) => {
+                    // The exact authority decision is known even if its audit
+                    // cannot be kept. Withdraw independently, then join this
+                    // owned attempt. Never recover publication from a diagnostic.
+                    publication_stop.send_replace(true);
+                    tracing::error!(?error, "LAN publication stopped: noncurrent authority evidence could not be stored");
+                    return Err(NativeClientError::Storage(error));
+                }
+            }
             Err(NativeClientError::Refused)
         }
         Err(ExchangeError::Refused | ExchangeError::Unavailable) => Err(NativeClientError::Refused),
