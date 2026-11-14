@@ -47,7 +47,7 @@ use super::{
 };
 use crate::domain::{
     Conversation, ConversationDeletion, Place, ProviderSessionErasure, ProviderSessionLink,
-    ToolSource,
+    RestCause, ToolSource,
 };
 pub use channels::{
     AgentPlace, ChannelError, ChannelFolders, ChannelListing, ChannelStore, FolderRefusal,
@@ -7203,7 +7203,7 @@ impl ConversationService {
     /// Stop `id`'s VM, keeping its disk, on a task of its own, once its
     /// agent has stopped: nothing for a conversation that has none, nor
     /// while anything still uses it. The next message resumes it.
-    fn rest_workspace(&self, id: &ConversationId, cause: crate::domain::RestCause) {
+    fn rest_workspace(&self, id: &ConversationId, cause: RestCause) {
         let service = self.clone();
         let id = id.clone();
         tokio::spawn(async move { service.inner.environment.rest(&id, cause).await });
