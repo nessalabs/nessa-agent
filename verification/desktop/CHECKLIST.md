@@ -701,8 +701,10 @@ on.
 
 - [ ] **The card opens a tab in the chat's right panel, no pane**, the list in activity
   order with a closed child called closed, and a child opens on its
-  transcript. Focus stays in the panel. Expanded, the widget starts below the
-  shared window toolbar and covers retained panes with the theme background.
+  transcript. Focus stays in the panel. Expanded, the widget shares the chat's
+  bounds and transparent ground; its header sits in the shared titlebar row,
+  with its body below the shared toolbar. The retained panes stay hidden beneath it
+  (`panes.css`, `styles.test.ts`, ADR 326).
   _Check:_ `subagents.mjs --only panel`.
 - [ ] **The transcript follows a new line while it is at the end, and stays
   put when scrolled up.** _Check:_ `subagents.mjs --only panel`.
@@ -1247,8 +1249,12 @@ phone's scanner is not this screen.
   controls (not a fill). _Check:_ `settings-page.mjs --only focus-ring`
   (WebKit walks with ⌥Tab, as Safari does).
 - [ ] **Review notifications ask from Allow.** Access shows the row and
-  does not prompt before that button is pressed. _Check:_
-  `settings-page.mjs --only review-notices`.
+  does not prompt before that button is pressed. Its detail is `Off` with
+  one Allow button before permission, `On` without Allow once granted, or
+  the browser's blocking explanation without Allow when denied. Without
+  browser support, neither the row nor its control is shown. Measure the
+  detail itself, separately from its label and button. _Check:_
+  `settings-page.mjs --only review-notices`; `lib/review-notices.test.mjs`.
 - [ ] **Remembered rules rest without a gateway.** Access shows one
   remembered-rules row, disabled, and says it is not available in this
   window. _Check:_ `settings-page.mjs --only remembered-rules`; unit test

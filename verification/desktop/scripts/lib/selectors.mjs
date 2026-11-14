@@ -317,6 +317,7 @@ export const css = {
   settingsContent: ".settings-content", // class
   settingsMasthead: ".settings-masthead", // class: the page's head: title and tabs
   settingsRow: '[data-slot="settings-row"]', // the UI kit's row, on any Settings page
+  settingsRowDetail: '[data-slot="settings-row-detail"]', // the row's status/explanation, separately from its label and control
   settingsFound: "[data-setting][data-found]", // where a search just landed
   settingsSearch: 'input[aria-label="Search settings"]',
   control: 'button, input, select, textarea, [role="switch"]',
