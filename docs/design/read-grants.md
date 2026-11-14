@@ -59,10 +59,10 @@ The owner manages grants with three socket methods, each admitted by Cedar for
   grant allows; the names may arrive in any order. The conversation must be
   the caller's and not deleted, and the credential an active paired device
   of the same owner (`share_target_not_paired` otherwise). A paired peer
-  gateway is shared `read` the same way, and reads only what it is granted
+  gateway is shared the same way, and may do only what that grant names
   ([peer gateways](auth/peer-gateways.md), row H8). Comment and drive are
   written only when Cedar permits `grant.comment` and `grant.drive` for the
-  principal the credential names. A denial writes nothing — no row and no
+  principal the credential names, a gateway included. A denial writes nothing — no row and no
   journal — and the answer is `capabilities_refused`, with `details.policies` the policy
   ids Cedar named, empty when no permit matched. The share does not match a
   gateway principal on its own. A credential that does not hold `conversation.read`,
@@ -233,11 +233,9 @@ tools](#checking-a-drive-turns-tools)).
   set contains `read`; `grant.comment` permits `conversation.comment` when
   it contains `comment`; `grant.drive` permits `conversation.drive` when it
   contains `drive`; `grant.note_deliver` permits delivery when it contains
-  `comment`. `grant.comment` and `grant.drive` also require the principal
-  to be signed in as the binding owner, which is the device case. A gateway
-  signs in as itself, so those permits do not match it. There is no forbid
-  for that: a hand-built row that gives a gateway `comment` is
-  `NotPermitted`. The store's grant predicate
+  `comment`. The capability is the decision for a device and for a gateway
+  principal. A hand-built row that gives a gateway `comment` permits
+  comment and does not permit drive. The store's grant predicate
   (`store::share_grants::granted`) is still the one statement of "holds a
   grant", whatever the set. The journal spells the set `read`,
   `read+comment`, or `read+comment+drive`, and `none` when the grant was
@@ -558,22 +556,23 @@ Slice J2 of #707 admits a Drive grant's commands: `conversation.send`,
   commands (row J12). So a device never acts as its owner beyond what a
   share admits; Drive never deletes, archives, exports, re-shares or changes
   the model.
-- **A Drive command** is the owner's, made from the device's surface: a
-  device signs in as its owner, and a party signed in as anyone else is
-  refused. It asks Cedar for the grant pairing mints,
+- **A Drive command** asks Cedar for the grant pairing mints,
   `conversation.read`, then the share grant on the one conversation the
-  command names (`admit_drive`). A Drive grant admits it; a Read or Comment
-  grant is `forbidden`; no grant is `conversation_not_found`, as for a read
-  (row J11). The capability set is read at every command, so a grant lowered or
-  revoked refuses the next one (row J13).
+  command names. A device signs in as its owner. A peer gateway signs in as
+  itself. The capability admits either one. A Drive grant admits it; a Read
+  or Comment grant is `forbidden`; no grant is `conversation_not_found`, as
+  for a read (row J11). The capability set is read at every command, so a
+  grant lowered or revoked refuses the next one (row J13). A turn already
+  admitted keeps the epoch it read (row J36).
 - **A driver sends text.** An image names a digest in the owner's
   attachment store and a linked file a path on the owner's machine, so
   either could name something never shared; both are refused, in a command
   or a receipt, and so is the receipt of a create (row J14).
 
-The turn runs as one of the owner's: the device signs in as its owner, so
-the command is the owner's command from the device's surface. Its tools are
-checked against the grant's policy ([Checking a Drive turn's
+The turn runs under the grant that admitted it. A device signs in as its
+owner and a peer gateway signs in as itself. The saved initiation is that
+grant and the epoch read for the command. Its tools are checked against the
+grant's policy ([Checking a Drive turn's
 tools](#checking-a-drive-turns-tools)).
 
 ### Who started a turn
@@ -624,7 +623,7 @@ sequenceDiagram
     participant Service as ConversationService
     Device->>Socket: conversation.send {conversationId, text}
     Socket->>Socket: binding_of: a receiver binding, so paired
-    Socket->>Socket: binding owner is the session's principal, else forbidden
+    Socket->>Socket: device signs in as the owner; a peer signs in as itself
     Socket->>Cedar: conversation.read (pairing's grant)
     Cedar-->>Socket: allow
     Socket->>Grants: held_grant(conversation, receiver)
@@ -900,9 +899,10 @@ row's tests are named by the row: the transitions in
 - **Follow rules** are the follower's table (a peer gateway, slice H, or a
   device's cache). Grants and follow rules are separate tables; this slice adds
   only the grant table, and nothing syncs by default.
-- **Driving through a peer gateway.** A peer forwards its people's commands
-  in a later slice. A peer signs in as its own principal, not its grantor,
-  so its own session is refused every Drive command `forbidden` (row J12).
+- **Driving through a peer gateway.** A peer signs in as its own principal.
+  Comment and drive are the grant's capability (row J36). The peer's session
+  acts in the grantor's conversation. Delete, archive, export, re-share, and
+  model changes stay the owner's.
 - **Sharing with a peer gateway from the desktop.** The dialog offers
   linked devices only (above); a peer gateway is shared with through the
   wire methods.
@@ -1010,18 +1010,19 @@ otherwise.
 | J7 | `conversation.shares` | Each grant's capabilities, its policy when the set includes drive, and its grant epoch, which moves only with its own capabilities or constraints | `shares_reports_each_grants_role_policy_and_policy_revision` |
 | J8 | Unshare a comment or a drive grant | Revoked like read, journaled with the capabilities and constraints it took away | `a_revoke_ends_a_grant_of_any_role`; `share_refuses_what_the_owner_cannot_grant` (unshare names no capability set) |
 | J9 | A drive grant past `MAX_DRIVE_GRANTS_PER_CONVERSATION` (8), new or a change from another set | Refused `InvalidInput`, nothing written; a driver's own constraints can still change | `a_conversation_holds_a_bounded_number_of_drive_grants` |
-| J32 | Share comment or drive with a principal that is not signed in as the binding owner, a gateway or any other | Refused `capabilities_refused`; `details.policies` names the Cedar policy ids, empty when no permit matched; the row unchanged and nothing journaled. The share does not match a gateway prefix | `a_gateway_is_refused_comment_and_drive_and_the_grant_is_unchanged` |
+| J32 | Share comment or drive with a gateway principal, or with any other principal the binding reads | Written. The journal names that principal. The share does not match a gateway prefix | `a_peer_is_granted_comment_and_drive_and_the_journal_names_the_principal` |
 | J33 | A device holding drive sends on that conversation, and the same command names another | Admitted on the granted conversation; `conversation_not_found` on the other | `a_drive_grant_drives_only_the_conversation_it_names` |
-| J34 | A gateway holding read; the same gateway holding a hand-built comment set; a device holding only read, signed in as the binding owner | The gateway reads and is `NotPermitted` comment and drive; the device is `NotPermitted` comment and drive | `paired_peer_gateway_never_comments_or_drives`, `a_hand_built_comment_grant_for_a_gateway_is_denied_by_cedar`, `grant_comment_and_drive_need_their_capability` (`tests/conversation/access_policy.rs`, `tests/conversation/store.rs`) |
+| J34 | A gateway holding read; the same gateway holding drive; a hand-built comment set; a device holding only read | The read-only gateway reads and is `NotPermitted` comment and drive. Drive permits both. The hand-built comment set permits comment and not drive. A device holding only read is `NotPermitted` comment and drive. Removing `capabilities.contains` from the permit fails the test | `a_peer_comments_and_drives_when_the_grant_names_the_capability`, `a_hand_built_comment_grant_lets_a_gateway_comment_and_not_drive`, `grant_comment_and_drive_need_their_capability` (`tests/conversation/access_policy.rs`, `tests/conversation/store.rs`) |
+| J36 | A peer with comment leaves a note and cannot send. A peer with drive sends text and is refused an image or a linked file. The peer cannot delete or re-share. A command on a conversation with no grant is not found. Revoke refuses the next command. A turn already admitted keeps its epoch. The audit names the gateway principal and the epoch, and the person when a same-person link is committed. The link adds no capability. An audit that cannot be written refuses the command and saves nothing | As the row says. The turn is `Initiation::grant` at admission and saved checked, under the receiver and the epoch read for it | `a_peer_comments_and_drives_under_its_grant`, `a_peer_command_is_refused_when_its_admission_audit_cannot_be_recorded` |
 | J35 | R1 is explicitly revoked; R2 and R3 of the same principal are independently granted, including no-ops; R1 is later granted again | R1's head moves on its own removal and stays there during later activity it cannot see. R2 and R3 keep their own rows. Regranting R1 moves its head and returns the row again. | `paired_catalogue_seeded_mock_agent_stress_seed_1`, `paired_catalogue_seeded_mock_agent_stress_seed_7`, `paired_catalogue_seeded_mock_agent_stress_seed_41`, `paired_catalogue_seeded_mock_agent_stress_under_load` (`tests/product/socket/subscriptions/paired_lists/stress.rs`) |
 | J10 | One page of `conversation.shares`: the page size of grants, each a Drive grant with the largest policy (both pattern lists full, 16 hosts of 253 bytes), every text at its longest, a cursor, and the catalogue revision at the largest safe integer | Fits one frame (`MAX_PAYLOAD_BYTES`); the schema states the page size, the grant cap, the host bounds the domain enforces, and the revision bound. A later page resumes after the cursor and names the same revision | `a_full_page_of_largest_grants_fits_one_frame`, `a_shares_page_resumes_after_its_cursor`, `the_schema_states_the_share_bounds_the_domain_enforces` (`tests/product/read_access.rs`); `shares_returns_one_page_and_refuses_a_page_size_past_its_bound` |
 | J11 | A paired session with pairing's `conversation.read` and a Drive grant sends, steers, stops, answers, cancels, or asks a receipt, naming the granted conversation; then naming another of the owner's | Admitted, and its message starts a turn there; the other is `conversation_not_found` | `a_drive_grant_drives_only_the_conversation_it_names` |
-| J12 | A paired session, holding `conversation.write` and a Drive grant, calls any other method whose grant is `conversation.write`; or, holding a Read or Comment grant, a Drive command; or a party signed in as a principal other than its grantor, as a peer is, holding Drive, a Drive command | `forbidden` | `a_paired_session_writes_only_what_a_drive_grant_admits` |
+| J12 | A paired session, holding `conversation.write` and a Drive grant, calls any other method whose grant is `conversation.write`; or, holding a Read or Comment grant, a Drive command. A peer holding Drive is admitted for a Drive command and refused delete, archive, and a model change | `forbidden` for the owner commands; the Drive command is admitted | `a_paired_session_writes_only_what_a_drive_grant_admits` |
 | J13 | A Drive grant lowered to Read, then revoked; the device unpaired; or a device without pairing's `conversation.read` | The next command `forbidden`, `conversation_not_found`, `unauthorized`, and `forbidden` before its grant is read | `a_drive_grant_lowered_revoked_or_unpaired_drives_no_more` |
 | J14 | A driver's message, or receipt, naming an image or a linked file; a driver asking the receipt of a create | `forbidden` | `a_driver_sends_text_and_names_nothing_of_the_owners` |
 | J15 | The owner's turn, before and while devices are paired, from the owner's own unbound surface; a driver's sent and steered turns; the driver's retry of the same request, and its next turn, after the owner changed the grant's policy | Saved as the owner's; as the grant with the revision read for it, and no copy of its role; the retry answered from its receipt with the first revision kept, the next turn with the new revision; the owner's turns with tools not checked, the driver's checked. A grant initiation survives a record checkpoint and its restore | `a_turn_is_saved_with_who_started_it`; `a_grant_initiation_survives_a_checkpoint_and_its_restore` (`nessa-sdk` `transcript.rs`) |
 | J16 | The owner, from its own surface, leaves a note | Saved as its own unit with the owner as author, a fresh id and the wall clock's time, `record_only` and recorded; no turn starts | `the_owner_leaves_a_note_saved_with_who_left_it_and_no_turn`; `a_new_note_takes_a_fresh_id_and_the_time_it_was_accepted` (`nessa-sdk` `sessions/notes.rs`); `a_note_is_saved_as_its_own_unit_and_starts_no_turn` (`nessa-sdk` `sessions/manager.rs`) |
-| J17 | A paired session with pairing's `conversation.read` leaves a note, and asks its status, under a Comment and then a Drive grant; naming another of the owner's conversations; under a Read grant; revoked; a party signed in as another principal holding Comment | Saved with the grant and the revision read for it; the other `conversation_not_found`; Read `forbidden`; revoked `conversation_not_found`; the other principal `forbidden`. A Comment grant's Drive command is `forbidden` | `a_comment_or_drive_grant_leaves_notes_on_the_conversation_it_names` |
+| J17 | A paired session with pairing's `conversation.read` leaves a note, and asks its status, under a Comment and then a Drive grant; naming another of the owner's conversations; under a Read grant; revoked; a peer gateway holding Comment | Saved with the grant and the revision read for it; the other `conversation_not_found`; Read `forbidden`; revoked `conversation_not_found`; the peer's note is saved under that grant and its send is `forbidden` | `a_comment_or_drive_grant_leaves_notes_on_the_conversation_it_names` |
 | J18 | A note retried with the same request, also after its grant's policy revision moved; the same request with other text, or under another authority | The first receipt, nothing more saved, the first revision kept; `idempotency_conflict`. A retry after a failed write writes it | `a_retried_note_answers_its_first_receipt_and_another_conflicts`; `the_same_request_is_answered_by_its_record_and_another_conflicts` (`nessa-sdk` `sessions/notes.rs`); `a_note_whose_write_failed_is_written_by_its_retry` (`nessa-sdk` `sessions/manager.rs`) |
 | J19 | An author past 20 notes in 60 seconds, a grant counted as one author across revisions; another author; a conversation holding 1024 notes; a clock set back | `message_quota_exceeded`, nothing saved; the other author admitted; full refuses a new note and still answers a retry; a clock set back makes no room | `an_author_past_its_note_rate_is_refused_and_another_is_not`; `an_author_leaves_at_most_its_rate_in_any_window`, `a_full_conversation_refuses_a_new_note_and_still_answers_a_retry` (`nessa-sdk` `sessions/notes.rs`) |
 | J20 | `conversation.messageStatus` for a request that left a note, and one that left none | `found` with the note's receipt, read from committed records; `found: false`; nothing written | `message_status_finds_the_callers_own_note_by_its_request` |

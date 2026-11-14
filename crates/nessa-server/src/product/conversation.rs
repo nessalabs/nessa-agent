@@ -6,7 +6,7 @@ use super::{
     state::ProductRouteState,
 };
 use crate::conversation::application::{
-    error_code, rule_principal, CatalogueHead, ConversationCaller, ConversationError,
+    binding_of, error_code, rule_principal, CatalogueHead, ConversationCaller, ConversationError,
     ConversationService, ListedPermissionRule, PermissionRuleCatalog, PreferenceUpdate,
     QuestionChoiceInput, ReadOpening, RequestedAgent, RequestedConversation, RuleCatalogError,
     RuleChange, RulePrincipal, SubmissionMode, SubmittedFile, SubmittedImage, SubmittedMessage,
@@ -68,7 +68,7 @@ use nessa_sdk::application::agent_execution::{
     permissions::{is_remember_option, PermissionCaller, PermissionSelectionState},
     sessions::{NoteDelivery, NoteRetirementReason, NoteState},
 };
-use nessa_sdk::domain::agent_execution::executions::Initiation;
+use nessa_sdk::domain::agent_execution::executions::{Initiation, Initiator};
 use serde_json::{json, Value};
 use std::sync::Arc;
 
@@ -159,7 +159,30 @@ async fn answer(
             value
         }};
     }
-    let caller = |request_id: String| caller(session, request_id);
+    // A device signs in as the binding owner, so its session already names
+    // the conversation's owner. A peer signs in as itself. The grant admitted
+    // the command; the conversation is still the grantor's, so the service
+    // sees that owner. The saved initiation stays the grant. The admission
+    // audit names the gateway principal.
+    let grantor = if matches!(initiation.initiator(), Initiator::Grant(_)) {
+        match state.reads.passive_read.as_ref() {
+            Some((receivers, _, _)) => binding_of(receivers.as_ref(), session.context())
+                .await
+                .ok()
+                .flatten()
+                .map(|binding| binding.owner_id),
+            None => None,
+        }
+    } else {
+        None
+    };
+    let caller = |request_id: String| {
+        let mut acting = caller(session, request_id);
+        if let Some(owner) = &grantor {
+            acting.principal_id = owner.clone();
+        }
+        acting
+    };
     let result: Result<OutgoingMessage, ConversationError> = async {
         match frame.method.as_str() {
             "conversation.create" => {
