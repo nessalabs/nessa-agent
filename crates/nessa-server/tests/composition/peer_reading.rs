@@ -600,7 +600,7 @@ async fn a_cancelled_record_hold_controller_releases_the_worker() {
     let (key, reader) = enroll(&a, &b, &relay, true).await;
     let reader = reader.unwrap();
     let conversation = a.conversation().await;
-    follow_granted(&b, key, &[conversation.clone()]).await;
+    follow_granted(&b, key, std::slice::from_ref(&conversation)).await;
     a.grant(
         ShareGrantTransition::Grant(ShareAccess::read()),
         &conversation,
@@ -1239,7 +1239,7 @@ async fn reads(refuse: bool) {
     // `peer_busy`: the record and the cache are gone.
     let (_, reader) = enroll(&a, &b, &relay, true).await;
     let reader = reader.unwrap();
-    follow_granted(&b, key, &[y.clone()]).await;
+    follow_granted(&b, key, std::slice::from_ref(&y)).await;
     a.grant(
         ShareGrantTransition::Grant(ShareAccess::read()),
         &y,
@@ -1350,7 +1350,7 @@ async fn a_peer_whose_address_stops_answering_is_read_through_its_relay() {
         .unwrap();
     assert!(matches!(&kept, PeerEntry::Readable(record) if record.relay() == Some(&relay_address)));
     let x = a.conversation().await;
-    follow_granted(&b, key, &[x.clone()]).await;
+    follow_granted(&b, key, std::slice::from_ref(&x)).await;
     a.grant(
         ShareGrantTransition::Grant(ShareAccess::read()),
         &x,
@@ -1966,7 +1966,7 @@ async fn first_sync_before_observation(
         (&peers.c, peers.key_c, receiver_c),
     ] {
         let conversation = peer.conversation().await;
-        follow_granted(&peers.b, key, &[conversation.clone()]).await;
+        follow_granted(&peers.b, key, std::slice::from_ref(&conversation)).await;
         peer.grant(
             ShareGrantTransition::Grant(ShareAccess::read()),
             &conversation,
