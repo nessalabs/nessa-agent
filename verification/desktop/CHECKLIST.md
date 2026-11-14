@@ -2628,6 +2628,16 @@ vault dialog blocking the main conversation click.
   (`default-override-reset`) measures each in Chromium and WebKit, columns and
   sidebar; with `src` at the parent commit it fails on the unresolved type
   tokens and the 16 px row inset.
+- [ ] **Each of a channel's choices is a menu at its row's end (#1340).** Main
+  agent, new threads, auto-stop and the order for Any are each a button that
+  says the choice and opens a menu; This Mac, Boat and Any computer come first,
+  then each connected computer by name, and a computer saved earlier but not
+  connected is still listed. Every button ends one inset from the dialog's
+  right edge (the title's left inset, within 1 px), and the dialog has no row
+  of tabs. _Check:_ `boat-runtime-settings.mjs` measures the four menus and
+  picks through them in Chromium and WebKit, columns and sidebar; the
+  conversation stress `channel` and `place` steps pick Boat, This Mac and a
+  paired worker from them; `channel-settings.test.tsx` lists the menu's items.
 
 
 ## Background tasks

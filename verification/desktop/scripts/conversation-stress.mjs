@@ -6,6 +6,7 @@ import {
   channelPlacementSettings,
   channelRuntimeSettings,
   openAccounts,
+  pickChoice,
 } from "./lib/boat-runtime-settings.mjs"
 import {
   changeVaultPassphrase,
@@ -5876,9 +5877,8 @@ const steps = {
           .locator(css.channelSettingsDialog)
           .locator(`[data-channel-placement="${channel.channelId}"]`)
         const row = control.locator('[data-placement-row="threads"]')
-        await row.getByRole("button", { name: "Computer", exact: true }).click()
-        await control.locator('[data-placement-computer="threads"]').click()
-        await run.page.locator(`[data-placement-choice="${worker.name}"]`).click()
+        // Each connected computer is listed in the row's menu (#1340).
+        await pickChoice(run.page, row, worker.name)
         const shown = await waitFor(
           async () =>
             (await control.getAttribute("data-thread-placement")) === worker.name,
