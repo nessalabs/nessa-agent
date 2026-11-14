@@ -103,6 +103,8 @@ export function workspaceEffects(
       current.workspace.view !== previous.workspace.view ||
       current.workspace.chrome !== previous.workspace.chrome ||
       current.workspace.arrangement !== previous.workspace.arrangement ||
+      // A session held off screen is read as a shown one is.
+      current.workspace.heldSession !== previous.workspace.heldSession ||
       current.workspace.transcriptFailures !== previous.workspace.transcriptFailures,
     effect: (_action, api) => {
       const state = api.getState().workspace

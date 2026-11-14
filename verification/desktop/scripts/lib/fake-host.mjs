@@ -60,9 +60,11 @@ export const STARTING = {
  *
  * Every page's host carries the call pill as `src-tauri/src/call_pill.rs`
  * does: a desktop page says what its call looks like (`call_pill_set`, null
- * for no call), and while that page is not in front the picture reaches a
+ * for no call) and whether a pane shows the call's chat, and while that
+ * page is not in front, or no pane shows the chat, the picture reaches a
  * pill page (`call.html`) as `nessa://call-pill-picture` and answers its
- * `call_pill_read`; in front, or with no call, the pill gets null. A pill
+ * `call_pill_read`; in front with the chat shown, or with no call, the pill
+ * gets null. A pill
  * page's `call_pill_press` reaches the desktop page as
  * `nessa://call-pill-press`. A browser tab cannot lose the front on its
  * own, so `window.__fakeHostDesktopInFront(false)` says the desktop window
@@ -127,12 +129,13 @@ export function gatewayHost({
   // is in front, which together decide what the pill draws. On the pill
   // page: what it was last sent.
   let pillCall = null
+  let pillChatShown = false
   let pillFront = true
   let pillPicture = null
   let pillOwner = false
   window.__fakeHostPill = { sets: 0 }
   const pillSettle = () => {
-    pillPicture = pillFront ? null : pillCall
+    pillPicture = pillFront && pillChatShown ? null : pillCall
     pillWire.postMessage({ kind: "picture", picture: pillPicture })
   }
   window.__fakeHostDesktopInFront = (inFront) => {
@@ -182,9 +185,12 @@ export function gatewayHost({
       }
       if (command === "home_folder") return Promise.resolve(window.__fakeHostHome)
       if (command === "call_pill_set") {
-        pillArgs(command, args, ["call"])
+        pillArgs(command, args, ["call", "chatShown"])
+        if (typeof args.chatShown !== "boolean")
+          throw new Error("call_pill_set takes chatShown as a boolean")
         pillOwner = true
         pillCall = args.call
+        pillChatShown = args.chatShown
         window.__fakeHostPill.sets++
         pillSettle()
         return Promise.resolve(null)

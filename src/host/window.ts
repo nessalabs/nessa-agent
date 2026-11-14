@@ -994,21 +994,25 @@ export async function onReviewNoticeOpened(handler: (conversationId: string) => 
 
 /*
  * The call pill (`src-tauri/src/call_pill.rs`): a small window that floats
- * over other apps while a voice call is open and the desktop window is not
- * in front. The host carries the call's picture from the desktop window to
+ * over everything while a voice call is open and its composer is not in
+ * view (the desktop window is not in front, or shows other chats). The host carries the call's picture from the desktop window to
  * it and its presses back. A plain browser has no second window to float,
  * so there the pill is never shown.
  */
 
 /**
- * Says what the desktop window's call looks like now; null when no call is
- * open. The host shows the pill while there is one and this window is not in
- * front. Desktop window only.
+ * Says what the desktop window's call looks like now, null when no call is
+ * open, and whether a pane shows the chat it talks to. The host shows the
+ * pill while there is a call and its composer is not in view: this window is
+ * not in front, or no pane shows that chat. Desktop window only.
  */
-export async function setCallPill(picture: CallPicture | null): Promise<void> {
+export async function setCallPill(
+  picture: CallPicture | null,
+  chatShown: boolean,
+): Promise<void> {
   if (!inTauri) return
   const { invoke } = await import("@tauri-apps/api/core")
-  await invoke("call_pill_set", { call: picture })
+  await invoke("call_pill_set", { call: picture, chatShown })
 }
 
 /** Subscribes the desktop window to presses on the pill. */
