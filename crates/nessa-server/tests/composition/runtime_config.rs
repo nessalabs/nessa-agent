@@ -148,10 +148,12 @@ fn parent_stop_setting_defaults_and_strict_override() {
 /// `nessa` on the VM: a key this build's reader refuses, an agent it has no
 /// adapter for, or a selected agent that is not configured would only show
 /// on a real VM, as an opening that never finishes.
+// Boat VMs are opened only by the Unix gateway, which owns `workspaces`.
+#[cfg(unix)]
 #[test]
 fn the_boat_vm_configuration_is_one_this_build_reads() {
     let root = "/home/user/.nessa/workspaces/thread/project";
-    let written = crate::workspaces::infrastructure::vm_config(root).unwrap();
+    let written = nessa_conversation::workspaces::infrastructure::vm_config(root).unwrap();
     let config = RuntimeConfig::parse(written.to_string().as_bytes()).unwrap();
     let agents = config
         .agents
