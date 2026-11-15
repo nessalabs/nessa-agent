@@ -549,8 +549,9 @@ export type ChangeOutcome = "sent" | "refused" | "unknown" | "not-asked"
 
 /**
  * Stops the turn a session's agent is at work on, saying who asked for the
- * source's record. Only a session on screen whose conversation shows a turn
- * at work is asked (`atWork`); the conversation that no longer runs arrives
+ * source's record. Only a session on screen, or the one held off screen (a
+ * voice call talks to it: the person asked it to stop by voice), whose
+ * conversation shows a turn at work is asked (`atWork`); the conversation that no longer runs arrives
  * as the source's update, and a refusal leaves it as it was.
  */
 export function stopTurn({
@@ -562,8 +563,8 @@ export function stopTurn({
 }): WorkspaceCommand<Promise<ChangeOutcome>> {
   return async (_dispatch, getState, { workspace }) => {
     const state = getState().workspace
-    if (!onScreen(state, sessionId) || !atWork(entry(state.transcripts, sessionId)))
-      return "not-asked"
+    const asked = onScreen(state, sessionId) || state.heldSession === sessionId
+    if (!asked || !atWork(entry(state.transcripts, sessionId))) return "not-asked"
     try {
       await workspace.stop(sessionId, initiator)
       return "sent"

@@ -129,6 +129,12 @@ export interface WorkspaceState {
    */
   readonly transcripts: Readonly<Record<string, Transcript>>
   /**
+   * The session something is using while no pane need show it — a voice
+   * call talking to it — or null. Its conversation is read and kept as a
+   * shown one is, so what uses it sees every change.
+   */
+  readonly heldSession: string | null
+  /**
    * The newest conversation revision held, by listed session — kept when its
    * content is let go (`model/retention.ts`), so a read answered after that
    * with an older conversation cannot bring the old one back. Let go with the
@@ -430,6 +436,7 @@ export const initialWorkspace: WorkspaceState = {
   sessions: {},
   drafts: {},
   transcripts: {},
+  heldSession: null,
   conversationRevisions: {},
   outbox: {},
   transcriptFailures: {},
@@ -581,12 +588,13 @@ export function overviewShownIds(state: WorkspaceState): string[] {
 }
 
 /**
- * The sessions on screen whose conversations the window keeps whatever
- * their age: the panes' (drafts among them) and the overview's, each
- * bounded.
+ * The sessions whose conversations the window keeps whatever their age:
+ * those on screen — the panes' (drafts among them) and the overview's, each
+ * bounded — and the one held (`heldSession`).
  */
 export function shownIds(state: WorkspaceState): Set<string> {
-  return new Set([...paneIds(state.panes), ...overviewShownIds(state)])
+  const held = state.heldSession === null ? [] : [state.heldSession]
+  return new Set([...paneIds(state.panes), ...overviewShownIds(state), ...held])
 }
 
 /**

@@ -41,6 +41,7 @@ export const {
   chooseModel,
   setComposerText,
   transcriptRetried: retryTranscript,
+  sessionHeld: holdSession,
   unsentDiscarded: discardUnsent,
   closeShare,
   renameStarted,

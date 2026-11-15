@@ -244,6 +244,8 @@ const workspaceSlice = createSlice({
     ) => updates.transcriptFailed(state, payload),
     transcriptRetried: (state, { payload }: Payload<{ sessionId: string }>) =>
       updates.transcriptRetried(state, payload),
+    sessionHeld: (state, { payload }: Payload<{ sessionId: string | null }>) =>
+      updates.sessionHeld(state, payload),
     messageSent: (
       state,
       {
