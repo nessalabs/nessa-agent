@@ -3,9 +3,11 @@ use super::*;
 #[cfg(unix)]
 use crate::application::service::environment_tools::running_turn;
 #[cfg(unix)]
-use crate::application::{Environments, ThreadEnvironments, WorkspaceRest};
+use crate::application::{Environments, ThreadEnvironments};
 #[cfg(unix)]
 use crate::domain::Place;
+#[cfg(unix)]
+use crate::domain::RestCause;
 #[cfg(unix)]
 use crate::infrastructure::FilePlaces;
 use crate::{
@@ -995,7 +997,7 @@ impl ThreadEnvironments for FakeVmWorkspaces {
     fn available(&self) -> EnvironmentFuture<'_, bool> {
         Box::pin(async { true })
     }
-    fn rest<'a>(&'a self, _: &'a ConversationId, _: WorkspaceRest) -> EnvironmentFuture<'a, bool> {
+    fn rest<'a>(&'a self, _: &'a ConversationId, _: RestCause) -> EnvironmentFuture<'a, bool> {
         self.0.fetch_add(1, Ordering::SeqCst);
         Box::pin(async { true })
     }

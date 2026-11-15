@@ -27,6 +27,16 @@ function ProviderMark({ id, label }: { id: string; label: string }) {
   )
 }
 
+/**
+ * The mark of the provider a model is from, on its tile — what the composer
+ * shows when it is folded to a circle (`composer.tsx`). A provider the
+ * catalogue does not list shows nothing.
+ */
+export function ModelMark({ provider }: { provider: string }) {
+  const known = composerProviders.find((each) => each.id === provider)
+  return known ? <ProviderMark id={known.id} label={known.label} /> : null
+}
+
 /** The SDK catalog in the picker's shape: each model with its context window. */
 const pickerGroups: ModelPickerGroup[] = composerProviders.map((provider) => ({
   id: provider.id,
