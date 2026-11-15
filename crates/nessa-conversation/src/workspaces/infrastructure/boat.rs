@@ -13,8 +13,8 @@
 use crate::workspaces::{
     application::{Provider, RestCause, WorkspaceReceipt, WorkspaceRuntime},
     domain::{
-        AdmissionRefusal, AdmissionRejection, BoatAccount, EnvironmentIdentity, Failure,
-        ObservedEnvironment, RefusalDisposition, VmSpec,
+        AdmissionRefusal, AdmissionRejection, Admitted, BoatAccount, CloudAccount,
+        EnvironmentIdentity, Failure, ObservedEnvironment, RefusalDisposition, VmSpec,
     },
 };
 use async_trait::async_trait;
@@ -149,7 +149,8 @@ fn spec(vm: &VmSpec, thread: Option<&str>) -> Result<MachineSpec, Failure> {
 
 #[async_trait]
 impl Provider for BoatProvider {
-    async fn validate(&self, account: &BoatAccount, vm: &VmSpec) -> Result<(), Failure> {
+    async fn validate(&self, account: &CloudAccount, vm: &VmSpec) -> Result<(), Failure> {
+        let account = boat(account)?;
         // Nessa admits only its own environment: a name it would refuse on
         // every creation is refused before anything is made for it.
         nessa_environment(&vm.environment)?;
@@ -161,10 +162,11 @@ impl Provider for BoatProvider {
     }
     async fn create(
         &self,
-        account: &BoatAccount,
+        account: &CloudAccount,
         vm: &VmSpec,
         thread: &str,
     ) -> Result<WorkspaceReceipt, Failure> {
+        let account = boat(account)?;
         nessa_environment(&vm.environment)?;
         let spec = spec(vm, Some(thread))?;
         let machines = self.machines(account)?;
@@ -177,7 +179,7 @@ impl Provider for BoatProvider {
         let refusal = created.refusal().map(rejection_from);
         Ok(WorkspaceReceipt {
             vm: created.vm().into(),
-            admission: identity_from(created.admission())?,
+            admission: Admitted::Boat(identity_from(created.admission())?),
             refusal,
             disposition: match created.disposition() {
                 Disposition::RollbackNewVm => RefusalDisposition::RollbackNewVm,
@@ -187,12 +189,14 @@ impl Provider for BoatProvider {
     }
     async fn connect(
         &self,
-        account: &BoatAccount,
+        account: &CloudAccount,
         made: &VmSpec,
         thread: &str,
         vm: &str,
-        admission: &EnvironmentIdentity,
+        admission: &Admitted,
     ) -> Result<Arc<dyn WorkspaceRuntime>, Failure> {
+        let account = boat(account)?;
+        let admission = boat_admission(admission)?;
         let deadline = crate::timer::clock::now() + CONNECT_BUDGET;
         let machines = self.machines(account)?;
         machines
@@ -206,7 +210,13 @@ impl Provider for BoatProvider {
             .await
             .map_err(|_| Failure::Provider)?
     }
-    async fn stop(&self, account: &BoatAccount, vm: &str, cause: RestCause) -> Result<(), Failure> {
+    async fn stop(
+        &self,
+        account: &CloudAccount,
+        vm: &str,
+        cause: RestCause,
+    ) -> Result<(), Failure> {
+        let account = boat(account)?;
         // Boat archives it: its disk is kept as a snapshot, nothing runs or
         // is billed, and `connect` resumes it.
         let cause = match cause {
@@ -221,10 +231,12 @@ impl Provider for BoatProvider {
     }
     async fn remove(
         &self,
-        account: &BoatAccount,
+        account: &CloudAccount,
         vm: &str,
-        admission: &EnvironmentIdentity,
+        admission: &Admitted,
     ) -> Result<(), Failure> {
+        let account = boat(account)?;
+        let admission = boat_admission(admission)?;
         // Only a VM this creation made is ever removed; the workspace's
         // cleanup asks only for one. Acceptance alone is not confirmed
         // erasure, so this always ends uncertain.
@@ -238,6 +250,21 @@ impl Provider for BoatProvider {
             .roll_back(&created)
             .await
             .map_err(failure)
+    }
+}
+
+/// The Boat account a connection to Boat carries.
+fn boat(account: &CloudAccount) -> Result<&BoatAccount, Failure> {
+    match account {
+        CloudAccount::Boat(account) => Ok(account),
+        CloudAccount::Agent37(_) => Err(Failure::InvalidInput),
+    }
+}
+/// What a Boat VM was admitted under.
+fn boat_admission(admission: &Admitted) -> Result<&EnvironmentIdentity, Failure> {
+    match admission {
+        Admitted::Boat(identity) => Ok(identity),
+        Admitted::Agent37(_) => Err(Failure::InvalidInput),
     }
 }
 

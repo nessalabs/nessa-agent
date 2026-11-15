@@ -35,6 +35,17 @@ pub enum EnvironmentEvent {
         observed_environment: Option<String>,
         observed_version: Option<u32>,
     },
+    /// An Agent37 VM was refused before workspace commands or grants: it
+    /// runs another template release or image than it was admitted under.
+    Agent37AdmissionRefused {
+        thread: String,
+        vm: String,
+        template: String,
+        template_revision: Option<u64>,
+        image_digest: String,
+        cause: String,
+        disposition: String,
+    },
     /// Rollback observation after receipt-save failure; false means erasure is unconfirmed.
     WorkspaceRollbackObserved {
         thread: String,

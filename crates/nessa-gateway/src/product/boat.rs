@@ -76,10 +76,12 @@ pub(super) async fn dispatch(
             return failure(&frame.id, code(error));
         }
         match service.settings.read().await {
-            Ok(saved) => success(
+            Ok(crate::workspaces::domain::CloudConnection::Boat(saved)) => success(
                 &frame.id,
                 &serde_json::json!({"state":"connected","environment":saved.environment,"image":saved.image}),
             ),
+            // Boat's settings hold only a Boat connection.
+            Ok(_) => failure(&frame.id, "boat_storage_unavailable"),
             Err(Failure::Locked) => success(&frame.id, &serde_json::json!({"state":"locked"})),
             Err(Failure::NotConfigured) => {
                 success(&frame.id, &serde_json::json!({"state":"disconnected"}))

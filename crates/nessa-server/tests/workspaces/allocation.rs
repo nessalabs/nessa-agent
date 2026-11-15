@@ -64,10 +64,10 @@ impl Settings for Config {
     fn generation(&self) -> Result<u64, Failure> {
         Ok(1)
     }
-    async fn read(&self) -> Result<BoatConnection, Failure> {
-        Ok(connection())
+    async fn read(&self) -> Result<CloudConnection, Failure> {
+        Ok(CloudConnection::Boat(connection()))
     }
-    async fn save(&self, _: u64, _: BoatConnection) -> Result<(), Failure> {
+    async fn save(&self, _: u64, _: CloudConnection) -> Result<(), Failure> {
         Ok(())
     }
     async fn clear(&self) -> Result<(), Failure> {
@@ -261,12 +261,12 @@ impl FakeProvider {
 }
 #[async_trait]
 impl Provider for FakeProvider {
-    async fn validate(&self, _: &BoatAccount, _: &VmSpec) -> Result<(), Failure> {
+    async fn validate(&self, _: &CloudAccount, _: &VmSpec) -> Result<(), Failure> {
         Ok(())
     }
     async fn create(
         &self,
-        _: &BoatAccount,
+        _: &CloudAccount,
         connection: &VmSpec,
         thread: &str,
     ) -> Result<WorkspaceReceipt, Failure> {
@@ -290,11 +290,11 @@ impl Provider for FakeProvider {
     }
     async fn connect(
         &self,
-        _: &BoatAccount,
+        _: &CloudAccount,
         connection: &VmSpec,
         _: &str,
         vm: &str,
-        _: &EnvironmentIdentity,
+        _: &Admitted,
     ) -> Result<Arc<dyn WorkspaceRuntime>, Failure> {
         self.connected_lifetimes
             .lock()
@@ -310,7 +310,7 @@ impl Provider for FakeProvider {
         self.connects.lock().unwrap().push(vm.into());
         Ok(Arc::new(Runtime))
     }
-    async fn stop(&self, _: &BoatAccount, vm: &str, _: RestCause) -> Result<(), Failure> {
+    async fn stop(&self, _: &CloudAccount, vm: &str, _: RestCause) -> Result<(), Failure> {
         self.recovery_steps
             .lock()
             .unwrap()
@@ -321,12 +321,7 @@ impl Provider for FakeProvider {
         self.stops.lock().unwrap().push(vm.into());
         Ok(())
     }
-    async fn remove(
-        &self,
-        _: &BoatAccount,
-        vm: &str,
-        _: &EnvironmentIdentity,
-    ) -> Result<(), Failure> {
+    async fn remove(&self, _: &CloudAccount, vm: &str, _: &Admitted) -> Result<(), Failure> {
         self.recovery_steps
             .lock()
             .unwrap()
@@ -1248,14 +1243,16 @@ async fn receipt_publication_panic_keeps_external_target_in_the_recovery_owner()
     assert_eq!(provider.creates.load(Ordering::SeqCst), 2);
 }
 
-pub(super) fn admission() -> EnvironmentIdentity {
-    EnvironmentIdentity::new(
-        "11111111-1111-4111-8111-111111111111".into(),
-        "nessa".into(),
-        "22222222-2222-4222-8222-222222222222".into(),
-        2,
+pub(super) fn admission() -> Admitted {
+    Admitted::Boat(
+        EnvironmentIdentity::new(
+            "11111111-1111-4111-8111-111111111111".into(),
+            "nessa".into(),
+            "22222222-2222-4222-8222-222222222222".into(),
+            2,
+        )
+        .unwrap(),
     )
-    .unwrap()
 }
 
 fn rejection() -> AdmissionRejection {

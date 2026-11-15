@@ -26,7 +26,7 @@ fn receipt() -> Assignment {
         thread: THREAD.into(),
         vm: "bx_fixture".into(),
         image: "fixture-image".into(),
-        admission: admission(),
+        admission: crate::workspaces::domain::Admitted::Boat(admission()),
     }
 }
 
@@ -41,7 +41,7 @@ async fn lifetime_refusal_keeps_the_actual_vm_target_after_reopen() {
         thread: THREAD.into(),
         vm: "bx_fixture".into(),
         image: "fixture-image".into(),
-        admission: admission(),
+        admission: crate::workspaces::domain::Admitted::Boat(admission()),
         rejection: AdmissionRejection::new(AdmissionRefusal::LifetimeNotEnforced, None),
         disposition: RefusalDisposition::RollbackNewVm,
     };
@@ -198,7 +198,7 @@ async fn refusal_is_terminal_and_a_restored_history_cannot_switch_vm_or_admissio
         thread: THREAD.into(),
         vm: "bx_fixture".into(),
         image: "fixture-image".into(),
-        admission: admission(),
+        admission: crate::workspaces::domain::Admitted::Boat(admission()),
         disposition: RefusalDisposition::RollbackNewVm,
         rejection: crate::workspaces::domain::AdmissionRejection::new(
             AdmissionRefusal::WrongVersion,

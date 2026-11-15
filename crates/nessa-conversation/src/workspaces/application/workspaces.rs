@@ -4,8 +4,8 @@ use super::RuntimeSettings;
 pub use crate::domain::RestCause;
 use crate::domain::{ChannelId, SettingsScope};
 use crate::workspaces::domain::{
-    AdmissionRefusal, AdmissionRejection, Assignment, BoatAccount, BoatConnection, CleanupOutcome,
-    EnvironmentIdentity, Failure, OpenFailure, RefusalDisposition, VmSpec,
+    AdmissionRefusal, AdmissionRejection, Admitted, Assignment, BoatConnection, CleanupOutcome,
+    CloudAccount, CloudConnection, Failure, OpenFailure, RefusalDisposition, VmSpec,
 };
 use async_trait::async_trait;
 use futures_util::FutureExt;
@@ -52,9 +52,9 @@ pub trait WorkspaceRuntime: Send + Sync {
 }
 #[async_trait]
 pub trait Settings: Send + Sync {
-    async fn read(&self) -> Result<BoatConnection, Failure>;
+    async fn read(&self) -> Result<CloudConnection, Failure>;
     fn generation(&self) -> Result<u64, Failure>;
-    async fn save(&self, generation: u64, connection: BoatConnection) -> Result<(), Failure>;
+    async fn save(&self, generation: u64, connection: CloudConnection) -> Result<(), Failure>;
     async fn clear(&self) -> Result<(), Failure>;
 }
 #[async_trait]
@@ -65,7 +65,7 @@ pub trait Assignments: Send + Sync {
 /// The provider retains an actual target even when post-create admission fails.
 pub struct WorkspaceReceipt {
     pub vm: String,
-    pub admission: EnvironmentIdentity,
+    pub admission: Admitted,
     pub refusal: Option<AdmissionRejection>,
     pub disposition: RefusalDisposition,
 }
@@ -73,33 +73,34 @@ pub struct WorkspaceReceipt {
 pub trait Provider: Send + Sync {
     /// Check a connection about to be saved: its account, and that a VM
     /// made from `spec` could be.
-    async fn validate(&self, account: &BoatAccount, spec: &VmSpec) -> Result<(), Failure>;
+    async fn validate(&self, account: &CloudAccount, spec: &VmSpec) -> Result<(), Failure>;
     async fn create(
         &self,
-        account: &BoatAccount,
+        account: &CloudAccount,
         spec: &VmSpec,
         thread: &str,
     ) -> Result<WorkspaceReceipt, Failure>;
     async fn connect(
         &self,
-        account: &BoatAccount,
+        account: &CloudAccount,
         spec: &VmSpec,
         thread: &str,
         vm: &str,
-        admission: &EnvironmentIdentity,
+        admission: &Admitted,
     ) -> Result<Arc<dyn WorkspaceRuntime>, Failure>;
     /// Best effort rollback of a received creation receipt that could not be saved.
     /// Acceptance alone cannot be returned as confirmed cleanup.
     /// `admission` is what the VM was admitted under when it was made.
     async fn remove(
         &self,
-        account: &BoatAccount,
+        account: &CloudAccount,
         vm: &str,
-        admission: &EnvironmentIdentity,
+        admission: &Admitted,
     ) -> Result<(), Failure>;
     /// Stop `vm`, keeping its disk: it costs nothing while stopped, and
     /// [`Provider::connect`] resumes it.
-    async fn stop(&self, account: &BoatAccount, vm: &str, cause: RestCause) -> Result<(), Failure>;
+    async fn stop(&self, account: &CloudAccount, vm: &str, cause: RestCause)
+        -> Result<(), Failure>;
 }
 
 /// What [`Workspaces::open`] hands out: the provider's runtime, holding the
@@ -139,7 +140,7 @@ pub enum RecoveryEvent {
     AdmissionRefused {
         thread: String,
         vm: String,
-        admission: EnvironmentIdentity,
+        admission: Admitted,
         rejection: AdmissionRejection,
         disposition: RefusalDisposition,
     },
@@ -235,8 +236,12 @@ impl Workspaces {
     }
     pub async fn save_token(&self, token: String) -> Result<(), Failure> {
         let image = self.image.clone().ok_or(Failure::WorkerUnavailable)?;
-        self.save(BoatConnection::new(token, "nessa".into(), image)?)
-            .await
+        self.save(CloudConnection::Boat(BoatConnection::new(
+            token,
+            "nessa".into(),
+            image,
+        )?))
+        .await
     }
     /// Forget the Boat connection. The Claude sign-in stays in Saved
     /// logins: every other machine is handed it too. It is removed only
@@ -259,10 +264,10 @@ impl Workspaces {
         self.claude_sign_in_changes
             .send_modify(|changes| *changes += 1);
     }
-    pub async fn save(&self, connection: BoatConnection) -> Result<(), Failure> {
+    pub async fn save(&self, connection: CloudConnection) -> Result<(), Failure> {
         let generation = self.settings.generation()?;
         let spec = connection.new_vm(None, Default::default());
-        self.provider.validate(&connection.account, &spec).await?;
+        self.provider.validate(&connection.account(), &spec).await?;
         self.settings.save(generation, connection).await
     }
     pub async fn open(
@@ -360,7 +365,7 @@ impl Workspaces {
     /// is asked and once it answered.
     async fn stop_recorded(
         &self,
-        account: &BoatAccount,
+        account: &CloudAccount,
         id: String,
         vm: String,
         cause: RestCause,
@@ -390,7 +395,7 @@ impl Workspaces {
         }
     }
     /// The account and VM a rest of thread `id` stops, if it has one.
-    async fn resting(&self, id: &str) -> Result<Option<(BoatAccount, String)>, Failure> {
+    async fn resting(&self, id: &str) -> Result<Option<(CloudAccount, String)>, Failure> {
         let Some(Assignment::Assigned {
             thread: assigned,
             vm,
@@ -402,7 +407,7 @@ impl Workspaces {
         if assigned != id {
             return Ok(None);
         }
-        Ok(Some((self.settings.read().await?.account, vm)))
+        Ok(Some((self.settings.read().await?.account(), vm)))
     }
     /// The names of what uses `thread`'s VM now.
     pub fn uses(&self, thread: &str) -> Vec<String> {
@@ -436,7 +441,7 @@ impl Workspaces {
             return Err(Failure::Storage);
         }
         let auto_stop = lifetimes.effective();
-        let account = &connection.account;
+        let account = &connection.account();
         let (spec, vm, admission, disposition) = match self.assignments.read(&id).await? {
             Some(Assignment::Assigned {
                 thread,
@@ -567,11 +572,11 @@ impl Workspaces {
     }
     async fn connect(
         &self,
-        account: &BoatAccount,
+        account: &CloudAccount,
         spec: &VmSpec,
         thread: &str,
         vm: &str,
-        admission: &EnvironmentIdentity,
+        admission: &Admitted,
         disposition: RefusalDisposition,
     ) -> Result<Arc<dyn WorkspaceRuntime>, Failure> {
         match self
@@ -589,11 +594,11 @@ impl Workspaces {
     #[allow(clippy::too_many_arguments)]
     async fn refuse(
         &self,
-        account: &BoatAccount,
+        account: &CloudAccount,
         spec: &VmSpec,
         thread: &str,
         vm: &str,
-        admission: &EnvironmentIdentity,
+        admission: &Admitted,
         rejection: AdmissionRejection,
         disposition: RefusalDisposition,
     ) -> Result<Arc<dyn WorkspaceRuntime>, Failure> {
@@ -633,10 +638,10 @@ impl Workspaces {
     }
     async fn cleanup(
         &self,
-        account: &BoatAccount,
+        account: &CloudAccount,
         thread: &str,
         vm: &str,
-        admission: &EnvironmentIdentity,
+        admission: &Admitted,
         disposition: RefusalDisposition,
     ) -> (CleanupOutcome, bool) {
         // Never delete an existing/replayed workspace or a target named by an

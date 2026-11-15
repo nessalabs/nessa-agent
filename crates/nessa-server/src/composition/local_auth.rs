@@ -2257,13 +2257,30 @@ mod tests;
 #[cfg(unix)]
 struct WorkspaceRecoveryAudit(Arc<dyn EnvironmentAudit>);
 #[cfg(unix)]
+use nessa_conversation::workspaces::domain::Admitted;
+#[cfg(unix)]
 impl RecoveryAudit for WorkspaceRecoveryAudit {
     fn record(&self, event: &RecoveryEvent) -> Result<(), WorkspaceFailure> {
         let record = match event {
             RecoveryEvent::AdmissionRefused {
                 thread,
                 vm,
-                admission,
+                admission: Admitted::Agent37(release),
+                rejection,
+                disposition,
+            } => EnvironmentEvent::Agent37AdmissionRefused {
+                thread: thread.clone(),
+                vm: vm.clone(),
+                template: release.template().into(),
+                template_revision: release.revision(),
+                image_digest: release.digest().into(),
+                cause: rejection.cause().as_str().into(),
+                disposition: disposition.as_str().into(),
+            },
+            RecoveryEvent::AdmissionRefused {
+                thread,
+                vm,
+                admission: Admitted::Boat(admission),
                 rejection,
                 disposition,
             } => EnvironmentEvent::WorkspaceAdmissionRefused {

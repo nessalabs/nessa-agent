@@ -133,17 +133,18 @@ impl BuildSource for CliBuild {
 struct Config;
 #[async_trait::async_trait]
 impl Settings for Config {
-    async fn read(&self) -> Result<BoatConnection, Failure> {
+    async fn read(&self) -> Result<CloudConnection, Failure> {
         BoatConnection::new(
             "fixture-token".into(),
             "nessa".into(),
             "fixture-image".into(),
         )
+        .map(CloudConnection::Boat)
     }
     fn generation(&self) -> Result<u64, Failure> {
         Ok(1)
     }
-    async fn save(&self, _: u64, _: BoatConnection) -> Result<(), Failure> {
+    async fn save(&self, _: u64, _: CloudConnection) -> Result<(), Failure> {
         unreachable!()
     }
     async fn clear(&self) -> Result<(), Failure> {
@@ -174,12 +175,12 @@ impl RecoveryAudit for Audit {
 struct FakeProvider;
 #[async_trait::async_trait]
 impl Provider for FakeProvider {
-    async fn validate(&self, _: &BoatAccount, _: &VmSpec) -> Result<(), Failure> {
+    async fn validate(&self, _: &CloudAccount, _: &VmSpec) -> Result<(), Failure> {
         Ok(())
     }
     async fn create(
         &self,
-        _: &BoatAccount,
+        _: &CloudAccount,
         _: &VmSpec,
         thread: &str,
     ) -> Result<WorkspaceReceipt, Failure> {
@@ -202,24 +203,26 @@ impl Provider for FakeProvider {
         }
         Ok(WorkspaceReceipt {
             vm: thread.into(),
-            admission: EnvironmentIdentity::new(
-                "11111111-1111-4111-8111-111111111111".into(),
-                "nessa".into(),
-                "22222222-2222-4222-8222-222222222222".into(),
-                2,
-            )
-            .unwrap(),
+            admission: Admitted::Boat(
+                EnvironmentIdentity::new(
+                    "11111111-1111-4111-8111-111111111111".into(),
+                    "nessa".into(),
+                    "22222222-2222-4222-8222-222222222222".into(),
+                    2,
+                )
+                .unwrap(),
+            ),
             refusal: None,
             disposition: RefusalDisposition::RetainTarget,
         })
     }
     async fn connect(
         &self,
-        _: &BoatAccount,
+        _: &CloudAccount,
         _: &VmSpec,
         thread: &str,
         _: &str,
-        _: &EnvironmentIdentity,
+        _: &Admitted,
     ) -> Result<Arc<dyn WorkspaceRuntime>, Failure> {
         // The driver makes Boat fail a thread's next opening by leaving
         // this file in its folder.
@@ -228,15 +231,10 @@ impl Provider for FakeProvider {
         }
         Ok(Arc::new(FakeVm(thread.into())))
     }
-    async fn remove(
-        &self,
-        _: &BoatAccount,
-        _: &str,
-        _: &EnvironmentIdentity,
-    ) -> Result<(), Failure> {
+    async fn remove(&self, _: &CloudAccount, _: &str, _: &Admitted) -> Result<(), Failure> {
         unreachable!()
     }
-    async fn stop(&self, _: &BoatAccount, vm: &str, _: RestCause) -> Result<(), Failure> {
+    async fn stop(&self, _: &CloudAccount, vm: &str, _: RestCause) -> Result<(), Failure> {
         event("rested", vm);
         Ok(())
     }
