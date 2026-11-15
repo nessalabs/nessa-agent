@@ -350,8 +350,13 @@ impl Workspaces {
     /// Forget `cloud`'s connection. The Claude sign-in stays in Saved
     /// logins: every other machine is handed it too. It is removed only
     /// from Settings › Saved logins.
+    /// New VMs then go to Boat again if they were going to `cloud`.
     pub async fn disconnect(&self, cloud: Cloud) -> Result<(), Failure> {
-        self.parts(cloud)?.settings.clear().await
+        self.parts(cloud)?.settings.clear().await?;
+        if cloud != Cloud::Boat && self.cloud().await? == cloud {
+            self.choice.save(Cloud::Boat).await?;
+        }
+        Ok(())
     }
     /// How many times the Claude sign-in was said to have changed.
     #[cfg(any(test, feature = "test-support"))]

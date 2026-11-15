@@ -3785,6 +3785,42 @@ export interface BoatStatus {
   /** The release-owned shared worker image saved with this connection; present only while connected. */
   image?: string
 }
+/** Connect a user-owned Agent37 workspace. The gateway makes this install's SSH key, registers it with the workspace, checks the release's pinned runtime template, then encrypts the key, the SSH key and the template in the unlocked vault. */
+export interface Agent37SaveParams {
+  /** Agent37 workspace API key (sk_live_...). Never returned or logged. */
+  key: string
+}
+/** Typed Agent37 connection refusals. Not configured: no workspace is saved. Unavailable: the key was refused, the wallet or instance limit does not allow it, or the release's runtime template is not published there. Provisioning and cleanup uncertainty require reconciliation, not automatic replacement. No code or diagnostic contains credential values. */
+export const Agent37ErrorCode = {
+  VaultLocked: "vault_locked",
+  Agent37NotConfigured: "agent37_not_configured",
+  InvalidRequest: "invalid_request",
+  Agent37StorageUnavailable: "agent37_storage_unavailable",
+  Agent37ResourceMissing: "agent37_resource_missing",
+  Agent37Unreachable: "agent37_unreachable",
+  Agent37Unavailable: "agent37_unavailable",
+  Agent37ProvisioningUncertain: "agent37_provisioning_uncertain",
+  Agent37CleanupUncertain: "agent37_cleanup_uncertain",
+} as const
+export type Agent37ErrorCode = (typeof Agent37ErrorCode)[keyof typeof Agent37ErrorCode]
+/** Secret-free saved Agent37 connection state. Connected means validation succeeded when saved. */
+export interface Agent37Status {
+  /** Locked when the vault cannot be read, disconnected when no workspace is saved, or connected after validation and encrypted persistence. */
+  state: "locked" | "disconnected" | "connected"
+  /** The pinned runtime template release new VMs are made from; present only while connected. */
+  template?: string
+}
+/** A cloud that makes thread VMs. */
+export const Cloud = { Boat: "boat", Agent37: "agent37" } as const
+export type Cloud = (typeof Cloud)[keyof typeof Cloud]
+/** Make new thread VMs on this cloud, which must be connected. A thread whose VM exists stays on the cloud it was made on. */
+export interface CloudChooseParams {
+  cloud: Cloud
+}
+/** The cloud new thread VMs are made on. */
+export interface CloudChoice {
+  cloud: Cloud
+}
 /** Disable automatic stop or stop after a positive duration, including active work. */
 export const VmLifetimeMode = { Never: "never", After: "after" } as const
 export type VmLifetimeMode = (typeof VmLifetimeMode)[keyof typeof VmLifetimeMode]
@@ -4033,7 +4069,7 @@ export const channelRules = {
 export const bounds = {
   maxOrdinaryResponseBytes: 65536,
   maxRequestFrameBytes: 65536,
-  maxReadyMethods: 127,
+  maxReadyMethods: 132,
   maxAuthCredentialCharacters: 16384,
   maxProductClientIdCharacters: 256,
   maxProductSurfaceInstanceCharacters: 256,
@@ -4370,6 +4406,11 @@ export const ProductMethod = {
   BoatSave: "boat.save",
   BoatSaveClaudeSignIn: "boat.saveClaudeSignIn",
   BoatDisconnect: "boat.disconnect",
+  Agent37Status: "agent37.status",
+  Agent37Save: "agent37.save",
+  Agent37Disconnect: "agent37.disconnect",
+  CloudRead: "cloud.read",
+  CloudChoose: "cloud.choose",
   DevicesPool: "devices.pool",
   DevicesSetPool: "devices.setPool",
   BoatRuntimeSettings: "boat.runtimeSettings",
@@ -4511,6 +4552,11 @@ export const productReadyMethods = [
   "boat.save",
   "boat.saveClaudeSignIn",
   "boat.disconnect",
+  "agent37.status",
+  "agent37.save",
+  "agent37.disconnect",
+  "cloud.read",
+  "cloud.choose",
   "devices.pool",
   "devices.setPool",
   "boat.runtimeSettings",
@@ -4642,6 +4688,11 @@ export const productMethodGrants = {
   "boat.save": "credential.manage",
   "boat.saveClaudeSignIn": "credential.manage",
   "boat.disconnect": "credential.manage",
+  "agent37.status": "credential.manage",
+  "agent37.save": "credential.manage",
+  "agent37.disconnect": "credential.manage",
+  "cloud.read": "credential.manage",
+  "cloud.choose": "credential.manage",
   "devices.pool": "credential.manage",
   "devices.setPool": "credential.manage",
   "boat.runtimeSettings": "credential.manage",

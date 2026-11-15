@@ -4203,6 +4203,79 @@ pub struct BoatStatus {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub image: Option<String>,
 }
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Agent37SaveParams {
+    pub key: String,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+pub enum Agent37ErrorCode {
+    #[serde(rename = "vault_locked")]
+    VaultLocked,
+    #[serde(rename = "agent37_not_configured")]
+    Agent37NotConfigured,
+    #[serde(rename = "invalid_request")]
+    InvalidRequest,
+    #[serde(rename = "agent37_storage_unavailable")]
+    Agent37StorageUnavailable,
+    #[serde(rename = "agent37_resource_missing")]
+    Agent37ResourceMissing,
+    #[serde(rename = "agent37_unreachable")]
+    Agent37Unreachable,
+    #[serde(rename = "agent37_unavailable")]
+    Agent37Unavailable,
+    #[serde(rename = "agent37_provisioning_uncertain")]
+    Agent37ProvisioningUncertain,
+    #[serde(rename = "agent37_cleanup_uncertain")]
+    Agent37CleanupUncertain,
+}
+impl Agent37ErrorCode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::VaultLocked => "vault_locked",
+            Self::Agent37NotConfigured => "agent37_not_configured",
+            Self::InvalidRequest => "invalid_request",
+            Self::Agent37StorageUnavailable => "agent37_storage_unavailable",
+            Self::Agent37ResourceMissing => "agent37_resource_missing",
+            Self::Agent37Unreachable => "agent37_unreachable",
+            Self::Agent37Unavailable => "agent37_unavailable",
+            Self::Agent37ProvisioningUncertain => "agent37_provisioning_uncertain",
+            Self::Agent37CleanupUncertain => "agent37_cleanup_uncertain",
+        }
+    }
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Agent37Status {
+    pub state: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub template: Option<String>,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+pub enum Cloud {
+    #[serde(rename = "boat")]
+    Boat,
+    #[serde(rename = "agent37")]
+    Agent37,
+}
+impl Cloud {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Boat => "boat",
+            Self::Agent37 => "agent37",
+        }
+    }
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CloudChooseParams {
+    pub cloud: Cloud,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CloudChoice {
+    pub cloud: Cloud,
+}
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 pub enum VmLifetimeMode {
     #[serde(rename = "never")]
@@ -4654,6 +4727,11 @@ pub mod product_method {
     pub const BOAT_SAVE: &str = "boat.save";
     pub const BOAT_SAVE_CLAUDE_SIGN_IN: &str = "boat.saveClaudeSignIn";
     pub const BOAT_DISCONNECT: &str = "boat.disconnect";
+    pub const AGENT37_STATUS: &str = "agent37.status";
+    pub const AGENT37_SAVE: &str = "agent37.save";
+    pub const AGENT37_DISCONNECT: &str = "agent37.disconnect";
+    pub const CLOUD_READ: &str = "cloud.read";
+    pub const CLOUD_CHOOSE: &str = "cloud.choose";
     pub const DEVICES_POOL: &str = "devices.pool";
     pub const DEVICES_SET_POOL: &str = "devices.setPool";
     pub const BOAT_RUNTIME_SETTINGS: &str = "boat.runtimeSettings";
@@ -4859,7 +4937,7 @@ pub fn wire_shape_product_session_ready(value: &Value) -> bool {
         }) && object.get("methods").is_some_and(|field| {
             let _ = field;
             field.as_array().is_some_and(|items| {
-                items.len() <= 127
+                items.len() <= 132
                     && items.iter().all(|item| {
                         let _ = item;
                         item.is_string()
@@ -4997,6 +5075,11 @@ pub const PRODUCT_READY_METHODS: &[&str] = &[
     "boat.save",
     "boat.saveClaudeSignIn",
     "boat.disconnect",
+    "agent37.status",
+    "agent37.save",
+    "agent37.disconnect",
+    "cloud.read",
+    "cloud.choose",
     "devices.pool",
     "devices.setPool",
     "boat.runtimeSettings",
@@ -5303,6 +5386,16 @@ pub enum ProductMethod {
     BoatSaveClaudeSignIn,
     /// `boat.disconnect`
     BoatDisconnect,
+    /// `agent37.status`
+    Agent37Status,
+    /// `agent37.save`
+    Agent37Save,
+    /// `agent37.disconnect`
+    Agent37Disconnect,
+    /// `cloud.read`
+    CloudRead,
+    /// `cloud.choose`
+    CloudChoose,
     /// `devices.pool`
     DevicesPool,
     /// `devices.setPool`
@@ -5450,6 +5543,11 @@ impl ProductMethod {
         ProductMethod::BoatSave,
         ProductMethod::BoatSaveClaudeSignIn,
         ProductMethod::BoatDisconnect,
+        ProductMethod::Agent37Status,
+        ProductMethod::Agent37Save,
+        ProductMethod::Agent37Disconnect,
+        ProductMethod::CloudRead,
+        ProductMethod::CloudChoose,
         ProductMethod::DevicesPool,
         ProductMethod::DevicesSetPool,
         ProductMethod::BoatRuntimeSettings,
@@ -5588,6 +5686,11 @@ impl ProductMethod {
             "boat.save" => Some(ProductMethod::BoatSave),
             "boat.saveClaudeSignIn" => Some(ProductMethod::BoatSaveClaudeSignIn),
             "boat.disconnect" => Some(ProductMethod::BoatDisconnect),
+            "agent37.status" => Some(ProductMethod::Agent37Status),
+            "agent37.save" => Some(ProductMethod::Agent37Save),
+            "agent37.disconnect" => Some(ProductMethod::Agent37Disconnect),
+            "cloud.read" => Some(ProductMethod::CloudRead),
+            "cloud.choose" => Some(ProductMethod::CloudChoose),
             "devices.pool" => Some(ProductMethod::DevicesPool),
             "devices.setPool" => Some(ProductMethod::DevicesSetPool),
             "boat.runtimeSettings" => Some(ProductMethod::BoatRuntimeSettings),
@@ -5725,6 +5828,11 @@ impl ProductMethod {
             ProductMethod::BoatSave => "boat.save",
             ProductMethod::BoatSaveClaudeSignIn => "boat.saveClaudeSignIn",
             ProductMethod::BoatDisconnect => "boat.disconnect",
+            ProductMethod::Agent37Status => "agent37.status",
+            ProductMethod::Agent37Save => "agent37.save",
+            ProductMethod::Agent37Disconnect => "agent37.disconnect",
+            ProductMethod::CloudRead => "cloud.read",
+            ProductMethod::CloudChoose => "cloud.choose",
             ProductMethod::DevicesPool => "devices.pool",
             ProductMethod::DevicesSetPool => "devices.setPool",
             ProductMethod::BoatRuntimeSettings => "boat.runtimeSettings",
@@ -5860,6 +5968,11 @@ impl ProductMethod {
             ProductMethod::BoatSave => Some("credential.manage"),
             ProductMethod::BoatSaveClaudeSignIn => Some("credential.manage"),
             ProductMethod::BoatDisconnect => Some("credential.manage"),
+            ProductMethod::Agent37Status => Some("credential.manage"),
+            ProductMethod::Agent37Save => Some("credential.manage"),
+            ProductMethod::Agent37Disconnect => Some("credential.manage"),
+            ProductMethod::CloudRead => Some("credential.manage"),
+            ProductMethod::CloudChoose => Some("credential.manage"),
             ProductMethod::DevicesPool => Some("credential.manage"),
             ProductMethod::DevicesSetPool => Some("credential.manage"),
             ProductMethod::BoatRuntimeSettings => Some("credential.manage"),
@@ -5994,6 +6107,11 @@ impl ProductMethod {
             ProductMethod::BoatSave => ProductLane::Requests,
             ProductMethod::BoatSaveClaudeSignIn => ProductLane::Requests,
             ProductMethod::BoatDisconnect => ProductLane::Requests,
+            ProductMethod::Agent37Status => ProductLane::Requests,
+            ProductMethod::Agent37Save => ProductLane::Requests,
+            ProductMethod::Agent37Disconnect => ProductLane::Requests,
+            ProductMethod::CloudRead => ProductLane::Requests,
+            ProductMethod::CloudChoose => ProductLane::Requests,
             ProductMethod::DevicesPool => ProductLane::Requests,
             ProductMethod::DevicesSetPool => ProductLane::Requests,
             ProductMethod::BoatRuntimeSettings => ProductLane::Requests,
@@ -6394,6 +6512,24 @@ impl ProductMethod {
                 Value::Object(fields) if fields.is_empty() => ProductParams::BoatDisconnect,
                 _ => return Err(ParamsRefused),
             },
+            ProductMethod::Agent37Status => match params {
+                Value::Object(fields) if fields.is_empty() => ProductParams::Agent37Status,
+                _ => return Err(ParamsRefused),
+            },
+            ProductMethod::Agent37Save => ProductParams::Agent37Save(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
+            ProductMethod::Agent37Disconnect => match params {
+                Value::Object(fields) if fields.is_empty() => ProductParams::Agent37Disconnect,
+                _ => return Err(ParamsRefused),
+            },
+            ProductMethod::CloudRead => match params {
+                Value::Object(fields) if fields.is_empty() => ProductParams::CloudRead,
+                _ => return Err(ParamsRefused),
+            },
+            ProductMethod::CloudChoose => ProductParams::CloudChoose(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
             ProductMethod::DevicesPool => ProductParams::DevicesPool(
                 serde_json::from_value(params).map_err(|_| ParamsRefused)?,
             ),
@@ -6563,6 +6699,11 @@ pub enum ProductParams {
     BoatSave(BoatSaveParams),
     BoatSaveClaudeSignIn(BoatClaudeSignInParams),
     BoatDisconnect,
+    Agent37Status,
+    Agent37Save(Agent37SaveParams),
+    Agent37Disconnect,
+    CloudRead,
+    CloudChoose(CloudChooseParams),
     DevicesPool(DevicesPoolParams),
     DevicesSetPool(DevicesSetPoolParams),
     BoatRuntimeSettings(BoatRuntimeReadParams),
@@ -6717,6 +6858,11 @@ impl ProductParams {
             ProductParams::BoatSave(_) => ProductMethod::BoatSave,
             ProductParams::BoatSaveClaudeSignIn(_) => ProductMethod::BoatSaveClaudeSignIn,
             ProductParams::BoatDisconnect => ProductMethod::BoatDisconnect,
+            ProductParams::Agent37Status => ProductMethod::Agent37Status,
+            ProductParams::Agent37Save(_) => ProductMethod::Agent37Save,
+            ProductParams::Agent37Disconnect => ProductMethod::Agent37Disconnect,
+            ProductParams::CloudRead => ProductMethod::CloudRead,
+            ProductParams::CloudChoose(_) => ProductMethod::CloudChoose,
             ProductParams::DevicesPool(_) => ProductMethod::DevicesPool,
             ProductParams::DevicesSetPool(_) => ProductMethod::DevicesSetPool,
             ProductParams::BoatRuntimeSettings(_) => ProductMethod::BoatRuntimeSettings,

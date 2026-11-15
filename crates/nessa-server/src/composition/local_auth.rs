@@ -16,9 +16,10 @@ use crate::{
     },
     workspaces::{
         application::{RecoveryAudit, RecoveryEvent, Workspaces},
-        domain::Failure as WorkspaceFailure,
+        domain::{Cloud, Failure as WorkspaceFailure},
         infrastructure::{
-            worker_image, BoatProvider, FileAssignments, RuntimeSettingsAudit, VaultSettings,
+            worker_image, Agent37Provider, Agent37VaultSettings, BoatProvider, FileAssignments,
+            FileCloudChoice, RuntimeSettingsAudit, VaultSettings,
         },
     },
 };
@@ -332,7 +333,21 @@ pub(super) async fn product_state(
             Arc::new(WorkspaceRecoveryAudit(workspace_audit.clone())),
             runtime_settings,
         )
-        .with_image(worker_image()),
+        .with_image(worker_image())
+        .with_cloud(
+            Cloud::Agent37,
+            Arc::new(Agent37VaultSettings(vault.vault.clone())),
+            Arc::new(Agent37Provider {
+                // SAFETY: geteuid has no preconditions.
+                relay_socket: super::mcp_servers::relay_socket(namespace, unsafe {
+                    libc::geteuid()
+                }),
+                relay_program: std::env::current_exe().map_err(setup_error)?,
+                endpoints: None,
+            }),
+            Arc::new(FileAssignments(namespace.join("agent37-workspaces"))),
+            Arc::new(FileCloudChoice(namespace.join("workspace-cloud"))),
+        ),
     );
     #[cfg(all(test, unix))]
     let workspace_service = super::vm_background_gateway::service(workspace_service);

@@ -56,6 +56,7 @@ pub use socket::{RECORD_LANE, RECORD_SLOT, REFUSAL_LANE};
 pub use state::ConnectedEnvironments;
 pub use state::{InvalidSessionSettings, ProductDependencies, ProductRouteState, SessionSettings};
 
+mod agent37;
 mod boat;
 mod channel;
 mod conversation;

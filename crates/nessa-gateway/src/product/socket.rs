@@ -2131,6 +2131,11 @@ async fn dispatch_authorized(
         | ProductMethod::McpServersRevoke => {
             super::mcp_servers::dispatch(state, session, frame).await
         }
+        ProductMethod::Agent37Status
+        | ProductMethod::Agent37Save
+        | ProductMethod::Agent37Disconnect
+        | ProductMethod::CloudRead
+        | ProductMethod::CloudChoose => super::agent37::dispatch(state, session, frame).await,
         ProductMethod::BoatStatus
         | ProductMethod::BoatSave
         | ProductMethod::BoatSaveClaudeSignIn
