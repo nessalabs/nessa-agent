@@ -115,7 +115,8 @@ import {
  *               and turned off while open, the titlebar's controls go back to
  *               starting where the lights end
  *   onboarding  setup is replayed from Settings › Advanced › Setup: the host
- *               is asked once; in the setup window that ask opens, nothing
+ *               is asked once; in the setup window that ask opens, over a
+ *               locked vault, no passphrase is asked for, nothing
  *               dims the desktop, and a glow fills the screen and forms the
  *               window (glow, fill, form, open, in that order) before any of
  *               the window's words can be seen; welcome's words are all
@@ -275,6 +276,8 @@ import {
  *               the hint on one line, the count as 4/5); Create opens a new
  *               session's home in it, whose first message runs in the made
  *               folder with the notes in the agent's system prompt (Claude).
+ *               A channel row that is not selected keeps its hover fill
+ *               while the pointer moves onto its settings beside it.
  *               A second channel works in a folder chosen in the picker, and
  *               its first message runs there; the gateway lists both, with
  *               their folders, and each conversation in its own. When the
@@ -951,6 +954,71 @@ async function channelRunning(page, name, running, failures) {
       `channel ${name} pointed at still shows its spinner (${pointed.spinner})`,
     )
   await page.mouse.move(600, 400)
+}
+
+/**
+ * The pointer on a row's settings, beside its control, leaves the row its
+ * hover fill: the frame owns hover, so moving onto the action does not drop
+ * it. The fill is compared with the one under the pointer on the control and
+ * with the one at rest, each read once it stops changing.
+ */
+async function rowFillBesideItsSettings(page, row, name, failures) {
+  const control = row.locator(":scope > [data-size]")
+  const settled = async () => {
+    let last = null
+    return (
+      (await waitFor(async () => {
+        const now = await control.evaluate((it) => getComputedStyle(it).backgroundColor)
+        const same = now === last
+        last = now
+        return same ? now : null
+      }, 5_000)) ?? last
+    )
+  }
+  const onControl = await settled()
+  await page.mouse.move(600, 400)
+  const atRest = await settled()
+  if (atRest === onControl) {
+    // A selected row keeps one fill under the pointer and away from it, so
+    // there is nothing to tell apart.
+    log(
+      `channel ${name} has the same fill at rest and pointed at, so its hover was not compared`,
+    )
+    return
+  }
+  await control.hover({ timeout: 10_000 })
+  await settled()
+  await row.locator("[data-channel-settings-open]").hover({ timeout: 10_000 })
+  const beside = await settled()
+  if (beside !== onControl)
+    failures.push(
+      `channel ${name} pointed at its settings loses the row's hover fill: ${beside}, not ${onControl}`,
+    )
+  return true
+}
+
+/**
+ * With two channels in the sidebar one is not selected, so its hover fill
+ * differs from its rest and can be weighed beside its settings. The columns
+ * layout's check: the tree draws channels as branches without these rows.
+ */
+async function channelRowsKeepHover(page, failures) {
+  const rows = page
+    .locator(`${css.sidebar} ${css.kitRowFrame}`)
+    .filter({ has: page.locator("[data-channel-settings-open]") })
+  const count = await rows.count()
+  if (count < 2) return
+  let compared = false
+  for (let index = 0; index < count && !compared; index++) {
+    const row = rows.nth(index)
+    const name = (await row.locator(":scope > [data-size]").textContent())?.trim() ?? ""
+    await page.mouse.move(600, 400)
+    await row.locator(":scope > [data-size]").hover({ timeout: 10_000 })
+    compared = await rowFillBesideItsSettings(page, row, name, failures)
+  }
+  await page.mouse.move(600, 400)
+  if (!compared)
+    failures.push(`no channel row of ${count} has a hover fill apart from its rest fill`)
 }
 
 /** The compact rail and the window bar keep separate geometry. */
@@ -5774,10 +5842,20 @@ const steps = {
       }
       // The host opens the setup window for that ask; this page is that
       // window, over the same gateway, as the real host builds it. Both
-      // agents are ready, so a click on either is a choice.
-      const page = await setupWindow(run, (page) =>
-        agentsProbe(page, () => ({ claude: "ready", codex: "ready" })),
-      )
+      // agents are ready, so a click on either is a choice. The vault is
+      // locked first, as after a restart: onboarding still asks for no
+      // passphrase (`setupWindow` refuses a vault dialog).
+      // Through the native vault session that owns it, as the app would.
+      const lock = await run.stack.vault.command({ operation: "lock" })
+      if (!lock.ok) throw new Error(`the vault would not lock: ${JSON.stringify(lock)}`)
+      let page
+      try {
+        page = await setupWindow(run, (page) =>
+          agentsProbe(page, () => ({ claude: "ready", codex: "ready" })),
+        )
+      } finally {
+        await run.stack.vault.unlock()
+      }
       try {
         const heading = (name) => page.getByRole("heading", { name, exact: true })
         const button = (name) => page.getByRole("button", { name, exact: true })
@@ -7423,6 +7501,7 @@ const steps = {
           notes,
           dropped.map(({ path }) => path),
         )
+        await run.exclusive(() => channelRowsKeepHover(run.page, failures))
         // A thread its agent makes naming where it runs stays in the
         // channel.
         const thread =
