@@ -1340,6 +1340,35 @@ describe("conversations", () => {
     expect(ids.filter((id) => gateway.live(id) === 1)).toHaveLength(8)
   })
 
+  it("D7: the conversation kept following is passed over past the limit, and followed again at once if it had been let go", async () => {
+    const { gateway, source, follow } = started()
+    const ids = ["c0", "c1", "c2", "c3", "c4", "c5", "c6", "c7", "c8", "c9"]
+    for (const id of ids) {
+      gateway.rows.set(id, row(id, { running: true }))
+      gateway.views.set(id, view(id))
+    }
+    follow()
+    await source.index()
+    for (const id of ids.slice(0, 8)) await source.transcript(id)
+    // c0, the oldest, is kept: c1 is let go in its place.
+    source.keepFollowing("c0")
+    await source.transcript("c8")
+    await flush()
+    expect(gateway.live("c0")).toBe(1)
+    expect(gateway.live("c1")).toBe(0)
+    // Kept no more, it is the oldest again and goes next.
+    source.keepFollowing(null)
+    await source.transcript("c9")
+    await flush()
+    expect(gateway.live("c0")).toBe(0)
+    // Kept again after it was let go: followed again at once.
+    source.keepFollowing("c0")
+    await flush()
+    expect(subscribesOf(gateway, "c0")).toHaveLength(2)
+    expect(gateway.live("c0")).toBe(1)
+    expect(ids.filter((id) => gateway.live(id) === 1)).toHaveLength(8)
+  })
+
   it("D23, D25: a conversation let go while its open is on its way is subscribed again only after that open is closed, and so is the one that took its place", async () => {
     const { gateway, source, follow } = started()
     const ids = ["c0", "c1", "c2", "c3", "c4", "c5", "c6", "c7", "c8"]

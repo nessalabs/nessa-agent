@@ -22,6 +22,8 @@ function scene() {
   const titleListeners = new Set<() => void>()
   let press: (press: CallPress) => void = () => {}
   let refuse = 0
+  let shown = true
+  const shownTold: boolean[] = []
   const told: (CallPicture | null)[] = []
   const did: string[] = []
   const set = (next: Partial<VoiceSnapshot>) => {
@@ -31,6 +33,7 @@ function scene() {
   const stop = followCallWithPill({
     call: {
       snapshot: () => state,
+      chatShown: () => shown,
       subscribe: (listener) => {
         callListeners.add(listener)
         return () => callListeners.delete(listener)
@@ -49,7 +52,7 @@ function scene() {
       },
     },
     pill: {
-      set: async (picture) => {
+      set: async (picture, chatShown) => {
         // A slow host: the first telling takes longer than the next, so
         // only an ordered sender keeps them in order.
         await new Promise((done) => setTimeout(done, told.length === 0 ? 5 : 0))
@@ -58,6 +61,7 @@ function scene() {
           throw new Error("no pill")
         }
         told.push(picture)
+        shownTold.push(chatShown)
       },
       onPress: (handler) => {
         press = handler
@@ -73,7 +77,12 @@ function scene() {
   })
   return {
     told,
+    shownTold,
     did,
+    show: (next: boolean) => {
+      shown = next
+      for (const listener of callListeners) listener()
+    },
     set,
     stop,
     press: (name: CallPress) => press(name),
@@ -160,4 +169,20 @@ it("stopping clears the pill and lets go of everything it listened to", async ()
   expect(s.listeners()).toBe(0)
   s.press("end")
   expect(s.did).toEqual([])
+})
+
+it("tells the host when the call's chat leaves the panes and comes back, the picture unchanged", async () => {
+  const s = scene()
+  s.set({ phase: "listening", sessionId: "s1" })
+  s.show(false)
+  s.show(false)
+  s.show(true)
+  await s.settled()
+  expect(s.shownTold).toEqual([true, false, true])
+  expect(new Set(s.told.map((picture) => picture?.phase))).toEqual(new Set(["listening"]))
+  // With no call there is no chat to show.
+  s.set({ phase: "idle", sessionId: null })
+  await s.settled()
+  expect(s.told.at(-1)).toBeNull()
+  expect(s.shownTold.at(-1)).toBe(false)
 })
