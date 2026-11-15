@@ -383,3 +383,51 @@ it("keeps Thinking in its row, and offers no project there", async () => {
     await act(async () => root.unmount())
   }
 })
+
+it("marks itself empty until anything is typed or attached, and its circle takes focus", async () => {
+  const root = createRoot(host)
+  const render = (text: string, images: ComposerImages["images"] = []) =>
+    act(async () =>
+      root.render(
+        <Composer
+          page={false}
+          onPageChange={() => {}}
+          text={text}
+          onTextChange={() => {}}
+          model={{ provider: "anthropic", modelId: "claude-opus-5" }}
+          onModelChange={() => {}}
+          images={{ images, onPaste: () => {}, onRemove: () => {} }}
+        />,
+      ),
+    )
+  try {
+    await render("")
+    const form = host.querySelector("form.desktop-composer")
+    expect(form?.hasAttribute("data-empty")).toBe(true)
+    const wake = host.querySelector<HTMLButtonElement>(".desktop-composer-wake")
+    expect(wake?.getAttribute("aria-label")).toBe("Write a message")
+    // The circle shows the model's provider mark, not the fallback.
+    expect(wake?.querySelector(".desktop-provider-mark")).not.toBeNull()
+    // A press puts focus on the circle: the pane takes it from there.
+    await act(async () => wake?.click())
+    expect(document.activeElement).toBe(wake)
+    // Spaces are typed: they keep the line.
+    await render("  ")
+    expect(form?.hasAttribute("data-empty")).toBe(false)
+    await render("draft")
+    expect(form?.hasAttribute("data-empty")).toBe(false)
+    await render("", [
+      {
+        id: "a",
+        kind: "file",
+        name: "notes.txt",
+        mimeType: "text/plain",
+        size: 1,
+        url: "blob:notes",
+      },
+    ])
+    expect(form?.hasAttribute("data-empty")).toBe(false)
+  } finally {
+    await act(async () => root.unmount())
+  }
+})
