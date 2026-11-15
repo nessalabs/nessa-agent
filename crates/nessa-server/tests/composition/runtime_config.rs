@@ -143,3 +143,27 @@ fn parent_stop_setting_defaults_and_strict_override() {
         );
     }
 }
+
+/// Every Boat VM is configured from the same data, read by the same
+/// `nessa` on the VM: a key this build's reader refuses, an agent it has no
+/// adapter for, or a selected agent that is not configured would only show
+/// on a real VM, as an opening that never finishes.
+// Boat VMs are opened only by the Unix gateway, which owns `workspaces`.
+#[cfg(unix)]
+#[test]
+fn the_boat_vm_configuration_is_one_this_build_reads() {
+    let root = "/home/user/.nessa/workspaces/thread/project";
+    let written = nessa_conversation::workspaces::infrastructure::vm_config(root).unwrap();
+    let config = RuntimeConfig::parse(written.to_string().as_bytes()).unwrap();
+    let agents = config
+        .agents
+        .as_ref()
+        .expect("the VM configures its agents");
+    assert_eq!(agents.workspace, std::path::PathBuf::from(root));
+    assert_eq!(agents.unknown(), None);
+    assert_eq!(
+        agents.selected().unwrap(),
+        nessa_protocol::agents::AgentId::Codex
+    );
+    assert!(config.env_serve.commands && config.env_serve.artifacts_in);
+}

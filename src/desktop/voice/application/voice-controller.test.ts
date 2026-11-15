@@ -664,17 +664,50 @@ describe("VoiceController", () => {
     expect(connection.outputs()).toEqual(["nothing_heard"])
   })
 
-  it("V16: the call ends once no pane shows its conversation", async () => {
+  it("V16: a call outlives the panes that show its conversation, and says whether one does", async () => {
     const { controller, connection } = setup()
     const first = controller.show("s-1")
     const second = controller.show("s-1")
     await controller.start("s-1")
+    expect(controller.chatShown()).toBe(true)
+    let told = 0
+    controller.subscribe(() => told++)
     first()
     first()
-    expect(connection.closed).toBe(false)
+    await settle()
+    expect(controller.chatShown()).toBe(true)
+    expect(told).toBe(0)
     second()
-    expect(connection.closed).toBe(true)
-    expect(controller.snapshot().phase).toBe("idle")
+    await settle()
+    expect(connection.closed).toBe(false)
+    expect(controller.snapshot().phase).toBe("listening")
+    expect(controller.chatShown()).toBe(false)
+    expect(told).toBe(1)
+    // Shown again, and another conversation's panes say nothing of this call.
+    const other = controller.show("s-2")
+    const again = controller.show("s-1")
+    await settle()
+    expect(controller.chatShown()).toBe(true)
+    expect(told).toBe(2)
+    other()
+    await settle()
+    expect(told).toBe(2)
+    again()
+  })
+
+  it("V16: a conversation moved from one pane to another is never told as off screen", async () => {
+    const { controller } = setup()
+    const first = controller.show("s-1")
+    await controller.start("s-1")
+    let told = 0
+    controller.subscribe(() => told++)
+    first()
+    // Asked between the two, the answer is still the settled one.
+    expect(controller.chatShown()).toBe(true)
+    controller.show("s-1")
+    await settle()
+    expect(told).toBe(0)
+    expect(controller.chatShown()).toBe(true)
   })
 
   it("V5: ending while connecting aborts the connect", async () => {

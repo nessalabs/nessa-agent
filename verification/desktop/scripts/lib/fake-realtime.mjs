@@ -164,6 +164,8 @@ export async function startFakeRealtime({ key = FAKE_VOICE_KEY } = {}) {
     ask,
     /** Whether a call is open now. */
     open: () => socket !== null,
+    /** Drops the open call, as a lost connection would. */
+    drop: () => socket?.terminate(),
     /** How many calls were opened. */
     calls: () => calls,
     /** The text of every system message the window gave the voice. */

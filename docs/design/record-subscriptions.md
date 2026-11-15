@@ -354,7 +354,7 @@ asks of the client does not offer them.
 | D4 | Ended `refused` as not found or deleted | The session is taken out; a deletion is also forgotten by the window's MCP Apps |
 | D5 | The connection is lost, then back | Every subscription ends `disconnected` and nothing more; back, one resync and each opened again from its cursor |
 | D6 | An incomplete list frame | `conversation.observe` walked in the list's turn until the pass finishes |
-| D7 | Opening past `subscriptionLimits.conversationTargets` | The least recently opened (by `transcript`, `send` or `appCall`; a frame does not count) is let go, its last frame dropped, its summary said from its row; opened again it is followed again |
+| D7 | Opening past `subscriptionLimits.conversationTargets` | The least recently opened (by `transcript`, `send` or `appCall`; a frame does not count) is let go, its last frame dropped, its summary said from its row; opened again it is followed again. The one the window holds off screen (`keepFollowing`, a voice call's chat) is passed over, and followed again at once if it had been let go |
 | D8 | A frame behind the cursor applied, same incarnation | Not applied; a frame from another incarnation is |
 | D9 | The list subscription ends, not lagging | A gap: opened again on the retry clock, never at once; its first frame resyncs once |
 | D10 | Ended `too_large`, or a frame the client could not read (`invalid_frame`) | Let go with a warning: no retry, no gap; asked again it follows again |

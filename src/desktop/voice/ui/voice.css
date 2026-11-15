@@ -17,10 +17,16 @@
   pointer-events: auto;
 }
 
-/* The line: plain words, centred, the newest three lines of a long sentence. */
+/*
+ * The line: plain words, centred. Where the call stands may wrap, since it
+ * is short and is read whole. Words said or heard run on as they come and
+ * stay on one line: the newest are kept and the older run off the line's
+ * start, fading there, so the line never grows or jumps while someone
+ * talks.
+ */
 .voice-bubble {
   position: relative;
-  max-width: min(30rem, 100%);
+  max-width: min(36rem, 100%);
   margin: 0;
   color: var(--desktop-muted);
   font-size: var(--desktop-text-body);
@@ -31,6 +37,30 @@
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 3;
   overflow: hidden;
+}
+
+/*
+ * One line that keeps its end. The row runs from the far edge, so words too
+ * long for it spill off the start; with room to spare the auto margins
+ * centre them (auto margins give way to nothing once the words overflow).
+ */
+.voice-bubble[data-running] {
+  display: flex;
+  flex-direction: row-reverse;
+  width: 100%;
+  -webkit-line-clamp: none;
+}
+
+/* Words that run off the start fade there; words that fit are left whole. */
+.voice-bubble[data-running][data-overflow] {
+  -webkit-mask-image: linear-gradient(to right, transparent, #000 2.5rem);
+  mask-image: linear-gradient(to right, transparent, #000 2.5rem);
+}
+
+.voice-bubble[data-running] > .voice-bubble-words {
+  flex: none;
+  margin-inline: auto;
+  white-space: nowrap;
 }
 
 .voice-dock[data-phase="speaking"] .voice-bubble {
