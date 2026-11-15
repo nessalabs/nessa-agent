@@ -1107,13 +1107,8 @@ pub fn exchange(
         if received && session.discovery.installed_mac().is_some() {
             return Ok(());
         }
-        match read_one(session, pipe, entropy, persist) {
-            Ok(changed) => {
-                need_send = changed;
-                received = true;
-            }
-            Err(error) => return Err(error),
-        }
+        need_send = read_one(session, pipe, entropy, persist)?;
+        received = true;
     }
     if session.discovery.installed_mac().is_some() {
         Ok(())
