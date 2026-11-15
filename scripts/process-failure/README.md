@@ -4,8 +4,16 @@
 GitHub failure annotations. The Cargo test runner consumes that adapter and
 decorator through `runProcess`, the one owner of CI-only activation; the existing
 desktop CI step invokes its narrow CLI around
-`node scripts/check-desktop.mjs`. The checker still owns its stages, arguments,
-assertions and deadlines. This wrapper does not choose tests or retry them.
+`node scripts/check-desktop.mjs`. The SDK coverage job uses the same CLI around
+`bash scripts/check-sdk-domain-coverage.sh`. The checkers still own their stages,
+arguments, assertions and deadlines. This wrapper does not choose tests or retry them.
+
+The SDK job explicitly installs Node 24 for its existing
+[local MCP HTTP fixture](../../crates/nessa-sdk/tests/infrastructure/mcp/http.rs).
+Its coverage script retains the package selection, serial test default and all
+three 100% thresholds. The workflow retains the 40-minute check and 60-minute job
+bounds. A local pass does not explain an earlier hosted failure; the shared
+reporter makes a future failed child's retained output available as annotations.
 
 On GitHub Actions, `../process-failure.mjs` retains the existing last 16,384 output
 characters from each failed child and forwards the original chunks unchanged.
@@ -53,6 +61,7 @@ all partition, build, harness, doctest and required-check assertions.
 
 ```sh
 node scripts/process-failure.mjs node scripts/check-desktop.mjs
+node scripts/process-failure.mjs bash scripts/check-sdk-domain-coverage.sh
 ```
 
 | Event | Execution and reporting |
@@ -66,5 +75,5 @@ node scripts/process-failure.mjs node scripts/check-desktop.mjs
 
 `../process-failure.test.mjs` includes portable actual-process CLI regressions.
 The desktop checker includes them in its existing test list so they execute on
-Windows as well as the frontend check. The workflow test pins this one wrapper
-around the existing checker; it does not add a job or replace the checker.
+Windows as well as the frontend check. Workflow tests pin these wrappers and the
+SDK fixture's explicit Node runtime. They add no job or replacement checker.

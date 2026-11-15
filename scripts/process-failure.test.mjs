@@ -457,6 +457,40 @@ test("the existing desktop workflow wraps its unchanged checker and runs portabl
   assert.ok(checker.includes('"scripts/process-failure.test.mjs"'))
 })
 
+test("SDK coverage keeps its gate and explicitly installs the fixture's Node runtime", () => {
+  const workflow = readFileSync(
+    new URL("../.github/workflows/local-auth.yml", import.meta.url),
+    "utf8",
+  )
+  const job = workflow
+    .split("\n  sdk-domain-coverage:")[1]
+    ?.split("\n  required-checks:")[0]
+  assert.ok(job)
+  const runtime = job.split("- uses: actions/setup-node@v4")[1]?.split("\n      - ")[0]
+  assert.ok(runtime)
+  assert.match(runtime, /^ {10}node-version: 24\r?$/m)
+  assert.doesNotMatch(runtime, /continue-on-error|if:/)
+  assert.match(job, /^ {4}timeout-minutes: 60\r?$/m)
+  const step = job.split("- name: Require complete SDK domain coverage")[1]
+  assert.ok(step)
+  assert.match(
+    step,
+    /^ {8}run: node scripts\/process-failure\.mjs bash scripts\/check-sdk-domain-coverage\.sh\r?$/m,
+  )
+  assert.doesNotMatch(step, /continue-on-error|if:/)
+  assert.match(step, /^ {8}timeout-minutes: 40\r?$/m)
+  const coverage = readFileSync(
+    new URL("./check-sdk-domain-coverage.sh", import.meta.url),
+    "utf8",
+  )
+  for (const dimension of ["lines", "functions", "regions"])
+    assert.ok(
+      coverage.includes(`--fail-under-${dimension} 100`),
+      `the SDK ${dimension} threshold remains 100%`,
+    )
+  assert.ok(coverage.includes('"${RUST_TEST_THREADS:=1}"'))
+})
+
 test("actual CLI bounds and escapes the failed tail while forwarding complete output", () => {
   fixture((root) => {
     const child = join(root, "large failure.mjs")

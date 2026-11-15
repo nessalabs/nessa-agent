@@ -847,6 +847,9 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: llvm-tools-preview
@@ -868,7 +871,7 @@ jobs:
       # The same deadlock margin as the ordinary SDK tests (#366). Over 36
       # green runs the serial instrumented suite took at most 11 minutes.
       - name: Require complete SDK domain coverage
-        run: bash scripts/check-sdk-domain-coverage.sh
+        run: node scripts/process-failure.mjs bash scripts/check-sdk-domain-coverage.sh
         timeout-minutes: 40
 
   # A skipped required check counts as a pass. scripts/ci-result.mjs is what
