@@ -1,8 +1,9 @@
 import { boatClaudeSignIn } from "../provider-authentication/model/boat-sign-in"
+import { agent37Gateway, type Agent37Gateway } from "./settings/adapters/agent37-gateway"
 import { boatGateway, type BoatGateway } from "./settings/adapters/boat-gateway"
 import { devicesGateway, type DevicesClient, type DevicesGateway } from "./devices"
 import { gatewayVault, type VaultSource } from "../vault"
-import type { VaultApi, BoatApi } from "@nessa/client"
+import type { Agent37Api, VaultApi, BoatApi } from "@nessa/client"
 /**
  * The desktop window's composition: every outside thing it talks to — the
  * workspace source, the clock, ids, the page's measure of the panes' room,
@@ -146,6 +147,7 @@ export interface DesktopDependencies extends WorkspaceDependencies {
   readonly permissionRules: PermissionRulesGateway | undefined
   /** The gateway's GitHub sign-in, for Settings; absent without a gateway. Provided by `main.tsx`. */
   readonly boat: BoatGateway | undefined
+  readonly agent37: Agent37Gateway | undefined
   readonly github: GithubGateway | undefined
   /** The gateway's side of a voice call; absent without a gateway. Provided by `main.tsx`. */
   readonly voice: VoiceGateway | undefined
@@ -297,6 +299,7 @@ export function createDesktopDependencies(
       : undefined,
     vault: options.vault ?? (source ? gatewayVault(() => source.connected()) : undefined),
     boat: source ? boatGateway(() => source.connected()) : undefined,
+    agent37: source ? agent37Gateway(() => source.connected()) : undefined,
     github: source ? githubGateway({ connected: () => source.connected() }) : undefined,
     voice: source ? voiceGateway(() => source.connected()) : undefined,
     voiceKey: source ? voiceKeyGateway(() => source.connected()) : undefined,
@@ -347,7 +350,11 @@ type WindowGatewayClient = GatewayClient &
   DevicesClient &
   VoiceClient &
   SavedLoginsClient &
-  GithubClient & { readonly vault: VaultApi; readonly boat: BoatApi } & McpServersClient &
+  GithubClient & {
+    readonly vault: VaultApi
+    readonly boat: BoatApi
+    readonly agent37: Agent37Api
+  } & McpServersClient &
   LinkedDevicesClient &
   NativeHooksClient &
   PermissionRulesClient &

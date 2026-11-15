@@ -1,3 +1,4 @@
+import { Agent37Provider } from "./settings/ui/agent37-row"
 import { BoatProvider } from "./settings/ui/boat-row"
 import { DevicesProvider } from "./devices"
 import { VaultProvider, nativeVault } from "../vault"
@@ -318,46 +319,50 @@ createRoot(container).render(
                                   gateway={dependencies.permissionRules}
                                 >
                                   <BoatProvider gateway={dependencies.boat}>
-                                    <GithubProvider
-                                      gateway={dependencies.github}
-                                      avatar={githubAvatar}
-                                    >
-                                      <VoiceKeyProvider gateway={dependencies.voiceKey}>
-                                        <SavedLoginsProvider
-                                          gateway={dependencies.savedLogins}
-                                        >
-                                          <VoiceProvider
-                                            controller={voice}
-                                            title={(sessionId) => {
-                                              const sessions =
-                                                store.getState().workspace.sessions
-                                              return Object.hasOwn(sessions, sessionId)
-                                                ? sessions[sessionId].title
-                                                : null
-                                            }}
-                                            showChat={(sessionId) =>
-                                              void store.dispatch(
-                                                openSession({ sessionId }),
-                                              )
-                                            }
+                                    <Agent37Provider gateway={dependencies.agent37}>
+                                      <GithubProvider
+                                        gateway={dependencies.github}
+                                        avatar={githubAvatar}
+                                      >
+                                        <VoiceKeyProvider gateway={dependencies.voiceKey}>
+                                          <SavedLoginsProvider
+                                            gateway={dependencies.savedLogins}
                                           >
-                                            {/* The window is dark only (desktop.html's
+                                            <VoiceProvider
+                                              controller={voice}
+                                              title={(sessionId) => {
+                                                const sessions =
+                                                  store.getState().workspace.sessions
+                                                return Object.hasOwn(sessions, sessionId)
+                                                  ? sessions[sessionId].title
+                                                  : null
+                                              }}
+                                              showChat={(sessionId) =>
+                                                void store.dispatch(
+                                                  openSession({ sessionId }),
+                                                )
+                                              }
+                                            >
+                                              {/* The window is dark only (desktop.html's
                                                 `dark` class, the native window's Dark
                                                 theme), so code and diagrams are too,
                                                 whatever the OS appearance is. */}
-                                            <CodeBlockProvider mode="dark">
-                                              <HapticProvider tick={hapticTick}>
-                                                <DesktopWindow
-                                                  hostKind={host.kind}
-                                                  browserSurface={host.kind === "browser"}
-                                                  inspectable={import.meta.env.DEV}
-                                                />
-                                              </HapticProvider>
-                                            </CodeBlockProvider>
-                                          </VoiceProvider>
-                                        </SavedLoginsProvider>
-                                      </VoiceKeyProvider>
-                                    </GithubProvider>
+                                              <CodeBlockProvider mode="dark">
+                                                <HapticProvider tick={hapticTick}>
+                                                  <DesktopWindow
+                                                    hostKind={host.kind}
+                                                    browserSurface={
+                                                      host.kind === "browser"
+                                                    }
+                                                    inspectable={import.meta.env.DEV}
+                                                  />
+                                                </HapticProvider>
+                                              </CodeBlockProvider>
+                                            </VoiceProvider>
+                                          </SavedLoginsProvider>
+                                        </VoiceKeyProvider>
+                                      </GithubProvider>
+                                    </Agent37Provider>
                                   </BoatProvider>
                                 </PermissionRulesProvider>
                               </NativeHooksProvider>
