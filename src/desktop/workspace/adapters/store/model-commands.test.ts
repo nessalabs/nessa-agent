@@ -484,6 +484,9 @@ describe("model choices", () => {
       await store.dispatch(stopTurn({ sessionId: "a", initiator: "person" })),
     ).not.toBe("not-asked")
     expect(asked(source, "stop").map((call) => call[1])).toEqual(["a"])
+    // The source is told which session to keep following, and when to stop.
+    store.dispatch(workspaceActions.sessionHeld({ sessionId: null }))
+    expect(asked(source, "keepFollowing").map((call) => call[1])).toEqual(["a", null])
   })
 
   it("clears an acknowledged choice once the source's frame confirms it", async () => {

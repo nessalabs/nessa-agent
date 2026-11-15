@@ -122,6 +122,15 @@ export function workspaceEffects(
     },
   })
 
+  // The session held off screen is the source's to keep following.
+  listener.startListening({
+    predicate: (_action: UnknownAction, current, previous) =>
+      current.workspace.heldSession !== previous.workspace.heldSession,
+    effect: (_action, api) => {
+      dependencies.workspace.keepFollowing(api.getState().workspace.heldSession)
+    },
+  })
+
   // What the window shows is told whenever it changes, whoever changed it,
   // for the person's agents to read. Built from state each time, so the same
   // window is said once however many actions arrive before it changes. The
