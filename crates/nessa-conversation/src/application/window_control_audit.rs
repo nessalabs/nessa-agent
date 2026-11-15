@@ -32,6 +32,9 @@ pub enum WindowControlOutcome {
     Unchanged { revision: u64 },
     /// Refused before the window was asked, or by the window, for `code`.
     Refused { code: String },
+    /// Sent to the window, which neither answered in time nor stayed to:
+    /// it may have made the change. `code` is what the caller was told.
+    Unconfirmed { code: String },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

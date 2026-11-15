@@ -63,6 +63,9 @@ pub fn stored(record: &WindowControlAuditRecord) -> Value {
         WindowControlOutcome::Refused { code } => {
             ("outcome", json!({ "outcome": "refused", "code": code }))
         }
+        WindowControlOutcome::Unconfirmed { code } => {
+            ("outcome", json!({ "outcome": "unconfirmed", "code": code }))
+        }
     };
     let via = match &record.via {
         WindowControlVia::Agent {

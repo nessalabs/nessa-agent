@@ -24,7 +24,9 @@
 //!   ──▶ the window's answer, within WINDOW_ANSWER_TIMEOUT
 //!         Applied / Unchanged { revision } ──▶ wait until that revision is held (or the
 //!           window is withdrawn, or WINDOW_HELD_WAIT) ──▶ audit outcome: the change is made
-//!         Refused { code } / no answer ──▶ audit outcome ──▶ refused
+//!         Refused { code } ──▶ audit refused ──▶ refused
+//!         no answer in time, or the connection gone ──▶ audit unconfirmed (it may
+//!           have happened) ──▶ window_not_answering / window_unavailable
 //! ```
 use super::{load_conversation, ConversationCaller, ConversationError, ConversationService};
 use crate::application::{
@@ -307,11 +309,24 @@ impl ConversationService {
             }
             Err(CommandRefusal::Busy) => return refused(record, WindowControlError::Busy).await,
         };
+        // Sent: from here a missing answer is not a refusal. The window may
+        // still carry the change out, so it is recorded as unconfirmed.
+        let unconfirmed = |mut record: WindowControlAuditRecord, error: WindowControlError| {
+            let audit = audit.clone();
+            async move {
+                record.outcome = WindowControlOutcome::Unconfirmed { code: error.code() };
+                audit
+                    .record(record)
+                    .await
+                    .map_err(WindowControlError::Conversation)?;
+                Err(error)
+            }
+        };
         let answered = match tokio::time::timeout(WINDOW_ANSWER_TIMEOUT, answer).await {
             Ok(Ok(answered)) => answered,
             // The window's connection closed before it answered.
-            Ok(Err(_)) => return refused(record, WindowControlError::NoWindow).await,
-            Err(_) => return refused(record, WindowControlError::NotAnswering).await,
+            Ok(Err(_)) => return unconfirmed(record, WindowControlError::NoWindow).await,
+            Err(_) => return unconfirmed(record, WindowControlError::NotAnswering).await,
         };
         let (revision, changed) = match answered {
             WindowAnswer::Applied { revision } => (revision, true),

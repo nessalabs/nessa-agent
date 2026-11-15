@@ -6931,6 +6931,7 @@ const steps = {
   },
 
   async control(run, step, failures) {
+    run.controlPane = undefined
     // A second conversation, for the agent in the main one to open beside it.
     const other = randomUUID()
     const first = prompt(run, STRESS.reply, step, " controlled")
@@ -6951,8 +6952,8 @@ const steps = {
     // Each change is the main conversation's agent calling the tool: the
     // window showing it carries it out by its own rules and says what came
     // of it once it shows it, so the tool's answer is already on screen.
-    const asked = (phrase, args, extra) =>
-      windowControl(run, phrase, args, step, extra, failures)
+    const asked = (phrase, args, extra, options) =>
+      windowControl(run, phrase, args, step, extra, failures, options)
 
     // Folding the sidebar makes room for a pane beside, as ⌘B does.
     let said = await asked(STRESS.arrangeWindow, { sidebar: "closed" }, " fold")
@@ -6998,7 +6999,9 @@ const steps = {
       ))
     )
       failures.push("arrange_window did not show the Agents overview")
-    await asked(STRESS.arrangeWindow, { view: "panes" }, " panes")
+    // The overview covers every composer, so this one turn is sent the way
+    // another of the person's devices would send it: on the client.
+    await asked(STRESS.arrangeWindow, { view: "panes" }, " panes", { covered: true })
     if (!(await shows(2)))
       failures.push(`back on the panes, ${await panes()} are on screen`)
     // A tab the focused chat's panel does not hold is refused, not guessed.
@@ -9590,17 +9593,36 @@ async function homeBesideNamed(page, failures) {
  */
 /**
  * The main conversation's agent calls a window tool (`phrase` names which)
- * with `args`; what the tool answered, its error included, or null.
+ * with `args`, asked in its own pane's composer (on the client only when
+ * `covered`, as nothing in the window can be typed in); what the tool
+ * answered, its error included, or null.
  */
-async function windowControl(run, phrase, args, step, extra, failures) {
+async function windowControl(run, phrase, args, step, extra, failures, options = {}) {
   const text = prompt(run, phrase, step, `${extra} args:${JSON.stringify(args)} :args`)
-  await run.client.conversation.submit(run.client.conversation.prepare(run.main.id, text))
-  const { turn } = await settled(run, run.main.id, new Set(), text, "completed", failures)
+  // Typed into the main conversation's own pane, which a change may have
+  // left unfocused: the pane the last answer said was its own (`you.pane`,
+  // counted in reading order, as the panes are laid out), else the focused one.
+  const panes = run.page.locator(css.pane)
+  const own = run.controlPane
+  const where = (
+    own && own <= (await panes.count())
+      ? panes.nth(own - 1)
+      : run.page.locator(css.focusedPane)
+  ).locator(css.conversationDock)
+  let seen = new Set()
+  if (options.covered)
+    await run.client.conversation.submit(
+      run.client.conversation.prepare(run.main.id, text),
+    )
+  else seen = await send(run, run.main.id, text, failures, undefined, where)
+  const { turn } = await settled(run, run.main.id, seen, text, "completed", failures)
   if (!turn) return null
   const reply = (turn.parts ?? []).map((part) => part.text ?? "").join("")
   const at = reply.indexOf(SAYS.control)
   try {
-    return JSON.parse(reply.slice(at + SAYS.control.length))
+    const said = JSON.parse(reply.slice(at + SAYS.control.length))
+    run.controlPane = said?.window?.you?.shown ? said.window.you.pane : undefined
+    return said
   } catch {
     failures.push(
       `the window tool turn did not say what came of it: ${reply.slice(0, 120)}`,

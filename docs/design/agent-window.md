@@ -120,7 +120,9 @@ Cedar action `workspace.control` on the person's own `Workspace`
 (`owner.workspace_control`), and for an action that names a conversation,
 that the person may read it. Every request is recorded in
 `audit/window-control` before the window is asked, and what came of it after,
-refusals included, with the caller, the tool call or session, the action, its
+refusals included. A change sent to the window that it neither answered
+in time nor stayed connected to answer is recorded as `unconfirmed`, not
+refused: the window may still have made it. Each record holds the caller, the tool call or session, the action, its
 severity and the policies that allowed it.
 
 ```mermaid
