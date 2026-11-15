@@ -111,7 +111,7 @@ test("local and CI aggregate the same named frontend and native checks", () => {
   // The coverage gate runs the same SDK tests again, instrumented, in its own job.
   assert.match(
     workflow,
-    /run: bash scripts\/check-sdk-domain-coverage\.sh\r?\n\s+timeout-minutes: \d+\r?\n/,
+    /run: node scripts\/process-failure\.mjs bash scripts\/check-sdk-domain-coverage\.sh\r?\n\s+timeout-minutes: 40\r?\n/,
   )
   assert.match(
     workflow,
@@ -151,8 +151,11 @@ test("Linux coverage is its own job, and assembly stays with the native smoke", 
 function assertCoverageJobSplit(localAuth, coverage, workflow) {
   assert.match(localAuth, /name: Assemble the Linux desktop runtime/)
   assert.match(localAuth, /pnpm desktop:smoke/)
-  assert.doesNotMatch(localAuth, /run: bash scripts\/check-sdk-domain-coverage\.sh/)
-  assert.match(coverage, /bash scripts\/check-sdk-domain-coverage\.sh/)
+  assert.doesNotMatch(localAuth, /bash scripts\/check-sdk-domain-coverage\.sh/)
+  assert.match(
+    coverage,
+    /run: node scripts\/process-failure\.mjs bash scripts\/check-sdk-domain-coverage\.sh/,
+  )
   assert.match(coverage, /NESSA_SDK_COVERAGE_TARGET: target\/sdk-domain-coverage/)
   assert.match(coverage, /prefix-key: sdk-domain-coverage/)
   assert.match(coverage, /cache-workspace-crates: "true"/)
