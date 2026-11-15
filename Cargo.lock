@@ -616,7 +616,7 @@ dependencies = [
 [[package]]
 name = "boat_client"
 version = "0.1.0"
-source = "git+https://github.com/nessalabs/workspace-sdk?rev=7501f6b2fda1212fa118698f1bbd599a28459eea#7501f6b2fda1212fa118698f1bbd599a28459eea"
+source = "git+https://github.com/nessalabs/workspace-sdk?rev=2f7cc35d50c38e50a03bf33ac42f8f792a73d388#2f7cc35d50c38e50a03bf33ac42f8f792a73d388"
 dependencies = [
  "base64 0.22.1",
  "fastrand",
@@ -8861,15 +8861,17 @@ dependencies = [
 [[package]]
 name = "workspace_sdk"
 version = "0.2.0"
-source = "git+https://github.com/nessalabs/workspace-sdk?rev=7501f6b2fda1212fa118698f1bbd599a28459eea#7501f6b2fda1212fa118698f1bbd599a28459eea"
+source = "git+https://github.com/nessalabs/workspace-sdk?rev=2f7cc35d50c38e50a03bf33ac42f8f792a73d388#2f7cc35d50c38e50a03bf33ac42f8f792a73d388"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
  "boat_client",
  "fs2",
+ "futures-util",
  "libc",
  "pty-runtime",
  "reqwest 0.12.28",
+ "rustls",
  "semver",
  "serde",
  "serde_json",
@@ -8879,7 +8881,9 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.20",
  "tokio",
+ "tokio-tungstenite",
  "uuid",
+ "webpki-roots 1.0.9",
 ]
 
 [[package]]

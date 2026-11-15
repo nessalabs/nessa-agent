@@ -34,18 +34,27 @@ pub(super) struct VmLink {
     workspace: String,
     /// The VM, as its diagnostics name it.
     vm: String,
+    /// Nessa's data directory in the VM.
+    data_dir: &'static str,
 }
 
 /// Nessa's own shell server in the image: the managed server runs here, in
 /// the VM beside the agent, never back on the gateway's machine.
 const VM_SHELL: &str = "/opt/nessa/bin/nessa-mcp";
-/// Where that shell keeps its private record of each command it ran.
-const VM_PROCESS_AUDIT: &str = "/home/user/.nessa/process-audit";
+/// Nessa's data directory in a Boat VM, private to its account. Another
+/// cloud's VM names its own: its account's home differs.
+pub(super) const BOAT_DATA_DIR: &str = "/home/user/.nessa";
 /// The `nessa` the image was made with.
 const VM_NESSA: &str = "/opt/nessa/bin/nessa";
-/// The environment `env serve` runs with in the VM, whichever copy it is.
-const VM_SERVE_ENVIRONMENT: &str =
-    "env -u NESSA_INSTANCE NESSA_STAGE=prod NESSA_DATA_DIR=/home/user/.nessa";
+/// The environment `env serve` runs with in the VM, whichever copy it is,
+/// with its data in `data_dir`.
+fn serve_environment(data_dir: &str) -> String {
+    format!("env -u NESSA_INSTANCE NESSA_STAGE=prod NESSA_DATA_DIR={data_dir}")
+}
+/// Where the shell keeps its private record of each command it ran.
+fn process_audit(data_dir: &str) -> String {
+    format!("{data_dir}/process-audit")
+}
 /// What a file channel holds in each direction between its two ends.
 const CHANNEL_BUFFER: usize = 64 * 1024;
 /// How long asking the image's `nessa` for its lease protocol may take.
@@ -62,6 +71,7 @@ impl VmLink {
         local_program: PathBuf,
         workspace: String,
         vm: &str,
+        data_dir: &'static str,
     ) -> Result<Arc<Self>, Failure> {
         let remote_socket = connection
             .forwarded_socket()
@@ -74,6 +84,7 @@ impl VmLink {
             remote_socket,
             workspace,
             vm: vm.to_owned(),
+            data_dir,
         }))
     }
     /// `sign_in` goes to the VM as the first line of the serve's input, which
@@ -88,8 +99,12 @@ impl VmLink {
         // One copy, chosen before it starts: when it ends, the connection
         // does.
         let program = match copy {
-            ServedCopy::Image => format!("{VM_SERVE_ENVIRONMENT} {VM_NESSA} env serve"),
-            ServedCopy::Installed(command) => format!("{VM_SERVE_ENVIRONMENT} {command}"),
+            ServedCopy::Image => {
+                format!("{} {VM_NESSA} env serve", serve_environment(self.data_dir))
+            }
+            ServedCopy::Installed(command) => {
+                format!("{} {command}", serve_environment(self.data_dir))
+            }
         };
         let line = sign_in_line(sign_in);
         let stream = self
@@ -203,6 +218,7 @@ impl HarnessMcpRelay for VmLink {
             &self.local_socket,
             &self.remote_socket,
             &self.workspace,
+            self.data_dir,
             program,
             arguments,
         )
@@ -220,6 +236,7 @@ fn vm_command(
     local_socket: &Path,
     remote_socket: &str,
     workspace: &str,
+    data_dir: &str,
     program: &Path,
     arguments: &[String],
 ) -> Option<(PathBuf, Vec<String>)> {
@@ -236,7 +253,7 @@ fn vm_command(
                 "--workspace".into(),
                 workspace.into(),
                 "--audit-directory".into(),
-                VM_PROCESS_AUDIT.into(),
+                process_audit(data_dir),
             ],
         ));
     }
@@ -391,6 +408,7 @@ mod tests {
             "/Applications/Nessa.app/nessa".into(),
             "/home/user/.nessa/workspaces/thread-1/project".into(),
             "bx_fixture",
+            BOAT_DATA_DIR,
         )
         .unwrap();
         (local, link)
@@ -421,7 +439,7 @@ mod tests {
         assert!(started
             .iter()
             .all(|command| command.starts_with("IFS= read -r t")));
-        assert!(started[0].contains(VM_SERVE_ENVIRONMENT));
+        assert!(started[0].contains(&serve_environment(BOAT_DATA_DIR)));
         assert!(started.iter().all(|command| !command.contains("sk-ant")));
     }
 
@@ -564,6 +582,7 @@ mod tests {
             Path::new("/gateway/mcp.sock"),
             "/home/user/.nessa/mcp-1.sock",
             "/home/user/.nessa/workspaces/thread-1",
+            BOAT_DATA_DIR,
             Path::new(program),
             arguments,
         )
@@ -583,7 +602,7 @@ mod tests {
                 "--workspace",
                 "/home/user/.nessa/workspaces/thread-1",
                 "--audit-directory",
-                VM_PROCESS_AUDIT,
+                "/home/user/.nessa/process-audit",
             ]
         );
     }
