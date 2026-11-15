@@ -314,7 +314,7 @@ impl ThreadEnvironments for ThreadWorkspaces {
         Ok(environment)
     }
     fn available(&self) -> EnvironmentFuture<'_, bool> {
-        Box::pin(async move { self.service.settings.read().await.is_ok() })
+        Box::pin(async move { self.service.connected().await })
     }
     fn rest<'a>(
         &'a self,

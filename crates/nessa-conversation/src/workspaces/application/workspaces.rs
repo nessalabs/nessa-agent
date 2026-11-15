@@ -5,7 +5,7 @@ pub use crate::domain::RestCause;
 use crate::domain::{ChannelId, SettingsScope};
 use crate::workspaces::domain::{
     AdmissionRefusal, AdmissionRejection, Admitted, Assignment, BoatConnection, CleanupOutcome,
-    CloudAccount, CloudConnection, Failure, OpenFailure, RefusalDisposition, VmSpec,
+    Cloud, CloudAccount, CloudConnection, Failure, OpenFailure, RefusalDisposition, VmSpec,
 };
 use async_trait::async_trait;
 use futures_util::FutureExt;
@@ -192,15 +192,48 @@ pub struct Rested {
     pub audit_failed: bool,
 }
 
+/// Which cloud new thread VMs are made on. A thread whose VM exists stays
+/// on the cloud it was made on.
+#[async_trait]
+pub trait CloudChoice: Send + Sync {
+    async fn read(&self) -> Result<Cloud, Failure>;
+    async fn save(&self, cloud: Cloud) -> Result<(), Failure>;
+}
+/// The one cloud a gateway that offers no choice makes VMs on.
+struct OnlyCloud(Cloud);
+#[async_trait]
+impl CloudChoice for OnlyCloud {
+    async fn read(&self) -> Result<Cloud, Failure> {
+        Ok(self.0)
+    }
+    async fn save(&self, cloud: Cloud) -> Result<(), Failure> {
+        if cloud == self.0 {
+            Ok(())
+        } else {
+            Err(Failure::InvalidInput)
+        }
+    }
+}
+
+/// One cloud's parts: its saved connection, its VMs, and the receipts of
+/// the VMs made on it. Each cloud keeps its own receipts, so a thread's VM
+/// is found on the cloud it was made on.
+#[derive(Clone)]
+struct CloudParts {
+    cloud: Cloud,
+    settings: Arc<dyn Settings>,
+    provider: Arc<dyn Provider>,
+    assignments: Arc<dyn Assignments>,
+}
+
 #[derive(Clone)]
 pub struct Workspaces {
-    pub settings: Arc<dyn Settings>,
     pub runtime_settings: Arc<dyn RuntimeSettings>,
     /// Counts each change of the Claude sign-in, for whoever must
     /// serve VMs again after one (`claude_sign_in_changed`).
     claude_sign_in_changes: tokio::sync::watch::Sender<u64>,
-    provider: Arc<dyn Provider>,
-    assignments: Arc<dyn Assignments>,
+    clouds: Arc<Vec<CloudParts>>,
+    choice: Arc<dyn CloudChoice>,
     recovery: Arc<dyn RecoveryAudit>,
     /// Who uses each thread's VM, by name, and the turn that orders
     /// opening it against resting it.
@@ -216,15 +249,86 @@ impl Workspaces {
         runtime_settings: Arc<dyn RuntimeSettings>,
     ) -> Self {
         Self {
-            settings,
             runtime_settings,
             claude_sign_in_changes: tokio::sync::watch::Sender::new(0),
             image: None,
-            provider,
-            assignments,
+            clouds: Arc::new(vec![CloudParts {
+                cloud: Cloud::Boat,
+                settings,
+                provider,
+                assignments,
+            }]),
+            choice: Arc::new(OnlyCloud(Cloud::Boat)),
             recovery,
             uses: Arc::default(),
         }
+    }
+    /// The same workspaces, also on `cloud`, with new VMs made on whichever
+    /// cloud `choice` names.
+    pub fn with_cloud(
+        mut self,
+        cloud: Cloud,
+        settings: Arc<dyn Settings>,
+        provider: Arc<dyn Provider>,
+        assignments: Arc<dyn Assignments>,
+        choice: Arc<dyn CloudChoice>,
+    ) -> Self {
+        let mut clouds = (*self.clouds).clone();
+        clouds.retain(|parts| parts.cloud != cloud);
+        clouds.push(CloudParts {
+            cloud,
+            settings,
+            provider,
+            assignments,
+        });
+        self.clouds = Arc::new(clouds);
+        self.choice = choice;
+        self
+    }
+    fn parts(&self, cloud: Cloud) -> Result<&CloudParts, Failure> {
+        self.clouds
+            .iter()
+            .find(|parts| parts.cloud == cloud)
+            .ok_or(Failure::NotConfigured)
+    }
+    /// `cloud`'s saved connection, if this gateway offers that cloud.
+    pub fn settings(&self, cloud: Cloud) -> Option<Arc<dyn Settings>> {
+        self.parts(cloud).ok().map(|parts| parts.settings.clone())
+    }
+    /// The cloud new thread VMs are made on.
+    pub async fn cloud(&self) -> Result<Cloud, Failure> {
+        self.choice.read().await
+    }
+    /// Make new thread VMs on `cloud`, which must be connected.
+    pub async fn choose(&self, cloud: Cloud) -> Result<(), Failure> {
+        self.parts(cloud)?.settings.read().await?;
+        self.choice.save(cloud).await
+    }
+    /// Whether the cloud new VMs are made on is connected.
+    pub async fn connected(&self) -> bool {
+        match self
+            .cloud()
+            .await
+            .and_then(|cloud| self.parts(cloud).cloned())
+        {
+            Ok(parts) => parts.settings.read().await.is_ok(),
+            Err(_) => false,
+        }
+    }
+    /// The cloud thread `id`'s VM, or its creation, was recorded on, and
+    /// that record. A thread recorded on two clouds is refused: which is
+    /// its VM cannot be told.
+    async fn recorded(&self, id: &str) -> Result<Option<(CloudParts, Assignment)>, Failure> {
+        let mut found = None;
+        for parts in self.clouds.iter() {
+            if let Some(assignment) = parts.assignments.read(id).await? {
+                if found.is_some() {
+                    return Err(Failure::Storage);
+                }
+                found = Some((parts.clone(), assignment));
+            }
+        }
+        Ok(found)
     }
     fn record_recovery(&self, event: &RecoveryEvent) -> Result<(), Failure> {
         catch_unwind(AssertUnwindSafe(|| self.recovery.record(event)))
@@ -243,11 +347,11 @@ impl Workspaces {
         )?))
         .await
     }
-    /// Forget the Boat connection. The Claude sign-in stays in Saved
+    /// Forget `cloud`'s connection. The Claude sign-in stays in Saved
     /// logins: every other machine is handed it too. It is removed only
     /// from Settings › Saved logins.
-    pub async fn disconnect(&self) -> Result<(), Failure> {
-        self.settings.clear().await
+    pub async fn disconnect(&self, cloud: Cloud) -> Result<(), Failure> {
+        self.parts(cloud)?.settings.clear().await
     }
     /// How many times the Claude sign-in was said to have changed.
     #[cfg(any(test, feature = "test-support"))]
@@ -265,10 +369,14 @@ impl Workspaces {
             .send_modify(|changes| *changes += 1);
     }
     pub async fn save(&self, connection: CloudConnection) -> Result<(), Failure> {
-        let generation = self.settings.generation()?;
+        let parts = self.parts(connection.cloud())?;
+        let generation = parts.settings.generation()?;
         let spec = connection.new_vm(None, Default::default());
-        self.provider.validate(&connection.account(), &spec).await?;
-        self.settings.save(generation, connection).await
+        parts
+            .provider
+            .validate(&connection.account(), &spec)
+            .await?;
+        parts.settings.save(generation, connection).await
     }
     pub async fn open(
         &self,
@@ -338,7 +446,7 @@ impl Workspaces {
                 audit_failed: false,
             };
         }
-        let (account, vm) = match self.resting(&id).await {
+        let (parts, account, vm) = match self.resting(&id).await {
             Ok(Some(found)) => found,
             Ok(None) => {
                 // No VM to stop: nothing to keep for the thread either.
@@ -355,7 +463,9 @@ impl Workspaces {
                 }
             }
         };
-        let rested = self.stop_recorded(&account, id.clone(), vm, cause).await;
+        let rested = self
+            .stop_recorded(&parts, &account, id.clone(), vm, cause)
+            .await;
         if matches!(rested.stopped, Ok(true)) {
             turn.rested();
         }
@@ -365,6 +475,7 @@ impl Workspaces {
     /// is asked and once it answered.
     async fn stop_recorded(
         &self,
+        parts: &CloudParts,
         account: &CloudAccount,
         id: String,
         vm: String,
@@ -377,7 +488,7 @@ impl Workspaces {
                 cause,
             })
             .is_err();
-        let stopped = AssertUnwindSafe(self.provider.stop(account, &vm, cause))
+        let stopped = AssertUnwindSafe(parts.provider.stop(account, &vm, cause))
             .catch_unwind()
             .await
             .unwrap_or(Err(Failure::Provider));
@@ -394,20 +505,27 @@ impl Workspaces {
             audit_failed: requested_failed || observed_failed,
         }
     }
-    /// The account and VM a rest of thread `id` stops, if it has one.
-    async fn resting(&self, id: &str) -> Result<Option<(CloudAccount, String)>, Failure> {
-        let Some(Assignment::Assigned {
-            thread: assigned,
-            vm,
-            ..
-        }) = self.assignments.read(id).await?
+    /// The cloud, account and VM a rest of thread `id` stops, if it has one.
+    async fn resting(
+        &self,
+        id: &str,
+    ) -> Result<Option<(CloudParts, CloudAccount, String)>, Failure> {
+        let Some((
+            parts,
+            Assignment::Assigned {
+                thread: assigned,
+                vm,
+                ..
+            },
+        )) = self.recorded(id).await?
         else {
             return Ok(None);
         };
         if assigned != id {
             return Ok(None);
         }
-        Ok(Some((self.settings.read().await?.account(), vm)))
+        let account = parts.settings.read().await?.account();
+        Ok(Some((parts, account, vm)))
     }
     /// The names of what uses `thread`'s VM now.
     pub fn uses(&self, thread: &str) -> Vec<String> {
@@ -434,7 +552,15 @@ impl Workspaces {
         provision: bool,
     ) -> Result<Arc<dyn WorkspaceRuntime>, Failure> {
         let id = id.to_owned();
-        let connection = self.settings.read().await?;
+        let recorded = self.recorded(&id).await?;
+        // A recorded thread stays on its cloud; a new one goes to the cloud
+        // chosen now.
+        let parts = match &recorded {
+            Some((parts, _)) => parts.clone(),
+            None => self.parts(self.cloud().await?)?.clone(),
+        };
+        let parts = &parts;
+        let connection = parts.settings.read().await?;
         let scope = channel.map_or(SettingsScope::Global, SettingsScope::Channel);
         let lifetimes = self.runtime_settings.read(&scope).await?;
         if lifetimes.scope() != &scope {
@@ -442,7 +568,7 @@ impl Workspaces {
         }
         let auto_stop = lifetimes.effective();
         let account = &connection.account();
-        let (spec, vm, admission, disposition) = match self.assignments.read(&id).await? {
+        let (spec, vm, admission, disposition) = match recorded.map(|(_, assignment)| assignment) {
             Some(Assignment::Assigned {
                 thread,
                 vm,
@@ -454,6 +580,7 @@ impl Workspaces {
                 let spec = VmSpec::of_receipt(image, &admission, auto_stop);
                 return self
                     .connect(
+                        parts,
                         account,
                         &spec,
                         &id,
@@ -494,11 +621,12 @@ impl Workspaces {
                 // answers with the VM it made then while it remembers that
                 // key.
                 if recorded.is_none() {
-                    self.assignments
+                    parts
+                        .assignments
                         .save(Assignment::Provisioning { thread: id.clone() })
                         .await?;
                 }
-                let created = self.provider.create(account, &spec, &id).await?;
+                let created = parts.provider.create(account, &spec, &id).await?;
                 let vm = created.vm;
                 let mut refusal = created.refusal;
                 // A new VM still wiping is clean once it restarts, and the
@@ -512,7 +640,7 @@ impl Workspaces {
                         == Some(AdmissionRefusal::WipePending)
                 {
                     let rested = self
-                        .stop_recorded(account, id.clone(), vm.clone(), RestCause::Wiping)
+                        .stop_recorded(parts, account, id.clone(), vm.clone(), RestCause::Wiping)
                         .await;
                     if rested.stopped == Ok(true) && !rested.audit_failed {
                         refusal = None;
@@ -521,6 +649,7 @@ impl Workspaces {
                 if let Some(rejection) = refusal {
                     return self
                         .refuse(
+                            parts,
                             account,
                             &spec,
                             &id,
@@ -537,7 +666,7 @@ impl Workspaces {
                     image: spec.image.clone(),
                     admission: created.admission.clone(),
                 };
-                let publication = AssertUnwindSafe(async { self.assignments.save(receipt).await })
+                let publication = AssertUnwindSafe(async { parts.assignments.save(receipt).await })
                     .catch_unwind()
                     .await
                     .unwrap_or(Err(Failure::Storage));
@@ -553,7 +682,14 @@ impl Workspaces {
                         })
                         .is_err();
                     let (cleanup, cleanup_audit_failed) = self
-                        .cleanup(account, &id, &vm, &created.admission, created.disposition)
+                        .cleanup(
+                            parts,
+                            account,
+                            &id,
+                            &vm,
+                            &created.admission,
+                            created.disposition,
+                        )
                         .await;
                     return Err(Failure::ReceiptRecovery {
                         vm,
@@ -567,11 +703,13 @@ impl Workspaces {
             // A receipt naming another thread is never this one's.
             Some(Assignment::Assigned { .. }) => return Err(Failure::ProvisioningUncertain),
         };
-        self.connect(account, &spec, &id, &vm, &admission, disposition)
+        self.connect(parts, account, &spec, &id, &vm, &admission, disposition)
             .await
     }
+    #[allow(clippy::too_many_arguments)]
     async fn connect(
         &self,
+        parts: &CloudParts,
         account: &CloudAccount,
         spec: &VmSpec,
         thread: &str,
@@ -579,14 +717,23 @@ impl Workspaces {
         admission: &Admitted,
         disposition: RefusalDisposition,
     ) -> Result<Arc<dyn WorkspaceRuntime>, Failure> {
-        match self
+        match parts
             .provider
             .connect(account, spec, thread, vm, admission)
             .await
         {
             Err(Failure::AdmissionRejected(rejection)) => {
-                self.refuse(account, spec, thread, vm, admission, rejection, disposition)
-                    .await
+                self.refuse(
+                    parts,
+                    account,
+                    spec,
+                    thread,
+                    vm,
+                    admission,
+                    rejection,
+                    disposition,
+                )
+                .await
             }
             result => result,
         }
@@ -594,6 +741,7 @@ impl Workspaces {
     #[allow(clippy::too_many_arguments)]
     async fn refuse(
         &self,
+        parts: &CloudParts,
         account: &CloudAccount,
         spec: &VmSpec,
         thread: &str,
@@ -610,7 +758,7 @@ impl Workspaces {
             rejection: rejection.clone(),
             disposition,
         };
-        let receipt_failed = AssertUnwindSafe(self.assignments.save(refusal))
+        let receipt_failed = AssertUnwindSafe(parts.assignments.save(refusal))
             .catch_unwind()
             .await
             .unwrap_or(Err(Failure::Storage))
@@ -625,7 +773,7 @@ impl Workspaces {
             })
             .is_err();
         let (cleanup, cleanup_audit_failed) = self
-            .cleanup(account, thread, vm, admission, disposition)
+            .cleanup(parts, account, thread, vm, admission, disposition)
             .await;
         Err(Failure::AdmissionRecovery {
             vm: vm.into(),
@@ -638,6 +786,7 @@ impl Workspaces {
     }
     async fn cleanup(
         &self,
+        parts: &CloudParts,
         account: &CloudAccount,
         thread: &str,
         vm: &str,
@@ -649,7 +798,7 @@ impl Workspaces {
         match disposition {
             RefusalDisposition::RetainTarget => (CleanupOutcome::Retained, false),
             RefusalDisposition::RollbackNewVm => {
-                let confirmed = AssertUnwindSafe(self.provider.remove(account, vm, admission))
+                let confirmed = AssertUnwindSafe(parts.provider.remove(account, vm, admission))
                     .catch_unwind()
                     .await
                     .unwrap_or(Err(Failure::CleanupUncertain))

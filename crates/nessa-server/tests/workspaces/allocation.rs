@@ -1528,7 +1528,7 @@ async fn disconnecting_boat_keeps_the_saved_claude_login() {
     );
     // Workspaces holds no way to change the sign-in: it is the saved Claude
     // login other machines are handed too, so disconnecting tells no change.
-    service.disconnect().await.unwrap();
+    service.disconnect(Cloud::Boat).await.unwrap();
     assert_eq!(service.claude_sign_in_changes(), 0);
     // Saving or removing it, which Saved logins does, is what is told.
     service.claude_sign_in_changed();
@@ -1621,4 +1621,98 @@ async fn a_replayed_vm_still_wiping_is_refused_and_never_stopped() {
     assert!(service.open(id(9), true, None).await.is_err());
     assert!(provider.stops.lock().unwrap().is_empty());
     assert_eq!(provider.deletes.load(Ordering::SeqCst), 0);
+}
+
+/// A saved Agent37 connection, for a second cloud beside Boat.
+struct Agent37Config;
+#[async_trait]
+impl Settings for Agent37Config {
+    fn generation(&self) -> Result<u64, Failure> {
+        Ok(1)
+    }
+    async fn read(&self) -> Result<CloudConnection, Failure> {
+        Agent37Connection::new(
+            "sk_live_fixture".into(),
+            b"fixture-private".to_vec(),
+            "ssh-ed25519 AAAAfixture".into(),
+            "nessa-runtime@1".into(),
+        )
+        .map(CloudConnection::Agent37)
+    }
+    async fn save(&self, _: u64, _: CloudConnection) -> Result<(), Failure> {
+        Ok(())
+    }
+    async fn clear(&self) -> Result<(), Failure> {
+        Ok(())
+    }
+}
+struct Chosen(Mutex<Cloud>);
+#[async_trait]
+impl CloudChoice for Chosen {
+    async fn read(&self) -> Result<Cloud, Failure> {
+        Ok(*self.0.lock().unwrap())
+    }
+    async fn save(&self, cloud: Cloud) -> Result<(), Failure> {
+        *self.0.lock().unwrap() = cloud;
+        Ok(())
+    }
+}
+
+/// New VMs go to the cloud chosen when they are made; a thread recorded on
+/// a cloud stays there, opened and rested there, whatever is chosen later;
+/// and a thread recorded on two clouds is refused.
+#[tokio::test]
+async fn each_thread_stays_on_the_cloud_its_vm_was_made_on() {
+    let (_, boat_store, boat, audit) = fixture_with_audit();
+    let agent37_store = Arc::new(Store::default());
+    let agent37 = Arc::new(FakeProvider::new(audit.steps.clone()));
+    let service = Workspaces::new(
+        Arc::new(Config),
+        boat.clone(),
+        boat_store.clone(),
+        audit,
+        Arc::new(Config),
+    )
+    .with_cloud(
+        Cloud::Agent37,
+        Arc::new(Agent37Config),
+        agent37.clone(),
+        agent37_store.clone(),
+        Arc::new(Chosen(Mutex::new(Cloud::Boat))),
+    );
+    boat.proceed.add_permits(1);
+    agent37.proceed.add_permits(1);
+    assert_eq!(service.cloud().await, Ok(Cloud::Boat));
+    assert!(service.open(id(1), true, None).await.is_ok());
+    assert_eq!(boat.creates.load(Ordering::SeqCst), 1);
+
+    service.choose(Cloud::Agent37).await.unwrap();
+    assert!(service.connected().await);
+    assert!(service.open(id(2), true, None).await.is_ok());
+    assert_eq!(agent37.creates.load(Ordering::SeqCst), 1);
+    assert!(agent37_store
+        .records
+        .lock()
+        .unwrap()
+        .contains_key(&id(2).to_string()));
+
+    // Thread 1 was made on Boat: it reopens and rests there.
+    assert!(service.open(id(1), false, None).await.is_ok());
+    assert_eq!(boat.creates.load(Ordering::SeqCst), 1);
+    assert_eq!(boat.connects.lock().unwrap().len(), 2);
+    assert_eq!(service.rest(id(1), RestCause::Idle).await.stopped, Ok(true));
+    assert_eq!(*boat.stops.lock().unwrap(), [format!("vm-{}", id(1))]);
+    assert!(agent37.stops.lock().unwrap().is_empty());
+
+    // Recorded on both clouds: which is its VM cannot be told.
+    let both = boat_store.records.lock().unwrap()[&id(1).to_string()].clone();
+    agent37_store
+        .records
+        .lock()
+        .unwrap()
+        .insert(id(1).to_string(), both);
+    assert_eq!(
+        service.open(id(1), false, None).await.err(),
+        Some(Failure::Storage)
+    );
 }
