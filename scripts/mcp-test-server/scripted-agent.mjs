@@ -602,7 +602,11 @@ async function scenarioTurn({ sessionId, prompt: blocks }) {
           {
             text,
             id: randomUUID(),
-            arguments: promptArguments(text),
+            // Read only by a turn that says them: any other prompt may quote
+            // text that looks like arguments, as a fork's copied history does.
+            ...(JSON.stringify(matched.steps).includes("${prompt.arguments}")
+              ? { arguments: promptArguments(text) }
+              : {}),
             images: promptImages(blocks),
             files: promptFiles(blocks),
           },

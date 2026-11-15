@@ -6961,7 +6961,10 @@ const steps = {
     if (!(await waitFor(async () => (await hidden(css.sidebar)) === "true", 5_000)))
       failures.push("arrange_window left the sidebar shown")
     said = await asked(STRESS.openThread, { threadId: other, where: "beside" }, " open")
-    if (said?.changed !== true || (await panes()) !== 2)
+    // The publication the answer waited for comes from the store; the panes
+    // are painted after it.
+    const shows = (count) => waitFor(async () => (await panes()) === count, 5_000)
+    if (said?.changed !== true || !(await shows(2)))
       failures.push(
         `open_thread beside said ${JSON.stringify(said)} with ${await panes()} panes on screen`,
       )
@@ -6969,7 +6972,7 @@ const steps = {
     said = await asked(STRESS.arrangeWindow, { panel: "open" }, " panel")
     if (said?.changed !== true)
       failures.push(`opening the panel said ${JSON.stringify(said)}`)
-    if ((await hidden(css.panel)) === "true")
+    if (!(await waitFor(async () => (await hidden(css.panel)) !== "true", 5_000)))
       failures.push("arrange_window left the right panel hidden")
     // Asked again, nothing changes, and the agent is told so.
     said = await asked(STRESS.arrangeWindow, { sidebar: "closed" }, " again")
@@ -6996,7 +6999,7 @@ const steps = {
     )
       failures.push("arrange_window did not show the Agents overview")
     await asked(STRESS.arrangeWindow, { view: "panes" }, " panes")
-    if ((await panes()) !== 2)
+    if (!(await shows(2)))
       failures.push(`back on the panes, ${await panes()} are on screen`)
     // A tab the focused chat's panel does not hold is refused, not guessed.
     said = await asked(
@@ -7014,7 +7017,7 @@ const steps = {
     // Closing takes the other conversation's pane away; a second close finds
     // it no longer on screen.
     said = await asked(STRESS.closePane, { threadId: other }, " close")
-    if (said?.changed !== true || (await panes()) !== 1)
+    if (said?.changed !== true || !(await shows(1)))
       failures.push(`close_pane said ${JSON.stringify(said)} with ${await panes()} panes`)
     said = await asked(STRESS.closePane, { threadId: other }, " gone")
     if (said?.error !== "not_on_screen")
