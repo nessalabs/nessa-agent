@@ -38,6 +38,10 @@ import {
  *               stopped, the name is plain again
  *   parent-stop Stop cancels the parent, owned child and grandchild without a report restart
  *   fail        the turn fails; the next message is sent in the same conversation
+ *   cloud       Agent37 is picked as the cloud for new thread VMs in
+ *               Settings › Connections › Accounts: a thread's VM is made on
+ *               Agent37 (the fixture's fake one) and stays there after Boat
+ *               is picked again, while the next thread's goes to Boat
  *   restore     a restored conversation is opened and shows its saved record;
  *               another, whose source file is moved aside, refuses Send and
  *               keeps the draft
@@ -3319,6 +3323,75 @@ async function enrollPeer(run, profile, code, invitationId) {
 }
 
 const steps = {
+  /** The cloud for new thread VMs is picked in Settings › Connections ›
+   * Accounts: a VM made while Agent37 is chosen is made on Agent37 (the
+   * fixture's fake one), and its thread stays there after Boat is chosen
+   * again, while a new thread goes to Boat. */
+  async cloud(run, step, failures) {
+    const original = run.main
+    const fixture = run.stack.vmFixture
+    const choose = async (cloud) => {
+      await openAccounts(run.page)
+      await unlockRequestedVault(run.client, run.page)
+      const connected = await run.page
+        .locator('[data-agent37-state="connected"]')
+        .waitFor({ timeout: 10_000 })
+        .then(
+          () => true,
+          () => false,
+        )
+      if (!connected) failures.push("Settings does not show Agent37 connected")
+      const row = run.page.locator("[data-cloud-choice]")
+      await pickChoice(run.page, row, cloud)
+      const shown = await waitFor(
+        async () => (await row.getAttribute("data-cloud-choice")) === cloud,
+        5_000,
+      )
+      if (!shown) failures.push(`the cloud choice does not show ${cloud} once picked`)
+      const saved = (await run.client.agent37.cloud()).cloud
+      if (saved !== cloud)
+        failures.push(`the gateway kept ${saved} after ${cloud} was picked`)
+      await closeSettings(run.page)
+    }
+    const made = (id) =>
+      fixture
+        .events()
+        .filter((event) => event.thread === id && event.kind === "created")
+        .map((event) => event.cloud)
+    const talk = async (id, said) => {
+      await run.client.conversation.submit(run.client.conversation.prepare(id, said))
+      await settled(run, id, new Set(), said, "completed", failures)
+    }
+    const open = async (id) => {
+      await run.client.conversation.create({
+        conversationId: id,
+        agent: run.stack.agent,
+        environment: "boat:thread",
+      })
+    }
+    await choose("agent37")
+    const onAgent37 = randomUUID()
+    await open(onAgent37)
+    await talk(onAgent37, `${STRESS.reply} cloud agent37 ${step.index}`)
+    if (made(onAgent37).join() !== "agent37")
+      failures.push(
+        `a VM made with Agent37 chosen was made on: ${made(onAgent37).join()}`,
+      )
+    await choose("boat")
+    await talk(onAgent37, `${STRESS.reply} cloud stays ${step.index}`)
+    if (made(onAgent37).join() !== "agent37")
+      failures.push(
+        `a thread on Agent37 moved after Boat was chosen: ${made(onAgent37).join()}`,
+      )
+    const onBoat = randomUUID()
+    await open(onBoat)
+    await talk(onBoat, `${STRESS.reply} cloud boat ${step.index}`)
+    if (made(onBoat).join() !== "boat")
+      failures.push(`a VM made with Boat chosen was made on: ${made(onBoat).join()}`)
+    run.checked.push(onAgent37, onBoat)
+    run.main = original
+    await openStressConversation(run.page, original.id, original.title)
+  },
   async vmBackground(run, step, failures) {
     const original = run.main
     const id = randomUUID()
@@ -12731,7 +12804,9 @@ async function startStack(options) {
   }
   let stack
   try {
-    const vmFixture = selected.some((step) => step.kind === "vmBackground")
+    const vmFixture = selected.some((step) =>
+      ["vmBackground", "cloud"].includes(step.kind),
+    )
       ? await vmBackgroundFixture(directory, PARK_IDLE_SECONDS)
       : null
     Object.assign(environment, vmFixture?.environment)
