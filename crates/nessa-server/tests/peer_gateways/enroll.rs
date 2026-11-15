@@ -113,6 +113,8 @@ fn kind(record: &PeerAuditRecord) -> &'static str {
         PeerAuditRecord::ForgetFinished { .. } => "peer_forget_finished",
         PeerAuditRecord::RelayRequested { .. } => "peer_relay_requested",
         PeerAuditRecord::RelayFinished { .. } => "peer_relay_finished",
+        PeerAuditRecord::FollowRequested { .. } => "peer_follow_requested",
+        PeerAuditRecord::FollowFinished { .. } => "peer_follow_finished",
         PeerAuditRecord::PollerChanged { .. } => "peer_poller_changed",
     }
 }
@@ -1351,6 +1353,7 @@ fn assert_pair(records: &[Value], operation: &str, expected: &Expected) {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn every_peer_command_answer_keeps_one_intent_and_one_outcome() {
     use nessa_auth::{adapters::pairing::ManualCode, domain::PrincipalId};
+    use nessa_client_core::retained::FollowRule;
     let fixture = Fixture::new().await;
     let (native, stop, listener, _) = fixture.listener().await;
     let a = pin_at(native).await;
@@ -1527,6 +1530,23 @@ async fn every_peer_command_answer_keeps_one_intent_and_one_outcome() {
         commands.relay(a_key, relay_at(), &owner).await,
         relay(Some("peer_busy"), &a_hex)
     );
+    {
+        let before = dialing.audit.records();
+        let answer = commands.follow(a_key, FollowRule::none(), &owner).await;
+        assert_eq!(answer.unwrap_err().code(), "peer_busy");
+        let operation = new_operation(&before, &dialing.audit.records());
+        assert_pair(
+            &dialing.audit.records(),
+            &operation,
+            &Expected {
+                command: "peer_follow",
+                code: Some("peer_busy"),
+                address: None,
+                peer: Some(a_hex.clone()),
+            },
+        );
+        covered.insert("peer_follow/peer_busy".to_owned());
+    }
     drop(socket);
     let answer = tokio::time::timeout(WAIT, held).await.unwrap().unwrap();
     let expected = enroll("peer_enroll", Some("peer_unreachable"), held_at, None);
@@ -1539,6 +1559,50 @@ async fn every_peer_command_answer_keeps_one_intent_and_one_outcome() {
         commands.relay(a_key, relay_at(), &owner).await,
         relay(None, &a_hex)
     );
+    {
+        let before = dialing.audit.records();
+        let answer = commands
+            .follow(
+                a_key,
+                FollowRule::new(Vec::new(), nessa_client_core::retained::FOLLOW_KEEP_MAX).unwrap(),
+                &owner,
+            )
+            .await;
+        assert!(answer.unwrap().replica_reset);
+        let operation = new_operation(&before, &dialing.audit.records());
+        assert_pair(
+            &dialing.audit.records(),
+            &operation,
+            &Expected {
+                command: "peer_follow",
+                code: None,
+                address: None,
+                peer: Some(a_hex.clone()),
+            },
+        );
+        covered.insert("peer_follow/ok".to_owned());
+        let missing = DeviceKey::new([9; 32]);
+        let before = dialing.audit.records();
+        let answer = commands.follow(missing, FollowRule::none(), &owner).await;
+        assert_eq!(answer.unwrap_err().code(), "peer_not_found");
+        let operation = new_operation(&before, &dialing.audit.records());
+        let missing_hex: String = missing
+            .bytes()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
+        assert_pair(
+            &dialing.audit.records(),
+            &operation,
+            &Expected {
+                command: "peer_follow",
+                code: Some("peer_not_found"),
+                address: None,
+                peer: Some(missing_hex),
+            },
+        );
+        covered.insert("peer_follow/peer_not_found".to_owned());
+    }
     row!(
         dialing,
         commands.forget(a_key, &owner).await,
@@ -1562,6 +1626,9 @@ async fn every_peer_command_answer_keeps_one_intent_and_one_outcome() {
         "peer_relay/ok",
         "peer_relay/peer_busy",
         "peer_relay/peer_not_found",
+        "peer_follow/ok",
+        "peer_follow/peer_busy",
+        "peer_follow/peer_not_found",
     ]
     .into_iter()
     .map(str::to_owned)

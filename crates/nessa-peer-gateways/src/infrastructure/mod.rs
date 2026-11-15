@@ -11,8 +11,8 @@ mod poller;
 mod records;
 pub use audit::{DurablePeerAudit, AUDIT_HEADROOM, AUDIT_QUEUE};
 pub use commands::{
-    EnrollmentEntropy, EnrollmentEntropySource, PeerCommands, PeerError, PeerSync, SyncState,
-    AUDIT_DEADLINE, CONNECT, PREEMPT,
+    EnrollmentEntropy, EnrollmentEntropySource, FollowChoice, PeerCommands, PeerError, PeerSync,
+    SyncState, AUDIT_DEADLINE, CONNECT, PREEMPT,
 };
 pub use connector::TcpPeerConnector;
 pub use lan::{
@@ -20,8 +20,8 @@ pub use lan::{
     LanRegistration, PEER_SERVICE,
 };
 pub use poller::{
-    PeerPoller, PollInputs, PollPolicy, POLL_BACKOFF_CAP, POLL_INTERVAL, READS_AT_ONCE,
-    READ_BUDGET, WITHDRAWN_PER_READ,
+    open_granted, PeerPoller, PollInputs, PollPolicy, POLL_BACKOFF_CAP, POLL_INTERVAL,
+    READS_AT_ONCE, READ_BUDGET, WITHDRAWN_PER_READ,
 };
 pub use records::{
     DiscoveryAuthoritySaveError, ForgetFailure, PeerEntry, PeerPhase, PeerRecord, PeerRecords,

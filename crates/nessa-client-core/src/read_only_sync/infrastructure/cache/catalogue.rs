@@ -21,17 +21,7 @@ impl ReadOnlyCache {
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(rows::database_error)?;
-        tx.execute(
-            "DELETE FROM catalogue_entries WHERE receiver=?1 AND origin=?2 AND stream=?3 AND entry_id=?4",
-            params![
-                catalogue.receiver().as_str(),
-                catalogue.origin().as_str(),
-                catalogue.stream().as_str(),
-                id.as_str()
-            ],
-        )
-        .map_err(rows::database_error)?;
-        raw_records::clear_transcript_target(&tx, catalogue.receiver(), catalogue.origin(), id)?;
+        remove_entry(&tx, catalogue, id)?;
         let committed = tx.commit();
         // Whatever the outcome, no loaded fold may outlive rows it came from.
         self.invalidate_loaded();
@@ -119,6 +109,7 @@ impl ReadOnlyCache {
     fn apply_catalogue(
         &mut self,
         plan: CataloguePagePlan,
+        retain: Option<&dyn Fn(&str) -> bool>,
     ) -> Result<CatalogueProgress, CacheError> {
         let replacement =
             catalogue_progress_after_page(&plan).map_err(CacheError::CatalogueProgress)?;
@@ -141,24 +132,37 @@ impl ReadOnlyCache {
                 .map_err(revision_error)?;
         }
         let mut invalidated = false;
+        for unchanged in &plan.unchanged {
+            if retain.is_some_and(|select| !select(unchanged.key.id.as_str())) {
+                remove_entry(&tx, scope, &unchanged.key.id)?;
+                invalidated = true;
+            }
+        }
         for value in &plan.entries {
             let saved = catalogue_rows::entry(&tx, scope, &value.manifest.key.id)?;
-            if let Some(saved) = &saved {
+            let should_write = if let Some(saved) = &saved {
                 let (earlier, later) = if saved.manifest.revision > value.manifest.revision {
                     (&value.manifest, &saved.manifest)
                 } else {
                     (&saved.manifest, &value.manifest)
                 };
                 validate_catalogue_revision_transition(earlier, later).map_err(revision_error)?;
-                if saved.manifest.revision > value.manifest.revision {
-                    continue;
+                if saved.manifest.revision == value.manifest.revision
+                    && saved.payload != value.payload
+                {
+                    return Err(CacheError::ConflictingRecord);
                 }
-                if saved.manifest.revision == value.manifest.revision {
-                    if saved.payload != value.payload {
-                        return Err(CacheError::ConflictingRecord);
-                    }
-                    continue;
-                }
+                saved.manifest.revision < value.manifest.revision
+            } else {
+                true
+            };
+            if retain.is_some_and(|select| !select(value.manifest.key.id.as_str())) {
+                remove_entry(&tx, scope, &value.manifest.key.id)?;
+                invalidated = true;
+                continue;
+            }
+            if !should_write {
+                continue;
             }
             let fenced = catalogue_rows::fence_state(&tx, scope, &value.manifest)?;
             if value.manifest.deleted && !fenced {
@@ -182,6 +186,63 @@ impl ReadOnlyCache {
             self.invalidate_loaded();
         }
         Ok(replacement)
+    }
+
+    /// Select only durable local rows; the full page is still validated.
+    pub(crate) fn selected_catalogue<'a>(
+        &'a mut self,
+        retain: Option<&'a dyn Fn(&str) -> bool>,
+    ) -> SelectedCatalogue<'a> {
+        SelectedCatalogue {
+            cache: self,
+            retain,
+        }
+    }
+
+    /// Enforce a local choice on an existing catalogue without a network read.
+    /// Page the identities inside one transaction so cleanup does not buffer
+    /// the full catalogue or publish a partially pruned replica.
+    pub(crate) fn retain_catalogue(
+        &mut self,
+        scope: &Scope,
+        retain: &dyn Fn(&str) -> bool,
+    ) -> Result<(), CacheError> {
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(rows::database_error)?;
+        let mut after = String::new();
+        loop {
+            let ids = {
+                let mut query = tx.prepare("SELECT entry_id FROM catalogue_entries WHERE receiver=?1 AND origin=?2 AND stream=?3 AND entry_id>?4 ORDER BY entry_id LIMIT 256")
+                    .map_err(rows::database_error)?;
+                let found = query
+                    .query_map(
+                        params![
+                            scope.receiver().as_str(),
+                            scope.origin().as_str(),
+                            scope.stream().as_str(),
+                            &after
+                        ],
+                        |row| row.get::<_, String>(0),
+                    )
+                    .map_err(rows::database_error)?
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(rows::database_error)?;
+                found
+            };
+            let Some(last) = ids.last() else { break };
+            after = last.clone();
+            for id in ids {
+                if !retain(&id) {
+                    let id = Id::new(id).map_err(|_| CacheError::Corrupt)?;
+                    remove_entry(&tx, scope, &id)?;
+                }
+            }
+        }
+        let committed = tx.commit();
+        self.invalidate_loaded();
+        committed.map_err(|_| CacheError::Uncertain)
     }
 
     fn catalogue_result<T>(
@@ -238,7 +299,7 @@ impl CatalogueStore for ReadOnlyCache {
         &mut self,
         plan: CataloguePagePlan,
     ) -> Result<CatalogueProgress, CatalogueStoreError> {
-        let result = self.apply_catalogue(plan);
+        let result = self.apply_catalogue(plan, None);
         self.catalogue_result(result)
     }
     fn reset(
@@ -248,6 +309,56 @@ impl CatalogueStore for ReadOnlyCache {
     ) -> Result<CatalogueProgress, CatalogueStoreError> {
         self.catalogue_result(Err(CacheError::ResetAttributionRequired))
     }
+}
+
+/// A per-read view of the same persistence owner, not a second cache or rule.
+pub(crate) struct SelectedCatalogue<'a> {
+    cache: &'a mut ReadOnlyCache,
+    retain: Option<&'a dyn Fn(&str) -> bool>,
+}
+impl CatalogueStore for SelectedCatalogue<'_> {
+    fn progress(
+        &mut self,
+        scope: &Scope,
+    ) -> Result<Option<CatalogueProgress>, CatalogueStoreError> {
+        CatalogueStore::progress(self.cache, scope)
+    }
+    fn begin(
+        &mut self,
+        scope: &Scope,
+        expected: Option<CatalogueProgress>,
+        boundary: u64,
+    ) -> Result<CatalogueProgress, CatalogueStoreError> {
+        CatalogueStore::begin(self.cache, scope, expected, boundary)
+    }
+    fn cached_revision(
+        &mut self,
+        scope: &Scope,
+        id: &Id,
+    ) -> Result<Option<u64>, CatalogueStoreError> {
+        CatalogueStore::cached_revision(self.cache, scope, id)
+    }
+    fn apply_page(
+        &mut self,
+        plan: CataloguePagePlan,
+    ) -> Result<CatalogueProgress, CatalogueStoreError> {
+        let result = self.cache.apply_catalogue(plan, self.retain);
+        self.cache.catalogue_result(result)
+    }
+    fn reset(
+        &mut self,
+        scope: &Scope,
+        expected: CatalogueProgress,
+    ) -> Result<CatalogueProgress, CatalogueStoreError> {
+        CatalogueStore::reset(self.cache, scope, expected)
+    }
+}
+
+fn remove_entry(connection: &Connection, catalogue: &Scope, id: &Id) -> Result<(), CacheError> {
+    connection.execute("DELETE FROM catalogue_entries WHERE receiver=?1 AND origin=?2 AND stream=?3 AND entry_id=?4",
+        params![catalogue.receiver().as_str(), catalogue.origin().as_str(), catalogue.stream().as_str(), id.as_str()])
+        .map_err(rows::database_error)?;
+    raw_records::clear_transcript_target(connection, catalogue.receiver(), catalogue.origin(), id)
 }
 
 fn revision_error(error: CatalogueValidationError) -> CacheError {

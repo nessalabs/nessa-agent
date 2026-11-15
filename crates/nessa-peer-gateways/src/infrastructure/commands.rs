@@ -15,12 +15,13 @@
 //! both are kept.
 //!
 //! Each peer has its own turn, held by the cycle reading that peer or by the
-//! owner command that names it (`peer.forget`, `peer.relay`). The command
-//! stops that peer's cycle (its read's sockets shut, its waits woken) and
-//! takes the turn once given back; the read carries on at the next cycle.
-//! A cycle of any other peer is left running. Enroll, forget, and relay
-//! share one separate turn, the record set, and the second is `Busy` at
-//! once: enroll and forget both change how many records are kept, and
+//! owner command that names it (`peer.forget`, `peer.relay`, `peer.follow`).
+//! The command stops that peer's cycle (its read's sockets shut, its waits
+//! woken) and takes the turn once given back; the read carries on at the
+//! next cycle. A cycle of any other peer is left running. Enroll, forget,
+//! relay, and follow share one separate turn, the record set, and the
+//! second is `Busy` at once: enroll and forget both change how many records
+//! are kept, and
 //! `MAX_PEERS` is checked against that set, and a relay that cannot take
 //! the set must not stop a read. A read does not hold the record set. Only
 //! another command already holding the turn being asked for makes it
@@ -34,8 +35,8 @@
 use super::audit::AUDIT_HEADROOM;
 use super::connector::raced;
 use super::records::{
-    ForgetFailure, PeerEntry, PeerPhase, PeerRecord, PeerRecords, PeerSlot, SlotFound, SlotRefusal,
-    SlotSave,
+    FollowFailure, ForgetFailure, PeerEntry, PeerPhase, PeerRecord, PeerRecords, PeerSlot,
+    SlotFound, SlotRefusal, SlotSave,
 };
 use crate::application::{
     CacheState, PeerAudit, PeerAuditFuture, PeerAuditRecord, PeerConnector, PeerHolding, PeerState,
@@ -51,7 +52,7 @@ use nessa_auth::{
     },
 };
 use nessa_client_core::pairing::{NativeClientError, NativeEnrollmentClient};
-use nessa_client_core::retained::{ReadStop, HANDSHAKE};
+use nessa_client_core::retained::{FollowRule, ReadStop, HANDSHAKE};
 use nessa_protocol::clock::Clock as MonotonicClock;
 use nessa_protocol::pairing::socket::{DeadlineStream, WAKE_TICK};
 use nessa_protocol::pairing::EnrollmentChannel;
@@ -936,8 +937,153 @@ impl PeerCommands {
                 peer: Some(key),
                 before,
                 after,
+                follow: None,
             },
         )
+    }
+    /// Store which of `key`'s granted conversations this gateway replicates,
+    /// and how many bytes of that replica to keep, for `initiator`. The
+    /// default, with no stored rule, replicates nothing. Changing the set or
+    /// the byte ceiling drops the local replica; the same rule again does
+    /// not. The peer is not dialed, and the rule is not sent to it. A
+    /// conversation the peer did not grant is not granted by naming it here.
+    /// Takes the record set, then this peer's turn, so a read of this peer
+    /// is stopped before the replica is dropped.
+    pub async fn follow(
+        &self,
+        key: DeviceKey,
+        rule: FollowRule,
+        initiator: &PrincipalId,
+    ) -> Result<FollowChoice, PeerError> {
+        self.audited(
+            Command::Follow {
+                peer: key,
+                conversations: rule.conversations().to_vec(),
+                keep_bytes: rule.keep_bytes(),
+            },
+            initiator,
+            self.follow_turn(key, rule),
+        )
+        .await
+    }
+    /// The follow change, and what it found and left.
+    async fn follow_turn(
+        &self,
+        key: DeviceKey,
+        rule: FollowRule,
+    ) -> (Result<FollowChoice, PeerError>, Evidence) {
+        let not_read = Evidence::not_read(Some(key));
+        let _set = match self.try_record_set() {
+            Ok(permit) => permit,
+            Err(refused) => return (Err(refused), not_read),
+        };
+        let _permit = match self.peer_turn(key).await {
+            Ok(permit) => EndedTurn {
+                commands: self,
+                key,
+                permit: Some(permit),
+            },
+            Err(refused) => return (Err(refused), not_read),
+        };
+        let records = self.records.clone();
+        let rule_for_store = rule.clone();
+        let applied = tokio::task::spawn_blocking(move || {
+            let entry = records.get(&key).map_err(FollowFailure::Storage)?;
+            let state = entry.as_ref().map(state_of);
+            let result = records.apply_follow(&key, &rule_for_store)?;
+            Ok((state, result))
+        })
+        .await
+        .unwrap_or(Err(FollowFailure::Storage(PrivateStateError::Unavailable)));
+        let records = self.records.clone();
+        let loaded = tokio::task::spawn_blocking(move || records.load_follow(&key))
+            .await
+            .unwrap_or(Err(PrivateStateError::Unavailable));
+        let stored = match &loaded {
+            Ok(Some(loaded)) => Some(loaded.rule.clone()),
+            _ => None,
+        };
+        match applied {
+            Ok((state, result)) => {
+                let state = state.unwrap_or(PeerState::Absent);
+                (
+                    Ok(FollowChoice {
+                        rule: result.after.clone(),
+                        replica_reset: result.replica_reset,
+                    }),
+                    Evidence {
+                        peer: Some(key),
+                        before: state.clone(),
+                        after: state,
+                        follow: Some(FollowAudit {
+                            before: result.before,
+                            after: Some(result.after),
+                            replica_reset: result.replica_reset,
+                            replica_reset_durable: result.replica_reset,
+                        }),
+                    },
+                )
+            }
+            Err(FollowFailure::Missing) => (
+                Err(PeerError::NotFound),
+                Evidence {
+                    peer: Some(key),
+                    before: PeerState::Absent,
+                    after: PeerState::Absent,
+                    follow: Some(FollowAudit {
+                        before: None,
+                        after: None,
+                        replica_reset: false,
+                        replica_reset_durable: false,
+                    }),
+                },
+            ),
+            Err(FollowFailure::Unreadable) => (
+                Err(PeerError::Unavailable),
+                Evidence {
+                    follow: Some(FollowAudit {
+                        before: stored.clone(),
+                        after: stored,
+                        replica_reset: false,
+                        replica_reset_durable: false,
+                    }),
+                    ..Evidence::unchanged(key, PeerState::Unreadable)
+                },
+            ),
+            Err(FollowFailure::Transition {
+                before,
+                replica_reset,
+                replica_reset_durable,
+                ..
+            }) => (
+                Err(PeerError::Unavailable),
+                Evidence {
+                    peer: Some(key),
+                    before: PeerState::Unknown,
+                    after: PeerState::Unknown,
+                    follow: Some(FollowAudit {
+                        before,
+                        after: stored,
+                        replica_reset,
+                        replica_reset_durable,
+                    }),
+                },
+            ),
+            Err(FollowFailure::Storage(_)) => (
+                Err(PeerError::Unavailable),
+                Evidence {
+                    peer: Some(key),
+                    before: PeerState::Unknown,
+                    after: PeerState::Unknown,
+                    follow: Some(FollowAudit {
+                        before: None,
+                        after: stored,
+                        replica_reset: false,
+                        replica_reset_durable: false,
+                    }),
+                },
+            ),
+        }
     }
     /// Set the relay kept for `key` to `relay`, or clear it with `None`, for
     /// `initiator`, and return the record as left. The relay is where this
@@ -1003,6 +1149,7 @@ impl PeerCommands {
                                 peer: Some(key),
                                 before,
                                 after,
+                                follow: None,
                             },
                         )
                     }
@@ -1013,6 +1160,7 @@ impl PeerCommands {
                             peer: Some(key),
                             before,
                             after: PeerState::Unknown,
+                            follow: None,
                         },
                     ),
                     Err(_) => (
@@ -1087,6 +1235,17 @@ impl PeerCommands {
                 peer: *peer,
                 relay: relay.clone(),
             },
+            Command::Follow {
+                peer,
+                conversations,
+                keep_bytes,
+            } => PeerAuditRecord::FollowRequested {
+                operation,
+                initiator: initiator.clone(),
+                peer: *peer,
+                conversations: conversations.clone(),
+                keep_bytes: *keep_bytes,
+            },
         };
         if !self.keep(requested).await {
             tracing::error!(command = command.name(), target = %command.target(),
@@ -1125,6 +1284,35 @@ impl PeerCommands {
                 after: evidence.after.clone(),
                 outcome: answer,
             },
+            Command::Follow { peer, .. } => {
+                let follow = evidence.follow.clone();
+                PeerAuditRecord::FollowFinished {
+                    operation,
+                    initiator: initiator.clone(),
+                    peer: *peer,
+                    before_conversations: follow
+                        .as_ref()
+                        .and_then(|item| item.before.as_ref())
+                        .map(|rule| rule.conversations().to_vec()),
+                    before_keep_bytes: follow
+                        .as_ref()
+                        .and_then(|item| item.before.as_ref())
+                        .map(|rule| rule.keep_bytes()),
+                    after_conversations: follow
+                        .as_ref()
+                        .and_then(|item| item.after.as_ref())
+                        .map(|rule| rule.conversations().to_vec()),
+                    after_keep_bytes: follow
+                        .as_ref()
+                        .and_then(|item| item.after.as_ref())
+                        .map(|rule| rule.keep_bytes()),
+                    replica_reset: follow.as_ref().is_some_and(|item| item.replica_reset),
+                    replica_reset_durable: follow.is_some_and(|item| item.replica_reset_durable),
+                    before: evidence.before,
+                    after: evidence.after.clone(),
+                    outcome: answer,
+                }
+            }
         };
         if !self.keep(finished).await {
             tracing::error!(command = command.name(), target = %command.target(), peer = %peer,
@@ -1309,6 +1497,11 @@ enum Command {
         peer: DeviceKey,
         relay: Option<RelayAddress>,
     },
+    Follow {
+        peer: DeviceKey,
+        conversations: Vec<String>,
+        keep_bytes: u64,
+    },
 }
 impl Command {
     fn name(&self) -> &'static str {
@@ -1316,16 +1509,27 @@ impl Command {
             Self::Enroll { .. } => "peer.enroll",
             Self::Forget { .. } => "peer.forget",
             Self::Relay { .. } => "peer.relay",
+            Self::Follow { .. } => "peer.follow",
         }
     }
-    /// What the owner named: the address dialed, or the peer forgotten or
-    /// given a relay.
+    /// What the owner named: the address dialed, or the peer forgotten,
+    /// given a relay, or followed.
     fn target(&self) -> String {
         match self {
             Self::Enroll { address, .. } => address.to_string(),
-            Self::Forget { peer } | Self::Relay { peer, .. } => hex(peer),
+            Self::Forget { peer } | Self::Relay { peer, .. } | Self::Follow { peer, .. } => {
+                hex(peer)
+            }
         }
     }
+}
+
+/// What `peer.follow` stored.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FollowChoice {
+    pub rule: FollowRule,
+    /// The local replica was dropped because the rule changed.
+    pub replica_reset: bool,
 }
 
 /// What one call found and left of its peer's record.
@@ -1334,6 +1538,8 @@ struct Evidence {
     peer: Option<DeviceKey>,
     before: PeerState,
     after: PeerState,
+    /// Set by `peer.follow`: the rule before and after, when either was stored.
+    follow: Option<FollowAudit>,
 }
 impl Evidence {
     /// The call ended before it read any record.
@@ -1342,6 +1548,7 @@ impl Evidence {
             peer,
             before: PeerState::NotRead,
             after: PeerState::NotRead,
+            follow: None,
         }
     }
     /// The record was read as `state` and left as it was.
@@ -1350,6 +1557,7 @@ impl Evidence {
             peer: Some(peer),
             before: state.clone(),
             after: state,
+            follow: None,
         }
     }
     /// What an enrollment's slot noted: the peer from the moment its pin was
@@ -1372,8 +1580,18 @@ impl Evidence {
             peer: Some(peer),
             before,
             after,
+            follow: None,
         }
     }
+}
+
+/// The follow rule a `peer.follow` call found and left.
+#[derive(Clone)]
+struct FollowAudit {
+    before: Option<FollowRule>,
+    after: Option<FollowRule>,
+    replica_reset: bool,
+    replica_reset_durable: bool,
 }
 
 /// A record as the audit names its state.
