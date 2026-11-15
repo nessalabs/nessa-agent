@@ -409,9 +409,9 @@ mod local_golden_tests;
 #[path = "../../tests/conversation/leases.rs"]
 mod lease_tests;
 
+pub(crate) use placement::rest_cause;
 #[cfg(unix)]
 pub use placement::ThreadEnvironments;
-pub use placement::WorkspaceRest;
 pub use placement::MAX_RETAINED_ENVIRONMENTS;
 
 #[cfg(unix)]

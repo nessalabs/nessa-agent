@@ -37,4 +37,4 @@ pub use workspace_window::{
 pub use place::{Place, UnknownPlace};
 pub use pool_preference::{PoolPreference, PoolRefusal, PoolSettings, MAX_POOL_ENTRIES};
 pub use settings_scope::SettingsScope;
-pub use vm_lifetime::{VmLifetime, VmLifetimeSettings};
+pub use vm_lifetime::{RestCause, VmLifetime, VmLifetimeSettings};

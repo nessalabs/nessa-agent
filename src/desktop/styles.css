@@ -1124,6 +1124,47 @@ html:not(.dark) [data-surface] {
     0 32px 80px -32px rgb(0 0 0 / 75%);
 }
 
+/*
+ * The composer folded to a circle, its model's mark on it: shown only in a
+ * quiet pane with nothing typed (`workspace/ui/panes/conversation.css`).
+ */
+.desktop-composer-wake {
+  display: none;
+  width: 100%;
+  height: 100%;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: inherit;
+  background: none;
+  color: var(--desktop-muted);
+  cursor: pointer;
+}
+
+.desktop-composer-wake:focus-visible {
+  outline: var(--desktop-focus-outline);
+  outline-offset: 2px;
+}
+
+/* On the circle the mark stands alone, as in the model chip: the circle is its tile. */
+.desktop-composer-wake .desktop-provider-mark {
+  width: 18px;
+  height: 18px;
+  flex: none;
+  background: none;
+  box-shadow: none;
+}
+
+.desktop-composer-wake .desktop-provider-mark svg {
+  width: 100%;
+  height: 100%;
+}
+
+.desktop-composer-wake > svg {
+  width: 16px;
+  height: 16px;
+}
+
 .desktop-composer textarea {
   display: block;
   width: 100%;
@@ -1801,10 +1842,22 @@ html:not(.dark) .desktop-tooltip {
   height: 62%;
 }
 
+/*
+ * A model row's tile fills the row's icon slot (the menu's 16px icon,
+ * `menu-recipe` in nessa_ui) and never gives up width to the row, or it
+ * squeezes into a tall sliver.
+ */
 [data-slot="searchable-listbox-option"] .desktop-provider-mark {
-  width: 28px;
-  height: 28px;
-  font-size: 13px;
+  width: 16px;
+  height: 16px;
+  flex: none;
+  /* A provider with no mark shows its capitals, as small as the tile allows. */
+  font-size: 7px;
+}
+
+[data-slot="searchable-listbox-option"] .desktop-provider-mark svg {
+  width: 75%;
+  height: 75%;
 }
 
 [data-slot="model-picker-provider-tabs"] .desktop-provider-mark {
