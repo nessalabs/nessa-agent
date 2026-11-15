@@ -1,6 +1,7 @@
 /**
  * The call pill's page (`call.html`): the small window that floats over
- * other apps while a voice call is open (`src-tauri/src/call_pill.rs`). It
+ * everything while a voice call is open and its composer is not in view
+ * (`src-tauri/src/call_pill.rs`). It
  * holds no call. It draws the picture the desktop window sends and hands
  * presses back; with no picture it draws nothing, and its window is hidden.
  */

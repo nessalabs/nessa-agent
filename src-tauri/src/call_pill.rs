@@ -1,6 +1,8 @@
-//! The call pill: a small window that floats over every app while a voice
-//! call is open and the desktop window is not in front, with the call's
-//! switches on it — microphone, speaker, End.
+//! The call pill: a small window that floats over everything while a voice
+//! call is open and its composer is not in view, with the call's switches on
+//! it — microphone, speaker, End. The composer is out of view while the
+//! desktop window is not in front, and while no pane in it shows the chat
+//! the call talks to: a call goes on while the person reads another chat.
 //!
 //! The call itself lives in the desktop window's page. This module only
 //! carries two things across: what the call looks like now, from the desktop
@@ -12,7 +14,8 @@
 //! desktop window says what its call looks like, and only the pill sends
 //! presses. Whether the pill is on screen is decided here too, from the
 //! desktop window's own focus, so a page that cannot tell it left the front
-//! (the keyboard was inside a frame) still gets its pill.
+//! (the keyboard was inside a frame) still gets its pill, and from what the
+//! page says its panes show, which only the page knows.
 //!
 //! The windows and the window server are outside the process: `CallPill`
 //! reaches them only through `PillScreen`, which composition supplies
@@ -176,6 +179,8 @@ pub struct CallPill {
 #[derive(Default)]
 struct Held {
     picture: Option<CallPicture>,
+    /// Whether a pane of the desktop window shows the call's chat.
+    chat_shown: bool,
     placed: bool,
 }
 
@@ -193,10 +198,15 @@ impl CallPill {
         self.held.lock().unwrap_or_else(|error| error.into_inner())
     }
 
-    /// What the desktop window's call looks like now; none when no call is
-    /// open. Whether the pill then shows is decided here, from the window.
-    pub fn set(&self, call: Option<CallPicture>) {
-        self.held().picture = call.map(CallPicture::bounded);
+    /// What the desktop window's call looks like now, none when no call is
+    /// open, and whether a pane there shows the chat it talks to. Whether
+    /// the pill then shows is decided here, from that and the window.
+    pub fn set(&self, call: Option<CallPicture>, chat_shown: bool) {
+        {
+            let mut held = self.held();
+            held.picture = call.map(CallPicture::bounded);
+            held.chat_shown = chat_shown;
+        }
         self.settle(self.screen.desktop_in_front());
     }
 
@@ -207,7 +217,11 @@ impl CallPill {
 
     /// The desktop page is loading again: whatever call it held is gone with it.
     pub fn desktop_page_reloading(&self) {
-        self.held().picture = None;
+        {
+            let mut held = self.held();
+            held.picture = None;
+            held.chat_shown = false;
+        }
         self.settle(true);
     }
 
@@ -276,7 +290,7 @@ impl CallPill {
     /// What the pill draws now: the held picture while it shows, else none.
     fn drawn(&self, desktop_in_front: bool) -> Option<CallPicture> {
         let held = self.held();
-        if shows(held.picture.is_some(), desktop_in_front) {
+        if shows(held.picture.is_some(), desktop_in_front, held.chat_shown) {
             held.picture.clone()
         } else {
             None
@@ -300,10 +314,11 @@ fn first_place(room: Room) -> Place {
     }
 }
 
-/// Whether the pill is on screen: a call is open, and the desktop window is
-/// not the one in front. In front, the composer already has the switches.
-fn shows(call_open: bool, desktop_in_front: bool) -> bool {
-    call_open && !desktop_in_front
+/// Whether the pill is on screen: a call is open, and its composer is not
+/// in view. The composer has the same switches, and is in view only while
+/// the desktop window is the one in front and a pane in it shows the chat.
+fn shows(call_open: bool, desktop_in_front: bool, chat_shown: bool) -> bool {
+    call_open && !(desktop_in_front && chat_shown)
 }
 
 /// The windows Tauri holds, and the window server behind them.
@@ -397,16 +412,18 @@ fn only(window: &WebviewWindow, label: &str) -> Result<(), String> {
     }
 }
 
-/// What the desktop window's call looks like now; none when no call is open.
-/// The desktop page says this at every change, whichever window is in front.
+/// What the desktop window's call looks like now, none when no call is open,
+/// and whether a pane there shows the chat it talks to. The desktop page
+/// says this at every change, whichever window is in front.
 #[tauri::command]
 pub fn call_pill_set(
     window: WebviewWindow,
     deps: State<'_, HostDependencies>,
     call: Option<CallPicture>,
+    chat_shown: bool,
 ) -> Result<(), String> {
     only(&window, DESKTOP_WINDOW)?;
-    deps.call_pill.set(call);
+    deps.call_pill.set(call, chat_shown);
     Ok(())
 }
 
@@ -572,17 +589,49 @@ mod tests {
     }
 
     #[test]
-    fn the_pill_shows_only_for_an_open_call_behind_other_windows() {
-        assert!(shows(true, false));
-        assert!(!shows(true, true));
-        assert!(!shows(false, false));
-        assert!(!shows(false, true));
+    fn the_pill_shows_only_for_an_open_call_whose_composer_is_out_of_view() {
+        assert!(!shows(true, true, true));
+        assert!(shows(true, true, false));
+        assert!(shows(true, false, true));
+        assert!(shows(true, false, false));
+        for in_front in [true, false] {
+            for chat_shown in [true, false] {
+                assert!(!shows(false, in_front, chat_shown));
+            }
+        }
+    }
+
+    #[test]
+    fn a_call_whose_chat_left_the_panes_shows_the_pill_over_the_front_window() {
+        let (screen, pill) = scene();
+        pill.set(call("Fix the build"), true);
+        assert_eq!(screen.did(), ["draw nothing"]);
+
+        // The person opened another chat: the window is still in front.
+        pill.set(call("Fix the build"), false);
+        assert_eq!(screen.did(), ["draw Fix the build", "move 1272,70", "show"]);
+        assert_eq!(pill.read(), call("Fix the build"));
+
+        // Leaving the front and coming back changes nothing while it is away.
+        leave_front(&screen, &pill);
+        come_front(&screen, &pill);
+        assert_eq!(screen.did(), ["draw Fix the build", "draw Fix the build"]);
+
+        // The chat is back in a pane: the composer has the switches again.
+        pill.set(call("Fix the build"), true);
+        assert_eq!(screen.did(), ["draw nothing", "hide"]);
+
+        // A page loading again forgets what its panes showed with its call.
+        pill.set(call("Fix the build"), false);
+        screen.did();
+        pill.desktop_page_reloading();
+        assert_eq!(screen.did(), ["draw nothing", "hide"]);
     }
 
     #[test]
     fn a_call_in_the_front_window_keeps_the_pill_away_and_leaving_shows_it_placed_once() {
         let (screen, pill) = scene();
-        pill.set(call("Fix the build"));
+        pill.set(call("Fix the build"), true);
         assert_eq!(screen.did(), ["draw nothing"]);
         assert_eq!(pill.read(), None);
 
@@ -591,7 +640,7 @@ mod tests {
         assert_eq!(pill.read(), call("Fix the build"));
 
         // On screen already: a change is drawn, and nothing is shown or moved.
-        pill.set(call("Ship the pill"));
+        pill.set(call("Ship the pill"), true);
         assert_eq!(screen.did(), ["draw Ship the pill"]);
 
         come_front(&screen, &pill);
@@ -607,9 +656,9 @@ mod tests {
         let (screen, pill) = scene();
         leave_front(&screen, &pill);
         assert_eq!(screen.did(), ["draw nothing"]);
-        pill.set(call("Fix the build"));
+        pill.set(call("Fix the build"), true);
         screen.did();
-        pill.set(None);
+        pill.set(None, false);
         assert_eq!(screen.did(), ["draw nothing", "hide"]);
         assert_eq!(pill.read(), None);
     }
@@ -618,7 +667,7 @@ mod tests {
     fn a_desktop_page_loading_again_puts_the_pill_away_with_its_call() {
         let (screen, pill) = scene();
         leave_front(&screen, &pill);
-        pill.set(call("Fix the build"));
+        pill.set(call("Fix the build"), true);
         screen.did();
         pill.desktop_page_reloading();
         assert_eq!(screen.did(), ["draw nothing", "hide"]);
@@ -633,13 +682,13 @@ mod tests {
         let (screen, pill) = scene();
         screen.said().refuses = vec!["show"];
         leave_front(&screen, &pill);
-        pill.set(call("Fix the build"));
+        pill.set(call("Fix the build"), true);
         assert_eq!(
             screen.did(),
             ["draw nothing", "draw Fix the build", "move 1272,70", "show"]
         );
         screen.said().refuses.clear();
-        pill.set(call("Fix the build"));
+        pill.set(call("Fix the build"), true);
         assert_eq!(screen.did(), ["draw Fix the build", "show"]);
         assert_eq!(screen.said().on_screen, Some(true));
     }
@@ -648,10 +697,10 @@ mod tests {
     fn a_hide_the_window_server_refused_is_tried_again_at_the_next_change() {
         let (screen, pill) = scene();
         leave_front(&screen, &pill);
-        pill.set(call("Fix the build"));
+        pill.set(call("Fix the build"), true);
         screen.did();
         screen.said().refuses = vec!["hide"];
-        pill.set(None);
+        pill.set(None, false);
         assert_eq!(screen.did(), ["draw nothing", "hide"]);
         screen.said().refuses.clear();
         come_front(&screen, &pill);
@@ -664,7 +713,7 @@ mod tests {
         let (screen, pill) = scene();
         screen.said().refuses = vec!["draw", "move"];
         leave_front(&screen, &pill);
-        pill.set(call("Fix the build"));
+        pill.set(call("Fix the build"), true);
         assert_eq!(screen.did().last().map(String::as_str), Some("show"));
         // The late page asks for what it missed.
         assert_eq!(pill.read(), call("Fix the build"));
@@ -672,13 +721,13 @@ mod tests {
         let (screen, pill) = scene();
         screen.said().room = Err("no screens".into());
         leave_front(&screen, &pill);
-        pill.set(call("Fix the build"));
+        pill.set(call("Fix the build"), true);
         assert_eq!(screen.did(), ["draw nothing", "draw Fix the build", "show"]);
 
         let (screen, pill) = scene();
         screen.said().room = Ok(None);
         leave_front(&screen, &pill);
-        pill.set(call("Fix the build"));
+        pill.set(call("Fix the build"), true);
         assert_eq!(screen.did(), ["draw nothing", "draw Fix the build", "show"]);
     }
 
@@ -687,7 +736,7 @@ mod tests {
         let (screen, pill) = scene();
         screen.said().on_screen = None;
         leave_front(&screen, &pill);
-        pill.set(call("Fix the build"));
+        pill.set(call("Fix the build"), true);
         assert_eq!(screen.did(), ["draw nothing", "draw Fix the build"]);
         assert_eq!(pill.read(), call("Fix the build"));
     }

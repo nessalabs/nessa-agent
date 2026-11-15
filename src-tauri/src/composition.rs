@@ -168,7 +168,8 @@ pub struct HostDependencies {
     /// are, so the finished setup window can fly onto the icon.
     pub tray_geometry: Arc<dyn crate::tray::TrayGeometry>,
     /// The call pill: what the desktop window's call looks like, and the
-    /// small window that shows it over other apps (`crate::call_pill`).
+    /// small window that shows it while its composer is out of view
+    /// (`crate::call_pill`).
     pub call_pill: Arc<crate::call_pill::CallPill>,
 }
 
