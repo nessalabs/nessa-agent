@@ -750,3 +750,179 @@ fn dial_gateway_says_a_bad_address_and_carries_the_relays_answer() {
     let connected = dial_gateway(&address.to_string(), None, None, Duration::from_secs(5)).unwrap();
     assert_eq!(connected.peer_addr().unwrap(), address);
 }
+
+#[test]
+fn one_shot_exits_release_only_their_own_shared_stop_sockets() {
+    use crate::read_only_sync::infrastructure::gateway::tests::session::{peer, send};
+    use nessa_protocol::product::generated::{product_event, product_method, SessionTermination};
+    use nessa_protocol::product::passive_read::wire_scope;
+    use nessa_protocol::product_contract::generated::SessionCloseReason;
+    use nessa_protocol::protocol::{EventFrame, OutgoingMessage, RequestFrame, ResponseFrame};
+    use serde_json::json;
+    struct Wall;
+    impl WallClock for Wall {
+        fn unix_milliseconds(&self) -> u64 {
+            123_000
+        }
+    }
+    struct Time(Instant);
+    impl MonotonicClock for Time {
+        fn elapsed_ms(&self) -> u64 {
+            self.0.elapsed().as_millis() as u64
+        }
+    }
+    let clocks = (
+        Arc::new(Wall) as Arc<dyn WallClock>,
+        Arc::new(Time(Instant::now())) as Arc<dyn MonotonicClock>,
+    );
+    let stop = ReadStop::new();
+    // A separate live operation shares cancellation with each one-shot below.
+    // No background thread or timing race is needed to hold its socket open.
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let mut sibling_socket = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+    let (mut sibling_peer, _) = listener.accept().unwrap();
+    sibling_peer
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .unwrap();
+    let sibling = Stopping::new(stop.clone(), clocks.1.clone(), u64::MAX);
+    sibling.register(&sibling_socket).unwrap();
+
+    for success in [true, false, true] {
+        let conversation = ConversationId::new("8e024fc9-0c9d-4952-8427-bcb2b3b07f8f").unwrap();
+        let scope = Scope::new(
+            Id::new("receiver").unwrap(),
+            Id::new("gateway").unwrap(),
+            Id::new(conversation.to_string()).unwrap(),
+            Id::new("incarnation").unwrap(),
+            nessa_sdk::infrastructure::session_storage::physical_record_schema(),
+            Id::new("epoch-3").unwrap(),
+        );
+        let (endpoint, server) = peer(move |socket| {
+            while let Some(text) = socket.read_text() {
+                let reading = RequestFrame::decode(&text).unwrap();
+                assert_eq!(reading.method, product_method::CONVERSATION_RECORDS_HEAD);
+                if success {
+                    send(
+                        socket,
+                        OutgoingMessage::Response(
+                            ResponseFrame::success(
+                                &reading.id,
+                                &json!({"scope":wire_scope(&scope),"head":"0"}),
+                            )
+                            .unwrap(),
+                        ),
+                    );
+                } else {
+                    send(
+                        socket,
+                        OutgoingMessage::Event(
+                            EventFrame::push(
+                                product_event::SESSION_TERMINATED,
+                                &SessionTermination {
+                                    code: SessionCloseReason::ProtocolIncompatible,
+                                    retryable: false,
+                                    retry_after_ms: None,
+                                },
+                                0,
+                                0,
+                            )
+                            .unwrap(),
+                        ),
+                    );
+                    break;
+                }
+            }
+        });
+
+        let mut invalid = endpoint.reader_access();
+        invalid.receiver = "";
+        assert_eq!(
+            RetainedCache::open_without_replicating(
+                invalid,
+                &conversation,
+                &stop,
+                Duration::from_secs(10),
+                FOLLOW_KEEP_MIN,
+                &clocks,
+            ),
+            Err(ReadFailure::Protocol),
+        );
+        assert_eq!(stop.lock().len(), 1, "early refusal preserves the sibling");
+        let result = RetainedCache::open_without_replicating(
+            endpoint.reader_access(),
+            &conversation,
+            &stop,
+            Duration::from_secs(10),
+            FOLLOW_KEEP_MIN,
+            &clocks,
+        );
+        assert_eq!(
+            result,
+            if success {
+                Ok(())
+            } else {
+                Err(ReadFailure::Protocol)
+            }
+        );
+        assert_eq!(
+            stop.lock().len(),
+            1,
+            "one-shot exit releases its own registrations, not its sibling's",
+        );
+        sibling_socket.write_all(b"a").unwrap();
+        let mut byte = [0];
+        sibling_peer.read_exact(&mut byte).unwrap();
+        assert_eq!(byte, *b"a");
+        server.join().unwrap();
+    }
+    stop.stop();
+    assert!(stop.lock().is_empty());
+    assert_eq!(
+        sibling_peer.read(&mut [0]).unwrap(),
+        0,
+        "shared stop still physically shuts down the surviving sibling"
+    );
+    drop(sibling);
+}
+
+#[test]
+fn scoped_stop_registration_drop_and_late_registration_keep_their_owners() {
+    struct Time;
+    impl MonotonicClock for Time {
+        fn elapsed_ms(&self) -> u64 {
+            0
+        }
+    }
+    let stop = ReadStop::new();
+    let clock: Arc<dyn MonotonicClock> = Arc::new(Time);
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let first_socket = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+    let (_first_peer, _) = listener.accept().unwrap();
+    let second_socket = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+    let (mut second_peer, _) = listener.accept().unwrap();
+    second_peer
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .unwrap();
+    let first = Stopping::new(stop.clone(), clock.clone(), u64::MAX);
+    let second = Stopping::new(stop.clone(), clock.clone(), u64::MAX);
+    first.register(&first_socket).unwrap();
+    second.register(&second_socket).unwrap();
+    assert_eq!(stop.lock().len(), 2);
+    first.release(); // Explicit close and later drop are idempotent and scoped.
+    assert_eq!(stop.lock().len(), 1);
+    drop(first);
+    assert_eq!(stop.lock().len(), 1);
+    stop.stop();
+    assert_eq!(second_peer.read(&mut [0]).unwrap(), 0);
+    drop(second);
+    assert!(stop.lock().is_empty());
+    let late_socket = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+    let (mut late_peer, _) = listener.accept().unwrap();
+    late_peer
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .unwrap();
+    let late = Stopping::new(stop.clone(), clock, u64::MAX);
+    late.register(&late_socket).unwrap();
+    assert_eq!(late_peer.read(&mut [0]).unwrap(), 0);
+    assert!(stop.lock().is_empty());
+}

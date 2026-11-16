@@ -134,6 +134,21 @@ impl ReadOnlyCache {
         Self::from_connection(connection, policy, clock)
     }
 
+    /// A bounded one-shot transcript, with no retained file to clean up.
+    pub(crate) fn ephemeral(
+        policy: CachePolicy,
+        clock: Arc<dyn Clock>,
+    ) -> Result<Self, CacheError> {
+        let connection = Connection::open_in_memory().map_err(rows::database_error)?;
+        connection
+            .pragma_update(None, "foreign_keys", true)
+            .map_err(rows::database_error)?;
+        connection
+            .execute_batch(include_str!("schema.sql"))
+            .map_err(rows::database_error)?;
+        Self::from_connection(connection, policy, clock)
+    }
+
     fn from_connection(
         connection: Connection,
         policy: CachePolicy,

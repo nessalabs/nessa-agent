@@ -218,7 +218,7 @@
         "methods": {
           "type": "array",
           "items": { "type": "string" },
-          "maxItems": 123,
+          "maxItems": 124,
           "description": "Registered product methods; permission is checked for every command."
         }
       },
@@ -7158,6 +7158,74 @@
       },
       "required": ["peerKey", "relay"],
       "description": "Wire input for peer.relay: set or clear the relay kept for a peer. A read of that peer in progress is stopped first, and the next read uses the new relay."
+    },
+    "PeerFollowParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "peerKey": {
+          "x-pairing-byte-array": "DeviceKey",
+          "description": "The peer's key, as peer.list shows it.",
+          "type": "array",
+          "items": { "type": "integer", "minimum": 0, "maximum": 255 },
+          "maxItems": 32,
+          "minItems": 32
+        },
+        "conversations": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 36,
+            "maxLength": 36,
+            "description": "One conversation id, a canonical lowercase UUID."
+          },
+          "minItems": 0,
+          "maxItems": 256,
+          "uniqueItems": true,
+          "description": "The granted conversations this gateway replicates from that peer, and keeps in its local replica. Empty follows none. Naming a conversation the peer did not grant does not grant it, and this list is not sent to the peer."
+        },
+        "keepBytes": {
+          "type": "integer",
+          "minimum": 1048576,
+          "maximum": 268435456,
+          "description": "How many bytes of that peer's local replica to keep. Changing the conversation list or this number drops the replica; the same choice again does not. 1048576 is the smallest replica, 268435456 the retained cache's own ceiling."
+        }
+      },
+      "required": ["peerKey", "conversations", "keepBytes"],
+      "description": "Wire input for peer.follow: which of the peer's granted conversations to replicate, and how much of the local replica to keep. The peer is not dialed."
+    },
+    "PeerFollowResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "peerKey": {
+          "x-pairing-byte-array": "DeviceKey",
+          "description": "The peer the rule was stored for.",
+          "type": "array",
+          "items": { "type": "integer", "minimum": 0, "maximum": 255 },
+          "maxItems": 32,
+          "minItems": 32
+        },
+        "conversations": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 36, "maxLength": 36 },
+          "minItems": 0,
+          "maxItems": 256,
+          "description": "The conversations the stored rule replicates, in id order."
+        },
+        "keepBytes": {
+          "type": "integer",
+          "minimum": 1048576,
+          "maximum": 268435456,
+          "description": "The replica ceiling the stored rule keeps."
+        },
+        "replicaReset": {
+          "type": "boolean",
+          "description": "The local replica was dropped because the rule changed. False when the stored rule was already this choice."
+        }
+      },
+      "required": ["peerKey", "conversations", "keepBytes", "replicaReset"],
+      "description": "Result of peer.follow. The grantor's catalogue is not in this result, and the peer is not told the rule."
     },
     "PeerPhase": {
       "type": "string",

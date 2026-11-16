@@ -714,7 +714,6 @@ impl RetainedCache {
         let session = match self.open_session(&access, &ending, &offline) {
             Ok(session) => session,
             Err(failure) => {
-                stop.release();
                 return Err(dial_failure(
                     failure,
                     &ending,
@@ -729,7 +728,6 @@ impl RetainedCache {
             };
             confirmed_held_file(&mut source, pause, request, &ending, files)
         };
-        stop.release();
         let outcome = match fetched? {
             Ok(fresh) => Ok(fresh),
             Err(fault) => Err(classify_artifact_fault(fault, &ending)),

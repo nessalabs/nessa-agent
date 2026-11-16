@@ -2998,6 +2998,21 @@ pub struct PeerRelayParams {
     #[serde(deserialize_with = "Option::deserialize")]
     pub relay: Option<String>,
 }
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PeerFollowParams {
+    pub peer_key: [u8; DeviceKey::LENGTH],
+    pub conversations: Vec<String>,
+    pub keep_bytes: u64,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PeerFollowResult {
+    pub peer_key: [u8; DeviceKey::LENGTH],
+    pub conversations: Vec<String>,
+    pub keep_bytes: u64,
+    pub replica_reset: bool,
+}
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 pub enum PeerPhase {
     #[serde(rename = "pending")]
@@ -4387,6 +4402,7 @@ pub mod product_method {
     pub const PEER_LIST: &str = "peer.list";
     pub const PEER_FORGET: &str = "peer.forget";
     pub const PEER_RELAY: &str = "peer.relay";
+    pub const PEER_FOLLOW: &str = "peer.follow";
     pub const CONVERSATION_SUBSCRIBE: &str = "conversation.subscribe";
     pub const CONVERSATION_SUBSCRIBE_LIST: &str = "conversation.subscribeList";
     pub const CONVERSATION_UNSUBSCRIBE: &str = "conversation.unsubscribe";
@@ -4618,7 +4634,7 @@ pub fn wire_shape_product_session_ready(value: &Value) -> bool {
         }) && object.get("methods").is_some_and(|field| {
             let _ = field;
             field.as_array().is_some_and(|items| {
-                items.len() <= 123
+                items.len() <= 124
                     && items.iter().all(|item| {
                         let _ = item;
                         item.is_string()
@@ -4725,6 +4741,7 @@ pub const PRODUCT_READY_METHODS: &[&str] = &[
     "peer.list",
     "peer.forget",
     "peer.relay",
+    "peer.follow",
     "conversation.subscribe",
     "conversation.subscribeList",
     "conversation.unsubscribe",
@@ -4996,6 +5013,8 @@ pub enum ProductMethod {
     PeerForget,
     /// `peer.relay`
     PeerRelay,
+    /// `peer.follow`
+    PeerFollow,
     /// `conversation.subscribe`
     ConversationSubscribe,
     /// `conversation.subscribeList`
@@ -5166,6 +5185,7 @@ impl ProductMethod {
         ProductMethod::PeerList,
         ProductMethod::PeerForget,
         ProductMethod::PeerRelay,
+        ProductMethod::PeerFollow,
         ProductMethod::ConversationSubscribe,
         ProductMethod::ConversationSubscribeList,
         ProductMethod::ConversationUnsubscribe,
@@ -5298,6 +5318,7 @@ impl ProductMethod {
             "peer.list" => Some(ProductMethod::PeerList),
             "peer.forget" => Some(ProductMethod::PeerForget),
             "peer.relay" => Some(ProductMethod::PeerRelay),
+            "peer.follow" => Some(ProductMethod::PeerFollow),
             "conversation.subscribe" => Some(ProductMethod::ConversationSubscribe),
             "conversation.subscribeList" => Some(ProductMethod::ConversationSubscribeList),
             "conversation.unsubscribe" => Some(ProductMethod::ConversationUnsubscribe),
@@ -5433,6 +5454,7 @@ impl ProductMethod {
             ProductMethod::PeerList => "peer.list",
             ProductMethod::PeerForget => "peer.forget",
             ProductMethod::PeerRelay => "peer.relay",
+            ProductMethod::PeerFollow => "peer.follow",
             ProductMethod::ConversationSubscribe => "conversation.subscribe",
             ProductMethod::ConversationSubscribeList => "conversation.subscribeList",
             ProductMethod::ConversationUnsubscribe => "conversation.unsubscribe",
@@ -5564,6 +5586,7 @@ impl ProductMethod {
             ProductMethod::PeerList => Some("credential.manage"),
             ProductMethod::PeerForget => Some("credential.manage"),
             ProductMethod::PeerRelay => Some("credential.manage"),
+            ProductMethod::PeerFollow => Some("credential.manage"),
             ProductMethod::ConversationSubscribe => Some("conversation.write"),
             ProductMethod::ConversationSubscribeList => Some("conversation.write"),
             ProductMethod::ConversationUnsubscribe => Some("conversation.write"),
@@ -5694,6 +5717,7 @@ impl ProductMethod {
             ProductMethod::PeerList => ProductLane::Requests,
             ProductMethod::PeerForget => ProductLane::Requests,
             ProductMethod::PeerRelay => ProductLane::Requests,
+            ProductMethod::PeerFollow => ProductLane::Requests,
             ProductMethod::ConversationSubscribe => ProductLane::Requests,
             ProductMethod::ConversationSubscribeList => ProductLane::Requests,
             ProductMethod::ConversationUnsubscribe => ProductLane::Requests,
@@ -6018,6 +6042,9 @@ impl ProductMethod {
             ProductMethod::PeerRelay => {
                 ProductParams::PeerRelay(serde_json::from_value(params).map_err(|_| ParamsRefused)?)
             }
+            ProductMethod::PeerFollow => ProductParams::PeerFollow(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
             ProductMethod::ConversationSubscribe => ProductParams::ConversationSubscribe(
                 serde_json::from_value(params).map_err(|_| ParamsRefused)?,
             ),
@@ -6247,6 +6274,7 @@ pub enum ProductParams {
     PeerList,
     PeerForget(PeerForgetParams),
     PeerRelay(PeerRelayParams),
+    PeerFollow(PeerFollowParams),
     ConversationSubscribe(ConversationSubscribeParams),
     ConversationSubscribeList(ConversationSubscribeListParams),
     ConversationUnsubscribe(ConversationUnsubscribeParams),
@@ -6391,6 +6419,7 @@ impl ProductParams {
             ProductParams::PeerList => ProductMethod::PeerList,
             ProductParams::PeerForget(_) => ProductMethod::PeerForget,
             ProductParams::PeerRelay(_) => ProductMethod::PeerRelay,
+            ProductParams::PeerFollow(_) => ProductMethod::PeerFollow,
             ProductParams::ConversationSubscribe(_) => ProductMethod::ConversationSubscribe,
             ProductParams::ConversationSubscribeList(_) => ProductMethod::ConversationSubscribeList,
             ProductParams::ConversationUnsubscribe(_) => ProductMethod::ConversationUnsubscribe,
