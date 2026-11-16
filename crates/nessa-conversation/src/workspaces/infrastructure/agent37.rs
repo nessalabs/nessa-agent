@@ -247,10 +247,12 @@ impl Provider for Agent37Provider {
             Ok(release) => (release, false),
             Err(_) => (TemplateRelease::new(vm.image.clone(), None, None)?, true),
         };
-        let cause = if unreadable {
-            Some(sdk::AdmissionRefusal::WrongTemplate)
-        } else {
-            created.refusal()
+        // Not carrying the key wins: such an instance is never deleted,
+        // whatever else it reported.
+        let cause = match created.refusal() {
+            Some(owner @ sdk::AdmissionRefusal::WrongOwner) => Some(owner),
+            _ if unreadable => Some(sdk::AdmissionRefusal::WrongTemplate),
+            other => other,
         };
         let refusal = cause.map(|cause| {
             AdmissionRejection::new(

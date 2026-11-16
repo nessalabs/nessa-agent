@@ -211,3 +211,20 @@ async fn an_unreadable_report_is_refused_and_removed_not_lost() {
     };
     assert_eq!((release.template(), release.digest()), (TEMPLATE, None));
 }
+
+/// One that does not carry the thread's key is kept even when its report
+/// cannot be read.
+#[tokio::test]
+async fn an_unreadable_report_from_someone_elses_instance_is_kept() {
+    let (provider, shared) = fake(json!({
+        "image_digest": "sha512:not-a-sha256",
+        "metadata": { "workspace_sdk_key": "someone-else" },
+    }))
+    .await;
+    let receipt = provider
+        .create(&account().await, &spec(), "fixture-thread")
+        .await
+        .unwrap();
+    assert_eq!(receipt.disposition, RefusalDisposition::RetainTarget);
+    assert_eq!(shared.lock().unwrap().calls, ["create"]);
+}
