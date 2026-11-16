@@ -60,7 +60,7 @@ uuid = { version = "1", features = ["v4"] }
 zeroize = "=1.9.0"
 
 [target.'cfg(unix)'.dependencies]
-workspace_sdk = { git = "https://github.com/nessalabs/workspace-sdk", rev = "2f7cc35d50c38e50a03bf33ac42f8f792a73d388", features = ["agent37"] }
+workspace_sdk = { git = "https://github.com/nessalabs/workspace-sdk", rev = "ad4703c8bd8f3765f3a8341fdc2169d19881d038", features = ["agent37"] }
 libc = "0.2"
 shepherd = { git = "https://github.com/nessalabs/shepherd", rev = "85ee0d55acabf5f91b8cac2e925872d044514864" }
 

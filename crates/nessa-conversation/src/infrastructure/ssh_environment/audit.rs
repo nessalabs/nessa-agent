@@ -42,7 +42,7 @@ pub enum EnvironmentEvent {
         vm: String,
         template: String,
         template_revision: Option<u64>,
-        image_digest: String,
+        image_digest: Option<String>,
         cause: String,
         disposition: String,
     },

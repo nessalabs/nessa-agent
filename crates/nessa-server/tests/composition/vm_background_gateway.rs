@@ -257,7 +257,7 @@ impl Provider for FakeProvider {
                     TemplateRelease::new(
                         "nessa-runtime@1".into(),
                         Some(1),
-                        format!("sha256:{}", "a".repeat(64)),
+                        Some(format!("sha256:{}", "a".repeat(64))),
                     )
                     .unwrap(),
                 ),

@@ -59,13 +59,15 @@ impl Agent37Connection {
     }
 }
 
-/// What an Agent37 VM was admitted under: the pinned template release it
-/// was made from, and the image digest it reported, held to on every wake.
+/// What an Agent37 VM reported it runs: its template, the template's
+/// revision and its image digest. An admitted VM's names the pinned release
+/// it was made from and a digest, held to on every wake; a refused VM's is
+/// whatever it reported, which may name no digest.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TemplateRelease {
     template: String,
     revision: Option<u64>,
-    digest: String,
+    digest: Option<String>,
 }
 impl TemplateRelease {
     /// Whether `template` names one release (`name@revision` or a system
@@ -80,12 +82,28 @@ impl TemplateRelease {
                 .bytes()
                 .all(|b| b.is_ascii_alphanumeric() || b"-_.@".contains(&b))
     }
-    pub fn new(template: String, revision: Option<u64>, digest: String) -> Result<Self, Failure> {
-        let digest_ok = digest
-            .strip_prefix("sha256:")
-            .is_some_and(|hex| hex.len() == 64 && hex.bytes().all(|b| b.is_ascii_hexdigit()));
-        if !Self::pinned(&template) || !digest_ok {
-            return Err(Failure::EnvironmentUnavailable);
+    /// # Errors
+    /// [`Failure::InvalidInput`] for a template name outside Agent37's
+    /// alphabet or a digest that is not one `sha256:` digest: what a caller
+    /// read it from decides what that means (a corrupt record, a bad
+    /// answer).
+    pub fn new(
+        template: String,
+        revision: Option<u64>,
+        digest: Option<String>,
+    ) -> Result<Self, Failure> {
+        let digest_ok = digest.as_deref().is_none_or(|digest| {
+            digest
+                .strip_prefix("sha256:")
+                .is_some_and(|hex| hex.len() == 64 && hex.bytes().all(|b| b.is_ascii_hexdigit()))
+        });
+        let named = !template.is_empty()
+            && template.len() <= 128
+            && template
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b"-_.@".contains(&b));
+        if !named || !digest_ok {
+            return Err(Failure::InvalidInput);
         }
         Ok(Self {
             template,
@@ -99,7 +117,9 @@ impl TemplateRelease {
     pub fn revision(&self) -> Option<u64> {
         self.revision
     }
-    pub fn digest(&self) -> &str {
-        &self.digest
+    /// The image digest it reported, if it reported one. An admitted VM's
+    /// always has one.
+    pub fn digest(&self) -> Option<&str> {
+        self.digest.as_deref()
     }
 }

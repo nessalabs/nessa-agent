@@ -616,7 +616,7 @@ dependencies = [
 [[package]]
 name = "boat_client"
 version = "0.1.0"
-source = "git+https://github.com/nessalabs/workspace-sdk?rev=2f7cc35d50c38e50a03bf33ac42f8f792a73d388#2f7cc35d50c38e50a03bf33ac42f8f792a73d388"
+source = "git+https://github.com/nessalabs/workspace-sdk?rev=ad4703c8bd8f3765f3a8341fdc2169d19881d038#ad4703c8bd8f3765f3a8341fdc2169d19881d038"
 dependencies = [
  "base64 0.22.1",
  "fastrand",
@@ -8861,7 +8861,7 @@ dependencies = [
 [[package]]
 name = "workspace_sdk"
 version = "0.2.0"
-source = "git+https://github.com/nessalabs/workspace-sdk?rev=2f7cc35d50c38e50a03bf33ac42f8f792a73d388#2f7cc35d50c38e50a03bf33ac42f8f792a73d388"
+source = "git+https://github.com/nessalabs/workspace-sdk?rev=ad4703c8bd8f3765f3a8341fdc2169d19881d038#ad4703c8bd8f3765f3a8341fdc2169d19881d038"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -8884,6 +8884,7 @@ dependencies = [
  "tokio-tungstenite",
  "uuid",
  "webpki-roots 1.0.9",
+ "zeroize",
 ]
 
 [[package]]

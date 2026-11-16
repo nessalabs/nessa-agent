@@ -15,7 +15,7 @@ use crate::workspaces::{
     application::{Provider, RestCause, WorkspaceReceipt, WorkspaceRuntime},
     domain::{
         AdmissionRefusal, AdmissionRejection, Admitted, Agent37Account, CloudAccount, Failure,
-        RefusalDisposition, TemplateRelease, VmSpec,
+        ObservedEnvironment, RefusalDisposition, TemplateRelease, VmSpec,
     },
 };
 use async_trait::async_trait;
@@ -169,11 +169,12 @@ fn identity(account: &Agent37Account) -> Result<Agent37Identity, Failure> {
     Agent37Identity::new(account.ssh_private.as_slice().to_vec(), &account.ssh_public)
         .map_err(|_| Failure::InvalidInput)
 }
+/// What an admitted VM is held to on each wake: a release with a digest.
 fn admission(release: &TemplateRelease) -> Result<sdk::Admission, Failure> {
     sdk::Admission::restore(
         release.template().into(),
         release.revision(),
-        release.digest().into(),
+        release.digest().ok_or(Failure::InvalidInput)?.into(),
     )
     .map_err(|_| Failure::InvalidInput)
 }
@@ -221,18 +222,35 @@ impl Provider for Agent37Provider {
             .create(&spec(vm, Some(thread))?, &format!("nessa-thread-{thread}"))
             .await
             .map_err(failure)?;
-        let admitted = created.admission();
+        let observed = created.observed();
+        // What it reported, kept as reported for the record; a refused
+        // instance's may be anything Agent37 answered within its alphabet.
+        let release = TemplateRelease::new(
+            observed.template.clone(),
+            observed.revision,
+            observed.digest.clone(),
+        )
+        .map_err(|_| Failure::Provider)?;
+        let refusal = created.refusal().map(|cause| {
+            AdmissionRejection::new(
+                refusal(cause),
+                Some(ObservedEnvironment {
+                    name: Some(observed.template.clone()),
+                    version: observed.revision.and_then(|r| u32::try_from(r).ok()),
+                }),
+            )
+        });
         Ok(WorkspaceReceipt {
             vm: created.instance().into(),
-            admission: Admitted::Agent37(TemplateRelease::new(
-                admitted.template().into(),
-                admitted.revision(),
-                admitted.digest().into(),
-            )?),
-            refusal: None,
-            // Found under the thread's own key or made now, it is the
-            // thread's alone: either may be deleted if refused.
-            disposition: RefusalDisposition::RollbackNewVm,
+            admission: Admitted::Agent37(release),
+            refusal,
+            // Under the thread's own key, found or made now, it is the
+            // thread's alone and may be deleted if refused. One that does
+            // not carry the key may be someone else's: it is kept.
+            disposition: match created.refusal() {
+                Some(sdk::AdmissionRefusal::WrongOwner) => RefusalDisposition::RetainTarget,
+                _ => RefusalDisposition::RollbackNewVm,
+            },
         })
     }
     async fn connect(

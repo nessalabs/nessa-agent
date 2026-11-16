@@ -2288,7 +2288,7 @@ impl RecoveryAudit for WorkspaceRecoveryAudit {
                 vm: vm.clone(),
                 template: release.template().into(),
                 template_revision: release.revision(),
-                image_digest: release.digest().into(),
+                image_digest: release.digest().map(str::to_owned),
                 cause: rejection.cause().as_str().into(),
                 disposition: disposition.as_str().into(),
             },

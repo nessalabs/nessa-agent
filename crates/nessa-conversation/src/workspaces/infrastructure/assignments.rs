@@ -149,7 +149,7 @@ mod identity {
     struct Agent37 {
         template: String,
         revision: Option<u64>,
-        digest: String,
+        digest: Option<String>,
     }
     pub(super) fn serialize<S: serde::Serializer>(
         value: &Admitted,
@@ -165,7 +165,7 @@ mod identity {
             Admitted::Agent37(value) => Wire::Agent37(Agent37 {
                 template: value.template().into(),
                 revision: value.revision(),
-                digest: value.digest().into(),
+                digest: value.digest().map(str::to_owned),
             }),
         }
         .serialize(serializer)
