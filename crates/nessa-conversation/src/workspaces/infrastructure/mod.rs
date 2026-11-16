@@ -1,5 +1,8 @@
-//! Provider, encrypted settings, receipt storage and SSH lease adapters.
-//! They implement the application ports; composition alone creates them.
+//! Provider, encrypted settings, receipt storage, cloud choice and SSH lease
+//! adapters, for Boat (`boat`, `settings`) and Agent37 (`agent37`,
+//! `agent37_settings`); each cloud has its own receipt store
+//! (`assignments`). They implement the application ports; composition alone
+//! creates them.
 mod agent37;
 mod agent37_settings;
 mod assignments;

@@ -5,7 +5,8 @@ kind: statechart
 status: implemented
 sourceRevision: "5b2bd93bc5eb0c983614329f0ba8e602ba83d095"
 summary: A channel independently places its main agent and new threads on Local
-  or Boat and can override the default Boat VM lifetime.
+  or a cloud VM, made on Boat or Agent37 as the owner chooses, and can override
+  the default VM lifetime.
 parent: gateway
 sources:
   - crates/nessa-conversation/src/application/placement.rs
@@ -27,6 +28,13 @@ sources:
   - crates/nessa-conversation/src/workspaces/domain/environment.rs
   - crates/nessa-conversation/src/workspaces/infrastructure/assignments.rs
   - crates/nessa-conversation/src/workspaces/infrastructure/boat.rs
+  - crates/nessa-conversation/src/workspaces/infrastructure/agent37.rs
+  - crates/nessa-conversation/src/workspaces/infrastructure/agent37_settings.rs
+  - crates/nessa-conversation/src/workspaces/infrastructure/cloud_choice.rs
+  - crates/nessa-conversation/src/workspaces/domain/agent37.rs
+  - crates/nessa-gateway/src/product/agent37.rs
+  - crates/nessa-gateway/src/product/cloud.rs
+  - src/desktop/settings/ui/agent37-row.tsx
   - crates/nessa-server/tests/workspaces/allocation.rs
   - crates/nessa-conversation/tests/workspaces/assignments.rs
   - crates/nessa-conversation/tests/workspaces/boat_admission.rs
@@ -80,6 +88,53 @@ not yet reviewed against this page. The Boat adapter now runs over the
 workspace SDK (`boat.rs` replaces `boat_admission.rs`); the paragraphs on
 readiness, wiping VMs and failed openings were updated with it, and the rest of
 the page was not re-reviewed.
+
+A cloud VM is made on Boat or on Agent37 (issue #1352). These paragraphs
+were added with it; the rest of the page was not re-reviewed, so
+`sourceRevision` stays at its checkpoint.
+
+## Which cloud makes a thread's VM
+
+```mermaid
+stateDiagram-v2
+    [*] --> Boat: no choice saved
+    Boat --> Agent37: choose Agent37 (connected), recorded first
+    Agent37 --> Boat: choose Boat, recorded first
+    Agent37 --> Boat: disconnect Agent37, recorded first
+```
+
+The owner picks one cloud for new thread VMs in Settings › Connections ›
+Accounts (`cloud.choose`). The choice is a private file beside the gateway's
+receipts (`workspace-cloud`); with none saved it is Boat. Each choice is
+recorded in the environment audit, with the cloud before and after, the
+cause and who asked, before it is saved; a choice that cannot be recorded is
+not made. Only a connected cloud can be chosen.
+
+Each cloud keeps its own receipts: `boat-workspaces` and
+`agent37-workspaces`. A thread's VM is found in the store of the cloud it was
+made on, and is opened, rested and rolled back there whatever is chosen
+later; only a thread with no receipt goes to the chosen cloud. A thread
+recorded on two clouds, a receipt whose admission names the other cloud, or a
+cloud's settings holding the other cloud's connection is refused as corrupt.
+Because a thread's cloud cannot be told without reading every store, one store
+that cannot be read stops every thread's opening and rest.
+
+Agent37's connection is the vault entry `agent37.connection`: the workspace
+API key, an SSH key pair made for this install (Agent37 registers SSH keys for
+the whole workspace; a replaced key stays registered there until removed in
+Agent37) and the pinned runtime template release. An Agent37 VM is admitted by
+that release and the image digest it reports, held to on every wake. A VM
+refused at creation is recorded Refused and deleted when it carries the
+thread's key, kept when it does not. As with Boat's image, a build makes no
+Agent37 VM until a template for its lease protocol is published.
+
+Disconnecting the chosen cloud sends new VMs to Boat again (recorded), stops
+that cloud's idle VMs while its account still can, then forgets the
+connection. A VM still in use keeps running until its agent is done; with no
+account to stop it, an Agent37 VM sleeps once idle (its idle time, at most a
+day), and a Boat VM runs out its lifetime.
+
+## Placement and allocation
 
 ```mermaid
 stateDiagram-v2
