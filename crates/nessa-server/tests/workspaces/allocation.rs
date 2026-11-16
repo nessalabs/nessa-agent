@@ -1749,48 +1749,52 @@ async fn each_thread_stays_on_the_cloud_its_vm_was_made_on() {
 
 /// A receipt in the wrong cloud's store, or a connection to another cloud
 /// in a cloud's settings, is refused as corrupt before any provider is
-/// asked.
+/// asked. Each is checked on its own.
 #[tokio::test]
 async fn a_record_on_the_wrong_cloud_is_refused_before_anything_is_asked() {
-    let (_, boat_store, boat, audit) = fixture_with_audit();
-    let agent37_store = Arc::new(Store::default());
-    let agent37 = Arc::new(FakeProvider::agent37(audit.steps.clone()));
-    let service = Workspaces::new(
-        Arc::new(Config),
-        boat.clone(),
-        boat_store,
-        audit,
-        Arc::new(Config),
-    )
-    .with_cloud(
-        Cloud::Agent37,
-        // Boat's connection where Agent37's belongs.
-        Arc::new(Config),
-        agent37.clone(),
-        agent37_store.clone(),
-        Arc::new(Chosen(Mutex::new(Cloud::Agent37))),
-    );
-    agent37_store.records.lock().unwrap().insert(
-        id(1).to_string(),
-        Assignment::Assigned {
-            thread: id(1).to_string(),
-            vm: "vm-misplaced".into(),
-            image: "image".into(),
-            // A Boat admission, in Agent37's store.
-            admission: admission(),
-        },
-    );
-    assert_eq!(
-        service.open(id(1), false, None).await.err(),
-        Some(Failure::Storage)
-    );
-    assert_eq!(
-        service.open(id(2), true, None).await.err(),
-        Some(Failure::Storage)
-    );
-    assert_eq!(agent37.creates.load(Ordering::SeqCst), 0);
-    assert!(agent37.connects.lock().unwrap().is_empty());
-    assert!(boat.connects.lock().unwrap().is_empty());
+    for misplaced_receipt in [true, false] {
+        let (_, boat_store, boat, audit) = fixture_with_audit();
+        let agent37_store = Arc::new(Store::default());
+        let agent37 = Arc::new(FakeProvider::agent37(audit.steps.clone()));
+        let settings: Arc<dyn Settings> = if misplaced_receipt {
+            Arc::new(Agent37Config)
+        } else {
+            // Boat's connection where Agent37's belongs.
+            Arc::new(Config)
+        };
+        let service = Workspaces::new(
+            Arc::new(Config),
+            boat.clone(),
+            boat_store,
+            audit,
+            Arc::new(Config),
+        )
+        .with_cloud(
+            Cloud::Agent37,
+            settings,
+            agent37.clone(),
+            agent37_store.clone(),
+            Arc::new(Chosen(Mutex::new(Cloud::Agent37))),
+        );
+        if misplaced_receipt {
+            agent37_store.records.lock().unwrap().insert(
+                id(1).to_string(),
+                Assignment::Assigned {
+                    thread: id(1).to_string(),
+                    vm: "vm-misplaced".into(),
+                    image: "image".into(),
+                    // A Boat admission, in Agent37's store.
+                    admission: admission(),
+                },
+            );
+        }
+        agent37.proceed.add_permits(1);
+        let opened = service.open(id(1), true, None).await;
+        assert_eq!(opened.err(), Some(Failure::Storage), "{misplaced_receipt}");
+        assert_eq!(agent37.creates.load(Ordering::SeqCst), 0);
+        assert!(agent37.connects.lock().unwrap().is_empty());
+        assert!(boat.connects.lock().unwrap().is_empty());
+    }
 }
 
 /// A choice of cloud is recorded with who made it before it is saved, and
