@@ -959,35 +959,37 @@ async function channelRunning(page, name, running, failures) {
 /**
  * The pointer on a row's settings, beside its control, leaves the row its
  * hover fill: the frame owns hover, so moving onto the action does not drop
- * it. The fill is compared with the one under the pointer on the control and
- * with the one at rest, each read once it stops changing.
+ * it. The fill at rest is read first; the hover fill is the one the control
+ * moves to under the pointer. Each is read once it stops changing. Answers
+ * whether there was a hover fill to compare.
  */
 async function rowFillBesideItsSettings(page, row, name, failures) {
   const control = row.locator(":scope > [data-size]")
+  const fill = () => control.evaluate((it) => getComputedStyle(it).backgroundColor)
   const settled = async () => {
     let last = null
     return (
       (await waitFor(async () => {
-        const now = await control.evaluate((it) => getComputedStyle(it).backgroundColor)
+        const now = await fill()
         const same = now === last
         last = now
         return same ? now : null
       }, 5_000)) ?? last
     )
   }
-  const onControl = await settled()
   await page.mouse.move(600, 400)
   const atRest = await settled()
-  if (atRest === onControl) {
+  await control.hover({ timeout: 10_000 })
+  // Waits past any transition delay for the fill to leave its rest.
+  if (!(await waitFor(async () => (await fill()) !== atRest, 2_000))) {
     // A selected row keeps one fill under the pointer and away from it, so
     // there is nothing to tell apart.
     log(
       `channel ${name} has the same fill at rest and pointed at, so its hover was not compared`,
     )
-    return
+    return false
   }
-  await control.hover({ timeout: 10_000 })
-  await settled()
+  const onControl = await settled()
   await row.locator("[data-channel-settings-open]").hover({ timeout: 10_000 })
   const beside = await settled()
   if (beside !== onControl)
@@ -1007,13 +1009,15 @@ async function channelRowsKeepHover(page, failures) {
     .locator(`${css.sidebar} ${css.kitRowFrame}`)
     .filter({ has: page.locator("[data-channel-settings-open]") })
   const count = await rows.count()
-  if (count < 2) return
+  if (count < 2) {
+    if (!(await page.locator(`${css.sidebar} [data-row="channel"]`).count()))
+      failures.push(`the sidebar shows ${count} channel rows with settings, not 2`)
+    return
+  }
   let compared = false
   for (let index = 0; index < count && !compared; index++) {
     const row = rows.nth(index)
     const name = (await row.locator(":scope > [data-size]").textContent())?.trim() ?? ""
-    await page.mouse.move(600, 400)
-    await row.locator(":scope > [data-size]").hover({ timeout: 10_000 })
     compared = await rowFillBesideItsSettings(page, row, name, failures)
   }
   await page.mouse.move(600, 400)
@@ -5854,7 +5858,13 @@ const steps = {
           agentsProbe(page, () => ({ claude: "ready", codex: "ready" })),
         )
       } finally {
-        await run.stack.vault.unlock()
+        // An unlock that fails is its own failure, never in place of what
+        // the window did.
+        await run.stack.vault
+          .unlock()
+          .catch((error) =>
+            failures.push(`the vault did not unlock again: ${error.message}`),
+          )
       }
       try {
         const heading = (name) => page.getByRole("heading", { name, exact: true })
@@ -10235,8 +10245,10 @@ async function setupWindow(run, prepare) {
   // Onboarding does not ask for the vault on its own (#1340), locked or not:
   // nothing in it needs protected data, so no unlock dialog is drawn.
   await page.waitForTimeout(1500)
-  if ((await page.locator("[data-vault-dialog]").count()) !== 0)
+  if ((await page.locator("[data-vault-dialog]").count()) !== 0) {
+    await page.close()
     throw new Error("the setup window opened a vault dialog on its own")
+  }
   return page
 }
 
