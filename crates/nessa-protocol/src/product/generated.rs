@@ -4271,6 +4271,27 @@ impl Cloud {
 pub struct CloudChooseParams {
     pub cloud: Cloud,
 }
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+pub enum CloudErrorCode {
+    #[serde(rename = "vault_locked")]
+    VaultLocked,
+    #[serde(rename = "cloud_not_configured")]
+    CloudNotConfigured,
+    #[serde(rename = "invalid_request")]
+    InvalidRequest,
+    #[serde(rename = "cloud_storage_unavailable")]
+    CloudStorageUnavailable,
+}
+impl CloudErrorCode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::VaultLocked => "vault_locked",
+            Self::CloudNotConfigured => "cloud_not_configured",
+            Self::InvalidRequest => "invalid_request",
+            Self::CloudStorageUnavailable => "cloud_storage_unavailable",
+        }
+    }
+}
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CloudChoice {

@@ -1,6 +1,7 @@
 import { createAppsApi, type AppsApi } from "./apps-api.js"
 import { createAgent37Api, type Agent37Api } from "./agent37-api.js"
 import { createBoatApi, type BoatApi } from "./boat-api.js"
+import { createCloudApi, type CloudApi } from "./cloud-api.js"
 import { createDevicesApi, type DevicesApi } from "./devices-api.js"
 import { createSubscriptionApi, type SubscriptionApi } from "./subscription-api.js"
 import type { ProductSessionReady } from "../protocol/product-types.js"
@@ -90,6 +91,7 @@ export class NessaClient {
   /** Encrypted Boat connection setup for cloud workspaces. */
   readonly boat: BoatApi
   readonly agent37: Agent37Api
+  readonly cloud: CloudApi
   /** The hub's devices: its own machine and the workers paired to it. */
   readonly devices: DevicesApi
   /** Authorized gateway health. */
@@ -143,6 +145,7 @@ export class NessaClient {
     this.server = createServerApi(wire)
     this.boat = createBoatApi(wire)
     this.agent37 = createAgent37Api(wire)
+    this.cloud = createCloudApi(wire)
     this.devices = createDevicesApi(wire)
     this.conversation = createConversationApi(wire, newRequestId)
     this.threadCommands = createThreadCommands(this.conversation, newRequestId, wire)

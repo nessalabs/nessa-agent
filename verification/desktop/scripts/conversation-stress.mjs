@@ -3348,7 +3348,7 @@ const steps = {
         5_000,
       )
       if (!shown) failures.push(`the cloud choice does not show ${cloud} once picked`)
-      const saved = (await run.client.agent37.cloud()).cloud
+      const saved = (await run.client.cloud.read()).cloud
       if (saved !== cloud)
         failures.push(`the gateway kept ${saved} after ${cloud} was picked`)
       await closeSettings(run.page)
@@ -3378,10 +3378,29 @@ const steps = {
         `a VM made with Agent37 chosen was made on: ${made(onAgent37).join()}`,
       )
     await choose("boat")
+    // Rested once idle, the thread's next turn opens its VM again: on the
+    // cloud it was made on, whatever is chosen now.
+    const events = () => fixture.events().filter((event) => event.thread === onAgent37)
+    let rested = -1
+    if (
+      !(await waitFor(
+        () =>
+          (rested = events().findIndex(
+            (event) => event.kind === "rested" && event.cloud === "agent37",
+          )) >= 0,
+        (PARK_IDLE_SECONDS + 30) * 1000,
+      ))
+    )
+      failures.push("the thread on Agent37 was not rested on Agent37 once idle")
     await talk(onAgent37, `${STRESS.reply} cloud stays ${step.index}`)
-    if (made(onAgent37).join() !== "agent37")
+    const after = events().slice(rested + 1)
+    if (!after.some((event) => event.kind === "connected" && event.cloud === "agent37"))
       failures.push(
-        `a thread on Agent37 moved after Boat was chosen: ${made(onAgent37).join()}`,
+        "the thread on Agent37 was not opened again on Agent37 after its rest",
+      )
+    if (made(onAgent37).join() !== "agent37" || events().some((e) => e.cloud === "boat"))
+      failures.push(
+        `a thread on Agent37 reached Boat after Boat was chosen: ${JSON.stringify(events())}`,
       )
     const onBoat = randomUUID()
     await open(onBoat)

@@ -226,9 +226,13 @@ impl Provider for FakeProvider {
     ) -> Result<WorkspaceReceipt, Failure> {
         // Like Boat, a creation is keyed by its thread: asking again for a
         // VM that already exists answers with that VM and makes nothing new.
-        let made = folder(thread).join(".boat-created");
+        // Each cloud keeps its own marker, so a thread asked of the wrong
+        // cloud is made there anew and the events show it.
+        let made = folder(thread).join(format!(".{}-created", self.0.as_str()));
         if made.exists() {
-            event("create_replayed", thread);
+            record(
+                serde_json::json!({"kind":"create_replayed","thread":thread,"cloud":self.0.as_str()}),
+            );
         } else {
             std::fs::create_dir_all(folder(thread)).map_err(|_| Failure::Storage)?;
             std::fs::write(&made, b"").map_err(|_| Failure::Storage)?;
@@ -279,6 +283,7 @@ impl Provider for FakeProvider {
         if std::fs::remove_file(folder(thread).join("fail-next-open")).is_ok() {
             return Err(Failure::Provider);
         }
+        record(serde_json::json!({"kind":"connected","thread":thread,"cloud":self.0.as_str()}));
         Ok(Arc::new(FakeVm(thread.into())))
     }
     async fn remove(&self, _: &CloudAccount, _: &str, _: &Admitted) -> Result<(), Failure> {

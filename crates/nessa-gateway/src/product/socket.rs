@@ -2133,9 +2133,10 @@ async fn dispatch_authorized(
         }
         ProductMethod::Agent37Status
         | ProductMethod::Agent37Save
-        | ProductMethod::Agent37Disconnect
-        | ProductMethod::CloudRead
-        | ProductMethod::CloudChoose => super::agent37::dispatch(state, session, frame).await,
+        | ProductMethod::Agent37Disconnect => super::agent37::dispatch(state, session, frame).await,
+        ProductMethod::CloudRead | ProductMethod::CloudChoose => {
+            super::cloud::dispatch(state, session, frame).await
+        }
         ProductMethod::BoatStatus
         | ProductMethod::BoatSave
         | ProductMethod::BoatSaveClaudeSignIn

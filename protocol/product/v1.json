@@ -9344,6 +9344,11 @@
       "required": ["cloud"],
       "description": "Make new thread VMs on this cloud, which must be connected. A thread whose VM exists stays on the cloud it was made on."
     },
+    "CloudErrorCode": {
+      "description": "Typed refusals of the cloud choice. Not configured: the cloud chosen has no saved connection. Storage unavailable: the choice, or its record, could not be read or kept; nothing changed.",
+      "type": "string",
+      "enum": ["vault_locked", "cloud_not_configured", "invalid_request", "cloud_storage_unavailable"]
+    },
     "CloudChoice": {
       "type": "object",
       "additionalProperties": false,

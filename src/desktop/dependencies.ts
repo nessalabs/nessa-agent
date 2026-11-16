@@ -3,7 +3,7 @@ import { agent37Gateway, type Agent37Gateway } from "./settings/adapters/agent37
 import { boatGateway, type BoatGateway } from "./settings/adapters/boat-gateway"
 import { devicesGateway, type DevicesClient, type DevicesGateway } from "./devices"
 import { gatewayVault, type VaultSource } from "../vault"
-import type { Agent37Api, VaultApi, BoatApi } from "@nessa/client"
+import type { Agent37Api, CloudApi, VaultApi, BoatApi } from "@nessa/client"
 /**
  * The desktop window's composition: every outside thing it talks to — the
  * workspace source, the clock, ids, the page's measure of the panes' room,
@@ -354,6 +354,7 @@ type WindowGatewayClient = GatewayClient &
     readonly vault: VaultApi
     readonly boat: BoatApi
     readonly agent37: Agent37Api
+    readonly cloud: CloudApi
   } & McpServersClient &
   LinkedDevicesClient &
   NativeHooksClient &

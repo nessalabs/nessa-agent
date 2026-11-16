@@ -54,6 +54,7 @@ import type { WindowCommandClient } from "./window-commands"
 export type FakeGatewayClient = {
   readonly boat: import("@nessa/client").BoatApi
   readonly agent37: import("@nessa/client").Agent37Api
+  readonly cloud: import("@nessa/client").CloudApi
 } & GatewayClient &
   WindowPublishClient &
   WindowCommandClient & {
@@ -694,8 +695,10 @@ export function fakeGateway(
         throw new Error("Agent37 provisioning is unavailable in this fixture")
       },
       disconnect: async () => ({ state: "disconnected" as const }),
-      cloud: async () => ({ cloud: "boat" as const }),
-      chooseCloud: async (cloud) => {
+    },
+    cloud: {
+      read: async () => ({ cloud: "boat" as const }),
+      choose: async (cloud) => {
         if (cloud !== "boat") throw new Error("Agent37 is not connected in this fixture")
         return { cloud }
       },

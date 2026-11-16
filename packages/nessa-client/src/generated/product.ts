@@ -3817,6 +3817,14 @@ export type Cloud = (typeof Cloud)[keyof typeof Cloud]
 export interface CloudChooseParams {
   cloud: Cloud
 }
+/** Typed refusals of the cloud choice. Not configured: the cloud chosen has no saved connection. Storage unavailable: the choice, or its record, could not be read or kept; nothing changed. */
+export const CloudErrorCode = {
+  VaultLocked: "vault_locked",
+  CloudNotConfigured: "cloud_not_configured",
+  InvalidRequest: "invalid_request",
+  CloudStorageUnavailable: "cloud_storage_unavailable",
+} as const
+export type CloudErrorCode = (typeof CloudErrorCode)[keyof typeof CloudErrorCode]
 /** The cloud new thread VMs are made on. */
 export interface CloudChoice {
   cloud: Cloud

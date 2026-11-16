@@ -5,12 +5,9 @@ import {
   Agent37ErrorCode,
   type Agent37SaveParams,
   type Agent37Status,
-  type Cloud,
-  type CloudChoice,
 } from "../generated/product.js"
 
-/** The saved Agent37 workspace, and which cloud new thread VMs are made on.
- * Status never contains a key. */
+/** The saved Agent37 workspace. Status never contains a key. */
 export type Agent37Api = {
   /** Read the saved workspace. A locked vault prevents reading its entry. */
   status(): Promise<Agent37Status>
@@ -21,11 +18,6 @@ export type Agent37Api = {
   /** Forget the workspace. Its VMs are not deleted. If new thread VMs were
    * going to Agent37, they go to Boat again. */
   disconnect(): Promise<Agent37Status>
-  /** The cloud new thread VMs are made on. */
-  cloud(): Promise<CloudChoice>
-  /** Make new thread VMs on `cloud`, which must be connected. A thread whose
-   * VM exists stays on the cloud it was made on. */
-  chooseCloud(cloud: Cloud): Promise<CloudChoice>
 }
 export function agent37Status(value: unknown): Agent37Status {
   if (typeof value !== "object" || value === null || Array.isArray(value))
@@ -44,15 +36,6 @@ export function agent37Status(value: unknown): Agent37Status {
   )
     return { state, template }
   throw new TypeError("Invalid Agent37 status")
-}
-export function cloudChoice(value: unknown): CloudChoice {
-  if (typeof value !== "object" || value === null || Array.isArray(value))
-    throw new TypeError("Invalid cloud choice")
-  const item = value as Record<string, unknown>
-  const cloud = Object.hasOwn(item, "cloud") ? item.cloud : undefined
-  if (Object.keys(item).length === 1 && (cloud === "boat" || cloud === "agent37"))
-    return { cloud }
-  throw new TypeError("Invalid cloud choice")
 }
 /** Redacted Agent37 setup failure. Provider diagnostics and secret parameters are discarded. */
 export class NessaAgent37Error extends Error {
@@ -82,7 +65,5 @@ export function createAgent37Api(session: RpcRequester): Agent37Api {
     status: () => call(ProductMethod.Agent37Status, {}, agent37Status),
     save: (params) => call(ProductMethod.Agent37Save, { key: params.key }, agent37Status),
     disconnect: () => call(ProductMethod.Agent37Disconnect, {}, agent37Status),
-    cloud: () => call(ProductMethod.CloudRead, {}, cloudChoice),
-    chooseCloud: (cloud) => call(ProductMethod.CloudChoose, { cloud }, cloudChoice),
   }
 }

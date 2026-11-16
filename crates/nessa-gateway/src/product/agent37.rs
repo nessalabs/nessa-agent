@@ -1,4 +1,4 @@
-//! Credential-managed Agent37 setup and the choice of cloud for thread VMs.
+//! Credential-managed Agent37 setup.
 //! Ordinary reads never expose the saved key.
 #[cfg(unix)]
 use super::socket::success;
@@ -7,7 +7,7 @@ use super::{socket::failure, state::ProductRouteState};
 use crate::workspaces::domain::{Cloud, CloudConnection, Failure};
 use nessa_auth::application::session::AuthenticatedSession;
 #[cfg(unix)]
-use nessa_protocol::product::generated::{Agent37SaveParams, CloudChooseParams};
+use nessa_protocol::product::generated::Agent37SaveParams;
 use nessa_protocol::protocol::{OutgoingMessage, RequestFrame};
 
 pub(super) async fn dispatch(
@@ -29,21 +29,6 @@ pub(super) async fn dispatch(
         let empty = frame.params.is_null() || frame.params == serde_json::json!({});
         let mut params = || std::mem::replace(&mut frame.params, serde_json::json!({}));
         match frame.method.as_str() {
-            "cloud.read" if empty => {}
-            "cloud.choose" => {
-                let Ok(params) = serde_json::from_value::<CloudChooseParams>(params()) else {
-                    return failure(&frame.id, "invalid_request");
-                };
-                if let Err(error) = service
-                    .choose(
-                        cloud_from(params.cloud),
-                        session.context().principal_id().as_str(),
-                    )
-                    .await
-                {
-                    return failure(&frame.id, code(error));
-                }
-            }
             "agent37.status" if empty => {}
             "agent37.disconnect" if empty => {
                 if let Err(error) = service
@@ -66,12 +51,6 @@ pub(super) async fn dispatch(
             }
             _ => return failure(&frame.id, "invalid_request"),
         }
-        if frame.method.starts_with("cloud.") {
-            return match service.cloud().await {
-                Ok(cloud) => success(&frame.id, &serde_json::json!({ "cloud": cloud.as_str() })),
-                Err(error) => failure(&frame.id, code(error)),
-            };
-        }
         let Some(settings) = service.settings(Cloud::Agent37) else {
             return failure(&frame.id, "agent37_unavailable");
         };
@@ -87,14 +66,6 @@ pub(super) async fn dispatch(
             }
             Err(error) => failure(&frame.id, code(error)),
         }
-    }
-}
-
-#[cfg(unix)]
-fn cloud_from(cloud: nessa_protocol::product::generated::Cloud) -> Cloud {
-    match cloud {
-        nessa_protocol::product::generated::Cloud::Boat => Cloud::Boat,
-        nessa_protocol::product::generated::Cloud::Agent37 => Cloud::Agent37,
     }
 }
 

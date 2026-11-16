@@ -46,6 +46,7 @@ const settingsParts = {
   devices: {} as import("@nessa/client").DevicesApi,
   boat: {} as import("@nessa/client").BoatApi,
   agent37: {} as import("@nessa/client").Agent37Api,
+  cloud: {} as import("@nessa/client").CloudApi,
   // Read back only for a file a view names; none here does.
   attachments: {} as AttachmentApi,
   agents: {} as AgentsApi,

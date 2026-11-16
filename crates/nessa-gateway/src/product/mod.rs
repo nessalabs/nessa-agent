@@ -59,6 +59,7 @@ pub use state::{InvalidSessionSettings, ProductDependencies, ProductRouteState, 
 mod agent37;
 mod boat;
 mod channel;
+mod cloud;
 mod conversation;
 mod device_setup;
 mod github;
