@@ -88,3 +88,62 @@ fn code(error: Failure) -> &'static str {
         Failure::OpeningUnrecorded(failure) => code(*failure),
     }
 }
+
+#[cfg(all(test, unix))]
+mod tests {
+    /// Every failure is answered with a code the schema names, so a client
+    /// recognizes each refusal.
+    #[test]
+    fn every_failure_is_a_code_the_schema_names() {
+        let failures = {
+            use crate::workspaces::domain::{
+                AdmissionRefusal, AdmissionRejection, CleanupOutcome, Failure, RefusalDisposition,
+            };
+            let rejection = AdmissionRejection::new(AdmissionRefusal::WrongVersion, None);
+            [
+                Failure::Locked,
+                Failure::NotConfigured,
+                Failure::InvalidInput,
+                Failure::Storage,
+                Failure::Provider,
+                Failure::EnvironmentUnavailable,
+                Failure::AdmissionRejected(rejection.clone()),
+                Failure::RefusedWorkspace {
+                    vm: "vm".into(),
+                    rejection: rejection.clone(),
+                    disposition: RefusalDisposition::RetainTarget,
+                },
+                Failure::UnverifiedWorkspace { vm: "vm".into() },
+                Failure::AdmissionRecovery {
+                    vm: "vm".into(),
+                    rejection,
+                    receipt_failed: false,
+                    audit_failed: false,
+                    cleanup: CleanupOutcome::Confirmed,
+                    cleanup_audit_failed: false,
+                },
+                Failure::WorkerUnavailable,
+                Failure::ProvisioningUncertain,
+                Failure::Missing,
+                Failure::CleanupUncertain,
+                Failure::ReceiptRecovery {
+                    vm: "vm".into(),
+                    receipt_audit_failed: false,
+                    cleanup: CleanupOutcome::Unconfirmed,
+                    cleanup_audit_failed: false,
+                },
+                Failure::OpeningUnrecorded(Box::new(Failure::Provider)),
+            ]
+        };
+        for failure in failures {
+            let code = super::code(failure.clone());
+            assert!(
+                serde_json::from_value::<nessa_protocol::product::generated::Agent37ErrorCode>(
+                    serde_json::json!(code)
+                )
+                .is_ok(),
+                "{failure:?} answers {code}, which the schema does not name"
+            );
+        }
+    }
+}
