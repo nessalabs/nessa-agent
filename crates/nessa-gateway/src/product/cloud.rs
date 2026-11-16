@@ -59,7 +59,17 @@ fn code(error: Failure) -> &'static str {
         Failure::NotConfigured | Failure::Missing => "cloud_not_configured",
         Failure::InvalidInput => "invalid_request",
         Failure::OpeningUnrecorded(failure) => code(*failure),
-        _ => "cloud_storage_unavailable",
+        Failure::Storage
+        | Failure::Provider
+        | Failure::EnvironmentUnavailable
+        | Failure::AdmissionRejected(_)
+        | Failure::RefusedWorkspace { .. }
+        | Failure::UnverifiedWorkspace { .. }
+        | Failure::AdmissionRecovery { .. }
+        | Failure::WorkerUnavailable
+        | Failure::ProvisioningUncertain
+        | Failure::CleanupUncertain
+        | Failure::ReceiptRecovery { .. } => "cloud_storage_unavailable",
     }
 }
 

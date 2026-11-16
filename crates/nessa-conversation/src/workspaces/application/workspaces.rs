@@ -454,14 +454,24 @@ impl Workspaces {
             self.switch(Cloud::Boat, ChoiceCause::Disconnected, by)
                 .await?;
         }
+        // Held across these stops, so a choice waits for them. Only VMs this
+        // gateway has opened since it started are known here: one left
+        // running from before a restart is not stopped by a disconnect.
+        let mut unstopped = false;
         for id in self.uses.idle(std::time::Duration::ZERO) {
             let on_cloud = matches!(
                 self.recorded(&id).await,
                 Ok(Some((recorded, _))) if recorded.cloud == cloud
             );
             if let (true, Ok(thread)) = (on_cloud, ConversationId::new(&id)) {
-                let _ = self.rest_owned(thread, RestCause::Closed).await;
+                let rested = self.rest_owned(thread, RestCause::Closed).await;
+                unstopped |= rested.stopped.is_err() || rested.audit_failed;
             }
+        }
+        // A VM that could not be stopped, or whose stop is not on the
+        // record, keeps its account: disconnecting again tries again.
+        if unstopped {
+            return Err(Failure::Provider);
         }
         parts.settings.clear().await
     }

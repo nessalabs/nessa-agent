@@ -143,14 +143,16 @@ pub struct SdkAgent37Enrollment {
 impl crate::workspaces::application::Agent37Enrollment for SdkAgent37Enrollment {
     async fn connection(
         &self,
-        key: zeroize::Zeroizing<String>,
+        mut key: zeroize::Zeroizing<String>,
     ) -> Result<crate::workspaces::domain::Agent37Connection, Failure> {
         let template = self.template.ok_or(Failure::WorkerUnavailable)?;
         let identity = Agent37Identity::generate("nessa")
             .await
             .map_err(|_| Failure::Provider)?;
         crate::workspaces::domain::Agent37Connection::new(
-            (*key).clone(),
+            // Moved out, so no copy is left unwiped; the wrapper wipes
+            // the empty string left behind.
+            std::mem::take(&mut *key),
             identity.private_key().to_vec(),
             identity.public_key().into(),
             template.into(),
@@ -181,7 +183,9 @@ fn admission(release: &TemplateRelease) -> Result<sdk::Admission, Failure> {
     sdk::Admission::restore(
         release.template().into(),
         release.revision(),
-        release.digest().ok_or(Failure::InvalidInput)?.into(),
+        // An admitted VM's receipt always names one: without it, the
+        // receipt is corrupt.
+        release.digest().ok_or(Failure::Storage)?.into(),
     )
     .map_err(|_| Failure::InvalidInput)
 }
@@ -232,13 +236,23 @@ impl Provider for Agent37Provider {
         let observed = created.observed();
         // What it reported, kept as reported for the record; a refused
         // instance's may be anything Agent37 answered within its alphabet.
-        let release = TemplateRelease::new(
+        // An instance that reported a template or digest Nessa cannot keep
+        // is still named, recorded refused under the release it was asked
+        // for, and rolled back like any other refused one.
+        let (release, unreadable) = match TemplateRelease::new(
             observed.template.clone(),
             observed.revision,
             observed.digest.clone(),
-        )
-        .map_err(|_| Failure::Provider)?;
-        let refusal = created.refusal().map(|cause| {
+        ) {
+            Ok(release) => (release, false),
+            Err(_) => (TemplateRelease::new(vm.image.clone(), None, None)?, true),
+        };
+        let cause = if unreadable {
+            Some(sdk::AdmissionRefusal::WrongTemplate)
+        } else {
+            created.refusal()
+        };
+        let refusal = cause.map(|cause| {
             AdmissionRejection::new(
                 refusal(cause),
                 Some(ObservedEnvironment {
@@ -254,7 +268,7 @@ impl Provider for Agent37Provider {
             // Under the thread's own key, found or made now, it is the
             // thread's alone and may be deleted if refused. One that does
             // not carry the key may be someone else's: it is kept.
-            disposition: match created.refusal() {
+            disposition: match cause {
                 Some(sdk::AdmissionRefusal::WrongOwner) => RefusalDisposition::RetainTarget,
                 _ => RefusalDisposition::RollbackNewVm,
             },

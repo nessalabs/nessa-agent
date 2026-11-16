@@ -186,3 +186,28 @@ async fn a_boat_account_or_admission_is_refused_before_anything_is_sent() {
     );
     assert!(shared.lock().unwrap().calls.is_empty());
 }
+
+/// An instance reporting a template or digest Nessa cannot keep is still
+/// named, refused and deleted: never left billing with no receipt.
+#[tokio::test]
+async fn an_unreadable_report_is_refused_and_removed_not_lost() {
+    let (provider, _) = fake(json!({ "image_digest": "sha512:not-a-sha256" })).await;
+    let receipt = provider
+        .create(&account().await, &spec(), "fixture-thread")
+        .await
+        .unwrap();
+    assert_eq!(
+        (
+            receipt.refusal.as_ref().map(|r| r.cause()),
+            receipt.disposition
+        ),
+        (
+            Some(AdmissionRefusal::WrongEnvironment),
+            RefusalDisposition::RollbackNewVm
+        )
+    );
+    let Admitted::Agent37(release) = receipt.admission else {
+        panic!("not an Agent37 admission")
+    };
+    assert_eq!((release.template(), release.digest()), (TEMPLATE, None));
+}

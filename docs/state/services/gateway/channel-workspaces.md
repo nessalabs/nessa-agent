@@ -130,9 +130,12 @@ Agent37 VM until a template for its lease protocol is published.
 
 Disconnecting the chosen cloud sends new VMs to Boat again (recorded), stops
 that cloud's idle VMs while its account still can, then forgets the
-connection. A VM still in use keeps running until its agent is done; with no
-account to stop it, an Agent37 VM sleeps once idle (its idle time, at most a
-day), and a Boat VM runs out its lifetime.
+connection; if one of those stops fails, or is not recorded, the connection
+is kept and the disconnect fails, so trying again tries again. Only VMs this
+gateway has opened since it started are known: one left running from before a
+restart, or still in use, keeps running; with no account to stop it, an
+Agent37 VM sleeps once idle (its idle time, at most a day), and a Boat VM runs
+out its lifetime. A choice of cloud waits while a disconnect stops VMs.
 
 ## Placement and allocation
 
