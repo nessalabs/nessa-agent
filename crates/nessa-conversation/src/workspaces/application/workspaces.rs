@@ -215,6 +215,18 @@ impl CloudChoice for OnlyCloud {
     }
 }
 
+/// Makes the connection that enrolls this install in an Agent37 workspace
+/// opened by `key`: an SSH key made for it, and the template release this
+/// build makes VMs from. Saving it registers the SSH key with the workspace;
+/// a key saved before stays registered there until removed in Agent37.
+#[async_trait]
+pub trait Agent37Enrollment: Send + Sync {
+    async fn connection(
+        &self,
+        key: zeroize::Zeroizing<String>,
+    ) -> Result<crate::workspaces::domain::Agent37Connection, Failure>;
+}
+
 /// One cloud's parts: its saved connection, its VMs, and the receipts of
 /// the VMs made on it. Each cloud keeps its own receipts, so a thread's VM
 /// is found on the cloud it was made on.
@@ -226,6 +238,15 @@ struct CloudParts {
     assignments: Arc<dyn Assignments>,
 }
 
+/// `parts`' saved connection, which must be to that cloud.
+async fn read_connection(parts: &CloudParts) -> Result<CloudConnection, Failure> {
+    let connection = parts.settings.read().await?;
+    if connection.cloud() != parts.cloud {
+        return Err(Failure::Storage);
+    }
+    Ok(connection)
+}
+
 #[derive(Clone)]
 pub struct Workspaces {
     pub runtime_settings: Arc<dyn RuntimeSettings>,
@@ -234,6 +255,7 @@ pub struct Workspaces {
     claude_sign_in_changes: tokio::sync::watch::Sender<u64>,
     clouds: Arc<Vec<CloudParts>>,
     choice: Arc<dyn CloudChoice>,
+    agent37: Option<Arc<dyn Agent37Enrollment>>,
     recovery: Arc<dyn RecoveryAudit>,
     /// Who uses each thread's VM, by name, and the turn that orders
     /// opening it against resting it.
@@ -259,6 +281,7 @@ impl Workspaces {
                 assignments,
             }]),
             choice: Arc::new(OnlyCloud(Cloud::Boat)),
+            agent37: None,
             recovery,
             uses: Arc::default(),
         }
@@ -319,10 +342,20 @@ impl Workspaces {
     /// that record. A thread recorded on two clouds is refused: which is
     /// its VM cannot be told.
     async fn recorded(&self, id: &str) -> Result<Option<(CloudParts, Assignment)>, Failure> {
+        // Each cloud's receipts are read, so one store that cannot be read
+        // stops every thread's opening and rest, whichever cloud it is on:
+        // which cloud a thread is on cannot be told without it.
         let mut found = None;
         for parts in self.clouds.iter() {
             if let Some(assignment) = parts.assignments.read(id).await? {
-                if found.is_some() {
+                // A receipt names the cloud its VM was admitted on; one in
+                // another cloud's store, or a thread on two, is corrupt.
+                let admitted = match &assignment {
+                    Assignment::Assigned { admission, .. }
+                    | Assignment::Refused { admission, .. } => Some(admission.cloud()),
+                    Assignment::Provisioning { .. } | Assignment::Unverified { .. } => None,
+                };
+                if found.is_some() || admitted.is_some_and(|cloud| cloud != parts.cloud) {
                     return Err(Failure::Storage);
                 }
                 found = Some((parts.clone(), assignment));
@@ -336,6 +369,17 @@ impl Workspaces {
     }
     pub fn with_image(mut self, image: Option<&str>) -> Self {
         self.image = image.map(str::to_owned);
+        self
+    }
+    /// Enroll in the Agent37 workspace `key` opens and save the connection,
+    /// once its SSH key is registered and its template found there.
+    pub async fn save_agent37_key(&self, key: zeroize::Zeroizing<String>) -> Result<(), Failure> {
+        let enrollment = self.agent37.clone().ok_or(Failure::NotConfigured)?;
+        let connection = enrollment.connection(key).await?;
+        self.save(CloudConnection::Agent37(connection)).await
+    }
+    pub fn with_agent37_enrollment(mut self, enrollment: Arc<dyn Agent37Enrollment>) -> Self {
+        self.agent37 = Some(enrollment);
         self
     }
     pub async fn save_token(&self, token: String) -> Result<(), Failure> {
@@ -529,7 +573,7 @@ impl Workspaces {
         if assigned != id {
             return Ok(None);
         }
-        let account = parts.settings.read().await?.account();
+        let account = read_connection(&parts).await?.account();
         Ok(Some((parts, account, vm)))
     }
     /// The names of what uses `thread`'s VM now.
@@ -565,7 +609,7 @@ impl Workspaces {
             None => self.parts(self.cloud().await?)?.clone(),
         };
         let parts = &parts;
-        let connection = parts.settings.read().await?;
+        let connection = read_connection(parts).await?;
         let scope = channel.map_or(SettingsScope::Global, SettingsScope::Channel);
         let lifetimes = self.runtime_settings.read(&scope).await?;
         if lifetimes.scope() != &scope {

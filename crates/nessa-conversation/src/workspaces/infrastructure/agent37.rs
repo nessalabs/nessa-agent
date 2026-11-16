@@ -133,22 +133,29 @@ impl Agent37Provider {
     }
 }
 
-/// A new connection to the Agent37 workspace `key` opens: the key, an SSH
-/// key made now for this install, and the template release this build
-/// pins. [`crate::workspaces::application::Workspaces::save`] registers the
-/// SSH key and checks the template before saving it.
-pub async fn agent37_connection(
-    key: String,
-) -> Result<crate::workspaces::domain::Agent37Connection, Failure> {
-    let identity = Agent37Identity::generate("nessa")
-        .await
-        .map_err(|_| Failure::Provider)?;
-    crate::workspaces::domain::Agent37Connection::new(
-        key,
-        identity.private_key().to_vec(),
-        identity.public_key().into(),
-        super::release::AGENT37_TEMPLATE.into(),
-    )
+/// Enrolls this install in an Agent37 workspace: an SSH key made now with
+/// the system's `ssh-keygen`, and the template release this build pins.
+pub struct SdkAgent37Enrollment {
+    /// The release new VMs are made from; `None` when this build has none.
+    pub template: Option<&'static str>,
+}
+#[async_trait]
+impl crate::workspaces::application::Agent37Enrollment for SdkAgent37Enrollment {
+    async fn connection(
+        &self,
+        key: zeroize::Zeroizing<String>,
+    ) -> Result<crate::workspaces::domain::Agent37Connection, Failure> {
+        let template = self.template.ok_or(Failure::WorkerUnavailable)?;
+        let identity = Agent37Identity::generate("nessa")
+            .await
+            .map_err(|_| Failure::Provider)?;
+        crate::workspaces::domain::Agent37Connection::new(
+            (*key).clone(),
+            identity.private_key().to_vec(),
+            identity.public_key().into(),
+            template.into(),
+        )
+    }
 }
 
 /// The Agent37 account a connection to Agent37 carries.

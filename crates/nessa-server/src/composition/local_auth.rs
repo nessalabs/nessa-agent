@@ -18,8 +18,9 @@ use crate::{
         application::{RecoveryAudit, RecoveryEvent, Workspaces},
         domain::{Cloud, Failure as WorkspaceFailure},
         infrastructure::{
-            worker_image, Agent37Provider, Agent37VaultSettings, BoatProvider, FileAssignments,
-            FileCloudChoice, RuntimeSettingsAudit, VaultSettings,
+            agent37_template, worker_image, Agent37Provider, Agent37VaultSettings, BoatProvider,
+            FileAssignments, FileCloudChoice, RuntimeSettingsAudit, SdkAgent37Enrollment,
+            VaultSettings,
         },
     },
 };
@@ -347,7 +348,10 @@ pub(super) async fn product_state(
             }),
             Arc::new(FileAssignments(namespace.join("agent37-workspaces"))),
             Arc::new(FileCloudChoice(namespace.join("workspace-cloud"))),
-        ),
+        )
+        .with_agent37_enrollment(Arc::new(SdkAgent37Enrollment {
+            template: agent37_template(),
+        })),
     );
     #[cfg(all(test, unix))]
     let workspace_service = super::vm_background_gateway::service(workspace_service);

@@ -8,7 +8,7 @@ mod cloud_choice;
 mod runtime;
 mod settings;
 mod ssh;
-pub use agent37::{agent37_connection, Agent37Provider};
+pub use agent37::{Agent37Provider, SdkAgent37Enrollment};
 pub use agent37_settings::Agent37VaultSettings;
 pub use assignments::FileAssignments;
 pub use boat::{vm_config, BoatProvider};
@@ -16,7 +16,7 @@ pub use cloud_choice::FileCloudChoice;
 pub use settings::VaultSettings;
 
 mod release;
-pub use release::{worker_image, AGENT37_TEMPLATE};
+pub use release::{agent37_template, worker_image};
 
 mod runtime_settings_audit;
 pub use runtime_settings_audit::RuntimeSettingsAudit;

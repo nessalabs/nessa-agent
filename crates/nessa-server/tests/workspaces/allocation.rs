@@ -1716,3 +1716,49 @@ async fn each_thread_stays_on_the_cloud_its_vm_was_made_on() {
         Some(Failure::Storage)
     );
 }
+
+/// A receipt in the wrong cloud's store, or a connection to another cloud
+/// in a cloud's settings, is refused as corrupt before any provider is
+/// asked.
+#[tokio::test]
+async fn a_record_on_the_wrong_cloud_is_refused_before_anything_is_asked() {
+    let (_, boat_store, boat, audit) = fixture_with_audit();
+    let agent37_store = Arc::new(Store::default());
+    let agent37 = Arc::new(FakeProvider::new(audit.steps.clone()));
+    let service = Workspaces::new(
+        Arc::new(Config),
+        boat.clone(),
+        boat_store,
+        audit,
+        Arc::new(Config),
+    )
+    .with_cloud(
+        Cloud::Agent37,
+        // Boat's connection where Agent37's belongs.
+        Arc::new(Config),
+        agent37.clone(),
+        agent37_store.clone(),
+        Arc::new(Chosen(Mutex::new(Cloud::Agent37))),
+    );
+    agent37_store.records.lock().unwrap().insert(
+        id(1).to_string(),
+        Assignment::Assigned {
+            thread: id(1).to_string(),
+            vm: "vm-misplaced".into(),
+            image: "image".into(),
+            // A Boat admission, in Agent37's store.
+            admission: admission(),
+        },
+    );
+    assert_eq!(
+        service.open(id(1), false, None).await.err(),
+        Some(Failure::Storage)
+    );
+    assert_eq!(
+        service.open(id(2), true, None).await.err(),
+        Some(Failure::Storage)
+    );
+    assert_eq!(agent37.creates.load(Ordering::SeqCst), 0);
+    assert!(agent37.connects.lock().unwrap().is_empty());
+    assert!(boat.connects.lock().unwrap().is_empty());
+}

@@ -32,7 +32,14 @@ pub fn worker_image() -> Option<&'static str> {
     (crate::env::LEASE_PROTOCOL == PROTOCOL).then_some(IMAGE)
 }
 
-/// The Agent37 runtime template release this build makes VMs from: Nessa's
-/// image, built on Agent37 and pinned by revision, so every VM runs the
-/// same one. It is published in the owner's own Agent37 workspace.
-pub const AGENT37_TEMPLATE: &str = "nessa-runtime@1";
+/// The lease protocol the published Agent37 runtime template serves, and
+/// that template's release. As with Boat's image, a build whose protocol
+/// differs makes no Agent37 VM until a matching template is published:
+/// `scripts/workspaces/agent37-runtime` builds one. A template lives in one
+/// Agent37 workspace, so this alpha's VMs are made in the workspace it was
+/// published to. None is published yet.
+const AGENT37_PROTOCOL: &str = "";
+const AGENT37_TEMPLATE: &str = "nessa-runtime@1";
+pub fn agent37_template() -> Option<&'static str> {
+    (crate::env::LEASE_PROTOCOL == AGENT37_PROTOCOL).then_some(AGENT37_TEMPLATE)
+}

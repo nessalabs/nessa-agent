@@ -4,10 +4,7 @@
 use super::socket::success;
 use super::{socket::failure, state::ProductRouteState};
 #[cfg(unix)]
-use crate::workspaces::{
-    domain::{Cloud, CloudConnection, Failure},
-    infrastructure::agent37_connection,
-};
+use crate::workspaces::domain::{Cloud, CloudConnection, Failure};
 use nessa_auth::application::session::AuthenticatedSession;
 #[cfg(unix)]
 use nessa_protocol::product::generated::{Agent37SaveParams, CloudChooseParams};
@@ -51,11 +48,9 @@ pub(super) async fn dispatch(
                 let Ok(params) = serde_json::from_value::<Agent37SaveParams>(params()) else {
                     return failure(&frame.id, "invalid_request");
                 };
-                let key = zeroize::Zeroizing::new(params.key);
-                let saved = match agent37_connection((*key).clone()).await {
-                    Ok(connection) => service.save(CloudConnection::Agent37(connection)).await,
-                    Err(error) => Err(error),
-                };
+                let saved = service
+                    .save_agent37_key(zeroize::Zeroizing::new(params.key))
+                    .await;
                 if let Err(error) = saved {
                     return failure(&frame.id, code(error));
                 }

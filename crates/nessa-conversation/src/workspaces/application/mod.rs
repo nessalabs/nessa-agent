@@ -6,6 +6,6 @@ pub use runtime_settings::{
     RuntimeSettings,
 };
 pub use workspaces::{
-    Assignments, CloudChoice, Provider, RecoveryAudit, RecoveryEvent, RestCause, ServedCopy,
-    Settings, WorkspaceReceipt, WorkspaceRuntime, WorkspaceStream, Workspaces,
+    Agent37Enrollment, Assignments, CloudChoice, Provider, RecoveryAudit, RecoveryEvent, RestCause,
+    ServedCopy, Settings, WorkspaceReceipt, WorkspaceRuntime, WorkspaceStream, Workspaces,
 };
