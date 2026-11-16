@@ -155,7 +155,7 @@ impl ConversationFeed {
             let _ = self.session.finish();
             unsubscribed
         })();
-        self.stop.release();
+        self.ending.release();
         match outcome {
             Ok(())
             | Err(
@@ -200,11 +200,6 @@ impl ConversationFeed {
         }
     }
 }
-impl Drop for ConversationFeed {
-    fn drop(&mut self) {
-        self.stop.release();
-    }
-}
 
 impl RetainedCache {
     /// Follow `conversation` on a new pinned session until `budget` or
@@ -239,14 +234,12 @@ impl RetainedCache {
         let mut session = match self.open_session(&access, &ending, &offline) {
             Ok(session) => session,
             Err(ReadFailure::Unreachable) if offline.load(Ordering::SeqCst) => {
-                stop.release();
                 return Err(SubscribeError {
                     failure: ReadFailure::Away,
                     authority: false,
                 });
             }
             Err(failure) => {
-                stop.release();
                 return Err(as_subscribe(failure));
             }
         };
@@ -255,13 +248,11 @@ impl RetainedCache {
             after,
         };
         if let Err(error) = session.begin() {
-            stop.release();
             return Err(classify(&ending, stop, error));
         }
         let subscribed = session.subscribe(&params);
         let _ = session.finish();
         if let Err(error) = subscribed {
-            stop.release();
             return Err(classify(&ending, stop, error));
         }
         Ok(ConversationFeed {
