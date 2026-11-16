@@ -147,6 +147,8 @@ struct Audit {
     /// Failed openings, kept apart so the receipt histories above stay exact.
     refused_opens: Mutex<Vec<(String, OpenFailure, &'static str)>>,
     steps: Arc<Mutex<Vec<RecoveryStep>>>,
+    /// Fails the record of a cloud choice.
+    fail_choice: AtomicBool,
     fail_receipt: AtomicBool,
     fail_cleanup: AtomicBool,
     panic_receipt: AtomicBool,
@@ -192,6 +194,7 @@ impl RecoveryAudit for Audit {
             RecoveryEvent::StopRequested { .. } | RecoveryEvent::StopAnswered { .. } => {
                 &self.fail_stop
             }
+            RecoveryEvent::CloudChosen { .. } => &self.fail_choice,
             RecoveryEvent::OpenRefused { .. } => unreachable!("kept above"),
         };
         if fail.load(Ordering::SeqCst) {
@@ -235,10 +238,26 @@ struct FakeProvider {
     panic_remove: AtomicBool,
     refuse_stop: AtomicBool,
     recovery_steps: Arc<Mutex<Vec<RecoveryStep>>>,
+    /// The admission its creations name: Boat's unless set.
+    admits: Mutex<Option<Admitted>>,
 }
 impl FakeProvider {
+    /// One making Agent37 VMs.
+    fn agent37(recovery_steps: Arc<Mutex<Vec<RecoveryStep>>>) -> Self {
+        let provider = Self::new(recovery_steps);
+        *provider.admits.lock().unwrap() = Some(Admitted::Agent37(
+            TemplateRelease::new(
+                "nessa-runtime@1".into(),
+                Some(1),
+                Some(format!("sha256:{}", "a".repeat(64))),
+            )
+            .unwrap(),
+        ));
+        provider
+    }
     fn new(recovery_steps: Arc<Mutex<Vec<RecoveryStep>>>) -> Self {
         Self {
+            admits: Mutex::new(None),
             refusal_on_create: Mutex::new(None),
             created_disposition: Mutex::new(RefusalDisposition::RollbackNewVm),
             refusal_on_connect: Mutex::new(None),
@@ -283,7 +302,12 @@ impl Provider for FakeProvider {
         self.proceed.acquire().await.unwrap().forget();
         Ok(WorkspaceReceipt {
             vm: format!("vm-{thread}"),
-            admission: admission(),
+            admission: self
+                .admits
+                .lock()
+                .unwrap()
+                .clone()
+                .unwrap_or_else(admission),
             refusal: self.refusal_on_create.lock().unwrap().clone(),
             disposition: *self.created_disposition.lock().unwrap(),
         })
@@ -1528,7 +1552,10 @@ async fn disconnecting_boat_keeps_the_saved_claude_login() {
     );
     // Workspaces holds no way to change the sign-in: it is the saved Claude
     // login other machines are handed too, so disconnecting tells no change.
-    service.disconnect(Cloud::Boat).await.unwrap();
+    service
+        .disconnect(Cloud::Boat, "fixture-owner")
+        .await
+        .unwrap();
     assert_eq!(service.claude_sign_in_changes(), 0);
     // Saving or removing it, which Saved logins does, is what is told.
     service.claude_sign_in_changed();
@@ -1665,7 +1692,7 @@ impl CloudChoice for Chosen {
 async fn each_thread_stays_on_the_cloud_its_vm_was_made_on() {
     let (_, boat_store, boat, audit) = fixture_with_audit();
     let agent37_store = Arc::new(Store::default());
-    let agent37 = Arc::new(FakeProvider::new(audit.steps.clone()));
+    let agent37 = Arc::new(FakeProvider::agent37(audit.steps.clone()));
     let service = Workspaces::new(
         Arc::new(Config),
         boat.clone(),
@@ -1686,7 +1713,10 @@ async fn each_thread_stays_on_the_cloud_its_vm_was_made_on() {
     assert!(service.open(id(1), true, None).await.is_ok());
     assert_eq!(boat.creates.load(Ordering::SeqCst), 1);
 
-    service.choose(Cloud::Agent37).await.unwrap();
+    service
+        .choose(Cloud::Agent37, "fixture-owner")
+        .await
+        .unwrap();
     assert!(service.connected().await);
     assert!(service.open(id(2), true, None).await.is_ok());
     assert_eq!(agent37.creates.load(Ordering::SeqCst), 1);
@@ -1724,7 +1754,7 @@ async fn each_thread_stays_on_the_cloud_its_vm_was_made_on() {
 async fn a_record_on_the_wrong_cloud_is_refused_before_anything_is_asked() {
     let (_, boat_store, boat, audit) = fixture_with_audit();
     let agent37_store = Arc::new(Store::default());
-    let agent37 = Arc::new(FakeProvider::new(audit.steps.clone()));
+    let agent37 = Arc::new(FakeProvider::agent37(audit.steps.clone()));
     let service = Workspaces::new(
         Arc::new(Config),
         boat.clone(),
@@ -1761,4 +1791,80 @@ async fn a_record_on_the_wrong_cloud_is_refused_before_anything_is_asked() {
     assert_eq!(agent37.creates.load(Ordering::SeqCst), 0);
     assert!(agent37.connects.lock().unwrap().is_empty());
     assert!(boat.connects.lock().unwrap().is_empty());
+}
+
+/// A choice of cloud is recorded with who made it before it is saved, and
+/// one that cannot be recorded is not made. Disconnecting the chosen cloud
+/// sends new VMs to Boat again (recorded), stops that cloud's idle VMs while
+/// its account still can, and only then forgets the connection.
+#[tokio::test]
+async fn choosing_and_disconnecting_a_cloud_are_recorded_and_ordered() {
+    let (_, boat_store, boat, audit) = fixture_with_audit();
+    let agent37 = Arc::new(FakeProvider::agent37(audit.steps.clone()));
+    let service = Workspaces::new(
+        Arc::new(Config),
+        boat.clone(),
+        boat_store,
+        audit.clone(),
+        Arc::new(Config),
+    )
+    .with_cloud(
+        Cloud::Agent37,
+        Arc::new(Agent37Config),
+        agent37.clone(),
+        Arc::new(Store::default()),
+        Arc::new(Chosen(Mutex::new(Cloud::Boat))),
+    );
+    audit.fail_choice.store(true, Ordering::SeqCst);
+    assert_eq!(
+        service.choose(Cloud::Agent37, "fixture-owner").await,
+        Err(Failure::Storage)
+    );
+    assert_eq!(service.cloud().await, Ok(Cloud::Boat));
+    audit.fail_choice.store(false, Ordering::SeqCst);
+    service
+        .choose(Cloud::Agent37, "fixture-owner")
+        .await
+        .unwrap();
+    agent37.proceed.add_permits(1);
+    // Opened, then let go: idle, not yet rested.
+    drop(service.open(id(1), true, None).await.unwrap());
+    service
+        .disconnect(Cloud::Agent37, "fixture-owner")
+        .await
+        .unwrap();
+    assert_eq!(service.cloud().await, Ok(Cloud::Boat));
+    assert_eq!(*agent37.stops.lock().unwrap(), [format!("vm-{}", id(1))]);
+    let chosen: Vec<_> = audit
+        .events
+        .lock()
+        .unwrap()
+        .iter()
+        .filter_map(|event| match event {
+            RecoveryEvent::CloudChosen {
+                before,
+                after,
+                cause,
+                by,
+            } => Some((*before, *after, *cause, by.clone())),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        chosen,
+        [
+            (
+                Cloud::Boat,
+                Cloud::Agent37,
+                ChoiceCause::Chosen,
+                "fixture-owner".to_owned()
+            ),
+            (
+                Cloud::Agent37,
+                Cloud::Boat,
+                ChoiceCause::Disconnected,
+                "fixture-owner".to_owned()
+            ),
+        ]
+    );
 }

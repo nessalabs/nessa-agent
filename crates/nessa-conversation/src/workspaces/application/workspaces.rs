@@ -135,8 +135,32 @@ impl WorkspaceRuntime for HeldRuntime {
 }
 
 /// Recovery evidence is independent of assignment publication and UI observers.
+/// Why the cloud for new VMs changed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ChoiceCause {
+    /// Someone chose it.
+    Chosen,
+    /// The cloud new VMs were going to was disconnected.
+    Disconnected,
+}
+impl ChoiceCause {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Chosen => "chosen",
+            Self::Disconnected => "disconnected",
+        }
+    }
+}
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RecoveryEvent {
+    /// New VMs are about to go to `after` instead of `before`, for `cause`,
+    /// at `by`'s request. Recorded before the choice is saved.
+    CloudChosen {
+        before: Cloud,
+        after: Cloud,
+        cause: ChoiceCause,
+        by: String,
+    },
     AdmissionRefused {
         thread: String,
         vm: String,
@@ -255,6 +279,8 @@ pub struct Workspaces {
     claude_sign_in_changes: tokio::sync::watch::Sender<u64>,
     clouds: Arc<Vec<CloudParts>>,
     choice: Arc<dyn CloudChoice>,
+    /// Orders choosing a cloud against disconnecting one.
+    choosing: Arc<tokio::sync::Mutex<()>>,
     agent37: Option<Arc<dyn Agent37Enrollment>>,
     recovery: Arc<dyn RecoveryAudit>,
     /// Who uses each thread's VM, by name, and the turn that orders
@@ -281,6 +307,7 @@ impl Workspaces {
                 assignments,
             }]),
             choice: Arc::new(OnlyCloud(Cloud::Boat)),
+            choosing: Arc::default(),
             agent37: None,
             recovery,
             uses: Arc::default(),
@@ -323,9 +350,27 @@ impl Workspaces {
         self.choice.read().await
     }
     /// Make new thread VMs on `cloud`, which must be connected.
-    pub async fn choose(&self, cloud: Cloud) -> Result<(), Failure> {
-        self.parts(cloud)?.settings.read().await?;
-        self.choice.save(cloud).await
+    ///
+    /// The choice is recorded, with who made it, before it is saved: a
+    /// choice that could not be recorded is not made.
+    pub async fn choose(&self, cloud: Cloud, by: &str) -> Result<(), Failure> {
+        let _choosing = self.choosing.lock().await;
+        read_connection(self.parts(cloud)?).await?;
+        self.switch(cloud, ChoiceCause::Chosen, by).await
+    }
+    /// Make new VMs go to `after`, recorded first.
+    async fn switch(&self, after: Cloud, cause: ChoiceCause, by: &str) -> Result<(), Failure> {
+        let before = self.cloud().await?;
+        if before == after {
+            return Ok(());
+        }
+        self.record_recovery(&RecoveryEvent::CloudChosen {
+            before,
+            after,
+            cause,
+            by: by.to_owned(),
+        })?;
+        self.choice.save(after).await
     }
     /// Whether the cloud new VMs are made on is connected.
     pub async fn connected(&self) -> bool {
@@ -394,13 +439,31 @@ impl Workspaces {
     /// Forget `cloud`'s connection. The Claude sign-in stays in Saved
     /// logins: every other machine is handed it too. It is removed only
     /// from Settings › Saved logins.
-    /// New VMs then go to Boat again if they were going to `cloud`.
-    pub async fn disconnect(&self, cloud: Cloud) -> Result<(), Failure> {
-        self.parts(cloud)?.settings.clear().await?;
+    ///
+    /// In order, so a failure leaves nothing pointing at a cloud with no
+    /// connection: if new VMs were going to `cloud`, they go to Boat again
+    /// (recorded first); then `cloud`'s VMs that nothing uses are stopped,
+    /// while its account can still stop them; then its connection is
+    /// cleared. A VM still in use keeps running until its agent is done;
+    /// with no account to stop it, it sleeps once idle on Agent37 (at its
+    /// idle time, at most a day) and runs out its lifetime on Boat.
+    pub async fn disconnect(&self, cloud: Cloud, by: &str) -> Result<(), Failure> {
+        let _choosing = self.choosing.lock().await;
+        let parts = self.parts(cloud)?.clone();
         if cloud != Cloud::Boat && self.cloud().await? == cloud {
-            self.choice.save(Cloud::Boat).await?;
+            self.switch(Cloud::Boat, ChoiceCause::Disconnected, by)
+                .await?;
         }
-        Ok(())
+        for id in self.uses.idle(std::time::Duration::ZERO) {
+            let on_cloud = matches!(
+                self.recorded(&id).await,
+                Ok(Some((recorded, _))) if recorded.cloud == cloud
+            );
+            if let (true, Ok(thread)) = (on_cloud, ConversationId::new(&id)) {
+                let _ = self.rest_owned(thread, RestCause::Closed).await;
+            }
+        }
+        parts.settings.clear().await
     }
     /// How many times the Claude sign-in was said to have changed.
     #[cfg(any(test, feature = "test-support"))]

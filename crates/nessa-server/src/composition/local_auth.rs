@@ -2281,6 +2281,17 @@ use nessa_conversation::workspaces::domain::Admitted;
 impl RecoveryAudit for WorkspaceRecoveryAudit {
     fn record(&self, event: &RecoveryEvent) -> Result<(), WorkspaceFailure> {
         let record = match event {
+            RecoveryEvent::CloudChosen {
+                before,
+                after,
+                cause,
+                by,
+            } => EnvironmentEvent::WorkspaceCloudChosen {
+                before: before.as_str().into(),
+                after: after.as_str().into(),
+                cause: cause.as_str().into(),
+                principal: by.clone(),
+            },
             RecoveryEvent::AdmissionRefused {
                 thread,
                 vm,

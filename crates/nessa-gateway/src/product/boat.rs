@@ -52,7 +52,10 @@ pub(super) async fn dispatch(
                 if frame.params.is_null() || frame.params == serde_json::json!({}) =>
             {
                 service
-                    .disconnect(crate::workspaces::domain::Cloud::Boat)
+                    .disconnect(
+                        crate::workspaces::domain::Cloud::Boat,
+                        session.context().principal_id().as_str(),
+                    )
                     .await
             }
             "boat.save" => {

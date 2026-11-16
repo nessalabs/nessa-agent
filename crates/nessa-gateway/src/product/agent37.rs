@@ -12,12 +12,12 @@ use nessa_protocol::protocol::{OutgoingMessage, RequestFrame};
 
 pub(super) async fn dispatch(
     state: &ProductRouteState,
-    _session: &AuthenticatedSession,
+    session: &AuthenticatedSession,
     frame: RequestFrame,
 ) -> OutgoingMessage {
     #[cfg(not(unix))]
     {
-        let _ = state;
+        let _ = (state, session);
         failure(&frame.id, "agent37_unavailable")
     }
     #[cfg(unix)]
@@ -34,13 +34,22 @@ pub(super) async fn dispatch(
                 let Ok(params) = serde_json::from_value::<CloudChooseParams>(params()) else {
                     return failure(&frame.id, "invalid_request");
                 };
-                if let Err(error) = service.choose(cloud_from(params.cloud)).await {
+                if let Err(error) = service
+                    .choose(
+                        cloud_from(params.cloud),
+                        session.context().principal_id().as_str(),
+                    )
+                    .await
+                {
                     return failure(&frame.id, code(error));
                 }
             }
             "agent37.status" if empty => {}
             "agent37.disconnect" if empty => {
-                if let Err(error) = service.disconnect(Cloud::Agent37).await {
+                if let Err(error) = service
+                    .disconnect(Cloud::Agent37, session.context().principal_id().as_str())
+                    .await
+                {
                     return failure(&frame.id, code(error));
                 }
             }
