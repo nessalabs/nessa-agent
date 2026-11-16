@@ -51,9 +51,11 @@ export function Agent37Row() {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState("")
   const [round, setRound] = useState(0)
+  const [unread, setUnread] = useState(false)
   useEffect(() => {
     let current = true
     const revision = ++reads.current
+    setUnread(false)
     void gateway
       ?.read()
       .then(async (value) => {
@@ -64,8 +66,10 @@ export function Agent37Row() {
         }
       })
       .catch(() => {
-        if (current && revision === reads.current)
+        if (current && revision === reads.current) {
+          setUnread(true)
           setError("Agent37 status could not be read.")
+        }
       })
     return () => {
       current = false
@@ -125,6 +129,18 @@ export function Agent37Row() {
             >
               Disconnect
             </RowAction>
+          ) : unread && state === undefined ? (
+            // Whether Agent37 is connected is unknown: never offer to
+            // replace a key that may be saved.
+            <RowAction
+              data-agent37-action="retry"
+              onClick={() => {
+                setError("")
+                setRound((n) => n + 1)
+              }}
+            >
+              Try again
+            </RowAction>
           ) : state === "locked" ? (
             <RowAction
               disabled={busy}
@@ -142,7 +158,11 @@ export function Agent37Row() {
       />
       <ItemRow
         label="Cloud for new thread VMs"
-        detail="A thread whose VM exists stays on the cloud it was made on."
+        detail={
+          cloud === "agent37" && state !== "connected"
+            ? "Agent37 is chosen; unlock to see its connection. A thread whose VM exists stays on the cloud it was made on."
+            : "A thread whose VM exists stays on the cloud it was made on. Agent37 VMs sleep after the VM lifetime idle (5 minutes to a day)."
+        }
         unavailable={!gateway || cloud === undefined || busy}
         data-cloud-choice={cloud ?? "reading"}
         control={

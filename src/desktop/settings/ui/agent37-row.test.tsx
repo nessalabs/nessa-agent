@@ -86,3 +86,30 @@ it("connects with a key pasted in its dialog, keeps nothing of it, and disconnec
   expect(row()?.dataset.agent37State).toBe("disconnected")
   expect(choice()?.dataset.cloudChoice).toBe("boat")
 })
+
+it("offers to read again, never to connect, when its status could not be read", async () => {
+  let reads = 0
+  const gateway: Agent37Gateway = {
+    read: async () => {
+      reads += 1
+      if (reads === 1) throw new Error("gateway away")
+      return { state: "connected", template: "nessa-runtime@1" }
+    },
+    save: async () => {
+      throw new Error("unexpected save")
+    },
+    disconnect: async () => ({ state: "disconnected" }),
+    cloud: async () => ({ cloud: "boat" }),
+    chooseCloud: async (cloud) => ({ cloud }),
+  }
+  await act(async () =>
+    root.render(
+      <Agent37Provider gateway={gateway}>
+        <Agent37Row />
+      </Agent37Provider>,
+    ),
+  )
+  expect(button("Connect…")).toBeUndefined()
+  await act(async () => button("Try again")?.click())
+  expect(row()?.dataset.agent37State).toBe("connected")
+})
