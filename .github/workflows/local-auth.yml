@@ -528,6 +528,10 @@ jobs:
         with:
           node-version: 24
       - shell: bash
+        env:
+          # Two harnesses may run at once; bound their independent libtest
+          # workers too. Test-owned concurrency and deadlines stay unchanged.
+          RUST_TEST_THREADS: "2"
         # Default libtest capture keeps failed-test assertions in the final
         # failure section, where the bounded diagnostic tail can retain them.
         # A later hang can delay those details; long-running notices and the

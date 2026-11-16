@@ -473,16 +473,26 @@ impl Workspaces {
             Some(Assignment::Unverified { vm, .. }) => {
                 return Err(Failure::UnverifiedWorkspace { vm })
             }
-            Some(_) => return Err(Failure::ProvisioningUncertain),
+            // Accounting never makes or finishes a VM.
+            Some(Assignment::Provisioning { .. }) if !provision => {
+                return Err(Failure::ProvisioningUncertain)
+            }
             None if !provision => return Err(Failure::Missing),
-            None => {
+            recorded @ (None | Some(Assignment::Provisioning { .. })) => {
                 // A new VM is made from the image this build pins, whatever
                 // image was pinned when the account was connected: that one
                 // may speak a lease protocol this build no longer does.
                 let spec = connection.new_vm(self.image.as_deref(), auto_stop);
-                self.assignments
-                    .save(Assignment::Provisioning { thread: id.clone() })
-                    .await?;
+                // The intent is saved before Boat is asked. An intent already
+                // saved is an earlier creation whose answer was lost: Boat
+                // is asked again with the same key (the thread's), and
+                // answers with the VM it made then while it remembers that
+                // key.
+                if recorded.is_none() {
+                    self.assignments
+                        .save(Assignment::Provisioning { thread: id.clone() })
+                        .await?;
+                }
                 let created = self.provider.create(account, &spec, &id).await?;
                 let vm = created.vm;
                 let mut refusal = created.refusal;
@@ -549,6 +559,8 @@ impl Workspaces {
                 }
                 (spec, vm, created.admission, created.disposition)
             }
+            // A receipt naming another thread is never this one's.
+            Some(Assignment::Assigned { .. }) => return Err(Failure::ProvisioningUncertain),
         };
         self.connect(account, &spec, &id, &vm, &admission, disposition)
             .await

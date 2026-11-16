@@ -824,7 +824,7 @@ test("Windows keeps default libtest capture and the full unchanged selection and
   assert.ok(block)
   assert.doesNotMatch(
     block,
-    /RUST_TEST_(?:NOCAPTURE|THREADS)|--nocapture|--show-output|--test-threads/,
+    /RUST_TEST_NOCAPTURE|--nocapture|--show-output|--test-threads/,
     "failed-test output must remain in libtest's final failure section",
   )
   assert.match(block, /timeout-minutes: 95/)

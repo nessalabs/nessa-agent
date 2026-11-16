@@ -250,6 +250,23 @@ fn nessa_environment(name: &str) -> Result<(), Failure> {
     }
 }
 
+/// What every VM's `nessa` is configured with, as data: the agents the
+/// image carries and how each is started. Only the workspace is the
+/// thread's own, added by [`vm_config`].
+const VM_CONFIG_TEMPLATE: &str = include_str!("vm_config.json");
+
+/// The VM's `config.json` for a thread whose workspace is `root`.
+pub fn vm_config(root: &str) -> Result<serde_json::Value, Failure> {
+    let mut config: serde_json::Value =
+        serde_json::from_str(VM_CONFIG_TEMPLATE).map_err(|_| Failure::Provider)?;
+    config
+        .pointer_mut("/agents")
+        .and_then(serde_json::Value::as_object_mut)
+        .ok_or(Failure::Provider)?
+        .insert("workspace".into(), root.into());
+    Ok(config)
+}
+
 /// The VM's `nessa` configuration: its agents run in the thread's
 /// workspace `root`. Written through the connection's standard input, so
 /// nothing of it is in a command line, and only its account can read it.
@@ -257,10 +274,7 @@ async fn write_config(
     link: &dyn workspace_sdk::ports::IConnection,
     root: &str,
 ) -> Result<(), Failure> {
-    let config = serde_json::json!({"envServe":{"commands":true,"artifactsIn":true},"agents":{"catalog":"/opt/nessa/models.json","workspace":root,"selected":"codex","runtimes":{
-        "codex":{"command":"/opt/nessa/bin/node","args":["/opt/nessa/harnesses/node_modules/@agentclientprotocol/codex-acp/dist/index.js"],"model":"gpt-5.6-terra","toolsEnabled":true},
-        "claude":{"command":"/opt/nessa/bin/node","args":["/opt/nessa/harnesses/node_modules/@agentclientprotocol/claude-agent-acp/dist/index.js"],"model":"claude-sonnet-5","toolsEnabled":true}
-    }}});
+    let config = vm_config(root)?;
     let mut input = tempfile::tempfile().map_err(|_| Failure::Storage)?;
     input
         .write_all(config.to_string().as_bytes())

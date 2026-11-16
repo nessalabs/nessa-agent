@@ -417,6 +417,11 @@
       "grant": "credential.manage",
       "lane": "requests"
     },
+    "peer.follow": {
+      "params": "PeerFollowParams",
+      "grant": "credential.manage",
+      "lane": "requests"
+    },
     "conversation.subscribe": {
       "params": "ConversationSubscribeParams",
       "grant": "conversation.write",
