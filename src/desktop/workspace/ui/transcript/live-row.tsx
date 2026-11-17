@@ -33,7 +33,9 @@ export function LiveRow({
   const activity = shown ?? reported
   return (
     <div className={drawn ? "workspace-live" : "workspace-live-spoken"} role="status">
-      <WorkingWords working={drawn}>{activity.label}</WorkingWords>
+      <WorkingWords working={drawn} settled>
+        {activity.label}
+      </WorkingWords>
       {drawn ? <LiveTime since={activity.since} /> : null}
     </div>
   )

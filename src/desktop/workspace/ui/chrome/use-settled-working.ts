@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react"
+import { useClock, useElapsed } from "../../../../clock"
 
 /** How long work must last before it is shown: a send refused at once never flickers. */
 export const workingShowAfterMs = 300
@@ -9,33 +10,35 @@ export const workingHoldMs = 600
  * Whether to show that something works: only once it has worked for
  * `workingShowAfterMs`, and then for at least `workingHoldMs`. A turn that
  * starts and ends within a moment (a send the host refuses) shows nothing.
- * `startedAt`, where the work's own start is known, counts from it, so work
- * that has already lasted shows at once.
+ * `startedAt`, where the work's own start is known (on the injected clock,
+ * as `Activity.since` is), counts from it, so work that has already lasted
+ * shows at once. The hold is a duration, measured on the monotonic clock.
  */
 export function useSettledWorking(working: boolean, startedAt?: number): boolean {
-  const lasted = (now: number) =>
-    startedAt !== undefined && now - startedAt >= workingShowAfterMs
-  const [shown, setShown] = useState(() => working && lasted(Date.now()))
-  const [since, setSince] = useState(() => Date.now())
+  const now = useClock()
+  const elapsed = useElapsed()
+  const lasted = () => startedAt !== undefined && now() - startedAt >= workingShowAfterMs
+  const [shown, setShown] = useState(() => working && lasted())
+  const [shownAt, setShownAt] = useState(() => elapsed())
   useEffect(() => {
     if (working && !shown) {
       const wait =
         startedAt === undefined
           ? workingShowAfterMs
-          : Math.max(0, startedAt + workingShowAfterMs - Date.now())
+          : Math.max(0, startedAt + workingShowAfterMs - now())
       const timer = window.setTimeout(() => {
         setShown(true)
-        setSince(Date.now())
+        setShownAt(elapsed())
       }, wait)
       return () => window.clearTimeout(timer)
     }
     if (!working && shown) {
-      const left = Math.max(0, since + workingHoldMs - Date.now())
+      const left = Math.max(0, shownAt + workingHoldMs - elapsed())
       const timer = window.setTimeout(() => setShown(false), left)
       return () => window.clearTimeout(timer)
     }
     return undefined
-  }, [working, shown, since, startedAt])
+  }, [working, shown, shownAt, startedAt, now, elapsed])
   // Work known to have lasted shows on this paint, not after a timer.
-  return shown || (working && lasted(Date.now()))
+  return shown || (working && lasted())
 }

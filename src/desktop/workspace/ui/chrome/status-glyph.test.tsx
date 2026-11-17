@@ -1,11 +1,16 @@
 // @vitest-environment jsdom
 import { renderToStaticMarkup } from "react-dom/server"
 import { expect, it } from "vitest"
+import { ClockProvider } from "../../../../clock"
 import { StatusGlyph } from "./status-glyph"
 
 const glyph = (node: React.ReactElement) => {
   const host = document.createElement("div")
-  host.innerHTML = renderToStaticMarkup(node)
+  host.innerHTML = renderToStaticMarkup(
+    <ClockProvider now={() => 0} elapsed={() => 0}>
+      {node}
+    </ClockProvider>,
+  )
   return host.firstElementChild as HTMLElement | null
 }
 

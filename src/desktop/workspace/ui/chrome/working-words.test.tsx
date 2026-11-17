@@ -2,6 +2,7 @@
 import { act } from "react"
 import { createRoot } from "react-dom/client"
 import { afterEach, beforeEach, expect, it, vi } from "vitest"
+import { ClockProvider } from "../../../../clock"
 import { SidebarRow } from "../source-list/sidebar-row"
 import { workingHoldMs, workingShowAfterMs } from "./use-settled-working"
 import { WorkingWords } from "./working-words"
@@ -22,7 +23,14 @@ afterEach(() => {
   vi.useRealTimers()
 })
 
-const render = (node: React.ReactElement) => act(() => root.render(node))
+const render = (node: React.ReactElement) =>
+  act(() =>
+    root.render(
+      <ClockProvider now={() => Date.now()} elapsed={() => Date.now()}>
+        {node}
+      </ClockProvider>,
+    ),
+  )
 const wait = (ms: number) => act(() => vi.advanceTimersByTime(ms))
 const shimmer = () => host.querySelector(".workspace-shimmer[data-working]")
 
@@ -48,6 +56,15 @@ it("never shimmers for work that ends at once, and holds a shown shimmer a momen
   expect(shimmer()).not.toBeNull()
   wait(50)
   expect(shimmer()).toBeNull()
+})
+
+it("draws at once when the caller has already waited", () => {
+  render(
+    <WorkingWords working settled>
+      Working
+    </WorkingWords>,
+  )
+  expect(shimmer()?.textContent).toBe("Working")
 })
 
 it("says Running to a reader only when asked", () => {

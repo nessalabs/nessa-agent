@@ -13,14 +13,18 @@ import { useSettledWorking } from "./use-settled-working"
  */
 export function WorkingWords({
   working,
+  settled = false,
   spoken = false,
   children,
 }: {
   working: boolean
+  /** The caller has already waited for the work to last; draw it at once. */
+  settled?: boolean
   spoken?: boolean
   children: ReactNode
 }) {
-  const shown = useSettledWorking(working)
+  const lasting = useSettledWorking(working && !settled)
+  const shown = settled ? working : lasting
   if (!shown) return <>{children}</>
   return (
     <>
