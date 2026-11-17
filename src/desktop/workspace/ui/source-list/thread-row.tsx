@@ -16,6 +16,7 @@ import { commandLabel } from "../../../model/keyboard"
 import { sessionTime } from "../../model/time-labels"
 import { ListRow } from "../../../ui/list-row"
 import { StatusGlyph } from "../chrome/status-glyph"
+import { WorkingWords } from "../chrome/working-words"
 import { SessionMenuItems, useOpenFromRow } from "../session-actions"
 import { useSessionRowActions } from "../session-row-actions"
 import { tooltip } from "../../../ui/tooltip"
@@ -52,6 +53,7 @@ export const ThreadRow = memo(function ThreadRow({
   // Delete only: the row is a button, which holds no field to rename in.
   const row = useSessionRowActions(sessionId)
   if (!session) return null
+  const running = session.status === "running"
   return (
     <li>
       <ContextMenu onOpenChange={row.onMenuOpen}>
@@ -75,8 +77,13 @@ export const ThreadRow = memo(function ThreadRow({
                 ? `${session.title} — ${commandLabel(isMac)}-click to open beside`
                 : session.title,
             )}
-            leading={<StatusGlyph status={session.status} idle />}
-            title={session.title}
+            // At work, its title shimmers and its point stays the resting one.
+            leading={<StatusGlyph status={running ? "idle" : session.status} idle />}
+            title={
+              <WorkingWords working={running} spoken>
+                {session.title}
+              </WorkingWords>
+            }
             trailing={<BranchTime at={session.updatedAt} />}
           />
         </ContextMenuTrigger>

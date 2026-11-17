@@ -353,31 +353,6 @@
   white-space: nowrap;
 }
 
-.workspace-shimmer {
-  background: linear-gradient(
-      90deg,
-      var(--desktop-faint) 0%,
-      var(--desktop-faint) 35%,
-      var(--foreground) 50%,
-      var(--desktop-faint) 65%,
-      var(--desktop-faint) 100%
-    )
-    0 0 / 250% 100%;
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
-  animation: workspace-shimmer 2.4s linear infinite;
-}
-
-@keyframes workspace-shimmer {
-  from {
-    background-position: 100% 0;
-  }
-  to {
-    background-position: -150% 0;
-  }
-}
-
 /* The time holds together at any width ("50 s", never "50" over "s"); the label gives way. */
 .workspace-live-time {
   flex-shrink: 0;
@@ -415,9 +390,7 @@
 :root[data-motion="reduced"] .workspace-live {
   animation: none;
 }
-:root[data-motion="reduced"] .workspace-shimmer {
-  animation: none;
-  background: none;
+:root[data-motion="reduced"] .workspace-live .workspace-shimmer {
   color: var(--desktop-muted);
 }
 

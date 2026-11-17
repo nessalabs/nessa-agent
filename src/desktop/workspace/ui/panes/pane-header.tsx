@@ -92,7 +92,10 @@ export const PaneHeader = memo(function PaneHeader({
               >
                 {title}
               </span>
-              {session ? <StatusGlyph status={session.status} /> : null}
+              {/* Work shows under the turn and in the sidebar, never up here. */}
+              {session && session.status !== "running" ? (
+                <StatusGlyph status={session.status} />
+              ) : null}
             </>
           }
           accessories={

@@ -179,7 +179,7 @@ async function mount({
           ],
         },
       ],
-      activity: { label: "Running the tests", since: 990 },
+      activity: { label: "Running the tests", since: 600 },
     })
   beforeLoad?.(source)
   const filter = keptFilter()
