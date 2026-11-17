@@ -103,6 +103,7 @@ fn validate_shape(connection: &Connection, database: &str) -> Result<(), OpenErr
         ("directory_resources","resource_id, environment, canonical_path, binding"),
         ("directory_cleanup","environment, canonical_path, binding, unlinked, audit_done, initiator"),
         ("directory_open_audits","resource_id, cause, initiator, audit_done"),
+        ("directory_pending_audits","sequence, resource_id, cause, initiator, environment, canonical_path, profile, before, after, at_ms"),
     ] {
         connection.prepare(&format!("SELECT {columns} FROM {database}{table} LIMIT 0")).map_err(|cause| OpenError::Damaged(format!("grant table {table}: {cause}")))?;
     }

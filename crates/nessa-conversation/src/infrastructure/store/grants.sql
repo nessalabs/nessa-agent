@@ -163,4 +163,19 @@ CREATE TABLE directory_open_audits (
     audit_done INTEGER NOT NULL CHECK (audit_done IN (0, 1))
 ) STRICT;
 
+-- An admission or share whose audit sink refused the record. The operation
+-- is not reported as done until this row is delivered and removed.
+CREATE TABLE directory_pending_audits (
+    sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+    resource_id TEXT NOT NULL,
+    cause TEXT NOT NULL,
+    initiator TEXT NOT NULL,
+    environment TEXT NOT NULL,
+    canonical_path TEXT NOT NULL,
+    profile TEXT,
+    before TEXT,
+    after TEXT,
+    at_ms INTEGER NOT NULL
+) STRICT;
+
 PRAGMA user_version = 2;

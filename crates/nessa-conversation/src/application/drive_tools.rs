@@ -307,27 +307,122 @@ impl InvocationHook for DriveToolHook {
 
 fn directory_command(hook: &DriveToolHook, call: &ProposedToolCall<'_>) -> Option<String> {
     let directory = hook.directory.get()?;
-    let (program, arguments) = command_arguments(call.arguments_json())?;
-    match directory.command_at(&hook.directory_subject, &program, &arguments) {
-        Ok(()) => None,
-        Err(error) => Some(error.to_string()),
+    match command_arguments(call.arguments_json()) {
+        ParsedCommand::Skip => None,
+        ParsedCommand::Unsafe => Some("the command is not a single program".to_owned()),
+        ParsedCommand::Run { program, arguments } => {
+            match directory.command_at(&hook.directory_subject, &program, &arguments) {
+                Ok(()) => None,
+                Err(error) => Some(error.to_string()),
+            }
+        }
     }
 }
 
-/// A command the harness is asking about: an `argv` array, or a `command` string.
-fn command_arguments(json: &str) -> Option<(String, Vec<String>)> {
-    let value: serde_json::Value = serde_json::from_str(json).ok()?;
+/// What a permission review's arguments are, as a command.
+#[derive(Debug)]
+enum ParsedCommand {
+    /// The review is not a command.
+    Skip,
+    /// A shell string whose programs cannot all be named.
+    Unsafe,
+    /// One program and its literal arguments.
+    Run {
+        program: String,
+        arguments: Vec<String>,
+    },
+}
+
+/// A command the harness is asking about: an `argv` array of literals, or a
+/// `command` string that is one program and its arguments. A string the shell
+/// would split into more than those tokens is [`ParsedCommand::Unsafe`].
+fn command_arguments(json: &str) -> ParsedCommand {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(json) else {
+        return ParsedCommand::Skip;
+    };
     if let Some(argv) = value.get("argv").and_then(|item| item.as_array()) {
-        let mut parts = argv
-            .iter()
-            .filter_map(|item| item.as_str().map(str::to_owned));
-        let program = parts.next()?;
-        return Some((program, parts.collect()));
+        let mut parts = Vec::new();
+        for item in argv {
+            let Some(text) = item.as_str() else {
+                return ParsedCommand::Unsafe;
+            };
+            parts.push(text.to_owned());
+        }
+        let Some(program) = parts.first().cloned() else {
+            return ParsedCommand::Unsafe;
+        };
+        return ParsedCommand::Run {
+            program,
+            arguments: parts.into_iter().skip(1).collect(),
+        };
     }
-    let command = value.get("command").and_then(|item| item.as_str())?;
-    let mut parts = command.split_whitespace().map(str::to_owned);
-    let program = parts.next()?;
-    Some((program, parts.collect()))
+    let Some(command) = value.get("command").and_then(|item| item.as_str()) else {
+        return ParsedCommand::Skip;
+    };
+    let mut parts = Vec::new();
+    for token in command.split_whitespace() {
+        if !literal_token(token) {
+            return ParsedCommand::Unsafe;
+        }
+        parts.push(token.to_owned());
+    }
+    let Some(program) = parts.first().cloned() else {
+        return ParsedCommand::Unsafe;
+    };
+    ParsedCommand::Run {
+        program,
+        arguments: parts.into_iter().skip(1).collect(),
+    }
+}
+
+/// A token a shell runs as itself: no metacharacter, quote, or expansion.
+fn literal_token(token: &str) -> bool {
+    !token.is_empty()
+        && token.chars().all(|character| {
+            matches!(
+                character,
+                'a'..='z'
+                    | 'A'..='Z'
+                    | '0'..='9'
+                    | '/'
+                    | '.'
+                    | '_'
+                    | '-'
+                    | '+'
+                    | '='
+                    | ':'
+                    | '@'
+                    | ','
+            )
+        })
+}
+
+#[cfg(test)]
+mod command_parse {
+    use super::{command_arguments, ParsedCommand};
+
+    #[test]
+    fn a_shell_string_that_runs_another_program_is_refused() {
+        assert!(matches!(
+            command_arguments(r#"{"command":"ls .; rm victim"}"#),
+            ParsedCommand::Unsafe
+        ));
+        assert!(matches!(
+            command_arguments(r#"{"command":"ls | rm"}"#),
+            ParsedCommand::Unsafe
+        ));
+        assert!(matches!(
+            command_arguments(r#"{"command":"ls $(rm victim)"}"#),
+            ParsedCommand::Unsafe
+        ));
+        match command_arguments(r#"{"command":"ls -l"}"#) {
+            ParsedCommand::Run { program, arguments } => {
+                assert_eq!(program, "ls");
+                assert_eq!(arguments, ["-l"]);
+            }
+            other => panic!("{other:?}"),
+        }
+    }
 }
 
 #[cfg(test)]

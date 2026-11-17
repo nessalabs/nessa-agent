@@ -6,7 +6,7 @@ use std::fs::File;
 use std::io::{Read, Write};
 use std::os::fd::{AsRawFd, FromRawFd, RawFd};
 
-use crate::application::{DirectoryFiles, DirectoryRefusal, MarkerBytes};
+use crate::application::{DirectoryFiles, DirectoryRefusal, DirectorySession, MarkerBytes};
 use crate::domain::{PathLeave, SandboxKind, WalkFacts, BINDING_LEN, MARKER_NAME};
 
 /// The local machine's directories.
@@ -142,29 +142,153 @@ impl DirectoryFiles for LocalDirectoryFiles {
     }
 
     fn root_leave(&self, canonical: &str, roots: &[String]) -> Result<PathLeave, DirectoryRefusal> {
+        self.open_session(canonical)?.root_leave(canonical, roots)
+    }
+
+    fn open_session(&self, canonical: &str) -> Result<Box<dyn DirectorySession>, DirectoryRefusal> {
+        Ok(Box::new(HeldDirectory {
+            root: open_directory(canonical)?,
+        }))
+    }
+}
+
+struct HeldDirectory {
+    root: File,
+}
+
+impl DirectorySession for HeldDirectory {
+    fn marker(&self) -> Result<MarkerBytes, DirectoryRefusal> {
+        let marker = match open_at(self.root.as_raw_fd(), MARKER_NAME, false) {
+            Ok(file) => file,
+            Err(DirectoryRefusal::Io(std::io::ErrorKind::NotFound)) => {
+                return Ok(MarkerBytes::Absent)
+            }
+            Err(error) => return Err(error),
+        };
+        read_marker_file(marker)
+    }
+
+    fn walk(&self, relative: &str) -> Result<WalkFacts, DirectoryRefusal> {
+        let (file, leave) = walk_from(self.root.as_raw_fd(), relative)?;
+        let marker = file
+            .as_ref()
+            .is_some_and(|opened| is_marker(self.root.as_raw_fd(), opened.as_raw_fd()));
+        Ok(WalkFacts { leave, marker })
+    }
+
+    fn read(&self, relative: &str) -> Result<Vec<u8>, DirectoryRefusal> {
+        let (file, leave) = walk_from(self.root.as_raw_fd(), relative)?;
+        if leave != PathLeave::Inside {
+            return Err(DirectoryRefusal::Outside { leave });
+        }
+        let mut file = file.ok_or(DirectoryRefusal::Outside {
+            leave: PathLeave::Missing,
+        })?;
+        if is_marker(self.root.as_raw_fd(), file.as_raw_fd()) {
+            return Err(DirectoryRefusal::MarkerName);
+        }
+        let mut bytes = Vec::new();
+        file.read_to_end(&mut bytes).map_err(io)?;
+        Ok(bytes)
+    }
+
+    fn write(&self, relative: &str, bytes: &[u8]) -> Result<(), DirectoryRefusal> {
+        let (existing, leave) = walk_from(self.root.as_raw_fd(), relative)?;
+        if leave != PathLeave::Inside && leave != PathLeave::Missing {
+            return Err(DirectoryRefusal::Outside { leave });
+        }
+        if existing
+            .as_ref()
+            .is_some_and(|opened| is_marker(self.root.as_raw_fd(), opened.as_raw_fd()))
+        {
+            return Err(DirectoryRefusal::MarkerName);
+        }
+        let parent = parent_file(self.root.as_raw_fd(), relative)?;
+        let name = final_name(relative)?;
+        let flags = libc::O_CREAT | libc::O_RDWR | libc::O_NOFOLLOW | libc::O_CLOEXEC;
+        let name = c_name(&name)?;
+        let fd = unsafe { libc::openat(parent.as_raw_fd(), name.as_ptr(), flags, 0o600) };
+        if fd < 0 {
+            return Err(io(std::io::Error::last_os_error()));
+        }
+        let mut file = unsafe { File::from_raw_fd(fd) };
+        if is_marker(self.root.as_raw_fd(), file.as_raw_fd()) {
+            return Err(DirectoryRefusal::MarkerName);
+        }
+        if unsafe { libc::ftruncate(file.as_raw_fd(), 0) } != 0 {
+            return Err(io(std::io::Error::last_os_error()));
+        }
+        file.write_all(bytes).map_err(io)?;
+        Ok(())
+    }
+
+    fn root_leave(&self, canonical: &str, roots: &[String]) -> Result<PathLeave, DirectoryRefusal> {
         if roots.is_empty() {
             return Ok(PathLeave::Outside);
         }
         let mut leave = PathLeave::Inside;
         for root in roots {
             let absolute = absolute(root)?;
-            if absolute == canonical {
-                continue;
-            }
-            let Some(rest) = absolute.strip_prefix(canonical.trim_end_matches('/')) else {
+            let Some(rest) = relative_inside(canonical, &absolute) else {
                 return Ok(PathLeave::Outside);
             };
-            let rest = rest.trim_start_matches('/');
             if rest.is_empty() {
+                if !same_directory(self.root.as_raw_fd(), &absolute)? {
+                    return Ok(PathLeave::Outside);
+                }
                 continue;
             }
-            let facts = self.walk(canonical, rest)?;
+            let facts = self.walk(rest)?;
             if facts.leave != PathLeave::Inside {
                 leave = facts.leave;
             }
         }
         Ok(leave)
     }
+}
+
+fn read_marker_file(marker: File) -> Result<MarkerBytes, DirectoryRefusal> {
+    let mut bytes = Vec::new();
+    (&marker)
+        .take(BINDING_LEN as u64 + 1)
+        .read_to_end(&mut bytes)
+        .map_err(io)?;
+    if bytes.len() == BINDING_LEN {
+        let mut exact = [0; BINDING_LEN];
+        exact.copy_from_slice(&bytes);
+        Ok(MarkerBytes::Exact(exact))
+    } else {
+        Ok(MarkerBytes::Other)
+    }
+}
+
+fn relative_inside<'a>(canonical: &str, absolute: &'a str) -> Option<&'a str> {
+    let canonical = canonical.trim_end_matches('/');
+    if canonical.is_empty() {
+        return Some(absolute.trim_start_matches('/'));
+    }
+    if absolute == canonical {
+        return Some("");
+    }
+    let mut prefix = String::from(canonical);
+    prefix.push('/');
+    absolute.strip_prefix(&prefix)
+}
+
+fn same_directory(root: RawFd, path: &str) -> Result<bool, DirectoryRefusal> {
+    let opened = open_directory(path)?;
+    Ok(same_inode(root, opened.as_raw_fd()))
+}
+
+fn same_inode(left: RawFd, right: RawFd) -> bool {
+    let mut left_stat = unsafe { std::mem::zeroed() };
+    let mut right_stat = unsafe { std::mem::zeroed() };
+    let left_ok = unsafe { libc::fstat(left, &mut left_stat) } == 0;
+    let right_ok = unsafe { libc::fstat(right, &mut right_stat) } == 0;
+    left_ok
+        && right_ok
+        && left_stat.st_dev == right_stat.st_dev
+        && left_stat.st_ino == right_stat.st_ino
 }
 
 fn absolute(path: &str) -> Result<String, DirectoryRefusal> {

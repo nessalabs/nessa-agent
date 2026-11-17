@@ -52,6 +52,8 @@ pub enum DirectoryRefusal {
     Capability { rules: Vec<String> },
     /// No grant exists for this subject.
     NotFound,
+    /// The audit sink did not accept the record. The operation is not done.
+    Audit,
 }
 
 impl std::fmt::Display for DirectoryRefusal {
@@ -97,6 +99,7 @@ impl std::fmt::Display for DirectoryRefusal {
             }
             Self::Capability { .. } => write!(formatter, "the directory grant does not allow this"),
             Self::NotFound => write!(formatter, "no directory grant"),
+            Self::Audit => write!(formatter, "the directory audit was not recorded"),
         }
     }
 }
@@ -185,6 +188,20 @@ pub struct StoredDirectoryResource {
     pub binding: [u8; BINDING_LEN],
 }
 
+/// One opened directory. Every check and every read or write uses this handle.
+pub trait DirectorySession: Send {
+    /// The marker, read from this directory.
+    fn marker(&self) -> Result<MarkerBytes, DirectoryRefusal>;
+    /// Walk `relative` from this directory.
+    fn walk(&self, relative: &str) -> Result<WalkFacts, DirectoryRefusal>;
+    /// Read a file from this directory.
+    fn read(&self, relative: &str) -> Result<Vec<u8>, DirectoryRefusal>;
+    /// Write a file in this directory, without truncating the marker.
+    fn write(&self, relative: &str, bytes: &[u8]) -> Result<(), DirectoryRefusal>;
+    /// Where each sandbox root sits relative to this directory.
+    fn root_leave(&self, canonical: &str, roots: &[String]) -> Result<PathLeave, DirectoryRefusal>;
+}
+
 /// Facts the walk reports.
 pub trait DirectoryFiles: Send + Sync {
     /// The canonical directory, opened no-follow.
@@ -214,6 +231,11 @@ pub trait DirectoryFiles: Send + Sync {
     fn hides_marker(&self, profile: SandboxKind) -> bool;
     /// Where each sandbox root sits relative to the granted directory.
     fn root_leave(&self, canonical: &str, roots: &[String]) -> Result<PathLeave, DirectoryRefusal>;
+    /// Open the directory once. The handle stays the directory that was opened.
+    fn open_session(&self, canonical: &str) -> Result<Box<dyn DirectorySession>, DirectoryRefusal> {
+        let _ = canonical;
+        Err(DirectoryRefusal::Io(std::io::ErrorKind::Unsupported))
+    }
 }
 
 /// The grant rows for one directory.
@@ -290,6 +312,30 @@ pub trait DirectoryStore: Send + Sync {
     ) -> Result<(), DirectoryRefusal>;
     /// Remove the cleanup row once both the unlink and the audit have committed.
     fn clear_cleanup(&self, environment: &str, canonical: &str) -> Result<(), DirectoryRefusal>;
+    /// Remember an audit the sink refused.
+    fn save_pending(&self, record: &DirectoryAuditRecord) -> Result<(), DirectoryRefusal> {
+        let _ = record;
+        Err(DirectoryRefusal::Store)
+    }
+    /// Audits still waiting for this resource.
+    fn pending_for(&self, resource_id: &str) -> Result<Vec<PendingAudit>, DirectoryRefusal> {
+        let _ = resource_id;
+        Ok(Vec::new())
+    }
+    /// Forget one delivered pending audit.
+    fn drop_pending(&self, sequence: i64) -> Result<(), DirectoryRefusal> {
+        let _ = sequence;
+        Ok(())
+    }
+}
+
+/// An audit record the sink has not accepted yet.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PendingAudit {
+    /// Row id.
+    pub sequence: i64,
+    /// The record to deliver.
+    pub record: DirectoryAuditRecord,
 }
 
 /// The first mismatch, and whether this call revoked the grants.
@@ -401,7 +447,7 @@ pub struct PolicyUnavailable;
 pub struct AuditUnavailable;
 
 /// One directory audit line.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct DirectoryAuditRecord {
     /// What happened.
     pub cause: String,
@@ -515,23 +561,23 @@ impl DirectoryAccess {
 
     /// Read a file inside a subject's directory.
     pub fn read(&self, subject: &str, relative: &str) -> Result<Vec<u8>, DirectoryRefusal> {
-        let (grant, resource) = self.prepare(subject, relative, "read")?;
-        let bytes = self.files.read_inside(&resource.canonical_path, relative)?;
-        let facts = self.files.walk(&resource.canonical_path, relative)?;
+        let (grant, resource, session) = self.prepare(subject, relative, "read")?;
+        let bytes = session.read(relative)?;
+        let facts = session.walk(relative)?;
         self.refuse_walk(&grant, &resource, facts, "directory.read")?;
         Ok(bytes)
     }
 
-    /// Write a file inside a subject's directory.
+    /// Write a file inside a subject's directory. A missing final name, under a
+    /// parent that is inside the directory, is created.
     pub fn write(
         &self,
         subject: &str,
         relative: &str,
         bytes: &[u8],
     ) -> Result<(), DirectoryRefusal> {
-        let (_grant, resource) = self.prepare(subject, relative, "write")?;
-        self.files
-            .write_inside(&resource.canonical_path, relative, bytes)
+        let (_grant, _resource, session) = self.prepare(subject, relative, "write")?;
+        session.write(relative, bytes)
     }
 
     /// Admit exec. This does not spawn a process.
@@ -544,9 +590,10 @@ impl DirectoryAccess {
             return Err(DirectoryRefusal::HooksAnswerFirst);
         }
         let resources = self.resource_of(grant)?;
-        let root_leave = self
-            .files
-            .root_leave(&resources.canonical_path, ask.roots)?;
+        let session = self.files.open_session(&resources.canonical_path)?;
+        self.open_marker_on(&*session, &resources, ask.subject)?;
+        self.flush_pending(&grant.resource_id)?;
+        let root_leave = session.root_leave(&resources.canonical_path, ask.roots)?;
         let question = ExecQuestion {
             capabilities: capability_names(&grant.capabilities),
             resource: grant.resource_id.clone(),
@@ -559,20 +606,17 @@ impl DirectoryAccess {
             .exec(&question)
             .map_err(|_| DirectoryRefusal::PolicyUnavailable)?
         {
-            PolicyAnswer::Allow => {
-                let _ = self.audit.record(&DirectoryAuditRecord {
-                    cause: "exec".to_owned(),
-                    resource_id: Some(grant.resource_id.clone()),
-                    environment: resources.environment,
-                    canonical_path: resources.canonical_path,
-                    initiator: ask.subject.to_owned(),
-                    before: None,
-                    after: None,
-                    profile: Some(ask.profile.as_str().to_owned()),
-                    at_ms: now_ms(),
-                });
-                Ok(())
-            }
+            PolicyAnswer::Allow => self.audit_required(DirectoryAuditRecord {
+                cause: "exec".to_owned(),
+                resource_id: Some(grant.resource_id.clone()),
+                environment: resources.environment,
+                canonical_path: resources.canonical_path,
+                initiator: ask.subject.to_owned(),
+                before: None,
+                after: None,
+                profile: Some(ask.profile.as_str().to_owned()),
+                at_ms: now_ms(),
+            }),
             PolicyAnswer::Deny { rules } => {
                 let recorded = self
                     .audit
@@ -723,6 +767,7 @@ impl DirectoryAccess {
             if resource.binding != bytes {
                 return self.mismatch(&resource, "marker-different", &request.initiator);
             }
+            self.flush_pending(&resource.resource_id)?;
             return self.insert_subject(request, resource);
         }
         if self.store.resource_by_binding(&bytes)?.is_some() {
@@ -735,7 +780,7 @@ impl DirectoryAccess {
             binding: bytes,
         };
         self.store.insert_resource(&resource)?;
-        self.audit_share(&resource, &request.initiator, "adopt");
+        self.audit_share(&resource, &request.initiator, "adopt")?;
         self.insert_subject(request, resource)
     }
 
@@ -781,7 +826,7 @@ impl DirectoryAccess {
             }
             return Err(error);
         }
-        self.audit_share(&resource, &request.initiator, "first-share");
+        self.audit_share(&resource, &request.initiator, "first-share")?;
         self.insert_subject(request, resource)
     }
 
@@ -843,14 +888,22 @@ impl DirectoryAccess {
         subject: &str,
         relative: &str,
         capability: &str,
-    ) -> Result<(StoredDirectoryGrant, StoredDirectoryResource), DirectoryRefusal> {
+    ) -> Result<
+        (
+            StoredDirectoryGrant,
+            StoredDirectoryResource,
+            Box<dyn DirectorySession>,
+        ),
+        DirectoryRefusal,
+    > {
         let grants = self.store.grants_for_subject(subject)?;
         let Some(grant) = grants.into_iter().next() else {
             return Err(DirectoryRefusal::NotFound);
         };
         let resource = self.resource_of(&grant)?;
-        self.open_marker(&resource, subject)?;
-        let facts = self.files.walk(&resource.canonical_path, relative)?;
+        let session = self.files.open_session(&resource.canonical_path)?;
+        self.open_marker_on(session.as_ref(), &resource, subject)?;
+        let facts = facts_for(session.as_ref(), relative, capability)?;
         self.refuse_walk(&grant, &resource, facts, &format!("directory.{capability}"))?;
         if !capability_names(&grant.capabilities)
             .iter()
@@ -858,7 +911,7 @@ impl DirectoryAccess {
         {
             return Err(DirectoryRefusal::Capability { rules: Vec::new() });
         }
-        Ok((grant, resource))
+        Ok((grant, resource, session))
     }
 
     fn refuse_walk(
@@ -895,12 +948,13 @@ impl DirectoryAccess {
         }
     }
 
-    fn open_marker(
+    fn open_marker_on(
         &self,
+        session: &dyn DirectorySession,
         resource: &StoredDirectoryResource,
         initiator: &str,
     ) -> Result<(), DirectoryRefusal> {
-        match self.files.read_marker(&resource.canonical_path)? {
+        match session.marker()? {
             MarkerBytes::Exact(bytes) if bytes == resource.binding => Ok(()),
             MarkerBytes::Exact(_) => self
                 .mismatch(resource, "marker-different", initiator)
@@ -951,8 +1005,13 @@ impl DirectoryAccess {
         Ok(())
     }
 
-    fn audit_share(&self, resource: &StoredDirectoryResource, initiator: &str, cause: &str) {
-        let _ = self.audit.record(&DirectoryAuditRecord {
+    fn audit_share(
+        &self,
+        resource: &StoredDirectoryResource,
+        initiator: &str,
+        cause: &str,
+    ) -> Result<(), DirectoryRefusal> {
+        self.audit_required(DirectoryAuditRecord {
             cause: cause.to_owned(),
             resource_id: Some(resource.resource_id.clone()),
             environment: resource.environment.clone(),
@@ -962,7 +1021,27 @@ impl DirectoryAccess {
             after: Some("active".to_owned()),
             profile: None,
             at_ms: now_ms(),
-        });
+        })
+    }
+
+    fn audit_required(&self, record: DirectoryAuditRecord) -> Result<(), DirectoryRefusal> {
+        if self.audit.record(&record).is_ok() {
+            return Ok(());
+        }
+        let resource_id = record.resource_id.clone().unwrap_or_default();
+        self.store.save_pending(&record)?;
+        let _ = resource_id;
+        Err(DirectoryRefusal::Audit)
+    }
+
+    fn flush_pending(&self, resource_id: &str) -> Result<(), DirectoryRefusal> {
+        for pending in self.store.pending_for(resource_id)? {
+            if self.audit.record(&pending.record).is_err() {
+                return Err(DirectoryRefusal::Audit);
+            }
+            self.store.drop_pending(pending.sequence)?;
+        }
+        Ok(())
     }
 
     fn lease(&self, environment: &str, canonical: &str) -> LeaseGuard {
@@ -998,6 +1077,45 @@ impl Drop for LeaseGuard {
         *held = false;
         self.lease.free.notify_one();
     }
+}
+
+fn facts_for(
+    session: &dyn DirectorySession,
+    relative: &str,
+    capability: &str,
+) -> Result<WalkFacts, DirectoryRefusal> {
+    let facts = session.walk(relative)?;
+    if capability != "write" || facts.leave != PathLeave::Missing {
+        return Ok(facts);
+    }
+    let parent = parent_relative(relative);
+    let parent_facts = if parent.is_empty() {
+        WalkFacts {
+            leave: PathLeave::Inside,
+            marker: false,
+        }
+    } else {
+        session.walk(&parent)?
+    };
+    if parent_facts.leave == PathLeave::Inside && !parent_facts.marker {
+        return Ok(WalkFacts {
+            leave: PathLeave::Inside,
+            marker: false,
+        });
+    }
+    Ok(facts)
+}
+
+fn parent_relative(relative: &str) -> String {
+    let mut parts: Vec<&str> = relative
+        .split('/')
+        .filter(|part| !part.is_empty() && *part != ".")
+        .collect();
+    if parts.len() <= 1 {
+        return String::new();
+    }
+    parts.pop();
+    parts.join("/")
 }
 
 fn capability_names(spelling: &str) -> Vec<String> {

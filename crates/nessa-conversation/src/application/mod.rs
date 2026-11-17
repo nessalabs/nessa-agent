@@ -170,10 +170,10 @@ mod directory_grant;
 pub use directory_grant::{
     allow_program, deny_argv, AuditUnavailable, BindingSource, DirectoryAccess, DirectoryAudit,
     DirectoryAuditRecord, DirectoryCommandQuestion, DirectoryFiles, DirectoryPolicyEvaluator,
-    DirectoryRefusal, DirectoryStore, DirectorySubject, ExecAsk, ExecQuestion, MarkerBytes,
-    PendingCleanup, PendingOpenAudit, PolicyAnswer, PolicyUnavailable, RandomBinding,
-    RevokeMismatch, ShareDirectory, SharedDirectory, StoredDirectoryGrant, StoredDirectoryResource,
-    UseQuestion,
+    DirectoryRefusal, DirectorySession, DirectoryStore, DirectorySubject, ExecAsk, ExecQuestion,
+    MarkerBytes, PendingAudit, PendingCleanup, PendingOpenAudit, PolicyAnswer, PolicyUnavailable,
+    RandomBinding, RevokeMismatch, ShareDirectory, SharedDirectory, StoredDirectoryGrant,
+    StoredDirectoryResource, UseQuestion,
 };
 mod drive_tools;
 mod environment;

@@ -7,8 +7,8 @@ use nessa_local_database::rusqlite::{params, OptionalExtension};
 use nessa_local_database::{OpenError, Schema};
 
 use crate::application::{
-    DirectoryRefusal, DirectoryStore, PendingCleanup, PendingOpenAudit, RevokeMismatch,
-    StoredDirectoryGrant, StoredDirectoryResource,
+    DirectoryAuditRecord, DirectoryRefusal, DirectoryStore, PendingAudit, PendingCleanup,
+    PendingOpenAudit, RevokeMismatch, StoredDirectoryGrant, StoredDirectoryResource,
 };
 use crate::domain::{ArgvPattern, CommandMatcher, CommandRules, RuleEffect, BINDING_LEN};
 use crate::timer::clock::wall_now;
@@ -350,6 +350,69 @@ impl DirectoryStore for SqliteDirectoryStore {
             .execute(
                 "DELETE FROM directory_cleanup WHERE environment = ?1 AND canonical_path = ?2",
                 params![environment, canonical],
+            )
+            .map_err(store)?;
+        Ok(())
+    }
+
+    fn save_pending(&self, record: &DirectoryAuditRecord) -> Result<(), DirectoryRefusal> {
+        let connection = self.connection.lock().expect("directory grants");
+        connection
+            .execute(
+                "INSERT INTO directory_pending_audits (
+                    resource_id, cause, initiator, environment, canonical_path, profile, before, after, at_ms
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                params![
+                    record.resource_id.clone().unwrap_or_default(),
+                    record.cause,
+                    record.initiator,
+                    record.environment,
+                    record.canonical_path,
+                    record.profile,
+                    record.before,
+                    record.after,
+                    i64::try_from(record.at_ms).unwrap_or(i64::MAX),
+                ],
+            )
+            .map_err(store)?;
+        Ok(())
+    }
+
+    fn pending_for(&self, resource_id: &str) -> Result<Vec<PendingAudit>, DirectoryRefusal> {
+        let connection = self.connection.lock().expect("directory grants");
+        let mut statement = connection
+            .prepare(
+                "SELECT sequence, resource_id, cause, initiator, environment, canonical_path, profile, before, after, at_ms
+                 FROM directory_pending_audits WHERE resource_id = ?1 ORDER BY sequence",
+            )
+            .map_err(store)?;
+        let rows = statement
+            .query_map(params![resource_id], |row| {
+                Ok(PendingAudit {
+                    sequence: row.get(0)?,
+                    record: DirectoryAuditRecord {
+                        cause: row.get(2)?,
+                        resource_id: Some(row.get(1)?),
+                        environment: row.get(4)?,
+                        canonical_path: row.get(5)?,
+                        initiator: row.get(3)?,
+                        before: row.get(7)?,
+                        after: row.get(8)?,
+                        profile: row.get(6)?,
+                        at_ms: u64::try_from(row.get::<_, i64>(9)?).unwrap_or(0),
+                    },
+                })
+            })
+            .map_err(store)?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(store)
+    }
+
+    fn drop_pending(&self, sequence: i64) -> Result<(), DirectoryRefusal> {
+        let connection = self.connection.lock().expect("directory grants");
+        connection
+            .execute(
+                "DELETE FROM directory_pending_audits WHERE sequence = ?1",
+                params![sequence],
             )
             .map_err(store)?;
         Ok(())
