@@ -210,17 +210,6 @@ export const SplitPanes = memo(function SplitPanes({
       unsubscribe()
     }
   }, [source])
-  // The frame that first paints a new arrangement skips scene text. The text
-  // is already laid out at a fixed width; painting it again is the resize.
-  // A resize of the same panes does not, so a drag does not hide the scene.
-  const shape = arrangementOf(drawn)
-  useLayoutEffect(() => {
-    const grid = gridRef.current
-    if (!grid) return
-    grid.setAttribute(marks.painting, "")
-    const id = requestAnimationFrame(() => grid.removeAttribute(marks.painting))
-    return () => cancelAnimationFrame(id)
-  }, [shape])
   // The workspace holds the sidebar in the row until these boxes paint.
   // Folding it out of the row on the earlier frame widens the one pane and
   // lays its text out, then the boxes lay it out again.
