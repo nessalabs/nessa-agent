@@ -1043,6 +1043,8 @@ struct Inner {
     /// What checks a Drive grant's tools. Composition binds it; until then
     /// no Drive turn is admitted (`drive_policy_unenforceable`).
     drive: Arc<OnceLock<DriveTools>>,
+    /// Directory grants. Unbound, a turn is not checked against one.
+    directory: Arc<OnceLock<Arc<crate::application::DirectoryAccess>>>,
     /// Remembered permission rules. Unbound, no turn is offered a remember
     /// choice and no review is answered by a rule.
     permission_rules: Arc<OnceLock<Arc<dyn PermissionRules>>>,
@@ -1536,6 +1538,7 @@ impl ConversationService {
                 failure_backoff: OnceLock::new(),
                 retry_scheduled: tokio::sync::Notify::new(),
                 drive: Arc::new(OnceLock::new()),
+                directory: Arc::new(OnceLock::new()),
                 permission_rules: Arc::new(OnceLock::new()),
                 fence_capture: Arc::new(OnceLock::new()),
             }),
@@ -2352,6 +2355,8 @@ impl ConversationService {
                                     drive: service.inner.drive.clone(),
                                     admitted: admitted_policies.clone(),
                                     source,
+                                    directory: service.inner.directory.clone(),
+                                    directory_subject: actor.principal_id().to_owned(),
                                 }));
                             }
                             // Every agent: whether a send to this thread
@@ -3943,6 +3948,12 @@ impl ConversationService {
     /// unbound, no Drive turn is admitted.
     pub fn bind_drive_tools(&self, drive: DriveTools) {
         let _ = self.inner.drive.set(drive);
+    }
+
+    /// Bind directory grants. A second bind is ignored. Unbound, permission
+    /// reviews and `run` do not consult a directory grant.
+    pub fn bind_directory_access(&self, access: Arc<crate::application::DirectoryAccess>) {
+        let _ = self.inner.directory.set(access);
     }
 
     /// Bind the remembered permission rules. A second bind is ignored.

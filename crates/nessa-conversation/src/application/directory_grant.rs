@@ -1,0 +1,1032 @@
+//! Sharing one directory: a binding marker, a path walk, and command rules.
+//!
+//! Cedar decides every read, write, exec, and command. This module orders
+//! the facts, the decision, and the audit. It does not open files itself.
+
+use std::sync::Arc;
+use std::time::Duration;
+
+use serde::Serialize;
+
+use crate::domain::{
+    encoded_grant, join_argv, ArgvPattern, CommandMatcher, CommandRules, DirectoryCapabilities,
+    DirectoryShapeError, PathLeave, RuleEffect, SandboxKind, WalkFacts, BINDING_LEN,
+};
+use crate::timer::clock::wall_now;
+
+/// Why a directory operation was refused.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DirectoryRefusal {
+    /// The grant's shape or size was refused before any file was touched.
+    Shape(DirectoryShapeError),
+    /// The filesystem could not complete the walk.
+    Io(std::io::ErrorKind),
+    /// The grant store could not record the change.
+    Store,
+    /// Cedar could not decide.
+    PolicyUnavailable,
+    /// The marker was present and was not exactly 32 bytes. It was not rewritten.
+    MarkerSize,
+    /// Those marker bytes already belong to a directory at another path.
+    BindingCopied,
+    /// The named path left the granted directory.
+    Outside { leave: PathLeave },
+    /// The named path is the marker file.
+    MarkerName,
+    /// The marker was missing or different. Grants for the resource are revoked.
+    MarkerMismatch { cause: String, audit_recorded: bool },
+    /// Exec was refused. `rules` are the Cedar policy ids.
+    Exec {
+        rules: Vec<String>,
+        audit_recorded: bool,
+    },
+    /// A command matcher refused the program.
+    Program {
+        matcher: String,
+        rules: Vec<String>,
+        audit_recorded: bool,
+    },
+    /// Command rules are a constraint, and the harness hooks would answer first.
+    HooksAnswerFirst,
+    /// The grant does not include this capability.
+    Capability { rules: Vec<String> },
+    /// No grant exists for this subject.
+    NotFound,
+}
+
+impl std::fmt::Display for DirectoryRefusal {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Shape(DirectoryShapeError::Frame) => {
+                write!(formatter, "the directory grant does not fit one frame")
+            }
+            Self::Shape(_) => write!(formatter, "the directory grant shape was refused"),
+            Self::Io(_) => write!(formatter, "the directory could not be opened"),
+            Self::Store => write!(formatter, "the directory grant could not be stored"),
+            Self::PolicyUnavailable => write!(formatter, "directory policy could not decide"),
+            Self::MarkerSize => write!(formatter, "the directory marker is the wrong size"),
+            Self::BindingCopied => write!(formatter, "the directory marker is a copy"),
+            Self::Outside { leave } => write!(formatter, "the path left the directory ({leave:?})"),
+            Self::MarkerName => write!(formatter, "the directory marker cannot be used"),
+            Self::MarkerMismatch { audit_recorded, .. } => write!(
+                formatter,
+                "the directory marker does not match{}",
+                audit_note(*audit_recorded)
+            ),
+            Self::Exec { audit_recorded, .. } => {
+                write!(
+                    formatter,
+                    "the command was not admitted{}",
+                    audit_note(*audit_recorded)
+                )
+            }
+            Self::Program {
+                matcher,
+                audit_recorded,
+                ..
+            } => write!(
+                formatter,
+                "command rule {matcher} refused the program{}",
+                audit_note(*audit_recorded)
+            ),
+            Self::HooksAnswerFirst => {
+                write!(
+                    formatter,
+                    "harness hooks would answer before the command rules"
+                )
+            }
+            Self::Capability { .. } => write!(formatter, "the directory grant does not allow this"),
+            Self::NotFound => write!(formatter, "no directory grant"),
+        }
+    }
+}
+
+fn audit_note(recorded: bool) -> &'static str {
+    if recorded {
+        ""
+    } else {
+        "; the audit was not recorded"
+    }
+}
+
+/// What the marker file held, stopping at 33 bytes.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum MarkerBytes {
+    /// The file was not there.
+    Absent,
+    /// Exactly 32 bytes.
+    Exact([u8; BINDING_LEN]),
+    /// Any other size. The file is not rewritten.
+    Other,
+}
+
+/// A subject of a directory grant.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DirectorySubject {
+    /// Principal id, when the subject is a principal.
+    pub principal_id: Option<String>,
+    /// Receiver id, when the subject is a receiver.
+    pub receiver_id: Option<String>,
+}
+
+/// A request to share one directory.
+#[derive(Clone, Debug)]
+pub struct ShareDirectory {
+    /// The environment the grantor enforces.
+    pub environment: String,
+    /// The directory the owner named.
+    pub path: String,
+    /// Who receives the grant.
+    pub subject: DirectorySubject,
+    /// Read, write, and exec, any non-empty subset.
+    pub capabilities: DirectoryCapabilities,
+    /// Ordered command matchers. Empty is no extra command constraint.
+    pub rules: CommandRules,
+    /// Who asked.
+    pub initiator: String,
+}
+
+/// The grant that was stored.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SharedDirectory {
+    /// The resource id. A second subject of the same directory reuses it.
+    pub resource_id: String,
+    /// The canonical directory.
+    pub canonical_path: String,
+    /// The capability spelling.
+    pub capabilities: String,
+}
+
+/// One stored grant.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StoredDirectoryGrant {
+    /// The resource id.
+    pub resource_id: String,
+    /// Principal, when the subject is a principal.
+    pub principal_id: Option<String>,
+    /// Receiver, when the subject is a receiver.
+    pub receiver_id: Option<String>,
+    /// Capability spelling.
+    pub capabilities: String,
+    /// Command rules, when the grant has any.
+    pub rules: CommandRules,
+}
+
+/// One stored directory resource.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StoredDirectoryResource {
+    /// Resource id.
+    pub resource_id: String,
+    /// Environment.
+    pub environment: String,
+    /// Canonical path.
+    pub canonical_path: String,
+    /// The 32 marker bytes.
+    pub binding: [u8; BINDING_LEN],
+}
+
+/// Facts the walk reports.
+pub trait DirectoryFiles: Send + Sync {
+    /// The canonical directory, opened no-follow.
+    fn canonicalize(&self, path: &str) -> Result<String, DirectoryRefusal>;
+    /// The marker, stopping at 33 bytes.
+    fn read_marker(&self, canonical: &str) -> Result<MarkerBytes, DirectoryRefusal>;
+    /// Create the marker exclusively with these bytes.
+    fn create_marker(
+        &self,
+        canonical: &str,
+        bytes: &[u8; BINDING_LEN],
+    ) -> Result<(), DirectoryRefusal>;
+    /// Remove the marker. Absent is success.
+    fn unlink_marker(&self, canonical: &str) -> Result<(), DirectoryRefusal>;
+    /// Walk `relative` from the granted directory.
+    fn walk(&self, canonical: &str, relative: &str) -> Result<WalkFacts, DirectoryRefusal>;
+    /// Read a file the walk already placed inside.
+    fn read_inside(&self, canonical: &str, relative: &str) -> Result<Vec<u8>, DirectoryRefusal>;
+    /// Write a file the walk already placed inside, without truncating the marker.
+    fn write_inside(
+        &self,
+        canonical: &str,
+        relative: &str,
+        bytes: &[u8],
+    ) -> Result<(), DirectoryRefusal>;
+    /// Whether a process in this sandbox can open the marker.
+    fn hides_marker(&self, profile: SandboxKind) -> bool;
+    /// Where each sandbox root sits relative to the granted directory.
+    fn root_leave(&self, canonical: &str, roots: &[String]) -> Result<PathLeave, DirectoryRefusal>;
+}
+
+/// The grant rows for one directory.
+pub trait DirectoryStore: Send + Sync {
+    /// Insert a new resource. The binding must be unique.
+    fn insert_resource(&self, resource: &StoredDirectoryResource) -> Result<(), DirectoryRefusal>;
+    /// The resource at this environment and path.
+    fn resource_at(
+        &self,
+        environment: &str,
+        canonical: &str,
+    ) -> Result<Option<StoredDirectoryResource>, DirectoryRefusal>;
+    /// The resource with this id.
+    fn resource(
+        &self,
+        resource_id: &str,
+    ) -> Result<Option<StoredDirectoryResource>, DirectoryRefusal>;
+    /// The resource that already holds these binding bytes.
+    fn resource_by_binding(
+        &self,
+        binding: &[u8; BINDING_LEN],
+    ) -> Result<Option<StoredDirectoryResource>, DirectoryRefusal>;
+    /// Insert one grant.
+    fn insert_grant(
+        &self,
+        grant: &StoredDirectoryGrant,
+        initiator: &str,
+    ) -> Result<(), DirectoryRefusal>;
+    /// Grants whose subject is this principal, receiver, or resource id.
+    fn grants_for_subject(
+        &self,
+        subject: &str,
+    ) -> Result<Vec<StoredDirectoryGrant>, DirectoryRefusal>;
+    /// Grants for one resource.
+    fn grants_for_resource(
+        &self,
+        resource_id: &str,
+    ) -> Result<Vec<StoredDirectoryGrant>, DirectoryRefusal>;
+    /// Revoke every grant for the resource and remember the first cause.
+    fn revoke_mismatch(
+        &self,
+        resource_id: &str,
+        cause: &str,
+        initiator: &str,
+    ) -> Result<RevokeMismatch, DirectoryRefusal>;
+    /// Mark the open audit recorded.
+    fn mark_open_audit(&self, resource_id: &str) -> Result<(), DirectoryRefusal>;
+    /// An open audit that has not been recorded.
+    fn pending_open_audit(
+        &self,
+        resource_id: &str,
+    ) -> Result<Option<PendingOpenAudit>, DirectoryRefusal>;
+    /// Remember a marker this attempt created whose resource row did not commit.
+    fn record_cleanup(
+        &self,
+        environment: &str,
+        canonical: &str,
+        binding: &[u8; BINDING_LEN],
+        initiator: &str,
+    ) -> Result<(), DirectoryRefusal>;
+    /// The cleanup row, if one is still pending.
+    fn cleanup(
+        &self,
+        environment: &str,
+        canonical: &str,
+    ) -> Result<Option<PendingCleanup>, DirectoryRefusal>;
+    /// Record that the marker was unlinked, or that the cleanup audit committed.
+    fn update_cleanup(
+        &self,
+        environment: &str,
+        canonical: &str,
+        unlinked: bool,
+        audit_done: bool,
+    ) -> Result<(), DirectoryRefusal>;
+    /// Remove the cleanup row once both the unlink and the audit have committed.
+    fn clear_cleanup(&self, environment: &str, canonical: &str) -> Result<(), DirectoryRefusal>;
+}
+
+/// The first mismatch, and whether this call revoked the grants.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RevokeMismatch {
+    /// Cause stored on the first open.
+    pub cause: String,
+    /// Initiator stored on the first open.
+    pub initiator: String,
+    /// Whether this call wrote the revoke.
+    pub removed_now: bool,
+}
+
+/// An open audit waiting for the sink.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PendingOpenAudit {
+    /// The original cause.
+    pub cause: String,
+    /// The original initiator.
+    pub initiator: String,
+}
+
+/// A marker waiting to be unlinked and audited.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PendingCleanup {
+    /// Marker bytes this attempt created.
+    pub binding: [u8; BINDING_LEN],
+    /// The unlink has been recorded.
+    pub unlinked: bool,
+    /// The cleanup audit has been recorded.
+    pub audit_done: bool,
+    /// Who asked for the share.
+    pub initiator: String,
+}
+
+/// Cedar's answer.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PolicyAnswer {
+    /// Permitted.
+    Allow,
+    /// Refused, naming the policy ids.
+    Deny { rules: Vec<String> },
+}
+
+/// A read or write question.
+#[derive(Clone, Debug)]
+pub struct UseQuestion<'a> {
+    /// Capability names.
+    pub capabilities: Vec<String>,
+    /// Resource id.
+    pub resource: String,
+    /// `directory.read` or `directory.write`.
+    pub action: String,
+    /// The walk.
+    pub leave: PathLeave,
+    /// Whether the opened entry is the marker.
+    pub marker: bool,
+    /// Unused lifetime so a caller can borrow.
+    pub _borrow: std::marker::PhantomData<&'a ()>,
+}
+
+/// An exec admission question.
+#[derive(Clone, Debug)]
+pub struct ExecQuestion {
+    /// Capability names.
+    pub capabilities: Vec<String>,
+    /// Resource id.
+    pub resource: String,
+    /// Sandbox profile.
+    pub profile: SandboxKind,
+    /// The process cannot open the marker.
+    pub hides_marker: bool,
+    /// Where the sandbox roots sit.
+    pub root_leave: PathLeave,
+}
+
+/// A command-rule question.
+#[derive(Clone, Debug)]
+pub struct DirectoryCommandQuestion<'a> {
+    /// Capability names.
+    pub capabilities: Vec<String>,
+    /// The matchers.
+    pub rules: &'a CommandRules,
+    /// Program path or file name.
+    pub program: &'a str,
+    /// Arguments joined by U+001F.
+    pub argv: String,
+}
+
+/// Cedar for directory grants.
+pub trait DirectoryPolicyEvaluator: Send + Sync {
+    /// Read or write.
+    fn use_directory(&self, question: &UseQuestion<'_>) -> Result<PolicyAnswer, PolicyUnavailable>;
+    /// Exec admission.
+    fn exec(&self, question: &ExecQuestion) -> Result<PolicyAnswer, PolicyUnavailable>;
+    /// One command against the grant's matchers.
+    fn command(
+        &self,
+        question: &DirectoryCommandQuestion<'_>,
+    ) -> Result<PolicyAnswer, PolicyUnavailable>;
+}
+
+/// The audit sink could not record.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PolicyUnavailable;
+
+/// The audit sink could not record.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AuditUnavailable;
+
+/// One directory audit line.
+#[derive(Clone, Debug, Serialize)]
+pub struct DirectoryAuditRecord {
+    /// What happened.
+    pub cause: String,
+    /// Resource id, when one exists.
+    pub resource_id: Option<String>,
+    /// Environment.
+    pub environment: String,
+    /// Canonical path.
+    pub canonical_path: String,
+    /// Who.
+    pub initiator: String,
+    /// Capability before, when a grant changed.
+    pub before: Option<String>,
+    /// Capability after.
+    pub after: Option<String>,
+    /// Sandbox profile, for an admitted exec.
+    pub profile: Option<String>,
+    /// When.
+    pub at_ms: u64,
+}
+
+/// Append-only audit.
+pub trait DirectoryAudit: Send + Sync {
+    /// Record one line. Failure means the sink is down.
+    fn record(&self, record: &DirectoryAuditRecord) -> Result<(), AuditUnavailable>;
+}
+
+/// 32 fresh binding bytes.
+pub trait BindingSource: Send + Sync {
+    /// The next binding.
+    fn mint(&self) -> [u8; BINDING_LEN];
+}
+
+/// Random binding bytes.
+pub struct RandomBinding;
+
+impl BindingSource for RandomBinding {
+    fn mint(&self) -> [u8; BINDING_LEN] {
+        let mut bytes = [0; BINDING_LEN];
+        getrandom::fill(&mut bytes).expect("binding bytes");
+        bytes
+    }
+}
+
+/// One exec admission.
+pub struct ExecAsk<'a> {
+    /// Who.
+    pub subject: &'a str,
+    /// Program file name.
+    pub program: &'a str,
+    /// Sandbox profile.
+    pub profile: SandboxKind,
+    /// Sandbox roots.
+    pub roots: &'a [String],
+    /// The harness hooks would answer before Nessa.
+    pub hooks_answer_first: bool,
+}
+
+/// The directory grant service.
+pub struct DirectoryAccess {
+    files: Arc<dyn DirectoryFiles>,
+    store: Arc<dyn DirectoryStore>,
+    policy: Arc<dyn DirectoryPolicyEvaluator>,
+    audit: Arc<dyn DirectoryAudit>,
+    binding: Arc<dyn BindingSource>,
+    leases: std::sync::Mutex<std::collections::HashMap<String, Arc<Lease>>>,
+}
+
+struct Lease {
+    held: std::sync::Mutex<bool>,
+    free: std::sync::Condvar,
+}
+
+impl DirectoryAccess {
+    /// The ports this service uses.
+    pub fn new(
+        files: Arc<dyn DirectoryFiles>,
+        store: Arc<dyn DirectoryStore>,
+        policy: Arc<dyn DirectoryPolicyEvaluator>,
+        audit: Arc<dyn DirectoryAudit>,
+        binding: Arc<dyn BindingSource>,
+    ) -> Self {
+        Self {
+            files,
+            store,
+            policy,
+            audit,
+            binding,
+            leases: std::sync::Mutex::new(std::collections::HashMap::new()),
+        }
+    }
+
+    /// Share one directory with one subject.
+    pub fn share(&self, request: ShareDirectory) -> Result<SharedDirectory, DirectoryRefusal> {
+        let canonical = self.files.canonicalize(&request.path)?;
+        encoded_grant(
+            &request.environment,
+            &canonical,
+            request.capabilities,
+            &request.rules,
+        )
+        .map_err(DirectoryRefusal::Shape)?;
+        let _lease = self.lease(&request.environment, &canonical);
+        self.finish_cleanup(&request.environment, &canonical)?;
+        match self.files.read_marker(&canonical)? {
+            MarkerBytes::Other => Err(DirectoryRefusal::MarkerSize),
+            MarkerBytes::Exact(bytes) => self.share_existing(request, canonical, bytes),
+            MarkerBytes::Absent => self.share_new(request, canonical),
+        }
+    }
+
+    /// Read a file inside a subject's directory.
+    pub fn read(&self, subject: &str, relative: &str) -> Result<Vec<u8>, DirectoryRefusal> {
+        let (grant, resource) = self.prepare(subject, relative, "read")?;
+        let bytes = self.files.read_inside(&resource.canonical_path, relative)?;
+        let facts = self.files.walk(&resource.canonical_path, relative)?;
+        self.refuse_walk(&grant, &resource, facts, "directory.read")?;
+        Ok(bytes)
+    }
+
+    /// Write a file inside a subject's directory.
+    pub fn write(
+        &self,
+        subject: &str,
+        relative: &str,
+        bytes: &[u8],
+    ) -> Result<(), DirectoryRefusal> {
+        let (_grant, resource) = self.prepare(subject, relative, "write")?;
+        self.files
+            .write_inside(&resource.canonical_path, relative, bytes)
+    }
+
+    /// Admit exec. This does not spawn a process.
+    pub fn exec(&self, ask: ExecAsk<'_>) -> Result<(), DirectoryRefusal> {
+        let grants = self.store.grants_for_subject(ask.subject)?;
+        let Some(grant) = grants.first() else {
+            return Err(DirectoryRefusal::NotFound);
+        };
+        if grant.rules.constrains_commands() && ask.hooks_answer_first {
+            return Err(DirectoryRefusal::HooksAnswerFirst);
+        }
+        let resources = self.resource_of(grant)?;
+        let root_leave = self
+            .files
+            .root_leave(&resources.canonical_path, ask.roots)?;
+        let question = ExecQuestion {
+            capabilities: capability_names(&grant.capabilities),
+            resource: grant.resource_id.clone(),
+            profile: ask.profile,
+            hides_marker: self.files.hides_marker(ask.profile),
+            root_leave,
+        };
+        match self
+            .policy
+            .exec(&question)
+            .map_err(|_| DirectoryRefusal::PolicyUnavailable)?
+        {
+            PolicyAnswer::Allow => {
+                let _ = self.audit.record(&DirectoryAuditRecord {
+                    cause: "exec".to_owned(),
+                    resource_id: Some(grant.resource_id.clone()),
+                    environment: resources.environment,
+                    canonical_path: resources.canonical_path,
+                    initiator: ask.subject.to_owned(),
+                    before: None,
+                    after: None,
+                    profile: Some(ask.profile.as_str().to_owned()),
+                    at_ms: now_ms(),
+                });
+                Ok(())
+            }
+            PolicyAnswer::Deny { rules } => {
+                let recorded = self
+                    .audit
+                    .record(&DirectoryAuditRecord {
+                        cause: "exec-refused".to_owned(),
+                        resource_id: Some(grant.resource_id.clone()),
+                        environment: resources.environment,
+                        canonical_path: resources.canonical_path,
+                        initiator: ask.subject.to_owned(),
+                        before: None,
+                        after: None,
+                        profile: Some(ask.profile.as_str().to_owned()),
+                        at_ms: now_ms(),
+                    })
+                    .is_ok();
+                Err(DirectoryRefusal::Exec {
+                    rules,
+                    audit_recorded: recorded,
+                })
+            }
+        }
+    }
+
+    /// Apply the subject's command rules to one program. An empty list allows.
+    pub fn command_at(
+        &self,
+        subject: &str,
+        program: &str,
+        argv: &[String],
+    ) -> Result<(), DirectoryRefusal> {
+        let grants = self.store.grants_for_subject(subject)?;
+        let Some(grant) = grants.first() else {
+            return Ok(());
+        };
+        if grant.rules.is_unreadable() {
+            return Err(DirectoryRefusal::Program {
+                matcher: "command.rules.unlisted".to_owned(),
+                rules: Vec::new(),
+                audit_recorded: false,
+            });
+        }
+        if !grant.rules.constrains_commands() {
+            return Ok(());
+        }
+        let question = DirectoryCommandQuestion {
+            capabilities: capability_names(&grant.capabilities),
+            rules: &grant.rules,
+            program,
+            argv: join_argv(argv),
+        };
+        match self
+            .policy
+            .command(&question)
+            .map_err(|_| DirectoryRefusal::PolicyUnavailable)?
+        {
+            PolicyAnswer::Allow => Ok(()),
+            PolicyAnswer::Deny { rules } => {
+                let matcher = rules
+                    .iter()
+                    .find(|id| id.starts_with("command.rules."))
+                    .cloned()
+                    .unwrap_or_else(|| "command.rules.unlisted".to_owned());
+                let resource = self.resource_of(grant).ok();
+                let recorded = self
+                    .audit
+                    .record(&DirectoryAuditRecord {
+                        cause: "command-refused".to_owned(),
+                        resource_id: Some(grant.resource_id.clone()),
+                        environment: resource
+                            .as_ref()
+                            .map(|item| item.environment.clone())
+                            .unwrap_or_default(),
+                        canonical_path: resource
+                            .as_ref()
+                            .map(|item| item.canonical_path.clone())
+                            .unwrap_or_default(),
+                        initiator: subject.to_owned(),
+                        before: None,
+                        after: None,
+                        profile: None,
+                        at_ms: now_ms(),
+                    })
+                    .is_ok();
+                Err(DirectoryRefusal::Program {
+                    matcher,
+                    rules,
+                    audit_recorded: recorded,
+                })
+            }
+        }
+    }
+
+    /// A call the harness made without asking. Recorded when the subject has a grant.
+    pub fn report_unasked(&self, subject: &str, tool: &str) -> Result<(), DirectoryRefusal> {
+        let grants = self.store.grants_for_subject(subject)?;
+        let Some(grant) = grants.first() else {
+            return Ok(());
+        };
+        let resource = self.resource_of(grant)?;
+        let _ = tool;
+        self.audit
+            .record(&DirectoryAuditRecord {
+                cause: "outside-nessa-gate".to_owned(),
+                resource_id: Some(grant.resource_id.clone()),
+                environment: resource.environment,
+                canonical_path: resource.canonical_path,
+                initiator: subject.to_owned(),
+                before: None,
+                after: None,
+                profile: None,
+                at_ms: now_ms(),
+            })
+            .map_err(|_| DirectoryRefusal::Store)
+    }
+
+    /// Write an open audit the sink previously refused, keeping the original initiator.
+    pub fn retry_open_audit(&self, resource_id: &str) -> Result<(), DirectoryRefusal> {
+        let Some(pending) = self.store.pending_open_audit(resource_id)? else {
+            return Ok(());
+        };
+        let resource = self.store.resource(resource_id)?;
+        self.audit
+            .record(&DirectoryAuditRecord {
+                cause: pending.cause,
+                resource_id: Some(resource_id.to_owned()),
+                environment: resource
+                    .as_ref()
+                    .map(|item| item.environment.clone())
+                    .unwrap_or_default(),
+                canonical_path: resource.map(|item| item.canonical_path).unwrap_or_default(),
+                initiator: pending.initiator,
+                before: Some("active".to_owned()),
+                after: Some("absent".to_owned()),
+                profile: None,
+                at_ms: now_ms(),
+            })
+            .map_err(|_| DirectoryRefusal::Store)?;
+        self.store.mark_open_audit(resource_id)
+    }
+
+    fn share_existing(
+        &self,
+        request: ShareDirectory,
+        canonical: String,
+        bytes: [u8; BINDING_LEN],
+    ) -> Result<SharedDirectory, DirectoryRefusal> {
+        if let Some(resource) = self.store.resource_at(&request.environment, &canonical)? {
+            if resource.binding != bytes {
+                return self.mismatch(&resource, "marker-different", &request.initiator);
+            }
+            return self.insert_subject(request, resource);
+        }
+        if self.store.resource_by_binding(&bytes)?.is_some() {
+            return Err(DirectoryRefusal::BindingCopied);
+        }
+        let resource = StoredDirectoryResource {
+            resource_id: new_id(),
+            environment: request.environment.clone(),
+            canonical_path: canonical,
+            binding: bytes,
+        };
+        self.store.insert_resource(&resource)?;
+        self.audit_share(&resource, &request.initiator, "adopt");
+        self.insert_subject(request, resource)
+    }
+
+    fn share_new(
+        &self,
+        request: ShareDirectory,
+        canonical: String,
+    ) -> Result<SharedDirectory, DirectoryRefusal> {
+        let binding = self.binding.mint();
+        self.files.create_marker(&canonical, &binding)?;
+        let resource = StoredDirectoryResource {
+            resource_id: new_id(),
+            environment: request.environment.clone(),
+            canonical_path: canonical.clone(),
+            binding,
+        };
+        if let Err(error) = self.store.insert_resource(&resource) {
+            self.store.record_cleanup(
+                &request.environment,
+                &canonical,
+                &binding,
+                &request.initiator,
+            )?;
+            let unlinked = self.files.unlink_marker(&canonical).is_ok();
+            let audit_done = self
+                .audit
+                .record(&DirectoryAuditRecord {
+                    cause: "file-absent".to_owned(),
+                    resource_id: None,
+                    environment: request.environment.clone(),
+                    canonical_path: canonical.clone(),
+                    initiator: request.initiator.clone(),
+                    before: None,
+                    after: Some("absent".to_owned()),
+                    profile: None,
+                    at_ms: now_ms(),
+                })
+                .is_ok();
+            self.store
+                .update_cleanup(&request.environment, &canonical, unlinked, audit_done)?;
+            if unlinked && audit_done {
+                self.store.clear_cleanup(&request.environment, &canonical)?;
+            }
+            return Err(error);
+        }
+        self.audit_share(&resource, &request.initiator, "first-share");
+        self.insert_subject(request, resource)
+    }
+
+    fn insert_subject(
+        &self,
+        request: ShareDirectory,
+        resource: StoredDirectoryResource,
+    ) -> Result<SharedDirectory, DirectoryRefusal> {
+        let capabilities = request.capabilities.as_str();
+        let grant = StoredDirectoryGrant {
+            resource_id: resource.resource_id.clone(),
+            principal_id: request.subject.principal_id,
+            receiver_id: request.subject.receiver_id,
+            capabilities: capabilities.clone(),
+            rules: request.rules,
+        };
+        self.store.insert_grant(&grant, &request.initiator)?;
+        Ok(SharedDirectory {
+            resource_id: resource.resource_id,
+            canonical_path: resource.canonical_path,
+            capabilities,
+        })
+    }
+
+    fn mismatch(
+        &self,
+        resource: &StoredDirectoryResource,
+        cause: &str,
+        initiator: &str,
+    ) -> Result<SharedDirectory, DirectoryRefusal> {
+        let revoked = self
+            .store
+            .revoke_mismatch(&resource.resource_id, cause, initiator)?;
+        let recorded = self
+            .audit
+            .record(&DirectoryAuditRecord {
+                cause: revoked.cause.clone(),
+                resource_id: Some(resource.resource_id.clone()),
+                environment: resource.environment.clone(),
+                canonical_path: resource.canonical_path.clone(),
+                initiator: revoked.initiator.clone(),
+                before: Some("active".to_owned()),
+                after: Some("absent".to_owned()),
+                profile: None,
+                at_ms: now_ms(),
+            })
+            .is_ok();
+        if recorded {
+            let _ = self.store.mark_open_audit(&resource.resource_id);
+        }
+        Err(DirectoryRefusal::MarkerMismatch {
+            cause: revoked.cause,
+            audit_recorded: recorded,
+        })
+    }
+
+    fn prepare(
+        &self,
+        subject: &str,
+        relative: &str,
+        capability: &str,
+    ) -> Result<(StoredDirectoryGrant, StoredDirectoryResource), DirectoryRefusal> {
+        let grants = self.store.grants_for_subject(subject)?;
+        let Some(grant) = grants.into_iter().next() else {
+            return Err(DirectoryRefusal::NotFound);
+        };
+        let resource = self.resource_of(&grant)?;
+        self.open_marker(&resource, subject)?;
+        let facts = self.files.walk(&resource.canonical_path, relative)?;
+        self.refuse_walk(&grant, &resource, facts, &format!("directory.{capability}"))?;
+        if !capability_names(&grant.capabilities)
+            .iter()
+            .any(|name| name == capability)
+        {
+            return Err(DirectoryRefusal::Capability { rules: Vec::new() });
+        }
+        Ok((grant, resource))
+    }
+
+    fn refuse_walk(
+        &self,
+        grant: &StoredDirectoryGrant,
+        resource: &StoredDirectoryResource,
+        facts: WalkFacts,
+        action: &str,
+    ) -> Result<(), DirectoryRefusal> {
+        let question = UseQuestion {
+            capabilities: capability_names(&grant.capabilities),
+            resource: resource.resource_id.clone(),
+            action: action.to_owned(),
+            leave: facts.leave,
+            marker: facts.marker,
+            _borrow: std::marker::PhantomData,
+        };
+        match self
+            .policy
+            .use_directory(&question)
+            .map_err(|_| DirectoryRefusal::PolicyUnavailable)?
+        {
+            PolicyAnswer::Allow => Ok(()),
+            PolicyAnswer::Deny { rules } => {
+                if facts.marker || rules.iter().any(|id| id == "directory.marker") {
+                    return Err(DirectoryRefusal::MarkerName);
+                }
+                if facts.leave != PathLeave::Inside || rules.iter().any(|id| id == "directory.path")
+                {
+                    return Err(DirectoryRefusal::Outside { leave: facts.leave });
+                }
+                Err(DirectoryRefusal::Capability { rules })
+            }
+        }
+    }
+
+    fn open_marker(
+        &self,
+        resource: &StoredDirectoryResource,
+        initiator: &str,
+    ) -> Result<(), DirectoryRefusal> {
+        match self.files.read_marker(&resource.canonical_path)? {
+            MarkerBytes::Exact(bytes) if bytes == resource.binding => Ok(()),
+            MarkerBytes::Exact(_) => self
+                .mismatch(resource, "marker-different", initiator)
+                .map(|_| ()),
+            MarkerBytes::Absent => self
+                .mismatch(resource, "marker-missing", initiator)
+                .map(|_| ()),
+            MarkerBytes::Other => self
+                .mismatch(resource, "marker-size", initiator)
+                .map(|_| ()),
+        }
+    }
+
+    fn resource_of(
+        &self,
+        grant: &StoredDirectoryGrant,
+    ) -> Result<StoredDirectoryResource, DirectoryRefusal> {
+        self.store
+            .resource(&grant.resource_id)?
+            .ok_or(DirectoryRefusal::NotFound)
+    }
+
+    fn finish_cleanup(&self, environment: &str, canonical: &str) -> Result<(), DirectoryRefusal> {
+        let Some(pending) = self.store.cleanup(environment, canonical)? else {
+            return Ok(());
+        };
+        let unlinked = pending.unlinked || self.files.unlink_marker(canonical).is_ok();
+        let audit_done = pending.audit_done
+            || self
+                .audit
+                .record(&DirectoryAuditRecord {
+                    cause: "file-absent".to_owned(),
+                    resource_id: None,
+                    environment: environment.to_owned(),
+                    canonical_path: canonical.to_owned(),
+                    initiator: pending.initiator.clone(),
+                    before: None,
+                    after: Some("absent".to_owned()),
+                    profile: None,
+                    at_ms: now_ms(),
+                })
+                .is_ok();
+        self.store
+            .update_cleanup(environment, canonical, unlinked, audit_done)?;
+        if unlinked && audit_done {
+            self.store.clear_cleanup(environment, canonical)?;
+        }
+        Ok(())
+    }
+
+    fn audit_share(&self, resource: &StoredDirectoryResource, initiator: &str, cause: &str) {
+        let _ = self.audit.record(&DirectoryAuditRecord {
+            cause: cause.to_owned(),
+            resource_id: Some(resource.resource_id.clone()),
+            environment: resource.environment.clone(),
+            canonical_path: resource.canonical_path.clone(),
+            initiator: initiator.to_owned(),
+            before: Some("none".to_owned()),
+            after: Some("active".to_owned()),
+            profile: None,
+            at_ms: now_ms(),
+        });
+    }
+
+    fn lease(&self, environment: &str, canonical: &str) -> LeaseGuard {
+        let key = format!("{environment}\0{canonical}");
+        let mut leases = self.leases.lock().expect("leases");
+        let lease = leases
+            .entry(key)
+            .or_insert_with(|| {
+                Arc::new(Lease {
+                    held: std::sync::Mutex::new(false),
+                    free: std::sync::Condvar::new(),
+                })
+            })
+            .clone();
+        drop(leases);
+        let mut held = lease.held.lock().expect("lease");
+        while *held {
+            held = lease.free.wait(held).expect("lease");
+        }
+        *held = true;
+        drop(held);
+        LeaseGuard { lease }
+    }
+}
+
+struct LeaseGuard {
+    lease: Arc<Lease>,
+}
+
+impl Drop for LeaseGuard {
+    fn drop(&mut self) {
+        let mut held = self.lease.held.lock().expect("lease");
+        *held = false;
+        self.lease.free.notify_one();
+    }
+}
+
+fn capability_names(spelling: &str) -> Vec<String> {
+    spelling.split('+').map(str::to_owned).collect()
+}
+
+fn now_ms() -> u64 {
+    wall_now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or(Duration::ZERO)
+        .as_millis() as u64
+}
+
+fn new_id() -> String {
+    let mut bytes = [0; 16];
+    getrandom::fill(&mut bytes).expect("resource id");
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+/// Builders the tests and the owner use.
+pub fn allow_program(program: &str) -> Result<CommandMatcher, DirectoryShapeError> {
+    CommandMatcher::new(RuleEffect::Allow, program, None)
+}
+
+/// A deny matcher with an argv pattern.
+pub fn deny_argv(program: &str, argv: &str) -> Result<CommandMatcher, DirectoryShapeError> {
+    CommandMatcher::new(RuleEffect::Deny, program, Some(ArgvPattern::new(argv)?))
+}
+
+#[cfg(test)]
+#[path = "../../tests/conversation/directory_grant.rs"]
+mod tests;

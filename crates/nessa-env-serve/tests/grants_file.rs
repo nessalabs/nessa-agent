@@ -322,3 +322,30 @@ fn a_peer_named_twice_is_refused_in_either_order() {
         }
     }
 }
+
+/// A gateway cannot replace the owner's entry with a wider one. The file
+/// bytes stay the ones the owner wrote.
+#[test]
+fn a_gateway_cannot_write_a_wider_grants_file() {
+    let directory = private_directory();
+    let grants = FileGrants::new(directory.path());
+    let peer = gateway();
+    grants
+        .change(&peer, |_| {
+            Ok::<_, ()>(Some(PeerGrant::new(
+                Agents::Named([AgentName::new("claude").unwrap()].into()),
+                Some(CommandGrant::new(1_000).unwrap()),
+            )))
+        })
+        .unwrap();
+    let before = std::fs::read(directory.path().join(FILE)).unwrap();
+    let refused = grants.gateway_write(&peer, &PeerGrant::everything());
+    assert_eq!(refused, Err(GatewayWrite::Wider));
+    assert_eq!(std::fs::read(directory.path().join(FILE)).unwrap(), before);
+    let narrower = PeerGrant::new(Agents::Named([].into()), None);
+    assert_eq!(
+        grants.gateway_write(&peer, &narrower),
+        Err(GatewayWrite::NotOwner)
+    );
+    assert_eq!(std::fs::read(directory.path().join(FILE)).unwrap(), before);
+}

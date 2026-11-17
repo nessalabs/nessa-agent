@@ -395,6 +395,34 @@ pub enum Changed<E> {
     Refused(E),
 }
 
+/// Why a gateway may not replace `grants.json`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GatewayWrite {
+    /// The proposed grant allows more than the owner's entry.
+    Wider,
+    /// The gateway is not the owner of the file. The owner's entry stays.
+    NotOwner,
+    /// The file could not be read, so it was not replaced.
+    Unreadable,
+}
+
+impl FileGrants {
+    /// Refuse a gateway's replacement of `peer`'s entry. A proposal wider
+    /// than the owner's entry is [`GatewayWrite::Wider`]. Any other proposal
+    /// is [`GatewayWrite::NotOwner`]. The file is not written.
+    pub fn gateway_write(&self, peer: &Peer, proposed: &PeerGrant) -> Result<(), GatewayWrite> {
+        let grants = self.read().map_err(|_| GatewayWrite::Unreadable)?;
+        let owner = grants
+            .get(peer)
+            .cloned()
+            .unwrap_or_else(|| crate::domain::unwritten(peer));
+        if proposed.widens(&owner) {
+            return Err(GatewayWrite::Wider);
+        }
+        Err(GatewayWrite::NotOwner)
+    }
+}
+
 impl PeerGrants for FileGrants {
     fn entry(&self, peer: &Peer) -> Result<Option<PeerGrant>, String> {
         self.read()

@@ -36,6 +36,21 @@ fn a_lease_lasts_at_most_its_grants_max_lease() {
     assert_eq!(lease_ms(&limited), Some(3_600_000));
 }
 
+/// A proposed grant is wider when it adds an agent, commands, time, or logins
+/// the owner's entry does not already allow.
+#[test]
+fn a_grant_is_wider_when_it_adds_what_the_owner_did_not() {
+    let owner = PeerGrant::new(named(&["claude"]), Some(CommandGrant::new(1_000).unwrap()));
+    assert!(!owner.widens(&owner));
+    assert!(PeerGrant::new(named(&["claude", "codex"]), owner.commands()).widens(&owner));
+    assert!(PeerGrant::everything().widens(&owner));
+    assert!(owner.clone().with_logins().widens(&owner));
+    let longer = PeerGrant::new(named(&["claude"]), Some(CommandGrant::new(2_000).unwrap()));
+    assert!(longer.widens(&owner));
+    let shorter = PeerGrant::new(named(&["claude"]), Some(CommandGrant::new(500).unwrap()));
+    assert!(!shorter.widens(&owner));
+}
+
 /// A command runs for the timeout asked or the grant's longest when that is
 /// shorter: narrowed, never widened; a grant without commands has no terms.
 #[test]

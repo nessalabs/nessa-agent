@@ -1,0 +1,699 @@
+#![cfg(unix)]
+
+use std::fs;
+use std::os::unix::fs::PermissionsExt;
+use std::sync::{Arc, Mutex};
+
+use super::*;
+use crate::domain::{PathLeave, SandboxKind, WalkFacts, BINDING_LEN, MAX_ENCODED_GRANT_BYTES};
+use crate::infrastructure::{
+    CedarDirectoryPolicyEvaluator, LocalDirectoryFiles, SqliteDirectoryStore,
+};
+
+fn private() -> tempfile::TempDir {
+    let directory = tempfile::tempdir().unwrap();
+    fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700)).unwrap();
+    directory
+}
+
+struct FixedBinding([u8; BINDING_LEN]);
+
+impl BindingSource for FixedBinding {
+    fn mint(&self) -> [u8; BINDING_LEN] {
+        self.0
+    }
+}
+
+struct RecordingAudit {
+    lines: Mutex<Vec<DirectoryAuditRecord>>,
+    fail: Mutex<bool>,
+}
+
+impl RecordingAudit {
+    fn new() -> Self {
+        Self {
+            lines: Mutex::new(Vec::new()),
+            fail: Mutex::new(false),
+        }
+    }
+}
+
+impl DirectoryAudit for RecordingAudit {
+    fn record(&self, record: &DirectoryAuditRecord) -> Result<(), AuditUnavailable> {
+        if *self.fail.lock().expect("fail") {
+            return Err(AuditUnavailable);
+        }
+        self.lines.lock().expect("lines").push(record.clone());
+        Ok(())
+    }
+}
+
+fn service(
+    files: Arc<dyn DirectoryFiles>,
+    store: Arc<dyn DirectoryStore>,
+    audit: Arc<dyn DirectoryAudit>,
+    binding: [u8; BINDING_LEN],
+) -> DirectoryAccess {
+    DirectoryAccess::new(
+        files,
+        store,
+        Arc::new(CedarDirectoryPolicyEvaluator::new().unwrap()),
+        audit,
+        Arc::new(FixedBinding(binding)),
+    )
+}
+
+fn share_read(access: &DirectoryAccess, path: &str, subject: &str) -> SharedDirectory {
+    access
+        .share(ShareDirectory {
+            environment: "local".to_owned(),
+            path: path.to_owned(),
+            subject: DirectorySubject {
+                principal_id: Some(subject.to_owned()),
+                receiver_id: None,
+            },
+            capabilities: crate::domain::DirectoryCapabilities::from_names([
+                "read", "write", "exec",
+            ])
+            .unwrap(),
+            rules: crate::domain::CommandRules::none(),
+            initiator: "owner".to_owned(),
+        })
+        .unwrap()
+}
+
+#[test]
+fn a_peer_reads_a_file_inside_and_not_a_path_that_leaves() {
+    let root = private();
+    let shared = root.path().join("shared");
+    fs::create_dir(&shared).unwrap();
+    fs::write(shared.join("note.txt"), b"hello").unwrap();
+    let secret = root.path().join("secret.txt");
+    fs::write(&secret, b"secret-bytes").unwrap();
+    std::os::unix::fs::symlink(&secret, shared.join("linked")).unwrap();
+    let store_dir = private();
+    let access = service(
+        Arc::new(LocalDirectoryFiles),
+        Arc::new(SqliteDirectoryStore::open(&store_dir.path().join("grants.sqlite3")).unwrap()),
+        Arc::new(RecordingAudit::new()),
+        [7; BINDING_LEN],
+    );
+    share_read(&access, shared.to_str().unwrap(), "peer");
+    assert_eq!(access.read("peer", "note.txt").unwrap(), b"hello");
+    let left = access.read("peer", "linked").unwrap_err();
+    assert!(matches!(
+        left,
+        DirectoryRefusal::Outside {
+            leave: PathLeave::Symlink
+        }
+    ));
+    assert!(!left.to_string().contains("secret"));
+    let dotdot = access.read("peer", "sub/../../secret.txt").unwrap_err();
+    assert!(matches!(dotdot, DirectoryRefusal::Outside { .. }));
+    assert!(!dotdot.to_string().contains("secret"));
+}
+
+#[test]
+fn the_marker_and_a_hard_link_of_it_are_refused() {
+    let root = private();
+    let shared = root.path().join("shared");
+    fs::create_dir(&shared).unwrap();
+    let store_dir = private();
+    let access = service(
+        Arc::new(LocalDirectoryFiles),
+        Arc::new(SqliteDirectoryStore::open(&store_dir.path().join("grants.sqlite3")).unwrap()),
+        Arc::new(RecordingAudit::new()),
+        [3; BINDING_LEN],
+    );
+    share_read(&access, shared.to_str().unwrap(), "peer");
+    fs::hard_link(shared.join(".nessa-binding"), shared.join("alias")).unwrap();
+    assert!(matches!(
+        access.read("peer", ".nessa-binding").unwrap_err(),
+        DirectoryRefusal::MarkerName
+    ));
+    assert!(matches!(
+        access.read("peer", "alias").unwrap_err(),
+        DirectoryRefusal::MarkerName
+    ));
+    let before = fs::read(shared.join(".nessa-binding")).unwrap();
+    assert!(matches!(
+        access.write("peer", ".nessa-binding", b"nope").unwrap_err(),
+        DirectoryRefusal::MarkerName
+    ));
+    assert_eq!(fs::read(shared.join(".nessa-binding")).unwrap(), before);
+}
+
+#[test]
+fn a_different_file_with_a_folded_name_is_readable_on_a_case_sensitive_disk() {
+    let root = private();
+    let shared = root.path().join("shared");
+    fs::create_dir(&shared).unwrap();
+    fs::write(shared.join(".NESSA-BINDING"), b"other").unwrap();
+    let store_dir = private();
+    let access = service(
+        Arc::new(LocalDirectoryFiles),
+        Arc::new(SqliteDirectoryStore::open(&store_dir.path().join("grants.sqlite3")).unwrap()),
+        Arc::new(RecordingAudit::new()),
+        [4; BINDING_LEN],
+    );
+    share_read(&access, shared.to_str().unwrap(), "peer");
+    assert_eq!(access.read("peer", ".NESSA-BINDING").unwrap(), b"other");
+}
+
+#[test]
+fn deny_wins_and_an_unlisted_program_is_refused() {
+    let root = private();
+    let shared = root.path().join("shared");
+    fs::create_dir(&shared).unwrap();
+    let store_dir = private();
+    let audit = Arc::new(RecordingAudit::new());
+    let access = service(
+        Arc::new(LocalDirectoryFiles),
+        Arc::new(SqliteDirectoryStore::open(&store_dir.path().join("grants.sqlite3")).unwrap()),
+        audit.clone(),
+        [5; BINDING_LEN],
+    );
+    access
+        .share(ShareDirectory {
+            environment: "local".into(),
+            path: shared.to_str().unwrap().into(),
+            subject: DirectorySubject {
+                principal_id: Some("peer".into()),
+                receiver_id: None,
+            },
+            capabilities: crate::domain::DirectoryCapabilities::from_names(["exec"]).unwrap(),
+            rules: crate::domain::CommandRules::new(vec![
+                allow_program("ls").unwrap(),
+                allow_program("rm").unwrap(),
+                deny_argv("rm", "-*").unwrap(),
+            ])
+            .unwrap(),
+            initiator: "owner".into(),
+        })
+        .unwrap();
+    assert!(access.command_at("peer", "ls", &[]).is_ok());
+    let refused = access
+        .command_at("peer", "/bin/rm", &["-rf".into()])
+        .unwrap_err();
+    match refused {
+        DirectoryRefusal::Program { matcher, .. } => assert_eq!(matcher, "command.rules.deny.2"),
+        other => panic!("{other:?}"),
+    }
+    let unlisted = access.command_at("peer", "cat", &[]).unwrap_err();
+    match unlisted {
+        DirectoryRefusal::Program { matcher, .. } => assert_eq!(matcher, "command.rules.unlisted"),
+        other => panic!("{other:?}"),
+    }
+}
+
+#[test]
+fn exec_names_the_sandbox_fact_that_refused_it() {
+    let root = private();
+    let shared = root.path().join("shared");
+    fs::create_dir(&shared).unwrap();
+    let store_dir = private();
+    let access = service(
+        Arc::new(LocalDirectoryFiles),
+        Arc::new(SqliteDirectoryStore::open(&store_dir.path().join("grants.sqlite3")).unwrap()),
+        Arc::new(RecordingAudit::new()),
+        [6; BINDING_LEN],
+    );
+    share_read(&access, shared.to_str().unwrap(), "peer");
+    let none = access
+        .exec(ExecAsk {
+            subject: "peer",
+            program: "ls",
+            profile: SandboxKind::None,
+            roots: std::slice::from_ref(&shared.to_str().unwrap().to_owned()),
+            hooks_answer_first: false,
+        })
+        .unwrap_err();
+    match none {
+        DirectoryRefusal::Exec { rules, .. } => {
+            assert!(rules.iter().any(|id| id == "directory.exec_none"))
+        }
+        other => panic!("{other:?}"),
+    }
+    let outside = root.path().join("elsewhere");
+    fs::create_dir(&outside).unwrap();
+    let root_outside = access
+        .exec(ExecAsk {
+            subject: "peer",
+            program: "ls",
+            profile: SandboxKind::Container,
+            roots: &[outside.to_str().unwrap().to_owned()],
+            hooks_answer_first: false,
+        })
+        .unwrap_err();
+    match root_outside {
+        DirectoryRefusal::Exec { rules, .. } => {
+            assert!(rules.iter().any(|id| id == "directory.exec_root"))
+        }
+        other => panic!("{other:?}"),
+    }
+    let directory = shared.to_str().unwrap().to_owned();
+    access
+        .exec(ExecAsk {
+            subject: "peer",
+            program: "ls",
+            profile: SandboxKind::Container,
+            roots: std::slice::from_ref(&directory),
+            hooks_answer_first: false,
+        })
+        .unwrap();
+}
+
+#[test]
+fn hooks_that_answer_first_do_not_skip_command_rules() {
+    let root = private();
+    let shared = root.path().join("shared");
+    fs::create_dir(&shared).unwrap();
+    let store_dir = private();
+    let access = service(
+        Arc::new(LocalDirectoryFiles),
+        Arc::new(SqliteDirectoryStore::open(&store_dir.path().join("grants.sqlite3")).unwrap()),
+        Arc::new(RecordingAudit::new()),
+        [8; BINDING_LEN],
+    );
+    access
+        .share(ShareDirectory {
+            environment: "local".into(),
+            path: shared.to_str().unwrap().into(),
+            subject: DirectorySubject {
+                principal_id: Some("peer".into()),
+                receiver_id: None,
+            },
+            capabilities: crate::domain::DirectoryCapabilities::from_names(["exec"]).unwrap(),
+            rules: crate::domain::CommandRules::new(vec![allow_program("ls").unwrap()]).unwrap(),
+            initiator: "owner".into(),
+        })
+        .unwrap();
+    let refused = access
+        .exec(ExecAsk {
+            subject: "peer",
+            program: "ls",
+            profile: SandboxKind::Harness,
+            roots: &[shared.to_str().unwrap().to_owned()],
+            hooks_answer_first: true,
+        })
+        .unwrap_err();
+    assert!(matches!(refused, DirectoryRefusal::HooksAnswerFirst));
+}
+
+#[test]
+fn an_unasked_call_is_recorded_outside_nessas_gate() {
+    let root = private();
+    let shared = root.path().join("shared");
+    fs::create_dir(&shared).unwrap();
+    let store_dir = private();
+    let audit = Arc::new(RecordingAudit::new());
+    let access = service(
+        Arc::new(LocalDirectoryFiles),
+        Arc::new(SqliteDirectoryStore::open(&store_dir.path().join("grants.sqlite3")).unwrap()),
+        audit.clone(),
+        [9; BINDING_LEN],
+    );
+    share_read(&access, shared.to_str().unwrap(), "peer");
+    access.report_unasked("peer", "Bash").unwrap();
+    let lines = audit.lines.lock().unwrap();
+    assert!(lines.iter().any(|line| line.cause == "outside-nessa-gate"));
+}
+
+#[test]
+fn sharing_writes_the_marker_and_not_harness_settings() {
+    let root = private();
+    let shared = root.path().join("shared");
+    fs::create_dir(&shared).unwrap();
+    let store_dir = private();
+    let access = service(
+        Arc::new(LocalDirectoryFiles),
+        Arc::new(SqliteDirectoryStore::open(&store_dir.path().join("grants.sqlite3")).unwrap()),
+        Arc::new(RecordingAudit::new()),
+        [1; BINDING_LEN],
+    );
+    share_read(&access, shared.to_str().unwrap(), "peer");
+    assert!(shared.join(".nessa-binding").is_file());
+    assert!(!shared.join(".claude").exists());
+    assert!(!shared.join(".codex").exists());
+}
+
+#[test]
+fn an_orphan_marker_of_32_bytes_is_adopted_and_a_longer_one_is_not_rewritten() {
+    let root = private();
+    let shared = root.path().join("shared");
+    fs::create_dir(&shared).unwrap();
+    let bytes = [2u8; BINDING_LEN];
+    fs::write(shared.join(".nessa-binding"), bytes).unwrap();
+    let store_dir = private();
+    let access = service(
+        Arc::new(LocalDirectoryFiles),
+        Arc::new(SqliteDirectoryStore::open(&store_dir.path().join("grants.sqlite3")).unwrap()),
+        Arc::new(RecordingAudit::new()),
+        [9; BINDING_LEN],
+    );
+    let shared_grant = share_read(&access, shared.to_str().unwrap(), "peer");
+    assert_eq!(fs::read(shared.join(".nessa-binding")).unwrap(), bytes);
+    assert!(!shared_grant.resource_id.is_empty());
+
+    let other = root.path().join("other");
+    fs::create_dir(&other).unwrap();
+    fs::write(other.join(".nessa-binding"), vec![0; 33]).unwrap();
+    let refused = access
+        .share(ShareDirectory {
+            environment: "local".into(),
+            path: other.to_str().unwrap().into(),
+            subject: DirectorySubject {
+                principal_id: Some("second".into()),
+                receiver_id: None,
+            },
+            capabilities: crate::domain::DirectoryCapabilities::from_names(["read"]).unwrap(),
+            rules: crate::domain::CommandRules::none(),
+            initiator: "owner".into(),
+        })
+        .unwrap_err();
+    assert!(matches!(refused, DirectoryRefusal::MarkerSize));
+    assert_eq!(fs::read(other.join(".nessa-binding")).unwrap().len(), 33);
+}
+
+#[test]
+fn a_second_subject_reuses_the_resource_and_a_copied_marker_is_refused() {
+    let root = private();
+    let shared = root.path().join("shared");
+    fs::create_dir(&shared).unwrap();
+    let store_dir = private();
+    let access = service(
+        Arc::new(LocalDirectoryFiles),
+        Arc::new(SqliteDirectoryStore::open(&store_dir.path().join("grants.sqlite3")).unwrap()),
+        Arc::new(RecordingAudit::new()),
+        [4; BINDING_LEN],
+    );
+    let first = share_read(&access, shared.to_str().unwrap(), "peer");
+    let second = share_read(&access, shared.to_str().unwrap(), "other");
+    assert_eq!(first.resource_id, second.resource_id);
+    let copy = root.path().join("copy");
+    fs::create_dir(&copy).unwrap();
+    fs::copy(shared.join(".nessa-binding"), copy.join(".nessa-binding")).unwrap();
+    let refused = access
+        .share(ShareDirectory {
+            environment: "local".into(),
+            path: copy.to_str().unwrap().into(),
+            subject: DirectorySubject {
+                principal_id: Some("thief".into()),
+                receiver_id: None,
+            },
+            capabilities: crate::domain::DirectoryCapabilities::from_names(["read"]).unwrap(),
+            rules: crate::domain::CommandRules::none(),
+            initiator: "owner".into(),
+        })
+        .unwrap_err();
+    assert!(matches!(refused, DirectoryRefusal::BindingCopied));
+}
+
+#[test]
+fn recreating_the_directory_without_the_marker_revokes_the_grant() {
+    let root = private();
+    let shared = root.path().join("shared");
+    fs::create_dir(&shared).unwrap();
+    let store_dir = private();
+    let audit = Arc::new(RecordingAudit::new());
+    let store =
+        Arc::new(SqliteDirectoryStore::open(&store_dir.path().join("grants.sqlite3")).unwrap());
+    let access = service(
+        Arc::new(LocalDirectoryFiles),
+        store.clone(),
+        audit,
+        [5; BINDING_LEN],
+    );
+    let granted = share_read(&access, shared.to_str().unwrap(), "peer");
+    fs::remove_dir_all(&shared).unwrap();
+    fs::create_dir(&shared).unwrap();
+    let refused = access.read("peer", "note.txt").unwrap_err();
+    match refused {
+        DirectoryRefusal::MarkerMismatch { cause, .. } => assert_eq!(cause, "marker-missing"),
+        other => panic!("{other:?}"),
+    }
+    assert!(store
+        .grants_for_resource(&granted.resource_id)
+        .unwrap()
+        .is_empty());
+}
+
+#[test]
+fn a_failed_audit_still_revokes_and_a_retry_keeps_the_original_initiator() {
+    let root = private();
+    let shared = root.path().join("shared");
+    fs::create_dir(&shared).unwrap();
+    let store_dir = private();
+    let audit = Arc::new(RecordingAudit::new());
+    let store =
+        Arc::new(SqliteDirectoryStore::open(&store_dir.path().join("grants.sqlite3")).unwrap());
+    let access = service(
+        Arc::new(LocalDirectoryFiles),
+        store.clone(),
+        audit.clone(),
+        [6; BINDING_LEN],
+    );
+    let granted = share_read(&access, shared.to_str().unwrap(), "peer");
+    fs::remove_file(shared.join(".nessa-binding")).unwrap();
+    *audit.fail.lock().unwrap() = true;
+    let refused = access.read("peer", "note.txt").unwrap_err();
+    match refused {
+        DirectoryRefusal::MarkerMismatch { audit_recorded, .. } => assert!(!audit_recorded),
+        other => panic!("{other:?}"),
+    }
+    assert!(store.grants_for_subject("peer").unwrap().is_empty());
+    *audit.fail.lock().unwrap() = false;
+    access.retry_open_audit(&granted.resource_id).unwrap();
+    let lines = audit.lines.lock().unwrap();
+    let recorded = lines
+        .iter()
+        .find(|line| line.cause == "marker-missing")
+        .unwrap();
+    assert_eq!(recorded.initiator, "peer");
+}
+
+struct FailResource {
+    inner: SqliteDirectoryStore,
+    failed: Mutex<bool>,
+}
+
+impl DirectoryStore for FailResource {
+    fn insert_resource(&self, resource: &StoredDirectoryResource) -> Result<(), DirectoryRefusal> {
+        if !*self.failed.lock().unwrap() {
+            *self.failed.lock().unwrap() = true;
+            return Err(DirectoryRefusal::Store);
+        }
+        self.inner.insert_resource(resource)
+    }
+    fn resource_at(
+        &self,
+        environment: &str,
+        canonical: &str,
+    ) -> Result<Option<StoredDirectoryResource>, DirectoryRefusal> {
+        self.inner.resource_at(environment, canonical)
+    }
+    fn resource(
+        &self,
+        resource_id: &str,
+    ) -> Result<Option<StoredDirectoryResource>, DirectoryRefusal> {
+        self.inner.resource(resource_id)
+    }
+    fn resource_by_binding(
+        &self,
+        binding: &[u8; BINDING_LEN],
+    ) -> Result<Option<StoredDirectoryResource>, DirectoryRefusal> {
+        self.inner.resource_by_binding(binding)
+    }
+    fn insert_grant(
+        &self,
+        grant: &StoredDirectoryGrant,
+        initiator: &str,
+    ) -> Result<(), DirectoryRefusal> {
+        self.inner.insert_grant(grant, initiator)
+    }
+    fn grants_for_subject(
+        &self,
+        subject: &str,
+    ) -> Result<Vec<StoredDirectoryGrant>, DirectoryRefusal> {
+        self.inner.grants_for_subject(subject)
+    }
+    fn grants_for_resource(
+        &self,
+        resource_id: &str,
+    ) -> Result<Vec<StoredDirectoryGrant>, DirectoryRefusal> {
+        self.inner.grants_for_resource(resource_id)
+    }
+    fn revoke_mismatch(
+        &self,
+        resource_id: &str,
+        cause: &str,
+        initiator: &str,
+    ) -> Result<RevokeMismatch, DirectoryRefusal> {
+        self.inner.revoke_mismatch(resource_id, cause, initiator)
+    }
+    fn mark_open_audit(&self, resource_id: &str) -> Result<(), DirectoryRefusal> {
+        self.inner.mark_open_audit(resource_id)
+    }
+    fn pending_open_audit(
+        &self,
+        resource_id: &str,
+    ) -> Result<Option<PendingOpenAudit>, DirectoryRefusal> {
+        self.inner.pending_open_audit(resource_id)
+    }
+    fn record_cleanup(
+        &self,
+        environment: &str,
+        canonical: &str,
+        binding: &[u8; BINDING_LEN],
+        initiator: &str,
+    ) -> Result<(), DirectoryRefusal> {
+        self.inner
+            .record_cleanup(environment, canonical, binding, initiator)
+    }
+    fn cleanup(
+        &self,
+        environment: &str,
+        canonical: &str,
+    ) -> Result<Option<PendingCleanup>, DirectoryRefusal> {
+        self.inner.cleanup(environment, canonical)
+    }
+    fn update_cleanup(
+        &self,
+        environment: &str,
+        canonical: &str,
+        unlinked: bool,
+        audit_done: bool,
+    ) -> Result<(), DirectoryRefusal> {
+        self.inner
+            .update_cleanup(environment, canonical, unlinked, audit_done)
+    }
+    fn clear_cleanup(&self, environment: &str, canonical: &str) -> Result<(), DirectoryRefusal> {
+        self.inner.clear_cleanup(environment, canonical)
+    }
+}
+
+#[test]
+fn a_failed_resource_insert_unlinks_the_marker_it_created() {
+    let root = private();
+    let shared = root.path().join("shared");
+    fs::create_dir(&shared).unwrap();
+    let store_dir = private();
+    let inner = SqliteDirectoryStore::open(&store_dir.path().join("grants.sqlite3")).unwrap();
+    let access = service(
+        Arc::new(LocalDirectoryFiles),
+        Arc::new(FailResource {
+            inner,
+            failed: Mutex::new(false),
+        }),
+        Arc::new(RecordingAudit::new()),
+        [8; BINDING_LEN],
+    );
+    let refused = access
+        .share(ShareDirectory {
+            environment: "local".into(),
+            path: shared.to_str().unwrap().into(),
+            subject: DirectorySubject {
+                principal_id: Some("peer".into()),
+                receiver_id: None,
+            },
+            capabilities: crate::domain::DirectoryCapabilities::from_names(["read"]).unwrap(),
+            rules: crate::domain::CommandRules::none(),
+            initiator: "owner".into(),
+        })
+        .unwrap_err();
+    assert!(matches!(refused, DirectoryRefusal::Store));
+    assert!(!shared.join(".nessa-binding").exists());
+}
+
+struct LongPath;
+
+impl DirectoryFiles for LongPath {
+    fn canonicalize(&self, _: &str) -> Result<String, DirectoryRefusal> {
+        Ok("x".repeat(MAX_ENCODED_GRANT_BYTES))
+    }
+    fn read_marker(&self, _: &str) -> Result<MarkerBytes, DirectoryRefusal> {
+        panic!("the frame check reads the marker");
+    }
+    fn create_marker(&self, _: &str, _: &[u8; BINDING_LEN]) -> Result<(), DirectoryRefusal> {
+        panic!("created");
+    }
+    fn unlink_marker(&self, _: &str) -> Result<(), DirectoryRefusal> {
+        Ok(())
+    }
+    fn walk(&self, _: &str, _: &str) -> Result<WalkFacts, DirectoryRefusal> {
+        Ok(WalkFacts {
+            leave: PathLeave::Inside,
+            marker: false,
+        })
+    }
+    fn read_inside(&self, _: &str, _: &str) -> Result<Vec<u8>, DirectoryRefusal> {
+        Ok(Vec::new())
+    }
+    fn write_inside(&self, _: &str, _: &str, _: &[u8]) -> Result<(), DirectoryRefusal> {
+        Ok(())
+    }
+    fn hides_marker(&self, _: SandboxKind) -> bool {
+        true
+    }
+    fn root_leave(&self, _: &str, _: &[String]) -> Result<PathLeave, DirectoryRefusal> {
+        Ok(PathLeave::Inside)
+    }
+}
+
+#[test]
+fn a_grant_that_does_not_fit_one_frame_is_refused_before_the_marker_is_read() {
+    let store_dir = private();
+    let access = service(
+        Arc::new(LongPath),
+        Arc::new(SqliteDirectoryStore::open(&store_dir.path().join("grants.sqlite3")).unwrap()),
+        Arc::new(RecordingAudit::new()),
+        [1; BINDING_LEN],
+    );
+    let refused = access
+        .share(ShareDirectory {
+            environment: "local".into(),
+            path: "/anywhere".into(),
+            subject: DirectorySubject {
+                principal_id: Some("peer".into()),
+                receiver_id: None,
+            },
+            capabilities: crate::domain::DirectoryCapabilities::from_names(["read"]).unwrap(),
+            rules: crate::domain::CommandRules::none(),
+            initiator: "owner".into(),
+        })
+        .unwrap_err();
+    assert!(matches!(
+        refused,
+        DirectoryRefusal::Shape(crate::domain::DirectoryShapeError::Frame)
+    ));
+}
+
+#[test]
+fn a_write_only_grant_refuses_a_read_as_a_capability() {
+    let root = private();
+    let shared = root.path().join("shared");
+    fs::create_dir(&shared).unwrap();
+    fs::write(shared.join("note.txt"), b"hello").unwrap();
+    let store_dir = private();
+    let access = service(
+        Arc::new(LocalDirectoryFiles),
+        Arc::new(SqliteDirectoryStore::open(&store_dir.path().join("grants.sqlite3")).unwrap()),
+        Arc::new(RecordingAudit::new()),
+        [2; BINDING_LEN],
+    );
+    access
+        .share(ShareDirectory {
+            environment: "local".into(),
+            path: shared.to_str().unwrap().into(),
+            subject: DirectorySubject {
+                principal_id: Some("peer".into()),
+                receiver_id: None,
+            },
+            capabilities: crate::domain::DirectoryCapabilities::from_names(["write"]).unwrap(),
+            rules: crate::domain::CommandRules::none(),
+            initiator: "owner".into(),
+        })
+        .unwrap();
+    let refused = access.read("peer", "note.txt").unwrap_err();
+    assert!(matches!(refused, DirectoryRefusal::Capability { .. }));
+}

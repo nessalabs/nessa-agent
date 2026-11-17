@@ -364,6 +364,22 @@ impl ConversationService {
         if let Err(refusal) = admitted {
             return self.refuse(&live, &refused, refusal).await;
         }
+        if let Some(directory) = self.inner.directory.get() {
+            let arguments: Vec<String> = work
+                .argv()
+                .iter()
+                .skip(1)
+                .map(|argument| argument.to_string())
+                .collect();
+            if let Err(error) =
+                directory.command_at(actor.principal_id(), work.program(), &arguments)
+            {
+                tracing::warn!(?error, "a directory grant refused the command");
+                return self
+                    .refuse(&live, &refused, CommandRefusal::CommandDenied)
+                    .await;
+            }
+        }
         if let Err(refusal) = SandboxProfiles::UNENCLOSED.admit(call.sandbox) {
             return self
                 .refuse(&live, &refused, CommandRefusal::Environment(refusal))

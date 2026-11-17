@@ -253,6 +253,9 @@ hooks are not allowed to answer first.
 
 ## Directory resource and command rules
 
+Issue #892 implements this section for a machine the grantor already runs.
+The cloud agent is not built. The lifecycle rows stay the contract.
+
 The resource is one canonical directory in an environment the grantor
 enforces. The environment is this gateway's own machine, a remote
 environment it already leases over SSH or a paired connection, or a cloud

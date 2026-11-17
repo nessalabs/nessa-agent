@@ -50,8 +50,10 @@ use super::ConversationFuture;
 use crate::domain::{ToolCall, ToolPolicy, ToolSource};
 use nessa_protocol::agents::AgentId;
 use nessa_protocol::conversation::domain::ConversationId;
+use nessa_sdk::application::agent_execution::executions::ExecutionUpdate;
 use nessa_sdk::application::agent_execution::hooks::{
-    HookError, InvocationHook, InvocationObservationWindow, ProposedToolCall, ToolVerdict,
+    HookError, InvocationContext, InvocationHook, InvocationObservationWindow, ProposedToolCall,
+    ToolVerdict,
 };
 use nessa_sdk::domain::agent_execution::executions::{Initiation, Initiator};
 use nessa_sdk::domain::agent_execution::permissions::RefusalOutcome;
@@ -241,6 +243,10 @@ pub struct DriveToolHook {
     pub drive: Arc<OnceLock<DriveTools>>,
     pub admitted: Arc<AdmittedPolicies>,
     pub source: ToolSource,
+    /// Directory grants, when composition bound them.
+    pub directory: Arc<OnceLock<Arc<super::DirectoryAccess>>>,
+    /// The principal opening the conversation. Command rules are that subject's.
+    pub directory_subject: String,
 }
 
 impl InvocationHook for DriveToolHook {
@@ -249,18 +255,79 @@ impl InvocationHook for DriveToolHook {
         call: &ProposedToolCall<'_>,
         _: &InvocationObservationWindow<'_>,
     ) -> Result<ToolVerdict, HookError> {
-        Ok(
-            match refusal(
-                &self.drive,
-                &self.admitted,
-                call.initiation(),
-                ToolCall::new(self.source, call.name()),
-            ) {
-                None => ToolVerdict::Allow,
-                Some(reason) => ToolVerdict::refuse(reason, RefusalOutcome::Continue),
-            },
-        )
+        if let Some(reason) = refusal(
+            &self.drive,
+            &self.admitted,
+            call.initiation(),
+            ToolCall::new(self.source, call.name()),
+        ) {
+            return Ok(ToolVerdict::refuse(reason, RefusalOutcome::Continue));
+        }
+        if let Some(reason) = directory_command(self, call) {
+            return Ok(ToolVerdict::refuse(reason, RefusalOutcome::Continue));
+        }
+        Ok(ToolVerdict::Allow)
     }
+
+    fn after_invocation(
+        &self,
+        context: &InvocationContext<'_>,
+        _: &Result<
+            nessa_sdk::domain::agent_execution::executions::ExecutionOutcome,
+            nessa_sdk::application::agent_execution::agents::AgentError,
+        >,
+    ) -> Result<(), HookError> {
+        let Some(directory) = self.directory.get() else {
+            return Ok(());
+        };
+        let mut asked = std::collections::HashSet::new();
+        let mut calls = Vec::new();
+        for event in context.observations.iter() {
+            match event.update() {
+                ExecutionUpdate::PermissionRequested { tool_id, .. } => {
+                    asked.insert(tool_id.clone());
+                }
+                ExecutionUpdate::Tool(tool) => {
+                    let name = tool.title().clone().unwrap_or_else(|| "tool".to_owned());
+                    calls.push((tool.id().clone(), name));
+                }
+                _ => {}
+            }
+        }
+        let mut reported = std::collections::HashSet::new();
+        for (id, name) in calls {
+            if asked.contains(&id) || !reported.insert(id) {
+                continue;
+            }
+            let _ = directory.report_unasked(&self.directory_subject, &name);
+        }
+        Ok(())
+    }
+}
+
+fn directory_command(hook: &DriveToolHook, call: &ProposedToolCall<'_>) -> Option<String> {
+    let directory = hook.directory.get()?;
+    let (program, arguments) = command_arguments(call.arguments_json())?;
+    match directory.command_at(&hook.directory_subject, &program, &arguments) {
+        Ok(()) => None,
+        Err(error) => Some(error.to_string()),
+    }
+}
+
+/// A command the harness is asking about: an `argv` array, or a `command` string.
+fn command_arguments(json: &str) -> Option<(String, Vec<String>)> {
+    let value: serde_json::Value = serde_json::from_str(json).ok()?;
+    if let Some(argv) = value.get("argv").and_then(|item| item.as_array()) {
+        let mut parts = argv
+            .iter()
+            .filter_map(|item| item.as_str().map(str::to_owned));
+        let program = parts.next()?;
+        return Some((program, parts.collect()));
+    }
+    let command = value.get("command").and_then(|item| item.as_str())?;
+    let mut parts = command.split_whitespace().map(str::to_owned);
+    let program = parts.next()?;
+    Some((program, parts.collect()))
 }
 
 #[cfg(test)]
