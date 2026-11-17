@@ -11588,16 +11588,31 @@ async function startGrantor(run) {
   }
 }
 
-/** Turn this window's gateway linking on or off, and reconnect the client. */
+/**
+ * Turn this window's gateway linking on or off, and reconnect the client.
+ * The restart is owned by the window: the browser's next conversation read
+ * is what says it came back, and that read is what keeps the connection
+ * refusal off the console check.
+ */
 async function setWindowLinking(run, enabled) {
-  await run.restartConsole.during(run.opened, async () => {
-    const result = await run.client.pairing.setLinking(enabled)
-    if (result.applies === "restarting") {
-      run.client.close()
-      run.client = await connectClient(run.stack.gateway, INSTANCE, "panel")
+  const held = await run.restartConsole.during(run.opened, async () => {
+    let result
+    for (let tries = 0; tries < 20; tries += 1) {
+      try {
+        result = await run.client.pairing.setLinking(enabled)
+        break
+      } catch (error) {
+        if (!String(error).includes("pairing_busy") || tries === 19) throw error
+        await sleep(500)
+      }
     }
+    if (result.applies !== "restarting") return true
+    run.client.close()
+    if (!(await run.restartConsole.readable(60_000))) return false
+    run.client = await connectClient(run.stack.gateway, INSTANCE, "panel")
+    return true
   })
-  if (!(await run.restartConsole.readable(60_000)))
+  if (held !== true)
     throw new Error(`the window did not come back with linking ${enabled ? "on" : "off"}`)
 }
 
