@@ -1347,8 +1347,7 @@ async fn a_late_audit_intent_does_not_spend_the_next_forgets_stop_window() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[should_panic(expected = "forget stopped the captured read")]
-async fn an_ended_read_cannot_prove_a_forget_stopped_it() {
+async fn releasing_the_record_hold_leaves_the_grant_follow_up() {
     stalled_audit(None, true, None).await;
 }
 
@@ -1474,17 +1473,18 @@ async fn stalled_audit(
     .expect("the old audit prefix finishes before timing the next forget");
     assert_eq!(audit_sequences(&audits), [1, 2, 3, 4]);
     if end_read_before_forget {
+        // The grant subscription stays up after the record copy finishes.
+        // Releasing the source hold is not an ended read, and it does not
+        // set the stop flag a later forget would set.
         record_hold.release();
-        tokio::time::timeout(WAIT, async {
-            while b.peers.active_read_stop(&key).is_some() {
-                tokio::time::sleep(Duration::from_millis(10)).await;
-            }
-        })
-        .await
-        .expect("the negative control's read gave its turn back");
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert!(
+            b.peers.active_read_stop(&key).is_some(),
+            "releasing the record hold ended the grant follow"
+        );
         assert!(
             !read_stop.is_stopped(),
-            "ending a read did not ask for a stop"
+            "releasing the record hold stopped the read"
         );
     }
     let current_release = tokio::spawn(async move {
@@ -1786,8 +1786,7 @@ async fn a_first_sync_completed_before_observation_is_not_lost() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[should_panic(expected = "C's captured read remained active while A completed")]
-async fn an_ended_peer_read_cannot_prove_concurrent_first_sync() {
+async fn releasing_cs_record_hold_leaves_its_follow_active_while_a_syncs() {
     first_sync_before_observation(true, true, FirstSyncStart::Ready).await;
 }
 
@@ -1999,19 +1998,31 @@ async fn first_sync_before_observation(
     }
     let entered_at = started.elapsed();
     let captured = first.expect("admitted first C identity");
-    let connections = peers.relay_c.accepted();
+    let mut connections = peers.relay_c.accepted();
     let a_was_incomplete = sync_of(&peers.b, &key_a)
         .await
         .is_none_or(|sync| sync.state != SyncState::Synced);
     let negative_c_ended = if end_c_before_observation {
+        // Releasing C's record hold lets the held copy finish and open its
+        // chat. That accept is this follow, not a restart caused by reading
+        // A. Count connections once that settles.
         hold_c.release();
-        tokio::time::timeout_at(deadline, async {
-            while peers.b.peers.active_read_stop(&key_c).is_some() {
-                tokio::time::sleep(Duration::from_millis(1)).await;
+        let mut seen = connections;
+        if let Ok(settled) = tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                tokio::time::sleep(Duration::from_millis(150)).await;
+                let now = peers.relay_c.accepted();
+                if now == seen {
+                    return now;
+                }
+                seen = now;
             }
         })
         .await
-        .is_ok()
+        {
+            connections = settled;
+        }
+        peers.b.peers.active_read_stop(&key_c).is_some()
     } else {
         true
     };
@@ -2104,7 +2115,7 @@ async fn first_sync_before_observation(
     );
     assert!(
         negative_c_ended,
-        "the negative control's C read did not end; {evidence}"
+        "releasing C's record hold ended its grant follow; {evidence}"
     );
     assert!(
         same_read,

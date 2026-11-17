@@ -39,9 +39,79 @@ impl ReadOnlyCache {
             .map_err(super::rows::database_error)
     }
 
+    /// The grants this receiver still holds, in conversation id order.
+    pub(crate) fn grant_present(
+        &self,
+        receiver: &str,
+    ) -> Result<Vec<(String, String, i64)>, CacheError> {
+        let mut statement = self
+            .connection
+            .prepare(
+                "SELECT conversation_id, capabilities, policy_revision
+                 FROM grant_rows WHERE receiver = ?1 ORDER BY conversation_id",
+            )
+            .map_err(super::rows::database_error)?;
+        let rows = statement
+            .query_map(params![receiver], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+            })
+            .map_err(super::rows::database_error)?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(super::rows::database_error)
+    }
+
+    /// Remove the grants whose last record in `entries` is a tombstone, and,
+    /// when `replaces`, every stored grant the frame no longer names. The
+    /// cursor stays where it was, so a later copy of what remains can still
+    /// fail and be asked again. Returns the ids that left the replica.
+    pub(crate) fn withdraw_grant_entries(
+        &mut self,
+        receiver: &str,
+        replaces: bool,
+        entries: &[(String, bool, Option<String>, i64)],
+    ) -> Result<Vec<String>, CacheError> {
+        let transaction = self
+            .connection
+            .transaction()
+            .map_err(super::rows::database_error)?;
+        let withdrawn = withdraw_entries(&transaction, receiver, replaces, entries)?;
+        transaction.commit().map_err(super::rows::database_error)?;
+        self.invalidate_loaded();
+        Ok(withdrawn)
+    }
+
+    /// Store the grants that remain and the cursor that names this complete
+    /// frame. Call it only after those conversations' records have been copied.
+    pub(crate) fn commit_grant_entries(
+        &mut self,
+        receiver: &str,
+        incarnation: &str,
+        position: u64,
+        entries: &[(String, bool, Option<String>, i64)],
+    ) -> Result<(), CacheError> {
+        let transaction = self
+            .connection
+            .transaction()
+            .map_err(super::rows::database_error)?;
+        for (conversation, capabilities, revision) in last_present(entries) {
+            upsert_grant(
+                &transaction,
+                receiver,
+                &conversation,
+                &capabilities,
+                revision,
+            )?;
+        }
+        store_cursor(&transaction, receiver, incarnation, position)?;
+        transaction.commit().map_err(super::rows::database_error)?;
+        self.invalidate_loaded();
+        Ok(())
+    }
+
     /// Apply `entries` in commit order and store the cursor. A later record for
     /// the same conversation wins. Removing a grant also removes that
     /// conversation's retained transcript. Returns the ids that left the replica.
+    #[cfg(test)]
     pub(crate) fn apply_grant_entries(
         &mut self,
         receiver: &str,
@@ -54,73 +124,17 @@ impl ReadOnlyCache {
             .connection
             .transaction()
             .map_err(super::rows::database_error)?;
-        let mut withdrawn = Vec::new();
-        if replaces {
-            let mut final_present: Vec<(String, String, i64)> = Vec::new();
-            for (conversation, absent, capabilities, revision) in entries {
-                final_present.retain(|(id, _, _)| id != conversation);
-                if !absent {
-                    if let Some(capabilities) = capabilities {
-                        final_present.push((conversation.clone(), capabilities.clone(), *revision));
-                    }
-                }
-            }
-            let mut statement = transaction
-                .prepare("SELECT conversation_id FROM grant_rows WHERE receiver = ?1")
-                .map_err(super::rows::database_error)?;
-            let existing: Vec<String> = statement
-                .query_map(params![receiver], |row| row.get(0))
-                .map_err(super::rows::database_error)?
-                .collect::<Result<_, _>>()
-                .map_err(super::rows::database_error)?;
-            drop(statement);
-            for id in existing {
-                if !final_present.iter().any(|(kept, _, _)| kept == &id) {
-                    remove_grant_conversation(&transaction, receiver, &id)?;
-                    withdrawn.push(id);
-                }
-            }
-            for (conversation, capabilities, revision) in &final_present {
-                upsert_grant(
-                    &transaction,
-                    receiver,
-                    conversation,
-                    capabilities,
-                    *revision,
-                )?;
-            }
-        } else {
-            // Last record for each conversation wins. An earlier tombstone
-            // must not delete a transcript a later grant in this frame keeps.
-            let mut last: Vec<&(String, bool, Option<String>, i64)> = Vec::new();
-            for entry in entries {
-                last.retain(|kept| kept.0 != entry.0);
-                last.push(entry);
-            }
-            for (conversation, absent, capabilities, revision) in last {
-                if *absent || capabilities.is_none() {
-                    if remove_grant_conversation(&transaction, receiver, conversation)? {
-                        withdrawn.push(conversation.clone());
-                    }
-                } else if let Some(capabilities) = capabilities {
-                    upsert_grant(
-                        &transaction,
-                        receiver,
-                        conversation,
-                        capabilities,
-                        *revision,
-                    )?;
-                }
-            }
+        let withdrawn = withdraw_entries(&transaction, receiver, replaces, entries)?;
+        for (conversation, capabilities, revision) in last_present(entries) {
+            upsert_grant(
+                &transaction,
+                receiver,
+                &conversation,
+                &capabilities,
+                revision,
+            )?;
         }
-        let position = i64::try_from(position).map_err(|_| CacheError::Corrupt)?;
-        transaction
-            .execute(
-                "INSERT INTO grant_cursors (receiver, incarnation, position) VALUES (?1, ?2, ?3)
-                 ON CONFLICT(receiver) DO UPDATE SET incarnation = excluded.incarnation, position = excluded.position",
-                params![receiver, incarnation, position],
-            )
-            .map_err(super::rows::database_error)?;
+        store_cursor(&transaction, receiver, incarnation, position)?;
         transaction.commit().map_err(super::rows::database_error)?;
         self.invalidate_loaded();
         Ok(withdrawn)
@@ -138,6 +152,82 @@ impl ReadOnlyCache {
 }
 
 use nessa_local_database::rusqlite::{OptionalExtension, Transaction};
+
+/// Last record that still grants each conversation. An earlier tombstone does
+/// not survive a later grant in the same frame.
+fn last_present(entries: &[(String, bool, Option<String>, i64)]) -> Vec<(String, String, i64)> {
+    let mut last: Vec<&(String, bool, Option<String>, i64)> = Vec::new();
+    for entry in entries {
+        last.retain(|kept| kept.0 != entry.0);
+        last.push(entry);
+    }
+    last.into_iter()
+        .filter_map(|(conversation, absent, capabilities, revision)| {
+            if *absent {
+                return None;
+            }
+            Some((conversation.clone(), capabilities.clone()?, *revision))
+        })
+        .collect()
+}
+
+fn withdraw_entries(
+    transaction: &Transaction<'_>,
+    receiver: &str,
+    replaces: bool,
+    entries: &[(String, bool, Option<String>, i64)],
+) -> Result<Vec<String>, CacheError> {
+    let present = last_present(entries);
+    let mut withdrawn = Vec::new();
+    if replaces {
+        let mut statement = transaction
+            .prepare("SELECT conversation_id FROM grant_rows WHERE receiver = ?1")
+            .map_err(super::rows::database_error)?;
+        let existing: Vec<String> = statement
+            .query_map(params![receiver], |row| row.get(0))
+            .map_err(super::rows::database_error)?
+            .collect::<Result<_, _>>()
+            .map_err(super::rows::database_error)?;
+        drop(statement);
+        for id in existing {
+            if !present.iter().any(|(kept, _, _)| kept == &id) {
+                remove_grant_conversation(transaction, receiver, &id)?;
+                withdrawn.push(id);
+            }
+        }
+        return Ok(withdrawn);
+    }
+    let mut last: Vec<&(String, bool, Option<String>, i64)> = Vec::new();
+    for entry in entries {
+        last.retain(|kept| kept.0 != entry.0);
+        last.push(entry);
+    }
+    for (conversation, absent, capabilities, _) in last {
+        if (*absent || capabilities.is_none())
+            && remove_grant_conversation(transaction, receiver, conversation)?
+        {
+            withdrawn.push(conversation.clone());
+        }
+    }
+    Ok(withdrawn)
+}
+
+fn store_cursor(
+    transaction: &Transaction<'_>,
+    receiver: &str,
+    incarnation: &str,
+    position: u64,
+) -> Result<(), CacheError> {
+    let position = i64::try_from(position).map_err(|_| CacheError::Corrupt)?;
+    transaction
+        .execute(
+            "INSERT INTO grant_cursors (receiver, incarnation, position) VALUES (?1, ?2, ?3)
+             ON CONFLICT(receiver) DO UPDATE SET incarnation = excluded.incarnation, position = excluded.position",
+            params![receiver, incarnation, position],
+        )
+        .map_err(super::rows::database_error)?;
+    Ok(())
+}
 
 fn upsert_grant(
     transaction: &Transaction<'_>,

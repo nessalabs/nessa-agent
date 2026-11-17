@@ -562,17 +562,6 @@ impl Session {
     pub(crate) fn ready(&self) -> &ProductSessionReady {
         &self.ready
     }
-    /// Later reads on this connection wait at most `ms`. The handshake budget
-    /// stays as it was.
-    pub(crate) fn shorten_operation(&mut self, ms: u64) {
-        if let Ok(policy) = GatewayPolicy::new(
-            self.policy.handshake_ms(),
-            ms,
-            self.policy.unexpected_events(),
-        ) {
-            self.policy = policy;
-        }
-    }
     pub(crate) fn begin(&mut self) -> Result<u64, GatewayError> {
         if self.active.is_some() {
             return Err(GatewayError::Busy);
@@ -741,32 +730,114 @@ impl Session {
         }
         Ok(())
     }
-    /// The next grant frame, or the subscription's end. Waits under the
-    /// current operation's deadline.
-    pub(crate) fn next_grant(&mut self) -> Result<GrantDelivery, GatewayError> {
-        let active = self.active.as_ref().ok_or(GatewayError::Busy)?;
-        if let Some(error) = active.failure {
+    /// The next grant frame already queued, or one frame of socket progress.
+    /// An idle tick is `Ok(None)` and leaves the socket up. A timeout of a
+    /// blocking read is not used here: that path closes the connection.
+    pub(crate) fn poll_grant(&mut self) -> Result<Option<GrantDelivery>, GatewayError> {
+        if let Some(error) = self.active.as_ref().and_then(|active| active.failure) {
             return Err(error);
         }
-        let result = self.grant_inner();
-        result.map_err(|error| self.fail(error))
-    }
-    fn grant_inner(&mut self) -> Result<GrantDelivery, GatewayError> {
         loop {
-            if self.events.grant_id.is_none() {
-                return Err(GatewayError::Busy);
+            if let Some(delivery) = self.take_grant()? {
+                return Ok(Some(delivery));
             }
-            if !self.events.grants.is_empty() {
-                return Ok(GrantDelivery::Changed(self.events.grants.remove(0)));
+            if !self.poll_socket(200)? {
+                return Ok(None);
             }
-            if let Some(ended) = self.events.grant_ended.take() {
-                self.events.grant_id = None;
-                return Ok(GrantDelivery::Ended(ended));
+        }
+    }
+    fn take_grant(&mut self) -> Result<Option<GrantDelivery>, GatewayError> {
+        if self.events.grant_id.is_none() {
+            return Err(GatewayError::Busy);
+        }
+        if !self.events.grants.is_empty() {
+            return Ok(Some(GrantDelivery::Changed(self.events.grants.remove(0))));
+        }
+        if let Some(ended) = self.events.grant_ended.take() {
+            self.events.grant_id = None;
+            return Ok(Some(GrantDelivery::Ended(ended)));
+        }
+        Ok(None)
+    }
+    /// The next view already queued, or one frame of socket progress. An idle
+    /// tick is `Ok(None)` and leaves the socket up.
+    pub(crate) fn poll_view(&mut self) -> Result<Option<Wait>, GatewayError> {
+        if let Some(error) = self.active.as_ref().and_then(|active| active.failure) {
+            return Err(error);
+        }
+        loop {
+            if let Some(wait) = self.take_view()? {
+                return Ok(Some(wait));
             }
+            if !self.poll_socket(50)? {
+                return Ok(None);
+            }
+        }
+    }
+    fn take_view(&mut self) -> Result<Option<Wait>, GatewayError> {
+        let inbox = self
+            .events
+            .subscription
+            .as_mut()
+            .ok_or(GatewayError::Busy)?;
+        if inbox.closed {
+            return Err(GatewayError::Closed(None));
+        }
+        if let Some(ended) = inbox.parked.ended.take() {
+            inbox.closed = true;
+            inbox.parked.views.clear();
+            let reason = match ended.reason {
+                ConversationSubscriptionEndReason::Lagging => SubscriptionEnd::Lagging,
+                ConversationSubscriptionEndReason::Refused => SubscriptionEnd::Refused,
+                ConversationSubscriptionEndReason::SourceClosed => SubscriptionEnd::SourceClosed,
+                ConversationSubscriptionEndReason::TooLarge => SubscriptionEnd::TooLarge,
+            };
+            let cause = (reason == SubscriptionEnd::Refused).then(|| {
+                ended
+                    .code
+                    .map_or(GatewayError::Protocol, subscription_refusal)
+            });
+            return Ok(Some(Wait::Ended(Ended { reason, cause })));
+        }
+        if let Some(viewed) = inbox.parked.views.pop() {
+            inbox.parked.views.clear();
+            return Ok(Some(Wait::View {
+                cursor: ViewCursor {
+                    incarnation: viewed.cursor.incarnation,
+                    position: viewed.cursor.position,
+                },
+                during_pass: true,
+            }));
+        }
+        Ok(None)
+    }
+    /// Read one product frame without treating an idle tick as a failed
+    /// operation. `true` when a frame was observed.
+    fn poll_socket(&mut self, slice_ms: u64) -> Result<bool, GatewayError> {
+        let polled = {
             let socket = self.socket.as_mut().ok_or(GatewayError::Transport)?;
-            match read_frame(socket)? {
-                OutgoingMessage::Response(_) => return Err(GatewayError::Correlation),
-                OutgoingMessage::Event(event) => self.events.observe(event)?,
+            socket
+                .transport
+                .stream_mut()
+                .begin_poll(None, slice_ms, 5_000);
+            socket.poll()
+        };
+        let text = match polled {
+            Ok(text) => text,
+            Err(error) => return Err(self.fail(error)),
+        };
+        let Some(text) = text else {
+            return Ok(false);
+        };
+        let message =
+            OutgoingMessage::decode(&text).map_err(|_| self.fail(GatewayError::Protocol))?;
+        match message {
+            OutgoingMessage::Response(_) => Err(self.fail(GatewayError::Correlation)),
+            OutgoingMessage::Event(event) => {
+                self.events
+                    .observe(event)
+                    .map_err(|error| self.fail(error))?;
+                Ok(true)
             }
         }
     }

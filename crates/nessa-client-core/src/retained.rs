@@ -690,6 +690,49 @@ impl GatewayStream for Socket {
     }
 }
 
+/// A complete frame continues the staged prefix only when it names the same
+/// snapshot. A replacement that fits in one frame would otherwise put the
+/// old prefix back, including a grant revoked between the two snapshots.
+fn finish_staged(
+    staged: &mut Vec<nessa_protocol::product::generated::GrantFrameEntry>,
+    staged_snapshot: &mut Option<String>,
+    changed: &nessa_protocol::product::generated::GrantsChanged,
+) -> Vec<nessa_protocol::product::generated::GrantFrameEntry> {
+    let continues = changed
+        .snapshot_id
+        .as_ref()
+        .is_some_and(|id| staged_snapshot.as_ref() == Some(id));
+    if !continues {
+        staged.clear();
+    }
+    *staged_snapshot = None;
+    let mut entries = std::mem::take(staged);
+    entries.extend(changed.grants.iter().map(copy_grant_entry));
+    entries
+}
+
+fn copy_grant_entry(
+    entry: &nessa_protocol::product::generated::GrantFrameEntry,
+) -> nessa_protocol::product::generated::GrantFrameEntry {
+    nessa_protocol::product::generated::GrantFrameEntry {
+        conversation_id: entry.conversation_id.clone(),
+        absent: entry.absent,
+        capabilities: entry.capabilities.clone(),
+        policy_revision: entry.policy_revision.clone(),
+    }
+}
+
+fn last_present_ids(entries: &[(String, bool, Option<String>, i64)]) -> Vec<String> {
+    let mut last = Vec::new();
+    for (conversation, absent, _, _) in entries {
+        last.retain(|id: &String| id != conversation);
+        if !absent {
+            last.push(conversation.clone());
+        }
+    }
+    last
+}
+
 /// One reader's private retained cache.
 pub struct RetainedCache {
     cache: ReadOnlyCache,
@@ -860,9 +903,9 @@ impl RetainedCache {
             if ending.cancelled() || stop.is_stopped() {
                 break;
             }
-            let delivery = match connection.next_grant() {
-                Ok(delivery) => delivery,
-                Err(GatewayError::TimedOut) => {
+            let delivery = match connection.poll_grant() {
+                Ok(Some(delivery)) => delivery,
+                Ok(None) => {
                     let id = Id::new(&receiver).map_err(|_| ReadFailure::Protocol)?;
                     self.drain_chats(&connection, &id, access.access_epoch, &mut chats)?;
                     if let Some(snapshot_id) = staged_snapshot.clone() {
@@ -900,9 +943,7 @@ impl RetainedCache {
                 }
                 continue;
             }
-            staged_snapshot = None;
-            let mut entries = std::mem::take(&mut staged);
-            entries.extend(changed.grants);
+            let entries = finish_staged(&mut staged, &mut staged_snapshot, &changed);
             let ordered: Vec<(String, bool, Option<String>, i64)> = entries
                 .iter()
                 .map(|entry| {
@@ -921,22 +962,16 @@ impl RetainedCache {
                 })
                 .collect();
             let id = Id::new(&receiver).map_err(|_| ReadFailure::Protocol)?;
-            // Copy before the cursor moves. A failed copy leaves the cursor
-            // where it was, so the next frame retries the same records.
-            self.copy_granted(&connection, &id, access.access_epoch, stop, &ordered)?;
+            let position = changed
+                .cursor
+                .position
+                .parse()
+                .map_err(|_| ReadFailure::Protocol)?;
+            // A revoke lands even when a later copy cannot. The cursor stays,
+            // so the addition is asked again.
             let removed = self
                 .cache
-                .apply_grant_entries(
-                    &receiver,
-                    changed.replaces,
-                    &changed.cursor.incarnation,
-                    changed
-                        .cursor
-                        .position
-                        .parse()
-                        .map_err(|_| ReadFailure::Protocol)?,
-                    &ordered,
-                )
+                .withdraw_grant_entries(&receiver, changed.replaces, &ordered)
                 .map_err(|error| cache_failure(&error))?;
             for id in removed {
                 if entries
@@ -946,13 +981,29 @@ impl RetainedCache {
                     withdrawn.push(id);
                 }
             }
-            let present: Vec<(String, String, i64)> = ordered
-                .iter()
-                .filter(|(_, absent, _, _)| !*absent)
-                .filter_map(|(conversation, _, capabilities, revision)| {
-                    Some((conversation.clone(), capabilities.clone()?, *revision))
-                })
+            self.copy_granted(&connection, &id, access.access_epoch, stop, &ordered)?;
+            self.cache
+                .commit_grant_entries(&receiver, &changed.cursor.incarnation, position, &ordered)
+                .map_err(|error| cache_failure(&error))?;
+            let present = self
+                .cache
+                .grant_present(&receiver)
+                .map_err(|error| cache_failure(&error))?;
+            let present: Vec<(String, String, i64)> = present
+                .into_iter()
+                .filter(|(conversation, _, _)| follow.contains(conversation))
                 .collect();
+            let copied = last_present_ids(&ordered);
+            for (conversation, _, _) in &present {
+                if copied.iter().any(|id| id == conversation)
+                    || chats.iter().any(|(_, open)| open == conversation)
+                {
+                    continue;
+                }
+                let conversation_id =
+                    ConversationId::new(conversation).map_err(|_| ReadFailure::Protocol)?;
+                self.copy_one(&connection, &id, access.access_epoch, conversation_id)?;
+            }
             self.open_chats(
                 &access, &ending, &offline, follow, &present, &mut live, &mut chats,
             )?;
@@ -966,10 +1017,6 @@ impl RetainedCache {
             on_synced(count);
             synced = true;
             ending.relax();
-            let _ = connection.shorten_operation(200);
-            for (chat, _) in &chats {
-                let _ = chat.shorten_operation(50);
-            }
             self.drain_chats(&connection, &id, access.access_epoch, &mut chats)?;
         }
         Ok(ReadReport {
@@ -1015,7 +1062,6 @@ impl RetainedCache {
             };
             let connection = GatewayConnection::new(session);
             if connection.subscribe(&conversation_id).is_ok() {
-                let _ = connection.shorten_operation(50);
                 chats.push((connection, conversation.clone()));
             }
         }
@@ -1067,17 +1113,17 @@ impl RetainedCache {
         let mut index = 0;
         while index < chats.len() {
             let conversation = chats[index].1.clone();
-            match chats[index].0.wait_view() {
-                Ok(crate::read_only_sync::application::follow::Wait::View { .. }) => {
+            match chats[index].0.poll_view() {
+                Ok(Some(crate::read_only_sync::application::follow::Wait::View { .. })) => {
                     let conversation_id =
                         ConversationId::new(&conversation).map_err(|_| ReadFailure::Protocol)?;
                     self.copy_one(records, receiver, epoch, conversation_id)?;
                 }
-                Ok(crate::read_only_sync::application::follow::Wait::Ended(_)) => {
+                Ok(Some(crate::read_only_sync::application::follow::Wait::Ended(_))) => {
                     chats.remove(index);
                     continue;
                 }
-                Err(GatewayError::TimedOut) => {
+                Ok(None) => {
                     index += 1;
                     continue;
                 }
@@ -1779,3 +1825,63 @@ fn failure(error: GatewayError) -> ReadFailure {
 #[cfg(test)]
 #[path = "../tests/retained/read.rs"]
 mod tests;
+
+#[cfg(test)]
+mod grant_frames {
+    use super::finish_staged;
+    use nessa_protocol::product::generated::{GrantFrameEntry, GrantStreamCursor, GrantsChanged};
+
+    fn entry(id: &str, absent: bool) -> GrantFrameEntry {
+        GrantFrameEntry {
+            conversation_id: id.to_owned(),
+            absent,
+            capabilities: (!absent).then(|| "read".to_owned()),
+            policy_revision: Some("1".to_owned()),
+        }
+    }
+
+    fn frame(snapshot: Option<&str>, grants: Vec<GrantFrameEntry>) -> GrantsChanged {
+        GrantsChanged {
+            subscription_id: "sub".to_owned(),
+            cursor: GrantStreamCursor {
+                incarnation: "inc".to_owned(),
+                position: "2".to_owned(),
+            },
+            complete: true,
+            replaces: true,
+            snapshot_id: snapshot.map(str::to_owned),
+            grants,
+        }
+    }
+
+    #[test]
+    fn a_replacement_snapshot_drops_the_staged_prefix() {
+        let mut staged = vec![entry("old", false)];
+        let mut snapshot = Some("1".to_owned());
+        let done = finish_staged(
+            &mut staged,
+            &mut snapshot,
+            &frame(Some("2"), vec![entry("new", false)]),
+        );
+        assert_eq!(done.len(), 1);
+        assert_eq!(done[0].conversation_id, "new");
+        assert!(staged.is_empty());
+    }
+
+    #[test]
+    fn the_last_page_of_a_snapshot_keeps_the_prefix() {
+        let mut staged = vec![entry("first", false)];
+        let mut snapshot = Some("4".to_owned());
+        let done = finish_staged(
+            &mut staged,
+            &mut snapshot,
+            &frame(Some("4"), vec![entry("second", false)]),
+        );
+        assert_eq!(
+            done.iter()
+                .map(|entry| entry.conversation_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["first", "second"]
+        );
+    }
+}

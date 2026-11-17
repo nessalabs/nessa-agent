@@ -1371,3 +1371,50 @@ fn a_grant_frame_keeps_the_last_record_and_its_transcript() {
         .unwrap();
     assert_eq!(gone, 0, "a revoke removes the transcript with the grant");
 }
+
+#[test]
+fn a_revoke_lands_before_the_cursor_moves() {
+    let root = tempfile::tempdir().unwrap();
+    let mut cache = cache(&cache_path(root.path(), "revoke-first.sqlite3"));
+    let blob = [0_u8, 0, 0, 0, 0, 0, 0, 1];
+    cache
+        .connection
+        .execute(
+            "INSERT INTO transcript_progress
+             (receiver, origin, stream, incarnation, schema_id, access_epoch, downloaded, applied, facts, generation)
+             VALUES ('recv', 'origin', 'conv-x', 'inc', 'schema', 'epoch', ?1, ?1, ?1, ?1)",
+            params![blob.as_slice()],
+        )
+        .unwrap();
+    let kept = ("conv-x".to_owned(), false, Some("read".to_owned()), 1_i64);
+    cache
+        .apply_grant_entries("recv", false, "inc", 1, &[kept])
+        .unwrap();
+    let revoked = ("conv-x".to_owned(), true, None, 2_i64);
+    let added = ("conv-y".to_owned(), false, Some("read".to_owned()), 2_i64);
+    cache
+        .withdraw_grant_entries("recv", false, &[revoked, added])
+        .unwrap();
+    assert!(cache.grant_ids("recv").unwrap().is_empty());
+    let transcript: i64 = cache
+        .connection
+        .query_row(
+            "SELECT count(*) FROM transcript_progress WHERE receiver = 'recv' AND stream = 'conv-x'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(transcript, 0);
+    let cursor: i64 = cache
+        .connection
+        .query_row(
+            "SELECT position FROM grant_cursors WHERE receiver = 'recv'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        cursor, 1,
+        "the addition's cursor waits until its copy finishes"
+    );
+}

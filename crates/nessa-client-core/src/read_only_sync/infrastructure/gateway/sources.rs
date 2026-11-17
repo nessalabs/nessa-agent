@@ -167,19 +167,22 @@ impl GatewayConnection {
                 .grant_page(&params)
         })?)
     }
-    pub(crate) fn shorten_operation(&self, ms: u64) -> Result<(), GatewayError> {
-        self.0
-            .try_borrow_mut()
-            .map_err(|_| GatewayError::Busy)?
-            .shorten_operation(ms);
-        Ok(())
-    }
-    pub(crate) fn next_grant(&self) -> Result<super::session::GrantDelivery, GatewayError> {
+    /// One grant frame, or `None` when the feed is idle. The socket stays up.
+    pub(crate) fn poll_grant(&self) -> Result<Option<super::session::GrantDelivery>, GatewayError> {
         settled(self.run(|| {
             self.0
                 .try_borrow_mut()
                 .map_err(|_| GatewayError::Busy)?
-                .next_grant()
+                .poll_grant()
+        })?)
+    }
+    /// One chat view, or `None` when that feed is idle. The socket stays up.
+    pub(crate) fn poll_view(&self) -> Result<Option<Wait>, GatewayError> {
+        settled(self.run(|| {
+            self.0
+                .try_borrow_mut()
+                .map_err(|_| GatewayError::Busy)?
+                .poll_view()
         })?)
     }
     /// Wait for the subscription's next view or end as its own operation.

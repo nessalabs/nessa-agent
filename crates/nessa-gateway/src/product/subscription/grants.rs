@@ -344,7 +344,7 @@ fn take_page(pin: &mut Pin) -> GrantsChanged {
         },
         complete,
         replaces: pin.replaces,
-        snapshot_id: (!complete && pin.id > 0).then(|| pin.id.to_string()),
+        snapshot_id: (pin.id > 0).then(|| pin.id.to_string()),
         grants,
     }
 }
@@ -358,7 +358,7 @@ fn preview(pin: &Pin, keep: usize, complete: bool) -> GrantsChanged {
         ),
         complete,
         replaces: pin.replaces,
-        snapshot_id: (!complete && pin.id > 0).then(|| pin.id.to_string()),
+        snapshot_id: (pin.id > 0).then(|| pin.id.to_string()),
         grants: pin.pending.iter().take(keep).map(copy_entry).collect(),
     }
 }
