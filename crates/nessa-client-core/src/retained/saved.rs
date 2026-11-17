@@ -5,8 +5,11 @@ use crate::read_only_sync::application::{
     offline::{SavedReads, SavedTranscript},
     CachedProgress,
 };
+use crate::read_only_sync::infrastructure::cache::EarlierFold;
 use nessa_protocol::conversation::{
-    catalogue_metadata::CatalogueMetadata, domain::ConversationId, view::ConversationView,
+    catalogue_metadata::CatalogueMetadata,
+    domain::ConversationId,
+    view::{ConversationEarlier, ConversationPoint, ConversationView},
 };
 use nessa_sync::replication::{
     catalogue::{CatalogueProgress, EntryKey, ManifestEntry},
@@ -194,4 +197,37 @@ impl RetainedCache {
             }
         }
     }
+
+    /// Turns before `before` in the retained fold. `None` when this cache
+    /// holds no transcript. `Err` is a point the fold does not contain, or a
+    /// cache that could not be read.
+    pub fn earlier(
+        &mut self,
+        receiver: &str,
+        origin: &str,
+        conversation: &ConversationId,
+        before: &ConversationPoint,
+        after: Option<&ConversationPoint>,
+    ) -> Result<Option<ConversationEarlier>, EarlierMiss> {
+        let receiver = Id::new(receiver).map_err(|_| EarlierMiss::Read(ReadFailure::Protocol))?;
+        let origin = Id::new(origin).map_err(|_| EarlierMiss::Read(ReadFailure::Protocol))?;
+        match self
+            .cache
+            .retained_earlier(&receiver, &origin, conversation, before, after)
+            .map_err(|error| EarlierMiss::Read(cache_failure(&error)))?
+        {
+            EarlierFold::Absent => Ok(None),
+            EarlierFold::Invalid => Err(EarlierMiss::Point),
+            EarlierFold::Page(page) => Ok(Some(page)),
+        }
+    }
+}
+
+/// Why an earlier page was not returned.
+#[derive(Debug)]
+pub enum EarlierMiss {
+    /// The point is not in the retained history.
+    Point,
+    /// The cache could not be read.
+    Read(ReadFailure),
 }

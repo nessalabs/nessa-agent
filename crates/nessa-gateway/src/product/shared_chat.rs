@@ -11,15 +11,15 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use nessa_auth::application::ports::Clock as WallClock;
 use nessa_client_core::retained::{
-    ReadFailure, RetainedCache, RetainedCatalogueEntry, RetainedTranscript,
+    EarlierMiss, ReadFailure, RetainedCache, RetainedCatalogueEntry, RetainedTranscript,
 };
 use nessa_peer_gateways::infrastructure::{PeerCommands, PeerEntry, PeerPhase, PeerRecords};
 use nessa_projection::{CommittedCursor, Projection};
 use nessa_protocol::clock::Clock as MonotonicClock;
 use nessa_protocol::conversation::domain::ConversationId;
 use nessa_protocol::conversation::view::{
-    ConversationCapabilities, ConversationSelectionView, ConversationTranscriptState,
-    ConversationView,
+    ConversationCapabilities, ConversationEarlier, ConversationPoint, ConversationSelectionView,
+    ConversationTranscriptState, ConversationView,
 };
 use nessa_protocol::product::generated::ConversationSummary;
 use nessa_sync::replication::catalogue::{EntryKey, MAX_CATALOGUE_ENTRIES};
@@ -44,6 +44,14 @@ pub trait SharedChats: Send + Sync {
     async fn open(&self, id: &ConversationId) -> Result<Option<OpenedReplica>, ConversationError>;
     /// Whether the cache still holds `id`.
     async fn holds(&self, id: &ConversationId) -> Result<bool, ConversationError>;
+    /// Turns before `before` when `id` is a retained chat. `Ok(None)` when it
+    /// is not. A point the history does not contain is invalid input.
+    async fn earlier(
+        &self,
+        id: &ConversationId,
+        before: &ConversationPoint,
+        after: Option<&ConversationPoint>,
+    ) -> Result<Option<ConversationEarlier>, ConversationError>;
 }
 
 /// The peer records this gateway already keeps.
@@ -91,6 +99,34 @@ impl SharedChats for PeerCacheChats {
     async fn holds(&self, id: &ConversationId) -> Result<bool, ConversationError> {
         Ok(self.lookup(id, false).await?.is_some())
     }
+
+    async fn earlier(
+        &self,
+        id: &ConversationId,
+        before: &ConversationPoint,
+        after: Option<&ConversationPoint>,
+    ) -> Result<Option<ConversationEarlier>, ConversationError> {
+        let active = active_peers(&self.peers).await?;
+        let records = Arc::clone(self.peers.records());
+        let wall = Arc::clone(&self.wall);
+        let monotonic = Arc::clone(&self.monotonic);
+        let id = id.clone();
+        let before = before.clone();
+        let after = after.cloned();
+        spawn_blocking(move || {
+            find_earlier(
+                &records,
+                &active,
+                wall,
+                monotonic,
+                &id,
+                &before,
+                after.as_ref(),
+            )
+        })
+        .await
+        .map_err(|_| ConversationError::Unavailable)?
+    }
 }
 
 impl PeerCacheChats {
@@ -137,6 +173,24 @@ pub(super) async fn open_replica(
         return Ok(None);
     };
     chats.open(id).await
+}
+
+/// Turns before `before` when `id` is a granted chat the caller may read.
+/// `Ok(None)` when it is not one, so the local history answers instead.
+pub(super) async fn read_earlier(
+    state: &ProductRouteState,
+    session: &nessa_auth::application::session::AuthenticatedSession,
+    id: &ConversationId,
+    before: &ConversationPoint,
+    after: Option<&ConversationPoint>,
+) -> Result<Option<ConversationEarlier>, ConversationError> {
+    if local_conversation(state, id).await? || !catalogue_admitted(state, session, false).await? {
+        return Ok(None);
+    }
+    let Some(chats) = source(state) else {
+        return Ok(None);
+    };
+    chats.earlier(id, before, after).await
 }
 
 /// Refuse a write on a granted chat the caller may read. A local conversation
@@ -260,6 +314,73 @@ fn list_cached(
         }
     }
     Ok(rows)
+}
+
+fn find_earlier(
+    records: &PeerRecords,
+    peers: &[ActivePeer],
+    wall: Arc<dyn WallClock>,
+    monotonic: Arc<dyn MonotonicClock>,
+    id: &ConversationId,
+    before: &ConversationPoint,
+    after: Option<&ConversationPoint>,
+) -> Result<Option<ConversationEarlier>, ConversationError> {
+    let mut failed = false;
+    for peer in peers {
+        match peer_earlier(records, peer, &wall, &monotonic, id, before, after) {
+            Ok(EarlierHit::Elsewhere) => {}
+            Ok(EarlierHit::Page(page)) => return Ok(Some(page)),
+            Ok(EarlierHit::NotLoaded) => return Err(ConversationError::Unavailable),
+            Ok(EarlierHit::NotInHistory) => return Err(ConversationError::InvalidInput),
+            Err(error) => {
+                tracing::warn!(
+                    receiver = %peer.receiver,
+                    error = ?error,
+                    "a peer cache could not page earlier history"
+                );
+                failed = true;
+            }
+        }
+    }
+    if failed {
+        Err(ConversationError::Unavailable)
+    } else {
+        Ok(None)
+    }
+}
+
+enum EarlierHit {
+    Elsewhere,
+    /// The chat is retained, and its transcript is not loaded yet.
+    NotLoaded,
+    NotInHistory,
+    Page(ConversationEarlier),
+}
+
+fn peer_earlier(
+    records: &PeerRecords,
+    peer: &ActivePeer,
+    wall: &Arc<dyn WallClock>,
+    monotonic: &Arc<dyn MonotonicClock>,
+    id: &ConversationId,
+    before: &ConversationPoint,
+    after: Option<&ConversationPoint>,
+) -> Result<EarlierHit, ReadFailure> {
+    let mut cache = open_cache(records, peer, wall, monotonic)?;
+    let Some(scope) = cache.saved_catalogue_scope(&peer.receiver)? else {
+        return Ok(EarlierHit::Elsewhere);
+    };
+    let held = cache.conversation_ids(&peer.receiver)?;
+    if !held.iter().any(|held| held == &id.to_string()) {
+        return Ok(EarlierHit::Elsewhere);
+    }
+    let origin = scope.origin().as_str().to_owned();
+    match cache.earlier(&peer.receiver, &origin, id, before, after) {
+        Ok(Some(page)) => Ok(EarlierHit::Page(page)),
+        Ok(None) => Ok(EarlierHit::NotLoaded),
+        Err(EarlierMiss::Point) => Ok(EarlierHit::NotInHistory),
+        Err(EarlierMiss::Read(error)) => Err(error),
+    }
 }
 
 fn find_cached(
@@ -528,8 +649,8 @@ mod tests {
     use nessa_protocol::agents::AgentId;
     use nessa_protocol::conversation::domain::{ConversationApprovalMode, ConversationId};
     use nessa_protocol::conversation::view::{
-        ConversationCapabilities, ConversationSelectionView, ConversationTranscriptState,
-        ConversationView,
+        ConversationCapabilities, ConversationEarlier, ConversationPoint,
+        ConversationSelectionView, ConversationTranscriptState, ConversationView,
     };
     use nessa_protocol::product::generated::ConversationSummary;
     use nessa_protocol::protocol::{OutgoingMessage, RequestFrame, ResponseFrame};
@@ -589,6 +710,29 @@ mod tests {
             id: &ConversationId,
         ) -> Result<bool, crate::conversation::application::ConversationError> {
             Ok(id.to_string() == self.id)
+        }
+
+        async fn earlier(
+            &self,
+            id: &ConversationId,
+            before: &ConversationPoint,
+            _: Option<&ConversationPoint>,
+        ) -> Result<Option<ConversationEarlier>, crate::conversation::application::ConversationError>
+        {
+            if id.to_string() != self.id {
+                return Ok(None);
+            }
+            if before.execution_id != "kept-turn" {
+                return Err(crate::conversation::application::ConversationError::InvalidInput);
+            }
+            Ok(Some(ConversationEarlier {
+                conversation_id: self.id.clone(),
+                messages: Vec::new(),
+                tools: Vec::new(),
+                handoffs: Vec::new(),
+                more: false,
+                truncated: false,
+            }))
         }
     }
 
@@ -829,6 +973,33 @@ mod tests {
         .await;
         assert!(!created.ok);
         assert_eq!(created.error.unwrap().code, "capabilities_refused");
+
+        let earlier = ask(
+            &state,
+            &session,
+            "conversation.readEarlier",
+            json!({
+                "conversationId": id,
+                "before": { "executionId": "kept-turn" }
+            }),
+        )
+        .await;
+        assert!(earlier.ok, "{earlier:?}");
+        let page = earlier.payload.unwrap();
+        assert_eq!(page["conversationId"], id);
+        assert_eq!(page["more"], false);
+        let missing_point = ask(
+            &state,
+            &session,
+            "conversation.readEarlier",
+            json!({
+                "conversationId": id,
+                "before": { "executionId": "no-such-turn" }
+            }),
+        )
+        .await;
+        assert!(!missing_point.ok);
+        assert_eq!(missing_point.error.unwrap().code, "invalid_request");
     }
 
     #[tokio::test]
@@ -849,6 +1020,18 @@ mod tests {
         .await;
         assert!(!read.ok);
         assert_eq!(read.error.unwrap().code, "conversation_not_found");
+        let earlier = ask(
+            &state,
+            &session,
+            "conversation.readEarlier",
+            json!({
+                "conversationId": id,
+                "before": { "executionId": "kept-turn" }
+            }),
+        )
+        .await;
+        assert!(!earlier.ok);
+        assert_eq!(earlier.error.unwrap().code, "conversation_not_found");
         let listed = ask(&state, &session, "conversation.list", json!({})).await;
         assert!(listed.ok, "{listed:?}");
         let rows = listed.payload.unwrap()["conversations"]

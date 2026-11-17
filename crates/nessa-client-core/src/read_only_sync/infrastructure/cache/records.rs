@@ -11,8 +11,9 @@ use nessa_local_database::{
     rusqlite::{Connection, TransactionBehavior},
     OpenError, Schema,
 };
-use nessa_projection::retained_view;
+use nessa_projection::{earlier_turns, retained_view, NoMcpToolUis};
 use nessa_protocol::conversation::domain::ConversationId;
+use nessa_protocol::conversation::view::{ConversationEarlier, ConversationPoint};
 use nessa_sdk::application::agent_execution::sessions::{CommittedStatus, StorageError};
 use nessa_sdk::infrastructure::session_storage::{
     TranscriptError, TranscriptFold, MAX_PHYSICAL_RECORD_PAYLOAD_BYTES,
@@ -22,8 +23,19 @@ use nessa_sync::replication::{
     domain::{Checkpoint, CommitPlan, Id, Scope},
     infrastructure::{MAX_PAGE_PAYLOAD, MAX_PAGE_RECORDS},
 };
+use std::collections::HashSet;
 use std::{path::Path, sync::Arc};
 use uuid::Uuid;
+
+/// A page of history from a retained fold, or why there is none.
+pub(crate) enum EarlierFold {
+    /// This cache has no retained transcript for the conversation.
+    Absent,
+    /// The transcript is retained, and the point is not in it.
+    Invalid,
+    /// The turns before the point.
+    Page(ConversationEarlier),
+}
 
 struct LoadedTranscript {
     progress: Option<CachedProgress>,
@@ -69,6 +81,43 @@ impl ReadOnlyCache {
         })();
         match result {
             Err(CacheError::Fenced) => Ok(SavedTranscript::Deleted),
+            other => other,
+        }
+    }
+
+    /// The turns before `before` in the retained fold, through the same
+    /// projection a gateway uses for `conversation.readEarlier`. Nothing is
+    /// live here: the fold is the peer's committed history.
+    pub(crate) fn retained_earlier(
+        &mut self,
+        receiver: &Id,
+        origin: &Id,
+        conversation: &ConversationId,
+        before: &ConversationPoint,
+        after: Option<&ConversationPoint>,
+    ) -> Result<EarlierFold, CacheError> {
+        let stream = Id::new(conversation.to_string()).map_err(|_| CacheError::Corrupt)?;
+        let result = (|| {
+            let Some(loaded) = self.retained_loaded(receiver, origin, &stream)? else {
+                return Ok(EarlierFold::Absent);
+            };
+            let Some(snapshot) = loaded.fold.snapshot() else {
+                return Ok(EarlierFold::Invalid);
+            };
+            match earlier_turns(
+                &conversation.to_string(),
+                snapshot,
+                Arc::new(NoMcpToolUis),
+                before,
+                after,
+                &HashSet::new(),
+            ) {
+                Some(page) => Ok(EarlierFold::Page(page)),
+                None => Ok(EarlierFold::Invalid),
+            }
+        })();
+        match result {
+            Err(CacheError::Fenced) => Ok(EarlierFold::Absent),
             other => other,
         }
     }

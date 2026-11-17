@@ -243,6 +243,12 @@ async fn answer(
                 }
                 let before = point(params.before)?;
                 let after = params.after.map(point).transpose()?;
+                if let Some(page) =
+                    super::shared_chat::read_earlier(state, session, &id, &before, after.as_ref())
+                        .await?
+                {
+                    return Ok(success(&frame.id, &page));
+                }
                 let page = service
                     .read_earlier(&id, &caller(frame.id.clone()), &before, after.as_ref())
                     .await?;

@@ -111,8 +111,8 @@ pub use artifact::{
 pub use device::{RetainedEnrollmentClient, RetainedEnrollmentStatus, RetainedPurge};
 pub use phone::{CataloguePresence, PhoneFence, PhoneLease, PhoneStamp};
 pub use saved::{
-    RetainedCatalogueEntry, RetainedCataloguePage, RetainedProgress, RetainedTranscript,
-    RetainedTranscriptSnapshot,
+    EarlierMiss, RetainedCatalogueEntry, RetainedCataloguePage, RetainedProgress,
+    RetainedTranscript, RetainedTranscriptSnapshot,
 };
 pub use subscribe::{ConversationFeed, FeedEvent, SubscribeError};
 

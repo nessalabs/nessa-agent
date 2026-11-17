@@ -254,7 +254,13 @@ impl Sources {
                 environments: None,
                 hooks: None,
                 default_device: None,
-                shared_chats: None,
+                // A retained transcript moves in the peer cache, not in the
+                // local records this view also watches.
+                shared_chats: state
+                    .linking
+                    .peers
+                    .as_ref()
+                    .map(|peers| peers.shared_chat_changes()),
             },
             Target::List { .. } => {
                 let owner = caller(session, String::new());
