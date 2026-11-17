@@ -339,6 +339,14 @@
     "readOnly": false,
     "destructive": false
   },
+  "workspace.arrange": {
+    "readOnly": false,
+    "destructive": false
+  },
+  "workspace.closePane": {
+    "readOnly": false,
+    "destructive": true
+  },
   "channel.create": {
     "readOnly": false,
     "destructive": false

@@ -117,6 +117,10 @@ export const KNOBS = {
     default: 1,
     what: "turns where an agent reads the window: beside another pane, the focused chat's panel (two tabs, the front tab, hidden and shown, then the other chat), then alone; the sidebar it folds parks once its slide ends and is reachable again when opened",
   },
+  controls: {
+    default: 1,
+    what: "turns where an agent changes the window with its tools: another conversation opened beside, the sidebar and right panel closed and opened, the Agents overview and back, a missing panel tab refused, a pane focused, then closed, and closed again refused; each change on record in the window-control audit",
+  },
   rails: {
     default: 1,
     what: 'times the side rail is turned on in Settings and opened around the traffic lights, a message sent, then closed and turned off, its toggle never moving; "nessa Studio" stays while a column holds the corner and goes over the panes alone',
@@ -325,6 +329,7 @@ export function plan(knobs, accessScenario = "full") {
   add(knobs.deletes, () => ({ kind: "delete" }))
   add(knobs.fresh, () => ({ kind: "fresh" }))
   add(knobs.windows, () => ({ kind: "window" }))
+  add(knobs.controls, () => ({ kind: "control" }))
   add(knobs.rails, () => ({ kind: "rail" }))
   add(knobs.panels, () => ({ kind: "panel" }))
   add(knobs.waitingRows, () => ({ kind: "waitingRow" }))

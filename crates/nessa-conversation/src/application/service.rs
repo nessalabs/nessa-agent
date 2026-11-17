@@ -145,7 +145,10 @@ pub use thread_reports::{report_outcomes_for_test, report_text_for_test};
 pub use thread_reports::{
     AwaitedTurn, PendingReport, ReportRegistration, ThreadReport, ThreadReportStore, ThreadTurn,
 };
-pub use workspace_windows::{PaneConversation, WindowReading};
+pub use workspace_windows::{
+    PaneConversation, WindowControlError, WindowControlled, WindowReading, WindowTarget,
+    WINDOW_ANSWER_TIMEOUT,
+};
 
 use tokio::{
     sync::{
@@ -950,6 +953,8 @@ struct Inner {
     agent_tool_admissions: Arc<SourcePermits>,
     /// What each person's open desktop windows show, for their agents.
     workspace_windows: Arc<super::WorkspaceWindows>,
+    /// Where each window change is recorded; unbound, every change is refused.
+    window_control_audit: OnceLock<Arc<dyn super::WindowControlAudit>>,
     /// Agent sends waiting to report their thread's finished turn.
     thread_reports: thread_reports::ThreadReports,
     ownership: OnceLock<owned_threads::Ownership>,
@@ -1498,6 +1503,7 @@ impl ConversationService {
                     super::MAX_AGENT_TOOL_ADMISSIONS,
                 )),
                 workspace_windows: super::WorkspaceWindows::new(),
+                window_control_audit: OnceLock::new(),
                 thread_reports: Default::default(),
                 ownership: OnceLock::new(),
                 thread_admission: Arc::new(Mutex::new(())),

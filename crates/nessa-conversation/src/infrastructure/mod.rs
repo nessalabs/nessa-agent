@@ -173,6 +173,8 @@ mod mode_audit;
 pub use mode_audit::DurableConversationModeAudit;
 mod settings_audit;
 pub use settings_audit::DurableSettingsAudit;
+mod window_control_audit;
+pub use window_control_audit::DurableWindowControlAudit;
 mod drive_tool_audit;
 pub use drive_tool_audit::DurableDriveToolAudit;
 

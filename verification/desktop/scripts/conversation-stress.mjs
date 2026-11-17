@@ -3815,20 +3815,38 @@ const steps = {
       if (!(await stopShown(run.page)))
         failures.push("Send did not turn into Stop while the turn ran")
       await pickAccess(run.page, step.to)
-      const held = await waitFor(
+      // A change the running turn holds back says nothing: the shield shows
+      // the choice at once and the composer adds no line about it (Saurav
+      // asked for the "Access changes when the agent stops." line to go).
+      const chosen = await waitFor(
         async () =>
-          fold(
-            await dock(run.page)
-              .locator(composerControls.notice)
-              .innerText()
-              .catch(() => ""),
-          ).includes("Access changes when the agent stops"),
-        10_000,
+          (await dock(run.page)
+            .locator(composerControls.access)
+            .getAttribute("data-access-mode")
+            .catch(() => null)) === composerControls.accessValue[step.to],
+        5_000,
       )
-      // The turn can end before the notice is read; only a running one owes it.
-      const { turn } = await untilTurn(run, run.main.id, { text }, () => true, 5)
-      if (!held && turn && !ended(turn))
-        failures.push("the composer did not say the change waits for the turn")
+      if (!chosen) failures.push("the shield did not show the choice while the turn ran")
+      let said = null
+      for (const _ of Array.from({ length: 6 })) {
+        const notices = await dock(run.page)
+          .locator(composerControls.notice)
+          .allInnerTexts()
+          .catch(() => [])
+        if (notices.length) said = notices
+        await run.page.waitForTimeout(250)
+      }
+      if (said)
+        failures.push(
+          `the composer spoke of the held access change: ${JSON.stringify(said)}`,
+        )
+      if (run.evidence && !run.accessHintShot) {
+        run.accessHintShot = true
+        await dock(run.page)
+          .locator(".desktop-composer")
+          .screenshot({ path: join(run.evidence, `access-held-${run.engine}.png`) })
+          .catch(() => {})
+      }
       await settled(run, run.main.id, seen, text, "completed", failures)
     } else {
       await pickAccess(run.page, step.to)
@@ -7282,6 +7300,123 @@ const steps = {
     )
   },
 
+  async control(run, step, failures) {
+    run.controlPane = undefined
+    // A second conversation, for the agent in the main one to open beside it.
+    const other = randomUUID()
+    const first = prompt(run, STRESS.reply, step, " controlled")
+    await run.client.conversation.create({
+      conversationId: other,
+      agent: run.stack.agent,
+    })
+    run.checked.push(other)
+    await run.client.conversation.submit(run.client.conversation.prepare(other, first))
+    await settled(run, other, new Set(), first, "completed", failures)
+    if (failures.length) return
+    const panes = () => run.page.locator(css.pane).count()
+    const hidden = (selector) =>
+      run.page.evaluate(
+        (selector) => document.querySelector(selector)?.getAttribute("aria-hidden"),
+        selector,
+      )
+    // Each change is the main conversation's agent calling the tool: the
+    // window showing it carries it out by its own rules and says what came
+    // of it once it shows it, so the tool's answer is already on screen.
+    const asked = (phrase, args, extra, options) =>
+      windowControl(run, phrase, args, step, extra, failures, options)
+
+    // Folding the sidebar makes room for a pane beside, as ⌘B does.
+    let said = await asked(STRESS.arrangeWindow, { sidebar: "closed" }, " fold")
+    if (said?.window?.windows?.[0]?.sidebar !== "closed")
+      failures.push(`arrange_window said ${JSON.stringify(said)}`)
+    if (!(await waitFor(async () => (await hidden(css.sidebar)) === "true", 5_000)))
+      failures.push("arrange_window left the sidebar shown")
+    said = await asked(STRESS.openThread, { threadId: other, where: "beside" }, " open")
+    // The publication the answer waited for comes from the store; the panes
+    // are painted after it.
+    const shows = (count) => waitFor(async () => (await panes()) === count, 5_000)
+    if (said?.changed !== true || !(await shows(2)))
+      failures.push(
+        `open_thread beside said ${JSON.stringify(said)} with ${await panes()} panes on screen`,
+      )
+    if (failures.length) return
+    said = await asked(STRESS.arrangeWindow, { panel: "open" }, " panel")
+    if (said?.changed !== true)
+      failures.push(`opening the panel said ${JSON.stringify(said)}`)
+    if (!(await waitFor(async () => (await hidden(css.panel)) !== "true", 5_000)))
+      failures.push("arrange_window left the right panel hidden")
+    // Asked again, nothing changes, and the agent is told so.
+    said = await asked(STRESS.arrangeWindow, { sidebar: "closed" }, " again")
+    if (said?.changed !== false)
+      failures.push(`a repeated arrange said ${JSON.stringify(said)}`)
+    said = await asked(
+      STRESS.arrangeWindow,
+      { sidebar: "open", panel: "closed" },
+      " unfold",
+    )
+    if (said?.changed !== true)
+      failures.push(`arrange_window back said ${JSON.stringify(said)}`)
+    await sidebarParks(run.page, failures, true)
+    if (!(await waitFor(async () => (await hidden(css.panel)) === "true", 5_000)))
+      failures.push("arrange_window left the right panel shown")
+    if (failures.length) return
+    // The Agents overview over the panes, then the panes again.
+    await asked(STRESS.arrangeWindow, { view: "agents" }, " overview")
+    if (
+      !(await waitFor(
+        async () => (await run.page.locator(css.overview).count()) === 1,
+        5_000,
+      ))
+    )
+      failures.push("arrange_window did not show the Agents overview")
+    // The overview covers every composer, so this one turn is sent the way
+    // another of the person's devices would send it: on the client.
+    await asked(STRESS.arrangeWindow, { view: "panes" }, " panes", { covered: true })
+    if (!(await shows(2)))
+      failures.push(`back on the panes, ${await panes()} are on screen`)
+    // A tab the focused chat's panel does not hold is refused, not guessed.
+    said = await asked(
+      STRESS.showPanelTab,
+      { plugin: "stress", id: "no-such-tab" },
+      " missing",
+    )
+    if (said?.error !== "tab_not_found")
+      failures.push(`show_panel_tab of a missing tab said ${JSON.stringify(said)}`)
+    said = await asked(STRESS.focusPane, { threadId: run.main.id }, " focus")
+    const focused = said?.window?.windows?.[0]?.panes?.find((pane) => pane.focused)
+    if (focused?.threadId !== run.main.id)
+      failures.push(`focus_pane said ${JSON.stringify(said)}`)
+    if (failures.length) return
+    // Closing takes the other conversation's pane away; a second close finds
+    // it no longer on screen.
+    said = await asked(STRESS.closePane, { threadId: other }, " close")
+    if (said?.changed !== true || !(await shows(1)))
+      failures.push(`close_pane said ${JSON.stringify(said)} with ${await panes()} panes`)
+    said = await asked(STRESS.closePane, { threadId: other }, " gone")
+    if (said?.error !== "not_on_screen")
+      failures.push(`closing a pane not on screen said ${JSON.stringify(said)}`)
+    // Every change is on record: asked, then what came of it.
+    const namespace = join(run.stack.gateway.directory, "ci", "instances", INSTANCE)
+    const audit = join(namespace, "conversations", "audit", "window-control")
+    const records = existsSync(audit)
+      ? readdirSync(audit).map((name) =>
+          JSON.parse(readFileSync(join(audit, name), "utf8")),
+        )
+      : []
+    const closes = records.filter(
+      (record) =>
+        record.action?.kind === "close_pane" && record.action.conversationId === other,
+    )
+    const outcomes = closes.filter((record) => record.phase === "outcome")
+    if (
+      closes.filter((record) => record.phase === "requested").length < 1 ||
+      !outcomes.some((record) => record.outcome?.outcome === "applied") ||
+      !outcomes.some((record) => record.outcome?.code === "not_on_screen") ||
+      closes.some((record) => record.severity !== "destructive")
+    )
+      failures.push(`the window-control audit holds ${JSON.stringify(closes)}`)
+  },
+
   async webhook(run, step, failures) {
     // The panel creates this conversation and holds the default owner grants,
     // including credential.manage. Sharing must use that same conversation owner.
@@ -9175,6 +9310,65 @@ const steps = {
         )
       if (!table.within) failures.push(`table ${index + 1} is wider than the reply`)
     }
+    // The table reads as part of the reply, not as small print in a grid:
+    // its cells a step below the reply's own text (never under 85% of it),
+    // column names smaller still and set in capitals, the first column a step
+    // stronger, hairlines between columns fainter than the rules between
+    // rows, and the panel close under the block before it (the copy strip
+    // takes the place of that block's margin, not a second gap on top).
+    const look = await message.evaluate((element) => {
+      const alpha = (color) => {
+        const slash = color.match(/\/\s*([\d.]+)(%?)\s*\)/)
+        if (slash) return Number(slash[1]) / (slash[2] ? 100 : 1)
+        const rgba = color.match(/rgba\([^)]*,\s*([\d.]+)\s*\)/)
+        return rgba ? Number(rgba[1]) : 1
+      }
+      const prose = element.querySelector('[data-slot="message-markdown"] > p')
+      const table = element.querySelector('[data-slot="markdown-table"]')
+      const before = table.previousElementSibling
+      const cells = table.querySelectorAll("tbody td")
+      const first = getComputedStyle(cells[0])
+      const second = getComputedStyle(cells[1])
+      const head = getComputedStyle(table.querySelector("th"))
+      return {
+        prose: prose ? parseFloat(getComputedStyle(prose).fontSize) : null,
+        cell: parseFloat(second.fontSize),
+        head: parseFloat(head.fontSize),
+        caps: head.textTransform,
+        firstWeight: Number(first.fontWeight),
+        cellWeight: Number(second.fontWeight),
+        columnRule: alpha(second.borderInlineStartColor),
+        rowRule: alpha(getComputedStyle(cells[0].parentElement).borderBottomColor),
+        gap: before
+          ? Math.round(
+              table.querySelector('[data-slot="table-shell"]').getBoundingClientRect()
+                .top - before.getBoundingClientRect().bottom,
+            )
+          : null,
+      }
+    })
+    if (look.prose === null)
+      failures.push("the table answer has no paragraph to size cells against")
+    else if (look.cell < look.prose * 0.85)
+      failures.push(
+        `table cells are ${look.cell}px beside ${look.prose}px prose: small print, not a step below`,
+      )
+    if (!(look.head < look.cell) || look.caps !== "uppercase")
+      failures.push(
+        `column names are ${look.head}px ${look.caps}, not smaller capitals above ${look.cell}px cells`,
+      )
+    if (!(look.firstWeight > look.cellWeight))
+      failures.push(
+        `the first column (${look.firstWeight}) is not a step stronger than the rest (${look.cellWeight})`,
+      )
+    if (!(look.columnRule < look.rowRule))
+      failures.push(
+        `column hairlines (${look.columnRule}) are not fainter than row rules (${look.rowRule})`,
+      )
+    // It used to sit 44px under a paragraph; now the strip and what is left
+    // of the paragraph's margin make 36px.
+    if (look.gap === null || look.gap > 40)
+      failures.push(`the table sits ${look.gap}px under the block before it, past 40px`)
     const [narrow, wide] = measured
     if (narrow.hidden > 1 || narrow.fadedRight)
       failures.push(`the narrow table scrolls (${narrow.hidden} px hidden)`)
@@ -9221,8 +9415,13 @@ const steps = {
     // Scrolled up, the way back to the latest sits on the composer's top
     // edge, half over it, rather than on a line of the reply (UI audit #28).
     const transcript = run.page.locator(css.focusedPane).locator(".workspace-transcript")
+    // The way back shows once the reader is more than half a screen from the
+    // end (`awayScreens` in transcript.tsx), so only a transcript that can
+    // scroll that far owes it.
     if (
-      await transcript.evaluate((each) => each.scrollHeight > each.clientHeight + 200)
+      await transcript.evaluate(
+        (each) => each.scrollHeight - each.clientHeight > each.clientHeight * 0.5 + 40,
+      )
     ) {
       const box = await transcript.boundingBox()
       await run.page.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
@@ -10005,6 +10204,46 @@ async function homeBesideNamed(page, failures) {
  * before the gateway has the change. Resolves with the answer that met
  * `holds`, else `null`; the window shows each answer.
  */
+/**
+ * The main conversation's agent calls a window tool (`phrase` names which)
+ * with `args`, asked in its own pane's composer (on the client only when
+ * `covered`, as nothing in the window can be typed in); what the tool
+ * answered, its error included, or null.
+ */
+async function windowControl(run, phrase, args, step, extra, failures, options = {}) {
+  const text = prompt(run, phrase, step, `${extra} args:${JSON.stringify(args)} :args`)
+  // Typed into the main conversation's own pane, which a change may have
+  // left unfocused: the pane the last answer said was its own (`you.pane`,
+  // counted in reading order, as the panes are laid out), else the focused one.
+  const panes = run.page.locator(css.pane)
+  const own = run.controlPane
+  const where = (
+    own && own <= (await panes.count())
+      ? panes.nth(own - 1)
+      : run.page.locator(css.focusedPane)
+  ).locator(css.conversationDock)
+  let seen = new Set()
+  if (options.covered)
+    await run.client.conversation.submit(
+      run.client.conversation.prepare(run.main.id, text),
+    )
+  else seen = await send(run, run.main.id, text, failures, undefined, where)
+  const { turn } = await settled(run, run.main.id, seen, text, "completed", failures)
+  if (!turn) return null
+  const reply = (turn.parts ?? []).map((part) => part.text ?? "").join("")
+  const at = reply.indexOf(SAYS.control)
+  try {
+    const said = JSON.parse(reply.slice(at + SAYS.control.length))
+    run.controlPane = said?.window?.you?.shown ? said.window.you.pane : undefined
+    return said
+  } catch {
+    failures.push(
+      `the window tool turn did not say what came of it: ${reply.slice(0, 120)}`,
+    )
+    return null
+  }
+}
+
 async function windowRead(run, conversationId, step, extra, failures, holds) {
   let said
   for (let attempt = 1; attempt <= 3; attempt += 1) {

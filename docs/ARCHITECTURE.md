@@ -1079,7 +1079,12 @@ committed reader and never opens an Agent. The ownership and ordering table is
 [agent thread tools](design/agent-thread-tools.md). `read_window` tells an
 agent what the person's desktop window shows, which pane is its own, and
 whether the focused chat's right panel is open and which widget tab is in
-front, from what the window last published over `workspace.publish`; see
+front, from what the window last published over `workspace.publish`.
+`arrange_window`, `show_panel_tab`, `open_thread`, `focus_pane` and
+`close_pane` ask that window to change, through the one `control_window` core
+the CLI's `workspace.arrange` and `workspace.closePane` call too: Cedar
+`workspace.control`, an audit of each request and outcome, and the window
+carrying it out by its own rules; see
 [the window an agent shares](design/agent-window.md).
 
 ## Nessa-owned tools over MCP

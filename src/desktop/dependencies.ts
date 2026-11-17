@@ -119,6 +119,9 @@ import {
   channelGateway,
   inMemoryChannels,
   windowPublisher,
+  windowCommandInbox,
+  clientsSeen,
+  type WindowCommandClient,
   sampleAppSession,
   sampleWidgetSession,
   type GatewayClient,
@@ -251,6 +254,16 @@ export function createDesktopDependencies(
       : undefined
   const workspace =
     options.workspace ?? source ?? samples ?? inMemorySource({ now, after })
+  // The clients the window publishes on: the changes asked of it arrive there.
+  const windowClients = source ? clientsSeen(() => source.connected()) : undefined
+  const publisher = windowClients
+    ? windowPublisher({
+        connected: windowClients.connected,
+        after,
+        // A window that could not say what it shows says it again on the source's own retry.
+        retryMs: defaultGatewayTiming.retryMs,
+      })
+    : undefined
   return {
     workspace,
     agentInstallations: source
@@ -319,15 +332,13 @@ export function createDesktopDependencies(
         ? inMemoryChannels({ add: (channel) => samples.addChannel(channel) })
         : options.channels,
     paths: options.paths,
-    // What the window shows, for the person's agents: only a gateway has any.
-    windowPublisher: source
-      ? windowPublisher({
-          connected: () => source.connected(),
-          after,
-          // A window that could not say what it shows says it again on the source's own retry.
-          retryMs: defaultGatewayTiming.retryMs,
-        })
-      : undefined,
+    // What the window shows, for the person's agents, and the changes they
+    // ask of it: only a gateway has any.
+    windowPublisher: publisher,
+    windowCommands:
+      windowClients && publisher
+        ? windowCommandInbox({ clients: windowClients.follow, publisher })
+        : undefined,
     now,
     newId,
     // The page's own layout: every command that changes the panes is held to it.
@@ -357,7 +368,8 @@ type WindowGatewayClient = { readonly sessionUrl?: string } & GatewayClient &
   NativeHooksClient &
   PermissionRulesClient &
   SharingClient &
-  WindowPublishClient & {
+  WindowPublishClient &
+  WindowCommandClient & {
     readonly agents: AgentsApi
     readonly mcpApps: McpAppsApi
     readonly attachments: AttachmentApi

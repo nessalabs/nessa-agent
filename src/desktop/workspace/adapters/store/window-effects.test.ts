@@ -23,7 +23,11 @@ function storeTelling(told: (ShownWindow | null)[]) {
     measure: () => roomyGrid,
     overviewFilter: keptFilter(),
     questionFlights: createQuestionFlights(),
-    windowPublisher: { publish: (window) => told.push(window) },
+    windowPublisher: {
+      windowId: "7d9f2a4e-1b3c-4d5e-8f60-718293a4b5c6",
+      publish: (window) => told.push(window),
+      settled: async () => told.length,
+    },
   })
 }
 
