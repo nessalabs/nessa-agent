@@ -93,7 +93,28 @@ than an enforced cross-principal deduplication guarantee.
 
 ## Source and regression map
 
+### Loopback HTTP fixture
+
+The ingress fixture observes a complete HTTP status and JSON body, independently
+of when the connection closes. The existing HTTP client owns response framing;
+the fixture keeps a single 20-second bound over sending the request and receiving
+the response body. This is stricter than the former read-only budget. Signing still
+uses the exact body sent, and duplicate fields are appended rather than replaced.
+
+| Observation | Fixture result | Regression |
+| --- | --- | --- |
+| Complete framed JSON reply while the socket remains open | Return the actual status and body | Framed reply before EOF |
+| Declared body is truncated before EOF | Reject; infer no receipt | Truncated reply |
+| No complete reply within 20 seconds | Fail; retain the request identity and transport error | Missing reply |
+| Correct MAC with duplicate timestamp or signature | Real router returns 401 before command effects | Physical duplicate observation and count-guard fault/restore |
+| Invalid signature, missing headers, malformed body or wrong status | Existing admission assertions remain authoritative | Existing ingress corpus |
+
+The Windows timeout report did not retain response bytes, so removing the EOF
+dependency does not establish the cause of that earlier failure. The fixture's
+HTTP client does not change listener shutdown or production admission.
+
 - [HTTP signature and resource boundary](../../crates/nessa-gateway/src/external_events/entrypoint/http.rs).
+- [Loopback HTTP reply ownership and framing regressions](../../crates/nessa-gateway/tests/external_events/http_client.rs).
 - [Current authority and durable submit mapping](../../crates/nessa-gateway/src/external_events/application/admission.rs).
 - [Delivery identity value](../../crates/nessa-gateway/src/external_events/domain/value_objects/identity.rs).
 - [Loopback HTTP, failure, concurrency and reopen tests](../../crates/nessa-gateway/tests/external_events/ingress.rs).
