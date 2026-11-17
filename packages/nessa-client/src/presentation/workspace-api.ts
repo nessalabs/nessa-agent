@@ -1,5 +1,10 @@
 import { ProductMethod } from "../generated/product.js"
-import type { WorkspacePublishResult, WorkspaceWindow } from "../generated/product.js"
+import type {
+  WorkspaceAnswerParams,
+  WorkspaceAnswerResult,
+  WorkspacePublishResult,
+  WorkspaceWindow,
+} from "../generated/product.js"
 import type { RpcRequester } from "../application/session-port.js"
 
 /**
@@ -22,6 +27,12 @@ export type WorkspaceApi = {
     revision: number,
     window?: WorkspaceWindow,
   ): Promise<WorkspacePublishResult>
+  /**
+   * Answer a `workspace.command` the gateway sent this connection's window:
+   * applied or unchanged with the revision that shows it, or refused with
+   * its code. `settled` is false when nobody waits for it any more.
+   */
+  answer(answer: WorkspaceAnswerParams): Promise<WorkspaceAnswerResult>
 }
 
 export function createWorkspaceApi(session: RpcRequester): WorkspaceApi {
@@ -33,7 +44,22 @@ export function createWorkspaceApi(session: RpcRequester): WorkspaceApi {
           window === undefined ? { windowId, revision } : { windowId, revision, window },
         ),
       ),
+    answer: async (answer) =>
+      workspaceAnswerResult(await session.request(ProductMethod.WorkspaceAnswer, answer)),
   }
+}
+
+/** The gateway's answer to `workspace.answer`, checked before a caller reads it. */
+function workspaceAnswerResult(value: unknown): WorkspaceAnswerResult {
+  if (
+    value === null ||
+    typeof value !== "object" ||
+    Array.isArray(value) ||
+    Object.keys(value).some((key) => key !== "settled") ||
+    typeof (value as { settled?: unknown }).settled !== "boolean"
+  )
+    throw new Error("Invalid workspace answer response")
+  return { settled: (value as { settled: boolean }).settled }
 }
 
 /** The gateway's answer, checked before a caller reads it. */

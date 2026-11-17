@@ -130,6 +130,8 @@ pub enum AccessAction {
     ReviewNotice,
     /// Read what the owner's desktop windows show, on their workspace.
     WorkspaceRead,
+    /// Change what the owner's desktop windows show, on their workspace.
+    WorkspaceControl,
     /// Make a channel, on the owner's catalogue.
     ChannelCreate,
     /// List the owner's channels, on their catalogue.
@@ -142,7 +144,7 @@ pub enum AccessAction {
 
 impl AccessAction {
     /// Every action, in declaration order.
-    pub const ALL: [Self; 21] = [
+    pub const ALL: [Self; 22] = [
         Self::AgentTools,
         Self::Locate,
         Self::Act,
@@ -160,6 +162,7 @@ impl AccessAction {
         Self::NoteDeliver,
         Self::ReviewNotice,
         Self::WorkspaceRead,
+        Self::WorkspaceControl,
         Self::ChannelCreate,
         Self::ChannelList,
         Self::ChannelUse,
@@ -186,6 +189,7 @@ impl AccessAction {
             Self::NoteDeliver => "note.deliver",
             Self::ReviewNotice => "review.notice",
             Self::WorkspaceRead => "workspace.read",
+            Self::WorkspaceControl => "workspace.control",
             Self::ChannelCreate => "channel.create",
             Self::ChannelList => "channel.list",
             Self::ChannelUse => "channel.use",

@@ -256,7 +256,12 @@ export function Composer({
         </StatusLabel>
       ) : null}
       {modelNotice ? (
-        <StatusLabel role="status" tone="neutral" className="desktop-composer-notice">
+        <StatusLabel
+          role="status"
+          tone="neutral"
+          icon={null}
+          className="desktop-composer-notice"
+        >
           {modelNotice}
         </StatusLabel>
       ) : null}
@@ -264,6 +269,7 @@ export function Composer({
         <StatusLabel
           tone={access.notice.tone}
           role="status"
+          icon={access.notice.tone === "neutral" ? null : undefined}
           className="desktop-composer-notice"
         >
           {access.notice.text}

@@ -398,6 +398,9 @@ it("keeps conversation content and the pane's look visible while a layout moves"
       /content-visibility:\s*hidden|visibility:\s*hidden|opacity:\s*0|display:\s*none/,
     )
     expect(rule).not.toMatch(/background:\s*var\(--background\)/)
+    // The composer's glass and shadow stay through the move: taking them off
+    // for a flight and back on at landing flashed it on every fold and drop.
+    expect(rule).not.toMatch(/backdrop-filter:\s*none|box-shadow:\s*none/)
   }
 })
 

@@ -10,6 +10,19 @@
 //!   ──▶ newest publication first
 //! ```
 //!
+//! An agent's or a CLI's change to a window (`control_window`) goes to the
+//! connection that holds that window's latest word, and its answer comes back
+//! on the same connection:
+//!
+//! ```text
+//! WorkspaceWindows::command(owner, window id, action)
+//!   ──▶ the connection holding the window's highest revision
+//!   ──▶ its command lane (the socket sends `workspace.command`)  ── full ──▶ Busy
+//!   ──▶ oneshot answer, kept by command id on that connection
+//! workspace.answer ──▶ WindowSlot::answer(command id, answer) ──▶ oneshot
+//! socket closes ──▶ the answers it owed are dropped ──▶ the caller hears Gone
+//! ```
+//!
 //! A window that reconnects publishes under the same id, so the connection
 //! it left behind (a socket the gateway has not seen close yet, after a
 //! laptop sleeps) never reads as a second window.
@@ -20,7 +33,7 @@
 //! connection, or past a restart, would tell an agent about a screen nobody
 //! has. A window that connects again publishes again. A person's windows
 //! are bounded by their connections, so there is no count to keep here.
-use crate::domain::WorkspaceWindow;
+use crate::domain::{WindowAction, WorkspaceWindow};
 use nessa_auth::domain::{OrganizationId, PrincipalId};
 use std::{
     collections::{BTreeMap, HashMap},
@@ -29,6 +42,42 @@ use std::{
         Arc, Mutex, MutexGuard,
     },
 };
+use tokio::sync::{mpsc, oneshot, Notify};
+
+/// Commands one connection holds unanswered, sent and not yet sent. A window
+/// answers each at once, so more than this means it has stopped reading.
+pub const MAX_WINDOW_COMMANDS: usize = 8;
+
+/// A change for one window, sent to the connection that holds it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WindowCommand {
+    /// Unique across the gateway's run, for the answer to name.
+    pub id: u64,
+    /// The window's own id: a connection may come to hold another window's.
+    pub window_id: String,
+    pub action: WindowAction,
+}
+
+/// What a window said of a command.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum WindowAnswer {
+    /// Done. `revision` is the publication that shows it.
+    Applied { revision: u64 },
+    /// Already so: nothing changed. `revision` is the one that shows it.
+    Unchanged { revision: u64 },
+    /// The window could not do it, for `code` (a conversation it does not
+    /// list, a panel tab the focused chat does not have…).
+    Refused { code: String },
+}
+
+/// Why a command could not be handed to a window.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CommandRefusal {
+    /// No open connection holds that window now.
+    Gone,
+    /// The connection holding it has [`MAX_WINDOW_COMMANDS`] unanswered.
+    Busy,
+}
 
 type Owner = (OrganizationId, PrincipalId);
 
@@ -48,14 +97,22 @@ pub struct WorkspaceWindows {
     next: AtomicU64,
     /// Counts publications across every connection, so the latest is known.
     published: AtomicU64,
+    /// Numbers commands across every connection.
+    commands: AtomicU64,
     windows: Mutex<HashMap<Owner, BTreeMap<u64, Publication>>>,
+    /// Woken by every publication, for a caller waiting on a revision.
+    publications: Notify,
 }
 
 /// A connection's place: what it published last, if anything, and its
-/// window, if that publication had one.
+/// window, if that publication had one; where its commands go, and the
+/// answers it owes.
 struct Publication {
     said: Option<Said>,
     window: Option<Arc<WorkspaceWindow>>,
+    commands: mpsc::Sender<WindowCommand>,
+    /// By command id: the window it was for, and its caller's answer.
+    owed: HashMap<u64, (String, oneshot::Sender<WindowAnswer>)>,
 }
 
 struct Said {
@@ -71,25 +128,114 @@ impl WorkspaceWindows {
     }
 
     /// A place for one connection of `principal`'s to publish its window in,
-    /// empty until it does. Dropping it withdraws the window.
+    /// empty until it does, and the commands sent to its window, for the
+    /// connection to deliver. Dropping the slot withdraws the window.
     pub fn open(
         self: &Arc<Self>,
         organization: OrganizationId,
         principal: PrincipalId,
-    ) -> WindowSlot {
+    ) -> (WindowSlot, mpsc::Receiver<WindowCommand>) {
         let id = self.next.fetch_add(1, Ordering::Relaxed);
         let owner = (organization, principal);
+        let (commands, receiver) = mpsc::channel(MAX_WINDOW_COMMANDS);
         self.lock().entry(owner.clone()).or_default().insert(
             id,
             Publication {
                 said: None,
                 window: None,
+                commands,
+                owed: HashMap::new(),
             },
         );
-        WindowSlot {
-            windows: self.clone(),
-            owner,
+        (
+            WindowSlot {
+                windows: self.clone(),
+                owner,
+                id,
+            },
+            receiver,
+        )
+    }
+
+    /// Hands `action` to the connection that holds `window_id`'s latest word,
+    /// and the answer it will owe. The answer's sender is dropped, unsent,
+    /// when that connection closes first.
+    ///
+    /// # Errors
+    /// [`CommandRefusal::Gone`] when no open connection holds that window,
+    /// [`CommandRefusal::Busy`] when the one holding it owes too many answers.
+    pub fn command(
+        &self,
+        organization: &OrganizationId,
+        principal: &PrincipalId,
+        window_id: &str,
+        action: WindowAction,
+    ) -> Result<oneshot::Receiver<WindowAnswer>, CommandRefusal> {
+        let mut windows = self.lock();
+        let owned = windows
+            .get_mut(&(organization.clone(), principal.clone()))
+            .ok_or(CommandRefusal::Gone)?;
+        let holder = owned
+            .values_mut()
+            .filter(|publication| {
+                publication.window.is_some()
+                    && publication
+                        .said
+                        .as_ref()
+                        .is_some_and(|said| said.id == window_id)
+            })
+            .max_by_key(|publication| {
+                let said = publication.said.as_ref().expect("filtered on said");
+                (said.revision, said.at)
+            })
+            .ok_or(CommandRefusal::Gone)?;
+        // Answers whose caller stopped waiting are owed to nobody.
+        holder.owed.retain(|_, (_, answer)| !answer.is_closed());
+        if holder.owed.len() >= MAX_WINDOW_COMMANDS {
+            return Err(CommandRefusal::Busy);
+        }
+        let id = self.commands.fetch_add(1, Ordering::Relaxed);
+        let command = WindowCommand {
             id,
+            window_id: window_id.to_owned(),
+            action,
+        };
+        match holder.commands.try_send(command) {
+            Ok(()) => {}
+            Err(mpsc::error::TrySendError::Full(_)) => return Err(CommandRefusal::Busy),
+            Err(mpsc::error::TrySendError::Closed(_)) => return Err(CommandRefusal::Gone),
+        }
+        let (answer, answered) = oneshot::channel();
+        holder.owed.insert(id, (window_id.to_owned(), answer));
+        Ok(answered)
+    }
+
+    /// Waits until `window_id`'s latest word is at least `revision`, on any
+    /// of its owner's connections: true then, at once when it is already;
+    /// false once no connection holds the window (it closed, or withdrew
+    /// it). The caller bounds the wait.
+    pub async fn published(
+        &self,
+        organization: &OrganizationId,
+        principal: &PrincipalId,
+        window_id: &str,
+        revision: u64,
+    ) -> bool {
+        loop {
+            let notified = self.publications.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            let held = self
+                .of(organization, principal)
+                .into_iter()
+                .find(|window| window.id == window_id)
+                .map(|window| window.revision);
+            match held {
+                Some(held) if held >= revision => return true,
+                // Withdrawn: its connection closed, or it said it shows nothing.
+                None => return false,
+                Some(_) => notified.await,
+            }
         }
     }
 
@@ -212,10 +358,35 @@ impl WindowSlot {
             at,
         });
         publication.window = window.map(Arc::new);
+        drop(windows);
+        self.windows.publications.notify_waiters();
         WindowPublished {
             revision,
             applied: true,
         }
+    }
+
+    /// Settles the command `command` for `window_id` with `answer`, when
+    /// this connection owes it. False for a command it does not owe:
+    /// answered already, never sent here, for another window, or no longer
+    /// awaited.
+    pub fn answer(&self, window_id: &str, command: u64, answer: WindowAnswer) -> bool {
+        let mut windows = self.windows.lock();
+        let Some(owed) = windows
+            .get_mut(&self.owner)
+            .and_then(|owned| owned.get_mut(&self.id))
+        else {
+            return false;
+        };
+        if owed
+            .owed
+            .get(&command)
+            .is_none_or(|(window, _)| window != window_id)
+        {
+            return false;
+        }
+        let (_, sender) = owed.owed.remove(&command).expect("checked above");
+        sender.send(answer).is_ok()
     }
 }
 
@@ -228,6 +399,9 @@ impl Drop for WindowSlot {
                 windows.remove(&self.owner);
             }
         }
+        drop(windows);
+        // A wait for this window's publication hears it is gone.
+        self.windows.publications.notify_waiters();
     }
 }
 

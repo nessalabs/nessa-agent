@@ -267,10 +267,12 @@ fn the_checked_in_bundle_validates_and_names_every_action() {
                 organization: &org,
                 owner: &owner,
             },
-            AccessAction::WorkspaceRead => AccessResource::Workspace {
-                organization: &org,
-                owner: &owner,
-            },
+            AccessAction::WorkspaceRead | AccessAction::WorkspaceControl => {
+                AccessResource::Workspace {
+                    organization: &org,
+                    owner: &owner,
+                }
+            }
             _ => on(&live),
         };
         let subject = match action {
@@ -497,6 +499,49 @@ fn owner_workspace_read_is_the_owners_own_windows_and_nobody_elses() {
     assert!(!allowed(&paired(
         &policy,
         AccessAction::WorkspaceRead,
+        AccessResource::Workspace {
+            organization: &org,
+            owner: &owner,
+        },
+        &Paired::default()
+    )));
+}
+
+#[test]
+fn owner_workspace_control_is_the_owners_own_windows_and_nobody_elses() {
+    let policy = policy();
+    let (org, elsewhere, owner, other) = (
+        organization("org"),
+        organization("elsewhere"),
+        principal("owner"),
+        principal("other"),
+    );
+    let control = |organization: &OrganizationId, principal: &PrincipalId| {
+        policy.evaluate(&AccessAsk {
+            subject: AccessSubject::Person {
+                organization,
+                principal,
+            },
+            action: AccessAction::WorkspaceControl,
+            resource: AccessResource::Workspace {
+                organization: &org,
+                owner: &owner,
+            },
+            held: None,
+            request: RequestShape::default(),
+            target: None,
+        })
+    };
+    assert_eq!(
+        allowed_by(&control(&org, &owner)),
+        Some(&["owner.workspace_control".to_owned()][..])
+    );
+    assert!(!allowed(&control(&org, &other)));
+    assert!(!allowed(&control(&elsewhere, &owner)));
+    // A paired device signs in as its owner and still moves no window.
+    assert!(!allowed(&paired(
+        &policy,
+        AccessAction::WorkspaceControl,
         AccessResource::Workspace {
             organization: &org,
             owner: &owner,

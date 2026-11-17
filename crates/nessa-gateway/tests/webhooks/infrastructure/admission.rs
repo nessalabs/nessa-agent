@@ -284,10 +284,12 @@ async fn webhook_cedar_subject_has_no_send_or_owner_authority() {
                 organization: &f.target.organization,
                 owner: &f.target.owner,
             },
-            AccessAction::WorkspaceRead => AccessResource::Workspace {
-                organization: &f.target.organization,
-                owner: &f.target.owner,
-            },
+            AccessAction::WorkspaceRead | AccessAction::WorkspaceControl => {
+                AccessResource::Workspace {
+                    organization: &f.target.organization,
+                    owner: &f.target.owner,
+                }
+            }
             _ => AccessResource::of(&metadata),
         };
         let verdict = f.policy.evaluate(&AccessAsk {

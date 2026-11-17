@@ -49,4 +49,18 @@ describe("telling the gateway what the window shows", () => {
       )
     }
   })
+
+  it("answers a command, and refuses an answer that is not the protocol's", async () => {
+    const request = vi.fn().mockResolvedValue({ settled: true })
+    const api = createWorkspaceApi({ request })
+    const answer = { windowId, commandId: 4, outcome: "applied", revision: 9 } as const
+    expect(await api.answer(answer)).toEqual({ settled: true })
+    expect(request).toHaveBeenCalledWith("workspace.answer", answer)
+    for (const bad of [null, {}, { settled: "yes" }, { settled: true, extra: 1 }]) {
+      const refusing = createWorkspaceApi({ request: vi.fn().mockResolvedValue(bad) })
+      await expect(refusing.answer(answer)).rejects.toThrow(
+        "Invalid workspace answer response",
+      )
+    }
+  })
 })
