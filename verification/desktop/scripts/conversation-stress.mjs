@@ -9993,9 +9993,43 @@ async function homeBesideNamed(page, failures) {
         await home.locator(".workspace-pane-title").allTextContents(),
       )}`,
     )
-  await page.keyboard.press(keys.closePane)
-  if (!(await waitFor(async () => (await page.locator(css.pane).count()) === 1, 10_000)))
-    failures.push("⌘W did not close the new session beside")
+  // A third pane changes the arrangement while this home's scene is already
+  // drawn: it stays drawn on every frame of the change.
+  const scene = page.locator(`${css.paneHome} .desktop-night-scene[data-scene-complete]`)
+  if (!(await waitFor(async () => (await scene.count()) === 1, 5_000))) {
+    failures.push("the new session beside never finished drawing its scene")
+    return
+  }
+  const split = await lookHolds(page, "a third pane beside a drawn scene")
+  await page.keyboard.press(keys.newSessionBeside)
+  if (
+    !(await waitFor(async () => (await page.locator(css.pane).count()) === 3, 10_000))
+  ) {
+    failures.push(
+      `another session beside left ${await page.locator(css.pane).count()} panes, not 3`,
+    )
+    return
+  }
+  await split(failures)
+  // Close both homes: the focused new one, then the first, focused by a click.
+  for (const left of [2, 1]) {
+    const focused = page.locator(css.focusedPane)
+    if ((await focused.locator(css.paneHome).count()) !== 1)
+      await page
+        .locator(css.paneHome)
+        .first()
+        .click({ position: { x: 20, y: 120 } })
+    await page.keyboard.press(keys.closePane)
+    if (
+      !(await waitFor(
+        async () => (await page.locator(css.pane).count()) === left,
+        10_000,
+      ))
+    ) {
+      failures.push(`⌘W left ${await page.locator(css.pane).count()} panes, not ${left}`)
+      return
+    }
+  }
 }
 
 /**
