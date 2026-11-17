@@ -656,13 +656,14 @@ impl MutationTarget for StopTarget {
         let id = self.id.clone();
         let caller = self.caller.clone();
         let turn = binding.turn_id().clone();
+        // Access stays the grantor (`caller`). The cancellation is the peer
+        // who stopped: that identity is the command binding, not the owner
+        // used to open the conversation.
+        let actor = binding.actor().clone();
         Box::pin(async move {
             let live = service
                 .resolve(&id, &caller)
                 .await
-                .map_err(CreationInitializationFailure::Target)?;
-            let actor = caller
-                .actor()
                 .map_err(CreationInitializationFailure::Target)?;
             // Checked queued or running, and still one or the other unless it
             // ended: a turn leaving the queue is neither for a moment, between

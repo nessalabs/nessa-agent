@@ -301,13 +301,12 @@ impl ConversationService {
         if self.inner.ownership.get().is_none() {
             return Ok(false);
         }
-        let roots: HashSet<_> = self
+        let roots: Vec<_> = self
             .captured_stops(caller)
             .await?
             .into_iter()
             .filter_map(|(root, target)| {
-                (target.target() == &conversation_session(id))
-                    .then(|| root.actor().request_id().to_owned())
+                (target.target() == &conversation_session(id)).then_some(root)
             })
             .collect();
         if roots.is_empty() {
@@ -318,9 +317,11 @@ impl ConversationService {
             .iter()
             .enumerate()
             .filter_map(|(index, receipt)| {
-                roots
-                    .contains(receipt.binding().actor().request_id())
-                    .then_some(index)
+                (receipt.binding().operation() == MutationOperation::Stop
+                    && roots
+                        .iter()
+                        .any(|root| root.actor() == receipt.binding().actor()))
+                .then_some(index)
             })
             .max();
         let Some(stopped_at) = stopped_at else {
