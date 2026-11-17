@@ -60,6 +60,10 @@ import {
  *   webhook     one granted conversation advances to a fixed source Head after
  *               a browser turn; independent native rows prove zero attempts
  *               under the unchanged loopback destination refusal policy
+ *   peer        a paired peer gateway, granted comment and drive, leaves a
+ *               note and sends a turn; the window shows the note as a grant
+ *               and the turn, and the gateway's view and grant record name
+ *               that peer
  *   aside       another conversation is opened in the window and talked to
  *   watch       the agent reads a new thread with more reads at once than
  *               one conversation may hold: some wait, the rest are refused,
@@ -345,8 +349,10 @@ import {
  * must be at rest, every turn ended as
  * planned, and nothing denied automatically or hidden behind a display limit.
  *
- * Build the gateway first (`cargo build -p nessa-server`). How to add a step
- * is in CODING_STANDARDS.md, "Conversation stress".
+ * Build the gateway first (`cargo build -p nessa-server`) and the peer
+ * example the `peer` step enrolls
+ * (`cargo build -p nessa-client-core --example read_only_sync`). How to add
+ * a step is in CODING_STANDARDS.md, "Conversation stress".
  *
  *   pnpm test:e2e:stress                        # the pull request's run
  *   pnpm test:e2e:stress -- --rounds 60 --parallel 12 --seed 7
@@ -368,7 +374,7 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs"
-import { spawnSync } from "node:child_process"
+import { spawn, spawnSync } from "node:child_process"
 import { tmpdir } from "node:os"
 import { basename, dirname, isAbsolute, join } from "node:path"
 import { setTimeout as sleep } from "node:timers/promises"
@@ -523,7 +529,8 @@ const meta = {
   help: `
 Usage: node verification/desktop/scripts/conversation-stress.mjs [options]
 
-Needs: the gateway built (cargo build -p nessa-server; or MCP_LIVE_NESSA). No
+Needs: the gateway built (cargo build -p nessa-server; or MCP_LIVE_NESSA)
+and the peer example (cargo build -p nessa-client-core --example read_only_sync). No
 harness and no sign-in: the gateway runs scripted-agent.mjs with the stress
 scenario (scripts/mcp-test-server/scenarios/stress.mjs). It starts its own
 gateway; --url is not used.
@@ -2989,6 +2996,110 @@ async function unusedNativeContext(run, step, failures) {
       await openStressConversation(run.page, run.main.id, run.main.title)
     }
   })
+}
+
+/** The enrolled-peer example (`read_only_sync`), built beside the gateway. */
+function peerExampleBin() {
+  const bin = join(repoRoot, "target/debug/examples/read_only_sync")
+  if (!existsSync(bin))
+    throw new Error(
+      "the peer example is not built (cargo build -p nessa-client-core --example read_only_sync)",
+    )
+  return bin
+}
+
+/** The last JSON object `read_only_sync` wrote. Diagnostics stay on stderr. */
+function peerOutcome(text) {
+  const lines = text.trim().split("\n")
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    if (!lines[index].startsWith("{")) continue
+    try {
+      return JSON.parse(lines[index])
+    } catch {
+      return null
+    }
+  }
+  return null
+}
+
+/** Run one peer-example command. `input` is the enrollment code for `pair`. */
+function peerExample(args, input) {
+  const result = spawnSync(peerExampleBin(), args, {
+    input,
+    encoding: "utf8",
+    timeout: 60_000,
+  })
+  return {
+    status: result.status,
+    outcome: peerOutcome(result.stdout ?? ""),
+    stderr: (result.stderr ?? "").trim(),
+    error: result.error,
+  }
+}
+
+/**
+ * Enroll a peer gateway against `invitationId` with `code`, approving the
+ * claimed key while `pair` holds the invitation. The credential id is the
+ * one `status` names once the enrollment is active.
+ */
+async function enrollPeer(run, profile, code, invitationId) {
+  const child = spawn(peerExampleBin(), ["pair", profile, "peer"], {
+    stdio: ["pipe", "pipe", "pipe"],
+  })
+  let stdout = ""
+  let stderr = ""
+  child.stdout.setEncoding("utf8")
+  child.stderr.setEncoding("utf8")
+  child.stdout.on("data", (chunk) => {
+    stdout += chunk
+  })
+  child.stderr.on("data", (chunk) => {
+    stderr += chunk
+  })
+  child.stdin.end(`${code}\n`)
+  const exited = new Promise((resolve) => {
+    child.once("exit", (status) => resolve(status))
+  })
+  const streamsClosed = Promise.all([
+    new Promise((resolve) => child.stdout.on("close", resolve)),
+    new Promise((resolve) => child.stderr.on("close", resolve)),
+  ])
+  try {
+    const deviceKey = await waitFor(async () => {
+      try {
+        return (await run.client.pairing.status(invitationId)).claimedDeviceKey ?? false
+      } catch {
+        return false
+      }
+    }, 30_000)
+    if (!deviceKey)
+      throw new Error(`the peer never claimed its invitation: ${stderr.trim() || stdout.trim()}`)
+    const approved = await run.client.pairing.approve(invitationId, deviceKey)
+    if (approved.activationStopped)
+      throw new Error(
+        `the peer's approval stopped ${approved.activationStopped}: ${approved.status.phase}`,
+      )
+    const status = await Promise.race([exited, sleep(30_000).then(() => "timeout")])
+    if (status === "timeout")
+      throw new Error(`the peer's enrollment did not finish: ${stderr.trim()}`)
+    await streamsClosed
+    let enrollment = peerOutcome(stdout)?.enrollment
+    for (let tries = 0; enrollment?.phase !== "active" && tries < 40; tries += 1) {
+      await sleep(250)
+      const read = peerExample(["status", profile])
+      enrollment = read.outcome?.enrollment ?? enrollment
+      if (tries === 39 && enrollment?.phase !== "active")
+        throw new Error(
+          `the peer did not become active (${enrollment?.phase ?? "no status"}): ${read.stderr || stderr.trim()}`,
+        )
+    }
+    if (!enrollment?.credentialId)
+      throw new Error(`the peer enrollment named no credential: ${JSON.stringify(enrollment)}`)
+    return enrollment
+  } finally {
+    if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL")
+    await exited
+  }
 }
 
 const steps = {
@@ -7477,6 +7588,123 @@ const steps = {
       closes.some((record) => record.severity !== "destructive")
     )
       failures.push(`the window-control audit holds ${JSON.stringify(closes)}`)
+  },
+
+  async peer(run, step, failures) {
+    // The owner sees the result in the window. The note and the turn are
+    // sent by the paired gateway, on its own credential, after the owner
+    // grants comment and drive. The composer's Send would be the owner.
+    const note = `peer note ${step.index}`
+    const drive = `${STRESS.reply} peer drive ${step.index}`
+    const conversationId = randomUUID()
+    const root = mkdtempSync(join(tmpdir(), "nessa-stress-peer-"))
+    let linked = false
+    try {
+      linked = await run.exclusive(async () => {
+        await openLinkedDevices(run.page)
+        const on = await switchLinking(run, true, failures)
+        if (on) await closeSettings(run.page)
+        return on
+      })
+      if (!linked || failures.length) return
+      await run.client.conversation.create({
+        conversationId,
+        agent: run.stack.agent,
+      })
+      run.checked.push(conversationId)
+      const stateRoot = join(root, "state")
+      const cache = join(root, "cache")
+      mkdirSync(stateRoot, { mode: 0o700 })
+      mkdirSync(cache, { mode: 0o700 })
+      const profile = join(root, "profile.json")
+      writeFileSync(
+        profile,
+        JSON.stringify({
+          stateRoot,
+          stateDirectory: "device",
+          cache,
+          gatewayAddress: run.nativeAddress,
+        }),
+        { mode: 0o600 },
+      )
+      const { code, status } = await run.client.pairing.create({ enrollee: "gateway" })
+      const enrollment = await enrollPeer(run, profile, code, status.invitationId)
+      await run.client.conversation.share(conversationId, enrollment.credentialId, [
+        "read",
+        "comment",
+      ])
+      await run.client.conversation.share(
+        conversationId,
+        enrollment.credentialId,
+        ["read", "comment", "drive"],
+        { preset: "read_only_tools" },
+      )
+      const commented = peerExample(["comment", profile, conversationId, note])
+      if (!commented.outcome?.successful)
+        failures.push(
+          `the peer's note was refused: ${commented.outcome?.refusal ?? commented.stderr ?? commented.error?.message ?? commented.status}`,
+        )
+      const driven = peerExample(["drive", profile, conversationId, drive])
+      if (!driven.outcome?.successful)
+        failures.push(
+          `the peer's turn was refused: ${driven.outcome?.refusal ?? driven.stderr ?? driven.error?.message ?? driven.status}`,
+        )
+      if (failures.length) return
+      await settled(run, conversationId, new Set(), drive, "completed", failures)
+      const view = await run.client.conversation.read(conversationId)
+      const saved = view.notes.find((each) => each.text === note)
+      if (saved?.author.kind !== "grant")
+        failures.push(
+          `the gateway's view does not show the peer's note as a grant: ${JSON.stringify(saved?.author ?? null)}`,
+        )
+      await run.exclusive(async () => {
+        await openStressConversation(run.page, conversationId, await titleOf(run, conversationId))
+        await expectShown(run.page, note, failures)
+        await expectShown(run.page, drive, failures)
+        if ((await run.page.locator('[data-note-author="grant"]').count()) < 1)
+          failures.push("the window does not show the peer's note as a grant")
+        if (run.evidence)
+          await run.page
+            .screenshot({
+              path: join(run.evidence, `peer-${step.index}.png`),
+              scale: "css",
+            })
+            .catch(() => {})
+      })
+      const uses = join(
+        run.stack.gateway.directory,
+        "ci",
+        "instances",
+        INSTANCE,
+        "access-grants",
+        "grant-uses",
+      )
+      const records = existsSync(uses)
+        ? readdirSync(uses).map((name) => JSON.parse(readFileSync(join(uses, name), "utf8")))
+        : []
+      const mine = records.filter((record) => record.target?.conversationId === conversationId)
+      for (const action of ["conversation.comment", "conversation.drive"]) {
+        const recorded = mine.find((record) => record.target?.action === action)
+        if (!recorded?.grant?.principalId?.startsWith("gateway:"))
+          failures.push(
+            `the grant record for ${action} does not name the peer: ${JSON.stringify(recorded ?? null)}`,
+          )
+      }
+      log(
+        `peer ${enrollment.credentialId} commented and drove ${conversationId} at epoch ${enrollment.accessEpoch}`,
+      )
+    } catch (error) {
+      failures.push(`a granted peer could not comment and drive: ${error.message}`)
+    } finally {
+      if (linked) {
+        await run.exclusive(async () => {
+          await openStressConversation(run.page, run.main.id, run.main.title)
+          await openLinkedDevices(run.page)
+          if (await switchLinking(run, false, failures)) await closeSettings(run.page)
+        })
+      }
+      rmSync(root, { recursive: true, force: true })
+    }
   },
 
   async webhook(run, step, failures) {
