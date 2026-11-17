@@ -356,6 +356,7 @@ describe("NessaClient", () => {
     })
 
     expect(client.productSession.gatewayId).toBe("gateway-1")
+    expect(client.sessionUrl).toBe(`ws://127.0.0.1:${port}/session`)
 
     const health = await client.server.health()
     expect(health).toEqual({
@@ -378,6 +379,7 @@ describe("NessaClient", () => {
     })
 
     client.close()
+    expect(client.sessionUrl).toBeUndefined()
   })
 
   it("routes four public thread methods through the existing authenticated session", async () => {

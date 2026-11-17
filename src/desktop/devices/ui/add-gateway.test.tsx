@@ -1,0 +1,762 @@
+// @vitest-environment jsdom
+import { act } from "react"
+import { createRoot, type Root } from "react-dom/client"
+import { afterEach, beforeEach, expect, it, vi } from "vitest"
+import type { PairingApi } from "@nessa/client"
+import type { GatewayPairing, PairingScope } from "../adapters/gateway-pairing"
+import * as deviceKey from "../../settings/model/device-key"
+import { AddGateway } from "./add-gateway"
+
+;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+function present<T>(value: T | undefined | null): T {
+  if (value == null) throw new Error("Expected test element")
+  return value
+}
+
+let root: Root
+let container: HTMLDivElement
+let controller: AbortSignal
+const saved = (samePerson: boolean | undefined = true) => ({
+  invitationId: Array(16).fill(1),
+  consentId: Array(16).fill(2),
+  generation: 1,
+  class: "peer-gateway-conversation-read",
+  grant: {
+    action: "conversation.read",
+    resource: { organizationId: "org", id: "gateway" },
+  },
+  createdAtMs: 1,
+  expiresAtMs: 600_001,
+  phase: "available" as const,
+  cleanupPending: false,
+  ...(samePerson === undefined ? {} : { samePerson }),
+})
+let scope: PairingScope
+let gateway: GatewayPairing
+beforeEach(() => {
+  vi.useFakeTimers()
+  window.matchMedia ??= (() => ({
+    matches: false,
+    addEventListener() {},
+    removeEventListener() {},
+  })) as never
+  scope = {
+    close: vi.fn(),
+    pairing: {
+      pending: vi.fn(async () => ({ items: [] })),
+      create: vi.fn(async () => ({ code: "ABCD-EFGH", status: saved() })),
+      status: vi.fn(async () => saved()),
+      approve: vi.fn(),
+      cancel: vi.fn(async () => ({ ...saved(), phase: "terminal" as const })),
+    } as unknown as PairingApi,
+  }
+  gateway = {
+    after: (ms, run) => {
+      const timer = setTimeout(run, ms)
+      return () => clearTimeout(timer)
+    },
+    open: vi.fn(async (_token, signal) => {
+      controller = signal
+      return scope
+    }),
+  }
+  container = document.createElement("div")
+  document.body.append(container)
+  root = createRoot(container)
+})
+afterEach(async () => {
+  await act(async () => root.unmount())
+  vi.restoreAllMocks()
+  vi.useRealTimers()
+  document.body.replaceChildren()
+})
+async function mount(onBack = () => {}) {
+  await act(async () =>
+    root.render(<AddGateway gateway={gateway} onBack={onBack} port={47651} />),
+  )
+}
+async function click(text: string) {
+  const button = [...container.querySelectorAll("button")].find(
+    (each) => each.textContent === text,
+  )
+  expect(button, text).toBeDefined()
+  await act(async () => present(button).click())
+}
+async function chooseOwner() {
+  await act(async () =>
+    present(container.querySelector<HTMLInputElement>('[type="checkbox"]')).click(),
+  )
+  await act(async () => {
+    const input = present(container.querySelector<HTMLInputElement>('[type="password"]'))
+    present(
+      present(Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")).set,
+    ).call(input, "owner-secret")
+    input.dispatchEvent(new Event("input", { bubbles: true }))
+  })
+}
+
+it("does not create before the choice, authenticates explicitly, and renders the canonical saved choice", async () => {
+  await mount()
+  expect(scope.pairing.create).not.toHaveBeenCalled()
+  await chooseOwner()
+  await click("Continue")
+  expect(gateway.open).toHaveBeenCalledWith("owner-secret", expect.any(AbortSignal))
+  expect(container.querySelector('[type="password"]')).toBeNull()
+  expect(scope.pairing.create).not.toHaveBeenCalled()
+  // A returned false is rendered as false, not overwritten by the earlier toggle.
+  vi.mocked(scope.pairing.create).mockResolvedValue({
+    code: "ABCD-EFGH",
+    status: saved(false),
+  })
+  await click("Create invitation")
+  expect(scope.pairing.create).toHaveBeenCalledExactlyOnceWith({
+    enrollee: "gateway",
+    samePerson: true,
+  })
+  expect(container.querySelector("[data-gateway-choice]")?.textContent).toContain(
+    "no person link",
+  )
+  expect(container.querySelector('[type="checkbox"]')).toBeNull()
+  expect(container.textContent).toContain("ABCD-EFGH")
+  expect(container.querySelector("pre")?.textContent).toContain("GATEWAY_IP:47651")
+  await click("End pairing sign-in")
+  expect(controller.aborted).toBe(true)
+  expect(scope.close).toHaveBeenCalled()
+  expect(container.textContent).not.toContain("ABCD-EFGH")
+  expect(container.textContent).not.toContain("owner-secret")
+})
+
+it("creates false on the panel and requires a successful pending read after a lost reply", async () => {
+  await mount()
+  await click("Continue")
+  expect(gateway.open).toHaveBeenCalledWith(undefined, expect.any(AbortSignal))
+  vi.mocked(scope.pairing.create).mockRejectedValueOnce(new Error("lost"))
+  await click("Create invitation")
+  const create = present(
+    [...container.querySelectorAll("button")].find(
+      (each) => each.textContent === "Create invitation",
+    ),
+  )
+  expect(create.disabled).toBe(true)
+  expect(scope.pairing.create).toHaveBeenCalledExactlyOnceWith({
+    enrollee: "gateway",
+    samePerson: false,
+  })
+  await click("Read pending invitations")
+  expect(create.disabled).toBe(false)
+  expect(scope.pairing.create).toHaveBeenCalledTimes(1)
+})
+
+it("recovers an immutable saved choice without regenerating a code or inferring a legacy value", async () => {
+  vi.mocked(scope.pairing.status).mockResolvedValue(saved(false))
+  vi.mocked(scope.pairing.pending).mockResolvedValue({
+    items: [
+      saved(false),
+      { ...saved(), invitationId: Array(16).fill(3), samePerson: undefined },
+    ],
+  })
+  await mount()
+  await click("Continue")
+  const resume = present(
+    [...container.querySelectorAll("button")].find((each) =>
+      each.textContent?.includes("no person link — Waiting for the other gateway"),
+    ),
+  )
+  await act(async () => resume.click())
+  expect(container.querySelector("[data-gateway-choice]")?.textContent).toContain(
+    "no person link",
+  )
+  expect(container.querySelector("[data-gateway-code]")).toBeNull()
+  expect(scope.pairing.create).not.toHaveBeenCalled()
+})
+
+it("closes a late sign-in after unmount and never starts a pending read", async () => {
+  let finish!: (value: PairingScope) => void
+  gateway.open = vi.fn<GatewayPairing["open"]>((_token, signal) => {
+    controller = signal
+    return new Promise((resolve) => {
+      finish = resolve
+    })
+  })
+  await mount()
+  await click("Continue")
+  await act(async () => root.unmount())
+  expect(controller.aborted).toBe(true)
+  await act(async () => finish(scope))
+  expect(scope.close).toHaveBeenCalledOnce()
+  expect(scope.pairing.pending).not.toHaveBeenCalled()
+})
+
+it("retires sign-in at its deadline while leaving the invitation recoverable", async () => {
+  await mount()
+  await click("Continue")
+  await click("Create invitation")
+  await act(async () => vi.advanceTimersByTimeAsync(10 * 60 * 1000))
+  expect(controller.aborted).toBe(true)
+  expect(scope.close).toHaveBeenCalled()
+  expect(scope.pairing.cancel).not.toHaveBeenCalled()
+  expect(container.querySelector("[data-gateway-code]")).toBeNull()
+  expect(container.textContent).toContain("Pairing sign-in ended")
+})
+
+it("retires the privileged scope on pagehide even without a React unmount", async () => {
+  await mount()
+  await chooseOwner()
+  await click("Continue")
+  await act(async () => window.dispatchEvent(new Event("pagehide")))
+  expect(controller.aborted).toBe(true)
+  expect(scope.close).toHaveBeenCalledOnce()
+})
+
+it("refuses creation while the initial pending read is unavailable", async () => {
+  vi.mocked(scope.pairing.pending).mockRejectedValueOnce(new Error("read unavailable"))
+  await mount()
+  await click("Continue")
+  const create = present(
+    [...container.querySelectorAll("button")].find(
+      (each) => each.textContent === "Create invitation",
+    ),
+  )
+  expect(create.disabled).toBe(true)
+  expect(scope.pairing.create).not.toHaveBeenCalled()
+  await click("Read pending invitations")
+  expect(create.disabled).toBe(false)
+})
+
+it("resumes Human invitations without asking their immutable choice again", async () => {
+  vi.mocked(scope.pairing.pending).mockResolvedValue({ items: [saved()] })
+  await mount()
+  await click("Resume owner invitations")
+  expect(container.querySelector('[type="checkbox"]')).toBeNull()
+  await act(async () => {
+    const input = present(container.querySelector<HTMLInputElement>('[type="password"]'))
+    present(
+      present(Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")).set,
+    ).call(input, "owner-secret")
+    input.dispatchEvent(new Event("input", { bubbles: true }))
+  })
+  await click("Continue")
+  expect(gateway.open).toHaveBeenCalledWith("owner-secret", expect.any(AbortSignal))
+  expect(
+    [...container.querySelectorAll("button")].some(
+      (each) => each.textContent === "Create invitation",
+    ),
+  ).toBe(false)
+  expect(container.textContent).toContain("same person — Waiting for the other gateway")
+  expect(scope.pairing.create).not.toHaveBeenCalled()
+})
+
+it("serializes double create and ignores a late answer after sign-out", async () => {
+  let finish!: (value: Awaited<ReturnType<PairingApi["create"]>>) => void
+  vi.mocked(scope.pairing.create).mockImplementation(
+    () =>
+      new Promise((resolve) => {
+        finish = resolve
+      }),
+  )
+  await mount()
+  await click("Continue")
+  const create = present(
+    [...container.querySelectorAll("button")].find(
+      (each) => each.textContent === "Create invitation",
+    ),
+  )
+  await act(async () => {
+    create.click()
+    create.click()
+  })
+  expect(scope.pairing.create).toHaveBeenCalledOnce()
+  await click("End pairing sign-in")
+  await act(async () => finish({ code: "ABCD-EFGH", status: saved() }))
+  expect(container.querySelector("[data-gateway-code]")).toBeNull()
+  expect(container.textContent).not.toContain("ABCD-EFGH")
+  expect(scope.pairing.cancel).not.toHaveBeenCalled()
+})
+
+it("keeps Active with owed attribution retryable and closes after the exact retry completes", async () => {
+  vi.spyOn(deviceKey, "deviceKeyFingerprint").mockResolvedValue("fingerprint")
+  const claimed = {
+    ...saved(),
+    phase: "claimed" as const,
+    claimedDeviceKey: Array(32).fill(7),
+  }
+  vi.mocked(scope.pairing.create).mockResolvedValue({
+    code: "ABCD-EFGH",
+    status: claimed,
+  })
+  vi.mocked(scope.pairing.approve).mockResolvedValueOnce({
+    status: { ...claimed, phase: "active" },
+    activationStopped: "retryable",
+  })
+  await mount()
+  await click("Continue")
+  await click("Create invitation")
+  await click("Approve matching fingerprint")
+  expect(container.querySelector("[data-gateway-fingerprint]")?.textContent).toBe(
+    "fingerprint",
+  )
+  expect(container.querySelector("[data-gateway-code]")).toBeNull()
+  expect(container.textContent).toContain("Activation needs another attempt")
+  expect(scope.close).not.toHaveBeenCalled()
+  vi.mocked(scope.pairing.approve).mockResolvedValueOnce({
+    status: { ...claimed, phase: "active" },
+  })
+  await click("Retry activation")
+  expect(scope.pairing.approve).toHaveBeenNthCalledWith(
+    1,
+    claimed.invitationId,
+    claimed.claimedDeviceKey,
+  )
+  expect(scope.pairing.approve).toHaveBeenNthCalledWith(
+    2,
+    claimed.invitationId,
+    claimed.claimedDeviceKey,
+  )
+  expect(scope.close).toHaveBeenCalledOnce()
+  expect(container.textContent).toContain("Reads still need a separate share")
+})
+
+it("withholds approval if the fingerprint cannot be computed", async () => {
+  vi.spyOn(deviceKey, "deviceKeyFingerprint").mockRejectedValue(
+    new Error("crypto unavailable"),
+  )
+  vi.mocked(scope.pairing.create).mockResolvedValue({
+    code: "ABCD-EFGH",
+    status: { ...saved(), phase: "claimed", claimedDeviceKey: Array(32).fill(7) },
+  })
+  await mount()
+  await click("Continue")
+  await click("Create invitation")
+  expect(container.textContent).toContain("Fingerprint unavailable")
+  expect(container.textContent).toContain("Go back and reopen Gateway")
+  const approve = present(
+    [...container.querySelectorAll("button")].find(
+      (each) => each.textContent === "Approve matching fingerprint",
+    ),
+  )
+  expect(approve.disabled).toBe(true)
+  expect(approve.getAttribute("aria-disabled")).toBe("true")
+  expect(scope.pairing.approve).not.toHaveBeenCalled()
+})
+
+it("keeps worker and owner-phone pending invitations outside the PeerRead entry", async () => {
+  vi.mocked(scope.pairing.pending).mockResolvedValue({
+    items: [
+      { ...saved(), class: "peer-gateway-environment-serve" },
+      {
+        ...saved(),
+        invitationId: Array(16).fill(4),
+        class: "gateway-owner-conversation-read-write",
+        samePerson: undefined,
+      },
+    ],
+  })
+  await mount()
+  await click("Resume panel invitations")
+  expect(container.textContent).not.toContain("Resume 01")
+  expect(container.textContent).not.toContain("Resume 04")
+  expect(scope.pairing.create).not.toHaveBeenCalled()
+})
+
+it("shows an absent saved choice as unknown after recovery", async () => {
+  vi.mocked(scope.pairing.status).mockResolvedValue({ ...saved(), samePerson: undefined })
+  vi.mocked(scope.pairing.pending).mockResolvedValue({
+    items: [{ ...saved(), samePerson: undefined }],
+  })
+  await mount()
+  await click("Resume panel invitations")
+  const resume = present(
+    [...container.querySelectorAll("button")].find((each) =>
+      each.textContent?.includes("choice unknown — Waiting for the other gateway"),
+    ),
+  )
+  await act(async () => resume.click())
+  expect(container.querySelector("[data-gateway-choice]")?.textContent).toContain(
+    "unknown",
+  )
+  expect(container.querySelector("[data-gateway-choice]")?.textContent).not.toContain(
+    "no person link",
+  )
+  expect(container.querySelector("[data-gateway-code]")).toBeNull()
+  expect(scope.pairing.create).not.toHaveBeenCalled()
+})
+
+it("discards an unsubmitted owner token on pagehide before the page can be cached", async () => {
+  await mount()
+  await chooseOwner()
+  expect(
+    present(container.querySelector<HTMLInputElement>('[type="password"]')).value,
+  ).toBe("owner-secret")
+  await act(async () => window.dispatchEvent(new Event("pagehide")))
+  expect(
+    present(container.querySelector<HTMLInputElement>('[type="password"]')).value,
+  ).toBe("")
+  expect(gateway.open).not.toHaveBeenCalled()
+})
+
+it.each([false, true])(
+  "retires a polled terminal receipt and code while preserving cleanupPending=%s",
+  async (cleanupPending) => {
+    await mount()
+    await chooseOwner()
+    await click("Continue")
+    await click("Create invitation")
+    vi.mocked(scope.pairing.status).mockResolvedValue({
+      ...saved(),
+      phase: "terminal",
+      cleanupPending,
+    })
+    await act(async () => vi.advanceTimersByTimeAsync(2_000))
+    expect(scope.close).toHaveBeenCalledOnce()
+    expect(controller.aborted).toBe(true)
+    expect(container.querySelector("[data-gateway-code]")).toBeNull()
+    expect(container.querySelector("[data-gateway-phase]")?.textContent).toContain(
+      "Ended",
+    )
+    expect(container.textContent.includes("Cleanup is still pending")).toBe(
+      cleanupPending,
+    )
+    await act(async () => vi.advanceTimersByTimeAsync(6_000))
+    expect(scope.pairing.status).toHaveBeenCalledTimes(1)
+  },
+)
+
+it("reads fresh status before resuming removal and preserves the canonical choice", async () => {
+  const terminal = { ...saved(false), phase: "terminal" as const, cleanupPending: true }
+  vi.mocked(scope.pairing.pending).mockResolvedValue({ items: [terminal] })
+  vi.mocked(scope.pairing.status).mockResolvedValue(terminal)
+  vi.mocked(scope.pairing.cancel).mockResolvedValue({
+    ...terminal,
+    cleanupPending: false,
+  })
+  await mount()
+  await click("Resume panel invitations")
+  const resume = present(
+    [...container.querySelectorAll("button")].find((each) =>
+      each.textContent?.startsWith("Resume 01"),
+    ),
+  )
+  await act(async () => resume.click())
+  expect(scope.pairing.status).toHaveBeenCalledExactlyOnceWith(terminal.invitationId)
+  expect(scope.close).not.toHaveBeenCalled()
+  expect(container.querySelector("[data-gateway-code]")).toBeNull()
+  await act(async () => vi.advanceTimersByTimeAsync(6_000))
+  expect(scope.pairing.status).toHaveBeenCalledTimes(1)
+  await click("Finish removal")
+  expect(scope.pairing.cancel).toHaveBeenCalledExactlyOnceWith(terminal.invitationId)
+  expect(scope.close).toHaveBeenCalledOnce()
+  expect(container.querySelector("[data-gateway-choice]")?.textContent).toContain(
+    "no person link",
+  )
+})
+
+it("retires a stale pending terminal receipt whose cleanup already completed", async () => {
+  vi.mocked(scope.pairing.pending).mockResolvedValue({
+    items: [{ ...saved(), phase: "terminal", cleanupPending: true }],
+  })
+  vi.mocked(scope.pairing.status).mockResolvedValue({
+    ...saved(),
+    phase: "terminal",
+    cleanupPending: false,
+  })
+  await mount()
+  await click("Resume panel invitations")
+  const resume = present(
+    [...container.querySelectorAll("button")].find((each) =>
+      each.textContent?.startsWith("Resume 01"),
+    ),
+  )
+  await act(async () => resume.click())
+  expect(scope.close).toHaveBeenCalledOnce()
+  expect(container.textContent).not.toContain("Finish removal")
+  expect(scope.pairing.cancel).not.toHaveBeenCalled()
+})
+
+it.each(["retryable", "permanent"] as const)(
+  "retires a terminal approval reply without reviving its %s notice",
+  async (activationStopped) => {
+    vi.spyOn(deviceKey, "deviceKeyFingerprint").mockResolvedValue("fingerprint")
+    const claimed = {
+      ...saved(),
+      phase: "claimed" as const,
+      claimedDeviceKey: Array(32).fill(7),
+    }
+    vi.mocked(scope.pairing.create).mockResolvedValue({
+      code: "ABCD-EFGH",
+      status: claimed,
+    })
+    vi.mocked(scope.pairing.approve).mockResolvedValue({
+      status: { ...claimed, phase: "terminal", cleanupPending: true },
+      activationStopped,
+    })
+    await mount()
+    await click("Continue")
+    await click("Create invitation")
+    await click("Approve matching fingerprint")
+    expect(scope.close).toHaveBeenCalledOnce()
+    expect(container.querySelector("[data-gateway-code]")).toBeNull()
+    expect(container.querySelector("[data-gateway-phase]")?.textContent).toContain(
+      "Ended",
+    )
+    expect(container.textContent).not.toContain("Activation needs another attempt")
+    expect(container.textContent).not.toContain("Activation cannot complete")
+    expect(container.textContent).toContain("Cleanup is still pending")
+    expect(container.textContent).not.toContain("Finish removal")
+  },
+)
+
+it.each(["approved", "active"] as const)(
+  "keeps a permanent %s stop authoritative across polling and offers cancellation only",
+  async (phase) => {
+    vi.spyOn(deviceKey, "deviceKeyFingerprint").mockResolvedValue("fingerprint")
+    const claimed = {
+      ...saved(),
+      phase: "claimed" as const,
+      claimedDeviceKey: Array(32).fill(7),
+    }
+    const stopped = { ...claimed, phase }
+    vi.mocked(scope.pairing.create).mockResolvedValue({
+      code: "ABCD-EFGH",
+      status: claimed,
+    })
+    vi.mocked(scope.pairing.approve).mockResolvedValue({
+      status: stopped,
+      activationStopped: "permanent",
+    })
+    vi.mocked(scope.pairing.status).mockResolvedValue(stopped)
+    await mount()
+    await click("Continue")
+    await click("Create invitation")
+    await act(async () =>
+      present(
+        [...container.querySelectorAll("button")].find(
+          (each) => each.textContent === "Approve matching fingerprint",
+        ),
+      ).focus(),
+    )
+    await click("Approve matching fingerprint")
+    expect(document.activeElement).toBe(
+      container.querySelector('[aria-label="Pair a gateway"]'),
+    )
+    expect(container.textContent).toContain("Activation cannot complete")
+    expect(container.textContent).toContain("Cancel this invitation and pair again")
+    expect(container.textContent).not.toContain("Activation needs another attempt")
+    expect(
+      [...container.querySelectorAll("button")].some(
+        (each) => each.textContent === "Retry activation",
+      ),
+    ).toBe(false)
+    await act(async () => vi.advanceTimersByTimeAsync(2_000))
+    expect(scope.pairing.status).toHaveBeenCalledOnce()
+    expect(container.textContent).toContain("Activation cannot complete")
+    expect(
+      [...container.querySelectorAll("button")].some(
+        (each) => each.textContent === "Retry activation",
+      ),
+    ).toBe(false)
+    await click("Cancel invitation")
+    expect(scope.pairing.approve).toHaveBeenCalledOnce()
+    expect(scope.pairing.cancel).toHaveBeenCalledExactlyOnceWith(claimed.invitationId)
+    expect(scope.close).toHaveBeenCalledOnce()
+    expect(container.textContent).not.toContain("Activation cannot complete")
+  },
+)
+
+it.each(["setup", "selected poll"])(
+  "offers executable recovery after a failed %s",
+  async (where) => {
+    const back = vi.fn()
+    if (where === "setup")
+      gateway.open = vi.fn().mockRejectedValue(new Error("unavailable"))
+    await mount(back)
+    await click("Continue")
+    if (where !== "setup") {
+      await click("Create invitation")
+      vi.mocked(scope.pairing.status).mockRejectedValue(new Error("unavailable"))
+      await act(async () => vi.advanceTimersByTimeAsync(2_000))
+    }
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain(
+      "Go back and reopen Gateway",
+    )
+    expect(container.querySelector('[role="alert"]')?.textContent).not.toContain(
+      "Read pending invitations",
+    )
+    await click("Back")
+    expect(back).toHaveBeenCalledOnce()
+  },
+)
+
+it.each(["explicit end", "deadline", "pagehide"])(
+  "a new invitation after %s does not inherit a previous permanent stop",
+  async (ending) => {
+    vi.spyOn(deviceKey, "deviceKeyFingerprint").mockResolvedValue("fingerprint")
+    const claimed = {
+      ...saved(),
+      phase: "claimed" as const,
+      claimedDeviceKey: Array(32).fill(7),
+    }
+    vi.mocked(scope.pairing.create).mockResolvedValueOnce({
+      code: "ABCD-EFGH",
+      status: claimed,
+    })
+    vi.mocked(scope.pairing.approve).mockResolvedValueOnce({
+      status: { ...claimed, phase: "approved" },
+      activationStopped: "permanent",
+    })
+    await mount()
+    await click("Continue")
+    await click("Create invitation")
+    await click("Approve matching fingerprint")
+    expect(container.textContent).toContain("Activation cannot complete")
+    if (ending === "explicit end") await click("End pairing sign-in")
+    else if (ending === "deadline")
+      await act(async () => vi.advanceTimersByTimeAsync(10 * 60 * 1000))
+    else await act(async () => window.dispatchEvent(new Event("pagehide")))
+    vi.mocked(scope.pairing.create).mockResolvedValueOnce({
+      code: "JKLM-NOPQ",
+      status: { ...claimed, invitationId: Array(16).fill(3) },
+    })
+    await click("Continue")
+    await click("Create invitation")
+    expect(container.textContent).not.toContain("Activation cannot complete")
+    const approve = [...container.querySelectorAll("button")].find(
+      (each) => each.textContent === "Approve matching fingerprint",
+    )
+    expect(approve).toBeDefined()
+    expect(approve?.disabled).toBe(false)
+  },
+)
+
+it("keeps one fingerprint for identical key bytes across fresh status arrays", async () => {
+  const fingerprint = vi
+    .spyOn(deviceKey, "deviceKeyFingerprint")
+    .mockResolvedValue("matching")
+  const claimed = {
+    ...saved(),
+    phase: "claimed" as const,
+    claimedDeviceKey: Array(32).fill(7),
+  }
+  vi.mocked(scope.pairing.create).mockResolvedValue({
+    code: "ABCD-EFGH",
+    status: claimed,
+  })
+  vi.mocked(scope.pairing.status).mockResolvedValue({
+    ...claimed,
+    claimedDeviceKey: [...claimed.claimedDeviceKey],
+  })
+  await mount()
+  await click("Continue")
+  await click("Create invitation")
+  await act(async () => vi.advanceTimersByTimeAsync(2_000))
+  expect(fingerprint).toHaveBeenCalledOnce()
+  expect(container.querySelector("[data-gateway-fingerprint]")?.textContent).toBe(
+    "matching",
+  )
+})
+
+it("withholds an old fingerprint while a different claimed key is being computed", async () => {
+  let complete!: (value: string) => void
+  vi.spyOn(deviceKey, "deviceKeyFingerprint")
+    .mockResolvedValueOnce("old fingerprint")
+    .mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          complete = resolve
+        }),
+    )
+  const claimed = {
+    ...saved(),
+    phase: "claimed" as const,
+    claimedDeviceKey: Array(32).fill(7),
+  }
+  const next = { ...claimed, claimedDeviceKey: Array(32).fill(8) }
+  vi.mocked(scope.pairing.create).mockResolvedValue({
+    code: "ABCD-EFGH",
+    status: claimed,
+  })
+  vi.mocked(scope.pairing.status).mockResolvedValue(next)
+  await mount()
+  await click("Continue")
+  await click("Create invitation")
+  expect(container.querySelector("[data-gateway-fingerprint]")?.textContent).toBe(
+    "old fingerprint",
+  )
+  await act(async () => vi.advanceTimersByTimeAsync(2_000))
+  expect(container.querySelector("[data-gateway-fingerprint]")).toBeNull()
+  const approve = present(
+    [...container.querySelectorAll("button")].find(
+      (each) => each.textContent === "Approve matching fingerprint",
+    ),
+  )
+  expect(approve.disabled).toBe(true)
+  await act(async () => complete("new fingerprint"))
+  expect(container.querySelector("[data-gateway-fingerprint]")?.textContent).toBe(
+    "new fingerprint",
+  )
+  expect(approve.disabled).toBe(false)
+})
+
+it("hands keyboard focus to creation and its receipt without stealing it on a poll", async () => {
+  await mount()
+  const region = present(container.querySelector('[aria-label="Pair a gateway"]'))
+  expect(document.activeElement).toBe(region)
+  await click("Continue")
+  const create = present(
+    [...container.querySelectorAll("button")].find(
+      (each) => each.textContent === "Create invitation",
+    ),
+  )
+  expect(document.activeElement).toBe(create)
+  await click("Create invitation")
+  expect(document.activeElement).toBe(region)
+  const cancel = present(
+    [...container.querySelectorAll("button")].find(
+      (each) => each.textContent === "Cancel invitation",
+    ),
+  )
+  await act(async () => cancel.focus())
+  vi.mocked(scope.pairing.status).mockResolvedValue({ ...saved() })
+  await act(async () => vi.advanceTimersByTimeAsync(2_000))
+  expect(document.activeElement).toBe(cancel)
+})
+
+it.each(["Cancel invitation", "Approve matching fingerprint"])(
+  "keeps %s focused but unavailable throughout a held status read",
+  async (label) => {
+    vi.spyOn(deviceKey, "deviceKeyFingerprint").mockResolvedValue("matching fingerprint")
+    const status =
+      label === "Cancel invitation"
+        ? saved()
+        : { ...saved(), phase: "claimed" as const, claimedDeviceKey: Array(32).fill(7) }
+    vi.mocked(scope.pairing.create).mockResolvedValue({ code: "ABCD-EFGH", status })
+    let finish: (value: typeof status) => void = () => {
+      throw new Error("status was not read")
+    }
+    vi.mocked(scope.pairing.status).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve
+        }),
+    )
+    await mount()
+    await click("Continue")
+    await click("Create invitation")
+    const control = present(
+      [...container.querySelectorAll("button")].find(
+        (button) => button.textContent === label,
+      ),
+    )
+    await act(async () => control.focus())
+    expect(document.activeElement).toBe(control)
+    await act(async () => vi.advanceTimersByTimeAsync(2_000))
+    expect(control.disabled).toBe(false)
+    expect(control.getAttribute("aria-disabled")).toBe("true")
+    expect(document.activeElement).toBe(control)
+    await act(async () => control.click())
+    expect(scope.pairing.cancel).not.toHaveBeenCalled()
+    expect(scope.pairing.approve).not.toHaveBeenCalled()
+    await act(async () => finish(status))
+    expect(control.getAttribute("aria-disabled")).toBe("false")
+    expect(document.activeElement).toBe(control)
+  },
+)

@@ -1,0 +1,144 @@
+{
+  "check": "gateway-pairing",
+  "ok": true,
+  "started": "2026-11-10T09:43:28.241Z",
+  "finished": "2026-11-10T09:46:07.030Z",
+  "target": {
+    "url": "http://127.0.0.1:36307/desktop.html",
+    "mode": "prod"
+  },
+  "results": [
+    {
+      "name": "choice-human-recovery-native",
+      "engine": "chromium",
+      "layout": "columns",
+      "focusHeld": true,
+      "pollPreservedFocus": true,
+      "commandBox": {
+        "width": 580,
+        "scrollWidth": 580
+      },
+      "constrainedCommandBox": {
+        "width": 240,
+        "scrollWidth": 240
+      },
+      "pageErrors": 0,
+      "true": 5,
+      "false": 2,
+      "integrationRefused": 1,
+      "refresh": 1,
+      "nativeActive": 1,
+      "replacementFalseActive": 1,
+      "stalePersonLinks": 0,
+      "failedReadRecovered": 1,
+      "nativePermanentStop": 2,
+      "stalePermanentStopAbsent": true,
+      "permanentStopCancelledWithoutLink": true,
+      "polledTerminalSessionClosed": true,
+      "currentDocumentTemporarySessionsClosed": true,
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "choice-human-recovery-native",
+      "engine": "chromium",
+      "layout": "sidebar",
+      "focusHeld": true,
+      "pollPreservedFocus": true,
+      "commandBox": {
+        "width": 580,
+        "scrollWidth": 580
+      },
+      "constrainedCommandBox": {
+        "width": 240,
+        "scrollWidth": 240
+      },
+      "pageErrors": 0,
+      "true": 5,
+      "false": 2,
+      "integrationRefused": 1,
+      "refresh": 1,
+      "nativeActive": 1,
+      "replacementFalseActive": 1,
+      "stalePersonLinks": 0,
+      "failedReadRecovered": 1,
+      "nativePermanentStop": 2,
+      "stalePermanentStopAbsent": true,
+      "permanentStopCancelledWithoutLink": true,
+      "polledTerminalSessionClosed": true,
+      "currentDocumentTemporarySessionsClosed": true,
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "choice-human-recovery-native",
+      "engine": "webkit",
+      "layout": "columns",
+      "focusHeld": true,
+      "pollPreservedFocus": true,
+      "commandBox": {
+        "width": 580,
+        "scrollWidth": 580
+      },
+      "constrainedCommandBox": {
+        "width": 240,
+        "scrollWidth": 240
+      },
+      "pageErrors": 0,
+      "true": 5,
+      "false": 2,
+      "integrationRefused": 1,
+      "refresh": 1,
+      "nativeActive": 1,
+      "replacementFalseActive": 1,
+      "stalePersonLinks": 0,
+      "failedReadRecovered": 1,
+      "nativePermanentStop": 2,
+      "stalePermanentStopAbsent": true,
+      "permanentStopCancelledWithoutLink": true,
+      "polledTerminalSessionClosed": true,
+      "currentDocumentTemporarySessionsClosed": true,
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "choice-human-recovery-native",
+      "engine": "webkit",
+      "layout": "sidebar",
+      "focusHeld": true,
+      "pollPreservedFocus": true,
+      "commandBox": {
+        "width": 580,
+        "scrollWidth": 580
+      },
+      "constrainedCommandBox": {
+        "width": 240,
+        "scrollWidth": 240
+      },
+      "pageErrors": 0,
+      "true": 5,
+      "false": 2,
+      "integrationRefused": 1,
+      "refresh": 1,
+      "nativeActive": 1,
+      "replacementFalseActive": 1,
+      "stalePersonLinks": 0,
+      "failedReadRecovered": 1,
+      "nativePermanentStop": 2,
+      "stalePermanentStopAbsent": true,
+      "permanentStopCancelledWithoutLink": true,
+      "polledTerminalSessionClosed": true,
+      "currentDocumentTemporarySessionsClosed": true,
+      "failures": [],
+      "ok": true
+    }
+  ],
+  "sourceRevision": "41cec9e2121cb420c67d8036334840c4832b903c",
+  "executionCheckout": "a863f487cd278280e58583c09d3d851942d461b2 with source changes subsequently committed unchanged as 41cec9e2121cb420c67d8036334840c4832b903c",
+  "sourceSha256": {
+    "src/desktop/devices/ui/add-gateway.tsx": "e988c7a54d9b27a7e931676619ebdcdf5d7be79ecf9ff147593a2555564b92f2",
+    "src/desktop/devices/model/gateway-pairing.ts": "d88a7ea7e1720cdbb7e6fd3c525c740b8b54d1bc0a85ce7e2d3d93c047803e79",
+    "src/desktop/devices/adapters/gateway-pairing.ts": "35ae49f9453b01e2df8b780e6ed8b31b6aaa2a53dc398e46c36843af4f2a8cb5",
+    "src/desktop/devices/ui/devices.css": "e5f9631b9ab60d0725a8fbdfd039ee7aab0124dff4ecd79128663d90ee1f67be"
+  }
+}

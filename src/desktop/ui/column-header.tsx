@@ -1,6 +1,6 @@
 /**
- * The head of a column, the same in the workspace's session list, its
- * sidebar and Settings' page: the titlebar row, holding the column's own
+ * The head of a column, used by the workspace's session list: the titlebar
+ * row, holding the column's own
  * action at its far end, and the column's title — inline in that row, after
  * the window's controls where they stand over the column, when it fits there
  * with room to breathe, else on a row of its own below (`titlePlacement`,

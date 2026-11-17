@@ -26,6 +26,7 @@
 import { attempt, CannotRun } from "./lib/cli.mjs"
 import { need, openPage, withCleanup, withEngines } from "./lib/browser.mjs"
 import { main } from "./lib/run.mjs"
+import { installFastFrames } from "./lib/fast-frames.mjs"
 import { keysWhileRowsArrive } from "./lib/overview-keyboard.mjs"
 import {
   expectedPaneFocus,
@@ -673,6 +674,7 @@ async function givesBackLostFocus(page, cause) {
   if (!(await overviewListed(page)))
     throw new CannotRun("the overview list did not finish drawing")
   let scrolledTo = null
+  let movedRow = null
   if (cause === "moved") {
     // Scrolled away from the focused row, as when reading further down.
     await page.setViewportSize({ width: 1440, height: 520 })
@@ -689,13 +691,21 @@ async function givesBackLostFocus(page, cause) {
       )
       const row = rows.at(-1)
       if (!row) return null
-      row.focus()
+      row.focus({ preventScroll: true })
+      if (document.activeElement !== row)
+        throw new Error(
+          `overview row ${row.dataset.overviewItem} did not receive setup focus; active element is ${document.activeElement?.tagName ?? "none"}[${document.activeElement?.closest(item)?.dataset.overviewItem ?? "-"}]`,
+        )
       const li = row.closest("li")
       li.parentElement.insertBefore(li, li.parentElement.firstElementChild)
-      return row.dataset.overviewItem
+      return {
+        row: row.dataset.overviewItem,
+        retainedFocus: document.activeElement === row,
+      }
     }, css.overviewItem)
     if (!moved) throw new CannotRun("no list holds two rows to move one within")
-    trail.push({ step: "moved its row", row: moved })
+    movedRow = moved.row
+    trail.push({ step: "moved its row", ...moved })
   } else if (cause === "moved-pill") {
     // Typing a reply beneath a row (no room beside the list), and its row moved.
     await page.setViewportSize({ width: 1000, height: 700 })
@@ -758,6 +768,10 @@ async function givesBackLostFocus(page, cause) {
     if (now !== scrolledTo)
       failures.push(`giving focus back scrolled the list from ${scrolledTo} to ${now}`)
   }
+  if (cause === "moved" && after.row !== movedRow)
+    failures.push(
+      `after its row moved, the keyboard is on ${after.row ?? after.on}, not ${movedRow}`,
+    )
   if (after.on !== "row")
     failures.push(`after ${cause}, the keyboard is on ${after.on}, not a row`)
   else {
@@ -1222,28 +1236,7 @@ async function boundKeys(page) {
 
 /** Frames every 8ms. The pane flight stays on the page clock, so thirty frames end inside it. */
 async function fastFrames(page) {
-  await page.evaluate(() => {
-    const queued = new Map()
-    let next = 1
-    const cancelNative = window.cancelAnimationFrame.bind(window)
-    window.requestAnimationFrame = (callback) => {
-      const id = next++
-      const timer = window.setTimeout(() => {
-        queued.delete(id)
-        callback(performance.now())
-      }, 8)
-      queued.set(id, timer)
-      return id
-    }
-    window.cancelAnimationFrame = (id) => {
-      const timer = queued.get(id)
-      if (timer !== undefined) {
-        window.clearTimeout(timer)
-        queued.delete(id)
-      }
-      cancelNative(id)
-    }
-  })
+  await page.evaluate(installFastFrames)
 }
 
 /**

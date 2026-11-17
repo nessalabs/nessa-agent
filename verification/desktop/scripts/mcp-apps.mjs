@@ -30,8 +30,13 @@ import {
 } from "../../../scripts/mcp-test-server/server.mjs"
 import { attempt, CannotRun, devServerOnlySteps, recordIfLeftOut } from "./lib/cli.mjs"
 import { appFrame, settleAppFrame } from "./lib/apps.mjs"
-import { need, openPage, withEngines } from "./lib/browser.mjs"
+import { need, openPage, withCleanup, withEngines } from "./lib/browser.mjs"
 import { main } from "./lib/run.mjs"
+import {
+  prepareFixtureTeardown,
+  teardownEvidence,
+  withHeldSampleReply,
+} from "./lib/mcp-fixture.mjs"
 import { target } from "./lib/server.mjs"
 import { content, css, names, selectorFor } from "./lib/selectors.mjs"
 import { contentIs, paneCount, settled, until } from "./lib/workspace.mjs"
@@ -888,8 +893,23 @@ async function releaseProbeHost(page) {
 }
 
 /** A fresh page on the sample session whose conversation carries the fixture app. */
-async function onSample(browser, { url, layout }) {
-  const opened = await openPage(browser, { url, layout })
+async function onSample(
+  browser,
+  { url, layout, holdReply = false, observeTeardown = false },
+) {
+  let teardown
+  const opened = await openPage(browser, {
+    url,
+    layout,
+    beforeLoad: observeTeardown
+      ? async (context) => {
+          teardown = await prepareFixtureTeardown(context)
+        }
+      : undefined,
+    preparePage: holdReply
+      ? async (_page, context) => context.clock.install()
+      : undefined,
+  })
   const { page } = opened
   // By the session list, not the switcher's chord: what is checked is the
   // app, on any host's keyboard.
@@ -905,7 +925,7 @@ async function onSample(browser, { url, layout }) {
   await row.click()
   await need(page, selectorFor.appFrameIn("inline"), "the app's card frame", 10_000)
   await settled(page)
-  return opened
+  return { ...opened, teardown }
 }
 
 /** Waits until the app in `frame` says it is `state` (`data-fixture-state`), and says what it is. */
@@ -1375,80 +1395,127 @@ const checks = {
     await appState(app, "live")
     const authors = page.locator(css.messageAuthor)
     const before = await authors.count()
-    // The person's own messages in this session carry no label.
-    if (before !== 0) failures.push(`${before} labels before the app wrote anything`)
-    await app.click(selectorFor.fixtureControl("message"))
-    const sent = await output(app, selectorFor.fixtureOutput("message"))
-    if (sent !== "ok: {}") failures.push(`the message was answered ${sent}`)
-    await authors
-      .nth(before)
-      .waitFor({ timeout: 5000 })
-      .catch(() => {})
-    const count = await authors.count()
-    if (count !== before + 1) {
-      failures.push(`${count - before} app labels appeared, not 1`)
-      return { sent, failures }
+    const result = await withHeldSampleReply(page, async () => {
+      // The person's own messages in this session carry no label.
+      if (before !== 0) failures.push(`${before} labels before the app wrote anything`)
+      await app.click(selectorFor.fixtureControl("message"))
+      const sent = await output(app, selectorFor.fixtureOutput("message"))
+      if (sent !== "ok: {}") failures.push(`the message was answered ${sent}`)
+      await authors
+        .nth(before)
+        .waitFor({ timeout: 5000 })
+        .catch(() => {})
+      const count = await authors.count()
+      if (count !== before + 1) {
+        failures.push(`${count - before} app labels appeared, not 1`)
+        return { sent, failures }
+      }
+      const author = authors.last()
+      const label = (await author.textContent().catch(() => null)) ?? ""
+      const expected = names.sentBy(names.fixtureTool, names.fixtureServer)
+      if (label !== expected)
+        failures.push(`the label says "${label}", not "${expected}"`)
+      // Whole on the page, wrapped where it must be: no title repeats it.
+      const title = await author.getAttribute("title").catch(() => null)
+      if (title !== null) failures.push(`the label has a title, "${title}"`)
+      const writer = await author.getAttribute("data-message-app").catch(() => null)
+      if (writer !== `${names.fixtureServer}/${names.fixtureTool}`)
+        failures.push(`the label's data-message-app is "${writer}"`)
+      // Each name isolated from the words around it (#390, E1-8).
+      const isolated = await author
+        .evaluate((e) => [...e.querySelectorAll("bdi")].map((name) => name.textContent))
+        .catch(() => [])
+      if (
+        JSON.stringify(isolated) !==
+        JSON.stringify([names.fixtureTool, names.fixtureServer])
+      )
+        failures.push(`the label isolates ${JSON.stringify(isolated)}`)
+      const wraps = await author
+        .evaluate((e) => {
+          const style = getComputedStyle(e)
+          return style.whiteSpace !== "nowrap" && style.textOverflow !== "ellipsis"
+        })
+        .catch(() => false)
+      if (!wraps) failures.push("the label is cut to one line, not wrapped")
+      // The label sits over its own message: the person's, with the app's words.
+      const message = author.locator("xpath=..")
+      const bubble = message.locator(css.bubble)
+      const said = (await bubble.textContent().catch(() => null)) ?? ""
+      if (said !== names.fixtureMessage) failures.push(`the bubble says "${said}"`)
+      const role = await message.getAttribute("data-role").catch(() => null)
+      if (role !== "user") failures.push(`the labelled message is the ${role}'s`)
+      const labelRect = await rect(author)
+      const bubbleRect = await rect(bubble)
+      const column = await rect(message)
+      const geometry = { label: labelRect, bubble: bubbleRect, column }
+      if (labelRect.y + labelRect.h > bubbleRect.y + 0.5)
+        failures.push("the label is not above the bubble")
+      const edge = Math.abs(labelRect.x + labelRect.w - (bubbleRect.x + bubbleRect.w))
+      geometry.rightEdgeApart = edge
+      if (edge > 6) failures.push(`the label is ${edge}px off the bubble's right edge`)
+      if (
+        labelRect.x < column.x - 0.5 ||
+        labelRect.x + labelRect.w > column.x + column.w + 0.5
+      )
+        failures.push("the label leaves the column")
+      // Hold an actual running reply, rather than assuming the earlier request is still busy.
+      const running = await page.locator(css.runningComposer).count()
+      if (running !== 1)
+        failures.push(`the held sample reply has ${running} running composers, not 1`)
+      // The sample's agent is replying now: another is refused, and adds nothing.
+      await app.click(selectorFor.fixtureControl("message"))
+      const busy = await output(app, selectorFor.fixtureOutput("message"), sent)
+      if (busy !== 'ok: {"isError":true}')
+        failures.push(`a message while the reply runs was answered ${busy}`)
+      if ((await authors.count()) !== before + 1)
+        failures.push("a refused message appeared in the transcript")
+      await app.click(selectorFor.fixtureControl("context"))
+      const context = await output(app, selectorFor.fixtureOutput("context"))
+      // The sample has no model to give a context to, and says so.
+      if (context !== `error: ${names.noModelForContext}`)
+        failures.push(`the context was answered ${context}`)
+      return { sent, label, said, busy, context, geometry, failures }
+    })
+    // Confirm actual clock resumption before driving the sample's remaining
+    // logical timers. runFor alone would also advance a paused clock.
+    const releasedAt = await page.evaluate(() => Date.now())
+    try {
+      const advanced = await page.waitForFunction(
+        (before) => Date.now() > before,
+        releasedAt,
+        { timeout: 5000 },
+      )
+      await advanced.dispose()
+    } catch (error) {
+      failures.push(
+        `could not confirm the sample clock resumed within 5000 ms: ${String(error)}`,
+      )
+      return { ...result, resumed: false, failures }
     }
-    const author = authors.last()
-    const label = (await author.textContent().catch(() => null)) ?? ""
-    const expected = names.sentBy(names.fixtureTool, names.fixtureServer)
-    if (label !== expected) failures.push(`the label says "${label}", not "${expected}"`)
-    // Whole on the page, wrapped where it must be: no title repeats it.
-    const title = await author.getAttribute("title").catch(() => null)
-    if (title !== null) failures.push(`the label has a title, "${title}"`)
-    const writer = await author.getAttribute("data-message-app").catch(() => null)
-    if (writer !== `${names.fixtureServer}/${names.fixtureTool}`)
-      failures.push(`the label's data-message-app is "${writer}"`)
-    // Each name isolated from the words around it (#390, E1-8).
-    const isolated = await author
-      .evaluate((e) => [...e.querySelectorAll("bdi")].map((name) => name.textContent))
-      .catch(() => [])
+    await page.context().clock.runFor(5000)
+    // This advances only the sample fixture, not a performance measurement.
     if (
-      JSON.stringify(isolated) !==
-      JSON.stringify([names.fixtureTool, names.fixtureServer])
+      !(await until(
+        page,
+        (selector) => !document.querySelector(selector),
+        css.runningComposer,
+        5000,
+      ))
     )
-      failures.push(`the label isolates ${JSON.stringify(isolated)}`)
-    const wraps = await author
-      .evaluate((e) => {
-        const style = getComputedStyle(e)
-        return style.whiteSpace !== "nowrap" && style.textOverflow !== "ellipsis"
-      })
-      .catch(() => false)
-    if (!wraps) failures.push("the label is cut to one line, not wrapped")
-    // The label sits over its own message: the person's, with the app's words.
-    const message = author.locator("xpath=..")
-    const bubble = message.locator(css.bubble)
-    const said = (await bubble.textContent().catch(() => null)) ?? ""
-    if (said !== names.fixtureMessage) failures.push(`the bubble says "${said}"`)
-    const role = await message.getAttribute("data-role").catch(() => null)
-    if (role !== "user") failures.push(`the labelled message is the ${role}'s`)
-    const labelRect = await rect(author)
-    const bubbleRect = await rect(bubble)
-    const column = await rect(message)
-    const geometry = { label: labelRect, bubble: bubbleRect, column }
-    if (labelRect.y + labelRect.h > bubbleRect.y + 0.5)
-      failures.push("the label is not above the bubble")
-    const edge = Math.abs(labelRect.x + labelRect.w - (bubbleRect.x + bubbleRect.w))
-    geometry.rightEdgeApart = edge
-    if (edge > 6) failures.push(`the label is ${edge}px off the bubble's right edge`)
-    if (
-      labelRect.x < column.x - 0.5 ||
-      labelRect.x + labelRect.w > column.x + column.w + 0.5
-    )
-      failures.push("the label leaves the column")
-    // The sample's agent is replying now: another is refused, and adds nothing.
+      failures.push("the released sample reply did not finish within 5000 ms")
     await app.click(selectorFor.fixtureControl("message"))
-    const busy = await output(app, selectorFor.fixtureOutput("message"), sent)
-    if (busy !== 'ok: {"isError":true}')
-      failures.push(`a message while the reply runs was answered ${busy}`)
-    if ((await authors.count()) !== before + 1)
-      failures.push("a refused message appeared in the transcript")
-    await app.click(selectorFor.fixtureControl("context"))
-    const context = await output(app, selectorFor.fixtureOutput("context"))
-    // The sample has no model to give a context to, and says so.
-    if (context !== `error: ${names.noModelForContext}`)
-      failures.push(`the context was answered ${context}`)
-    return { sent, label, said, busy, context, geometry, failures }
+    const next = await output(
+      app,
+      selectorFor.fixtureOutput("message"),
+      result.busy ?? result.sent,
+    )
+    if (next !== "ok: {}")
+      failures.push(`after the reply finished the next message was answered ${next}`)
+    if ((await authors.count()) !== before + 2)
+      failures.push(
+        "after the reply finished the next message did not add exactly one label",
+      )
+    return { ...result, resumed: true, next, failures }
   },
 
   csp: async (page) => {
@@ -1597,7 +1664,7 @@ const checks = {
     return { notices, failures }
   },
 
-  teardown: async (page) => {
+  teardown: async (page, _layout, _shots, teardown) => {
     const failures = []
     // By its tab's close: the frames go with the place.
     const { proxy, app } = await openPanel(page, failures)
@@ -1624,31 +1691,49 @@ const checks = {
     if (second.app === app || second.proxy === proxy)
       failures.push("reopening the panel reused its retired app or proxy")
     const tabs = await panelTabCount(page)
-    // The fixture answers its teardown 400ms after it is asked: until then
-    // the tab stays, and the app is still on the page saying so.
-    await second.app.click(selectorFor.fixtureControl("close"))
-    const said = await appState(second.app, "tearing-down", 2000).catch(() => ({
-      state: "detached",
-    }))
-    const waiting = await panelTabCount(page)
-    await until(page, ([tab, want]) => document.querySelectorAll(tab).length === want, [
+    // Retain the original request and answer at dispatch, before the host
+    // can retire their documents. The fixture's 400ms answer is unchanged.
+    const observation = await teardown.observe(
+      page,
+      second,
       `${css.chatPanelTabs} [role="tab"]`,
-      tabs - 1,
-    ])
-    if (said.state !== "tearing-down")
-      failures.push(
-        `the app asking to go was not sent ui/resource-teardown (it says ${said.state})`,
-      )
-    if (waiting !== tabs)
-      failures.push("the app's tab closed before the app answered its teardown")
-    if ((await panelTabCount(page)) !== tabs - 1)
-      failures.push("the app's tab did not close after its teardown")
-    if (!second.app.isDetached() || !second.proxy.isDetached())
-      failures.push("the app's document or proxy outlived its teardown")
-    await need(page, css.widgetCardRow, "the torn-down app's retained Open row")
-    if (await page.locator(selectorFor.appFrameIn("inline")).count())
-      failures.push("teardown restarted an app whose Open row must remain")
-    return { said: said.state, failures }
+    )
+    return withCleanup(
+      async () => {
+        await second.app.click(selectorFor.fixtureControl("close"))
+        const requestObservation = await observation.waitWithin(2000)
+        if (requestObservation.kind === "timed-out")
+          failures.push(
+            "the original app did not observe a teardown request within 2000 ms",
+          )
+        await until(
+          page,
+          ([tab, want]) => document.querySelectorAll(tab).length === want,
+          [`${css.chatPanelTabs} [role="tab"]`, tabs - 1],
+        )
+        const observed = teardownEvidence(
+          observation.records,
+          tabs,
+          observation.overflow,
+          observation.initial,
+        )
+        failures.push(...observed.failures)
+        if ((await panelTabCount(page)) !== tabs - 1)
+          failures.push("the app's tab did not close after its teardown")
+        if (!second.app.isDetached() || !second.proxy.isDetached())
+          failures.push("the app's document or proxy outlived its teardown")
+        await need(page, css.widgetCardRow, "the torn-down app's retained Open row")
+        if (await page.locator(selectorFor.appFrameIn("inline")).count())
+          failures.push("teardown restarted an app whose Open row must remain")
+        return {
+          said: observed.request?.state,
+          requestObservation,
+          teardown: observed,
+          failures,
+        }
+      },
+      () => observation.close(),
+    )
   },
 }
 
@@ -1671,9 +1756,19 @@ await main(
           let opened
           await attempt(rep, { engine, layout, name }, async () => {
             const probe = sandboxProbeChecks.has(name)
-            opened = await (probe ? onProbeHost : onSample)(browser, { url, layout })
+            opened = await (probe ? onProbeHost : onSample)(browser, {
+              url,
+              layout,
+              holdReply: name === "message",
+              observeTeardown: name === "teardown",
+            })
             try {
-              return await checks[name](opened.page, layout, options.shots)
+              return await checks[name](
+                opened.page,
+                layout,
+                options.shots,
+                opened.teardown,
+              )
             } finally {
               if (probe)
                 await attempt(

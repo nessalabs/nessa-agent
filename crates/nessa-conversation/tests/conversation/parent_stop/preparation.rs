@@ -424,8 +424,13 @@ async fn granted_child_preparation_failure(commit: bool) {
         "the single child capacity can be reused after release"
     );
     drop(work);
-    host.close();
     retire(service, storage, metadata).await;
+    assert_eq!(
+        host.end_requests(),
+        3,
+        "retirement sends End for the root and reused child"
+    );
+    host.close();
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_granted_child_rejected_preparation_write_keeps_capacity_until_release() {

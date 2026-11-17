@@ -90,6 +90,7 @@ const checks = [
     skipProd: "not run: dev server only",
   },
   { name: "gateway-window", args: ["--scripted"] },
+  { name: "gateway-pairing", layout: "columns,sidebar", args: [] },
   { name: "scripted-scenarios", args: [] },
   { name: "parent-stop", args: [] },
 ]

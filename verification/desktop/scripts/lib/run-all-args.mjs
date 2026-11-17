@@ -16,7 +16,11 @@ export function argsForCheck(check, options, { base = [], out, page, sharesPage 
   if (!sharesPage) {
     if (urlChecks.has(check) && options.url) args.push("--url", options.url)
     if (check === "perf-budget" && options.runs) args.push("--runs", options.runs)
-    if (check === "message-sync" || productionFixtures.has(check))
+    if (
+      (check === "perf-budget" && !options.url) ||
+      check === "message-sync" ||
+      productionFixtures.has(check)
+    )
       args.push("--mode", "prod")
     return args
   }

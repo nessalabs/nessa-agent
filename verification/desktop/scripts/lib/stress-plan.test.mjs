@@ -10,6 +10,13 @@ test("the same numbers and seed give the same plan, and another seed another", (
   assert.equal(random(7)(), random(7)())
 })
 
+test("default and raised plans exercise gateway pairing", () => {
+  const pairings = (knobs) =>
+    plan(knobs).filter((step) => step.kind === "gatewayPairing").length
+  assert.ok(pairings(knobsFrom({}, {})) > 0)
+  assert.equal(pairings(knobsFrom({ gatewayPairings: "4" }, {})), 4)
+})
+
 test("every required step appears as often as its number says", () => {
   const knobs = knobsFrom({ rounds: "40", seed: "9" }, {})
   const steps = plan(knobs)
@@ -56,6 +63,7 @@ test("every required step appears as often as its number says", () => {
   assert.equal(count("pool"), knobs.pools)
   assert.equal(count("place"), knobs.places)
   assert.equal(count("devices"), knobs.devices)
+  assert.equal(count("gatewayPairing"), knobs.gatewayPairings)
   assert.equal(count("ssh"), knobs.sshHosts)
   assert.equal(count("tunnel"), knobs.tunnels)
   assert.equal(count("drift"), knobs.drifts)
@@ -183,6 +191,7 @@ test("the legacy seed preserves the existing non-model work's relative order", (
         pools: "0",
         places: "0",
         devices: "0",
+        gatewayPairings: "0",
         sshHosts: "0",
         tunnels: "0",
         drifts: "0",

@@ -79,6 +79,7 @@ const options = cli({
     only: { type: "string" },
     "skip-perf": { type: "boolean", default: false },
     runs: { type: "string" },
+    reports: { type: "string" },
   },
   help: `
 Usage: node verification/desktop/scripts/run-all.mjs [options]
@@ -87,6 +88,8 @@ Usage: node verification/desktop/scripts/run-all.mjs [options]
                    a name not among them is refused (exit 2).
   --skip-perf      Leave out perf-budget (the production build and its runs).
   --runs <n>       Passed to perf-budget.
+  --reports <dir>  Keep individual check JSON in a fresh child of this directory.
+                   Diagnostic only: the aggregate and child exits still decide the result.
 
 message-sync builds its own production fixture preview in either mode; its
 retained-app functional check is run separately in dev with the sandbox listener.
@@ -155,6 +158,8 @@ function run(check, args) {
 const all = [...functional, "perf-budget"]
 let checks
 try {
+  if (options.reports !== undefined && options.reports.length === 0)
+    throw new UsageError("--reports requires a nonempty directory")
   checks = options.only
     ? chosen(options.only, all, options.list)
     : [...functional, ...(options["skip-perf"] ? [] : ["perf-budget"])]
@@ -167,7 +172,12 @@ const scheduled = checksUnder(options.mode, checks)
 const leftOutSet = new Set(scheduled.leftOut)
 const sharesPage = (check) =>
   functional.includes(check) && !ownsPreview(check, options.mode)
-const dir = mkdtempSync(join(tmpdir(), "nessa-desktop-verify-all-"))
+const retainReports = options.reports !== undefined
+if (retainReports) mkdirSync(resolve(options.reports), { recursive: true })
+const dir = mkdtempSync(
+  join(retainReports ? resolve(options.reports) : tmpdir(), "nessa-desktop-verify-all-"),
+)
+if (retainReports) log(`Keeping diagnostic check JSON in ${dir}`)
 const summary = []
 const documents = {}
 let page
@@ -221,7 +231,7 @@ try {
   }
 } finally {
   await page?.close()
-  rmSync(dir, { recursive: true, force: true })
+  if (!retainReports) rmSync(dir, { recursive: true, force: true })
 }
 
 log(`\n${table(summary, ["check", "status", "held", "seconds"])}`)

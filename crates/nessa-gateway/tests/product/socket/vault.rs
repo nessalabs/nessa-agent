@@ -1,9 +1,12 @@
 use super::*;
+use futures_util::FutureExt;
 use nessa_vault::{
     application::{Clock as VaultClock, Vault},
     domain::Status,
     infrastructure::{EncryptedFileVault, FileAudit, OsEntropy},
 };
+use std::any::Any;
+use std::panic::{resume_unwind, AssertUnwindSafe};
 // These independent gateway fixtures run the real memory-hard KDF. Share one
 // machine's fixture capacity; replies that run the KDF wait VAULT_REPLY;
 // concurrency inside a fixture (owner races, cleanup and late replies) remains
@@ -49,10 +52,15 @@ async fn ask(peer: &mut TestPeer, id: &str, method: &str, params: Value) -> Valu
         )))
         .unwrap();
     loop {
-        let message = timeout(VAULT_REPLY, peer.output.recv())
-            .await
-            .expect("a vault reply within its KDF budget")
-            .expect("the socket stays open");
+        let message = AssertUnwindSafe(async {
+            timeout(VAULT_REPLY, peer.output.recv())
+                .await
+                .expect("a vault reply within its KDF budget")
+                .expect("the socket stays open")
+        })
+        .catch_unwind()
+        .await
+        .unwrap_or_else(|payload| response_wait_failed(id, method, payload));
         let Message::Text(text) = message else {
             panic!("response")
         };
@@ -60,6 +68,181 @@ async fn ask(peer: &mut TestPeer, id: &str, method: &str, params: Value) -> Valu
         if value["type"] == "res" && value["id"] == id {
             return value;
         }
+    }
+}
+
+fn response_wait_failed(id: &str, method: &str, payload: Box<dyn Any + Send>) -> ! {
+    let text = payload
+        .downcast_ref::<String>()
+        .map(String::as_str)
+        .or_else(|| payload.downcast_ref::<&str>().copied());
+    if let Some(text) = text {
+        // Keep context in libtest's captured failure, without formatting params.
+        panic!("Vault response wait failed: id={id}, method={method}; original panic: {text}");
+    }
+    resume_unwind(payload)
+}
+
+#[cfg(test)]
+mod response_wait_context {
+    use super::*;
+    use std::panic::{catch_unwind, panic_any};
+
+    fn text(payload: Box<dyn Any + Send>) -> String {
+        *payload.downcast::<String>().expect("textual failure")
+    }
+
+    #[test]
+    fn textual_failures_keep_request_and_complete_original_cause() {
+        let long = format!(
+            "original first line\n{}\noriginal last line",
+            "cause".repeat(1000)
+        );
+        for payload in [
+            Box::new(long.clone()) as Box<dyn Any + Send>,
+            Box::new("borrowed original cause"),
+        ] {
+            let original = payload
+                .downcast_ref::<String>()
+                .map(String::as_str)
+                .or_else(|| payload.downcast_ref::<&str>().copied())
+                .unwrap()
+                .to_owned();
+            let failure = catch_unwind(AssertUnwindSafe(|| {
+                response_wait_failed("request-7", "vault.unlock", payload)
+            }))
+            .unwrap_err();
+            let failure = text(failure);
+            assert!(
+                failure.contains("id=request-7, method=vault.unlock"),
+                "{failure}"
+            );
+            assert!(failure.ends_with(&original), "{failure}");
+        }
+    }
+
+    #[test]
+    fn opaque_failure_keeps_the_same_box() {
+        let original = catch_unwind(|| panic_any(Box::new(73_u8))).unwrap_err();
+        let address = (&*original as *const dyn Any).cast::<()>();
+        let failure = catch_unwind(AssertUnwindSafe(|| {
+            response_wait_failed("7", "vault.unlock", original)
+        }))
+        .unwrap_err();
+        assert_eq!((&*failure as *const dyn Any).cast::<()>(), address);
+    }
+
+    #[test]
+    fn original_text_is_preserved_even_when_it_contains_private_data() {
+        let failure = catch_unwind(|| {
+            response_wait_failed("7", "vault.unlock", Box::new("original-private-sentinel"))
+        })
+        .unwrap_err();
+        assert!(text(failure).ends_with("original-private-sentinel"));
+    }
+
+    #[tokio::test]
+    async fn matching_response_is_forwarded_after_unrelated_frames() {
+        let (socket, mut peer) = test_socket(None);
+        let response = json!({"type":"res","id":"7","payload":{"state":"locked"}});
+        for frame in [
+            json!({"type":"event"}),
+            json!({"type":"res","id":"other"}),
+            response.clone(),
+        ] {
+            socket
+                .outgoing
+                .send(Message::Text(frame.to_string().into()))
+                .unwrap();
+        }
+        assert_eq!(ask(&mut peer, "7", "vault.lock", json!({})).await, response);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_valid_reply_after_the_generic_peer_budget_uses_the_vault_budget() {
+        let (socket, mut peer) = test_socket(None);
+        let expected = json!({"type":"res","id":"7","payload":{"state":"locked"}});
+        let response = expected.clone();
+        let output = socket.outgoing.clone();
+        let sender = tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_secs(2)).await;
+            output.send(Message::Text(response.to_string().into())).unwrap();
+        });
+        let started = tokio::time::Instant::now();
+        assert_eq!(ask(&mut peer, "7", "vault.lock", json!({})).await, expected);
+        assert_eq!(started.elapsed(), Duration::from_secs(2));
+        sender.await.unwrap();
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn an_unrelated_frame_keeps_the_next_receive_on_its_own_vault_budget() {
+        let (socket, mut peer) = test_socket(None);
+        let expected = json!({"type":"res","id":"7","payload":{"state":"locked"}});
+        let response = expected.clone();
+        let output = socket.outgoing.clone();
+        let sender = tokio::spawn(async move {
+            for frame in [json!({"type":"event"}), response] {
+                tokio::time::sleep(VAULT_REPLY - Duration::from_secs(2)).await;
+                output.send(Message::Text(frame.to_string().into())).unwrap();
+            }
+        });
+        let started = tokio::time::Instant::now();
+        assert_eq!(ask(&mut peer, "7", "vault.lock", json!({})).await, expected);
+        assert!(started.elapsed() > VAULT_REPLY);
+        sender.await.unwrap();
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn receive_timeout_keeps_cause_and_request_without_params() {
+        let (_socket, mut peer) = test_socket(None);
+        let started = tokio::time::Instant::now();
+        let failure = AssertUnwindSafe(ask(
+            &mut peer,
+            "request-7",
+            "vault.unlock",
+            json!({"passphrase":"params-secret-sentinel"}),
+        ))
+        .catch_unwind()
+        .await
+        .unwrap_err();
+        let failure = text(failure);
+        assert!(
+            failure.contains("id=request-7, method=vault.unlock"),
+            "{failure}"
+        );
+        assert_eq!(started.elapsed(), VAULT_REPLY);
+        assert!(
+            failure.contains("a vault reply within its KDF budget"),
+            "{failure}"
+        );
+        assert!(failure.contains("Elapsed(())"), "{failure}");
+        assert!(!failure.contains("params-secret-sentinel"), "{failure}");
+    }
+
+    #[tokio::test]
+    async fn send_failure_is_not_labelled_as_receive_failure() {
+        let (socket, mut peer) = test_socket(None);
+        drop(socket);
+        let failure = AssertUnwindSafe(ask(&mut peer, "7", "vault.lock", json!({})))
+            .catch_unwind()
+            .await
+            .unwrap_err();
+        let failure = text(failure);
+        assert!(failure.contains("SendError"), "{failure}");
+        assert!(!failure.contains("Vault response wait failed"), "{failure}");
+    }
+
+    #[tokio::test]
+    async fn closed_receive_keeps_the_original_closed_socket_cause() {
+        let (socket, mut peer) = test_socket(None);
+        drop(socket.outgoing);
+        let failure = AssertUnwindSafe(ask(&mut peer, "7", "vault.lock", json!({})))
+            .catch_unwind()
+            .await
+            .unwrap_err();
+        let failure = text(failure);
+        assert!(failure.contains("id=7, method=vault.lock"), "{failure}");
+        assert!(failure.contains("the socket stays open"), "{failure}");
     }
 }
 #[tokio::test]

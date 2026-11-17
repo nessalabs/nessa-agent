@@ -15,6 +15,7 @@ import {
   type DeviceWorker,
   type PairingApi,
 } from "@nessa/client"
+import type { GatewayPairing } from "./gateway-pairing"
 import type { DeviceSshConnect, DeviceSshHost } from "../model/devices"
 import {
   DEVICE_KEY_BYTES,
@@ -93,6 +94,8 @@ export const MAX_PAGES = 1_024
 export type CloudState = "connected" | "disconnected" | "locked"
 
 export interface DevicesGateway {
+  /** Explicitly scoped reader-gateway invitations, when composition supplies them. */
+  readonly gatewayPairing?: GatewayPairing
   /** How often an open view reads again. */
   readonly pollMs: number
   list(): Promise<Outcome<DevicesRead>>
@@ -158,6 +161,7 @@ function bytesOf(hex: string, length: number): number[] {
 export function devicesGateway(options: {
   readonly connected: () => Promise<DevicesClient>
   readonly pollMs?: number
+  readonly gatewayPairing?: GatewayPairing
 }): DevicesGateway {
   async function answer<T>(
     run: (client: DevicesClient) => Promise<T>,
@@ -170,6 +174,7 @@ export function devicesGateway(options: {
   }
   return {
     pollMs: options.pollMs ?? 5_000,
+    gatewayPairing: options.gatewayPairing,
     list: () =>
       answer(async (client) => {
         const first = await client.devices.list()

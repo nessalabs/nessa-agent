@@ -161,7 +161,7 @@ describe("linked devices", () => {
     )
     const cancelled = reduce(
       { ...held, pending: null },
-      { type: "cancel" },
+      { type: "cancel", invitationId: invitation },
       {
         type: "answered",
         seq: held.seq + 1,
@@ -630,7 +630,7 @@ describe("linked devices", () => {
       hiddenInvitation: other,
       notice: { kind: "codeHidden" as const, from: "read" as const },
     }
-    const cancelling = reduce(hidden, { type: "cancel" })
+    const cancelling = reduce(hidden, { type: "cancel", invitationId: other })
     expect(cancelling.pending).toMatchObject({ kind: "cancel", invitationId: other })
   })
 

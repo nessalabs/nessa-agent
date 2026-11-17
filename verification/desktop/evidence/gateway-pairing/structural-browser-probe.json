@@ -1,0 +1,24 @@
+{
+  "stages": [
+    {
+      "stage": "fixed",
+      "exit": 0,
+      "containsIntendedFailure": false
+    },
+    {
+      "stage": "mutant",
+      "exit": 1,
+      "containsIntendedFailure": true
+    },
+    {
+      "stage": "restored",
+      "exit": 0,
+      "containsIntendedFailure": false
+    }
+  ],
+  "baseRevision": "a863f487cd278280e58583c09d3d851942d461b2",
+  "dirtyScope": "immutable selection rewrite before the separate focus fix",
+  "fixedAndRestoredUiSha256": "5f271ce88c054057cd08785da389f817054add4775e5d4ede121ddf04e0ef2de",
+  "revertedUiRevision": "a863f487cd278280e58583c09d3d851942d461b2",
+  "finalSourceRevision": "41cec9e2121cb420c67d8036334840c4832b903c"
+}

@@ -1,0 +1,375 @@
+{
+  "mutants": [
+    {
+      "probe": "focus-new-view",
+      "mutantExit": 1,
+      "assertionFailure": true,
+      "file": "src/desktop/devices/ui/add-gateway.tsx",
+      "before": "else page.current?.focus()",
+      "after": "else void page"
+    },
+    {
+      "probe": "poll-keeps-focus",
+      "mutantExit": 1,
+      "assertionFailure": true,
+      "file": "src/desktop/devices/ui/add-gateway.tsx",
+      "before": "[canCreate, invitation, signedIn, recovering, permanentStop]",
+      "after": "[canCreate, status, signedIn, recovering, permanentStop]"
+    },
+    {
+      "probe": "permanent-focus",
+      "mutantExit": 1,
+      "assertionFailure": true,
+      "file": "src/desktop/devices/ui/add-gateway.tsx",
+      "before": "[canCreate, invitation, signedIn, recovering, permanentStop]",
+      "after": "[canCreate, invitation, signedIn, recovering]"
+    },
+    {
+      "probe": "fingerprint-recovery",
+      "mutantExit": 1,
+      "assertionFailure": true,
+      "file": "src/desktop/devices/ui/add-gateway.tsx",
+      "before": "Fingerprint unavailable. Go back and reopen Gateway to resume this invitation.",
+      "after": "Fingerprint unavailable. Read this invitation again before approving."
+    },
+    {
+      "probe": "canonical-stop",
+      "mutantExit": 1,
+      "assertionFailure": true,
+      "file": "src/desktop/devices/model/gateway-pairing.ts",
+      "before": "activationStopped: event.reply.activationStopped,",
+      "after": "activationStopped: \"retryable\","
+    },
+    {
+      "probe": "permanent-has-no-retry",
+      "mutantExit": 1,
+      "assertionFailure": true,
+      "file": "src/desktop/devices/ui/add-gateway.tsx",
+      "before": "activationStopped !== \"permanent\"",
+      "after": "true"
+    },
+    {
+      "probe": "reachable-recovery",
+      "mutantExit": 1,
+      "assertionFailure": true,
+      "file": "src/desktop/devices/ui/add-gateway.tsx",
+      "before": "Not confirmed. Go back and reopen Gateway to resume saved invitations.",
+      "after": "Not confirmed. Read pending invitations before trying again."
+    },
+    {
+      "probe": "shell-argument",
+      "mutantExit": 1,
+      "assertionFailure": true,
+      "file": "src/desktop/devices/model/gateway-pairing.ts",
+      "before": "/[^\\x20-\\x26\\x28-\\x7e]/g",
+      "after": "/$^/g"
+    },
+    {
+      "probe": "consumed-active-code",
+      "mutantExit": 1,
+      "assertionFailure": true,
+      "file": "src/desktop/devices/model/gateway-pairing.ts",
+      "before": "if (details.status.phase === \"active\") {",
+      "after": "if (false) {"
+    },
+    {
+      "probe": "abort-shared-waits",
+      "mutantExit": 1,
+      "assertionFailure": true,
+      "file": "src/desktop/devices/adapters/gateway-pairing.ts",
+      "before": "else signal.addEventListener(\"abort\", abort, { once: true })",
+      "after": "else void abort"
+    },
+    {
+      "probe": "retire-late-owned-client",
+      "mutantExit": 1,
+      "assertionFailure": true,
+      "file": "src/desktop/devices/adapters/gateway-pairing.ts",
+      "before": "retireLate?.(value)",
+      "after": "void value"
+    },
+    {
+      "probe": "terminal-retirement",
+      "mutantExit": 1,
+      "assertionFailure": true,
+      "file": "src/desktop/devices/ui/add-gateway.tsx",
+      "before": "if (receipt.type !== \"resume\" || !next.cleanupPending) finishReceipt()",
+      "after": "if (false) finishReceipt()"
+    },
+    {
+      "probe": "fresh-resume-status",
+      "mutantExit": 1,
+      "assertionFailure": true,
+      "file": "src/desktop/devices/ui/add-gateway.tsx",
+      "before": "const next = await currentScope().pairing.status(each.invitationId)",
+      "after": "const next = each"
+    },
+    {
+      "probe": "resume-unfinished-removal",
+      "mutantExit": 1,
+      "assertionFailure": true,
+      "file": "src/desktop/devices/ui/add-gateway.tsx",
+      "before": "receipt.type !== \"resume\"",
+      "after": "true"
+    },
+    {
+      "probe": "terminal-consumes-evidence",
+      "mutantExit": 1,
+      "assertionFailure": true,
+      "file": "src/desktop/devices/model/gateway-pairing.ts",
+      "before": "if (details.status.phase === \"terminal\") return { status: details.status }",
+      "after": "if (false) return { status: details.status }"
+    },
+    {
+      "probe": "clear-selection",
+      "mutantExit": 1,
+      "assertionFailure": true,
+      "file": "src/desktop/devices/model/gateway-pairing.ts",
+      "before": "if (event.type === \"clear\") return undefined",
+      "after": "if (event.type === \"clear\") return previous"
+    },
+    {
+      "probe": "invitation-fact-binding",
+      "mutantExit": 1,
+      "assertionFailure": true,
+      "file": "src/desktop/devices/model/gateway-pairing.ts",
+      "before": "previous && sameBytes(previous.status.invitationId, status.invitationId)",
+      "after": "previous"
+    },
+    {
+      "probe": "fingerprint-invitation",
+      "mutantExit": 1,
+      "assertionFailure": true,
+      "file": "src/desktop/devices/model/gateway-pairing.ts",
+      "before": "!sameBytes(previous.status.invitationId, event.invitationId)",
+      "after": "false"
+    },
+    {
+      "probe": "fingerprint-key",
+      "mutantExit": 1,
+      "assertionFailure": true,
+      "file": "src/desktop/devices/model/gateway-pairing.ts",
+      "before": "!sameBytes(previous.status.claimedDeviceKey, event.key)",
+      "after": "false"
+    },
+    {
+      "probe": "preserve-matching-fingerprint",
+      "mutantExit": 1,
+      "assertionFailure": true,
+      "file": "src/desktop/devices/model/gateway-pairing.ts",
+      "before": "sameBytes(related.status.claimedDeviceKey, status.claimedDeviceKey)",
+      "after": "false"
+    },
+    {
+      "probe": "discard-changed-fingerprint",
+      "mutantExit": 1,
+      "assertionFailure": true,
+      "file": "src/desktop/devices/model/gateway-pairing.ts",
+      "before": "sameBytes(related.status.claimedDeviceKey, status.claimedDeviceKey)",
+      "after": "true"
+    },
+    {
+      "probe": "fingerprint-calculation-identity",
+      "mutantExit": 1,
+      "assertionFailure": true,
+      "file": "src/desktop/devices/ui/add-gateway.tsx",
+      "before": "[invitation, fingerprintKey, status?.phase === \"terminal\"]",
+      "after": "[invitation, status?.claimedDeviceKey, status?.phase === \"terminal\"]"
+    },
+    {
+      "probe": "unsent-owner-draft",
+      "mutantExit": 1,
+      "assertionFailure": true,
+      "file": "src/desktop/devices/ui/add-gateway.tsx",
+      "before": "const hide = () => {\n      retire()\n      setToken(\"\")",
+      "after": "const hide = () => {\n      retire()"
+    },
+    {
+      "probe": "product-route",
+      "mutantExit": 1,
+      "assertionFailure": true,
+      "file": "src/desktop/devices/adapters/gateway-pairing.ts",
+      "before": "if (url.pathname === \"/browser/session\")",
+      "after": "if (true)"
+    },
+    {
+      "probe": "endpoint-snapshot",
+      "mutantExit": 1,
+      "assertionFailure": true,
+      "file": "src/desktop/devices/adapters/gateway-pairing.ts",
+      "before": "if (panel.sessionUrl !== endpoint)",
+      "after": "if (false)"
+    },
+    {
+      "probe": "closed-api",
+      "mutantExit": 1,
+      "assertionFailure": true,
+      "file": "src/desktop/devices/adapters/gateway-pairing.ts",
+      "before": "pairing = undefined",
+      "after": "void pairing"
+    },
+    {
+      "probe": "aborted-before-panel",
+      "mutantExit": 1,
+      "assertionFailure": true,
+      "file": "src/desktop/devices/adapters/gateway-pairing.ts",
+      "before": "check()\n        const panel",
+      "after": "const panel"
+    },
+    {
+      "probe": "no-mutation-replay",
+      "mutantExit": 1,
+      "assertionFailure": true,
+      "file": "src/desktop/devices/adapters/gateway-pairing.ts",
+      "before": "return call(api)",
+      "after": "return call(api).catch(() => call(api))"
+    },
+    {
+      "probe": "choice-forwarding",
+      "mutantExit": 1,
+      "assertionFailure": true,
+      "file": "src/desktop/devices/adapters/gateway-pairing.ts",
+      "before": "return { enrollee: PairingEnrollee.Gateway, samePerson }",
+      "after": "return { enrollee: PairingEnrollee.Gateway, samePerson: true }"
+    },
+    {
+      "probe": "gateway-boundary",
+      "mutantExit": 1,
+      "assertionFailure": true,
+      "file": "src/desktop/devices/adapters/gateway-pairing.ts",
+      "before": "actual.gatewayId !== expected.gatewayId",
+      "after": "false"
+    },
+    {
+      "probe": "organization-boundary",
+      "mutantExit": 1,
+      "assertionFailure": true,
+      "file": "src/desktop/devices/adapters/gateway-pairing.ts",
+      "before": "actual.organizationId !== expected.organizationId",
+      "after": "false"
+    },
+    {
+      "probe": "audience-boundary",
+      "mutantExit": 1,
+      "assertionFailure": true,
+      "file": "src/desktop/devices/adapters/gateway-pairing.ts",
+      "before": "actual.audienceId !== expected.audienceId",
+      "after": "false"
+    },
+    {
+      "probe": "reconnect-disabled",
+      "mutantExit": 1,
+      "assertionFailure": true,
+      "file": "src/desktop/devices/adapters/gateway-pairing.ts",
+      "before": "reconnect: { enabled: false }",
+      "after": "reconnect: { enabled: true }"
+    },
+    {
+      "probe": "pinned-session-path",
+      "mutantExit": 1,
+      "assertionFailure": true,
+      "file": "src/desktop/devices/adapters/gateway-pairing.ts",
+      "before": "url.pathname = \"/session\"",
+      "after": "url.pathname = \"/browser/session\""
+    },
+    {
+      "probe": "late-owner-connect",
+      "mutantExit": 1,
+      "assertionFailure": true,
+      "file": "src/desktop/devices/adapters/gateway-pairing.ts",
+      "before": "privileged = client\n          check()",
+      "after": "privileged = client"
+    },
+    {
+      "probe": "closed-client",
+      "mutantExit": 1,
+      "assertionFailure": true,
+      "file": "src/desktop/devices/adapters/gateway-pairing.ts",
+      "before": "privileged?.close()",
+      "after": "void privileged"
+    },
+    {
+      "probe": "double-submit",
+      "mutantExit": 1,
+      "assertionFailure": true,
+      "file": "src/desktop/devices/ui/add-gateway.tsx",
+      "before": "if (operation.current) return",
+      "after": "if (false) return"
+    },
+    {
+      "probe": "late-create",
+      "mutantExit": 1,
+      "assertionFailure": true,
+      "file": "src/desktop/devices/ui/add-gateway.tsx",
+      "before": "if (current !== generation.current) return\n                    apply({ type: \"create\", reply: made })",
+      "after": "if (false) return\n                    apply({ type: \"create\", reply: made })"
+    },
+    {
+      "probe": "lost-create-read",
+      "mutantExit": 1,
+      "assertionFailure": true,
+      "file": "src/desktop/devices/ui/add-gateway.tsx",
+      "before": "!recovering && !needsRead && !busy",
+      "after": "!recovering && !busy"
+    },
+    {
+      "probe": "pagehide-teardown",
+      "mutantExit": 1,
+      "assertionFailure": true,
+      "file": "src/desktop/devices/ui/add-gateway.tsx",
+      "before": "window.addEventListener(\"pagehide\", hide)",
+      "after": "void hide"
+    },
+    {
+      "probe": "deadline",
+      "mutantExit": 1,
+      "assertionFailure": true,
+      "file": "src/desktop/devices/ui/add-gateway.tsx",
+      "before": "gateway.after(SESSION_MS, () => {",
+      "after": "gateway.after(SESSION_MS * 2, () => {"
+    },
+    {
+      "probe": "saved-choice",
+      "mutantExit": 1,
+      "assertionFailure": true,
+      "file": "src/desktop/devices/ui/add-gateway.tsx",
+      "before": "status.samePerson === undefined",
+      "after": "samePerson === undefined"
+    },
+    {
+      "probe": "class-separation",
+      "mutantExit": 1,
+      "assertionFailure": true,
+      "file": "src/desktop/devices/ui/add-gateway.tsx",
+      "before": "reply.items.filter((each) => each.class === PEER_READ)",
+      "after": "reply.items"
+    },
+    {
+      "probe": "owed-active",
+      "mutantExit": 1,
+      "assertionFailure": true,
+      "file": "src/desktop/devices/model/gateway-pairing.ts",
+      "before": "activationStopped: event.reply.activationStopped,",
+      "after": "activationStopped: undefined,"
+    },
+    {
+      "probe": "native-port",
+      "mutantExit": 1,
+      "assertionFailure": true,
+      "file": "src/desktop/devices/model/gateway-pairing.ts",
+      "before": "address: `GATEWAY_IP:${port}`",
+      "after": "address: \"GATEWAY_IP:47650\""
+    }
+  ],
+  "restoredExit": 0,
+  "sourceRevision": "41cec9e2121cb420c67d8036334840c4832b903c",
+  "restoredTests": 54,
+  "command": "pnpm exec vitest run src/desktop/devices/ui/add-gateway.test.tsx src/desktop/devices/adapters/gateway-pairing.test.ts src/desktop/devices/model/gateway-pairing.test.ts",
+  "executionCheckout": "a863f487cd278280e58583c09d3d851942d461b2 with source changes subsequently committed unchanged as 41cec9e2121cb420c67d8036334840c4832b903c",
+  "sourceSha256": {
+    "src/desktop/devices/ui/add-gateway.tsx": "e988c7a54d9b27a7e931676619ebdcdf5d7be79ecf9ff147593a2555564b92f2",
+    "src/desktop/devices/model/gateway-pairing.ts": "d88a7ea7e1720cdbb7e6fd3c525c740b8b54d1bc0a85ce7e2d3d93c047803e79",
+    "src/desktop/devices/adapters/gateway-pairing.ts": "35ae49f9453b01e2df8b780e6ed8b31b6aaa2a53dc398e46c36843af4f2a8cb5",
+    "src/desktop/devices/ui/devices.css": "e5f9631b9ab60d0725a8fbdfd039ee7aab0124dff4ecd79128663d90ee1f67be"
+  }
+}

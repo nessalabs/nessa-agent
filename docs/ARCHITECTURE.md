@@ -251,8 +251,9 @@ the quick switcher included. Titlebar content starts at the one safe area,
 no control or text draws under the window's controls, though a pane's header
 picture runs behind them to the window's edge. A column's title sits inline in
 the titlebar row, after the controls, where it fits, and on its own row below
-where it does not (`src/desktop/ui/column-header.tsx`, the same head for the
-session list, the sidebar and Settings' page). ResizeObserver reports update
+where it does not (`src/desktop/ui/column-header.tsx`, used by the session list
+in the columns layout). The sidebar tree has no separate session-list column;
+Settings uses its own masthead and page header. ResizeObserver reports update
 its width measurements only. One animation-frame callback applies the latest
 placement before the next paint, so moving the title cannot resize neighboring
 panes within that observer broadcast (#693). The overview's width observer also

@@ -1,0 +1,791 @@
+{
+  "functionalSource": "88bc8b58df613e90dfb8142cf7d0ff53f052ac91",
+  "mainControlSource": "19954d1f99adbfefea9036bcd33ce9f49c353038",
+  "functional": {
+    "summary": [
+      {
+        "check": "smoke",
+        "status": "held",
+        "held": "32/32",
+        "seconds": 30
+      },
+      {
+        "check": "ambient-overview",
+        "status": "held",
+        "held": "8/8",
+        "seconds": 43
+      },
+      {
+        "check": "resize-observers",
+        "status": "held",
+        "held": "4/4",
+        "seconds": 36
+      },
+      {
+        "check": "icon-buttons",
+        "status": "held",
+        "held": "12/12",
+        "seconds": 86
+      },
+      {
+        "check": "shared-controls",
+        "status": "FAILED",
+        "held": "28/32",
+        "seconds": 141
+      },
+      {
+        "check": "focus",
+        "status": "FAILED",
+        "held": "77/92",
+        "seconds": 478
+      },
+      {
+        "check": "drag",
+        "status": "FAILED",
+        "held": "173/188",
+        "seconds": 1946
+      },
+      {
+        "check": "responsive",
+        "status": "FAILED",
+        "held": "52/58",
+        "seconds": 535
+      },
+      {
+        "check": "safe-area",
+        "status": "held",
+        "held": "90/90",
+        "seconds": 207
+      },
+      {
+        "check": "columns",
+        "status": "FAILED",
+        "held": "251/270",
+        "seconds": 1777
+      },
+      {
+        "check": "committed-transcript",
+        "status": "held",
+        "held": "120/120",
+        "seconds": 14
+      },
+      {
+        "check": "local-tab-lifetimes",
+        "status": "held",
+        "held": "24/24",
+        "seconds": 9
+      },
+      {
+        "check": "lease-details",
+        "status": "held",
+        "held": "108/108",
+        "seconds": 82
+      },
+      {
+        "check": "load-fallback",
+        "status": "held",
+        "held": "16/16",
+        "seconds": 15
+      },
+      {
+        "check": "gateway-states",
+        "status": "held",
+        "held": "14/14",
+        "seconds": 46
+      },
+      {
+        "check": "conversation-unread",
+        "status": "held",
+        "held": "4/4",
+        "seconds": 12
+      },
+      {
+        "check": "mode-publication",
+        "status": "held",
+        "held": "2/2",
+        "seconds": 14
+      },
+      {
+        "check": "panel-list-follow",
+        "status": "held",
+        "held": "2/2",
+        "seconds": 18
+      },
+      {
+        "check": "linked-devices",
+        "status": "held",
+        "held": "18/18",
+        "seconds": 80
+      },
+      {
+        "check": "share-dialog",
+        "status": "held",
+        "held": "26/26",
+        "seconds": 233
+      },
+      {
+        "check": "session-rows",
+        "status": "held",
+        "held": "10/10",
+        "seconds": 51
+      },
+      {
+        "check": "settings-page",
+        "status": "FAILED",
+        "held": "23/24",
+        "seconds": 155
+      },
+      {
+        "check": "widgets",
+        "status": "held",
+        "held": "48/48",
+        "seconds": 229
+      },
+      {
+        "check": "subagents",
+        "status": "FAILED",
+        "held": "8/12",
+        "seconds": 152
+      },
+      {
+        "check": "mcp-apps",
+        "status": "FAILED",
+        "held": "88/100",
+        "seconds": 514
+      },
+      {
+        "check": "app-review",
+        "status": "FAILED",
+        "held": "32/36",
+        "seconds": 495
+      },
+      {
+        "check": "approval-deadline",
+        "status": "held",
+        "held": "2/2",
+        "seconds": 23
+      },
+      {
+        "check": "clock-snapshots",
+        "status": "held",
+        "held": "4/4",
+        "seconds": 2
+      },
+      {
+        "check": "message-sync",
+        "status": "FAILED",
+        "held": "8/14",
+        "seconds": 132
+      },
+      {
+        "check": "command-order",
+        "status": "COULD NOT RUN",
+        "held": "4/8",
+        "seconds": 23
+      },
+      {
+        "check": "published-files",
+        "status": "held",
+        "held": "24/24",
+        "seconds": 87
+      },
+      {
+        "check": "transcript-notes",
+        "status": "held",
+        "held": "16/16",
+        "seconds": 34
+      },
+      {
+        "check": "transcript-unreadable",
+        "status": "held",
+        "held": "4/4",
+        "seconds": 9
+      },
+      {
+        "check": "tool-disclosure",
+        "status": "held",
+        "held": "20/20",
+        "seconds": 23
+      },
+      {
+        "check": "user-attachments",
+        "status": "held",
+        "held": "144/144",
+        "seconds": 9
+      },
+      {
+        "check": "turn-outcomes",
+        "status": "held",
+        "held": "12/12",
+        "seconds": 30
+      },
+      {
+        "check": "send-failure",
+        "status": "held",
+        "held": "14/14",
+        "seconds": 19
+      },
+      {
+        "check": "refused-messages",
+        "status": "held",
+        "held": "8/8",
+        "seconds": 5
+      }
+    ],
+    "held": 1530,
+    "attempted": 1620,
+    "cannotRun": 18
+  },
+  "boundary": "Historical development functional observations; not a new-head matrix. Main controls are selected reproductions, not a full matrix or failure-rate comparison.",
+  "mainControls": [
+    {
+      "name": "shared-controls-1",
+      "family": "shared-controls",
+      "source": "19954d1f99adbfefea9036bcd33ce9f49c353038",
+      "exit": 1,
+      "candidateFailedNames": ["rows"],
+      "stats": {
+        "held": 0,
+        "attempted": 1,
+        "cannotRun": 0,
+        "failedNames": ["rows"],
+        "skipped": 0
+      }
+    },
+    {
+      "name": "shared-controls-2",
+      "family": "shared-controls",
+      "source": "19954d1f99adbfefea9036bcd33ce9f49c353038",
+      "exit": 1,
+      "candidateFailedNames": ["rows", "segmented"],
+      "stats": {
+        "held": 1,
+        "attempted": 2,
+        "cannotRun": 0,
+        "failedNames": ["segmented"],
+        "skipped": 0
+      }
+    },
+    {
+      "name": "shared-controls-3",
+      "family": "shared-controls",
+      "source": "19954d1f99adbfefea9036bcd33ce9f49c353038",
+      "exit": 1,
+      "candidateFailedNames": ["segmented"],
+      "stats": {
+        "held": 0,
+        "attempted": 1,
+        "cannotRun": 0,
+        "failedNames": ["segmented"],
+        "skipped": 0
+      }
+    },
+    {
+      "name": "focus",
+      "family": "focus",
+      "source": "19954d1f99adbfefea9036bcd33ce9f49c353038",
+      "exit": 1,
+      "candidateFailedNames": [
+        "focus-answers-card",
+        "focus-answers-overview",
+        "focus-gives-back-beside",
+        "focus-gives-back-moved",
+        "focus-gives-back-moved-pill",
+        "focus-gives-back-show-all",
+        "focus-mash",
+        "focus-overview-complete-list"
+      ],
+      "stats": {
+        "held": 31,
+        "attempted": 46,
+        "cannotRun": 12,
+        "failedNames": [
+          "focus-answers-card",
+          "focus-answers-overview",
+          "focus-gives-back-beside",
+          "focus-gives-back-moved",
+          "focus-gives-back-moved-pill",
+          "focus-gives-back-show-all",
+          "focus-overview-arriving",
+          "focus-overview-complete-list"
+        ],
+        "skipped": 0
+      }
+    },
+    {
+      "name": "drag-1",
+      "family": "drag",
+      "source": "19954d1f99adbfefea9036bcd33ce9f49c353038",
+      "exit": 0,
+      "candidateFailedNames": ["sideways-top"],
+      "stats": {
+        "held": 1,
+        "attempted": 1,
+        "cannotRun": 0,
+        "failedNames": [],
+        "skipped": 0
+      }
+    },
+    {
+      "name": "drag-2",
+      "family": "drag",
+      "source": "19954d1f99adbfefea9036bcd33ce9f49c353038",
+      "exit": 1,
+      "candidateFailedNames": ["sideways-top", "stationary-drag-target"],
+      "stats": {
+        "held": 1,
+        "attempted": 2,
+        "cannotRun": 0,
+        "failedNames": ["stationary-drag-target"],
+        "skipped": 0
+      }
+    },
+    {
+      "name": "drag-3",
+      "family": "drag",
+      "source": "19954d1f99adbfefea9036bcd33ce9f49c353038",
+      "exit": 1,
+      "candidateFailedNames": [
+        "command-mid-drag",
+        "compact-glass-release",
+        "sideways-top",
+        "sweep-across-zones"
+      ],
+      "stats": {
+        "held": 0,
+        "attempted": 4,
+        "cannotRun": 1,
+        "failedNames": [
+          "command-mid-drag",
+          "compact-glass-release",
+          "sideways-top",
+          "sweep-across-zones"
+        ],
+        "skipped": 0
+      }
+    },
+    {
+      "name": "drag-4",
+      "family": "drag",
+      "source": "19954d1f99adbfefea9036bcd33ce9f49c353038",
+      "exit": 1,
+      "candidateFailedNames": ["sideways-top"],
+      "stats": {
+        "held": 0,
+        "attempted": 1,
+        "cannotRun": 0,
+        "failedNames": ["sideways-top"],
+        "skipped": 0
+      }
+    },
+    {
+      "name": "drag-5",
+      "family": "drag",
+      "source": "19954d1f99adbfefea9036bcd33ce9f49c353038",
+      "exit": 1,
+      "candidateFailedNames": [
+        "command-mid-drag",
+        "compact-glass-release",
+        "reduced-motion",
+        "rest-settles",
+        "sideways-top",
+        "sweep-across-zones"
+      ],
+      "stats": {
+        "held": 2,
+        "attempted": 6,
+        "cannotRun": 0,
+        "failedNames": [
+          "compact-glass-release",
+          "rest-settles",
+          "sideways-top",
+          "sweep-across-zones"
+        ],
+        "skipped": 0
+      }
+    },
+    {
+      "name": "drag-6",
+      "family": "drag",
+      "source": "19954d1f99adbfefea9036bcd33ce9f49c353038",
+      "exit": 1,
+      "candidateFailedNames": ["sideways-top"],
+      "stats": {
+        "held": 0,
+        "attempted": 1,
+        "cannotRun": 0,
+        "failedNames": ["sideways-top"],
+        "skipped": 0
+      }
+    },
+    {
+      "name": "responsive-1",
+      "family": "responsive",
+      "source": "19954d1f99adbfefea9036bcd33ce9f49c353038",
+      "exit": 1,
+      "candidateFailedNames": ["overview-row-answers"],
+      "stats": {
+        "held": 0,
+        "attempted": 1,
+        "cannotRun": 0,
+        "failedNames": ["overview-row-answers"],
+        "skipped": 0
+      }
+    },
+    {
+      "name": "responsive-2",
+      "family": "responsive",
+      "source": "19954d1f99adbfefea9036bcd33ce9f49c353038",
+      "exit": 1,
+      "candidateFailedNames": ["column-title", "overview-row-answers"],
+      "stats": {
+        "held": 0,
+        "attempted": 2,
+        "cannotRun": 1,
+        "failedNames": ["column-title", "overview-row-answers"],
+        "skipped": 0
+      }
+    },
+    {
+      "name": "responsive-3",
+      "family": "responsive",
+      "source": "19954d1f99adbfefea9036bcd33ce9f49c353038",
+      "exit": 1,
+      "candidateFailedNames": ["overview-row-answers"],
+      "stats": {
+        "held": 0,
+        "attempted": 1,
+        "cannotRun": 0,
+        "failedNames": ["overview-row-answers"],
+        "skipped": 0
+      }
+    },
+    {
+      "name": "responsive-4",
+      "family": "responsive",
+      "source": "19954d1f99adbfefea9036bcd33ce9f49c353038",
+      "exit": 1,
+      "candidateFailedNames": ["column-title", "overview-row-answers"],
+      "stats": {
+        "held": 0,
+        "attempted": 2,
+        "cannotRun": 1,
+        "failedNames": ["column-title", "overview-row-answers"],
+        "skipped": 0
+      }
+    },
+    {
+      "name": "columns-1",
+      "family": "columns",
+      "source": "19954d1f99adbfefea9036bcd33ce9f49c353038",
+      "exit": 1,
+      "candidateFailedNames": ["overview-narrow"],
+      "stats": {
+        "held": 0,
+        "attempted": 1,
+        "cannotRun": 0,
+        "failedNames": ["overview-narrow"],
+        "skipped": 0
+      }
+    },
+    {
+      "name": "columns-2",
+      "family": "columns",
+      "source": "19954d1f99adbfefea9036bcd33ce9f49c353038",
+      "exit": 1,
+      "candidateFailedNames": ["quiet-composer", "sidebar-motion", "split-motion"],
+      "stats": {
+        "held": 0,
+        "attempted": 3,
+        "cannotRun": 0,
+        "failedNames": ["quiet-composer", "sidebar-motion", "split-motion"],
+        "skipped": 0
+      }
+    },
+    {
+      "name": "columns-3",
+      "family": "columns",
+      "source": "19954d1f99adbfefea9036bcd33ce9f49c353038",
+      "exit": 1,
+      "candidateFailedNames": ["quiet-composer", "sidebar-motion", "split-motion"],
+      "stats": {
+        "held": 0,
+        "attempted": 3,
+        "cannotRun": 0,
+        "failedNames": ["quiet-composer", "sidebar-motion", "split-motion"],
+        "skipped": 0
+      }
+    },
+    {
+      "name": "columns-4",
+      "family": "columns",
+      "source": "19954d1f99adbfefea9036bcd33ce9f49c353038",
+      "exit": 1,
+      "candidateFailedNames": ["quiet-composer", "split-motion"],
+      "stats": {
+        "held": 0,
+        "attempted": 2,
+        "cannotRun": 0,
+        "failedNames": ["quiet-composer", "split-motion"],
+        "skipped": 0
+      }
+    },
+    {
+      "name": "columns-5",
+      "family": "columns",
+      "source": "19954d1f99adbfefea9036bcd33ce9f49c353038",
+      "exit": 1,
+      "candidateFailedNames": ["quiet-composer", "sidebar-motion", "split-motion"],
+      "stats": {
+        "held": 0,
+        "attempted": 3,
+        "cannotRun": 0,
+        "failedNames": ["quiet-composer", "sidebar-motion", "split-motion"],
+        "skipped": 0
+      }
+    },
+    {
+      "name": "columns-6",
+      "family": "columns",
+      "source": "19954d1f99adbfefea9036bcd33ce9f49c353038",
+      "exit": 1,
+      "candidateFailedNames": ["quiet-composer", "sidebar-motion", "split-motion"],
+      "stats": {
+        "held": 0,
+        "attempted": 3,
+        "cannotRun": 0,
+        "failedNames": ["quiet-composer", "sidebar-motion", "split-motion"],
+        "skipped": 0
+      }
+    },
+    {
+      "name": "columns-7",
+      "family": "columns",
+      "source": "19954d1f99adbfefea9036bcd33ce9f49c353038",
+      "exit": 1,
+      "candidateFailedNames": [
+        "overview-narrow",
+        "quiet-composer",
+        "sidebar-motion",
+        "split-motion"
+      ],
+      "stats": {
+        "held": 1,
+        "attempted": 4,
+        "cannotRun": 0,
+        "failedNames": ["overview-narrow", "quiet-composer", "split-motion"],
+        "skipped": 0
+      }
+    },
+    {
+      "name": "settings-page-1",
+      "family": "settings-page",
+      "source": "19954d1f99adbfefea9036bcd33ce9f49c353038",
+      "exit": 1,
+      "candidateFailedNames": ["review-notices"],
+      "stats": {
+        "held": 0,
+        "attempted": 1,
+        "cannotRun": 0,
+        "failedNames": ["review-notices"],
+        "skipped": 0
+      }
+    },
+    {
+      "name": "subagents-1",
+      "family": "subagents",
+      "source": "19954d1f99adbfefea9036bcd33ce9f49c353038",
+      "exit": 1,
+      "candidateFailedNames": ["panel"],
+      "stats": {
+        "held": 0,
+        "attempted": 1,
+        "cannotRun": 0,
+        "failedNames": ["panel"],
+        "skipped": 0
+      }
+    },
+    {
+      "name": "subagents-2",
+      "family": "subagents",
+      "source": "19954d1f99adbfefea9036bcd33ce9f49c353038",
+      "exit": 1,
+      "candidateFailedNames": ["panel"],
+      "stats": {
+        "held": 0,
+        "attempted": 1,
+        "cannotRun": 0,
+        "failedNames": ["panel"],
+        "skipped": 0
+      }
+    },
+    {
+      "name": "subagents-3",
+      "family": "subagents",
+      "source": "19954d1f99adbfefea9036bcd33ce9f49c353038",
+      "exit": 1,
+      "candidateFailedNames": ["panel"],
+      "stats": {
+        "held": 0,
+        "attempted": 1,
+        "cannotRun": 0,
+        "failedNames": ["panel"],
+        "skipped": 0
+      }
+    },
+    {
+      "name": "subagents-4",
+      "family": "subagents",
+      "source": "19954d1f99adbfefea9036bcd33ce9f49c353038",
+      "exit": 1,
+      "candidateFailedNames": ["panel"],
+      "stats": {
+        "held": 0,
+        "attempted": 1,
+        "cannotRun": 0,
+        "failedNames": ["panel"],
+        "skipped": 0
+      }
+    },
+    {
+      "name": "mcp-apps-1",
+      "family": "mcp-apps",
+      "source": "19954d1f99adbfefea9036bcd33ce9f49c353038",
+      "exit": 1,
+      "candidateFailedNames": ["panel", "teardown", "window"],
+      "stats": {
+        "held": 0,
+        "attempted": 3,
+        "cannotRun": 0,
+        "failedNames": ["panel", "teardown", "window"],
+        "skipped": 0
+      }
+    },
+    {
+      "name": "mcp-apps-2",
+      "family": "mcp-apps",
+      "source": "19954d1f99adbfefea9036bcd33ce9f49c353038",
+      "exit": 1,
+      "candidateFailedNames": ["panel", "teardown", "window"],
+      "stats": {
+        "held": 0,
+        "attempted": 3,
+        "cannotRun": 0,
+        "failedNames": ["panel", "teardown", "window"],
+        "skipped": 0
+      }
+    },
+    {
+      "name": "mcp-apps-3",
+      "family": "mcp-apps",
+      "source": "19954d1f99adbfefea9036bcd33ce9f49c353038",
+      "exit": 1,
+      "candidateFailedNames": ["panel", "teardown", "window"],
+      "stats": {
+        "held": 0,
+        "attempted": 3,
+        "cannotRun": 0,
+        "failedNames": ["panel", "teardown", "window"],
+        "skipped": 0
+      }
+    },
+    {
+      "name": "mcp-apps-4",
+      "family": "mcp-apps",
+      "source": "19954d1f99adbfefea9036bcd33ce9f49c353038",
+      "exit": 1,
+      "candidateFailedNames": ["panel", "teardown", "window"],
+      "stats": {
+        "held": 0,
+        "attempted": 3,
+        "cannotRun": 0,
+        "failedNames": ["panel", "teardown", "window"],
+        "skipped": 0
+      }
+    },
+    {
+      "name": "app-review-1",
+      "family": "app-review",
+      "source": "19954d1f99adbfefea9036bcd33ce9f49c353038",
+      "exit": 1,
+      "candidateFailedNames": ["message-bidi"],
+      "stats": {
+        "held": 0,
+        "attempted": 1,
+        "cannotRun": 0,
+        "failedNames": ["message-bidi"],
+        "skipped": 0
+      }
+    },
+    {
+      "name": "app-review-2",
+      "family": "app-review",
+      "source": "19954d1f99adbfefea9036bcd33ce9f49c353038",
+      "exit": 1,
+      "candidateFailedNames": ["message-bidi"],
+      "stats": {
+        "held": 0,
+        "attempted": 1,
+        "cannotRun": 0,
+        "failedNames": ["message-bidi"],
+        "skipped": 0
+      }
+    },
+    {
+      "name": "app-review-3",
+      "family": "app-review",
+      "source": "19954d1f99adbfefea9036bcd33ce9f49c353038",
+      "exit": 1,
+      "candidateFailedNames": ["message-bidi"],
+      "stats": {
+        "held": 0,
+        "attempted": 1,
+        "cannotRun": 0,
+        "failedNames": ["message-bidi"],
+        "skipped": 0
+      }
+    },
+    {
+      "name": "app-review-4",
+      "family": "app-review",
+      "source": "19954d1f99adbfefea9036bcd33ce9f49c353038",
+      "exit": 1,
+      "candidateFailedNames": ["message-bidi"],
+      "stats": {
+        "held": 0,
+        "attempted": 1,
+        "cannotRun": 0,
+        "failedNames": ["message-bidi"],
+        "skipped": 0
+      }
+    },
+    {
+      "name": "message-sync",
+      "family": "message-sync",
+      "source": "19954d1f99adbfefea9036bcd33ce9f49c353038",
+      "exit": 1,
+      "candidateFailedNames": ["delivery"],
+      "stats": {
+        "held": 10,
+        "attempted": 14,
+        "cannotRun": 0,
+        "failedNames": ["delivery"],
+        "skipped": 0
+      }
+    },
+    {
+      "name": "command-order",
+      "family": "command-order",
+      "source": "19954d1f99adbfefea9036bcd33ce9f49c353038",
+      "exit": 2,
+      "candidateFailedNames": ["command", "direction"],
+      "stats": {
+        "held": 4,
+        "attempted": 8,
+        "cannotRun": 4,
+        "failedNames": ["command", "direction"],
+        "skipped": 0
+      }
+    }
+  ]
+}

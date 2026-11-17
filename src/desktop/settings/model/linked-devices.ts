@@ -9,7 +9,8 @@
  * into the sentences here. Nothing is updated optimistically: a write that
  * may have changed what is open reads again, and that read is what is shown.
  *
- * The state names the one request in flight (`pending`). The tab sends it.
+ * The state names the request owning the current result (`pending`). The tab
+ * sends it. Cancel may supersede a quiet poll whose read still physically runs.
  * An answer comes back as `answered` with the request's `seq`, so an answer
  * for a request since replaced changes nothing. A poll read does not clear
  * what an action just said.
@@ -170,7 +171,7 @@ export interface Notice {
   readonly from: "read" | "action"
 }
 
-/** The one request in flight. `poll`: a read that must not clear an action notice. */
+/** Current result owner. `poll`: an observational read Cancel may supersede. */
 export type PendingRequest =
   | { readonly kind: "read"; readonly seq: number; readonly poll?: true }
   | { readonly kind: "create"; readonly seq: number }
@@ -215,7 +216,7 @@ export type LinkedDevicesEvent =
       readonly outcome: Outcome<unknown>
     }
   | { readonly type: "pair" }
-  | { readonly type: "cancel" }
+  | { readonly type: "cancel"; readonly invitationId: string }
   | { readonly type: "refresh" }
   | { readonly type: "approve"; readonly invitationId: string }
   | { readonly type: "deny"; readonly invitationId: string }
@@ -371,7 +372,7 @@ export function linkingShown(state: LinkedDevicesState): boolean {
   return state.switching ? state.switching.enabled : state.linking === "on"
 }
 
-/** One request at a time, while linking is on and the gateway can be reached. */
+/** Ordinary actions wait for the current request while linking is on. */
 export function canAct(state: LinkedDevicesState): boolean {
   return (
     state.connection === "connected" && state.linking === "on" && state.pending === null
@@ -408,6 +409,19 @@ const openInvitation = (state: LinkedDevicesState) =>
 /** Whether the open invitation may be cancelled or replaced. */
 export function canReplace(state: LinkedDevicesState): boolean {
   return canAct(state) && openInvitation(state) !== null && state.confirmRevoke === null
+}
+
+/** Cancel may supersede an observational poll, never an uncertain mutation's read. */
+export function canCancel(state: LinkedDevicesState): boolean {
+  return (
+    state.connection === "connected" &&
+    state.linking === "on" &&
+    state.switching === null &&
+    state.confirmRevoke === null &&
+    openInvitation(state) !== null &&
+    (state.pending === null ||
+      (state.pending.kind === "read" && state.pending.poll === true))
+  )
 }
 
 /** A waiting device Approve may name: its key was shown and hashed. */
@@ -873,7 +887,12 @@ export function linkedDevicesReducer(
       return begin(state, { kind: "create" }, null)
     case "cancel": {
       const invitationId = openInvitation(state)
-      if (!canReplace(state) || invitationId === null) return state
+      if (
+        !canCancel(state) ||
+        invitationId === null ||
+        event.invitationId !== invitationId
+      )
+        return state
       return begin(state, { kind: "cancel", invitationId }, null)
     }
     case "refresh": {

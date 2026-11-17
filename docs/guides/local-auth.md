@@ -695,3 +695,31 @@ the session is bound to the exact origin that signed in. No CORS access is enabl
 Cookie authentication is accepted only on `/browser/session`; native `/session`
 continues to require explicit credential evidence. Sign-out closes all sockets
 using that browser session on the next state check, without cancelling agents.
+
+## Explicit Human sign-in for a gateway invitation
+
+Devices → Add device → Gateway creates a read-only gateway invitation. Choose
+“Both gateways belong to me” before creating the code. That choice asks for the
+Human owner's existing access token, opens a separate temporary session to this
+window's gateway, and keeps the panel credential in place. It does not read the
+owner token file or establish a durable panel-to-person relation. An Integration
+token remains ineligible even if it has an administrator membership.
+
+The token is not written to application storage or a URL. The temporary session
+has the supplied credential's existing authority; the pairing page exposes only
+pairing operations. It disables reconnect and closes on completion, navigation,
+page hide, explicit End pairing sign-in or a scheduled ten-minute UI deadline.
+That timer depends on the browser event loop; it does not expire the credential
+or impose a server session TTL. Closing does not promise zeroization of
+JavaScript strings. Reopening requires explicit
+sign-in and reads pending invitations; it cannot recover a lost one-use code.
+A lost create response must be followed by Read pending invitations before
+another create is offered. A saved choice is read-only; cancel to replace it.
+
+Use the displayed native enrollment command on the other gateway, compare its
+fingerprint, and approve that exact key. Active is credential activation, not a
+promise that person attribution has committed or that any conversation is
+shared. If the grant or audit write fails, Retry activation uses the existing
+credential and receiver. Linked devices' existing credential revoke removes
+attribution. This entry creates PeerRead; Phone keeps OwnerPhone consent and
+Computer keeps Environment consent.
