@@ -14,6 +14,7 @@ import {
   indexFailed,
   indexLoaded,
   indexRequested,
+  sessionHeld,
   sessionRemoved,
   shownSessionIds,
   transcriptFailed,
@@ -833,6 +834,39 @@ describe("what is kept of sessions no pane shows", () => {
     expect(kept).not.toContain("s0")
     expect(kept).not.toContain("s1")
     expect(kept).toContain("s2")
+  })
+
+  it("keeps and reads a held session's conversation as a shown one's, until it is let go", () => {
+    const sessions = Array.from({ length: retention.unshownConversations + 2 }, (_, i) =>
+      summary(`s${i}`, "gateway", 1000 + i),
+    )
+    const listed = indexLoaded(initialWorkspace, {
+      index: {
+        ...testIndex(),
+        sessions: [...testIndex().sessions, ...sessions],
+      },
+      draftId: "x",
+      read: "r",
+    })
+    // s0 is the oldest and in no pane: a voice call talks to it.
+    const state = sessionHeld(listed, { sessionId: "s0" })
+    expect(sessionHeld(state, { sessionId: "s0" })).toBe(state)
+    expect(shownSessionIds(state)).toContain("s0")
+    const hear = (from: typeof state) =>
+      sessions.reduce(
+        (current, session) =>
+          updateReceived(current, {
+            update: { kind: "transcript", transcript: transcript(session.id, 2) },
+          }),
+        from,
+      )
+    const held = hear(state)
+    expect(Object.keys(held.transcripts)).toContain("s0")
+    expect(Object.keys(held.transcripts)).not.toContain("s1")
+    // Let go, it is one of the rest again: the next conversation heard lets it go.
+    const released = sessionHeld(held, { sessionId: null })
+    expect(shownSessionIds(released)).not.toContain("s0")
+    expect(Object.keys(hear(released).transcripts)).not.toContain("s0")
   })
 
   it("keeps a conversation's newest revision when its content is let go, so an older read cannot bring it back", () => {

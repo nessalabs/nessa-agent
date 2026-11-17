@@ -183,7 +183,7 @@ impl PeerSocket {
         self.transport.write_all(bytes).unwrap();
         self.transport.flush().unwrap();
     }
-    fn read_text(&mut self) -> Option<String> {
+    pub(crate) fn read_text(&mut self) -> Option<String> {
         loop {
             let buffer = self.frames.unfilled().ok()?;
             let count = self
@@ -227,6 +227,19 @@ pub(crate) struct Endpoint {
     device: NativeIdentity,
 }
 impl Endpoint {
+    pub(crate) fn reader_access(&self) -> crate::retained::ReaderAccess<'_> {
+        crate::retained::ReaderAccess {
+            role: crate::retained::ReaderRole::GrantedPeer,
+            address: self.address,
+            relay: None,
+            identity: &self.device,
+            pin: self.pin,
+            credential: "credential",
+            receiver: "receiver",
+            access_epoch: 3,
+            client_id: "example",
+        }
+    }
     fn evidence<'a>(&'a self, credential: &'a str) -> DeviceEvidence<'a> {
         DeviceEvidence {
             identity: &self.device,

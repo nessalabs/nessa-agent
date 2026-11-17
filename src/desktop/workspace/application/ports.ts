@@ -293,6 +293,13 @@ export interface WorkspaceSource {
    */
   delete(sessionId: string, initiator: Initiator): Promise<void>
   markRead(sessionId: string): Promise<void>
+  /**
+   * The session the window holds off screen (`heldSession`: a voice call
+   * talks to it), or null. A source that follows only so many conversations
+   * keeps following this one past its limit, and follows it again if it had
+   * let it go, so what the call waits for still arrives.
+   */
+  keepFollowing(sessionId: string | null): void
 }
 
 /** The source's refusal: a typed reason (`model/failure.ts`), never a sentence. */

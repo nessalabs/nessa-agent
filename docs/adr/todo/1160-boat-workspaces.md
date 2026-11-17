@@ -81,7 +81,7 @@ sequenceDiagram
 | B2 | Save valid token | Validate account and dedicated `nessa` environment; persist encrypted entry under captured vault generation | Connected after persistence; status contains no token |
 | B3 | Concurrent creates for one thread | Serialize allocation; persist intent before provider create | One create key and VM |
 | B4 | Creation receipt arrives | Persist VM identity before workspace preparation | Retry prepares same VM |
-| B5 | Creation outcome lost / crash before receipt | Retain unresolved intent | Refuse automatic replacement; operator reconciliation required |
+| B5 | Creation outcome lost / crash before receipt | Retain unresolved intent; Boat may or may not have made the VM | The next opening that may provision asks Boat again under the same key (`nessa-thread-<thread>`): Boat answers with the VM it made, or makes it now, so there is still one VM. An opening that may not provision (accounting, reads) stays `ProvisioningUncertain` and never creates |
 | B6 | Preparation fails / saved VM missing | Retain assignment; refuse open | Retry existing VM or address missing resource; no Local fallback |
 | B7 | Opening caller disappears | Accepted allocation task owns receipt persistence | Preserve its result independently of observer |
 | B8 | Start / continue harness | Existing SSH lease framing and scoped launch variables | No HTTP input replay |
@@ -92,7 +92,9 @@ sequenceDiagram
 | B13 | Chat history erased | Existing conversation erasure and tombstone | Workspace files and VM retained, like Local project files; manage in Boat |
 | B14 | Local thread | Existing local environment | No Boat allocation |
 | B15 | Slow initial channel open | Client allows workspace preparation before agent exchange allowance | Await typed answer; never replay an uncertain mutation automatically |
-| B16 | Receipt persistence fails after create | Attempt provider deletion; retain unresolved intent | Accepted deletion alone is not confirmed cleanup |
+| B16 | Receipt persistence fails after create | Attempt provider deletion; retain unresolved intent | Accepted deletion alone is not confirmed cleanup. The next opening asks again under the same key as in B5 (B16a, B16b) |
+| B16a | Retry after an unconfirmed rollback | Boat replays the VM it still has (`ready`), so the answer is `RetainTarget` | Saved and used if admitted; if refused, kept and never removed, since a replay may be in use |
+| B16b | Retry after a confirmed rollback | While Boat remembers the key it replays the removed VM's id (`RetainTarget`); once it forgets, it makes a new VM (`RollbackNewVm`) | A replayed id is never removed again; if it no longer exists, connecting fails and the saved VM is missing (B6). A new VM follows B4 |
 | B17 | Fresh creation acknowledgement names a starting VM | The SDK waits for that VM within the ready budget; no attached workspace, SSH, MCP or agent command yet | Preserve the named VM and rollback disposition on timeout or rejection |
 | B18 | Fresh VM becomes ready | The SDK re-reads the dedicated environment and the complete receipt, including exact `wipePendingUntilRestart: false`, before admission | Ready alone never authorizes attachment |
 | B19 | New VM still wiping at creation | `Workspaces` records StopRequested, stops it (cause `wiping`), records StopAnswered; waking it is the restart that ends the wipe | A stop not accepted or not recorded leaves it refused and rolled back; a replayed VM still wiping stays refused |

@@ -13,10 +13,12 @@ use nessa_auth::{
     adapters::pairing::ManualCode, application::session::AuthenticatedSession,
     domain::pairing::DeviceKey,
 };
+use nessa_client_core::retained::FollowRule;
 use nessa_peer_gateways::infrastructure::{PeerEntry, PeerPhase, PeerSync, SyncState};
 use nessa_protocol::product::generated::{
-    PeerEnrollParams, PeerErrorCode, PeerForgetParams, PeerGateway, PeerListResult,
-    PeerPhase as WirePhase, PeerRelayParams, PeerSync as WireSync, PeerSyncState,
+    PeerEnrollParams, PeerErrorCode, PeerFollowParams, PeerFollowResult, PeerForgetParams,
+    PeerGateway, PeerListResult, PeerPhase as WirePhase, PeerRelayParams, PeerSync as WireSync,
+    PeerSyncState,
 };
 use nessa_protocol::protocol::{OutgoingMessage, RequestFrame};
 use nessa_protocol::relay::RelayAddress;
@@ -84,6 +86,29 @@ pub(super) async fn dispatch(
             peers
                 .forget(DeviceKey::new(params.peer_key), initiator)
                 .await
+        }
+        "peer.follow" => {
+            let Ok(params) = serde_json::from_value::<PeerFollowParams>(frame.params) else {
+                return failure(&id, "invalid_request");
+            };
+            let Ok(rule) = FollowRule::new(params.conversations, params.keep_bytes) else {
+                return failure(&id, "invalid_request");
+            };
+            return match peers
+                .follow(DeviceKey::new(params.peer_key), rule, initiator)
+                .await
+            {
+                Ok(choice) => success(
+                    &id,
+                    &PeerFollowResult {
+                        peer_key: params.peer_key,
+                        conversations: choice.rule.conversations().to_vec(),
+                        keep_bytes: choice.rule.keep_bytes(),
+                        replica_reset: choice.replica_reset,
+                    },
+                ),
+                Err(error) => failure(&id, error.code()),
+            };
         }
         _ => return failure(&id, "unknown_method"),
     };
