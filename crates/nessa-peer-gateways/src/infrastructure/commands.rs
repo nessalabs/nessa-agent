@@ -1341,7 +1341,10 @@ impl PeerCommands {
     ) -> PollerRecord<'_> {
         if matches!(
             cause,
-            PollerCause::Withdrawn { .. } | PollerCause::ResetRequired | PollerCause::CacheDamaged
+            PollerCause::Withdrawn { .. }
+                | PollerCause::ResetRequired
+                | PollerCause::CacheDamaged
+                | PollerCause::Ended { .. }
         ) {
             self.note_shared_chats();
         }

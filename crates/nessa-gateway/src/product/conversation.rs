@@ -1157,7 +1157,15 @@ pub(super) async fn read_view(
         state
             .local_timings
             .observe(&opened.view, state.clock.unix_milliseconds());
-        let view = wire_view(state, opened.view).await?;
+        // The grantor's model may not be installed here. The transcript still
+        // renders; this gateway is not going to run that agent.
+        let view = match wire_view(state, opened.view.clone()).await {
+            Ok(view) => view,
+            Err(
+                ConversationError::ModelUnavailable | ConversationError::ApprovalModeUnavailable,
+            ) => passive_shared_view(state, opened.view).await?,
+            Err(error) => return Err(error),
+        };
         return Ok((view, Some(opened.cursor)));
     }
     let read = service
@@ -1658,6 +1666,64 @@ async fn wire_view(
                 }
             }
         }
+    }
+    serde_json::from_value(value).map_err(|_| ConversationError::Unavailable)
+}
+
+/// A shared transcript whose agent or model is not in this gateway's catalog.
+/// The selection is kept as the grantor saved it. The runtime display facts
+/// that catalog would have supplied are left off, and every approval mode is
+/// offered so the saved one is still a choice the client accepts. Nothing
+/// here can be run.
+async fn passive_shared_view(
+    state: &ProductRouteState,
+    view: ApplicationConversationView,
+) -> Result<WireConversationView, ConversationError> {
+    let selection = view
+        .selection
+        .clone()
+        .ok_or(ConversationError::Unavailable)?;
+    let conversation_id = view.conversation_id.clone();
+    let mut value = serde_json::to_value(view).map_err(|_| ConversationError::Unavailable)?;
+    let fields = value
+        .as_object_mut()
+        .ok_or(ConversationError::Unavailable)?;
+    fields.insert(
+        "serverNowMs".into(),
+        json!(state.view_clock.unix_milliseconds()),
+    );
+    fields.insert(
+        "approvalMode".into(),
+        json!(selection.approval_mode.as_str()),
+    );
+    fields.insert("model".into(), json!(selection.model));
+    fields.insert(
+        "approvalModes".into(),
+        json!([
+            {
+                "id": "ask",
+                "name": "Ask",
+                "description": "The provider asks before it acts."
+            },
+            {
+                "id": "auto",
+                "name": "Auto",
+                "description": "The provider proceeds where it can."
+            },
+            {
+                "id": "full",
+                "name": "Full",
+                "description": "The provider proceeds without asking."
+            }
+        ]),
+    );
+    // The catalog's context window and display name are not known here.
+    fields.remove("runtime");
+    if let Some(service) = state.conversation.service.as_ref() {
+        let id =
+            ConversationId::new(&conversation_id).map_err(|_| ConversationError::InvalidInput)?;
+        let snapshot = service.usage_limit_snapshot(&id).await?;
+        fields.insert("usageLimitAutoContinue".into(), json!(snapshot.enabled));
     }
     serde_json::from_value(value).map_err(|_| ConversationError::Unavailable)
 }

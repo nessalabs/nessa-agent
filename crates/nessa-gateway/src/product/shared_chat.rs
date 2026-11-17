@@ -1000,6 +1000,28 @@ mod tests {
         .await;
         assert!(!missing_point.ok);
         assert_eq!(missing_point.error.unwrap().code, "invalid_request");
+
+        let bare = serde_json::from_value(json!({
+            "environments": [],
+            "commandHosts": [],
+            "agents": [],
+            "nativeHooks": {"claude": "off", "codex": "off"}
+        }))
+        .unwrap();
+        let state = state.with_agents_catalog(bare);
+        let read = ask(
+            &state,
+            &session,
+            "conversation.read",
+            json!({ "conversationId": id }),
+        )
+        .await;
+        assert!(read.ok, "{read:?}");
+        let payload = read.payload.unwrap();
+        assert_eq!(payload["title"], "from the grantor");
+        assert_eq!(payload["model"], "model");
+        assert_eq!(payload["approvalMode"], "ask");
+        assert!(payload.get("runtime").is_none());
     }
 
     #[tokio::test]
