@@ -34,7 +34,13 @@ export function StatusGlyph({
 }) {
   // Running shows only once it lasts, so a turn refused at once never flickers.
   const settled = useSettledWorking(reported === "running")
-  const status = reported === "running" && !settled ? "idle" : reported
+  // Shown, it holds through a quick end until its hold is over.
+  const status =
+    reported === "running" && !settled
+      ? "idle"
+      : reported === "idle" && settled
+        ? "running"
+        : reported
   if (status === "idle")
     return idle ? (
       <span className="workspace-status" data-status="idle" aria-hidden="true" />

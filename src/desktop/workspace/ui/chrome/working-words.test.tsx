@@ -5,6 +5,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest"
 import { ClockProvider } from "../../../../clock"
 import { SidebarRow } from "../source-list/sidebar-row"
 import { workingHoldMs, workingShowAfterMs } from "./use-settled-working"
+import { StatusGlyph } from "./status-glyph"
 import { WorkingWords } from "./working-words"
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -95,4 +96,17 @@ it("shows a running channel by its name, not a glyph at its end", () => {
   expect(host.querySelector("[aria-label]")?.getAttribute("aria-label")).toBe(
     "general Running",
   )
+})
+
+it("keeps a shown running glyph through its hold when the turn ends", () => {
+  const arc = () => host.querySelector('.workspace-status[data-status="running"]')
+  render(<StatusGlyph status="running" />)
+  expect(arc()).toBeNull()
+  wait(workingShowAfterMs)
+  expect(arc()).not.toBeNull()
+  render(<StatusGlyph status="idle" />)
+  wait(workingHoldMs - 50)
+  expect(arc()).not.toBeNull()
+  wait(50)
+  expect(arc()).toBeNull()
 })
