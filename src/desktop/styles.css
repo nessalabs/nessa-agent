@@ -526,12 +526,6 @@ html:not(.dark) [data-surface] {
   content-visibility: hidden;
 }
 
-/* A column change paints its boxes without also painting scene text that is
-   already laid out. The next frame shows it again. */
-.split-panes-grid[data-split-painting] .desktop-night-scene[data-scene-complete] {
-  content-visibility: hidden;
-}
-
 /*
  * A chosen picture fills the same box as the scene, covering it, and blends in
  * the same way: fading in under the titlebar and out toward both sides and

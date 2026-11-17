@@ -797,6 +797,47 @@ const LIGHTS_END = 76
  * (`content-visibility: hidden`) in one change, so its rows are never
  * restyled on a frame of the fold. Opened again, it is reachable at once.
  */
+/**
+ * Watches every frame of a fold, a split or a close for a pane that changes
+ * how it looks while it moves: a composer losing its glass blur or shadow, or
+ * a laid-out scene skipped for a frame. Either flashed on every fold and drop
+ * and read as the window flickering. Call it before the key, and the function
+ * it returns after the motion has landed.
+ */
+async function lookHolds(page, label) {
+  await page.evaluate(() => {
+    const seen = []
+    let on = true
+    const tick = () => {
+      if (!on) return
+      for (const composer of document.querySelectorAll(".desktop-composer")) {
+        const style = getComputedStyle(composer)
+        if (style.backdropFilter === "none" || style.boxShadow === "none")
+          seen.push(`composer ${style.backdropFilter} / ${style.boxShadow}`)
+      }
+      for (const scene of document.querySelectorAll(
+        ".desktop-night-scene[data-scene-complete]",
+      ))
+        if (getComputedStyle(scene).contentVisibility === "hidden")
+          seen.push("a laid-out scene skipped")
+      requestAnimationFrame(tick)
+    }
+    requestAnimationFrame(tick)
+    window.__stressLook = () => {
+      on = false
+      return seen
+    }
+  })
+  return async (failures) => {
+    await page.waitForTimeout(700)
+    const seen = await page.evaluate(() => window.__stressLook?.() ?? [])
+    if (seen.length)
+      failures.push(
+        `${label}: a pane changed its look while it moved, in ${seen.length} frame(s), e.g. ${seen[0]}`,
+      )
+  }
+}
+
 async function sidebarParks(page, failures, open) {
   const read = () =>
     page.evaluate((selector) => {
@@ -7118,8 +7159,10 @@ const steps = {
     if (failures.length) return
     // ⌘B hides the sidebar, which makes room for a pane beside; ⌘-click on a
     // row in the session list then opens it there, focused. The page is a Mac's.
+    const folded = await lookHolds(run.page, "folding the sidebar")
     await run.page.keyboard.press(keys.toggleSidebar)
     await sidebarParks(run.page, failures, false)
+    await folded(failures)
     await run.page
       .locator(selectorFor.sessionListRowFor(conversationId), {
         hasText: await titleOf(run, conversationId),
@@ -7197,6 +7240,7 @@ const steps = {
     )
     if (failures.length) return
     // ⌘W closes the focused pane: the one beside.
+    const closed = await lookHolds(run.page, "closing the pane beside")
     await run.page.keyboard.press(keys.closePane)
     if (
       !(await waitFor(
@@ -7207,13 +7251,16 @@ const steps = {
       failures.push("⌘W did not close the pane beside")
       return
     }
+    await closed(failures)
     // A new session beside names itself: alone, a home is its greeting;
     // beside another pane every pane says what it is (UI audit #27).
     await homeBesideNamed(run.page, failures)
     await noHistoryButtons(run.page, failures, "the window")
     if (failures.length) return
+    const unfolded = await lookHolds(run.page, "opening the sidebar")
     await run.page.keyboard.press(keys.toggleSidebar)
     await sidebarParks(run.page, failures, true)
+    await unfolded(failures)
     await channelShowsList(run.page, failures)
     if (failures.length) return
     // The main conversation is the pane left. Not opened from its row: the
