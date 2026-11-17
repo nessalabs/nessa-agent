@@ -134,11 +134,12 @@ impl ConversationService {
         &self,
         storage: Arc<dyn CreationStorage>,
         id: ConversationId,
-        caller: ConversationCaller,
+        access: ConversationCaller,
+        command: ConversationCaller,
         execution: String,
     ) -> Result<MutationReceipt, Failure> {
-        let base = stop_binding(&id, &caller, &execution).map_err(MutationFailure::Target)?;
-        ensure_live(self, &id, &caller)
+        let base = stop_binding(&id, &command, &execution).map_err(MutationFailure::Target)?;
+        ensure_live(self, &id, &access)
             .await
             .map_err(MutationFailure::Target)?;
         let service = self.clone();
@@ -146,7 +147,7 @@ impl ConversationService {
             let admission = service.inner.thread_admission.clone().lock_owned().await;
             let _service_admission = service.admit().await.map_err(|_| unavailable())?;
             let selection = service
-                .select_stop(storage.clone(), &id, &caller, base)
+                .select_stop(storage.clone(), &id, &access, &command, base)
                 .await?;
             drop(admission);
             let mut root_result = None;
@@ -174,7 +175,7 @@ impl ConversationService {
                     continue;
                 }
                 let result = service
-                    .execute_selected_stop(storage.clone(), binding, &caller)
+                    .execute_selected_stop(storage.clone(), binding, &access)
                     .await;
                 match result {
                     Ok(receipt) if is_root => root_result = Some(receipt),
@@ -199,10 +200,13 @@ impl ConversationService {
         &self,
         storage: Arc<dyn CreationStorage>,
         id: &ConversationId,
-        caller: &ConversationCaller,
+        access: &ConversationCaller,
+        command: &ConversationCaller,
         root: MutationBinding,
     ) -> Result<Selection, Failure> {
         // The root request lease is released before ordinary target effects.
+        // The receipt is the peer's. Opening the conversation is the grantor's.
+        let caller = command;
         let lease = storage
             .open_creation(
                 caller.principal_id.as_str().into(),
@@ -238,7 +242,7 @@ impl ConversationService {
         let target = StopTarget {
             service: self.clone(),
             id: id.clone(),
-            caller: caller.clone(),
+            caller: access.clone(),
             execution_id: root.turn_id().as_str().into(),
         };
         target
@@ -288,7 +292,7 @@ impl ConversationService {
                             {
                                 continue;
                             }
-                            ensure_live(self, &child_id, caller)
+                            ensure_live(self, &child_id, access)
                                 .await
                                 .map_err(MutationFailure::Target)?;
                             // Read committed identities without opening a provider or
@@ -299,7 +303,7 @@ impl ConversationService {
                                 .await
                                 .map_err(MutationFailure::Target)?;
                             if let Some(live) = self
-                                .live_now(&child_id, caller)
+                                .live_now(&child_id, access)
                                 .await
                                 .map_err(MutationFailure::Target)?
                             {
@@ -331,7 +335,7 @@ impl ConversationService {
             if let Some(store) = self.inner.thread_reports.store.get() {
                 let pending = store.pending().await.map_err(MutationFailure::Target)?;
                 let live = self
-                    .resolve(id, caller)
+                    .resolve(id, access)
                     .await
                     .map_err(MutationFailure::Target)?;
                 let mut unfinished = live.agent.unsettled_execution_ids().await;
@@ -652,14 +656,16 @@ impl ConversationService {
                 else {
                     continue;
                 };
-                let caller = ConversationCaller {
+                let command = ConversationCaller {
                     organization_id: record.organization().clone(),
                     principal_id: PrincipalId::new(binding.actor().principal_id())
                         .map_err(|_| ConversationError::Unavailable)?,
                     surface_id: binding.actor().surface_id().into(),
                     action_id: binding.actor().request_id().into(),
                 };
-                let base = stop_binding(&id, &caller, binding.turn_id().as_str())?;
+                let mut access = command.clone();
+                access.principal_id = record.owner().clone();
+                let base = stop_binding(&id, &command, binding.turn_id().as_str())?;
                 if binding == &base {
                     continue;
                 }
@@ -672,23 +678,24 @@ impl ConversationService {
                         })
                     });
                 if !complete {
-                    retry.push((id, caller, binding.turn_id().as_str().to_owned()));
+                    retry.push((id, access, command, binding.turn_id().as_str().to_owned()));
                 }
             }
         }
         let count = retry.len();
         let service = self.clone();
         tokio::spawn(async move {
-            for (id, caller, execution) in retry {
+            for (id, access, command, execution) in retry {
                 if service.inner.retirement.get().is_some() {
                     break;
                 }
                 loop {
                     let result = service
-                        .stop_command(
+                        .stop_command_as(
                             storage.clone(),
                             id.clone(),
-                            caller.clone(),
+                            access.clone(),
+                            command.clone(),
                             execution.clone(),
                         )
                         .await;

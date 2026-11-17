@@ -162,10 +162,11 @@ async fn answer(
     // A device signs in as the binding owner, so its session already names
     // the conversation's owner. A peer signs in as itself. The grant admitted
     // the command; the conversation is still the grantor's, so opening it
-    // asks `owner.act` of that owner. A note records the session principal:
-    // the session store keys a note by that principal and the request, and
-    // two peers that reuse one request id each keep their own. The saved
-    // initiation stays the grant. The admission audit names the gateway
+    // asks `owner.act` of that owner. A note records the session principal.
+    // A send or a stop is stored under that same principal and request. The
+    // session store and the command history each key by principal and
+    // request, so two peers that reuse one request id each keep their own. The
+    // saved initiation stays the grant. The admission audit names the gateway
     // principal.
     let grantor = if matches!(initiation.initiator(), Initiator::Grant(_)) {
         match state.reads.passive_read.as_ref() {
@@ -461,7 +462,8 @@ async fn answer(
                     SubmissionMode::Queue
                 };
                 let id = conversation_id(&params.conversation_id)?;
-                let caller = caller(params.request_id.clone());
+                let access = caller(params.request_id.clone());
+                let command = session_caller(params.request_id.clone());
                 let execution_id = params.execution_id.clone();
                 // The clock is this moment, before the agent is asked, so the
                 // wait includes getting the turn under way. It is registered
@@ -491,10 +493,11 @@ async fn answer(
                         .await
                         .is_ok();
                 let submitted = service
-                    .submit_command_notifying(
+                    .submit_command_for(
                         store,
                         id.clone(),
-                        caller.clone(),
+                        access.clone(),
+                        command,
                         initiation,
                         offers_remember,
                         execution_id.clone(),
@@ -511,7 +514,7 @@ async fn answer(
                     Some(receipt) => receipt,
                     None => {
                         service
-                            .current_submission(id.clone(), caller, execution_id)
+                            .current_submission(id.clone(), access, execution_id)
                             .await?
                     }
                 };
@@ -521,10 +524,11 @@ async fn answer(
                 let params = target_params!(ConversationStopParams);
                 let store = service.commands().ok_or(ConversationError::Unavailable)?;
                 let receipt = service
-                    .stop_command(
+                    .stop_command_as(
                         store,
                         conversation_id(&params.conversation_id)?,
                         caller(params.request_id.clone()),
+                        session_caller(params.request_id.clone()),
                         params.execution_id,
                     )
                     .await
@@ -538,13 +542,14 @@ async fn answer(
                 let params = target_params!(ConversationReceiptParams);
                 let store = service.commands().ok_or(ConversationError::Unavailable)?;
                 let id = conversation_id(&params.conversation_id)?;
-                let caller = caller(params.request_id.clone());
+                let access = caller(params.request_id.clone());
+                let command = session_caller(params.request_id.clone());
                 let result = match params.operation {
                     ConversationCommandOperation::Create => service
                         .lookup_creation(
                             store,
                             id,
-                            caller,
+                            access,
                             requested_conversation_from_receipt(&params)?,
                         )
                         .await
@@ -564,13 +569,13 @@ async fn answer(
                         let binding =
                             crate::conversation::application::ConversationService::submit_lookup(
                                 &id,
-                                &caller,
+                                &command,
                                 &execution_id,
                                 &message,
                                 mode,
                             )?;
                         service
-                            .lookup_command(store, id, caller, binding)
+                            .lookup_command(store, id, access, binding)
                             .await
                             .map_err(mutation_failure)?
                             .map(|receipt| command_receipt(&params.request_id, &receipt))
@@ -591,11 +596,11 @@ async fn answer(
                         let binding =
                             crate::conversation::application::ConversationService::stop_lookup(
                                 &id,
-                                &caller,
+                                &command,
                                 &execution_id,
                             )?;
                         service
-                            .lookup_command(store, id, caller, binding)
+                            .lookup_command(store, id, access.clone(), binding)
                             .await
                             .map_err(mutation_failure)?
                             .map(|receipt| command_receipt(&params.request_id, &receipt))

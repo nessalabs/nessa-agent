@@ -4087,10 +4087,12 @@ async fn a_detached_scheduled_command_keeps_its_submission_permit() {
         entered: Notify::new(),
         release: Notify::new(),
     });
+    let acting = caller();
     let waiting = service.submit_command_permitted(
         commands.clone(),
         id.clone(),
-        caller(),
+        acting.clone(),
+        acting,
         Initiation::owner(),
         false,
         "held-command".into(),

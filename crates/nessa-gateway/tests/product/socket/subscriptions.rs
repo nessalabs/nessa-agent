@@ -2967,7 +2967,13 @@ async fn a_peer_comments_and_drives_under_its_grant() {
         )
         .await;
     assert_eq!(share["ok"], false, "{share}");
-    assert_eq!(fixture.metadata.grants(&fixture.id).await.unwrap(), before);
+    // The grant row is what a re-share would replace. The conversation's
+    // catalogue revision also moves when the turn is saved, which can land
+    // after this read.
+    assert_eq!(
+        fixture.metadata.grants(&fixture.id).await.unwrap().grants,
+        before.grants
+    );
     let absent = fixture
         .call(
             "conversation.send",
