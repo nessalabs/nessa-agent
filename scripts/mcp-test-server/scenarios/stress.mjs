@@ -121,7 +121,7 @@ export const TABLE_LINES = [
   "| Option | Price | Includes | Availability |",
   "| --- | --- | --- | --- |",
   "| Single ticket | $16.99 CAD | One screening, general admission (unassigned seating) | On sale since Sept 29; per-screening status unconfirmed |",
-  "| Cine-Maniac Pass | $150 CAD | All Scotiabank screenings, rush priority, social events | |",
+  "| Cine-Maniac Pass | $150 CAD | All Scotiabank screenings, `rush` priority, social events | |",
   "",
   "| Film | Venue | Date | Time | Runtime | Format | Language | Seats left |",
   "| --- | --- | --- | --- | ---: | --- | --- | ---: |",
