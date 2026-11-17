@@ -41,6 +41,7 @@ pub(super) async fn run(run: Run) {
         slot,
         read_by,
         reply_by,
+        pages: _,
     } = run;
     let mut slot = Some(slot);
     let Target::Events {

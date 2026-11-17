@@ -3047,12 +3047,61 @@ export interface ConversationSubscriptionEnded {
   /** Where a view subscription resumes from: the cursor of the last view frame written or, when none was, the after it was opened with. Absent for a list, and for a view subscription opened without after that wrote no frame. */
   lastDelivered?: ConversationViewCursor
 }
-/** Refusals of subscribe and unsubscribe beside the conversation error codes a refused first read carries. subscription_capacity: the connection's published limit is full. subscription_duplicate: this connection already follows that target; the agent catalog is one target, so a connection follows it at most once. unknown_subscription: no such live subscription on this connection, or one the other unsubscribe stops. cursor_ahead: after names a position past the stored history. */
+/** Where in this receiver's grant log a frame was read. */
+export interface GrantStreamCursor {
+  /** This receiver's grant log incarnation. A different one replaces the set. The empty log's incarnation is none. */
+  incarnation: string
+  /** Decimal position in this receiver's grant log. Compare positions only within one incarnation. */
+  position: string
+}
+/** Follow this receiver's grants. The reply comes after the first read, then grants.changed until grants.subscriptionEnded or grants.unsubscribe. One per connection. */
+export interface GrantsSubscribeParams {
+  /** The cursor of the last complete grant frame this client applied. No record behind it in the same incarnation is sent. */
+  after?: GrantStreamCursor
+}
+/** Continue one incomplete grant snapshot. A grant change since that snapshot replaces it. */
+export interface GrantsPageParams {
+  subscriptionId: ConversationSubscriptionId
+  /** The snapshot the incomplete frame named. */
+  snapshotId: string
+  /** The same after the subscription was opened with. An incomplete frame does not advance it. */
+  after?: GrantStreamCursor
+}
+/** Stop the grant subscription on this connection. A frame already being written may arrive before the reply; none arrives after it. */
+export interface GrantsUnsubscribeParams {
+  subscriptionId: ConversationSubscriptionId
+}
+/** One grant commit for this receiver: added, revoked, or its epoch changed. */
+export interface GrantFrameEntry {
+  conversationId: string
+  /** True when this commit removed the grant. A tombstone. The stored capabilities are absent. */
+  absent: boolean
+  /** The capabilities that commit stored. Absent on a tombstone. */
+  capabilities?: "read" | "read+comment" | "read+comment+drive"
+  /** The grant epoch that commit stored. */
+  policyRevision?: string
+}
+/** This receiver's grant commits since after, or a replacement of the set. Apply a complete frame. Stage an incomplete one. */
+export interface GrantsChanged {
+  subscriptionId: ConversationSubscriptionId
+  cursor: GrantStreamCursor
+  /** False when this frame is a prefix cut on a grant boundary. It does not advance after. */
+  complete: boolean
+  /** True when this frame, with the pages of its snapshot, replaces the set. False when it continues the log. */
+  replaces: boolean
+  /** Set on an incomplete frame. grants.page names it, with the same after. */
+  snapshotId?: string
+  /** The commits in this frame, in log order. A complete snapshot's pages together are the set. */
+  grants: GrantFrameEntry[]
+}
+/** Refusals of subscribe and unsubscribe beside the conversation error codes a refused first read carries. subscription_capacity: the connection's published limit is full. subscription_duplicate: this connection already follows that target; the agent catalog is one target, so a connection follows it at most once. unknown_subscription: no such live subscription on this connection, or one the other unsubscribe stops. cursor_ahead: after names a position past the stored history. incarnation_changed: after names another grant-log incarnation. grant_log_floor: after is older than the oldest retained grant-log record. */
 export const ConversationSubscriptionErrorCode = {
   SubscriptionCapacity: "subscription_capacity",
   SubscriptionDuplicate: "subscription_duplicate",
   UnknownSubscription: "unknown_subscription",
   CursorAhead: "cursor_ahead",
+  IncarnationChanged: "incarnation_changed",
+  GrantLogFloor: "grant_log_floor",
 } as const
 export type ConversationSubscriptionErrorCode =
   (typeof ConversationSubscriptionErrorCode)[keyof typeof ConversationSubscriptionErrorCode]
@@ -3976,6 +4025,7 @@ export const vmLifetimeSeconds = { minimum: 1, maximum: 4294967295 } as const
 export const subscriptionLimits = {
   conversationTargets: 8,
   listTargets: 2,
+  grantTargets: 1,
   deliveryTimeoutMs: 10000,
 } as const
 export const conversationSubscriptionIdPattern = "^[1-9][0-9]{0,19}$" as const
@@ -4033,7 +4083,7 @@ export const channelRules = {
 export const bounds = {
   maxOrdinaryResponseBytes: 65536,
   maxRequestFrameBytes: 65536,
-  maxReadyMethods: 127,
+  maxReadyMethods: 130,
   maxAuthCredentialCharacters: 16384,
   maxProductClientIdCharacters: 256,
   maxProductSurfaceInstanceCharacters: 256,
@@ -4340,6 +4390,9 @@ export const ProductMethod = {
   PeerForget: "peer.forget",
   PeerRelay: "peer.relay",
   PeerFollow: "peer.follow",
+  GrantsSubscribe: "grants.subscribe",
+  GrantsPage: "grants.page",
+  GrantsUnsubscribe: "grants.unsubscribe",
   ConversationSubscribe: "conversation.subscribe",
   ConversationSubscribeList: "conversation.subscribeList",
   ConversationUnsubscribe: "conversation.unsubscribe",
@@ -4392,6 +4445,8 @@ export const ProductEvent = {
   ConversationListed: "conversation.listed",
   AgentsListed: "agents.listed",
   ConversationSubscriptionEnded: "conversation.subscriptionEnded",
+  GrantsChanged: "grants.changed",
+  GrantsSubscriptionEnded: "grants.subscriptionEnded",
   PermissionReviewWaiting: "permission.reviewWaiting",
   WorkspaceCommand: "workspace.command",
   ConversationEvents: "conversation.events",
@@ -4481,6 +4536,9 @@ export const productReadyMethods = [
   "peer.forget",
   "peer.relay",
   "peer.follow",
+  "grants.subscribe",
+  "grants.page",
+  "grants.unsubscribe",
   "conversation.subscribe",
   "conversation.subscribeList",
   "conversation.unsubscribe",
@@ -4612,6 +4670,9 @@ export const productMethodGrants = {
   "peer.forget": "credential.manage",
   "peer.relay": "credential.manage",
   "peer.follow": "credential.manage",
+  "grants.subscribe": "conversation.write",
+  "grants.page": "conversation.write",
+  "grants.unsubscribe": "conversation.write",
   "conversation.subscribe": "conversation.write",
   "conversation.subscribeList": "conversation.write",
   "conversation.unsubscribe": "conversation.write",

@@ -9,6 +9,18 @@
       "reason": "One piece of an upload's bytes for a surface that cannot reach PUT /attachments. The action is attachment.begin; the bytes are not a JSON call."
     },
     {
+      "method": "grants.subscribe",
+      "reason": "Follows this receiver's grants by a stream of events after the acknowledgement. One call would drop the stream."
+    },
+    {
+      "method": "grants.page",
+      "reason": "Continues one grant snapshot on the subscription that opened it. One call would drop the stream."
+    },
+    {
+      "method": "grants.unsubscribe",
+      "reason": "Stops the grant subscription on this connection. It names a subscription the stream minted."
+    },
+    {
       "method": "conversation.subscribe",
       "reason": "Follows one conversation by a stream of events after the acknowledgement. One call would drop the stream."
     },

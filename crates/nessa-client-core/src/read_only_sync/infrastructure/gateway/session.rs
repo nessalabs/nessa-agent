@@ -32,9 +32,9 @@ use nessa_protocol::product::generated::{
     wire_shape_session_authenticate_params, wire_shape_session_challenge,
     ConversationSubscribeParams, ConversationSubscribeResult, ConversationSubscriptionEndReason,
     ConversationSubscriptionEnded, ConversationUnsubscribeParams, ConversationViewCursor,
-    ConversationViewed, ProductClientMetadata, ProductSessionReady, ProductSurface,
-    ProductSurfaceKind, SessionAuthenticateParams, SessionChallenge,
-    CONVERSATION_SUBSCRIPTION_ID_PATTERN, MAX_AUTH_CREDENTIAL_CHARACTERS,
+    ConversationViewed, GrantsChanged, GrantsSubscribeParams, ProductClientMetadata,
+    ProductSessionReady, ProductSurface, ProductSurfaceKind, SessionAuthenticateParams,
+    SessionChallenge, CONVERSATION_SUBSCRIPTION_ID_PATTERN, MAX_AUTH_CREDENTIAL_CHARACTERS,
     MAX_CONVERSATION_SUBSCRIPTION_ID_CHARACTERS, MAX_PRODUCT_CLIENT_ID_CHARACTERS,
     MAX_PRODUCT_SURFACE_INSTANCE_CHARACTERS, MIN_CONVERSATION_SUBSCRIPTION_ID_CHARACTERS,
     PRODUCT_HANDSHAKE_METHOD, PRODUCT_VERSION, TRANSCRIPT_STATES,
@@ -145,6 +145,12 @@ struct SubscriptionInbox {
     closed: bool,
 }
 
+/// One grant-subscription delivery.
+pub(crate) enum GrantDelivery {
+    Changed(GrantsChanged),
+    Ended(ConversationSubscriptionEnded),
+}
+
 /// One delivery from the subscription feed, in arrival order.
 pub(crate) enum SubscriptionDelivery {
     View(Box<ConversationViewed>),
@@ -168,6 +174,13 @@ struct Events {
     /// No kept view in this incarnation may sit behind this cursor. It starts
     /// as `conversation.subscribe`'s `after` and moves to each view kept.
     floor: Option<ConversationViewCursor>,
+    /// Grant frames for this connection's one `grants.subscribe`.
+    grants: Vec<GrantsChanged>,
+    grant_ended: Option<ConversationSubscriptionEnded>,
+    grant_id: Option<String>,
+    /// Set while `grants.subscribe` is unanswered, so a frame that arrives
+    /// with the reply is kept.
+    grant_opening: bool,
 }
 impl Events {
     fn new(policy: GatewayPolicy) -> Self {
@@ -178,6 +191,10 @@ impl Events {
             opening: None,
             opening_conversation: None,
             floor: None,
+            grants: Vec::new(),
+            grant_ended: None,
+            grant_id: None,
+            grant_opening: false,
         }
     }
     /// `session.terminated` is this connection's close, the same acceptance
@@ -193,6 +210,8 @@ impl Events {
             product_event::CONVERSATION_SUBSCRIPTION_ENDED => {
                 self.observe_subscription_end(event.payload)
             }
+            product_event::GRANTS_CHANGED => self.observe_grants(event.payload),
+            product_event::GRANTS_SUBSCRIPTION_ENDED => self.observe_grant_end(event.payload),
             _ => self.count_unexpected(),
         }
     }
@@ -304,6 +323,36 @@ impl Events {
             return self.count_unexpected();
         };
         parked.ended.get_or_insert(ended);
+        Ok(())
+    }
+    fn observe_grants(&mut self, payload: serde_json::Value) -> Result<(), GatewayError> {
+        let changed = match strict_decode::<GrantsChanged>(payload) {
+            Ok(changed) if conforming_subscription_id(&changed.subscription_id) => changed,
+            _ => return Ok(()),
+        };
+        if let Some(id) = &self.grant_id {
+            if changed.subscription_id != *id {
+                return Err(GatewayError::Protocol);
+            }
+        } else if !self.grant_opening {
+            return self.count_unexpected();
+        }
+        self.grants.push(changed);
+        Ok(())
+    }
+    fn observe_grant_end(&mut self, payload: serde_json::Value) -> Result<(), GatewayError> {
+        let ended = match strict_decode::<ConversationSubscriptionEnded>(payload) {
+            Ok(ended) if conforming_subscription_id(&ended.subscription_id) => ended,
+            _ => return Ok(()),
+        };
+        if let Some(id) = &self.grant_id {
+            if ended.subscription_id != *id {
+                return Err(GatewayError::Protocol);
+            }
+        } else if !self.grant_opening {
+            return self.count_unexpected();
+        }
+        self.grant_ended.get_or_insert(ended);
         Ok(())
     }
     fn count_unexpected(&mut self) -> Result<(), GatewayError> {
@@ -637,6 +686,79 @@ impl Session {
         });
         Ok(result.subscription_id)
     }
+    /// Open this connection's grant subscription. A frame that arrived with
+    /// the reply is kept and comes out of [`Self::next_grant`] first.
+    pub(crate) fn subscribe_grants(
+        &mut self,
+        params: &GrantsSubscribeParams,
+    ) -> Result<String, GatewayError> {
+        if self.events.grant_id.is_some() || self.events.grant_opening {
+            return Err(self.fail(GatewayError::Busy));
+        }
+        self.events.grant_opening = true;
+        let value = match self.rpc(product_method::GRANTS_SUBSCRIBE, params, RpcKind::Subscribe) {
+            Ok(value) => value,
+            Err(error) => {
+                self.events.grant_opening = false;
+                self.events.grants.clear();
+                self.events.grant_ended = None;
+                return Err(error);
+            }
+        };
+        let result = match strict_decode::<ConversationSubscribeResult>(value) {
+            Ok(result) if conforming_subscription_id(&result.subscription_id) => result,
+            _ => {
+                self.events.grant_opening = false;
+                return Err(self.fail(GatewayError::Protocol));
+            }
+        };
+        self.events.grant_opening = false;
+        self.events.grant_id = Some(result.subscription_id.clone());
+        Ok(result.subscription_id)
+    }
+    pub(crate) fn grant_subscription(&self) -> Option<String> {
+        self.events.grant_id.clone()
+    }
+    pub(crate) fn grant_page(
+        &mut self,
+        params: &nessa_protocol::product::generated::GrantsPageParams,
+    ) -> Result<(), GatewayError> {
+        let value = self.rpc(product_method::GRANTS_PAGE, params, RpcKind::Subscribe)?;
+        let result = strict_decode::<ConversationSubscribeResult>(value)?;
+        if result.subscription_id != params.subscription_id {
+            return Err(self.fail(GatewayError::Protocol));
+        }
+        Ok(())
+    }
+    /// The next grant frame, or the subscription's end. Waits under the
+    /// current operation's deadline.
+    pub(crate) fn next_grant(&mut self) -> Result<GrantDelivery, GatewayError> {
+        let active = self.active.as_ref().ok_or(GatewayError::Busy)?;
+        if let Some(error) = active.failure {
+            return Err(error);
+        }
+        let result = self.grant_inner();
+        result.map_err(|error| self.fail(error))
+    }
+    fn grant_inner(&mut self) -> Result<GrantDelivery, GatewayError> {
+        loop {
+            if self.events.grant_id.is_none() {
+                return Err(GatewayError::Busy);
+            }
+            if !self.events.grants.is_empty() {
+                return Ok(GrantDelivery::Changed(self.events.grants.remove(0)));
+            }
+            if let Some(ended) = self.events.grant_ended.take() {
+                self.events.grant_id = None;
+                return Ok(GrantDelivery::Ended(ended));
+            }
+            let socket = self.socket.as_mut().ok_or(GatewayError::Transport)?;
+            match read_frame(socket)? {
+                OutgoingMessage::Response(_) => return Err(GatewayError::Correlation),
+                OutgoingMessage::Event(event) => self.events.observe(event)?,
+            }
+        }
+    }
     /// The next kept view, or the subscription's end once every kept view
     /// has been taken. Waits under the current operation's deadline.
     pub(crate) fn next_delivery(&mut self) -> Result<SubscriptionDelivery, GatewayError> {
@@ -928,7 +1050,9 @@ pub(crate) fn subscription_refusal(code: String) -> GatewayError {
         "subscription_capacity" => SubscriptionRefusal::Subscription(SubscriptionCode::Capacity),
         "subscription_duplicate" => SubscriptionRefusal::Subscription(SubscriptionCode::Duplicate),
         "unknown_subscription" => SubscriptionRefusal::Subscription(SubscriptionCode::Unknown),
-        "cursor_ahead" => SubscriptionRefusal::Subscription(SubscriptionCode::CursorAhead),
+        "cursor_ahead" | "incarnation_changed" | "grant_log_floor" => {
+            SubscriptionRefusal::Subscription(SubscriptionCode::CursorAhead)
+        }
         _ => match serde_json::from_value::<ConversationErrorCode>(serde_json::Value::String(code))
         {
             Ok(code) => SubscriptionRefusal::Conversation(code),

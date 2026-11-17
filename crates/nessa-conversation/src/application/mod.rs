@@ -370,9 +370,10 @@ pub use service::{
 };
 pub use session_key::conversation_session;
 pub use share_grants::{
-    binding_of, note_candidates, paired_facts, GrantedShare, HeldGrant, Reader, ResourceKind,
-    RevisionHold, ShareConversation, ShareGrant, ShareGrantChange, ShareGrantList,
-    ShareGrantReceipt, ShareGrantTransition, ShareGrants, MAX_DRIVE_GRANTS_PER_CONVERSATION,
+    binding_of, note_candidates, paired_facts, GrantLogEntry, GrantSnapshotEntry, GrantStream,
+    GrantedShare, HeldGrant, Reader, ResourceKind, RevisionHold, ShareConversation, ShareGrant,
+    ShareGrantChange, ShareGrantList, ShareGrantReceipt, ShareGrantTransition, ShareGrants,
+    EMPTY_GRANT_INCARNATION, GRANT_LOG_RETAINED, MAX_DRIVE_GRANTS_PER_CONVERSATION,
     MAX_POLICY_REVISION, MAX_SHARE_GRANTS_PER_CONVERSATION,
 };
 #[cfg_attr(

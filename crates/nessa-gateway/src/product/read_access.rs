@@ -58,9 +58,19 @@ use nessa_sdk::domain::agent_execution::{
     permissions::PermissionId,
 };
 
+/// The paired receiver this session is bound to, when it is paired.
+pub(super) async fn paired_receiver(
+    state: &ProductRouteState,
+    session: &AuthenticatedSession,
+) -> Result<Option<String>, &'static str> {
+    Ok(paired_binding(state, session)
+        .await?
+        .map(|binding| binding.receiver_id))
+}
+
 /// The paired party `session` is now, by its receiver binding: `None` for
 /// the owner's own surface, or when this gateway keeps no receiver bindings.
-async fn paired_binding(
+pub(super) async fn paired_binding(
     state: &ProductRouteState,
     session: &AuthenticatedSession,
 ) -> Result<Option<ReceiverBinding>, &'static str> {
@@ -245,6 +255,9 @@ pub(super) async fn admit_paired_read(
             | "conversation.observe"
             | "conversation.subscribeList"
             | "conversation.unsubscribe"
+            | "grants.subscribe"
+            | "grants.page"
+            | "grants.unsubscribe"
     ) {
         return Ok(false);
     }
@@ -441,7 +454,7 @@ fn paired_action(method: &str) -> AccessAction {
 /// reaches only to be admitted again by its grants: the read and the view
 /// subscription ask [`admit_conversation`], the lists ask [`admit_list`],
 /// and an unsubscribe ends only what was admitted. Rows G12 and G13.
-const ADMITTED_BY_ITS_OWN_CHECK: [&str; 9] = [
+const ADMITTED_BY_ITS_OWN_CHECK: [&str; 12] = [
     "conversation.read",
     "conversation.readEarlier",
     "conversation.list",
@@ -451,6 +464,9 @@ const ADMITTED_BY_ITS_OWN_CHECK: [&str; 9] = [
     "conversation.peek",
     "conversation.subscribeList",
     "conversation.unsubscribe",
+    "grants.subscribe",
+    "grants.page",
+    "grants.unsubscribe",
 ];
 
 /// The one admission of a socket request, after its session was found

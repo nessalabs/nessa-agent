@@ -10,7 +10,8 @@ mod held_files;
 mod phone;
 mod session;
 pub(crate) use session::{
-    subscription_refusal, DeviceEvidence, LocalConnector, Session, SubscriptionDelivery,
+    subscription_refusal, DeviceEvidence, GrantDelivery, LocalConnector, Session,
+    SubscriptionDelivery,
 };
 mod sources;
 pub(crate) use sources::{

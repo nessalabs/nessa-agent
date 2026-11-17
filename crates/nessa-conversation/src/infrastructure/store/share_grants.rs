@@ -19,9 +19,10 @@ use super::{
     cells, failed, next_revision, read, stored_time, time, unreadable, LocalConversationStore,
 };
 use crate::application::{
-    AccessAction, ConversationCaller, ConversationError, ConversationFuture, HeldGrant,
-    OwnerAccess, ResourceKind, RevisionHold, ShareGrant, ShareGrantChange, ShareGrantList,
-    ShareGrantReceipt, ShareGrantTransition, ShareGrants, MAX_DRIVE_GRANTS_PER_CONVERSATION,
+    AccessAction, ConversationCaller, ConversationError, ConversationFuture, GrantLogEntry,
+    GrantSnapshotEntry, GrantStream, HeldGrant, OwnerAccess, ResourceKind, RevisionHold,
+    ShareGrant, ShareGrantChange, ShareGrantList, ShareGrantReceipt, ShareGrantTransition,
+    ShareGrants, EMPTY_GRANT_INCARNATION, GRANT_LOG_RETAINED, MAX_DRIVE_GRANTS_PER_CONVERSATION,
     MAX_POLICY_REVISION, MAX_SHARE_GRANTS_PER_CONVERSATION,
 };
 use crate::domain::{
@@ -37,6 +38,8 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::task::{Context, Poll};
+use tokio::sync::Notify;
+use uuid::Uuid;
 
 /// One target selector for gate acquisition and the transaction. An ordinary
 /// omitted receiver keeps this credential's row; a credential-owned principal
@@ -673,6 +676,217 @@ impl ShareGrants for LocalConversationStore {
             }
         })
     }
+
+    fn grant_log_notify(&self) -> Arc<Notify> {
+        Arc::clone(&self.grant_log)
+    }
+
+    fn grant_stream<'a>(&'a self, receiver_id: &'a str) -> ConversationFuture<'a, GrantStream> {
+        let receiver_id = receiver_id.to_owned();
+        self.run(move |connection| read_grant_stream(connection, &receiver_id))
+    }
+
+    fn grant_log_after<'a>(
+        &'a self,
+        receiver_id: &'a str,
+        after: u64,
+    ) -> ConversationFuture<'a, Vec<GrantLogEntry>> {
+        let receiver_id = receiver_id.to_owned();
+        self.run(move |connection| {
+            let after = i64::try_from(after).unwrap_or(i64::MAX);
+            let mut statement = connection
+                .prepare(
+                    "SELECT position, conversation_id, capabilities, policy, policy_revision
+                     FROM grants.grant_log
+                     WHERE receiver_id = ?1 AND position > ?2
+                     ORDER BY position",
+                )
+                .map_err(failed)?;
+            let rows = statement
+                .query_map(params![receiver_id, after], |row| {
+                    Ok(GrantLogEntry {
+                        position: u64::try_from(row.get::<_, i64>(0)?).unwrap_or(0),
+                        conversation_id: row.get(1)?,
+                        capabilities: row.get(2)?,
+                        policy: row.get(3)?,
+                        policy_revision: row
+                            .get::<_, Option<i64>>(4)?
+                            .and_then(|value| u64::try_from(value).ok()),
+                    })
+                })
+                .map_err(failed)?;
+            rows.collect::<Result<Vec<_>, _>>().map_err(failed)
+        })
+    }
+
+    fn grant_snapshot<'a>(
+        &'a self,
+        receiver_id: &'a str,
+    ) -> ConversationFuture<'a, Vec<GrantSnapshotEntry>> {
+        let receiver_id = receiver_id.to_owned();
+        self.run(move |connection| {
+            let mut statement = connection
+                .prepare(
+                    "SELECT resource_id, capabilities, policy, policy_revision
+                     FROM grants.share_grants
+                     WHERE resource_kind = 'conversation' AND receiver_id = ?1
+                     ORDER BY resource_id",
+                )
+                .map_err(failed)?;
+            let rows = statement
+                .query_map(params![receiver_id], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, Option<String>>(2)?,
+                        row.get::<_, i64>(3)?,
+                    ))
+                })
+                .map_err(failed)?;
+            rows.map(|row| {
+                let (conversation_id, capabilities, policy, revision) = row.map_err(failed)?;
+                Ok(GrantSnapshotEntry {
+                    conversation_id,
+                    capabilities,
+                    policy,
+                    policy_revision: u64::try_from(revision).unwrap_or(0),
+                })
+            })
+            .collect()
+        })
+    }
+}
+
+fn read_grant_stream(
+    connection: &super::Connection,
+    receiver_id: &str,
+) -> Result<GrantStream, ConversationError> {
+    let found: Option<(String, i64)> = connection
+        .query_row(
+            "SELECT incarnation, head FROM grants.grant_streams WHERE receiver_id = ?1",
+            params![receiver_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()
+        .map_err(failed)?;
+    let Some((incarnation, head)) = found else {
+        return Ok(GrantStream {
+            incarnation: EMPTY_GRANT_INCARNATION.to_owned(),
+            head: 0,
+            oldest: None,
+        });
+    };
+    let oldest: Option<i64> = connection
+        .query_row(
+            "SELECT MIN(position) FROM grants.grant_log WHERE receiver_id = ?1",
+            params![receiver_id],
+            |row| row.get(0),
+        )
+        .map_err(failed)?;
+    Ok(GrantStream {
+        incarnation,
+        head: u64::try_from(head).unwrap_or(0),
+        oldest: oldest.and_then(|position| u64::try_from(position).ok()),
+    })
+}
+
+/// Append this commit to each receiver it changes, in the grant's transaction.
+fn append_grant_log(
+    transaction: &Transaction<'_>,
+    conversation: &str,
+    receiver: Option<&str>,
+    previous: Option<&str>,
+    after: &Held,
+    epoch: i64,
+) -> Result<(), ConversationError> {
+    if let Some(previous) = previous.filter(|previous| Some(*previous) != receiver) {
+        append_receiver_log(
+            transaction,
+            previous,
+            &LogRecord {
+                conversation,
+                capabilities: None,
+                policy: None,
+                epoch: None,
+            },
+        )?;
+    }
+    if let Some(receiver) = receiver {
+        let record = if after.0.as_str() == NONE {
+            LogRecord {
+                conversation,
+                capabilities: None,
+                policy: None,
+                epoch: None,
+            }
+        } else {
+            LogRecord {
+                conversation,
+                capabilities: Some(after.0.as_str()),
+                policy: after.1.as_deref(),
+                epoch: Some(epoch),
+            }
+        };
+        append_receiver_log(transaction, receiver, &record)?;
+    }
+    Ok(())
+}
+
+struct LogRecord<'a> {
+    conversation: &'a str,
+    capabilities: Option<&'a str>,
+    policy: Option<&'a str>,
+    epoch: Option<i64>,
+}
+
+fn append_receiver_log(
+    transaction: &Transaction<'_>,
+    receiver: &str,
+    record: &LogRecord<'_>,
+) -> Result<(), ConversationError> {
+    let found: Option<(String, i64)> = transaction
+        .query_row(
+            "SELECT incarnation, head FROM grants.grant_streams WHERE receiver_id = ?1",
+            params![receiver],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()
+        .map_err(failed)?;
+    let (incarnation, head) = found.unwrap_or_else(|| (Uuid::new_v4().to_string(), 0));
+    let position = head.checked_add(1).ok_or(ConversationError::Metadata)?;
+    transaction
+        .execute(
+            "INSERT INTO grants.grant_log
+             (receiver_id, position, conversation_id, capabilities, policy, policy_revision)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                receiver,
+                position,
+                record.conversation,
+                record.capabilities,
+                record.policy,
+                record.epoch
+            ],
+        )
+        .map_err(failed)?;
+    transaction
+        .execute(
+            "INSERT INTO grants.grant_streams (receiver_id, incarnation, head)
+             VALUES (?1, ?2, ?3)
+             ON CONFLICT(receiver_id) DO UPDATE SET head = excluded.head",
+            params![receiver, incarnation, position],
+        )
+        .map_err(failed)?;
+    let floor = position.saturating_sub(i64::try_from(GRANT_LOG_RETAINED).unwrap_or(1024));
+    if floor > 0 {
+        transaction
+            .execute(
+                "DELETE FROM grants.grant_log WHERE receiver_id = ?1 AND position <= ?2",
+                params![receiver, floor],
+            )
+            .map_err(failed)?;
+    }
+    Ok(())
 }
 
 impl LocalConversationStore {
@@ -795,6 +1009,7 @@ impl LocalConversationStore {
         let changes = self.changes.clone();
         let access = self.access.clone();
         let connection = self.connection.clone();
+        let grant_log = self.grant_log.clone();
         let links = self
             .person_links
             .read()
@@ -1239,6 +1454,16 @@ impl LocalConversationStore {
                     }
                     .map_err(failed)?;
                 }
+                if applied {
+                    append_grant_log(
+                        &transaction,
+                        &id,
+                        receiver.as_deref(),
+                        stored_receiver.as_deref(),
+                        &after,
+                        stamped_epoch,
+                    )?;
+                }
                 transaction.commit().map_err(failed)?;
                 let receipt = ShareGrantReceipt {
                     applied,
@@ -1268,10 +1493,14 @@ impl LocalConversationStore {
                 }
                 Ok(ChangeAttempt::Applied(receipt))
                 };
-                match links {
+                let wrote = match links {
                     Some(links) => links.with_current(write),
                     None => write(),
+                };
+                if matches!(wrote, Ok(ChangeAttempt::Applied(receipt)) if receipt.applied) {
+                    grant_log.notify_waiters();
                 }
+                wrote
             })
             .await
             .map_err(|_| ConversationError::Metadata)?

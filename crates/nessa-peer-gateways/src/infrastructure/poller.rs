@@ -11,7 +11,7 @@
 //!   --> each due peer, up to READS_AT_ONCE:
 //!   take that peer's turn --> re-read its record; gone or revoked --> drop it
 //!   pinned status (NativeEnrollmentClient over its PeerSlot)
-//!     Active   --> the client saves the credential --> RetainedCache::read
+//!     Active   --> the client saves the credential --> RetainedCache::follow_grants
 //!                    Refused                    --> pinned status again
 //!                    ResetRequired, CacheDamaged --> empty the cache, read once more
 //!     Terminal or Unclaimed --> the client removes the cache and marks the
@@ -504,7 +504,12 @@ impl Shared {
             None => return None,
         };
         let mut changes = Vec::new();
-        let pace = self.held(key, &cycle, &mut changes).await;
+        // Released once the grant snapshot is applied, so a live subscription
+        // does not hold a read slot. Dropped again here if the snapshot never
+        // arrived.
+        let slot = Arc::new(Mutex::new(Some(permit)));
+        let pace = self.held(key, &cycle, &mut changes, slot.clone()).await;
+        drop(slot.lock().unwrap_or_else(PoisonError::into_inner).take());
         // The turn is given back first: an audit, however slow, never holds
         // it. The read slot stays until the records leave the queue, so
         // another cycle cannot enqueue while they are still queued. The
@@ -516,7 +521,6 @@ impl Shared {
         drop(turn);
         let mut stopped = self.stopped.clone();
         self.commands.poller_kept(changes, &mut stopped).await;
-        drop(permit);
         pace
     }
 
@@ -527,6 +531,7 @@ impl Shared {
         key: DeviceKey,
         cycle: &Arc<CycleStop>,
         changes: &mut Vec<PollerRecord<'a>>,
+        slot: Arc<Mutex<Option<OwnedSemaphorePermit>>>,
     ) -> Option<Pace> {
         // Forgotten, ended or replaced since the listing: what is read is
         // what the record says now, under the turn.
@@ -569,7 +574,14 @@ impl Shared {
                 access_epoch,
             }) => {
                 let mut result = self
-                    .read(&record, &receiver, access_epoch, cycle, changes)
+                    .read(
+                        &record,
+                        &receiver,
+                        access_epoch,
+                        cycle,
+                        changes,
+                        slot.clone(),
+                    )
                     .await;
                 if let Some(cause) = match &result {
                     Some(Err(ReadFailure::ResetRequired)) => Some(PollerCause::ResetRequired),
@@ -579,7 +591,7 @@ impl Shared {
                     // Derived from the peer: emptied and read again from nothing.
                     self.reset(key, cause, changes).await;
                     result = self
-                        .read(&record, &receiver, access_epoch, cycle, changes)
+                        .read(&record, &receiver, access_epoch, cycle, changes, slot)
                         .await;
                 }
                 match result {
@@ -747,6 +759,7 @@ impl Shared {
         access_epoch: u64,
         cycle: &Arc<CycleStop>,
         changes: &mut Vec<PollerRecord<'a>>,
+        slot: Arc<Mutex<Option<OwnedSemaphorePermit>>>,
     ) -> Option<Result<ReadReport, ReadFailure>> {
         let key = *record.key();
         let records = self.commands.records().clone();
@@ -761,6 +774,8 @@ impl Shared {
             cycle.read().clone(),
             self.inputs.policy.read_budget,
         );
+        let commands = self.commands.clone();
+        let (live_tx, mut live_rx) = tokio::sync::mpsc::channel(1);
         let (work, withdrawn) = spawn_read(move |withdrawn| {
             let credential = records
                 .slot(key)
@@ -774,20 +789,14 @@ impl Shared {
             let rule = loaded
                 .map(|follow| follow.rule)
                 .unwrap_or_else(FollowRule::none);
-            if rule.conversations().is_empty() {
-                return Ok(ReadReport {
-                    moved: false,
-                    complete: true,
-                    conversations: 0,
-                });
-            }
             let mut cache = RetainedCache::open_keeping(
                 &records.cache_path(&key),
                 rule.keep_bytes(),
-                wall,
+                wall.clone(),
                 clock,
             )?;
-            cache.read_followed(
+            let live_tx = live_tx.clone();
+            cache.follow_grants(
                 ReaderAccess {
                     role: ReaderRole::GrantedPeer,
                     address,
@@ -802,18 +811,35 @@ impl Shared {
                 &rule,
                 &stop,
                 budget,
-                WITHDRAWN_PER_READ,
                 withdrawn,
+                move |count| {
+                    commands.set_sync(
+                        key,
+                        Some(PeerSync {
+                            state: SyncState::Synced,
+                            last_synced_ms: Some(wall.unix_milliseconds()),
+                            conversations: Some(count),
+                        }),
+                    );
+                    let _ = live_tx.try_send(());
+                },
             )
         });
         tokio::pin!(work);
         let mut stopped = self.stopped.clone();
-        let ended = tokio::select! {
-            ended = &mut work => ended,
-            () = until_stopped(&mut stopped) => {
-                // Shut the read's sockets and wait for it.
-                cycle.stop();
-                (&mut work).await
+        let mut released = false;
+        let ended = loop {
+            tokio::select! {
+                ended = &mut work => break ended,
+                _ = live_rx.recv(), if !released => {
+                    released = true;
+                    drop(slot.lock().unwrap_or_else(PoisonError::into_inner).take());
+                }
+                () = until_stopped(&mut stopped) => {
+                    // Shut the read's sockets and wait for it.
+                    cycle.stop();
+                    break (&mut work).await;
+                }
             }
         };
         let (result, withdrawn) = read_ended(ended, &withdrawn);

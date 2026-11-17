@@ -63,6 +63,41 @@ use nessa_protocol::conversation::fence_capture::FenceCapture;
 use nessa_protocol::conversation::read_scope::ReadRefusal;
 use nessa_sdk::application::agent_execution::sessions::{NoteCandidates, NoteRecord};
 use nessa_sdk::domain::agent_execution::executions::Initiator;
+use std::sync::Arc;
+use tokio::sync::Notify;
+
+/// The empty grant log's incarnation. The first commit mints another.
+pub const EMPTY_GRANT_INCARNATION: &str = "none";
+/// Grant-log records kept per receiver. Older than this, a resume takes a snapshot.
+pub const GRANT_LOG_RETAINED: u64 = 1024;
+
+/// This receiver's grant log, as the subscription reads it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GrantStream {
+    pub incarnation: String,
+    pub head: u64,
+    /// The oldest retained log position. `None` when the log holds nothing.
+    pub oldest: Option<u64>,
+}
+
+/// One grant-log record, in commit order. `capabilities` is `None` on a tombstone.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GrantLogEntry {
+    pub position: u64,
+    pub conversation_id: String,
+    pub capabilities: Option<String>,
+    pub policy: Option<String>,
+    pub policy_revision: Option<u64>,
+}
+
+/// One live grant on the receiver, for a full snapshot.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GrantSnapshotEntry {
+    pub conversation_id: String,
+    pub capabilities: String,
+    pub policy: Option<String>,
+    pub policy_revision: u64,
+}
 
 /// Who is reading, as far as read grants are concerned.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -491,6 +526,38 @@ pub trait ShareGrants: Send + Sync {
         receiver_id: &'a str,
         policy_revision: u64,
     ) -> ConversationFuture<'a, RevisionHold>;
+    /// Wakes after a grant-log append. A store with no log never wakes.
+    fn grant_log_notify(&self) -> Arc<Notify> {
+        Arc::new(Notify::new())
+    }
+    /// This receiver's grant log head. The empty log is incarnation `none` at 0.
+    fn grant_stream<'a>(&'a self, receiver_id: &'a str) -> ConversationFuture<'a, GrantStream> {
+        let _ = receiver_id;
+        Box::pin(async {
+            Ok(GrantStream {
+                incarnation: EMPTY_GRANT_INCARNATION.to_owned(),
+                head: 0,
+                oldest: None,
+            })
+        })
+    }
+    /// Log records with `position` greater than `after`, in order.
+    fn grant_log_after<'a>(
+        &'a self,
+        receiver_id: &'a str,
+        after: u64,
+    ) -> ConversationFuture<'a, Vec<GrantLogEntry>> {
+        let _ = (receiver_id, after);
+        Box::pin(async { Ok(Vec::new()) })
+    }
+    /// The grants this receiver holds now.
+    fn grant_snapshot<'a>(
+        &'a self,
+        receiver_id: &'a str,
+    ) -> ConversationFuture<'a, Vec<GrantSnapshotEntry>> {
+        let _ = receiver_id;
+        Box::pin(async { Ok(Vec::new()) })
+    }
 }
 
 /// A grant revision kept still until this is dropped.

@@ -362,7 +362,7 @@ struct Stopping {
     owner: Arc<()>,
     clock: Arc<dyn MonotonicClock>,
     /// When the budget is spent, by `clock`.
-    until: u64,
+    until: std::sync::atomic::AtomicU64,
     /// [`END_OPEN`] until the first end, then [`END_CALLER`] or [`END_BUDGET`].
     cause: AtomicU8,
 }
@@ -372,9 +372,15 @@ impl Stopping {
             stop,
             owner: Arc::new(()),
             clock,
-            until,
+            until: std::sync::atomic::AtomicU64::new(until),
             cause: AtomicU8::new(END_OPEN),
         }
+    }
+    /// A live subscription is not ended by the read budget that bounded
+    /// its first snapshot.
+    fn relax(&self) {
+        self.until
+            .store(u64::MAX, std::sync::atomic::Ordering::SeqCst);
     }
     fn register(&self, socket: &TcpStream) -> IoResult<()> {
         self.stop.register(&self.owner, socket)
@@ -383,7 +389,7 @@ impl Stopping {
         self.stop.release(&self.owner);
     }
     fn spent(&self) -> bool {
-        self.clock.elapsed_ms() >= self.until
+        self.clock.elapsed_ms() >= self.until.load(std::sync::atomic::Ordering::SeqCst)
     }
     /// Whether this fetch has ended, and the first condition that ended it.
     /// A caller stop observed now is kept ahead of a spent budget. A budget
@@ -419,7 +425,7 @@ impl Cancellation for Stopping {
         self.note_end()
     }
     fn until_ms(&self) -> Option<u64> {
-        Some(self.until)
+        Some(self.until.load(std::sync::atomic::Ordering::SeqCst))
     }
 }
 /// Connect to a paired gateway's native listener at `address` within
@@ -729,15 +735,24 @@ impl RetainedCache {
     /// The conversations the cache holds for `receiver`, by id, read from
     /// the cache alone.
     pub fn conversation_ids(&mut self, receiver: &str) -> Result<Vec<String>, ReadFailure> {
-        let receiver = Id::new(receiver).map_err(|_| ReadFailure::Cache)?;
-        let Some(scope) = self.catalogue_scope(&receiver)? else {
-            return Ok(Vec::new());
-        };
-        Ok(self
-            .live(&scope)?
-            .into_iter()
-            .map(|id| id.as_str().to_owned())
-            .collect())
+        let mut ids = Vec::new();
+        if let Ok(parsed) = Id::new(receiver) {
+            if let Some(scope) = self.catalogue_scope(&parsed)? {
+                ids.extend(
+                    self.live(&scope)?
+                        .into_iter()
+                        .map(|id| id.as_str().to_owned()),
+                );
+            }
+        }
+        ids.extend(
+            self.cache
+                .grant_ids(receiver)
+                .map_err(|error| cache_failure(&error))?,
+        );
+        ids.sort();
+        ids.dedup();
+        Ok(ids)
     }
 
     /// Read what the gateway grants `access` into this cache, within
@@ -785,6 +800,208 @@ impl RetainedCache {
         withdrawn: &mut Vec<String>,
     ) -> Result<ReadReport, ReadFailure> {
         self.read_in(access, stop, budget, max_withdrawn, withdrawn, Some(follow))
+    }
+
+    /// Follow this receiver's grants on `grants.subscribe`, and each chat
+    /// `follow` names on `conversation.subscribe`. The catalogue is not read.
+    /// `on_synced` runs after each complete frame, with how many conversations
+    /// the replica holds. The call stays until `stop` or the subscription ends.
+    pub fn follow_grants(
+        &mut self,
+        access: ReaderAccess<'_>,
+        follow: &FollowRule,
+        stop: &Arc<ReadStop>,
+        budget: Duration,
+        withdrawn: &mut Vec<String>,
+        mut on_synced: impl FnMut(u64),
+    ) -> Result<ReadReport, ReadFailure> {
+        let receiver = access.receiver.to_owned();
+        let ending = Arc::new(Stopping::new(
+            stop.clone(),
+            self.clock.clone(),
+            self.clock
+                .elapsed_ms()
+                .saturating_add(u64::try_from(budget.as_millis()).unwrap_or(u64::MAX)),
+        ));
+        let offline = Arc::new(AtomicBool::new(false));
+        let session = self.open_session(&access, &ending, &offline)?;
+        let connection = GatewayConnection::new(session);
+        let stored = self
+            .cache
+            .grant_cursor(&receiver)
+            .map_err(|error| cache_failure(&error))?;
+        let cursor_of = |stored: &Option<(String, u64)>| {
+            stored.as_ref().map(|(incarnation, position)| {
+                nessa_protocol::product::generated::GrantStreamCursor {
+                    incarnation: incarnation.clone(),
+                    position: position.to_string(),
+                }
+            })
+        };
+        let resume = if let Err(error) = connection.subscribe_grants(cursor_of(&stored)) {
+            if stored.is_some() && grant_cursor_refused(&error) {
+                self.cache
+                    .clear_grant_cursor(&receiver)
+                    .map_err(|cause| cache_failure(&cause))?;
+                connection.subscribe_grants(None).map_err(failure)?;
+                None
+            } else {
+                return Err(failure(error));
+            }
+        } else {
+            cursor_of(&stored)
+        };
+        let mut staged: Vec<nessa_protocol::product::generated::GrantFrameEntry> = Vec::new();
+        let mut chats: Vec<GatewayConnection> = Vec::new();
+        let mut live = LiveFollow::new();
+        let mut synced = false;
+        loop {
+            if ending.cancelled() || stop.is_stopped() {
+                break;
+            }
+            let delivery = match connection.next_grant() {
+                Ok(delivery) => delivery,
+                Err(error) => return Err(failure(error)),
+            };
+            let changed = match delivery {
+                crate::read_only_sync::infrastructure::gateway::GrantDelivery::Changed(changed) => {
+                    changed
+                }
+                crate::read_only_sync::infrastructure::gateway::GrantDelivery::Ended(ended) => {
+                    tracing::info!(reason = ended.reason.as_str(), "grant subscription ended");
+                    return Err(ReadFailure::Unreachable);
+                }
+            };
+            if !changed.complete {
+                if changed.replaces {
+                    staged = changed.grants;
+                } else {
+                    staged.extend(changed.grants);
+                }
+                if let Some(snapshot_id) = changed.snapshot_id.clone() {
+                    let _ = connection.grant_page(&snapshot_id, resume.as_ref());
+                }
+                continue;
+            }
+            let mut entries = std::mem::take(&mut staged);
+            entries.extend(changed.grants);
+            let present: Vec<(String, String, i64)> = entries
+                .iter()
+                .filter(|entry| !entry.absent && follow.contains(&entry.conversation_id))
+                .filter_map(|entry| {
+                    let capabilities = entry.capabilities.clone()?;
+                    let revision = entry
+                        .policy_revision
+                        .as_deref()
+                        .and_then(|text| text.parse::<i64>().ok())
+                        .unwrap_or(0);
+                    Some((entry.conversation_id.clone(), capabilities, revision))
+                })
+                .collect();
+            let absent: Vec<String> = entries
+                .iter()
+                .filter(|entry| entry.absent || !follow.contains(&entry.conversation_id))
+                .map(|entry| entry.conversation_id.clone())
+                .collect();
+            let removed = self
+                .cache
+                .apply_grant_frame(
+                    &receiver,
+                    changed.replaces,
+                    true,
+                    &changed.cursor.incarnation,
+                    changed
+                        .cursor
+                        .position
+                        .parse()
+                        .map_err(|_| ReadFailure::Protocol)?,
+                    &present,
+                    &absent,
+                )
+                .map_err(|error| cache_failure(&error))?;
+            for id in removed {
+                if entries
+                    .iter()
+                    .any(|entry| entry.conversation_id == id && entry.absent)
+                {
+                    withdrawn.push(id);
+                }
+            }
+            let id = Id::new(&receiver).map_err(|_| ReadFailure::Protocol)?;
+            for (conversation, _, _) in &present {
+                let Ok(conversation_id) = ConversationId::new(conversation) else {
+                    continue;
+                };
+                let _ = self.records(
+                    &connection,
+                    &id,
+                    access.access_epoch,
+                    conversation_id,
+                    false,
+                );
+            }
+            self.open_chats(
+                &access, &ending, &offline, follow, &present, &mut live, &mut chats,
+            )?;
+            let count = u64::try_from(
+                self.cache
+                    .grant_ids(&receiver)
+                    .map_err(|error| cache_failure(&error))?
+                    .len(),
+            )
+            .unwrap_or(0);
+            on_synced(count);
+            synced = true;
+            ending.relax();
+            break;
+        }
+        Ok(ReadReport {
+            moved: synced,
+            complete: true,
+            conversations: self
+                .cache
+                .grant_ids(&receiver)
+                .map_err(|error| cache_failure(&error))?
+                .len(),
+        })
+    }
+
+    /// Subscribe the chats `present` that `follow` names, up to the connection
+    /// cap. A refusal leaves the grant feed up. `chats` keeps those sessions.
+    #[allow(clippy::too_many_arguments)]
+    fn open_chats(
+        &self,
+        access: &ReaderAccess<'_>,
+        ending: &Arc<Stopping>,
+        offline: &Arc<AtomicBool>,
+        follow: &FollowRule,
+        present: &[(String, String, i64)],
+        live: &mut LiveFollow,
+        chats: &mut Vec<GatewayConnection>,
+    ) -> Result<(), ReadFailure> {
+        for (conversation, _, _) in present {
+            if !follow.contains(conversation) || live.open_ids().iter().any(|id| id == conversation)
+            {
+                continue;
+            }
+            if live.open_ids().len()
+                >= nessa_protocol::product::generated::MAX_CONNECTION_CONVERSATION_SUBSCRIPTIONS
+            {
+                break;
+            }
+            let _ = live.open(conversation);
+            let Ok(conversation_id) = ConversationId::new(conversation) else {
+                continue;
+            };
+            let Ok(session) = self.open_session(access, ending, offline) else {
+                continue;
+            };
+            let connection = GatewayConnection::new(session);
+            if connection.subscribe(&conversation_id).is_ok() {
+                chats.push(connection);
+            }
+        }
+        Ok(())
     }
 
     fn read_in(
@@ -1426,6 +1643,17 @@ fn cache_failure(error: &CacheError) -> ReadFailure {
 }
 
 /// A gateway failure as the caller acts on it.
+fn grant_cursor_refused(error: &GatewayError) -> bool {
+    matches!(
+        error,
+        GatewayError::Subscription(
+            crate::read_only_sync::application::SubscriptionRefusal::Subscription(
+                crate::read_only_sync::application::SubscriptionCode::CursorAhead,
+            )
+        )
+    )
+}
+
 fn failure(error: GatewayError) -> ReadFailure {
     if let Some(outcome) = error.connection_outcome() {
         return match outcome {

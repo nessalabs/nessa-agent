@@ -30,6 +30,7 @@
   "x-subscriptionLimits": {
     "conversationTargets": 8,
     "listTargets": 2,
+    "grantTargets": 1,
     "deliveryTimeoutMs": 10000
   },
   "x-channelRules": {
@@ -218,7 +219,7 @@
         "methods": {
           "type": "array",
           "items": { "type": "string" },
-          "maxItems": 127,
+          "maxItems": 130,
           "description": "Registered product methods; permission is checked for every command."
         }
       },
@@ -7467,15 +7468,137 @@
       "required": ["subscriptionId", "reason"],
       "description": "The subscription's one terminal frame. Nothing of it follows."
     },
+    "GrantStreamCursor": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "incarnation": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "description": "This receiver's grant log incarnation. A different one replaces the set. The empty log's incarnation is none."
+        },
+        "position": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,19})$",
+          "maxLength": 20,
+          "description": "Decimal position in this receiver's grant log. Compare positions only within one incarnation."
+        }
+      },
+      "required": ["incarnation", "position"],
+      "description": "Where in this receiver's grant log a frame was read."
+    },
+    "GrantsSubscribeParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "after": {
+          "$ref": "#/$defs/GrantStreamCursor",
+          "description": "The cursor of the last complete grant frame this client applied. No record behind it in the same incarnation is sent."
+        }
+      },
+      "required": [],
+      "description": "Follow this receiver's grants. The reply comes after the first read, then grants.changed until grants.subscriptionEnded or grants.unsubscribe. One per connection."
+    },
+    "GrantsPageParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "subscriptionId": { "$ref": "#/$defs/ConversationSubscriptionId" },
+        "snapshotId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 20,
+          "pattern": "^[1-9][0-9]{0,19}$",
+          "description": "The snapshot the incomplete frame named."
+        },
+        "after": {
+          "$ref": "#/$defs/GrantStreamCursor",
+          "description": "The same after the subscription was opened with. An incomplete frame does not advance it."
+        }
+      },
+      "required": ["subscriptionId", "snapshotId"],
+      "description": "Continue one incomplete grant snapshot. A grant change since that snapshot replaces it."
+    },
+    "GrantsUnsubscribeParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "subscriptionId": { "$ref": "#/$defs/ConversationSubscriptionId" }
+      },
+      "required": ["subscriptionId"],
+      "description": "Stop the grant subscription on this connection. A frame already being written may arrive before the reply; none arrives after it."
+    },
+    "GrantFrameEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "conversationId": {
+          "type": "string",
+          "minLength": 36,
+          "maxLength": 36,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
+        "absent": {
+          "type": "boolean",
+          "description": "True when this commit removed the grant. A tombstone. The stored capabilities are absent."
+        },
+        "capabilities": {
+          "type": "string",
+          "enum": ["read", "read+comment", "read+comment+drive"],
+          "description": "The capabilities that commit stored. Absent on a tombstone."
+        },
+        "policyRevision": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,19})$",
+          "maxLength": 20,
+          "description": "The grant epoch that commit stored."
+        }
+      },
+      "required": ["conversationId", "absent"],
+      "description": "One grant commit for this receiver: added, revoked, or its epoch changed."
+    },
+    "GrantsChanged": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "subscriptionId": { "$ref": "#/$defs/ConversationSubscriptionId" },
+        "cursor": { "$ref": "#/$defs/GrantStreamCursor" },
+        "complete": {
+          "type": "boolean",
+          "description": "False when this frame is a prefix cut on a grant boundary. It does not advance after."
+        },
+        "replaces": {
+          "type": "boolean",
+          "description": "True when this frame, with the pages of its snapshot, replaces the set. False when it continues the log."
+        },
+        "snapshotId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 20,
+          "pattern": "^[1-9][0-9]{0,19}$",
+          "description": "Set on an incomplete frame. grants.page names it, with the same after."
+        },
+        "grants": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/GrantFrameEntry" },
+          "description": "The commits in this frame, in log order. A complete snapshot's pages together are the set."
+        }
+      },
+      "required": ["subscriptionId", "cursor", "complete", "replaces", "grants"],
+      "description": "This receiver's grant commits since after, or a replacement of the set. Apply a complete frame. Stage an incomplete one."
+    },
     "ConversationSubscriptionErrorCode": {
       "type": "string",
       "enum": [
         "subscription_capacity",
         "subscription_duplicate",
         "unknown_subscription",
-        "cursor_ahead"
+        "cursor_ahead",
+        "incarnation_changed",
+        "grant_log_floor"
       ],
-      "description": "Refusals of subscribe and unsubscribe beside the conversation error codes a refused first read carries. subscription_capacity: the connection's published limit is full. subscription_duplicate: this connection already follows that target; the agent catalog is one target, so a connection follows it at most once. unknown_subscription: no such live subscription on this connection, or one the other unsubscribe stops. cursor_ahead: after names a position past the stored history."
+      "description": "Refusals of subscribe and unsubscribe beside the conversation error codes a refused first read carries. subscription_capacity: the connection's published limit is full. subscription_duplicate: this connection already follows that target; the agent catalog is one target, so a connection follows it at most once. unknown_subscription: no such live subscription on this connection, or one the other unsubscribe stops. cursor_ahead: after names a position past the stored history. incarnation_changed: after names another grant-log incarnation. grant_log_floor: after is older than the oldest retained grant-log record."
     },
     "ConversationMessageDelivery": {
       "type": "string",

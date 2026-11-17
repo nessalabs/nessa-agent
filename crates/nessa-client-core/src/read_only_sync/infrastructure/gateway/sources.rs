@@ -125,6 +125,56 @@ impl GatewayConnection {
             first,
         })
     }
+    /// Open the grant subscription and keep frames that arrived with the reply.
+    pub(crate) fn subscribe_grants(
+        &self,
+        after: Option<nessa_protocol::product::generated::GrantStreamCursor>,
+    ) -> Result<String, GatewayError> {
+        let params = nessa_protocol::product::generated::GrantsSubscribeParams { after };
+        settled(self.run(|| {
+            self.0
+                .try_borrow_mut()
+                .map_err(|_| GatewayError::Busy)?
+                .subscribe_grants(&params)
+        })?)
+    }
+    /// The next grant frame or the subscription's end, as its own operation.
+    pub(crate) fn grant_page(
+        &self,
+        snapshot_id: &str,
+        after: Option<&nessa_protocol::product::generated::GrantStreamCursor>,
+    ) -> Result<(), GatewayError> {
+        let id = self
+            .0
+            .try_borrow()
+            .map_err(|_| GatewayError::Busy)?
+            .grant_subscription()
+            .ok_or(GatewayError::Busy)?;
+        let params = nessa_protocol::product::generated::GrantsPageParams {
+            subscription_id: id,
+            snapshot_id: snapshot_id.to_owned(),
+            after: after.map(
+                |cursor| nessa_protocol::product::generated::GrantStreamCursor {
+                    incarnation: cursor.incarnation.clone(),
+                    position: cursor.position.clone(),
+                },
+            ),
+        };
+        settled(self.run(|| {
+            self.0
+                .try_borrow_mut()
+                .map_err(|_| GatewayError::Busy)?
+                .grant_page(&params)
+        })?)
+    }
+    pub(crate) fn next_grant(&self) -> Result<super::session::GrantDelivery, GatewayError> {
+        settled(self.run(|| {
+            self.0
+                .try_borrow_mut()
+                .map_err(|_| GatewayError::Busy)?
+                .next_grant()
+        })?)
+    }
     /// Wait for the subscription's next view or end as its own operation.
     pub(crate) fn wait_view(&self) -> Result<Wait, GatewayError> {
         settled(self.run(|| {

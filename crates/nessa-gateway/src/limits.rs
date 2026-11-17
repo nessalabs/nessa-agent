@@ -26,9 +26,10 @@ use nessa_protocol::lease::{
     MAX_DATA_BYTES, MAX_FETCHES_IN_FLIGHT, MAX_OPEN_PUBLISHERS,
 };
 use nessa_protocol::product::generated::{
-    MAX_CONNECTION_CONVERSATION_SUBSCRIPTIONS, MAX_CONNECTION_LIST_SUBSCRIPTIONS,
-    MAX_PRODUCT_CLIENT_ID_CHARACTERS, MAX_PRODUCT_SURFACE_INSTANCE_CHARACTERS,
-    MAX_RECORD_RESPONSE_BYTES, MAX_SHARE_PAGE, SUBSCRIPTION_DELIVERY_TIMEOUT_MS,
+    MAX_CONNECTION_CONVERSATION_SUBSCRIPTIONS, MAX_CONNECTION_GRANT_SUBSCRIPTIONS,
+    MAX_CONNECTION_LIST_SUBSCRIPTIONS, MAX_PRODUCT_CLIENT_ID_CHARACTERS,
+    MAX_PRODUCT_SURFACE_INSTANCE_CHARACTERS, MAX_RECORD_RESPONSE_BYTES, MAX_SHARE_PAGE,
+    SUBSCRIPTION_DELIVERY_TIMEOUT_MS,
 };
 use nessa_protocol::protocol::MAX_PAYLOAD_BYTES;
 use nessa_sdk::application::agent_execution::sessions::{ArtifactRecord, NoteRecord, NoteText};
@@ -222,6 +223,18 @@ fn catalogue() -> &'static [Limit] {
             tier: "fixed",
             owner: "protocol/product/v1.json x-subscriptionLimits.listTargets",
             meaning: "a list subscription past this on one socket is refused",
+        },
+        Limit {
+            id: "socket.grant_subscriptions",
+            tier: "fixed",
+            owner: "protocol/product/v1.json x-subscriptionLimits.grantTargets",
+            meaning: "a grant subscription past this on one socket is refused, and it does not take a conversation subscription slot",
+        },
+        Limit {
+            id: "grant.log_retained",
+            tier: "fixed",
+            owner: "GRANT_LOG_RETAINED in crates/nessa-conversation/src/application/share_grants.rs",
+            meaning: "grant-log records kept for one receiver; a resume older than the oldest of them takes a full snapshot",
         },
         Limit {
             id: "conversation.share_grants",
@@ -444,7 +457,7 @@ fn catalogue() -> &'static [Limit] {
             id: "peer.poll_interval",
             tier: "fixed",
             owner: "POLL_INTERVAL in crates/nessa-peer-gateways/src/infrastructure/poller.rs",
-            meaning: "how often each up-to-date peer gateway is read, jittered 80 to 120 percent; what a peer shares or unshares reaches this gateway's cache within about one interval",
+            meaning: "how often each peer is read again, jittered 80 to 120 percent; an Active read is one grants.subscribe snapshot and the chats its follow rule names, and does not call catalogueHead",
         },
         Limit {
             id: "peer.poll_backoff_cap",
@@ -649,6 +662,14 @@ pub fn effective_json(
     put(
         "socket.list_subscriptions",
         count(MAX_CONNECTION_LIST_SUBSCRIPTIONS),
+    );
+    put(
+        "socket.grant_subscriptions",
+        count(MAX_CONNECTION_GRANT_SUBSCRIPTIONS),
+    );
+    put(
+        "grant.log_retained",
+        crate::conversation::application::GRANT_LOG_RETAINED,
     );
     put(
         "conversation.share_grants",

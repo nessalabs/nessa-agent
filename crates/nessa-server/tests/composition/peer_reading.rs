@@ -868,37 +868,6 @@ impl Reader {
             .execute_batch(statement)
             .unwrap();
     }
-    /// B's cache of `key`, byte for byte, while no read has it open.
-    fn snapshot(&self, key: &DeviceKey) -> Vec<u8> {
-        std::fs::read(self.cache_path(key)).unwrap()
-    }
-    /// Put back a `snapshot`, in the same private file.
-    fn restore(&self, key: &DeviceKey, bytes: &[u8]) {
-        let mut file = nessa_local_storage::open(
-            &self.cache_path(key),
-            nessa_local_storage::OpenMode::ReadWrite,
-        )
-        .unwrap();
-        file.set_len(0).unwrap();
-        std::io::Write::write_all(&mut file, bytes).unwrap();
-        file.sync_all().unwrap();
-    }
-    /// The catalogue head B's cache of `key` completed, as hex.
-    fn completed(&self, key: &DeviceKey) -> String {
-        nessa_local_database::rusqlite::Connection::open(self.cache_path(key))
-            .unwrap()
-            .query_row("SELECT hex(completed) FROM catalogue_progress", [], |row| {
-                row.get(0)
-            })
-            .unwrap()
-    }
-    /// How many finished walks B's cache of `key` notes.
-    fn walks(&self, key: &DeviceKey) -> i64 {
-        nessa_local_database::rusqlite::Connection::open(self.cache_path(key))
-            .unwrap()
-            .query_row("SELECT count(*) FROM retained_walks", [], |row| row.get(0))
-            .unwrap()
-    }
     /// The poller changes kept so far, as `change` names them.
     fn kept(&self) -> Vec<String> {
         self.changes
@@ -1037,7 +1006,6 @@ async fn reads(refuse: bool) {
     // These rows are about what A grants. B follows every chat the test
     // creates; a chat with no follow rule is not replicated.
     follow_granted(&b, key, &[x.clone(), y.clone(), z.clone()]).await;
-
     // R2: A shares X and not Y; B's cache gets X only.
     a.grant(
         ShareGrantTransition::Grant(ShareAccess::read()),
@@ -1072,7 +1040,8 @@ async fn reads(refuse: bool) {
     .await;
     synced_with(&b, 1).await;
 
-    // R5: A shares Z, then deletes it; B's cache drops it.
+    // R5: A shares Z, then deletes the conversation. The grant remains, so
+    // B's cache keeps Z until A revokes it. Deletion is not a grant frame.
     a.grant(
         ShareGrantTransition::Grant(ShareAccess::read()),
         &z,
@@ -1094,69 +1063,16 @@ async fn reads(refuse: bool) {
         )
         .await
         .unwrap();
-    synced_with(&b, 1).await;
-    assert_eq!(b.cached(&key, &reader.0), vec![y.to_string()]);
-    assert_eq!(b.walks(&key), 1, "a finished walk is noted");
-
-    // R21: a walk cut short after its catalogue pass, then a restart (every
-    // poller here is a new one). B's cache is put back to how such a walk
-    // leaves it: A unshared Y, the pass reached A's new head, and the walk
-    // stopped before it asked Y, so Y is still cached and no walk is noted.
-    // At that unchanged head B walks again and withdraws Y; it is `synced`
-    // only after that, holding nothing.
-    let before = b.snapshot(&key);
-    a.grant(ShareGrantTransition::Revoke, &y, &reader).await;
-    synced_with(&b, 0).await;
-    let head = b.completed(&key);
-    b.restore(&key, &before);
-    b.tamper(
-        &key,
-        &format!("UPDATE catalogue_progress SET completed = x'{head}'; DELETE FROM retained_walks"),
-    );
-    assert_eq!(b.cached(&key, &reader.0), vec![y.to_string()]);
-    assert_eq!(b.completed(&key), head, "the pass is at A's head");
-    synced_with(&b, 0).await;
-    assert!(
-        b.cached(&key, &reader.0).is_empty(),
-        "withdrawn at the unchanged head"
-    );
-    assert_eq!(b.walks(&key), 1, "the finished walk is noted");
-    a.grant(
-        ShareGrantTransition::Grant(ShareAccess::read()),
-        &y,
-        &reader,
-    )
-    .await;
-    synced_with(&b, 1).await;
-
-    // R6: B's cache records more of A's catalogue than A serves, as after A
-    // is restored from an older copy. The cache cannot continue
-    // (ResetRequired), so B empties it and reads again on its own. A read
-    // that did not reset would fail on every poll and never be `synced`.
-    b.tamper(
-        &key,
-        "UPDATE catalogue_progress SET completed = x'7fffffffffffffff'",
-    );
+    synced_with(&b, 2).await;
+    let mut kept = vec![y.to_string(), z.to_string()];
+    kept.sort();
+    assert_eq!(b.cached(&key, &reader.0), kept);
+    a.grant(ShareGrantTransition::Revoke, &z, &reader).await;
     synced_with(&b, 1).await;
     assert_eq!(b.cached(&key, &reader.0), vec![y.to_string()]);
 
-    // R7: B's cache names another owner's catalogue for this receiver than
-    // the one A answers. It holds one catalogue per receiver, so it does not
-    // continue: ResetRequired again.
-    b.tamper(
-        &key,
-        &format!(
-            "PRAGMA foreign_keys = OFF;
-             UPDATE catalogue_progress SET stream = 'conversation-owner:{}'",
-            "0".repeat(64)
-        ),
-    );
-    synced_with(&b, 1).await;
-    assert_eq!(b.cached(&key, &reader.0), vec![y.to_string()]);
-
-    // R8: B's cache has a shape this build does not read, as every cache
-    // made before walks were noted has. Derived from A, it is emptied and
-    // read again.
+    // R8: B's cache has a shape this build does not read. Derived from A, it
+    // is emptied and read again.
     b.tamper(&key, "PRAGMA user_version = 1");
     synced_with(&b, 1).await;
     assert_eq!(b.cached(&key, &reader.0), vec![y.to_string()]);
@@ -1268,11 +1184,7 @@ async fn reads(refuse: bool) {
         "approved: pending+none -> active+none".to_owned(),
         format!("withdrew {x}: active+cache -> active+cache"),
         format!("withdrew {y}: active+cache -> active+cache"),
-        // R21: withdrawn, and withdrawn again after the cut walk.
-        format!("withdrew {y}: active+cache -> active+cache"),
-        format!("withdrew {y}: active+cache -> active+cache"),
-        "reset_required: active+cache -> active+none".to_owned(),
-        "reset_required: active+cache -> active+none".to_owned(),
+        format!("withdrew {z}: active+cache -> active+cache"),
         "cache_damaged: active+cache -> active+none".to_owned(),
         "ended(terminal: credential_revoked): active+cache -> revoked+none".to_owned(),
         "ended(terminal: denied): pending+none -> revoked+none".to_owned(),
