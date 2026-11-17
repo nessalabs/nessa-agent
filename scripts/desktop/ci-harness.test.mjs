@@ -123,7 +123,7 @@ test("local and CI aggregate the same named frontend and native checks", () => {
   assert.match(workflow, /npm ci --ignore-scripts/)
 })
 
-test("Linux coverage is its own job, and assembly stays with the native smoke", () => {
+test("Linux coverage is its own job, and assembly stays with the native smoke in theirs", () => {
   const workflow = readFileSync(".github/workflows/local-auth.yml", "utf8")
   // Hosted Windows checks this file out with CRLF. A search that requires a
   // bare LF after the job key misses every header there, and check-desktop
@@ -131,21 +131,32 @@ test("Linux coverage is its own job, and assembly stays with the native smoke", 
   const asWindowsCheckout = workflow.replace(/\r\n/g, "\n").replace(/\n/g, "\r\n")
   for (const checkout of [workflow, asWindowsCheckout]) {
     const jobAt = (name) => checkout.search(new RegExp(`\\n  ${name}:\\r?\\n`))
+    const desktopStart = jobAt("linux-desktop")
     const localAuthStart = jobAt("local-auth")
     const coverageStart = jobAt("sdk-domain-coverage")
     const checksStart = jobAt("required-checks")
-    assert.ok(localAuthStart !== -1, "local-auth job")
+    assert.ok(desktopStart !== -1, "linux-desktop job")
+    assert.ok(localAuthStart > desktopStart, "local-auth follows linux-desktop")
     assert.ok(coverageStart > localAuthStart, "sdk-domain-coverage follows local-auth")
     assert.ok(checksStart > coverageStart, "required-checks follows sdk-domain-coverage")
+    const desktop = checkout.slice(desktopStart, localAuthStart)
     const localAuth = checkout.slice(localAuthStart, coverageStart)
     const coverage = checkout.slice(coverageStart, checksStart)
-    assertCoverageJobSplit(localAuth, coverage, checkout)
+    assertCoverageJobSplit(desktop, localAuth, coverage, checkout)
   }
 })
 
-function assertCoverageJobSplit(localAuth, coverage, workflow) {
-  assert.match(localAuth, /name: Assemble the Linux desktop runtime/)
-  assert.match(localAuth, /pnpm desktop:smoke/)
+function assertCoverageJobSplit(desktop, localAuth, coverage, workflow) {
+  // Assembly and the smoke share a runner of their own, so the Rust tests do
+  // not wait in front of them and they do not wait behind the Rust tests.
+  assert.match(desktop, /name: Assemble the Linux desktop runtime/)
+  assert.match(desktop, /pnpm desktop:smoke/)
+  assert.match(desktop, /needs: changes\r?\n/)
+  assert.doesNotMatch(desktop, /cargo-test-parallel/)
+  assert.doesNotMatch(
+    localAuth,
+    /run: [^\n]*(prepare\.mjs|desktop:smoke|install-linux-build-deps)/,
+  )
   assert.doesNotMatch(localAuth, /run: bash scripts\/check-sdk-domain-coverage\.sh/)
   assert.match(coverage, /bash scripts\/check-sdk-domain-coverage\.sh/)
   assert.match(coverage, /NESSA_SDK_COVERAGE_TARGET: target\/sdk-domain-coverage/)
@@ -161,12 +172,12 @@ function assertCoverageJobSplit(localAuth, coverage, workflow) {
   assert.match(workflow, /options:\s+- restore\s+- cold\s+default: restore/)
 }
 
-test("the existing Linux matrix leg uniquely owns direct runtime assembly", () => {
+test("the Linux desktop job uniquely owns direct runtime assembly", () => {
   const workflow = readFileSync(".github/workflows/local-auth.yml", "utf8")
   assert.equal(workflow.match(/run: node scripts\/desktop\/prepare\.mjs/g)?.length, 1)
   assert.match(
     workflow,
-    /name: Assemble the Linux desktop runtime\s+if: runner\.os == 'Linux'\s+run: node scripts\/desktop\/prepare\.mjs/,
+    /name: Assemble the Linux desktop runtime\s+run: node scripts\/desktop\/prepare\.mjs/,
   )
   // The release assembles the runtime only inside the bundle build, through
   // the config's beforeBuildCommand, so what it verifies is what it packaged.
@@ -187,27 +198,38 @@ test("native Linux verification matches the release distribution and retains smo
   const release = readFileSync(".github/workflows/release.yml", "utf8")
   for (const newline of ["\n", "\r\n"]) {
     const checkout = (text) => text.replace(/\r?\n/g, newline)
-    const native = workflowJobs(checkout(integration)).find(
-      ([name]) => name === "local-auth",
-    )?.[1]
+    const jobs = workflowJobs(checkout(integration))
+    const native = jobs.find(([name]) => name === "linux-desktop")?.[1]
+    const tests = jobs.find(([name]) => name === "local-auth")?.[1]
     const shipping = workflowJobs(checkout(release)).find(
       ([name]) => name === "build",
     )?.[1]
-    assert.ok(native && shipping, "native verification and release build jobs exist")
+    assert.ok(
+      native && tests && shipping,
+      "native verification, the test matrix and the release build jobs exist",
+    )
     const linux = shipping.match(
       /- runner: (ubuntu-\d{2}\.\d{2})\r?\n\s+target: x86_64-unknown-linux-gnu/,
     )
     assert.ok(linux, "the Linux release declares an explicit Ubuntu baseline")
-    const matrix = native.match(/matrix:\s+os: \[([^\]]+)\]/)
-    assert.ok(matrix, "native verification declares its platform matrix")
+    assert.ok(
+      native.includes(`runs-on: ${linux[1]}${newline}`),
+      "native verification must use the release's Linux distribution",
+    )
+    assert.ok(
+      native.includes(`key: ${linux[1]}${newline}`),
+      "Linux Rust cache must distinguish the selected distribution's ABI",
+    )
+    const matrix = tests.match(/matrix:\s+os: \[([^\]]+)\]/)
+    assert.ok(matrix, "the test matrix declares its platforms")
     assert.deepEqual(
       matrix[1].split(",").map((name) => name.trim()),
       ["windows-latest", linux[1], "macos-latest"],
-      "native verification must use the release's Linux distribution",
+      "the Linux tests must use the release's Linux distribution",
     )
-    assert.ok(native.includes(`- os: ${linux[1]}${newline}            partition: all`))
+    assert.ok(tests.includes(`- os: ${linux[1]}${newline}            partition: all`))
     assert.ok(
-      native.includes("key: ${{ runner.os == 'Linux' && matrix.os || '' }}"),
+      tests.includes("key: ${{ runner.os == 'Linux' && matrix.os || '' }}"),
       "Linux Rust cache must distinguish the selected distribution's ABI",
     )
     assert.match(
@@ -335,9 +357,11 @@ test("apt installs and every CI job are bounded", () => {
   assert.equal(scriptBudget, 62.75)
 
   // Minutes, from 21 green local-auth runs on 2026-10-07 and the four release
-  // runs that exist. local-auth is 140 because the 65 minute apt step, the
-  // 60 minute Rust test step, and at most 11.3 minutes of everything else
-  // sum past 130. The release build is 120 because 65 + 25.7 does too.
+  // runs that exist. local-auth stays 140, set when it also held the 65
+  // minute apt step: its 60 minute Rust test step is the bound that has to
+  // elapse inside it now. linux-desktop is 120 because that apt step and at
+  // most 17 minutes of everything else (run 43811777001) have to fit. The
+  // release build is 120 because 65 + 25.7 does too.
   // windows-server-tests is 95 because its test step is 90 and setup is at
   // most 4 minutes. Run 41947356093 was still inside server-other at 70.
   const bounds = {
@@ -345,11 +369,11 @@ test("apt installs and every CI job are bounded", () => {
       workflows: 10,
       changes: 10,
       "gateway-contract": 45,
-      "desktop-release-profile": 45,
       frontend: 30,
       // 90: the browser install may use 45 minutes (run 42079903038 was still
       // fetching at 30) and the rest of green run 42072698358 took 31.
       "conversation-stress": 90,
+      "linux-desktop": 120,
       "local-auth": 140,
       "windows-server-tests": 95,
       "sdk-domain-coverage": 60,
@@ -400,7 +424,7 @@ test("apt installs and every CI job are bounded", () => {
       // to elapse; the job has to still be running when it does.
       const jobTimeout =
         workflow === localAuth
-          ? bounds["local-auth.yml"]["local-auth"]
+          ? bounds["local-auth.yml"]["linux-desktop"]
           : bounds["release.yml"].build
       assert.ok(scriptBudget <= stepTimeout, `${scriptBudget} <= ${stepTimeout}`)
       assert.ok(stepTimeout < jobTimeout, `${stepTimeout} < ${jobTimeout}`)
@@ -678,12 +702,11 @@ test("the frontend job owns top-level script and verification-script tests, and 
   const root = JSON.parse(readFileSync("package.json", "utf8"))
   const workflow = readFileSync(".github/workflows/local-auth.yml", "utf8")
   const gatewayStart = workflow.indexOf("  gateway-contract:")
-  const releaseStart = workflow.indexOf("  desktop-release-profile:")
   const frontendStart = workflow.indexOf("  frontend:")
   const localAuthStart = workflow.indexOf("  local-auth:")
-  for (const boundary of [gatewayStart, releaseStart, frontendStart, localAuthStart])
+  for (const boundary of [gatewayStart, frontendStart, localAuthStart])
     assert.notEqual(boundary, -1, "expected CI job boundary is missing")
-  const gateway = workflow.slice(gatewayStart, releaseStart)
+  const gateway = workflow.slice(gatewayStart, frontendStart)
   const frontend = workflow.slice(frontendStart, localAuthStart)
 
   assert.equal(

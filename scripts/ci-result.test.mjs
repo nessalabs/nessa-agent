@@ -18,8 +18,8 @@ function needs(code, jobs, plan = {}) {
 const compileJobs = {
   workflows: "success",
   "gateway-contract": "success",
-  "desktop-release-profile": "success",
   frontend: "success",
+  "linux-desktop": "success",
   "local-auth": "success",
   "windows-server-tests": "success",
   "sdk-domain-coverage": "success",
@@ -221,11 +221,9 @@ test("the Windows split preserves full build flags, platform coverage, guards, c
     }
     assert.match(server, /runs-on: windows-latest/)
     for (const block of [local, server]) {
-      if (block === local) {
-        assert.match(block, /needs: \[changes, desktop-release-profile\]/)
-      } else {
-        assert.match(block, /needs: changes/)
-      }
+      // Neither waits for another compile job: the Windows legs are the
+      // longest in a run, so a job in front of them is added to all of it.
+      assert.match(block, /needs: changes\r?\n/)
       assert.match(
         block,
         block === local
@@ -247,6 +245,25 @@ test("the Windows split preserves full build flags, platform coverage, guards, c
       checkout,
       /cancel-in-progress: \$\{\{ github\.event_name == 'pull_request' \}\}/,
     )
+    // One group per commit on `main`: under one group for the branch, pushes
+    // ran one at a time and a push waiting behind another was dropped.
+    assert.ok(
+      checkout.includes(
+        "group: ${{ github.workflow }}-${{ github.event_name == 'push' && github.sha || github.ref }}",
+      ),
+    )
+    // The release-profile compile uses the Mac the matrix already has.
+    assert.match(
+      local,
+      /if: runner\.os == 'macOS'\n\s+run: pnpm build\n(?:\s+#.*\n)*\s+- name: [^\n]+\n\s+if: runner\.os == 'macOS'\n\s+run: cargo check -p nessa-app --release --all-targets\n/,
+    )
+    assert.equal(checkout.match(/runs-on: macos-latest/g), null)
+    // Windows test files go to the workspace drive in every Windows job.
+    for (const block of [local, server])
+      assert.match(
+        block,
+        /name: Keep Windows test files on the workspace drive\r?\n\s+if: runner\.os == 'Windows'/,
+      )
     assert.match(
       blocks.find((block) => block.id === "gateway-contract").text,
       /node --test scripts\/cargo-test-parallel\/e2e\.test\.mjs scripts\/cargo-test-parallel\/diagnostics\.test\.mjs/,
