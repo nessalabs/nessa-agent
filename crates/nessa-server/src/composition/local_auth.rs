@@ -1785,6 +1785,15 @@ async fn conversations(
         DurableAgentToolAudit::new(root.join("audit").join("agent-tools"), clock.clone())
             .map_err(|error| RunError::Agent(error.to_string()))?,
     ));
+    // Every change an agent or a CLI asks a desktop window to make is
+    // recorded before the window is asked, and what came of it after.
+    service.bind_window_control_audit(Arc::new(
+        crate::conversation::infrastructure::DurableWindowControlAudit::new(
+            root.join("audit").join("window-control"),
+            clock.clone(),
+        )
+        .map_err(|error| RunError::Agent(error.to_string()))?,
+    ));
     // Changes made from Settings (an app no longer always allowed, a
     // channel moved) are recorded before they are reported.
     service.bind_settings_audit(Arc::new(

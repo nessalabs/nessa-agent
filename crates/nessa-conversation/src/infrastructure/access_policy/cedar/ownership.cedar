@@ -141,6 +141,22 @@ when {
     principal.id == resource.owner
 };
 
+// The owner's agent, or the owner's own CLI, changes what the owner's
+// desktop windows show: opens and closes the side columns and the panel,
+// opens, focuses and closes panes. Nobody else's windows, and never a paired
+// device's session (refused before this, as a catalogue write). A pane's
+// conversation is asked about separately, as `conversation.read`.
+@id("owner.workspace_control")
+permit (
+    principal is NessaConversation::Person,
+    action == NessaConversation::Action::"workspace.control",
+    resource is NessaConversation::Workspace
+)
+when {
+    principal.organization == resource.organization &&
+    principal.id == resource.owner
+};
+
 // The owner makes channels in their own catalogue. Only this action takes a
 // folder path; every later request names the channel, never the path.
 @id("owner.channel_create")

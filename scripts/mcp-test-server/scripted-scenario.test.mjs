@@ -24,6 +24,7 @@ import {
   permissionCall,
   promptFiles,
   promptImages,
+  promptArguments,
   promptText,
   runSteps,
   scenarioScript,
@@ -346,6 +347,12 @@ test("the window scenario parses, and the first named turn wins over the fallbac
     ]),
     "AB",
   )
+  assert.deepEqual(
+    promptArguments('stress open r3 args:{"threadId":"t","where":"right"} :args s1'),
+    { threadId: "t", where: "right" },
+  )
+  assert.deepEqual(promptArguments("stress open r3 s1"), {})
+  assert.throws(() => promptArguments("x args:[1] :args"))
   assert.equal(promptImages([{ type: "text", text: "A" }]), "none")
   assert.equal(
     promptImages([
@@ -1117,6 +1124,53 @@ test("the scripted process refuses an absent selected server instead of calling 
   const sessionId = (await agent.request("session/new", claudeOpen)).result.sessionId
   const result = await agent.request("session/prompt", { sessionId, prompt: [] })
   assert.match(result.error.message, /no nessa-agents server/)
+})
+
+test("a saving tool step with keepErrors keeps an error's structuredContent instead of failing", async () => {
+  for (const bad of [{ keepErrors: false, save: "r" }, { keepErrors: true }])
+    assert.throws(
+      () =>
+        parseScenario({
+          turns: [{ steps: [{ do: "tool", tool: "x", arguments: {}, ...bad }] }],
+        }),
+      /keepErrors is true, on a tool step that saves/,
+    )
+  const refused = {
+    isError: true,
+    content: [{ type: "text", text: "not_on_screen" }],
+    structuredContent: { error: "not_on_screen" },
+  }
+  const run = (extra) => {
+    const updates = []
+    const parsed = parseScenario({
+      turns: [
+        {
+          steps: [
+            { do: "tool", tool: "x", arguments: {}, save: "r", ...extra },
+            { do: "text", chunks: ["said ${r.error}"] },
+            { do: "end" },
+          ],
+        },
+      ],
+    })
+    return runSteps(parsed.turns[0].steps, {
+      agent: "claude",
+      cancelled: () => false,
+      openCall: () => undefined,
+      toolId: () => "call",
+      clearCall: () => {},
+      update: (frame) => updates.push(frame),
+      messageId: () => "m",
+      callTool: async () => refused,
+    }).then((outcome) => ({ outcome, updates }))
+  }
+  const failed = await run({})
+  assert.match(failed.outcome.fail, /x failed: not_on_screen/)
+  const kept = await run({ keepErrors: true })
+  assert.equal(kept.outcome.stopReason, "end_turn")
+  assert.ok(
+    kept.updates.some((frame) => JSON.stringify(frame).includes("said not_on_screen")),
+  )
 })
 
 test("a tool step with times makes that many calls at once and saves every result", async () => {

@@ -4,9 +4,12 @@ use crate::application::{
     ConversationCaller, ConversationError, ConversationEventError, ConversationService,
     EventProgress, PaneConversation, ReportRegistration, RequestedAgent, RequestedConversation,
     SourcePermits, SubmissionMode, SubmittedMessage, ThreadEvent, ThreadReport, ThreadTurn,
-    WindowReading, MAX_EVENT_READERS,
+    WindowControlError, WindowControlVia, WindowReading, WindowTarget, MAX_EVENT_READERS,
 };
-use crate::domain::{PaneContent, WindowPanel, WindowShowing};
+use crate::domain::{
+    OpenPlace, PaneContent, WidgetRef, WindowAction, WindowPanel, WindowShowing, WindowSide,
+    WindowView,
+};
 use crate::mcp_servers::application::{BuiltInAnswer, BuiltInFuture, BuiltInServer};
 use crate::timer::clock;
 use nessa_protocol::agents::AgentId;
@@ -147,6 +150,75 @@ impl BuiltInServer for ConversationTools {
                 "annotations": {"readOnlyHint": true, "openWorldHint": false},
             }),
             json!({
+                "name": "arrange_window",
+                "description": "Change what the person's Nessa desktop window shows, as they would with a click: open or close the sidebar, the session list or the focused chat's right panel (\"open\" or \"closed\", the words read_window uses), or show the panes or the Agents overview (view). Give one or more fields; each is done in the order listed here, and a failure stops the rest. It acts on the window showing this conversation, else the most recent one. Nothing is lost: each change is undone the same way. Answers what each field changed, and the window as read_window reads it after.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "sidebar": {"type": "string", "enum": ["open", "closed"]},
+                        "sessionList": {"type": "string", "enum": ["open", "closed"], "description": "The session list beside the sidebar. A window in the sidebar arrangement has none."},
+                        "panel": {"type": "string", "enum": ["open", "closed"], "description": "The focused chat's right panel."},
+                        "view": {"type": "string", "enum": ["panes", "agents"], "description": "What fills the content region: the panes, or the Agents overview over them."},
+                    },
+                    "additionalProperties": false,
+                },
+                "annotations": {"readOnlyHint": false, "destructiveHint": false, "idempotentHint": true, "openWorldHint": false},
+            }),
+            json!({
+                "name": "show_panel_tab",
+                "description": "Bring one of the focused chat's right-panel tabs to the front and open the panel, in the person's Nessa desktop window. Name the tab by the plugin and id read_window lists under panel.tabs. Answers the window as read_window reads it after.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "plugin": {"type": "string"},
+                        "id": {"type": "string"},
+                    },
+                    "required": ["plugin", "id"],
+                    "additionalProperties": false,
+                },
+                "annotations": {"readOnlyHint": false, "destructiveHint": false, "idempotentHint": true, "openWorldHint": false},
+            }),
+            json!({
+                "name": "open_thread",
+                "description": "Show a thread (any conversation of the person's, by its threadId) in the person's Nessa desktop window and focus it. where: \"beside\" (default) splits the focused pane, to the right if the room allows, else below, and where neither fits shows it in the focused pane; \"right\" or \"below\" splits that way only; \"here\" shows it in the focused pane in place of what it shows. A thread already on screen is focused where it is. Answers the window as read_window reads it after.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "threadId": {"type": "string"},
+                        "where": {"type": "string", "enum": ["beside", "right", "below", "here"], "default": "beside"},
+                    },
+                    "required": ["threadId"],
+                    "additionalProperties": false,
+                },
+                "annotations": {"readOnlyHint": false, "destructiveHint": false, "idempotentHint": true, "openWorldHint": false},
+            }),
+            json!({
+                "name": "focus_pane",
+                "description": "Focus the pane showing this thread in the person's Nessa desktop window, so what they type goes there. The thread must be on screen (read_window lists it). Answers the window as read_window reads it after.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "threadId": {"type": "string"},
+                    },
+                    "required": ["threadId"],
+                    "additionalProperties": false,
+                },
+                "annotations": {"readOnlyHint": false, "destructiveHint": false, "idempotentHint": true, "openWorldHint": false},
+            }),
+            json!({
+                "name": "close_pane",
+                "description": "Close the pane showing this thread in the person's Nessa desktop window, as ⌘W does. The thread itself is kept; only the pane goes. The last pane leaves a new-session pane. Answers the window as read_window reads it after.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "threadId": {"type": "string"},
+                    },
+                    "required": ["threadId"],
+                    "additionalProperties": false,
+                },
+                "annotations": {"readOnlyHint": false, "destructiveHint": true, "idempotentHint": true, "openWorldHint": false},
+            }),
+            json!({
                 "name": "close_thread",
                 "description": "Close this thread once its work is done and nothing you started needs to keep running. When this turn ends, the thread's agent stops, and a thread in the cloud also stops its VM, keeping its files. The thread stays: the person's next message to it opens it again where it left off. Do not call it while a background command should keep running.",
                 "inputSchema": {
@@ -261,6 +333,105 @@ struct Stop {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Window {}
+/// `arrange_window`: each field one change, in this order.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct Arrange {
+    #[serde(default, deserialize_with = "supplied")]
+    sidebar: Option<Shown>,
+    #[serde(default, deserialize_with = "supplied")]
+    session_list: Option<Shown>,
+    #[serde(default, deserialize_with = "supplied")]
+    panel: Option<Shown>,
+    #[serde(default, deserialize_with = "supplied")]
+    view: Option<View>,
+}
+impl Arrange {
+    fn actions(self) -> Vec<WindowAction> {
+        let sides = [
+            (WindowSide::Sidebar, self.sidebar),
+            (WindowSide::SessionList, self.session_list),
+            (WindowSide::Panel, self.panel),
+        ];
+        sides
+            .into_iter()
+            .filter_map(|(side, shown)| {
+                shown.map(|shown| WindowAction::Show {
+                    side,
+                    open: matches!(shown, Shown::Open),
+                })
+            })
+            .chain(self.view.map(|view| WindowAction::View(view.0)))
+            .collect()
+    }
+}
+/// "open" or "closed", decoded only from its published string.
+#[derive(Clone, Copy, Deserialize)]
+#[serde(try_from = "String")]
+enum Shown {
+    Open,
+    Closed,
+}
+impl TryFrom<String> for Shown {
+    type Error = &'static str;
+    fn try_from(word: String) -> Result<Self, Self::Error> {
+        match word.as_str() {
+            "open" => Ok(Self::Open),
+            "closed" => Ok(Self::Closed),
+            _ => Err("not open or closed"),
+        }
+    }
+}
+#[derive(Clone, Copy, Deserialize)]
+#[serde(try_from = "String")]
+struct View(WindowView);
+impl TryFrom<String> for View {
+    type Error = &'static str;
+    fn try_from(word: String) -> Result<Self, Self::Error> {
+        [WindowView::Panes, WindowView::Agents]
+            .into_iter()
+            .find(|view| view.name() == word)
+            .map(Self)
+            .ok_or("unknown view")
+    }
+}
+#[derive(Clone, Copy, Deserialize)]
+#[serde(try_from = "String")]
+struct Where(OpenPlace);
+impl TryFrom<String> for Where {
+    type Error = &'static str;
+    fn try_from(word: String) -> Result<Self, Self::Error> {
+        [
+            OpenPlace::Beside,
+            OpenPlace::Right,
+            OpenPlace::Below,
+            OpenPlace::Here,
+        ]
+        .into_iter()
+        .find(|place| place.name() == word)
+        .map(Self)
+        .ok_or("unknown place")
+    }
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PanelTab {
+    plugin: String,
+    id: String,
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct OpenThread {
+    thread_id: String,
+    #[serde(default, rename = "where", deserialize_with = "supplied")]
+    place: Option<Where>,
+}
+/// `focus_pane` and `close_pane`: the thread whose pane it is.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct Pane {
+    thread_id: String,
+}
 /// `close_thread` takes nothing: it closes the calling agent's own thread.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -301,6 +472,50 @@ fn parse<T: serde::de::DeserializeOwned>(arguments: Value) -> Result<T, String> 
         return Err("invalid_request".into());
     }
     serde_json::from_value(arguments).map_err(|_| "invalid_request".into())
+}
+/// A window tool's arguments as the changes they ask, in order, and the
+/// thread they name, for the admission's audit.
+fn window_actions(
+    tool: &str,
+    arguments: Value,
+) -> Result<(Vec<WindowAction>, Option<ConversationId>), String> {
+    match tool {
+        "arrange_window" => {
+            let actions = parse::<Arrange>(arguments)?.actions();
+            if actions.is_empty() {
+                return Err("invalid_request".into());
+            }
+            Ok((actions, None))
+        }
+        "show_panel_tab" => {
+            let tab = parse::<PanelTab>(arguments)?;
+            let widget = WidgetRef::new(tab.plugin, tab.id).map_err(|_| "invalid_request")?;
+            Ok((vec![WindowAction::PanelTab(widget)], None))
+        }
+        "open_thread" => {
+            let open = parse::<OpenThread>(arguments)?;
+            let conversation = thread(&open.thread_id)?;
+            let place = open.place.map_or(OpenPlace::Beside, |place| place.0);
+            Ok((
+                vec![WindowAction::Open {
+                    conversation: conversation.clone(),
+                    place,
+                }],
+                Some(conversation),
+            ))
+        }
+        "focus_pane" | "close_pane" => {
+            let pane = parse::<Pane>(arguments)?;
+            let conversation = thread(&pane.thread_id)?;
+            let action = if tool == "focus_pane" {
+                WindowAction::Focus(conversation.clone())
+            } else {
+                WindowAction::Close(conversation.clone())
+            };
+            Ok((vec![action], Some(conversation)))
+        }
+        _ => Err("unknown_tool".into()),
+    }
 }
 fn thread(id: &str) -> Result<ConversationId, String> {
     ConversationId::new(id).map_err(|_| "invalid_request".into())
@@ -649,6 +864,50 @@ async fn run(
                 .map_err(code)?;
             let reading = service.read_windows(&source.caller()).await.map_err(code)?;
             Ok(window_view(source.conversation(), &reading))
+        }
+        "arrange_window" | "show_panel_tab" | "open_thread" | "focus_pane" | "close_pane" => {
+            // Decoded whole before admission: an off-schema argument is
+            // refused without an audit record or a window asked.
+            let (actions, target) = window_actions(&tool, arguments)?;
+            let purpose = format!("window.{tool}");
+            let action = identity(&source, &call, &purpose);
+            let admitted = service
+                .admit_agent_tool(
+                    source,
+                    call.clone(),
+                    tool,
+                    target,
+                    AgentToolRequest {
+                        logical: call.clone(),
+                        command: action,
+                    },
+                    stop,
+                )
+                .await
+                .map_err(code)?;
+            let caller = admitted.caller();
+            let mut changed = false;
+            for action in actions {
+                let done = service
+                    .control_window(
+                        &caller,
+                        WindowControlVia::Agent {
+                            source: admitted.conversation().clone(),
+                            execution: admitted.execution().into(),
+                            call: call.clone(),
+                        },
+                        WindowTarget::Showing(admitted.conversation()),
+                        action,
+                    )
+                    .await
+                    .map_err(|error: WindowControlError| error.code())?;
+                changed |= done.changed;
+            }
+            let reading = service.read_windows(&caller).await.map_err(code)?;
+            Ok(json!({
+                "changed": changed,
+                "window": window_view(admitted.conversation(), &reading),
+            }))
         }
         "close_thread" => {
             let _: Close = parse(arguments)?;
@@ -1291,6 +1550,10 @@ mod tests {
                 "stop_thread" => parse::<Stop>(arguments).map(|_| ()),
                 "subscribe" => parse::<Follow>(arguments).map(|_| ()),
                 "read_window" => parse::<Window>(arguments).map(|_| ()),
+                "arrange_window" => parse::<Arrange>(arguments).map(|_| ()),
+                "show_panel_tab" => parse::<PanelTab>(arguments).map(|_| ()),
+                "open_thread" => parse::<OpenThread>(arguments).map(|_| ()),
+                "focus_pane" | "close_pane" => parse::<Pane>(arguments).map(|_| ()),
                 "close_thread" => parse::<Close>(arguments).map(|_| ()),
                 _ => panic!("uncovered published tool: {tool}"),
             }
@@ -1403,6 +1666,11 @@ mod tests {
                 "subscribe",
                 "stop_thread",
                 "read_window",
+                "arrange_window",
+                "show_panel_tab",
+                "open_thread",
+                "focus_pane",
+                "close_pane",
                 "close_thread"
             ]
         );
