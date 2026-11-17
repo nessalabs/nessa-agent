@@ -3073,7 +3073,9 @@ async function enrollPeer(run, profile, code, invitationId) {
       }
     }, 30_000)
     if (!deviceKey)
-      throw new Error(`the peer never claimed its invitation: ${stderr.trim() || stdout.trim()}`)
+      throw new Error(
+        `the peer never claimed its invitation: ${stderr.trim() || stdout.trim()}`,
+      )
     const approved = await run.client.pairing.approve(invitationId, deviceKey)
     if (approved.activationStopped)
       throw new Error(
@@ -3094,7 +3096,9 @@ async function enrollPeer(run, profile, code, invitationId) {
         )
     }
     if (!enrollment?.credentialId)
-      throw new Error(`the peer enrollment named no credential: ${JSON.stringify(enrollment)}`)
+      throw new Error(
+        `the peer enrollment named no credential: ${JSON.stringify(enrollment)}`,
+      )
     return enrollment
   } finally {
     if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL")
@@ -7658,7 +7662,11 @@ const steps = {
           `the gateway's view does not show the peer's note as a grant: ${JSON.stringify(saved?.author ?? null)}`,
         )
       await run.exclusive(async () => {
-        await openStressConversation(run.page, conversationId, await titleOf(run, conversationId))
+        await openStressConversation(
+          run.page,
+          conversationId,
+          await titleOf(run, conversationId),
+        )
         await expectShown(run.page, note, failures)
         await expectShown(run.page, drive, failures)
         if ((await run.page.locator('[data-note-author="grant"]').count()) < 1)
@@ -7680,9 +7688,13 @@ const steps = {
         "grant-uses",
       )
       const records = existsSync(uses)
-        ? readdirSync(uses).map((name) => JSON.parse(readFileSync(join(uses, name), "utf8")))
+        ? readdirSync(uses).map((name) =>
+            JSON.parse(readFileSync(join(uses, name), "utf8")),
+          )
         : []
-      const mine = records.filter((record) => record.target?.conversationId === conversationId)
+      const mine = records.filter(
+        (record) => record.target?.conversationId === conversationId,
+      )
       for (const action of ["conversation.comment", "conversation.drive"]) {
         const recorded = mine.find((record) => record.target?.action === action)
         if (!recorded?.grant?.principalId?.startsWith("gateway:"))
