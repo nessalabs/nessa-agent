@@ -6,7 +6,7 @@ status: implemented
 summary: A paired gateway announces a dial address and a rotating token, and
   does not enroll from that announcement.
 parent: gateway
-sourceRevision: "2763455c33c057c3c1da500827c540597b82e065"
+sourceRevision: "9a258cb87cb84bf9138f004c3d3b0cf0b33a3c54"
 sources:
   - crates/nessa-peer-gateways/src/application/discovery.rs
   - crates/nessa-peer-gateways/src/application/discovery_authority.rs
