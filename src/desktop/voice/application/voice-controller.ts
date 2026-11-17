@@ -182,6 +182,10 @@ export class VoiceController {
   private readonly listeners = new Set<() => void>()
   /** How many panes show each conversation's call. */
   private readonly shown = new Map<string, number>()
+  /** A change of what the panes show is waiting to be told. */
+  private shownSettling = false
+  /** `chatShown`: what the panes showed of the call's conversation when they last settled. */
+  private shownTold = false
 
   constructor(private readonly dependencies: VoiceControllerDependencies) {}
 
@@ -340,24 +344,57 @@ export class VoiceController {
   }
 
   /**
-   * A pane shows `sessionId`'s call while the answer is held. Once no pane
-   * shows the conversation a call talks to, the call ends (V16): a call is
-   * never left talking to a chat nobody can see.
+   * A pane shows `sessionId`'s conversation while the answer is held. A call
+   * outlives the panes that show its conversation: the person may read
+   * another chat while they talk, and the call's switches then float on the
+   * pill (`chatShown`). The call ends when it is ended, or when its
+   * conversation is gone (V16).
    */
   show(sessionId: string): () => void {
     this.shown.set(sessionId, (this.shown.get(sessionId) ?? 0) + 1)
+    this.shownChanged()
     let held = true
     return () => {
       if (!held) return
       held = false
       const left = (this.shown.get(sessionId) ?? 1) - 1
-      if (left > 0) {
-        this.shown.set(sessionId, left)
-        return
-      }
-      this.shown.delete(sessionId)
-      if (this.state.sessionId === sessionId) this.end()
+      if (left > 0) this.shown.set(sessionId, left)
+      else this.shown.delete(sessionId)
+      this.shownChanged()
     }
+  }
+
+  /**
+   * Whether a pane shows the conversation the call talks to; false with no
+   * call. As the panes last settled: a conversation moved between panes is
+   * shown throughout, whoever asks in between.
+   */
+  chatShown(): boolean {
+    return this.shownTold
+  }
+
+  /** `chatShown` as the panes stand this instant. */
+  private shownNow(): boolean {
+    const sessionId = this.state.sessionId
+    return sessionId !== null && this.shown.has(sessionId)
+  }
+
+  /**
+   * Tells the listeners that what the panes show may have changed, once
+   * they have settled: a pane that swaps one conversation for another lets
+   * the first go and takes the second in the same breath, and a
+   * conversation moved between panes is never off screen in between.
+   */
+  private shownChanged(): void {
+    if (this.shownSettling) return
+    this.shownSettling = true
+    queueMicrotask(() => {
+      this.shownSettling = false
+      const shown = this.shownNow()
+      if (shown === this.shownTold) return
+      this.shownTold = shown
+      for (const listener of [...this.listeners]) listener()
+    })
   }
 
   /** Puts a failed or dropped call's notice away. */
@@ -417,6 +454,7 @@ export class VoiceController {
 
   private set(next: VoiceSnapshot): void {
     this.state = next
+    this.shownTold = this.shownNow()
     for (const listener of [...this.listeners]) listener()
   }
 

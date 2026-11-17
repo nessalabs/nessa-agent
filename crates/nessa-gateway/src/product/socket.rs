@@ -2175,7 +2175,8 @@ async fn dispatch_authorized(
         ProductMethod::PeerEnroll
         | ProductMethod::PeerList
         | ProductMethod::PeerForget
-        | ProductMethod::PeerRelay => super::peers::dispatch(state, session, frame).await,
+        | ProductMethod::PeerRelay
+        | ProductMethod::PeerFollow => super::peers::dispatch(state, session, frame).await,
         ProductMethod::ServerReach => {
             if frame.params != json!({}) {
                 return failure(&frame.id, "invalid_request");

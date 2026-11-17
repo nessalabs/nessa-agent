@@ -529,6 +529,9 @@ jobs:
           node-version: 24
       - shell: bash
         env:
+          # Two harnesses may run at once; bound their independent libtest
+          # workers too. Test-owned concurrency and deadlines stay unchanged.
+          RUST_TEST_THREADS: "2"
           # Emit panic details immediately even if later tests hit the step deadline.
           RUST_TEST_NOCAPTURE: "1"
         # The step compiles before it tests. Cargo.lock is part of the cache

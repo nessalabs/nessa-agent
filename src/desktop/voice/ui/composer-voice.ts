@@ -5,11 +5,12 @@
  */
 import { useMemo } from "react"
 import type { ComposerVoice } from "../../ui/composer"
-import { useVoiceController, useVoiceSnapshot } from "./voice-context"
+import { useVoiceController, useVoiceSnapshot, useVoiceStart } from "./voice-context"
 
 export function useComposerVoice(sessionId: string): ComposerVoice | undefined {
   const controller = useVoiceController()
   const snapshot = useVoiceSnapshot()
+  const start = useVoiceStart()
   const open =
     snapshot !== undefined &&
     snapshot.sessionId === sessionId &&
@@ -20,10 +21,11 @@ export function useComposerVoice(sessionId: string): ComposerVoice | undefined {
   const speakerOn = snapshot?.speakerOn ?? true
   return useMemo(
     () =>
-      controller
+      controller && start
         ? {
             active: open,
-            start: () => void controller.start(sessionId),
+            // Asked first when a call talks to another chat: starting ends it.
+            start: () => start(sessionId),
             end: () => controller.end(),
             microphoneOn,
             speakerOn,
@@ -31,6 +33,6 @@ export function useComposerVoice(sessionId: string): ComposerVoice | undefined {
             setSpeaker: (on: boolean) => controller.setSpeaker(on),
           }
         : undefined,
-    [controller, open, microphoneOn, speakerOn, sessionId],
+    [controller, start, open, microphoneOn, speakerOn, sessionId],
   )
 }

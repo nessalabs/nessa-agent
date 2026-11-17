@@ -935,3 +935,90 @@ async fn the_relay_leg_starts_when_the_injected_clock_passes_the_head_start() {
         vec![("relay.example:443".to_owned(), key)]
     );
 }
+
+#[tokio::test]
+async fn a_failed_follow_marker_audits_the_prior_rule_and_completed_reset() {
+    follow_reset_failure_audit(true).await;
+}
+
+#[tokio::test]
+async fn a_failed_directory_sync_audits_physical_reset_without_durability() {
+    follow_reset_failure_audit(false).await;
+}
+
+async fn follow_reset_failure_audit(durable: bool) {
+    let (_directory, records, record, _) = relayed_record();
+    let key = *record.key();
+    let before = FollowRule::none();
+    records.apply_follow(&key, &before).unwrap();
+    let after = FollowRule::new(
+        vec!["00000000-0000-4000-8000-000000000001".into()],
+        nessa_client_core::retained::FOLLOW_KEEP_MAX,
+    )
+    .unwrap();
+    let audit = Arc::new(Gated {
+        records: Mutex::new(Vec::new()),
+        open: watch::channel(true).0,
+    });
+    let commands = PeerCommands::new(
+        records.clone(),
+        Arc::new(Still),
+        audit.clone(),
+        Arc::new(Nothing),
+        Arc::new(|| {
+            Box::new(nessa_auth::adapters::pairing::OsEntropy) as Box<dyn EnrollmentEntropy>
+        }),
+    );
+    let owner = PrincipalId::new("owner").unwrap();
+    drop(
+        nessa_client_core::retained::RetainedCache::open(
+            &records.cache_path(&key),
+            Arc::new(Wall),
+            Arc::new(Still),
+        )
+        .unwrap(),
+    );
+    assert!(records.cache_path(&key).exists());
+    if durable {
+        records.fail_next_follow_marker();
+    } else {
+        records.fail_next_cache_sync();
+    }
+    assert!(matches!(
+        commands.follow(key, after.clone(), &owner).await,
+        Err(PeerError::Unavailable)
+    ));
+    let saved = audit.records.lock().unwrap();
+    let PeerAuditRecord::FollowFinished {
+        initiator,
+        peer,
+        before_conversations,
+        before_keep_bytes,
+        after_conversations,
+        after_keep_bytes,
+        replica_reset,
+        replica_reset_durable,
+        outcome,
+        ..
+    } = saved.last().unwrap()
+    else {
+        panic!("the command must deliver its final audit record");
+    };
+    assert_eq!(initiator, &owner);
+    assert_eq!(peer, &key);
+    assert_eq!(
+        before_conversations.as_deref(),
+        Some(before.conversations())
+    );
+    assert_eq!(*before_keep_bytes, Some(before.keep_bytes()));
+    assert_eq!(after_conversations.as_deref(), Some(after.conversations()));
+    assert_eq!(*after_keep_bytes, Some(after.keep_bytes()));
+    assert!(*replica_reset);
+    assert_eq!(*replica_reset_durable, durable);
+    assert!(outcome.is_err());
+    assert!(records.load_follow(&key).unwrap().unwrap().reset_pending);
+    assert!(
+        !records.cache_path(&key).exists(),
+        "the reset completed before the marker failed"
+    );
+}

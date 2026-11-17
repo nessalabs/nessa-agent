@@ -850,6 +850,8 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
 
   // The conversations followed, least recently opened first (D7).
   const views = new Map<string, Followed<Transcript>>()
+  // The one the window holds off screen (`keepFollowing`): never the one let go.
+  let kept: string | null = null
   const list: Followed<void> = followed()
   // Sessions whose archive or delete is on its way: a list frame that arrives
   // meanwhile may have been read before it, and does not list them again (W6).
@@ -1542,7 +1544,9 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
     else {
       follow = followed<Transcript>()
       while (views.size >= subscriptionLimits.conversationTargets) {
-        const [oldest] = views.keys()
+        // The least recently opened, passing over the one kept.
+        const oldest = [...views.keys()].find((id) => id !== kept)
+        if (oldest === undefined) break
         // Answered and closed before this one is subscribed (D25); one
         // already answered is closed at once, ahead of the next subscribe.
         const leaving = views.get(oldest)
@@ -2189,6 +2193,15 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
       }),
     // The gateway keeps no unread mark: every summary is read already.
     markRead: () => within(() => Promise.resolve()),
+    keepFollowing(sessionId) {
+      kept = sessionId
+      // Followed again if it was let go; one followed already stays as it is.
+      if (sessionId === null || disposed || views.has(sessionId)) return
+      if (takenOut(sessionId)) return
+      transcriptOf(sessionId, "person").catch((error: unknown) =>
+        console.warn("Could not follow the held conversation", sessionId, error),
+      )
+    },
     // An app calls on its own schedule, not a person's: in the background.
     connected: () => within(() => client("app")),
     appCall(conversationId, call) {

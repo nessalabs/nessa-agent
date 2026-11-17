@@ -591,6 +591,13 @@
       "destructive": false
     },
     {
+      "name": "peer.follow",
+      "params": "PeerFollowParams",
+      "grant": "credential.manage",
+      "readOnly": false,
+      "destructive": false
+    },
+    {
       "name": "conversation.unsubscribe",
       "params": "ConversationUnsubscribeParams",
       "grant": "conversation.write",
