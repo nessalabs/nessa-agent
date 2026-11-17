@@ -2998,6 +2998,21 @@ pub struct PeerRelayParams {
     #[serde(deserialize_with = "Option::deserialize")]
     pub relay: Option<String>,
 }
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PeerFollowParams {
+    pub peer_key: [u8; DeviceKey::LENGTH],
+    pub conversations: Vec<String>,
+    pub keep_bytes: u64,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PeerFollowResult {
+    pub peer_key: [u8; DeviceKey::LENGTH],
+    pub conversations: Vec<String>,
+    pub keep_bytes: u64,
+    pub replica_reset: bool,
+}
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 pub enum PeerPhase {
     #[serde(rename = "pending")]
@@ -3798,6 +3813,227 @@ pub struct WorkspacePublishResult {
     pub applied: bool,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+pub enum WorkspaceActionKind {
+    #[serde(rename = "sidebar")]
+    Sidebar,
+    #[serde(rename = "session_list")]
+    SessionList,
+    #[serde(rename = "panel")]
+    Panel,
+    #[serde(rename = "panel_tab")]
+    PanelTab,
+    #[serde(rename = "show")]
+    Show,
+    #[serde(rename = "open_conversation")]
+    OpenConversation,
+    #[serde(rename = "focus_pane")]
+    FocusPane,
+    #[serde(rename = "close_pane")]
+    ClosePane,
+}
+impl WorkspaceActionKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Sidebar => "sidebar",
+            Self::SessionList => "session_list",
+            Self::Panel => "panel",
+            Self::PanelTab => "panel_tab",
+            Self::Show => "show",
+            Self::OpenConversation => "open_conversation",
+            Self::FocusPane => "focus_pane",
+            Self::ClosePane => "close_pane",
+        }
+    }
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+pub enum WorkspaceArrangeKind {
+    #[serde(rename = "sidebar")]
+    Sidebar,
+    #[serde(rename = "session_list")]
+    SessionList,
+    #[serde(rename = "panel")]
+    Panel,
+    #[serde(rename = "panel_tab")]
+    PanelTab,
+    #[serde(rename = "show")]
+    Show,
+    #[serde(rename = "open_conversation")]
+    OpenConversation,
+    #[serde(rename = "focus_pane")]
+    FocusPane,
+}
+impl WorkspaceArrangeKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Sidebar => "sidebar",
+            Self::SessionList => "session_list",
+            Self::Panel => "panel",
+            Self::PanelTab => "panel_tab",
+            Self::Show => "show",
+            Self::OpenConversation => "open_conversation",
+            Self::FocusPane => "focus_pane",
+        }
+    }
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+pub enum WorkspaceView {
+    #[serde(rename = "panes")]
+    Panes,
+    #[serde(rename = "agents")]
+    Agents,
+}
+impl WorkspaceView {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Panes => "panes",
+            Self::Agents => "agents",
+        }
+    }
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+pub enum WorkspaceOpenPlace {
+    #[serde(rename = "beside")]
+    Beside,
+    #[serde(rename = "right")]
+    Right,
+    #[serde(rename = "below")]
+    Below,
+    #[serde(rename = "here")]
+    Here,
+}
+impl WorkspaceOpenPlace {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Beside => "beside",
+            Self::Right => "right",
+            Self::Below => "below",
+            Self::Here => "here",
+        }
+    }
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkspaceAction {
+    pub kind: WorkspaceActionKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub open: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub view: Option<WorkspaceView>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub widget: Option<WorkspaceWidget>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conversation_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub place: Option<WorkspaceOpenPlace>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkspaceArrangeAction {
+    pub kind: WorkspaceArrangeKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub open: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub view: Option<WorkspaceView>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub widget: Option<WorkspaceWidget>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conversation_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub place: Option<WorkspaceOpenPlace>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkspaceCommand {
+    pub window_id: String,
+    pub command_id: u64,
+    pub action: WorkspaceAction,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+pub enum WorkspaceAnswerOutcome {
+    #[serde(rename = "applied")]
+    Applied,
+    #[serde(rename = "unchanged")]
+    Unchanged,
+    #[serde(rename = "refused")]
+    Refused,
+}
+impl WorkspaceAnswerOutcome {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Applied => "applied",
+            Self::Unchanged => "unchanged",
+            Self::Refused => "refused",
+        }
+    }
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+pub enum WorkspaceCommandRefusal {
+    #[serde(rename = "conversation_not_listed")]
+    ConversationNotListed,
+    #[serde(rename = "not_on_screen")]
+    NotOnScreen,
+    #[serde(rename = "tab_not_found")]
+    TabNotFound,
+    #[serde(rename = "no_session_list")]
+    NoSessionList,
+    #[serde(rename = "no_chat_focused")]
+    NoChatFocused,
+    #[serde(rename = "no_room")]
+    NoRoom,
+    #[serde(rename = "covered")]
+    Covered,
+}
+impl WorkspaceCommandRefusal {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::ConversationNotListed => "conversation_not_listed",
+            Self::NotOnScreen => "not_on_screen",
+            Self::TabNotFound => "tab_not_found",
+            Self::NoSessionList => "no_session_list",
+            Self::NoChatFocused => "no_chat_focused",
+            Self::NoRoom => "no_room",
+            Self::Covered => "covered",
+        }
+    }
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkspaceAnswerParams {
+    pub window_id: String,
+    pub command_id: u64,
+    pub outcome: WorkspaceAnswerOutcome,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub revision: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub code: Option<WorkspaceCommandRefusal>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkspaceAnswerResult {
+    pub settled: bool,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkspaceArrangeParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub window_id: Option<String>,
+    pub action: WorkspaceArrangeAction,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkspaceClosePaneParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub window_id: Option<String>,
+    pub conversation_id: String,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkspaceControlResult {
+    pub window_id: String,
+    pub revision: u64,
+    pub changed: bool,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 pub enum VaultState {
     #[serde(rename = "unconfigured")]
     Unconfigured,
@@ -4387,6 +4623,7 @@ pub mod product_method {
     pub const PEER_LIST: &str = "peer.list";
     pub const PEER_FORGET: &str = "peer.forget";
     pub const PEER_RELAY: &str = "peer.relay";
+    pub const PEER_FOLLOW: &str = "peer.follow";
     pub const CONVERSATION_SUBSCRIBE: &str = "conversation.subscribe";
     pub const CONVERSATION_SUBSCRIBE_LIST: &str = "conversation.subscribeList";
     pub const CONVERSATION_UNSUBSCRIBE: &str = "conversation.unsubscribe";
@@ -4396,6 +4633,9 @@ pub mod product_method {
     pub const CONVERSATION_PERMISSION_RULES: &str = "conversation.permissionRules";
     pub const CONVERSATION_REVOKE_PERMISSION_RULE: &str = "conversation.revokePermissionRule";
     pub const WORKSPACE_PUBLISH: &str = "workspace.publish";
+    pub const WORKSPACE_ANSWER: &str = "workspace.answer";
+    pub const WORKSPACE_ARRANGE: &str = "workspace.arrange";
+    pub const WORKSPACE_CLOSE_PANE: &str = "workspace.closePane";
     pub const CHANNEL_CREATE: &str = "channel.create";
     pub const CHANNEL_LIST: &str = "channel.list";
     pub const CHANNEL_SET_PLACEMENT: &str = "channel.setPlacement";
@@ -4437,6 +4677,7 @@ pub mod product_event {
     pub const AGENTS_LISTED: &str = "agents.listed";
     pub const CONVERSATION_SUBSCRIPTION_ENDED: &str = "conversation.subscriptionEnded";
     pub const PERMISSION_REVIEW_WAITING: &str = "permission.reviewWaiting";
+    pub const WORKSPACE_COMMAND: &str = "workspace.command";
     pub const CONVERSATION_EVENTS: &str = "conversation.events";
 }
 pub fn wire_shape_session_challenge(value: &Value) -> bool {
@@ -4618,7 +4859,7 @@ pub fn wire_shape_product_session_ready(value: &Value) -> bool {
         }) && object.get("methods").is_some_and(|field| {
             let _ = field;
             field.as_array().is_some_and(|items| {
-                items.len() <= 123
+                items.len() <= 127
                     && items.iter().all(|item| {
                         let _ = item;
                         item.is_string()
@@ -4725,6 +4966,7 @@ pub const PRODUCT_READY_METHODS: &[&str] = &[
     "peer.list",
     "peer.forget",
     "peer.relay",
+    "peer.follow",
     "conversation.subscribe",
     "conversation.subscribeList",
     "conversation.unsubscribe",
@@ -4734,6 +4976,9 @@ pub const PRODUCT_READY_METHODS: &[&str] = &[
     "conversation.permissionRules",
     "conversation.revokePermissionRule",
     "workspace.publish",
+    "workspace.answer",
+    "workspace.arrange",
+    "workspace.closePane",
     "channel.create",
     "channel.list",
     "channel.setPlacement",
@@ -4996,6 +5241,8 @@ pub enum ProductMethod {
     PeerForget,
     /// `peer.relay`
     PeerRelay,
+    /// `peer.follow`
+    PeerFollow,
     /// `conversation.subscribe`
     ConversationSubscribe,
     /// `conversation.subscribeList`
@@ -5014,6 +5261,12 @@ pub enum ProductMethod {
     ConversationRevokePermissionRule,
     /// `workspace.publish`
     WorkspacePublish,
+    /// `workspace.answer`
+    WorkspaceAnswer,
+    /// `workspace.arrange`
+    WorkspaceArrange,
+    /// `workspace.closePane`
+    WorkspaceClosePane,
     /// `channel.create`
     ChannelCreate,
     /// `channel.list`
@@ -5166,6 +5419,7 @@ impl ProductMethod {
         ProductMethod::PeerList,
         ProductMethod::PeerForget,
         ProductMethod::PeerRelay,
+        ProductMethod::PeerFollow,
         ProductMethod::ConversationSubscribe,
         ProductMethod::ConversationSubscribeList,
         ProductMethod::ConversationUnsubscribe,
@@ -5175,6 +5429,9 @@ impl ProductMethod {
         ProductMethod::ConversationPermissionRules,
         ProductMethod::ConversationRevokePermissionRule,
         ProductMethod::WorkspacePublish,
+        ProductMethod::WorkspaceAnswer,
+        ProductMethod::WorkspaceArrange,
+        ProductMethod::WorkspaceClosePane,
         ProductMethod::ChannelCreate,
         ProductMethod::ChannelList,
         ProductMethod::ChannelSetPlacement,
@@ -5298,6 +5555,7 @@ impl ProductMethod {
             "peer.list" => Some(ProductMethod::PeerList),
             "peer.forget" => Some(ProductMethod::PeerForget),
             "peer.relay" => Some(ProductMethod::PeerRelay),
+            "peer.follow" => Some(ProductMethod::PeerFollow),
             "conversation.subscribe" => Some(ProductMethod::ConversationSubscribe),
             "conversation.subscribeList" => Some(ProductMethod::ConversationSubscribeList),
             "conversation.unsubscribe" => Some(ProductMethod::ConversationUnsubscribe),
@@ -5309,6 +5567,9 @@ impl ProductMethod {
                 Some(ProductMethod::ConversationRevokePermissionRule)
             }
             "workspace.publish" => Some(ProductMethod::WorkspacePublish),
+            "workspace.answer" => Some(ProductMethod::WorkspaceAnswer),
+            "workspace.arrange" => Some(ProductMethod::WorkspaceArrange),
+            "workspace.closePane" => Some(ProductMethod::WorkspaceClosePane),
             "channel.create" => Some(ProductMethod::ChannelCreate),
             "channel.list" => Some(ProductMethod::ChannelList),
             "channel.setPlacement" => Some(ProductMethod::ChannelSetPlacement),
@@ -5433,6 +5694,7 @@ impl ProductMethod {
             ProductMethod::PeerList => "peer.list",
             ProductMethod::PeerForget => "peer.forget",
             ProductMethod::PeerRelay => "peer.relay",
+            ProductMethod::PeerFollow => "peer.follow",
             ProductMethod::ConversationSubscribe => "conversation.subscribe",
             ProductMethod::ConversationSubscribeList => "conversation.subscribeList",
             ProductMethod::ConversationUnsubscribe => "conversation.unsubscribe",
@@ -5442,6 +5704,9 @@ impl ProductMethod {
             ProductMethod::ConversationPermissionRules => "conversation.permissionRules",
             ProductMethod::ConversationRevokePermissionRule => "conversation.revokePermissionRule",
             ProductMethod::WorkspacePublish => "workspace.publish",
+            ProductMethod::WorkspaceAnswer => "workspace.answer",
+            ProductMethod::WorkspaceArrange => "workspace.arrange",
+            ProductMethod::WorkspaceClosePane => "workspace.closePane",
             ProductMethod::ChannelCreate => "channel.create",
             ProductMethod::ChannelList => "channel.list",
             ProductMethod::ChannelSetPlacement => "channel.setPlacement",
@@ -5564,6 +5829,7 @@ impl ProductMethod {
             ProductMethod::PeerList => Some("credential.manage"),
             ProductMethod::PeerForget => Some("credential.manage"),
             ProductMethod::PeerRelay => Some("credential.manage"),
+            ProductMethod::PeerFollow => Some("credential.manage"),
             ProductMethod::ConversationSubscribe => Some("conversation.write"),
             ProductMethod::ConversationSubscribeList => Some("conversation.write"),
             ProductMethod::ConversationUnsubscribe => Some("conversation.write"),
@@ -5573,6 +5839,9 @@ impl ProductMethod {
             ProductMethod::ConversationPermissionRules => Some("conversation.write"),
             ProductMethod::ConversationRevokePermissionRule => Some("conversation.write"),
             ProductMethod::WorkspacePublish => Some("conversation.write"),
+            ProductMethod::WorkspaceAnswer => Some("conversation.write"),
+            ProductMethod::WorkspaceArrange => Some("conversation.write"),
+            ProductMethod::WorkspaceClosePane => Some("conversation.write"),
             ProductMethod::ChannelCreate => Some("conversation.write"),
             ProductMethod::ChannelList => Some("conversation.write"),
             ProductMethod::ChannelSetPlacement => Some("conversation.write"),
@@ -5694,6 +5963,7 @@ impl ProductMethod {
             ProductMethod::PeerList => ProductLane::Requests,
             ProductMethod::PeerForget => ProductLane::Requests,
             ProductMethod::PeerRelay => ProductLane::Requests,
+            ProductMethod::PeerFollow => ProductLane::Requests,
             ProductMethod::ConversationSubscribe => ProductLane::Requests,
             ProductMethod::ConversationSubscribeList => ProductLane::Requests,
             ProductMethod::ConversationUnsubscribe => ProductLane::Requests,
@@ -5703,6 +5973,9 @@ impl ProductMethod {
             ProductMethod::ConversationPermissionRules => ProductLane::Requests,
             ProductMethod::ConversationRevokePermissionRule => ProductLane::Requests,
             ProductMethod::WorkspacePublish => ProductLane::Requests,
+            ProductMethod::WorkspaceAnswer => ProductLane::Requests,
+            ProductMethod::WorkspaceArrange => ProductLane::Requests,
+            ProductMethod::WorkspaceClosePane => ProductLane::Requests,
             ProductMethod::ChannelCreate => ProductLane::Requests,
             ProductMethod::ChannelList => ProductLane::Requests,
             ProductMethod::ChannelSetPlacement => ProductLane::Requests,
@@ -6018,6 +6291,9 @@ impl ProductMethod {
             ProductMethod::PeerRelay => {
                 ProductParams::PeerRelay(serde_json::from_value(params).map_err(|_| ParamsRefused)?)
             }
+            ProductMethod::PeerFollow => ProductParams::PeerFollow(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
             ProductMethod::ConversationSubscribe => ProductParams::ConversationSubscribe(
                 serde_json::from_value(params).map_err(|_| ParamsRefused)?,
             ),
@@ -6047,6 +6323,15 @@ impl ProductMethod {
                 )
             }
             ProductMethod::WorkspacePublish => ProductParams::WorkspacePublish(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
+            ProductMethod::WorkspaceAnswer => ProductParams::WorkspaceAnswer(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
+            ProductMethod::WorkspaceArrange => ProductParams::WorkspaceArrange(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
+            ProductMethod::WorkspaceClosePane => ProductParams::WorkspaceClosePane(
                 serde_json::from_value(params).map_err(|_| ParamsRefused)?,
             ),
             ProductMethod::ChannelCreate => ProductParams::ChannelCreate(
@@ -6247,6 +6532,7 @@ pub enum ProductParams {
     PeerList,
     PeerForget(PeerForgetParams),
     PeerRelay(PeerRelayParams),
+    PeerFollow(PeerFollowParams),
     ConversationSubscribe(ConversationSubscribeParams),
     ConversationSubscribeList(ConversationSubscribeListParams),
     ConversationUnsubscribe(ConversationUnsubscribeParams),
@@ -6256,6 +6542,9 @@ pub enum ProductParams {
     ConversationPermissionRules(ConversationPermissionRulesParams),
     ConversationRevokePermissionRule(ConversationRevokePermissionRuleParams),
     WorkspacePublish(WorkspacePublishParams),
+    WorkspaceAnswer(WorkspaceAnswerParams),
+    WorkspaceArrange(WorkspaceArrangeParams),
+    WorkspaceClosePane(WorkspaceClosePaneParams),
     ChannelCreate(ChannelCreateParams),
     ChannelList(ChannelListParams),
     ChannelSetPlacement(ChannelSetPlacementParams),
@@ -6391,6 +6680,7 @@ impl ProductParams {
             ProductParams::PeerList => ProductMethod::PeerList,
             ProductParams::PeerForget(_) => ProductMethod::PeerForget,
             ProductParams::PeerRelay(_) => ProductMethod::PeerRelay,
+            ProductParams::PeerFollow(_) => ProductMethod::PeerFollow,
             ProductParams::ConversationSubscribe(_) => ProductMethod::ConversationSubscribe,
             ProductParams::ConversationSubscribeList(_) => ProductMethod::ConversationSubscribeList,
             ProductParams::ConversationUnsubscribe(_) => ProductMethod::ConversationUnsubscribe,
@@ -6404,6 +6694,9 @@ impl ProductParams {
                 ProductMethod::ConversationRevokePermissionRule
             }
             ProductParams::WorkspacePublish(_) => ProductMethod::WorkspacePublish,
+            ProductParams::WorkspaceAnswer(_) => ProductMethod::WorkspaceAnswer,
+            ProductParams::WorkspaceArrange(_) => ProductMethod::WorkspaceArrange,
+            ProductParams::WorkspaceClosePane(_) => ProductMethod::WorkspaceClosePane,
             ProductParams::ChannelCreate(_) => ProductMethod::ChannelCreate,
             ProductParams::ChannelList(_) => ProductMethod::ChannelList,
             ProductParams::ChannelSetPlacement(_) => ProductMethod::ChannelSetPlacement,

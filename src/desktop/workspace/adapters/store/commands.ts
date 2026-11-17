@@ -41,6 +41,7 @@ export const {
   chooseModel,
   setComposerText,
   transcriptRetried: retryTranscript,
+  sessionHeld: holdSession,
   unsentDiscarded: discardUnsent,
   closeShare,
   renameStarted,
@@ -52,6 +53,7 @@ export const {
   panelShown,
   panelTabShown: showPanelTab,
   panelTabClosed: closePanelTab,
+  panelSet: setPanel,
 } = workspaceActions
 
 export type WorkspaceCommand<Result = void> = ThunkAction<

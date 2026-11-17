@@ -566,8 +566,18 @@ button.devices-tile:focus-visible,
   gap: 12px;
 }
 
+/* A channel's order: which order it follows, chosen at the row's end. */
 .devices-pool-mode {
-  align-self: flex-start;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  min-height: 28px;
+}
+
+.devices-pool-mode-label {
+  color: var(--foreground);
+  font-size: var(--desktop-text-body);
 }
 
 .devices-pool-place {

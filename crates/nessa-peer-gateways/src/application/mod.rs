@@ -105,6 +105,15 @@ pub enum PollerCause {
     ResetRequired,
     /// The cache is damaged or has an older shape; it is emptied.
     CacheDamaged,
+    /// Local default-none or a previously stored choice reset, before any
+    /// remote status request. Initiated by the system, not a new human choice.
+    FollowReset {
+        default: bool,
+        conversations: Vec<String>,
+        keep_bytes: u64,
+        replica_reset: bool,
+        replica_reset_durable: bool,
+    },
     /// The peer no longer grants these conversations, which one read found;
     /// each left the cache. At most [`WITHDRAWN_PER_RECORD`] in one record.
     Withdrawn { conversations: Vec<String> },
@@ -167,6 +176,33 @@ pub enum PeerAuditRecord {
         initiator: PrincipalId,
         peer: DeviceKey,
         relay: Option<RelayAddress>,
+        before: PeerState,
+        after: PeerState,
+        outcome: Result<(), &'static str>,
+    },
+    /// `peer.follow` asked to store which conversations to replicate.
+    /// Nothing has been checked or written yet.
+    FollowRequested {
+        operation: Uuid,
+        initiator: PrincipalId,
+        peer: DeviceKey,
+        conversations: Vec<String>,
+        keep_bytes: u64,
+    },
+    /// That choice ended. `before` is the rule that was stored, `after` the
+    /// rule stored now; either is absent when no rule was stored.
+    /// `replica_reset` is whether the local replica was dropped.
+    FollowFinished {
+        operation: Uuid,
+        initiator: PrincipalId,
+        peer: DeviceKey,
+        before_conversations: Option<Vec<String>>,
+        before_keep_bytes: Option<u64>,
+        after_conversations: Option<Vec<String>>,
+        after_keep_bytes: Option<u64>,
+        replica_reset: bool,
+        /// The physical reset's directory sync was acknowledged.
+        replica_reset_durable: bool,
         before: PeerState,
         after: PeerState,
         outcome: Result<(), &'static str>,

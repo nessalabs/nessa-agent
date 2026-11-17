@@ -355,7 +355,7 @@ Slice A's regressions, by row. "Domain" is the lease aggregate's rule
 recorded stream's (`crates/nessa-sdk/tests/application/agent_execution/sessions/leases.rs`),
 and "in process" drives a real conversation through the port with the
 in-process adapter or a substitute, or for L9 also the lease's fence alone
-(`crates/nessa-server/tests/conversation/leases.rs` and
+(`crates/nessa-conversation/tests/conversation/leases.rs` and
 `environment.rs` beside it). The domain and in-process tests are named for
 their rows; the fold's are named for what they show.
 
@@ -516,7 +516,7 @@ never run somewhere else.
 | Lost connection | the lease ends as lost at once (no reconnect budget yet); its end is asked of a new connection with `Account` | the host ends every lease of a lost connection and records what that took |
 
 **Orderings the SSH adapter meets** (gate 15). Each row has its test, in
-`crates/nessa-server/tests/conversation/ssh_environment.rs` (adapter),
+`crates/nessa-conversation/tests/conversation/ssh_environment.rs` (adapter),
 `crates/nessa-env-serve/tests/serve.rs` (host), `tests/env_serve_binary.rs` (the real
 binary over pipes) and `tests/conversation/leases.rs` (service).
 
@@ -1823,7 +1823,7 @@ locally.
 | Artifacts | Held by digest; single-use upload tickets; local manifest and range reads; uploads from surfaces only | An artifact channel from environments (sftp over SSH; bounded stream over a paired connection); lease-scoped tickets for environments; protected sync to devices | Gateway `attachments` | #273; D [#701](https://github.com/nessalabs/nessa-agent/issues/701) |
 | Agent tools for the mesh | `nessa-mcp` serves shell and other Nessa tools locally; no environment argument | `environments.list`, `thread.create` with an environment, `run` on an environment, `artifacts.publish`/`fetch`, all thin over product methods and validated by the gateway | `nessa-mcp`; gateway `environment.*` methods | 0012; C [#700](https://github.com/nessalabs/nessa-agent/issues/700), I [#706](https://github.com/nessalabs/nessa-agent/issues/706) |
 | Reaching the gateway from outside | Loopback `/session`; native listener with pairing to Approved when configured | Overlay or tunnel are the person's choice and need nothing new; the relay is #266; the native listener admits only minted credentials on both paths | Gateway `device_pairing`, composition | #263, #265, #266 |
-| Directional sync | A linked device and a peer gateway's poller each replicate every conversation that reader is granted. There is no per-peer follow rule | Follow rules per peer (which granted conversations, how much to keep) beside grants per peer (which conversations, which role); two gateways never merge stores; environment policy per peer and per work kind | `nessa-client-core` follow table; gateway grants; sync engine scope | #257, #262; G [#704](https://github.com/nessalabs/nessa-agent/issues/704) |
+| Directional sync | A linked device replicates every conversation it is granted. A peer gateway replicates only the intersection of that peer's grants and the follower's `peer.follow` rule (which conversations, and how many bytes to keep); the default follows nothing, and the grantor is not sent the rule | Follow rules per peer (which granted conversations, how much to keep) beside grants per peer (which conversations, which role); two gateways never merge stores; environment policy per peer and per work kind | `nessa-client-core` follow table; gateway grants; sync engine scope | #257, #262; G [#704](https://github.com/nessalabs/nessa-agent/issues/704) |
 | Sharing | Grants per conversation id, each with a capability set and, for drive, a tool policy revision. A paired device and a peer gateway comment and drive the one conversation whose grant names that capability ([Sharing a conversation](#sharing-a-conversation)) | The environment enforces a Drive grant's pre-tool verdicts from the snapshot the lease carries, and the share dialog names which tools that policy can gate | Gateway `auth`, `conversation`; 0014 policy owner | 0011 phase B; #130 slices; G [#704](https://github.com/nessalabs/nessa-agent/issues/704), J [#707](https://github.com/nessalabs/nessa-agent/issues/707), [#891](https://github.com/nessalabs/nessa-agent/issues/891) |
 | Previews | None | Lease-scoped loopback forwards over the SSH session or a paired stream, only for the lease's own ports, recorded and shown | Gateway environment adapters; `nessa-mcp` | B [#699](https://github.com/nessalabs/nessa-agent/issues/699), I [#706](https://github.com/nessalabs/nessa-agent/issues/706) |
 | Environment health and limits | None | Idle sleep with native resume, low-disk pause, health in `environments.list` | `nessa env serve`; environment adapters | B [#699](https://github.com/nessalabs/nessa-agent/issues/699) |

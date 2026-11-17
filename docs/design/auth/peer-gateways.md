@@ -1291,14 +1291,24 @@ sequenceDiagram
 Part 2b-3 reads what each peer granted. One task per gateway,
 `PeerPoller`, started and joined with native pairing, schedules the kept
 peers and reads up to `READS_AT_ONCE` (4) of them side by side. Each cycle
-holds that peer's turn. `peer.forget` and `peer.relay` stop the cycle of the
-peer they name and go ahead; a cycle of any other peer keeps going. A peer,
-however slow, never keeps an owner command waiting except the command that
-names it, and never keeps the other peers' reads waiting past its own place
-in the cap. `peer.enroll` does not stop a read. It shares the record set
-with `peer.forget` and `peer.relay`, one at a time: enroll and forget both
-change how many records are kept and `MAX_PEERS` is checked against that
-set, and a relay that cannot take the set does not stop a read.
+holds that peer's turn. `peer.forget`, `peer.relay`, and `peer.follow` stop
+the cycle of the peer they name and go ahead; a cycle of any other peer
+keeps going. A peer, however slow, never keeps an owner command waiting
+except the command that names it, and never keeps the other peers' reads
+waiting past its own place in the cap. `peer.enroll` does not stop a read.
+It shares the record set with `peer.forget`, `peer.relay`, and `peer.follow`,
+one at a time: enroll and forget both change how many records are kept and
+`MAX_PEERS` is checked against that set, and a relay or follow that cannot
+take the set does not stop a read.
+
+`peer.follow` is the follower's rule for that peer: which granted
+conversations to replicate, and how many bytes of the local replica to keep.
+Nothing is stored until the person chooses, and the poller then replicates
+the intersection of that rule and the grants. A granted chat with no rule
+can still be opened, and that open does not write the replica. Changing the
+set or the byte ceiling drops the replica. Naming a conversation the peer
+did not grant does not grant it, the peer is not dialed, and the rule is
+not sent. Forgetting the peer removes the rule with the record.
 
 ```mermaid
 sequenceDiagram
@@ -1320,7 +1330,7 @@ sequenceDiagram
     P->>A: catalogueHead (unchanged, and a finished walk noted there: done)
     P->>A: catalogue manifest pass and resolve
     P->>C: what A grants, by its owner's catalogue stream
-    P->>A: recordsHead for each cached conversation, while the budget lasts
+    P->>A: recordsHead for each cached conversation the follow rule names, while the budget lasts
     A-->>P: wrong_owner: no longer granted
     P->>C: withdraw it (entry and transcript)
     P->>A: record pages for the rest (cache full: heads only, to withdraw)

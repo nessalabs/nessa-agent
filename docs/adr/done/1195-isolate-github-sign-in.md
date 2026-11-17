@@ -80,7 +80,7 @@ Review `cursor/isolate-github-sign-in-4ae9` against `main`. The tree under
 review is the committed head. Intended behavior is the state table above.
 
 Scope: `GithubTokenVault` in
-`crates/nessa-server/src/github/infrastructure/token_vault.rs`, the module
+`crates/nessa-gateway/src/github/infrastructure/token_vault.rs`, the module
 comment in `github/infrastructure/mod.rs`, this record, and the sign-in
 sentences in `docs/design/github-connect.md` and
 `docs/state/services/gateway/github-reads.md`. Out of scope: the device-flow

@@ -8,7 +8,7 @@ summary: Repository selection and removal evidence commit together in the
   current vault generation.
 sourceRevision: "77a6b620af4d94b234294f6d273fd74b3dfb44c7"
 sources:
-  - crates/nessa-server/src/github_relay/infrastructure/selection.rs
+  - crates/nessa-gateway/src/github_relay/infrastructure/selection.rs
 diagramLinks: {}
 model:
   spec: tla/services/github-webhooks/RelaySelection.tla
@@ -41,4 +41,4 @@ stateDiagram-v2
 
 ## Bounded rule model
 
-Owns atomic binding removal, event deletion evidence and current-generation commit fencing. One selected repository bounds the transaction. Addition, name update and gap acceptance are described contracts outside these removal invariants; cloud authorization and catch-up belong to the relay page owner. This finite abstraction checks safety only. It does not execute or verify the implementation, promise eventual completion, or qualify external effects. Existing source checkpoints and historical test receipts retain their earlier scope. The scoped model review inspected `crates/nessa-server/src/github_relay/infrastructure/selection.rs`.
+Owns atomic binding removal, event deletion evidence and current-generation commit fencing. One selected repository bounds the transaction. Addition, name update and gap acceptance are described contracts outside these removal invariants; cloud authorization and catch-up belong to the relay page owner. This finite abstraction checks safety only. It does not execute or verify the implementation, promise eventual completion, or qualify external effects. Existing source checkpoints and historical test receipts retain their earlier scope. The scoped model review inspected `crates/nessa-gateway/src/github_relay/infrastructure/selection.rs`.

@@ -353,6 +353,7 @@ export function fakeSource(index: WorkspaceIndex = testIndex()): FakeSource {
         emit({ kind: "session-removed", sessionId, revision: session.revision + 1 })
       }),
     markRead: (sessionId) => answer("markRead", [sessionId], () => undefined),
+    keepFollowing: (sessionId) => void calls.push(["keepFollowing", sessionId]),
   }
 }
 

@@ -14,9 +14,9 @@ spike route was rejected during the gateway review. Only `/session` now serves
 authenticated WebSockets; `/` returns 404. Legacy protocol code, SDK profiles, and
 the shared token setting have been removed.
 The independent server data-root adapter and product schemas already exist under
-`crates/nessa-server/src/env/paths.rs` and `protocol/product/`. Future-tense steps
+`crates/nessa-gateway/src/env/paths.rs` and `protocol/product/`. Future-tense steps
 below are historical planning language, not evidence of missing implementation.
-Current connection handling lives in [product/socket.rs](../../../crates/nessa-server/src/product/socket.rs).
+Current connection handling lives in [product/socket.rs](../../../crates/nessa-gateway/src/product/socket.rs).
 Use the ADRs above to distinguish completed scope from outstanding work.
 
 ## Deployment target
@@ -60,11 +60,11 @@ and no failure on `/session` falls back to the spike.
 
 | Area | Plan |
 | --- | --- |
-| [Existing AppState](../../../crates/nessa-server/src/app/state.rs) | Keep legacy shared-token state unchanged; no registry added to it |
+| [Existing AppState](../../../crates/nessa-gateway/src/app/state.rs) | Keep legacy shared-token state unchanged; no registry added to it |
 | Original `connect/middleware/auth.rs` (removed) | Leave the spike's token comparison and hello flow unchanged |
 | Original `server/entrypoint/session.rs` (removed) | Keep spike state; introduce separate product connection state |
 | [Existing hello encoder](../../../crates/nessa-protocol/src/protocol/encode.rs) | Leave `HelloOk`, its scopes, and challenge semantics unchanged |
-| [HTTP router](../../../crates/nessa-server/src/server/entrypoint/http.rs) | Compose a separate `/session` route with route-local middleware dependencies |
+| [HTTP router](../../../crates/nessa-gateway/src/server/entrypoint/http.rs) | Compose a separate `/session` route with route-local middleware dependencies |
 | New product middleware | Authenticate, construct AuthContext, check current grants, guard dispatch/output, and handle invalidation |
 | New credential provider | Production local-registry implementation or deterministic test implementation of the same contract |
 | [SDK options](../../../packages/nessa-client/src/application/options.ts) | Explicit product mode selects `/session`, requires a credential, and uses the new session handshake |
@@ -575,7 +575,7 @@ conventions for concrete file placement.
 | `crates/nessa-server/src/auth/` | Identity/organization/membership types, credential lifecycle, clock/entropy/store ports, local registry adapter, RPC handlers, and a small Cedar policy adapter |
 | `crates/nessa-server/src/auth/policies/` | Checked-in Cedar schema and policies, validation fixtures, tenant/grant isolation cases |
 | `crates/nessa-server/src/composition/` | Build product route state with provider/service, lock/load store, local gateway identity, shutdown; legacy AppState unchanged |
-| `crates/nessa-server/src/env/`, `core/` | Explicit scoped/legacy configuration, stage/instance storage path, typed startup errors, offline init/recovery entrypoint |
+| `crates/nessa-gateway/src/env/`, `core/` | Explicit scoped/legacy configuration, stage/instance storage path, typed startup errors, offline init/recovery entrypoint |
 | New `server/middleware/` and product entrypoints | Mandatory authentication/authorization pipeline, verified product sessions, revision/expiry wakeups, bounded writes; existing connect/hello untouched |
 | `protocol/` and generation/check scripts | Existing v1 and new session-v1 product profiles, permission descriptors, fixtures and generated parity |
 | `packages/nessa-client/src/` | Version-aware handshake, scoped options, typed credential APIs/results, close/invalidation behavior |

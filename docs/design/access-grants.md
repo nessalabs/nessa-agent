@@ -97,16 +97,16 @@ Policy bundles, each the decider for its question:
 | Question | Bundle |
 | --- | --- |
 | Which grants a credential may hold, and who may be issued one | `crates/nessa-auth/src/adapters/cedar/policies.cedar` (`hold.peer` allows a gateway `conversation.read` and `environment.serve`) |
-| What the owner may do with a conversation | `crates/nessa-server/src/conversation/infrastructure/access_policy/cedar/ownership.cedar` |
-| What a paired reader may do | `crates/nessa-server/src/conversation/infrastructure/access_policy/cedar/readers.cedar` |
-| Who may share | `crates/nessa-server/src/conversation/infrastructure/access_policy/cedar/shares.cedar` |
-| Which tools a turn may call | `crates/nessa-server/src/conversation/infrastructure/tool_policy/cedar/tools.cedar` |
-| Which host and program a command may use | `crates/nessa-server/src/conversation/infrastructure/tool_policy/cedar/commands.cedar` |
-| Who may edit a remembered permission rule | `crates/nessa-server/src/conversation/infrastructure/permission_rules/cedar/rules.cedar` (the owner; a grant is refused) |
+| What the owner may do with a conversation | `crates/nessa-conversation/src/infrastructure/access_policy/cedar/ownership.cedar` |
+| What a paired reader may do | `crates/nessa-conversation/src/infrastructure/access_policy/cedar/readers.cedar` |
+| Who may share | `crates/nessa-conversation/src/infrastructure/access_policy/cedar/shares.cedar` |
+| Which tools a turn may call | `crates/nessa-conversation/src/infrastructure/tool_policy/cedar/tools.cedar` |
+| Which host and program a command may use | `crates/nessa-conversation/src/infrastructure/tool_policy/cedar/commands.cedar` |
+| Who may edit a remembered permission rule | `crates/nessa-conversation/src/infrastructure/permission_rules/cedar/rules.cedar` (the owner; a grant is refused) |
 | Which agent or command a peer may lease on a host | `crates/nessa-env-serve/src/infrastructure/cedar/policies.cedar` |
 
 The socket has one admission, `admit_request` in
-`crates/nessa-server/src/product/read_access.rs`. A paired command is
+`crates/nessa-gateway/src/product/read_access.rs`. A paired command is
 returned as `Initiation::grant(receiver, policy_revision)`. The turn records
 that grant and that epoch. An owner surface is `Initiation::owner()`. A
 device signs in as the binding owner, so Drive works for the owner's phone.
@@ -131,7 +131,7 @@ through `shares.cedar`.
 and the policy and admitted nothing new. [#793](https://github.com/nessalabs/nessa-agent/issues/793)
 lets a party signed in as its grantor drive the one conversation, text only,
 through `admit_request`. Tool checking
-(`crates/nessa-server/src/conversation/application/drive_tools.rs`) keeps the
+(`crates/nessa-conversation/src/application/drive_tools.rs`) keeps the
 policy of the admitted epoch and holds that revision across the save. A
 change of policy applies to the next turn.
 
@@ -465,6 +465,9 @@ subscribe to). The slice adds one grant target per connection beside the
 eight and does not raise the conversation cap. A second grant subscription
 on that socket is refused `subscription_capacity`.
 
+Peer gateways store the follow rule with `peer.follow` (default none, local only).
+The poller replicates the intersection into the retained cache. Replacing
+the poller with grant and chat subscriptions is the subscribe-follow slice.
 The follow rule may name more than eight chats. The live set on that
 connection is still eight. Before the follower subscribes another chat, it
 unsubscribes one it already opened. The chat it lets go is the least
@@ -1938,6 +1941,56 @@ replica. The grantor's catalogue is unchanged by the choice. Following
 nine granted chats is the follower's choice: it unsubscribes one before
 it subscribes another. A raw ninth `conversation.subscribe` is refused
 and closes nothing.
+
+### Follow repair orderings
+
+| Ordering | Result |
+| --- | --- |
+| Explicit open before the first catalogue poll, or after a rule reset | Read into a bounded in-memory cache; no catalogue prerequisite and no transcript is left on disk. |
+| Explicit open of an already followed chat | The one-shot cache is separate; the followed catalogue and transcript stay unchanged. |
+| Rule stored and replica removed, then reset-marker write fails | Return the original rule and completed reset with the failure; audit does not reconstruct the discarded transition from the new rule. |
+| Explicit open while retained cache is corrupt, full, or reset-pending | Do not open, reset, or repair the retained database. The one-shot owns only its bounded transient cache and connection; the poller still owns pending reset recovery. |
+| One-shot succeeds, is refused, fails to initialize, or runs out of budget | Its operation-scoped registration owner releases socket clones on every exit; reusing the stop does not retain prior connections. |
+| Cache/journal unlink completes but directory sync fails | Report the physical reset as performed and its durability as unconfirmed. Keep the prior follow choice; do not equate failed durability with no deletion. |
+
+### Structural correction after review
+
+The previous selection check ran after catalogue persistence, so an interrupted
+walk could leave off-rule data. Selection now belongs to the catalogue transaction:
+validate the complete page and metadata first, then atomically advance progress
+with only selected entries. This is local retention, not a source deletion or a
+grant. Existing generic device-owner reads remain unrestricted.
+
+| Boundary | Required evidence |
+| --- | --- |
+| First page commits, later page fails or process restarts | Only selected rows and transcripts are durable after the first transaction. |
+| Invalid metadata in an unselected entry | Reject the whole page; selection cannot bypass protocol validation. |
+| Restored populated replica has no follow choice and peer is offline | Reconcile the local default-none reset before remote status, with a system local-follow cause and actual reset/durability outcome. |
+| Follow reset is pending on restart | Reconcile that local reset before contacting the peer; retain the stored choice and pending marker on uncertain durability. |
+| Two operations share one stop; one ends or refuses early | Ending operation removes only its owned registrations. The sibling remains stoppable. |
+| Shared stop fires with several live operations | Drain and shut every operation's socket; the shared stop remains terminal. |
+| A socket registers after shared stop | Immediately shut that late socket; it cannot escape cancellation. |
+| A subscription explicitly closes | Release only that subscription's operation identity through the same scoped cleanup owner. |
+
+Each `Stopping` owns a unique in-memory identity. Socket registrations carry that
+identity; its drop removes only matching registrations. Explicit close uses the
+same scoped release. The shared stop is separate: it shuts all identities. Tests
+retain a live sibling through another operation's success, refusal and invalid
+input, then verify shared stop physically closes the sibling. The local reset
+adds one record to the bounded cycle maximum (36); four concurrent cycles plus
+two owner records fit the 146-entry audit queue.
+
+
+The earlier socket cleanup treated shared cancellation authority as one operation's
+resource owner. Each operation now owns its registrations; the shared stop remains
+only the cancellation authority. No successful read or error clears siblings.
+
+The reset store owns unlink and sync evidence. The command maps that evidence
+without guessing from an error category; audit publishes both the physical reset
+and whether its durability was confirmed. One-shot reads own a separate lifetime,
+not a borrowed retained replica. Each bounded driver slice resumes the same
+transient checkpoint under the original deadline until complete or failed.
+
 
 ## Depends on
 

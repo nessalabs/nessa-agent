@@ -13,7 +13,7 @@ const product = "crates/nessa-server/src/product/read_access.rs"
 test("a cedar adapter directory may use the engine and implement the port", () => {
   for (const path of [
     adapter,
-    "crates/nessa-server/src/conversation/infrastructure/tool_policy/cedar/mod.rs",
+    "crates/nessa-conversation/src/infrastructure/tool_policy/cedar/mod.rs",
   ])
     assert.deepEqual(
       policyEngineViolations(

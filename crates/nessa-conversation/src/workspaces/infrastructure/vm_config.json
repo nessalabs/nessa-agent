@@ -1,0 +1,21 @@
+{
+  "envServe": { "commands": true, "artifactsIn": true },
+  "agents": {
+    "catalog": "/opt/nessa/models.json",
+    "selected": "codex",
+    "runtimes": {
+      "codex": {
+        "command": "/opt/nessa/bin/node",
+        "args": ["/opt/nessa/harnesses/node_modules/@agentclientprotocol/codex-acp/dist/index.js"],
+        "model": "gpt-5.6-terra",
+        "toolsEnabled": true
+      },
+      "claude": {
+        "command": "/opt/nessa/bin/node",
+        "args": ["/opt/nessa/harnesses/node_modules/@agentclientprotocol/claude-agent-acp/dist/index.js"],
+        "model": "claude-sonnet-5",
+        "toolsEnabled": true
+      }
+    }
+  }
+}

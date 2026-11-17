@@ -57,8 +57,7 @@
  *   (`data-split-corner`, and `data-drag-corner` while a preview moves it),
  *   motion in progress (`data-split-flipping`, `data-drag-reflow`), a drag
  *   (`data-drag-carrying`, `data-drag-lifted`, `data-drag-waiting`,
- *   `data-drag-pressing`, `data-drag-blur`, `data-drag-takes-spare`), a column
- *   change being painted (`data-split-painting`), the edge between two panes
+ *   `data-drag-pressing`, `data-drag-blur`, `data-drag-takes-spare`), the edge between two panes
  *   (`.split-panes-pane-edge`, to draw what divides them), and the carried copy and its layer
  *   (`.split-panes-ghost`, `-layer`, `-carrier`, `-placeholder`, `-shield`);
  * - the frame spreads `data-pane-key`, `data-flip` and `data-flip-id`, and a

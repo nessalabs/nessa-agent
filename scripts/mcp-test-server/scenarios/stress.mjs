@@ -40,6 +40,16 @@ export const STRESS = {
   oversized: "stress oversized",
   stream: "stress stream",
   window: "stress window",
+  /**
+   * Each window tool the agent calls on the person's window, by name, with
+   * the arguments the prompt carries (`${prompt.arguments}`). Each phrase is
+   * no other's substring.
+   */
+  arrangeWindow: "stress arrange-window",
+  showPanelTab: "stress show-panel-tab",
+  openThread: "stress open-thread",
+  focusPane: "stress focus-pane",
+  closePane: "stress close-pane",
   panelTabs: "stress panel tabs",
   table: "stress table",
   paste: "stress paste",
@@ -95,6 +105,8 @@ export const SAYS = {
   stream: "Streamed: ",
   streamEnd: "Stream finished.",
   window: "Window: ",
+  /** What a window tool answered, as a one-item list: its result, or its error. */
+  control: "Controlled: ",
   panelTabs: "Panel tabs: ",
   table: "Tables: ",
   paste: "Images: ",
@@ -121,7 +133,7 @@ export const TABLE_LINES = [
   "| Option | Price | Includes | Availability |",
   "| --- | --- | --- | --- |",
   "| Single ticket | $16.99 CAD | One screening, general admission (unassigned seating) | On sale since Sept 29; per-screening status unconfirmed |",
-  "| Cine-Maniac Pass | $150 CAD | All Scotiabank screenings, rush priority, social events | |",
+  "| Cine-Maniac Pass | $150 CAD | All Scotiabank screenings, `rush` priority, social events | |",
   "",
   "| Film | Venue | Date | Time | Runtime | Format | Language | Seats left |",
   "| --- | --- | --- | --- | ---: | --- | --- | ---: |",
@@ -620,6 +632,29 @@ export function stressScenario({
           { do: "end" },
         ],
       },
+      // The window tools, one turn each, with the arguments the check sends.
+      // `keepErrors`, so a refusal is said back, not a failed turn.
+      ...[
+        [STRESS.arrangeWindow, "arrange_window"],
+        [STRESS.showPanelTab, "show_panel_tab"],
+        [STRESS.openThread, "open_thread"],
+        [STRESS.focusPane, "focus_pane"],
+        [STRESS.closePane, "close_pane"],
+      ].map(([when, tool]) => ({
+        when,
+        steps: [
+          {
+            do: "tool",
+            server: "nessa-agents",
+            tool,
+            arguments: "${prompt.arguments}",
+            save: "controlled",
+            keepErrors: true,
+          },
+          { do: "text", chunks: [SAYS.control + "${controlled}"] },
+          { do: "end" },
+        ],
+      })),
       {
         // Two panel widgets, from two servers, so the chat's panel has two
         // tabs. The window step opens them, changes the front tab, hides and

@@ -803,6 +803,8 @@ export function inMemorySource(
         emit({ kind: "session-removed", sessionId, revision })
         return revision
       }),
+    // Every session's changes reach every listener here: nothing to keep.
+    keepFollowing: () => {},
     markRead: (sessionId) =>
       live(() => {
         const session = known(sessionId)

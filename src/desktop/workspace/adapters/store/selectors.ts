@@ -302,6 +302,10 @@ export const selectWidgetOpenElsewhere = (state: Root, widget: WidgetRef): boole
   return state.workspace.panelled.includes(paneItemKey(widgetItem(widget)))
 }
 
+/** The last time something set the right panel open or closed on purpose. */
+export const selectPanelSet = (state: Root): WorkspaceState["panelSet"] =>
+  state.workspace.panelSet
+
 /** How many times something asked the window to show the right panel. */
 export const selectPanelAsked = (state: Root): number => state.workspace.panelAsked
 

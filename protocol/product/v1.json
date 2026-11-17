@@ -218,7 +218,7 @@
         "methods": {
           "type": "array",
           "items": { "type": "string" },
-          "maxItems": 123,
+          "maxItems": 127,
           "description": "Registered product methods; permission is checked for every command."
         }
       },
@@ -7159,6 +7159,74 @@
       "required": ["peerKey", "relay"],
       "description": "Wire input for peer.relay: set or clear the relay kept for a peer. A read of that peer in progress is stopped first, and the next read uses the new relay."
     },
+    "PeerFollowParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "peerKey": {
+          "x-pairing-byte-array": "DeviceKey",
+          "description": "The peer's key, as peer.list shows it.",
+          "type": "array",
+          "items": { "type": "integer", "minimum": 0, "maximum": 255 },
+          "maxItems": 32,
+          "minItems": 32
+        },
+        "conversations": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 36,
+            "maxLength": 36,
+            "description": "One conversation id, a canonical lowercase UUID."
+          },
+          "minItems": 0,
+          "maxItems": 256,
+          "uniqueItems": true,
+          "description": "The granted conversations this gateway replicates from that peer, and keeps in its local replica. Empty follows none. Naming a conversation the peer did not grant does not grant it, and this list is not sent to the peer."
+        },
+        "keepBytes": {
+          "type": "integer",
+          "minimum": 1048576,
+          "maximum": 268435456,
+          "description": "How many bytes of that peer's local replica to keep. Changing the conversation list or this number drops the replica; the same choice again does not. 1048576 is the smallest replica, 268435456 the retained cache's own ceiling."
+        }
+      },
+      "required": ["peerKey", "conversations", "keepBytes"],
+      "description": "Wire input for peer.follow: which of the peer's granted conversations to replicate, and how much of the local replica to keep. The peer is not dialed."
+    },
+    "PeerFollowResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "peerKey": {
+          "x-pairing-byte-array": "DeviceKey",
+          "description": "The peer the rule was stored for.",
+          "type": "array",
+          "items": { "type": "integer", "minimum": 0, "maximum": 255 },
+          "maxItems": 32,
+          "minItems": 32
+        },
+        "conversations": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 36, "maxLength": 36 },
+          "minItems": 0,
+          "maxItems": 256,
+          "description": "The conversations the stored rule replicates, in id order."
+        },
+        "keepBytes": {
+          "type": "integer",
+          "minimum": 1048576,
+          "maximum": 268435456,
+          "description": "The replica ceiling the stored rule keeps."
+        },
+        "replicaReset": {
+          "type": "boolean",
+          "description": "The local replica was dropped because the rule changed. False when the stored rule was already this choice."
+        }
+      },
+      "required": ["peerKey", "conversations", "keepBytes", "replicaReset"],
+      "description": "Result of peer.follow. The grantor's catalogue is not in this result, and the peer is not told the rule."
+    },
     "PeerPhase": {
       "type": "string",
       "enum": ["pending", "active", "revoked", "unreadable"],
@@ -8831,6 +8899,257 @@
         }
       },
       "required": ["revision", "applied"]
+    },
+    "WorkspaceActionKind": {
+      "type": "string",
+      "enum": [
+        "sidebar",
+        "session_list",
+        "panel",
+        "panel_tab",
+        "show",
+        "open_conversation",
+        "focus_pane",
+        "close_pane"
+      ],
+      "description": "A change to a window: open or close the sidebar, the session list or the focused chat's right panel; bring a panel tab to the front; show the panes or the Agents overview; open a conversation; focus or close the pane showing one."
+    },
+    "WorkspaceArrangeKind": {
+      "type": "string",
+      "enum": [
+        "sidebar",
+        "session_list",
+        "panel",
+        "panel_tab",
+        "show",
+        "open_conversation",
+        "focus_pane"
+      ],
+      "description": "The changes workspace.arrange makes: every WorkspaceActionKind but close_pane, which takes something off the screen and is workspace.closePane."
+    },
+    "WorkspaceView": {
+      "type": "string",
+      "enum": ["panes", "agents"],
+      "description": "What fills the window's content region: the panes, or the Agents overview over them."
+    },
+    "WorkspaceOpenPlace": {
+      "type": "string",
+      "enum": ["beside", "right", "below", "here"],
+      "description": "Where a conversation opens: beside the focused pane (to the right if the room allows, else below, else in its place), only to its right, only below it, or in its place."
+    },
+    "WorkspaceAction": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "One change the gateway asks a window to make. Each kind names exactly the fields it takes: open for sidebar, session_list and panel; widget for panel_tab; view for show; conversationId (and place, for open_conversation) for open_conversation, focus_pane and close_pane.",
+      "properties": {
+        "kind": { "$ref": "#/$defs/WorkspaceActionKind", "description": "The change." },
+        "open": {
+          "type": "boolean",
+          "description": "Whether the side column or panel is to be open, for sidebar, session_list and panel."
+        },
+        "view": {
+          "$ref": "#/$defs/WorkspaceView",
+          "description": "What fills the content region, for show."
+        },
+        "widget": {
+          "$ref": "#/$defs/WorkspaceWidget",
+          "description": "The focused chat's panel tab to bring to the front, for panel_tab."
+        },
+        "conversationId": {
+          "type": "string",
+          "minLength": 36,
+          "maxLength": 36,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "description": "The conversation to open, focus or close the pane of, for open_conversation, focus_pane and close_pane."
+        },
+        "place": {
+          "$ref": "#/$defs/WorkspaceOpenPlace",
+          "description": "Where to open it, for open_conversation. Absent is beside."
+        }
+      },
+      "required": ["kind"]
+    },
+    "WorkspaceArrangeAction": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "The change workspace.arrange asks for, named as a WorkspaceAction is.",
+      "properties": {
+        "kind": { "$ref": "#/$defs/WorkspaceArrangeKind", "description": "The change." },
+        "open": {
+          "type": "boolean",
+          "description": "Whether the side column or panel is to be open, for sidebar, session_list and panel."
+        },
+        "view": {
+          "$ref": "#/$defs/WorkspaceView",
+          "description": "What fills the content region, for show."
+        },
+        "widget": {
+          "$ref": "#/$defs/WorkspaceWidget",
+          "description": "The focused chat's panel tab to bring to the front, for panel_tab."
+        },
+        "conversationId": {
+          "type": "string",
+          "minLength": 36,
+          "maxLength": 36,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "description": "The conversation to open, focus or close the pane of, for open_conversation, focus_pane and close_pane."
+        },
+        "place": {
+          "$ref": "#/$defs/WorkspaceOpenPlace",
+          "description": "Where to open it, for open_conversation. Absent is beside."
+        }
+      },
+      "required": ["kind"]
+    },
+    "WorkspaceCommand": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "A change the gateway asks this connection's window to make, for one of the person's agents or their own CLI. The window carries it out by its own rules, publishes what it shows after, and answers with workspace.answer naming the commandId.",
+      "properties": {
+        "windowId": {
+          "type": "string",
+          "minLength": 36,
+          "maxLength": 36,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "description": "The window it is for: the windowId this connection published."
+        },
+        "commandId": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991,
+          "description": "The gateway's id for this command, for the answer to name."
+        },
+        "action": { "$ref": "#/$defs/WorkspaceAction", "description": "The change." }
+      },
+      "required": ["windowId", "commandId", "action"]
+    },
+    "WorkspaceAnswerOutcome": {
+      "type": "string",
+      "enum": ["applied", "unchanged", "refused"],
+      "description": "What the window did: made the change, found it made already, or could not make it."
+    },
+    "WorkspaceCommandRefusal": {
+      "type": "string",
+      "enum": [
+        "conversation_not_listed",
+        "not_on_screen",
+        "tab_not_found",
+        "no_session_list",
+        "no_chat_focused",
+        "no_room",
+        "covered"
+      ],
+      "description": "Why a window could not make a change: the conversation is not one it lists; no pane shows it; the focused chat's panel has no such tab; this arrangement has no session list; no chat is focused to have a panel; the panes have no room on the side asked; something the person opened over it (a side rail place over the panel) keeps it from being drawn."
+    },
+    "WorkspaceAnswerParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "A window's answer to a workspace.command (workspace.answer). An applied or unchanged answer names the revision that shows it, published before or after the answer; a refused one names its code.",
+      "properties": {
+        "windowId": {
+          "type": "string",
+          "minLength": 36,
+          "maxLength": 36,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "description": "The window that was asked."
+        },
+        "commandId": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991,
+          "description": "The command answered."
+        },
+        "outcome": {
+          "$ref": "#/$defs/WorkspaceAnswerOutcome",
+          "description": "What the window did."
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991,
+          "description": "The publication that shows the change, for applied and unchanged."
+        },
+        "code": {
+          "$ref": "#/$defs/WorkspaceCommandRefusal",
+          "description": "Why, for refused."
+        }
+      },
+      "required": ["windowId", "commandId", "outcome"]
+    },
+    "WorkspaceAnswerResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "The answer to workspace.answer: whether a caller was still waiting for it.",
+      "properties": {
+        "settled": {
+          "type": "boolean",
+          "description": "False when the command was not this connection's to answer, was answered already, or nobody waits for it now."
+        }
+      },
+      "required": ["settled"]
+    },
+    "WorkspaceArrangeParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Change what one of the person's desktop windows shows (workspace.arrange), as a click there would: nothing is taken off the screen, and each change is undone the same way. The window carries it out by its own rules and the answer comes once it has published what it shows after. Audited, as each window change is.",
+      "properties": {
+        "windowId": {
+          "type": "string",
+          "minLength": 36,
+          "maxLength": 36,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "description": "The window, as read_window names it. Absent is the most recently published one."
+        },
+        "action": {
+          "$ref": "#/$defs/WorkspaceArrangeAction",
+          "description": "The change."
+        }
+      },
+      "required": ["action"]
+    },
+    "WorkspaceClosePaneParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Close the pane showing a conversation in one of the person's desktop windows (workspace.closePane), as ⌘W does. The conversation is kept. Audited, as each window change is.",
+      "properties": {
+        "windowId": {
+          "type": "string",
+          "minLength": 36,
+          "maxLength": 36,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "description": "The window, as read_window names it. Absent is the most recently published one."
+        },
+        "conversationId": {
+          "type": "string",
+          "minLength": 36,
+          "maxLength": 36,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "description": "The conversation whose pane closes."
+        }
+      },
+      "required": ["conversationId"]
+    },
+    "WorkspaceControlResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "The answer to workspace.arrange and workspace.closePane: the window changed and the publication that shows it.",
+      "properties": {
+        "windowId": {
+          "type": "string",
+          "minLength": 36,
+          "maxLength": 36,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "description": "The window that made the change."
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991,
+          "description": "The publication that shows it, held by the gateway when this answer is sent."
+        },
+        "changed": { "type": "boolean", "description": "False when it was so already." }
+      },
+      "required": ["windowId", "revision", "changed"]
     },
     "VaultState": {
       "type": "string",
