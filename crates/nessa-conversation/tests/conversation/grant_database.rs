@@ -28,7 +28,7 @@ fn a_foreign_grant_version_refuses_before_opening_or_creating_metadata() {
             Err(crate::infrastructure::ConversationStoreOpenError::Grants {
                 cause: nessa_local_database::OpenError::Version {
                     found: 99,
-                    expected: 1
+                    expected: 2
                 },
                 ..
             })
