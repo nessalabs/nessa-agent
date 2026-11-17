@@ -2902,6 +2902,26 @@ export interface PeerRelayParams {
   /** Where to ask for the peer when its address does not answer: a relay's `host:port`, the host a name or an address (an IPv6 one in brackets), at most 255 UTF-8 bytes (`x-utf8MaxBytes`; `maxLength` counts code points and is only a coarse bound). Looked up at each dial. It carries no trust: the peer must still present its pinned key through it. Null clears it, so the peer is read only at its address. */
   relay: string | null
 }
+/** Wire input for peer.follow: which of the peer's granted conversations to replicate, and how much of the local replica to keep. The peer is not dialed. */
+export interface PeerFollowParams {
+  /** The peer's key, as peer.list shows it. */
+  peerKey: number[]
+  /** The granted conversations this gateway replicates from that peer, and keeps in its local replica. Empty follows none. Naming a conversation the peer did not grant does not grant it, and this list is not sent to the peer. */
+  conversations: string[]
+  /** How many bytes of that peer's local replica to keep. Changing the conversation list or this number drops the replica; the same choice again does not. 1048576 is the smallest replica, 268435456 the retained cache's own ceiling. */
+  keepBytes: number
+}
+/** Result of peer.follow. The grantor's catalogue is not in this result, and the peer is not told the rule. */
+export interface PeerFollowResult {
+  /** The peer the rule was stored for. */
+  peerKey: number[]
+  /** The conversations the stored rule replicates, in id order. */
+  conversations: string[]
+  /** The replica ceiling the stored rule keeps. */
+  keepBytes: number
+  /** The local replica was dropped because the rule changed. False when the stored rule was already this choice. */
+  replicaReset: boolean
+}
 /** Where this gateway's enrollment with a peer stands, as this gateway last heard. pending: claimed, waiting on the peer's owner to approve, or not yet confirmed. active: the peer issued this gateway a credential. revoked: the peer ended the enrollment (its owner revoked the credential, or denied, cancelled or let expire the claim), its retained cache is removed and it is no longer read; only peer.forget helps. unreadable: the peer's record is there but this build cannot read it, or it was made with a key that is no longer this gateway's; only peer.forget helps. */
 export const PeerPhase = {
   Pending: "pending",
@@ -3547,6 +3567,143 @@ export interface WorkspacePublishResult {
   /** False when a later revision was already held, so this one changed nothing. */
   applied: boolean
 }
+/** A change to a window: open or close the sidebar, the session list or the focused chat's right panel; bring a panel tab to the front; show the panes or the Agents overview; open a conversation; focus or close the pane showing one. */
+export const WorkspaceActionKind = {
+  Sidebar: "sidebar",
+  SessionList: "session_list",
+  Panel: "panel",
+  PanelTab: "panel_tab",
+  Show: "show",
+  OpenConversation: "open_conversation",
+  FocusPane: "focus_pane",
+  ClosePane: "close_pane",
+} as const
+export type WorkspaceActionKind =
+  (typeof WorkspaceActionKind)[keyof typeof WorkspaceActionKind]
+/** The changes workspace.arrange makes: every WorkspaceActionKind but close_pane, which takes something off the screen and is workspace.closePane. */
+export const WorkspaceArrangeKind = {
+  Sidebar: "sidebar",
+  SessionList: "session_list",
+  Panel: "panel",
+  PanelTab: "panel_tab",
+  Show: "show",
+  OpenConversation: "open_conversation",
+  FocusPane: "focus_pane",
+} as const
+export type WorkspaceArrangeKind =
+  (typeof WorkspaceArrangeKind)[keyof typeof WorkspaceArrangeKind]
+/** What fills the window's content region: the panes, or the Agents overview over them. */
+export const WorkspaceView = { Panes: "panes", Agents: "agents" } as const
+export type WorkspaceView = (typeof WorkspaceView)[keyof typeof WorkspaceView]
+/** Where a conversation opens: beside the focused pane (to the right if the room allows, else below, else in its place), only to its right, only below it, or in its place. */
+export const WorkspaceOpenPlace = {
+  Beside: "beside",
+  Right: "right",
+  Below: "below",
+  Here: "here",
+} as const
+export type WorkspaceOpenPlace =
+  (typeof WorkspaceOpenPlace)[keyof typeof WorkspaceOpenPlace]
+/** One change the gateway asks a window to make. Each kind names exactly the fields it takes: open for sidebar, session_list and panel; widget for panel_tab; view for show; conversationId (and place, for open_conversation) for open_conversation, focus_pane and close_pane. */
+export interface WorkspaceAction {
+  /** The change. */
+  kind: WorkspaceActionKind
+  /** Whether the side column or panel is to be open, for sidebar, session_list and panel. */
+  open?: boolean
+  /** What fills the content region, for show. */
+  view?: WorkspaceView
+  /** The focused chat's panel tab to bring to the front, for panel_tab. */
+  widget?: WorkspaceWidget
+  /** The conversation to open, focus or close the pane of, for open_conversation, focus_pane and close_pane. */
+  conversationId?: string
+  /** Where to open it, for open_conversation. Absent is beside. */
+  place?: WorkspaceOpenPlace
+}
+/** The change workspace.arrange asks for, named as a WorkspaceAction is. */
+export interface WorkspaceArrangeAction {
+  /** The change. */
+  kind: WorkspaceArrangeKind
+  /** Whether the side column or panel is to be open, for sidebar, session_list and panel. */
+  open?: boolean
+  /** What fills the content region, for show. */
+  view?: WorkspaceView
+  /** The focused chat's panel tab to bring to the front, for panel_tab. */
+  widget?: WorkspaceWidget
+  /** The conversation to open, focus or close the pane of, for open_conversation, focus_pane and close_pane. */
+  conversationId?: string
+  /** Where to open it, for open_conversation. Absent is beside. */
+  place?: WorkspaceOpenPlace
+}
+/** A change the gateway asks this connection's window to make, for one of the person's agents or their own CLI. The window carries it out by its own rules, publishes what it shows after, and answers with workspace.answer naming the commandId. */
+export interface WorkspaceCommand {
+  /** The window it is for: the windowId this connection published. */
+  windowId: string
+  /** The gateway's id for this command, for the answer to name. */
+  commandId: number
+  /** The change. */
+  action: WorkspaceAction
+}
+/** What the window did: made the change, found it made already, or could not make it. */
+export const WorkspaceAnswerOutcome = {
+  Applied: "applied",
+  Unchanged: "unchanged",
+  Refused: "refused",
+} as const
+export type WorkspaceAnswerOutcome =
+  (typeof WorkspaceAnswerOutcome)[keyof typeof WorkspaceAnswerOutcome]
+/** Why a window could not make a change: the conversation is not one it lists; no pane shows it; the focused chat's panel has no such tab; this arrangement has no session list; no chat is focused to have a panel; the panes have no room on the side asked; something the person opened over it (a side rail place over the panel) keeps it from being drawn. */
+export const WorkspaceCommandRefusal = {
+  ConversationNotListed: "conversation_not_listed",
+  NotOnScreen: "not_on_screen",
+  TabNotFound: "tab_not_found",
+  NoSessionList: "no_session_list",
+  NoChatFocused: "no_chat_focused",
+  NoRoom: "no_room",
+  Covered: "covered",
+} as const
+export type WorkspaceCommandRefusal =
+  (typeof WorkspaceCommandRefusal)[keyof typeof WorkspaceCommandRefusal]
+/** A window's answer to a workspace.command (workspace.answer). An applied or unchanged answer names the revision that shows it, published before or after the answer; a refused one names its code. */
+export interface WorkspaceAnswerParams {
+  /** The window that was asked. */
+  windowId: string
+  /** The command answered. */
+  commandId: number
+  /** What the window did. */
+  outcome: WorkspaceAnswerOutcome
+  /** The publication that shows the change, for applied and unchanged. */
+  revision?: number
+  /** Why, for refused. */
+  code?: WorkspaceCommandRefusal
+}
+/** The answer to workspace.answer: whether a caller was still waiting for it. */
+export interface WorkspaceAnswerResult {
+  /** False when the command was not this connection's to answer, was answered already, or nobody waits for it now. */
+  settled: boolean
+}
+/** Change what one of the person's desktop windows shows (workspace.arrange), as a click there would: nothing is taken off the screen, and each change is undone the same way. The window carries it out by its own rules and the answer comes once it has published what it shows after. Audited, as each window change is. */
+export interface WorkspaceArrangeParams {
+  /** The window, as read_window names it. Absent is the most recently published one. */
+  windowId?: string
+  /** The change. */
+  action: WorkspaceArrangeAction
+}
+/** Close the pane showing a conversation in one of the person's desktop windows (workspace.closePane), as ⌘W does. The conversation is kept. Audited, as each window change is. */
+export interface WorkspaceClosePaneParams {
+  /** The window, as read_window names it. Absent is the most recently published one. */
+  windowId?: string
+  /** The conversation whose pane closes. */
+  conversationId: string
+}
+/** The answer to workspace.arrange and workspace.closePane: the window changed and the publication that shows it. */
+export interface WorkspaceControlResult {
+  /** The window that made the change. */
+  windowId: string
+  /** The publication that shows it, held by the gateway when this answer is sent. */
+  revision: number
+  /** False when it was so already. */
+  changed: boolean
+}
 /** The local vault state. Unlock belongs to the connection that proved its passphrase; closing its owner locks the vault. */
 export const VaultState = {
   Unconfigured: "unconfigured",
@@ -3876,7 +4033,7 @@ export const channelRules = {
 export const bounds = {
   maxOrdinaryResponseBytes: 65536,
   maxRequestFrameBytes: 65536,
-  maxReadyMethods: 123,
+  maxReadyMethods: 127,
   maxAuthCredentialCharacters: 16384,
   maxProductClientIdCharacters: 256,
   maxProductSurfaceInstanceCharacters: 256,
@@ -4182,6 +4339,7 @@ export const ProductMethod = {
   PeerList: "peer.list",
   PeerForget: "peer.forget",
   PeerRelay: "peer.relay",
+  PeerFollow: "peer.follow",
   ConversationSubscribe: "conversation.subscribe",
   ConversationSubscribeList: "conversation.subscribeList",
   ConversationUnsubscribe: "conversation.unsubscribe",
@@ -4191,6 +4349,9 @@ export const ProductMethod = {
   ConversationPermissionRules: "conversation.permissionRules",
   ConversationRevokePermissionRule: "conversation.revokePermissionRule",
   WorkspacePublish: "workspace.publish",
+  WorkspaceAnswer: "workspace.answer",
+  WorkspaceArrange: "workspace.arrange",
+  WorkspaceClosePane: "workspace.closePane",
   ChannelCreate: "channel.create",
   ChannelList: "channel.list",
   ChannelSetPlacement: "channel.setPlacement",
@@ -4232,6 +4393,7 @@ export const ProductEvent = {
   AgentsListed: "agents.listed",
   ConversationSubscriptionEnded: "conversation.subscriptionEnded",
   PermissionReviewWaiting: "permission.reviewWaiting",
+  WorkspaceCommand: "workspace.command",
   ConversationEvents: "conversation.events",
 } as const
 export const ProductHandshakeMethod = "session.authenticate" as const
@@ -4318,6 +4480,7 @@ export const productReadyMethods = [
   "peer.list",
   "peer.forget",
   "peer.relay",
+  "peer.follow",
   "conversation.subscribe",
   "conversation.subscribeList",
   "conversation.unsubscribe",
@@ -4327,6 +4490,9 @@ export const productReadyMethods = [
   "conversation.permissionRules",
   "conversation.revokePermissionRule",
   "workspace.publish",
+  "workspace.answer",
+  "workspace.arrange",
+  "workspace.closePane",
   "channel.create",
   "channel.list",
   "channel.setPlacement",
@@ -4445,6 +4611,7 @@ export const productMethodGrants = {
   "peer.list": "credential.manage",
   "peer.forget": "credential.manage",
   "peer.relay": "credential.manage",
+  "peer.follow": "credential.manage",
   "conversation.subscribe": "conversation.write",
   "conversation.subscribeList": "conversation.write",
   "conversation.unsubscribe": "conversation.write",
@@ -4454,6 +4621,9 @@ export const productMethodGrants = {
   "conversation.permissionRules": "conversation.write",
   "conversation.revokePermissionRule": "conversation.write",
   "workspace.publish": "conversation.write",
+  "workspace.answer": "conversation.write",
+  "workspace.arrange": "conversation.write",
+  "workspace.closePane": "conversation.write",
   "channel.create": "conversation.write",
   "channel.list": "conversation.write",
   "channel.setPlacement": "conversation.write",

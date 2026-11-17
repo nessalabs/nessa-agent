@@ -70,8 +70,11 @@ Tidying (`model/tidy.ts`) is a pure function: fillers ("um", "uh", "erm"),
 repeated words and a leading lowercase are fixed, nothing else. The
 transcription model is also asked for clean punctuated text.
 
-One call per window. Starting another, closing its pane, or leaving the
-conversation ends the one running.
+One call per window. Starting another ends the one running, so Talk in a
+chat while a call talks to another asks first, naming the chat whose call
+ends. Closing the call's pane or showing another conversation in it ends
+nothing (V16). A call that fails or drops while no pane shows its chat says
+so in the window, since the chat's own notice is not on screen to say it.
 
 | # | State | Event | Result |
 | --- | --- | --- | --- |
@@ -90,7 +93,7 @@ conversation ends the one running.
 | V13 | any open | `stop_agent` | sends asked for before it and not yet on their way are withdrawn (each answers `not_sent`); a send already on its way is waited out; then `stopTurn` as the Stop button, and the function answers `stopped` or `nothing_running` |
 | V14 | any open | response asked while one is in flight | queued; at most one response at a time; a `response.create` the provider refuses (error) frees the voice |
 | V15 | any open | mute mic / speaker | the track or audio is off; the call stays |
-| V16 | any open | end, pane closed, conversation left | idle; the transport closed |
+| V16 | any open | end, or the conversation is gone from the window (archived, deleted) | idle; the transport closed. A pane closed or showing another conversation ends nothing: the call goes on, the window keeps following its conversation off screen (`heldSession`, kept and read as a shown one is) so every reply still reaches the voice, and its switches float on the pill until a pane shows it again |
 | V17 | any open | transport closed or failed | ended, saying the call dropped |
 | V18 | listening | 12 s after it opened, or after the last unmute, the provider has not heard the person start speaking, and the microphone is on | the transport checks its own audio once over 1 s: any event back from the provider, whether the microphone's track is still live and not muted by the system, audio bytes going out (which fails only when the connection itself is down, since silence is sent too; unknown when the statistics hold no count for outgoing audio, under either name a web view gives its kind), and sound from the microphone (unknown when the meter cannot run). The first thing found wrong is shown in place of "Listening" until the person is heard or the microphone changes; a check that ran into a mute is dropped |
 
@@ -112,12 +115,16 @@ Known limits, accepted for now:
 
 ## The call pill
 
-While a call is open and the desktop window is not the one in front, the
-call's switches float over the other apps on a pill: a small window of its
+While a call is open and its composer is not in view, the call's switches
+float on a pill. The composer is out of view while the desktop window is not
+the one in front, and while no pane in it shows the chat the call talks to:
+the person may read or write in another chat while they talk. The pill is a
+small window of its
 own (`call`, declared hidden in `tauri.conf.json`), always on top, on every
 Space. It shows where the call stands and which chat it talks to, with the
 speaker, the microphone and End. Pressing the chat's name brings the desktop
-window forward; dragging it moves the pill.
+window forward on that chat, opening it in the focused pane when no pane
+shows it; dragging it moves the pill.
 
 The pill holds no call. The call stays in the desktop window's page, and two
 things cross between the windows through the host (`src-tauri/src/call_pill.rs`):
@@ -127,8 +134,12 @@ sequenceDiagram
     participant D as Desktop window (holds the call)
     participant H as Host
     participant P as Pill window
-    D->>H: a call opened, here is its picture
-    Note over H: the desktop window is in front, so the pill stays hidden
+    D->>H: a call opened, here is its picture, and a pane shows its chat
+    Note over H: the desktop window is in front and shows the chat, so the pill stays hidden
+    D->>H: no pane shows the chat now
+    H->>P: show, and draw this picture
+    D->>H: a pane shows the chat again
+    H->>P: hide
     H->>H: the desktop window left the front
     H->>P: show, and draw this picture
     P->>H: the person pressed Mute
@@ -144,7 +155,9 @@ sequenceDiagram
 | --- | --- |
 | What the pill draws for a call, and what each press asks of it | `voice/model/call-pill.ts` |
 | Telling the host what the call looks like, in order, and carrying presses out on it | `voice/application/call-pill.ts` |
-| Whether the pill is on screen: a call is open and the desktop window is not in front | the host (`call_pill.rs`), from the system's own focus events. The page is never asked: a page's idea of focus goes stale when its window is hidden |
+| Whether the pill is on screen: a call is open, and the desktop window is not in front or no pane in it shows the call's chat | the host (`call_pill.rs`). Focus it hears from the system's own events; the page is never asked, since a page's idea of focus goes stale when its window is hidden. What the panes show only the page knows, and it says so with each picture |
+| Whether a pane shows the call's chat | `VoiceController.chatShown`, from the panes' own composers (`VoiceDock`), told once the panes have settled so a chat moved between panes is never said to be off screen |
+| Keeping the call's chat followed off screen, and ending a call whose chat is gone | `voice/application/call-chat.ts`, with the workspace's `heldSession` |
 | Who may call what: only the desktop window says what the call looks like, only the pill presses | `call_pill.rs`, by the calling window's label |
 | The latest picture, for a pill page that loads late | the host; the pill reads it after it starts listening |
 | Where the pill stands | top centre of the main screen the first time, then wherever it was dragged, until the app quits |
@@ -196,11 +209,11 @@ whether one is saved.
 
 ## Checks
 
-- Gateway: `crates/nessa-server/tests/voice` — K1–K9 with a scripted provider,
+- Gateway: `crates/nessa-gateway/tests/voice` — K1–K9 with a scripted provider,
   a memory secret and a recording audit, and a caller gone mid-mint; the
   OpenAI request and answer beside the adapter; the methods at the socket
   (grants, shapes, no key in any answer) in
-  `crates/nessa-server/tests/product/socket/voice.rs`.
+  `crates/nessa-gateway/tests/product/socket/voice.rs`.
 - Window: `src/desktop/voice/**/*.test.ts` — V1–V17 on a fake transport and a
   fake workspace; tidy's cases.
 - End to end: the stress check's `voice` step (`pnpm test:e2e:stress`, knob

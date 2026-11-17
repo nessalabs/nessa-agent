@@ -117,6 +117,10 @@ export const KNOBS = {
     default: 1,
     what: "turns where an agent reads the window: beside another pane, the focused chat's panel (two tabs, the front tab, hidden and shown, then the other chat), then alone; the sidebar it folds parks once its slide ends and is reachable again when opened",
   },
+  controls: {
+    default: 1,
+    what: "turns where an agent changes the window with its tools: another conversation opened beside, the sidebar and right panel closed and opened, the Agents overview and back, a missing panel tab refused, a pane focused, then closed, and closed again refused; each change on record in the window-control audit",
+  },
   rails: {
     default: 1,
     what: 'times the side rail is turned on in Settings and opened around the traffic lights, a message sent, then closed and turned off, its toggle never moving; "nessa Studio" stays while a column holds the corner and goes over the panes alone',
@@ -203,7 +207,7 @@ export const KNOBS = {
   },
   composers: {
     default: 1,
-    what: "times the composer's row is read: the model is named without its family, thinking stands before the hairline and Send, no project is offered, and nothing stands under the card",
+    what: "times the composer's row is read: the model is named without its family, thinking stands before the hairline and Send, no project is offered, nothing stands under the card, the model menu's provider tiles are square, and in three short stacked panes an empty composer you are not in folds to a circle that opens it",
   },
   menuPanels: {
     default: 1,
@@ -232,6 +236,10 @@ export const KNOBS = {
   webhooks: {
     default: 1,
     what: "window turns captured by a disposable webhook with production loopback refusal and no attempt; positive TLS delivery is qualified separately",
+  },
+  sharedChats: {
+    default: 1,
+    what: "a granted chat opened from the follower's window: the transcript is read, a composed message is refused, and unshare takes the chat off the list",
   },
   huddles: {
     default: 1,
@@ -321,6 +329,7 @@ export function plan(knobs, accessScenario = "full") {
   add(knobs.deletes, () => ({ kind: "delete" }))
   add(knobs.fresh, () => ({ kind: "fresh" }))
   add(knobs.windows, () => ({ kind: "window" }))
+  add(knobs.controls, () => ({ kind: "control" }))
   add(knobs.rails, () => ({ kind: "rail" }))
   add(knobs.panels, () => ({ kind: "panel" }))
   add(knobs.waitingRows, () => ({ kind: "waitingRow" }))
@@ -366,6 +375,8 @@ export function plan(knobs, accessScenario = "full") {
     steps.push({ kind: "restore", slot })
   if (knobs.pairedCatalogues > 0)
     steps.push({ kind: "pairedCatalogue", cycles: knobs.pairedCatalogues })
+  for (let slot = 0; slot < knobs.sharedChats; slot += 1)
+    steps.push({ kind: "sharedChat", slot })
   // Preset checks keep their original model. Positive model changes follow
   // that work, using Ask before their review; chaos keeps concurrent coverage.
   // Handoffs come last of all: a switch stays in the metadata, and no older

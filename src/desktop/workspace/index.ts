@@ -101,6 +101,12 @@ export {
   type WindowPublishClient,
 } from "./adapters/gateway/window-publisher"
 export {
+  windowCommandInbox,
+  clientsSeen,
+  type WindowCommandClient,
+} from "./adapters/gateway/window-commands"
+export { carryOutWindowChange } from "./adapters/store/window-commands"
+export {
   inMemorySharing,
   type InMemorySharing,
 } from "./adapters/in-memory/in-memory-sharing"

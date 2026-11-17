@@ -20,7 +20,7 @@
  *     doc comments in `.rs` sources; `crates/nessa-sdk/docs/*.md` reaches it
  *     only if something includes it, and nothing does.
  *   - A Rust test may open a Markdown file at run time and compare it, as
- *     `nessa-server`'s limits test does with `docs/limits.md`. Each such file
+ *     `nessa-gateway`'s limits test does with `docs/limits.md`. Each such file
  *     is listed in `READ_BY_RUST`, and a change to it is code.
  *   - `scripts/check-architecture.mjs` enforces the contract *described in*
  *     `docs/ARCHITECTURE.md` and `docs/codebase-structure.md`, but it reads

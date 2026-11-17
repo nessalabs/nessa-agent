@@ -13,6 +13,10 @@
  *     its place, sent like any window, until the window changes
  * ```
  *
+ * settled() ─▶ the revision the gateway holds for what the window shows now,
+ *   once nothing is left to send: what a change an agent asked for
+ *   (`window-commands.ts`) answers with
+ *
  * `windowId` is this window's for its whole life, and its revisions go on
  * rising across connections, so the gateway reads a connection it left
  * behind as the same window, older.
@@ -68,6 +72,16 @@ export function windowPublisher(options: {
   let watched: WindowPublishClient | undefined
   let unwatch: (() => void) | undefined
   let cancelRetry: (() => void) | undefined
+  // The revision the gateway took for `latest`, while nothing newer is owed.
+  let held: number | undefined
+  let waiting: Array<(revision: number) => void> = []
+  const settle = () => {
+    if (held === undefined || sending || owed) return
+    const revision = held
+    const settled = waiting
+    waiting = []
+    for (const resolve of settled) resolve(revision)
+  }
 
   const retry = () => {
     if (cancelRetry) return
@@ -92,6 +106,7 @@ export function windowPublisher(options: {
       owed = true
       return
     }
+    held = undefined
     sending = true
     try {
       do {
@@ -101,11 +116,12 @@ export function windowPublisher(options: {
         const window: ShownWindow | null | undefined = latest
         revision += 1
         try {
-          await client.workspace.publish(
+          const published = await client.workspace.publish(
             windowId,
             revision,
             window ? wire(window) : undefined,
           )
+          held = latest === window ? published.revision : undefined
         } catch (error) {
           if (!(error instanceof NessaRpcError && refusedForGood.has(error.code)))
             throw error
@@ -125,11 +141,20 @@ export function windowPublisher(options: {
     }
     // A change that came while a refused or failed publication was out.
     if (owed) void flush()
+    else settle()
   }
   return {
+    windowId,
     publish(window) {
+      if (latest !== window) held = undefined
       latest = window
       void flush()
+    },
+    settled() {
+      return new Promise((resolve) => {
+        waiting.push(resolve)
+        settle()
+      })
     },
   }
 }

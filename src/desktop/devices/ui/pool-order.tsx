@@ -6,15 +6,12 @@
  * is what the gateway answered.
  */
 import { Button } from "@nessa-ui/react/button"
-import {
-  SegmentedControl,
-  SegmentedControlOption,
-} from "@nessa-ui/react/segmented-control"
 import { SettingsGroup, SettingsRow } from "@nessa-ui/react/settings-group"
 import { Switch } from "@nessa-ui/react/switch"
 import { useEffect, useRef, useState } from "react"
 import type { DevicesPool } from "@nessa/client"
 import { IconButton } from "../../ui/icon-button"
+import { ChoiceMenu } from "../../ui/choice-menu"
 import type { DevicesGateway } from "../adapters/devices-gateway"
 import { sortWorkers, statusWord, workerCard, type WorkerCard } from "../model/devices"
 import {
@@ -120,39 +117,34 @@ export function PoolOrder({
   return (
     <div className="devices-pool" data-devices-pool={channelId ?? "global"}>
       {channelId !== undefined ? (
-        <SegmentedControl
-          variant="glass"
-          className="devices-pool-mode"
-          aria-label="Where this channel’s threads run"
-          value={mode}
-          onValueChange={(next) => {
-            if (!pool || next === mode) return
-            // Keeping an order of its own starts from the default's.
-            void save(next === "custom" ? pool.defaultPreference : undefined)
-          }}
-        >
-          <SegmentedControlOption
-            value="default"
+        <div className="devices-pool-mode">
+          <span className="devices-pool-mode-label">Uses</span>
+          <ChoiceMenu<Mode>
+            label="Where this channel’s threads run"
+            value={pool ? mode : undefined}
+            placeholder="Loading…"
             disabled={!pool || busy}
-            data-devices-pool-mode="default"
-          >
-            Same as Devices
-          </SegmentedControlOption>
-          <SegmentedControlOption
-            value="custom"
-            disabled={!pool || busy}
-            data-devices-pool-mode="custom"
-          >
-            Its own order
-          </SegmentedControlOption>
-        </SegmentedControl>
+            data-devices-pool-mode={mode}
+            options={[
+              { id: "default", label: "Same order as Devices" },
+              { id: "custom", label: "Its own order" },
+            ]}
+            onChange={(next) => {
+              if (!pool || next === mode) return
+              // Keeping an order of its own starts from the default's.
+              void save(next === "custom" ? pool.defaultPreference : undefined)
+            }}
+          />
+        </div>
       ) : null}
       <SettingsGroup
         surface="flat"
         aria-label="Thread order"
         disabled={!pool || busy || mode === "default"}
+        // How Any picks a computer is said on Devices; a channel's settings
+        // leave it out (#1340 follow-up).
         footnote={
-          pool
+          pool && channelId === undefined
             ? `New threads on Any computer go to the first one here that’s online and under ${pool.busyCpuPercent}% CPU and ${pool.busyMemoryPercent}% memory. When every one is busy, Boat takes it if it’s connected, or else the first one here.`
             : undefined
         }

@@ -451,7 +451,7 @@ pub enum ConversationPermissionAsk {
 /// [`ConversationPermissionOrigin::App`], they are the app — the tool call
 /// whose UI it is — and `server` and `tool` the tool it asked to call, `tool`
 /// being the review's `tool_name` (`review_of` in `app_reviews` builds both
-/// from one name; `nessa-server/tests/conversation/app_reviews.rs` asserts they agree).
+/// from one name; `nessa-conversation/tests/conversation/app_reviews.rs` asserts they agree).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum ConversationPermissionOrigin {
@@ -571,7 +571,7 @@ pub struct ConversationTool {
     pub changes_cut: bool,
 }
 /// The most file changes one tool call lists. The schema states it again;
-/// `nessa-server/tests/conversation/agreement.rs` holds the two together.
+/// `nessa-conversation/tests/conversation/agreement.rs` holds the two together.
 pub const MAX_TOOL_CHANGES: usize = 16;
 /// The most bytes of one side of a file change a view carries, before or
 /// after. Past it the side is cut at a character boundary and the change says
@@ -598,7 +598,7 @@ pub struct ConversationToolChange {
     pub cut: bool,
 }
 /// The most bytes of a tool's structured result a view carries. The schema
-/// states it again; `nessa-server/tests/conversation/agreement.rs` holds the two together.
+/// states it again; `nessa-conversation/tests/conversation/agreement.rs` holds the two together.
 pub const MAX_STRUCTURED_CONTENT_BYTES: usize = 16384;
 /// An MCP tool's identity, copied from the SDK's validated `McpTool`, and the
 /// UI resource the tool declared, as its server last listed it.

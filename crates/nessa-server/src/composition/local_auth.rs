@@ -18,8 +18,7 @@ use crate::{
         application::{RecoveryAudit, RecoveryEvent, Workspaces},
         domain::Failure as WorkspaceFailure,
         infrastructure::{
-            worker_image, BoatProvider, ConfigBoatRuntimeSettings, FileAssignments,
-            RuntimeSettingsAudit, VaultSettings,
+            worker_image, BoatProvider, FileAssignments, RuntimeSettingsAudit, VaultSettings,
         },
     },
 };
@@ -289,7 +288,7 @@ pub(super) async fn product_state(
     .map_err(setup_error)?;
     #[cfg(unix)]
     let runtime_settings = {
-        Arc::new(ConfigBoatRuntimeSettings {
+        Arc::new(super::boat_runtime_settings::ConfigBoatRuntimeSettings {
             config: Arc::new(ConfigJson::new(
                 Arc::new(OsConfigFiles::new(super::runtime_config::config_path(
                     namespace,
@@ -581,6 +580,15 @@ pub(super) async fn product_state(
     )
     .await?;
     let caller_kinds = store.clone();
+    let catalogue_owner = store
+        .catalogue_owner()
+        .ok()
+        .and_then(|(organization, principal)| {
+            Some((
+                OrganizationId::new(organization).ok()?,
+                nessa_auth::domain::PrincipalId::new(principal).ok()?,
+            ))
+        });
     let mut product = ProductRouteState::new(
         gateway,
         organization,
@@ -611,6 +619,9 @@ pub(super) async fn product_state(
         PersistentSessions::open(&path, SystemClock.unix_seconds())
             .map_err(|cause| RunError::opening_browser_sessions(&path, cause))?
     }));
+    if let Some((organization, principal)) = catalogue_owner {
+        product = product.with_catalogue_owner(organization, principal);
+    }
     if let Some(runtime) = &webhooks {
         product = product.with_webhooks(runtime.clone());
     }
@@ -1351,7 +1362,7 @@ async fn conversations(
     let environment_tools = command_policy
         .as_ref()
         .map(super::environment_tools::EnvironmentTools::new);
-    let conversation_tools = super::conversation_tools::ConversationTools::new();
+    let conversation_tools = crate::mcp_servers::conversation_tools::ConversationTools::new();
     let background_tools = super::background_tools::BackgroundTools::new();
     let mut built_in: Vec<Arc<dyn BuiltInServer>> =
         vec![conversation_tools.clone(), background_tools.clone()];
@@ -1709,7 +1720,7 @@ async fn conversations(
             },
             Arc::new(RuntimeClock::new()),
         ));
-        let settings = crate::conversation::infrastructure::ConfigPoolSettings::new(
+        let settings = super::pool_settings::ConfigPoolSettings::new(
             config,
             root.join("audit").join("pool-settings"),
             Arc::new(SystemClock),
@@ -1785,6 +1796,15 @@ async fn conversations(
     service.bind_agent_tool_audit(Arc::new(
         DurableAgentToolAudit::new(root.join("audit").join("agent-tools"), clock.clone())
             .map_err(|error| RunError::Agent(error.to_string()))?,
+    ));
+    // Every change an agent or a CLI asks a desktop window to make is
+    // recorded before the window is asked, and what came of it after.
+    service.bind_window_control_audit(Arc::new(
+        crate::conversation::infrastructure::DurableWindowControlAudit::new(
+            root.join("audit").join("window-control"),
+            clock.clone(),
+        )
+        .map_err(|error| RunError::Agent(error.to_string()))?,
     ));
     // Changes made from Settings (an app no longer always allowed, a
     // channel moved) are recorded before they are reported.
@@ -2239,20 +2259,6 @@ impl CredentialAdmin for LocalAdmin {
             }
             Ok(outcome)
         })
-    }
-}
-
-impl crate::agents::application::CallerKindSource
-    for nessa_auth::adapters::local::LocalCredentialStore
-{
-    fn caller_kind(&self, principal_id: &str) -> &'static str {
-        match self.principal_kind(principal_id) {
-            Ok(Some(nessa_auth::domain::PrincipalKind::Human)) => "person",
-            Ok(Some(nessa_auth::domain::PrincipalKind::Agent)) => "agent",
-            Ok(Some(nessa_auth::domain::PrincipalKind::Integration)) => "integration",
-            Ok(Some(nessa_auth::domain::PrincipalKind::Gateway)) => "gateway",
-            _ => "unknown",
-        }
     }
 }
 

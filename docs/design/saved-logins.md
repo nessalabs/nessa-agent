@@ -110,7 +110,7 @@ Codex is not carried.
 
 ## Checked by
 
-Unit tests under `crates/nessa-server/tests/logins`, `env_serve`,
+Unit tests under `crates/nessa-gateway/tests/logins`, `env_serve`,
 `conversation/ssh_environment.rs` and `product/socket/logins.rs`; the
 conversation stress step `login` (a real `nessa env dial` worker started
 signed out, off then on, its launches recorded).

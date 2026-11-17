@@ -357,7 +357,7 @@ fn main() {
                 if let WindowEvent::DragDrop(drag) = event {
                     channel_paths::dropped_on_desktop(window.app_handle(), drag);
                 }
-                // A call's pill floats only while this window is not in front.
+                // Whether this window is in front is half of whether a call's pill floats.
                 if let WindowEvent::Focused(in_front) = event {
                     let app = window.app_handle();
                     if let Some(deps) = app.try_state::<HostDependencies>() {

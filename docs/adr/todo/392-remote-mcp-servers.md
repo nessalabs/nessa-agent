@@ -95,8 +95,8 @@ Composition owns actual endpoint/network/storage adapters and their startup/drai
 The current #391 implementation is **stdio and name-addressed**. Its stored
 shape is `{name, command, args?, enabled?, env?}`; remote identities are proposed
 here, not already present. Extend
-[`configured_server.rs`](../../../crates/nessa-server/src/mcp_servers/domain/configured_server.rs),
-[`stored_servers.rs`](../../../crates/nessa-server/src/mcp_servers/infrastructure/stored_servers.rs)
+[`configured_server.rs`](../../../crates/nessa-conversation/src/mcp_servers/domain/configured_server.rs),
+[`stored_servers.rs`](../../../crates/nessa-conversation/src/mcp_servers/infrastructure/stored_servers.rs)
 and the existing `LiveServerSet` port together. Preserve stdio's absent-field
 defaults, duplicate-env detection, kept-value semantics, base/per-server env
 composition, managed `nessa` reservation and name-based save/remove/inspect.

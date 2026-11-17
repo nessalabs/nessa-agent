@@ -1033,3 +1033,112 @@ fn a_purge_receipt_in_the_presence_snapshot_is_a_tombstone_without_a_row() {
         CataloguePresence::Tombstone
     );
 }
+
+#[test]
+fn selection_is_atomic_with_page_progress_and_survives_interruption() {
+    let root = tempfile::tempdir().unwrap();
+    let path = cache_path(root.path(), "selection.sqlite3");
+    let mut first = cache(&path);
+    let pass = start(&mut first, 1);
+    CatalogueStore::apply_page(
+        &mut first.selected_catalogue(Some(&|_| false)),
+        page(pass, vec![value(1, false)]),
+    )
+    .unwrap();
+    // A process exit or failed next network request cannot expose this entry.
+    drop(first);
+    let mut next = cache(&path);
+    assert_eq!(count(&next, "catalogue_entries"), 0);
+    assert_eq!(
+        CatalogueStore::progress(&mut next, &catalogue_scope())
+            .unwrap()
+            .unwrap()
+            .completed,
+        1
+    );
+    let pass = start(&mut next, 2);
+    let before = CatalogueStore::progress(&mut next, &catalogue_scope()).unwrap();
+    let mut invalid = value(2, false);
+    invalid.payload = b"{broken".to_vec();
+    assert_eq!(
+        CatalogueStore::apply_page(
+            &mut next.selected_catalogue(Some(&|_| false)),
+            page(pass.clone(), vec![invalid])
+        ),
+        Err(CatalogueStoreError::Failed)
+    );
+    assert_eq!(
+        CatalogueStore::progress(&mut next, &catalogue_scope()).unwrap(),
+        before
+    );
+    CatalogueStore::apply_page(
+        &mut next.selected_catalogue(Some(&|_| true)),
+        page(pass, vec![value(2, false)]),
+    )
+    .unwrap();
+    assert_eq!(count(&next, "catalogue_entries"), 1);
+    next.retain_catalogue(&catalogue_scope(), &|_| false)
+        .unwrap();
+    assert_eq!(count(&next, "catalogue_entries"), 0);
+    assert_eq!(count(&next, "catalogue_deletions"), 0);
+    assert_eq!(
+        CatalogueStore::progress(&mut next, &catalogue_scope())
+            .unwrap()
+            .unwrap()
+            .completed,
+        2
+    );
+}
+
+#[test]
+fn interrupted_partial_walk_never_persists_excluded_metadata() {
+    let root = tempfile::tempdir().unwrap();
+    let path = cache_path(root.path(), "partial.sqlite3");
+    let mut first = cache(&path);
+    let pass = start(&mut first, 2);
+    let kept = value(1, false);
+    let mut excluded = value(2, false);
+    excluded.manifest.key.creation = 2;
+    excluded.manifest.key.id = id("00000000-0000-0000-0000-000000000002");
+    let mut payload: Value = serde_json::from_slice(&excluded.payload).unwrap();
+    payload["id"] = json!(excluded.manifest.key.id.as_str());
+    excluded.payload = serde_json::to_vec(&payload).unwrap();
+    let entries = vec![kept, excluded];
+    let plan = CataloguePagePlan::new(
+        ManifestPage {
+            request: ManifestRequest {
+                pass,
+                max_entries: 2,
+            },
+            entries: entries.iter().map(|v| v.manifest.clone()).collect(),
+            has_more: true,
+        },
+        entries,
+        vec![],
+    )
+    .unwrap();
+    CatalogueStore::apply_page(
+        &mut first.selected_catalogue(Some(&|entry| entry == scope().stream().as_str())),
+        plan,
+    )
+    .unwrap();
+    drop(first);
+    let mut reopened = cache(&path);
+    assert_eq!(count(&reopened, "catalogue_entries"), 1);
+    assert!(reopened
+        .catalogue_entry(
+            &catalogue_scope(),
+            &id("00000000-0000-0000-0000-000000000002")
+        )
+        .unwrap()
+        .is_none());
+    assert!(reopened
+        .catalogue_entry(&catalogue_scope(), scope().stream())
+        .unwrap()
+        .is_some());
+    assert!(CatalogueStore::progress(&mut reopened, &catalogue_scope())
+        .unwrap()
+        .unwrap()
+        .active
+        .is_some());
+}

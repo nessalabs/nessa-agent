@@ -16,25 +16,25 @@ sources:
   - crates/nessa-auth/src/adapters/local/registry/pairing/owner_phone.rs
   - crates/nessa-server/src/composition/local_auth.rs
   - crates/nessa-server/src/composition/root.rs
-  - crates/nessa-server/src/core/shutdown.rs
-  - crates/nessa-server/src/webhooks/infrastructure/runtime.rs
-  - crates/nessa-server/src/product/read_access.rs
-  - crates/nessa-server/src/product/state.rs
+  - crates/nessa-gateway/src/core/shutdown.rs
+  - crates/nessa-gateway/src/webhooks/infrastructure/runtime.rs
+  - crates/nessa-gateway/src/product/read_access.rs
+  - crates/nessa-gateway/src/product/state.rs
   - crates/nessa-server/tests/webhooks/infrastructure/product.rs
-  - crates/nessa-server/src/conversation/application/share_grants.rs
-  - crates/nessa-server/src/conversation/infrastructure/store/share_grants.rs
-  - crates/nessa-server/src/conversation/infrastructure/access_policy/cedar/readers.cedar
-  - crates/nessa-server/src/webhooks/application/share.rs
+  - crates/nessa-conversation/src/application/share_grants.rs
+  - crates/nessa-conversation/src/infrastructure/store/share_grants.rs
+  - crates/nessa-conversation/src/infrastructure/access_policy/cedar/readers.cedar
+  - crates/nessa-gateway/src/webhooks/application/share.rs
   - crates/nessa-webhooks/src/application/registration.rs
   - crates/nessa-webhooks/src/infrastructure/outbox/registry.rs
-  - crates/nessa-server/tests/webhooks/infrastructure/share.rs
-  - crates/nessa-server/src/webhooks/application/admission.rs
-  - crates/nessa-server/tests/webhooks/infrastructure/admission.rs
+  - crates/nessa-gateway/tests/webhooks/infrastructure/share.rs
+  - crates/nessa-gateway/src/webhooks/application/admission.rs
+  - crates/nessa-gateway/tests/webhooks/infrastructure/admission.rs
   - crates/nessa-server/tests/composition/local_auth.rs
-  - crates/nessa-server/tests/conversation/store.rs
-  - crates/nessa-server/src/webhooks/infrastructure/runtime/delivery.rs
+  - crates/nessa-conversation/tests/conversation/store.rs
+  - crates/nessa-gateway/src/webhooks/infrastructure/runtime/delivery.rs
   - crates/nessa-server/tests/webhooks/infrastructure/product_delivery.rs
-  - crates/nessa-server/src/conversation/infrastructure/store.rs
+  - crates/nessa-conversation/src/infrastructure/store.rs
 diagramLinks: {}
 diagramDetails:
   - diagram: 0
@@ -133,10 +133,10 @@ separately owns startup, source replay, Sending and actual response settlement;
 
 ## Evidence
 
-- [Actual registry, grant and Cedar integration](https://github.com/nessalabs/nessa-agent/blob/d4b6e6cba2dd345c129d00f4115d272944f0f079/crates/nessa-server/tests/webhooks/infrastructure/admission.rs): one-chat filtering, unshare, stale epoch after re-share, credential revoke, expiry while waiting and no other Cedar authority.
+- [Actual registry, grant and Cedar integration](https://github.com/nessalabs/nessa-agent/blob/d4b6e6cba2dd345c129d00f4115d272944f0f079/crates/nessa-gateway/tests/webhooks/infrastructure/admission.rs): one-chat filtering, unshare, stale epoch after re-share, credential revoke, expiry while waiting and no other Cedar authority.
 - [Composed revoke owner](https://github.com/nessalabs/nessa-agent/blob/d4b6e6cba2dd345c129d00f4115d272944f0f079/crates/nessa-server/tests/composition/local_auth.rs): observe the queued writer, abort its observer, then confirm publication after hold release.
 - [Registry regressions](https://github.com/nessalabs/nessa-agent/blob/d4b6e6cba2dd345c129d00f4115d272944f0f079/crates/nessa-auth/src/adapters/local/registry.rs): a hold prevents canonical registry reopening; read-only identity and caller-kind facts remain available.
-- [Principal grant regression](https://github.com/nessalabs/nessa-agent/blob/d4b6e6cba2dd345c129d00f4115d272944f0f079/crates/nessa-server/tests/conversation/store.rs): unshare waits, and a re-share cannot revive the old epoch.
+- [Principal grant regression](https://github.com/nessalabs/nessa-agent/blob/d4b6e6cba2dd345c129d00f4115d272944f0f079/crates/nessa-conversation/tests/conversation/store.rs): unshare waits, and a re-share cannot revive the old epoch.
 
 Historical d4b6e6cb source checks passed209 auth tests,29 webhook tests, the principal grant
 regression and the composed revoke regression. These are admission and isolated
@@ -351,4 +351,4 @@ and default/raised stress acceptance remain pending.
 
 ## Bounded rule model
 
-Owns credential-before-grant fence acquisition, checked admission, absolute expiry recheck and permanent cancellation. Credential/principal/tenant/audience and exact grant epoch comparisons are represented by successful gate actions; Cedar policy contents and physical metadata joins remain outside this model. This finite abstraction checks safety only. It does not execute or verify the implementation, promise eventual completion, or qualify external effects. Existing source checkpoints and historical test receipts retain their earlier scope. The scoped model review inspected `crates/nessa-server/src/webhooks/application/admission.rs`.
+Owns credential-before-grant fence acquisition, checked admission, absolute expiry recheck and permanent cancellation. Credential/principal/tenant/audience and exact grant epoch comparisons are represented by successful gate actions; Cedar policy contents and physical metadata joins remain outside this model. This finite abstraction checks safety only. It does not execute or verify the implementation, promise eventual completion, or qualify external effects. Existing source checkpoints and historical test receipts retain their earlier scope. The scoped model review inspected `crates/nessa-gateway/src/webhooks/application/admission.rs`.

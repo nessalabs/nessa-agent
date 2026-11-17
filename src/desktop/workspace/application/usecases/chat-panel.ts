@@ -72,6 +72,14 @@ export function openWidgetInPanel(
   }
 }
 
+/** Sets the right panel open or closed, as its toggle does (`panelSet`). */
+export function setPanel(
+  state: WorkspaceState,
+  { open }: { open: boolean },
+): WorkspaceState {
+  return { ...state, panelSet: { count: state.panelSet.count + 1, open } }
+}
+
 /** Brings `widget`'s tab to the front of `sessionId`'s panel; nothing when it has none. */
 export function showPanelTab(
   state: WorkspaceState,

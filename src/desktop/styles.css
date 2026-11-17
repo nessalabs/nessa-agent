@@ -526,12 +526,6 @@ html:not(.dark) [data-surface] {
   content-visibility: hidden;
 }
 
-/* A column change paints its boxes without also painting scene text that is
-   already laid out. The next frame shows it again. */
-.split-panes-grid[data-split-painting] .desktop-night-scene[data-scene-complete] {
-  content-visibility: hidden;
-}
-
 /*
  * A chosen picture fills the same box as the scene, covering it, and blends in
  * the same way: fading in under the titlebar and out toward both sides and
@@ -1100,7 +1094,9 @@ html:not(.dark) [data-surface] {
 .desktop-composer {
   container-type: inline-size;
   border-radius: 24px;
-  padding: 18px 14px 12px 22px;
+  /* Logical sides, so a notice's mark hangs in the start padding either way. */
+  padding-block: 18px 12px;
+  padding-inline: 22px 14px;
   /* Lit from above: a faint glow across the top, the way light sits on glass. */
   background:
     radial-gradient(
@@ -1120,6 +1116,47 @@ html:not(.dark) [data-surface] {
     var(--desktop-composer-ring, 0 0 0 0 transparent),
     0 1px 2px rgb(0 0 0 / 20%),
     0 32px 80px -32px rgb(0 0 0 / 75%);
+}
+
+/*
+ * The composer folded to a circle, its model's mark on it: shown only in a
+ * quiet pane with nothing typed (`workspace/ui/panes/conversation.css`).
+ */
+.desktop-composer-wake {
+  display: none;
+  width: 100%;
+  height: 100%;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: inherit;
+  background: none;
+  color: var(--desktop-muted);
+  cursor: pointer;
+}
+
+.desktop-composer-wake:focus-visible {
+  outline: var(--desktop-focus-outline);
+  outline-offset: 2px;
+}
+
+/* On the circle the mark stands alone, as in the model chip: the circle is its tile. */
+.desktop-composer-wake .desktop-provider-mark {
+  width: 18px;
+  height: 18px;
+  flex: none;
+  background: none;
+  box-shadow: none;
+}
+
+.desktop-composer-wake .desktop-provider-mark svg {
+  width: 100%;
+  height: 100%;
+}
+
+.desktop-composer-wake > svg {
+  width: 16px;
+  height: 16px;
 }
 
 .desktop-composer textarea {
@@ -1322,10 +1359,40 @@ html:not(.dark) [data-surface] {
   outline-offset: 2px;
 }
 
-/* A refused access change, said on its own line above the controls. */
+/*
+ * What the composer says of the draft, its model or its access, on a quiet
+ * line of its own above the controls. Its words start where the draft's text
+ * starts; a warning's mark hangs in the padding to their left, and a neutral
+ * notice draws no mark at all, so the line reads as a hint, not a list item.
+ */
 .desktop-composer-notice {
   display: flex;
-  margin-top: 8px;
+  margin-top: 6px;
+  font-size: var(--desktop-text-footnote);
+  line-height: 1.5;
+  color: var(--muted-foreground);
+  animation: desktop-composer-notice-in var(--desktop-fast) ease-out;
+}
+
+.desktop-composer-notice[data-tone="warning"] {
+  color: var(--foreground);
+}
+
+.desktop-composer-notice [data-slot="status-label-mark"] {
+  /* The mark is 12px and sits 6px before the words. */
+  margin-inline-start: -18px;
+}
+
+@keyframes desktop-composer-notice-in {
+  from {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .desktop-composer-notice {
+    animation: none;
+  }
 }
 
 .desktop-composer-row {
@@ -1769,10 +1836,22 @@ html:not(.dark) .desktop-tooltip {
   height: 62%;
 }
 
+/*
+ * A model row's tile fills the row's icon slot (the menu's 16px icon,
+ * `menu-recipe` in nessa_ui) and never gives up width to the row, or it
+ * squeezes into a tall sliver.
+ */
 [data-slot="searchable-listbox-option"] .desktop-provider-mark {
-  width: 28px;
-  height: 28px;
-  font-size: 13px;
+  width: 16px;
+  height: 16px;
+  flex: none;
+  /* A provider with no mark shows its capitals, as small as the tile allows. */
+  font-size: 7px;
+}
+
+[data-slot="searchable-listbox-option"] .desktop-provider-mark svg {
+  width: 75%;
+  height: 75%;
 }
 
 [data-slot="model-picker-provider-tabs"] .desktop-provider-mark {

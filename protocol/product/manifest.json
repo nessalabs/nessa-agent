@@ -417,6 +417,11 @@
       "grant": "credential.manage",
       "lane": "requests"
     },
+    "peer.follow": {
+      "params": "PeerFollowParams",
+      "grant": "credential.manage",
+      "lane": "requests"
+    },
     "conversation.subscribe": {
       "params": "ConversationSubscribeParams",
       "grant": "conversation.write",
@@ -459,6 +464,21 @@
     },
     "workspace.publish": {
       "params": "WorkspacePublishParams",
+      "grant": "conversation.write",
+      "lane": "requests"
+    },
+    "workspace.answer": {
+      "params": "WorkspaceAnswerParams",
+      "grant": "conversation.write",
+      "lane": "requests"
+    },
+    "workspace.arrange": {
+      "params": "WorkspaceArrangeParams",
+      "grant": "conversation.write",
+      "lane": "requests"
+    },
+    "workspace.closePane": {
+      "params": "WorkspaceClosePaneParams",
       "grant": "conversation.write",
       "lane": "requests"
     },
@@ -631,6 +651,7 @@
     "agents.listed": "AgentsListed",
     "conversation.subscriptionEnded": "ConversationSubscriptionEnded",
     "permission.reviewWaiting": "PermissionReviewWaiting",
+    "workspace.command": "WorkspaceCommand",
     "conversation.events": "ConversationEvents"
   },
   "handshakeMethod": "session.authenticate"

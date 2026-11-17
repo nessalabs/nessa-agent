@@ -1,6 +1,6 @@
 /**
  * A realtime voice provider, on this machine, for the stress check's `voice`
- * step: the one HTTP call the gateway makes (`crates/nessa-server/src/voice`)
+ * step: the one HTTP call the gateway makes (`crates/nessa-gateway/src/voice`)
  * answered as OpenAI documents it, and the call itself as a WebSocket that
  * speaks the same realtime events with no audio (the window's `scripted`
  * transport).
@@ -164,6 +164,8 @@ export async function startFakeRealtime({ key = FAKE_VOICE_KEY } = {}) {
     ask,
     /** Whether a call is open now. */
     open: () => socket !== null,
+    /** Drops the open call, as a lost connection would. */
+    drop: () => socket?.terminate(),
     /** How many calls were opened. */
     calls: () => calls,
     /** The text of every system message the window gave the voice. */

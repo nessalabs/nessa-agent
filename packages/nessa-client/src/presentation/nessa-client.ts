@@ -24,6 +24,7 @@ import { createGithubApi, type GithubApi } from "./github-api.js"
 import { createVoiceApi, type VoiceApi } from "./voice-api.js"
 import { createLoginsApi, type LoginsApi } from "./logins-api.js"
 import { createPairingApi, type PairingApi } from "./pairing-api.js"
+import { createPeerApi, type PeerApi } from "./peer-api.js"
 import { createAuthApi, type AuthApi } from "./auth-api.js"
 import { createCatalogueReadApi, type CatalogueReadApi } from "./catalogue-read-api.js"
 import { createRecordReadApi, type RecordReadApi } from "./record-read-api.js"
@@ -114,6 +115,8 @@ export class NessaClient {
   readonly credentials: CredentialApi
   /** Owner pairing: create a one-use code, and approve, deny or cancel an invitation. */
   readonly pairing: PairingApi
+  /** This gateway's peers: enroll, choose which granted chats to keep, and list them. */
+  readonly peer: PeerApi
   /** The gateway's GitHub sign-in: read it, start it, cancel it, or forget it. */
   readonly github: GithubApi
   /** The gateway's realtime voice key, and the voice calls it starts. */
@@ -153,6 +156,7 @@ export class NessaClient {
     this.apps = createAppsApi(wire)
     this.credentials = createCredentialApi(wire, newRequestId)
     this.pairing = createPairingApi(wire)
+    this.peer = createPeerApi(wire)
     this.github = createGithubApi(wire)
     this.voice = createVoiceApi(wire)
     this.logins = createLoginsApi(wire)

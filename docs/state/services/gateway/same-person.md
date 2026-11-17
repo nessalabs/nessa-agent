@@ -7,14 +7,14 @@ parent: gateway
 summary: An immutable invitation choice adds credential-bound attribution after activation, without granting access.
 sourceRevision: "311ad40ca846a09689e6ccaea29c2cebdcfe758e"
 sources:
-  - crates/nessa-server/src/product/pairing.rs
+  - crates/nessa-gateway/src/product/pairing.rs
   - packages/nessa-client/src/protocol/pairing-validate.ts
   - packages/nessa-client/src/presentation/pairing-api.test.ts
   - crates/nessa-server/src/composition/local_auth.rs
   - protocol/product/v1.json
   - crates/nessa-server/src/composition/auth_command.rs
-  - crates/nessa-server/src/cli/application/call.rs
-  - crates/nessa-server/src/cli/infrastructure/gateway.rs
+  - crates/nessa-gateway/src/cli/application/call.rs
+  - crates/nessa-gateway/src/cli/infrastructure/gateway.rs
   - crates/nessa-auth/src/domain/pairing/value_objects/person_link.rs
   - crates/nessa-auth/src/domain/pairing/value_objects/values.rs
   - crates/nessa-auth/src/application/pairing/person_links.rs
@@ -22,15 +22,15 @@ sources:
   - crates/nessa-auth/src/adapters/local/registry/pairing/person_links.rs
   - crates/nessa-auth/src/adapters/local/registry/pairing/enrollment.rs
   - crates/nessa-device-pairing/src/application/activation.rs
-  - crates/nessa-server/src/conversation/infrastructure/store/person_links.rs
-  - crates/nessa-server/src/conversation/infrastructure/store/grant_database.rs
+  - crates/nessa-conversation/src/infrastructure/store/person_links.rs
+  - crates/nessa-conversation/src/infrastructure/store/grant_database.rs
   - crates/nessa-server/tests/device_pairing/infrastructure/person_links.rs
-  - crates/nessa-server/tests/conversation/grant_database.rs
+  - crates/nessa-conversation/tests/conversation/grant_database.rs
   - crates/nessa-peer-gateways/src/infrastructure/records.rs
   - crates/nessa-server/tests/device_pairing/mounted/same_person.rs
   - crates/nessa-server/tests/device_pairing/owner_routes.rs
   - crates/nessa-server/tests/peer_gateways/same_person.rs
-  - crates/nessa-server/tests/backup/deletion.rs
+  - crates/nessa-gateway/tests/backup/deletion.rs
 diagramLinks: {}
 ---
 # Pair a gateway as the same person

@@ -117,6 +117,32 @@ test("a crate change reaches that crate and everything that depends on it", () =
   assert.equal(storage.sdk, true)
 })
 
+test("a crate that reads another crate's files by path is reached by them", () => {
+  const reading = workspaceGraph([
+    { dir: "crates/nessa-sdk", manifest: manifest("nessa-sdk"), text: "" },
+    {
+      dir: "crates/nessa-conversation",
+      manifest: manifest("nessa-conversation", ["nessa-sdk"]),
+      text: `"../../nessa-server/src/devices/infrastructure/machine.rs"`,
+    },
+    {
+      dir: "crates/nessa-server",
+      manifest: manifest("nessa-server", ["nessa-conversation"]),
+      text: "",
+    },
+  ])
+  const change = planChange(
+    [
+      {
+        filename: "crates/nessa-server/src/devices/infrastructure/machine.rs",
+        patch: "+ok",
+      },
+    ],
+    reading,
+  )
+  assert.deepEqual(change.rustPackages, ["nessa-server", "nessa-conversation"])
+})
+
 test("a renamed file counts at both its old and new path", () => {
   const moved = plan({
     filename: "crates/nessa-server/src/a.rs",

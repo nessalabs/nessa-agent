@@ -7,17 +7,17 @@ summary: "A conversation can change to a supported model on the same provider se
 sourceRevision: "aa91831b5331d3461969f6a7be723a6d3325f29b"
 parent: "sdk-runtime"
 sources:
-  - "crates/nessa-server/src/conversation/application/service.rs"
-  - "crates/nessa-server/src/conversation/application/service/model_changes.rs"
+  - "crates/nessa-conversation/src/application/service.rs"
+  - "crates/nessa-conversation/src/application/service/model_changes.rs"
   - "src/desktop/workspace/adapters/store/model-commands.ts"
   - "src/desktop/workspace/adapters/store/session-commands.ts"
-  - "crates/nessa-server/tests/conversation/model_changes.rs"
+  - "crates/nessa-conversation/tests/conversation/model_changes.rs"
   - "src/desktop/workspace/adapters/store/model-commands.test.ts"
-  - "crates/nessa-server/src/conversation/infrastructure/mode_audit.rs"
+  - "crates/nessa-conversation/src/infrastructure/mode_audit.rs"
   - "crates/nessa-server/src/composition/current_agent.rs"
   - "crates/nessa-sdk/src/application/agent_execution/agents/agent.rs"
   - "crates/nessa-sdk/src/infrastructure/acp/sessions/thought_level.rs"
-  - "crates/nessa-server/tests/conversation/application.rs"
+  - "crates/nessa-conversation/tests/conversation/application.rs"
   - "crates/nessa-server/tests/conversation/launch_configuration.rs"
   - "crates/nessa-sdk/tests/application/agent_execution/agents/effort.rs"
   - "crates/nessa-sdk/tests/application/agent_execution/providers/operation_cap\
@@ -78,11 +78,11 @@ stateDiagram-v2
 
 The model journal binds the original conversation, request, actor and before/after identities. An exact retry reads or recovers that request rather than issuing another native control. The SDK retains the active turn's execution binding separately from the acknowledged selection, so a next-turn change does not rewrite the running turn's model. New admissions use the selected model's limits; retries retain their original complete submitted input.
 
-An applied model change invalidates the causal usage limit and reconciles its [scheduled continuation](usage-limit-continuation.md) before completion. Reasoning effort remains a separate SDK capability; this page does not claim a product effort control. The [model journal](../../../../../crates/nessa-server/src/conversation/application/service/model_changes.rs) and [desktop staging regressions](../../../../../src/desktop/workspace/adapters/store/model-commands.test.ts) own these boundaries.
+An applied model change invalidates the causal usage limit and reconciles its [scheduled continuation](usage-limit-continuation.md) before completion. Reasoning effort remains a separate SDK capability; this page does not claim a product effort control. The [model journal](../../../../../crates/nessa-conversation/src/application/service/model_changes.rs) and [desktop staging regressions](../../../../../src/desktop/workspace/adapters/store/model-commands.test.ts) own these boundaries.
 
 ## Further reading
 
-[Source](../../../../../crates/nessa-server/src/conversation/application/service.rs) · [Related source](../../../../../crates/nessa-server/src/conversation/infrastructure/mode_audit.rs) · [Related tests](../../../../../crates/nessa-server/tests/conversation/application.rs)
+[Source](../../../../../crates/nessa-conversation/src/application/service.rs) · [Related source](../../../../../crates/nessa-conversation/src/infrastructure/mode_audit.rs) · [Related tests](../../../../../crates/nessa-conversation/tests/conversation/application.rs)
 
 ## Model coverage
 

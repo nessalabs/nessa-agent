@@ -67,6 +67,7 @@ test("every required step appears as often as its number says", () => {
   assert.equal(count("restore"), knobs.restores)
   assert.equal(count("huddle"), knobs.huddles)
   assert.equal(count("webhook"), knobs.webhooks)
+  assert.equal(count("sharedChat"), knobs.sharedChats)
   assert.equal(count("reviews"), 1)
   assert.equal(count("long"), 1)
   assert.equal(steps.find((step) => step.kind === "long").turns, knobs.long)
@@ -168,6 +169,7 @@ test("the legacy seed preserves the existing non-model work's relative order", (
         backgroundTasks: "0",
         vmBackgroundTasks: "0",
         windows: "0",
+        controls: "0",
         linkings: "0",
         mcpServers: "0",
         rails: "0",
@@ -216,6 +218,7 @@ test("the legacy seed preserves the existing non-model work's relative order", (
     (step, index) =>
       step.kind !== "model" &&
       step.kind !== "pairedCatalogue" &&
+      step.kind !== "sharedChat" &&
       !(step.kind === "switch" && steps[index + 1]?.after !== "switch"),
   )
   assert.deepEqual(

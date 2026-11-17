@@ -385,6 +385,18 @@ export function transcriptRetried(
     : { ...state, transcriptFailures }
 }
 
+/**
+ * Something began using `sessionId` off screen, or with null stopped: a
+ * voice call talks to it. Its conversation is then read and kept as a shown
+ * one is (`shownIds`). The same state when nothing changes.
+ */
+export function sessionHeld(
+  state: WorkspaceState,
+  { sessionId }: { sessionId: string | null },
+): WorkspaceState {
+  return state.heldSession === sessionId ? state : { ...state, heldSession: sessionId }
+}
+
 /** The sessions shown in a pane that are listed, in pane order. */
 function sessionsInPanes(state: WorkspaceState): SessionSummary[] {
   return paneIds(state.panes).flatMap((sessionId) => sessionOf(state, sessionId) ?? [])

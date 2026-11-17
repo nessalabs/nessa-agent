@@ -129,6 +129,12 @@ export interface WorkspaceState {
    */
   readonly transcripts: Readonly<Record<string, Transcript>>
   /**
+   * The session something is using while no pane need show it — a voice
+   * call talking to it — or null. Its conversation is read and kept as a
+   * shown one is, so what uses it sees every change.
+   */
+  readonly heldSession: string | null
+  /**
    * The newest conversation revision held, by listed session — kept when its
    * content is let go (`model/retention.ts`), so a read answered after that
    * with an older conversation cannot bring the old one back. Let go with the
@@ -210,6 +216,13 @@ export interface WorkspaceState {
    * whether it is open stays the window's own (`use-workspace-window.ts`).
    */
   readonly panelAsked: number
+  /**
+   * The last time something set the right panel open or closed on purpose,
+   * as an agent's `arrange_window` does: the window sets it when `count`
+   * changes. Unlike `panelAsked` it moves no caret. Whether the panel is
+   * drawn stays the window's (`panelOpen`).
+   */
+  readonly panelSet: { readonly count: number; readonly open: boolean }
   readonly view: SessionView
   /**
    * What fills the content region: the panes, the Agents overview over
@@ -430,6 +443,7 @@ export const initialWorkspace: WorkspaceState = {
   sessions: {},
   drafts: {},
   transcripts: {},
+  heldSession: null,
   conversationRevisions: {},
   outbox: {},
   transcriptFailures: {},
@@ -445,6 +459,7 @@ export const initialWorkspace: WorkspaceState = {
   panels: {},
   panelled: [],
   panelAsked: 0,
+  panelSet: { count: 0, open: false },
   view: { channelId: "" },
   content: "panes",
   overview: { selected: null, filter: defaultFilter, group: null },
@@ -581,12 +596,13 @@ export function overviewShownIds(state: WorkspaceState): string[] {
 }
 
 /**
- * The sessions on screen whose conversations the window keeps whatever
- * their age: the panes' (drafts among them) and the overview's, each
- * bounded.
+ * The sessions whose conversations the window keeps whatever their age:
+ * those on screen — the panes' (drafts among them) and the overview's, each
+ * bounded — and the one held (`heldSession`).
  */
 export function shownIds(state: WorkspaceState): Set<string> {
-  return new Set([...paneIds(state.panes), ...overviewShownIds(state)])
+  const held = state.heldSession === null ? [] : [state.heldSession]
+  return new Set([...paneIds(state.panes), ...overviewShownIds(state), ...held])
 }
 
 /**

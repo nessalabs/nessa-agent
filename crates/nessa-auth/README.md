@@ -188,7 +188,7 @@ Independent changes can target these modules after agreeing on their ports:
 | Local verifier/store (implemented) | `adapters/local/` | Evidence verification, durable lifecycle and coherent snapshots |
 | Credential lifecycle (implemented) | `application/credential_admin.rs` and `adapters/local/` | Durable issuance, idempotent retries, revocation, owner recovery, and committed transition evidence |
 | Policy evolution | Existing `adapters/cedar/` | Nessa-authored policies and authoritative resource inputs |
-| Gateway integration (implemented) | `nessa-server/src/product/` | Verified session, current-state policy checks and bounded socket lifetime |
+| Gateway integration (implemented) | `nessa-gateway/src/product/` | Verified session, current-state policy checks and bounded socket lifetime |
 | Hosted identity | Future managed adapter | Verified binding mapping and authority/freshness rules |
 
 One change should own a shared port/schema edit; coordinate that contract before

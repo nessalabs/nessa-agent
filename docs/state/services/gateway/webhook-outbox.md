@@ -9,7 +9,7 @@ summary: Private intents, canonical cursors and causal delivery outcomes compose
 sourceRevision: "4b33de21f7fd68df83e308de4134ef1dda82f01f"
 parent: gateway
 sources:
-  - crates/nessa-server/src/conversation/infrastructure/store/share_grants.rs
+  - crates/nessa-conversation/src/infrastructure/store/share_grants.rs
   - crates/nessa-server/tests/webhooks/infrastructure/product_delivery/discovery.rs
   - crates/nessa-webhooks/src/domain/value_objects/registration_lifecycle.rs
   - crates/nessa-webhooks/tests/domain/registration_lifecycle.rs
@@ -52,7 +52,7 @@ sources:
   - crates/nessa-webhooks/src/infrastructure/outbox/source_reset/mod.rs
   - crates/nessa-webhooks/src/infrastructure/outbox/source_reset/store.rs
   - crates/nessa-webhooks/src/infrastructure/outbox/source_reset/owner.rs
-  - crates/nessa-server/src/product/webhook_reset.rs
+  - crates/nessa-gateway/src/product/webhook_reset.rs
   - crates/nessa-webhooks/tests/infrastructure/outbox/owner_reset.rs
   - crates/nessa-server/tests/webhooks/infrastructure/product_delivery/owner_reset.rs
   - crates/nessa-server/tests/webhooks/infrastructure/product_delivery/owner_query.rs
@@ -66,7 +66,7 @@ sources:
   - crates/nessa-webhooks/tests/infrastructure/outbox/cleanup.rs
   - crates/nessa-webhooks/tests/infrastructure/outbox.rs
   - crates/nessa-webhooks/tests/infrastructure/outbox/source_reset.rs
-  - crates/nessa-server/src/webhooks/infrastructure/runtime/delivery.rs
+  - crates/nessa-gateway/src/webhooks/infrastructure/runtime/delivery.rs
   - crates/nessa-server/tests/webhooks/infrastructure/product_delivery.rs
   - crates/nessa-server/src/composition/root.rs
   - crates/nessa-server/src/composition/local_auth.rs
@@ -736,4 +736,4 @@ corrected remote platform or browser-stress pass.
 
 ## Bounded rule model
 
-Owns one attempt's durable Sending publication before POST, retained observation before outcome callbacks and cold unresolved Sending becoming Unknown. It deliberately excludes queue selection, cursor resets, retention cleanup, retries and registration stop histories; these are separate safety obligations, not proved by this model. This finite abstraction checks safety only. It does not execute or verify the implementation, promise eventual completion, or qualify external effects. Existing source checkpoints and historical test receipts retain their earlier scope. The scoped model review inspected `crates/nessa-server/src/webhooks/infrastructure/runtime/delivery.rs`, `crates/nessa-webhooks/src/domain/value_objects/delivery.rs`.
+Owns one attempt's durable Sending publication before POST, retained observation before outcome callbacks and cold unresolved Sending becoming Unknown. It deliberately excludes queue selection, cursor resets, retention cleanup, retries and registration stop histories; these are separate safety obligations, not proved by this model. This finite abstraction checks safety only. It does not execute or verify the implementation, promise eventual completion, or qualify external effects. Existing source checkpoints and historical test receipts retain their earlier scope. The scoped model review inspected `crates/nessa-gateway/src/webhooks/infrastructure/runtime/delivery.rs`, `crates/nessa-webhooks/src/domain/value_objects/delivery.rs`.

@@ -24,22 +24,15 @@ const VaultContext = createContext({
  * cryptographic admission. Native composition supplies its app-owned source. */
 export function VaultProvider({
   source,
-  setup = false,
   autoUnlock = false,
   children,
 }: {
   source: VaultSource | undefined
-  setup?: boolean
   autoUnlock?: boolean
   children: ReactNode
 }) {
   return source ? (
-    <MountedVault
-      key={setup ? "setup" : "workspace"}
-      source={source}
-      setup={setup}
-      autoUnlock={autoUnlock}
-    >
+    <MountedVault source={source} autoUnlock={autoUnlock}>
       {children}
     </MountedVault>
   ) : (
@@ -48,12 +41,10 @@ export function VaultProvider({
 }
 function MountedVault({
   source,
-  setup,
   autoUnlock,
   children,
 }: {
   source: VaultSource
-  setup: boolean
   autoUnlock: boolean
   children: ReactNode
 }) {
@@ -119,9 +110,9 @@ function MountedVault({
   )
   useEffect(() => {
     controller.activate()
-    if (setup || autoUnlock) void requestUnlock(setup)
+    if (autoUnlock) void requestUnlock()
     return () => controller.dispose()
-  }, [controller, setup, autoUnlock, requestUnlock])
+  }, [controller, autoUnlock, requestUnlock])
   useEffect(() => {
     window.addEventListener("focus", controller.refreshPending)
     return () => window.removeEventListener("focus", controller.refreshPending)

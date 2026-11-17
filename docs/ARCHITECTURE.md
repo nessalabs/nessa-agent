@@ -613,7 +613,7 @@ restored fence reuses its original validated principal, lifecycle cause, and
 correlation instead of reconstructing attribution from the later upgrade attempt.
 Unknown launchctl output fails closed; legacy headerless health additionally
 requires a sole matching listening PID.
-For a managed update, `crates/nessa-server/src/desktop_runtime/` validates the
+For a managed update, `crates/nessa-conversation/src/desktop_runtime/` validates the
 correlated request, closes conversation admission, joins admitted commands,
 attempts owner cleanup, and persists upgrade audit evidence. Only a successful
 private result, correlated to that runtime instance and synced with its directory,
@@ -1078,7 +1078,12 @@ committed reader and never opens an Agent. The ownership and ordering table is
 [agent thread tools](design/agent-thread-tools.md). `read_window` tells an
 agent what the person's desktop window shows, which pane is its own, and
 whether the focused chat's right panel is open and which widget tab is in
-front, from what the window last published over `workspace.publish`; see
+front, from what the window last published over `workspace.publish`.
+`arrange_window`, `show_panel_tab`, `open_thread`, `focus_pane` and
+`close_pane` ask that window to change, through the one `control_window` core
+the CLI's `workspace.arrange` and `workspace.closePane` call too: Cedar
+`workspace.control`, an audit of each request and outcome, and the window
+carrying it out by its own rules; see
 [the window an agent shares](design/agent-window.md).
 
 ## Nessa-owned tools over MCP
@@ -1089,7 +1094,7 @@ configuration. The gateway holds the connection to each configured MCP server
 for each harness session (ADR 344): each provider open gets a stand-in in the
 place of each server configured then — `McpServers` owns that live set, which
 can be replaced while conversations run — (`nessa mcp-relay`,
-`crates/nessa-server/src/mcp_servers/`);
+`crates/nessa-gateway/src/mcp_servers/`);
 when a harness starts it, the SDK's `infrastructure::mcp::McpServers` opens a
 session of its own — the server process and the one connection to it — lists
 its tools with their MCP Apps `_meta.ui`, reads `ui://` resources, and
@@ -1124,7 +1129,7 @@ and `doctor` commands use the existing authenticated product protocol as the CLI
 surface; they do not access the server registry. Offline `auth init --local`
 bootstraps first access, and local recovery/provisioning retain their exclusive
 registry lock. Cloud selection fails explicitly until its implementation exists.
-See the [CLI module map](../crates/nessa-server/src/cli/mod.rs) and
+See the [CLI module map](../crates/nessa-gateway/src/cli/mod.rs) and
 [local auth guide](guides/local-auth.md).
 
 Owned cold-close recovery consumes SDK resource proof from the existing session
@@ -1148,7 +1153,7 @@ watermarks support bounded offline catch-up and explicit gaps. No private payloa
 is sent over the wake-up socket. Source wire bounds are published in
 `protocol/defaults/github-relay-contract.json`.
 
-`crates/nessa-server/src/github_relay` owns the native consumer and private local
+`crates/nessa-gateway/src/github_relay` owns the native consumer and private local
 SQLCipher-encrypted inbox, keyed from the session-unlocked local vault. `GithubConnections` remains the sole token owner through its injected vault entry; its injected
 credential adapter discovers the App-selected repositories. `LiveEvents` owns
 selection changes through one private SQLite transaction, including deletion

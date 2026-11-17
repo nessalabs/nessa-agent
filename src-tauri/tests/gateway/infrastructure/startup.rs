@@ -389,7 +389,7 @@ fn the_log_tail_is_the_end_of_the_log_and_never_the_whole_of_it() {
 
 const GENERATION: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
-/// Exactly what `crates/nessa-server/src/core/startup_failure.rs` serializes.
+/// Exactly what `crates/nessa-gateway/src/core/startup_failure.rs` serializes.
 fn record_json(reason: &str, generation: &str) -> String {
     serde_json::json!({
         "reason": reason,

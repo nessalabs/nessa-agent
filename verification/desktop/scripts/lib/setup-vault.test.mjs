@@ -2,7 +2,7 @@ import assert from "node:assert/strict"
 import { readFileSync } from "node:fs"
 import { test } from "node:test"
 import { runInNewContext } from "node:vm"
-import { unlockRequestedVault, unlockVault, VAULT_PASSPHRASE } from "./vault.mjs"
+import { unlockRequestedVault, unlockVault } from "./vault.mjs"
 
 // Exercise the actual window initializer without its CLI or browser main.
 const source = readFileSync(
@@ -19,56 +19,20 @@ const setupWindow = runInNewContext(`(${source.slice(start, end)})`, {
   unlockVault,
 })
 
-function fixture({
-  state = "locked",
-  statusError,
-  promptError,
-  staysLocked = false,
-} = {}) {
+/**
+ * A setup window over a vault in `state`. `prompts` is how many vault dialogs
+ * the window draws on its own; onboarding asks for none (#1340), so any is a
+ * refusal, and the window never fills or submits a passphrase.
+ */
+function fixture({ state = "locked", prompts = 0 } = {}) {
   const calls = []
-  let visible = false
-  const dialog = {
-    isVisible: async () => visible,
-    waitFor: async (options) => {
-      if (options?.state === "hidden") {
-        calls.push("hidden")
-        assert.equal(visible, false)
-        return
-      }
-      calls.push("prompt")
-      assert.equal(options?.timeout, 15_000)
-      if (promptError) throw promptError
-      // The authoritative status can finish before React paints its dialog.
-      // isVisible remains false until this actual readiness wait yields.
-      await Promise.resolve()
-      visible = true
-    },
-    getByLabel: (name) => {
-      assert.equal(name, "Passphrase")
-      return {
-        fill: async (value) => {
-          assert.equal(visible, true)
-          assert.equal(value, VAULT_PASSPHRASE)
-          calls.push("fill")
-        },
-      }
-    },
-    getByRole: (role, { name }) => {
-      assert.equal(role, "button")
-      assert.equal(name, "Unlock")
-      return {
-        click: async () => {
-          calls.push("unlock")
-          visible = false
-          if (!staysLocked) state = "unlocked"
-        },
-      }
-    },
-  }
   const page = {
     addInitScript: async () => {},
     goto: async () => {
       calls.push("goto")
+    },
+    waitForTimeout: async (ms) => {
+      calls.push(`settle:${ms}`)
     },
     locator: (selector) => {
       if (selector === ".nessa-setup-window")
@@ -77,20 +41,19 @@ function fixture({
             calls.push("shell")
           },
         }
-      assert.equal(selector, '[data-vault-dialog="unlock"]')
-      return dialog
-    },
-    getByRole: (role, { name }) => {
-      assert.equal(role, "dialog")
-      assert.equal(name, "Unlock Nessa")
-      return { evaluate: async () => true }
+      assert.equal(selector, "[data-vault-dialog]")
+      return {
+        count: async () => {
+          calls.push(`dialogs:${prompts}`)
+          return prompts
+        },
+      }
     },
   }
   const client = {
     vault: {
       status: async () => {
         calls.push(`status:${state}`)
-        if (statusError) throw statusError
         return { state }
       },
     },
@@ -112,42 +75,22 @@ function fixture({
   return { run, page, calls }
 }
 
-test("setup waits for a late locked-vault prompt and confirms the actual unlock", async () => {
+test("a locked vault: the setup window opens with no vault dialog and asks nothing", async () => {
   const f = fixture()
   assert.equal(await setupWindow(f.run), f.page)
-  assert.deepEqual(f.calls, [
-    "install",
-    "goto",
-    "shell",
-    "status:locked",
-    "prompt",
-    "fill",
-    "unlock",
-    "hidden",
-    "status:unlocked",
-  ])
+  assert.deepEqual(f.calls, ["install", "goto", "shell", "settle:1500", "dialogs:0"])
 })
 
-test("already unlocked setup performs no passphrase or unlock action", async () => {
+test("an unlocked vault: the same, and its state is not read or changed", async () => {
   const f = fixture({ state: "unlocked" })
   assert.equal(await setupWindow(f.run), f.page)
-  assert.deepEqual(f.calls, ["install", "goto", "shell", "status:unlocked"])
+  assert.equal(
+    f.calls.some((call) => call.startsWith("status:")),
+    false,
+  )
 })
 
-test("unavailable status refuses setup readiness before any unlock", async () => {
-  const f = fixture({ statusError: new Error("status unavailable") })
-  await assert.rejects(setupWindow(f.run), /status unavailable/)
-  assert.equal(f.calls.includes("unlock"), false)
-})
-
-test("a missing prompt refuses inside the unchanged fifteen-second ceiling", async () => {
-  const f = fixture({ promptError: new Error("prompt unavailable") })
-  await assert.rejects(setupWindow(f.run), /prompt unavailable/)
-  assert.equal(f.calls.includes("unlock"), false)
-})
-
-test("a completed click without authoritative unlock is not successful readiness", async () => {
-  const f = fixture({ staysLocked: true })
-  await assert.rejects(setupWindow(f.run), /did not unlock/)
-  assert.equal(f.calls.filter((c) => c === "unlock").length, 1)
+test("a vault dialog drawn by onboarding on its own refuses the window", async () => {
+  const f = fixture({ prompts: 1 })
+  await assert.rejects(setupWindow(f.run), /opened a vault dialog on its own/)
 })
