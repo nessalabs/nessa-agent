@@ -4,5 +4,6 @@
   "conversation.subscribe": "Follows one conversation by a stream of events after the acknowledgement. One call would drop the stream.",
   "conversation.subscribeList": "Follows the conversation list by a stream of events after the acknowledgement. One call would drop the stream.",
   "conversation.subscribeEvents": "Follows one conversation's events by a stream after the acknowledgement. One call would drop the stream.",
-  "agents.subscribe": "Follows the agent catalog by a stream of events after the acknowledgement. One call would drop the stream."
+  "agents.subscribe": "Follows the agent catalog by a stream of events after the acknowledgement. One call would drop the stream.",
+  "workspace.answer": "A window's answer to a workspace.command the gateway sent it on that same connection. Only the window that was asked can give it."
 }

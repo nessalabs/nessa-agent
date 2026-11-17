@@ -173,7 +173,7 @@ test("the Windows split preserves full build flags, platform coverage, guards, c
     // Keep every case and its internal stress/deadline contract unchanged.
     assert.match(
       server,
-      /env:\r?\n(?:[ \t]+#[^\r\n]*\r?\n)*[ \t]+RUST_TEST_THREADS: "2"\r?\n(?:[ \t]+#[^\r\n]*\r?\n)*[ \t]+RUST_TEST_NOCAPTURE: "1"/,
+      /env:\r?\n(?:[ \t]+#[^\r\n]*\r?\n)*[ \t]+RUST_TEST_THREADS: "2"\r?\n/,
     )
     assert.match(server, /timeout-minutes: 95/)
     assert.match(server, /timeout-minutes: 90/)

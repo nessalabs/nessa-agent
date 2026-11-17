@@ -23,6 +23,10 @@
     {
       "method": "agents.subscribe",
       "reason": "Follows the agent catalog by a stream of events after the acknowledgement. One call would drop the stream."
+    },
+    {
+      "method": "workspace.answer",
+      "reason": "A window's answer to a workspace.command the gateway sent it on that same connection. Only the window that was asked can give it."
     }
   ],
   "methods": [
@@ -641,6 +645,20 @@
       "grant": "conversation.write",
       "readOnly": false,
       "destructive": false
+    },
+    {
+      "name": "workspace.arrange",
+      "params": "WorkspaceArrangeParams",
+      "grant": "conversation.write",
+      "readOnly": false,
+      "destructive": false
+    },
+    {
+      "name": "workspace.closePane",
+      "params": "WorkspaceClosePaneParams",
+      "grant": "conversation.write",
+      "readOnly": false,
+      "destructive": true
     },
     {
       "name": "channel.create",

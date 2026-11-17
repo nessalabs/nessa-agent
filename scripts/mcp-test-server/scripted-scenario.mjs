@@ -40,10 +40,15 @@
  * A tool step calls `mcptest` unless it names another of the session's MCP
  * servers (`server`, such as the gateway's own `nessa-agents`). With `save`,
  * its result's `structuredContent` (or, without one, a JSON object its
- * first text block holds) is kept under that name for the rest of the turn, and a result that is an error fails the turn. A string anywhere
+ * first text block holds) is kept under that name for the rest of the turn, and a result that is an error fails the turn, unless the step says
+ * `keepErrors: true`: then the error's `structuredContent` is kept as any
+ * other result, so a check can say a refusal back. A string anywhere
  * in a later step's arguments or text that is `${name.path}` is replaced by
  * that saved value's field, so one call can name what an earlier call made.
- * `${prompt.text}` is the prompt the turn answers, and `${prompt.images}` the
+ * `${prompt.text}` is the prompt the turn answers, `${prompt.arguments}` the
+ * JSON object it carries between ` args:` and ` :args` (`promptArguments`,
+ * `{}` when it carries none; a step's whole `arguments` may be that one
+ * reference), and `${prompt.images}` the
  * images it carried (`promptImages`), `${prompt.files}` the files linked to
  * it, read where the agent runs (`promptFiles`); `${session.cwd}` and
  * `${session.systemPrompt}` are the folder the session was opened in and the
@@ -109,7 +114,7 @@ const FIELDS = {
 }
 
 /** Fields a step may leave out. */
-const OPTIONAL = { tool: ["server", "save", "times", "title"] }
+const OPTIONAL = { tool: ["server", "save", "times", "title", "keepErrors"] }
 
 /** The modes, by harness, in which the harness asks for nothing. */
 export const FULL_ACCESS = { claude: "bypassPermissions", codex: "agent-full-access" }
@@ -209,6 +214,7 @@ function parseStep(step, branch) {
         ...(Object.hasOwn(step, "save") ? { save: toolName(step.save) } : {}),
         ...(Object.hasOwn(step, "times") ? { times: timesOf(step.times) } : {}),
         ...(Object.hasOwn(step, "title") ? { title: titleOf(step.title) } : {}),
+        ...(Object.hasOwn(step, "keepErrors") ? { keepErrors: keepErrorsOf(step) } : {}),
       }
     case "pause":
       if (!Number.isInteger(step.ms) || step.ms < 0 || step.ms > MAX_PAUSE_MS)
@@ -233,6 +239,12 @@ function parseStep(step, branch) {
   }
 }
 
+function keepErrorsOf(step) {
+  if (step.keepErrors !== true || !Object.hasOwn(step, "save"))
+    throw new Error("keepErrors is true, on a tool step that saves its result")
+  return true
+}
+
 function timesOf(times) {
   if (!Number.isInteger(times) || times < 2 || times > MAX_TIMES)
     throw new Error(`a tool step's times is a whole number from 2 to ${MAX_TIMES}`)
@@ -247,8 +259,11 @@ function toolName(name) {
   return name
 }
 
+/** An object, or one whole `${name.path}` reference filled with an object when called. */
 function argumentsOf(value) {
-  if (!plain(value)) throw new Error("a tool's arguments are an object")
+  const reference =
+    typeof value === "string" && /^\$\{[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*\}$/.test(value)
+  if (!plain(value) && !reference) throw new Error("a tool's arguments are an object")
   return value
 }
 
@@ -280,6 +295,20 @@ export function promptText(prompt) {
     )
     .map((block) => block.text)
     .join("")
+}
+
+/**
+ * The JSON object a prompt's text carries between ` args:` and ` :args`, so
+ * one turn can call a tool with what the check asks, or `{}` with none. A
+ * check that writes the markers writes JSON between them.
+ */
+export function promptArguments(text) {
+  const start = text.indexOf(" args:")
+  const end = text.indexOf(" :args", start)
+  if (start < 0 || end < 0) return {}
+  const value = JSON.parse(text.slice(start + " args:".length, end))
+  if (!plain(value)) throw new Error("a prompt's arguments are not an object")
+  return value
 }
 
 /**
@@ -654,7 +683,7 @@ async function callTool(step, ctx, existing) {
   ctx.update(completedUpdate(id, result))
   ctx.clearCall(step.tool)
   if (step.save) {
-    if (result?.isError === true)
+    if (result?.isError === true && !step.keepErrors)
       return { fail: `${step.tool} failed: ${resultText(result)}` }
     ctx.saved.set(step.save, result?.structuredContent ?? textObject(result))
   }

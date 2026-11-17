@@ -467,6 +467,21 @@
       "grant": "conversation.write",
       "lane": "requests"
     },
+    "workspace.answer": {
+      "params": "WorkspaceAnswerParams",
+      "grant": "conversation.write",
+      "lane": "requests"
+    },
+    "workspace.arrange": {
+      "params": "WorkspaceArrangeParams",
+      "grant": "conversation.write",
+      "lane": "requests"
+    },
+    "workspace.closePane": {
+      "params": "WorkspaceClosePaneParams",
+      "grant": "conversation.write",
+      "lane": "requests"
+    },
     "channel.create": {
       "params": "ChannelCreateParams",
       "grant": "conversation.write",
@@ -636,6 +651,7 @@
     "agents.listed": "AgentsListed",
     "conversation.subscriptionEnded": "ConversationSubscriptionEnded",
     "permission.reviewWaiting": "PermissionReviewWaiting",
+    "workspace.command": "WorkspaceCommand",
     "conversation.events": "ConversationEvents"
   },
   "handshakeMethod": "session.authenticate"

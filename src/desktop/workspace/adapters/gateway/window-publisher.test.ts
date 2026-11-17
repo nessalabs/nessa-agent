@@ -273,3 +273,23 @@ describe("publishing what the window shows", () => {
     ])
   })
 })
+
+describe("saying which revision shows the window now", () => {
+  it("settles once the gateway holds the latest window, however many sends that takes", async () => {
+    const fake = fakeClient()
+    const { publisher } = publisherOver(fake)
+    expect(publisher.windowId).toBe(WINDOW)
+    publisher.publish(window("one"))
+    await settle()
+    let revision: number | undefined
+    void publisher.settled().then((held) => (revision = held))
+    // A change while the first is out: the first's revision does not show it.
+    publisher.publish(window(id))
+    await fake.answer()
+    expect(revision).toBeUndefined()
+    await fake.answer()
+    expect(revision).toBe(2)
+    // Nothing owed: settled at once.
+    await expect(publisher.settled()).resolves.toBe(2)
+  })
+})

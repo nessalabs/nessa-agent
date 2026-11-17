@@ -31,9 +31,11 @@ import {
  *   reviews     one turn asks `--reviews` reviews in a row, each a card
  *   large       one review larger than the old 16 KB display limit
  *   stop        Send turns into Stop while the turn runs; Stop cancels it.
- *               While it runs, the chat's channel in the sidebar shows a
- *               spinner at its end, which its settings replace only under
- *               the pointer; stopped, the spinner is gone
+ *               While it runs, the window shows work one way, shimmering
+ *               words, with no turning arc in a pane's header, the sidebar
+ *               or the line under the turn: the chat's channel name
+ *               shimmers, its settings show only under the pointer;
+ *               stopped, the name is plain again
  *   parent-stop Stop cancels the parent, owned child and grandchild without a report restart
  *   fail        the turn fails; the next message is sent in the same conversation
  *   restore     a restored conversation is opened and shows its saved record;
@@ -800,6 +802,47 @@ const LIGHTS_END = 76
  * (`content-visibility: hidden`) in one change, so its rows are never
  * restyled on a frame of the fold. Opened again, it is reachable at once.
  */
+/**
+ * Watches every frame of a fold, a split or a close for a pane that changes
+ * how it looks while it moves: a composer losing its glass blur or shadow, or
+ * a laid-out scene skipped for a frame. Either flashed on every fold and drop
+ * and read as the window flickering. Call it before the key, and the function
+ * it returns after the motion has landed.
+ */
+async function lookHolds(page, label) {
+  await page.evaluate(() => {
+    const seen = []
+    let on = true
+    const tick = () => {
+      if (!on) return
+      for (const composer of document.querySelectorAll(".desktop-composer")) {
+        const style = getComputedStyle(composer)
+        if (style.backdropFilter === "none" || style.boxShadow === "none")
+          seen.push(`composer ${style.backdropFilter} / ${style.boxShadow}`)
+      }
+      for (const scene of document.querySelectorAll(
+        ".desktop-night-scene[data-scene-complete]",
+      ))
+        if (getComputedStyle(scene).contentVisibility === "hidden")
+          seen.push("a laid-out scene skipped")
+      requestAnimationFrame(tick)
+    }
+    requestAnimationFrame(tick)
+    window.__stressLook = () => {
+      on = false
+      return seen
+    }
+  })
+  return async (failures) => {
+    await page.waitForTimeout(700)
+    const seen = await page.evaluate(() => window.__stressLook?.() ?? [])
+    if (seen.length)
+      failures.push(
+        `${label}: a pane changed its look while it moved, in ${seen.length} frame(s), e.g. ${seen[0]}`,
+      )
+  }
+}
+
 async function sidebarParks(page, failures, open) {
   const read = () =>
     page.evaluate((selector) => {
@@ -872,10 +915,10 @@ async function channelShowsList(page, failures) {
 const MAIN_CHANNEL = "Conversations"
 
 /**
- * A channel in the sidebar shows that something runs in it with a spinner at
- * its row's end, and its name says "Running" to a reader. Its settings stay
- * hidden until the row is pointed at, and then take the spinner's place.
- * Without a running turn no spinner is drawn.
+ * A channel in the sidebar shows that something runs in it by its name
+ * shimmering, with no glyph at its row's end, and its name says "Running" to
+ * a reader. Its settings stay hidden until the row is pointed at. Without a
+ * running turn the name is plain.
  */
 async function channelRunning(page, name, running, failures) {
   const row = page
@@ -894,9 +937,10 @@ async function channelRunning(page, name, running, failures) {
         return opacity
       }
       return {
-        // A count waiting on the person takes the spinner's place.
         counted: frame.querySelector("[data-trailing='count']") !== null,
-        spinner: shown(frame.querySelector('.workspace-status[data-status="running"]')),
+        shimmer: frame.querySelector(".workspace-shimmer[data-working]") !== null,
+        spinner: frame.querySelectorAll('.workspace-status[data-status="running"]')
+          .length,
         settings: shown(frame.querySelector("[data-channel-settings-open]")),
         said: (
           frame.querySelector("[data-size]")?.getAttribute("aria-label") ?? ""
@@ -913,45 +957,41 @@ async function channelRunning(page, name, running, failures) {
   // Away from the window's left edge, where the pointer would peek the sidebar out.
   await page.mouse.move(600, 400)
   const wanted = (now) =>
-    now.counted
-      ? !running || now.spinner === null
-      : (now.spinner !== null) === running && now.said === running
+    now.spinner === 0 && now.shimmer === running && now.said === running
   let now = await read()
   await waitFor(async () => wanted((now = await read())), 10_000)
-  if (!wanted(now))
+  if (now.spinner > 0)
     failures.push(
-      `channel ${name} ${running ? "shows no spinner while" : "still shows a spinner after"} a turn runs: ${JSON.stringify(now)}`,
+      `channel ${name} draws a turning arc (${now.spinner}): ${JSON.stringify(now)}`,
     )
-  // A count waiting on the person stands in the spinner's place: the spinner
-  // goes unchecked this time, and the run says so.
-  if (running && now.counted)
-    log(`channel ${name} held a waiting count, so its spinner was not checked`)
+  else if (!wanted(now))
+    failures.push(
+      `channel ${name}'s name ${running ? "does not shimmer while" : "still shimmers after"} a turn runs: ${JSON.stringify(now)}`,
+    )
   if (now.settings === null) {
     failures.push(`channel ${name} has no settings`)
     return
   }
   // Settled, not after a fixed wait: the kit fades them over its transition.
-  const spins = running && !now.counted
   const atRest =
     (await waitFor(async () => {
       const at = await read()
-      return at.settings === 0 && (!spins || at.spinner === 1) ? at : null
+      return at.settings === 0 ? at : null
     }, 5_000)) ?? (await read())
   if (atRest.settings !== 0)
     failures.push(`channel ${name} shows its settings at rest (${atRest.settings})`)
-  if (spins && atRest.spinner !== 1)
-    failures.push(`channel ${name}'s spinner shows at ${atRest.spinner} at rest`)
   await row.locator(":scope > [data-size]").hover({ timeout: 10_000 })
   const pointed =
     (await waitFor(async () => {
       const at = await read()
-      return at.settings === 1 && !(at.spinner > 0) ? at : null
+      return at.settings === 1 ? at : null
     }, 5_000)) ?? (await read())
   if (pointed.settings !== 1)
     failures.push(`channel ${name} pointed at shows its settings at ${pointed.settings}`)
-  if (pointed.spinner > 0)
+  // The name keeps saying it works under the pointer: nothing takes its place.
+  if (pointed.shimmer !== running)
     failures.push(
-      `channel ${name} pointed at still shows its spinner (${pointed.spinner})`,
+      `channel ${name} pointed at ${running ? "stops" : "starts"} shimmering: ${JSON.stringify(pointed)}`,
     )
   await page.mouse.move(600, 400)
 }
@@ -1023,6 +1063,68 @@ async function channelRowsKeepHover(page, failures) {
   await page.mouse.move(600, 400)
   if (!compared)
     failures.push(`no channel row of ${count} has a hover fill apart from its rest fill`)
+}
+
+/**
+ * While a turn runs, the window shows work one way: shimmering words, with no
+ * turning arc in a pane's header, the sidebar, or the line under the turn.
+ * A line under the turn, where one is drawn, is its words alone; a session
+ * row in the sidebar's tree, where one lists the chat, shimmers its title.
+ */
+async function oneWorkingSign(run, conversationId, failures) {
+  const read = () =>
+    run.page.evaluate(
+      ({ header, sidebar, id }) => {
+        const arcs = (scope) =>
+          [...document.querySelectorAll(scope)].reduce(
+            (sum, at) =>
+              sum +
+              at.querySelectorAll('.workspace-status[data-status="running"]').length,
+            0,
+          )
+        const lines = [...document.querySelectorAll(".workspace-live")]
+        const row = document.querySelector(
+          `${sidebar} .workspace-thread-row[data-session-row="${id}"]`,
+        )
+        return {
+          header: arcs(header),
+          sidebar: arcs(sidebar),
+          lines: lines.length,
+          lineArcs: arcs(".workspace-live"),
+          plainLines: lines.filter((line) => !line.querySelector(".workspace-shimmer"))
+            .length,
+          row: row
+            ? row.querySelector(".workspace-shimmer[data-working]") !== null
+            : null,
+        }
+      },
+      { header: css.paneHeader, sidebar: css.sidebar, id: conversationId },
+    )
+  // The tree's row learns of the turn from the list's next frame.
+  const now =
+    (await waitFor(async () => {
+      const at = await read()
+      return at.row !== false ? at : null
+    }, 5_000)) ?? (await read())
+  if (now.header > 0) failures.push(`a pane header draws a turning arc (${now.header})`)
+  if (now.sidebar > 0) failures.push(`the sidebar draws a turning arc (${now.sidebar})`)
+  if (now.lineArcs > 0)
+    failures.push(`the line under the turn draws a turning arc (${now.lineArcs})`)
+  if (now.plainLines > 0)
+    failures.push(`${now.plainLines} line(s) under a running turn do not shimmer`)
+  if (now.row === false)
+    failures.push("the running chat's sidebar row does not shimmer its title")
+  log(
+    `one working sign: ${now.lines} live line(s), sidebar row ${now.row === null ? "not listed" : "shimmers"}`,
+  )
+  if (run.evidence)
+    await run.page
+      .screenshot({
+        path: join(run.evidence, `working-${run.engine ?? "window"}.png`),
+        timeout: 4_000,
+        animations: "allow",
+      })
+      .catch((error) => log(`working screenshot: ${error.message.split("\n")[0]}`))
 }
 
 /** The compact rail and the window bar keep separate geometry. */
@@ -3521,6 +3623,7 @@ const steps = {
       failures.push("Send did not turn into Stop while the turn ran")
       return
     }
+    await oneWorkingSign(run, run.main.id, failures)
     await channelRunning(run.page, MAIN_CHANNEL, true, failures)
     await dock(run.page)
       .getByRole(...composerControls.stop)
@@ -3887,20 +3990,38 @@ const steps = {
       if (!(await stopShown(run.page)))
         failures.push("Send did not turn into Stop while the turn ran")
       await pickAccess(run.page, step.to)
-      const held = await waitFor(
+      // A change the running turn holds back says nothing: the shield shows
+      // the choice at once and the composer adds no line about it (Saurav
+      // asked for the "Access changes when the agent stops." line to go).
+      const chosen = await waitFor(
         async () =>
-          fold(
-            await dock(run.page)
-              .locator(composerControls.notice)
-              .innerText()
-              .catch(() => ""),
-          ).includes("Access changes when the agent stops"),
-        10_000,
+          (await dock(run.page)
+            .locator(composerControls.access)
+            .getAttribute("data-access-mode")
+            .catch(() => null)) === composerControls.accessValue[step.to],
+        5_000,
       )
-      // The turn can end before the notice is read; only a running one owes it.
-      const { turn } = await untilTurn(run, run.main.id, { text }, () => true, 5)
-      if (!held && turn && !ended(turn))
-        failures.push("the composer did not say the change waits for the turn")
+      if (!chosen) failures.push("the shield did not show the choice while the turn ran")
+      let said = null
+      for (const _ of Array.from({ length: 6 })) {
+        const notices = await dock(run.page)
+          .locator(composerControls.notice)
+          .allInnerTexts()
+          .catch(() => [])
+        if (notices.length) said = notices
+        await run.page.waitForTimeout(250)
+      }
+      if (said)
+        failures.push(
+          `the composer spoke of the held access change: ${JSON.stringify(said)}`,
+        )
+      if (run.evidence && !run.accessHintShot) {
+        run.accessHintShot = true
+        await dock(run.page)
+          .locator(".desktop-composer")
+          .screenshot({ path: join(run.evidence, `access-held-${run.engine}.png`) })
+          .catch(() => {})
+      }
       await settled(run, run.main.id, seen, text, "completed", failures)
     } else {
       await pickAccess(run.page, step.to)
@@ -7206,8 +7327,10 @@ const steps = {
     if (failures.length) return
     // ⌘B hides the sidebar, which makes room for a pane beside; ⌘-click on a
     // row in the session list then opens it there, focused. The page is a Mac's.
+    const folded = await lookHolds(run.page, "folding the sidebar")
     await run.page.keyboard.press(keys.toggleSidebar)
     await sidebarParks(run.page, failures, false)
+    await folded(failures)
     await run.page
       .locator(selectorFor.sessionListRowFor(conversationId), {
         hasText: await titleOf(run, conversationId),
@@ -7285,6 +7408,7 @@ const steps = {
     )
     if (failures.length) return
     // ⌘W closes the focused pane: the one beside.
+    const closed = await lookHolds(run.page, "closing the pane beside")
     await run.page.keyboard.press(keys.closePane)
     if (
       !(await waitFor(
@@ -7295,13 +7419,16 @@ const steps = {
       failures.push("⌘W did not close the pane beside")
       return
     }
+    await closed(failures)
     // A new session beside names itself: alone, a home is its greeting;
     // beside another pane every pane says what it is (UI audit #27).
     await homeBesideNamed(run.page, failures)
     await noHistoryButtons(run.page, failures, "the window")
     if (failures.length) return
+    const unfolded = await lookHolds(run.page, "opening the sidebar")
     await run.page.keyboard.press(keys.toggleSidebar)
     await sidebarParks(run.page, failures, true)
+    await unfolded(failures)
     await channelShowsList(run.page, failures)
     if (failures.length) return
     // The main conversation is the pane left. Not opened from its row: the
@@ -7321,6 +7448,123 @@ const steps = {
         said.windows[0].sessionList === "open" &&
         said.windows[0].panes.length === 1,
     )
+  },
+
+  async control(run, step, failures) {
+    run.controlPane = undefined
+    // A second conversation, for the agent in the main one to open beside it.
+    const other = randomUUID()
+    const first = prompt(run, STRESS.reply, step, " controlled")
+    await run.client.conversation.create({
+      conversationId: other,
+      agent: run.stack.agent,
+    })
+    run.checked.push(other)
+    await run.client.conversation.submit(run.client.conversation.prepare(other, first))
+    await settled(run, other, new Set(), first, "completed", failures)
+    if (failures.length) return
+    const panes = () => run.page.locator(css.pane).count()
+    const hidden = (selector) =>
+      run.page.evaluate(
+        (selector) => document.querySelector(selector)?.getAttribute("aria-hidden"),
+        selector,
+      )
+    // Each change is the main conversation's agent calling the tool: the
+    // window showing it carries it out by its own rules and says what came
+    // of it once it shows it, so the tool's answer is already on screen.
+    const asked = (phrase, args, extra, options) =>
+      windowControl(run, phrase, args, step, extra, failures, options)
+
+    // Folding the sidebar makes room for a pane beside, as ⌘B does.
+    let said = await asked(STRESS.arrangeWindow, { sidebar: "closed" }, " fold")
+    if (said?.window?.windows?.[0]?.sidebar !== "closed")
+      failures.push(`arrange_window said ${JSON.stringify(said)}`)
+    if (!(await waitFor(async () => (await hidden(css.sidebar)) === "true", 5_000)))
+      failures.push("arrange_window left the sidebar shown")
+    said = await asked(STRESS.openThread, { threadId: other, where: "beside" }, " open")
+    // The publication the answer waited for comes from the store; the panes
+    // are painted after it.
+    const shows = (count) => waitFor(async () => (await panes()) === count, 5_000)
+    if (said?.changed !== true || !(await shows(2)))
+      failures.push(
+        `open_thread beside said ${JSON.stringify(said)} with ${await panes()} panes on screen`,
+      )
+    if (failures.length) return
+    said = await asked(STRESS.arrangeWindow, { panel: "open" }, " panel")
+    if (said?.changed !== true)
+      failures.push(`opening the panel said ${JSON.stringify(said)}`)
+    if (!(await waitFor(async () => (await hidden(css.panel)) !== "true", 5_000)))
+      failures.push("arrange_window left the right panel hidden")
+    // Asked again, nothing changes, and the agent is told so.
+    said = await asked(STRESS.arrangeWindow, { sidebar: "closed" }, " again")
+    if (said?.changed !== false)
+      failures.push(`a repeated arrange said ${JSON.stringify(said)}`)
+    said = await asked(
+      STRESS.arrangeWindow,
+      { sidebar: "open", panel: "closed" },
+      " unfold",
+    )
+    if (said?.changed !== true)
+      failures.push(`arrange_window back said ${JSON.stringify(said)}`)
+    await sidebarParks(run.page, failures, true)
+    if (!(await waitFor(async () => (await hidden(css.panel)) === "true", 5_000)))
+      failures.push("arrange_window left the right panel shown")
+    if (failures.length) return
+    // The Agents overview over the panes, then the panes again.
+    await asked(STRESS.arrangeWindow, { view: "agents" }, " overview")
+    if (
+      !(await waitFor(
+        async () => (await run.page.locator(css.overview).count()) === 1,
+        5_000,
+      ))
+    )
+      failures.push("arrange_window did not show the Agents overview")
+    // The overview covers every composer, so this one turn is sent the way
+    // another of the person's devices would send it: on the client.
+    await asked(STRESS.arrangeWindow, { view: "panes" }, " panes", { covered: true })
+    if (!(await shows(2)))
+      failures.push(`back on the panes, ${await panes()} are on screen`)
+    // A tab the focused chat's panel does not hold is refused, not guessed.
+    said = await asked(
+      STRESS.showPanelTab,
+      { plugin: "stress", id: "no-such-tab" },
+      " missing",
+    )
+    if (said?.error !== "tab_not_found")
+      failures.push(`show_panel_tab of a missing tab said ${JSON.stringify(said)}`)
+    said = await asked(STRESS.focusPane, { threadId: run.main.id }, " focus")
+    const focused = said?.window?.windows?.[0]?.panes?.find((pane) => pane.focused)
+    if (focused?.threadId !== run.main.id)
+      failures.push(`focus_pane said ${JSON.stringify(said)}`)
+    if (failures.length) return
+    // Closing takes the other conversation's pane away; a second close finds
+    // it no longer on screen.
+    said = await asked(STRESS.closePane, { threadId: other }, " close")
+    if (said?.changed !== true || !(await shows(1)))
+      failures.push(`close_pane said ${JSON.stringify(said)} with ${await panes()} panes`)
+    said = await asked(STRESS.closePane, { threadId: other }, " gone")
+    if (said?.error !== "not_on_screen")
+      failures.push(`closing a pane not on screen said ${JSON.stringify(said)}`)
+    // Every change is on record: asked, then what came of it.
+    const namespace = join(run.stack.gateway.directory, "ci", "instances", INSTANCE)
+    const audit = join(namespace, "conversations", "audit", "window-control")
+    const records = existsSync(audit)
+      ? readdirSync(audit).map((name) =>
+          JSON.parse(readFileSync(join(audit, name), "utf8")),
+        )
+      : []
+    const closes = records.filter(
+      (record) =>
+        record.action?.kind === "close_pane" && record.action.conversationId === other,
+    )
+    const outcomes = closes.filter((record) => record.phase === "outcome")
+    if (
+      closes.filter((record) => record.phase === "requested").length < 1 ||
+      !outcomes.some((record) => record.outcome?.outcome === "applied") ||
+      !outcomes.some((record) => record.outcome?.code === "not_on_screen") ||
+      closes.some((record) => record.severity !== "destructive")
+    )
+      failures.push(`the window-control audit holds ${JSON.stringify(closes)}`)
   },
 
   async webhook(run, step, failures) {
@@ -9217,6 +9461,65 @@ const steps = {
         )
       if (!table.within) failures.push(`table ${index + 1} is wider than the reply`)
     }
+    // The table reads as part of the reply, not as small print in a grid:
+    // its cells a step below the reply's own text (never under 85% of it),
+    // column names smaller still and set in capitals, the first column a step
+    // stronger, hairlines between columns fainter than the rules between
+    // rows, and the panel close under the block before it (the copy strip
+    // takes the place of that block's margin, not a second gap on top).
+    const look = await message.evaluate((element) => {
+      const alpha = (color) => {
+        const slash = color.match(/\/\s*([\d.]+)(%?)\s*\)/)
+        if (slash) return Number(slash[1]) / (slash[2] ? 100 : 1)
+        const rgba = color.match(/rgba\([^)]*,\s*([\d.]+)\s*\)/)
+        return rgba ? Number(rgba[1]) : 1
+      }
+      const prose = element.querySelector('[data-slot="message-markdown"] > p')
+      const table = element.querySelector('[data-slot="markdown-table"]')
+      const before = table.previousElementSibling
+      const cells = table.querySelectorAll("tbody td")
+      const first = getComputedStyle(cells[0])
+      const second = getComputedStyle(cells[1])
+      const head = getComputedStyle(table.querySelector("th"))
+      return {
+        prose: prose ? parseFloat(getComputedStyle(prose).fontSize) : null,
+        cell: parseFloat(second.fontSize),
+        head: parseFloat(head.fontSize),
+        caps: head.textTransform,
+        firstWeight: Number(first.fontWeight),
+        cellWeight: Number(second.fontWeight),
+        columnRule: alpha(second.borderInlineStartColor),
+        rowRule: alpha(getComputedStyle(cells[0].parentElement).borderBottomColor),
+        gap: before
+          ? Math.round(
+              table.querySelector('[data-slot="table-shell"]').getBoundingClientRect()
+                .top - before.getBoundingClientRect().bottom,
+            )
+          : null,
+      }
+    })
+    if (look.prose === null)
+      failures.push("the table answer has no paragraph to size cells against")
+    else if (look.cell < look.prose * 0.85)
+      failures.push(
+        `table cells are ${look.cell}px beside ${look.prose}px prose: small print, not a step below`,
+      )
+    if (!(look.head < look.cell) || look.caps !== "uppercase")
+      failures.push(
+        `column names are ${look.head}px ${look.caps}, not smaller capitals above ${look.cell}px cells`,
+      )
+    if (!(look.firstWeight > look.cellWeight))
+      failures.push(
+        `the first column (${look.firstWeight}) is not a step stronger than the rest (${look.cellWeight})`,
+      )
+    if (!(look.columnRule < look.rowRule))
+      failures.push(
+        `column hairlines (${look.columnRule}) are not fainter than row rules (${look.rowRule})`,
+      )
+    // It used to sit 44px under a paragraph; now the strip and what is left
+    // of the paragraph's margin make 36px.
+    if (look.gap === null || look.gap > 40)
+      failures.push(`the table sits ${look.gap}px under the block before it, past 40px`)
     const [narrow, wide] = measured
     if (narrow.hidden > 1 || narrow.fadedRight)
       failures.push(`the narrow table scrolls (${narrow.hidden} px hidden)`)
@@ -9263,8 +9566,13 @@ const steps = {
     // Scrolled up, the way back to the latest sits on the composer's top
     // edge, half over it, rather than on a line of the reply (UI audit #28).
     const transcript = run.page.locator(css.focusedPane).locator(".workspace-transcript")
+    // The way back shows once the reader is more than half a screen from the
+    // end (`awayScreens` in transcript.tsx), so only a transcript that can
+    // scroll that far owes it.
     if (
-      await transcript.evaluate((each) => each.scrollHeight > each.clientHeight + 200)
+      await transcript.evaluate(
+        (each) => each.scrollHeight - each.clientHeight > each.clientHeight * 0.5 + 40,
+      )
     ) {
       const box = await transcript.boundingBox()
       await run.page.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
@@ -10035,9 +10343,43 @@ async function homeBesideNamed(page, failures) {
         await home.locator(".workspace-pane-title").allTextContents(),
       )}`,
     )
-  await page.keyboard.press(keys.closePane)
-  if (!(await waitFor(async () => (await page.locator(css.pane).count()) === 1, 10_000)))
-    failures.push("⌘W did not close the new session beside")
+  // A third pane changes the arrangement while this home's scene is already
+  // drawn: it stays drawn on every frame of the change.
+  const scene = page.locator(`${css.paneHome} .desktop-night-scene[data-scene-complete]`)
+  if (!(await waitFor(async () => (await scene.count()) === 1, 5_000))) {
+    failures.push("the new session beside never finished drawing its scene")
+    return
+  }
+  const split = await lookHolds(page, "a third pane beside a drawn scene")
+  await page.keyboard.press(keys.newSessionBeside)
+  if (
+    !(await waitFor(async () => (await page.locator(css.pane).count()) === 3, 10_000))
+  ) {
+    failures.push(
+      `another session beside left ${await page.locator(css.pane).count()} panes, not 3`,
+    )
+    return
+  }
+  await split(failures)
+  // Close both homes: the focused new one, then the first, focused by a click.
+  for (const left of [2, 1]) {
+    const focused = page.locator(css.focusedPane)
+    if ((await focused.locator(css.paneHome).count()) !== 1)
+      await page
+        .locator(css.paneHome)
+        .first()
+        .click({ position: { x: 20, y: 120 } })
+    await page.keyboard.press(keys.closePane)
+    if (
+      !(await waitFor(
+        async () => (await page.locator(css.pane).count()) === left,
+        10_000,
+      ))
+    ) {
+      failures.push(`⌘W left ${await page.locator(css.pane).count()} panes, not ${left}`)
+      return
+    }
+  }
 }
 
 /**
@@ -10047,6 +10389,46 @@ async function homeBesideNamed(page, failures) {
  * before the gateway has the change. Resolves with the answer that met
  * `holds`, else `null`; the window shows each answer.
  */
+/**
+ * The main conversation's agent calls a window tool (`phrase` names which)
+ * with `args`, asked in its own pane's composer (on the client only when
+ * `covered`, as nothing in the window can be typed in); what the tool
+ * answered, its error included, or null.
+ */
+async function windowControl(run, phrase, args, step, extra, failures, options = {}) {
+  const text = prompt(run, phrase, step, `${extra} args:${JSON.stringify(args)} :args`)
+  // Typed into the main conversation's own pane, which a change may have
+  // left unfocused: the pane the last answer said was its own (`you.pane`,
+  // counted in reading order, as the panes are laid out), else the focused one.
+  const panes = run.page.locator(css.pane)
+  const own = run.controlPane
+  const where = (
+    own && own <= (await panes.count())
+      ? panes.nth(own - 1)
+      : run.page.locator(css.focusedPane)
+  ).locator(css.conversationDock)
+  let seen = new Set()
+  if (options.covered)
+    await run.client.conversation.submit(
+      run.client.conversation.prepare(run.main.id, text),
+    )
+  else seen = await send(run, run.main.id, text, failures, undefined, where)
+  const { turn } = await settled(run, run.main.id, seen, text, "completed", failures)
+  if (!turn) return null
+  const reply = (turn.parts ?? []).map((part) => part.text ?? "").join("")
+  const at = reply.indexOf(SAYS.control)
+  try {
+    const said = JSON.parse(reply.slice(at + SAYS.control.length))
+    run.controlPane = said?.window?.you?.shown ? said.window.you.pane : undefined
+    return said
+  } catch {
+    failures.push(
+      `the window tool turn did not say what came of it: ${reply.slice(0, 120)}`,
+    )
+    return null
+  }
+}
+
 async function windowRead(run, conversationId, step, extra, failures, holds) {
   let said
   for (let attempt = 1; attempt <= 3; attempt += 1) {

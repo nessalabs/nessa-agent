@@ -3,7 +3,8 @@
 //! another person's windows.
 use super::*;
 use crate::domain::{
-    PaneContent, WindowArrangement, WindowColumn, WindowPane, WindowPanel, WindowShowing,
+    PaneContent, WindowAction, WindowArrangement, WindowColumn, WindowPane, WindowPanel,
+    WindowShowing,
 };
 
 fn window(sidebar: bool) -> WorkspaceWindow {
@@ -45,7 +46,7 @@ const B: &str = "1c4c9f1f-7054-4b62-8e66-1f8f5f8f9b22";
 fn a_window_is_held_from_its_publication_until_its_connection_closes() {
     let windows = WorkspaceWindows::new();
     let (org, principal) = owner("owner");
-    let first = windows.open(org.clone(), principal.clone());
+    let first = windows.open(org.clone(), principal.clone()).0;
     // Connected, nothing said yet: no window to read.
     assert!(sidebars(&windows, "owner").is_empty());
     assert_eq!(
@@ -55,7 +56,7 @@ fn a_window_is_held_from_its_publication_until_its_connection_closes() {
             applied: true
         }
     );
-    let second = windows.open(org, principal);
+    let second = windows.open(org, principal).0;
     second.publish(B, 1, Some(window(false)));
     // The most recently published first.
     assert_eq!(sidebars(&windows, "owner"), [(1, false), (1, true)]);
@@ -77,7 +78,7 @@ fn a_window_is_held_from_its_publication_until_its_connection_closes() {
 fn the_newest_revision_wins_whichever_arrives_last() {
     let windows = WorkspaceWindows::new();
     let (org, principal) = owner("owner");
-    let slot = windows.open(org, principal);
+    let slot = windows.open(org, principal).0;
     slot.publish(A, 5, Some(window(true)));
     assert_eq!(
         slot.publish(A, 4, Some(window(false))),
@@ -97,9 +98,9 @@ fn a_window_that_reconnects_is_one_window_not_two() {
     let windows = WorkspaceWindows::new();
     let (org, principal) = owner("owner");
     // The connection a window left behind, not yet seen to close.
-    let stale = windows.open(org.clone(), principal.clone());
+    let stale = windows.open(org.clone(), principal.clone()).0;
     stale.publish(A, 4, Some(window(true)));
-    let fresh = windows.open(org, principal);
+    let fresh = windows.open(org, principal).0;
     fresh.publish(A, 5, Some(window(false)));
     assert_eq!(sidebars(&windows, "owner"), [(5, false)]);
     // A late answer on the old connection says less than the window's newest.
@@ -125,11 +126,136 @@ fn a_window_that_reconnects_is_one_window_not_two() {
 fn nobody_reads_another_persons_windows() {
     let windows = WorkspaceWindows::new();
     let (org, principal) = owner("owner");
-    let slot = windows.open(org, principal);
+    let slot = windows.open(org, principal).0;
     slot.publish(A, 1, Some(window(true)));
     assert!(sidebars(&windows, "other").is_empty());
     let (_, owner) = owner("owner");
     assert!(windows
         .of(&OrganizationId::new("elsewhere").unwrap(), &owner)
         .is_empty());
+}
+
+fn sidebar(open: bool) -> WindowAction {
+    WindowAction::Show {
+        side: crate::domain::WindowSide::Sidebar,
+        open,
+    }
+}
+
+#[tokio::test]
+async fn a_command_goes_to_the_connection_holding_the_window_and_its_answer_comes_back() {
+    let windows = WorkspaceWindows::new();
+    let (org, principal) = owner("owner");
+    let (stale, mut stale_commands) = windows.open(org.clone(), principal.clone());
+    let (fresh, mut fresh_commands) = windows.open(org.clone(), principal.clone());
+    stale.publish(A, 1, Some(window(true)));
+    // The window came back on another connection: that one holds it now.
+    fresh.publish(A, 2, Some(window(true)));
+    let answered = windows
+        .command(&org, &principal, A, sidebar(false))
+        .unwrap();
+    let command = fresh_commands.try_recv().unwrap();
+    assert_eq!(command.window_id, A);
+    assert_eq!(command.action, sidebar(false));
+    assert!(stale_commands.try_recv().is_err());
+    // Only the connection that was asked settles it, and only for its window.
+    assert!(!stale.answer(A, command.id, WindowAnswer::Applied { revision: 3 }));
+    assert!(!fresh.answer(B, command.id, WindowAnswer::Applied { revision: 3 }));
+    assert!(fresh.answer(A, command.id, WindowAnswer::Applied { revision: 3 }));
+    assert_eq!(
+        answered.await.unwrap(),
+        WindowAnswer::Applied { revision: 3 }
+    );
+    // Answered once.
+    assert!(!fresh.answer(A, command.id, WindowAnswer::Applied { revision: 3 }));
+}
+
+#[test]
+fn a_command_for_a_window_nobody_holds_is_refused() {
+    let windows = WorkspaceWindows::new();
+    let (org, principal) = owner("owner");
+    assert_eq!(
+        windows
+            .command(&org, &principal, A, sidebar(true))
+            .unwrap_err(),
+        CommandRefusal::Gone
+    );
+    let (slot, _commands) = windows.open(org.clone(), principal.clone());
+    slot.publish(A, 1, Some(window(true)));
+    // Another person's window is not theirs to change.
+    let (_, stranger) = owner("stranger");
+    assert_eq!(
+        windows
+            .command(&org, &stranger, A, sidebar(true))
+            .unwrap_err(),
+        CommandRefusal::Gone
+    );
+    // Withdrawn, it shows nothing to change.
+    slot.publish(A, 2, None);
+    assert_eq!(
+        windows
+            .command(&org, &principal, A, sidebar(true))
+            .unwrap_err(),
+        CommandRefusal::Gone
+    );
+}
+
+#[tokio::test]
+async fn a_window_that_stops_answering_is_busy_and_its_closing_ends_every_wait() {
+    let windows = WorkspaceWindows::new();
+    let (org, principal) = owner("owner");
+    let (slot, commands) = windows.open(org.clone(), principal.clone());
+    slot.publish(A, 1, Some(window(true)));
+    let waits: Vec<_> = (0..MAX_WINDOW_COMMANDS)
+        .map(|_| windows.command(&org, &principal, A, sidebar(true)).unwrap())
+        .collect();
+    assert_eq!(
+        windows
+            .command(&org, &principal, A, sidebar(true))
+            .unwrap_err(),
+        CommandRefusal::Busy
+    );
+    drop(commands);
+    drop(slot);
+    for wait in waits {
+        assert!(wait.await.is_err());
+    }
+}
+
+#[tokio::test]
+async fn a_wait_for_a_revision_ends_once_it_is_published() {
+    let windows = WorkspaceWindows::new();
+    let (org, principal) = owner("owner");
+    let (slot, _commands) = windows.open(org.clone(), principal.clone());
+    slot.publish(A, 1, Some(window(true)));
+    let waiting = {
+        let windows = windows.clone();
+        let (org, principal) = (org.clone(), principal.clone());
+        tokio::spawn(async move { windows.published(&org, &principal, A, 2).await })
+    };
+    tokio::task::yield_now().await;
+    assert!(!waiting.is_finished());
+    slot.publish(A, 2, Some(window(false)));
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_secs(5), waiting)
+            .await
+            .unwrap()
+            .unwrap()
+    );
+    // Already held: no wait at all.
+    assert!(windows.published(&org, &principal, A, 1).await);
+    // Its connection closes while a wait is on: the wait hears it is gone.
+    let waiting = {
+        let windows = windows.clone();
+        let (org, principal) = (org.clone(), principal.clone());
+        tokio::spawn(async move { windows.published(&org, &principal, A, 3).await })
+    };
+    tokio::task::yield_now().await;
+    drop(slot);
+    assert!(
+        !tokio::time::timeout(std::time::Duration::from_secs(5), waiting)
+            .await
+            .unwrap()
+            .unwrap()
+    );
 }

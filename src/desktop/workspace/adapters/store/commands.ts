@@ -53,6 +53,7 @@ export const {
   panelShown,
   panelTabShown: showPanelTab,
   panelTabClosed: closePanelTab,
+  panelSet: setPanel,
 } = workspaceActions
 
 export type WorkspaceCommand<Result = void> = ThunkAction<
