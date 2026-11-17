@@ -31,9 +31,11 @@ import {
  *   reviews     one turn asks `--reviews` reviews in a row, each a card
  *   large       one review larger than the old 16 KB display limit
  *   stop        Send turns into Stop while the turn runs; Stop cancels it.
- *               While it runs, the chat's channel in the sidebar shows a
- *               spinner at its end, which its settings replace only under
- *               the pointer; stopped, the spinner is gone
+ *               While it runs, the window shows work one way, shimmering
+ *               words, with no turning arc in a pane's header, the sidebar
+ *               or the line under the turn: the chat's channel name
+ *               shimmers, its settings show only under the pointer;
+ *               stopped, the name is plain again
  *   parent-stop Stop cancels the parent, owned child and grandchild without a report restart
  *   fail        the turn fails; the next message is sent in the same conversation
  *   restore     a restored conversation is opened and shows its saved record;
@@ -869,10 +871,10 @@ async function channelShowsList(page, failures) {
 const MAIN_CHANNEL = "Conversations"
 
 /**
- * A channel in the sidebar shows that something runs in it with a spinner at
- * its row's end, and its name says "Running" to a reader. Its settings stay
- * hidden until the row is pointed at, and then take the spinner's place.
- * Without a running turn no spinner is drawn.
+ * A channel in the sidebar shows that something runs in it by its name
+ * shimmering, with no glyph at its row's end, and its name says "Running" to
+ * a reader. Its settings stay hidden until the row is pointed at. Without a
+ * running turn the name is plain.
  */
 async function channelRunning(page, name, running, failures) {
   const row = page
@@ -891,9 +893,10 @@ async function channelRunning(page, name, running, failures) {
         return opacity
       }
       return {
-        // A count waiting on the person takes the spinner's place.
         counted: frame.querySelector("[data-trailing='count']") !== null,
-        spinner: shown(frame.querySelector('.workspace-status[data-status="running"]')),
+        shimmer: frame.querySelector(".workspace-shimmer[data-working]") !== null,
+        spinner: frame.querySelectorAll('.workspace-status[data-status="running"]')
+          .length,
         settings: shown(frame.querySelector("[data-channel-settings-open]")),
         said: (
           frame.querySelector("[data-size]")?.getAttribute("aria-label") ?? ""
@@ -910,47 +913,105 @@ async function channelRunning(page, name, running, failures) {
   // Away from the window's left edge, where the pointer would peek the sidebar out.
   await page.mouse.move(600, 400)
   const wanted = (now) =>
-    now.counted
-      ? !running || now.spinner === null
-      : (now.spinner !== null) === running && now.said === running
+    now.spinner === 0 && now.shimmer === running && now.said === running
   let now = await read()
   await waitFor(async () => wanted((now = await read())), 10_000)
-  if (!wanted(now))
+  if (now.spinner > 0)
     failures.push(
-      `channel ${name} ${running ? "shows no spinner while" : "still shows a spinner after"} a turn runs: ${JSON.stringify(now)}`,
+      `channel ${name} draws a turning arc (${now.spinner}): ${JSON.stringify(now)}`,
     )
-  // A count waiting on the person stands in the spinner's place: the spinner
-  // goes unchecked this time, and the run says so.
-  if (running && now.counted)
-    log(`channel ${name} held a waiting count, so its spinner was not checked`)
+  else if (!wanted(now))
+    failures.push(
+      `channel ${name}'s name ${running ? "does not shimmer while" : "still shimmers after"} a turn runs: ${JSON.stringify(now)}`,
+    )
   if (now.settings === null) {
     failures.push(`channel ${name} has no settings`)
     return
   }
   // Settled, not after a fixed wait: the kit fades them over its transition.
-  const spins = running && !now.counted
   const atRest =
     (await waitFor(async () => {
       const at = await read()
-      return at.settings === 0 && (!spins || at.spinner === 1) ? at : null
+      return at.settings === 0 ? at : null
     }, 5_000)) ?? (await read())
   if (atRest.settings !== 0)
     failures.push(`channel ${name} shows its settings at rest (${atRest.settings})`)
-  if (spins && atRest.spinner !== 1)
-    failures.push(`channel ${name}'s spinner shows at ${atRest.spinner} at rest`)
   await row.locator(":scope > [data-size]").hover({ timeout: 10_000 })
   const pointed =
     (await waitFor(async () => {
       const at = await read()
-      return at.settings === 1 && !(at.spinner > 0) ? at : null
+      return at.settings === 1 ? at : null
     }, 5_000)) ?? (await read())
   if (pointed.settings !== 1)
     failures.push(`channel ${name} pointed at shows its settings at ${pointed.settings}`)
-  if (pointed.spinner > 0)
+  // The name keeps saying it works under the pointer: nothing takes its place.
+  if (pointed.shimmer !== running)
     failures.push(
-      `channel ${name} pointed at still shows its spinner (${pointed.spinner})`,
+      `channel ${name} pointed at ${running ? "stops" : "starts"} shimmering: ${JSON.stringify(pointed)}`,
     )
   await page.mouse.move(600, 400)
+}
+
+/**
+ * While a turn runs, the window shows work one way: shimmering words, with no
+ * turning arc in a pane's header, the sidebar, or the line under the turn.
+ * A line under the turn, where one is drawn, is its words alone; a session
+ * row in the sidebar's tree, where one lists the chat, shimmers its title.
+ */
+async function oneWorkingSign(run, conversationId, failures) {
+  const read = () =>
+    run.page.evaluate(
+      ({ header, sidebar, id }) => {
+        const arcs = (scope) =>
+          [...document.querySelectorAll(scope)].reduce(
+            (sum, at) =>
+              sum +
+              at.querySelectorAll('.workspace-status[data-status="running"]').length,
+            0,
+          )
+        const lines = [...document.querySelectorAll(".workspace-live")]
+        const row = document.querySelector(
+          `${sidebar} .workspace-thread-row[data-session-row="${id}"]`,
+        )
+        return {
+          header: arcs(header),
+          sidebar: arcs(sidebar),
+          lines: lines.length,
+          lineArcs: arcs(".workspace-live"),
+          plainLines: lines.filter((line) => !line.querySelector(".workspace-shimmer"))
+            .length,
+          row: row
+            ? row.querySelector(".workspace-shimmer[data-working]") !== null
+            : null,
+        }
+      },
+      { header: css.paneHeader, sidebar: css.sidebar, id: conversationId },
+    )
+  // The tree's row learns of the turn from the list's next frame.
+  const now =
+    (await waitFor(async () => {
+      const at = await read()
+      return at.row !== false ? at : null
+    }, 5_000)) ?? (await read())
+  if (now.header > 0) failures.push(`a pane header draws a turning arc (${now.header})`)
+  if (now.sidebar > 0) failures.push(`the sidebar draws a turning arc (${now.sidebar})`)
+  if (now.lineArcs > 0)
+    failures.push(`the line under the turn draws a turning arc (${now.lineArcs})`)
+  if (now.plainLines > 0)
+    failures.push(`${now.plainLines} line(s) under a running turn do not shimmer`)
+  if (now.row === false)
+    failures.push("the running chat's sidebar row does not shimmer its title")
+  log(
+    `one working sign: ${now.lines} live line(s), sidebar row ${now.row === null ? "not listed" : "shimmers"}`,
+  )
+  if (run.evidence)
+    await run.page
+      .screenshot({
+        path: join(run.evidence, `working-${run.engine ?? "window"}.png`),
+        timeout: 4_000,
+        animations: "allow",
+      })
+      .catch((error) => log(`working screenshot: ${error.message.split("\n")[0]}`))
 }
 
 /** The compact rail and the window bar keep separate geometry. */
@@ -3449,6 +3510,7 @@ const steps = {
       failures.push("Send did not turn into Stop while the turn ran")
       return
     }
+    await oneWorkingSign(run, run.main.id, failures)
     await channelRunning(run.page, MAIN_CHANNEL, true, failures)
     await dock(run.page)
       .getByRole(...composerControls.stop)
