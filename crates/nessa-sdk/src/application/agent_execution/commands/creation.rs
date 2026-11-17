@@ -200,6 +200,18 @@ pub trait CreationStorage: Send + Sync {
             )))
         })
     }
+
+    /// Every retained submit and stop, in the order their command streams were
+    /// first admitted. One principal's [`Self::mutations`] is that principal's
+    /// slice of this order. A store without this observation returns the same
+    /// refusal as [`Self::mutations`].
+    fn observed_mutations(&self) -> CreationFuture<'_, Vec<super::mutation::MutationReceipt>> {
+        Box::pin(async {
+            Err(CreationStorageError::Storage(StorageError::Corrupt(
+                "mutation observation is not on this store".into(),
+            )))
+        })
+    }
 }
 
 /// Exclusive access to one principal request's immutable command history.

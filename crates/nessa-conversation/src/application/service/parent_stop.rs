@@ -30,7 +30,7 @@ use nessa_sdk::domain::agent_execution::subagents::{
     LifetimeState, OwnershipSnapshot, MAX_READ_PAGE,
 };
 use sha2::{Digest, Sha256};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::time::Duration;
 type Failure = MutationFailure<ConversationError>;
@@ -435,20 +435,41 @@ impl ConversationService {
     }
 }
 
+const MISSING_OBSERVATION: &str = "mutation observation is not on this store";
+
 impl ConversationService {
+    /// Submit and stop receipts in admission order, across every principal.
+    /// A store that only answers one principal falls back to `fallback`.
+    pub(super) async fn ordered_mutations(
+        &self,
+        fallback: &ConversationCaller,
+    ) -> Result<Vec<MutationReceipt>, ConversationError> {
+        let Some(storage) = self.commands() else {
+            return Ok(Vec::new());
+        };
+        match storage.observed_mutations().await {
+            Ok(receipts) => Ok(receipts),
+            Err(CreationStorageError::Storage(StorageError::Corrupt(detail)))
+                if detail == MISSING_OBSERVATION =>
+            {
+                storage
+                    .mutations(fallback.principal_id.as_str().into())
+                    .await
+                    .map_err(|_| ConversationError::Unavailable)
+            }
+            Err(_) => Err(ConversationError::Unavailable),
+        }
+    }
+
     /// Read complete acknowledged selections. Prefixes only locate candidate
     /// child receipts; the root's digest, never a prefix, binds their authority.
+    /// A peer's stop is in that peer's ledger. The binding's principal is the
+    /// one the selection was stored under.
     pub(super) async fn captured_stops(
         &self,
         caller: &ConversationCaller,
     ) -> Result<Vec<(MutationBinding, MutationBinding)>, ConversationError> {
-        let Some(storage) = self.commands() else {
-            return Ok(Vec::new());
-        };
-        let receipts = storage
-            .mutations(caller.principal_id.as_str().into())
-            .await
-            .map_err(|_| ConversationError::Unavailable)?;
+        let receipts = self.ordered_mutations(caller).await?;
         let mut captured = Vec::new();
         let mut aggregate_children = Vec::new();
         for receipt in &receipts {
@@ -459,6 +480,8 @@ impl ConversationService {
             let id = ConversationId::new(binding.target().as_str())
                 .map_err(|_| ConversationError::Unavailable)?;
             let mut origin = caller.clone();
+            origin.principal_id = PrincipalId::new(binding.actor().principal_id())
+                .map_err(|_| ConversationError::Unavailable)?;
             origin.surface_id = binding.actor().surface_id().into();
             origin.action_id = binding.actor().request_id().into();
             let base = stop_binding(&id, &origin, binding.turn_id().as_str())?;
@@ -519,12 +542,7 @@ impl ConversationService {
         caller: &ConversationCaller,
     ) -> Result<bool, ConversationError> {
         let captured = self.captured_stops(caller).await?;
-        let receipts = self
-            .commands()
-            .ok_or(ConversationError::Unavailable)?
-            .mutations(caller.principal_id.as_str().into())
-            .await
-            .map_err(|_| ConversationError::Unavailable)?;
+        let receipts = self.ordered_mutations(caller).await?;
         for (root, target) in captured {
             if target.target() != &conversation_session(id)
                 || target.turn_id() != turn.execution_id()
@@ -628,22 +646,45 @@ impl ConversationService {
         let Some(storage) = self.commands() else {
             return Ok(0);
         };
-        let mut owners = BTreeSet::new();
-        for row in &snapshot.lifetimes {
-            let id = ConversationId::new(row.session_id.as_str())
-                .map_err(|_| ConversationError::Unavailable)?;
-            if let Some(record) =
-                super::load_conversation(self.inner.metadata.as_ref(), &id).await?
-            {
-                owners.insert(record.owner().as_str().to_owned());
+        let groups = match storage.observed_mutations().await {
+            Ok(receipts) => {
+                let mut grouped: BTreeMap<String, Vec<MutationReceipt>> = BTreeMap::new();
+                for receipt in receipts {
+                    grouped
+                        .entry(receipt.binding().actor().principal_id().to_owned())
+                        .or_default()
+                        .push(receipt);
+                }
+                grouped.into_values().collect()
             }
-        }
+            Err(CreationStorageError::Storage(StorageError::Corrupt(detail)))
+                if detail == MISSING_OBSERVATION =>
+            {
+                let mut owners = BTreeSet::new();
+                for row in &snapshot.lifetimes {
+                    let id = ConversationId::new(row.session_id.as_str())
+                        .map_err(|_| ConversationError::Unavailable)?;
+                    if let Some(record) =
+                        super::load_conversation(self.inner.metadata.as_ref(), &id).await?
+                    {
+                        owners.insert(record.owner().as_str().to_owned());
+                    }
+                }
+                let mut groups = Vec::new();
+                for principal in owners {
+                    groups.push(
+                        storage
+                            .mutations(principal)
+                            .await
+                            .map_err(|_| ConversationError::Unavailable)?,
+                    );
+                }
+                groups
+            }
+            Err(_) => return Err(ConversationError::Unavailable),
+        };
         let mut retry = Vec::new();
-        for principal in owners {
-            let receipts = storage
-                .mutations(principal.clone())
-                .await
-                .map_err(|_| ConversationError::Unavailable)?;
+        for receipts in groups {
             for receipt in &receipts {
                 let binding = receipt.binding();
                 if binding.operation() != MutationOperation::Stop {

@@ -392,12 +392,26 @@ async fn two_peers_keep_separate_sends_and_stops_under_one_request_id() {
         .stop_command_as(
             storage.clone(),
             target,
-            stop_access,
+            stop_access.clone(),
             stop_two,
             "turn-two".into(),
         )
         .await
         .unwrap();
+    use nessa_sdk::application::agent_execution::commands::MutationOperation;
+    service.bind_commands(storage.clone());
+    let found = service.ordered_mutations(&stop_access).await.unwrap();
+    let principals: Vec<_> = found
+        .iter()
+        .filter(|receipt| receipt.binding().operation() == MutationOperation::Stop)
+        .map(|receipt| receipt.binding().actor().principal_id().to_owned())
+        .collect();
+    assert!(principals
+        .iter()
+        .any(|principal| principal == "gateway:one"));
+    assert!(principals
+        .iter()
+        .any(|principal| principal == "gateway:two"));
     retire(service, storage, metadata).await;
 }
 

@@ -13,6 +13,7 @@ use super::{
     conversation_session, ConversationCaller, ConversationError, ConversationId,
     ConversationService, SubmissionMode,
 };
+use nessa_auth::domain::PrincipalId;
 use nessa_sdk::application::agent_execution::{
     agents::resumed_turn_id,
     commands::{MutationOperation, MutationOutcome, MutationStage},
@@ -176,11 +177,7 @@ impl ConversationService {
         if selected.is_empty() {
             return Ok(HashSet::new());
         }
-        let storage = self.commands().ok_or(ConversationError::Unavailable)?;
-        let receipts = storage
-            .mutations(caller.principal_id.as_str().into())
-            .await
-            .map_err(|_| ConversationError::Unavailable)?;
+        let receipts = self.ordered_mutations(caller).await?;
         let mut stopped = HashSet::new();
         for binding in selected {
             let receipt = receipts
@@ -205,13 +202,7 @@ impl ConversationService {
         caller: &ConversationCaller,
         history: &[InvocationRecord],
     ) -> Result<Vec<(usize, String)>, ConversationError> {
-        let Some(storage) = self.commands() else {
-            return Ok(Vec::new());
-        };
-        let receipts = storage
-            .mutations(caller.principal_id.as_str().into())
-            .await
-            .map_err(|_| ConversationError::Unavailable)?;
+        let receipts = self.ordered_mutations(caller).await?;
         let mut people = Vec::new();
         for record in history {
             if record.request.user_message.sender() != &MessageSender::Person {
@@ -252,39 +243,51 @@ impl ConversationService {
                     })
                     .collect(),
             };
-            let mut sender = caller.clone();
-            sender.surface_id = record.actor.surface_id().into();
-            sender.action_id = record.actor.request_id().into();
             let mode = if record.submission == InvocationSubmission::Queued {
                 SubmissionMode::Queue
             } else {
                 SubmissionMode::Steer
             };
-            let expected = super::mutation::submit_binding(
-                id,
-                &sender,
-                record.request.execution_id.as_str(),
-                &message,
-                mode,
-                None,
-            )?;
-            if let Some(index) = receipts.iter().position(|receipt| {
-                receipt.binding().operation() == MutationOperation::Submit
-                    && receipt.binding() == &expected
-                    && receipt.outcome() == Some(MutationOutcome::Dispatched)
-            }) {
-                if let Some(store) = self.inner.scheduled_messages.get() {
-                    if let Some(evidence) = store
-                        .command_evidence(&id.to_string(), record.request.execution_id.as_str())
-                        .await?
-                    {
-                        if evidence.binding(id, record.request.execution_id.as_str())? == expected {
-                            continue;
-                        }
+            let Some(index) = receipts.iter().position(|receipt| {
+                if receipt.binding().operation() != MutationOperation::Submit
+                    || receipt.outcome() != Some(MutationOutcome::Dispatched)
+                    || receipt.binding().target() != &conversation_session(id)
+                    || receipt.binding().turn_id().as_str() != record.request.execution_id.as_str()
+                {
+                    return false;
+                }
+                let Ok(principal) = PrincipalId::new(receipt.binding().actor().principal_id())
+                else {
+                    return false;
+                };
+                let mut sender = caller.clone();
+                sender.principal_id = principal;
+                sender.surface_id = record.actor.surface_id().into();
+                sender.action_id = record.actor.request_id().into();
+                super::mutation::submit_binding(
+                    id,
+                    &sender,
+                    record.request.execution_id.as_str(),
+                    &message,
+                    mode,
+                    None,
+                )
+                .is_ok_and(|expected| receipt.binding() == &expected)
+            }) else {
+                continue;
+            };
+            let expected = receipts[index].binding().clone();
+            if let Some(store) = self.inner.scheduled_messages.get() {
+                if let Some(evidence) = store
+                    .command_evidence(&id.to_string(), record.request.execution_id.as_str())
+                    .await?
+                {
+                    if evidence.binding(id, record.request.execution_id.as_str())? == expected {
+                        continue;
                     }
                 }
-                people.push((index, record.request.execution_id.as_str().to_owned()));
             }
+            people.push((index, record.request.execution_id.as_str().to_owned()));
         }
         people.sort();
         Ok(people)
@@ -310,13 +313,7 @@ impl ConversationService {
         if roots.is_empty() {
             return Ok(false);
         }
-        let Some(storage) = self.commands() else {
-            return Ok(true);
-        };
-        let receipts = storage
-            .mutations(caller.principal_id.as_str().into())
-            .await
-            .map_err(|_| ConversationError::Unavailable)?;
+        let receipts = self.ordered_mutations(caller).await?;
         let stopped_at = receipts
             .iter()
             .enumerate()
