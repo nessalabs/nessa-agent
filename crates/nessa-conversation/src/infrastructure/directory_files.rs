@@ -318,15 +318,21 @@ fn absolute(path: &str) -> Result<String, DirectoryRefusal> {
 }
 
 fn open_directory(path: &str) -> Result<File, DirectoryRefusal> {
+    // The owner named this path. An ancestor may be a symlink, as `/var` is
+    // on macOS. Following those ancestors reaches the directory. Every name
+    // inside it is opened from the resulting handle without following links.
     let absolute = absolute(path)?;
-    let mut current = open_at(libc::AT_FDCWD, "/", true)?;
-    if absolute == "/" {
-        return Ok(current);
+    let name = c_name(&absolute)?;
+    let fd = unsafe {
+        libc::open(
+            name.as_ptr(),
+            libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC,
+        )
+    };
+    if fd < 0 {
+        return Err(io(std::io::Error::last_os_error()));
     }
-    for component in absolute.split('/').filter(|part| !part.is_empty()) {
-        current = open_at(current.as_raw_fd(), component, true)?;
-    }
-    Ok(current)
+    Ok(unsafe { File::from_raw_fd(fd) })
 }
 
 fn walk_from(root: RawFd, relative: &str) -> Result<(Option<File>, PathLeave), DirectoryRefusal> {
@@ -410,12 +416,18 @@ fn open_at(dir: RawFd, name: &str, directory: bool) -> Result<File, DirectoryRef
         return Ok(unsafe { File::from_raw_fd(fd) });
     }
     let error = std::io::Error::last_os_error();
-    if error.raw_os_error() == Some(libc::ELOOP) {
+    if error.raw_os_error() == Some(libc::ELOOP) || is_symlink(dir, &name) {
         return Err(DirectoryRefusal::Outside {
             leave: PathLeave::Symlink,
         });
     }
     Err(io(error))
+}
+
+fn is_symlink(dir: RawFd, name: &std::ffi::CStr) -> bool {
+    let mut info: libc::stat = unsafe { std::mem::zeroed() };
+    let result = unsafe { libc::fstatat(dir, name.as_ptr(), &mut info, libc::AT_SYMLINK_NOFOLLOW) };
+    result == 0 && (info.st_mode & libc::S_IFMT) == libc::S_IFLNK
 }
 
 fn is_marker(root: RawFd, opened: RawFd) -> bool {
