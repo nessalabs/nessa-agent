@@ -127,9 +127,9 @@ jobs:
         run: pnpm exec playwright install --with-deps chromium
         timeout-minutes: 15
       # nessa-mcp: the `github` step runs commands through Nessa's own shell tool.
-      - run: |
-          cargo build -p nessa-server -p nessa-mcp
-          cargo build -p nessa-client-core --example read_only_sync
+      - run: cargo build -p nessa-server -p nessa-mcp
+      # The peer step enrolls through this example.
+      - run: cargo build -p nessa-client-core --example read_only_sync
       - name: Pick the seed
         env:
           SEED: ${{ inputs.seed }}
