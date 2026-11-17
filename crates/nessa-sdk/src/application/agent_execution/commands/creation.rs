@@ -33,6 +33,8 @@ pub enum CreationStorageError {
     TaskFault(CreationTaskFault),
     /// This principal request already names a different command family.
     ForeignRequest,
+    /// This store cannot list every principal's commands.
+    UnsupportedObservation,
 }
 impl From<StorageError> for CreationStorageError {
     fn from(error: StorageError) -> Self {
@@ -206,11 +208,7 @@ pub trait CreationStorage: Send + Sync {
     /// slice of this order. A store without this observation returns the same
     /// refusal as [`Self::mutations`].
     fn observed_mutations(&self) -> CreationFuture<'_, Vec<super::mutation::MutationReceipt>> {
-        Box::pin(async {
-            Err(CreationStorageError::Storage(StorageError::Corrupt(
-                "mutation observation is not on this store".into(),
-            )))
-        })
+        Box::pin(async { Err(CreationStorageError::UnsupportedObservation) })
     }
 }
 

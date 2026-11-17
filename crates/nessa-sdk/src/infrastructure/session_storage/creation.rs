@@ -456,6 +456,7 @@ fn replay_error(error: CreationStorageError) -> StorageError {
     match error {
         CreationStorageError::Storage(error) => error,
         CreationStorageError::ForeignRequest => corrupt("conflicting command identity"),
+        CreationStorageError::UnsupportedObservation => corrupt("unsupported command observation"),
         CreationStorageError::TaskFault(_) => corrupt("command replay task fault"),
     }
 }

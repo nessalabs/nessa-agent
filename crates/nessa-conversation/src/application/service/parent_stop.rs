@@ -435,8 +435,6 @@ impl ConversationService {
     }
 }
 
-const MISSING_OBSERVATION: &str = "mutation observation is not on this store";
-
 impl ConversationService {
     /// Submit and stop receipts in admission order, across every principal.
     /// A store that only answers one principal falls back to `fallback`.
@@ -449,14 +447,10 @@ impl ConversationService {
         };
         match storage.observed_mutations().await {
             Ok(receipts) => Ok(receipts),
-            Err(CreationStorageError::Storage(StorageError::Corrupt(detail)))
-                if detail == MISSING_OBSERVATION =>
-            {
-                storage
-                    .mutations(fallback.principal_id.as_str().into())
-                    .await
-                    .map_err(|_| ConversationError::Unavailable)
-            }
+            Err(CreationStorageError::UnsupportedObservation) => storage
+                .mutations(fallback.principal_id.as_str().into())
+                .await
+                .map_err(|_| ConversationError::Unavailable),
             Err(_) => Err(ConversationError::Unavailable),
         }
     }
@@ -657,9 +651,7 @@ impl ConversationService {
                 }
                 grouped.into_values().collect()
             }
-            Err(CreationStorageError::Storage(StorageError::Corrupt(detail)))
-                if detail == MISSING_OBSERVATION =>
-            {
+            Err(CreationStorageError::UnsupportedObservation) => {
                 let mut owners = BTreeSet::new();
                 for row in &snapshot.lifetimes {
                     let id = ConversationId::new(row.session_id.as_str())

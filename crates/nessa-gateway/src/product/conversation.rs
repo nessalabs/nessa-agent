@@ -703,9 +703,10 @@ async fn answer(
                 let params = target_params!(ConversationAnswerQuestionParams);
                 interaction_key(&params.question)?;
                 service
-                    .answer_question(
+                    .answer_question_as(
                         conversation_id(&params.conversation_id)?,
                         caller(params.request_id.clone()),
+                        session_caller(params.request_id.clone()).actor()?,
                         params.execution_id,
                         params.question_id,
                         params.question,
@@ -765,9 +766,10 @@ async fn answer(
                     }
                 }
                 service
-                    .answer(
+                    .answer_as(
                         conversation_id(&params.conversation_id)?,
                         caller(params.request_id.clone()),
+                        session_caller(params.request_id.clone()).actor()?,
                         params.execution_id,
                         params.permission_id,
                         params.review,
@@ -837,9 +839,10 @@ async fn answer(
                 let params = target_params!(ConversationCancelParams);
                 interaction_key(&params.review)?;
                 service
-                    .cancel_permission(
+                    .cancel_permission_as(
                         conversation_id(&params.conversation_id)?,
                         caller(params.request_id.clone()),
+                        session_caller(params.request_id.clone()).actor()?,
                         params.execution_id,
                         params.permission_id,
                         params.review,
