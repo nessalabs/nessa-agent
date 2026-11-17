@@ -598,13 +598,17 @@ fn restarted_installed_dialer_delivers_the_missing_install_to_offered_grantor() 
     );
     let (dialer_tx, grantor_rx) = std::sync::mpsc::channel();
     let (grantor_tx, dialer_rx) = std::sync::mpsc::channel();
+    let grantor_installed = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let mut dialer_pipe = Queue {
         tx: dialer_tx,
         rx: dialer_rx,
     };
-    let mut grantor_pipe = Queue {
-        tx: grantor_tx,
-        rx: grantor_rx,
+    let mut grantor_pipe = CountingQueue {
+        inner: Queue {
+            tx: grantor_tx,
+            rx: grantor_rx,
+        },
+        installed: grantor_installed.clone(),
     };
     let worker = std::thread::spawn(move || {
         exchange(
@@ -637,6 +641,29 @@ fn restarted_installed_dialer_delivers_the_missing_install_to_offered_grantor() 
     assert!(writes
         .iter()
         .any(|commit| commit.durable && commit.discovery.installed_mac().is_some()));
+    assert_eq!(
+        grantor_installed.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "the grantor sends Installed once; the commit is that send"
+    );
+}
+
+struct CountingQueue {
+    inner: Queue,
+    installed: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+}
+
+impl DiscoveryPipe for CountingQueue {
+    fn send_frame(&mut self, bytes: &[u8]) -> std::io::Result<()> {
+        if matches!(decode_message(bytes), Some(Inbound::Installed { .. })) {
+            self.installed
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+        self.inner.send_frame(bytes)
+    }
+    fn recv_frame(&mut self) -> std::io::Result<Vec<u8>> {
+        self.inner.recv_frame()
+    }
 }
 
 #[test]

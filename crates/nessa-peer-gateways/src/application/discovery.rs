@@ -1078,11 +1078,47 @@ pub enum ExchangeError {
     Entropy,
 }
 
+/// Generations of the terminal `Installed` frame this attempt has exchanged.
+/// A commit that already sent one is the send; `reconnect` does not emit it again.
+#[derive(Default)]
+struct Terminal {
+    sent: Option<[u8; 32]>,
+    received: Option<[u8; 32]>,
+}
+
+impl Terminal {
+    fn note_outbound(&mut self, message: &Outbound) {
+        if let Outbound::Installed { generation } = message {
+            self.sent = Some(*generation);
+        }
+    }
+
+    fn note_inbound(&mut self, message: &Inbound) {
+        if let Inbound::Installed { generation } = message {
+            self.received = Some(*generation);
+        }
+    }
+
+    /// `restarted_installed_dialer_delivers_the_missing_install_to_offered_grantor`
+    /// is the regression: both sides hold the installed generation, each has
+    /// sent `Installed` for it once, and each has received the peer's.
+    fn agreed(&self, session: &Session) -> bool {
+        let Some(generation) = session.discovery.generation() else {
+            return false;
+        };
+        session.discovery.installed_mac().is_some()
+            && self.sent == Some(generation)
+            && self.received == Some(generation)
+    }
+}
+
 /// Run one side of the exchange. `sends_first` is the dialer: it writes the
 /// resume messages before it reads. Each durable commit is handed to
 /// `persist` before its messages are sent. A `{` frame is the enrollment
-/// refusal envelope, not current-credential evidence. An installed dialer reads
-/// the grantor response before completing; transport loss remains an error.
+/// refusal envelope, not current-credential evidence. The attempt completes
+/// when the installed generation's `Installed` frame has been sent once and
+/// received once. A resume does not send that frame again after a commit
+/// already did. Transport loss before that agreement remains an error.
 pub fn exchange(
     session: &mut Session,
     pipe: &mut dyn DiscoveryPipe,
@@ -1090,10 +1126,10 @@ pub fn exchange(
     persist: &mut dyn FnMut(&Commit) -> Result<(), std::io::Error>,
     sends_first: bool,
 ) -> Result<(), ExchangeError> {
+    let mut terminal = Terminal::default();
     let mut need_send = true;
-    let mut received = !sends_first;
     if !sends_first {
-        match read_one(session, pipe, entropy, persist) {
+        match read_one(session, pipe, entropy, persist, &mut terminal) {
             Ok(_) => need_send = true,
             Err(error) => return Err(error),
         }
@@ -1101,16 +1137,22 @@ pub fn exchange(
     for _ in 0..12 {
         if need_send {
             for message in session.reconnect() {
+                if matches!(
+                    &message,
+                    Outbound::Installed { generation } if terminal.sent == Some(*generation)
+                ) {
+                    continue;
+                }
                 send_frame(pipe, &encode_message(&message))?;
+                terminal.note_outbound(&message);
             }
         }
-        if received && session.discovery.installed_mac().is_some() {
+        if terminal.agreed(session) {
             return Ok(());
         }
-        need_send = read_one(session, pipe, entropy, persist)?;
-        received = true;
+        need_send = read_one(session, pipe, entropy, persist, &mut terminal)?;
     }
-    if session.discovery.installed_mac().is_some() {
+    if terminal.agreed(session) {
         Ok(())
     } else {
         Err(ExchangeError::BadMessage)
@@ -1140,6 +1182,7 @@ fn read_one(
     pipe: &mut dyn DiscoveryPipe,
     entropy: &mut dyn FnMut() -> Option<[u8; 32]>,
     persist: &mut dyn FnMut(&Commit) -> Result<(), std::io::Error>,
+    terminal: &mut Terminal,
 ) -> Result<bool, ExchangeError> {
     let frame = pipe.recv_frame().map_err(ExchangeError::Io)?;
     match frame.as_slice() {
@@ -1152,6 +1195,7 @@ fn read_one(
         return Err(ExchangeError::Refused);
     }
     let inbound = decode_message(&frame).ok_or(ExchangeError::BadMessage)?;
+    terminal.note_inbound(&inbound);
     let before = session.discovery.name();
     let mut entropy_failed = false;
     let (next, commits) = session.receive(inbound, &mut || match entropy() {
@@ -1169,7 +1213,14 @@ fn read_one(
             persist(commit).map_err(ExchangeError::Io)?;
         }
         for message in &commit.send {
+            if matches!(
+                message,
+                Outbound::Installed { generation } if terminal.sent == Some(*generation)
+            ) {
+                continue;
+            }
             send_frame(pipe, &encode_message(message))?;
+            terminal.note_outbound(message);
         }
     }
     let changed = next.discovery.name() != before;
