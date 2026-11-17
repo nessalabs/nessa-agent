@@ -457,7 +457,7 @@ fn catalogue() -> &'static [Limit] {
             id: "peer.poll_interval",
             tier: "fixed",
             owner: "POLL_INTERVAL in crates/nessa-peer-gateways/src/infrastructure/poller.rs",
-            meaning: "how often each peer is read again, jittered 80 to 120 percent; an Active read is one grants.subscribe snapshot and the chats its follow rule names, and does not call catalogueHead",
+            meaning: "how often each peer is read again, jittered 80 to 120 percent; an Active peer holds grants.subscribe and the conversation.subscribe sessions its follow rule names until that peer stops or the subscription ends, and that read does not call catalogueHead; a dropped subscription resumes after this interval",
         },
         Limit {
             id: "peer.poll_backoff_cap",
@@ -469,7 +469,7 @@ fn catalogue() -> &'static [Limit] {
             id: "peer.read_budget",
             tier: "fixed",
             owner: "READ_BUDGET in crates/nessa-peer-gateways/src/infrastructure/poller.rs",
-            meaning: "the longest one read of one peer gateway runs, on the injected clock; a read that reaches it having saved something ends incomplete and continues on the next cycle, and one that saved nothing is unreachable and backs off. Each peer has this timeout of its own, so a slow or failing peer is reported and the others are read without waiting it out",
+            meaning: "the longest the first pass of one peer read runs, on the injected clock, before an Active grant subscription is up; a read that reaches it having saved something ends incomplete and continues on the next cycle, and one that saved nothing is unreachable and backs off. Once that subscription is up the read stays until the peer stops or the subscription ends. Each peer has this timeout of its own, so a slow or failing peer is reported and the others are read without waiting it out",
         },
         Limit {
             id: "peer.preempt",
@@ -487,7 +487,7 @@ fn catalogue() -> &'static [Limit] {
             id: "peer.reads_at_once",
             tier: "fixed",
             owner: "READS_AT_ONCE in crates/nessa-peer-gateways/src/infrastructure/poller.rs",
-            meaning: "how many peer gateways are read at once; one more stays due until a read finishes and frees a place, and is not failed or skipped. A slow peer holds only its own place, until that cycle ends, and its read is bounded by its own read budget",
+            meaning: "how many peer gateways are read at once; one more stays due until a read finishes and frees a place, and is not failed or skipped. An Active follow frees its place when the first grant snapshot is stored, and holds that peer's turn until the peer stops or the subscription ends",
         },
         Limit {
             id: "peer.withdrawn_per_read",

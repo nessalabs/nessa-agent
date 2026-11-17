@@ -39,29 +39,32 @@ impl ReadOnlyCache {
             .map_err(super::rows::database_error)
     }
 
-    /// Replace or continue this receiver's replica and store `cursor` when
-    /// `complete`. Returns the conversation ids that were held and are not
-    /// in the resulting set.
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn apply_grant_frame(
+    /// Apply `entries` in commit order and store the cursor. A later record for
+    /// the same conversation wins. Removing a grant also removes that
+    /// conversation's retained transcript. Returns the ids that left the replica.
+    pub(crate) fn apply_grant_entries(
         &mut self,
         receiver: &str,
         replaces: bool,
-        complete: bool,
         incarnation: &str,
         position: u64,
-        present: &[(String, String, i64)],
-        absent: &[String],
+        entries: &[(String, bool, Option<String>, i64)],
     ) -> Result<Vec<String>, CacheError> {
-        if !complete {
-            return Ok(Vec::new());
-        }
         let transaction = self
             .connection
             .transaction()
             .map_err(super::rows::database_error)?;
         let mut withdrawn = Vec::new();
         if replaces {
+            let mut final_present: Vec<(String, String, i64)> = Vec::new();
+            for (conversation, absent, capabilities, revision) in entries {
+                final_present.retain(|(id, _, _)| id != conversation);
+                if !absent {
+                    if let Some(capabilities) = capabilities {
+                        final_present.push((conversation.clone(), capabilities.clone(), *revision));
+                    }
+                }
+            }
             let mut statement = transaction
                 .prepare("SELECT conversation_id FROM grant_rows WHERE receiver = ?1")
                 .map_err(super::rows::database_error)?;
@@ -71,49 +74,43 @@ impl ReadOnlyCache {
                 .collect::<Result<_, _>>()
                 .map_err(super::rows::database_error)?;
             drop(statement);
-            transaction
-                .execute(
-                    "DELETE FROM grant_rows WHERE receiver = ?1",
-                    params![receiver],
-                )
-                .map_err(super::rows::database_error)?;
-            for (conversation, capabilities, revision) in present {
-                transaction
-                    .execute(
-                        "INSERT INTO grant_rows (receiver, conversation_id, capabilities, policy_revision)
-                         VALUES (?1, ?2, ?3, ?4)",
-                        params![receiver, conversation, capabilities, revision],
-                    )
-                    .map_err(super::rows::database_error)?;
-            }
             for id in existing {
-                if !present.iter().any(|(kept, _, _)| kept == &id) {
+                if !final_present.iter().any(|(kept, _, _)| kept == &id) {
+                    remove_grant_conversation(&transaction, receiver, &id)?;
                     withdrawn.push(id);
                 }
             }
-        } else {
-            for id in absent {
-                let removed = transaction
-                    .execute(
-                        "DELETE FROM grant_rows WHERE receiver = ?1 AND conversation_id = ?2",
-                        params![receiver, id],
-                    )
-                    .map_err(super::rows::database_error)?;
-                if removed > 0 {
-                    withdrawn.push(id.clone());
-                }
+            for (conversation, capabilities, revision) in &final_present {
+                upsert_grant(
+                    &transaction,
+                    receiver,
+                    conversation,
+                    capabilities,
+                    *revision,
+                )?;
             }
-            for (conversation, capabilities, revision) in present {
-                transaction
-                    .execute(
-                        "INSERT INTO grant_rows (receiver, conversation_id, capabilities, policy_revision)
-                         VALUES (?1, ?2, ?3, ?4)
-                         ON CONFLICT(receiver, conversation_id) DO UPDATE SET
-                           capabilities = excluded.capabilities,
-                           policy_revision = excluded.policy_revision",
-                        params![receiver, conversation, capabilities, revision],
-                    )
-                    .map_err(super::rows::database_error)?;
+        } else {
+            // Last record for each conversation wins. An earlier tombstone
+            // must not delete a transcript a later grant in this frame keeps.
+            let mut last: Vec<&(String, bool, Option<String>, i64)> = Vec::new();
+            for entry in entries {
+                last.retain(|kept| kept.0 != entry.0);
+                last.push(entry);
+            }
+            for (conversation, absent, capabilities, revision) in last {
+                if *absent || capabilities.is_none() {
+                    if remove_grant_conversation(&transaction, receiver, conversation)? {
+                        withdrawn.push(conversation.clone());
+                    }
+                } else if let Some(capabilities) = capabilities {
+                    upsert_grant(
+                        &transaction,
+                        receiver,
+                        conversation,
+                        capabilities,
+                        *revision,
+                    )?;
+                }
             }
         }
         let position = i64::try_from(position).map_err(|_| CacheError::Corrupt)?;
@@ -125,6 +122,7 @@ impl ReadOnlyCache {
             )
             .map_err(super::rows::database_error)?;
         transaction.commit().map_err(super::rows::database_error)?;
+        self.invalidate_loaded();
         Ok(withdrawn)
     }
 
@@ -139,4 +137,58 @@ impl ReadOnlyCache {
     }
 }
 
-use nessa_local_database::rusqlite::OptionalExtension;
+use nessa_local_database::rusqlite::{OptionalExtension, Transaction};
+
+fn upsert_grant(
+    transaction: &Transaction<'_>,
+    receiver: &str,
+    conversation: &str,
+    capabilities: &str,
+    revision: i64,
+) -> Result<(), CacheError> {
+    transaction
+        .execute(
+            "INSERT INTO grant_rows (receiver, conversation_id, capabilities, policy_revision)
+             VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(receiver, conversation_id) DO UPDATE SET
+               capabilities = excluded.capabilities,
+               policy_revision = excluded.policy_revision",
+            params![receiver, conversation, capabilities, revision],
+        )
+        .map_err(super::rows::database_error)?;
+    Ok(())
+}
+
+/// Drop the grant row and the transcript stored for that conversation.
+/// True when a grant row was removed.
+fn remove_grant_conversation(
+    transaction: &Transaction<'_>,
+    receiver: &str,
+    conversation: &str,
+) -> Result<bool, CacheError> {
+    let removed = transaction
+        .execute(
+            "DELETE FROM grant_rows WHERE receiver = ?1 AND conversation_id = ?2",
+            params![receiver, conversation],
+        )
+        .map_err(super::rows::database_error)?;
+    for table in [
+        "transcript_records",
+        "transcript_checkpoints",
+        "transcript_progress",
+        "catalogue_entries",
+    ] {
+        let column = if table == "catalogue_entries" {
+            "entry_id"
+        } else {
+            "stream"
+        };
+        transaction
+            .execute(
+                &format!("DELETE FROM {table} WHERE receiver = ?1 AND {column} = ?2"),
+                params![receiver, conversation],
+            )
+            .map_err(super::rows::database_error)?;
+    }
+    Ok(removed > 0)
+}

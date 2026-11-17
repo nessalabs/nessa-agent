@@ -1317,3 +1317,57 @@ async fn hot_cache_page_does_not_clone_pending_prefix() {
     );
     assert_eq!(store.transcript(&scope).unwrap().downloaded(), 21);
 }
+
+#[test]
+fn a_grant_frame_keeps_the_last_record_and_its_transcript() {
+    let root = tempfile::tempdir().unwrap();
+    let mut cache = cache(&cache_path(root.path(), "grants.sqlite3"));
+    let blob = [0_u8, 0, 0, 0, 0, 0, 0, 1];
+    cache
+        .connection
+        .execute(
+            "INSERT INTO transcript_progress
+             (receiver, origin, stream, incarnation, schema_id, access_epoch, downloaded, applied, facts, generation)
+             VALUES ('recv', 'origin', 'conv-a', 'inc', 'schema', 'epoch', ?1, ?1, ?1, ?1)",
+            params![blob.as_slice()],
+        )
+        .unwrap();
+    let present = ("conv-a".to_owned(), false, Some("read".to_owned()), 1_i64);
+    let absent = ("conv-a".to_owned(), true, None, 2_i64);
+    let restored = ("conv-a".to_owned(), false, Some("read".to_owned()), 3_i64);
+    cache
+        .apply_grant_entries(
+            "recv",
+            false,
+            "inc",
+            3,
+            &[present.clone(), absent.clone(), restored],
+        )
+        .unwrap();
+    assert_eq!(cache.grant_ids("recv").unwrap(), vec!["conv-a".to_owned()]);
+    let kept: i64 = cache
+        .connection
+        .query_row(
+            "SELECT count(*) FROM transcript_progress WHERE receiver = 'recv' AND stream = 'conv-a'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        kept, 1,
+        "a later grant in the same frame keeps the transcript"
+    );
+    cache
+        .apply_grant_entries("recv", false, "inc", 4, &[present, absent])
+        .unwrap();
+    assert!(cache.grant_ids("recv").unwrap().is_empty());
+    let gone: i64 = cache
+        .connection
+        .query_row(
+            "SELECT count(*) FROM transcript_progress WHERE receiver = 'recv' AND stream = 'conv-a'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(gone, 0, "a revoke removes the transcript with the grant");
+}

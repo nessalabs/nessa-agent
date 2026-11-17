@@ -91,6 +91,10 @@ pub(super) async fn run(run: Run) {
     // wake drops the pin and sends a replacement snapshot.
     let mut continue_pin = false;
     loop {
+        // Register before the read. A commit during the read or the send
+        // marks this waiter, and the wait below returns at once.
+        let notified = wake.notified();
+        tokio::pin!(notified);
         if let Err(code) =
             read_access::admit_paired_read(&state, &session, "grants.subscribe").await
         {
@@ -132,7 +136,7 @@ pub(super) async fn run(run: Run) {
             }
         }
         if caught_up(&stream, after.as_ref()) && announced && pin.is_none() {
-            if wait_next(&wake, &mut pages).await.is_none() {
+            if wait_registered(&mut notified, &mut pages).await.is_none() {
                 return;
             }
             continue;
@@ -208,7 +212,7 @@ pub(super) async fn run(run: Run) {
             return;
         }
         announced = true;
-        let Some(paged) = wait_next(&wake, &mut pages).await else {
+        let Some(paged) = wait_registered(&mut notified, &mut pages).await else {
             return;
         };
         let log_moved = paged.is_none();
@@ -269,8 +273,9 @@ async fn fresh_frame(
             .grant_log_after(receiver, position)
             .await
             .map_err(|_| ())?;
+        *snapshots = snapshots.saturating_add(1);
         let mut pin = Pin {
-            id: 0,
+            id: *snapshots,
             replaces: false,
             incarnation: stream.incarnation.clone(),
             head: stream.head,
@@ -468,12 +473,12 @@ async fn end_subscription(
 
 /// `Some(None)` when the log woke, `Some(page)` when a page arrived, `None`
 /// when both sources are gone.
-async fn wait_next(
-    wake: &std::sync::Arc<tokio::sync::Notify>,
+async fn wait_registered(
+    notified: &mut std::pin::Pin<&mut tokio::sync::futures::Notified<'_>>,
     pages: &mut mpsc::Receiver<GrantPage>,
 ) -> Option<Option<GrantPage>> {
     tokio::select! {
-        _ = wake.notified() => Some(None),
+        _ = notified.as_mut() => Some(None),
         page = pages.recv() => page.map(Some),
     }
 }

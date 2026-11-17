@@ -1335,10 +1335,11 @@ sequenceDiagram
     P->>A: conversation.subscribe for each chat the rule names, within the connection cap
     P->>A: recordsHead once for each of those chats, so the first copy is in the cache
     A-->>P: wrong_owner: no longer granted
-    P->>C: withdraw it (entry and transcript)
+    P->>C: withdraw it (grant row and transcript)
     P->>A: record pages for the rest (cache full: heads only, to withdraw)
+    Note over P,A: the grant and chat subscriptions stay open; later grants.changed and conversation views are applied, and a revoke removes the transcript with the grant
     C-->>P: ResetRequired or damaged: empty the cache, read once more
-    A-->>P: openProduct refused (redacted)
+    A-->>P: openProduct refused, or the grant subscription ends: resume after the interval from the stored cursors
     P->>A: pinned status again, only Terminal ends the enrollment
     O->>P: peer.forget or peer.relay of this peer, while its cycle holds its turn
     P->>P: that peer's cycle stopped: its sockets shut, its stop flag asked every 50 ms, waits woken, its turn given back
@@ -1346,7 +1347,7 @@ sequenceDiagram
     O->>P: peer.enroll while reads run
     P-->>O: the record set, if no enroll, forget, or relay holds it; no read is stopped
     P->>U: each change as it is made (status, reset, conversations withdrawn): queued, in turn order
-    P->>P: give back the turn, keep the read slot
+    P->>P: give back the turn when the cycle stops or the grant subscription ends; the read slot was freed at the first snapshot
     P->>U: log each record at AUDIT_DEADLINE
     P->>P: keep the read slot until those records leave the queue, or the poller stops
     P->>P: free the read slot

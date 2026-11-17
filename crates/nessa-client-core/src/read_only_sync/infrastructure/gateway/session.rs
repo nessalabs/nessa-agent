@@ -562,6 +562,17 @@ impl Session {
     pub(crate) fn ready(&self) -> &ProductSessionReady {
         &self.ready
     }
+    /// Later reads on this connection wait at most `ms`. The handshake budget
+    /// stays as it was.
+    pub(crate) fn shorten_operation(&mut self, ms: u64) {
+        if let Ok(policy) = GatewayPolicy::new(
+            self.policy.handshake_ms(),
+            ms,
+            self.policy.unexpected_events(),
+        ) {
+            self.policy = policy;
+        }
+    }
     pub(crate) fn begin(&mut self) -> Result<u64, GatewayError> {
         if self.active.is_some() {
             return Err(GatewayError::Busy);
