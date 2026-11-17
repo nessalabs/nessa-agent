@@ -51,7 +51,9 @@ describe("client.peer", () => {
     ])
     expect(result.replicaReset).toBe(true)
     calls.length = 0
-    const listed = session({ items: [{ peerKey, phase: "active", credentialId: "credential" }] })
+    const listed = session({
+      items: [{ peerKey, phase: "active", credentialId: "credential" }],
+    })
     expect((await listed.api.list()).items[0]?.credentialId).toBe("credential")
     expect(listed.calls).toEqual([{ method: "peer.list", params: {} }])
   })

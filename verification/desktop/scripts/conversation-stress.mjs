@@ -3276,7 +3276,9 @@ const steps = {
       const note = `a note composed on the follower ${step.index}`
       const box = dock(run.page).locator("textarea")
       await box.fill(note)
-      await dock(run.page).getByRole(...composerControls.send).click()
+      await dock(run.page)
+        .getByRole(...composerControls.send)
+        .click()
       const refused = await waitFor(async () => {
         const banner = run.page.locator("[data-send-failure]")
         if ((await banner.count()) !== 1) return null
@@ -11631,7 +11633,8 @@ async function grantSharedChat(run, grantor, step) {
     peer = (await run.client.peer.list()).items.find((item) => item.phase === "active")
     if (!peer?.credentialId) await sleep(250)
   }
-  if (!peer?.credentialId) throw new Error("the follower has no credential for the grantor")
+  if (!peer?.credentialId)
+    throw new Error("the follower has no credential for the grantor")
   await grantor.client.conversation.share(id, peer.credentialId, ["read"])
   await run.client.peer.follow({
     peerKey: peer.peerKey,
