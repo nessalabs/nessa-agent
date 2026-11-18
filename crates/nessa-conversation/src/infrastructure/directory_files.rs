@@ -137,8 +137,10 @@ impl DirectoryFiles for LocalDirectoryFiles {
         Ok(())
     }
 
-    fn hides_marker(&self, profile: SandboxKind) -> bool {
-        !matches!(profile, SandboxKind::None)
+    fn hides_marker(&self, _profile: SandboxKind) -> bool {
+        // No sandbox on this machine is configured to exclude `.nessa-binding`.
+        // The fact stays false until an enforcing sandbox reports it.
+        false
     }
 
     fn root_leave(&self, canonical: &str, roots: &[String]) -> Result<PathLeave, DirectoryRefusal> {

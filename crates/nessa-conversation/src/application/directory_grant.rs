@@ -804,26 +804,13 @@ impl DirectoryAccess {
                 &binding,
                 &request.initiator,
             )?;
-            let unlinked = self.files.unlink_marker(&canonical).is_ok();
-            let audit_done = self
-                .audit
-                .record(&DirectoryAuditRecord {
-                    cause: "file-absent".to_owned(),
-                    resource_id: None,
-                    environment: request.environment.clone(),
-                    canonical_path: canonical.clone(),
-                    initiator: request.initiator.clone(),
-                    before: None,
-                    after: Some("absent".to_owned()),
-                    profile: None,
-                    at_ms: now_ms(),
-                })
-                .is_ok();
-            self.store
-                .update_cleanup(&request.environment, &canonical, unlinked, audit_done)?;
-            if unlinked && audit_done {
-                self.store.clear_cleanup(&request.environment, &canonical)?;
-            }
+            self.record_file_absent(
+                &request.environment,
+                &canonical,
+                &request.initiator,
+                false,
+                false,
+            )?;
             return Err(error);
         }
         self.audit_share(&resource, &request.initiator, "first-share")?;
@@ -981,28 +968,57 @@ impl DirectoryAccess {
         let Some(pending) = self.store.cleanup(environment, canonical)? else {
             return Ok(());
         };
-        let unlinked = pending.unlinked || self.files.unlink_marker(canonical).is_ok();
-        let audit_done = pending.audit_done
-            || self
-                .audit
-                .record(&DirectoryAuditRecord {
-                    cause: "file-absent".to_owned(),
-                    resource_id: None,
-                    environment: environment.to_owned(),
-                    canonical_path: canonical.to_owned(),
-                    initiator: pending.initiator.clone(),
-                    before: None,
-                    after: Some("absent".to_owned()),
-                    profile: None,
-                    at_ms: now_ms(),
-                })
-                .is_ok();
+        self.record_file_absent(
+            environment,
+            canonical,
+            &pending.initiator,
+            pending.unlinked,
+            pending.audit_done,
+        )
+    }
+
+    /// The absence record is written only after the marker unlink has succeeded.
+    /// A failed unlink leaves the cleanup row, with the audit still pending.
+    fn record_file_absent(
+        &self,
+        environment: &str,
+        canonical: &str,
+        initiator: &str,
+        already_unlinked: bool,
+        already_audited: bool,
+    ) -> Result<(), DirectoryRefusal> {
+        let unlinked = already_unlinked || self.files.unlink_marker(canonical).is_ok();
+        let audit_done = unlinked
+            && (already_audited
+                || self
+                    .audit
+                    .record(&DirectoryAuditRecord {
+                        cause: "file-absent".to_owned(),
+                        resource_id: None,
+                        environment: environment.to_owned(),
+                        canonical_path: canonical.to_owned(),
+                        initiator: initiator.to_owned(),
+                        before: None,
+                        after: Some("absent".to_owned()),
+                        profile: None,
+                        at_ms: now_ms(),
+                    })
+                    .is_ok());
         self.store
             .update_cleanup(environment, canonical, unlinked, audit_done)?;
         if unlinked && audit_done {
             self.store.clear_cleanup(environment, canonical)?;
         }
         Ok(())
+    }
+
+    /// Whether `subject` has a directory grant whose command list is a constraint.
+    pub fn command_constrained(&self, subject: &str) -> Result<bool, DirectoryRefusal> {
+        Ok(self
+            .store
+            .grants_for_subject(subject)?
+            .iter()
+            .any(|grant| grant.rules.constrains_commands() || grant.rules.is_unreadable()))
     }
 
     fn audit_share(

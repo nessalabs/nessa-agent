@@ -273,7 +273,7 @@ fn exec_names_the_sandbox_fact_that_refused_it() {
         other => panic!("{other:?}"),
     }
     let directory = shared.to_str().unwrap().to_owned();
-    access
+    let hidden = access
         .exec(ExecAsk {
             subject: "peer",
             program: "ls",
@@ -281,7 +281,13 @@ fn exec_names_the_sandbox_fact_that_refused_it() {
             roots: std::slice::from_ref(&directory),
             hooks_answer_first: false,
         })
-        .unwrap();
+        .unwrap_err();
+    match hidden {
+        DirectoryRefusal::Exec { rules, .. } => {
+            assert!(rules.iter().any(|id| id == "directory.exec_marker"))
+        }
+        other => panic!("{other:?}"),
+    }
 }
 
 #[test]
@@ -812,7 +818,9 @@ fn an_allowed_exec_is_not_reported_when_the_audit_sink_is_down() {
     let store_dir = private();
     let audit = Arc::new(RecordingAudit::new());
     let access = service(
-        Arc::new(LocalDirectoryFiles),
+        Arc::new(MarkerHidden {
+            inner: LocalDirectoryFiles,
+        }),
         Arc::new(SqliteDirectoryStore::open(&store_dir.path().join("grants.sqlite3")).unwrap()),
         audit.clone(),
         [6; BINDING_LEN],
@@ -891,6 +899,52 @@ impl DirectorySession for OriginalSession {
     }
 }
 
+struct MarkerHidden {
+    inner: LocalDirectoryFiles,
+}
+
+impl DirectoryFiles for MarkerHidden {
+    fn canonicalize(&self, path: &str) -> Result<String, DirectoryRefusal> {
+        self.inner.canonicalize(path)
+    }
+    fn read_marker(&self, canonical: &str) -> Result<MarkerBytes, DirectoryRefusal> {
+        self.inner.read_marker(canonical)
+    }
+    fn create_marker(
+        &self,
+        canonical: &str,
+        bytes: &[u8; BINDING_LEN],
+    ) -> Result<(), DirectoryRefusal> {
+        self.inner.create_marker(canonical, bytes)
+    }
+    fn unlink_marker(&self, canonical: &str) -> Result<(), DirectoryRefusal> {
+        self.inner.unlink_marker(canonical)
+    }
+    fn walk(&self, canonical: &str, relative: &str) -> Result<WalkFacts, DirectoryRefusal> {
+        self.inner.walk(canonical, relative)
+    }
+    fn read_inside(&self, canonical: &str, relative: &str) -> Result<Vec<u8>, DirectoryRefusal> {
+        self.inner.read_inside(canonical, relative)
+    }
+    fn write_inside(
+        &self,
+        canonical: &str,
+        relative: &str,
+        bytes: &[u8],
+    ) -> Result<(), DirectoryRefusal> {
+        self.inner.write_inside(canonical, relative, bytes)
+    }
+    fn hides_marker(&self, _: SandboxKind) -> bool {
+        true
+    }
+    fn root_leave(&self, canonical: &str, roots: &[String]) -> Result<PathLeave, DirectoryRefusal> {
+        self.inner.root_leave(canonical, roots)
+    }
+    fn open_session(&self, canonical: &str) -> Result<Box<dyn DirectorySession>, DirectoryRefusal> {
+        self.inner.open_session(canonical)
+    }
+}
+
 struct ReplacedPath;
 
 impl DirectoryFiles for ReplacedPath {
@@ -940,4 +994,137 @@ fn a_read_uses_the_directory_that_was_opened_not_a_later_path() {
     );
     share_read(&access, "/shared", "peer");
     assert_eq!(access.read("peer", "note.txt").unwrap(), b"original");
+}
+
+struct StickyUnlink {
+    inner: LocalDirectoryFiles,
+    fail: Mutex<bool>,
+}
+
+impl DirectoryFiles for StickyUnlink {
+    fn canonicalize(&self, path: &str) -> Result<String, DirectoryRefusal> {
+        self.inner.canonicalize(path)
+    }
+    fn read_marker(&self, canonical: &str) -> Result<MarkerBytes, DirectoryRefusal> {
+        self.inner.read_marker(canonical)
+    }
+    fn create_marker(
+        &self,
+        canonical: &str,
+        bytes: &[u8; BINDING_LEN],
+    ) -> Result<(), DirectoryRefusal> {
+        self.inner.create_marker(canonical, bytes)
+    }
+    fn unlink_marker(&self, canonical: &str) -> Result<(), DirectoryRefusal> {
+        if *self.fail.lock().expect("unlink") {
+            return Err(DirectoryRefusal::Io(std::io::ErrorKind::PermissionDenied));
+        }
+        self.inner.unlink_marker(canonical)
+    }
+    fn walk(&self, canonical: &str, relative: &str) -> Result<WalkFacts, DirectoryRefusal> {
+        self.inner.walk(canonical, relative)
+    }
+    fn read_inside(&self, canonical: &str, relative: &str) -> Result<Vec<u8>, DirectoryRefusal> {
+        self.inner.read_inside(canonical, relative)
+    }
+    fn write_inside(
+        &self,
+        canonical: &str,
+        relative: &str,
+        bytes: &[u8],
+    ) -> Result<(), DirectoryRefusal> {
+        self.inner.write_inside(canonical, relative, bytes)
+    }
+    fn hides_marker(&self, profile: SandboxKind) -> bool {
+        self.inner.hides_marker(profile)
+    }
+    fn root_leave(&self, canonical: &str, roots: &[String]) -> Result<PathLeave, DirectoryRefusal> {
+        self.inner.root_leave(canonical, roots)
+    }
+    fn open_session(&self, canonical: &str) -> Result<Box<dyn DirectorySession>, DirectoryRefusal> {
+        self.inner.open_session(canonical)
+    }
+}
+
+#[test]
+fn a_failed_unlink_does_not_record_the_marker_as_absent() {
+    let root = private();
+    let shared = root.path().join("shared");
+    fs::create_dir(&shared).unwrap();
+    let store_dir = private();
+    let audit = Arc::new(RecordingAudit::new());
+    let files = Arc::new(StickyUnlink {
+        inner: LocalDirectoryFiles,
+        fail: Mutex::new(true),
+    });
+    let inner = SqliteDirectoryStore::open(&store_dir.path().join("grants.sqlite3")).unwrap();
+    let access = service(
+        files.clone(),
+        Arc::new(FailResource {
+            inner,
+            failed: Mutex::new(false),
+        }),
+        audit.clone(),
+        [8; BINDING_LEN],
+    );
+    let refused = access
+        .share(ShareDirectory {
+            environment: "local".into(),
+            path: shared.to_str().unwrap().into(),
+            subject: DirectorySubject {
+                principal_id: Some("peer".into()),
+                receiver_id: None,
+            },
+            capabilities: crate::domain::DirectoryCapabilities::from_names(["read"]).unwrap(),
+            rules: crate::domain::CommandRules::none(),
+            initiator: "owner".into(),
+        })
+        .unwrap_err();
+    assert!(matches!(refused, DirectoryRefusal::Store));
+    assert!(shared.join(".nessa-binding").is_file());
+    assert!(audit
+        .lines
+        .lock()
+        .unwrap()
+        .iter()
+        .all(|line| line.cause != "file-absent"));
+    *files.fail.lock().unwrap() = false;
+    share_read(&access, shared.to_str().unwrap(), "peer");
+    assert!(audit
+        .lines
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|line| line.cause == "file-absent"));
+}
+
+#[test]
+fn a_shell_string_is_a_constraint_only_when_the_grant_has_command_rules() {
+    let root = private();
+    let shared = root.path().join("shared");
+    fs::create_dir(&shared).unwrap();
+    let store_dir = private();
+    let access = service(
+        Arc::new(LocalDirectoryFiles),
+        Arc::new(SqliteDirectoryStore::open(&store_dir.path().join("grants.sqlite3")).unwrap()),
+        Arc::new(RecordingAudit::new()),
+        [1; BINDING_LEN],
+    );
+    assert!(!access.command_constrained("owner").unwrap());
+    share_read(&access, shared.to_str().unwrap(), "peer");
+    assert!(!access.command_constrained("peer").unwrap());
+    access
+        .share(ShareDirectory {
+            environment: "local".into(),
+            path: shared.to_str().unwrap().into(),
+            subject: DirectorySubject {
+                principal_id: Some("ruled".into()),
+                receiver_id: None,
+            },
+            capabilities: crate::domain::DirectoryCapabilities::from_names(["exec"]).unwrap(),
+            rules: crate::domain::CommandRules::new(vec![allow_program("ls").unwrap()]).unwrap(),
+            initiator: "owner".into(),
+        })
+        .unwrap();
+    assert!(access.command_constrained("ruled").unwrap());
 }
