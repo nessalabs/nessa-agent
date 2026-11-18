@@ -1,6 +1,6 @@
 /**
  * Where a floating thing sits beside the control it belongs to — a tooltip by
- * the control it names, the thinking control's popover by its chip: on the
+ * the control it names: on the
  * side the control prefers (below for the window's own controls, above for
  * the composer's chips, beside for the side rail's icons), flipped to the
  * opposite side when it will not fit there or

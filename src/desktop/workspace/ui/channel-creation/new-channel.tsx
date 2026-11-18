@@ -560,7 +560,6 @@ function ModelAnswer({ flow }: { flow: ChannelCreation }) {
         <CatalogueModelPicker
           value={flow.draft.model}
           onChange={(model) => dispatch(draftChannel({ change: { model } }))}
-          side="bottom"
           className="new-channel-model"
         />
         <Button

@@ -205,9 +205,13 @@ export const KNOBS = {
     default: 1,
     what: "times the pane's ⋯ menu and the overview's filter are opened: rows lead with their icons, a chosen filter's check sits before its number, and a number picks it",
   },
+  pickers: {
+    default: 1,
+    what: "times a model is starred and then chosen with its thinking level by one press of a bar in the model picker, opened on Starred, and the next message runs on it",
+  },
   composers: {
     default: 1,
-    what: "times the composer's row is read: the model is named without its family, thinking stands before the hairline and Send, no project is offered, nothing stands under the card, the model menu's provider tiles are square, and in three short stacked panes an empty composer you are not in folds to a circle that opens it",
+    what: "times the composer's row is read: the model is named without its family, Fast stands beside it, access before the hairline and Send, no project is offered, nothing stands under the card, the model picker's provider tiles are square, and in three short stacked panes an empty composer you are not in folds to a circle that opens it",
   },
   menuPanels: {
     default: 1,
@@ -320,6 +324,7 @@ export function plan(knobs, accessScenario = "full") {
   add(knobs.switches, () => ({ kind: "switch" }))
   add(knobs.inputFiles, () => ({ kind: "inputFiles" }))
   add(knobs.modelSwitches, () => ({ kind: "model" }))
+  add(knobs.pickers, () => ({ kind: "picker" }))
   add(knobs.asides, () => ({ kind: "aside" }))
   add(knobs.large, () => ({ kind: "large" }))
   add(knobs.parks, () => ({ kind: "park" }))
@@ -377,11 +382,12 @@ export function plan(knobs, accessScenario = "full") {
   for (let slot = 0; slot < knobs.peers; slot += 1) steps.push({ kind: "peer" })
   if (knobs.pairedCatalogues > 0)
     steps.push({ kind: "pairedCatalogue", cycles: knobs.pairedCatalogues })
-  // Preset checks keep their original model. Positive model changes follow
-  // that work, using Ask before their review; chaos keeps concurrent coverage.
+  // Preset checks keep their original model. Positive model changes (a
+  // `model` step, and a `picker` step's bar) follow that work, using Ask before their review; chaos keeps concurrent coverage.
   // Handoffs come last of all: a switch stays in the metadata, and no older
   // build's file holds one, so the `upgrade` step runs before it.
-  const last = (step) => (step.kind === "handoff" ? 2 : step.kind === "model" ? 1 : 0)
+  const last = (step) =>
+    step.kind === "handoff" ? 2 : step.kind === "model" || step.kind === "picker" ? 1 : 0
   const sequence = [0, 1, 2].flatMap((rank) =>
     steps.filter((step) => last(step) === rank),
   )

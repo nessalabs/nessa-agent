@@ -23,23 +23,19 @@
  *   overview-header the Agents overview's header holds its place while its list
  *                   scrolls to the end, the list begins below it, and the list's
  *                   top edge fades (its mask) rather than cutting a row
- *   thinking-control the composer's thinking control (ADR 238 › The thinking
- *                   control): from the keyboard it opens onto the slider, the
- *                   arrows, Home and End change the level, and only Ultra, past
- *                   Max, is marked apart; dragged, the knob follows the pointer,
- *                   the level is the nearest and let go it settles on it; its
- *                   popover stays on its chip as ⌘B and ⌥⌘S move it; each model
- *                   named in selectors.mjs offers exactly the levels the SDK
- *                   catalogue publishes for it, Fast only where it has it, and
- *                   Ultra only past a published Max (ADR 302); a level carried
- *                   to a model without it shows as that model's nearest, and
- *                   chosen there stays chosen; in
- *                   every frame of every change — the drag and Fast too — the
- *                   composer, its controls and the popover hold their
- *                   place; a level's change animates transform and opacity only;
- *                   Escape, and Tab past its end, close it onto its chip; with
- *                   the system's reduced motion, nothing animates and the words
- *                   that were shown are not drawn
+ *   model-picker    the composer's model and thinking picker (nessa_ui
+ *                   ModelLevelPicker): from the keyboard it opens onto search;
+ *                   hovering its models changes nothing on the page; each model
+ *                   named in selectors.mjs draws one bar per level the SDK
+ *                   catalogue publishes for it, None drawing none (ADR 302); a
+ *                   bar chooses the model at that level and closes it; a level
+ *                   carried to a model without it shows as that model's
+ *                   nearest and is the person's own again back on the first;
+ *                   Fast beside the chip is offered only where the model has
+ *                   it; a model with no levels names none on the chip; a star
+ *                   lists the model under Starred, where the picker then
+ *                   opens; Escape gives the keyboard back to the chip; with
+ *                   the system's reduced motion, opening it animates nothing
  *   header-picture  from a conversation pane's "…" menu, a picture chosen in the
  *                   file dialog shows in the panes' header bands; a new
  *                   session's home draws it from the pane's top edge, in the
@@ -111,6 +107,7 @@ import { join } from "node:path"
 import { attempt, CannotRun, chosen } from "./lib/cli.mjs"
 import { need, openPage, withEngines } from "./lib/browser.mjs"
 import { main } from "./lib/run.mjs"
+import { clearStarredModels } from "./lib/stress-conversation.mjs"
 import { integrationsFit, openIntegrations } from "./lib/settings.mjs"
 import {
   catalogueFile,
@@ -888,319 +885,121 @@ checks["list-gutter"] = async ({ page, engine, layout, options }) => {
   return { gutters: seen, failures }
 }
 
-/**
- * Samples, every frame until `stop`, where a composer, its controls and the
- * thinking popover are, and what animates in them: how many animations were
- * running and which properties they moved.
- */
-const sampleThinking = (page, chip) =>
+/** What the composer's model chip and its picker show now. */
+const pickerState = (page, chip) =>
   page.evaluate(
     ([sel, chipSelector]) => {
-      const chipElement = document.querySelector(chipSelector)
-      const composer = chipElement?.closest(sel.composerForm)
-      const popover = document.querySelector(sel.thinkingPopover)
-      if (!composer || !popover) return false
-      const controls = [...composer.querySelectorAll(sel.button)]
-      const rect = (e) => {
-        const r = e.getBoundingClientRect()
-        return [r.left, r.top, r.width, r.height]
-      }
-      const sample = { frames: [], running: 0, properties: [], stop: false }
-      window.__thinkingSample = sample
-      const properties = new Set()
-      const ignored = new Set(["offset", "computedOffset", "easing", "composite"])
-      const tick = () => {
-        sample.frames.push({
-          composer: rect(composer),
-          controls: controls.map(rect),
-          popover: popover.isConnected ? rect(popover) : null,
-        })
-        for (const a of document.getAnimations()) {
-          const target = a.effect?.target
-          if (!(target instanceof Element)) continue
-          if (!popover.contains(target) && !composer.contains(target)) continue
-          if (a.playState !== "running" && a.playState !== "pending") continue
-          sample.running += 1
-          if (a.transitionProperty) properties.add(a.transitionProperty)
-          else
-            for (const frame of a.effect.getKeyframes())
-              for (const name of Object.keys(frame))
-                if (!ignored.has(name)) properties.add(name)
-        }
-        sample.properties = [...properties]
-        if (!sample.stop) requestAnimationFrame(tick)
-      }
-      tick()
-      return true
-    },
-    [css, chip],
-  )
-
-/** Stops `sampleThinking` and reads what it saw. */
-const sampled = (page) =>
-  page.evaluate(() => {
-    const sample = window.__thinkingSample
-    sample.stop = true
-    return sample
-  })
-
-/** The largest distance anything sampled moved from where it was in the first frame. */
-function drift(frames, part) {
-  const first = frames[0][part]
-  let most = 0
-  for (const frame of frames) {
-    const now = frame[part]
-    if (!first || !now) continue
-    const pairs = Array.isArray(first[0])
-      ? first.map((r, i) => [r, now[i]])
-      : [[first, now]]
-    for (const [a, b] of pairs)
-      for (let i = 0; i < a.length; i++) most = Math.max(most, Math.abs(a[i] - b[i]))
-  }
-  return Math.round(most * 100) / 100
-}
-
-/** Where the slider stands and what has the keyboard, by position (the levels are the page's). */
-const thinkingState = (page, chip) =>
-  page.evaluate(
-    ([sel, chipSelector]) => {
-      const knob = document.querySelector(sel.thinkingSlider)
-      const popover = document.querySelector(sel.thinkingPopover)
+      const trigger = document.querySelector(chipSelector)
+      const fast = trigger?.closest(sel.composerForm)?.querySelector(sel.composerFast)
       return {
-        open: popover !== null,
-        count: knob ? Number(knob.getAttribute("aria-valuemax")) + 1 : 0,
-        checked: knob ? Number(knob.getAttribute("aria-valuenow")) : -1,
-        checkedLabel: knob?.getAttribute("aria-valuetext"),
-        knobFocused: knob !== null && document.activeElement === knob,
-        ultra:
-          document.querySelector(sel.thinkingTrack)?.hasAttribute("data-ultra") ?? false,
-        utmost: popover?.hasAttribute("data-utmost") ?? false,
-        chipFocused: document.activeElement === document.querySelector(chipSelector),
-        chipLabel: document.querySelector(chipSelector)?.getAttribute("aria-label"),
+        open: document.querySelector(sel.modelPicker) !== null,
+        label: trigger?.getAttribute("aria-label") ?? null,
+        level: trigger?.querySelector(sel.modelChipLevel)?.textContent ?? null,
+        chipFocused: document.activeElement === trigger,
+        searchFocused: document.activeElement === document.querySelector(sel.modelSearch),
+        fast: fast
+          ? { disabled: fast.disabled, pressed: fast.getAttribute("aria-pressed") }
+          : null,
+        starred:
+          document
+            .querySelector(`${sel.modelRail}[data-filter="starred"]`)
+            ?.getAttribute("aria-current") === "true",
       }
     },
     [css, chip],
   )
 
-/** Opens a new session's home, whose composer offers every level and Fast, and its chip from the keyboard. */
-async function openThinking(page) {
+/** A new session's home, whose composer can change its model, and its chip. */
+async function openModelChip(page) {
   await page.keyboard.press(keys.newSession)
   await settled(page)
-  const chip = `${css.focusedPane} ${css.thinkingChip}`
-  await need(page, chip, "the focused pane's thinking chip")
+  const chip = `${css.focusedPane} ${css.modelChip}`
+  await need(page, chip, "the focused pane's model chip")
   if (await page.locator(chip).isDisabled())
-    throw new CannotRun("the new session's model offers no thinking levels")
-  await page.locator(chip).focus()
+    throw new CannotRun("the new session's model chip is disabled")
   return chip
 }
 
-checks["thinking-control"] = async ({ page, engine, options }) => {
+checks["model-picker"] = async ({ page, engine, options }) => {
+  await clearStarredModels(page)
+  try {
+    return await modelPicker({ page, engine, options })
+  } finally {
+    await clearStarredModels(page).catch(() => {})
+  }
+}
+
+async function modelPicker({ page, engine, options }) {
   const failures = []
-  const chip = await openThinking(page)
-  const moves = []
-  const sampling = async (name, act, { motionOnly = true } = {}) => {
-    if (!(await sampleThinking(page, chip)))
-      throw new CannotRun("no composer or thinking popover to sample")
-    await act()
-    await settled(page)
-    await frames(page, 2)
-    const sample = await sampled(page)
-    const move = {
-      name,
-      frames: sample.frames.length,
-      running: sample.running,
-      properties: sample.properties,
-      composer: drift(sample.frames, "composer"),
-      controls: drift(sample.frames, "controls"),
-      popover: drift(sample.frames, "popover"),
-    }
-    moves.push(move)
-    for (const part of ["composer", "controls", "popover"])
-      if (move[part] > 0.5) failures.push(`${name}: the ${part} moved ${move[part]}px`)
-    const other = sample.properties.filter((p) => p !== "transform" && p !== "opacity")
-    if (motionOnly && other.length)
-      failures.push(`${name}: animated ${other.join(", ")} (transform and opacity only)`)
-    return move
-  }
-
-  await page.keyboard.press(keys.enter)
-  if (!(await until(page, (sel) => document.querySelector(sel), css.thinkingPopover)))
-    return { failures: ["Return on the chip did not open the thinking popover"] }
-  await settled(page)
-  const opened = await thinkingState(page, chip)
-  if (opened.count < 3)
-    throw new CannotRun(`the slider offers ${opened.count} levels; the walk needs 3`)
-  if (!opened.knobFocused)
-    failures.push("opened with the keyboard elsewhere than the slider")
-  await shot(options, page, `thinking-${engine}-opened`)
-
-  // Home first, so every step after it has somewhere to go.
-  const walk = [
-    [keys.home, () => 0],
-    [keys.right, (s) => s.checked + 1],
-    [keys.right, (s) => s.checked + 1],
-    [keys.end, (s) => s.count - 1],
-    [keys.left, (s) => s.checked - 1],
-    [keys.home, () => 0],
-  ]
-  let now = opened
-  for (const [key, expected] of walk) {
-    const want = expected(now)
-    await sampling(`${key} to stop ${want}`, () => page.keyboard.press(key))
-    now = await thinkingState(page, chip)
-    if (now.checked !== want)
-      failures.push(`${key}: the level is ${now.checked}, not ${want}`)
-    if (!now.knobFocused) failures.push(`${key}: the keyboard left the slider`)
-    if (now.chipLabel !== `Thinking level: ${now.checkedLabel}`)
-      failures.push(`${key}: the chip says "${now.chipLabel}"`)
-    // Past Max, where the model has Ultra, is the one level marked apart; below it none is.
-    if (now.utmost !== (now.ultra && now.checked === now.count - 1))
-      failures.push(
-        `${key}: at level ${now.checked} the popover is${now.utmost ? "" : " not"} marked utmost`,
-      )
-    if (key === keys.end) await shot(options, page, `thinking-${engine}-utmost`)
-  }
-
-  // The pointer: pressed near the start and dragged most of the way from the
-  // second level to the third, the knob follows it and the level is the
-  // nearest; let go, the knob settles on that level's place.
-  const track = await page.locator(css.thinkingTrack).boundingBox()
-  const midline = track.y + track.height / 2
-  const toward = 1.7 / (now.count - 1)
-  let held
-  await sampling("drag", async () => {
-    await page.mouse.move(track.x + 2, midline)
-    await page.mouse.down()
-    await page.mouse.move(track.x + track.width * toward, midline, { steps: 12 })
-    await frames(page, 2)
-    const knob = await page.locator(css.thinkingSlider).boundingBox()
-    held = {
-      pointer: track.x + track.width * toward,
-      knob: knob.x + knob.width / 2,
-      state: await thinkingState(page, chip),
-    }
-    await page.mouse.up()
-  })
-  const dropped = await thinkingState(page, chip)
-  const knob = await page.locator(css.thinkingSlider).boundingBox()
-  const settledAt = knob.x + knob.width / 2
-  const levelAt = track.x + (track.width * 2) / (now.count - 1)
-  const drag = {
-    followed: Math.round((held.knob - held.pointer) * 100) / 100,
-    heldLevel: held.state.checked,
-    level: dropped.checked,
-    settled: Math.round((settledAt - levelAt) * 100) / 100,
-  }
-  if (Math.abs(drag.followed) > 2)
-    failures.push(`drag: the held knob stood ${drag.followed}px from the pointer`)
-  if (drag.heldLevel !== 2 || drag.level !== 2)
-    failures.push(
-      `drag: the level was ${drag.heldLevel} held and ${drag.level} let go, not 2`,
-    )
-  if (Math.abs(drag.settled) > 1)
-    failures.push(
-      `drag: let go, the knob settled ${drag.settled}px from its level's place`,
-    )
-  const changes = moves.filter((m) => m.name !== "fast")
-  if (!changes.some((m) => m.running > 0))
-    failures.push("no level change animated at all: the sampler saw nothing")
-
-  // Fast, where offered: a setting of its own, and turning it on moves nothing.
-  const fast = await page.locator(css.thinkingFast).count()
-  if (fast) {
-    await sampling(
-      "fast",
-      async () => {
-        await page.locator(css.thinkingFast).focus()
-        await page.keyboard.press("Space")
-      },
-      // Its pill changes colour as well as its bolt moving; only its place is held here.
-      { motionOnly: false },
-    )
-    const pressed = await page.locator(css.thinkingFast).getAttribute("aria-pressed")
-    if (pressed !== "true")
-      failures.push(`Fast mode's toggle is aria-pressed="${pressed}"`)
-    const after = await thinkingState(page, chip)
-    if (after.checked !== dropped.checked)
-      failures.push(`Fast changed the level from ${dropped.checked} to ${after.checked}`)
-  }
-
-  await page.keyboard.press(keys.escape)
-  const closed = await thinkingState(page, chip)
-  if (closed.open) failures.push("Escape left the thinking popover open")
-  if (!closed.chipFocused)
-    failures.push("Escape did not give the keyboard back to the chip")
-
-  // Tab from the level, the popover's last part, leaves it for its chip too.
-  await page.keyboard.press(keys.enter)
-  await until(page, (sel) => document.querySelector(sel), css.thinkingPopover)
-  await page.keyboard.press("Tab")
-  const tabbed = await thinkingState(page, chip)
-  if (tabbed.open) failures.push("Tab past the popover's end left it open")
-  if (!tabbed.chipFocused)
-    failures.push("Tab past the popover's end did not land on the chip")
-
-  // The popover stays on its chip when the chip moves with no change of the
-  // window's size: a column folding (⌘B), the session list going (⌥⌘S).
+  const chip = await openModelChip(page)
+  const row = (name) =>
+    page.locator(css.modelOption).filter({
+      has: page.locator(css.modelOptionLabel).getByText(name, { exact: true }),
+    })
   const opens = async () => {
     await page.locator(chip).focus()
     await page.keyboard.press(keys.enter)
-    if (!(await until(page, (sel) => document.querySelector(sel), css.thinkingPopover)))
-      throw new Error("Return on the chip did not open the thinking popover")
+    if (!(await until(page, (sel) => document.querySelector(sel), css.modelPicker)))
+      throw new Error("Return on the chip did not open the model picker")
     await settled(page)
   }
-  const edges = () =>
-    page.evaluate(
-      ([sel, chipSelector]) => {
-        const c = document.querySelector(chipSelector)?.getBoundingClientRect()
-        const p = document.querySelector(sel.thinkingPopover)?.getBoundingClientRect()
-        return c && p
-          ? { chipRight: c.right, chipTop: c.top, right: p.right, bottom: p.bottom }
-          : null
-      },
-      [css, chip],
-    )
-  await opens()
-  const following = []
-  const start = await edges()
-  for (const [name, chord] of [
-    ["⌘B", keys.toggleSidebar],
-    ["⌥⌘S", keys.toggleSessionList],
-  ]) {
-    await page.keyboard.press(chord)
-    await frames(page, 2)
-    await settled(page)
-    await frames(page, 2)
-    const now = await edges()
-    if (!now) {
-      failures.push(`${name}: the thinking popover closed as its chip moved`)
-      break
-    }
-    const row = {
-      name,
-      chipMoved: Math.round(now.chipRight - start.chipRight),
-      right: Math.round((now.right - now.chipRight) * 100) / 100,
-      above: Math.round((now.chipTop - now.bottom) * 100) / 100,
-    }
-    following.push(row)
-    if (Math.abs(row.right) > 1)
-      failures.push(`${name}: the popover's edge is ${row.right}px from its chip's`)
-    if (Math.abs(row.above - 10) > 1)
-      failures.push(`${name}: the popover ends ${row.above}px above its chip, not 10`)
+  const closes = async () => {
+    await page.locator(css.modelSearch).fill("")
+    await page.keyboard.press(keys.escape)
+    await until(page, (sel) => !document.querySelector(sel), css.modelPicker)
   }
-  if (!following.some((row) => row.chipMoved !== 0))
-    failures.push(
-      "⌘B and ⌥⌘S did not move the chip: nothing showed the popover following",
-    )
-  await page.keyboard.press(keys.escape)
-  await page.keyboard.press(keys.toggleSidebar)
-  await page.keyboard.press(keys.toggleSessionList)
-  await settled(page)
+  /** Finds `name` by search, so the row is on screen whatever the rail shows. */
+  const find = async (name) => {
+    await page.locator(css.modelSearch).fill(name)
+    const found = row(name)
+    if (!(await found.count())) throw new CannotRun(`${name} is not in the model picker`)
+    return found
+  }
+  const pickByName = async (name) => {
+    await opens()
+    await (await find(name)).locator(css.modelOptionLabel).click()
+    if (!(await until(page, (sel) => !document.querySelector(sel), css.modelPicker)))
+      failures.push(`choosing ${name} by its name left the picker open`)
+    await settled(page)
+    return pickerState(page, chip)
+  }
 
-  // Each model as the SDK catalogue publishes it (ADR 302): exactly its
-  // levels, Fast only where it has it, Ultra only past a published `max`.
-  // The catalogue is read, never retyped; the models named in selectors.mjs
-  // are confirmed against it before anything is judged.
+  // From the keyboard it opens onto search.
+  await opens()
+  const opened = await pickerState(page, chip)
+  if (!opened.searchFocused)
+    failures.push("opened with the keyboard elsewhere than search")
+  await shot(options, page, `model-picker-${engine}-opened`)
+
+  // Hovering the models changes nothing on the page: the hover is CSS alone.
+  await page.locator(`${css.modelRail}[data-filter="all"]`).click()
+  await page.evaluate((sel) => {
+    const picker = document.querySelector(sel)
+    window.__pickerMutations = 0
+    window.__pickerObserver = new MutationObserver((records) => {
+      window.__pickerMutations += records.length
+    })
+    window.__pickerObserver.observe(picker, {
+      subtree: true,
+      childList: true,
+      attributes: true,
+      characterData: true,
+    })
+  }, css.modelPicker)
+  const rows = page.locator(css.modelOption)
+  const hovered = Math.min(await rows.count(), 12)
+  for (let at = 0; at < hovered; at++) await rows.nth(at).hover()
+  await frames(page, 2)
+  const mutations = await page.evaluate(() => {
+    window.__pickerObserver.disconnect()
+    return window.__pickerMutations
+  })
+  if (mutations > 0)
+    failures.push(`hovering ${hovered} models changed the page ${mutations} times`)
+
+  // Each model as the SDK catalogue publishes it (ADR 302): one bar for each
+  // level but None, which lights none. The catalogue is read, never retyped;
+  // the models named in selectors.mjs are confirmed against it first.
   const catalogue = JSON.parse(readFileSync(catalogueFile, "utf8")).models
   const entry = (name) => {
     const found = catalogue.find((model) => model.displayName === name)
@@ -1211,47 +1010,10 @@ checks["thinking-control"] = async ({ page, engine, options }) => {
     return found
   }
   const published = (name) => entry(name).reasoning?.effortLevels ?? []
-  const pastMax = (levels) =>
-    levels.indexOf("max") >= 0 && levels.indexOf("max") < levels.length - 1
-  const pick = async (model) => {
-    await page.locator(`${css.focusedPane} ${css.modelChip}`).click()
-    const option = page.locator(css.modelOption, { hasText: model }).first()
-    await page.locator(css.modelOption).first().waitFor({ timeout: 3000 })
-    // The picker shows one provider's models at a time: look under each tab.
-    const tabs = page.locator(css.modelProviderTab)
-    for (let tab = 0; !(await option.count()) && tab < (await tabs.count()); tab++)
-      await tabs.nth(tab).click()
-    if (!(await option.count()))
-      throw new CannotRun(`${model} is not in the model picker`)
-    await option.click()
-    await settled(page)
-  }
-  // What the page offers for the model shown: its levels' names, least
-  // first, whether Ultra's segment is drawn, and whether Fast is offered.
-  const offered = async () => {
-    if (await page.locator(chip).isDisabled())
-      return { levels: [], ultra: false, fast: false, disabled: true }
-    await opens()
-    const levels = []
-    await page.keyboard.press(keys.home)
-    let state = await thinkingState(page, chip)
-    for (let stop = 0; stop < state.count; stop++) {
-      levels.push(state.checkedLabel)
-      await page.keyboard.press(keys.right)
-      state = await thinkingState(page, chip)
-    }
-    const fast = (await page.locator(css.thinkingFast).count()) > 0
-    await page.keyboard.press(keys.escape)
-    return { levels, ultra: state.ultra, fast, disabled: false }
-  }
-  const catalogueModels = {}
   const premises = [
     [names.modelWithFast, (e) => e.fastMode && published(e.displayName).length >= 3],
     [names.modelWithoutFast, (e) => !e.fastMode && published(e.displayName).length >= 3],
-    [
-      names.modelWithoutLevels,
-      (e) => e.reasoning !== null && published(e.displayName).length === 0,
-    ],
+    [names.modelWithoutLevels, (e) => published(e.displayName).length === 0],
     [names.modelWithLeastLevel, (e) => published(e.displayName)[0] === "none"],
   ]
   for (const [name, holds] of premises)
@@ -1263,113 +1025,138 @@ checks["thinking-control"] = async ({ page, engine, options }) => {
     throw new CannotRun(
       `${names.modelWithoutFast} offers None; the carry below needs one that does not`,
     )
-  for (const name of [
-    names.modelWithFast,
-    names.modelWithoutFast,
-    names.modelWithoutLevels,
-    names.modelWithLeastLevel,
-  ]) {
-    await pick(name)
-    const onPage = await offered()
-    const levels = published(name)
-    catalogueModels[name] = { published: levels, fast: entry(name).fastMode, ...onPage }
-    if (onPage.levels.length !== levels.length)
+  const models = {}
+  for (const [name] of premises) {
+    const bars = await (
+      await find(name)
+    )
+      .locator(css.modelBar)
+      .evaluateAll((all) => all.map((bar) => bar.dataset.level))
+    const want = published(name).filter((level) => level !== "none")
+    models[name] = { published: published(name), bars }
+    if (bars.join() !== want.join())
       failures.push(
-        `${name}: offers ${onPage.levels.length} levels, the catalogue ${levels.length}`,
+        `${name}: draws bars ${bars.join() || "none"}, the catalogue ${want.join() || "none"}`,
       )
-    if (onPage.disabled !== (levels.length === 0))
-      failures.push(`${name}: the chip is${onPage.disabled ? "" : " not"} disabled`)
-    if (onPage.fast !== (entry(name).fastMode && levels.length > 0))
-      failures.push(`${name}: Fast is${onPage.fast ? "" : " not"} offered`)
-    if (onPage.ultra !== pastMax(levels))
-      failures.push(`${name}: Ultra's segment is${onPage.ultra ? "" : " not"} drawn`)
   }
-  const ultraAdvertised = catalogue
-    .filter((model) => pastMax(model.reasoning?.effortLevels ?? []))
-    .map((model) => model.displayName)
+  await closes()
 
-  // A level carried to a model without it: None, from a model whose least it
-  // is, shows on one without it as that model's least — and chosen there, it
-  // is that level back on the first model, not the None carried.
-  await pick(names.modelWithLeastLevel)
+  // A bar chooses the model at that level, in one press, and closes the picker.
   await opens()
-  await page.keyboard.press(keys.home)
-  const carriedFrom = await thinkingState(page, chip)
-  await page.keyboard.press(keys.escape)
-  await pick(names.modelWithoutFast)
-  const shownAs = await thinkingState(page, chip)
+  const withFast = await find(names.modelWithFast)
+  const second = withFast.locator(css.modelBar).nth(1)
+  const secondLevel = (await second.getAttribute("aria-label")).split(", ").at(-1)
+  await second.click()
+  if (!(await until(page, (sel) => !document.querySelector(sel), css.modelPicker)))
+    failures.push("a bar left the picker open")
+  await settled(page)
+  const barred = await pickerState(page, chip)
+  if (barred.label !== `Change model, currently ${names.modelWithFast}, ${secondLevel}`)
+    failures.push(
+      `a bar of ${names.modelWithFast} at ${secondLevel} left the chip "${barred.label}"`,
+    )
+  if (barred.fast?.disabled !== false)
+    failures.push(`${names.modelWithFast}: Fast beside the chip is not offered`)
+
+  // A level carried to a model without it: None, chosen on a model whose
+  // least it is, shows on one without it as that model's least, and is None
+  // again back on the first, since a name keeps the person's own level.
   await opens()
-  const least = await thinkingState(page, chip)
-  const carried = {
-    from: carriedFrom.checkedLabel,
-    shownAs: shownAs.chipLabel,
-    ultraAdvertised,
-    models: catalogueModels,
-  }
-  if (
-    least.checked !== 0 ||
-    shownAs.chipLabel !== `Thinking level: ${least.checkedLabel}`
+  const least = await find(names.modelWithLeastLevel)
+  await least.focus()
+  for (let step = 0; step < published(names.modelWithLeastLevel).length; step++)
+    await page.keyboard.press(keys.left)
+  await page.keyboard.press(keys.enter)
+  await settled(page)
+  const none = await pickerState(page, chip)
+  const shownAs = await pickByName(names.modelWithoutFast)
+  const back = await pickByName(names.modelWithLeastLevel)
+  const carried = { none: none.level, shownAs: shownAs.level, back: back.level }
+  if (!none.label?.startsWith(`Change model, currently ${names.modelWithLeastLevel}`))
+    failures.push(`Return on ${names.modelWithLeastLevel} left the chip "${none.label}"`)
+  if (!shownAs.level || shownAs.level === none.level)
+    failures.push(
+      `${none.level} carried to ${names.modelWithoutFast} shows as "${shownAs.level}", not its least level`,
+    )
+  if (back.level !== none.level)
+    failures.push(
+      `${none.level} came back on ${names.modelWithLeastLevel} as "${back.level}"`,
+    )
+  if (shownAs.fast?.disabled !== true)
+    failures.push(`${names.modelWithoutFast}: Fast beside the chip is offered`)
+
+  // A model with no levels: no bars, and the chip names no level.
+  const levelless = await pickByName(names.modelWithoutLevels)
+  if (levelless.level !== null)
+    failures.push(
+      `${names.modelWithoutLevels}: the chip names the level "${levelless.level}"`,
+    )
+
+  // A star lists the model under Starred, and the picker opens there.
+  await pickByName(names.modelWithFast)
+  await opens()
+  const starRow = await find(names.modelWithFast)
+  await starRow.hover()
+  await starRow.locator(css.modelStar).click()
+  await closes()
+  await opens()
+  const starredOpen = await pickerState(page, chip)
+  const listed = await row(names.modelWithFast).count()
+  if (!starredOpen.starred)
+    failures.push("with a star, the picker did not open on Starred")
+  if (listed !== 1) failures.push(`Starred lists ${names.modelWithFast} ${listed} times`)
+  await shot(options, page, `model-picker-${engine}-starred`)
+  const unstar = row(names.modelWithFast)
+  await unstar.hover()
+  await unstar.locator(css.modelStar).click()
+
+  // Escape gives the keyboard back to the chip.
+  await closes()
+  await until(
+    page,
+    (chipSelector) => document.activeElement === document.querySelector(chipSelector),
+    chip,
   )
-    failures.push(
-      `None carried to ${names.modelWithoutFast} shows as "${shownAs.chipLabel}", not its least level`,
-    )
-  // Home there, on the level already shown, chooses it.
-  await page.keyboard.press(keys.home)
-  await page.keyboard.press(keys.escape)
-  await pick(names.modelWithLeastLevel)
-  carried.back = (await thinkingState(page, chip)).chipLabel
-  if (carried.back !== `Thinking level: ${least.checkedLabel}`)
-    failures.push(
-      `${least.checkedLabel} chosen on ${names.modelWithoutFast} came back as "${carried.back}"`,
-    )
-  await pick(names.modelWithFast)
+  const closed = await pickerState(page, chip)
+  if (closed.open) failures.push("Escape left the model picker open")
+  if (!closed.chipFocused)
+    failures.push("Escape did not give the keyboard back to the chip")
 
-  // With the system's reduced motion, the same walk animates nothing.
+  // With the system's reduced motion, opening it animates nothing.
   const reduced = await openPage(page.context().browser(), {
     url: page.url(),
     layout: "columns",
     reducedMotion: "reduce",
   })
-  const still = []
+  let still
   try {
-    const reducedChip = await openThinking(reduced.page)
+    const reducedChip = await openModelChip(reduced.page)
+    await reduced.page.locator(reducedChip).focus()
     await reduced.page.keyboard.press(keys.enter)
     if (
-      !(await until(
-        reduced.page,
-        (sel) => document.querySelector(sel),
-        css.thinkingPopover,
-      ))
+      !(await until(reduced.page, (sel) => document.querySelector(sel), css.modelPicker))
     )
       throw new CannotRun(
-        "Return on the chip did not open the popover with reduced motion",
+        "Return on the chip did not open the picker with reduced motion",
       )
-    // The chip's own wash as it opens is a colour, not the control's motion: let it end.
-    await settled(reduced.page)
-    for (const key of [keys.end, keys.home, keys.right]) {
-      if (!(await sampleThinking(reduced.page, reducedChip)))
-        throw new CannotRun("no thinking popover to sample with reduced motion")
-      await reduced.page.keyboard.press(key)
-      await frames(reduced.page, 6)
-      const sample = await sampled(reduced.page)
-      still.push({ key, running: sample.running, properties: sample.properties })
-      if (sample.running > 0)
-        failures.push(
-          `reduced motion: ${key} ran ${sample.running} animation frames (${sample.properties.join(", ")})`,
-        )
-      const leaving = await reduced.page.evaluate(
-        (sel) =>
-          [...document.querySelectorAll(sel)].map((e) => getComputedStyle(e).opacity),
-        css.thinkingLeaving,
-      )
-      if (leaving.some((opacity) => opacity !== "0"))
-        failures.push(`reduced motion: ${key} left the old words drawn (${leaving})`)
-    }
+    still = await reduced.page.evaluate((sel) => {
+      const picker = document.querySelector(sel)
+      return document
+        .getAnimations()
+        .filter(
+          (a) =>
+            a.effect?.target instanceof Element &&
+            picker.contains(a.effect.target) &&
+            (a.playState === "running" || a.playState === "pending"),
+        ).length
+    }, css.modelPicker)
+    if (still > 0)
+      failures.push(`reduced motion: opening the picker ran ${still} animations`)
   } finally {
     await reduced.close()
   }
 
-  return { opened, moves, drag, following, carried, reduced: still, failures }
+  return { opened, mutations, models, barred, carried, reduced: still, failures }
 }
 
 checks["overview-counts"] = async ({ page, engine, options }) => {
@@ -2797,7 +2584,7 @@ checks["header-picture"] = async ({ page, engine, layout, options }) => {
 const meta = {
   name: "responsive",
   summary:
-    "approval card, composer controls and thinking control, column titles, Settings and a pane's home at many sizes",
+    "approval card, composer controls and model picker, column titles, Settings and a pane's home at many sizes",
   defaults: { engine: "chromium,webkit", layout: "columns" },
   options: { only: { type: "string" } },
   help: `

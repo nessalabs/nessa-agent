@@ -142,7 +142,9 @@ test("positive model steps retain default and raised counts, run last but for ha
       const first = steps.findIndex((step) => step.kind === "model")
       assert.equal(steps.filter((step) => step.kind === "model").length, count)
       assert.ok(
-        steps.slice(first).every((step) => ["model", "handoff"].includes(step.kind)),
+        steps
+          .slice(first)
+          .every((step) => ["model", "picker", "handoff"].includes(step.kind)),
       )
       let mode = "ask"
       for (const step of steps) {
@@ -192,6 +194,7 @@ test("the legacy seed preserves the existing non-model work's relative order", (
         menuPanels: "0",
         menus: "0",
         composers: "0",
+        pickers: "0",
         githubs: "0",
         voices: "0",
         logins: "0",

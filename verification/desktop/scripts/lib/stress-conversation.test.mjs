@@ -305,32 +305,44 @@ test("missing, ambiguous or differently titled Home selection supplies no identi
     assert.equal(await selectedStressConversation(listedWindow(rows), title), null)
 })
 
-function modelPicker(groups, selected = 0) {
+function modelPicker(names) {
   let opened = false,
+    query = "",
     chosen
-  const visited = []
+  const exact = { exact: true }
   const page = {
     locator(selector) {
-      if (selector === css.modelProviderTab)
+      if (selector === css.modelSearch)
         return {
-          count: async () => groups.length,
-          nth: (i) => ({
-            click: async () => {
-              selected = i
-              visited.push(i)
-            },
-          }),
+          waitFor: async () => assert.equal(opened, true),
+          fill: async (text) => {
+            query = text
+          },
+        }
+      if (selector === css.modelOptionLabel)
+        return {
+          getByText: (name, options) => {
+            assert.deepEqual(options, exact)
+            return { name }
+          },
         }
       assert.equal(selector, css.modelOption)
       return {
-        first: () => ({ waitFor: async () => assert.equal(opened, true) }),
-        filter: ({ hasText }) => ({
-          count: async () =>
-            groups[selected].filter((name) => name.includes(hasText)).length,
-          click: async () => {
-            chosen = groups[selected].find((name) => name.includes(hasText))
-          },
-        }),
+        filter: ({ has }) => {
+          const rows = () =>
+            names.filter((name) => name.includes(query) && name === has.name)
+          return {
+            count: async () => rows().length,
+            locator: (label) => {
+              assert.equal(label, css.modelOptionLabel)
+              return {
+                click: async () => {
+                  chosen = rows()[0]
+                },
+              }
+            },
+          }
+        },
       }
     },
   }
@@ -341,24 +353,29 @@ function modelPicker(groups, selected = 0) {
         opened = true
       },
     },
-    visited,
+    query: () => query,
     chosen: () => chosen,
   }
 }
-test("Home selects the exact fixture across provider tabs, never the initial provider default", async () => {
+test("Home searches for the exact fixture, whatever the picker opens on", async () => {
   const { selectStressModel } = await import("./stress-conversation.mjs")
-  const picker = modelPicker([["Claude Opus 5"], ["GPT-6 Astra", "GPT-5.6 Terra"]])
+  const picker = modelPicker([
+    "Claude Opus 5",
+    "GPT-6 Astra",
+    "GPT-5.6 Terra",
+    "GPT-5.6 Terra Mini",
+  ])
   await selectStressModel(picker.page, picker.trigger, "GPT-5.6 Terra")
+  assert.equal(picker.query(), "GPT-5.6 Terra")
   assert.equal(picker.chosen(), "GPT-5.6 Terra")
-  assert.deepEqual(picker.visited, [0, 1])
 })
 test("Home missing or ambiguous fixture models cannot fall back to another selection", async () => {
   const { selectStressModel } = await import("./stress-conversation.mjs")
-  for (const groups of [
-    [["Claude Opus 5"], ["GPT-6 Astra"]],
-    [["GPT-5.6 Terra", "GPT-5.6 Terra duplicate"]],
+  for (const names of [
+    ["Claude Opus 5", "GPT-6 Astra"],
+    ["GPT-5.6 Terra", "GPT-5.6 Terra"],
   ]) {
-    const picker = modelPicker(groups)
+    const picker = modelPicker(names)
     await assert.rejects(
       selectStressModel(picker.page, picker.trigger, "GPT-5.6 Terra"),
       /not uniquely offered/,

@@ -8,7 +8,7 @@ SDK model catalogue as each provider publishes them, carries them to
 `EffectiveCapabilities`, and says where mapping them onto one slider belongs.
 It follows the "Reasoning and mode" row of
 [the SDK shape](../../design/agent_execution/sdk-shape.md#how-the-superset-grows)
-and replaces the placeholder tables [ADR 238](../done/238-desktop-workspace-frontend.md#the-thinking-control)
+and replaces the placeholder tables [ADR 238](../done/238-desktop-workspace-frontend.md#the-model-and-thinking-picker)
 kept until the catalogue carried them.
 
 - **Date:** 2026-09-29

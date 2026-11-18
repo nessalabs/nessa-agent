@@ -792,7 +792,7 @@ describe("a source removing a session", () => {
       const textOf = (pane: Element | undefined) =>
         pane?.querySelector("textarea")?.value ?? ""
       const modelOf = (pane: Element | undefined) =>
-        pane?.querySelector('[data-slot="model-picker-trigger"]')?.textContent ?? ""
+        pane?.querySelector('[data-slot="model-level-picker-trigger"]')?.textContent ?? ""
       const accessOf = (pane: Element | undefined) =>
         pane?.querySelector("[data-access-mode]")?.getAttribute("data-access-mode") ?? ""
       for (let step = 0; step < 8 && textOf(reply()) !== "unsent reply"; step++)
@@ -1015,7 +1015,7 @@ describe("a source removing a session", () => {
       for (let step = 0; step < 8 && !pane()?.querySelector("textarea"); step++)
         await act(async () => frames.runFrame())
       expect(pane()?.querySelector("textarea")).not.toBeNull()
-      const chip = () => pane()?.querySelector('[data-slot="model-picker-trigger"]')
+      const chip = () => pane()?.querySelector('[data-slot="model-level-picker-trigger"]')
       await act(async () => {
         store.dispatch(
           workspaceActions.transcriptLoaded({

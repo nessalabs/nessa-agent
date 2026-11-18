@@ -3,7 +3,6 @@ import catalog from "../../../crates/nessa-sdk/data/models.json"
 import {
   agentForProvider,
   composerModels,
-  contextLabel,
   defaultComposerModel,
   groupByProvider,
   providerLabel,
@@ -71,16 +70,6 @@ describe("defaultComposerModel", () => {
   it("falls back to the first model when Opus 5 is absent, and to none when empty", () => {
     expect(defaultComposerModel([model("openai", "a")])?.modelId).toBe("a")
     expect(defaultComposerModel([])).toBeUndefined()
-  })
-})
-
-describe("contextLabel", () => {
-  it.each([
-    [1_050_000, "1M context"],
-    [200_000, "200K context"],
-    [128_000, "128K context"],
-  ])("labels %i tokens as %s", (tokens, label) => {
-    expect(contextLabel(tokens)).toBe(label)
   })
 })
 
