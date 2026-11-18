@@ -1283,9 +1283,9 @@ async fn append_shared(
         return Ok(None);
     };
     match chats.list(archived).await {
-        Ok(replicas) => Ok(super::shared_chat::append_bounded(
+        Ok(catalogue) => Ok(super::shared_chat::append_catalogue(
             page.rows,
-            replicas,
+            catalogue,
             page.limit,
             page.complete,
             page.skip,
@@ -1295,6 +1295,7 @@ async fn append_shared(
                 error = %error,
                 "shared chats were left out of the conversation list"
             );
+            *page.complete = false;
             Ok(None)
         }
     }

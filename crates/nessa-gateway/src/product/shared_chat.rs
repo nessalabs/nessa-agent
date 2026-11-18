@@ -6,6 +6,7 @@
 //! are the view. Cedar already admitted that owner surface; this module
 //! does not grant a write. The peer-write slice is what asks the grantor.
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -43,7 +44,9 @@ pub struct OpenedReplica {
 #[async_trait]
 pub trait SharedChats: Send + Sync {
     /// Chats still in the cache. `archived` selects the archived list.
-    async fn list(&self, archived: bool) -> Result<Vec<ConversationSummary>, ConversationError>;
+    /// [`SharedCatalogue::complete`] is false when a peer cache could not be
+    /// read: the chats it holds are not known to be absent.
+    async fn list(&self, archived: bool) -> Result<SharedCatalogue, ConversationError>;
     /// The saved transcript, or nothing when this id is not a granted chat.
     async fn open(&self, id: &ConversationId) -> Result<Option<OpenedReplica>, ConversationError>;
     /// Whether the cache still holds `id`.
@@ -63,6 +66,15 @@ pub trait SharedChats: Send + Sync {
         id: &ConversationId,
         file: SharedFileRequest,
     ) -> Result<SharedFileRead, ConversationError>;
+}
+
+/// The shared chats one list read found.
+pub struct SharedCatalogue {
+    /// Chats whose caches were read, in peer order. The first peer to name an
+    /// id is the one a later open of that id uses.
+    pub rows: Vec<ConversationSummary>,
+    /// Every active peer cache was read.
+    pub complete: bool,
 }
 
 /// A file range the transcript named, as `artifact.read` asks it.
@@ -121,7 +133,7 @@ struct ActivePeer {
 
 #[async_trait]
 impl SharedChats for PeerCacheChats {
-    async fn list(&self, archived: bool) -> Result<Vec<ConversationSummary>, ConversationError> {
+    async fn list(&self, archived: bool) -> Result<SharedCatalogue, ConversationError> {
         let active = active_peers(&self.peers).await?;
         let records = Arc::clone(self.peers.records());
         let wall = Arc::clone(&self.wall);
@@ -328,12 +340,16 @@ pub(super) fn append_bounded(
     complete: &mut bool,
     skip: usize,
 ) -> Option<u64> {
+    // The first peer to name an id wins, the same order `list_cached` and
+    // `find_cached` walk. A later peer's copy of that id is not a second row.
+    let mut seen = HashSet::new();
     let mut replicas = replicas
         .into_iter()
         .filter(|replica| {
-            !rows
-                .iter()
-                .any(|row| row.conversation_id == replica.conversation_id)
+            seen.insert(replica.conversation_id.clone())
+                && !rows
+                    .iter()
+                    .any(|row| row.conversation_id == replica.conversation_id)
         })
         .collect::<Vec<_>>();
     let rest = if skip >= replicas.len() {
@@ -350,6 +366,21 @@ pub(super) fn append_bounded(
     rows.extend(rest.into_iter().take(placed));
     *complete = false;
     Some(skip.saturating_add(placed) as u64)
+}
+
+/// Append one shared-catalogue read. A peer cache that could not be read keeps
+/// the page incomplete even when every row that was read fits.
+pub(super) fn append_catalogue(
+    rows: &mut Vec<ConversationSummary>,
+    catalogue: SharedCatalogue,
+    limit: usize,
+    complete: &mut bool,
+    skip: usize,
+) -> Option<u64> {
+    if !catalogue.complete {
+        *complete = false;
+    }
+    append_bounded(rows, catalogue.rows, limit, complete, skip)
 }
 
 /// How many replicas a cursor minted by [`shared_page_cursor`] already
@@ -429,8 +460,9 @@ fn list_cached(
     wall: Arc<dyn WallClock>,
     monotonic: Arc<dyn MonotonicClock>,
     archived: bool,
-) -> Result<Vec<ConversationSummary>, ConversationError> {
+) -> Result<SharedCatalogue, ConversationError> {
     let mut rows = Vec::new();
+    let mut complete = true;
     for peer in peers {
         match peer_rows(records, peer, &wall, &monotonic, archived) {
             Ok(found) => rows.extend(found),
@@ -440,10 +472,11 @@ fn list_cached(
                     error = ?error,
                     "a peer cache was left out of the conversation list"
                 );
+                complete = false;
             }
         }
     }
-    Ok(rows)
+    Ok(SharedCatalogue { rows, complete })
 }
 
 fn find_earlier(
@@ -899,21 +932,27 @@ mod tests {
         async fn list(
             &self,
             archived: bool,
-        ) -> Result<Vec<ConversationSummary>, crate::conversation::application::ConversationError>
+        ) -> Result<super::SharedCatalogue, crate::conversation::application::ConversationError>
         {
             if archived {
-                return Ok(Vec::new());
+                return Ok(super::SharedCatalogue {
+                    rows: Vec::new(),
+                    complete: true,
+                });
             }
-            Ok(vec![ConversationSummary {
-                conversation_id: self.id.clone(),
-                title: self.view.title.clone(),
-                preview: Some("hello from the grantor".into()),
-                created_at_ms: 10,
-                updated_at_ms: 11,
-                running: false,
-                archived: false,
-                channel_id: None,
-            }])
+            Ok(super::SharedCatalogue {
+                complete: true,
+                rows: vec![ConversationSummary {
+                    conversation_id: self.id.clone(),
+                    title: self.view.title.clone(),
+                    preview: Some("hello from the grantor".into()),
+                    created_at_ms: 10,
+                    updated_at_ms: 11,
+                    running: false,
+                    archived: false,
+                    channel_id: None,
+                }],
+            })
         }
 
         async fn open(
@@ -1396,6 +1435,43 @@ mod tests {
         );
         assert_eq!(continued.len(), 1);
         assert_eq!(continued[0].conversation_id, "b");
+        assert!(!complete);
+        let mut same = Vec::new();
+        complete = true;
+        let mut first = summary("same");
+        first.title = Some("first".into());
+        let mut second = summary("same");
+        second.title = Some("second".into());
+        assert_eq!(
+            super::append_bounded(
+                &mut same,
+                vec![first, second, summary("other")],
+                256,
+                &mut complete,
+                0,
+            ),
+            None
+        );
+        assert_eq!(same.len(), 2);
+        assert_eq!(same[0].title.as_deref(), Some("first"));
+        assert_eq!(same[1].conversation_id, "other");
+        assert!(complete);
+        let mut partial = vec![summary("local")];
+        complete = true;
+        assert_eq!(
+            super::append_catalogue(
+                &mut partial,
+                super::SharedCatalogue {
+                    rows: vec![summary("shared")],
+                    complete: false,
+                },
+                256,
+                &mut complete,
+                0,
+            ),
+            None
+        );
+        assert_eq!(partial.len(), 2);
         assert!(!complete);
     }
 

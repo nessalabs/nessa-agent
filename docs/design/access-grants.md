@@ -1772,9 +1772,12 @@ read-only capabilities. A command that would change a chat the caller may
 read is refused `capabilities_refused` and is not sent to the grantor. The
 conversation metadata file is not written. A file or image the transcript
 names is read from the granting peer, one range at a time, for the catalogue
-owner Cedar admits. Rows are appended only into the room a list or observe
-page has left, and a page that cannot hold them stays incomplete. A paired device of the follower and the owner phone do not
-receive these rows. Live updates from the grantor, and a peer's own comment
+owner Cedar admits. A peer cache that cannot be read leaves the list
+incomplete, so a chat it holds is not treated as gone. Two peers that grant
+the same conversation id contribute one row, the first peer's. Rows are
+appended only into the room a list or observe page has left, and a page that
+cannot hold them stays incomplete. A paired device of the follower and the
+owner phone do not receive these rows. Live updates from the grantor, and a peer's own comment
 or drive, stay with the later slices.
 
 ### 3. Let a peer comment and drive under its grant
