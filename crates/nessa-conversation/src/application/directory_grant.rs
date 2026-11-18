@@ -50,6 +50,8 @@ pub enum DirectoryRefusal {
     HooksAnswerFirst,
     /// The grant does not include this capability.
     Capability { rules: Vec<String> },
+    /// A marker this attempt created is still waiting to be removed.
+    CleanupPending,
     /// No grant exists for this subject.
     NotFound,
     /// The audit sink did not accept the record. The operation is not done.
@@ -98,6 +100,9 @@ impl std::fmt::Display for DirectoryRefusal {
                 )
             }
             Self::Capability { .. } => write!(formatter, "the directory grant does not allow this"),
+            Self::CleanupPending => {
+                write!(formatter, "the directory marker cleanup is still pending")
+            }
             Self::NotFound => write!(formatter, "no directory grant"),
             Self::Audit => write!(formatter, "the directory audit was not recorded"),
         }
@@ -640,17 +645,28 @@ impl DirectoryAccess {
         }
     }
 
-    /// Apply the subject's command rules to one program. An empty list allows.
+    /// Apply every directory grant this subject holds. A grant with no command
+    /// list allows. A deny on any grant refuses, including when another grant
+    /// has no list.
     pub fn command_at(
         &self,
         subject: &str,
         program: &str,
         argv: &[String],
     ) -> Result<(), DirectoryRefusal> {
-        let grants = self.store.grants_for_subject(subject)?;
-        let Some(grant) = grants.first() else {
-            return Ok(());
-        };
+        for grant in self.store.grants_for_subject(subject)? {
+            self.command_on(subject, &grant, program, argv)?;
+        }
+        Ok(())
+    }
+
+    fn command_on(
+        &self,
+        subject: &str,
+        grant: &StoredDirectoryGrant,
+        program: &str,
+        argv: &[String],
+    ) -> Result<(), DirectoryRefusal> {
         if grant.rules.is_unreadable() {
             return Err(DirectoryRefusal::Program {
                 matcher: "command.rules.unlisted".to_owned(),
@@ -892,12 +908,6 @@ impl DirectoryAccess {
         self.open_marker_on(session.as_ref(), &resource, subject)?;
         let facts = facts_for(session.as_ref(), relative, capability)?;
         self.refuse_walk(&grant, &resource, facts, &format!("directory.{capability}"))?;
-        if !capability_names(&grant.capabilities)
-            .iter()
-            .any(|name| name == capability)
-        {
-            return Err(DirectoryRefusal::Capability { rules: Vec::new() });
-        }
         Ok((grant, resource, session))
     }
 
@@ -974,7 +984,11 @@ impl DirectoryAccess {
             &pending.initiator,
             pending.unlinked,
             pending.audit_done,
-        )
+        )?;
+        if self.store.cleanup(environment, canonical)?.is_some() {
+            return Err(DirectoryRefusal::CleanupPending);
+        }
+        Ok(())
     }
 
     /// The absence record is written only after the marker unlink has succeeded.

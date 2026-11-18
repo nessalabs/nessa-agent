@@ -1088,6 +1088,21 @@ fn a_failed_unlink_does_not_record_the_marker_as_absent() {
         .unwrap()
         .iter()
         .all(|line| line.cause != "file-absent"));
+    let still = access
+        .share(ShareDirectory {
+            environment: "local".into(),
+            path: shared.to_str().unwrap().into(),
+            subject: DirectorySubject {
+                principal_id: Some("peer".into()),
+                receiver_id: None,
+            },
+            capabilities: crate::domain::DirectoryCapabilities::from_names(["read"]).unwrap(),
+            rules: crate::domain::CommandRules::none(),
+            initiator: "owner".into(),
+        })
+        .unwrap_err();
+    assert!(matches!(still, DirectoryRefusal::CleanupPending));
+    assert!(shared.join(".nessa-binding").is_file());
     *files.fail.lock().unwrap() = false;
     share_read(&access, shared.to_str().unwrap(), "peer");
     assert!(audit
@@ -1127,4 +1142,97 @@ fn a_shell_string_is_a_constraint_only_when_the_grant_has_command_rules() {
         })
         .unwrap();
     assert!(access.command_constrained("ruled").unwrap());
+}
+
+#[test]
+fn a_deny_on_one_directory_refuses_even_when_another_grant_has_no_rules() {
+    let root = private();
+    let open = root.path().join("open");
+    let closed = root.path().join("closed");
+    fs::create_dir(&open).unwrap();
+    fs::create_dir(&closed).unwrap();
+    let store_dir = private();
+    let store =
+        Arc::new(SqliteDirectoryStore::open(&store_dir.path().join("grants.sqlite3")).unwrap());
+    let audit = Arc::new(RecordingAudit::new());
+    let access = service(
+        Arc::new(LocalDirectoryFiles),
+        store.clone(),
+        audit.clone(),
+        [2; BINDING_LEN],
+    );
+    let closed_access = service(
+        Arc::new(LocalDirectoryFiles),
+        store,
+        audit,
+        [3; BINDING_LEN],
+    );
+    share_read(&access, open.to_str().unwrap(), "peer");
+    closed_access
+        .share(ShareDirectory {
+            environment: "local".into(),
+            path: closed.to_str().unwrap().into(),
+            subject: DirectorySubject {
+                principal_id: Some("peer".into()),
+                receiver_id: None,
+            },
+            capabilities: crate::domain::DirectoryCapabilities::from_names(["exec"]).unwrap(),
+            rules: crate::domain::CommandRules::new(vec![deny_argv("rm", "-*").unwrap()]).unwrap(),
+            initiator: "owner".into(),
+        })
+        .unwrap();
+    let refused = access
+        .command_at("peer", "rm", &["-rf".into()])
+        .unwrap_err();
+    match refused {
+        DirectoryRefusal::Program { matcher, .. } => assert_eq!(matcher, "command.rules.deny.0"),
+        other => panic!("{other:?}"),
+    }
+}
+
+#[test]
+fn a_failed_second_share_does_not_keep_a_grant_change() {
+    let root = private();
+    let shared = root.path().join("shared");
+    fs::create_dir(&shared).unwrap();
+    let store_dir = private();
+    let path = store_dir.path().join("grants.sqlite3");
+    let access = service(
+        Arc::new(LocalDirectoryFiles),
+        Arc::new(SqliteDirectoryStore::open(&path).unwrap()),
+        Arc::new(RecordingAudit::new()),
+        [3; BINDING_LEN],
+    );
+    share_read(&access, shared.to_str().unwrap(), "peer");
+    let again = access
+        .share(ShareDirectory {
+            environment: "local".into(),
+            path: shared.to_str().unwrap().into(),
+            subject: DirectorySubject {
+                principal_id: Some("peer".into()),
+                receiver_id: None,
+            },
+            capabilities: crate::domain::DirectoryCapabilities::from_names(["read"]).unwrap(),
+            rules: crate::domain::CommandRules::none(),
+            initiator: "owner".into(),
+        })
+        .unwrap_err();
+    assert!(matches!(again, DirectoryRefusal::Store));
+    let connection = nessa_local_database::rusqlite::Connection::open(&path).unwrap();
+    let changes: i64 = connection
+        .query_row(
+            "SELECT count(*) FROM share_grant_changes WHERE resource_kind = 'directory'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let grants: i64 = connection
+        .query_row(
+            "SELECT count(*) FROM share_grants WHERE resource_kind = 'directory'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(changes, 1);
+    assert_eq!(grants, 1);
 }

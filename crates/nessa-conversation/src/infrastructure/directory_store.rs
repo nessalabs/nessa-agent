@@ -92,7 +92,7 @@ impl DirectoryStore for SqliteDirectoryStore {
         grant: &StoredDirectoryGrant,
         initiator: &str,
     ) -> Result<(), DirectoryRefusal> {
-        let connection = self.connection.lock().expect("directory grants");
+        let mut connection = self.connection.lock().expect("directory grants");
         let principal = grant.principal_id.clone().unwrap_or_else(|| {
             format!("receiver:{}", grant.receiver_id.clone().unwrap_or_default())
         });
@@ -100,7 +100,8 @@ impl DirectoryStore for SqliteDirectoryStore {
         let now = now_ms();
         let credential = format!("{}:{principal}", grant.resource_id);
         let request = format!("share:{credential}:{now}");
-        connection
+        let transaction = connection.transaction().map_err(store)?;
+        transaction
             .execute(
                 "INSERT INTO share_grant_changes (
                     principal_id, resource_kind, resource_id, receiver_id, credential_id,
@@ -120,8 +121,8 @@ impl DirectoryStore for SqliteDirectoryStore {
                 ],
             )
             .map_err(store)?;
-        let revision = connection.last_insert_rowid();
-        connection
+        let revision = transaction.last_insert_rowid();
+        transaction
             .execute(
                 "INSERT INTO share_grants (
                     principal_id, resource_kind, resource_id, receiver_id, credential_id,
@@ -139,6 +140,7 @@ impl DirectoryStore for SqliteDirectoryStore {
                 ],
             )
             .map_err(store)?;
+        transaction.commit().map_err(store)?;
         Ok(())
     }
 
