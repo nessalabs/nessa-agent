@@ -331,17 +331,7 @@ async fn fresh_frame(
 /// is the log head. An incomplete frame keeps `after` unmoved by using the
 /// position already covered, and names `snapshotId` when the pin has one.
 fn take_page(pin: &mut Pin) -> GrantsChanged {
-    let mut keep = pin.pending.len();
-    while keep > 0 {
-        let complete = keep == pin.pending.len();
-        if event_len(&preview(pin, keep, complete)) <= MAX_PAYLOAD_BYTES as usize {
-            break;
-        }
-        keep -= 1;
-    }
-    if keep == 0 && !pin.pending.is_empty() {
-        keep = 1;
-    }
+    let keep = fitting_prefix(pin);
     let complete = keep == pin.pending.len();
     let grants: Vec<GrantFrameEntry> = pin.pending.drain(..keep).collect();
     let position = if complete {
@@ -371,6 +361,34 @@ fn take_page(pin: &mut Pin) -> GrantsChanged {
         snapshot_id: (pin.id > 0).then(|| pin.id.to_string()),
         grants,
     }
+}
+
+/// How many leading entries fit one frame. Each entry is serialized once.
+/// The whole set is measured as a complete frame; a cut uses the incomplete
+/// envelope, which grows by each entry and a comma. One entry is sent even
+/// when it is already over the bound.
+fn fitting_prefix(pin: &Pin) -> usize {
+    let total = pin.pending.len();
+    if total == 0 || event_len(&preview(pin, total, true)) <= MAX_PAYLOAD_BYTES as usize {
+        return total;
+    }
+    if total == 1 {
+        return 1;
+    }
+    let mut size = event_len(&preview(pin, 0, false));
+    let mut keep = 0;
+    for (index, entry) in pin.pending.iter().take(total - 1).enumerate() {
+        let entry_len = serde_json::to_string(entry)
+            .map(|text| text.len())
+            .unwrap_or(usize::MAX);
+        let extra = entry_len.saturating_add(usize::from(index > 0));
+        if keep > 0 && size.saturating_add(extra) > MAX_PAYLOAD_BYTES as usize {
+            break;
+        }
+        size = size.saturating_add(extra);
+        keep += 1;
+    }
+    keep.max(1)
 }
 
 fn preview(pin: &Pin, keep: usize, complete: bool) -> GrantsChanged {
@@ -509,7 +527,11 @@ async fn wait_registered(
 
 #[cfg(test)]
 mod tests {
-    use super::page_continues;
+    use super::{
+        copy_entry, event_len, fitting_prefix, page_continues, preview, take_page, Pin,
+        MAX_PAYLOAD_BYTES,
+    };
+    use nessa_protocol::product::generated::GrantFrameEntry;
 
     #[test]
     fn a_page_continues_only_the_open_pin() {
@@ -518,5 +540,66 @@ mod tests {
         assert!(!page_continues(Some("4"), None));
         assert!(!page_continues(Some("4"), Some(0)));
         assert!(!page_continues(Some("9"), Some(4)));
+    }
+
+    fn entry(index: usize) -> GrantFrameEntry {
+        GrantFrameEntry {
+            conversation_id: format!("conversation-{index:08}"),
+            absent: false,
+            capabilities: Some("read,comment,drive".to_owned()),
+            policy_revision: Some("18446744073709551615".to_owned()),
+        }
+    }
+
+    fn pin(count: usize) -> Pin {
+        Pin {
+            id: 4,
+            replaces: true,
+            incarnation: "incarnation".to_owned(),
+            head: 9,
+            pending: (0..count).map(entry).collect(),
+            covered: 0,
+            incremental: false,
+        }
+    }
+
+    #[test]
+    fn an_entry_grows_the_frame_by_its_own_text_and_a_comma() {
+        let open = pin(2);
+        let empty = event_len(&preview(&open, 0, false));
+        let first = serde_json::to_string(&open.pending[0]).unwrap().len();
+        let second = serde_json::to_string(&open.pending[1]).unwrap().len();
+        assert_eq!(event_len(&preview(&open, 1, false)), empty + first);
+        assert_eq!(
+            event_len(&preview(&open, 2, false)),
+            empty + first + 1 + second
+        );
+    }
+
+    #[test]
+    fn a_snapshot_page_is_a_fitting_prefix_measured_once_per_grant() {
+        let mut small = pin(2);
+        let frame = take_page(&mut small);
+        assert!(frame.complete);
+        assert!(small.pending.is_empty());
+        assert!(event_len(&frame) <= MAX_PAYLOAD_BYTES as usize);
+
+        let count = 4_000;
+        let mut large = pin(count);
+        let chosen = fitting_prefix(&large);
+        assert!(chosen < count);
+        assert!(chosen > 1);
+        let frame = take_page(&mut large);
+        assert!(!frame.complete);
+        assert_eq!(frame.grants.len(), chosen);
+        assert_eq!(large.pending.len(), count - chosen);
+        assert!(event_len(&preview(&pin(count), chosen, false)) <= MAX_PAYLOAD_BYTES as usize);
+        assert!(event_len(&preview(&pin(count), chosen + 1, false)) > MAX_PAYLOAD_BYTES as usize);
+        let again = take_page(&mut large);
+        assert_eq!(again.grants.len(), chosen);
+        assert_eq!(
+            again.grants[0].conversation_id,
+            copy_entry(&entry(chosen)).conversation_id
+        );
     }
 }
