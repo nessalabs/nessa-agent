@@ -38,7 +38,8 @@ test("workflow installs go through the shared pnpm action", () => {
       (step) =>
         step !== optional && step.includes("uses: ./.github/actions/pnpm-install"),
     ).length,
-    4,
+    // frontend, both stress jobs, the Linux smoke and the Mac release check.
+    5,
   )
   assert.equal(
     localAuth.match(/save: \$\{\{ github\.ref == 'refs\/heads\/main' \}\}/g)?.length,
