@@ -2245,6 +2245,68 @@ async fn a_failing_peer_is_reported_and_the_other_is_read() {
     stop(peers.a).await;
 }
 
+/// One read slot. Both peers are caught up, and both follows are still up:
+/// the first freed the slot when its snapshot was stored, so the second
+/// could be read. A follow that kept the slot would leave the second due.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_caught_up_follow_frees_the_read_slot() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut peers = TwoPeers::start(directory.path()).await;
+    for (peer, relay, key) in [
+        (&peers.a, &peers.relay_a, &mut peers.key_a),
+        (&peers.c, &peers.relay_c, &mut peers.key_c),
+    ] {
+        let (enrolled, receiver) = enroll(peer, &peers.b, relay, true).await;
+        *key = enrolled;
+        let conversation = peer.conversation().await;
+        peer.grant(
+            ShareGrantTransition::Grant(ShareAccess::read()),
+            &conversation,
+            &receiver.unwrap(),
+        )
+        .await;
+        follow_granted(&peers.b, enrolled, &[conversation]).await;
+    }
+    let poller = peers.b.poller(PollPolicy {
+        reads_at_once: 1,
+        ..POLICY
+    });
+    let since = SystemClock.unix_milliseconds();
+    let reached = tokio::time::timeout(WAIT, async {
+        loop {
+            let a = sync_of(&peers.b, &peers.key_a).await;
+            let c = sync_of(&peers.b, &peers.key_c).await;
+            let up = |sync: Option<PeerSync>| {
+                sync.is_some_and(|sync| {
+                    sync.state == SyncState::Synced
+                        && sync.last_synced_ms.is_some_and(|at| at >= since)
+                })
+            };
+            if up(a) && up(c) {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await;
+    let a_stop = peers.b.peers.active_read_stop(&peers.key_a);
+    let c_stop = peers.b.peers.active_read_stop(&peers.key_c);
+    assert!(
+        reached.is_ok(),
+        "A: {:?}; C: {:?}",
+        sync_of(&peers.b, &peers.key_a).await,
+        sync_of(&peers.b, &peers.key_c).await
+    );
+    assert!(
+        a_stop.as_ref().is_some_and(|stop| !stop.is_stopped())
+            && c_stop.as_ref().is_some_and(|stop| !stop.is_stopped()),
+        "a caught-up follow ended so the other peer could be read"
+    );
+    tokio::time::timeout(WAIT, poller.join()).await.unwrap();
+    stop(peers.a).await;
+    stop(peers.c).await;
+}
+
 /// With one read slot, a second peer's read does not start until the first
 /// gives the slot back.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
