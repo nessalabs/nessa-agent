@@ -75,6 +75,7 @@ export {
   loadAssignedSurfaceCredential,
   loadAssignedGatewayEndpoint,
   flushCompositor,
+  performHaptic,
   onFocusComposer,
   onGatewayStartup,
   onRuntimeCopy,
