@@ -933,6 +933,32 @@ test("a session in full access asks nothing: the permission runs its allow-once 
   )
 })
 
+test("a text step that continues adds to the message before it", async () => {
+  const notes = []
+  let made = 0
+  await runSteps(
+    [
+      { do: "text", chunks: ["One."] },
+      { do: "pause", ms: 0 },
+      { do: "text", continues: true, chunks: ["Two."] },
+      { do: "text", chunks: ["Three."] },
+    ],
+    {
+      cancelled: () => false,
+      update: (frame) => notes.push(frame.messageId),
+      messageId: () => `m${++made}`,
+    },
+  )
+  assert.deepEqual(notes, ["m1", "m1", "m2"])
+  assert.throws(
+    () =>
+      parseScenario({
+        turns: [{ steps: [{ do: "text", chunks: ["x"], continues: 1 }] }],
+      }),
+    /continues/,
+  )
+})
+
 test("a pause sleeps only after the gateway has queued the update before it", async () => {
   const order = []
   const outcome = await runSteps([{ do: "pause", ms: 400 }], {

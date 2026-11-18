@@ -141,6 +141,9 @@ export const TABLE_LINES = [
   "| Night Shift at the Lighthouse | CineCycle | Sat Oct 17 | 11:59 pm | 88 min | 16 mm | French, English subtitles | 9 |",
 ]
 
+/** How long a `table` turn holds between its tables and the rest of its answer. */
+export const TABLE_HOLD_MS = 3000
+
 /**
  * The code and the diagram a `table` turn streams after its tables, so the
  * window draws a highlighted code block and a Mermaid diagram in the same
@@ -457,6 +460,15 @@ export function stressScenario({
               "${prompt.text}",
               "\n\n",
               ...TABLE_LINES.map((line) => `${line}\n`),
+            ],
+          },
+          // The tables are finished while the rest is still to come, for the
+          // window to be watched leaving them alone.
+          { do: "pause", ms: TABLE_HOLD_MS },
+          {
+            do: "text",
+            continues: true,
+            chunks: [
               "\n",
               ...CODE_LINES.map((line) => `${line}\n`),
               "\n",
