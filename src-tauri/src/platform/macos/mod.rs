@@ -2,6 +2,7 @@
 //! the desktop window's traffic lights.
 
 mod claude_sign_in;
+mod haptics;
 mod live_resize;
 mod minted;
 mod overlay;
@@ -77,6 +78,10 @@ impl Host for Macos {
 
     fn hold_window_controls(&self, window: &WebviewWindow) -> Result<(), String> {
         window_controls::hold(window)
+    }
+
+    fn perform_haptic(&self, window: &WebviewWindow) -> Result<(), String> {
+        haptics::level_change(window)
     }
 
     fn float_beside_fullscreen(&self, window: &WebviewWindow) {

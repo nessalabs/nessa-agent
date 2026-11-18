@@ -18,6 +18,10 @@ sources:
   - "verification/desktop/scripts/responsive.mjs"
   - src/desktop/model/side-column.ts
   - src/desktop/model/side-column.test.ts
+  - src/desktop/workspace/model/side-swipe.ts
+  - src/desktop/workspace/model/side-swipe.test.ts
+  - src/desktop/workspace/adapters/dom/side-swipe.ts
+  - src/desktop/workspace/adapters/dom/side-swipe.test.tsx
 diagramLinks: {}
 model:
   spec: tla/services/desktop/workspace/fold-reveal-and-resize-side-columns.tla
@@ -64,6 +68,33 @@ stateDiagram-v2
         Release or blur reevaluates inside/outside.
         Stale timer events are ignored.
     end note
+```
+
+## Swipe across the chat
+
+In the app window (not a browser tab, whose own swipe goes back a page), a
+two-finger sideways swipe over the chat's panes moves one side column per
+swipe, with one haptic tick from the host when a column moved. From the
+window's edge the columns are rail, sidebar, session list. A swipe left folds
+the open column nearest the chat; a swipe right opens the closed column
+nearest the edge, so they return in the order they left. A column the window
+cannot draw (the rail while off or without room, a list the layout lacks) is
+passed over. Momentum after the fingers lift is the same swipe, and a gesture
+is decided where it began: one that began vertical, as a pinch, outside the
+chat, or over something that scrolls sideways itself (a wide table, a code
+block, an input) moves nothing.
+
+```mermaid
+stateDiagram-v2
+    [*] --> Idle
+    Idle --> Skipped: first event outside the chat, over a sideways scroller, or a pinch
+    Idle --> Tracking: first event over the chat
+    Tracking --> Scroll: vertical travel first
+    Tracking --> Done: 48 px sideways, twice the vertical / toggle one column + tick
+    Tracking --> Idle: 180 ms with no event, short of a swipe
+    Skipped --> Idle: 180 ms with no event
+    Scroll --> Idle: 180 ms with no event
+    Done --> Idle: 180 ms with no event
 ```
 
 ## Layout observer orderings (#693)
