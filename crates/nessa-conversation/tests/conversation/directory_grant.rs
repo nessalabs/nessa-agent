@@ -584,6 +584,9 @@ impl DirectoryStore for FailResource {
     ) -> Result<Option<PendingCleanup>, DirectoryRefusal> {
         self.inner.cleanup(environment, canonical)
     }
+    fn pending_cleanups(&self) -> Result<Vec<(String, String)>, DirectoryRefusal> {
+        self.inner.pending_cleanups()
+    }
     fn update_cleanup(
         &self,
         environment: &str,
@@ -1653,4 +1656,193 @@ fn an_unenclosed_command_is_not_admitted_for_a_directory_grant() {
         }
         other => panic!("{other:?}"),
     }
+}
+
+#[test]
+fn a_failed_audit_retry_still_revokes_another_directory() {
+    let root = private();
+    let first = root.path().join("first");
+    let second = root.path().join("second");
+    let third = root.path().join("third");
+    let fourth = root.path().join("fourth");
+    fs::create_dir(&first).unwrap();
+    fs::create_dir(&second).unwrap();
+    fs::create_dir(&third).unwrap();
+    fs::create_dir(&fourth).unwrap();
+    fs::write(third.join("note.txt"), b"kept").unwrap();
+    let store_dir = private();
+    let audit = Arc::new(RecordingAudit::new());
+    let store =
+        Arc::new(SqliteDirectoryStore::open(&store_dir.path().join("grants.sqlite3")).unwrap());
+    let access = DirectoryAccess::new(
+        Arc::new(LocalDirectoryFiles),
+        store.clone(),
+        Arc::new(CedarDirectoryPolicyEvaluator::new().unwrap()),
+        audit.clone(),
+        Arc::new(RandomBinding),
+    );
+    let revoked = share_read(&access, first.to_str().unwrap(), "alfa");
+    let other = share_read(&access, second.to_str().unwrap(), "beta");
+    share_read(&access, third.to_str().unwrap(), "calm");
+    let executed = share_read(&access, fourth.to_str().unwrap(), "delta");
+    fs::remove_file(first.join(".nessa-binding")).unwrap();
+    *audit.fail.lock().unwrap() = true;
+    access.read("alfa", "note.txt").unwrap_err();
+    assert!(store
+        .grants_for_resource(&revoked.resource_id)
+        .unwrap()
+        .is_empty());
+    fs::remove_file(second.join(".nessa-binding")).unwrap();
+    let refused = access.read("beta", "note.txt").unwrap_err();
+    assert!(matches!(refused, DirectoryRefusal::MarkerMismatch { .. }));
+    assert!(store
+        .grants_for_resource(&other.resource_id)
+        .unwrap()
+        .is_empty());
+    assert!(matches!(
+        access.read("calm", "note.txt").unwrap_err(),
+        DirectoryRefusal::Store
+    ));
+    fs::remove_file(fourth.join(".nessa-binding")).unwrap();
+    assert!(matches!(
+        access
+            .exec(ExecAsk {
+                subject: "delta",
+                program: "cat",
+                profile: SandboxKind::None,
+                roots: &[],
+                hooks_answer_first: false,
+            })
+            .unwrap_err(),
+        DirectoryRefusal::MarkerMismatch { .. }
+    ));
+    assert!(store
+        .grants_for_resource(&executed.resource_id)
+        .unwrap()
+        .is_empty());
+}
+
+struct GateUnlink {
+    inner: LocalDirectoryFiles,
+    fail_once: Mutex<bool>,
+    entered: std::sync::Condvar,
+    entered_flag: Mutex<bool>,
+    release: Mutex<bool>,
+    release_cv: std::sync::Condvar,
+}
+
+impl DirectoryFiles for GateUnlink {
+    fn canonicalize(&self, path: &str) -> Result<String, DirectoryRefusal> {
+        self.inner.canonicalize(path)
+    }
+    fn read_marker(&self, canonical: &str) -> Result<MarkerBytes, DirectoryRefusal> {
+        self.inner.read_marker(canonical)
+    }
+    fn create_marker(
+        &self,
+        canonical: &str,
+        bytes: &[u8; BINDING_LEN],
+    ) -> Result<(), DirectoryRefusal> {
+        self.inner.create_marker(canonical, bytes)
+    }
+    fn unlink_marker(&self, canonical: &str) -> Result<(), DirectoryRefusal> {
+        if *self.fail_once.lock().unwrap() {
+            *self.fail_once.lock().unwrap() = false;
+            return Err(DirectoryRefusal::Io(std::io::ErrorKind::PermissionDenied));
+        }
+        {
+            let mut entered = self.entered_flag.lock().unwrap();
+            *entered = true;
+            self.entered.notify_all();
+        }
+        let mut release = self.release.lock().unwrap();
+        while !*release {
+            release = self.release_cv.wait(release).unwrap();
+        }
+        self.inner.unlink_marker(canonical)
+    }
+    fn walk(&self, canonical: &str, relative: &str) -> Result<WalkFacts, DirectoryRefusal> {
+        self.inner.walk(canonical, relative)
+    }
+    fn read_inside(&self, canonical: &str, relative: &str) -> Result<Vec<u8>, DirectoryRefusal> {
+        self.inner.read_inside(canonical, relative)
+    }
+    fn write_inside(
+        &self,
+        canonical: &str,
+        relative: &str,
+        bytes: &[u8],
+    ) -> Result<(), DirectoryRefusal> {
+        self.inner.write_inside(canonical, relative, bytes)
+    }
+    fn hides_marker(&self, profile: SandboxKind) -> bool {
+        self.inner.hides_marker(profile)
+    }
+    fn root_leave(&self, canonical: &str, roots: &[String]) -> Result<PathLeave, DirectoryRefusal> {
+        self.inner.root_leave(canonical, roots)
+    }
+    fn open_session(&self, canonical: &str) -> Result<Box<dyn DirectorySession>, DirectoryRefusal> {
+        self.inner.open_session(canonical)
+    }
+}
+
+#[test]
+fn cleanup_waits_for_the_share_lease_before_it_unlinks() {
+    let root = private();
+    let shared = root.path().join("shared");
+    fs::create_dir(&shared).unwrap();
+    let store_dir = private();
+    let files = Arc::new(GateUnlink {
+        inner: LocalDirectoryFiles,
+        fail_once: Mutex::new(true),
+        entered: std::sync::Condvar::new(),
+        entered_flag: Mutex::new(false),
+        release: Mutex::new(false),
+        release_cv: std::sync::Condvar::new(),
+    });
+    let access = Arc::new(service(
+        files.clone(),
+        Arc::new(FailResource {
+            inner: SqliteDirectoryStore::open(&store_dir.path().join("grants.sqlite3")).unwrap(),
+            failed: Mutex::new(false),
+        }),
+        Arc::new(RecordingAudit::new()),
+        [17; BINDING_LEN],
+    ));
+    let request = ShareDirectory {
+        environment: "local".into(),
+        path: shared.to_str().unwrap().into(),
+        subject: DirectorySubject {
+            principal_id: Some("peer".into()),
+            receiver_id: None,
+        },
+        capabilities: crate::domain::DirectoryCapabilities::from_names(["read"]).unwrap(),
+        rules: crate::domain::CommandRules::none(),
+        initiator: "owner".into(),
+    };
+    assert!(matches!(
+        access.share(request.clone()).unwrap_err(),
+        DirectoryRefusal::Store
+    ));
+    assert!(shared.join(".nessa-binding").is_file());
+    let reconciling = access.clone();
+    let reconcile_thread = std::thread::spawn(move || reconciling.reconcile());
+    {
+        let mut entered = files.entered_flag.lock().unwrap();
+        while !*entered {
+            entered = files.entered.wait(entered).unwrap();
+        }
+    }
+    let sharing = access.clone();
+    let shared_again = request.clone();
+    let share_thread = std::thread::spawn(move || sharing.share(shared_again));
+    let started = std::time::Instant::now();
+    while started.elapsed() < std::time::Duration::from_millis(200) && !share_thread.is_finished() {
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    *files.release.lock().unwrap() = true;
+    files.release_cv.notify_all();
+    reconcile_thread.join().unwrap().unwrap();
+    share_thread.join().unwrap().unwrap();
+    assert!(shared.join(".nessa-binding").is_file());
 }

@@ -571,7 +571,7 @@ impl DirectoryAccess {
         )
         .map_err(DirectoryRefusal::Shape)?;
         let _lease = self.lease(&request.environment, &canonical);
-        self.finish_cleanup(&request.environment, &canonical)?;
+        self.finish_cleanup_held(&request.environment, &canonical)?;
         match self.files.read_marker(&canonical)? {
             MarkerBytes::Other => Err(DirectoryRefusal::MarkerSize),
             MarkerBytes::Exact(bytes) => self.share_existing(request, canonical, bytes),
@@ -602,7 +602,14 @@ impl DirectoryAccess {
 
     /// Admit exec. This does not spawn a process.
     pub fn exec(&self, ask: ExecAsk<'_>) -> Result<(), DirectoryRefusal> {
-        self.reconcile()?;
+        let owed = self.reconcile().err();
+        match self.decide_exec(ask) {
+            Ok(()) => owed.map_or(Ok(()), Err),
+            Err(error) => Err(error),
+        }
+    }
+
+    fn decide_exec(&self, ask: ExecAsk<'_>) -> Result<(), DirectoryRefusal> {
         let grants = self.store.grants_for_subject(ask.subject)?;
         let Some(grant) = grants.first() else {
             return Err(DirectoryRefusal::NotFound);
@@ -671,6 +678,15 @@ impl DirectoryAccess {
         argv: &[String],
     ) -> Result<(), DirectoryRefusal> {
         self.reconcile()?;
+        self.enforce_commands(subject, program, argv)
+    }
+
+    fn enforce_commands(
+        &self,
+        subject: &str,
+        program: &str,
+        argv: &[String],
+    ) -> Result<(), DirectoryRefusal> {
         for grant in self.store.grants_for_subject(subject)? {
             self.command_on(subject, &grant, program, argv)?;
         }
@@ -687,9 +703,8 @@ impl DirectoryAccess {
         profile: SandboxKind,
         roots: &[String],
     ) -> Result<(), DirectoryRefusal> {
-        self.command_at(subject, program, argv)?;
         if self.store.grants_for_subject(subject)?.is_empty() {
-            return Ok(());
+            return self.reconcile();
         }
         self.exec(ExecAsk {
             subject,
@@ -697,7 +712,8 @@ impl DirectoryAccess {
             profile,
             roots,
             hooks_answer_first: false,
-        })
+        })?;
+        self.enforce_commands(subject, program, argv)
     }
 
     fn command_on(
@@ -969,7 +985,27 @@ impl DirectoryAccess {
         ),
         DirectoryRefusal,
     > {
-        self.reconcile()?;
+        let owed = self.reconcile().err();
+        let opened = self.open_for_use(subject, relative, capability);
+        match opened {
+            Ok(value) => owed.map_or(Ok(value), Err),
+            Err(error) => Err(error),
+        }
+    }
+
+    fn open_for_use(
+        &self,
+        subject: &str,
+        relative: &str,
+        capability: &str,
+    ) -> Result<
+        (
+            StoredDirectoryGrant,
+            StoredDirectoryResource,
+            Box<dyn DirectorySession>,
+        ),
+        DirectoryRefusal,
+    > {
         let grants = self.store.grants_for_subject(subject)?;
         let Some(grant) = grants.into_iter().next() else {
             return Err(DirectoryRefusal::NotFound);
@@ -1046,6 +1082,17 @@ impl DirectoryAccess {
     }
 
     fn finish_cleanup(&self, environment: &str, canonical: &str) -> Result<(), DirectoryRefusal> {
+        let _lease = self.lease(environment, canonical);
+        self.finish_cleanup_held(environment, canonical)
+    }
+
+    /// The caller holds this directory's share lease. The cleanup row is read
+    /// again under that lease, so a share that already committed is not unlinked.
+    fn finish_cleanup_held(
+        &self,
+        environment: &str,
+        canonical: &str,
+    ) -> Result<(), DirectoryRefusal> {
         let Some(pending) = self.store.cleanup(environment, canonical)? else {
             return Ok(());
         };
