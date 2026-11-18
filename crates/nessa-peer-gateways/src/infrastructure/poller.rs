@@ -597,9 +597,10 @@ impl Shared {
                     }
                     Some((Err(ReadFailure::Stopped), _)) => return self.stopped_short(),
                     Some((Err(failure), retained)) => {
-                        // A page kept before the cache filled or could not be
-                        // written is already readable. The failure still backs
-                        // off; the open transcript still has to hear about it.
+                        // A page kept before the cache filled, could not be
+                        // written, or the connection was lost is already
+                        // readable. The failure still backs off; the open
+                        // transcript still has to hear about it.
                         if retained_failure_notifies(failure, retained) {
                             self.commands.note_shared_chats();
                         }
@@ -1224,11 +1225,15 @@ fn read_ended(
 }
 
 /// A failed read kept a page the subscribers have not been told about.
-/// Quota and a cache that could not be written are the failures that leave
-/// applied pages in place. Anything else either saved nothing or is already
-/// announced by its own cause.
+/// Quota, a cache that could not be written, and a connection lost after a
+/// page was kept leave that page in place. A read that kept nothing does
+/// not. A damaged cache and a required reset are announced by their own cause.
 fn retained_failure_notifies(failure: ReadFailure, retained: bool) -> bool {
-    retained && matches!(failure, ReadFailure::Quota | ReadFailure::Cache)
+    retained
+        && matches!(
+            failure,
+            ReadFailure::Quota | ReadFailure::Cache | ReadFailure::Unreachable | ReadFailure::Away
+        )
 }
 
 /// How a cycle that did not read is listed.

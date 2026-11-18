@@ -794,9 +794,9 @@ impl RetainedCache {
     /// not grant: the catalogue is still what the gateway serves.
     ///
     /// The boolean is true when a page was kept and the read then failed
-    /// because the cache is full or could not be written. The error still
-    /// stands. The caller tells subscribers the cache moved; a withdrawal
-    /// is already in `withdrawn`.
+    /// because the cache is full, could not be written, or the connection
+    /// was lost. The error still stands. The caller tells subscribers the
+    /// cache moved; a withdrawal is already in `withdrawn`.
     pub fn read_followed(
         &mut self,
         access: ReaderAccess<'_>,
@@ -808,7 +808,14 @@ impl RetainedCache {
     ) -> (Result<ReadReport, ReadFailure>, bool) {
         let (result, progressed) =
             self.read_in(access, stop, budget, max_withdrawn, withdrawn, Some(follow));
-        let retained = progressed && matches!(result, Err(ReadFailure::Quota | ReadFailure::Cache));
+        let retained = progressed
+            && matches!(
+                result,
+                Err(ReadFailure::Quota
+                    | ReadFailure::Cache
+                    | ReadFailure::Unreachable
+                    | ReadFailure::Away)
+            );
         (result, retained)
     }
 
