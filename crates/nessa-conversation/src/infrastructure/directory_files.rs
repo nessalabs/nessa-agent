@@ -622,6 +622,18 @@ mod marker_identity {
 
     #[test]
     fn a_failed_marker_write_removes_the_file_it_created() {
+        // The file-size limit is process-wide. Apply it in a child so the
+        // other tests in this process can still write.
+        if std::env::var_os("NESSA_MARKER_WRITE_LIMIT").is_none() {
+            let status = std::process::Command::new(std::env::current_exe().unwrap())
+                .arg("a_failed_marker_write_removes_the_file_it_created")
+                .arg("--exact")
+                .env("NESSA_MARKER_WRITE_LIMIT", "1")
+                .status()
+                .unwrap();
+            assert!(status.success());
+            return;
+        }
         let root = tempfile::tempdir().unwrap();
         let shared = root.path().join("shared");
         std::fs::create_dir(&shared).unwrap();
