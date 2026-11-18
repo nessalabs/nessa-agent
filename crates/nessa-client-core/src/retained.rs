@@ -159,6 +159,9 @@ const CATALOGUE_PAGES: usize = 64;
 const RECORD_PAGES: usize = 16;
 /// How long connecting and authenticating may take, in milliseconds.
 const HANDSHAKE_MS: u64 = 5_000;
+/// Bytes of grant entries held while an incomplete snapshot is assembled.
+/// A further page fails the follow and leaves the committed cursor where it was.
+const STAGED_GRANT_BYTES: usize = 512 * 1024;
 /// How long connecting and authenticating may take. The operating system's
 /// connect inside it cannot be stopped: [`ReadStop::stop`] shuts the sockets a
 /// read has open, not one still connecting, so a stop can wait up to this.
@@ -711,6 +714,43 @@ fn finish_staged(
     entries
 }
 
+/// Append one incomplete page, or replace the buffer when a new snapshot
+/// starts. Past [`STAGED_GRANT_BYTES`] the page is not kept.
+fn stage_grant_page(
+    staged: &mut Vec<nessa_protocol::product::generated::GrantFrameEntry>,
+    staged_bytes: &mut usize,
+    staged_snapshot: &mut Option<String>,
+    changed: &nessa_protocol::product::generated::GrantsChanged,
+) -> Result<(), ReadFailure> {
+    let same_snapshot = changed
+        .snapshot_id
+        .as_ref()
+        .is_some_and(|id| staged_snapshot.as_ref() == Some(id));
+    let fresh = changed.replaces && !same_snapshot;
+    let base = if fresh { 0 } else { *staged_bytes };
+    let adding = grant_text_len(&changed.grants);
+    if base.saturating_add(adding) > STAGED_GRANT_BYTES {
+        return Err(ReadFailure::Protocol);
+    }
+    if fresh {
+        staged.clear();
+    }
+    staged.extend(changed.grants.iter().map(copy_grant_entry));
+    *staged_bytes = base.saturating_add(adding);
+    *staged_snapshot = changed.snapshot_id.clone();
+    Ok(())
+}
+
+fn grant_text_len(entries: &[nessa_protocol::product::generated::GrantFrameEntry]) -> usize {
+    entries.iter().fold(0_usize, |sum, entry| {
+        sum.saturating_add(
+            serde_json::to_string(entry)
+                .map(|text| text.len())
+                .unwrap_or(usize::MAX),
+        )
+    })
+}
+
 fn copy_grant_entry(
     entry: &nessa_protocol::product::generated::GrantFrameEntry,
 ) -> nessa_protocol::product::generated::GrantFrameEntry {
@@ -880,10 +920,12 @@ impl RetainedCache {
         budget: Duration,
         max_withdrawn: usize,
         withdrawn: &mut Vec<String>,
-        mut on_withdrawn: impl FnMut(&[String]),
-        mut on_synced: impl FnMut(u64),
+        on_withdrawn: impl FnMut(&[String]),
+        on_synced: impl FnMut(u64),
     ) -> Result<ReadReport, ReadFailure> {
         let receiver = access.receiver.to_owned();
+        let before = withdrawn.len();
+        self.progressed = false;
         let ending = Arc::new(Stopping::new(
             stop.clone(),
             self.clock.clone(),
@@ -891,8 +933,51 @@ impl RetainedCache {
                 .elapsed_ms()
                 .saturating_add(u64::try_from(budget.as_millis()).unwrap_or(u64::MAX)),
         ));
+        let result = self.follow_until(
+            access,
+            follow,
+            stop,
+            &ending,
+            max_withdrawn,
+            withdrawn,
+            on_withdrawn,
+            on_synced,
+        );
+        // A budget that cancels the socket is `Stopped` at the stream. The
+        // same end as a catalogue read: a caller stop stays stopped, and a
+        // spent budget that saved nothing is unreachable.
+        let progressed = self.progressed || withdrawn.len() > before;
+        let end = read_end(result, stop.is_stopped(), ending.spent(), progressed);
+        match end {
+            ReadEnd::Read(report) => Ok(report),
+            ReadEnd::Incomplete => Ok(ReadReport {
+                moved: true,
+                complete: false,
+                conversations: self
+                    .cache
+                    .grant_ids(&receiver)
+                    .map_err(|error| cache_failure(&error))?
+                    .len(),
+            }),
+            ReadEnd::Failed(failure) => Err(failure),
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn follow_until(
+        &mut self,
+        access: ReaderAccess<'_>,
+        follow: &FollowRule,
+        stop: &Arc<ReadStop>,
+        ending: &Arc<Stopping>,
+        max_withdrawn: usize,
+        withdrawn: &mut Vec<String>,
+        mut on_withdrawn: impl FnMut(&[String]),
+        mut on_synced: impl FnMut(u64),
+    ) -> Result<ReadReport, ReadFailure> {
+        let receiver = access.receiver.to_owned();
         let offline = Arc::new(AtomicBool::new(false));
-        let session = self.open_session(&access, &ending, &offline)?;
+        let session = self.open_session(&access, ending, &offline)?;
         let connection = GatewayConnection::new(session);
         let stored = self
             .cache
@@ -920,6 +1005,7 @@ impl RetainedCache {
             cursor_of(&stored)
         };
         let mut staged: Vec<nessa_protocol::product::generated::GrantFrameEntry> = Vec::new();
+        let mut staged_bytes = 0_usize;
         let mut staged_snapshot: Option<String> = None;
         let mut chats: Vec<(GatewayConnection, String)> = Vec::new();
         let mut live = LiveFollow::new();
@@ -946,7 +1032,7 @@ impl RetainedCache {
                         let present = self.followed_present(&receiver, follow)?;
                         dropped |= self.open_chats(
                             &access,
-                            &ending,
+                            ending,
                             &offline,
                             &connection,
                             &id,
@@ -997,23 +1083,21 @@ impl RetainedCache {
             if !changed.complete {
                 // `replaces` describes the whole snapshot, not each page.
                 // A later page of the same snapshot appends. A new snapshot
-                // starts the staging buffer over.
-                let same_snapshot = changed
-                    .snapshot_id
-                    .as_ref()
-                    .is_some_and(|id| staged_snapshot.as_ref() == Some(id));
-                if changed.replaces && !same_snapshot {
-                    staged = changed.grants;
-                } else {
-                    staged.extend(changed.grants);
-                }
-                staged_snapshot = changed.snapshot_id.clone();
+                // starts the staging buffer over. The cursor stays until a
+                // complete frame is stored.
+                stage_grant_page(
+                    &mut staged,
+                    &mut staged_bytes,
+                    &mut staged_snapshot,
+                    &changed,
+                )?;
                 if let Some(snapshot_id) = staged_snapshot.clone() {
                     let _ = connection.grant_page(&snapshot_id, resume.as_ref());
                 }
                 continue;
             }
             let entries = finish_staged(&mut staged, &mut staged_snapshot, &changed);
+            staged_bytes = 0;
             let ordered: Vec<(String, bool, Option<String>, i64)> = entries
                 .iter()
                 .map(|entry| {
@@ -1100,7 +1184,7 @@ impl RetainedCache {
             }
             self.open_chats(
                 &access,
-                &ending,
+                ending,
                 &offline,
                 &connection,
                 &id,
@@ -2095,7 +2179,9 @@ mod tests;
 
 #[cfg(test)]
 mod grant_frames {
-    use super::{finish_staged, revoked_by_gateway};
+    use super::{
+        finish_staged, revoked_by_gateway, stage_grant_page, ReadFailure, STAGED_GRANT_BYTES,
+    };
     use nessa_protocol::product::generated::{GrantFrameEntry, GrantStreamCursor, GrantsChanged};
 
     fn entry(id: &str, absent: bool) -> GrantFrameEntry {
@@ -2108,13 +2194,21 @@ mod grant_frames {
     }
 
     fn frame(snapshot: Option<&str>, grants: Vec<GrantFrameEntry>) -> GrantsChanged {
+        changed(true, snapshot, grants)
+    }
+
+    fn changed(
+        complete: bool,
+        snapshot: Option<&str>,
+        grants: Vec<GrantFrameEntry>,
+    ) -> GrantsChanged {
         GrantsChanged {
             subscription_id: "sub".to_owned(),
             cursor: GrantStreamCursor {
                 incarnation: "inc".to_owned(),
                 position: "2".to_owned(),
             },
-            complete: true,
+            complete,
             replaces: true,
             snapshot_id: snapshot.map(str::to_owned),
             grants,
@@ -2169,5 +2263,23 @@ mod grant_frames {
             false,
             &[entry("gone", true), entry("gone", false)]
         ));
+    }
+
+    #[test]
+    fn a_later_page_past_the_staging_budget_is_not_kept() {
+        let mut staged = vec![entry("kept", false)];
+        let mut bytes = STAGED_GRANT_BYTES;
+        let mut snapshot = Some("7".to_owned());
+        let refused = stage_grant_page(
+            &mut staged,
+            &mut bytes,
+            &mut snapshot,
+            &changed(false, Some("7"), vec![entry("more", false)]),
+        );
+        assert_eq!(refused, Err(ReadFailure::Protocol));
+        assert_eq!(staged.len(), 1);
+        assert_eq!(staged[0].conversation_id, "kept");
+        assert_eq!(bytes, STAGED_GRANT_BYTES);
+        assert_eq!(snapshot.as_deref(), Some("7"));
     }
 }

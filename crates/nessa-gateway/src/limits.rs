@@ -867,7 +867,10 @@ fn render(limits: &OperationalLimits, session: &SessionSettings) -> String {
          grant frames kept while a record read shares the subscription connection; one more closes the connection so the follow retries from its cursor instead of dropping a page |\n\
          | client.grant_frame_bytes | client | the client's own | \
          `QUEUED_GRANT_BYTES` in `crates/nessa-client-core/src/read_only_sync/infrastructure/gateway/session.rs` | \
-         bytes of those queued frames; past this the connection closes the same way |\n",
+         bytes of those queued frames; past this the connection closes the same way |\n\
+         | client.grant_snapshot_bytes | client | the client's own | \
+         `STAGED_GRANT_BYTES` in `crates/nessa-client-core/src/retained.rs` | \
+         grant entries held while an incomplete snapshot is assembled; past this the follow fails and its committed cursor stays where it was |\n",
     );
     document
 }
