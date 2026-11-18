@@ -212,17 +212,10 @@ impl PeerCacheChats {
     }
 }
 
-/// The stand-in when a test set one, otherwise the live peer cache.
+/// The shared-chat port composition injected. Production injects the peer
+/// cache. A test injects a stand-in through the same field.
 pub(super) fn source(state: &ProductRouteState) -> Option<Arc<dyn SharedChats>> {
-    if let Some(chats) = &state.linking.shared_chats {
-        return Some(Arc::clone(chats));
-    }
-    let peers = state.linking.peers.clone()?;
-    Some(Arc::new(PeerCacheChats::new(
-        peers,
-        Arc::clone(&state.clock),
-        Arc::clone(&state.uptime_clock),
-    )))
+    state.linking.shared_chats.clone()
 }
 
 /// One range of a file a granted chat names, read from the peer that granted
@@ -322,14 +315,6 @@ pub(super) async fn catalogue_admitted(
     }
 }
 
-/// The id prefix of a cursor that continues a finished local catalogue into
-/// the replicas that page could not hold. The desktop stops an incomplete
-/// observe page with no cursor, and it continues only when the next cursor
-/// keeps the same incarnation and boundary and is later in creation order.
-/// This id is not a conversation. The next observe recognizes it and serves
-/// the remainder.
-const SHARED_PAGE_ID_PREFIX: &str = "ffffffff-ffff-ffff-ffff-";
-
 /// Add `replicas` that fit in `limit`, after `skip` of them that an earlier
 /// page of this walk already returned. `Some` is where the next page starts
 /// when this one could not hold the rest. A remainder keeps the page incomplete.
@@ -370,35 +355,64 @@ pub(super) fn append_bounded(
 
 /// Append one shared-catalogue read. A peer cache that could not be read keeps
 /// the page incomplete even when every row that was read fits.
+/// Where a shared page stopped, and the fingerprint of the list it walked.
+pub(super) struct SharedAppend {
+    pub next: Option<u64>,
+    pub fingerprint: u32,
+}
+
 pub(super) fn append_catalogue(
     rows: &mut Vec<ConversationSummary>,
     catalogue: SharedCatalogue,
     limit: usize,
     complete: &mut bool,
     skip: usize,
-) -> Option<u64> {
+    expected: Option<u32>,
+) -> SharedAppend {
     if !catalogue.complete {
         *complete = false;
     }
-    append_bounded(rows, catalogue.rows, limit, complete, skip)
+    let fingerprint = replica_fingerprint(&catalogue.rows);
+    // The offset names a position in the list that minted it. A changed
+    // list is walked from the start, so a withdrawal cannot hide a later chat.
+    let skip = match expected {
+        Some(seen) if seen != fingerprint => 0,
+        _ => skip,
+    };
+    SharedAppend {
+        next: append_bounded(rows, catalogue.rows, limit, complete, skip),
+        fingerprint,
+    }
 }
 
-/// How many replicas a cursor minted by [`shared_page_cursor`] already
-/// returned. Any other id is a local catalogue cursor.
-pub(super) fn shared_page_offset(cursor: &ConversationObserveCursor) -> Option<usize> {
-    let suffix = cursor.id.strip_prefix(SHARED_PAGE_ID_PREFIX)?;
-    if suffix.len() != 12 {
+/// The replica list a shared-page cursor was issued against, and how far
+/// into that list the next page starts.
+pub(super) struct SharedMark {
+    /// [`replica_fingerprint`] of the list when the cursor was minted.
+    pub fingerprint: u32,
+    pub offset: usize,
+}
+
+/// The mark in a cursor minted by [`shared_page_cursor`]. Any other id is a
+/// local catalogue cursor.
+pub(super) fn shared_page_mark(cursor: &ConversationObserveCursor) -> Option<SharedMark> {
+    let (fingerprint, offset) = cursor.id.split_once("-ffff-ffff-ffff-")?;
+    if fingerprint.len() != 8 || offset.len() != 12 {
         return None;
     }
-    let offset = u64::from_str_radix(suffix, 16).ok()?;
-    usize::try_from(offset).ok()
+    Some(SharedMark {
+        fingerprint: u32::from_str_radix(fingerprint, 16).ok()?,
+        offset: usize::try_from(u64::from_str_radix(offset, 16).ok()?).ok()?,
+    })
 }
 
-/// A cursor the desktop will walk after `base`, naming the replica `offset`
-/// the next page starts at. No `base` is the first observe of a walk.
+/// A cursor the desktop will walk after `base`. `fingerprint` is the replica
+/// list it continues, and `offset` is where the next page starts. No `base`
+/// is the first observe of a walk.
 pub(super) fn shared_page_cursor(
     base: Option<&ConversationObserveCursor>,
     offset: u64,
+    fingerprint: u32,
 ) -> ConversationObserveCursor {
     let (incarnation, boundary, creation) = match base {
         Some(base) => {
@@ -418,8 +432,53 @@ pub(super) fn shared_page_cursor(
         incarnation,
         boundary,
         creation,
-        id: format!("{SHARED_PAGE_ID_PREFIX}{offset:012x}"),
+        id: format!("{fingerprint:08x}-ffff-ffff-ffff-{offset:012x}"),
     }
+}
+
+/// A stable fingerprint of replica ids in order. A later page trusts its
+/// offset only when the list still hashes to the cursor's fingerprint.
+pub(super) fn replica_fingerprint(rows: &[ConversationSummary]) -> u32 {
+    let mut hash = 0x811c_9dc5u32;
+    for row in rows {
+        for byte in row.conversation_id.bytes() {
+            hash ^= u32::from(byte);
+            hash = hash.wrapping_mul(0x0100_0193);
+        }
+        hash ^= 0xff;
+    }
+    hash
+}
+
+/// Drop replicas whose id is already a local conversation. Opening prefers
+/// the local row, including one that is archived or deleted, so the list
+/// must not show the peer's copy of it.
+pub(super) fn omit_local(
+    rows: Vec<ConversationSummary>,
+    local: &HashSet<String>,
+) -> Vec<ConversationSummary> {
+    rows.into_iter()
+        .filter(|row| !local.contains(&row.conversation_id))
+        .collect()
+}
+
+/// The replica ids that are already local conversations, archived and deleted
+/// included. `load` returns a tombstone, which is the same fact `open` uses
+/// to prefer the local row.
+pub(super) async fn local_ids(
+    state: &ProductRouteState,
+    rows: &[ConversationSummary],
+) -> Result<HashSet<String>, ConversationError> {
+    let mut local = HashSet::new();
+    for row in rows {
+        let Ok(id) = ConversationId::new(&row.conversation_id) else {
+            continue;
+        };
+        if local_conversation(state, &id).await? {
+            local.insert(row.conversation_id.clone());
+        }
+    }
+    Ok(local)
 }
 
 async fn local_conversation(
@@ -1458,21 +1517,58 @@ mod tests {
         assert!(complete);
         let mut partial = vec![summary("local")];
         complete = true;
-        assert_eq!(
-            super::append_catalogue(
-                &mut partial,
-                super::SharedCatalogue {
-                    rows: vec![summary("shared")],
-                    complete: false,
-                },
-                256,
-                &mut complete,
-                0,
-            ),
-            None
-        );
+        assert!(super::append_catalogue(
+            &mut partial,
+            super::SharedCatalogue {
+                rows: vec![summary("shared")],
+                complete: false,
+            },
+            256,
+            &mut complete,
+            0,
+            None,
+        )
+        .next
+        .is_none());
         assert_eq!(partial.len(), 2);
         assert!(!complete);
+        let kept = vec![summary("kept"), summary("later")];
+        let fingerprint = super::replica_fingerprint(&kept);
+        let mut changed = Vec::new();
+        complete = true;
+        let restarted = super::append_catalogue(
+            &mut changed,
+            super::SharedCatalogue {
+                rows: kept,
+                complete: true,
+            },
+            1,
+            &mut complete,
+            1,
+            Some(0),
+        );
+        assert_eq!(changed[0].conversation_id, "kept");
+        assert_eq!(restarted.next, Some(1));
+        assert_ne!(restarted.fingerprint, 0);
+        let mut followed = Vec::new();
+        complete = true;
+        let rest = super::append_catalogue(
+            &mut followed,
+            super::SharedCatalogue {
+                rows: vec![summary("kept"), summary("later")],
+                complete: true,
+            },
+            1,
+            &mut complete,
+            1,
+            Some(fingerprint),
+        );
+        assert_eq!(followed[0].conversation_id, "later");
+        assert!(rest.next.is_none());
+        let local = std::collections::HashSet::from([String::from("local")]);
+        let replicas = super::omit_local(vec![summary("local"), summary("shared")], &local);
+        assert_eq!(replicas.len(), 1);
+        assert_eq!(replicas[0].conversation_id, "shared");
     }
 
     #[test]
@@ -1484,20 +1580,22 @@ mod tests {
             creation: "9".into(),
             id: "00000000-0000-4000-8000-000000000001".into(),
         };
-        let next = super::shared_page_cursor(Some(&local), 0);
+        let next = super::shared_page_cursor(Some(&local), 0, 0xab);
         assert_eq!(next.incarnation, local.incarnation);
         assert_eq!(next.boundary, local.boundary);
         assert_eq!(next.creation, "10");
-        assert_eq!(super::shared_page_offset(&next), Some(0));
-        let later = super::shared_page_cursor(Some(&next), 256);
+        let mark = super::shared_page_mark(&next).unwrap();
+        assert_eq!(mark.offset, 0);
+        assert_eq!(mark.fingerprint, 0xab);
+        let later = super::shared_page_cursor(Some(&next), 256, 0xab);
         assert_eq!(later.creation, "11");
-        assert_eq!(super::shared_page_offset(&later), Some(256));
+        assert_eq!(super::shared_page_mark(&later).unwrap().offset, 256);
         assert!(later.id > next.id);
-        let fresh = super::shared_page_cursor(None, 0);
+        let fresh = super::shared_page_cursor(None, 0, 1);
         assert_eq!(fresh.incarnation, "shared");
         assert_eq!(fresh.creation, "1");
-        assert_eq!(super::shared_page_offset(&fresh), Some(0));
-        assert_eq!(super::shared_page_offset(&local), None);
+        assert_eq!(super::shared_page_mark(&fresh).unwrap().offset, 0);
+        assert!(super::shared_page_mark(&local).is_none());
     }
 
     /// The local catalogue's last page: full, finished, and without a cursor.

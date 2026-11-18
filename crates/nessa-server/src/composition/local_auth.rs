@@ -729,9 +729,15 @@ pub(super) async fn product_state(
     )));
     let native = match native {
         Some((prepared, commands, peers)) => {
+            let shared_chats = Arc::new(crate::product::shared_chat::PeerCacheChats::new(
+                peers.clone(),
+                product.clock.clone(),
+                product.uptime_clock.clone(),
+            ));
             product = product
                 .with_pairing(Arc::new(commands))
                 .with_peers(peers)
+                .with_shared_chats(shared_chats)
                 .with_tunnel_secrets(prepared.tunnel_secrets());
             let prepared = match listener_environments {
                 Some(environments) => prepared.with_environments(environments),

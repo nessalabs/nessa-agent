@@ -424,11 +424,11 @@ async fn answer(
                 // A cursor this gateway minted names the replicas the previous
                 // page could not hold. The local catalogue is already
                 // finished, so this page is those replicas.
-                let shared_offset = params
+                let shared_mark = params
                     .cursor
                     .as_ref()
-                    .and_then(super::shared_chat::shared_page_offset);
-                let mut observed = if shared_offset.is_some() {
+                    .and_then(super::shared_chat::shared_page_mark);
+                let mut observed = if shared_mark.is_some() {
                     ConversationObserveResult {
                         conversations: Vec::new(),
                         complete: true,
@@ -457,7 +457,7 @@ async fn answer(
                 // Shared chats use the room this page has left. A full local
                 // page stays incomplete and carries a cursor, so the walk can
                 // take the ones that did not fit.
-                if let Some(next) = append_shared(
+                if let Some(appended) = append_shared(
                     state,
                     session,
                     &scope.reader,
@@ -466,16 +466,20 @@ async fn answer(
                         rows: &mut observed.conversations,
                         complete: &mut observed.complete,
                         limit: nessa_sync::replication::catalogue::MAX_CATALOGUE_ENTRIES,
-                        skip: shared_offset.unwrap_or(0),
+                        skip: shared_mark.as_ref().map(|mark| mark.offset).unwrap_or(0),
+                        expected: shared_mark.map(|mark| mark.fingerprint),
                     },
                 )
                 .await?
                 {
-                    if observed.cursor.is_none() {
-                        observed.cursor = Some(super::shared_chat::shared_page_cursor(
-                            params.cursor.as_ref(),
-                            next,
-                        ));
+                    if let Some(next) = appended.next {
+                        if observed.cursor.is_none() {
+                            observed.cursor = Some(super::shared_chat::shared_page_cursor(
+                                params.cursor.as_ref(),
+                                next,
+                                appended.fingerprint,
+                            ));
+                        }
                     }
                 }
                 Ok(success(&frame.id, &observed))
@@ -1245,6 +1249,7 @@ pub(super) async fn read_list(
             complete: &mut listed.complete,
             limit: crate::conversation::application::MAX_LISTED_CONVERSATIONS,
             skip: 0,
+            expected: None,
         },
     )
     .await?;
@@ -1258,6 +1263,9 @@ struct SharedPage<'a> {
     limit: usize,
     /// How many replicas an earlier page of this walk already returned.
     skip: usize,
+    /// The replica-list fingerprint that `skip` was counted in. `None` on the
+    /// first page of a walk.
+    expected: Option<u32>,
 }
 
 /// The owner's list also names chats a peer granted, from the peer cache,
@@ -1272,7 +1280,7 @@ async fn append_shared(
     reader: &Reader,
     archived: bool,
     page: &mut SharedPage<'_>,
-) -> Result<Option<u64>, ConversationError> {
+) -> Result<Option<super::shared_chat::SharedAppend>, ConversationError> {
     if !matches!(reader, Reader::Owner) || !*page.complete {
         return Ok(None);
     }
@@ -1283,13 +1291,18 @@ async fn append_shared(
         return Ok(None);
     };
     match chats.list(archived).await {
-        Ok(catalogue) => Ok(super::shared_chat::append_catalogue(
-            page.rows,
-            catalogue,
-            page.limit,
-            page.complete,
-            page.skip,
-        )),
+        Ok(mut catalogue) => {
+            let local = super::shared_chat::local_ids(state, &catalogue.rows).await?;
+            catalogue.rows = super::shared_chat::omit_local(catalogue.rows, &local);
+            Ok(Some(super::shared_chat::append_catalogue(
+                page.rows,
+                catalogue,
+                page.limit,
+                page.complete,
+                page.skip,
+                page.expected,
+            )))
+        }
         Err(error) => {
             tracing::warn!(
                 error = %error,

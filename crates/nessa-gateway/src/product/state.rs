@@ -243,9 +243,9 @@ pub struct LinkingRoutes {
     /// enrolled with the native key. `None` answers every peer method
     /// `peer_not_configured`.
     pub peers: Option<Arc<PeerCommands>>,
-    /// A stand-in for the peer cache, used by tests. Production leaves this
-    /// empty and reads `peers`.
-    pub(crate) shared_chats: Option<Arc<dyn super::shared_chat::SharedChats>>,
+    /// Granted chats, read from the peer cache. Composition injects the
+    /// adapter. `None` shows no shared chats.
+    pub shared_chats: Option<Arc<dyn super::shared_chat::SharedChats>>,
 }
 
 /// The hub's devices, the default device, and channel workspaces.
@@ -579,12 +579,9 @@ impl ProductRouteState {
         self
     }
 
-    /// Answer granted chats from `chats` instead of the peer cache.
-    #[cfg(test)]
-    pub(crate) fn with_shared_chats(
-        mut self,
-        chats: Arc<dyn super::shared_chat::SharedChats>,
-    ) -> Self {
+    /// Read granted chats through `chats`. Composition passes the peer cache.
+    /// A test passes a stand-in.
+    pub fn with_shared_chats(mut self, chats: Arc<dyn super::shared_chat::SharedChats>) -> Self {
         self.linking.shared_chats = Some(chats);
         self
     }

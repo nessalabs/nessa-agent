@@ -1774,7 +1774,10 @@ conversation metadata file is not written. A file or image the transcript
 names is read from the granting peer, one range at a time, for the catalogue
 owner Cedar admits. A peer cache that cannot be read leaves the list
 incomplete, so a chat it holds is not treated as gone. Two peers that grant
-the same conversation id contribute one row, the first peer's. Rows are
+the same conversation id contribute one row, the first peer's. A local
+conversation, including one archived or deleted, is not listed again from a
+peer. A later observe page trusts its offset only while the replica list is
+the one that minted it. Composition injects the peer-cache adapter. Rows are
 appended only into the room a list or observe page has left, and a page that
 cannot hold them stays incomplete. A paired device of the follower and the
 owner phone do not receive these rows. Live updates from the grantor, and a peer's own comment
