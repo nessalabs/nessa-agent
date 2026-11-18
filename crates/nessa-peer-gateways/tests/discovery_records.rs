@@ -31,6 +31,26 @@ fn record() -> PeerRecord {
 }
 
 #[test]
+fn a_refusal_audit_survives_restore_when_the_field_stays_none() {
+    let audit = Audit {
+        before: "none",
+        after: "none",
+        cause: "public key rejected or shared secret all zeros",
+        initiator: "gateway",
+    };
+    let json = discovery_to_json(&Discovery::None, Some(&audit)).unwrap();
+    let stored = PeerRecord {
+        discovery_json: Some(json.clone()),
+        ..record()
+    };
+    let own = [6; 44];
+    let restored = decode(&encode(&stored, &own).unwrap(), &stored.key, &own).unwrap();
+    assert!(matches!(restored.discovery(), Discovery::None));
+    assert_eq!(restored.discovery_json.as_deref(), Some(json.as_str()));
+    assert!(restored.needs_discovery_exchange());
+}
+
+#[test]
 fn legacy_enrollment_without_eligibility_stays_silent_after_restore() {
     let record = record();
     let own = [6; 44];

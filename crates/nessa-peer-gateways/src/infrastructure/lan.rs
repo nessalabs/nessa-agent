@@ -5,7 +5,23 @@
 //! only the chunked payload (`p0`, `p1`, …). The pinned key, its fingerprint,
 //! and the owner are not registered.
 use crate::application::{announcement_txt, payload_from_txt};
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
+
+/// The DNS-SD host this announcement names. It is not derived from a gateway id.
+pub fn synthetic_host(instance: &str) -> String {
+    format!("{instance}.local.")
+}
+
+/// The address record for [`synthetic_host`]. Type 1 is A and type 28 is AAAA.
+/// `the_synthetic_host_has_an_address_record_for_the_advertised_ip` is the
+/// regression. On macOS, `DNSServiceRegisterRecord` publishes this record and
+/// withdraw removes it with the service.
+pub fn host_address_record(address: IpAddr) -> (u16, Vec<u8>) {
+    match address {
+        IpAddr::V4(ip) => (1, ip.octets().to_vec()),
+        IpAddr::V6(ip) => (28, ip.octets().to_vec()),
+    }
+}
 
 /// The DNS-SD type a paired peer browses. It is not the linking type.
 pub const PEER_SERVICE: &str = "_nessa-peer._tcp.local.";
@@ -53,7 +69,13 @@ mod multicast {
             payload: &[u8],
             instance: &str,
         ) -> Result<Box<dyn LanRegistration>, String> {
-            let host = format!("{instance}.local.");
+            let host = super::synthetic_host(instance);
+            // The record macOS registers explicitly. mdns-sd builds the same
+            // record from the address; a wrong length is a broken helper.
+            let (rrtype, rdata) = super::host_address_record(address.ip());
+            if !matches!((rrtype, rdata.len()), (1, 4) | (28, 16)) {
+                return Err("address record does not match the advertised address".into());
+            }
             let properties = announcement_txt(payload);
             let borrowed: Vec<(&str, &str)> = properties
                 .iter()
@@ -121,8 +143,15 @@ mod multicast {
     use std::ptr;
 
     type DnsServiceRef = *mut c_void;
+    type DnsRecordRef = *mut c_void;
+
+    /// `kDNSServiceClass_IN` and `kDNSServiceFlagsUnique` from dns_sd.h.
+    const CLASS_IN: u16 = 1;
+    const UNIQUE: u32 = 0x20;
+    const ADDRESS_TTL_SECONDS: u32 = 120;
 
     extern "C" {
+        fn DNSServiceCreateConnection(sd_ref: *mut DnsServiceRef) -> i32;
         fn DNSServiceRegister(
             sd_ref: *mut DnsServiceRef,
             flags: u32,
@@ -137,6 +166,25 @@ mod multicast {
             callback: *const c_void,
             context: *mut c_void,
         ) -> i32;
+        fn DNSServiceRegisterRecord(
+            sd_ref: DnsServiceRef,
+            record_ref: *mut DnsRecordRef,
+            flags: u32,
+            interface_index: u32,
+            fullname: *const c_char,
+            rrtype: u16,
+            rrclass: u16,
+            rdlen: u16,
+            rdata: *const c_void,
+            ttl: u32,
+            callback: *const c_void,
+            context: *mut c_void,
+        ) -> i32;
+        fn DNSServiceRemoveRecord(
+            sd_ref: DnsServiceRef,
+            record_ref: DnsRecordRef,
+            flags: u32,
+        ) -> i32;
         fn DNSServiceRefDeallocate(sd_ref: DnsServiceRef);
     }
 
@@ -150,8 +198,11 @@ mod multicast {
             instance: &str,
         ) -> Result<Box<dyn LanRegistration>, String> {
             let name = CString::new(instance).map_err(|error| error.to_string())?;
-            let host =
-                CString::new(format!("{instance}.local.")).map_err(|error| error.to_string())?;
+            let host_name = super::synthetic_host(instance);
+            let host = CString::new(host_name.as_str()).map_err(|error| error.to_string())?;
+            let (rrtype, rdata) = super::host_address_record(address.ip());
+            let rdlen =
+                u16::try_from(rdata.len()).map_err(|_| "address record is too long".to_owned())?;
             let regtype = CString::new(
                 PEER_SERVICE
                     .trim_end_matches("local.")
@@ -159,12 +210,46 @@ mod multicast {
             )
             .map_err(|error| error.to_string())?;
             let txt = txt_bytes(&announcement_txt(payload))?;
-            let mut reference: DnsServiceRef = ptr::null_mut();
-            // SAFETY: the pointers are valid for the call. The responder copies
-            // what it keeps. A null domain and callback are the documented defaults.
+            let mut connection: DnsServiceRef = ptr::null_mut();
+            // SAFETY: the pointer is valid for the call. The responder copies
+            // what it keeps.
+            let status = unsafe { DNSServiceCreateConnection(&mut connection) };
+            if status != 0 || connection.is_null() {
+                return Err(format!("Bonjour refused the address connection ({status})"));
+            }
+            let mut record: DnsRecordRef = ptr::null_mut();
+            // SAFETY: `connection` is a live connection, and the name and
+            // address bytes live until this call returns. A null callback
+            // asks for no completion notice. A non-null host on
+            // DNSServiceRegister does not create this address record.
+            let record_status = unsafe {
+                DNSServiceRegisterRecord(
+                    connection,
+                    &mut record,
+                    UNIQUE,
+                    0,
+                    host.as_ptr(),
+                    rrtype,
+                    CLASS_IN,
+                    rdlen,
+                    rdata.as_ptr().cast(),
+                    ADDRESS_TTL_SECONDS,
+                    ptr::null(),
+                    ptr::null_mut(),
+                )
+            };
+            if record_status != 0 || record.is_null() {
+                unsafe { DNSServiceRefDeallocate(connection) };
+                return Err(format!(
+                    "Bonjour refused the address record ({record_status})"
+                ));
+            }
+            let mut service: DnsServiceRef = ptr::null_mut();
+            // SAFETY: the pointers are valid for the call. A null domain and
+            // callback are the documented defaults.
             let status = unsafe {
                 DNSServiceRegister(
-                    &mut reference,
+                    &mut service,
                     0,
                     0,
                     name.as_ptr(),
@@ -179,10 +264,18 @@ mod multicast {
                     ptr::null_mut(),
                 )
             };
-            if status != 0 || reference.is_null() {
+            if status != 0 || service.is_null() {
+                unsafe {
+                    DNSServiceRemoveRecord(connection, record, 0);
+                    DNSServiceRefDeallocate(connection);
+                }
                 return Err(format!("Bonjour refused the peer announcement ({status})"));
             }
-            Ok(Box::new(Registration(reference)))
+            Ok(Box::new(Registration {
+                connection,
+                record,
+                service,
+            }))
         }
     }
 
@@ -198,21 +291,49 @@ mod multicast {
         Ok(record)
     }
 
-    struct Registration(DnsServiceRef);
+    struct Registration {
+        connection: DnsServiceRef,
+        record: DnsRecordRef,
+        service: DnsServiceRef,
+    }
 
-    // SAFETY: the reference is deallocated once, from Drop, and dns_sd allows
-    // that from any thread when no other call is using it.
+    impl Registration {
+        fn stop(&mut self) {
+            let service = std::mem::replace(&mut self.service, ptr::null_mut());
+            if !service.is_null() {
+                // SAFETY: the reference came from a successful DNSServiceRegister
+                // and is deallocated once.
+                unsafe { DNSServiceRefDeallocate(service) };
+            }
+            let record = std::mem::replace(&mut self.record, ptr::null_mut());
+            let connection = std::mem::replace(&mut self.connection, ptr::null_mut());
+            if connection.is_null() {
+                return;
+            }
+            if !record.is_null() {
+                // SAFETY: `record` was registered on `connection` and is removed once.
+                unsafe { DNSServiceRemoveRecord(connection, record, 0) };
+            }
+            // SAFETY: `connection` came from DNSServiceCreateConnection and is
+            // deallocated once, after its address record is removed.
+            unsafe { DNSServiceRefDeallocate(connection) };
+        }
+    }
+
+    // SAFETY: the references are deallocated once, from Drop, and dns_sd allows
+    // that from any thread when no other call is using them.
     unsafe impl Send for Registration {}
     unsafe impl Sync for Registration {}
 
     impl LanRegistration for Registration {
-        fn withdraw(self: Box<Self>) {}
+        fn withdraw(mut self: Box<Self>) {
+            self.stop();
+        }
     }
 
     impl Drop for Registration {
         fn drop(&mut self) {
-            // SAFETY: the reference came from a successful DNSServiceRegister.
-            unsafe { DNSServiceRefDeallocate(self.0) };
+            self.stop();
         }
     }
 
@@ -222,3 +343,24 @@ mod multicast {
 }
 
 pub use multicast::platform as platform_lan_announcer;
+
+#[cfg(test)]
+mod tests {
+    use super::{host_address_record, synthetic_host};
+    use std::net::IpAddr;
+
+    #[test]
+    fn the_synthetic_host_has_an_address_record_for_the_advertised_ip() {
+        assert_eq!(
+            synthetic_host("n0123456789abcdef0"),
+            "n0123456789abcdef0.local."
+        );
+        let v4: IpAddr = "192.0.2.10".parse().unwrap();
+        assert_eq!(host_address_record(v4), (1, vec![192, 0, 2, 10]));
+        let v6: std::net::Ipv6Addr = "2001:db8::1".parse().unwrap();
+        assert_eq!(
+            host_address_record(IpAddr::V6(v6)),
+            (28, v6.octets().to_vec())
+        );
+    }
+}

@@ -108,7 +108,7 @@ pub struct PeerRecord {
     /// Enrollment-time eligibility. Absent on pre-discovery records.
     discovery_enabled: bool,
     /// The JSON of `discovery` and the audit of the write that stored it.
-    /// Absent while discovery is `None`.
+    /// Absent while discovery is `None` and no refusal audit has been stored.
     discovery_json: Option<String>,
     /// False once this gateway has seen the peer credential expire or be
     /// revoked. That observation does not change `phase`.

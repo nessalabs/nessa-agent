@@ -1,8 +1,9 @@
 use super::{
     announcement_bytes, announcement_txt, connection_allowed, decode_announcement, decode_message,
     discovery_from_json, discovery_to_json, encode_message, exchange, instance_label, mac_key,
-    match_announcement, payload_from_txt, public_half, shared_secret, Announcement, Discovery,
-    DiscoveryPipe, Inbound, Outbound, Phase, PinnedMac, Role, Session, TokenPeer, DISCOVERY_WINDOW,
+    match_announcement, payload_from_txt, public_half, shared_secret, Announcement, Commit,
+    Discovery, DiscoveryPipe, Inbound, Outbound, Phase, PinnedMac, Role, Session, TokenPeer,
+    DISCOVERY_WINDOW,
 };
 use std::net::SocketAddr;
 
@@ -146,6 +147,11 @@ fn an_all_zero_public_is_rejected_and_an_all_zero_secret_returns_offered_to_keye
     );
     assert!(matches!(after.discovery, Discovery::None));
     assert!(!commits.iter().any(|commit| commit.durable));
+    assert!(commits.iter().all(Commit::persists));
+    assert_eq!(
+        commits[0].audit.as_ref().map(|audit| audit.after),
+        Some("none")
+    );
     assert!(matches!(
         commits[0].send.as_slice(),
         [Outbound::Reject { .. }]
@@ -200,6 +206,59 @@ fn an_all_zero_public_is_rejected_and_an_all_zero_secret_returns_offered_to_keye
             .send
             .iter()
             .any(|message| { publish_of(message) == Some(public_half(&key(8))) })));
+}
+
+#[test]
+fn a_rejected_public_key_keeps_its_audit_when_the_field_stays() {
+    for (session, public_key) in [
+        (active(Role::Grantor), [0; 32]),
+        (
+            Session::new(
+                Role::Grantor,
+                Phase::Active,
+                Discovery::Keyed {
+                    generation: key(1),
+                    private_key: key(6),
+                },
+            ),
+            [0; 32],
+        ),
+    ] {
+        let before = session.discovery.clone();
+        let (peer_tx, grantor_rx) = std::sync::mpsc::channel();
+        peer_tx
+            .send(encode_message(&Outbound::Publish {
+                generation: key(1),
+                public_key,
+            }))
+            .unwrap();
+        drop(peer_tx);
+        let (grantor_tx, _closed) = std::sync::mpsc::channel();
+        let mut pipe = Queue {
+            tx: grantor_tx,
+            rx: grantor_rx,
+        };
+        let mut session = session;
+        let mut kept = Vec::new();
+        let result = exchange(
+            &mut session,
+            &mut pipe,
+            &mut || Some(key(2)),
+            &mut |commit| {
+                kept.push(commit.clone());
+                Ok(())
+            },
+            false,
+        );
+        assert!(matches!(result, Err(super::ExchangeError::Io(_))));
+        assert_eq!(session.discovery.name(), before.name());
+        assert_eq!(kept.len(), 1);
+        assert!(!kept[0].durable);
+        assert!(kept[0].persists());
+        let json = discovery_to_json(&kept[0].discovery, kept[0].audit.as_ref()).unwrap();
+        assert!(json.contains("public key rejected or shared secret all zeros"));
+        assert_eq!(discovery_from_json(&json), Some(before));
+    }
 }
 
 #[test]

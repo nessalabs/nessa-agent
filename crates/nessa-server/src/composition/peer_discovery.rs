@@ -70,7 +70,7 @@ impl GrantorDiscovery for RegistryDiscovery {
             pipe,
             &mut random_bytes,
             &mut |commit| {
-                if !commit.durable {
+                if !commit.persists() {
                     return Ok(());
                 }
                 let json = discovery_to_json(&commit.discovery, commit.audit.as_ref());
@@ -254,7 +254,7 @@ fn dial_discovery(
         &mut pipe,
         &mut random_bytes,
         &mut |commit| {
-            if commit.durable {
+            if commit.persists() {
                 snapshot = records
                     .write_discovery(&snapshot, commit.discovery.clone(), commit.audit.as_ref())
                     .map_err(|_| io::Error::other("discovery"))?;

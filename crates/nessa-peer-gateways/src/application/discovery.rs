@@ -139,8 +139,9 @@ impl Discovery {
     }
 }
 
-/// One durable step. `durable` is false when the field does not change: the
-/// caller sends `send` and does not write the record.
+/// One step of an exchange. `durable` is true when the discovery field
+/// changes. A refusal whose field stays put still carries an audit, and
+/// [`Commit::persists`] is the write. A resend has neither.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Commit {
     pub discovery: Discovery,
@@ -149,7 +150,16 @@ pub struct Commit {
     pub durable: bool,
 }
 
-/// The audit kept in the same write as a durable discovery change.
+impl Commit {
+    /// Whether this step is written. The field change and a refusal audit
+    /// are both writes. `a_rejected_public_key_keeps_its_audit_when_the_field_stays`
+    /// is the regression for a refusal whose field does not change.
+    pub fn persists(&self) -> bool {
+        self.durable || self.audit.is_some()
+    }
+}
+
+/// The audit kept with the discovery write.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Audit {
     pub before: &'static str,
@@ -946,6 +956,9 @@ struct StoredAudit {
 #[derive(Serialize, Deserialize)]
 #[serde(tag = "field", rename_all = "camelCase")]
 enum StoredDiscovery {
+    None {
+        audit: StoredAudit,
+    },
     Keyed {
         generation: String,
         private_key: String,
@@ -968,7 +981,8 @@ enum StoredDiscovery {
 }
 
 /// The discovery field and the audit of the write that stored it, as one JSON
-/// object. `None` stays absent from the record.
+/// object. `None` with no audit stays absent. A refusal whose field stays
+/// `none` stores the audit and no key.
 pub fn discovery_to_json(discovery: &Discovery, audit: Option<&Audit>) -> Option<String> {
     let stored_audit = audit.map(|audit| StoredAudit {
         before: audit.before.to_owned(),
@@ -977,7 +991,9 @@ pub fn discovery_to_json(discovery: &Discovery, audit: Option<&Audit>) -> Option
         initiator: audit.initiator.to_owned(),
     });
     let stored = match discovery {
-        Discovery::None => return None,
+        Discovery::None => StoredDiscovery::None {
+            audit: stored_audit?,
+        },
         Discovery::Keyed {
             generation,
             private_key,
@@ -1008,6 +1024,7 @@ pub fn discovery_to_json(discovery: &Discovery, audit: Option<&Audit>) -> Option
 pub fn discovery_from_json(text: &str) -> Option<Discovery> {
     let stored: StoredDiscovery = serde_json::from_str(text).ok()?;
     Some(match stored {
+        StoredDiscovery::None { .. } => Discovery::None,
         StoredDiscovery::Keyed {
             generation,
             private_key,
@@ -1209,7 +1226,7 @@ fn read_one(
         return Err(ExchangeError::Entropy);
     }
     for commit in &commits {
-        if commit.durable {
+        if commit.persists() {
             persist(commit).map_err(ExchangeError::Io)?;
         }
         for message in &commit.send {

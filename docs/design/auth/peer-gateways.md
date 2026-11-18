@@ -1639,7 +1639,10 @@ control cannot pass by masking an unrelated A failure.
 With at least one paired gateway whose discovery field is `installed` and
 whose credential is still current, this gateway may announce itself on the
 local network (`_nessa-peer._tcp`). The announcement carries a dial address,
-a port, and one HMAC-SHA256 token per such peer. The token covers the window
+a port, and one HMAC-SHA256 token per such peer. Its DNS-SD host is a
+random `<instance>.local` name. On macOS the system responder does not
+create that name's address record, so the registration publishes the
+advertised address and removes it when the service is withdrawn. The token covers the window
 index, the address family, the address, and the port. The window length is
 `peer.discovery_window` in [limits](../../limits.md). A paired peer
 recomputes the token for the current window and one window on either side.
