@@ -154,8 +154,9 @@ CREATE TABLE directory_cleanup (
     PRIMARY KEY (environment, canonical_path)
 ) STRICT;
 
--- The first open that found a missing or different marker. Later opens keep
--- this cause. `audit_done` stays 0 until the audit sink accepts it.
+-- The latest revocation of this resource. A later share's grants are still
+-- removed on the next mismatch; this row does not mean those grants are gone.
+-- `audit_done` stays 0 until the audit sink accepts that revocation.
 CREATE TABLE directory_open_audits (
     resource_id TEXT PRIMARY KEY,
     cause TEXT NOT NULL,

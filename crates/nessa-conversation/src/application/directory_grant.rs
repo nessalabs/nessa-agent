@@ -279,7 +279,8 @@ pub trait DirectoryStore: Send + Sync {
         &self,
         resource_id: &str,
     ) -> Result<Vec<StoredDirectoryGrant>, DirectoryRefusal>;
-    /// Revoke every grant for the resource and remember the first cause.
+    /// Revoke every current grant for the resource. An earlier revocation does not
+    /// leave a later share in place.
     fn revoke_mismatch(
         &self,
         resource_id: &str,
@@ -893,6 +894,7 @@ impl DirectoryAccess {
         if recorded {
             let _ = self.store.mark_open_audit(&resource.resource_id);
         }
+        let _ = self.flush_pending(&resource.resource_id);
         Err(DirectoryRefusal::MarkerMismatch {
             cause: revoked.cause,
             audit_recorded: recorded,

@@ -1265,6 +1265,124 @@ fn deleting_the_directory_revokes_the_grant() {
 }
 
 #[test]
+fn a_share_after_revocation_is_revoked_again_on_the_next_mismatch() {
+    let root = private();
+    let shared = root.path().join("shared");
+    fs::create_dir(&shared).unwrap();
+    let store_dir = private();
+    let store =
+        Arc::new(SqliteDirectoryStore::open(&store_dir.path().join("grants.sqlite3")).unwrap());
+    let access = service(
+        Arc::new(LocalDirectoryFiles),
+        store.clone(),
+        Arc::new(RecordingAudit::new()),
+        [8; BINDING_LEN],
+    );
+    let granted = share_read(&access, shared.to_str().unwrap(), "peer");
+    let marker = fs::read(shared.join(".nessa-binding")).unwrap();
+    fs::remove_file(shared.join(".nessa-binding")).unwrap();
+    access.read("peer", "note.txt").unwrap_err();
+    assert!(store
+        .grants_for_resource(&granted.resource_id)
+        .unwrap()
+        .is_empty());
+    fs::write(shared.join(".nessa-binding"), &marker).unwrap();
+    share_read(&access, shared.to_str().unwrap(), "peer");
+    assert_eq!(
+        store
+            .grants_for_resource(&granted.resource_id)
+            .unwrap()
+            .len(),
+        1
+    );
+    fs::remove_file(shared.join(".nessa-binding")).unwrap();
+    let refused = access.read("peer", "note.txt").unwrap_err();
+    match refused {
+        DirectoryRefusal::MarkerMismatch { cause, .. } => assert_eq!(cause, "marker-missing"),
+        other => panic!("{other:?}"),
+    }
+    assert!(store
+        .grants_for_resource(&granted.resource_id)
+        .unwrap()
+        .is_empty());
+    fs::write(shared.join(".nessa-binding"), &marker).unwrap();
+    assert!(matches!(
+        access.read("peer", "note.txt").unwrap_err(),
+        DirectoryRefusal::NotFound
+    ));
+}
+
+#[test]
+fn a_partial_revocation_journal_does_not_stick() {
+    let root = private();
+    let shared = root.path().join("shared");
+    fs::create_dir(&shared).unwrap();
+    let store_dir = private();
+    let database = store_dir.path().join("grants.sqlite3");
+    let store = Arc::new(SqliteDirectoryStore::open(&database).unwrap());
+    let access = service(
+        Arc::new(LocalDirectoryFiles),
+        store.clone(),
+        Arc::new(RecordingAudit::new()),
+        [9; BINDING_LEN],
+    );
+    let granted = share_read(&access, shared.to_str().unwrap(), "peer");
+    share_read(&access, shared.to_str().unwrap(), "other");
+    fs::remove_file(shared.join(".nessa-binding")).unwrap();
+    let probe = nessa_local_database::rusqlite::Connection::open(&database).unwrap();
+    probe
+        .execute_batch(
+            "CREATE TRIGGER directory_revoke_fail_second
+             BEFORE INSERT ON share_grant_changes
+             WHEN NEW.after = 'none'
+               AND (SELECT COUNT(*) FROM share_grant_changes
+                    WHERE resource_kind = 'directory' AND resource_id = NEW.resource_id AND after = 'none') >= 1
+             BEGIN
+               SELECT RAISE(ABORT, 'forced second revoke');
+             END;",
+        )
+        .unwrap();
+    assert!(matches!(
+        access.read("peer", "note.txt").unwrap_err(),
+        DirectoryRefusal::Store
+    ));
+    assert_eq!(
+        store
+            .grants_for_resource(&granted.resource_id)
+            .unwrap()
+            .len(),
+        2
+    );
+    assert_eq!(
+        count(&probe, "SELECT count(*) FROM directory_open_audits"),
+        0
+    );
+    assert_eq!(
+        count(
+            &probe,
+            "SELECT count(*) FROM share_grant_changes WHERE after = 'none'"
+        ),
+        0
+    );
+    probe
+        .execute_batch("DROP TRIGGER directory_revoke_fail_second;")
+        .unwrap();
+    let refused = access.read("peer", "note.txt").unwrap_err();
+    match refused {
+        DirectoryRefusal::MarkerMismatch { cause, .. } => assert_eq!(cause, "marker-missing"),
+        other => panic!("{other:?}"),
+    }
+    assert!(store
+        .grants_for_resource(&granted.resource_id)
+        .unwrap()
+        .is_empty());
+}
+
+fn count(connection: &nessa_local_database::rusqlite::Connection, sql: &str) -> i64 {
+    connection.query_row(sql, [], |row| row.get(0)).unwrap()
+}
+
+#[test]
 fn an_unasked_call_is_not_forgotten_when_the_audit_sink_is_down() {
     let root = private();
     let shared = root.path().join("shared");

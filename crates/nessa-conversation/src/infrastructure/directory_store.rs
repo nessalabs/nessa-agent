@@ -186,26 +186,12 @@ impl DirectoryStore for SqliteDirectoryStore {
         cause: &str,
         initiator: &str,
     ) -> Result<RevokeMismatch, DirectoryRefusal> {
-        let connection = self.connection.lock().expect("directory grants");
-        if let Some((stored_cause, stored_initiator)) = connection
-            .query_row(
-                "SELECT cause, initiator FROM directory_open_audits WHERE resource_id = ?1",
-                params![resource_id],
-                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
-            )
-            .optional()
-            .map_err(store)?
-        {
-            return Ok(RevokeMismatch {
-                cause: stored_cause,
-                initiator: stored_initiator,
-                removed_now: false,
-            });
-        }
+        let mut connection = self.connection.lock().expect("directory grants");
+        let transaction = connection.transaction().map_err(store)?;
         let grants = {
-            let mut statement = connection
+            let mut statement = transaction
                 .prepare(
-                    "SELECT principal_id, receiver_id, credential_id, capabilities, policy
+                    "SELECT principal_id, receiver_id, credential_id, capabilities, policy, policy_revision
                      FROM share_grants WHERE resource_kind = 'directory' AND resource_id = ?1",
                 )
                 .map_err(store)?;
@@ -217,36 +203,110 @@ impl DirectoryStore for SqliteDirectoryStore {
                         row.get::<_, String>(2)?,
                         row.get::<_, String>(3)?,
                         row.get::<_, Option<String>>(4)?,
+                        row.get::<_, i64>(5)?,
                     ))
                 })
                 .map_err(store)?;
             rows.collect::<Result<Vec<_>, _>>().map_err(store)?
         };
+        if grants.is_empty() {
+            if let Some((stored_cause, stored_initiator)) = transaction
+                .query_row(
+                    "SELECT cause, initiator FROM directory_open_audits WHERE resource_id = ?1",
+                    params![resource_id],
+                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+                )
+                .optional()
+                .map_err(store)?
+            {
+                transaction.commit().map_err(store)?;
+                return Ok(RevokeMismatch {
+                    cause: stored_cause,
+                    initiator: stored_initiator,
+                    removed_now: false,
+                });
+            }
+            transaction
+                .execute(
+                    "INSERT INTO directory_open_audits (resource_id, cause, initiator, audit_done) VALUES (?1, ?2, ?3, 0)",
+                    params![resource_id, cause, initiator],
+                )
+                .map_err(store)?;
+            transaction.commit().map_err(store)?;
+            return Ok(RevokeMismatch {
+                cause: cause.to_owned(),
+                initiator: initiator.to_owned(),
+                removed_now: true,
+            });
+        }
+        if let Some((stored_cause, stored_initiator)) = transaction
+            .query_row(
+                "SELECT cause, initiator FROM directory_open_audits WHERE resource_id = ?1 AND audit_done = 0",
+                params![resource_id],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+            )
+            .optional()
+            .map_err(store)?
+        {
+            let (environment, canonical) = transaction
+                .query_row(
+                    "SELECT environment, canonical_path FROM directory_resources WHERE resource_id = ?1",
+                    params![resource_id],
+                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+                )
+                .optional()
+                .map_err(store)?
+                .unwrap_or_default();
+            transaction
+                .execute(
+                    "INSERT INTO directory_pending_audits (
+                        resource_id, cause, initiator, environment, canonical_path, profile, before, after, at_ms
+                     ) VALUES (?1, ?2, ?3, ?4, ?5, NULL, 'active', 'absent', ?6)",
+                    params![resource_id, stored_cause, stored_initiator, environment, canonical, now_ms()],
+                )
+                .map_err(store)?;
+        }
         let now = now_ms();
-        for (principal, receiver, credential, capabilities, policy) in grants {
-            connection
+        for (principal, receiver, credential, capabilities, policy, revision) in grants {
+            transaction
                 .execute(
                     "INSERT INTO share_grant_changes (
                         principal_id, resource_kind, resource_id, receiver_id, credential_id,
                         before, after, policy_before, policy_after, initiator, surface, request,
                         changed_at_ms, revision
                     ) VALUES (?1, 'directory', ?2, ?3, ?4, ?5, 'none', ?6, NULL, ?7, 'directory', ?8, ?9, 0)",
-                    params![principal, resource_id, receiver, credential, capabilities, policy, initiator, format!("revoke:{credential}:{cause}"), now],
+                    params![
+                        principal,
+                        resource_id,
+                        receiver,
+                        credential,
+                        capabilities,
+                        policy,
+                        initiator,
+                        format!("revoke:{credential}:{revision}"),
+                        now,
+                    ],
                 )
                 .map_err(store)?;
         }
-        connection
+        transaction
             .execute(
                 "DELETE FROM share_grants WHERE resource_kind = 'directory' AND resource_id = ?1",
                 params![resource_id],
             )
             .map_err(store)?;
-        connection
+        transaction
             .execute(
-                "INSERT INTO directory_open_audits (resource_id, cause, initiator, audit_done) VALUES (?1, ?2, ?3, 0)",
+                "INSERT INTO directory_open_audits (resource_id, cause, initiator, audit_done)
+                 VALUES (?1, ?2, ?3, 0)
+                 ON CONFLICT(resource_id) DO UPDATE SET
+                    cause = excluded.cause,
+                    initiator = excluded.initiator,
+                    audit_done = 0",
                 params![resource_id, cause, initiator],
             )
             .map_err(store)?;
+        transaction.commit().map_err(store)?;
         Ok(RevokeMismatch {
             cause: cause.to_owned(),
             initiator: initiator.to_owned(),
