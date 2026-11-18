@@ -6833,6 +6833,9 @@ const steps = {
         await openLinkedDevices(run.page)
         if (await switchLinking(run, false, failures)) await closeSettings(run.page)
       })
+      // Switching linking off restarted the gateway, which sealed its vault:
+      // unlocked again, so the steps after this one find it as it was.
+      await run.stack.vault.unlock()
       // Back to the main conversation, in the default channel: the chat
       // above left the session list showing the step's channel.
       await run.page
