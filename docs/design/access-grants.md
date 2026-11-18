@@ -114,9 +114,9 @@ A peer gateway signs in as `gateway:<key>`. The same function says
 forwarding that peer's people is a later slice. [ADR 803](../adr/done/803-policy-goes-through-cedar.md)
 records this admission as the place a paired method is decided.
 
-`@id("paired.peer_gateway")` in `readers.cedar` forbids `conversation.comment`
-and `conversation.drive` when `signedInAs != bindingOwner`. A Drive role can
-be stored on a peer and still do nothing.
+`grant.comment` and `grant.drive` permit the capability. A gateway principal
+that signs in as itself comments and drives the one conversation the grant
+names. `hold.peer` is unchanged.
 
 ### Share grants (#704, merged in #720; roles in #787; Drive in #793)
 
@@ -213,7 +213,7 @@ policy engine, a new crate, or a grant-by-list.
 | Share role Read / Comment / Drive | Becomes the capability set: Read is `read`, Comment is `read` + `comment`, Drive is those plus `drive`. One wire field, `capabilities`. The role enum goes. |
 | Tool policy and `commandHosts` | Stay as constraints on a grant that has `drive`. |
 | `policy_revision` | Stays, under the name grant epoch. |
-| `paired.peer_gateway` | Not in this build's Cedar policies. `grant.comment` and `grant.drive` require the capability and, until the peer-write slice, a principal signed in as the binding owner. One condition, on the permit. Startup does not delete the id out of an older conversation file. An older grant store is refused whole. That refusal does not open or delete the conversation file. |
+| `paired.peer_gateway` | Not in this build's Cedar policies. `grant.comment` and `grant.drive` require the capability. A gateway principal is admitted by that capability. Startup does not delete the id out of an older conversation file. An older grant store is refused whole. That refusal does not open or delete the conversation file. |
 | A stored Drive role that a peer cannot use | `conversation.share` asks those permits before it writes. A denial writes nothing and returns the policy ids. The use case does not match a gateway principal on its own. The same permits deny a hand-built row at admission. |
 | `share_grants` key `(receiver_id, conversation_id)` | This build writes `(subject_kind, subject_id, resource_kind, resource_id)`. A paired device or gateway uses subject kind `receiver` and its receiver id, so two devices of one owner stay two rows. An integration or a later agent uses subject kind `principal`. One integration principal has one active webhook registration. The same-person link is not the subject. The directory slice does not change the key. A directory resource and its marker are minted once, and later subject grants on that same directory reuse that resource id. The grant store is its own file. A grant store at any other version is refused and not rewritten. Old `share_grants` rows left in the conversation file are not read and are not migrated. Refusing or deleting the grant store leaves conversations, deletions, and summaries in place. |
 | Credential `conversation.read`, `conversation.write`, `environment.serve` | Stay. They say whether this credential may read, may be the conversation authority, or may serve. They do not name a conversation or a directory. `hold.peer` stays as written. |
@@ -773,6 +773,7 @@ a POST.
 
 ## LAN announcement
 
+Implemented as [local discovery](auth/peer-gateways.md#local-discovery).
 Pairing phases and discovery install are the peer table in
 [Lifecycles](#lifecycles). This section does not add a pairing phase.
 
@@ -1445,7 +1446,7 @@ pin. The LAN section does not add a discovery step.
 | P-pending | no enrollment | Enrollment starts | The one-use code | Pending. No session and no grant stream. | Pairing | The peer record at `Pending`, and the invitation's same-person choice. The choice is true or false and does not change after this commit. No link row. The gateway principal is not known yet. | Target the invitation, before none, after Pending, cause enrollment, initiator the owner. The choice is part of that record. |
 | P-active | Pending | Enrollment completes | The credential id and the receiver are stored. The invitation's choice is the one P-pending stored. No link for this gateway key remains after a revoke. A remaining link is G-unlink-retry, and this commit waits. | Active. No phase is added. Subscriptions can open. Discovery field is `none` until P-key or P-accept. | Enrollment | The phase `Active`, the credential id, and the receiver, in the same write of the credential store. When the choice is true, the link row is the next grant-store write, as G-link. A failure of that next write is G-link-retry. Admission does not report the person until the link commits. When the choice is false, no link is written. A false choice does not clear a stale link by omission. The choice is not asked again. No phase besides `Pending`, `Active`, and `Revoked`. | Target the peer, before Pending, after Active, cause enrollment complete, initiator the owner |
 | P-revoke | Pending or Active | Enrollment revoke | The owner's revoke | Revoked. No announcement. | The owner | The phase `Revoked` commits in the credential store. The link removal is the next grant-store write, G-unlink. A failure of that next write is G-unlink-retry. The two stores are not one commit. | Target the peer, before Pending or Active, after Revoked, cause revoke, initiator the owner |
-| P-key | none, phase Active | The dialer mints one generation | This side is the dialer. The phase is Active. No generation is unfinished. A new generation does not start while one is unfinished. | keyed | The dialer | The generation id, 32 bytes, and this side's X25519 private key (RFC 7748), 32 bytes. The public half is X25519(private, basepoint 9), the 32-byte little-endian u-coordinate, not an encoding of the private key, and it is sent only after this commit. No peer public. No discovery byte is sent in this commit. | Target the peer, before none, after keyed, cause local key, initiator this gateway |
+| P-key | none, phase Active, enrollment created with discovery enabled | The dialer mints one generation | This side is the dialer. The phase is Active. No generation is unfinished. A new generation does not start while one is unfinished. | keyed | The dialer | The generation id, 32 bytes, and this side's X25519 private key (RFC 7748), 32 bytes. The public half is X25519(private, basepoint 9), the 32-byte little-endian u-coordinate, not an encoding of the private key, and it is sent only after this commit. No peer public. No discovery byte is sent in this commit. | Target the peer, before none, after keyed, cause local key, initiator this gateway |
 | P-publish | keyed or offered | Send this side's public half | The ephemeral private key for this generation is already durable. The bytes are X25519(private, basepoint 9), the RFC 7748 32-byte little-endian u-coordinate, and they are not 32 zero bytes. They are not an encoding of the private key. The private key is durable before its public half is sent. | The same state | This gateway | None | None |
 | P-offer | keyed | The peer's public key for this same generation is known | The `keyed` write has committed. The generation matches. The peer public is exactly 32 bytes and is not 32 zero bytes. Any other public key takes P-reject. | offered | This gateway | Add the peer's public key. `stored` is sent only after this commit. | Target the peer, before keyed, after offered, cause peer public, initiator this gateway |
 | P-accept | none, phase Active | The dialer's generation and public key arrive | This side is the granting gateway. It has not minted a generation. The phase is Active. The dialer's public key is exactly 32 bytes and is not 32 zero bytes. Any other public key takes P-reject. | offered | The granting gateway | That generation, this side's new X25519 private key (RFC 7748), 32 bytes, and the dialer's public key. The public half this side will send is X25519(private, basepoint 9), the 32-byte little-endian u-coordinate, not an encoding of the private key. This commit finishes before this side sends its public half. | Target the peer, before none, after offered, cause accept dialer generation, initiator this gateway |
@@ -2122,3 +2123,43 @@ Paired peer gateways (#705), which do not store the discovery key. This
 slice adds the agreement and the stored field. Sequenced after the grant
 slices so discovery does not become a second enrollment.
 ```
+
+#### Discovery scheduling and enrollment identity
+
+| Ordering | Required behavior |
+| --- | --- |
+| Restore a record without discovery eligibility | Keep it silent; only a newly saved enrollment opts in. |
+| An installed or offline peer stalls during discovery retry | Token refresh proceeds independently. Stop withdraws the publication before joining the current attempt; no further peer is attempted. |
+| Entropy fails while accepting or replacing a discovery generation | Refuse before any resulting transition is persisted or sent; retain the prior record. |
+| Restart after installed is saved but before delivery | Retry the pinned exchange for installed records too; local persistence is not remote confirmation. |
+| Re-pair the same gateway key after an earlier enrollment ends | Select the current Active credential and carry its invitation identity into each discovery write. Recheck its credential on commit; never write an older enrollment. |
+
+The scheduler periodically retries eligible Active records, including installed ones. This deliberately does not claim remote installation confirmation.
+
+#### Exact discovery attempt and authority
+
+A discovery attempt names the peer key, full enrollment public intent, and issued credential ID. The ID is not a bearer secret. `openDiscovery` carries the latter two over the pinned TLS connection, whose actual device proof supplies the key. This is the current discovery protocol, not a compatibility layer. The granting registry owns current credential evidence; transport diagnostics do not own it.
+
+| Ordering | Admission and durable effects | Retry / publication |
+| --- | --- | --- |
+| Dialer reads enrollment, then forget/re-enroll replaces the same key before opening | Native client compares the saved full intent and credential against the attempt snapshot before sending. Mismatch refuses the attempt. | The new enrollment is unchanged. |
+| Two streams for the same enrollment overlap | Discovery writes compare the exact previously observed discovery field under the store lock. Only a successful commit advances the stream’s expected snapshot; a stale stream returns conflict without replacing the winner. | Retry restores the committed state rather than overwriting a newer generation. |
+| Replacement occurs after opening or while an old answer is pending | Every local discovery commit and noncurrent-credential update compares the same full intent and credential under the record lock. Mismatch is a typed conflict; missing record is not a successful save. | No old generation or refusal changes the replacement. |
+| Grantor receives an exact enrollment/credential/key request | Resolve that invitation, verify public intent and credential binding against actual TLS key, and read its current credential evidence. | Only the matching current Active enrollment runs key agreement. |
+| Grantor knows that exact credential is revoked or expired | Return typed `NotCurrent`. Dialer records noncurrent only if its attempt identity still matches. | Stop that enrollment's announcement and discovery retries. Pairing phase is not rewritten. |
+| Unknown/mismatched enrollment, unsupported discovery, failed entropy/storage, or network loss | Return `NotPaired`, `Unavailable`, or the physical error. Generic JSON refusal is not credential evidence. No credential-current mutation follows. | Preserve prior state and retry. Do not claim remote completion. |
+| Installed dialer reconnects | Send installed, then read the grantor's response; local installation alone does not complete the exchange. | A definitive matching `NotCurrent` is observed even after installation. A healthy grantor acknowledges; a temporarily unavailable grantor does not poison the credential. |
+| Shutdown while a retry is pending | Withdraw publication independently, finish/join the current owned attempt, check stop before another peer. | No detached native worker and no new attempt after stop. |
+
+Discovery is not a new enrollment and does not repair a mismatched enrollment. Current credential evidence is admission-time evidence, not a promise that the peer remains reachable or authorized forever. Network loss is uncertainty, not proof of revocation.
+
+#### Durable credential authority observation
+
+| Ordering | Evidence and state owner |
+| --- | --- |
+| Exact pinned grantor returns NotCurrent | The immutable observation records full intent, credential ID, grantor key as system initiator, prior current decision, noncurrent outcome and matching-grantor-refusal cause. The private record adapter adds its injected observation time and atomically persists the observation before returning; eligibility derives from absence of that observation, not a second boolean. |
+| Repeated NotCurrent / later pairing revocation | Preserve the first observation and its time. Revocation may remove the active credential but retains the observation's original credential and exact intent. |
+| Restore mismatched evidence or pending enrollment with withdrawal | Reject as corrupt; do not silently repair identity, cause, before/after or initiator. |
+| Exact current enrollment is known NotCurrent but durable write fails | Return a typed known-but-unstored error. The LAN task signals its own stop, withdraws its live registration, and joins the current attempt without starting another peer. No durable evidence success is claimed. Unknown/stale enrollment errors and generic transport refusals do not trigger this policy. |
+
+A failed write cannot preserve the observation across a crash. This process stays stopped without automatic recovery; a later process starts with only the durable evidence it can restore, so an unpersisted observation is unknown after restart.

@@ -327,6 +327,94 @@ async fn tombstone(metadata: &LocalConversationStore, target: &ConversationId) {
         .unwrap();
 }
 
+/// Two granted peers that reuse one request id each keep their own send and
+/// their own stop. Opening the conversation uses the owner. The command
+/// history is the peer's.
+#[tokio::test]
+async fn two_peers_keep_separate_sends_and_stops_under_one_request_id() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("data");
+    let provider = Arc::new(ProviderFactory::default());
+    let (service, storage, metadata) = fixture(&root, provider.clone());
+    let target = id();
+    opened(&service, &provider, &target).await;
+    let access = caller("same");
+    let mut first = access.clone();
+    first.principal_id = PrincipalId::new("gateway:one").unwrap();
+    let mut second = access.clone();
+    second.principal_id = PrincipalId::new("gateway:two").unwrap();
+    service
+        .submit_command_for(
+            storage.clone(),
+            target.clone(),
+            access.clone(),
+            first.clone(),
+            Initiation::owner(),
+            false,
+            "turn-one".into(),
+            message("from one"),
+            SubmissionMode::Queue,
+            None,
+        )
+        .await
+        .unwrap();
+    service
+        .submit_command_for(
+            storage.clone(),
+            target.clone(),
+            access.clone(),
+            second.clone(),
+            Initiation::owner(),
+            false,
+            "turn-two".into(),
+            message("from two"),
+            SubmissionMode::Queue,
+            None,
+        )
+        .await
+        .unwrap();
+    let mut stop_one = caller("stop-same");
+    stop_one.principal_id = first.principal_id.clone();
+    let mut stop_two = caller("stop-same");
+    stop_two.principal_id = second.principal_id;
+    let stop_access = caller("stop-same");
+    service
+        .stop_command_as(
+            storage.clone(),
+            target.clone(),
+            stop_access.clone(),
+            stop_one,
+            "turn-one".into(),
+        )
+        .await
+        .unwrap();
+    service
+        .stop_command_as(
+            storage.clone(),
+            target,
+            stop_access.clone(),
+            stop_two,
+            "turn-two".into(),
+        )
+        .await
+        .unwrap();
+    use nessa_sdk::application::agent_execution::commands::MutationOperation;
+    service.bind_commands(storage.clone());
+    let found = service.ordered_mutations(&stop_access).await.unwrap();
+    let principals: Vec<_> = found
+        .iter()
+        .filter(|receipt| receipt.binding().operation() == MutationOperation::Stop)
+        .map(|receipt| receipt.binding().actor().principal_id().to_owned())
+        .collect();
+    assert!(principals
+        .iter()
+        .any(|principal| principal == "gateway:one"));
+    assert!(principals
+        .iter()
+        .any(|principal| principal == "gateway:two"));
+    retire(service, storage, metadata).await;
+}
+
 #[tokio::test]
 async fn submit_commits_the_attempt_before_enqueue() {
     let directory = tempfile::tempdir().unwrap();

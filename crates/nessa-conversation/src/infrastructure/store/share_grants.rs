@@ -19,7 +19,7 @@ use super::{
     cells, failed, next_revision, read, stored_time, time, unreadable, LocalConversationStore,
 };
 use crate::application::{
-    AccessAction, ConversationCaller, ConversationError, ConversationFuture, HeldGrant,
+    AccessAction, ConversationCaller, ConversationError, ConversationFuture, GrantUse, HeldGrant,
     OwnerAccess, ResourceKind, RevisionHold, ShareGrant, ShareGrantChange, ShareGrantList,
     ShareGrantReceipt, ShareGrantTransition, ShareGrants, MAX_DRIVE_GRANTS_PER_CONVERSATION,
     MAX_POLICY_REVISION, MAX_SHARE_GRANTS_PER_CONVERSATION,
@@ -30,10 +30,14 @@ use crate::domain::{
 use nessa_auth::application::ports::AccessHold;
 use nessa_auth::domain::{CredentialId, PrincipalId, MAX_IDENTIFIER_BYTES};
 use nessa_local_database::rusqlite::{params, OptionalExtension, Transaction, TransactionBehavior};
+use nessa_local_storage::{create_directory, open, sync_directory, OpenMode, PrivateTempFile};
 use nessa_protocol::conversation::domain::ConversationId;
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::future::Future;
+use std::io::{ErrorKind, Read, Write};
+use std::path::Path;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::task::{Context, Poll};
@@ -671,6 +675,15 @@ impl ShareGrants for LocalConversationStore {
                 }
                 _ => Ok(None),
             }
+        })
+    }
+
+    fn record_use(&self, admitted: GrantUse) -> ConversationFuture<'_, ()> {
+        let directory = self.grant_path.with_file_name("grant-uses");
+        Box::pin(async move {
+            tokio::task::spawn_blocking(move || commit_grant_use(&directory, &admitted))
+                .await
+                .map_err(|_| ConversationError::Audit)?
         })
     }
 }
@@ -1341,9 +1354,151 @@ impl LocalConversationStore {
     }
 }
 
+/// The first admission of this receiver's command stands. A later call with
+/// the same conversation, receiver, command, and request keeps that file,
+/// including when the person link or the epoch has since changed. Another
+/// receiver, or another command, is a different record.
+fn commit_grant_use(directory: &Path, admitted: &GrantUse) -> Result<(), ConversationError> {
+    create_directory(directory).map_err(|_| ConversationError::Audit)?;
+    let correlation = format!(
+        "{}:{}:{}:{}",
+        admitted.conversation_id, admitted.receiver_id, admitted.command, admitted.request_id
+    );
+    let digest = Sha256::digest(correlation.as_bytes());
+    let id = format!("grant-use-{digest:x}");
+    let destination = directory.join(format!("{id}.json"));
+    if grant_use_stands(&destination, &id)? {
+        return Ok(());
+    }
+    let value = json!({
+        "recordId": id,
+        "kind": "grant_use",
+        "target": {
+            "conversationId": admitted.conversation_id.to_string(),
+            "action": admitted.action,
+            "command": admitted.command,
+        },
+        "grant": {
+            "principalId": admitted.principal_id.as_str(),
+            "receiverId": admitted.receiver_id,
+            "policyRevision": admitted.policy_revision,
+            "personId": admitted.person.as_ref().map(PrincipalId::as_str),
+        },
+        "requestId": admitted.request_id,
+        "observedAtMs": admitted.observed_at_ms,
+    });
+    let mut file = PrivateTempFile::new_in(directory).map_err(|_| ConversationError::Audit)?;
+    serde_json::to_writer(file.as_file_mut(), &value).map_err(|_| ConversationError::Audit)?;
+    file.as_file_mut()
+        .write_all(b"\n")
+        .and_then(|_| file.as_file().sync_all())
+        .map_err(|_| ConversationError::Audit)?;
+    if let Err(error) = file.publish(&destination) {
+        if error.kind() != ErrorKind::AlreadyExists || !grant_use_stands(&destination, &id)? {
+            return Err(ConversationError::Audit);
+        }
+    }
+    sync_directory(directory).map_err(|_| ConversationError::Audit)
+}
+
+fn grant_use_stands(destination: &Path, id: &str) -> Result<bool, ConversationError> {
+    let mut file = match open(destination, OpenMode::Read) {
+        Ok(file) => file,
+        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(false),
+        Err(_) => return Err(ConversationError::Audit),
+    };
+    let mut bytes = Vec::new();
+    Read::by_ref(&mut file)
+        .take(16_385)
+        .read_to_end(&mut bytes)
+        .map_err(|_| ConversationError::Audit)?;
+    if bytes.len() > 16_384 {
+        return Err(ConversationError::Audit);
+    }
+    let stored: Value = serde_json::from_slice(&bytes).map_err(|_| ConversationError::Audit)?;
+    let stands = stored.get("kind").and_then(Value::as_str) == Some("grant_use")
+        && stored.get("recordId").and_then(Value::as_str) == Some(id);
+    if stands {
+        Ok(true)
+    } else {
+        Err(ConversationError::Audit)
+    }
+}
+
 #[cfg(test)]
 #[path = "../../../tests/conversation/share_grant_policy_text.rs"]
 mod tests;
+
+#[cfg(test)]
+mod grant_use_audit {
+    use super::commit_grant_use;
+    use crate::application::GrantUse;
+    use nessa_auth::domain::PrincipalId;
+    use nessa_protocol::conversation::domain::ConversationId;
+
+    fn admitted(person: Option<&str>, revision: u64) -> GrantUse {
+        GrantUse {
+            conversation_id: ConversationId::new("00000000-0000-4000-8000-000000000891").unwrap(),
+            action: "conversation.comment",
+            command: "conversation.message".into(),
+            principal_id: PrincipalId::new("gateway:peer").unwrap(),
+            receiver_id: "receiver".into(),
+            policy_revision: revision,
+            person: person.map(|id| PrincipalId::new(id).unwrap()),
+            request_id: "note-1".into(),
+            observed_at_ms: 10,
+        }
+    }
+
+    #[test]
+    fn the_first_admission_stands_when_a_retry_names_someone_else() {
+        let root = tempfile::tempdir().unwrap();
+        let directory = root.path().join("grant-uses");
+        commit_grant_use(&directory, &admitted(None, 3)).unwrap();
+        commit_grant_use(&directory, &admitted(Some("owner"), 9)).unwrap();
+        let files: Vec<_> = std::fs::read_dir(&directory)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .collect();
+        assert_eq!(files.len(), 1);
+        let stored: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&files[0]).unwrap()).unwrap();
+        assert_eq!(stored["kind"], "grant_use");
+        assert_eq!(stored["grant"]["principalId"], "gateway:peer");
+        assert_eq!(stored["grant"]["policyRevision"], 3);
+        assert!(stored["grant"]["personId"].is_null());
+        assert_eq!(stored["requestId"], "note-1");
+        assert_eq!(stored["target"]["command"], "conversation.message");
+    }
+
+    #[test]
+    fn another_receiver_or_command_is_its_own_admission() {
+        let root = tempfile::tempdir().unwrap();
+        let directory = root.path().join("grant-uses");
+        let mut other_receiver = admitted(None, 3);
+        other_receiver.receiver_id = "other-receiver".into();
+        other_receiver.principal_id = PrincipalId::new("gateway:other").unwrap();
+        let mut other_command = admitted(None, 3);
+        other_command.command = "conversation.steer".into();
+        other_command.action = "conversation.drive";
+        commit_grant_use(&directory, &admitted(None, 3)).unwrap();
+        commit_grant_use(&directory, &other_receiver).unwrap();
+        commit_grant_use(&directory, &other_command).unwrap();
+        let files: Vec<_> = std::fs::read_dir(&directory)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .collect();
+        assert_eq!(files.len(), 3);
+    }
+
+    #[test]
+    fn a_use_is_refused_when_its_directory_cannot_be_created() {
+        let root = tempfile::tempdir().unwrap();
+        let blocked = root.path().join("grant-uses");
+        std::fs::write(&blocked, b"not a directory").unwrap();
+        assert!(commit_grant_use(&blocked, &admitted(None, 1)).is_err());
+    }
+}
 
 #[cfg(test)]
 mod cancelled_wait {

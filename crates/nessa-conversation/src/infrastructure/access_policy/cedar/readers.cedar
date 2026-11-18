@@ -7,9 +7,8 @@
 // "read", and when granted "comment" and "drive", absent when it holds
 // none. `context.request` is what a command carries.
 //
-// Comment and drive require the capability and a principal signed in as
-// the binding owner. That is the device case. A gateway signs in as itself,
-// so those permits do not match it even when a row names the capability.
+// Comment and drive are the capability. A gateway that signs in as itself
+// is admitted when the grant names the capability, on that conversation.
 
 // A device may ask for its scoped list even when it has no conversation grants.
 // The list index narrows rows; grant.read still admits each candidate. A peer
@@ -75,8 +74,7 @@ when {
     principal.bindingOwner == resource.owner
 };
 
-// A grant that includes comment leaves notes in the conversation it names,
-// and only when the principal is signed in as the binding owner.
+// A grant that includes comment leaves notes in the conversation it names.
 @id("grant.comment")
 permit (
     principal is NessaConversation::Reader,
@@ -86,15 +84,13 @@ permit (
 when {
     context has capabilities &&
     context.capabilities.contains("comment") &&
-    principal.signedInAs == principal.bindingOwner &&
     principal.organization == resource.organization &&
     principal.bindingOwner == resource.owner &&
     !resource.deleted
 };
 
 // A grant that includes drive starts, steers and stops turns in the
-// conversation it names, and only when the principal is signed in as the
-// binding owner.
+// conversation it names.
 @id("grant.drive")
 permit (
     principal is NessaConversation::Reader,
@@ -104,7 +100,6 @@ permit (
 when {
     context has capabilities &&
     context.capabilities.contains("drive") &&
-    principal.signedInAs == principal.bindingOwner &&
     principal.organization == resource.organization &&
     principal.bindingOwner == resource.owner &&
     !resource.deleted

@@ -14,6 +14,9 @@
 //! Arrows are reads and writes. A record is the peer's own: one that cannot be
 //! read fails that peer's operations and nothing else
 //! (docs/adr/todo/202-versioned-local-datasets.md, record scope).
+use crate::application::{
+    discovery_from_json, discovery_to_json, Audit, Discovery, NotCurrentEvidence,
+};
 use base64::{engine::general_purpose::STANDARD, Engine};
 use nessa_auth::{
     adapters::pairing::NativeIdentity,
@@ -76,6 +79,19 @@ pub enum PeerPhase {
     Revoked,
 }
 
+/// Distinguish failure before exact authority admission from failure to keep
+/// already-known noncurrent evidence. Only the latter requires publication stop.
+#[derive(Debug)]
+pub enum DiscoveryAuthoritySaveError {
+    Unobserved(PrivateStateError),
+    Unstored(PrivateStateError),
+}
+impl From<PrivateStateError> for DiscoveryAuthoritySaveError {
+    fn from(error: PrivateStateError) -> Self {
+        Self::Unobserved(error)
+    }
+}
+
 /// One readable peer record.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PeerRecord {
@@ -86,6 +102,17 @@ pub struct PeerRecord {
     relay: Option<RelayAddress>,
     intent: PublicIntent,
     phase: PeerPhase,
+    /// `None` until this enrollment agrees a discovery key. A record written
+    /// before that field existed stays `None`; startup does not invent one.
+    discovery: Discovery,
+    /// Enrollment-time eligibility. Absent on pre-discovery records.
+    discovery_enabled: bool,
+    /// The JSON of `discovery` and the audit of the write that stored it.
+    /// Absent while discovery is `None` and no refusal audit has been stored.
+    discovery_json: Option<String>,
+    /// False once this gateway has seen the peer credential expire or be
+    /// revoked. That observation does not change `phase`.
+    not_current: Option<NotCurrentObservation>,
 }
 impl PeerRecord {
     /// The peer's key: what identifies it, whatever its address.
@@ -107,6 +134,33 @@ impl PeerRecord {
     /// Where the enrollment stands.
     pub fn phase(&self) -> &PeerPhase {
         &self.phase
+    }
+    /// Immutable enrollment identity captured by a discovery attempt.
+    pub fn intent(&self) -> PublicIntent {
+        self.intent
+    }
+
+    /// Compare the enrollment and its issued credential, not just the reusable key.
+    pub fn same_enrollment(&self, expected: &Self) -> bool {
+        self.key == expected.key && self.intent == expected.intent && self.phase == expected.phase
+    }
+
+    /// An eligible Active enrollment retries even after saving its own MAC.
+    /// Local installation does not confirm the grantor received it.
+    pub fn needs_discovery_exchange(&self) -> bool {
+        self.discovery_enabled
+            && self.credential_current()
+            && matches!(self.phase, PeerPhase::Active { .. })
+    }
+
+    /// The discovery field. `None` is a paired peer this build has no key for.
+    pub fn discovery(&self) -> &Discovery {
+        &self.discovery
+    }
+    /// Whether the peer credential is still current. Expiry does not revoke
+    /// the phase.
+    pub fn credential_current(&self) -> bool {
+        self.not_current.is_none()
     }
 }
 
@@ -417,6 +471,68 @@ impl PeerRecords {
             self.write(&left, &own, true).map(|()| left)
         };
         Ok(Some((found, written)))
+    }
+
+    /// Store the discovery field and, when `commit` says the write is durable,
+    /// its audit, in the same record write. The phase is not changed. A missing
+    /// or replaced enrollment is a conflict; an unreadable record is corrupt.
+    pub fn write_discovery(
+        &self,
+        expected: &PeerRecord,
+        discovery: Discovery,
+        audit: Option<&Audit>,
+    ) -> Result<PeerRecord, PrivateStateError> {
+        let _guard = self.lock();
+        let own = self.own_spki()?;
+        let Some(found) = self.read(&expected.key, &own)? else {
+            return Err(PrivateStateError::Conflict);
+        };
+        if !found.same_enrollment(expected)
+            || found.discovery != expected.discovery
+            || !matches!(found.phase, PeerPhase::Active { .. })
+        {
+            return Err(PrivateStateError::Conflict);
+        }
+        let left = PeerRecord {
+            discovery_json: discovery_to_json(&discovery, audit),
+            discovery,
+            ..found.clone()
+        };
+        self.write(&left, &own, true)?;
+        Ok(left)
+    }
+
+    /// Store definitive discovery NotCurrent evidence for this exact enrollment.
+    /// The phase stays what it was, including Active when the credential expired.
+    pub fn record_discovery_not_current(
+        &self,
+        expected: &PeerRecord,
+    ) -> Result<PeerRecord, DiscoveryAuthoritySaveError> {
+        let _guard = self.lock();
+        let own = self.own_spki()?;
+        let Some(found) = self.read(&expected.key, &own)? else {
+            return Err(PrivateStateError::Conflict.into());
+        };
+        if !found.same_enrollment(expected) {
+            return Err(PrivateStateError::Conflict.into());
+        }
+        if found.not_current.is_some() {
+            return Ok(found);
+        }
+        let PeerPhase::Active { credential, .. } = &found.phase else {
+            return Err(PrivateStateError::Conflict.into());
+        };
+        let left = PeerRecord {
+            not_current: Some(NotCurrentObservation::new(
+                &found,
+                credential,
+                self.clock.unix_milliseconds(),
+            )),
+            ..found.clone()
+        };
+        self.write(&left, &own, true)
+            .map_err(DiscoveryAuthoritySaveError::Unstored)?;
+        Ok(left)
     }
 
     /// Where the retained cache of what `key` granted this gateway lives:
@@ -924,6 +1040,10 @@ impl ClientPendingStore for PeerSlot {
             relay,
             intent,
             phase: PeerPhase::Pending,
+            discovery: Discovery::None,
+            discovery_enabled: true,
+            discovery_json: None,
+            not_current: None,
         };
         if existing.as_ref() != Some(&record) {
             if let Err(error) = self.records.write(&record, &own, replace) {
@@ -1037,7 +1157,97 @@ struct Stored {
     credential: Option<StoredCredential>,
     /// The peer ended the enrollment; never with a credential.
     revoked: bool,
+    /// Absent means no discovery key. Startup does not fill one in.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    discovery: Option<String>,
+    #[serde(default)]
+    discovery_enabled: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    not_current: Option<NotCurrentObservation>,
 }
+
+/// Immutable authority evidence, durably co-located with its enrollment. The
+/// sole variant names cause, prior decision, result and system initiator;
+/// arbitrary booleans/diagnostics cannot manufacture a valid observation.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct NotCurrentObservation {
+    transition: NotCurrentTransition,
+    grantor_key: String,
+    credential_id: String,
+    invitation: String,
+    attempt: String,
+    consent: String,
+    generation: u64,
+    expiry_ms: u64,
+    same_person: bool,
+    observed_ms: u64,
+}
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+enum NotCurrentTransition {
+    /// The pinned grantor's exact NotCurrent response changed the previously
+    /// current local authority decision to noncurrent. No human is inferred.
+    CurrentToNotCurrentByMatchingGrantor,
+}
+impl NotCurrentObservation {
+    fn new(record: &PeerRecord, credential: &CredentialId, observed_ms: u64) -> Self {
+        let evidence =
+            NotCurrentEvidence::matching_grantor(record.key, record.intent, credential.clone());
+        Self {
+            transition: NotCurrentTransition::CurrentToNotCurrentByMatchingGrantor,
+            grantor_key: STANDARD.encode(evidence.grantor.bytes()),
+            credential_id: evidence.credential.as_str().to_owned(),
+            invitation: STANDARD.encode(evidence.intent.invitation().bytes()),
+            attempt: STANDARD.encode(evidence.intent.attempt().bytes()),
+            consent: STANDARD.encode(evidence.intent.consent().bytes()),
+            generation: evidence.intent.generation(),
+            expiry_ms: evidence.intent.expiry_ms(),
+            same_person: evidence.intent.same_person(),
+            observed_ms,
+        }
+    }
+    fn validates(&self, record: &PeerRecord) -> bool {
+        let Ok(credential) = CredentialId::new(self.credential_id.clone()) else {
+            return false;
+        };
+        let Ok(intent) = PublicIntent::new(
+            InvitationId::new(match fixed(&self.invitation) {
+                Ok(value) => value,
+                Err(_) => return false,
+            }),
+            AttemptId::new(match fixed(&self.attempt) {
+                Ok(value) => value,
+                Err(_) => return false,
+            }),
+            ConsentIntentId::new(match fixed(&self.consent) {
+                Ok(value) => value,
+                Err(_) => return false,
+            }),
+            self.generation,
+            self.expiry_ms,
+            ConsentClass::PeerRead,
+        )
+        .and_then(|intent| intent.with_same_person(self.same_person)) else {
+            return false;
+        };
+        let Ok(key) = fixed(&self.grantor_key) else {
+            return false;
+        };
+        let evidence =
+            NotCurrentEvidence::matching_grantor(DeviceKey::new(key), intent, credential);
+        let active = match &record.phase {
+            PeerPhase::Active { credential, .. } => Some(credential),
+            _ => None,
+        };
+        evidence.belongs_to(
+            record.key,
+            record.intent,
+            active,
+            record.phase == PeerPhase::Revoked,
+        )
+    }
+}
+
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct StoredCredential {
@@ -1060,6 +1270,9 @@ fn encode(record: &PeerRecord, own: &[u8; 44]) -> Result<Vec<u8>, PrivateStateEr
         expiry_ms: intent.expiry_ms(),
         same_person: intent.same_person(),
         revoked: record.phase == PeerPhase::Revoked,
+        discovery: record.discovery_json.clone(),
+        discovery_enabled: record.discovery_enabled,
+        not_current: record.not_current.clone(),
         credential: match &record.phase {
             PeerPhase::Pending | PeerPhase::Revoked => None,
             PeerPhase::Active {
@@ -1103,6 +1316,10 @@ fn decode(bytes: &[u8], key: &DeviceKey, own: &[u8; 44]) -> Result<PeerRecord, P
     )
     .and_then(|intent| intent.with_same_person(stored.same_person))
     .map_err(|_| PrivateStateError::Corrupt)?;
+    let discovery = match stored.discovery.as_deref() {
+        None => Discovery::None,
+        Some(json) => discovery_from_json(json).ok_or(PrivateStateError::Corrupt)?,
+    };
     let phase = match (stored.revoked, stored.credential) {
         (true, None) => PeerPhase::Revoked,
         (true, Some(_)) => return Err(PrivateStateError::Corrupt),
@@ -1114,7 +1331,7 @@ fn decode(bytes: &[u8], key: &DeviceKey, own: &[u8; 44]) -> Result<PeerRecord, P
                 .map_err(|_| PrivateStateError::Corrupt)?,
         },
     };
-    Ok(PeerRecord {
+    let record = PeerRecord {
         key: *key,
         pin,
         address: stored
@@ -1124,7 +1341,19 @@ fn decode(bytes: &[u8], key: &DeviceKey, own: &[u8; 44]) -> Result<PeerRecord, P
         relay: stored.relay,
         intent,
         phase,
-    })
+        discovery_enabled: stored.discovery_enabled,
+        discovery_json: stored.discovery,
+        discovery,
+        not_current: stored.not_current,
+    };
+    if record
+        .not_current
+        .as_ref()
+        .is_some_and(|evidence| !evidence.validates(&record))
+    {
+        return Err(PrivateStateError::Corrupt);
+    }
+    Ok(record)
 }
 
 fn fixed<const N: usize>(text: &str) -> Result<[u8; N], PrivateStateError> {
@@ -1338,3 +1567,7 @@ fn apply_follow_transition(
 #[cfg(test)]
 #[path = "../../tests/follow_transition.rs"]
 mod follow_transition_tests;
+
+#[cfg(test)]
+#[path = "../../tests/discovery_records.rs"]
+mod discovery_tests;

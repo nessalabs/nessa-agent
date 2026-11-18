@@ -8,13 +8,34 @@ use std::fmt::{Display, Formatter, Result as FmtResult};
 use std::num::NonZeroUsize;
 use std::path::PathBuf;
 
-pub(crate) const HELP: &str = "read_only_sync pair PROFILE (code on stdin)\nread_only_sync status PROFILE\nread_only_sync sync-records PROFILE CONVERSATION PAGES\nread_only_sync check-records PROFILE CONVERSATION\nread_only_sync follow PROFILE CONVERSATION PAGES MAX_PASSES\nread_only_sync sync-catalogue PROFILE PAGES\nread_only_sync fetch PROFILE CONVERSATION DIGEST MIMETYPE SIZE OUT\nread_only_sync list CACHE RECEIVER ORIGIN CATALOGUE [AFTER_CREATION AFTER_ID]\nread_only_sync show CACHE RECEIVER ORIGIN CONVERSATION\nread_only_sync reset-records|reset-catalogue CACHE RECEIVER ORIGIN STREAM OPERATION CALLER GENERATION OLD_INCARNATION OLD_SCHEMA OLD_EPOCH NEW_INCARNATION NEW_SCHEMA NEW_EPOCH";
+pub(crate) const HELP: &str = "read_only_sync pair PROFILE [peer] (code on stdin)\nread_only_sync status PROFILE\nread_only_sync comment PROFILE CONVERSATION TEXT\nread_only_sync drive PROFILE CONVERSATION TEXT\nread_only_sync sync-records PROFILE CONVERSATION PAGES\nread_only_sync check-records PROFILE CONVERSATION\nread_only_sync follow PROFILE CONVERSATION PAGES MAX_PASSES\nread_only_sync sync-catalogue PROFILE PAGES\nread_only_sync fetch PROFILE CONVERSATION DIGEST MIMETYPE SIZE OUT\nread_only_sync list CACHE RECEIVER ORIGIN CATALOGUE [AFTER_CREATION AFTER_ID]\nread_only_sync show CACHE RECEIVER ORIGIN CONVERSATION\nread_only_sync reset-records|reset-catalogue CACHE RECEIVER ORIGIN STREAM OPERATION CALLER GENERATION OLD_INCARNATION OLD_SCHEMA OLD_EPOCH NEW_INCARNATION NEW_SCHEMA NEW_EPOCH";
+
+/// Who `pair` enrolls as. `peer` is a gateway principal (`ConsentClass::PeerRead`);
+/// anything else is one of the owner's devices.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PairClass {
+    Device,
+    Peer,
+}
 
 pub(crate) enum Command {
     Local(LocalCommand),
     /// Enroll this device with the code read from standard input.
     Pair {
         profile: PathBuf,
+        class: PairClass,
+    },
+    /// Leave a note on a conversation this enrollment may comment on.
+    Comment {
+        profile: PathBuf,
+        conversation: ConversationId,
+        text: String,
+    },
+    /// Send one text turn on a conversation this enrollment may drive.
+    Drive {
+        profile: PathBuf,
+        conversation: ConversationId,
+        text: String,
     },
     /// Read this device's enrollment status over the pinned gateway key; a
     /// Terminal status purges the profile's cache before the record goes.
@@ -89,10 +110,20 @@ impl Display for CommandError {
 }
 
 pub(crate) fn parse(args: &[String]) -> Result<Command, CommandError> {
+    if let Some(command) = parse_granted(args)? {
+        return Ok(command);
+    }
     match args {
+        [name, profile, class] if name == "pair" && class == "peer" => {
+            return Ok(Command::Pair {
+                profile: profile.into(),
+                class: PairClass::Peer,
+            })
+        }
         [name, profile] if name == "pair" => {
             return Ok(Command::Pair {
                 profile: profile.into(),
+                class: PairClass::Device,
             })
         }
         [name, profile] if name == "status" => {
@@ -147,6 +178,39 @@ pub(crate) fn parse(args: &[String]) -> Result<Command, CommandError> {
         _ => {}
     }
     parse_local(args).map(Command::Local)
+}
+
+/// `comment` and `drive` name a conversation and the text, which may be several
+/// words. A missing or blank text, or one past 8 KiB, is an argument error.
+fn parse_granted(args: &[String]) -> Result<Option<Command>, CommandError> {
+    let [name, profile, conversation, text @ ..] = args else {
+        return Ok(None);
+    };
+    if name != "comment" && name != "drive" {
+        return Ok(None);
+    }
+    if text.is_empty() {
+        return Err(CommandError::Arguments);
+    }
+    let text = text.join(" ");
+    if text.len() > 8 * 1024 || text.trim().is_empty() {
+        return Err(CommandError::Arguments);
+    }
+    let conversation = ConversationId::new(conversation).map_err(|_| CommandError::Identity)?;
+    let profile = PathBuf::from(profile);
+    Ok(Some(if name == "drive" {
+        Command::Drive {
+            profile,
+            conversation,
+            text,
+        }
+    } else {
+        Command::Comment {
+            profile,
+            conversation,
+            text,
+        }
+    }))
 }
 
 fn parse_local(args: &[String]) -> Result<LocalCommand, CommandError> {
