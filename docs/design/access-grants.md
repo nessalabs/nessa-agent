@@ -1772,7 +1772,8 @@ read-only capabilities. A command that would change a chat the caller may
 read is refused `capabilities_refused` and is not sent to the grantor. The
 conversation metadata file is not written. A file or image the transcript
 names is read from the granting peer, one range at a time, for the catalogue
-owner Cedar admits. A peer cache that cannot be read leaves the list
+owner Cedar admits. The grantor admits that range through `grant.artifact_read`
+when the peer's grant includes read. A peer cache that cannot be read leaves the list
 incomplete, so a chat it holds is not treated as gone. Two peers that grant
 the same conversation id contribute one row, the first peer's, and that
 copy's archived flag is the one the list uses. A local

@@ -190,9 +190,11 @@ fn piece_error_code(error: PieceError) -> ConversationErrorCode {
 /// not exist does. What it may read there is the hold's to say
 /// ([`nessa_attachments::application::HeldReads`]): only in a conversation
 /// that is the caller's, as for an upload, and only exactly the file it
-/// keeps now, named by digest, media type and size. A chat that exists only
-/// in a peer cache has no local hold. Its range is read from the peer that
-/// granted it, for the catalogue owner Cedar admits.
+/// keeps now, named by digest, media type and size. A peer gateway signs in
+/// as itself; `grant.artifact_read` admits the range when its grant includes
+/// read. A chat that exists only in a peer cache has no local hold. Its
+/// range is read from the peer that granted it, for the catalogue owner
+/// Cedar admits.
 pub(super) async fn dispatch_read(
     state: &ProductRouteState,
     session: &AuthenticatedSession,
@@ -210,6 +212,25 @@ pub(super) async fn dispatch_read(
     }
     if let Some(reads) = state.files.held_reads.as_ref() {
         let context = session.context();
+        match super::read_access::peer_artifact_read(state, session, &conversation).await {
+            Ok(Some(())) => {
+                return match reads
+                    .read_admitted(
+                        context.organization_id(),
+                        &conversation,
+                        &stored,
+                        offset,
+                        max_bytes,
+                    )
+                    .await
+                {
+                    Ok(bytes) => read_success(&frame.id, offset, bytes.as_bytes()),
+                    Err(error) => failure(&frame.id, read_error_code(error).as_str()),
+                };
+            }
+            Ok(None) => {}
+            Err(code) => return failure(&frame.id, code),
+        }
         match reads
             .read(
                 context.organization_id(),
