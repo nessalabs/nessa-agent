@@ -798,9 +798,9 @@ impl DirectoryAccess {
                         .map(|item| item.canonical_path.clone())
                         .unwrap_or_default(),
                     initiator: subject.to_owned(),
-                    before: None,
-                    after: None,
-                    profile: None,
+                    before: Some(matcher.clone()),
+                    after: Some(attempted_command(program, argv)),
+                    profile: (!rules.is_empty()).then(|| rules.join(",")),
                     at_ms: now_ms(),
                 });
                 Err(DirectoryRefusal::Program {
@@ -1355,6 +1355,13 @@ fn parent_relative(relative: &str) -> String {
     }
     parts.pop();
     parts.join("/")
+}
+
+fn attempted_command(program: &str, argv: &[String]) -> String {
+    if argv.is_empty() {
+        return program.to_owned();
+    }
+    format!("{program}\u{1f}{}", join_argv(argv))
 }
 
 fn capability_names(spelling: &str) -> Vec<String> {

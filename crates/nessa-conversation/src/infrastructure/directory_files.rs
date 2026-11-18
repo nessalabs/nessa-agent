@@ -467,11 +467,20 @@ fn open_named(dir: RawFd, name: &str) -> Result<File, DirectoryRefusal> {
 }
 
 fn is_regular(file: &File) -> Result<bool, DirectoryRefusal> {
+    Ok(file_mode(file)? & libc::S_IFMT == libc::S_IFREG)
+}
+
+fn is_walk_target(file: &File) -> Result<bool, DirectoryRefusal> {
+    let kind = file_mode(file)? & libc::S_IFMT;
+    Ok(kind == libc::S_IFREG || kind == libc::S_IFDIR)
+}
+
+fn file_mode(file: &File) -> Result<u32, DirectoryRefusal> {
     let mut info = unsafe { std::mem::zeroed() };
     if unsafe { libc::fstat(file.as_raw_fd(), &mut info) } != 0 {
         return Err(io(std::io::Error::last_os_error()));
     }
-    Ok(info.st_mode & libc::S_IFMT == libc::S_IFREG)
+    Ok(info.st_mode)
 }
 
 /// Move `.nessa-binding` aside, then delete it only when that file is the one
@@ -547,7 +556,7 @@ fn open_at(dir: RawFd, name: &str, directory: bool) -> Result<File, DirectoryRef
     let fd = unsafe { libc::openat(dir, name.as_ptr(), flags) };
     if fd >= 0 {
         let file = unsafe { File::from_raw_fd(fd) };
-        if !directory && !is_regular(&file)? {
+        if !directory && !is_walk_target(&file)? {
             return Err(DirectoryRefusal::Io(std::io::ErrorKind::InvalidInput));
         }
         return Ok(file);

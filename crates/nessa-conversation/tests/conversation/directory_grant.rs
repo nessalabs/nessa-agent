@@ -83,6 +83,25 @@ fn share_read(access: &DirectoryAccess, path: &str, subject: &str) -> SharedDire
 }
 
 #[test]
+fn a_write_creates_a_file_under_a_directory_inside_the_share() {
+    let root = private();
+    let shared = root.path().join("shared");
+    fs::create_dir(&shared).unwrap();
+    let store_dir = private();
+    let access = service(
+        Arc::new(LocalDirectoryFiles),
+        Arc::new(SqliteDirectoryStore::open(&store_dir.path().join("grants.sqlite3")).unwrap()),
+        Arc::new(RecordingAudit::new()),
+        [24; BINDING_LEN],
+    );
+    share_read(&access, shared.to_str().unwrap(), "peer");
+    fs::create_dir(shared.join("sub")).unwrap();
+    fs::write(shared.join("sub/existing"), b"old").unwrap();
+    access.write("peer", "sub/existing", b"nested").unwrap();
+    assert_eq!(access.read("peer", "sub/existing").unwrap(), b"nested");
+}
+
+#[test]
 fn a_peer_reads_a_file_inside_and_not_a_path_that_leaves() {
     let root = private();
     let shared = root.path().join("shared");
@@ -2009,9 +2028,19 @@ fn a_refused_exec_is_kept_when_the_audit_sink_is_down() {
     assert!(lines
         .iter()
         .any(|line| line.cause == "exec-refused" && line.initiator == "peer"));
-    assert!(lines
+    let command = lines
         .iter()
-        .any(|line| line.cause == "command-refused" && line.initiator == "ruled"));
+        .find(|line| line.cause == "command-refused" && line.initiator == "ruled")
+        .unwrap();
+    assert_eq!(command.after.as_deref(), Some("rm"));
+    assert!(command
+        .before
+        .as_deref()
+        .is_some_and(|matcher| matcher.starts_with("command.rules")));
+    assert!(command
+        .profile
+        .as_deref()
+        .is_some_and(|rules| rules.contains("command.rules")));
 }
 
 #[test]
