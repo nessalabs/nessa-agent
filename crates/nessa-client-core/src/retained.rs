@@ -51,6 +51,7 @@ use crate::read_only_sync::application::{
     CacheError, CachePolicy, CachedProgress, Cancellation, GatewayConnector, GatewayError,
     GatewayPolicy, GatewayStream,
 };
+use crate::read_only_sync::domain::HELD_FILE_RANGE_BYTES;
 use crate::read_only_sync::infrastructure::cache::ReadOnlyCache;
 use crate::read_only_sync::infrastructure::gateway::{
     read_named, CatalogueReader, DeviceEvidence, GatewayConnection, Session,
@@ -1447,9 +1448,8 @@ pub fn read_peer_artifact(
     clock: &Arc<dyn MonotonicClock>,
     budget: Duration,
 ) -> Result<Vec<u8>, ReadFailure> {
-    const MAX_RANGE: usize = 32 * 1024;
     if file.max_bytes == 0
-        || file.max_bytes > MAX_RANGE
+        || file.max_bytes as u64 > HELD_FILE_RANGE_BYTES
         || file.size == 0
         || file.offset >= file.size
     {
