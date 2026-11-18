@@ -388,7 +388,8 @@ export function plan(knobs, accessScenario = "full") {
   if (knobs.pairedCatalogues > 0)
     steps.push({ kind: "pairedCatalogue", cycles: knobs.pairedCatalogues })
   // Preset checks keep their original model. Positive model changes (a
-  // `model` step, and a `picker` step's bar) follow that work, using Ask before their review; chaos keeps concurrent coverage.
+  // `model` step, and a `picker` step's bar) follow that work, using Ask
+  // before their review; chaos keeps concurrent coverage.
   // Handoffs come last of all: a switch stays in the metadata, and no older
   // build's file holds one, so the `upgrade` step runs before it.
   const last = (step) =>
