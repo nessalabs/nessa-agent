@@ -190,18 +190,16 @@ fn piece_error_code(error: PieceError) -> ConversationErrorCode {
 /// not exist does. What it may read there is the hold's to say
 /// ([`nessa_attachments::application::HeldReads`]): only in a conversation
 /// that is the caller's, as for an upload, and only exactly the file it
-/// keeps now, named by digest, media type and size.
+/// keeps now, named by digest, media type and size. A peer gateway signs in
+/// as itself; `grant.artifact_read` admits the range when its grant includes
+/// read. A chat that exists only in a peer cache has no local hold. Its
+/// range is read from the peer that granted it, for the catalogue owner
+/// Cedar admits.
 pub(super) async fn dispatch_read(
     state: &ProductRouteState,
     session: &AuthenticatedSession,
     frame: RequestFrame,
 ) -> OutgoingMessage {
-    let Some(reads) = state.files.held_reads.as_ref() else {
-        return failure(
-            &frame.id,
-            ConversationErrorCode::ConversationsNotConfigured.as_str(),
-        );
-    };
     let Some((conversation, stored, offset, max_bytes)) =
         serde_json::from_value::<ArtifactReadParams>(frame.params)
             .ok()
@@ -212,27 +210,99 @@ pub(super) async fn dispatch_read(
     if let Err(code) = super::read_access::admit_conversation(state, session, &conversation).await {
         return failure(&frame.id, code);
     }
-    let context = session.context();
-    match reads
-        .read(
-            context.organization_id(),
-            context.principal_id(),
-            &conversation,
-            &stored,
+    if let Some(reads) = state.files.held_reads.as_ref() {
+        let context = session.context();
+        match super::read_access::peer_artifact_read(state, session, &conversation).await {
+            Ok(Some(())) => {
+                return match reads
+                    .read_admitted(
+                        context.organization_id(),
+                        &conversation,
+                        &stored,
+                        offset,
+                        max_bytes,
+                    )
+                    .await
+                {
+                    Ok(bytes) => read_success(&frame.id, offset, bytes.as_bytes()),
+                    Err(error) => failure(&frame.id, read_error_code(error).as_str()),
+                };
+            }
+            Ok(None) => {}
+            Err(code) => return failure(&frame.id, code),
+        }
+        match reads
+            .read(
+                context.organization_id(),
+                context.principal_id(),
+                &conversation,
+                &stored,
+                offset,
+                max_bytes,
+            )
+            .await
+        {
+            Ok(bytes) => return read_success(&frame.id, offset, bytes.as_bytes()),
+            // A shared chat has no local metadata row. The peer that granted
+            // it still holds the file.
+            Err(HeldReadError::ConversationNotFound) => {}
+            Err(error) => return failure(&frame.id, read_error_code(error).as_str()),
+        }
+    }
+    match super::shared_chat::read_shared_file(
+        state,
+        session,
+        &conversation,
+        super::shared_chat::SharedFileRequest {
+            digest: stored.digest().to_string(),
+            media_type: stored.media_type().as_str().to_owned(),
+            size: stored.size(),
             offset,
             max_bytes,
-        )
-        .await
+        },
+    )
+    .await
     {
-        Ok(bytes) => success(
+        Ok(super::shared_chat::SharedFileRead::Range(bytes)) => {
+            read_success(&frame.id, offset, &bytes)
+        }
+        Ok(super::shared_chat::SharedFileRead::NotHeld) => failure(
             &frame.id,
-            &ArtifactReadResult {
-                offset,
-                data: STANDARD.encode(bytes.as_bytes()),
-            },
+            ConversationErrorCode::AttachmentNotFound.as_str(),
         ),
-        Err(error) => failure(&frame.id, read_error_code(error).as_str()),
+        Ok(super::shared_chat::SharedFileRead::Missing) => failure(
+            &frame.id,
+            ConversationErrorCode::ConversationNotFound.as_str(),
+        ),
+        Ok(super::shared_chat::SharedFileRead::Unavailable) => failure(
+            &frame.id,
+            ConversationErrorCode::TemporarilyUnavailable.as_str(),
+        ),
+        Ok(super::shared_chat::SharedFileRead::Elsewhere) if state.files.held_reads.is_some() => {
+            failure(
+                &frame.id,
+                ConversationErrorCode::ConversationNotFound.as_str(),
+            )
+        }
+        Ok(super::shared_chat::SharedFileRead::Elsewhere) => failure(
+            &frame.id,
+            ConversationErrorCode::ConversationsNotConfigured.as_str(),
+        ),
+        Err(_) => failure(
+            &frame.id,
+            ConversationErrorCode::TemporarilyUnavailable.as_str(),
+        ),
     }
+}
+
+fn read_success(id: &str, offset: u64, bytes: &[u8]) -> OutgoingMessage {
+    success(
+        id,
+        &ArtifactReadResult {
+            offset,
+            data: STANDARD.encode(bytes),
+        },
+    )
 }
 
 /// The request's conversation, file and range, when each is well formed.

@@ -51,17 +51,18 @@ use crate::read_only_sync::application::{
     CacheError, CachePolicy, CachedProgress, Cancellation, GatewayConnector, GatewayError,
     GatewayPolicy, GatewayStream,
 };
+use crate::read_only_sync::domain::HELD_FILE_RANGE_BYTES;
 use crate::read_only_sync::infrastructure::cache::ReadOnlyCache;
 use crate::read_only_sync::infrastructure::gateway::{
-    CatalogueReader, DeviceEvidence, GatewayConnection, Session,
+    read_named, CatalogueReader, DeviceEvidence, GatewayConnection, Session,
 };
 use nessa_auth::adapters::pairing::{relay_key, NativeIdentity};
 use nessa_auth::application::ports::Clock as WallClock;
 use nessa_protocol::clock::Clock as MonotonicClock;
 use nessa_protocol::conversation::domain::ConversationId;
 use nessa_protocol::product::generated::{
-    MAX_PHYSICAL_RECORD_PAYLOAD_BYTES, MAX_RECORD_PAGE_PAYLOAD_BYTES, MAX_RECORD_PAGE_RECORDS,
-    PASSIVE_MIN_REQUEST_TIMEOUT_MS,
+    ArtifactReadParams, MAX_PHYSICAL_RECORD_PAYLOAD_BYTES, MAX_RECORD_PAGE_PAYLOAD_BYTES,
+    MAX_RECORD_PAGE_RECORDS, PASSIVE_MIN_REQUEST_TIMEOUT_MS,
 };
 use nessa_protocol::product_contract::generated::{ConversationErrorCode, RecordReadErrorCode};
 use nessa_protocol::product_contract::ConnectionOutcome;
@@ -111,8 +112,8 @@ pub use artifact::{
 pub use device::{RetainedEnrollmentClient, RetainedEnrollmentStatus, RetainedPurge};
 pub use phone::{CataloguePresence, PhoneFence, PhoneLease, PhoneStamp};
 pub use saved::{
-    RetainedCatalogueEntry, RetainedCataloguePage, RetainedProgress, RetainedTranscript,
-    RetainedTranscriptSnapshot,
+    EarlierMiss, RetainedCatalogueEntry, RetainedCataloguePage, RetainedProgress,
+    RetainedTranscript, RetainedTranscriptSnapshot,
 };
 pub use subscribe::{ConversationFeed, FeedEvent, SubscribeError};
 
@@ -165,6 +166,22 @@ const HANDSHAKE_MS: u64 = 5_000;
 pub const HANDSHAKE: Duration = Duration::from_millis(HANDSHAKE_MS);
 /// Unrelated events one operation tolerates.
 const UNEXPECTED_EVENTS: usize = 16;
+
+/// One range of a file a peer's conversation holds, named as the view names it.
+pub struct PeerArtifact<'a> {
+    /// The granted conversation.
+    pub conversation: &'a ConversationId,
+    /// The file's digest, as the view spells it.
+    pub digest: &'a str,
+    /// The file's media type, as the view spells it.
+    pub media_type: &'a str,
+    /// The file's size, together with the digest and media type.
+    pub size: u64,
+    /// Where the range starts.
+    pub offset: u64,
+    /// How many bytes this range asks for, at most one product range.
+    pub max_bytes: usize,
+}
 
 /// What a reader presents and reads as: its key, the gateway key it pinned,
 /// and the credential, receiver and access epoch its latest Active status
@@ -767,6 +784,7 @@ impl RetainedCache {
         withdrawn: &mut Vec<String>,
     ) -> Result<ReadReport, ReadFailure> {
         self.read_in(access, stop, budget, max_withdrawn, withdrawn, None)
+            .0
     }
 
     /// Read like [`Self::read`], and keep a transcript only for a conversation
@@ -775,6 +793,11 @@ impl RetainedCache {
     /// choice, so it is not reported in `withdrawn` (that list is chats the
     /// gateway no longer grants). A rule cannot add a chat the gateway did
     /// not grant: the catalogue is still what the gateway serves.
+    ///
+    /// The boolean is true when a page was kept and the read then failed
+    /// because the cache is full, could not be written, or the connection
+    /// was lost. The error still stands. The caller tells subscribers the
+    /// cache moved; a withdrawal is already in `withdrawn`.
     pub fn read_followed(
         &mut self,
         access: ReaderAccess<'_>,
@@ -783,8 +806,11 @@ impl RetainedCache {
         budget: Duration,
         max_withdrawn: usize,
         withdrawn: &mut Vec<String>,
-    ) -> Result<ReadReport, ReadFailure> {
-        self.read_in(access, stop, budget, max_withdrawn, withdrawn, Some(follow))
+    ) -> (Result<ReadReport, ReadFailure>, bool) {
+        let (result, progressed) =
+            self.read_in(access, stop, budget, max_withdrawn, withdrawn, Some(follow));
+        let retained = retained_page(&result, progressed);
+        (result, retained)
     }
 
     fn read_in(
@@ -795,7 +821,7 @@ impl RetainedCache {
         max_withdrawn: usize,
         withdrawn: &mut Vec<String>,
         follow: Option<&FollowRule>,
-    ) -> Result<ReadReport, ReadFailure> {
+    ) -> (Result<ReadReport, ReadFailure>, bool) {
         let receiver = access.receiver.to_owned();
         let ending = Arc::new(Stopping::new(
             stop.clone(),
@@ -810,15 +836,19 @@ impl RetainedCache {
         let result = self.read_inner(access, &ending, &offline, max_withdrawn, withdrawn, follow);
         let progressed = self.progressed || withdrawn.len() > before;
         let end = read_end(result, stop.is_stopped(), ending.spent(), progressed);
-        match away(end, offline.load(Ordering::SeqCst)) {
+        let result = match away(end, offline.load(Ordering::SeqCst)) {
             ReadEnd::Read(report) => Ok(report),
-            ReadEnd::Incomplete => Ok(ReadReport {
-                moved: true,
-                complete: false,
-                conversations: self.conversation_ids(&receiver)?.len(),
-            }),
+            ReadEnd::Incomplete => match self.conversation_ids(&receiver) {
+                Ok(ids) => Ok(ReadReport {
+                    moved: true,
+                    complete: false,
+                    conversations: ids.len(),
+                }),
+                Err(failure) => Err(failure),
+            },
             ReadEnd::Failed(failure) => Err(failure),
-        }
+        };
+        (result, progressed)
     }
 
     fn read_inner(
@@ -1023,36 +1053,7 @@ impl RetainedCache {
         ending: &Arc<Stopping>,
         offline: &Arc<AtomicBool>,
     ) -> Result<Session, ReadFailure> {
-        let policy = GatewayPolicy::new(
-            HANDSHAKE_MS,
-            PASSIVE_MIN_REQUEST_TIMEOUT_MS,
-            UNEXPECTED_EVENTS,
-        )
-        .map_err(|_| ReadFailure::Protocol)?;
-        Session::connect(
-            access.address,
-            DeviceEvidence {
-                identity: access.identity,
-                pin: access.pin,
-                credential: access.credential,
-            },
-            access.client_id,
-            &StoppableConnector {
-                ending: ending.clone(),
-                // A pin that is no Ed25519 key fails TLS whatever the route.
-                relay: access.relay.and_then(|address| {
-                    Some(RelayRoute {
-                        address: address.clone(),
-                        key: relay_key(&access.pin)?,
-                    })
-                }),
-                offline: offline.clone(),
-            },
-            self.clock.clone(),
-            ending.clone(),
-            policy,
-        )
-        .map_err(failure)
+        connect_reader(access, &self.clock, ending, offline)
     }
 
     /// One conversation's records, from what the cache holds to the head;
@@ -1324,6 +1325,19 @@ fn read_each(
     held.map_or(Ok(complete), Err)
 }
 
+/// A failed read kept a page the caller has not announced. The poller wakes
+/// subscribers from this answer and does not decide the failures again.
+fn retained_page(result: &Result<ReadReport, ReadFailure>, progressed: bool) -> bool {
+    progressed
+        && matches!(
+            result,
+            Err(ReadFailure::Quota
+                | ReadFailure::Cache
+                | ReadFailure::Unreachable
+                | ReadFailure::Away)
+        )
+}
+
 /// A cache failure the rest of a read's withdrawals still go ahead past.
 fn holds_back(failure: ReadFailure) -> bool {
     matches!(failure, ReadFailure::Quota | ReadFailure::Cache)
@@ -1423,6 +1437,90 @@ fn cache_failure(error: &CacheError) -> ReadFailure {
         CacheError::Scope { .. } => ReadFailure::ResetRequired,
         _ => ReadFailure::Cache,
     }
+}
+
+/// One `artifact.read` range from the peer `access` names. The range is the
+/// caller's. Nothing is written to a cache. A file the peer does not hold, or
+/// a conversation it does not grant, is [`ReadFailure::Product`].
+pub fn read_peer_artifact(
+    access: ReaderAccess<'_>,
+    file: PeerArtifact<'_>,
+    clock: &Arc<dyn MonotonicClock>,
+    budget: Duration,
+) -> Result<Vec<u8>, ReadFailure> {
+    if file.max_bytes == 0
+        || file.max_bytes as u64 > HELD_FILE_RANGE_BYTES
+        || file.size == 0
+        || file.offset >= file.size
+    {
+        return Err(ReadFailure::Protocol);
+    }
+    let stop = ReadStop::new();
+    let until = clock
+        .elapsed_ms()
+        .saturating_add(u64::try_from(budget.as_millis()).unwrap_or(u64::MAX));
+    let ending = Arc::new(Stopping::new(stop, Arc::clone(clock), until));
+    let offline = Arc::new(AtomicBool::new(false));
+    let session = connect_reader(&access, clock, &ending, &offline)?;
+    let connection = GatewayConnection::new(session);
+    let params = ArtifactReadParams {
+        conversation_id: file.conversation.to_string(),
+        digest: file.digest.to_owned(),
+        mime_type: file.media_type.to_owned(),
+        size: file.size,
+        offset: file.offset,
+        max_bytes: file.max_bytes as u64,
+    };
+    match read_named(&connection, params) {
+        Ok(bytes) => {
+            let room = file.size - file.offset;
+            let limit = room.min(file.max_bytes as u64);
+            if bytes.is_empty() || bytes.len() as u64 > limit {
+                Err(ReadFailure::Protocol)
+            } else {
+                Ok(bytes)
+            }
+        }
+        Err(error) => Err(artifact::held_file_failure(error)),
+    }
+}
+
+fn connect_reader(
+    access: &ReaderAccess<'_>,
+    clock: &Arc<dyn MonotonicClock>,
+    ending: &Arc<Stopping>,
+    offline: &Arc<AtomicBool>,
+) -> Result<Session, ReadFailure> {
+    let policy = GatewayPolicy::new(
+        HANDSHAKE_MS,
+        PASSIVE_MIN_REQUEST_TIMEOUT_MS,
+        UNEXPECTED_EVENTS,
+    )
+    .map_err(|_| ReadFailure::Protocol)?;
+    Session::connect(
+        access.address,
+        DeviceEvidence {
+            identity: access.identity,
+            pin: access.pin,
+            credential: access.credential,
+        },
+        access.client_id,
+        &StoppableConnector {
+            ending: ending.clone(),
+            // A pin that is no Ed25519 key fails TLS whatever the route.
+            relay: access.relay.and_then(|address| {
+                Some(RelayRoute {
+                    address: address.clone(),
+                    key: relay_key(&access.pin)?,
+                })
+            }),
+            offline: offline.clone(),
+        },
+        Arc::clone(clock),
+        ending.clone(),
+        policy,
+    )
+    .map_err(failure)
 }
 
 /// A gateway failure as the caller acts on it.

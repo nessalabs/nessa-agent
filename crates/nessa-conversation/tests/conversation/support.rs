@@ -1904,10 +1904,54 @@ pub fn fixture_in(
     Arc<MemoryRepository>,
     Arc<InMemoryStorage>,
 ) {
-    let provider = Arc::new(ProviderFactory::default());
-    let repository = Arc::new(MemoryRepository::default());
-    let storage = Arc::new(InMemoryStorage::new());
     let summaries = Arc::new(MemorySummaries::default());
+    let repository = Arc::new(MemoryRepository::default());
+    assemble(
+        limits,
+        environment,
+        tool_config,
+        Arc::new(MemoryListing {
+            repository: repository.clone(),
+            summaries: summaries.clone(),
+        }),
+        repository,
+        Arc::new(InMemoryStorage::new()),
+        summaries,
+    )
+}
+
+/// [`fixture`], listing conversations from `listing` instead of the memory store.
+pub fn fixture_with_listing(
+    limits: ConversationLimits,
+    listing: Arc<dyn crate::application::ConversationListing>,
+) -> ConversationService {
+    assemble(
+        limits,
+        crate::infrastructure::in_process_environment().into(),
+        Default::default(),
+        listing,
+        Arc::new(MemoryRepository::default()),
+        Arc::new(InMemoryStorage::new()),
+        Arc::new(MemorySummaries::default()),
+    )
+    .0
+}
+
+fn assemble(
+    limits: ConversationLimits,
+    environment: crate::application::Environments,
+    tool_config: crate::application::EnvironmentToolConfig,
+    listing: Arc<dyn crate::application::ConversationListing>,
+    repository: Arc<MemoryRepository>,
+    storage: Arc<InMemoryStorage>,
+    summaries: Arc<MemorySummaries>,
+) -> (
+    ConversationService,
+    Arc<ProviderFactory>,
+    Arc<MemoryRepository>,
+    Arc<InMemoryStorage>,
+) {
+    let provider = Arc::new(ProviderFactory::default());
     let service = ConversationService::new(
         ConversationDependencies {
             input_files: None,
@@ -1920,11 +1964,8 @@ pub fn fixture_in(
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
             attachments: None,
-            summaries: summaries.clone(),
-            listing: Arc::new(MemoryListing {
-                repository: repository.clone(),
-                summaries,
-            }),
+            summaries,
+            listing,
             deletion_audit: Arc::new(AcceptingDeletionAudit),
             provider_sessions: claude_erasers(),
             deletion_budgets: DELETION_BUDGETS,

@@ -21,6 +21,7 @@ use crate::conversation::infrastructure::{
     LocalConversationStore, LocalReceiverAuthority, NessaCatalogueReadSource,
     NessaRecordReadSource, TestReadGate,
 };
+use crate::product::shared_chat::SharedChats;
 use crate::product::{ProductDependencies, ProductRouteState};
 use nessa_auth::adapters::cedar::CedarPolicyEvaluator;
 use nessa_auth::adapters::local::{BootstrapRequest, LocalCredentialStore};
@@ -310,6 +311,10 @@ impl Peer {
     }
     /// A conversation of the owner's, with an opened, empty transcript.
     async fn conversation(&self) -> ConversationId {
+        self.conversation_for(AgentId::Claude).await
+    }
+    /// A conversation run by `agent`, with an opened, empty transcript.
+    async fn conversation_for(&self, agent: AgentId) -> ConversationId {
         let id = ConversationId::new(&uuid()).unwrap();
         self.metadata
             .create(
@@ -320,7 +325,7 @@ impl Peer {
                     "peer".into(),
                     uuid(),
                     SystemClock.unix_milliseconds(),
-                    AgentId::Claude,
+                    agent,
                     ConversationModelId::new("model").unwrap(),
                     ConversationApprovalMode::Ask,
                 )
@@ -2841,6 +2846,190 @@ async fn a_follow_rule_replicates_only_the_chats_the_person_chose() {
         )),
         "offline local cleanup must retain system-attributed effect evidence"
     );
+}
+
+/// Issue #890: a granted chat the follower chose to follow opens from B's
+/// peer cache. An id with no grant is absent. Unshare takes it off the list.
+/// Opening writes nothing on A, and B's files gain no conversation metadata row.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_granted_chat_opens_from_the_peer_cache() {
+    let directory = tempfile::tempdir().unwrap();
+    let a_root = directory.path().join("a");
+    let b_root = directory.path().join("b");
+    let a = Peer::start(&a_root).await;
+    let b = Reader::prepare(&b_root, false).await;
+    let relay = Relay::start(a.native).await;
+    let (key, reader) = enroll(&a, &b, &relay, true).await;
+    let reader = reader.unwrap();
+    let claude = a.conversation_for(AgentId::Claude).await;
+    let codex = a.conversation_for(AgentId::Codex).await;
+    a.grant(
+        ShareGrantTransition::Grant(ShareAccess::read()),
+        &claude,
+        &reader,
+    )
+    .await;
+    a.grant(
+        ShareGrantTransition::Grant(ShareAccess::read()),
+        &codex,
+        &reader,
+    )
+    .await;
+    b.peers
+        .follow(
+            key,
+            FollowRule::new(vec![claude.to_string(), codex.to_string()], FOLLOW_KEEP_MAX).unwrap(),
+            &b.owner,
+        )
+        .await
+        .unwrap();
+    synced_with(&b, 2).await;
+
+    let files_before = files_under(&b_root);
+    let grantor_before = digest(&a_root.join("source"));
+    let chats = crate::product::shared_chat::PeerCacheChats::new(
+        Arc::clone(&b.peers),
+        Arc::new(SystemClock),
+        RuntimeDependencies::default().clock,
+    );
+    let opened = chats.open(&claude).await.unwrap().unwrap();
+    assert_eq!(opened.view.conversation_id, claude.to_string());
+    assert!(!opened.view.capabilities.queue);
+    assert!(!opened.view.capabilities.steer);
+    assert_eq!(
+        opened
+            .view
+            .selection
+            .as_ref()
+            .map(|selection| selection.agent),
+        Some(AgentId::Claude)
+    );
+    let codex_view = chats.open(&codex).await.unwrap().unwrap();
+    assert_eq!(
+        codex_view
+            .view
+            .selection
+            .as_ref()
+            .map(|selection| selection.agent),
+        Some(AgentId::Codex)
+    );
+    let missing = ConversationId::new(&uuid()).unwrap();
+    assert!(chats.open(&missing).await.unwrap().is_none());
+    let listed = chats.list(false).await.unwrap();
+    assert!(listed.complete);
+    let ids: Vec<_> = listed
+        .rows
+        .iter()
+        .map(|row| row.conversation_id.clone())
+        .collect();
+    assert!(ids.contains(&claude.to_string()));
+    assert!(ids.contains(&codex.to_string()));
+    assert!(!ids.contains(&missing.to_string()));
+    assert_eq!(files_under(&b_root), files_before);
+    assert_eq!(digest(&a_root.join("source")), grantor_before);
+    assert_eq!(conversation_rows(&b_root, &claude.to_string()), 0);
+    assert_eq!(
+        metadata_rows(&a_root.join("metadata.sqlite3"), &claude.to_string()),
+        1
+    );
+    assert!(b.cached(&key, &reader.0).contains(&claude.to_string()));
+
+    a.grant(ShareGrantTransition::Revoke, &claude, &reader)
+        .await;
+    synced_with(&b, 1).await;
+    let listed = chats.list(false).await.unwrap();
+    assert!(listed.complete);
+    let ids: Vec<_> = listed
+        .rows
+        .iter()
+        .map(|row| row.conversation_id.clone())
+        .collect();
+    assert!(!ids.contains(&claude.to_string()));
+    assert!(ids.contains(&codex.to_string()));
+    assert!(chats.open(&claude).await.unwrap().is_none());
+    drop(relay);
+    stop(a).await;
+}
+
+fn files_under(root: &Path) -> Vec<String> {
+    let mut names = Vec::new();
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let Ok(read) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in read.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+            } else if let Ok(relative) = path.strip_prefix(root) {
+                names.push(relative.display().to_string());
+            }
+        }
+    }
+    names.sort();
+    names
+}
+
+fn digest(root: &Path) -> u64 {
+    let mut hash = 0xcbf29ce484222325u64;
+    for name in files_under(root) {
+        for byte in name.as_bytes() {
+            hash ^= u64::from(*byte);
+            hash = hash.wrapping_mul(0x100000001b3);
+        }
+        let Ok(bytes) = std::fs::read(root.join(&name)) else {
+            continue;
+        };
+        for byte in bytes {
+            hash ^= u64::from(byte);
+            hash = hash.wrapping_mul(0x100000001b3);
+        }
+    }
+    hash
+}
+
+fn conversation_rows(root: &Path, id: &str) -> usize {
+    let mut count = 0usize;
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let Ok(read) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in read.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+                continue;
+            }
+            if path.extension().and_then(|ext| ext.to_str()) != Some("sqlite3") {
+                continue;
+            }
+            let Ok(connection) = nessa_local_database::rusqlite::Connection::open(&path) else {
+                continue;
+            };
+            let rows: i64 = connection
+                .query_row(
+                    "SELECT COUNT(*) FROM conversations WHERE id=?1",
+                    [id],
+                    |row| row.get(0),
+                )
+                .unwrap_or(0);
+            count += usize::try_from(rows).unwrap_or(0);
+        }
+    }
+    count
+}
+
+fn metadata_rows(path: &Path, id: &str) -> i64 {
+    let connection = nessa_local_database::rusqlite::Connection::open(path).unwrap();
+    connection
+        .query_row(
+            "SELECT COUNT(*) FROM conversations WHERE id=?1",
+            [id],
+            |row| row.get(0),
+        )
+        .unwrap()
 }
 
 /// Real pinned TLS, actual OpenDiscovery dispatch, both persistence adapters,

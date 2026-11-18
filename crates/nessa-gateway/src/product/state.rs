@@ -29,7 +29,7 @@ use nessa_auth::{
         pairing::OwnerPhonePurposeSource,
         ports::{AccessReader, Clock, CredentialVerifier, PolicyEvaluator},
     },
-    domain::{AudienceId, OrganizationId, Resource, ResourceId},
+    domain::{AudienceId, OrganizationId, PrincipalId, Resource, ResourceId},
 };
 use nessa_device_pairing::application::NativeLinking;
 use nessa_device_pairing::infrastructure::PairingOwnerCommands;
@@ -170,6 +170,9 @@ pub struct ReadRoutes {
     pub conversation_access: Option<Arc<dyn ConversationAccessPolicyEvaluator>>,
     pub catalogue_source: Option<Arc<dyn CatalogueReadSource>>,
     pub record_source: Option<Arc<dyn RecordReadSource>>,
+    /// The local catalogue's owner, from the credential registry. A granted
+    /// chat is that owner's. Absent, the peer cache is not shown.
+    pub(crate) catalogue_owner: Option<(OrganizationId, PrincipalId)>,
 }
 
 /// The agent catalogue, installs and native hooks (`agents.*`).
@@ -240,6 +243,9 @@ pub struct LinkingRoutes {
     /// enrolled with the native key. `None` answers every peer method
     /// `peer_not_configured`.
     pub peers: Option<Arc<PeerCommands>>,
+    /// Granted chats, read from the peer cache. Composition injects the
+    /// adapter. `None` shows no shared chats.
+    pub shared_chats: Option<Arc<dyn super::shared_chat::SharedChats>>,
 }
 
 /// The hub's devices, the default device, and channel workspaces.
@@ -559,6 +565,24 @@ impl ProductRouteState {
     /// answer `peer_not_configured`.
     pub fn with_peers(mut self, peers: Arc<PeerCommands>) -> Self {
         self.linking.peers = Some(peers);
+        self
+    }
+
+    /// The registry's catalogue owner. Shared chats are admitted as this
+    /// owner's, by Cedar's `owner.read` and `owner.list`.
+    pub fn with_catalogue_owner(
+        mut self,
+        organization: OrganizationId,
+        principal: PrincipalId,
+    ) -> Self {
+        self.reads.catalogue_owner = Some((organization, principal));
+        self
+    }
+
+    /// Read granted chats through `chats`. Composition passes the peer cache.
+    /// A test passes a stand-in.
+    pub fn with_shared_chats(mut self, chats: Arc<dyn super::shared_chat::SharedChats>) -> Self {
+        self.linking.shared_chats = Some(chats);
         self
     }
 

@@ -209,6 +209,8 @@ pub(super) struct Sources {
     hooks: Option<watch::Receiver<u64>>,
     /// The default device, saved from Devices, for the agent catalog.
     default_device: Option<watch::Receiver<Option<String>>>,
+    /// A granted chat was added or withdrawn from a peer cache.
+    shared_chats: Option<watch::Receiver<u64>>,
 }
 
 pub(super) enum Wake {
@@ -216,7 +218,18 @@ pub(super) enum Wake {
     /// The owner's catalogue changed: a row the list frame left out may
     /// have changed too (row L5).
     Catalogue,
+    /// A peer cache changed. An open view reads again. An incomplete list
+    /// counts it even when the local catalogue head did not move: a granted
+    /// chat is not a catalogue revision.
+    Shared,
     Closed,
+}
+
+/// Which of the notices [`Sources::drain`] took change an incomplete list's key.
+#[derive(Default)]
+struct Drained {
+    catalogue: bool,
+    shared: bool,
 }
 
 impl Sources {
@@ -238,6 +251,7 @@ impl Sources {
                 environments: None,
                 hooks: None,
                 default_device: None,
+                shared_chats: None,
             },
             Target::View { conversation, .. } => Self {
                 records: Some(records()?.watch(conversation).map_err(closed)?),
@@ -251,6 +265,13 @@ impl Sources {
                 environments: None,
                 hooks: None,
                 default_device: None,
+                // A retained transcript moves in the peer cache, not in the
+                // local records this view also watches.
+                shared_chats: state
+                    .linking
+                    .peers
+                    .as_ref()
+                    .map(|peers| peers.shared_chat_changes()),
             },
             Target::List { .. } => {
                 let owner = caller(session, String::new());
@@ -272,6 +293,11 @@ impl Sources {
                     environments: None,
                     hooks: None,
                     default_device: None,
+                    shared_chats: state
+                        .linking
+                        .peers
+                        .as_ref()
+                        .map(|peers| peers.shared_chat_changes()),
                 }
             }
             // Only the paired environments, the native hooks choice and the
@@ -285,25 +311,28 @@ impl Sources {
                 environments: state.agents_catalog_changes(),
                 hooks: state.native_hooks_changes(),
                 default_device: state.default_device_changes(),
+                shared_chats: None,
             },
         })
     }
 
     /// Takes every notice already waiting without waiting for another, and
-    /// says whether one of them was the catalogue's. Called right before a
-    /// list reads, so a commit that dirtied both the records and the
-    /// catalogue is one read, not two (row L5). A notice after this is still
-    /// waiting for the next `changed`; a closed source is said by it.
-    async fn drain(&mut self) -> bool {
-        let mut catalogue = false;
+    /// says whether one of them was the catalogue's or a peer cache's.
+    /// Called right before a list reads, so a commit that dirtied both the
+    /// records and the catalogue is one read, not two (row L5). A notice
+    /// after this is still waiting for the next `changed`; a closed source
+    /// is said by it.
+    async fn drain(&mut self) -> Drained {
+        let mut drained = Drained::default();
         while let Ok(wake) = tokio::time::timeout(Duration::ZERO, self.changed()).await {
             match wake {
                 Wake::Changed => {}
-                Wake::Catalogue => catalogue = true,
+                Wake::Catalogue => drained.catalogue = true,
+                Wake::Shared => drained.shared = true,
                 Wake::Closed => break,
             }
         }
-        catalogue
+        drained
     }
 
     pub(super) async fn changed(&mut self) -> Wake {
@@ -343,6 +372,12 @@ impl Sources {
                 None => std::future::pending().await,
             }
         };
+        let shared_chats = async {
+            match self.shared_chats.as_mut() {
+                Some(shared) => shared.changed().await,
+                None => std::future::pending().await,
+            }
+        };
         tokio::select! {
             changed = default_device => match changed {
                 Ok(()) => Wake::Changed,
@@ -366,6 +401,10 @@ impl Sources {
             },
             changed = hooks => match changed {
                 Ok(()) => Wake::Changed,
+                Err(_) => Wake::Closed,
+            },
+            changed = shared_chats => match changed {
+                Ok(()) => Wake::Shared,
                 Err(_) => Wake::Closed,
             },
         }
@@ -616,11 +655,16 @@ struct Sent {
     /// not the view's cursor, which a read behind the view leaves where it
     /// was.
     read_through: Option<Cursor>,
-    /// How many catalogue changes a list has been woken by. Part of an
-    /// incomplete list's key, with every row the service read, so a change
-    /// to a row the frame left out is sent though the rows it carries are
-    /// the same, and the client walks the catalogue for it (row L5).
+    /// How many times the owner's catalogue woke this list. Part of an
+    /// incomplete list's key when the catalogue has no head, with every row
+    /// the service read, so a change to a row the frame left out is sent
+    /// though the rows it carries are the same (row L5). A head already
+    /// names that revision, so the counter is not part of the key then.
     catalogue: u64,
+    /// How many times a peer cache woke this list. Part of an incomplete
+    /// list's key even when a local head exists: a granted chat does not
+    /// move that head, and an incomplete list's rows are only the local ones.
+    shared: u64,
 }
 
 impl Sent {
@@ -738,8 +782,14 @@ impl Sent {
                     read
                 } else {
                     match head {
-                        Some(head) => serde_json::json!([read, head.incarnation, head.revision]),
-                        None => serde_json::json!([read, self.catalogue]),
+                        // The head's revision covers a local row the frame
+                        // left out. The peer-cache generation covers a granted
+                        // chat, which does not move that head and is not one
+                        // of these rows.
+                        Some(head) => {
+                            serde_json::json!([read, head.incarnation, head.revision, self.shared])
+                        }
+                        None => serde_json::json!([read, self.catalogue, self.shared]),
                     }
                 };
                 Framed::Frame(Frame {
@@ -933,6 +983,7 @@ pub(super) async fn run(run: Run) {
         last: None,
         read_through: None,
         catalogue: 0,
+        shared: 0,
     };
     let mut reply = Some(slot);
     loop {
@@ -998,6 +1049,7 @@ pub(super) async fn run(run: Run) {
         match sources.changed().await {
             Wake::Changed => {}
             Wake::Catalogue => sent.catalogue += 1,
+            Wake::Shared => sent.shared += 1,
             Wake::Closed => {
                 sent.end(ConversationSubscriptionEndReason::SourceClosed, None);
                 return;
@@ -1005,8 +1057,12 @@ pub(super) async fn run(run: Run) {
         }
         if matches!(target, Target::List { .. }) {
             clock::sleep(LIST_REREAD_FLOOR).await;
-            if sources.drain().await {
+            let drained = sources.drain().await;
+            if drained.catalogue {
                 sent.catalogue += 1;
+            }
+            if drained.shared {
+                sent.shared += 1;
             }
         }
     }
@@ -1090,7 +1146,7 @@ mod tests {
     }
 
     #[test]
-    fn a_scoped_incomplete_list_ignores_the_owner_wake_counter() {
+    fn an_incomplete_list_with_a_head_follows_the_peer_cache() {
         let deliveries = Arc::new(SubscriptionDeliveries::new(Arc::new(
             EventSequence::default(),
         )));
@@ -1113,7 +1169,17 @@ mod tests {
         };
         let first = key(&mut sent, batch(3));
         sent.catalogue = 99;
-        assert_eq!(key(&mut sent, batch(3)), first);
+        assert_eq!(
+            key(&mut sent, batch(3)),
+            first,
+            "the owner counter is not the head"
+        );
+        sent.shared = 1;
+        assert_ne!(
+            key(&mut sent, batch(3)),
+            first,
+            "a peer-cache wake is a new list"
+        );
         assert_ne!(key(&mut sent, batch(4)), first);
     }
 
@@ -1125,6 +1191,7 @@ mod tests {
             last: None,
             read_through: None,
             catalogue: 0,
+            shared: 0,
         }
     }
 
@@ -1347,17 +1414,27 @@ mod tests {
             environments: None,
             hooks: None,
             default_device: None,
+            shared_chats: None,
         };
-        assert!(!sources.drain().await, "nothing waiting");
+        assert!(!sources.drain().await.catalogue, "nothing waiting");
         live.send(1).unwrap();
         signal.publish();
-        assert!(sources.drain().await, "the catalogue's notice is said");
+        let drained = sources.drain().await;
+        assert!(drained.catalogue, "the catalogue's notice is said");
+        assert!(!drained.shared, "a catalogue notice is not a peer cache");
         assert!(waits(&mut sources).await, "both taken");
         live.send(2).unwrap();
         assert!(
-            !sources.drain().await,
+            !sources.drain().await.catalogue,
             "another source's alone is not the catalogue's"
         );
+        assert!(waits(&mut sources).await);
+        let (peer, shared) = watch::channel(0u64);
+        sources.shared_chats = Some(shared);
+        peer.send(1).unwrap();
+        let drained = sources.drain().await;
+        assert!(drained.shared, "a peer-cache notice is said");
+        assert!(!drained.catalogue);
         assert!(waits(&mut sources).await);
         drop(changes);
     }
@@ -1378,6 +1455,7 @@ mod tests {
             environments: None,
             hooks: None,
             default_device: None,
+            shared_chats: None,
         };
         drop(changes);
         assert!(matches!(sources.changed().await, Wake::Closed));

@@ -1764,6 +1764,30 @@ two databases.
 The access-grant refactor.
 ```
 
+Implemented. On the follower, `conversation.list`, `conversation.observe`,
+`conversation.read`, and `conversation.subscribe` read the peer cache of
+chats the follower chose to follow. Cedar's `owner.list` and `owner.read`
+admit that read for the local catalogue owner; anyone else is told the
+conversation is not found. The chat is that cache's saved projection, with
+read-only capabilities. A command that would change a chat the caller may
+read is refused `capabilities_refused` and is not sent to the grantor. The
+conversation metadata file is not written. A file or image the transcript
+names is read from the granting peer, one range at a time, for the catalogue
+owner Cedar admits. The grantor admits that range through `grant.artifact_read`
+when the peer's grant includes read. A peer cache that cannot be read leaves the list
+incomplete, so a chat it holds is not treated as gone. Two peers that grant
+the same conversation id contribute one row, the first peer's, and that
+copy's archived flag is the one the list uses. A local
+conversation, including one archived or deleted, is not listed again from a
+peer. A later observe page trusts its offset only while the replica list is
+the one that minted it. When that list has changed, the page stays
+incomplete and carries no cursor, so the walk does not claim membership. That cursor's id uses a UUID run `ConversationId`
+refuses, so it cannot be a local conversation's own cursor. Composition injects the peer-cache adapter. Rows are
+appended only into the room a list or observe page has left, and a page that
+cannot hold them stays incomplete. A paired device of the follower and the
+owner phone do not receive these rows. Live updates from the grantor, and a peer's own comment
+or drive, stay with the later slices.
+
 ### 3. Let a peer comment and drive under its grant
 
 ```markdown
