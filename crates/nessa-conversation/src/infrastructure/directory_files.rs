@@ -27,25 +27,14 @@ impl DirectoryFiles for LocalDirectoryFiles {
 
     fn read_marker(&self, canonical: &str) -> Result<MarkerBytes, DirectoryRefusal> {
         let root = open_directory(canonical)?;
-        let marker = match open_at(root.as_raw_fd(), MARKER_NAME, false) {
+        let marker = match open_marker_file(root.as_raw_fd()) {
             Ok(file) => file,
             Err(DirectoryRefusal::Io(std::io::ErrorKind::NotFound)) => {
                 return Ok(MarkerBytes::Absent)
             }
             Err(error) => return Err(error),
         };
-        let mut bytes = Vec::new();
-        (&marker)
-            .take(BINDING_LEN as u64 + 1)
-            .read_to_end(&mut bytes)
-            .map_err(io)?;
-        if bytes.len() == BINDING_LEN {
-            let mut exact = [0; BINDING_LEN];
-            exact.copy_from_slice(&bytes);
-            Ok(MarkerBytes::Exact(exact))
-        } else {
-            Ok(MarkerBytes::Other)
-        }
+        read_marker_bytes(&marker)
     }
 
     fn create_marker(
@@ -61,8 +50,11 @@ impl DirectoryFiles for LocalDirectoryFiles {
         if fd < 0 {
             return Err(io(std::io::Error::last_os_error()));
         }
-        let mut file = unsafe { File::from_raw_fd(fd) };
-        file.write_all(bytes).map_err(io)?;
+        let file = unsafe { File::from_raw_fd(fd) };
+        if let Err(error) = (&file).write_all(bytes) {
+            let _ = remove_validated(root.as_raw_fd(), &file);
+            return Err(io(error));
+        }
         Ok(())
     }
 
@@ -76,9 +68,11 @@ impl DirectoryFiles for LocalDirectoryFiles {
             Err(DirectoryRefusal::Io(std::io::ErrorKind::NotFound)) => return Ok(true),
             Err(error) => return Err(error),
         };
-        let marker = match open_at(root.as_raw_fd(), MARKER_NAME, false) {
+        let marker = match open_marker_file(root.as_raw_fd()) {
             Ok(file) => file,
-            Err(DirectoryRefusal::Io(std::io::ErrorKind::NotFound)) => return Ok(true),
+            Err(DirectoryRefusal::Io(
+                std::io::ErrorKind::NotFound | std::io::ErrorKind::InvalidInput,
+            )) => return Ok(true),
             Err(error) => return Err(error),
         };
         let mut bytes = Vec::new();
@@ -89,17 +83,8 @@ impl DirectoryFiles for LocalDirectoryFiles {
         if bytes.as_slice() != binding.as_slice() {
             return Ok(true);
         }
-        drop(marker);
-        let name = c_name(MARKER_NAME)?;
-        let result = unsafe { libc::unlinkat(root.as_raw_fd(), name.as_ptr(), 0) };
-        if result == 0 {
-            return Ok(true);
-        }
-        let error = std::io::Error::last_os_error();
-        if error.kind() == std::io::ErrorKind::NotFound {
-            return Ok(true);
-        }
-        Err(io(error))
+        remove_validated(root.as_raw_fd(), &marker)?;
+        Ok(true)
     }
 
     fn unlink_marker(&self, canonical: &str) -> Result<(), DirectoryRefusal> {
@@ -207,7 +192,7 @@ impl DirectorySession for HeldDirectory {
     fn marker(&self) -> Result<MarkerBytes, DirectoryRefusal> {
         let mut held = self.marker.lock().expect("marker");
         if held.is_none() {
-            match open_at(self.root.as_raw_fd(), MARKER_NAME, false) {
+            match open_marker_file(self.root.as_raw_fd()) {
                 Ok(file) => *held = Some(file),
                 Err(DirectoryRefusal::Io(std::io::ErrorKind::NotFound)) => {
                     return Ok(MarkerBytes::Absent)
@@ -462,6 +447,81 @@ fn final_name(relative: &str) -> Result<String, DirectoryRefusal> {
         })
 }
 
+fn open_marker_file(dir: RawFd) -> Result<File, DirectoryRefusal> {
+    let file = open_named(dir, MARKER_NAME)?;
+    if is_regular(&file)? {
+        Ok(file)
+    } else {
+        Err(DirectoryRefusal::Io(std::io::ErrorKind::InvalidInput))
+    }
+}
+
+fn open_named(dir: RawFd, name: &str) -> Result<File, DirectoryRefusal> {
+    let flags = libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK;
+    let name = c_name(name)?;
+    let fd = unsafe { libc::openat(dir, name.as_ptr(), flags) };
+    if fd < 0 {
+        return Err(io(std::io::Error::last_os_error()));
+    }
+    Ok(unsafe { File::from_raw_fd(fd) })
+}
+
+fn is_regular(file: &File) -> Result<bool, DirectoryRefusal> {
+    let mut info = unsafe { std::mem::zeroed() };
+    if unsafe { libc::fstat(file.as_raw_fd(), &mut info) } != 0 {
+        return Err(io(std::io::Error::last_os_error()));
+    }
+    Ok(info.st_mode & libc::S_IFMT == libc::S_IFREG)
+}
+
+/// Move `.nessa-binding` aside, then delete it only when that file is the one
+/// already validated. A different file is renamed back and not removed.
+fn remove_validated(dir: RawFd, validated: &File) -> Result<(), DirectoryRefusal> {
+    let aside = aside_name();
+    match rename_at(dir, MARKER_NAME, &aside, false) {
+        Err(DirectoryRefusal::Io(std::io::ErrorKind::NotFound)) => return Ok(()),
+        Err(error) => return Err(error),
+        Ok(()) => {}
+    }
+    let moved = open_named(dir, &aside)?;
+    if same_inode(validated.as_raw_fd(), moved.as_raw_fd()) {
+        return unlink_named(dir, &aside);
+    }
+    match rename_at(dir, &aside, MARKER_NAME, true) {
+        Ok(()) | Err(DirectoryRefusal::Io(std::io::ErrorKind::AlreadyExists)) => Ok(()),
+        Err(error) => Err(error),
+    }
+}
+
+fn aside_name() -> String {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    format!(".nessa-cleanup-{}-{n}", std::process::id())
+}
+
+fn rename_at(dir: RawFd, from: &str, to: &str, noreplace: bool) -> Result<(), DirectoryRefusal> {
+    let from = c_name(from)?;
+    let to = c_name(to)?;
+    let flags = if noreplace { libc::RENAME_NOREPLACE } else { 0 };
+    if unsafe { libc::renameat2(dir, from.as_ptr(), dir, to.as_ptr(), flags) } == 0 {
+        Ok(())
+    } else {
+        Err(io(std::io::Error::last_os_error()))
+    }
+}
+
+fn unlink_named(dir: RawFd, name: &str) -> Result<(), DirectoryRefusal> {
+    let name = c_name(name)?;
+    if unsafe { libc::unlinkat(dir, name.as_ptr(), 0) } == 0 {
+        return Ok(());
+    }
+    let error = std::io::Error::last_os_error();
+    if error.kind() == std::io::ErrorKind::NotFound {
+        return Ok(());
+    }
+    Err(io(error))
+}
+
 fn open_at(dir: RawFd, name: &str, directory: bool) -> Result<File, DirectoryRefusal> {
     if name == ".." {
         return Err(DirectoryRefusal::Outside {
@@ -534,5 +594,49 @@ mod marker_identity {
             session.read("alias").unwrap_err(),
             DirectoryRefusal::MarkerName
         ));
+    }
+
+    #[test]
+    fn a_fifo_marker_is_refused_without_blocking_or_being_removed() {
+        let root = tempfile::tempdir().unwrap();
+        let shared = root.path().join("shared");
+        std::fs::create_dir(&shared).unwrap();
+        let marker = shared.join(MARKER_NAME);
+        let name = std::ffi::CString::new(marker.to_str().unwrap()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
+        let started = std::time::Instant::now();
+        let error = LocalDirectoryFiles
+            .read_marker(shared.to_str().unwrap())
+            .unwrap_err();
+        assert!(started.elapsed() < std::time::Duration::from_secs(2));
+        assert!(matches!(
+            error,
+            DirectoryRefusal::Io(std::io::ErrorKind::InvalidInput)
+        ));
+        assert!(marker.exists());
+        assert!(LocalDirectoryFiles
+            .release_created_marker(shared.to_str().unwrap(), &[1; BINDING_LEN])
+            .unwrap());
+        assert!(marker.exists());
+    }
+
+    #[test]
+    fn a_failed_marker_write_removes_the_file_it_created() {
+        let root = tempfile::tempdir().unwrap();
+        let shared = root.path().join("shared");
+        std::fs::create_dir(&shared).unwrap();
+        let mut old = unsafe { std::mem::zeroed() };
+        assert_eq!(unsafe { libc::getrlimit(libc::RLIMIT_FSIZE, &mut old) }, 0);
+        let limited = libc::rlimit {
+            rlim_cur: 0,
+            rlim_max: old.rlim_max,
+        };
+        unsafe { libc::signal(libc::SIGXFSZ, libc::SIG_IGN) };
+        assert_eq!(unsafe { libc::setrlimit(libc::RLIMIT_FSIZE, &limited) }, 0);
+        let result = LocalDirectoryFiles.create_marker(shared.to_str().unwrap(), &[1; BINDING_LEN]);
+        unsafe { libc::setrlimit(libc::RLIMIT_FSIZE, &old) };
+        unsafe { libc::signal(libc::SIGXFSZ, libc::SIG_DFL) };
+        assert!(result.is_err());
+        assert!(!shared.join(MARKER_NAME).exists());
     }
 }
