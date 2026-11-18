@@ -1105,15 +1105,16 @@ fn status_outcome(landed: Option<SlotOutcome>) -> Result<(), &'static str> {
 /// The conversations a read has withdrawn so far, outside its worker.
 type Withdrawn = Arc<Mutex<Vec<String>>>;
 
+/// What the blocking read returns: its report, and whether a page was kept
+/// before a quota or storage failure.
+type FinishedRead = (Result<ReadReport, ReadFailure>, bool);
+
 /// Start `read` on a blocking thread, with the conversations it withdraws
 /// kept outside that thread: a read that panics part way has still removed
 /// them from the cache, and its caller still learns of them.
 fn spawn_read(
-    read: impl FnOnce(&mut Vec<String>) -> (Result<ReadReport, ReadFailure>, bool) + Send + 'static,
-) -> (
-    JoinHandle<(Result<ReadReport, ReadFailure>, bool)>,
-    Withdrawn,
-) {
+    read: impl FnOnce(&mut Vec<String>) -> FinishedRead + Send + 'static,
+) -> (JoinHandle<FinishedRead>, Withdrawn) {
     let withdrawn = Arc::new(Mutex::new(Vec::new()));
     let work = tokio::task::spawn_blocking({
         let withdrawn = withdrawn.clone();
@@ -1214,7 +1215,7 @@ pub fn open_granted(
 /// it ended: a worker that panicked is a cache failure, and what it withdrew
 /// before is kept.
 fn read_ended(
-    joined: Result<(Result<ReadReport, ReadFailure>, bool), JoinError>,
+    joined: Result<FinishedRead, JoinError>,
     withdrawn: &Mutex<Vec<String>>,
 ) -> (Result<ReadReport, ReadFailure>, Vec<String>, bool) {
     let withdrawn = std::mem::take(&mut *withdrawn.lock().unwrap_or_else(PoisonError::into_inner));
