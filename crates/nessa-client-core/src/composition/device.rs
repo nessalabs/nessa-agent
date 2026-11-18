@@ -13,7 +13,7 @@ use crate::pairing::{NativeClientError, NativeEnrollmentClient};
 use nessa_auth::{
     adapters::pairing::{ManualCode, OsEntropy},
     application::pairing::ClientPendingStore,
-    domain::pairing::{AttemptOutcome, TerminalCause},
+    domain::pairing::{AttemptOutcome, ConsentClass, TerminalCause},
 };
 use nessa_protocol::pairing::wire::NativePairingStatus;
 use serde_json::{json, Value};
@@ -38,16 +38,30 @@ pub(super) struct Device {
 }
 impl Device {
     /// An enrollment client over `store`: the private state itself, or that
-    /// state behind the cache purge an ended enrollment runs first.
+    /// state behind the cache purge an ended enrollment runs first. Pairing
+    /// uses the owner's device class.
     pub(super) fn new(
         profile: &Profile,
         store: Arc<dyn ClientPendingStore>,
+    ) -> std::io::Result<Self> {
+        Self::enrolling(profile, store, ConsentClass::DeviceRead)
+    }
+    /// As [`Self::new`], enrolling as `class`. Status reads do not send a
+    /// class; only `pair` does, and the invitation fixes which class it accepts.
+    pub(super) fn enrolling(
+        profile: &Profile,
+        store: Arc<dyn ClientPendingStore>,
+        class: ConsentClass,
     ) -> std::io::Result<Self> {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()?;
         Ok(Self {
-            client: NativeEnrollmentClient::new(store, Arc::new(MonotonicClock::new())),
+            client: NativeEnrollmentClient::enrolling(
+                class,
+                store,
+                Arc::new(MonotonicClock::new()),
+            ),
             runtime,
             gateway: profile.gateway,
         })

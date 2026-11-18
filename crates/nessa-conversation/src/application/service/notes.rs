@@ -21,7 +21,9 @@
 //! (`product::read_access::admit_request`), which hands this the author.
 use super::{conversation_session, load_conversation, ConversationService, LiveConversation};
 use crate::application::{note_candidates, ConversationCaller, ConversationError, ShareGrants};
+use nessa_auth::domain::PrincipalId;
 use nessa_protocol::conversation::domain::ConversationId;
+use nessa_sdk::application::agent_execution::permissions::ActionContext;
 use nessa_sdk::application::agent_execution::sessions::{
     CommittedSession, NoteCandidates, NoteDelivery, NoteRecord, NoteRecordError, NoteRequest,
     NoteState, NoteText, StorageError,
@@ -96,10 +98,34 @@ impl ConversationService {
         text: String,
         delivery: NoteDelivery,
     ) -> Result<(NoteRecord, NoteState), ConversationError> {
-        let text = NoteText::new(text).map_err(|_| ConversationError::InvalidInput)?;
         let actor = caller.actor()?;
+        self.leave_attributed_note(id, caller, actor, author, text, delivery)
+            .await
+    }
+
+    /// Leave a note the way [`Self::leave_note`] does, recording `actor`
+    /// while `access` is who may open the conversation.
+    ///
+    /// A granted peer is not the conversation's owner. Admission already
+    /// decided the peer may comment. Opening the conversation still asks
+    /// `owner.act` of the grantor (`access`). The note itself is the peer's
+    /// (`actor`): the session store keys a note by that principal and the
+    /// request, so two peers that reuse one request id each keep their own.
+    ///
+    /// # Errors
+    /// As [`Self::leave_note`].
+    pub async fn leave_attributed_note(
+        &self,
+        id: ConversationId,
+        access: ConversationCaller,
+        actor: ActionContext,
+        author: Initiator,
+        text: String,
+        delivery: NoteDelivery,
+    ) -> Result<(NoteRecord, NoteState), ConversationError> {
+        let text = NoteText::new(text).map_err(|_| ConversationError::InvalidInput)?;
         let _admission = self.admit().await?;
-        let live = self.resolve(&id, &caller).await?;
+        let live = self.resolve(&id, &access).await?;
         let manager = live.agent.session_manager();
         let record = manager
             .record_note(NoteRequest {
@@ -139,20 +165,39 @@ impl ConversationService {
         id: ConversationId,
         caller: ConversationCaller,
     ) -> Result<Option<(NoteRecord, NoteState)>, ConversationError> {
-        caller.actor()?;
+        let sender = caller.principal_id.clone();
+        self.note_status_of(id, caller, &sender).await
+    }
+
+    /// [`Self::note_status`] for a sender who is not the principal `access`
+    /// uses to open the conversation. The saved note is `sender`'s request
+    /// (`access.action_id`). A granted peer looks up its own note and opens
+    /// the grantor's conversation.
+    ///
+    /// # Errors
+    /// As [`Self::note_status`].
+    pub async fn note_status_of(
+        &self,
+        id: ConversationId,
+        access: ConversationCaller,
+        sender: &PrincipalId,
+    ) -> Result<Option<(NoteRecord, NoteState)>, ConversationError> {
+        access.actor()?;
         let _admission = self.admit().await?;
         let record = load_conversation(self.inner.metadata.as_ref(), &id)
             .await?
             .ok_or(ConversationError::NotFound)?;
-        self.access().admit(&record, &caller)?;
+        self.access().admit(&record, &access)?;
+        let request_id = access.action_id.clone();
+        let sender = sender.clone();
         let session_id = conversation_session(&id);
-        let found = |committed: &Option<CommittedSession>| {
+        let found = move |committed: &Option<CommittedSession>| {
             committed
                 .as_ref()
                 .and_then(CommittedSession::snapshot)
                 .and_then(|snapshot| {
                     snapshot
-                        .note(caller.principal_id.as_str(), &caller.action_id)
+                        .note(sender.as_str(), &request_id)
                         .map(|note| (note.clone(), snapshot.note_state(note)))
                 })
         };

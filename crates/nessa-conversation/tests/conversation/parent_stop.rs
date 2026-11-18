@@ -1303,6 +1303,59 @@ async fn foreign_callers_and_report_id_collisions_do_not_cancel_unrelated_user_w
     person_input_releases_report_pause("later-person").await;
 }
 
+/// The owner's stop and a later peer send can share a request id. The send
+/// is not that stop, so it releases the report pause.
+#[tokio::test]
+async fn a_peer_send_reusing_a_stop_request_id_releases_report_pause() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("data");
+    let provider = Arc::new(ProviderFactory::default());
+    provider.turn_cancel.store(true, Ordering::SeqCst);
+    let (service, storage, metadata) = fixture(&root, provider.clone());
+    bind(&service, &storage, &root, true).await;
+    let parent = id();
+    opened(&service, &provider, &parent).await;
+    let held = hold_turn(&service, &provider, &parent, "parent").await;
+    service
+        .stop_command(
+            storage.clone(),
+            parent.clone(),
+            caller("shared"),
+            "parent".into(),
+        )
+        .await
+        .unwrap();
+    let access = caller("shared");
+    let mut peer = access.clone();
+    peer.principal_id = PrincipalId::new("gateway:peer").unwrap();
+    service
+        .submit_command_for(
+            storage.clone(),
+            parent.clone(),
+            access,
+            peer,
+            Initiation::owner(),
+            false,
+            "after-stop".into(),
+            message("continue"),
+            SubmissionMode::Queue,
+            None,
+        )
+        .await
+        .unwrap();
+    drop(held);
+    let live = service.resolve(&parent, &caller("read")).await.unwrap();
+    let history = live.agent.session_manager().snapshot().await.unwrap();
+    assert!(
+        !service
+            .reports_paused(&parent, &caller("read"), &history.invocations)
+            .await
+            .unwrap(),
+        "a peer send after the stop releases the pause when it reuses the stop request id"
+    );
+    retire(service, storage, metadata).await;
+}
+
 #[tokio::test]
 async fn an_ordinary_resume_shaped_person_submit_releases_report_pause() {
     let execution = Resumption::of(&ExecutionId::new("arbitrary-person-input").unwrap())

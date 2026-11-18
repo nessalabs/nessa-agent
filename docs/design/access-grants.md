@@ -114,9 +114,9 @@ A peer gateway signs in as `gateway:<key>`. The same function says
 forwarding that peer's people is a later slice. [ADR 803](../adr/done/803-policy-goes-through-cedar.md)
 records this admission as the place a paired method is decided.
 
-`@id("paired.peer_gateway")` in `readers.cedar` forbids `conversation.comment`
-and `conversation.drive` when `signedInAs != bindingOwner`. A Drive role can
-be stored on a peer and still do nothing.
+`grant.comment` and `grant.drive` permit the capability. A gateway principal
+that signs in as itself comments and drives the one conversation the grant
+names. `hold.peer` is unchanged.
 
 ### Share grants (#704, merged in #720; roles in #787; Drive in #793)
 
@@ -213,7 +213,7 @@ policy engine, a new crate, or a grant-by-list.
 | Share role Read / Comment / Drive | Becomes the capability set: Read is `read`, Comment is `read` + `comment`, Drive is those plus `drive`. One wire field, `capabilities`. The role enum goes. |
 | Tool policy and `commandHosts` | Stay as constraints on a grant that has `drive`. |
 | `policy_revision` | Stays, under the name grant epoch. |
-| `paired.peer_gateway` | Not in this build's Cedar policies. `grant.comment` and `grant.drive` require the capability and, until the peer-write slice, a principal signed in as the binding owner. One condition, on the permit. Startup does not delete the id out of an older conversation file. An older grant store is refused whole. That refusal does not open or delete the conversation file. |
+| `paired.peer_gateway` | Not in this build's Cedar policies. `grant.comment` and `grant.drive` require the capability. A gateway principal is admitted by that capability. Startup does not delete the id out of an older conversation file. An older grant store is refused whole. That refusal does not open or delete the conversation file. |
 | A stored Drive role that a peer cannot use | `conversation.share` asks those permits before it writes. A denial writes nothing and returns the policy ids. The use case does not match a gateway principal on its own. The same permits deny a hand-built row at admission. |
 | `share_grants` key `(receiver_id, conversation_id)` | This build writes `(subject_kind, subject_id, resource_kind, resource_id)`. A paired device or gateway uses subject kind `receiver` and its receiver id, so two devices of one owner stay two rows. An integration or a later agent uses subject kind `principal`. One integration principal has one active webhook registration. The same-person link is not the subject. The directory slice does not change the key. A directory resource and its marker are minted once, and later subject grants on that same directory reuse that resource id. The grant store is its own file. A grant store at any other version is refused and not rewritten. Old `share_grants` rows left in the conversation file are not read and are not migrated. Refusing or deleting the grant store leaves conversations, deletions, and summaries in place. |
 | Credential `conversation.read`, `conversation.write`, `environment.serve` | Stay. They say whether this credential may read, may be the conversation authority, or may serve. They do not name a conversation or a directory. `hold.peer` stays as written. |

@@ -77,7 +77,7 @@ impl RecordStorage {
             let path = self.command_path();
             let received = self
                 .owner
-                .read(move || read_commands(path, &principal, project))
+                .read(move || read_commands(path, Some(principal), project))
                 .await?;
             received
                 .await
@@ -97,6 +97,25 @@ impl CreationStorage for RecordStorage {
         self.observed_commands(principal, |held| match held {
             Held::Mutation(receipt) => Some(receipt),
             Held::Creation(_) => None,
+        })
+    }
+    fn observed_mutations(&self) -> CreationFuture<'_, Vec<MutationReceipt>> {
+        Box::pin(async move {
+            self.runtime().await?;
+            let path = self.command_path();
+            let received = self
+                .owner
+                .read(move || {
+                    read_commands(path, None, |held| match held {
+                        Held::Mutation(receipt) => Some(receipt),
+                        Held::Creation(_) => None,
+                    })
+                })
+                .await?;
+            received
+                .await
+                .map_err(|_| StorageError::ReadWorkerPanicked)?
+                .map_err(Into::into)
         })
     }
     fn open_creation(
@@ -173,7 +192,7 @@ const OBSERVED_COMMANDS_SQL: &str = "WITH observed AS (
 // records do not participate in admission ordering.
 fn read_commands<T>(
     path: PathBuf,
-    principal: &str,
+    principal: Option<String>,
     project: fn(Held) -> Option<T>,
 ) -> Result<Vec<T>, StorageError> {
     let connection =
@@ -204,7 +223,7 @@ fn read_commands<T>(
             .map_err(query_error)?
             .ok_or_else(|| corrupt("command observation record exceeds field bounds"))?;
         if stream != current {
-            collect_commands(&mut held, principal, &mut result, project);
+            collect_commands(&mut held, principal.as_deref(), &mut result, project);
             current = stream;
             offset = 0;
         }
@@ -262,13 +281,13 @@ fn read_commands<T>(
         }
         held.insert(request, next);
     }
-    collect_commands(&mut held, principal, &mut result, project);
+    collect_commands(&mut held, principal.as_deref(), &mut result, project);
     Ok(result)
 }
 
 fn collect_commands<T>(
     held: &mut HashMap<String, Held>,
-    principal: &str,
+    principal: Option<&str>,
     result: &mut Vec<T>,
     project: fn(Held) -> Option<T>,
 ) {
@@ -277,7 +296,7 @@ fn collect_commands<T>(
             Held::Creation(receipt) => receipt.binding().actor(),
             Held::Mutation(receipt) => receipt.binding().actor(),
         };
-        if actor.principal_id() == principal {
+        if principal.is_none_or(|principal| actor.principal_id() == principal) {
             if let Some(receipt) = project(receipt) {
                 result.push(receipt);
             }
@@ -437,6 +456,7 @@ fn replay_error(error: CreationStorageError) -> StorageError {
     match error {
         CreationStorageError::Storage(error) => error,
         CreationStorageError::ForeignRequest => corrupt("conflicting command identity"),
+        CreationStorageError::UnsupportedObservation => corrupt("unsupported command observation"),
         CreationStorageError::TaskFault(_) => corrupt("command replay task fault"),
     }
 }
