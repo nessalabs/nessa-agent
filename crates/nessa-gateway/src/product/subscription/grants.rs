@@ -87,6 +87,9 @@ pub(super) async fn run(run: Run) {
     let mut pin: Option<Pin> = None;
     let mut snapshots = 0_u64;
     let mut announced = false;
+    // Incarnation and head last delivered complete. A wake for another
+    // receiver does not send this one another snapshot.
+    let mut delivered: Option<(String, u64)> = None;
     // The next frame continues `pin` only when `grants.page` asked. A log
     // wake drops the pin and sends a replacement snapshot.
     let mut continue_pin = false;
@@ -135,7 +138,15 @@ pub(super) async fn run(run: Run) {
                 }
             }
         }
-        if caught_up(&stream, after.as_ref()) && announced && pin.is_none() {
+        let delivered_this = delivered.as_ref().is_some_and(|(incarnation, head)| {
+            incarnation == &stream.incarnation && *head == stream.head
+        });
+        let pin_same = pin
+            .as_ref()
+            .is_some_and(|open| open.incarnation == stream.incarnation && open.head == stream.head);
+        // This receiver's log did not move. A page the follower asked for
+        // still continues; any other wake waits.
+        if announced && !continue_pin && (delivered_this || pin_same) {
             if wait_registered(&mut notified, &mut pages).await.is_none() {
                 return;
             }
@@ -208,8 +219,12 @@ pub(super) async fn run(run: Run) {
                 return;
             }
         }
+        let complete = changed.complete;
         if !send_changed(&deliveries, &id, changed).await {
             return;
+        }
+        if complete {
+            delivered = Some((stream.incarnation.clone(), stream.head));
         }
         announced = true;
         let Some(paged) = wait_registered(&mut notified, &mut pages).await else {

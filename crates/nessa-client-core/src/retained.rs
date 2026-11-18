@@ -1065,14 +1065,18 @@ impl RetainedCache {
             ending.relax();
             self.drain_chats(&connection, &id, access.access_epoch, &mut live, &mut chats)?;
         }
+        let conversations = self
+            .cache
+            .grant_ids(&receiver)
+            .map_err(|error| cache_failure(&error))?
+            .len();
+        if stop.is_stopped() || ending.ended_by_caller() {
+            return Err(ReadFailure::Stopped);
+        }
         Ok(ReadReport {
             moved: synced,
-            complete: true,
-            conversations: self
-                .cache
-                .grant_ids(&receiver)
-                .map_err(|error| cache_failure(&error))?
-                .len(),
+            complete: synced,
+            conversations,
         })
     }
 
