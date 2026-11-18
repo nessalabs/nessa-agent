@@ -14,9 +14,7 @@ export default function WorkSteps({ work }: { work: WorkStep[] }) {
       {work.map((step) => (
         <div key={step.key}>
           {/* What the agent said on the way is prose it wrote, not a thought. */}
-          {step.text !== undefined && (
-            <ReplyMarkdown>{step.text}</ReplyMarkdown>
-          )}
+          {step.text !== undefined && <ReplyMarkdown>{step.text}</ReplyMarkdown>}
           {step.thought !== undefined && (
             <p className="text-sm whitespace-pre-wrap text-muted-foreground">
               {step.thought}

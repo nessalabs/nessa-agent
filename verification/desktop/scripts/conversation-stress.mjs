@@ -3793,7 +3793,8 @@ const steps = {
       window.__stressLongTasks = []
       window.__stressLongObserver?.disconnect()
       window.__stressLongObserver = new PerformanceObserver((list) => {
-        for (const entry of list.getEntries()) window.__stressLongTasks.push(entry.duration)
+        for (const entry of list.getEntries())
+          window.__stressLongTasks.push(entry.duration)
       })
       window.__stressLongObserver.observe({ type: "longtask" })
     })
@@ -9767,7 +9768,13 @@ const steps = {
     if (!turn) return
     // The gateway keeps the answer as it streamed: every line, in order, once.
     const said = (turn.parts ?? []).map((part) => part.text ?? "").join("")
-    const expected = `${SAYS.table}${text}\n\n${[...TABLE_LINES, "", ...CODE_LINES, "", ...MATH_LINES]
+    const expected = `${SAYS.table}${text}\n\n${[
+      ...TABLE_LINES,
+      "",
+      ...CODE_LINES,
+      "",
+      ...MATH_LINES,
+    ]
       .map((line) => `${line}\n`)
       .join("")}`
     if (said.trimEnd() !== expected.trimEnd())
@@ -9824,7 +9831,9 @@ const steps = {
     const words = await message.evaluate((element) => ({
       reply: element.querySelectorAll('[data-slot="reply-markdown"]').length,
       reactMarkdown: element.querySelectorAll('[data-slot="message-markdown"]').length,
-      kept: element.querySelector('[data-slot="markdown-table"]')?.dataset.stressFirstSeen === "1",
+      kept:
+        element.querySelector('[data-slot="markdown-table"]')?.dataset.stressFirstSeen ===
+        "1",
       inline: element.querySelectorAll(".katex:not(.katex-display .katex)").length,
       display: element.querySelectorAll(".katex-display").length,
       dollars: [...element.querySelectorAll('[data-slot="reply-markdown"] > p')]
@@ -9836,7 +9845,9 @@ const steps = {
         `the answer is drawn by ${words.reply} ReplyMarkdown and ${words.reactMarkdown} MessageMarkdown, not Words alone`,
       )
     if (!words.kept)
-      failures.push("the first table was drawn again while the rest of the answer streamed")
+      failures.push(
+        "the first table was drawn again while the rest of the answer streamed",
+      )
     if (words.inline !== 2 || words.display !== 1 || words.dollars.length)
       failures.push(
         `the answer's maths drew ${words.inline} inline and ${words.display} display formulas, with ${JSON.stringify(words.dollars)} left as text`,
