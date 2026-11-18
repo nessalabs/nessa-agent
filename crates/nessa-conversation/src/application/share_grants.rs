@@ -3,17 +3,17 @@
 //! owner's conversations. `docs/design/read-grants.md` holds the rules and
 //! the state table its tests are written from.
 //!
-//! A grant has a capability set, read and for a device also comment and
-//! drive, and a drive grant its constraints ([`ShareAccess`]): the tool
-//! policy and command hosts. What each capability lets its holder do is the
+//! A grant has a capability set, read and, when granted, comment and drive,
+//! and a drive grant its constraints ([`ShareAccess`]): the tool policy and
+//! command hosts. What each capability lets its holder do is the
 //! conversation access policy's (`ConversationAccessPolicyEvaluator`): a
 //! grant that includes read reads, and reads exactly as read alone does
 //! (row J1); only a grant that includes drive drives the conversation it
 //! names, and one that includes comment leaves notes in it (rows J11 and
-//! J17). Comment and drive also require a principal signed in as the
-//! binding owner, which is the device. This module reads the facts the
-//! policy is asked with, the conversation and the capabilities its receiver
-//! holds there ([`paired_facts`]), and never compares capabilities itself.
+//! J17). The capability is the decision for a device and for a gateway
+//! principal. This module reads the facts the policy is asked with, the
+//! conversation and the capabilities its receiver holds there
+//! ([`paired_facts`]), and never compares capabilities itself.
 //!
 //! Every read path a paired party reaches asks the policy, and none keeps
 //! its own copy:
@@ -225,6 +225,31 @@ async fn deliverable(
     }
 }
 
+/// One comment or drive admission, written before the command runs.
+///
+/// The first record for one receiver, one command, and one request on a
+/// conversation stands. A retry of that same call keeps its principal,
+/// epoch, and person. Another receiver, or another command, is its own
+/// record even when the request text matches. The capability is not copied
+/// here: Cedar read it from the grant.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GrantUse {
+    pub conversation_id: ConversationId,
+    /// The Cedar action, `conversation.comment` or `conversation.drive`.
+    pub action: &'static str,
+    /// The socket method, such as `conversation.send` or `conversation.steer`.
+    pub command: String,
+    pub principal_id: PrincipalId,
+    pub receiver_id: String,
+    pub policy_revision: u64,
+    /// The person a same-person link named for this gateway principal and
+    /// credential when the command was admitted. Absent when no link was
+    /// committed. The link adds no capability.
+    pub person: Option<PrincipalId>,
+    pub request_id: String,
+    pub observed_at_ms: u64,
+}
+
 /// The capabilities a party holds on one conversation, and the grant epoch
 /// that set them, read together. The epoch is [`ShareGrant::policy_revision`].
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -405,6 +430,14 @@ pub trait ShareGrants: Send + Sync {
         Box::pin(async { Err(ConversationError::Metadata) })
     }
 
+    /// Record `use_` before a comment or drive command runs. The local store
+    /// writes it beside the grant file. A store that does not keep this
+    /// record refuses, so a comment or a drive is not admitted without the
+    /// audit. A failure is [`ConversationError::Audit`] and the command does
+    /// not run.
+    fn record_use(&self, _use: GrantUse) -> ConversationFuture<'_, ()> {
+        Box::pin(async { Err(ConversationError::Audit) })
+    }
     /// The grant `receiver_id` holds on `id`, or `None` when it holds none
     /// there.
     fn held_grant<'a>(
@@ -550,7 +583,9 @@ impl ShareConversation<'_> {
     /// `InvalidInput` and writes nothing (row J3). Comment and drive are
     /// asked of Cedar (`grant.comment`, `grant.drive`) before they are
     /// written. A denial writes nothing and carries the policy ids Cedar
-    /// named. The use case does not match a gateway principal on its own.
+    /// named. The capability is the decision: a gateway principal is granted
+    /// comment or drive when those permits allow it. The use case does not
+    /// match a gateway principal on its own.
     /// The credential must have an active receiver
     /// binding and a registry answer about that exact credential, or
     /// `ShareTargetNotPaired`. Whether the caller may share this

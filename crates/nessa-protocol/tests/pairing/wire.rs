@@ -963,3 +963,28 @@ fn the_enrollment_class_is_carried_and_never_changes_in_transit() {
         matches!(decode_reply(&bytes).unwrap(), NativePairingReply::Hello(decoded) if decoded == environment && decoded != peer)
     );
 }
+
+#[test]
+fn discovery_request_carries_exact_enrollment_and_nonsecret_credential_identifier() {
+    let intent = public();
+    let credential = CredentialId::new("issued-peer-credential").unwrap();
+    let bytes = encode_request(&NativePairingRequest::OpenDiscovery {
+        public: intent,
+        credential: credential.clone(),
+    })
+    .unwrap();
+    match decode_request(&bytes).unwrap() {
+        NativePairingRequest::OpenDiscovery {
+            public,
+            credential: actual,
+        } => {
+            assert_eq!(public, intent);
+            assert_eq!(actual, credential);
+        }
+        other => panic!("wrong request: {other:?}"),
+    }
+    let mut missing: Value = serde_json::from_slice(&bytes).unwrap();
+    missing.as_object_mut().unwrap().remove("credential");
+    assert!(decode_request(&serde_json::to_vec(&missing).unwrap()).is_err());
+    assert!(decode_request(br#"{"kind":"openDiscovery"}"#).is_err());
+}

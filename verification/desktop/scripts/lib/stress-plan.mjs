@@ -237,6 +237,10 @@ export const KNOBS = {
     default: 1,
     what: "window turns captured by a disposable webhook with production loopback refusal and no attempt; positive TLS delivery is qualified separately",
   },
+  peers: {
+    default: 1,
+    what: "paired peer gateways granted comment and drive that leave a note and send a turn the window shows",
+  },
   huddles: {
     default: 1,
     what: "turns that show a voice app (the test server's talk board): its frame is allowed the microphone, it opens in the chat's panel as one tab, after Always allow its next message goes unasked, and Revoke in Settings › Access takes the trust back",
@@ -369,6 +373,8 @@ export function plan(knobs, accessScenario = "full") {
   }
   for (let slot = 0; slot < knobs.restores; slot += 1)
     steps.push({ kind: "restore", slot })
+  // After the shuffle, with restores: a new default must not reshuffle a seed.
+  for (let slot = 0; slot < knobs.peers; slot += 1) steps.push({ kind: "peer" })
   if (knobs.pairedCatalogues > 0)
     steps.push({ kind: "pairedCatalogue", cycles: knobs.pairedCatalogues })
   // Preset checks keep their original model. Positive model changes follow

@@ -2842,3 +2842,92 @@ async fn a_follow_rule_replicates_only_the_chats_the_person_chose() {
         "offline local cleanup must retain system-attributed effect evidence"
     );
 }
+
+/// Real pinned TLS, actual OpenDiscovery dispatch, both persistence adapters,
+/// and a post-install revocation observed only through discovery (not poller).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn native_discovery_agrees_keys_retries_installed_and_observes_revocation() {
+    use crate::composition::peer_discovery::discovery_cycle_for_test;
+    use nessa_peer_gateways::application::discovery_from_json;
+    let directory = tempfile::tempdir().unwrap();
+    let a = Peer::start(&directory.path().join("a")).await;
+    let b = Reader::prepare(&directory.path().join("b"), false).await;
+    let relay = Relay::start(a.native).await;
+    let (key, reader) = enroll(&a, &b, &relay, true).await;
+    let reader = reader.unwrap();
+    synced_with(&b, 0).await; // Saves the issued credential; joins the poller.
+    assert!(!discovery_cycle_for_test(&b.peers).await);
+    let (entry, _) = b.peer().await;
+    let PeerEntry::Readable(installed) = entry else {
+        panic!("readable peer");
+    };
+    assert_eq!(installed.key(), &key);
+    let mac = *installed
+        .discovery()
+        .installed_mac()
+        .expect("native dialer installed");
+    let intent = installed.intent();
+    let credential = CredentialId::new(reader.1.clone()).unwrap();
+    let claim = a
+        .commands
+        .status(&a.session, intent.invitation())
+        .await
+        .unwrap();
+    let (_, dialer_key) = claim.claim_binding().unwrap();
+    tokio::time::timeout(WAIT, async {
+        loop {
+            let granted = a
+                .auth
+                .peer_discovery(
+                    &dialer_key,
+                    &intent,
+                    &credential,
+                    SystemClock.unix_seconds(),
+                )
+                .unwrap()
+                .unwrap();
+            if granted
+                .discovery_json
+                .as_deref()
+                .and_then(discovery_from_json)
+                .is_some_and(|discovery| discovery.installed_mac() == Some(&mac))
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    // The installed native reconnect still reads the grantor, without minting.
+    assert!(!discovery_cycle_for_test(&b.peers).await);
+    let (entry, _) = b.peer().await;
+    let PeerEntry::Readable(retried) = entry else {
+        panic!("readable peer");
+    };
+    assert_eq!(retried.discovery().installed_mac(), Some(&mac));
+    assert!(retried.credential_current());
+    a.auth
+        .revoke_sync(RevokeCredentialRequest {
+            request_id: uuid(),
+            issuer_principal_id: a.owner.clone(),
+            credential_id: reader.1,
+            revoked_at: SystemClock.unix_seconds(),
+        })
+        .unwrap();
+    // No poller runs here: only actual discovery can change this observation.
+    assert!(
+        !discovery_cycle_for_test(&b.peers).await,
+        "durable evidence does not require fail-closed task shutdown"
+    );
+    let (entry, _) = b.peer().await;
+    let PeerEntry::Readable(refused) = entry else {
+        panic!("readable peer");
+    };
+    assert!(!refused.credential_current());
+    assert!(!refused.needs_discovery_exchange());
+    assert!(matches!(refused.phase(), PeerPhase::Active { .. }));
+    assert_eq!(refused.discovery().installed_mac(), Some(&mac));
+    drop(relay);
+    stop(a).await;
+}

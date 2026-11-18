@@ -1187,6 +1187,7 @@ impl ConversationService {
                 .submit_command_origin(
                     storage,
                     target,
+                    caller.clone(),
                     caller,
                     Initiation::agent(author),
                     false,

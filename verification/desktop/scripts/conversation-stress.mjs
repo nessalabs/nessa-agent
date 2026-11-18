@@ -60,6 +60,10 @@ import {
  *   webhook     one granted conversation advances to a fixed source Head after
  *               a browser turn; independent native rows prove zero attempts
  *               under the unchanged loopback destination refusal policy
+ *   peer        a paired peer gateway, granted comment and drive, leaves a
+ *               note and sends a turn; the window shows the note as a grant
+ *               and the turn, and the gateway's view and grant record name
+ *               that peer
  *   aside       another conversation is opened in the window and talked to
  *   watch       the agent reads a new thread with more reads at once than
  *               one conversation may hold: some wait, the rest are refused,
@@ -117,7 +121,8 @@ import {
  *               and turned off while open, the titlebar's controls go back to
  *               starting where the lights end
  *   onboarding  setup is replayed from Settings › Advanced › Setup: the host
- *               is asked once; in the setup window that ask opens, nothing
+ *               is asked once; in the setup window that ask opens, over a
+ *               locked vault, no passphrase is asked for, nothing
  *               dims the desktop, and a glow fills the screen and forms the
  *               window (glow, fill, form, open, in that order) before any of
  *               the window's words can be seen; welcome's words are all
@@ -277,6 +282,8 @@ import {
  *               the hint on one line, the count as 4/5); Create opens a new
  *               session's home in it, whose first message runs in the made
  *               folder with the notes in the agent's system prompt (Claude).
+ *               A channel row that is not selected keeps its hover fill
+ *               while the pointer moves onto its settings beside it.
  *               A second channel works in a folder chosen in the picker, and
  *               its first message runs there; the gateway lists both, with
  *               their folders, and each conversation in its own. When the
@@ -345,8 +352,10 @@ import {
  * must be at rest, every turn ended as
  * planned, and nothing denied automatically or hidden behind a display limit.
  *
- * Build the gateway first (`cargo build -p nessa-server`). How to add a step
- * is in CODING_STANDARDS.md, "Conversation stress".
+ * Build the gateway first (`cargo build -p nessa-server`) and the peer
+ * example the `peer` step enrolls
+ * (`cargo build -p nessa-client-core --example read_only_sync`). How to add
+ * a step is in CODING_STANDARDS.md, "Conversation stress".
  *
  *   pnpm test:e2e:stress                        # the pull request's run
  *   pnpm test:e2e:stress -- --rounds 60 --parallel 12 --seed 7
@@ -368,7 +377,7 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs"
-import { spawnSync } from "node:child_process"
+import { spawn, spawnSync } from "node:child_process"
 import { tmpdir } from "node:os"
 import { basename, dirname, isAbsolute, join } from "node:path"
 import { setTimeout as sleep } from "node:timers/promises"
@@ -523,7 +532,8 @@ const meta = {
   help: `
 Usage: node verification/desktop/scripts/conversation-stress.mjs [options]
 
-Needs: the gateway built (cargo build -p nessa-server; or MCP_LIVE_NESSA). No
+Needs: the gateway built (cargo build -p nessa-server; or MCP_LIVE_NESSA)
+and the peer example (cargo build -p nessa-client-core --example read_only_sync). No
 harness and no sign-in: the gateway runs scripted-agent.mjs with the stress
 scenario (scripts/mcp-test-server/scenarios/stress.mjs). It starts its own
 gateway; --url is not used.
@@ -991,6 +1001,75 @@ async function channelRunning(page, name, running, failures) {
       `channel ${name} pointed at ${running ? "stops" : "starts"} shimmering: ${JSON.stringify(pointed)}`,
     )
   await page.mouse.move(600, 400)
+}
+
+/**
+ * The pointer on a row's settings, beside its control, leaves the row its
+ * hover fill: the frame owns hover, so moving onto the action does not drop
+ * it. The fill at rest is read first; the hover fill is the one the control
+ * moves to under the pointer. Each is read once it stops changing. Answers
+ * whether there was a hover fill to compare.
+ */
+async function rowFillBesideItsSettings(page, row, name, failures) {
+  const control = row.locator(":scope > [data-size]")
+  const fill = () => control.evaluate((it) => getComputedStyle(it).backgroundColor)
+  const settled = async () => {
+    let last = null
+    return (
+      (await waitFor(async () => {
+        const now = await fill()
+        const same = now === last
+        last = now
+        return same ? now : null
+      }, 5_000)) ?? last
+    )
+  }
+  await page.mouse.move(600, 400)
+  const atRest = await settled()
+  await control.hover({ timeout: 10_000 })
+  // Waits past any transition delay for the fill to leave its rest.
+  if (!(await waitFor(async () => (await fill()) !== atRest, 2_000))) {
+    // A selected row keeps one fill under the pointer and away from it, so
+    // there is nothing to tell apart.
+    log(
+      `channel ${name} has the same fill at rest and pointed at, so its hover was not compared`,
+    )
+    return false
+  }
+  const onControl = await settled()
+  await row.locator("[data-channel-settings-open]").hover({ timeout: 10_000 })
+  const beside = await settled()
+  if (beside !== onControl)
+    failures.push(
+      `channel ${name} pointed at its settings loses the row's hover fill: ${beside}, not ${onControl}`,
+    )
+  return true
+}
+
+/**
+ * With two channels in the sidebar one is not selected, so its hover fill
+ * differs from its rest and can be weighed beside its settings. The columns
+ * layout's check: the tree draws channels as branches without these rows.
+ */
+async function channelRowsKeepHover(page, failures) {
+  const rows = page
+    .locator(`${css.sidebar} ${css.kitRowFrame}`)
+    .filter({ has: page.locator("[data-channel-settings-open]") })
+  const count = await rows.count()
+  if (count < 2) {
+    if (!(await page.locator(`${css.sidebar} [data-row="channel"]`).count()))
+      failures.push(`the sidebar shows ${count} channel rows with settings, not 2`)
+    return
+  }
+  let compared = false
+  for (let index = 0; index < count && !compared; index++) {
+    const row = rows.nth(index)
+    const name = (await row.locator(":scope > [data-size]").textContent())?.trim() ?? ""
+    compared = await rowFillBesideItsSettings(page, row, name, failures)
+  }
+  await page.mouse.move(600, 400)
+  if (!compared)
+    failures.push(`no channel row of ${count} has a hover fill apart from its rest fill`)
 }
 
 /**
@@ -2989,6 +3068,114 @@ async function unusedNativeContext(run, step, failures) {
       await openStressConversation(run.page, run.main.id, run.main.title)
     }
   })
+}
+
+/** The enrolled-peer example (`read_only_sync`), built beside the gateway. */
+function peerExampleBin() {
+  const bin = join(repoRoot, "target/debug/examples/read_only_sync")
+  if (!existsSync(bin))
+    throw new Error(
+      "the peer example is not built (cargo build -p nessa-client-core --example read_only_sync)",
+    )
+  return bin
+}
+
+/** The last JSON object `read_only_sync` wrote. Diagnostics stay on stderr. */
+function peerOutcome(text) {
+  const lines = text.trim().split("\n")
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    if (!lines[index].startsWith("{")) continue
+    try {
+      return JSON.parse(lines[index])
+    } catch {
+      return null
+    }
+  }
+  return null
+}
+
+/** Run one peer-example command. `input` is the enrollment code for `pair`. */
+function peerExample(args, input) {
+  const result = spawnSync(peerExampleBin(), args, {
+    input,
+    encoding: "utf8",
+    timeout: 60_000,
+  })
+  return {
+    status: result.status,
+    outcome: peerOutcome(result.stdout ?? ""),
+    stderr: (result.stderr ?? "").trim(),
+    error: result.error,
+  }
+}
+
+/**
+ * Enroll a peer gateway against `invitationId` with `code`, approving the
+ * claimed key while `pair` holds the invitation. The credential id is the
+ * one `status` names once the enrollment is active.
+ */
+async function enrollPeer(run, profile, code, invitationId) {
+  const child = spawn(peerExampleBin(), ["pair", profile, "peer"], {
+    stdio: ["pipe", "pipe", "pipe"],
+  })
+  let stdout = ""
+  let stderr = ""
+  child.stdout.setEncoding("utf8")
+  child.stderr.setEncoding("utf8")
+  child.stdout.on("data", (chunk) => {
+    stdout += chunk
+  })
+  child.stderr.on("data", (chunk) => {
+    stderr += chunk
+  })
+  child.stdin.end(`${code}\n`)
+  const exited = new Promise((resolve) => {
+    child.once("exit", (status) => resolve(status))
+  })
+  const streamsClosed = Promise.all([
+    new Promise((resolve) => child.stdout.on("close", resolve)),
+    new Promise((resolve) => child.stderr.on("close", resolve)),
+  ])
+  try {
+    const deviceKey = await waitFor(async () => {
+      try {
+        return (await run.client.pairing.status(invitationId)).claimedDeviceKey ?? false
+      } catch {
+        return false
+      }
+    }, 30_000)
+    if (!deviceKey)
+      throw new Error(
+        `the peer never claimed its invitation: ${stderr.trim() || stdout.trim()}`,
+      )
+    const approved = await run.client.pairing.approve(invitationId, deviceKey)
+    if (approved.activationStopped)
+      throw new Error(
+        `the peer's approval stopped ${approved.activationStopped}: ${approved.status.phase}`,
+      )
+    const status = await Promise.race([exited, sleep(30_000).then(() => "timeout")])
+    if (status === "timeout")
+      throw new Error(`the peer's enrollment did not finish: ${stderr.trim()}`)
+    await streamsClosed
+    let enrollment = peerOutcome(stdout)?.enrollment
+    for (let tries = 0; enrollment?.phase !== "active" && tries < 40; tries += 1) {
+      await sleep(250)
+      const read = peerExample(["status", profile])
+      enrollment = read.outcome?.enrollment ?? enrollment
+      if (tries === 39 && enrollment?.phase !== "active")
+        throw new Error(
+          `the peer did not become active (${enrollment?.phase ?? "no status"}): ${read.stderr || stderr.trim()}`,
+        )
+    }
+    if (!enrollment?.credentialId)
+      throw new Error(
+        `the peer enrollment named no credential: ${JSON.stringify(enrollment)}`,
+      )
+    return enrollment
+  } finally {
+    if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL")
+    await exited
+  }
 }
 
 const steps = {
@@ -5895,10 +6082,26 @@ const steps = {
       }
       // The host opens the setup window for that ask; this page is that
       // window, over the same gateway, as the real host builds it. Both
-      // agents are ready, so a click on either is a choice.
-      const page = await setupWindow(run, (page) =>
-        agentsProbe(page, () => ({ claude: "ready", codex: "ready" })),
-      )
+      // agents are ready, so a click on either is a choice. The vault is
+      // locked first, as after a restart: onboarding still asks for no
+      // passphrase (`setupWindow` refuses a vault dialog).
+      // Through the native vault session that owns it, as the app would.
+      const lock = await run.stack.vault.command({ operation: "lock" })
+      if (!lock.ok) throw new Error(`the vault would not lock: ${JSON.stringify(lock)}`)
+      let page
+      try {
+        page = await setupWindow(run, (page) =>
+          agentsProbe(page, () => ({ claude: "ready", codex: "ready" })),
+        )
+      } finally {
+        // An unlock that fails is its own failure, never in place of what
+        // the window did.
+        await run.stack.vault
+          .unlock()
+          .catch((error) =>
+            failures.push(`the vault did not unlock again: ${error.message}`),
+          )
+      }
       try {
         const heading = (name) => page.getByRole("heading", { name, exact: true })
         const button = (name) => page.getByRole("button", { name, exact: true })
@@ -7479,6 +7682,131 @@ const steps = {
       failures.push(`the window-control audit holds ${JSON.stringify(closes)}`)
   },
 
+  async peer(run, step, failures) {
+    // The owner sees the result in the window. The note and the turn are
+    // sent by the paired gateway, on its own credential, after the owner
+    // grants comment and drive. The composer's Send would be the owner.
+    const note = `peer note ${step.index}`
+    const drive = `${STRESS.reply} peer drive ${step.index}`
+    const conversationId = randomUUID()
+    const root = mkdtempSync(join(tmpdir(), "nessa-stress-peer-"))
+    let linked = false
+    try {
+      linked = await run.exclusive(async () => {
+        await openLinkedDevices(run.page)
+        const on = await switchLinking(run, true, failures)
+        if (on) await closeSettings(run.page)
+        return on
+      })
+      if (!linked || failures.length) return
+      await run.client.conversation.create({
+        conversationId,
+        agent: run.stack.agent,
+      })
+      run.checked.push(conversationId)
+      const stateRoot = join(root, "state")
+      const cache = join(root, "cache")
+      mkdirSync(stateRoot, { mode: 0o700 })
+      mkdirSync(cache, { mode: 0o700 })
+      const profile = join(root, "profile.json")
+      writeFileSync(
+        profile,
+        JSON.stringify({
+          stateRoot,
+          stateDirectory: "device",
+          cache,
+          gatewayAddress: run.nativeAddress,
+        }),
+        { mode: 0o600 },
+      )
+      const { code, status } = await run.client.pairing.create({ enrollee: "gateway" })
+      const enrollment = await enrollPeer(run, profile, code, status.invitationId)
+      await run.client.conversation.share(conversationId, enrollment.credentialId, [
+        "read",
+        "comment",
+      ])
+      await run.client.conversation.share(
+        conversationId,
+        enrollment.credentialId,
+        ["read", "comment", "drive"],
+        { preset: "read_only_tools" },
+      )
+      const commented = peerExample(["comment", profile, conversationId, note])
+      if (!commented.outcome?.successful)
+        failures.push(
+          `the peer's note was refused: ${commented.outcome?.refusal ?? commented.stderr ?? commented.error?.message ?? commented.status}`,
+        )
+      const driven = peerExample(["drive", profile, conversationId, drive])
+      if (!driven.outcome?.successful)
+        failures.push(
+          `the peer's turn was refused: ${driven.outcome?.refusal ?? driven.stderr ?? driven.error?.message ?? driven.status}`,
+        )
+      if (failures.length) return
+      await settled(run, conversationId, new Set(), drive, "completed", failures)
+      const view = await run.client.conversation.read(conversationId)
+      const saved = view.notes.find((each) => each.text === note)
+      if (saved?.author.kind !== "grant")
+        failures.push(
+          `the gateway's view does not show the peer's note as a grant: ${JSON.stringify(saved?.author ?? null)}`,
+        )
+      await run.exclusive(async () => {
+        await openStressConversation(
+          run.page,
+          conversationId,
+          await titleOf(run, conversationId),
+        )
+        await expectShown(run.page, note, failures)
+        await expectShown(run.page, drive, failures)
+        if ((await run.page.locator('[data-note-author="grant"]').count()) < 1)
+          failures.push("the window does not show the peer's note as a grant")
+        if (run.evidence)
+          await run.page
+            .screenshot({
+              path: join(run.evidence, `peer-${step.index}.png`),
+              scale: "css",
+            })
+            .catch(() => {})
+      })
+      const uses = join(
+        run.stack.gateway.directory,
+        "ci",
+        "instances",
+        INSTANCE,
+        "access-grants",
+        "grant-uses",
+      )
+      const records = existsSync(uses)
+        ? readdirSync(uses).map((name) =>
+            JSON.parse(readFileSync(join(uses, name), "utf8")),
+          )
+        : []
+      const mine = records.filter(
+        (record) => record.target?.conversationId === conversationId,
+      )
+      for (const action of ["conversation.comment", "conversation.drive"]) {
+        const recorded = mine.find((record) => record.target?.action === action)
+        if (!recorded?.grant?.principalId?.startsWith("gateway:"))
+          failures.push(
+            `the grant record for ${action} does not name the peer: ${JSON.stringify(recorded ?? null)}`,
+          )
+      }
+      log(
+        `peer ${enrollment.credentialId} commented and drove ${conversationId} at epoch ${enrollment.accessEpoch}`,
+      )
+    } catch (error) {
+      failures.push(`a granted peer could not comment and drive: ${error.message}`)
+    } finally {
+      if (linked) {
+        await run.exclusive(async () => {
+          await openStressConversation(run.page, run.main.id, run.main.title)
+          await openLinkedDevices(run.page)
+          if (await switchLinking(run, false, failures)) await closeSettings(run.page)
+        })
+      }
+      rmSync(root, { recursive: true, force: true })
+    }
+  },
+
   async webhook(run, step, failures) {
     // The panel creates this conversation and holds the default owner grants,
     // including credential.manage. Sharing must use that same conversation owner.
@@ -7667,6 +7995,7 @@ const steps = {
           notes,
           dropped.map(({ path }) => path),
         )
+        await run.exclusive(() => channelRowsKeepHover(run.page, failures))
         // A thread its agent makes naming where it runs stays in the
         // channel.
         const thread =
@@ -10538,8 +10867,10 @@ async function setupWindow(run, prepare) {
   // Onboarding does not ask for the vault on its own (#1340), locked or not:
   // nothing in it needs protected data, so no unlock dialog is drawn.
   await page.waitForTimeout(1500)
-  if ((await page.locator("[data-vault-dialog]").count()) !== 0)
+  if ((await page.locator("[data-vault-dialog]").count()) !== 0) {
+    await page.close()
     throw new Error("the setup window opened a vault dialog on its own")
+  }
   return page
 }
 

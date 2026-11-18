@@ -760,38 +760,46 @@ fn grant_comment_and_drive_need_their_capability() {
     }
 }
 
+/// A peer holding drive comments and drives. Holding only read, it does
+/// neither. Removing `capabilities.contains` from the permit would let the
+/// read-only peer through: the other conditions already hold.
 #[test]
-fn paired_peer_gateway_never_comments_or_drives() {
+fn a_peer_comments_and_drives_when_the_grant_names_the_capability() {
     let policy = policy();
     let live = conversation("org", "owner", false);
-    for action in [AccessAction::Comment, AccessAction::Drive] {
-        let device = Paired {
-            held: Some(Capabilities::drive()),
-            ..Paired::default()
-        };
-        assert!(allowed(&paired(&policy, action, on(&live), &device)));
+    let peer = |held| Paired {
+        signed_in_as: "gateway:peer",
+        held,
+        ..Paired::default()
+    };
+    for (action, id) in [
+        (AccessAction::Comment, "grant.comment"),
+        (AccessAction::Drive, "grant.drive"),
+    ] {
         assert_eq!(
-            paired(
+            allowed_by(&paired(
                 &policy,
                 action,
                 on(&live),
-                &Paired {
-                    signed_in_as: "gateway:peer",
-                    ..device
-                }
-            ),
-            AccessDecision::Deny(AccessDenial::NotPermitted)
+                &peer(Some(Capabilities::drive()))
+            )),
+            Some(&[id.to_owned()][..])
         );
     }
-    // A peer still reads what it was granted.
+    assert_eq!(
+        paired(
+            &policy,
+            AccessAction::Drive,
+            on(&live),
+            &peer(Some(Capabilities::read()))
+        ),
+        AccessDecision::Deny(AccessDenial::NotPermitted)
+    );
     assert!(allowed(&paired(
         &policy,
         AccessAction::Read,
         on(&live),
-        &Paired {
-            signed_in_as: "gateway:peer",
-            ..Paired::default()
-        }
+        &peer(Some(Capabilities::read()))
     )));
 }
 
@@ -1016,8 +1024,8 @@ fn owner_access_the_policy_cannot_decide_is_unavailable() {
 
 /// What a paired reader may do, for every binding, signer, deletion and
 /// role: it reads its grantor's live conversation with any role; comments
-/// with Comment or Drive and drives with Drive, as a device and never as a
-/// peer gateway; sees a granted tombstone in its catalogue; and never writes,
+/// with Comment or Drive and drives with Drive, a device and a peer gateway
+/// alike; sees a granted tombstone in its catalogue; and never writes,
 /// shares or takes owner write commands. A device lists its grant scope.
 #[test]
 fn paired_access_answers_its_truth_table() {
@@ -1044,9 +1052,9 @@ fn paired_access_answers_its_truth_table() {
                         owned && held.is_some(),
                         "read {org} {binding_owner} {signed_in_as} {held:?} deleted={deleted}"
                     );
-                    // A peer gateway neither comments nor drives; each
-                    // role is listed with what it allows.
-                    let device = signed_in_as == binding_owner;
+                    // Comment and drive follow the capability, for a device
+                    // and for a peer. Removing `capabilities.contains` from
+                    // the permit would allow a read-only grant.
                     for (action, roles) in [
                         (
                             AccessAction::Comment,
@@ -1056,7 +1064,7 @@ fn paired_access_answers_its_truth_table() {
                     ] {
                         assert_eq!(
                             allowed(&paired(&policy, action, on(&record), &facts)),
-                            device && owned && held.is_some_and(|held| roles.contains(&held)),
+                            owned && held.is_some_and(|held| roles.contains(&held)),
                             "{} {org} {binding_owner} {signed_in_as} {held:?} deleted={deleted}",
                             action.name()
                         );
@@ -1207,7 +1215,7 @@ fn owner_share_answers_its_truth_table() {
 
 /// What a paired party is told, for every signer, role held, deletion and
 /// request: allowed; a party that may read the conversation, a peer gateway
-/// included, forbidden what its role, request or signer does not allow; a
+/// included, forbidden what its capability or request does not allow; a
 /// granted tombstone told it was deleted when the party signed in as its
 /// owner, as the socket's owner check told it; and anything else told it
 /// does not exist, as an ungranted id is (rows G1, J11 to J14). A peer
@@ -1404,7 +1412,7 @@ fn paired_access_tells_each_refusal_as_its_table_says() {
             Some(Capabilities::comment()),
             false,
             text,
-            Err(Forbidden),
+            Ok(()),
         ),
         (
             true,
@@ -1420,7 +1428,7 @@ fn paired_access_tells_each_refusal_as_its_table_says() {
             Some(Capabilities::drive()),
             false,
             text,
-            Err(Forbidden),
+            Ok(()),
         ),
         (true, AccessAction::Drive, None, true, text, Err(NotFound)),
         (
