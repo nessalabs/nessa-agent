@@ -11,7 +11,8 @@ pub(crate) use held_files::read_named;
 mod phone;
 mod session;
 pub(crate) use session::{
-    subscription_refusal, DeviceEvidence, LocalConnector, Session, SubscriptionDelivery,
+    subscription_refusal, CommandExchange, DeviceEvidence, LocalConnector, Session,
+    SubscriptionDelivery,
 };
 mod sources;
 pub(crate) use sources::{

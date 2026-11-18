@@ -5221,12 +5221,31 @@ impl ConversationService {
         key: String,
         choices: Option<Vec<QuestionChoiceInput>>,
     ) -> Result<(), ConversationError> {
+        let actor = caller.actor()?;
+        self.answer_question_as(id, caller, actor, execution, question, key, choices)
+            .await
+    }
+
+    /// [`Self::answer_question`] opening the conversation as `access` and
+    /// recording `actor`. A granted peer is not the owner. The answer is the
+    /// peer's.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn answer_question_as(
+        &self,
+        id: ConversationId,
+        access: ConversationCaller,
+        actor: nessa_sdk::application::agent_execution::permissions::ActionContext,
+        execution: String,
+        question: String,
+        key: String,
+        choices: Option<Vec<QuestionChoiceInput>>,
+    ) -> Result<(), ConversationError> {
         let service = self.clone();
+        let caller = access;
         supervised(async move {
             let _admission = service.admit().await?;
             // Kept, not merely checked: who answered is the one fact an audit of
             // an explicit answer exists to record.
-            let actor = caller.actor()?;
             let execution_id =
                 ExecutionId::new(&execution).map_err(|_| ConversationError::InvalidInput)?;
             let question_id =
@@ -5275,10 +5294,39 @@ impl ConversationService {
         option: String,
         permission_caller: PermissionCaller,
     ) -> Result<(), ConversationError> {
+        let actor = caller.actor()?;
+        self.answer_as(
+            id,
+            caller,
+            actor,
+            execution,
+            permission,
+            review,
+            option,
+            permission_caller,
+        )
+        .await
+    }
+
+    /// [`Self::answer`] opening the conversation as `access` and recording
+    /// `actor`. A granted peer's approval stays that peer's decision.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn answer_as(
+        &self,
+        id: ConversationId,
+        access: ConversationCaller,
+        actor: nessa_sdk::application::agent_execution::permissions::ActionContext,
+        execution: String,
+        permission: String,
+        review: String,
+        option: String,
+        permission_caller: PermissionCaller,
+    ) -> Result<(), ConversationError> {
         let service = self.clone();
+        let caller = access;
+        let answered_by = answerer_of(&actor)?;
         supervised(async move {
             let _admission = service.admit().await?;
-            let actor = caller.actor()?;
             let execution_id =
                 ExecutionId::new(&execution).map_err(|_| ConversationError::InvalidInput)?;
             let permission_id =
@@ -5299,13 +5347,10 @@ impl ConversationService {
             }
             let live = service.resolve_holding_reviews(&id, &caller).await?;
             // An app's review first: it is the gateway's own, not the agent's.
-            match live.app_reviews.answer(
-                &execution,
-                &permission,
-                &review,
-                &option,
-                answerer(&caller),
-            ) {
+            match live
+                .app_reviews
+                .answer(&execution, &permission, &review, &option, answered_by)
+            {
                 ReviewAnswer::Ended => return Ok(()),
                 ReviewAnswer::Stale => return Err(AgentError::StalePermission.into()),
                 ReviewAnswer::NotAnAppReview => {}
@@ -5425,13 +5470,32 @@ impl ConversationService {
         review: String,
         reason: String,
     ) -> Result<(), ConversationError> {
+        let actor = caller.actor()?;
+        self.cancel_permission_as(id, caller, actor, execution, permission, review, reason)
+            .await
+    }
+
+    /// [`Self::cancel_permission`] opening the conversation as `access` and
+    /// recording `actor`. A granted peer's cancellation stays that peer's.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn cancel_permission_as(
+        &self,
+        id: ConversationId,
+        access: ConversationCaller,
+        actor: nessa_sdk::application::agent_execution::permissions::ActionContext,
+        execution: String,
+        permission: String,
+        review: String,
+        reason: String,
+    ) -> Result<(), ConversationError> {
         let service = self.clone();
+        let caller = access;
+        let answered_by = answerer_of(&actor)?;
         supervised(async move {
             let _admission = service.admit().await?;
             if reason.len() > 1024 {
                 return Err(ConversationError::InvalidInput);
             }
-            let actor = caller.actor()?;
             let reason = CustomPermissionCancellationReason::new("gateway_request", reason)
                 .map_err(|_| ConversationError::InvalidInput)?;
             let execution_id =
@@ -5441,7 +5505,7 @@ impl ConversationService {
             let live = service.resolve_holding_reviews(&id, &caller).await?;
             match live
                 .app_reviews
-                .cancel(&execution, &permission, &review, answerer(&caller))
+                .cancel(&execution, &permission, &review, answered_by)
             {
                 ReviewAnswer::Ended => return Ok(()),
                 ReviewAnswer::Stale => return Err(AgentError::StalePermission.into()),
@@ -7471,6 +7535,15 @@ fn initiator_of(actor: &ActionContext) -> McpAppInitiator {
 }
 
 /// Who answered an app's review: the caller of `conversation.answer`.
+fn answerer_of(actor: &ActionContext) -> Result<ReviewAnswerer, ConversationError> {
+    Ok(ReviewAnswerer {
+        principal_id: PrincipalId::new(actor.principal_id())
+            .map_err(|_| ConversationError::InvalidInput)?,
+        surface_id: actor.surface_id().to_owned(),
+        request_id: actor.request_id().to_owned(),
+    })
+}
+
 fn answerer(caller: &ConversationCaller) -> ReviewAnswerer {
     ReviewAnswerer {
         principal_id: caller.principal_id.clone(),

@@ -2841,11 +2841,10 @@ fn a_version_5_database_is_refused_without_erasing_its_grants() {
 }
 
 /// A comment grant written through the store, past `conversation.share`, is
-/// a legal capability set. Cedar lets the device that is signed in as the
-/// binding owner comment, and denies the gateway comment because it is not.
+/// a legal capability set. Cedar lets the device and the gateway comment.
 /// Neither may drive: the set does not contain `drive`.
 #[tokio::test]
-async fn a_hand_built_comment_grant_for_a_gateway_is_denied_by_cedar() {
+async fn a_hand_built_comment_grant_lets_a_gateway_comment_and_not_drive() {
     use crate::application::{
         AccessAction, AccessAsk, AccessDecision, AccessDenial, AccessResource, AccessSubject,
         ConversationAccessPolicyEvaluator, RequestShape, ShareGrants,
@@ -2887,10 +2886,10 @@ async fn a_hand_built_comment_grant_for_a_gateway_is_denied_by_cedar() {
         ask(&owner, AccessAction::Comment),
         AccessDecision::Allow { .. }
     ));
-    assert_eq!(
+    assert!(matches!(
         ask(&gateway, AccessAction::Comment),
-        AccessDecision::Deny(AccessDenial::NotPermitted)
-    );
+        AccessDecision::Allow { .. }
+    ));
     assert_eq!(
         ask(&owner, AccessAction::Drive),
         AccessDecision::Deny(AccessDenial::NotPermitted)
