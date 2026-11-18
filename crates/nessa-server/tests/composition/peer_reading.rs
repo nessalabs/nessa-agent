@@ -1040,8 +1040,9 @@ async fn reads(refuse: bool) {
     .await;
     synced_with(&b, 1).await;
 
-    // R5: A shares Z, then deletes the conversation. The grant remains, so
-    // B's cache keeps Z until A revokes it. Deletion is not a grant frame.
+    // R5: A shares Z, then deletes the conversation. The grant row on A
+    // remains, but the record read is no longer the owner's. B drops Z and
+    // audits that withdrawal. Revoking the leftover grant does not bring it back.
     a.grant(
         ShareGrantTransition::Grant(ShareAccess::read()),
         &z,
@@ -1063,10 +1064,8 @@ async fn reads(refuse: bool) {
         )
         .await
         .unwrap();
-    synced_with(&b, 2).await;
-    let mut kept = vec![y.to_string(), z.to_string()];
-    kept.sort();
-    assert_eq!(b.cached(&key, &reader.0), kept);
+    synced_with(&b, 1).await;
+    assert_eq!(b.cached(&key, &reader.0), vec![y.to_string()]);
     a.grant(ShareGrantTransition::Revoke, &z, &reader).await;
     synced_with(&b, 1).await;
     assert_eq!(b.cached(&key, &reader.0), vec![y.to_string()]);

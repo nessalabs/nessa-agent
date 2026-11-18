@@ -735,6 +735,13 @@ fn revoked_by_gateway(
     }
 }
 
+#[derive(PartialEq, Eq)]
+enum CopyStop {
+    More,
+    Held,
+    Gone,
+}
+
 fn last_present_ids(entries: &[(String, bool, Option<String>, i64)]) -> Vec<String> {
     let mut last = Vec::new();
     for (conversation, absent, _, _) in entries {
@@ -871,6 +878,7 @@ impl RetainedCache {
         follow: &FollowRule,
         stop: &Arc<ReadStop>,
         budget: Duration,
+        max_withdrawn: usize,
         withdrawn: &mut Vec<String>,
         mut on_withdrawn: impl FnMut(&[String]),
         mut on_synced: impl FnMut(u64),
@@ -925,10 +933,18 @@ impl RetainedCache {
                 Ok(Some(delivery)) => delivery,
                 Ok(None) => {
                     let id = Id::new(&receiver).map_err(|_| ReadFailure::Protocol)?;
-                    self.drain_chats(&connection, &id, access.access_epoch, &mut live, &mut chats)?;
+                    let mut dropped = self.drain_chats(
+                        &connection,
+                        &id,
+                        access.access_epoch,
+                        &mut live,
+                        &mut chats,
+                        withdrawn,
+                        &mut on_withdrawn,
+                    )?;
                     if synced {
                         let present = self.followed_present(&receiver, follow)?;
-                        self.open_chats(
+                        dropped |= self.open_chats(
                             &access,
                             &ending,
                             &offline,
@@ -938,15 +954,29 @@ impl RetainedCache {
                             &present,
                             &mut live,
                             &mut chats,
+                            withdrawn,
+                            &mut on_withdrawn,
                         )?;
-                        self.catch_up_one(
+                        dropped |= self.catch_up_one(
                             &connection,
                             &id,
                             access.access_epoch,
                             &present,
                             &chats,
                             &mut catch_up,
+                            withdrawn,
+                            &mut on_withdrawn,
                         )?;
+                    }
+                    if dropped {
+                        let count = u64::try_from(
+                            self.cache
+                                .grant_ids(&receiver)
+                                .map_err(|error| cache_failure(&error))?
+                                .len(),
+                        )
+                        .unwrap_or(0);
+                        on_synced(count);
                     }
                     if let Some(snapshot_id) = staged_snapshot.clone() {
                         let _ = connection.grant_page(&snapshot_id, resume.as_ref());
@@ -1026,7 +1056,26 @@ impl RetainedCache {
                 withdrawn.extend(fresh.iter().cloned());
                 on_withdrawn(&fresh);
             }
-            self.copy_granted(&connection, &id, access.access_epoch, stop, &ordered)?;
+            if withdrawn.len() >= max_withdrawn {
+                return Ok(ReadReport {
+                    moved: true,
+                    complete: false,
+                    conversations: self
+                        .cache
+                        .grant_ids(&receiver)
+                        .map_err(|error| cache_failure(&error))?
+                        .len(),
+                });
+            }
+            self.copy_granted(
+                &connection,
+                &id,
+                access.access_epoch,
+                stop,
+                &ordered,
+                withdrawn,
+                &mut on_withdrawn,
+            )?;
             self.cache
                 .commit_grant_entries(&receiver, &changed.cursor.incarnation, position, &ordered)
                 .map_err(|error| cache_failure(&error))?;
@@ -1040,7 +1089,14 @@ impl RetainedCache {
                 }
                 let conversation_id =
                     ConversationId::new(conversation).map_err(|_| ReadFailure::Protocol)?;
-                self.copy_one(&connection, &id, access.access_epoch, conversation_id)?;
+                self.copy_one(
+                    &connection,
+                    &id,
+                    access.access_epoch,
+                    conversation_id,
+                    withdrawn,
+                    &mut on_withdrawn,
+                )?;
             }
             self.open_chats(
                 &access,
@@ -1052,6 +1108,8 @@ impl RetainedCache {
                 &present,
                 &mut live,
                 &mut chats,
+                withdrawn,
+                &mut on_withdrawn,
             )?;
             let count = u64::try_from(
                 self.cache
@@ -1063,7 +1121,15 @@ impl RetainedCache {
             on_synced(count);
             synced = true;
             ending.relax();
-            self.drain_chats(&connection, &id, access.access_epoch, &mut live, &mut chats)?;
+            self.drain_chats(
+                &connection,
+                &id,
+                access.access_epoch,
+                &mut live,
+                &mut chats,
+                withdrawn,
+                &mut on_withdrawn,
+            )?;
         }
         let conversations = self
             .cache
@@ -1098,6 +1164,7 @@ impl RetainedCache {
     /// One retained chat that has no subscription, in turn. The connection cap
     /// is eight subscriptions, and each chat has its own connection, so a
     /// ninth stays unsubscribed. This read is what keeps it current.
+    #[allow(clippy::too_many_arguments)]
     fn catch_up_one(
         &mut self,
         connection: &GatewayConnection,
@@ -1106,20 +1173,29 @@ impl RetainedCache {
         present: &[(String, String, i64)],
         chats: &[(GatewayConnection, String)],
         cursor: &mut usize,
-    ) -> Result<(), ReadFailure> {
+        withdrawn: &mut Vec<String>,
+        on_withdrawn: &mut impl FnMut(&[String]),
+    ) -> Result<bool, ReadFailure> {
         let waiting: Vec<&str> = present
             .iter()
             .map(|(conversation, _, _)| conversation.as_str())
             .filter(|conversation| !chats.iter().any(|(_, open)| open == conversation))
             .collect();
         if waiting.is_empty() {
-            return Ok(());
+            return Ok(false);
         }
         let index = *cursor % waiting.len();
         *cursor = index.saturating_add(1);
         let conversation_id =
             ConversationId::new(waiting[index]).map_err(|_| ReadFailure::Protocol)?;
-        self.copy_one(connection, receiver, epoch, conversation_id)
+        self.copy_one(
+            connection,
+            receiver,
+            epoch,
+            conversation_id,
+            withdrawn,
+            on_withdrawn,
+        )
     }
 
     /// Subscribe the chats `present` names, up to the connection cap. A chat
@@ -1137,7 +1213,10 @@ impl RetainedCache {
         present: &[(String, String, i64)],
         live: &mut LiveFollow,
         chats: &mut Vec<(GatewayConnection, String)>,
-    ) -> Result<(), ReadFailure> {
+        withdrawn: &mut Vec<String>,
+        on_withdrawn: &mut impl FnMut(&[String]),
+    ) -> Result<bool, ReadFailure> {
+        let mut gone = false;
         for (conversation, _, _) in present {
             if live.open_ids().iter().any(|id| id == conversation) {
                 continue;
@@ -1163,18 +1242,31 @@ impl RetainedCache {
                         live.close(conversation);
                     }
                     crate::read_only_sync::application::follow::Wait::View { .. } => {
-                        self.copy_one(records, receiver, epoch, conversation_id)?;
-                        chats.push((connection, conversation.clone()));
+                        let dropped = self.copy_one(
+                            records,
+                            receiver,
+                            epoch,
+                            conversation_id,
+                            withdrawn,
+                            on_withdrawn,
+                        )?;
+                        gone |= dropped;
+                        if dropped {
+                            live.close(conversation);
+                        } else {
+                            chats.push((connection, conversation.clone()));
+                        }
                     }
                 },
                 Err(_) => live.close(conversation),
             }
         }
-        Ok(())
+        Ok(gone)
     }
 
     /// Read each followed conversation through to its record head. A failure
     /// is returned before the grant cursor moves.
+    #[allow(clippy::too_many_arguments)]
     fn copy_granted(
         &mut self,
         connection: &GatewayConnection,
@@ -1182,6 +1274,8 @@ impl RetainedCache {
         epoch: u64,
         stop: &ReadStop,
         entries: &[(String, bool, Option<String>, i64)],
+        withdrawn: &mut Vec<String>,
+        on_withdrawn: &mut impl FnMut(&[String]),
     ) -> Result<(), ReadFailure> {
         let mut last_present = Vec::new();
         for (conversation, absent, _, _) in entries {
@@ -1197,10 +1291,17 @@ impl RetainedCache {
                 if stop.is_stopped() {
                     return Err(ReadFailure::Stopped);
                 }
-                match self.records(connection, receiver, epoch, conversation_id.clone(), false)? {
-                    Conversation::Read { complete: true } | Conversation::Withdrawn => break,
-                    Conversation::Read { complete: false } => continue,
-                    Conversation::Unread { .. } => return Err(ReadFailure::Unreachable),
+                let outcome =
+                    self.records(connection, receiver, epoch, conversation_id.clone(), false)?;
+                if self.copied(
+                    outcome,
+                    receiver.as_str(),
+                    &conversation,
+                    withdrawn,
+                    on_withdrawn,
+                )? != CopyStop::More
+                {
+                    break;
                 }
             }
         }
@@ -1208,6 +1309,7 @@ impl RetainedCache {
     }
 
     /// Take chat views that have arrived and copy the records they name.
+    #[allow(clippy::too_many_arguments)]
     fn drain_chats(
         &mut self,
         records: &GatewayConnection,
@@ -1215,7 +1317,10 @@ impl RetainedCache {
         epoch: u64,
         live: &mut LiveFollow,
         chats: &mut Vec<(GatewayConnection, String)>,
-    ) -> Result<(), ReadFailure> {
+        withdrawn: &mut Vec<String>,
+        on_withdrawn: &mut impl FnMut(&[String]),
+    ) -> Result<bool, ReadFailure> {
+        let mut gone = false;
         let mut index = 0;
         while index < chats.len() {
             let conversation = chats[index].1.clone();
@@ -1223,7 +1328,20 @@ impl RetainedCache {
                 Ok(Some(crate::read_only_sync::application::follow::Wait::View { .. })) => {
                     let conversation_id =
                         ConversationId::new(&conversation).map_err(|_| ReadFailure::Protocol)?;
-                    self.copy_one(records, receiver, epoch, conversation_id)?;
+                    let dropped = self.copy_one(
+                        records,
+                        receiver,
+                        epoch,
+                        conversation_id,
+                        withdrawn,
+                        on_withdrawn,
+                    )?;
+                    if dropped {
+                        let (_, conversation) = chats.remove(index);
+                        live.close(&conversation);
+                        gone = true;
+                        continue;
+                    }
                 }
                 Ok(Some(crate::read_only_sync::application::follow::Wait::Ended(_))) => {
                     let (_, conversation) = chats.remove(index);
@@ -1238,7 +1356,7 @@ impl RetainedCache {
             }
             index += 1;
         }
-        Ok(())
+        Ok(gone)
     }
 
     fn copy_one(
@@ -1247,12 +1365,54 @@ impl RetainedCache {
         receiver: &Id,
         epoch: u64,
         conversation: ConversationId,
-    ) -> Result<(), ReadFailure> {
+        withdrawn: &mut Vec<String>,
+        on_withdrawn: &mut impl FnMut(&[String]),
+    ) -> Result<bool, ReadFailure> {
         loop {
-            match self.records(connection, receiver, epoch, conversation.clone(), false)? {
-                Conversation::Read { complete: true } | Conversation::Withdrawn => return Ok(()),
-                Conversation::Read { complete: false } => continue,
-                Conversation::Unread { .. } => return Err(ReadFailure::Unreachable),
+            let outcome = self.records(connection, receiver, epoch, conversation.clone(), false)?;
+            match self.copied(
+                outcome,
+                receiver.as_str(),
+                &conversation.to_string(),
+                withdrawn,
+                on_withdrawn,
+            )? {
+                CopyStop::More => continue,
+                CopyStop::Held => return Ok(false),
+                CopyStop::Gone => return Ok(true),
+            }
+        }
+    }
+
+    /// How far one conversation's copy got. `Gone` means the owner deleted it
+    /// without a grant tombstone: the local grant and transcript are removed
+    /// and the audit is told.
+    fn copied(
+        &mut self,
+        outcome: Conversation,
+        receiver: &str,
+        conversation: &str,
+        withdrawn: &mut Vec<String>,
+        on_withdrawn: &mut impl FnMut(&[String]),
+    ) -> Result<CopyStop, ReadFailure> {
+        match outcome {
+            Conversation::Read { complete: false } => Ok(CopyStop::More),
+            Conversation::Read { complete: true } => Ok(CopyStop::Held),
+            Conversation::Unread { .. } => Err(ReadFailure::Unreachable),
+            Conversation::Withdrawn => {
+                let removed = self
+                    .cache
+                    .withdraw_grant_entries(
+                        receiver,
+                        false,
+                        &[(conversation.to_owned(), true, None, 0_i64)],
+                    )
+                    .map_err(|error| cache_failure(&error))?;
+                if !removed.is_empty() {
+                    withdrawn.extend(removed.iter().cloned());
+                    on_withdrawn(&removed);
+                }
+                Ok(CopyStop::Gone)
             }
         }
     }

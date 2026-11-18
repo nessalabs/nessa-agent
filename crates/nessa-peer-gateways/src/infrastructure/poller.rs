@@ -504,9 +504,9 @@ impl Shared {
             None => return None,
         };
         let mut changes = Vec::new();
-        // Released once the grant snapshot is applied, so a live subscription
-        // does not hold a read slot. Dropped again here if the snapshot never
-        // arrived.
+        // Held until this cycle ends, including a live follow. The audit
+        // queue is sized for that many cycles, and a follow keeps handing it
+        // withdrawals after the first snapshot.
         let slot = Arc::new(Mutex::new(Some(permit)));
         let pace = self.held(key, &cycle, &mut changes, slot.clone()).await;
         drop(slot.lock().unwrap_or_else(PoisonError::into_inner).take());
@@ -759,7 +759,7 @@ impl Shared {
         access_epoch: u64,
         cycle: &Arc<CycleStop>,
         changes: &mut Vec<PollerRecord<'a>>,
-        slot: Arc<Mutex<Option<OwnedSemaphorePermit>>>,
+        _slot: Arc<Mutex<Option<OwnedSemaphorePermit>>>,
     ) -> Option<Result<ReadReport, ReadFailure>> {
         let key = *record.key();
         let records = self.commands.records().clone();
@@ -775,7 +775,7 @@ impl Shared {
             self.inputs.policy.read_budget,
         );
         let commands = self.commands.clone();
-        let (live_tx, mut live_rx) = tokio::sync::mpsc::channel(1);
+        let (live_tx, live_rx) = tokio::sync::mpsc::channel(1);
         let (audit_tx, mut audit_rx) = tokio::sync::mpsc::unbounded_channel();
         let (work, withdrawn) = spawn_read(move |withdrawn| {
             let credential = records
@@ -813,6 +813,7 @@ impl Shared {
                 &rule,
                 &stop,
                 budget,
+                WITHDRAWN_PER_READ,
                 withdrawn,
                 move |ids| {
                     let _ = audit_tx.send(ids.to_vec());
@@ -832,15 +833,14 @@ impl Shared {
         });
         tokio::pin!(work);
         let mut stopped = self.stopped.clone();
-        let mut released = false;
+        // The read slot stays until this cycle ends and its audit records are
+        // drained. Releasing it at the first snapshot let later withdrawals
+        // enqueue after other cycles had already filled the audit queue.
+        let _live_rx = live_rx;
         let mut recorded = 0_usize;
         let ended = loop {
             tokio::select! {
                 ended = &mut work => break ended,
-                _ = live_rx.recv(), if !released => {
-                    released = true;
-                    drop(slot.lock().unwrap_or_else(PoisonError::into_inner).take());
-                }
                 batch = audit_rx.recv() => {
                     if let Some(batch) = batch {
                         recorded += batch.len();
@@ -870,7 +870,10 @@ impl Shared {
     }
 
     /// Record withdrawals while the follow is still up. The rows are already
-    /// gone, so before and after name the same holding.
+    /// gone, so before and after name the same holding. A refused record
+    /// leaves the deletion in place. The cycle drains the answers after it
+    /// gives the turn back, and the follow stops after
+    /// [`WITHDRAWN_PER_READ`] so this batch fits the audit queue.
     async fn audit_withdrawn<'a>(
         &'a self,
         key: DeviceKey,
