@@ -1099,6 +1099,43 @@ fn spawn_read(
     (work, withdrawn)
 }
 
+/// One range of a file the peer holds. The bytes come from that peer's
+/// `artifact.read`. Nothing is written to the retained cache. The peer is
+/// dialed for this one range.
+pub fn read_granted_artifact(
+    records: &Arc<PeerRecords>,
+    record: &PeerRecord,
+    receiver: &str,
+    file: nessa_client_core::retained::PeerArtifact<'_>,
+    clock: Arc<dyn MonotonicClock>,
+) -> Result<Vec<u8>, ReadFailure> {
+    let key = *record.key();
+    let credential = records
+        .slot(key)
+        .load_credential()
+        .map_err(|_| ReadFailure::Cache)?
+        .ok_or(ReadFailure::Cache)?;
+    let id = credential.credential().as_str().to_owned();
+    let (secret, pin, _) = credential.into_enrollment().into_parts();
+    let identity = NativeIdentity::restore(secret).map_err(|_| ReadFailure::Cache)?;
+    nessa_client_core::retained::read_peer_artifact(
+        ReaderAccess {
+            role: ReaderRole::GrantedPeer,
+            address: record.address(),
+            relay: record.relay(),
+            identity: &identity,
+            pin,
+            credential: &id,
+            receiver,
+            access_epoch: 0,
+            client_id: CLIENT_ID,
+        },
+        file,
+        &clock,
+        Duration::from_secs(15),
+    )
+}
+
 /// Read `conversation` from `record`'s peer without adding it to the follow
 /// rule. The transcript is read into a bounded in-memory cache, separate from
 /// the retained replica, and discarded on return. This validates/downloads the

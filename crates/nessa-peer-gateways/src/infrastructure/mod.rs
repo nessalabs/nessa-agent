@@ -14,8 +14,8 @@ pub use commands::{
 };
 pub use connector::TcpPeerConnector;
 pub use poller::{
-    open_granted, PeerPoller, PollInputs, PollPolicy, POLL_BACKOFF_CAP, POLL_INTERVAL,
-    READS_AT_ONCE, READ_BUDGET, WITHDRAWN_PER_READ,
+    open_granted, read_granted_artifact, PeerPoller, PollInputs, PollPolicy, POLL_BACKOFF_CAP,
+    POLL_INTERVAL, READS_AT_ONCE, READ_BUDGET, WITHDRAWN_PER_READ,
 };
 pub use records::{
     ForgetFailure, PeerEntry, PeerPhase, PeerRecord, PeerRecords, PeerSlot, SlotFound, SlotOutcome,

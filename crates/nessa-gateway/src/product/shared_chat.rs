@@ -11,9 +11,12 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use nessa_auth::application::ports::Clock as WallClock;
 use nessa_client_core::retained::{
-    EarlierMiss, ReadFailure, RetainedCache, RetainedCatalogueEntry, RetainedTranscript,
+    EarlierMiss, PeerArtifact, ReadFailure, RetainedCache, RetainedCatalogueEntry,
+    RetainedTranscript,
 };
-use nessa_peer_gateways::infrastructure::{PeerCommands, PeerEntry, PeerPhase, PeerRecords};
+use nessa_peer_gateways::infrastructure::{
+    read_granted_artifact, PeerCommands, PeerEntry, PeerPhase, PeerRecord, PeerRecords,
+};
 use nessa_projection::{CommittedCursor, Projection};
 use nessa_protocol::clock::Clock as MonotonicClock;
 use nessa_protocol::conversation::domain::ConversationId;
@@ -22,6 +25,7 @@ use nessa_protocol::conversation::view::{
     ConversationTranscriptState, ConversationView,
 };
 use nessa_protocol::product::generated::{ConversationObserveCursor, ConversationSummary};
+use nessa_protocol::product_contract::generated::ConversationErrorCode;
 use nessa_sync::replication::catalogue::{EntryKey, MAX_CATALOGUE_ENTRIES};
 use tokio::task::spawn_blocking;
 use uuid::Uuid;
@@ -52,6 +56,41 @@ pub trait SharedChats: Send + Sync {
         before: &ConversationPoint,
         after: Option<&ConversationPoint>,
     ) -> Result<Option<ConversationEarlier>, ConversationError>;
+    /// One range of a file `id` holds on the peer that granted it.
+    /// [`SharedFileRead::Elsewhere`] when this cache does not hold `id`.
+    async fn read_file(
+        &self,
+        id: &ConversationId,
+        file: SharedFileRequest,
+    ) -> Result<SharedFileRead, ConversationError>;
+}
+
+/// A file range the transcript named, as `artifact.read` asks it.
+pub struct SharedFileRequest {
+    /// The digest the view carries.
+    pub digest: String,
+    /// The media type the view carries.
+    pub media_type: String,
+    /// The size the view carries, with the digest and media type.
+    pub size: u64,
+    /// Where the range starts.
+    pub offset: u64,
+    /// How many bytes the range asks for.
+    pub max_bytes: usize,
+}
+
+/// What a shared-file range read found.
+pub enum SharedFileRead {
+    /// `id` is not a chat this cache holds.
+    Elsewhere,
+    /// The peer returned this range.
+    Range(Vec<u8>),
+    /// The peer holds the chat and does not hold this file.
+    NotHeld,
+    /// The chat is gone on the peer.
+    Missing,
+    /// The peer could not be asked now.
+    Unavailable,
 }
 
 /// The peer records this gateway already keeps.
@@ -127,6 +166,21 @@ impl SharedChats for PeerCacheChats {
         .await
         .map_err(|_| ConversationError::Unavailable)?
     }
+
+    async fn read_file(
+        &self,
+        id: &ConversationId,
+        file: SharedFileRequest,
+    ) -> Result<SharedFileRead, ConversationError> {
+        let active = active_peers(&self.peers).await?;
+        let records = Arc::clone(self.peers.records());
+        let wall = Arc::clone(&self.wall);
+        let monotonic = Arc::clone(&self.monotonic);
+        let id = id.clone();
+        spawn_blocking(move || read_cached_file(&records, &active, wall, monotonic, &id, &file))
+            .await
+            .map_err(|_| ConversationError::Unavailable)?
+    }
 }
 
 impl PeerCacheChats {
@@ -157,6 +211,25 @@ pub(super) fn source(state: &ProductRouteState) -> Option<Arc<dyn SharedChats>> 
         Arc::clone(&state.clock),
         Arc::clone(&state.uptime_clock),
     )))
+}
+
+/// One range of a file a granted chat names, read from the peer that granted
+/// it. Cedar's `owner.read` admits the catalogue owner. A local conversation,
+/// or a caller Cedar does not admit, is [`SharedFileRead::Elsewhere`] so the
+/// local hold answers instead. Nothing is written into this gateway's store.
+pub(super) async fn read_shared_file(
+    state: &ProductRouteState,
+    session: &nessa_auth::application::session::AuthenticatedSession,
+    id: &ConversationId,
+    file: SharedFileRequest,
+) -> Result<SharedFileRead, ConversationError> {
+    if local_conversation(state, id).await? || !catalogue_admitted(state, session, false).await? {
+        return Ok(SharedFileRead::Elsewhere);
+    }
+    let Some(chats) = source(state) else {
+        return Ok(SharedFileRead::Elsewhere);
+    };
+    chats.read_file(id, file).await
 }
 
 /// The saved view when `id` is not one of this gateway's own conversations
@@ -437,6 +510,101 @@ fn peer_earlier(
         Ok(None) => Ok(EarlierHit::NotLoaded),
         Err(EarlierMiss::Point) => Ok(EarlierHit::NotInHistory),
         Err(EarlierMiss::Read(error)) => Err(error),
+    }
+}
+
+fn read_cached_file(
+    records: &Arc<PeerRecords>,
+    peers: &[ActivePeer],
+    wall: Arc<dyn WallClock>,
+    monotonic: Arc<dyn MonotonicClock>,
+    id: &ConversationId,
+    file: &SharedFileRequest,
+) -> Result<SharedFileRead, ConversationError> {
+    let mut failed = false;
+    for peer in peers {
+        let holds = match cache_holds(records, peer, &wall, &monotonic, id) {
+            Ok(holds) => holds,
+            Err(error) => {
+                tracing::warn!(
+                    receiver = %peer.receiver,
+                    error = ?error,
+                    "a peer cache could not be read for a shared file"
+                );
+                failed = true;
+                continue;
+            }
+        };
+        if !holds {
+            continue;
+        }
+        let record = records
+            .get(&peer.key)
+            .map_err(|_| ConversationError::Unavailable)?;
+        let Some(PeerEntry::Readable(record)) = record else {
+            return Ok(SharedFileRead::Unavailable);
+        };
+        return Ok(shared_range(
+            records,
+            &record,
+            &peer.receiver,
+            id,
+            file,
+            &monotonic,
+        ));
+    }
+    if failed {
+        Err(ConversationError::Unavailable)
+    } else {
+        Ok(SharedFileRead::Elsewhere)
+    }
+}
+
+fn cache_holds(
+    records: &PeerRecords,
+    peer: &ActivePeer,
+    wall: &Arc<dyn WallClock>,
+    monotonic: &Arc<dyn MonotonicClock>,
+    id: &ConversationId,
+) -> Result<bool, ReadFailure> {
+    let mut cache = open_cache(records, peer, wall, monotonic)?;
+    let held = cache.conversation_ids(&peer.receiver)?;
+    Ok(held.iter().any(|held| held == &id.to_string()))
+}
+
+fn shared_range(
+    records: &Arc<PeerRecords>,
+    record: &PeerRecord,
+    receiver: &str,
+    id: &ConversationId,
+    file: &SharedFileRequest,
+    clock: &Arc<dyn MonotonicClock>,
+) -> SharedFileRead {
+    let read = read_granted_artifact(
+        records,
+        record,
+        receiver,
+        PeerArtifact {
+            conversation: id,
+            digest: &file.digest,
+            media_type: &file.media_type,
+            size: file.size,
+            offset: file.offset,
+            max_bytes: file.max_bytes,
+        },
+        Arc::clone(clock),
+    );
+    match read {
+        Ok(bytes) => SharedFileRead::Range(bytes),
+        Err(ReadFailure::Product(ConversationErrorCode::InvalidRequest)) => {
+            SharedFileRead::Unavailable
+        }
+        Err(ReadFailure::Product(
+            ConversationErrorCode::ConversationNotFound
+            | ConversationErrorCode::ConversationDeleted,
+        )) => SharedFileRead::Missing,
+        Err(ReadFailure::Product(_)) => SharedFileRead::NotHeld,
+        Err(_) => SharedFileRead::Unavailable,
     }
 }
 
@@ -790,6 +958,24 @@ mod tests {
                 more: false,
                 truncated: false,
             }))
+        }
+
+        async fn read_file(
+            &self,
+            id: &ConversationId,
+            file: super::SharedFileRequest,
+        ) -> Result<super::SharedFileRead, crate::conversation::application::ConversationError>
+        {
+            if id.to_string() != self.id {
+                return Ok(super::SharedFileRead::Elsewhere);
+            }
+            if file.digest == format!("sha256:{}", "ab".repeat(32))
+                && file.offset == 0
+                && file.size == 4
+            {
+                return Ok(super::SharedFileRead::Range(vec![1, 2, 3, 4]));
+            }
+            Ok(super::SharedFileRead::NotHeld)
         }
     }
 
@@ -1380,5 +1566,52 @@ mod tests {
         assert_eq!(followed["complete"], true);
         assert!(followed.get("cursor").is_none());
         assert_eq!(followed["conversations"][0]["conversationId"], shared_id);
+    }
+
+    #[tokio::test]
+    async fn a_shared_chat_file_is_read_from_the_peer() {
+        let held = replica();
+        let id = held.id.clone();
+        let (state, session) = owner_state(held).await;
+        let digest = format!("sha256:{}", "ab".repeat(32));
+        let read = |conversation: &str, digest: &str| {
+            RequestFrame::new(
+                "request",
+                "artifact.read",
+                &json!({
+                    "conversationId": conversation,
+                    "digest": digest,
+                    "mimeType": "text/plain",
+                    "size": 4,
+                    "offset": 0,
+                    "maxBytes": 4
+                }),
+            )
+            .unwrap()
+        };
+        let reply = response(
+            super::super::attachment::dispatch_read(&state, &session, read(&id, &digest)).await,
+        );
+        assert!(reply.ok, "{reply:?}");
+        assert_eq!(reply.payload.unwrap()["data"], "AQIDBA==");
+        let missing = response(
+            super::super::attachment::dispatch_read(
+                &state,
+                &session,
+                read("00000000-0000-4000-8000-000000000891", &digest),
+            )
+            .await,
+        );
+        assert!(!missing.ok);
+        let other = response(
+            super::super::attachment::dispatch_read(
+                &state,
+                &session,
+                read(&id, &format!("sha256:{}", "cd".repeat(32))),
+            )
+            .await,
+        );
+        assert!(!other.ok);
+        assert_eq!(other.error.unwrap().code, "attachment_not_found");
     }
 }

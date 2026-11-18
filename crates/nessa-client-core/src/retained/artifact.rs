@@ -300,7 +300,7 @@ fn file_step(step: FileStep) -> ArtifactFileStep {
 /// other code `artifact.read` is taught. They are not this device's authority
 /// being refused, so pinned status is not asked again. `forbidden` and
 /// `unauthorized` are not conversation codes and still use [`failure`].
-fn held_file_failure(error: GatewayError) -> ReadFailure {
+pub(super) fn held_file_failure(error: GatewayError) -> ReadFailure {
     match error {
         GatewayError::HeldFile(HeldFileRefusal::Conversation(code)) => match code {
             ConversationErrorCode::TemporarilyUnavailable => ReadFailure::Unreachable,
