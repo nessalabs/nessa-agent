@@ -293,8 +293,14 @@ jobs:
   # conversations run beside it. Every feature a person reaches through a
   # conversation is flexed here (CODING_STANDARDS.md, "Conversation stress").
   # The pull request runs its default numbers; the nightly load run in
-  # conversation-stress-load.yml raises them. The chaos check runs after it
-  # in the same job, on the same gateway build.
+  # conversation-stress-load.yml raises them.
+  #
+  # The scripted, browser, focused WebKit and chaos checks run beside it in
+  # `conversation-checks`, on a runner of their own. In one job they ran
+  # after the stress check, one after the other: 26 to 35 minutes per pull
+  # request, longer than any test leg once those got faster. Each job builds
+  # the same gateway and installs the same browsers, so what is checked does
+  # not change, only how many of the checks wait for each other.
   conversation-stress:
     name: Conversation stress check
     needs: changes
@@ -348,16 +354,6 @@ jobs:
       # build chaos waits on.
       - name: Build the peer example
         run: cargo build -p nessa-client-core --example read_only_sync
-      # Reuse this job's gateway build and browser install. The reset-boundary
-      # regression needs both engines, including WebKit's ticking-clock path.
-      - name: Run the scripted gateway checks in both browsers
-        run: pnpm test:e2e:scripted -- --channel bundled --evidence "$STRESS_EVIDENCE/scripted"
-      - name: Verify GitHub live-event opt-in in both browsers
-        run: node verification/desktop/scripts/github-live-events.mjs --channel bundled --out "$STRESS_EVIDENCE/github-live-events.json" --shots "$STRESS_EVIDENCE/github-live-events"
-      - name: Verify usage-limit cards in both browsers
-        run: node verification/desktop/scripts/usage-limit.mjs --channel bundled --out "$STRESS_EVIDENCE/usage-limit.json" --shots "$STRESS_EVIDENCE/usage-limit"
-      - name: Verify pane dragging after deferred fitting in both browsers
-        run: node verification/desktop/scripts/drag.mjs --engine chromium,webkit --layout columns --channel bundled --only resize-mid-drag,return-interrupted --out "$STRESS_EVIDENCE/drag.json"
       # The private Swift phone product is exercised by nessa-ios's macOS
       # phone-files-stress workflow against this exact gateway source.
       # This Ubuntu job cannot build that product; it retains core window load.
@@ -368,8 +364,80 @@ jobs:
           mkdir -p "$STRESS_EVIDENCE"
           pnpm test:e2e:stress -- --inputFiles 0 --channel bundled --evidence "$STRESS_EVIDENCE" --out "$STRESS_EVIDENCE/result.json" 2>&1 | tee "$STRESS_EVIDENCE/stress.log"
         timeout-minutes: 20
-      # Focused webhook coverage supplements the complete default run above.
-      # Reuse installed browsers and gateway; other knobs are zero so the
+      - name: Keep the evidence of a failed run
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: conversation-stress-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.STRESS_EVIDENCE }}
+          if-no-files-found: ignore
+          retention-days: 7
+
+  # The checks that used to run after the stress check in its job: the
+  # scripted gateway checks, the browser checks, the focused WebKit stress
+  # steps and the conversation chaos check. Same gateway build, same browsers.
+  conversation-checks:
+    name: Conversation scripted, WebKit and chaos checks
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
+    runs-on: ubuntu-latest
+    # The browser install may use 45 minutes (run 42079903038 was still
+    # fetching at 30); everything after it took at most 16 minutes in the
+    # combined job, plus a cold gateway build. 90, as the stress job.
+    timeout-minutes: 90
+    env:
+      STRESS_EVIDENCE: ${{ github.workspace }}-stress-evidence
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.rust-cache != 'cold' }}
+        with:
+          # The same gateway build as `conversation-stress`, which stays the
+          # one writer of this cache: two writers would double what it keeps
+          # against the repository's ten-gigabyte ceiling.
+          shared-key: conversation-stress
+          save-if: false
+          cache-on-failure: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - uses: ./.github/actions/pnpm-install
+      - name: Install the pinned browsers and their runtime dependencies
+        run: |
+          set -euo pipefail
+          # A dropped Azure mirror connection used to hold apt until this
+          # step's own bound (run 42079903038). The retries and the socket
+          # timeout are the ones install-linux-build-deps.sh already uses.
+          sudo tee /etc/apt/apt.conf.d/99-nessa-ci-retries >/dev/null <<'EOF'
+          Acquire::Retries "3";
+          Acquire::http::Timeout "30";
+          Acquire::https::Timeout "30";
+          EOF
+          pnpm exec playwright install --with-deps chromium webkit
+        # 45 minutes is that script's ceiling for an install that is still
+        # moving. Run 42079903038 had not finished fetching at 30.
+        timeout-minutes: 45
+      # nessa-mcp: the stress check's `github` step runs commands through
+      # Nessa's own shell tool.
+      - id: gateway-build
+        run: cargo build -p nessa-server -p nessa-mcp
+      # The peer step enrolls through this example. It is not the gateway
+      # build chaos waits on.
+      - name: Build the peer example
+        run: cargo build -p nessa-client-core --example read_only_sync
+      # The reset-boundary regression needs both engines, including WebKit's
+      # ticking-clock path.
+      - name: Run the scripted gateway checks in both browsers
+        run: pnpm test:e2e:scripted -- --channel bundled --evidence "$STRESS_EVIDENCE/scripted"
+      - name: Verify GitHub live-event opt-in in both browsers
+        run: node verification/desktop/scripts/github-live-events.mjs --channel bundled --out "$STRESS_EVIDENCE/github-live-events.json" --shots "$STRESS_EVIDENCE/github-live-events"
+      - name: Verify usage-limit cards in both browsers
+        run: node verification/desktop/scripts/usage-limit.mjs --channel bundled --out "$STRESS_EVIDENCE/usage-limit.json" --shots "$STRESS_EVIDENCE/usage-limit"
+      - name: Verify pane dragging after deferred fitting in both browsers
+        run: node verification/desktop/scripts/drag.mjs --engine chromium,webkit --layout columns --channel bundled --only resize-mid-drag,return-interrupted --out "$STRESS_EVIDENCE/drag.json"
+      # Focused webhook coverage supplements the complete default run in
+      # `conversation-stress`. Other knobs are zero so the
       # fixture never enables native discovery. These are not full-cohort runs.
       - name: Run focused webhook default and raised browser cases
         shell: bash
@@ -450,7 +518,7 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: conversation-stress-${{ github.run_id }}-${{ github.run_attempt }}
+          name: conversation-checks-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ env.STRESS_EVIDENCE }}
           if-no-files-found: ignore
           retention-days: 7
@@ -984,6 +1052,7 @@ jobs:
       - changes
       - gateway-contract
       - frontend
+      - conversation-checks
       - conversation-stress
       - linux-desktop
       - local-auth

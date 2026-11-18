@@ -8,7 +8,8 @@ const workflow = readFileSync(
   new URL("../.github/workflows/local-auth.yml", import.meta.url),
   "utf8",
 )
-const start = workflow.indexOf("  conversation-stress:\n")
+// Chaos runs in its own job beside the stress check, on that job's gateway build.
+const start = workflow.indexOf("  conversation-checks:\n")
 const end = workflow.indexOf("\n  windows-server-tests:", start)
 assert(start !== -1 && end > start)
 const job = workflow.slice(start, end)
@@ -27,13 +28,17 @@ function admitted(cancelled, outcome) {
   return runInNewContext(expression, Object.create(null), { timeout: 100 })
 }
 
-test("the readiness outcome belongs to the existing gateway build before stress", () => {
+test("the readiness outcome belongs to the job's gateway build before its checks", () => {
   assert.match(
     job,
     /- id: gateway-build\n        run: cargo build -p nessa-server -p nessa-mcp\n/,
   )
   assert(
-    job.indexOf("- id: gateway-build") < job.indexOf("Run the conversation stress check"),
+    job.indexOf("- id: gateway-build") <
+      job.indexOf("Run the scripted gateway checks in both browsers"),
+  )
+  assert(
+    job.indexOf("- id: gateway-build") < job.indexOf("Run the conversation chaos check"),
   )
 })
 

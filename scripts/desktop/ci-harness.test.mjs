@@ -163,10 +163,10 @@ function assertCoverageJobSplit(desktop, localAuth, coverage, workflow) {
   assert.match(coverage, /prefix-key: sdk-domain-coverage/)
   assert.match(coverage, /cache-workspace-crates: "true"/)
   assert.doesNotMatch(coverage, /prepare\.mjs|desktop:smoke/)
-  assert.equal(workflow.match(/uses: Swatinem\/rust-cache@v2/g)?.length, 6)
+  assert.equal(workflow.match(/uses: Swatinem\/rust-cache@v2/g)?.length, 7)
   assert.equal(
     workflow.match(/github\.event\.inputs\.rust-cache != 'cold'/g)?.length,
-    6,
+    7,
     "a cold measurement skips the cache and nothing else",
   )
   assert.match(workflow, /options:\s+- restore\s+- cold\s+default: restore/)
@@ -373,6 +373,7 @@ test("apt installs and every CI job are bounded", () => {
       // 90: the browser install may use 45 minutes (run 42079903038 was still
       // fetching at 30) and the rest of green run 42072698358 took 31.
       "conversation-stress": 90,
+      "conversation-checks": 90,
       "linux-desktop": 120,
       "local-auth": 140,
       "windows-server-tests": 95,
@@ -833,4 +834,46 @@ test("publication requires the tag to exist and states the channel", () => {
   assert.match(workflow, /\$\{PRERELEASE:\+--prerelease\}/)
   // A draft from a run before the channel was set is corrected rather than left.
   assert.match(workflow, /gh release edit "\$TAG" --prerelease=/)
+})
+
+test("the stress check and its companion checks run on two runners with the same setup", () => {
+  const workflow = readFileSync(".github/workflows/local-auth.yml", "utf8")
+  const jobs = Object.fromEntries(workflowJobs(workflow))
+  const stress = jobs["conversation-stress"]
+  const checks = jobs["conversation-checks"]
+  assert.ok(stress && checks, "both stress jobs exist")
+  // Each builds the same gateway and installs the same browsers, so a check
+  // moved from one to the other runs against what it did before.
+  for (const job of [stress, checks]) {
+    assert.match(job, /needs: changes\r?\n/)
+    assert.match(
+      job,
+      /- id: gateway-build\r?\n\s+run: cargo build -p nessa-server -p nessa-mcp\r?\n/,
+    )
+    assert.match(job, /run: cargo build -p nessa-client-core --example read_only_sync/)
+    assert.match(job, /pnpm exec playwright install --with-deps chromium webkit/)
+  }
+  // The default stress run stays in its own job; everything else that used
+  // to queue behind it is in the companion job, each once.
+  assert.match(stress, /pnpm test:e2e:stress -- /)
+  assert.doesNotMatch(stress, /test:e2e:scripted|test:e2e:chaos|--engine webkit/)
+  assert.doesNotMatch(checks, /pnpm test:e2e:stress -- /)
+  for (const check of [
+    "pnpm test:e2e:scripted",
+    "github-live-events.mjs",
+    "usage-limit.mjs",
+    "drag.mjs",
+    "--webhooks 3",
+    "--menuPanels 1",
+    "--devices 1",
+    "--menus 1",
+    "--composers 1 --voices 1",
+    "--githubs 1",
+    "--onboardings 1",
+    "pnpm test:e2e:chaos",
+  ])
+    assert.equal(workflow.split(check).length - 1, 1, check)
+  assert.ok(checks.includes("pnpm test:e2e:chaos"))
+  // One cache writer: the companion job reads the stress job's cache.
+  assert.match(checks, /shared-key: conversation-stress\r?\n\s+save-if: false/)
 })
