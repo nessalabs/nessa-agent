@@ -50,7 +50,9 @@ describe("client.peer", () => {
       },
     ])
     expect(result.replicaReset).toBe(true)
-    calls.length = 0
+    const forgotten = session({ peerKey, phase: "revoked" })
+    await forgotten.api.forget({ peerKey })
+    expect(forgotten.calls).toEqual([{ method: "peer.forget", params: { peerKey } }])
     const listed = session({
       items: [{ peerKey, phase: "active", credentialId: "credential" }],
     })

@@ -3262,11 +3262,12 @@ const steps = {
    */
   async sharedChat(run, step, failures) {
     const grantor = await startGrantor(run)
+    const enrolled = {}
     let linked = false
     try {
       linked = true
       await setWindowLinking(run, true)
-      const opened = await grantSharedChat(run, grantor, step)
+      const opened = await grantSharedChat(run, grantor, step, enrolled)
       await openStressConversation(run.page, opened.id, opened.title)
       const transcript = await waitFor(
         async () => (await run.page.locator(".workspace-transcript").count()) === 1,
@@ -3299,6 +3300,10 @@ const steps = {
       if (!gone) failures.push("unshare left the granted chat in the window")
       await openStressConversation(run.page, run.main.id, run.main.title)
     } finally {
+      if (enrolled.peerKey)
+        await run.client.peer.forget({ peerKey: enrolled.peerKey }).catch((error) => {
+          failures.push(`the grantor was not forgotten: ${error.message ?? error}`)
+        })
       if (linked)
         await setWindowLinking(run, false).catch((error) => {
           failures.push(`linking was not turned back off: ${error.message ?? error}`)
@@ -11620,7 +11625,13 @@ async function setWindowLinking(run, enabled) {
  * Share one renamed chat from `grantor` to this window's gateway, and wait
  * until the window's list names it.
  */
-async function grantSharedChat(run, grantor, step) {
+function samePeerKey(left, right) {
+  return (
+    left?.length === right?.length && left.every((byte, index) => byte === right[index])
+  )
+}
+
+async function grantSharedChat(run, grantor, step, enrolled) {
   const id = randomUUID()
   const title = `Shared chat ${step.index}`
   await grantor.client.conversation.create({
@@ -11629,7 +11640,11 @@ async function grantSharedChat(run, grantor, step) {
   })
   await grantor.client.conversation.rename(id, title)
   const created = await grantor.client.pairing.create({ enrollee: "gateway" })
-  await run.client.peer.enroll({ address: grantor.address, code: created.code })
+  const joined = await run.client.peer.enroll({
+    address: grantor.address,
+    code: created.code,
+  })
+  enrolled.peerKey = joined.peerKey
   let claimed
   for (let tries = 0; tries < 40 && !claimed; tries += 1) {
     claimed = (await grantor.client.pairing.status(created.status.invitationId))
@@ -11645,7 +11660,12 @@ async function grantSharedChat(run, grantor, step) {
     throw new Error(`approving the follower stopped: ${approved.activationStopped}`)
   let peer
   for (let tries = 0; tries < 40 && !peer?.credentialId; tries += 1) {
-    peer = (await run.client.peer.list()).items.find((item) => item.phase === "active")
+    peer = (await run.client.peer.list()).items.find(
+      (item) =>
+        samePeerKey(item.peerKey, enrolled.peerKey) &&
+        item.phase === "active" &&
+        item.credentialId,
+    )
     if (!peer?.credentialId) await sleep(250)
   }
   if (!peer?.credentialId)

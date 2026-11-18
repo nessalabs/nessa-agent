@@ -4,6 +4,7 @@ import type {
   PeerEnrollParams,
   PeerFollowParams,
   PeerFollowResult,
+  PeerForgetParams,
   PeerGateway,
   PeerListResult,
 } from "../generated/product.js"
@@ -18,6 +19,8 @@ export type PeerApi = {
   enroll(params: PeerEnrollParams): Promise<PeerGateway>
   /** Store which of one peer's granted chats this gateway replicates. */
   follow(params: PeerFollowParams): Promise<PeerFollowResult>
+  /** Forget one peer and its retained cache. */
+  forget(params: PeerForgetParams): Promise<PeerGateway>
   /** Every peer this gateway keeps. */
   list(): Promise<PeerListResult>
 }
@@ -28,6 +31,8 @@ export function createPeerApi(session: RpcRequester): PeerApi {
       session.request(ProductMethod.PeerEnroll, params).then(peerGateway),
     follow: (params) =>
       session.request(ProductMethod.PeerFollow, params).then(peerFollowResult),
+    forget: (params) =>
+      session.request(ProductMethod.PeerForget, params).then(peerGateway),
     list: () => session.request(ProductMethod.PeerList, {}).then(peerList),
   }
 }
