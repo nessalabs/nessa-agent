@@ -271,18 +271,21 @@ fn upsert_grant(
 }
 
 /// Drop the grant row and the transcript stored for that conversation.
-/// True when a grant row was removed.
+/// True when a grant row or retained transcript was removed. A copy can
+/// store the transcript before the grant row is committed, and that
+/// deletion is still a withdrawal.
 fn remove_grant_conversation(
     transaction: &Transaction<'_>,
     receiver: &str,
     conversation: &str,
 ) -> Result<bool, CacheError> {
-    let removed = transaction
+    let mut removed = transaction
         .execute(
             "DELETE FROM grant_rows WHERE receiver = ?1 AND conversation_id = ?2",
             params![receiver, conversation],
         )
-        .map_err(super::rows::database_error)?;
+        .map_err(super::rows::database_error)?
+        > 0;
     for table in [
         "transcript_records",
         "transcript_checkpoints",
@@ -294,12 +297,13 @@ fn remove_grant_conversation(
         } else {
             "stream"
         };
-        transaction
+        removed |= transaction
             .execute(
                 &format!("DELETE FROM {table} WHERE receiver = ?1 AND {column} = ?2"),
                 params![receiver, conversation],
             )
-            .map_err(super::rows::database_error)?;
+            .map_err(super::rows::database_error)?
+            > 0;
     }
-    Ok(removed > 0)
+    Ok(removed)
 }

@@ -1436,6 +1436,52 @@ fn a_replacement_drops_a_transcript_that_has_no_grant_row() {
 }
 
 #[test]
+fn an_incremental_revoke_reports_a_transcript_that_has_no_grant_row() {
+    let root = tempfile::tempdir().unwrap();
+    let mut cache = cache(&cache_path(root.path(), "incremental-orphan.sqlite3"));
+    let blob = [0_u8, 0, 0, 0, 0, 0, 0, 1];
+    cache
+        .connection
+        .execute(
+            "INSERT INTO transcript_progress
+             (receiver, origin, stream, incarnation, schema_id, access_epoch, downloaded, applied, facts, generation)
+             VALUES ('recv', 'origin', 'conv-x', 'inc', 'schema', 'epoch', ?1, ?1, ?1, ?1)",
+            params![blob.as_slice()],
+        )
+        .unwrap();
+    let kept = ("conv-y".to_owned(), false, Some("read".to_owned()), 1_i64);
+    cache
+        .apply_grant_entries("recv", false, "inc", 4, std::slice::from_ref(&kept))
+        .unwrap();
+    let revoked = ("conv-x".to_owned(), true, None, 5_i64);
+    let removed = cache
+        .withdraw_grant_entries("recv", false, &[revoked])
+        .unwrap();
+    assert_eq!(removed, vec!["conv-x".to_owned()]);
+    let gone: i64 = cache
+        .connection
+        .query_row(
+            "SELECT count(*) FROM transcript_progress WHERE receiver = 'recv' AND stream = 'conv-x'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        gone, 0,
+        "the incremental tombstone drops the uncommitted transcript"
+    );
+    let cursor: i64 = cache
+        .connection
+        .query_row(
+            "SELECT position FROM grant_cursors WHERE receiver = 'recv'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(cursor, 4, "the withdrawal does not move the cursor");
+}
+
+#[test]
 fn a_revoke_lands_before_the_cursor_moves() {
     let root = tempfile::tempdir().unwrap();
     let mut cache = cache(&cache_path(root.path(), "revoke-first.sqlite3"));

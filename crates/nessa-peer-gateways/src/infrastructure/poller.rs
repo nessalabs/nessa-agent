@@ -520,21 +520,32 @@ impl Shared {
         }
     }
     /// Wait until `changes` have left the audit queue, then free the place.
-    /// An empty wave only frees the place. The turn is still held here; the
-    /// wait is the records already handed over, and a stalled writer is the
-    /// same wait the cycle makes after it gives the turn back.
+    /// An empty wave only frees the place. `false` when this peer's cycle is
+    /// stopped first: the records that are still queued are put back, the
+    /// place stays held, and the caller gives the turn back before waiting
+    /// on them.
     async fn release_place<'a>(
         &'a self,
         changes: &mut Vec<PollerRecord<'a>>,
         permit: &mut Option<OwnedSemaphorePermit>,
         stopped: &mut watch::Receiver<bool>,
-    ) {
-        if !changes.is_empty() {
-            self.commands
-                .poller_kept(std::mem::take(changes), stopped)
-                .await;
+        cycle: &CycleStop,
+    ) -> bool {
+        if changes.is_empty() {
+            drop(permit.take());
+            return true;
         }
-        drop(permit.take());
+        let pending = self
+            .commands
+            .poller_kept(std::mem::take(changes), stopped, Some(cycle))
+            .await;
+        if pending.is_empty() {
+            drop(permit.take());
+            true
+        } else {
+            changes.extend(pending);
+            false
+        }
     }
     fn now(&self) -> u64 {
         self.commands.clock.elapsed_ms()
@@ -598,7 +609,7 @@ impl Shared {
         // no replacement cycle starts, and shutdown can drain the writer.
         drop(turn);
         let mut stopped = self.stopped.clone();
-        self.commands.poller_kept(changes, &mut stopped).await;
+        let _left = self.commands.poller_kept(changes, &mut stopped, None).await;
         drop(permit);
         pace
     }
@@ -967,7 +978,13 @@ impl Shared {
                     // queue and the place is freed. The subscription stays up
                     // on this peer's turn.
                     synced = true;
-                    self.release_place(changes, &mut permit, &mut stopped).await;
+                    if !self
+                        .release_place(changes, &mut permit, &mut stopped, cycle)
+                        .await
+                    {
+                        cycle.stop();
+                        break (&mut work).await;
+                    }
                 }
                 () = until_stopped(&mut stopped) => {
                     // Shut the read's sockets and wait for it.
@@ -1037,8 +1054,7 @@ impl Shared {
         if !held {
             return false;
         }
-        self.release_place(changes, permit, stopped).await;
-        true
+        self.release_place(changes, permit, stopped, cycle).await
     }
 
     /// Record withdrawals while the follow is still up. The rows are already
