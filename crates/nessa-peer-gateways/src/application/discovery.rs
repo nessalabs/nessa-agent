@@ -201,7 +201,9 @@ pub enum Outbound {
 pub enum Inbound {
     Publish {
         generation: [u8; 32],
-        public_key: [u8; 32],
+        /// `None` when the frame's public half is not 32 bytes. That is
+        /// P-reject, not an undecodable frame.
+        public_key: Option<[u8; 32]>,
     },
     Stored {
         generation: [u8; 32],
@@ -329,9 +331,12 @@ impl Session {
     fn on_publish(
         &mut self,
         generation: [u8; 32],
-        public_key: [u8; 32],
+        public_key: Option<[u8; 32]>,
         entropy: &mut dyn FnMut() -> [u8; 32],
     ) -> Vec<Commit> {
+        let Some(public_key) = public_key else {
+            return self.reject_public(generation);
+        };
         if public_key == [0; 32] {
             return self.reject_public(generation);
         }
@@ -560,9 +565,9 @@ impl Session {
                 generation: ours,
                 private_key,
                 ..
-            } if *ours == generation => (
+            } => (
                 Discovery::Keyed {
-                    generation,
+                    generation: *ours,
                     private_key: *private_key,
                 },
                 true,
@@ -883,10 +888,13 @@ pub fn decode_message(bytes: &[u8]) -> Option<Inbound> {
     let generation = bytes.get(1..33)?.try_into().ok()?;
     match tag {
         1 => {
-            if bytes.len() != 65 {
+            if bytes.len() < 33 {
                 return None;
             }
-            let public_key = bytes[33..65].try_into().ok()?;
+            let raw = &bytes[33..];
+            let public_key = (raw.len() == 32)
+                .then(|| <[u8; 32]>::try_from(raw).ok())
+                .flatten();
             Some(Inbound::Publish {
                 generation,
                 public_key,

@@ -50,7 +50,7 @@ fn an_unpaired_gateway_sends_no_announcement() {
     let (after, commits) = pending.receive(
         Inbound::Publish {
             generation: key(1),
-            public_key: public_half(&key(3)),
+            public_key: Some(public_half(&key(3))),
         },
         &mut entropy_from(vec![key(4)]),
     );
@@ -141,7 +141,7 @@ fn an_all_zero_public_is_rejected_and_an_all_zero_secret_returns_offered_to_keye
     let (after, commits) = grantor.receive(
         Inbound::Publish {
             generation: key(1),
-            public_key: [0; 32],
+            public_key: Some([0; 32]),
         },
         &mut entropy_from(vec![key(4)]),
     );
@@ -172,7 +172,7 @@ fn an_all_zero_public_is_rejected_and_an_all_zero_secret_returns_offered_to_keye
     let (cleared, commits) = offered.receive(
         Inbound::Publish {
             generation: key(1),
-            public_key: peer_public,
+            public_key: Some(peer_public),
         },
         &mut || key(7),
     );
@@ -262,6 +262,78 @@ fn a_rejected_public_key_keeps_its_audit_when_the_field_stays() {
 }
 
 #[test]
+fn a_wrong_sized_public_key_is_a_durable_rejection_back_to_keyed() {
+    let generation = key(1);
+    let private_key = key(5);
+    for key_len in [31usize, 33] {
+        let mut frame = vec![1u8];
+        frame.extend_from_slice(&generation);
+        frame.extend(std::iter::repeat_n(9u8, key_len));
+        assert_eq!(
+            decode_message(&frame),
+            Some(Inbound::Publish {
+                generation,
+                public_key: None,
+            })
+        );
+        let (peer_tx, grantor_rx) = std::sync::mpsc::channel();
+        peer_tx.send(frame).unwrap();
+        drop(peer_tx);
+        let (grantor_tx, grantor_sent) = std::sync::mpsc::channel();
+        let mut pipe = Queue {
+            tx: grantor_tx,
+            rx: grantor_rx,
+        };
+        let mut session = Session::new(
+            Role::Grantor,
+            Phase::Active,
+            Discovery::Offered {
+                generation,
+                private_key,
+                peer_public: public_half(&key(6)),
+            },
+        );
+        let mut kept = Vec::new();
+        let result = exchange(
+            &mut session,
+            &mut pipe,
+            &mut || Some(key(2)),
+            &mut |commit| {
+                kept.push(commit.clone());
+                Ok(())
+            },
+            false,
+        );
+        assert!(matches!(result, Err(super::ExchangeError::Io(_))));
+        assert!(matches!(
+            session.discovery,
+            Discovery::Keyed {
+                generation: kept_generation,
+                private_key: kept_private,
+            } if kept_generation == generation && kept_private == private_key
+        ));
+        assert_eq!(kept.len(), 1);
+        assert!(kept[0].durable);
+        assert!(kept[0].persists());
+        assert_eq!(
+            kept[0].audit.as_ref().map(|audit| audit.cause),
+            Some("public key rejected or shared secret all zeros")
+        );
+        let json = discovery_to_json(&kept[0].discovery, kept[0].audit.as_ref()).unwrap();
+        assert!(!json.contains("peerPublic"));
+        assert!(matches!(
+            discovery_from_json(&json),
+            Some(Discovery::Keyed { .. })
+        ));
+        let refusal = grantor_sent.recv().unwrap();
+        assert!(matches!(
+            decode_message(&refusal),
+            Some(Inbound::Reject { generation: refused }) if refused == generation
+        ));
+    }
+}
+
+#[test]
 fn two_generation_ids_resolve_to_the_dialers_id() {
     let dialer_generation = key(9);
     let grantor_generation = key(1);
@@ -286,7 +358,7 @@ fn two_generation_ids_resolve_to_the_dialers_id() {
     let (dialer_after, dialer_commits) = dialer.receive(
         Inbound::Publish {
             generation: grantor_generation,
-            public_key: public_half(&key(3)),
+            public_key: Some(public_half(&key(3))),
         },
         &mut || key(4),
     );
@@ -302,7 +374,7 @@ fn two_generation_ids_resolve_to_the_dialers_id() {
     let (grantor_after, grantor_commits) = grantor.receive(
         Inbound::Publish {
             generation: dialer_generation,
-            public_key: dialer_public,
+            public_key: Some(dialer_public),
         },
         &mut || key(5),
     );
@@ -524,7 +596,7 @@ fn a_message_round_trips_and_a_refusal_envelope_is_not_a_public_half() {
         decode_message(&bytes),
         Some(Inbound::Publish {
             generation: key(1),
-            public_key: public_half(&key(2)),
+            public_key: Some(public_half(&key(2))),
         })
     );
     assert!(decode_message(br#"{"kind":"refused"}"#).is_none());
