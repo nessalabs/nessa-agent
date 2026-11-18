@@ -21,7 +21,7 @@ use nessa_protocol::conversation::view::{
     ConversationCapabilities, ConversationEarlier, ConversationPoint, ConversationSelectionView,
     ConversationTranscriptState, ConversationView,
 };
-use nessa_protocol::product::generated::ConversationSummary;
+use nessa_protocol::product::generated::{ConversationObserveCursor, ConversationSummary};
 use nessa_sync::replication::catalogue::{EntryKey, MAX_CATALOGUE_ENTRIES};
 use tokio::task::spawn_blocking;
 use uuid::Uuid;
@@ -237,14 +237,25 @@ pub(super) async fn catalogue_admitted(
     }
 }
 
-/// Add `replicas` that fit in `limit`. A remainder keeps the page incomplete.
+/// The id prefix of a cursor that continues a finished local catalogue into
+/// the replicas that page could not hold. The desktop stops an incomplete
+/// observe page with no cursor, and it continues only when the next cursor
+/// keeps the same incarnation and boundary and is later in creation order.
+/// This id is not a conversation. The next observe recognizes it and serves
+/// the remainder.
+const SHARED_PAGE_ID_PREFIX: &str = "ffffffff-ffff-ffff-ffff-";
+
+/// Add `replicas` that fit in `limit`, after `skip` of them that an earlier
+/// page of this walk already returned. `Some` is where the next page starts
+/// when this one could not hold the rest. A remainder keeps the page incomplete.
 pub(super) fn append_bounded(
     rows: &mut Vec<ConversationSummary>,
     replicas: Vec<ConversationSummary>,
     limit: usize,
     complete: &mut bool,
-) {
-    let replicas = replicas
+    skip: usize,
+) -> Option<u64> {
+    let mut replicas = replicas
         .into_iter()
         .filter(|replica| {
             !rows
@@ -252,13 +263,59 @@ pub(super) fn append_bounded(
                 .any(|row| row.conversation_id == replica.conversation_id)
         })
         .collect::<Vec<_>>();
+    let rest = if skip >= replicas.len() {
+        Vec::new()
+    } else {
+        replicas.split_off(skip)
+    };
     let room = limit.saturating_sub(rows.len());
-    if replicas.len() <= room {
-        rows.extend(replicas);
-        return;
+    if rest.len() <= room {
+        rows.extend(rest);
+        return None;
     }
-    rows.extend(replicas.into_iter().take(room));
+    let placed = room;
+    rows.extend(rest.into_iter().take(placed));
     *complete = false;
+    Some(skip.saturating_add(placed) as u64)
+}
+
+/// How many replicas a cursor minted by [`shared_page_cursor`] already
+/// returned. Any other id is a local catalogue cursor.
+pub(super) fn shared_page_offset(cursor: &ConversationObserveCursor) -> Option<usize> {
+    let suffix = cursor.id.strip_prefix(SHARED_PAGE_ID_PREFIX)?;
+    if suffix.len() != 12 {
+        return None;
+    }
+    let offset = u64::from_str_radix(suffix, 16).ok()?;
+    usize::try_from(offset).ok()
+}
+
+/// A cursor the desktop will walk after `base`, naming the replica `offset`
+/// the next page starts at. No `base` is the first observe of a walk.
+pub(super) fn shared_page_cursor(
+    base: Option<&ConversationObserveCursor>,
+    offset: u64,
+) -> ConversationObserveCursor {
+    let (incarnation, boundary, creation) = match base {
+        Some(base) => {
+            let creation = match base.creation.parse::<u64>() {
+                Ok(value) => value.checked_add(1).map(|next| next.to_string()),
+                Err(_) => None,
+            };
+            (
+                base.incarnation.clone(),
+                base.boundary.clone(),
+                creation.unwrap_or_else(|| base.creation.clone()),
+            )
+        }
+        None => ("shared".to_owned(), "0".to_owned(), "1".to_owned()),
+    };
+    ConversationObserveCursor {
+        incarnation,
+        boundary,
+        creation,
+        id: format!("{SHARED_PAGE_ID_PREFIX}{offset:012x}"),
+    }
 }
 
 async fn local_conversation(
@@ -783,6 +840,17 @@ mod tests {
         ProductRouteState,
         nessa_auth::application::session::AuthenticatedSession,
     ) {
+        route(chats, ConversationLimits::default(), None).await
+    }
+
+    async fn route(
+        chats: Arc<dyn SharedChats>,
+        limits: ConversationLimits,
+        listing: Option<Arc<dyn crate::conversation::application::ConversationListing>>,
+    ) -> (
+        ProductRouteState,
+        nessa_auth::application::session::AuthenticatedSession,
+    ) {
         let directory = tempfile::tempdir().unwrap();
         let root = directory.path().join("auth");
         nessa_local_storage::create_directory(&root).unwrap();
@@ -830,8 +898,12 @@ mod tests {
         .execute(&issued.evidence, &AudienceId::new("gateway").unwrap())
         .await
         .unwrap();
-        let (service, _, _, _) =
-            crate::conversation_test_support::fixture(ConversationLimits::default());
+        let service = match listing {
+            Some(listing) => {
+                crate::conversation_test_support::fixture_with_listing(limits, listing)
+            }
+            None => crate::conversation_test_support::fixture(limits).0,
+        };
         let catalog = serde_json::from_value(json!({
             "environments": [],
             "commandHosts": [],
@@ -1110,13 +1182,203 @@ mod tests {
             .map(|index| summary(&format!("local-{index}")))
             .collect();
         let mut complete = true;
-        super::append_bounded(&mut rows, vec![summary("shared")], 256, &mut complete);
+        assert_eq!(
+            super::append_bounded(&mut rows, vec![summary("shared")], 256, &mut complete, 0),
+            Some(0)
+        );
         assert_eq!(rows.len(), 256);
         assert!(!complete);
         let mut room = vec![summary("local")];
         complete = true;
-        super::append_bounded(&mut room, vec![summary("shared")], 256, &mut complete);
+        assert_eq!(
+            super::append_bounded(&mut room, vec![summary("shared")], 256, &mut complete, 0),
+            None
+        );
         assert_eq!(room.len(), 2);
         assert!(complete);
+        let mut continued = Vec::new();
+        complete = true;
+        assert_eq!(
+            super::append_bounded(
+                &mut continued,
+                vec![summary("a"), summary("b"), summary("c")],
+                1,
+                &mut complete,
+                1,
+            ),
+            Some(2)
+        );
+        assert_eq!(continued.len(), 1);
+        assert_eq!(continued[0].conversation_id, "b");
+        assert!(!complete);
+    }
+
+    #[test]
+    fn a_shared_page_cursor_is_later_than_the_local_one_and_names_its_offset() {
+        use nessa_protocol::product::generated::ConversationObserveCursor;
+        let local = ConversationObserveCursor {
+            incarnation: "metadata".into(),
+            boundary: "4".into(),
+            creation: "9".into(),
+            id: "00000000-0000-4000-8000-000000000001".into(),
+        };
+        let next = super::shared_page_cursor(Some(&local), 0);
+        assert_eq!(next.incarnation, local.incarnation);
+        assert_eq!(next.boundary, local.boundary);
+        assert_eq!(next.creation, "10");
+        assert_eq!(super::shared_page_offset(&next), Some(0));
+        let later = super::shared_page_cursor(Some(&next), 256);
+        assert_eq!(later.creation, "11");
+        assert_eq!(super::shared_page_offset(&later), Some(256));
+        assert!(later.id > next.id);
+        let fresh = super::shared_page_cursor(None, 0);
+        assert_eq!(fresh.incarnation, "shared");
+        assert_eq!(fresh.creation, "1");
+        assert_eq!(super::shared_page_offset(&fresh), Some(0));
+        assert_eq!(super::shared_page_offset(&local), None);
+    }
+
+    /// The local catalogue's last page: full, finished, and without a cursor.
+    /// The shared chat has to come back on a later page the desktop can ask for.
+    struct FullPage;
+
+    impl crate::conversation::application::ConversationListing for FullPage {
+        fn list(
+            &self,
+            _: &OrganizationId,
+            _: &nessa_auth::domain::PrincipalId,
+            _: bool,
+            _: usize,
+            _: &crate::conversation::application::Reader,
+        ) -> crate::conversation::application::ConversationFuture<
+            '_,
+            crate::conversation::application::ListedConversations,
+        > {
+            Box::pin(async { Ok(crate::conversation::application::ListedConversations::default()) })
+        }
+
+        fn observe(
+            &self,
+            _: &OrganizationId,
+            _: &nessa_auth::domain::PrincipalId,
+            _: bool,
+            _: Option<crate::conversation::application::ObservationCursor>,
+            _: &crate::conversation::application::Reader,
+        ) -> crate::conversation::application::ConversationFuture<
+            '_,
+            crate::conversation::application::ObservedConversations,
+        > {
+            let conversations = (0..super::MAX_CATALOGUE_ENTRIES)
+                .map(|index| {
+                    let id = ConversationId::new(&format!("00000000-0000-4000-8000-{index:012x}"))
+                        .unwrap();
+                    crate::conversation::application::ListedConversation {
+                        conversation: crate::conversation::domain::Conversation::new(
+                            id,
+                            OrganizationId::new("org").unwrap(),
+                            nessa_auth::domain::PrincipalId::new("owner").unwrap(),
+                            "credential".into(),
+                            "create".into(),
+                            1,
+                            nessa_protocol::agents::AgentId::Claude,
+                            nessa_protocol::conversation::domain::ConversationModelId::new("model")
+                                .unwrap(),
+                            nessa_protocol::conversation::domain::ConversationApprovalMode::Ask,
+                        )
+                        .unwrap(),
+                        summary: nessa_protocol::conversation::domain::ConversationSummary::new(
+                            None, None, 1, false,
+                        )
+                        .unwrap(),
+                        held: None,
+                    }
+                })
+                .collect();
+            Box::pin(async move {
+                Ok(crate::conversation::application::ObservedConversations {
+                    conversations,
+                    complete: true,
+                    cursor: None,
+                })
+            })
+        }
+
+        fn owners(
+            &self,
+        ) -> crate::conversation::application::ConversationFuture<
+            '_,
+            Vec<(OrganizationId, nessa_auth::domain::PrincipalId)>,
+        > {
+            Box::pin(async { Ok(Vec::new()) })
+        }
+    }
+
+    #[tokio::test]
+    async fn a_full_observe_page_continues_into_the_shared_chat() {
+        let held = replica();
+        let shared_id = held.id.clone();
+        let (state, session) = route(
+            held,
+            ConversationLimits::default(),
+            Some(Arc::new(FullPage)),
+        )
+        .await;
+        let first = ask(&state, &session, "conversation.observe", json!({})).await;
+        assert!(first.ok, "{first:?}");
+        let page = first.payload.unwrap();
+        assert_eq!(page["complete"], false);
+        let rows = page["conversations"].as_array().unwrap();
+        assert_eq!(rows.len(), super::MAX_CATALOGUE_ENTRIES);
+        assert!(rows.iter().all(|row| row["conversationId"] != shared_id));
+        assert!(page["cursor"].is_object(), "{page}");
+        let next = ask(
+            &state,
+            &session,
+            "conversation.observe",
+            json!({ "cursor": page["cursor"] }),
+        )
+        .await;
+        assert!(next.ok, "{next:?}");
+        let rest = next.payload.unwrap();
+        assert_eq!(rest["complete"], true);
+        assert!(rest.get("cursor").is_none());
+        let shared = rest["conversations"].as_array().unwrap();
+        assert_eq!(shared.len(), 1);
+        assert_eq!(shared[0]["conversationId"], shared_id);
+
+        // A later local page: the cursor has to stay in that pass and move
+        // forward, which is the only continuation the desktop follows.
+        let later = ask(
+            &state,
+            &session,
+            "conversation.observe",
+            json!({
+                "cursor": {
+                    "incarnation": "metadata",
+                    "boundary": "4",
+                    "creation": "9",
+                    "id": "00000000-0000-4000-8000-000000000001"
+                }
+            }),
+        )
+        .await;
+        assert!(later.ok, "{later:?}");
+        let later = later.payload.unwrap();
+        assert_eq!(later["complete"], false);
+        assert_eq!(later["cursor"]["incarnation"], "metadata");
+        assert_eq!(later["cursor"]["boundary"], "4");
+        assert_eq!(later["cursor"]["creation"], "10");
+        let followed = ask(
+            &state,
+            &session,
+            "conversation.observe",
+            json!({ "cursor": later["cursor"] }),
+        )
+        .await;
+        assert!(followed.ok, "{followed:?}");
+        let followed = followed.payload.unwrap();
+        assert_eq!(followed["complete"], true);
+        assert!(followed.get("cursor").is_none());
+        assert_eq!(followed["conversations"][0]["conversationId"], shared_id);
     }
 }

@@ -420,36 +420,64 @@ async fn answer(
             "conversation.observe" => {
                 let params = params!(ConversationObserveParams);
                 let scope = list_scope.as_ref().ok_or(ConversationError::Metadata)?;
-                let cursor = match params.cursor {
-                    Some(cursor) => Some(observation_cursor(cursor)?),
-                    None => None,
+                let archived = params.archived.unwrap_or(false);
+                // A cursor this gateway minted names the replicas the previous
+                // page could not hold. The local catalogue is already
+                // finished, so this page is those replicas.
+                let shared_offset = params
+                    .cursor
+                    .as_ref()
+                    .and_then(super::shared_chat::shared_page_offset);
+                let mut observed = if shared_offset.is_some() {
+                    ConversationObserveResult {
+                        conversations: Vec::new(),
+                        complete: true,
+                        cursor: None,
+                    }
+                } else {
+                    let cursor = match params.cursor.as_ref() {
+                        Some(cursor) => Some(observation_cursor(clone_observe_cursor(cursor))?),
+                        None => None,
+                    };
+                    let observed = service
+                        .observe_for(
+                            caller(frame.id.clone()),
+                            archived,
+                            cursor,
+                            &scope.reader,
+                            &scope.owner,
+                            scope.policy.as_deref(),
+                        )
+                        .await;
+                    trace_conversation_observe(observed.as_ref().err());
+                    observe_result(observed?)
                 };
-                let observed = service
-                    .observe_for(
-                        caller(frame.id.clone()),
-                        params.archived.unwrap_or(false),
-                        cursor,
-                        &scope.reader,
-                        &scope.owner,
-                        scope.policy.as_deref(),
-                    )
-                    .await;
-                trace_conversation_observe(observed.as_ref().err());
-                let mut observed = observe_result(observed?);
                 super::read_access::admit_index_rows(state, session, &observed.conversations)
                     .await?;
-                // Shared chats use the room this page has left. A full page
-                // stays incomplete so the walk can take them on the next one.
-                append_shared(
+                // Shared chats use the room this page has left. A full local
+                // page stays incomplete and carries a cursor, so the walk can
+                // take the ones that did not fit.
+                if let Some(next) = append_shared(
                     state,
                     session,
                     &scope.reader,
-                    params.archived.unwrap_or(false),
-                    nessa_sync::replication::catalogue::MAX_CATALOGUE_ENTRIES,
-                    &mut observed.conversations,
-                    &mut observed.complete,
+                    archived,
+                    &mut SharedPage {
+                        rows: &mut observed.conversations,
+                        complete: &mut observed.complete,
+                        limit: nessa_sync::replication::catalogue::MAX_CATALOGUE_ENTRIES,
+                        skip: shared_offset.unwrap_or(0),
+                    },
                 )
-                .await?;
+                .await?
+                {
+                    if observed.cursor.is_none() {
+                        observed.cursor = Some(super::shared_chat::shared_page_cursor(
+                            params.cursor.as_ref(),
+                            next,
+                        ));
+                    }
+                }
                 Ok(success(&frame.id, &observed))
             }
             "conversation.send" | "conversation.steer" => {
@@ -1212,48 +1240,62 @@ pub(super) async fn read_list(
         session,
         &scope.reader,
         archived,
-        crate::conversation::application::MAX_LISTED_CONVERSATIONS,
-        &mut listed.conversations,
-        &mut listed.complete,
+        &mut SharedPage {
+            rows: &mut listed.conversations,
+            complete: &mut listed.complete,
+            limit: crate::conversation::application::MAX_LISTED_CONVERSATIONS,
+            skip: 0,
+        },
     )
     .await?;
     Ok((listed, head))
 }
 
+/// One catalogue page shared chats may be appended to.
+struct SharedPage<'a> {
+    rows: &'a mut Vec<ConversationSummary>,
+    complete: &'a mut bool,
+    limit: usize,
+    /// How many replicas an earlier page of this walk already returned.
+    skip: usize,
+}
+
 /// The owner's list also names chats a peer granted, from the peer cache,
 /// when Cedar's `owner.list` allows this caller that catalogue. A page that
 /// is not already complete is left alone. Replicas that do not fit keep the
-/// page incomplete so the next one can take them. A cache that cannot be
-/// read leaves the local rows in place.
+/// page incomplete. The `Some` offset is where the next page starts, and only
+/// when this page could not hold them. A cache that cannot be read leaves the
+/// local rows in place.
 async fn append_shared(
     state: &ProductRouteState,
     session: &AuthenticatedSession,
     reader: &Reader,
     archived: bool,
-    limit: usize,
-    rows: &mut Vec<ConversationSummary>,
-    complete: &mut bool,
-) -> Result<(), ConversationError> {
-    if !matches!(reader, Reader::Owner) || !*complete {
-        return Ok(());
+    page: &mut SharedPage<'_>,
+) -> Result<Option<u64>, ConversationError> {
+    if !matches!(reader, Reader::Owner) || !*page.complete {
+        return Ok(None);
     }
     if !super::shared_chat::catalogue_admitted(state, session, true).await? {
-        return Ok(());
+        return Ok(None);
     }
     let Some(chats) = super::shared_chat::source(state) else {
-        return Ok(());
+        return Ok(None);
     };
     match chats.list(archived).await {
-        Ok(replicas) => {
-            super::shared_chat::append_bounded(rows, replicas, limit, complete);
-            Ok(())
-        }
+        Ok(replicas) => Ok(super::shared_chat::append_bounded(
+            page.rows,
+            replicas,
+            page.limit,
+            page.complete,
+            page.skip,
+        )),
         Err(error) => {
             tracing::warn!(
                 error = %error,
                 "shared chats were left out of the conversation list"
             );
-            Ok(())
+            Ok(None)
         }
     }
 }
@@ -1798,6 +1840,15 @@ fn list_result(listed: ConversationList) -> ConversationListResult {
             })
             .collect(),
         complete: listed.complete,
+    }
+}
+
+fn clone_observe_cursor(cursor: &ConversationObserveCursor) -> ConversationObserveCursor {
+    ConversationObserveCursor {
+        incarnation: cursor.incarnation.clone(),
+        boundary: cursor.boundary.clone(),
+        creation: cursor.creation.clone(),
+        id: cursor.id.clone(),
     }
 }
 
