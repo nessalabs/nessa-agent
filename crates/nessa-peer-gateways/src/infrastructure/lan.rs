@@ -23,6 +23,16 @@ pub fn host_address_record(address: IpAddr) -> (u16, Vec<u8>) {
     }
 }
 
+/// `Some(0)` is the daemon's confirmation of an address record. A missing
+/// callback answer, or any other code, is not a registered record.
+/// `DNSServiceRegisterRecord` returns `kDNSServiceErr_BadParam` for a null
+/// callback, so that answer cannot be skipped.
+/// `address_record_callback_accepts_only_a_confirmed_record` is the regression.
+#[cfg_attr(not(any(test, target_os = "macos")), allow(dead_code))]
+pub fn address_record_confirmed(error: Option<i32>) -> bool {
+    matches!(error, Some(0))
+}
+
 /// The DNS-SD type a paired peer browses. It is not the linking type.
 pub const PEER_SERVICE: &str = "_nessa-peer._tcp.local.";
 
@@ -149,6 +159,43 @@ mod multicast {
     const CLASS_IN: u16 = 1;
     const UNIQUE: u32 = 0x20;
     const ADDRESS_TTL_SECONDS: u32 = 120;
+    const POLLIN: i16 = 1;
+    const EINTR: i32 = 4;
+
+    type RegisterRecordReply =
+        unsafe extern "C" fn(DnsServiceRef, DnsRecordRef, u32, i32, *mut c_void);
+
+    #[repr(C)]
+    struct PollFd {
+        fd: i32,
+        events: i16,
+        revents: i16,
+    }
+
+    struct RecordReply {
+        error: Option<i32>,
+    }
+
+    extern "C" {
+        fn poll(fds: *mut PollFd, nfds: u32, timeout: i32) -> i32;
+        fn __error() -> *mut i32;
+    }
+
+    unsafe extern "C" fn address_record_reply(
+        _service: DnsServiceRef,
+        _record: DnsRecordRef,
+        _flags: u32,
+        error: i32,
+        context: *mut c_void,
+    ) {
+        if context.is_null() {
+            return;
+        }
+        // SAFETY: `context` is the `RecordReply` kept alive until the
+        // connection that owns this callback is deallocated.
+        let reply = unsafe { &mut *context.cast::<RecordReply>() };
+        reply.error = Some(error);
+    }
 
     extern "C" {
         fn DNSServiceCreateConnection(sd_ref: *mut DnsServiceRef) -> i32;
@@ -177,9 +224,11 @@ mod multicast {
             rdlen: u16,
             rdata: *const c_void,
             ttl: u32,
-            callback: *const c_void,
+            callback: RegisterRecordReply,
             context: *mut c_void,
         ) -> i32;
+        fn DNSServiceRefSockFD(sd_ref: DnsServiceRef) -> i32;
+        fn DNSServiceProcessResult(sd_ref: DnsServiceRef) -> i32;
         fn DNSServiceRemoveRecord(
             sd_ref: DnsServiceRef,
             record_ref: DnsRecordRef,
@@ -218,10 +267,12 @@ mod multicast {
                 return Err(format!("Bonjour refused the address connection ({status})"));
             }
             let mut record: DnsRecordRef = ptr::null_mut();
+            let mut reply = Box::new(RecordReply { error: None });
             // SAFETY: `connection` is a live connection, and the name and
-            // address bytes live until this call returns. A null callback
-            // asks for no completion notice. A non-null host on
-            // DNSServiceRegister does not create this address record.
+            // address bytes live until this call returns. `reply` stays
+            // allocated until the connection is deallocated. A non-null host
+            // on DNSServiceRegister does not create this address record, and
+            // a null callback is BadParam.
             let record_status = unsafe {
                 DNSServiceRegisterRecord(
                     connection,
@@ -234,8 +285,8 @@ mod multicast {
                     rdlen,
                     rdata.as_ptr().cast(),
                     ADDRESS_TTL_SECONDS,
-                    ptr::null(),
-                    ptr::null_mut(),
+                    address_record_reply,
+                    reply.as_mut() as *mut RecordReply as *mut c_void,
                 )
             };
             if record_status != 0 || record.is_null() {
@@ -243,6 +294,13 @@ mod multicast {
                 return Err(format!(
                     "Bonjour refused the address record ({record_status})"
                 ));
+            }
+            if let Err(error) = confirm_address_record(connection, reply.as_mut()) {
+                unsafe {
+                    DNSServiceRemoveRecord(connection, record, 0);
+                    DNSServiceRefDeallocate(connection);
+                }
+                return Err(error);
             }
             let mut service: DnsServiceRef = ptr::null_mut();
             // SAFETY: the pointers are valid for the call. A null domain and
@@ -275,6 +333,7 @@ mod multicast {
                 connection,
                 record,
                 service,
+                reply,
             }))
         }
     }
@@ -291,14 +350,71 @@ mod multicast {
         Ok(record)
     }
 
+    fn confirm_address_record(
+        connection: DnsServiceRef,
+        reply: *mut RecordReply,
+    ) -> Result<(), String> {
+        let fd = unsafe { DNSServiceRefSockFD(connection) };
+        if fd < 0 {
+            return Err("Bonjour address connection has no socket".into());
+        }
+        // SAFETY: `reply` is the callback context and is not borrowed while
+        // DNSServiceProcessResult invokes the callback.
+        let reported = |reply: *mut RecordReply| unsafe { (*reply).error };
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while reported(reply).is_none() {
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            if remaining.is_zero() {
+                break;
+            }
+            let mut slot = PollFd {
+                fd,
+                events: POLLIN,
+                revents: 0,
+            };
+            let millis = i32::try_from(remaining.as_millis()).unwrap_or(2_000);
+            let polled = unsafe { poll(&mut slot, 1, millis) };
+            if polled < 0 {
+                let interrupted = unsafe { *__error() } == EINTR;
+                if interrupted {
+                    continue;
+                }
+                return Err("Bonjour address connection could not be read".into());
+            }
+            if polled == 0 {
+                break;
+            }
+            // SAFETY: `reply` is not borrowed while the callback writes it.
+            let status = unsafe { DNSServiceProcessResult(connection) };
+            if status != 0 {
+                return Err(format!(
+                    "Bonjour did not finish the address record ({status})"
+                ));
+            }
+        }
+        let error = reported(reply);
+        if super::address_record_confirmed(error) {
+            Ok(())
+        } else {
+            Err(match error {
+                Some(code) => format!("Bonjour refused the address record ({code})"),
+                None => "Bonjour did not confirm the address record".to_owned(),
+            })
+        }
+    }
+
     struct Registration {
         connection: DnsServiceRef,
         record: DnsRecordRef,
         service: DnsServiceRef,
+        /// Keeps the callback context alive until the connection is gone.
+        reply: Box<RecordReply>,
     }
 
     impl Registration {
         fn stop(&mut self) {
+            // The callback context outlives every ProcessResult on this connection.
+            let _kept = self.reply.error;
             let service = std::mem::replace(&mut self.service, ptr::null_mut());
             if !service.is_null() {
                 // SAFETY: the reference came from a successful DNSServiceRegister
@@ -362,5 +478,13 @@ mod tests {
             host_address_record(IpAddr::V6(v6)),
             (28, v6.octets().to_vec())
         );
+    }
+
+    #[test]
+    fn address_record_callback_accepts_only_a_confirmed_record() {
+        assert!(super::address_record_confirmed(Some(0)));
+        assert!(!super::address_record_confirmed(None));
+        // kDNSServiceErr_BadParam, the code a null callback gets.
+        assert!(!super::address_record_confirmed(Some(-65540)));
     }
 }
