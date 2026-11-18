@@ -23,19 +23,20 @@ use nessa_protocol::conversation::view::{
     ConversationView as ApplicationConversationView,
 };
 use nessa_protocol::product::generated::{
-    ApprovalMode as WireApprovalMode, ConversationAnswerParams, ConversationAnswerQuestionParams,
-    ConversationArchiveParams, ConversationCancelParams, ConversationCloseParams,
-    ConversationCommandOperation, ConversationCommandOutcome, ConversationCommandReceipt,
-    ConversationCommandStage, ConversationCreateParams, ConversationCreateResult,
-    ConversationDeleteParams, ConversationForkParams, ConversationListParams,
-    ConversationListResult, ConversationMutationResult, ConversationObserveCursor,
-    ConversationObserveParams, ConversationObserveResult, ConversationPermissionAnswerErrorDetails,
-    ConversationPermissionReviewParams, ConversationPermissionReviewResult,
-    ConversationPermissionRulesParams, ConversationPermissionRulesResult,
-    ConversationPermissionSelectionState, ConversationQuestionReviewParams,
-    ConversationQuestionReviewResult, ConversationReadEarlierParams, ConversationReadParams,
-    ConversationReceiptParams, ConversationReceiptResult, ConversationRemoveParams,
-    ConversationRenameParams, ConversationReorderParams, ConversationRevokePermissionRuleParams,
+    ApprovalMode as WireApprovalMode, ApprovalModeChoice, ConversationAnswerParams,
+    ConversationAnswerQuestionParams, ConversationArchiveParams, ConversationCancelParams,
+    ConversationCloseParams, ConversationCommandOperation, ConversationCommandOutcome,
+    ConversationCommandReceipt, ConversationCommandStage, ConversationCreateParams,
+    ConversationCreateResult, ConversationDeleteParams, ConversationForkParams,
+    ConversationListParams, ConversationListResult, ConversationMutationResult,
+    ConversationObserveCursor, ConversationObserveParams, ConversationObserveResult,
+    ConversationPermissionAnswerErrorDetails, ConversationPermissionReviewParams,
+    ConversationPermissionReviewResult, ConversationPermissionRulesParams,
+    ConversationPermissionRulesResult, ConversationPermissionSelectionState,
+    ConversationQuestionReviewParams, ConversationQuestionReviewResult,
+    ConversationReadEarlierParams, ConversationReadParams, ConversationReceiptParams,
+    ConversationReceiptResult, ConversationRemoveParams, ConversationRenameParams,
+    ConversationReorderParams, ConversationRevokePermissionRuleParams,
     ConversationRevokePermissionRuleResult, ConversationSendParams,
     ConversationSetApprovalModeParams, ConversationSetApprovalModeResult,
     ConversationSetModelParams, ConversationSetModelResult,
@@ -1793,26 +1794,7 @@ async fn passive_shared_view(
         json!(selection.approval_mode.as_str()),
     );
     fields.insert("model".into(), json!(selection.model));
-    fields.insert(
-        "approvalModes".into(),
-        json!([
-            {
-                "id": "ask",
-                "name": "Ask",
-                "description": "The provider asks before it acts."
-            },
-            {
-                "id": "auto",
-                "name": "Auto",
-                "description": "The provider proceeds where it can."
-            },
-            {
-                "id": "full",
-                "name": "Full",
-                "description": "The provider proceeds without asking."
-            }
-        ]),
-    );
+    fields.insert("approvalModes".into(), passive_approval_modes()?);
     // The catalog's context window and display name are not known here.
     fields.remove("runtime");
     if let Some(service) = state.conversation.service.as_ref() {
@@ -1822,6 +1804,35 @@ async fn passive_shared_view(
         fields.insert("usageLimitAutoContinue".into(), json!(snapshot.enabled));
     }
     serde_json::from_value(value).map_err(|_| ConversationError::Unavailable)
+}
+
+/// Every persisted approval mode, so a saved selection stays a choice the
+/// client accepts. The set is [`ConversationApprovalMode::ALL`].
+fn passive_approval_modes() -> Result<Value, ConversationError> {
+    let choices = ConversationApprovalMode::ALL
+        .iter()
+        .copied()
+        .map(|mode| ApprovalModeChoice {
+            id: match mode {
+                ConversationApprovalMode::Ask => WireApprovalMode::Ask,
+                ConversationApprovalMode::Auto => WireApprovalMode::Auto,
+                ConversationApprovalMode::Full => WireApprovalMode::Full,
+            },
+            name: match mode {
+                ConversationApprovalMode::Ask => "Ask",
+                ConversationApprovalMode::Auto => "Auto",
+                ConversationApprovalMode::Full => "Full",
+            }
+            .to_owned(),
+            description: match mode {
+                ConversationApprovalMode::Ask => "The provider asks before it acts.",
+                ConversationApprovalMode::Auto => "The provider proceeds where it can.",
+                ConversationApprovalMode::Full => "The provider proceeds without asking.",
+            }
+            .to_owned(),
+        })
+        .collect::<Vec<_>>();
+    serde_json::to_value(choices).map_err(|_| ConversationError::Unavailable)
 }
 
 /// The agent a creation names, if it names one.
