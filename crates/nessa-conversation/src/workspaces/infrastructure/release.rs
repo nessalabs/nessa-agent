@@ -30,7 +30,10 @@
 // replace the owner's entry (#892). The lease frames are unchanged, so
 // this build is not f1318337c23960c2. The image id stays the published
 // worker until a rebuilt image is published for this hash.
-const PROTOCOL: &str = "8f55fd2e603d7b23";
+// That refusal is now the Cedar policy's. The lease frames are unchanged,
+// so this build is not 8f55fd2e603d7b23. The image id stays the published
+// worker until a rebuilt image is published for this hash.
+const PROTOCOL: &str = "af5221b07fd1d407";
 const IMAGE: &str = "bsh_KC74wkwmxzdt57Y9MxwBdSJlBa75Lfjz0BvFC-6SuS4";
 pub fn worker_image() -> Option<&'static str> {
     (crate::env::LEASE_PROTOCOL == PROTOCOL).then_some(IMAGE)
