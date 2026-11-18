@@ -520,11 +520,11 @@ fn list_cached(
     monotonic: Arc<dyn MonotonicClock>,
     archived: bool,
 ) -> Result<SharedCatalogue, ConversationError> {
-    let mut rows = Vec::new();
+    let mut found = Vec::new();
     let mut complete = true;
     for peer in peers {
-        match peer_rows(records, peer, &wall, &monotonic, archived) {
-            Ok(found) => rows.extend(found),
+        match peer_rows(records, peer, &wall, &monotonic) {
+            Ok(rows) => found.push(rows),
             Err(error) => {
                 tracing::warn!(
                     receiver = %peer.receiver,
@@ -535,7 +535,32 @@ fn list_cached(
             }
         }
     }
-    Ok(SharedCatalogue { rows, complete })
+    Ok(SharedCatalogue {
+        rows: choose_peer_rows(found, archived),
+        complete,
+    })
+}
+
+/// The first peer to hold an id is the conversation every later read opens.
+/// Its archived flag decides the list. A later peer's copy of that id is not
+/// a second chat, and it does not replace an archived copy with an active one.
+pub(super) fn choose_peer_rows(
+    peers: Vec<Vec<ConversationSummary>>,
+    archived: bool,
+) -> Vec<ConversationSummary> {
+    let mut seen = HashSet::new();
+    let mut rows = Vec::new();
+    for peer in peers {
+        for row in peer {
+            if !seen.insert(row.conversation_id.clone()) {
+                continue;
+            }
+            if row.archived == archived {
+                rows.push(row);
+            }
+        }
+    }
+    rows
 }
 
 fn find_earlier(
@@ -735,7 +760,6 @@ fn peer_rows(
     peer: &ActivePeer,
     wall: &Arc<dyn WallClock>,
     monotonic: &Arc<dyn MonotonicClock>,
-    archived: bool,
 ) -> Result<Vec<ConversationSummary>, ReadFailure> {
     let mut cache = open_cache(records, peer, wall, monotonic)?;
     let Some(scope) = cache.saved_catalogue_scope(&peer.receiver)? else {
@@ -753,7 +777,7 @@ fn peer_rows(
         MAX_CATALOGUE_ENTRIES,
     )? {
         for entry in page.entries() {
-            if let Some(row) = summary_of(entry, archived) {
+            if let Some(row) = summary_of(entry) {
                 rows.push(row);
             }
         }
@@ -765,16 +789,13 @@ fn peer_rows(
     Ok(rows)
 }
 
-fn summary_of(entry: &RetainedCatalogueEntry, archived: bool) -> Option<ConversationSummary> {
+fn summary_of(entry: &RetainedCatalogueEntry) -> Option<ConversationSummary> {
     if entry.manifest().deleted {
         return None;
     }
     let metadata = entry.metadata()?;
     let summary = metadata.summary();
     let is_archived = summary.is_some_and(|summary| summary.archived());
-    if is_archived != archived {
-        return None;
-    }
     Some(ConversationSummary {
         conversation_id: metadata.id().to_string(),
         title: summary
@@ -1569,6 +1590,32 @@ mod tests {
         let replicas = super::omit_local(vec![summary("local"), summary("shared")], &local);
         assert_eq!(replicas.len(), 1);
         assert_eq!(replicas[0].conversation_id, "shared");
+    }
+
+    #[test]
+    fn the_first_peer_wins_before_the_archived_filter() {
+        let row = |id: &str, archived: bool| ConversationSummary {
+            conversation_id: id.to_owned(),
+            title: Some(if archived { "old" } else { "new" }.into()),
+            preview: None,
+            created_at_ms: 1,
+            updated_at_ms: 1,
+            running: false,
+            archived,
+            channel_id: None,
+        };
+        let peers = || {
+            vec![
+                vec![row("same", true), row("only-first", false)],
+                vec![row("same", false)],
+            ]
+        };
+        let active = super::choose_peer_rows(peers(), false);
+        assert_eq!(active.len(), 1);
+        assert_eq!(active[0].conversation_id, "only-first");
+        let archived = super::choose_peer_rows(peers(), true);
+        assert_eq!(archived.len(), 1);
+        assert_eq!(archived[0].title.as_deref(), Some("old"));
     }
 
     #[test]
