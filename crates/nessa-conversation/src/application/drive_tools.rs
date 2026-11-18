@@ -299,7 +299,9 @@ impl InvocationHook for DriveToolHook {
             if asked.contains(&id) || !reported.insert(id) {
                 continue;
             }
-            let _ = directory.report_unasked(&self.directory_subject, &name);
+            directory
+                .report_unasked(&self.directory_subject, &name)
+                .map_err(|error| HookError::Failed(error.to_string()))?;
         }
         Ok(())
     }
@@ -363,6 +365,12 @@ fn command_arguments(json: &str) -> ParsedCommand {
     let Some(command) = value.get("command").and_then(|item| item.as_str()) else {
         return ParsedCommand::Skip;
     };
+    if command
+        .chars()
+        .any(|character| character.is_whitespace() && character != ' ')
+    {
+        return ParsedCommand::Unsafe;
+    }
     let mut parts = Vec::new();
     for token in command.split_whitespace() {
         if !literal_token(token) {
@@ -417,6 +425,10 @@ mod command_parse {
         ));
         assert!(matches!(
             command_arguments(r#"{"command":"ls $(rm victim)"}"#),
+            ParsedCommand::Unsafe
+        ));
+        assert!(matches!(
+            command_arguments("{\"command\":\"ls .\\nrm victim\"}"),
             ParsedCommand::Unsafe
         ));
         match command_arguments(r#"{"command":"ls -l"}"#) {

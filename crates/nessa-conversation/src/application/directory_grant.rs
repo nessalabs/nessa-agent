@@ -595,7 +595,7 @@ impl DirectoryAccess {
             return Err(DirectoryRefusal::HooksAnswerFirst);
         }
         let resources = self.resource_of(grant)?;
-        let session = self.files.open_session(&resources.canonical_path)?;
+        let session = self.open_root(&resources, ask.subject)?;
         self.open_marker_on(&*session, &resources, ask.subject)?;
         self.flush_pending(&grant.resource_id)?;
         let root_leave = session.root_leave(&resources.canonical_path, ask.roots)?;
@@ -733,19 +733,32 @@ impl DirectoryAccess {
         };
         let resource = self.resource_of(grant)?;
         let _ = tool;
-        self.audit
-            .record(&DirectoryAuditRecord {
-                cause: "outside-nessa-gate".to_owned(),
-                resource_id: Some(grant.resource_id.clone()),
-                environment: resource.environment,
-                canonical_path: resource.canonical_path,
-                initiator: subject.to_owned(),
-                before: None,
-                after: None,
-                profile: None,
-                at_ms: now_ms(),
-            })
-            .map_err(|_| DirectoryRefusal::Store)
+        self.flush_pending(&grant.resource_id)?;
+        self.audit_required(DirectoryAuditRecord {
+            cause: "outside-nessa-gate".to_owned(),
+            resource_id: Some(grant.resource_id.clone()),
+            environment: resource.environment,
+            canonical_path: resource.canonical_path,
+            initiator: subject.to_owned(),
+            before: None,
+            after: None,
+            profile: None,
+            at_ms: now_ms(),
+        })
+    }
+
+    fn open_root(
+        &self,
+        resource: &StoredDirectoryResource,
+        initiator: &str,
+    ) -> Result<Box<dyn DirectorySession>, DirectoryRefusal> {
+        match self.files.open_session(&resource.canonical_path) {
+            Ok(session) => Ok(session),
+            Err(DirectoryRefusal::Io(std::io::ErrorKind::NotFound)) => Err(self
+                .mismatch(resource, "marker-missing", initiator)
+                .expect_err("a missing directory revokes its grants")),
+            Err(error) => Err(error),
+        }
     }
 
     /// Write an open audit the sink previously refused, keeping the original initiator.
@@ -904,7 +917,7 @@ impl DirectoryAccess {
             return Err(DirectoryRefusal::NotFound);
         };
         let resource = self.resource_of(&grant)?;
-        let session = self.files.open_session(&resource.canonical_path)?;
+        let session = self.open_root(&resource, subject)?;
         self.open_marker_on(session.as_ref(), &resource, subject)?;
         let facts = facts_for(session.as_ref(), relative, capability)?;
         self.refuse_walk(&grant, &resource, facts, &format!("directory.{capability}"))?;

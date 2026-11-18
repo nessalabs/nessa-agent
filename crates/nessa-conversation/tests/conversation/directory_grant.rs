@@ -1236,3 +1236,63 @@ fn a_failed_second_share_does_not_keep_a_grant_change() {
     assert_eq!(changes, 1);
     assert_eq!(grants, 1);
 }
+
+#[test]
+fn deleting_the_directory_revokes_the_grant() {
+    let root = private();
+    let shared = root.path().join("shared");
+    fs::create_dir(&shared).unwrap();
+    let store_dir = private();
+    let store =
+        Arc::new(SqliteDirectoryStore::open(&store_dir.path().join("grants.sqlite3")).unwrap());
+    let access = service(
+        Arc::new(LocalDirectoryFiles),
+        store.clone(),
+        Arc::new(RecordingAudit::new()),
+        [4; BINDING_LEN],
+    );
+    let granted = share_read(&access, shared.to_str().unwrap(), "peer");
+    fs::remove_dir_all(&shared).unwrap();
+    let refused = access.read("peer", "note.txt").unwrap_err();
+    match refused {
+        DirectoryRefusal::MarkerMismatch { cause, .. } => assert_eq!(cause, "marker-missing"),
+        other => panic!("{other:?}"),
+    }
+    assert!(store
+        .grants_for_resource(&granted.resource_id)
+        .unwrap()
+        .is_empty());
+}
+
+#[test]
+fn an_unasked_call_is_not_forgotten_when_the_audit_sink_is_down() {
+    let root = private();
+    let shared = root.path().join("shared");
+    fs::create_dir(&shared).unwrap();
+    let store_dir = private();
+    let audit = Arc::new(RecordingAudit::new());
+    let access = service(
+        Arc::new(LocalDirectoryFiles),
+        Arc::new(SqliteDirectoryStore::open(&store_dir.path().join("grants.sqlite3")).unwrap()),
+        audit.clone(),
+        [5; BINDING_LEN],
+    );
+    share_read(&access, shared.to_str().unwrap(), "peer");
+    *audit.fail.lock().unwrap() = true;
+    let refused = access.report_unasked("peer", "Bash").unwrap_err();
+    assert!(matches!(refused, DirectoryRefusal::Audit));
+    assert!(audit
+        .lines
+        .lock()
+        .unwrap()
+        .iter()
+        .all(|line| line.cause != "outside-nessa-gate"));
+    *audit.fail.lock().unwrap() = false;
+    access.report_unasked("peer", "Bash").unwrap();
+    assert!(audit
+        .lines
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|line| line.cause == "outside-nessa-gate"));
+}
