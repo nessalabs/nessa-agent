@@ -722,6 +722,18 @@ fn copy_grant_entry(
     }
 }
 
+/// Whether the gateway, not the local follow rule, dropped `id`.
+fn revoked_by_gateway(
+    id: &str,
+    replaces: bool,
+    entries: &[nessa_protocol::product::generated::GrantFrameEntry],
+) -> bool {
+    match entries.iter().find(|entry| entry.conversation_id == id) {
+        Some(entry) => entry.absent,
+        None => replaces,
+    }
+}
+
 fn last_present_ids(entries: &[(String, bool, Option<String>, i64)]) -> Vec<String> {
     let mut last = Vec::new();
     for (conversation, absent, _, _) in entries {
@@ -1002,10 +1014,10 @@ impl RetainedCache {
                 .map_err(|error| cache_failure(&error))?;
             let mut fresh = Vec::new();
             for id in removed {
-                if entries
-                    .iter()
-                    .any(|entry| entry.conversation_id == id && entry.absent)
-                {
+                // A replacement lists only the grants that remain. One missing
+                // from it was revoked. A chat the follow rule skips is still
+                // present in the frame, so it is not reported as a revoke.
+                if revoked_by_gateway(&id, changed.replaces, &entries) {
                     fresh.push(id);
                 }
             }
@@ -1918,7 +1930,7 @@ mod tests;
 
 #[cfg(test)]
 mod grant_frames {
-    use super::finish_staged;
+    use super::{finish_staged, revoked_by_gateway};
     use nessa_protocol::product::generated::{GrantFrameEntry, GrantStreamCursor, GrantsChanged};
 
     fn entry(id: &str, absent: bool) -> GrantFrameEntry {
@@ -1973,5 +1985,14 @@ mod grant_frames {
                 .collect::<Vec<_>>(),
             vec!["first", "second"]
         );
+    }
+
+    #[test]
+    fn a_replacement_counts_a_missing_grant_as_revoked() {
+        let entries = vec![entry("kept", false)];
+        assert!(revoked_by_gateway("gone", true, &entries));
+        assert!(!revoked_by_gateway("kept", true, &entries));
+        assert!(!revoked_by_gateway("gone", false, &entries));
+        assert!(revoked_by_gateway("gone", false, &[entry("gone", true)]));
     }
 }
