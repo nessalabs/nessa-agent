@@ -847,8 +847,11 @@ impl RetainedCache {
 
     /// Follow this receiver's grants on `grants.subscribe`, and each chat
     /// `follow` names on `conversation.subscribe`. The catalogue is not read.
-    /// `on_synced` runs after each complete frame, with how many conversations
-    /// the replica holds. The call stays until `stop` or the subscription ends.
+    /// `on_withdrawn` runs as each revoke is stored, so the audit does not
+    /// wait for this call to return. `on_synced` runs after each complete
+    /// frame, with how many conversations the replica holds. The call stays
+    /// until `stop` or the subscription ends.
+    #[allow(clippy::too_many_arguments)]
     pub fn follow_grants(
         &mut self,
         access: ReaderAccess<'_>,
@@ -856,6 +859,7 @@ impl RetainedCache {
         stop: &Arc<ReadStop>,
         budget: Duration,
         withdrawn: &mut Vec<String>,
+        mut on_withdrawn: impl FnMut(&[String]),
         mut on_synced: impl FnMut(u64),
     ) -> Result<ReadReport, ReadFailure> {
         let receiver = access.receiver.to_owned();
@@ -899,6 +903,7 @@ impl RetainedCache {
         let mut chats: Vec<(GatewayConnection, String)> = Vec::new();
         let mut live = LiveFollow::new();
         let mut synced = false;
+        let mut catch_up = 0_usize;
         loop {
             if ending.cancelled() || stop.is_stopped() {
                 break;
@@ -907,7 +912,29 @@ impl RetainedCache {
                 Ok(Some(delivery)) => delivery,
                 Ok(None) => {
                     let id = Id::new(&receiver).map_err(|_| ReadFailure::Protocol)?;
-                    self.drain_chats(&connection, &id, access.access_epoch, &mut chats)?;
+                    self.drain_chats(&connection, &id, access.access_epoch, &mut live, &mut chats)?;
+                    if synced {
+                        let present = self.followed_present(&receiver, follow)?;
+                        self.open_chats(
+                            &access,
+                            &ending,
+                            &offline,
+                            &connection,
+                            &id,
+                            access.access_epoch,
+                            &present,
+                            &mut live,
+                            &mut chats,
+                        )?;
+                        self.catch_up_one(
+                            &connection,
+                            &id,
+                            access.access_epoch,
+                            &present,
+                            &chats,
+                            &mut catch_up,
+                        )?;
+                    }
                     if let Some(snapshot_id) = staged_snapshot.clone() {
                         let _ = connection.grant_page(&snapshot_id, resume.as_ref());
                     }
@@ -973,26 +1000,24 @@ impl RetainedCache {
                 .cache
                 .withdraw_grant_entries(&receiver, changed.replaces, &ordered)
                 .map_err(|error| cache_failure(&error))?;
+            let mut fresh = Vec::new();
             for id in removed {
                 if entries
                     .iter()
                     .any(|entry| entry.conversation_id == id && entry.absent)
                 {
-                    withdrawn.push(id);
+                    fresh.push(id);
                 }
+            }
+            if !fresh.is_empty() {
+                withdrawn.extend(fresh.iter().cloned());
+                on_withdrawn(&fresh);
             }
             self.copy_granted(&connection, &id, access.access_epoch, stop, &ordered)?;
             self.cache
                 .commit_grant_entries(&receiver, &changed.cursor.incarnation, position, &ordered)
                 .map_err(|error| cache_failure(&error))?;
-            let present = self
-                .cache
-                .grant_present(&receiver)
-                .map_err(|error| cache_failure(&error))?;
-            let present: Vec<(String, String, i64)> = present
-                .into_iter()
-                .filter(|(conversation, _, _)| follow.contains(conversation))
-                .collect();
+            let present = self.followed_present(&receiver, follow)?;
             let copied = last_present_ids(&ordered);
             for (conversation, _, _) in &present {
                 if copied.iter().any(|id| id == conversation)
@@ -1005,7 +1030,15 @@ impl RetainedCache {
                 self.copy_one(&connection, &id, access.access_epoch, conversation_id)?;
             }
             self.open_chats(
-                &access, &ending, &offline, follow, &present, &mut live, &mut chats,
+                &access,
+                &ending,
+                &offline,
+                &connection,
+                &id,
+                access.access_epoch,
+                &present,
+                &mut live,
+                &mut chats,
             )?;
             let count = u64::try_from(
                 self.cache
@@ -1017,7 +1050,7 @@ impl RetainedCache {
             on_synced(count);
             synced = true;
             ending.relax();
-            self.drain_chats(&connection, &id, access.access_epoch, &mut chats)?;
+            self.drain_chats(&connection, &id, access.access_epoch, &mut live, &mut chats)?;
         }
         Ok(ReadReport {
             moved: synced,
@@ -1030,22 +1063,66 @@ impl RetainedCache {
         })
     }
 
-    /// Subscribe the chats `present` that `follow` names, up to the connection
-    /// cap. A refusal leaves the grant feed up. `chats` keeps those sessions.
+    /// The grants `follow` still names, from the replica.
+    fn followed_present(
+        &mut self,
+        receiver: &str,
+        follow: &FollowRule,
+    ) -> Result<Vec<(String, String, i64)>, ReadFailure> {
+        Ok(self
+            .cache
+            .grant_present(receiver)
+            .map_err(|error| cache_failure(&error))?
+            .into_iter()
+            .filter(|(conversation, _, _)| follow.contains(conversation))
+            .collect())
+    }
+
+    /// One retained chat that has no subscription, in turn. The connection cap
+    /// is eight subscriptions, and each chat has its own connection, so a
+    /// ninth stays unsubscribed. This read is what keeps it current.
+    fn catch_up_one(
+        &mut self,
+        connection: &GatewayConnection,
+        receiver: &Id,
+        epoch: u64,
+        present: &[(String, String, i64)],
+        chats: &[(GatewayConnection, String)],
+        cursor: &mut usize,
+    ) -> Result<(), ReadFailure> {
+        let waiting: Vec<&str> = present
+            .iter()
+            .map(|(conversation, _, _)| conversation.as_str())
+            .filter(|conversation| !chats.iter().any(|(_, open)| open == conversation))
+            .collect();
+        if waiting.is_empty() {
+            return Ok(());
+        }
+        let index = *cursor % waiting.len();
+        *cursor = index.saturating_add(1);
+        let conversation_id =
+            ConversationId::new(waiting[index]).map_err(|_| ReadFailure::Protocol)?;
+        self.copy_one(connection, receiver, epoch, conversation_id)
+    }
+
+    /// Subscribe the chats `present` names, up to the connection cap. A chat
+    /// whose subscription ends is taken out of `live` so the next pass opens
+    /// it again. The view that arrived with the subscribe is copied here.
     #[allow(clippy::too_many_arguments)]
     fn open_chats(
-        &self,
+        &mut self,
         access: &ReaderAccess<'_>,
         ending: &Arc<Stopping>,
         offline: &Arc<AtomicBool>,
-        follow: &FollowRule,
+        records: &GatewayConnection,
+        receiver: &Id,
+        epoch: u64,
         present: &[(String, String, i64)],
         live: &mut LiveFollow,
         chats: &mut Vec<(GatewayConnection, String)>,
     ) -> Result<(), ReadFailure> {
         for (conversation, _, _) in present {
-            if !follow.contains(conversation) || live.open_ids().iter().any(|id| id == conversation)
-            {
+            if live.open_ids().iter().any(|id| id == conversation) {
                 continue;
             }
             if live.open_ids().len()
@@ -1055,14 +1132,25 @@ impl RetainedCache {
             }
             let _ = live.open(conversation);
             let Ok(conversation_id) = ConversationId::new(conversation) else {
+                live.close(conversation);
                 continue;
             };
             let Ok(session) = self.open_session(access, ending, offline) else {
+                live.close(conversation);
                 continue;
             };
             let connection = GatewayConnection::new(session);
-            if connection.subscribe(&conversation_id).is_ok() {
-                chats.push((connection, conversation.clone()));
+            match connection.subscribe(&conversation_id) {
+                Ok(subscribed) => match subscribed.first {
+                    crate::read_only_sync::application::follow::Wait::Ended(_) => {
+                        live.close(conversation);
+                    }
+                    crate::read_only_sync::application::follow::Wait::View { .. } => {
+                        self.copy_one(records, receiver, epoch, conversation_id)?;
+                        chats.push((connection, conversation.clone()));
+                    }
+                },
+                Err(_) => live.close(conversation),
             }
         }
         Ok(())
@@ -1108,6 +1196,7 @@ impl RetainedCache {
         records: &GatewayConnection,
         receiver: &Id,
         epoch: u64,
+        live: &mut LiveFollow,
         chats: &mut Vec<(GatewayConnection, String)>,
     ) -> Result<(), ReadFailure> {
         let mut index = 0;
@@ -1120,7 +1209,8 @@ impl RetainedCache {
                     self.copy_one(records, receiver, epoch, conversation_id)?;
                 }
                 Ok(Some(crate::read_only_sync::application::follow::Wait::Ended(_))) => {
-                    chats.remove(index);
+                    let (_, conversation) = chats.remove(index);
+                    live.close(&conversation);
                     continue;
                 }
                 Ok(None) => {

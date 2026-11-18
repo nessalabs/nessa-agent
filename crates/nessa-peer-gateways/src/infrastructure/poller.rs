@@ -776,6 +776,7 @@ impl Shared {
         );
         let commands = self.commands.clone();
         let (live_tx, mut live_rx) = tokio::sync::mpsc::channel(1);
+        let (audit_tx, mut audit_rx) = tokio::sync::mpsc::unbounded_channel();
         let (work, withdrawn) = spawn_read(move |withdrawn| {
             let credential = records
                 .slot(key)
@@ -796,6 +797,7 @@ impl Shared {
                 clock,
             )?;
             let live_tx = live_tx.clone();
+            let audit_tx = audit_tx.clone();
             cache.follow_grants(
                 ReaderAccess {
                     role: ReaderRole::GrantedPeer,
@@ -812,6 +814,9 @@ impl Shared {
                 &stop,
                 budget,
                 withdrawn,
+                move |ids| {
+                    let _ = audit_tx.send(ids.to_vec());
+                },
                 move |count| {
                     commands.set_sync(
                         key,
@@ -828,12 +833,19 @@ impl Shared {
         tokio::pin!(work);
         let mut stopped = self.stopped.clone();
         let mut released = false;
+        let mut recorded = 0_usize;
         let ended = loop {
             tokio::select! {
                 ended = &mut work => break ended,
                 _ = live_rx.recv(), if !released => {
                     released = true;
                     drop(slot.lock().unwrap_or_else(PoisonError::into_inner).take());
+                }
+                batch = audit_rx.recv() => {
+                    if let Some(batch) = batch {
+                        recorded += batch.len();
+                        self.audit_withdrawn(key, &batch, changes).await;
+                    }
                 }
                 () = until_stopped(&mut stopped) => {
                     // Shut the read's sockets and wait for it.
@@ -842,28 +854,41 @@ impl Shared {
                 }
             }
         };
+        while let Ok(batch) = audit_rx.try_recv() {
+            recorded += batch.len();
+            self.audit_withdrawn(key, &batch, changes).await;
+        }
         let (result, withdrawn) = read_ended(ended, &withdrawn);
-        if !withdrawn.is_empty() {
-            // Read after the fact: each withdrawal removed rows inside the
-            // cache, so the record and whether a cache is there are as the
-            // read left them, before and after alike.
-            let held = self.commands.holding(key).await;
-            for conversations in withdrawn.chunks(WITHDRAWN_PER_RECORD) {
-                changes.push(self.commands.poller_changed(
-                    key,
-                    PollerCause::Withdrawn {
-                        conversations: conversations.to_vec(),
-                    },
-                    held.clone(),
-                    held.clone(),
-                    Ok(()),
-                ));
-            }
+        let pending = withdrawn.get(recorded..).unwrap_or(&[]);
+        if !pending.is_empty() {
+            self.audit_withdrawn(key, pending, changes).await;
         }
         if self.stopping() {
             return None;
         }
         Some(result)
+    }
+
+    /// Record withdrawals while the follow is still up. The rows are already
+    /// gone, so before and after name the same holding.
+    async fn audit_withdrawn<'a>(
+        &'a self,
+        key: DeviceKey,
+        conversations: &[String],
+        changes: &mut Vec<PollerRecord<'a>>,
+    ) {
+        let held = self.commands.holding(key).await;
+        for conversations in conversations.chunks(WITHDRAWN_PER_RECORD) {
+            changes.push(self.commands.poller_changed(
+                key,
+                PollerCause::Withdrawn {
+                    conversations: conversations.to_vec(),
+                },
+                held.clone(),
+                held.clone(),
+                Ok(()),
+            ));
+        }
     }
 
     fn read_done(&self, key: DeviceKey, report: ReadReport) -> Pace {
