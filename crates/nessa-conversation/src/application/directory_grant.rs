@@ -721,6 +721,27 @@ impl DirectoryAccess {
         self.enforce_commands(subject, program, argv)
     }
 
+    /// Exec admission for a shell string that is not one literal program.
+    /// A subject with no directory grant is unchanged. A subject with a grant
+    /// is admitted only when exec allows that sandbox.
+    pub fn admit_shell(
+        &self,
+        subject: &str,
+        profile: SandboxKind,
+        roots: &[String],
+    ) -> Result<(), DirectoryRefusal> {
+        if self.store.grants_for_subject(subject)?.is_empty() {
+            return self.reconcile();
+        }
+        self.exec(ExecAsk {
+            subject,
+            program: "",
+            profile,
+            roots,
+            hooks_answer_first: false,
+        })
+    }
+
     fn command_on(
         &self,
         subject: &str,

@@ -1660,6 +1660,18 @@ fn an_unenclosed_command_is_not_admitted_for_a_directory_grant() {
         }
         other => panic!("{other:?}"),
     }
+    access
+        .admit_shell("stranger", SandboxKind::None, &[])
+        .unwrap();
+    let quoted = access
+        .admit_shell("peer", SandboxKind::None, &[])
+        .unwrap_err();
+    match quoted {
+        DirectoryRefusal::Exec { rules, .. } => {
+            assert!(rules.iter().any(|rule| rule == "directory.exec_none"));
+        }
+        other => panic!("{other:?}"),
+    }
 }
 
 #[test]

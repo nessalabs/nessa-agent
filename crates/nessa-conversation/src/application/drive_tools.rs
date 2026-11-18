@@ -311,11 +311,18 @@ fn directory_command(hook: &DriveToolHook, call: &ProposedToolCall<'_>) -> Optio
     let directory = hook.directory.get()?;
     match command_arguments(call.arguments_json()) {
         ParsedCommand::Skip => None,
-        ParsedCommand::Unsafe => match directory.command_constrained(&hook.directory_subject) {
-            Ok(false) => None,
-            Ok(true) => Some("the command is not a single program".to_owned()),
-            Err(error) => Some(error.to_string()),
-        },
+        ParsedCommand::Unsafe => {
+            if let Err(error) =
+                directory.admit_shell(&hook.directory_subject, SandboxKind::None, &[])
+            {
+                return Some(error.to_string());
+            }
+            match directory.command_constrained(&hook.directory_subject) {
+                Ok(false) => None,
+                Ok(true) => Some("the command is not a single program".to_owned()),
+                Err(error) => Some(error.to_string()),
+            }
+        }
         ParsedCommand::Run { program, arguments } => {
             match directory.admit_execution(
                 &hook.directory_subject,
