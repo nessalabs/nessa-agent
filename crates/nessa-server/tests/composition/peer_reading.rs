@@ -2916,7 +2916,9 @@ async fn a_granted_chat_opens_from_the_peer_cache() {
     let missing = ConversationId::new(&uuid()).unwrap();
     assert!(chats.open(&missing).await.unwrap().is_none());
     let listed = chats.list(false).await.unwrap();
+    assert!(listed.complete);
     let ids: Vec<_> = listed
+        .rows
         .iter()
         .map(|row| row.conversation_id.clone())
         .collect();
@@ -2936,7 +2938,9 @@ async fn a_granted_chat_opens_from_the_peer_cache() {
         .await;
     synced_with(&b, 1).await;
     let listed = chats.list(false).await.unwrap();
+    assert!(listed.complete);
     let ids: Vec<_> = listed
+        .rows
         .iter()
         .map(|row| row.conversation_id.clone())
         .collect();
