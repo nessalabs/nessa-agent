@@ -1952,3 +1952,111 @@ fn a_share_keeps_its_audit_when_the_sink_is_down_until_restart() {
     assert_eq!(recorded.before.as_deref(), Some("none"));
     assert_eq!(recorded.after.as_deref(), Some("active"));
 }
+
+#[test]
+fn a_refused_exec_is_kept_when_the_audit_sink_is_down() {
+    let root = private();
+    let shared = root.path().join("shared");
+    fs::create_dir(&shared).unwrap();
+    let store_dir = private();
+    let database = store_dir.path().join("grants.sqlite3");
+    let audit = Arc::new(RecordingAudit::new());
+    let access = service(
+        Arc::new(LocalDirectoryFiles),
+        Arc::new(SqliteDirectoryStore::open(&database).unwrap()),
+        audit.clone(),
+        [20; BINDING_LEN],
+    );
+    share_read(&access, shared.to_str().unwrap(), "peer");
+    access
+        .share(ShareDirectory {
+            environment: "local".into(),
+            path: shared.to_str().unwrap().into(),
+            subject: DirectorySubject {
+                principal_id: Some("ruled".into()),
+                receiver_id: None,
+            },
+            capabilities: crate::domain::DirectoryCapabilities::from_names(["exec"]).unwrap(),
+            rules: crate::domain::CommandRules::new(vec![allow_program("ls").unwrap()]).unwrap(),
+            initiator: "owner".into(),
+        })
+        .unwrap();
+    *audit.fail.lock().unwrap() = true;
+    let refused = access
+        .exec(ExecAsk {
+            subject: "peer",
+            program: "cat",
+            profile: SandboxKind::None,
+            roots: &[],
+            hooks_answer_first: false,
+        })
+        .unwrap_err();
+    match refused {
+        DirectoryRefusal::Exec { audit_recorded, .. } => assert!(!audit_recorded),
+        other => panic!("{other:?}"),
+    }
+    *audit.fail.lock().unwrap() = false;
+    access.reconcile().unwrap();
+    *audit.fail.lock().unwrap() = true;
+    let command = access.command_at("ruled", "rm", &[]).unwrap_err();
+    match command {
+        DirectoryRefusal::Program { audit_recorded, .. } => assert!(!audit_recorded),
+        other => panic!("{other:?}"),
+    }
+    *audit.fail.lock().unwrap() = false;
+    access.reconcile().unwrap();
+    let lines = audit.lines.lock().unwrap();
+    assert!(lines
+        .iter()
+        .any(|line| line.cause == "exec-refused" && line.initiator == "peer"));
+    assert!(lines
+        .iter()
+        .any(|line| line.cause == "command-refused" && line.initiator == "ruled"));
+}
+
+#[test]
+fn cleanup_does_not_unlink_a_marker_this_attempt_did_not_create() {
+    let root = private();
+    let shared = root.path().join("shared");
+    fs::create_dir(&shared).unwrap();
+    let store_dir = private();
+    let database = store_dir.path().join("grants.sqlite3");
+    let files = Arc::new(FailUnlink {
+        inner: LocalDirectoryFiles,
+        fail: Mutex::new(true),
+    });
+    let access = service(
+        files,
+        Arc::new(FailResource {
+            inner: SqliteDirectoryStore::open(&database).unwrap(),
+            failed: Mutex::new(false),
+        }),
+        Arc::new(RecordingAudit::new()),
+        [21; BINDING_LEN],
+    );
+    access
+        .share(ShareDirectory {
+            environment: "local".into(),
+            path: shared.to_str().unwrap().into(),
+            subject: DirectorySubject {
+                principal_id: Some("peer".into()),
+                receiver_id: None,
+            },
+            capabilities: crate::domain::DirectoryCapabilities::from_names(["read"]).unwrap(),
+            rules: crate::domain::CommandRules::none(),
+            initiator: "owner".into(),
+        })
+        .unwrap_err();
+    fs::write(shared.join(".nessa-binding"), [9; BINDING_LEN]).unwrap();
+    let restarted = service(
+        Arc::new(LocalDirectoryFiles),
+        Arc::new(SqliteDirectoryStore::open(&database).unwrap()),
+        Arc::new(RecordingAudit::new()),
+        [21; BINDING_LEN],
+    );
+    restarted.reconcile().unwrap();
+    assert_eq!(
+        fs::read(shared.join(".nessa-binding")).unwrap(),
+        [9; BINDING_LEN]
+    );
+}

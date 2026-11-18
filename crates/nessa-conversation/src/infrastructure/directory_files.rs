@@ -66,6 +66,21 @@ impl DirectoryFiles for LocalDirectoryFiles {
         Ok(())
     }
 
+    fn release_created_marker(
+        &self,
+        canonical: &str,
+        binding: &[u8; BINDING_LEN],
+    ) -> Result<bool, DirectoryRefusal> {
+        match self.read_marker(canonical)? {
+            MarkerBytes::Absent => Ok(true),
+            MarkerBytes::Exact(bytes) if bytes == *binding => {
+                self.unlink_marker(canonical)?;
+                Ok(true)
+            }
+            MarkerBytes::Exact(_) | MarkerBytes::Other => Ok(true),
+        }
+    }
+
     fn unlink_marker(&self, canonical: &str) -> Result<(), DirectoryRefusal> {
         let root = open_directory(canonical)?;
         let marker = c_name(MARKER_NAME)?;

@@ -221,6 +221,17 @@ pub trait DirectoryFiles: Send + Sync {
     ) -> Result<(), DirectoryRefusal>;
     /// Remove the marker. Absent is success.
     fn unlink_marker(&self, canonical: &str) -> Result<(), DirectoryRefusal>;
+    /// The marker this attempt created is no longer at `canonical`. A different
+    /// file now at that name is left in place. `Ok(false)` means the matching
+    /// marker is still there.
+    fn release_created_marker(
+        &self,
+        canonical: &str,
+        binding: &[u8; BINDING_LEN],
+    ) -> Result<bool, DirectoryRefusal> {
+        let _ = binding;
+        self.unlink_marker(canonical).map(|()| true)
+    }
     /// Walk `relative` from the granted directory.
     fn walk(&self, canonical: &str, relative: &str) -> Result<WalkFacts, DirectoryRefusal>;
     /// Read a file the walk already placed inside.
@@ -651,20 +662,17 @@ impl DirectoryAccess {
                 at_ms: now_ms(),
             }),
             PolicyAnswer::Deny { rules } => {
-                let recorded = self
-                    .audit
-                    .record(&DirectoryAuditRecord {
-                        cause: "exec-refused".to_owned(),
-                        resource_id: Some(grant.resource_id.clone()),
-                        environment: resources.environment,
-                        canonical_path: resources.canonical_path,
-                        initiator: ask.subject.to_owned(),
-                        before: None,
-                        after: None,
-                        profile: Some(ask.profile.as_str().to_owned()),
-                        at_ms: now_ms(),
-                    })
-                    .is_ok();
+                let recorded = self.deliver_or_keep(&DirectoryAuditRecord {
+                    cause: "exec-refused".to_owned(),
+                    resource_id: Some(grant.resource_id.clone()),
+                    environment: resources.environment,
+                    canonical_path: resources.canonical_path,
+                    initiator: ask.subject.to_owned(),
+                    before: None,
+                    after: None,
+                    profile: Some(ask.profile.as_str().to_owned()),
+                    at_ms: now_ms(),
+                });
                 Err(DirectoryRefusal::Exec {
                     rules,
                     audit_recorded: recorded,
@@ -778,26 +786,23 @@ impl DirectoryAccess {
                     .cloned()
                     .unwrap_or_else(|| "command.rules.unlisted".to_owned());
                 let resource = self.resource_of(grant).ok();
-                let recorded = self
-                    .audit
-                    .record(&DirectoryAuditRecord {
-                        cause: "command-refused".to_owned(),
-                        resource_id: Some(grant.resource_id.clone()),
-                        environment: resource
-                            .as_ref()
-                            .map(|item| item.environment.clone())
-                            .unwrap_or_default(),
-                        canonical_path: resource
-                            .as_ref()
-                            .map(|item| item.canonical_path.clone())
-                            .unwrap_or_default(),
-                        initiator: subject.to_owned(),
-                        before: None,
-                        after: None,
-                        profile: None,
-                        at_ms: now_ms(),
-                    })
-                    .is_ok();
+                let recorded = self.deliver_or_keep(&DirectoryAuditRecord {
+                    cause: "command-refused".to_owned(),
+                    resource_id: Some(grant.resource_id.clone()),
+                    environment: resource
+                        .as_ref()
+                        .map(|item| item.environment.clone())
+                        .unwrap_or_default(),
+                    canonical_path: resource
+                        .as_ref()
+                        .map(|item| item.canonical_path.clone())
+                        .unwrap_or_default(),
+                    initiator: subject.to_owned(),
+                    before: None,
+                    after: None,
+                    profile: None,
+                    at_ms: now_ms(),
+                });
                 Err(DirectoryRefusal::Program {
                     matcher,
                     rules,
@@ -936,6 +941,7 @@ impl DirectoryAccess {
             self.record_file_absent(
                 &request.environment,
                 &canonical,
+                &binding,
                 &request.initiator,
                 false,
                 false,
@@ -1108,9 +1114,16 @@ impl DirectoryAccess {
             profile: None,
             at_ms: now_ms(),
         };
-        if self.audit.record(&record).is_err() {
-            let _ = self.store.save_pending(&record);
+        let _ = self.deliver_or_keep(&record);
+    }
+
+    /// The sink accepted the record. Otherwise it stays pending for the next delivery.
+    fn deliver_or_keep(&self, record: &DirectoryAuditRecord) -> bool {
+        if self.audit.record(record).is_ok() {
+            return true;
         }
+        let _ = self.store.save_pending(record);
+        false
     }
 
     fn open_marker_on(
@@ -1160,6 +1173,7 @@ impl DirectoryAccess {
         self.record_file_absent(
             environment,
             canonical,
+            &pending.binding,
             &pending.initiator,
             pending.unlinked,
             pending.audit_done,
@@ -1176,11 +1190,16 @@ impl DirectoryAccess {
         &self,
         environment: &str,
         canonical: &str,
+        binding: &[u8; BINDING_LEN],
         initiator: &str,
         already_unlinked: bool,
         already_audited: bool,
     ) -> Result<(), DirectoryRefusal> {
-        let unlinked = already_unlinked || self.files.unlink_marker(canonical).is_ok();
+        let unlinked = already_unlinked
+            || self
+                .files
+                .release_created_marker(canonical, binding)
+                .unwrap_or(false);
         let audit_done = unlinked
             && (already_audited
                 || self
