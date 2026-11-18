@@ -2080,8 +2080,9 @@ Named so they are not mistaken for settled:
   as the profile both the binding and the environment hold.
 - **Peer policy vocabulary.** What an environment may narrow in a lease and
   how that is written in Cedar.
-- **Local discovery.** Whether to announce at all by default, and what the
-  announcement reveals.
+- **Local discovery.** A paired gateway announces a dial address, a port, and
+  one rotating token per paired peer. The announcement does not carry a key
+  or a stable id. See [local discovery](auth/peer-gateways.md#local-discovery).
 - **Which tools a policy can gate, per binding.** The share dialog must
   say it; the answer comes from the #142 declaration and the 0014 survey.
 - **Listener hardening for a tunnel.** Answered in

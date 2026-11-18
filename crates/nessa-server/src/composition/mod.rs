@@ -76,6 +76,7 @@ mod native_linking;
 mod native_pairing;
 #[cfg(unix)]
 mod opencode_profile;
+mod peer_discovery;
 #[cfg(unix)]
 mod pool_settings;
 mod relay_command;
