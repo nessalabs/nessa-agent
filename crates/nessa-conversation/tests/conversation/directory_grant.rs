@@ -505,12 +505,16 @@ struct FailResource {
 }
 
 impl DirectoryStore for FailResource {
-    fn insert_resource(&self, resource: &StoredDirectoryResource) -> Result<(), DirectoryRefusal> {
+    fn insert_resource(
+        &self,
+        resource: &StoredDirectoryResource,
+        transition: &DirectoryAuditRecord,
+    ) -> Result<(), DirectoryRefusal> {
         if !*self.failed.lock().unwrap() {
             *self.failed.lock().unwrap() = true;
             return Err(DirectoryRefusal::Store);
         }
-        self.inner.insert_resource(resource)
+        self.inner.insert_resource(resource, transition)
     }
     fn resource_at(
         &self,
@@ -1845,4 +1849,54 @@ fn cleanup_waits_for_the_share_lease_before_it_unlinks() {
     reconcile_thread.join().unwrap().unwrap();
     share_thread.join().unwrap().unwrap();
     assert!(shared.join(".nessa-binding").is_file());
+}
+
+#[test]
+fn a_share_keeps_its_audit_when_the_sink_is_down_until_restart() {
+    let root = private();
+    let shared = root.path().join("shared");
+    fs::create_dir(&shared).unwrap();
+    let store_dir = private();
+    let database = store_dir.path().join("grants.sqlite3");
+    let failing = Arc::new(RecordingAudit::new());
+    *failing.fail.lock().unwrap() = true;
+    let access = service(
+        Arc::new(LocalDirectoryFiles),
+        Arc::new(SqliteDirectoryStore::open(&database).unwrap()),
+        failing,
+        [18; BINDING_LEN],
+    );
+    assert!(matches!(
+        access
+            .share(ShareDirectory {
+                environment: "local".into(),
+                path: shared.to_str().unwrap().into(),
+                subject: DirectorySubject {
+                    principal_id: Some("peer".into()),
+                    receiver_id: None,
+                },
+                capabilities: crate::domain::DirectoryCapabilities::from_names(["read"]).unwrap(),
+                rules: crate::domain::CommandRules::none(),
+                initiator: "owner".into(),
+            })
+            .unwrap_err(),
+        DirectoryRefusal::Audit
+    ));
+    drop(access);
+    let audit = Arc::new(RecordingAudit::new());
+    let restarted = service(
+        Arc::new(LocalDirectoryFiles),
+        Arc::new(SqliteDirectoryStore::open(&database).unwrap()),
+        audit.clone(),
+        [18; BINDING_LEN],
+    );
+    restarted.reconcile().unwrap();
+    let lines = audit.lines.lock().unwrap();
+    let recorded = lines
+        .iter()
+        .find(|line| line.cause == "first-share")
+        .unwrap();
+    assert_eq!(recorded.initiator, "owner");
+    assert_eq!(recorded.before.as_deref(), Some("none"));
+    assert_eq!(recorded.after.as_deref(), Some("active"));
 }

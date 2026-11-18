@@ -35,7 +35,10 @@ pub use grants::{
     admit_update, change_grant, Applied, ChangeFailed, GrantAudit, GrantChange, GrantOutcome,
     GrantStore, PeerGrants,
 };
-pub use lease_policy::{Denial, LeaseAsk, LeaseDecision, LeaseFacts, LeasePolicyEvaluator};
+pub use lease_policy::{
+    Denial, GatewayWriteDecision, GatewayWriteFacts, GatewayWritePolicy, LeaseAsk, LeaseDecision,
+    LeaseFacts, LeasePolicyEvaluator,
+};
 pub use redial::{redial, stop_past_deadline, Backoff};
 pub use serve::{
     refuse, serve, CommandRan, CommandRunner, CommandStop, HarnessLauncher, LeaseLedger,

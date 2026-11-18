@@ -30,14 +30,38 @@ impl SqliteDirectoryStore {
 }
 
 impl DirectoryStore for SqliteDirectoryStore {
-    fn insert_resource(&self, resource: &StoredDirectoryResource) -> Result<(), DirectoryRefusal> {
-        let connection = self.connection.lock().expect("directory grants");
-        connection
+    fn insert_resource(
+        &self,
+        resource: &StoredDirectoryResource,
+        transition: &crate::application::DirectoryAuditRecord,
+    ) -> Result<(), DirectoryRefusal> {
+        let mut connection = self.connection.lock().expect("directory grants");
+        let transaction = connection.transaction().map_err(store)?;
+        transaction
             .execute(
                 "INSERT INTO directory_resources (resource_id, environment, canonical_path, binding) VALUES (?1, ?2, ?3, ?4)",
                 params![resource.resource_id, resource.environment, resource.canonical_path, resource.binding.to_vec()],
             )
             .map_err(store)?;
+        transaction
+            .execute(
+                "INSERT INTO directory_pending_audits (
+                    resource_id, cause, initiator, environment, canonical_path, profile, before, after, at_ms
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                params![
+                    transition.resource_id.clone().unwrap_or_default(),
+                    transition.cause,
+                    transition.initiator,
+                    transition.environment,
+                    transition.canonical_path,
+                    transition.profile,
+                    transition.before,
+                    transition.after,
+                    i64::try_from(transition.at_ms).unwrap_or(i64::MAX),
+                ],
+            )
+            .map_err(store)?;
+        transaction.commit().map_err(store)?;
         Ok(())
     }
 

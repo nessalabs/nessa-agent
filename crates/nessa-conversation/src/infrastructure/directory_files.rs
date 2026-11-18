@@ -155,31 +155,42 @@ impl DirectoryFiles for LocalDirectoryFiles {
     fn open_session(&self, canonical: &str) -> Result<Box<dyn DirectorySession>, DirectoryRefusal> {
         Ok(Box::new(HeldDirectory {
             root: open_directory(canonical)?,
+            marker: std::sync::Mutex::new(None),
         }))
     }
 }
 
 struct HeldDirectory {
     root: File,
+    /// The marker file validated for this open. Later names are compared to
+    /// this file, not looked up again by `.nessa-binding`.
+    marker: std::sync::Mutex<Option<File>>,
 }
 
 impl DirectorySession for HeldDirectory {
     fn marker(&self) -> Result<MarkerBytes, DirectoryRefusal> {
-        let marker = match open_at(self.root.as_raw_fd(), MARKER_NAME, false) {
-            Ok(file) => file,
-            Err(DirectoryRefusal::Io(std::io::ErrorKind::NotFound)) => {
-                return Ok(MarkerBytes::Absent)
+        let mut held = self.marker.lock().expect("marker");
+        if held.is_none() {
+            match open_at(self.root.as_raw_fd(), MARKER_NAME, false) {
+                Ok(file) => *held = Some(file),
+                Err(DirectoryRefusal::Io(std::io::ErrorKind::NotFound)) => {
+                    return Ok(MarkerBytes::Absent)
+                }
+                Err(error) => return Err(error),
             }
-            Err(error) => return Err(error),
-        };
-        read_marker_file(marker)
+        }
+        let marker = held.as_ref().expect("the marker file is held");
+        if unsafe { libc::lseek(marker.as_raw_fd(), 0, libc::SEEK_SET) } < 0 {
+            return Err(io(std::io::Error::last_os_error()));
+        }
+        read_marker_bytes(marker)
     }
 
     fn walk(&self, relative: &str) -> Result<WalkFacts, DirectoryRefusal> {
         let (file, leave) = walk_from(self.root.as_raw_fd(), relative)?;
         let marker = file
             .as_ref()
-            .is_some_and(|opened| is_marker(self.root.as_raw_fd(), opened.as_raw_fd()));
+            .is_some_and(|opened| self.same_marker(opened.as_raw_fd()));
         Ok(WalkFacts { leave, marker })
     }
 
@@ -191,7 +202,7 @@ impl DirectorySession for HeldDirectory {
         let mut file = file.ok_or(DirectoryRefusal::Outside {
             leave: PathLeave::Missing,
         })?;
-        if is_marker(self.root.as_raw_fd(), file.as_raw_fd()) {
+        if self.same_marker(file.as_raw_fd()) {
             return Err(DirectoryRefusal::MarkerName);
         }
         let mut bytes = Vec::new();
@@ -206,7 +217,7 @@ impl DirectorySession for HeldDirectory {
         }
         if existing
             .as_ref()
-            .is_some_and(|opened| is_marker(self.root.as_raw_fd(), opened.as_raw_fd()))
+            .is_some_and(|opened| self.same_marker(opened.as_raw_fd()))
         {
             return Err(DirectoryRefusal::MarkerName);
         }
@@ -219,7 +230,7 @@ impl DirectorySession for HeldDirectory {
             return Err(io(std::io::Error::last_os_error()));
         }
         let mut file = unsafe { File::from_raw_fd(fd) };
-        if is_marker(self.root.as_raw_fd(), file.as_raw_fd()) {
+        if self.same_marker(file.as_raw_fd()) {
             return Err(DirectoryRefusal::MarkerName);
         }
         if unsafe { libc::ftruncate(file.as_raw_fd(), 0) } != 0 {
@@ -254,9 +265,17 @@ impl DirectorySession for HeldDirectory {
     }
 }
 
-fn read_marker_file(marker: File) -> Result<MarkerBytes, DirectoryRefusal> {
+impl HeldDirectory {
+    fn same_marker(&self, opened: RawFd) -> bool {
+        let held = self.marker.lock().expect("marker");
+        held.as_ref()
+            .is_some_and(|marker| same_inode(marker.as_raw_fd(), opened))
+    }
+}
+
+fn read_marker_bytes(marker: &File) -> Result<MarkerBytes, DirectoryRefusal> {
     let mut bytes = Vec::new();
-    (&marker)
+    marker
         .take(BINDING_LEN as u64 + 1)
         .read_to_end(&mut bytes)
         .map_err(io)?;
@@ -457,4 +476,27 @@ fn c_name(name: &str) -> Result<std::ffi::CString, DirectoryRefusal> {
 
 fn io(error: std::io::Error) -> DirectoryRefusal {
     DirectoryRefusal::Io(error.kind())
+}
+
+#[cfg(test)]
+mod marker_identity {
+    use super::*;
+
+    #[test]
+    fn a_renamed_marker_is_still_the_marker() {
+        let root = tempfile::tempdir().unwrap();
+        let shared = root.path().join("shared");
+        std::fs::create_dir(&shared).unwrap();
+        let path = shared.to_str().unwrap();
+        LocalDirectoryFiles
+            .create_marker(path, &[9; BINDING_LEN])
+            .unwrap();
+        let session = LocalDirectoryFiles.open_session(path).unwrap();
+        assert!(matches!(session.marker().unwrap(), MarkerBytes::Exact(_)));
+        std::fs::rename(shared.join(MARKER_NAME), shared.join("alias")).unwrap();
+        assert!(matches!(
+            session.read("alias").unwrap_err(),
+            DirectoryRefusal::MarkerName
+        ));
+    }
 }

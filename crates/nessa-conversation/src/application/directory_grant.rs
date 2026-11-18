@@ -245,8 +245,13 @@ pub trait DirectoryFiles: Send + Sync {
 
 /// The grant rows for one directory.
 pub trait DirectoryStore: Send + Sync {
-    /// Insert a new resource. The binding must be unique.
-    fn insert_resource(&self, resource: &StoredDirectoryResource) -> Result<(), DirectoryRefusal>;
+    /// Insert a new resource and the audit that transition owes, in one commit.
+    /// The binding must be unique.
+    fn insert_resource(
+        &self,
+        resource: &StoredDirectoryResource,
+        transition: &DirectoryAuditRecord,
+    ) -> Result<(), DirectoryRefusal>;
     /// The resource at this environment and path.
     fn resource_at(
         &self,
@@ -880,8 +885,7 @@ impl DirectoryAccess {
             canonical_path: canonical,
             binding: bytes,
         };
-        self.store.insert_resource(&resource)?;
-        self.audit_share(&resource, &request.initiator, "adopt")?;
+        self.record_resource(&resource, &request.initiator, "adopt")?;
         self.insert_subject(request, resource)
     }
 
@@ -898,7 +902,10 @@ impl DirectoryAccess {
             canonical_path: canonical.clone(),
             binding,
         };
-        if let Err(error) = self.store.insert_resource(&resource) {
+        if let Err(error) = self.store.insert_resource(
+            &resource,
+            &self.transition(&resource, &request.initiator, "first-share"),
+        ) {
             self.store.record_cleanup(
                 &request.environment,
                 &canonical,
@@ -914,7 +921,7 @@ impl DirectoryAccess {
             )?;
             return Err(error);
         }
-        self.audit_share(&resource, &request.initiator, "first-share")?;
+        self.flush_pending(&resource.resource_id)?;
         self.insert_subject(request, resource)
     }
 
@@ -1153,13 +1160,24 @@ impl DirectoryAccess {
             .any(|grant| grant.rules.constrains_commands() || grant.rules.is_unreadable()))
     }
 
-    fn audit_share(
+    fn record_resource(
         &self,
         resource: &StoredDirectoryResource,
         initiator: &str,
         cause: &str,
     ) -> Result<(), DirectoryRefusal> {
-        self.audit_required(DirectoryAuditRecord {
+        self.store
+            .insert_resource(resource, &self.transition(resource, initiator, cause))?;
+        self.flush_pending(&resource.resource_id)
+    }
+
+    fn transition(
+        &self,
+        resource: &StoredDirectoryResource,
+        initiator: &str,
+        cause: &str,
+    ) -> DirectoryAuditRecord {
+        DirectoryAuditRecord {
             cause: cause.to_owned(),
             resource_id: Some(resource.resource_id.clone()),
             environment: resource.environment.clone(),
@@ -1169,7 +1187,7 @@ impl DirectoryAccess {
             after: Some("active".to_owned()),
             profile: None,
             at_ms: now_ms(),
-        })
+        }
     }
 
     fn audit_required(&self, record: DirectoryAuditRecord) -> Result<(), DirectoryRefusal> {

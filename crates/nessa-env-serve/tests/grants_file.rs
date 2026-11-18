@@ -339,12 +339,13 @@ fn a_gateway_cannot_write_a_wider_grants_file() {
         })
         .unwrap();
     let before = std::fs::read(directory.path().join(FILE)).unwrap();
-    let refused = grants.gateway_write(&peer, &PeerGrant::everything());
+    let policy = crate::infrastructure::CedarLeasePolicy::new().unwrap();
+    let refused = grants.gateway_write(&peer, &PeerGrant::everything(), &policy);
     assert_eq!(refused, Err(GatewayWrite::Wider));
     assert_eq!(std::fs::read(directory.path().join(FILE)).unwrap(), before);
     let narrower = PeerGrant::new(Agents::Named([].into()), None);
     assert_eq!(
-        grants.gateway_write(&peer, &narrower),
+        grants.gateway_write(&peer, &narrower, &policy),
         Err(GatewayWrite::NotOwner)
     );
     assert_eq!(std::fs::read(directory.path().join(FILE)).unwrap(), before);

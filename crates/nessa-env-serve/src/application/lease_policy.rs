@@ -64,6 +64,37 @@ pub enum Denial {
     Unavailable,
 }
 
+/// Facts for a gateway's attempt to replace one grant entry.
+pub struct GatewayWriteFacts<'a> {
+    /// The gateway asking to write.
+    pub peer: &'a Peer,
+    /// The grant it proposes.
+    pub proposed: &'a PeerGrant,
+    /// The owner's entry, or what a peer with no entry holds.
+    pub owner: &'a PeerGrant,
+    /// Whether `proposed` lets the peer do something `owner` does not.
+    /// This is a fact. The policy decides the refusal.
+    pub widens: bool,
+}
+
+/// The policy's refusal of a gateway write. A gateway does not replace the file.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GatewayWriteDecision {
+    /// The proposal is wider than the owner's entry.
+    Wider,
+    /// The gateway is not the owner of the file.
+    NotOwner,
+    /// The policy could not decide.
+    Unavailable,
+}
+
+/// Whether a gateway may replace a grant entry.
+pub trait GatewayWritePolicy: Send + Sync {
+    /// The refusal for `facts`. An evaluator that cannot decide answers
+    /// [`GatewayWriteDecision::Unavailable`].
+    fn replace(&self, facts: &GatewayWriteFacts<'_>) -> GatewayWriteDecision;
+}
+
 /// Whether a lease is allowed, decided by the lease policy.
 pub trait LeasePolicyEvaluator: Send + Sync {
     /// The decision for `facts`. Never an error: an evaluator that cannot
