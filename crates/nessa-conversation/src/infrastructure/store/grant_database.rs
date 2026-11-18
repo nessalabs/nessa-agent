@@ -2,7 +2,7 @@
 //! The existing SQL adapter attaches it as `grants`; explicit qualifiers keep
 //! old metadata grant tables outside the read and write paths. An attached
 //! transaction retains atomic grant evidence and catalogue publication.
-use nessa_local_database::{rusqlite::Connection, OpenError, Schema};
+use nessa_local_database::{rusqlite::Connection, OpenError, Schema, Upgrade};
 use std::path::{Path, PathBuf};
 
 /// Production grants are identity/access data, independent of conversation
@@ -17,8 +17,17 @@ pub(super) fn path(metadata: &Path) -> PathBuf {
     metadata.with_extension("grants.sqlite3")
 }
 
+/// The steps that bring an older grant file to [`schema`]'s version. Version 1
+/// is the grant rows without the log. The step adds the empty log tables and
+/// leaves every grant row where it was.
+static UPGRADES: [Upgrade; 1] = [Upgrade::new(1, include_str!("grants_from_1.sql"))];
+
+fn schema() -> Result<Schema, OpenError> {
+    Schema::new(include_str!("grants.sql"))?.with_upgrades(&UPGRADES)
+}
+
 pub(super) fn open(path: &Path) -> Result<Connection, OpenError> {
-    let connection = nessa_local_database::open(path, &Schema::new(include_str!("grants.sql"))?)?;
+    let connection = nessa_local_database::open(path, &schema()?)?;
     validate_shape(&connection, "")?;
     Ok(connection)
 }
@@ -55,7 +64,7 @@ pub(super) fn attach_read_only(connection: &Connection, path: &Path) -> Result<(
     connection.execute("ATTACH DATABASE ?1 AS grants", [uri.as_str()])?;
     let found = connection
         .pragma_query_value(Some("grants"), "user_version", |row| row.get::<_, i64>(0))?;
-    let expected = Schema::new(include_str!("grants.sql"))?.version();
+    let expected = schema()?.version();
     if found != i64::from(expected) {
         return Err(OpenError::Version { found, expected });
     }

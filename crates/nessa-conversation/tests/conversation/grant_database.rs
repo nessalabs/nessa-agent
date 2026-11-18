@@ -41,6 +41,40 @@ fn a_foreign_grant_version_refuses_before_opening_or_creating_metadata() {
     }
 }
 
+#[tokio::test]
+async fn a_version_one_grant_file_keeps_its_rows_and_gains_the_log() {
+    let opened = opened();
+    let id = new_id();
+    opened.store.create(owned(&id)).await.unwrap();
+    assert!(grant(&opened.store, &id, "phone").await);
+    drop(opened.store);
+    let grants = opened.path.with_extension("grants.sqlite3");
+    let connection = Connection::open(&grants).unwrap();
+    let before: i64 = connection
+        .query_row("SELECT count(*) FROM share_grants", [], |row| row.get(0))
+        .unwrap();
+    assert!(before >= 1);
+    connection
+        .execute_batch("DROP TABLE grant_log; DROP TABLE grant_streams; PRAGMA user_version = 1;")
+        .unwrap();
+    drop(connection);
+    let store = LocalConversationStore::open(&opened.path).unwrap();
+    assert!(store.held_grant(&id, "phone").await.unwrap().is_some());
+    let connection = Connection::open(&grants).unwrap();
+    let version: i64 = connection
+        .pragma_query_value(None, "user_version", |row| row.get(0))
+        .unwrap();
+    assert_eq!(version, 2);
+    let after: i64 = connection
+        .query_row("SELECT count(*) FROM share_grants", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(after, before);
+    let streams: i64 = connection
+        .query_row("SELECT count(*) FROM grant_streams", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(streams, 0);
+}
+
 #[test]
 fn a_snapshot_refuses_a_foreign_grant_version_without_writing_either_file() {
     let opened = opened();
