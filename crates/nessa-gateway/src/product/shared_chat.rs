@@ -374,11 +374,16 @@ pub(super) fn append_catalogue(
     }
     let fingerprint = replica_fingerprint(&catalogue.rows);
     // The offset names a position in the list that minted it. A changed
-    // list is walked from the start, so a withdrawal cannot hide a later chat.
-    let skip = match expected {
-        Some(seen) if seen != fingerprint => 0,
-        _ => skip,
-    };
+    // list is not a later page of the walk the caller already accumulated:
+    // that walk stays incomplete and offers no cursor, so it cannot claim
+    // the withdrawn chat is still a member.
+    if matches!(expected, Some(seen) if seen != fingerprint) {
+        *complete = false;
+        return SharedAppend {
+            next: None,
+            fingerprint,
+        };
+    }
     SharedAppend {
         next: append_bounded(rows, catalogue.rows, limit, complete, skip),
         fingerprint,
@@ -1558,7 +1563,7 @@ mod tests {
         let fingerprint = super::replica_fingerprint(&kept);
         let mut changed = Vec::new();
         complete = true;
-        let restarted = super::append_catalogue(
+        let stopped = super::append_catalogue(
             &mut changed,
             super::SharedCatalogue {
                 rows: kept,
@@ -1569,9 +1574,10 @@ mod tests {
             1,
             Some(0),
         );
-        assert_eq!(changed[0].conversation_id, "kept");
-        assert_eq!(restarted.next, Some(1));
-        assert_ne!(restarted.fingerprint, 0);
+        assert!(changed.is_empty());
+        assert!(stopped.next.is_none());
+        assert!(!complete);
+        assert_ne!(stopped.fingerprint, 0);
         let mut followed = Vec::new();
         complete = true;
         let rest = super::append_catalogue(
