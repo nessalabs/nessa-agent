@@ -325,6 +325,24 @@ impl DirectoryStore for SqliteDirectoryStore {
         Ok(())
     }
 
+    fn open_audits_pending(&self) -> Result<Vec<String>, DirectoryRefusal> {
+        let connection = self.connection.lock().expect("directory grants");
+        let mut statement = connection
+            .prepare("SELECT resource_id FROM directory_open_audits WHERE audit_done = 0")
+            .map_err(store)?;
+        let rows = statement.query_map([], |row| row.get(0)).map_err(store)?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(store)
+    }
+
+    fn pending_resources(&self) -> Result<Vec<String>, DirectoryRefusal> {
+        let connection = self.connection.lock().expect("directory grants");
+        let mut statement = connection
+            .prepare("SELECT DISTINCT resource_id FROM directory_pending_audits")
+            .map_err(store)?;
+        let rows = statement.query_map([], |row| row.get(0)).map_err(store)?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(store)
+    }
+
     fn pending_open_audit(
         &self,
         resource_id: &str,

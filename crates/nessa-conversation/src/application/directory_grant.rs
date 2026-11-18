@@ -294,6 +294,14 @@ pub trait DirectoryStore: Send + Sync {
         &self,
         resource_id: &str,
     ) -> Result<Option<PendingOpenAudit>, DirectoryRefusal>;
+    /// Resources whose mismatch audit has not been recorded.
+    fn open_audits_pending(&self) -> Result<Vec<String>, DirectoryRefusal> {
+        Ok(Vec::new())
+    }
+    /// Resources that still have an audit the sink refused.
+    fn pending_resources(&self) -> Result<Vec<String>, DirectoryRefusal> {
+        Ok(Vec::new())
+    }
     /// Remember a marker this attempt created whose resource row did not commit.
     fn record_cleanup(
         &self,
@@ -548,6 +556,7 @@ impl DirectoryAccess {
 
     /// Share one directory with one subject.
     pub fn share(&self, request: ShareDirectory) -> Result<SharedDirectory, DirectoryRefusal> {
+        self.reconcile()?;
         let canonical = self.files.canonicalize(&request.path)?;
         encoded_grant(
             &request.environment,
@@ -588,6 +597,7 @@ impl DirectoryAccess {
 
     /// Admit exec. This does not spawn a process.
     pub fn exec(&self, ask: ExecAsk<'_>) -> Result<(), DirectoryRefusal> {
+        self.reconcile()?;
         let grants = self.store.grants_for_subject(ask.subject)?;
         let Some(grant) = grants.first() else {
             return Err(DirectoryRefusal::NotFound);
@@ -655,6 +665,7 @@ impl DirectoryAccess {
         program: &str,
         argv: &[String],
     ) -> Result<(), DirectoryRefusal> {
+        self.reconcile()?;
         for grant in self.store.grants_for_subject(subject)? {
             self.command_on(subject, &grant, program, argv)?;
         }
@@ -728,6 +739,7 @@ impl DirectoryAccess {
 
     /// A call the harness made without asking. Recorded when the subject has a grant.
     pub fn report_unasked(&self, subject: &str, tool: &str) -> Result<(), DirectoryRefusal> {
+        self.reconcile()?;
         let grants = self.store.grants_for_subject(subject)?;
         let Some(grant) = grants.first() else {
             return Ok(());
@@ -760,6 +772,18 @@ impl DirectoryAccess {
                 .expect_err("a missing directory revokes its grants")),
             Err(error) => Err(error),
         }
+    }
+
+    /// Deliver every mismatch audit the sink has not accepted, then every other
+    /// pending directory audit. Share, read, write, exec, and process start call this.
+    pub fn reconcile(&self) -> Result<(), DirectoryRefusal> {
+        for resource_id in self.store.open_audits_pending()? {
+            self.retry_open_audit(&resource_id)?;
+        }
+        for resource_id in self.store.pending_resources()? {
+            self.flush_pending(&resource_id)?;
+        }
+        Ok(())
     }
 
     /// Write an open audit the sink previously refused, keeping the original initiator.
@@ -914,6 +938,7 @@ impl DirectoryAccess {
         ),
         DirectoryRefusal,
     > {
+        self.reconcile()?;
         let grants = self.store.grants_for_subject(subject)?;
         let Some(grant) = grants.into_iter().next() else {
             return Err(DirectoryRefusal::NotFound);

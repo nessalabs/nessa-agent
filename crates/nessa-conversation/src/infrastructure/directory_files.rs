@@ -16,8 +16,13 @@ pub struct LocalDirectoryFiles;
 impl DirectoryFiles for LocalDirectoryFiles {
     fn canonicalize(&self, path: &str) -> Result<String, DirectoryRefusal> {
         let absolute = absolute(path)?;
-        let _root = open_directory(&absolute)?;
-        Ok(absolute)
+        let resolved = std::fs::canonicalize(&absolute).map_err(io)?;
+        let text = resolved
+            .to_str()
+            .ok_or(DirectoryRefusal::Io(std::io::ErrorKind::InvalidData))?
+            .to_owned();
+        let _root = open_directory(&text)?;
+        Ok(text)
     }
 
     fn read_marker(&self, canonical: &str) -> Result<MarkerBytes, DirectoryRefusal> {

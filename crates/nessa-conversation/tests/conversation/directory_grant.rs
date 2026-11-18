@@ -1383,6 +1383,102 @@ fn count(connection: &nessa_local_database::rusqlite::Connection, sql: &str) -> 
 }
 
 #[test]
+fn a_later_read_delivers_the_mismatch_audit_the_sink_refused() {
+    let root = private();
+    let shared = root.path().join("shared");
+    fs::create_dir(&shared).unwrap();
+    let store_dir = private();
+    let audit = Arc::new(RecordingAudit::new());
+    let store =
+        Arc::new(SqliteDirectoryStore::open(&store_dir.path().join("grants.sqlite3")).unwrap());
+    let access = service(
+        Arc::new(LocalDirectoryFiles),
+        store,
+        audit.clone(),
+        [11; BINDING_LEN],
+    );
+    share_read(&access, shared.to_str().unwrap(), "peer");
+    fs::remove_file(shared.join(".nessa-binding")).unwrap();
+    *audit.fail.lock().unwrap() = true;
+    let refused = access.read("peer", "note.txt").unwrap_err();
+    match refused {
+        DirectoryRefusal::MarkerMismatch { audit_recorded, .. } => assert!(!audit_recorded),
+        other => panic!("{other:?}"),
+    }
+    *audit.fail.lock().unwrap() = false;
+    assert!(matches!(
+        access.read("peer", "note.txt").unwrap_err(),
+        DirectoryRefusal::NotFound
+    ));
+    let lines = audit.lines.lock().unwrap();
+    let recorded = lines
+        .iter()
+        .find(|line| line.cause == "marker-missing")
+        .unwrap();
+    assert_eq!(recorded.initiator, "peer");
+    assert_eq!(recorded.before.as_deref(), Some("active"));
+    assert_eq!(recorded.after.as_deref(), Some("absent"));
+}
+
+#[test]
+fn restart_delivers_a_mismatch_audit_without_another_open() {
+    let root = private();
+    let shared = root.path().join("shared");
+    fs::create_dir(&shared).unwrap();
+    let store_dir = private();
+    let database = store_dir.path().join("grants.sqlite3");
+    let failing = Arc::new(RecordingAudit::new());
+    let store = Arc::new(SqliteDirectoryStore::open(&database).unwrap());
+    let access = service(
+        Arc::new(LocalDirectoryFiles),
+        store,
+        failing.clone(),
+        [12; BINDING_LEN],
+    );
+    share_read(&access, shared.to_str().unwrap(), "peer");
+    fs::remove_file(shared.join(".nessa-binding")).unwrap();
+    *failing.fail.lock().unwrap() = true;
+    access.read("peer", "note.txt").unwrap_err();
+    drop(access);
+    let restarted_audit = Arc::new(RecordingAudit::new());
+    let restarted = service(
+        Arc::new(LocalDirectoryFiles),
+        Arc::new(SqliteDirectoryStore::open(&database).unwrap()),
+        restarted_audit.clone(),
+        [12; BINDING_LEN],
+    );
+    restarted.reconcile().unwrap();
+    let lines = restarted_audit.lines.lock().unwrap();
+    let recorded = lines
+        .iter()
+        .find(|line| line.cause == "marker-missing")
+        .unwrap();
+    assert_eq!(recorded.initiator, "peer");
+}
+
+#[test]
+fn a_symlink_and_its_target_are_one_directory() {
+    let root = private();
+    let real = root.path().join("real");
+    fs::create_dir(&real).unwrap();
+    let alias = root.path().join("alias");
+    std::os::unix::fs::symlink(&real, &alias).unwrap();
+    let store_dir = private();
+    let access = service(
+        Arc::new(LocalDirectoryFiles),
+        Arc::new(SqliteDirectoryStore::open(&store_dir.path().join("grants.sqlite3")).unwrap()),
+        Arc::new(RecordingAudit::new()),
+        [13; BINDING_LEN],
+    );
+    let through_alias = share_read(&access, alias.to_str().unwrap(), "peer");
+    let through_real = share_read(&access, real.to_str().unwrap(), "other");
+    let expected = std::fs::canonicalize(&real).unwrap();
+    assert_eq!(through_alias.canonical_path, expected.to_str().unwrap());
+    assert_eq!(through_alias.resource_id, through_real.resource_id);
+    assert_eq!(through_alias.canonical_path, through_real.canonical_path);
+}
+
+#[test]
 fn an_unasked_call_is_not_forgotten_when_the_audit_sink_is_down() {
     let root = private();
     let shared = root.path().join("shared");
