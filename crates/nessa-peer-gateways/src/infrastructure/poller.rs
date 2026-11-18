@@ -487,12 +487,15 @@ impl Shared {
         *self.stopped.borrow()
     }
     /// Take a read place if this wave does not already hold one. `false` once
-    /// the poller is stopping or the semaphore is closed.
+    /// the poller is stopping, this peer's cycle is stopped, or the semaphore
+    /// is closed. The wait does not outlive `peer.forget`, `peer.follow`, or
+    /// `peer.relay` for this peer.
     async fn hold_place(
         &self,
         place: &ReadPlace,
         permit: &mut Option<OwnedSemaphorePermit>,
         stopped: &mut watch::Receiver<bool>,
+        cycle: &CycleStop,
     ) -> bool {
         if permit.is_some() {
             return true;
@@ -504,6 +507,7 @@ impl Shared {
         tokio::select! {
             biased;
             () = until_stopped(&mut stopped) => false,
+            () = cycle.stopped() => false,
             acquired = place.reads.clone().acquire_owned() => {
                 match acquired {
                     Ok(held) => {
@@ -672,7 +676,10 @@ impl Shared {
                         .unwrap_or_else(PoisonError::into_inner)
                         .take();
                     let mut stopped = self.stopped.clone();
-                    if !self.hold_place(&place, &mut permit, &mut stopped).await {
+                    if !self
+                        .hold_place(&place, &mut permit, &mut stopped, cycle)
+                        .await
+                    {
                         return self.stopped_short();
                     }
                     self.reset(key, cause, changes).await;
@@ -935,14 +942,24 @@ impl Shared {
             tokio::select! {
                 ended = &mut work => break ended,
                 batch = audit_rx.recv() => {
-                    if let Some(batch) = batch {
-                        if !self.hold_place(&place, &mut permit, &mut stopped).await {
-                            cycle.stop();
-                            break (&mut work).await;
-                        }
-                        recorded += batch.len();
-                        self.audit_withdrawn(key, &batch, changes).await;
-                        self.release_place(changes, &mut permit, &mut stopped).await;
+                    let Some(batch) = batch else {
+                        continue;
+                    };
+                    if !self
+                        .keep_batch(
+                            key,
+                            &batch,
+                            &place,
+                            &mut permit,
+                            &mut stopped,
+                            cycle,
+                            changes,
+                            &mut recorded,
+                        )
+                        .await
+                    {
+                        cycle.stop();
+                        break (&mut work).await;
                     }
                 }
                 Some(()) = live_rx.recv(), if !synced => {
@@ -960,16 +977,34 @@ impl Shared {
             }
         };
         while let Ok(batch) = audit_rx.try_recv() {
-            if !self.hold_place(&place, &mut permit, &mut stopped).await {
-                break;
-            }
-            recorded += batch.len();
-            self.audit_withdrawn(key, &batch, changes).await;
+            let _ = self
+                .keep_batch(
+                    key,
+                    &batch,
+                    &place,
+                    &mut permit,
+                    &mut stopped,
+                    cycle,
+                    changes,
+                    &mut recorded,
+                )
+                .await;
         }
         let (result, withdrawn) = read_ended(ended, &withdrawn);
         let pending = withdrawn.get(recorded..).unwrap_or(&[]);
-        if !pending.is_empty() && self.hold_place(&place, &mut permit, &mut stopped).await {
-            self.audit_withdrawn(key, pending, changes).await;
+        if !pending.is_empty() {
+            let _ = self
+                .keep_batch(
+                    key,
+                    pending,
+                    &place,
+                    &mut permit,
+                    &mut stopped,
+                    cycle,
+                    changes,
+                    &mut recorded,
+                )
+                .await;
         }
         if let Some(held) = permit {
             *place.permit.lock().unwrap_or_else(PoisonError::into_inner) = Some(held);
@@ -978,6 +1013,32 @@ impl Shared {
             return None;
         }
         Some(result)
+    }
+
+    /// Record `batch` and free the place once that wave has left the queue.
+    /// `false` when this peer's cycle or the poller has stopped: the batch is
+    /// still recorded, without waiting for a place, so the turn can be given
+    /// back.
+    #[allow(clippy::too_many_arguments)]
+    async fn keep_batch<'a>(
+        &'a self,
+        key: DeviceKey,
+        batch: &[String],
+        place: &ReadPlace,
+        permit: &mut Option<OwnedSemaphorePermit>,
+        stopped: &mut watch::Receiver<bool>,
+        cycle: &CycleStop,
+        changes: &mut Vec<PollerRecord<'a>>,
+        recorded: &mut usize,
+    ) -> bool {
+        let held = self.hold_place(place, permit, stopped, cycle).await;
+        *recorded += batch.len();
+        self.audit_withdrawn(key, batch, changes).await;
+        if !held {
+            return false;
+        }
+        self.release_place(changes, permit, stopped).await;
+        true
     }
 
     /// Record withdrawals while the follow is still up. The rows are already

@@ -1373,6 +1373,69 @@ fn a_grant_frame_keeps_the_last_record_and_its_transcript() {
 }
 
 #[test]
+fn a_replacement_drops_a_transcript_that_has_no_grant_row() {
+    let root = tempfile::tempdir().unwrap();
+    let mut cache = cache(&cache_path(root.path(), "orphan-transcript.sqlite3"));
+    let blob = [0_u8, 0, 0, 0, 0, 0, 0, 1];
+    for stream in ["conv-x", "conv-y"] {
+        cache
+            .connection
+            .execute(
+                "INSERT INTO transcript_progress
+                 (receiver, origin, stream, incarnation, schema_id, access_epoch, downloaded, applied, facts, generation)
+                 VALUES ('recv', 'origin', ?1, 'inc', 'schema', 'epoch', ?2, ?2, ?2, ?2)",
+                params![stream, blob.as_slice()],
+            )
+            .unwrap();
+    }
+    let kept = ("conv-y".to_owned(), false, Some("read".to_owned()), 1_i64);
+    cache
+        .apply_grant_entries("recv", false, "inc", 4, std::slice::from_ref(&kept))
+        .unwrap();
+    // conv-x was copied and the commit did not land. An incremental frame
+    // does not know that, so the transcript stays.
+    cache.withdraw_grant_entries("recv", false, &[]).unwrap();
+    let still: i64 = cache
+        .connection
+        .query_row(
+            "SELECT count(*) FROM transcript_progress WHERE receiver = 'recv' AND stream = 'conv-x'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(still, 1);
+    let removed = cache.withdraw_grant_entries("recv", true, &[kept]).unwrap();
+    assert_eq!(removed, vec!["conv-x".to_owned()]);
+    let gone: i64 = cache
+        .connection
+        .query_row(
+            "SELECT count(*) FROM transcript_progress WHERE receiver = 'recv' AND stream = 'conv-x'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(gone, 0, "the replacement drops the uncommitted transcript");
+    let kept_transcript: i64 = cache
+        .connection
+        .query_row(
+            "SELECT count(*) FROM transcript_progress WHERE receiver = 'recv' AND stream = 'conv-y'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(kept_transcript, 1);
+    let cursor: i64 = cache
+        .connection
+        .query_row(
+            "SELECT position FROM grant_cursors WHERE receiver = 'recv'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(cursor, 4, "the replacement does not move the cursor");
+}
+
+#[test]
 fn a_revoke_lands_before_the_cursor_moves() {
     let root = tempfile::tempdir().unwrap();
     let mut cache = cache(&cache_path(root.path(), "revoke-first.sqlite3"));

@@ -2307,6 +2307,83 @@ async fn a_caught_up_follow_frees_the_read_slot() {
     stop(peers.c).await;
 }
 
+/// One read slot is held by C's unfinished read. A's caught-up follow then
+/// has a grant revoked and waits to record that withdrawal. Forgetting A
+/// must not sit in that wait until it is told `Busy`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_stopped_follow_does_not_wait_out_a_taken_read_slot() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut peers = TwoPeers::start(directory.path()).await;
+    let (key_a, reader_a) = enroll(&peers.a, &peers.b, &peers.relay_a, true).await;
+    peers.key_a = key_a;
+    let reader_a = reader_a.unwrap();
+    let conversation = peers.a.conversation().await;
+    peers
+        .a
+        .grant(
+            ShareGrantTransition::Grant(ShareAccess::read()),
+            &conversation,
+            &reader_a,
+        )
+        .await;
+    follow_granted(&peers.b, key_a, &[conversation.clone()]).await;
+    let poller = peers.b.poller(PollPolicy {
+        reads_at_once: 1,
+        ..POLICY
+    });
+    let since = SystemClock.unix_milliseconds();
+    tokio::time::timeout(WAIT, async {
+        loop {
+            let sync = sync_of(&peers.b, &peers.key_a).await;
+            let followed = peers.b.peers.active_read_stop(&peers.key_a).is_some();
+            if followed
+                && sync.is_some_and(|sync| {
+                    sync.state == SyncState::Synced
+                        && sync.last_synced_ms.is_some_and(|at| at >= since)
+                })
+            {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("A's follow did not stay up");
+    peers.relay_c.hold_after(1);
+    let (key_c, reader_c) = enroll(&peers.c, &peers.b, &peers.relay_c, true).await;
+    peers.key_c = key_c;
+    let reader_c = reader_c.unwrap();
+    let other = peers.c.conversation().await;
+    peers
+        .c
+        .grant(
+            ShareGrantTransition::Grant(ShareAccess::read()),
+            &other,
+            &reader_c,
+        )
+        .await;
+    follow_granted(&peers.b, key_c, &[other]).await;
+    tokio::time::timeout(WAIT, async {
+        while peers.relay_c.held() == 0 {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("C's read did not take the only slot");
+    peers
+        .a
+        .grant(ShareGrantTransition::Revoke, &conversation, &reader_a)
+        .await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let forgotten = tokio::time::timeout(WAIT, peers.b.peers.forget(peers.key_a, &peers.b.owner))
+        .await
+        .expect("forgetting A waited out C's read slot");
+    tokio::time::timeout(WAIT, poller.join()).await.unwrap();
+    assert!(forgotten.is_ok(), "{forgotten:?}");
+    stop(peers.a).await;
+    stop(peers.c).await;
+}
+
 /// With one read slot, a second peer's read does not start until the first
 /// gives the slot back.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

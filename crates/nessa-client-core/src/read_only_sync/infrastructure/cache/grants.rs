@@ -195,6 +195,27 @@ fn withdraw_entries(
                 withdrawn.push(id);
             }
         }
+        // A copy can store a transcript and then fail before the grant row
+        // is committed. A later replacement that no longer names that chat
+        // has no grant row to find, so the transcript is listed on its own.
+        let mut statement = transaction
+            .prepare("SELECT DISTINCT stream FROM transcript_progress WHERE receiver = ?1")
+            .map_err(super::rows::database_error)?;
+        let copied: Vec<String> = statement
+            .query_map(params![receiver], |row| row.get(0))
+            .map_err(super::rows::database_error)?
+            .collect::<Result<_, _>>()
+            .map_err(super::rows::database_error)?;
+        drop(statement);
+        for id in copied {
+            if present.iter().any(|(kept, _, _)| kept == &id)
+                || withdrawn.iter().any(|gone| gone == &id)
+            {
+                continue;
+            }
+            remove_grant_conversation(transaction, receiver, &id)?;
+            withdrawn.push(id);
+        }
         return Ok(withdrawn);
     }
     let mut last: Vec<&(String, bool, Option<String>, i64)> = Vec::new();
