@@ -722,13 +722,14 @@ fn copy_grant_entry(
     }
 }
 
-/// Whether the gateway, not the local follow rule, dropped `id`.
+/// Whether the gateway, not the local follow rule, dropped `id`. The last
+/// record in the frame wins, the same rule the replica uses.
 fn revoked_by_gateway(
     id: &str,
     replaces: bool,
     entries: &[nessa_protocol::product::generated::GrantFrameEntry],
 ) -> bool {
-    match entries.iter().find(|entry| entry.conversation_id == id) {
+    match entries.iter().rfind(|entry| entry.conversation_id == id) {
         Some(entry) => entry.absent,
         None => replaces,
     }
@@ -1994,5 +1995,15 @@ mod grant_frames {
         assert!(!revoked_by_gateway("kept", true, &entries));
         assert!(!revoked_by_gateway("gone", false, &entries));
         assert!(revoked_by_gateway("gone", false, &[entry("gone", true)]));
+        assert!(revoked_by_gateway(
+            "gone",
+            false,
+            &[entry("gone", false), entry("gone", true)]
+        ));
+        assert!(!revoked_by_gateway(
+            "gone",
+            false,
+            &[entry("gone", true), entry("gone", false)]
+        ));
     }
 }
