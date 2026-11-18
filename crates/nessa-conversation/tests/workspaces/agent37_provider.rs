@@ -228,3 +228,79 @@ async fn an_unreadable_report_from_someone_elses_instance_is_kept() {
     assert_eq!(receipt.disposition, RefusalDisposition::RetainTarget);
     assert_eq!(shared.lock().unwrap().calls, ["create"]);
 }
+
+/// Against Agent37 itself, with the published runtime template: Nessa's
+/// provider registers its key, makes a thread's VM, connects with the relay
+/// forward, asks the image's `nessa` for its lease protocol, stops it and
+/// deletes it. Billed, so run only when asked, with AGENT37_API_KEY set:
+/// `cargo test -p nessa-conversation --lib agent37_live -- --ignored`.
+#[tokio::test]
+#[ignore = "makes a billed Agent37 VM; needs AGENT37_API_KEY and the published template"]
+async fn agent37_live_a_thread_vm_is_made_connected_stopped_and_deleted() {
+    let key = std::env::var("AGENT37_API_KEY").expect("AGENT37_API_KEY");
+    let template = crate::workspaces::infrastructure::agent37_template()
+        .expect("this build pins a published template");
+    let identity = workspace_sdk::providers::agent37::Agent37Identity::generate("nessa-live")
+        .await
+        .unwrap();
+    let connection = CloudConnection::Agent37(
+        Agent37Connection::new(
+            key,
+            identity.private_key().to_vec(),
+            identity.public_key().into(),
+            template.into(),
+        )
+        .unwrap(),
+    );
+    let place = tempfile::tempdir().unwrap();
+    let relay = place.path().join("relay.sock");
+    let _listening = tokio::net::UnixListener::bind(&relay).unwrap();
+    let provider = Agent37Provider {
+        relay_socket: relay,
+        relay_program: "/usr/bin/true".into(),
+        endpoints: None,
+    };
+    let account = connection.account();
+    let spec = connection.new_vm(
+        None,
+        crate::domain::VmLifetime::from_seconds(Some(900)).unwrap(),
+    );
+    provider.validate(&account, &spec).await.unwrap();
+    let thread = uuid::Uuid::new_v4().to_string();
+    let receipt = provider.create(&account, &spec, &thread).await.unwrap();
+    eprintln!("made {} under {:?}", receipt.vm, receipt.admission);
+    let outcome = async {
+        assert!(receipt.refusal.is_none(), "{:?}", receipt.refusal);
+        // A key registered moments ago reaches a running VM within minutes.
+        let mut runtime = None;
+        for attempt in 0..20 {
+            match provider
+                .connect(&account, &spec, &thread, &receipt.vm, &receipt.admission)
+                .await
+            {
+                Ok(connected) => {
+                    runtime = Some(connected);
+                    break;
+                }
+                Err(error) => eprintln!("connect attempt {attempt}: {error:?}"),
+            }
+            tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+        }
+        let runtime = runtime.expect("never connected");
+        let protocol = runtime.image_protocol().await;
+        eprintln!("the image's nessa speaks {protocol:?}");
+        assert_eq!(protocol.as_deref(), Some(crate::env::LEASE_PROTOCOL));
+        drop(runtime);
+        provider
+            .stop(&account, &receipt.vm, RestCause::Closed)
+            .await
+            .unwrap();
+    }
+    .await;
+    provider
+        .remove(&account, &receipt.vm, &receipt.admission)
+        .await
+        .unwrap();
+    eprintln!("deleted {}", receipt.vm);
+    outcome
+}

@@ -37,8 +37,9 @@ pub fn worker_image() -> Option<&'static str> {
 /// differs makes no Agent37 VM until a matching template is published:
 /// `scripts/workspaces/agent37-runtime` builds one. A template lives in one
 /// Agent37 workspace, so this alpha's VMs are made in the workspace it was
-/// published to. None is published yet.
-const AGENT37_PROTOCOL: &str = "";
+/// published to: `nessa-runtime@1` was published from this lease protocol's
+/// sources, image digest sha256:f87af076ec3f5b2464f7ad584a90ca659aa0bb382fd9dc940d33f82830745584.
+const AGENT37_PROTOCOL: &str = "f1318337c23960c2";
 const AGENT37_TEMPLATE: &str = "nessa-runtime@1";
 pub fn agent37_template() -> Option<&'static str> {
     (crate::env::LEASE_PROTOCOL == AGENT37_PROTOCOL).then_some(AGENT37_TEMPLATE)
