@@ -2326,7 +2326,7 @@ async fn a_stopped_follow_does_not_wait_out_a_taken_read_slot() {
             &reader_a,
         )
         .await;
-    follow_granted(&peers.b, key_a, &[conversation.clone()]).await;
+    follow_granted(&peers.b, key_a, std::slice::from_ref(&conversation)).await;
     let poller = peers.b.poller(PollPolicy {
         reads_at_once: 1,
         ..POLICY
