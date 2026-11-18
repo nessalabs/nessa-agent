@@ -9352,7 +9352,9 @@
     "CloudChoice": {
       "type": "object",
       "additionalProperties": false,
-      "properties": { "cloud": { "$ref": "#/$defs/Cloud" } },
+      "properties": {
+        "cloud": { "$ref": "#/$defs/Cloud", "description": "The cloud chosen for new thread VMs." }
+      },
       "required": ["cloud"],
       "description": "The cloud new thread VMs are made on."
     },

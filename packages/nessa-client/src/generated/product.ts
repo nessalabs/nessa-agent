@@ -3827,6 +3827,7 @@ export const CloudErrorCode = {
 export type CloudErrorCode = (typeof CloudErrorCode)[keyof typeof CloudErrorCode]
 /** The cloud new thread VMs are made on. */
 export interface CloudChoice {
+  /** The cloud chosen for new thread VMs. */
   cloud: Cloud
 }
 /** Disable automatic stop or stop after a positive duration, including active work. */

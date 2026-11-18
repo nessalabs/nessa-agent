@@ -90,7 +90,9 @@ export class NessaClient {
 
   /** Encrypted Boat connection setup for cloud workspaces. */
   readonly boat: BoatApi
+  /** Encrypted Agent37 connection setup for cloud workspaces. */
   readonly agent37: Agent37Api
+  /** The cloud new thread VMs are made on: Boat or Agent37. */
   readonly cloud: CloudApi
   /** The hub's devices: its own machine and the workers paired to it. */
   readonly devices: DevicesApi
