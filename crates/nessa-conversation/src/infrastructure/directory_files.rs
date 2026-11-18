@@ -71,14 +71,35 @@ impl DirectoryFiles for LocalDirectoryFiles {
         canonical: &str,
         binding: &[u8; BINDING_LEN],
     ) -> Result<bool, DirectoryRefusal> {
-        match self.read_marker(canonical)? {
-            MarkerBytes::Absent => Ok(true),
-            MarkerBytes::Exact(bytes) if bytes == *binding => {
-                self.unlink_marker(canonical)?;
-                Ok(true)
-            }
-            MarkerBytes::Exact(_) | MarkerBytes::Other => Ok(true),
+        let root = match open_directory(canonical) {
+            Ok(root) => root,
+            Err(DirectoryRefusal::Io(std::io::ErrorKind::NotFound)) => return Ok(true),
+            Err(error) => return Err(error),
+        };
+        let marker = match open_at(root.as_raw_fd(), MARKER_NAME, false) {
+            Ok(file) => file,
+            Err(DirectoryRefusal::Io(std::io::ErrorKind::NotFound)) => return Ok(true),
+            Err(error) => return Err(error),
+        };
+        let mut bytes = Vec::new();
+        (&marker)
+            .take(BINDING_LEN as u64 + 1)
+            .read_to_end(&mut bytes)
+            .map_err(io)?;
+        if bytes.as_slice() != binding.as_slice() {
+            return Ok(true);
         }
+        drop(marker);
+        let name = c_name(MARKER_NAME)?;
+        let result = unsafe { libc::unlinkat(root.as_raw_fd(), name.as_ptr(), 0) };
+        if result == 0 {
+            return Ok(true);
+        }
+        let error = std::io::Error::last_os_error();
+        if error.kind() == std::io::ErrorKind::NotFound {
+            return Ok(true);
+        }
+        Err(io(error))
     }
 
     fn unlink_marker(&self, canonical: &str) -> Result<(), DirectoryRefusal> {

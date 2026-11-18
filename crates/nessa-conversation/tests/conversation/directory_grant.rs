@@ -2060,3 +2060,70 @@ fn cleanup_does_not_unlink_a_marker_this_attempt_did_not_create() {
         [9; BINDING_LEN]
     );
 }
+
+fn pending_cleanup(binding: u8) -> (tempfile::TempDir, tempfile::TempDir, std::path::PathBuf) {
+    let root = private();
+    let shared = root.path().join("shared");
+    fs::create_dir(&shared).unwrap();
+    let store_dir = private();
+    let database = store_dir.path().join("grants.sqlite3");
+    let access = service(
+        Arc::new(FailUnlink {
+            inner: LocalDirectoryFiles,
+            fail: Mutex::new(true),
+        }),
+        Arc::new(FailResource {
+            inner: SqliteDirectoryStore::open(&database).unwrap(),
+            failed: Mutex::new(false),
+        }),
+        Arc::new(RecordingAudit::new()),
+        [binding; BINDING_LEN],
+    );
+    access
+        .share(ShareDirectory {
+            environment: "local".into(),
+            path: shared.to_str().unwrap().into(),
+            subject: DirectorySubject {
+                principal_id: Some("peer".into()),
+                receiver_id: None,
+            },
+            capabilities: crate::domain::DirectoryCapabilities::from_names(["read"]).unwrap(),
+            rules: crate::domain::CommandRules::none(),
+            initiator: "owner".into(),
+        })
+        .unwrap_err();
+    (root, store_dir, shared)
+}
+
+#[test]
+fn cleanup_finishes_when_the_directory_is_already_gone() {
+    let (_root, store_dir, shared) = pending_cleanup(22);
+    fs::remove_dir_all(&shared).unwrap();
+    let restarted = service(
+        Arc::new(LocalDirectoryFiles),
+        Arc::new(SqliteDirectoryStore::open(&store_dir.path().join("grants.sqlite3")).unwrap()),
+        Arc::new(RecordingAudit::new()),
+        [22; BINDING_LEN],
+    );
+    restarted.reconcile().unwrap();
+    restarted.reconcile().unwrap();
+}
+
+#[test]
+fn cleanup_leaves_a_marker_in_a_directory_that_replaced_the_original() {
+    let (_root, store_dir, shared) = pending_cleanup(23);
+    fs::remove_dir_all(&shared).unwrap();
+    fs::create_dir(&shared).unwrap();
+    fs::write(shared.join(".nessa-binding"), [9; BINDING_LEN]).unwrap();
+    let restarted = service(
+        Arc::new(LocalDirectoryFiles),
+        Arc::new(SqliteDirectoryStore::open(&store_dir.path().join("grants.sqlite3")).unwrap()),
+        Arc::new(RecordingAudit::new()),
+        [23; BINDING_LEN],
+    );
+    restarted.reconcile().unwrap();
+    assert_eq!(
+        fs::read(shared.join(".nessa-binding")).unwrap(),
+        [9; BINDING_LEN]
+    );
+}
