@@ -33,6 +33,19 @@ pub fn address_record_confirmed(error: Option<i32>) -> bool {
     matches!(error, Some(0))
 }
 
+/// How long the announcer waits for the daemon to confirm an address record.
+/// The wait is a blocking poll on a thread no runtime drives, so it reads
+/// [`nessa_timer::clock::os`].
+#[cfg_attr(not(any(test, target_os = "macos")), allow(dead_code))]
+fn address_record_deadline() -> std::time::Instant {
+    nessa_timer::clock::os::now() + std::time::Duration::from_secs(2)
+}
+
+#[cfg_attr(not(any(test, target_os = "macos")), allow(dead_code))]
+fn address_record_remaining(deadline: std::time::Instant) -> std::time::Duration {
+    deadline.saturating_duration_since(nessa_timer::clock::os::now())
+}
+
 /// The DNS-SD type a paired peer browses. It is not the linking type.
 pub const PEER_SERVICE: &str = "_nessa-peer._tcp.local.";
 
@@ -361,9 +374,9 @@ mod multicast {
         // SAFETY: `reply` is the callback context and is not borrowed while
         // DNSServiceProcessResult invokes the callback.
         let reported = |reply: *mut RecordReply| unsafe { (*reply).error };
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        let deadline = super::address_record_deadline();
         while reported(reply).is_none() {
-            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            let remaining = super::address_record_remaining(deadline);
             if remaining.is_zero() {
                 break;
             }
@@ -486,5 +499,8 @@ mod tests {
         assert!(!super::address_record_confirmed(None));
         // kDNSServiceErr_BadParam, the code a null callback gets.
         assert!(!super::address_record_confirmed(Some(-65540)));
+        let past = nessa_timer::clock::os::now() - std::time::Duration::from_secs(1);
+        assert!(super::address_record_remaining(past).is_zero());
+        assert!(super::address_record_deadline() > nessa_timer::clock::os::now());
     }
 }
