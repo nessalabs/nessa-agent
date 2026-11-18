@@ -200,7 +200,10 @@ async fn opened(
         )
         .await
         .unwrap();
-    tokio::time::timeout(Duration::from_secs(5), async {
+    // Setup, not a race bound. A loaded Windows runner can take longer than
+    // five seconds to attach the stand-in agent while the rest of the crate
+    // is running.
+    tokio::time::timeout(Duration::from_secs(30), async {
         loop {
             if provider.open_calls.load(Ordering::SeqCst) >= 1 {
                 let live = service.resolve(target, &caller("create")).await.unwrap();
@@ -212,7 +215,7 @@ async fn opened(
         }
     })
     .await
-    .unwrap();
+    .expect("the stand-in agent attaches");
 }
 async fn finish_turn(
     service: &ConversationService,
@@ -222,7 +225,7 @@ async fn finish_turn(
 ) {
     send(service, target, execution, "finished").await;
     let turn = nessa_sdk::domain::agent_execution::executions::ExecutionId::new(execution).unwrap();
-    tokio::time::timeout(Duration::from_secs(5), async {
+    tokio::time::timeout(Duration::from_secs(30), async {
         loop {
             let started = provider
                 .executions
