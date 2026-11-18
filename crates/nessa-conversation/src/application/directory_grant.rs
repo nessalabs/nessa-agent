@@ -316,6 +316,11 @@ pub trait DirectoryStore: Send + Sync {
         environment: &str,
         canonical: &str,
     ) -> Result<Option<PendingCleanup>, DirectoryRefusal>;
+    /// Every cleanup that still owes an unlink or an audit. Each pair is the
+    /// environment and the canonical path.
+    fn pending_cleanups(&self) -> Result<Vec<(String, String)>, DirectoryRefusal> {
+        Ok(Vec::new())
+    }
     /// Record that the marker was unlinked, or that the cleanup audit committed.
     fn update_cleanup(
         &self,
@@ -672,6 +677,29 @@ impl DirectoryAccess {
         Ok(())
     }
 
+    /// Command rules, then exec admission, for a command this subject will run.
+    /// No directory grant is not an exec refusal.
+    pub fn admit_execution(
+        &self,
+        subject: &str,
+        program: &str,
+        argv: &[String],
+        profile: SandboxKind,
+        roots: &[String],
+    ) -> Result<(), DirectoryRefusal> {
+        self.command_at(subject, program, argv)?;
+        if self.store.grants_for_subject(subject)?.is_empty() {
+            return Ok(());
+        }
+        self.exec(ExecAsk {
+            subject,
+            program,
+            profile,
+            roots,
+            hooks_answer_first: false,
+        })
+    }
+
     fn command_on(
         &self,
         subject: &str,
@@ -774,9 +802,12 @@ impl DirectoryAccess {
         }
     }
 
-    /// Deliver every mismatch audit the sink has not accepted, then every other
-    /// pending directory audit. Share, read, write, exec, and process start call this.
+    /// Deliver owed mismatch audits, other pending directory audits, and marker
+    /// cleanups. Share, read, write, exec, and process start call this.
     pub fn reconcile(&self) -> Result<(), DirectoryRefusal> {
+        for (environment, canonical) in self.store.pending_cleanups()? {
+            self.finish_cleanup(&environment, &canonical)?;
+        }
         for resource_id in self.store.open_audits_pending()? {
             self.retry_open_audit(&resource_id)?;
         }

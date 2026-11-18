@@ -381,6 +381,17 @@ impl DirectoryStore for SqliteDirectoryStore {
         Ok(())
     }
 
+    fn pending_cleanups(&self) -> Result<Vec<(String, String)>, DirectoryRefusal> {
+        let connection = self.connection.lock().expect("directory grants");
+        let mut statement = connection
+            .prepare("SELECT environment, canonical_path FROM directory_cleanup")
+            .map_err(store)?;
+        let rows = statement
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .map_err(store)?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(store)
+    }
+
     fn cleanup(
         &self,
         environment: &str,

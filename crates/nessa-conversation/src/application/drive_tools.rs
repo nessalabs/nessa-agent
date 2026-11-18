@@ -47,7 +47,7 @@
 use super::share_grants::ShareGrants;
 use super::tool_policy::{ToolDecision, ToolInitiator, ToolPolicyEvaluator};
 use super::ConversationFuture;
-use crate::domain::{ToolCall, ToolPolicy, ToolSource};
+use crate::domain::{SandboxKind, ToolCall, ToolPolicy, ToolSource};
 use nessa_protocol::agents::AgentId;
 use nessa_protocol::conversation::domain::ConversationId;
 use nessa_sdk::application::agent_execution::executions::ExecutionUpdate;
@@ -317,7 +317,13 @@ fn directory_command(hook: &DriveToolHook, call: &ProposedToolCall<'_>) -> Optio
             Err(error) => Some(error.to_string()),
         },
         ParsedCommand::Run { program, arguments } => {
-            match directory.command_at(&hook.directory_subject, &program, &arguments) {
+            match directory.admit_execution(
+                &hook.directory_subject,
+                &program,
+                &arguments,
+                SandboxKind::None,
+                &[],
+            ) {
                 Ok(()) => None,
                 Err(error) => Some(error.to_string()),
             }
