@@ -1,6 +1,6 @@
 import { ToolPayload } from "./tool-payload"
 import { ToolCall, ToolCallTrigger, ToolCallContent } from "@nessa-ui/react/tool-call"
-import { MessageMarkdown } from "@nessa-ui/react/message-markdown"
+import { ReplyMarkdown } from "@nessa-ui/react/reply-markdown"
 import type { AgentToolView, WorkStep } from "./agent-transcript-view"
 
 /**
@@ -15,7 +15,7 @@ export default function WorkSteps({ work }: { work: WorkStep[] }) {
         <div key={step.key}>
           {/* What the agent said on the way is prose it wrote, not a thought. */}
           {step.text !== undefined && (
-            <MessageMarkdown streaming={false}>{step.text}</MessageMarkdown>
+            <ReplyMarkdown>{step.text}</ReplyMarkdown>
           )}
           {step.thought !== undefined && (
             <p className="text-sm whitespace-pre-wrap text-muted-foreground">

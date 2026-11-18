@@ -127,7 +127,7 @@ it("renders no HTML the agent wrote, and no script link", async () => {
 it("draws nothing for a reply that is only whitespace so far", async () => {
   const { body, dispose } = await drawn(["\n\n"])
   try {
-    expect(body.querySelector("[data-slot=message-markdown]")).toBeNull()
+    expect(body.querySelector("[data-slot=reply-markdown]")).toBeNull()
   } finally {
     await dispose()
   }

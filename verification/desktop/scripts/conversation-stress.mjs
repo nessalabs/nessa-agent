@@ -400,6 +400,7 @@ import {
   STRESS,
   TABLE_LINES,
   CODE_LINES,
+  MATH_LINES,
   TRACE_CALLS,
   TRACE_PAUSE_MS,
   WATCH_CALLS,
@@ -3787,6 +3788,15 @@ const steps = {
 
   async stream(run, step, failures) {
     const text = prompt(run, STRESS.stream, step)
+    // Every task the window runs for 50 ms or more while the reply streams.
+    await run.page.evaluate(() => {
+      window.__stressLongTasks = []
+      window.__stressLongObserver?.disconnect()
+      window.__stressLongObserver = new PerformanceObserver((list) => {
+        for (const entry of list.getEntries()) window.__stressLongTasks.push(entry.duration)
+      })
+      window.__stressLongObserver.observe({ type: "longtask" })
+    })
     const seen = await send(run, run.main.id, text, failures)
     const last = streamWord(STREAM_WORDS - 1).trim()
     // Live: the reply's newest words are drawn while the turn still runs,
@@ -3795,6 +3805,13 @@ const steps = {
       failures.push(`while streaming, the window never showed the newest words (${last})`)
     else if ((await pageText(run.page)).includes(fold(SAYS.streamEnd)))
       failures.push("the newest words were drawn only after the turn ended")
+    const long = await run.page.evaluate(() => {
+      window.__stressLongObserver?.disconnect()
+      return window.__stressLongTasks ?? []
+    })
+    console.log(
+      `stream: ${long.length} tasks of 50 ms or more while ${STREAM_WORDS} words streamed, longest ${Math.round(Math.max(0, ...long))} ms, ${Math.round(long.reduce((sum, each) => sum + each, 0))} ms in all`,
+    )
     // The sidebar closed and opened again draws the same reply, not an
     // emptied one.
     await run.page.keyboard.press(keys.toggleSidebar)
@@ -9750,18 +9767,21 @@ const steps = {
     if (!turn) return
     // The gateway keeps the answer as it streamed: every line, in order, once.
     const said = (turn.parts ?? []).map((part) => part.text ?? "").join("")
-    const expected = `${SAYS.table}${text}\n\n${[...TABLE_LINES, "", ...CODE_LINES]
+    const expected = `${SAYS.table}${text}\n\n${[...TABLE_LINES, "", ...CODE_LINES, "", ...MATH_LINES]
       .map((line) => `${line}\n`)
       .join("")}`
     if (said.trimEnd() !== expected.trimEnd())
       failures.push(`the table answer came back as ${JSON.stringify(said.slice(0, 120))}`)
-    // The list previews the answer as prose: a table's pipes and dashes are
-    // left out (UI audit #3).
+    // The list previews the answer as prose: a table's pipes and dashes and
+    // the code are left out (UI audit #3); the maths line is prose and stays.
     let listed
     const previewed = await waitFor(async () => {
       const { conversations } = await run.client.conversation.list({})
       listed = conversations.find((each) => each.conversationId === run.main.id)
-      return listed?.preview === `${SAYS.table}${text}`.trim()
+      return (
+        listed?.preview ===
+        [`${SAYS.table}${text}`.trim(), ...MATH_LINES.filter(Boolean)].join(" ")
+      )
     }, 10_000)
     if (!previewed)
       failures.push(
@@ -9774,6 +9794,12 @@ const steps = {
       .locator('.workspace-message[data-role="agent"]')
       .filter({ hasText: `${SAYS.table}${text}` })
     const tables = message.locator('[data-slot="markdown-table"]')
+    // Words (the kit's ReplyMarkdown) parses the reply once per finished
+    // block, so a block that has finished is never drawn again while the
+    // rest streams: the first table, marked when it first shows, is the same
+    // element once the whole answer is in.
+    if (await waitFor(async () => (await tables.count()) > 0, 15_000))
+      await tables.first().evaluate((table) => (table.dataset.stressFirstSeen = "1"))
     // Both tables whole: the last cell streamed is drawn, and the window has
     // finished revealing the answer (no word still in its fade-in span), so
     // every column has its final width.
@@ -9791,8 +9817,36 @@ const steps = {
       )
       return
     }
+    // The reply is drawn by Words, not react-markdown; the first table was
+    // kept as it streamed; and the maths streamed last is drawn with KaTeX
+    // from the TeX Words read, inline and as one display block, with no
+    // dollar sign left in the reply's prose.
+    const words = await message.evaluate((element) => ({
+      reply: element.querySelectorAll('[data-slot="reply-markdown"]').length,
+      reactMarkdown: element.querySelectorAll('[data-slot="message-markdown"]').length,
+      kept: element.querySelector('[data-slot="markdown-table"]')?.dataset.stressFirstSeen === "1",
+      inline: element.querySelectorAll(".katex:not(.katex-display .katex)").length,
+      display: element.querySelectorAll(".katex-display").length,
+      dollars: [...element.querySelectorAll('[data-slot="reply-markdown"] > p')]
+        .map((paragraph) => paragraph.textContent)
+        .filter((line) => line.includes("$")),
+    }))
+    if (words.reply !== 1 || words.reactMarkdown !== 0)
+      failures.push(
+        `the answer is drawn by ${words.reply} ReplyMarkdown and ${words.reactMarkdown} MessageMarkdown, not Words alone`,
+      )
+    if (!words.kept)
+      failures.push("the first table was drawn again while the rest of the answer streamed")
+    if (words.inline !== 2 || words.display !== 1 || words.dollars.length)
+      failures.push(
+        `the answer's maths drew ${words.inline} inline and ${words.display} display formulas, with ${JSON.stringify(words.dollars)} left as text`,
+      )
+    if (run.evidence)
+      await message.screenshot({
+        path: join(run.evidence, `table-reply-${run.engine}-${step.index}.png`),
+      })
     // Short runs each table holds, which a squeezed column used to split.
-    const words = [
+    const cut = [
       ["Price", "$16.99", "CAD", "$150"],
       ["Runtime", "Format", "Projectionist"],
     ]
@@ -9824,7 +9878,7 @@ const steps = {
           }
         },
       )
-    }, words)
+    }, cut)
     // Each table shows its data rows once, as streamed: a table's lines less
     // its heading and delimiter.
     const rows = TABLE_LINES.join("\n")
@@ -9854,7 +9908,7 @@ const steps = {
         const rgba = color.match(/rgba\([^)]*,\s*([\d.]+)\s*\)/)
         return rgba ? Number(rgba[1]) : 1
       }
-      const prose = element.querySelector('[data-slot="message-markdown"] > p')
+      const prose = element.querySelector('[data-slot="reply-markdown"] > p')
       const table = element.querySelector('[data-slot="markdown-table"]')
       const before = table.previousElementSibling
       const cells = table.querySelectorAll("tbody td")

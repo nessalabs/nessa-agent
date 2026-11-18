@@ -159,7 +159,7 @@ export const KNOBS = {
   },
   tables: {
     default: 1,
-    what: "turns whose answer streams Markdown tables, one narrow and one wider than the reply, then code that stays dark with the OS in light mode",
+    what: "turns whose answer streams Markdown tables, one narrow and one wider than the reply, then code that stays dark with the OS in light mode, then maths; Words draws it, keeping each finished block as the rest streams",
   },
   traces: {
     default: 1,

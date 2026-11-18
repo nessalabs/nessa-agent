@@ -159,6 +159,19 @@ export const CODE_LINES = [
 ]
 
 /**
+ * The maths a `table` turn streams last, inline and as a display block:
+ * Words reads the TeX as the reply streams, and the window draws it with
+ * KaTeX, so no dollar sign is left showing.
+ */
+export const MATH_LINES = [
+  "Euler: $e^{i\\pi} + 1 = 0$, and $x^2$ stays in the line.",
+  "",
+  "$$",
+  "\\int_0^1 x \\, dx = \\frac{1}{2}",
+  "$$",
+]
+
+/**
  * How many reads of one thread a watch turn makes at once: more than one
  * conversation's agent may have waiting, so some are refused and the rest
  * wait out their `waitMs`.
@@ -446,6 +459,8 @@ export function stressScenario({
               ...TABLE_LINES.map((line) => `${line}\n`),
               "\n",
               ...CODE_LINES.map((line) => `${line}\n`),
+              "\n",
+              ...MATH_LINES.map((line) => `${line}\n`),
             ],
           },
           { do: "end" },
