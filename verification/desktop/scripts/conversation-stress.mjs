@@ -3383,6 +3383,22 @@ const steps = {
       linked = true
       await setWindowLinking(run, true)
       const opened = await grantSharedChat(run, grantor, step, enrolled)
+      // The API list names the chat before the window's subscription does,
+      // especially after linking has just restarted. The click below only
+      // waits fifteen seconds.
+      const columns = await run.page.locator(css.sessionList).count()
+      const listedRow = run.page.locator(
+        columns
+          ? selectorFor.sessionListRowFor(opened.id)
+          : selectorFor.stressTreeSessionFor(opened.id),
+        { hasText: opened.title },
+      )
+      const shown = await listedRow.waitFor({ state: "visible", timeout: 60_000 }).then(
+        () => true,
+        () => false,
+      )
+      if (!shown)
+        throw new Error(`the granted chat never appeared in the window (${opened.id})`)
       await openStressConversation(run.page, opened.id, opened.title)
       const transcript = await waitFor(
         async () => (await run.page.locator(".workspace-transcript").count()) === 1,
