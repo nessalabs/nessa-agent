@@ -147,9 +147,13 @@ pub(super) async fn run(run: Run) {
         // This receiver's log did not move. A page the follower asked for
         // still continues; any other wake waits.
         if announced && !continue_pin && (delivered_this || pin_same) {
-            if wait_registered(&mut notified, &mut pages).await.is_none() {
+            let Some(paged) = wait_registered(&mut notified, &mut pages).await else {
                 return;
-            }
+            };
+            continue_pin = page_continues(
+                paged.as_ref().map(|page| page.snapshot_id.as_str()),
+                pin.as_ref().map(|open| open.id),
+            );
             continue;
         }
         let resume = after.as_ref().filter(|_| !continue_pin || pin.is_none());
@@ -230,12 +234,17 @@ pub(super) async fn run(run: Run) {
         let Some(paged) = wait_registered(&mut notified, &mut pages).await else {
             return;
         };
-        let log_moved = paged.is_none();
-        continue_pin = paged.is_some_and(|page| {
-            pin.as_ref()
-                .is_some_and(|open| open.id > 0 && open.id.to_string() == page.snapshot_id)
-        }) && !log_moved;
+        continue_pin = page_continues(
+            paged.as_ref().map(|page| page.snapshot_id.as_str()),
+            pin.as_ref().map(|open| open.id),
+        );
     }
+}
+
+/// A `grants.page` continues the open pin only when it names that pin.
+/// A wake, or a page for another snapshot, does not.
+fn page_continues(snapshot_id: Option<&str>, pin_id: Option<u64>) -> bool {
+    snapshot_id.is_some_and(|id| pin_id.is_some_and(|pin| pin > 0 && pin.to_string() == id))
 }
 
 fn resume_refusal(stream: &GrantStream, after: Option<&Cursor>) -> Option<&'static str> {
@@ -495,5 +504,19 @@ async fn wait_registered(
     tokio::select! {
         _ = notified.as_mut() => Some(None),
         page = pages.recv() => page.map(Some),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::page_continues;
+
+    #[test]
+    fn a_page_continues_only_the_open_pin() {
+        assert!(page_continues(Some("4"), Some(4)));
+        assert!(!page_continues(None, Some(4)));
+        assert!(!page_continues(Some("4"), None));
+        assert!(!page_continues(Some("4"), Some(0)));
+        assert!(!page_continues(Some("9"), Some(4)));
     }
 }
