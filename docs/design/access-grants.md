@@ -1778,7 +1778,8 @@ the same conversation id contribute one row, the first peer's, and that
 copy's archived flag is the one the list uses. A local
 conversation, including one archived or deleted, is not listed again from a
 peer. A later observe page trusts its offset only while the replica list is
-the one that minted it. Composition injects the peer-cache adapter. Rows are
+the one that minted it. That cursor's id uses a UUID run `ConversationId`
+refuses, so it cannot be a local conversation's own cursor. Composition injects the peer-cache adapter. Rows are
 appended only into the room a list or observe page has left, and a page that
 cannot hold them stays incomplete. A paired device of the follower and the
 owner phone do not receive these rows. Live updates from the grantor, and a peer's own comment

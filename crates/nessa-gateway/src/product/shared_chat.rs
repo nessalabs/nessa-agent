@@ -393,8 +393,9 @@ pub(super) struct SharedMark {
     pub offset: usize,
 }
 
-/// The mark in a cursor minted by [`shared_page_cursor`]. Any other id is a
-/// local catalogue cursor.
+/// The mark in a cursor minted by [`shared_page_cursor`]. The id is a
+/// canonical UUID whose middle run [`ConversationId`] refuses, so a local
+/// catalogue cursor, which is the last conversation's id, cannot carry it.
 pub(super) fn shared_page_mark(cursor: &ConversationObserveCursor) -> Option<SharedMark> {
     let (fingerprint, offset) = cursor.id.split_once("-ffff-ffff-ffff-")?;
     if fingerprint.len() != 8 || offset.len() != 12 {
@@ -1643,6 +1644,14 @@ mod tests {
         assert_eq!(fresh.creation, "1");
         assert_eq!(super::shared_page_mark(&fresh).unwrap().offset, 0);
         assert!(super::shared_page_mark(&local).is_none());
+        assert!(ConversationId::new(&next.id).is_err());
+        assert!(ConversationId::new(&local.id).is_ok());
+        let near = ConversationObserveCursor {
+            id: "ffffffff-0000-4000-8000-000000000000".into(),
+            ..local
+        };
+        assert!(ConversationId::new(&near.id).is_ok());
+        assert!(super::shared_page_mark(&near).is_none());
     }
 
     /// The local catalogue's last page: full, finished, and without a cursor.
