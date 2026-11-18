@@ -808,14 +808,7 @@ impl RetainedCache {
     ) -> (Result<ReadReport, ReadFailure>, bool) {
         let (result, progressed) =
             self.read_in(access, stop, budget, max_withdrawn, withdrawn, Some(follow));
-        let retained = progressed
-            && matches!(
-                result,
-                Err(ReadFailure::Quota
-                    | ReadFailure::Cache
-                    | ReadFailure::Unreachable
-                    | ReadFailure::Away)
-            );
+        let retained = retained_page(&result, progressed);
         (result, retained)
     }
 
@@ -1329,6 +1322,19 @@ fn read_each(
         }
     }
     held.map_or(Ok(complete), Err)
+}
+
+/// A failed read kept a page the caller has not announced. The poller wakes
+/// subscribers from this answer and does not decide the failures again.
+fn retained_page(result: &Result<ReadReport, ReadFailure>, progressed: bool) -> bool {
+    progressed
+        && matches!(
+            result,
+            Err(ReadFailure::Quota
+                | ReadFailure::Cache
+                | ReadFailure::Unreachable
+                | ReadFailure::Away)
+        )
 }
 
 /// A cache failure the rest of a read's withdrawals still go ahead past.

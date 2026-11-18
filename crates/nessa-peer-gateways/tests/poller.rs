@@ -266,19 +266,6 @@ fn a_full_cache_is_listed_quota_and_a_read_that_saved_nothing_unreachable() {
     );
 }
 
-#[test]
-fn a_failed_read_notifies_only_when_it_kept_a_page() {
-    assert!(retained_failure_notifies(ReadFailure::Quota, true));
-    assert!(retained_failure_notifies(ReadFailure::Cache, true));
-    assert!(retained_failure_notifies(ReadFailure::Unreachable, true));
-    assert!(retained_failure_notifies(ReadFailure::Away, true));
-    assert!(!retained_failure_notifies(ReadFailure::Quota, false));
-    assert!(!retained_failure_notifies(ReadFailure::Cache, false));
-    assert!(!retained_failure_notifies(ReadFailure::Unreachable, false));
-    assert!(!retained_failure_notifies(ReadFailure::Stopped, true));
-    assert!(!retained_failure_notifies(ReadFailure::CacheDamaged, true));
-}
-
 /// Issue #266, R3: a peer is `away` only when its relay said it is not
 /// registered there, on the status dial or on the read; a relay's
 /// `NoAnswer`, a busy peer, stays `unreachable`.

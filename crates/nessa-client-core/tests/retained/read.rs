@@ -479,6 +479,19 @@ fn report(complete: bool) -> ReadReport {
 }
 
 #[test]
+fn a_kept_page_is_announced_only_for_the_failures_that_leave_it() {
+    let kept = |failure| retained_page(&Err(failure), true);
+    assert!(kept(ReadFailure::Quota));
+    assert!(kept(ReadFailure::Cache));
+    assert!(kept(ReadFailure::Unreachable));
+    assert!(kept(ReadFailure::Away));
+    assert!(!kept(ReadFailure::Stopped));
+    assert!(!kept(ReadFailure::CacheDamaged));
+    assert!(!retained_page(&Err(ReadFailure::Quota), false));
+    assert!(!retained_page(&Ok(report(true)), true));
+}
+
+#[test]
 fn a_read_its_budget_cut_short_counts_only_if_it_saved_something() {
     for cut in [ReadFailure::Stopped, ReadFailure::Unreachable] {
         // Saved something: incomplete, and the next read carries on.

@@ -597,11 +597,9 @@ impl Shared {
                     }
                     Some((Err(ReadFailure::Stopped), _)) => return self.stopped_short(),
                     Some((Err(failure), retained)) => {
-                        // A page kept before the cache filled, could not be
-                        // written, or the connection was lost is already
-                        // readable. The failure still backs off; the open
-                        // transcript still has to hear about it.
-                        if retained_failure_notifies(failure, retained) {
+                        // `retained` is the cache's decision that a page was
+                        // kept. The failure still backs off.
+                        if retained {
                             self.commands.note_shared_chats();
                         }
                         self.unread(key, &Unread::Read(failure))
@@ -1222,18 +1220,6 @@ fn read_ended(
     let withdrawn = std::mem::take(&mut *withdrawn.lock().unwrap_or_else(PoisonError::into_inner));
     let (result, retained) = joined.unwrap_or((Err(ReadFailure::Cache), false));
     (result, withdrawn, retained)
-}
-
-/// A failed read kept a page the subscribers have not been told about.
-/// Quota, a cache that could not be written, and a connection lost after a
-/// page was kept leave that page in place. A read that kept nothing does
-/// not. A damaged cache and a required reset are announced by their own cause.
-fn retained_failure_notifies(failure: ReadFailure, retained: bool) -> bool {
-    retained
-        && matches!(
-            failure,
-            ReadFailure::Quota | ReadFailure::Cache | ReadFailure::Unreachable | ReadFailure::Away
-        )
 }
 
 /// How a cycle that did not read is listed.
