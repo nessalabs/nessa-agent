@@ -2121,10 +2121,15 @@ async fn first_sync_before_observation(
         same_read,
         "C's captured read remained active while A completed; {evidence}"
     );
-    assert_eq!(
-        after, connections,
-        "reading A restarted C's held read; {evidence}"
-    );
+    if !end_c_before_observation {
+        // Releasing the hold lets the follow open its chat, which is another
+        // accept and can land after the count is sampled. The cycle identity
+        // above is what shows A did not restart C.
+        assert_eq!(
+            after, connections,
+            "reading A restarted C's held read; {evidence}"
+        );
+    }
 }
 
 /// A slow peer's read stays open while another peer, enrolled after that
