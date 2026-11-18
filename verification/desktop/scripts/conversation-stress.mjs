@@ -11906,18 +11906,20 @@ async function grantSharedChat(run, grantor, step, enrolled) {
   )
   if (approved.activationStopped)
     throw new Error(`approving the follower stopped: ${approved.activationStopped}`)
-  let peer
-  for (let tries = 0; tries < 40 && !peer?.credentialId; tries += 1) {
-    peer = (await run.client.peer.list()).items.find(
-      (item) =>
-        samePeerKey(item.peerKey, enrolled.peerKey) &&
-        item.phase === "active" &&
-        item.credentialId,
+  const peer = await waitFor(async () => {
+    const found = (await run.client.peer.list()).items.find((item) =>
+      samePeerKey(item.peerKey, enrolled.peerKey),
     )
-    if (!peer?.credentialId) await sleep(250)
+    return found?.phase === "active" && found.credentialId ? found : null
+  }, 45_000)
+  if (!peer?.credentialId) {
+    const found = (await run.client.peer.list()).items.find((item) =>
+      samePeerKey(item.peerKey, enrolled.peerKey),
+    )
+    throw new Error(
+      `the follower has no credential for the grantor (${found?.phase ?? "absent"})`,
+    )
   }
-  if (!peer?.credentialId)
-    throw new Error("the follower has no credential for the grantor")
   await grantor.client.conversation.share(id, peer.credentialId, ["read"])
   await run.client.peer.follow({
     peerKey: peer.peerKey,
