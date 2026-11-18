@@ -1852,6 +1852,46 @@ fn cleanup_waits_for_the_share_lease_before_it_unlinks() {
 }
 
 #[test]
+fn a_refused_read_or_write_records_who_asked_and_the_path() {
+    let root = private();
+    let shared = root.path().join("shared");
+    fs::create_dir(&shared).unwrap();
+    fs::write(shared.join("note.txt"), b"hello").unwrap();
+    let store_dir = private();
+    let audit = Arc::new(RecordingAudit::new());
+    let access = service(
+        Arc::new(LocalDirectoryFiles),
+        Arc::new(SqliteDirectoryStore::open(&store_dir.path().join("grants.sqlite3")).unwrap()),
+        audit.clone(),
+        [19; BINDING_LEN],
+    );
+    share_read(&access, shared.to_str().unwrap(), "peer");
+    assert!(matches!(
+        access.read("peer", ".nessa-binding").unwrap_err(),
+        DirectoryRefusal::MarkerName
+    ));
+    assert!(matches!(
+        access.write("peer", "../outside.txt", b"no").unwrap_err(),
+        DirectoryRefusal::Outside { .. }
+    ));
+    let lines = audit.lines.lock().unwrap();
+    let marker = lines
+        .iter()
+        .find(|line| line.cause == "marker-name")
+        .unwrap();
+    assert_eq!(marker.initiator, "peer");
+    assert_eq!(marker.before.as_deref(), Some("directory.read"));
+    assert_eq!(marker.after.as_deref(), Some(".nessa-binding"));
+    let outside = lines
+        .iter()
+        .find(|line| line.cause == "path-leaves")
+        .unwrap();
+    assert_eq!(outside.initiator, "peer");
+    assert_eq!(outside.before.as_deref(), Some("directory.write"));
+    assert_eq!(outside.after.as_deref(), Some("../outside.txt"));
+}
+
+#[test]
 fn a_share_keeps_its_audit_when_the_sink_is_down_until_restart() {
     let root = private();
     let shared = root.path().join("shared");

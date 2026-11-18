@@ -589,7 +589,7 @@ impl DirectoryAccess {
         let (grant, resource, session) = self.prepare(subject, relative, "read")?;
         let bytes = session.read(relative)?;
         let facts = session.walk(relative)?;
-        self.refuse_walk(&grant, &resource, facts, "directory.read")?;
+        self.refuse_walk(&grant, &resource, facts, subject, relative, "read")?;
         Ok(bytes)
     }
 
@@ -1021,7 +1021,7 @@ impl DirectoryAccess {
         let session = self.open_root(&resource, subject)?;
         self.open_marker_on(session.as_ref(), &resource, subject)?;
         let facts = facts_for(session.as_ref(), relative, capability)?;
-        self.refuse_walk(&grant, &resource, facts, &format!("directory.{capability}"))?;
+        self.refuse_walk(&grant, &resource, facts, subject, relative, capability)?;
         Ok((grant, resource, session))
     }
 
@@ -1030,12 +1030,14 @@ impl DirectoryAccess {
         grant: &StoredDirectoryGrant,
         resource: &StoredDirectoryResource,
         facts: WalkFacts,
-        action: &str,
+        subject: &str,
+        relative: &str,
+        capability: &str,
     ) -> Result<(), DirectoryRefusal> {
         let question = UseQuestion {
             capabilities: capability_names(&grant.capabilities),
             resource: resource.resource_id.clone(),
-            action: action.to_owned(),
+            action: format!("directory.{capability}"),
             leave: facts.leave,
             marker: facts.marker,
             _borrow: std::marker::PhantomData,
@@ -1047,15 +1049,46 @@ impl DirectoryAccess {
         {
             PolicyAnswer::Allow => Ok(()),
             PolicyAnswer::Deny { rules } => {
-                if facts.marker || rules.iter().any(|id| id == "directory.marker") {
-                    return Err(DirectoryRefusal::MarkerName);
-                }
-                if facts.leave != PathLeave::Inside || rules.iter().any(|id| id == "directory.path")
-                {
-                    return Err(DirectoryRefusal::Outside { leave: facts.leave });
-                }
-                Err(DirectoryRefusal::Capability { rules })
+                let (cause, error) =
+                    if facts.marker || rules.iter().any(|id| id == "directory.marker") {
+                        ("marker-name", DirectoryRefusal::MarkerName)
+                    } else if facts.leave != PathLeave::Inside
+                        || rules.iter().any(|id| id == "directory.path")
+                    {
+                        (
+                            "path-leaves",
+                            DirectoryRefusal::Outside { leave: facts.leave },
+                        )
+                    } else {
+                        ("capability", DirectoryRefusal::Capability { rules })
+                    };
+                self.record_refusal(resource, subject, relative, capability, cause);
+                Err(error)
             }
+        }
+    }
+
+    fn record_refusal(
+        &self,
+        resource: &StoredDirectoryResource,
+        subject: &str,
+        relative: &str,
+        capability: &str,
+        cause: &str,
+    ) {
+        let record = DirectoryAuditRecord {
+            cause: cause.to_owned(),
+            resource_id: Some(resource.resource_id.clone()),
+            environment: resource.environment.clone(),
+            canonical_path: resource.canonical_path.clone(),
+            initiator: subject.to_owned(),
+            before: Some(format!("directory.{capability}")),
+            after: Some(relative.to_owned()),
+            profile: None,
+            at_ms: now_ms(),
+        };
+        if self.audit.record(&record).is_err() {
+            let _ = self.store.save_pending(&record);
         }
     }
 
