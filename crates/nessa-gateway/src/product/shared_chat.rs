@@ -578,28 +578,24 @@ fn find_earlier(
     before: &ConversationPoint,
     after: Option<&ConversationPoint>,
 ) -> Result<Option<ConversationEarlier>, ConversationError> {
-    let mut failed = false;
     for peer in peers {
         match peer_earlier(records, peer, &wall, &monotonic, id, before, after) {
             Ok(EarlierHit::Elsewhere) => {}
             Ok(EarlierHit::Page(page)) => return Ok(Some(page)),
             Ok(EarlierHit::NotLoaded) => return Err(ConversationError::Unavailable),
             Ok(EarlierHit::NotInHistory) => return Err(ConversationError::InvalidInput),
+            // This peer holds the id. A later peer's history is not a substitute.
             Err(error) => {
                 tracing::warn!(
                     receiver = %peer.receiver,
                     error = ?error,
                     "a peer cache could not page earlier history"
                 );
-                failed = true;
+                return Err(ConversationError::Unavailable);
             }
         }
     }
-    if failed {
-        Err(ConversationError::Unavailable)
-    } else {
-        Ok(None)
-    }
+    Ok(None)
 }
 
 enum EarlierHit {
@@ -742,8 +738,11 @@ fn find_cached(
     let mut failed = false;
     for peer in peers {
         match peer_open(records, peer, &wall, &monotonic, id, project) {
-            Ok(Some(opened)) => return Ok(Some(opened)),
-            Ok(None) => {}
+            Ok(PeerCopy::Opened(opened)) => return Ok(Some(*opened)),
+            Ok(PeerCopy::Absent) => {}
+            // The first peer that holds the id wins, including when its
+            // transcript cannot be read. A later peer's copy is not this chat.
+            Ok(PeerCopy::Unreadable) => return Err(ConversationError::Unavailable),
             Err(error) => {
                 tracing::warn!(
                     receiver = %peer.receiver,
@@ -759,6 +758,15 @@ fn find_cached(
     } else {
         Ok(None)
     }
+}
+
+/// What one peer's cache holds for an id.
+enum PeerCopy {
+    /// This peer does not have the conversation.
+    Absent,
+    Opened(Box<OpenedReplica>),
+    /// This peer has the conversation, and its transcript cannot be read.
+    Unreadable,
 }
 
 fn peer_rows(
@@ -827,33 +835,43 @@ fn peer_open(
     monotonic: &Arc<dyn MonotonicClock>,
     id: &ConversationId,
     project: bool,
-) -> Result<Option<OpenedReplica>, ReadFailure> {
+) -> Result<PeerCopy, ReadFailure> {
     let mut cache = open_cache(records, peer, wall, monotonic)?;
     let Some(scope) = cache.saved_catalogue_scope(&peer.receiver)? else {
-        return Ok(None);
+        return Ok(PeerCopy::Absent);
     };
     let held = cache.conversation_ids(&peer.receiver)?;
     let name = id.to_string();
     if !held.iter().any(|held| held == &name) {
-        return Ok(None);
+        return Ok(PeerCopy::Absent);
     }
     if !project {
-        return Ok(Some(placeholder(id)));
+        return Ok(PeerCopy::Opened(Box::new(placeholder(id))));
     }
     let origin = scope.origin().as_str().to_owned();
     let stream = scope.stream().as_str().to_owned();
     let incarnation = scope.incarnation().as_str().to_owned();
     let selection = selection_for(&mut cache, &peer.receiver, &origin, &stream, id)?;
-    let transcript = cache.transcript_view(&peer.receiver, &origin, id, Uuid::nil())?;
+    let transcript = match cache.transcript_view(&peer.receiver, &origin, id, Uuid::nil()) {
+        Ok(transcript) => transcript,
+        Err(error) => {
+            tracing::warn!(
+                receiver = %peer.receiver,
+                error = ?error,
+                "a peer cache holds the chat and its transcript could not be read"
+            );
+            return Ok(PeerCopy::Unreadable);
+        }
+    };
     if matches!(transcript, RetainedTranscript::Deleted) {
-        return Ok(None);
+        return Ok(PeerCopy::Unreadable);
     }
-    Ok(Some(project_transcript(
+    Ok(PeerCopy::Opened(Box::new(project_transcript(
         id,
         incarnation,
         selection,
         transcript,
-    )))
+    ))))
 }
 
 fn open_cache(
