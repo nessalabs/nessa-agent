@@ -384,6 +384,7 @@ async fn faulted_listener_join_reports_the_fault_without_reconciling() {
         peers: bound.peers.clone(),
         audit: bound.audit.clone(),
         announced: None,
+        lan: None,
         tunnel: None,
     };
     assert_eq!(

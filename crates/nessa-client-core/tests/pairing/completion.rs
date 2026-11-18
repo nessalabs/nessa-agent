@@ -7,10 +7,14 @@ use nessa_auth::{
         ClientPendingStore, DeviceCredential, PendingEnrollment, PrivateKeyMaterial,
         PrivateStateError,
     },
-    domain::{pairing::PublicIntent, CredentialId, ResourceId},
+    domain::{
+        pairing::{AttemptId, ConsentClass, ConsentIntentId, InvitationId, PublicIntent},
+        CredentialId, ResourceId,
+    },
 };
 use nessa_protocol::clock::Clock;
 use std::{
+    io::Read,
     net::{TcpListener, TcpStream},
     sync::{
         atomic::{AtomicUsize, Ordering},
@@ -307,4 +311,95 @@ async fn last_handle_drop_keeps_private_state_owned_until_physical_completion() 
         !directory.path().join("unused.sqlite3").exists(),
         "no purge or cache open for NoPending"
     );
+}
+
+struct DiscoverySaved {
+    intent: PublicIntent,
+    credential: CredentialId,
+}
+impl ClientPendingStore for DiscoverySaved {
+    fn load_pending(&self) -> Result<Option<PendingEnrollment>, PrivateStateError> {
+        Empty.load_pending()
+    }
+    fn load_credential(&self) -> Result<Option<DeviceCredential>, PrivateStateError> {
+        Ok(Some(DeviceCredential::new(
+            PendingEnrollment::new(
+                PrivateKeyMaterial::new(zeroize::Zeroizing::new([7; 32])),
+                [8; 44],
+                self.intent,
+            ),
+            self.credential.clone(),
+            ResourceId::new("receiver").unwrap(),
+        )))
+    }
+    fn save_pending(
+        &self,
+        key: &PrivateKeyMaterial,
+        pin: &[u8; 44],
+        intent: PublicIntent,
+        expected: Option<PublicIntent>,
+    ) -> Result<(), PrivateStateError> {
+        Empty.save_pending(key, pin, intent, expected)
+    }
+    fn save_credential(
+        &self,
+        credential: &CredentialId,
+        receiver: &ResourceId,
+        expected: PublicIntent,
+    ) -> Result<(), PrivateStateError> {
+        Empty.save_credential(credential, receiver, expected)
+    }
+    fn end_enrollment(&self, expected: PublicIntent) -> Result<(), PrivateStateError> {
+        Empty.end_enrollment(expected)
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn discovery_refuses_replaced_enrollment_before_any_tls_or_exchange_bytes() {
+    let intent = PublicIntent::new(
+        InvitationId::new([1; 16]),
+        AttemptId::new([2; 16]),
+        ConsentIntentId::new([3; 16]),
+        1,
+        1000,
+        ConsentClass::PeerRead,
+    )
+    .unwrap();
+    let credential = CredentialId::new("issued").unwrap();
+    for (expected, expected_credential) in [
+        (
+            intent.with_attempt(AttemptId::new([4; 16])),
+            credential.clone(),
+        ),
+        (intent, CredentialId::new("replaced").unwrap()),
+    ] {
+        let client = NativeEnrollmentClient::enrolling(
+            ConsentClass::PeerRead,
+            Arc::new(DiscoverySaved {
+                intent,
+                credential: credential.clone(),
+            }),
+            Arc::new(Time),
+        );
+        let (stream, mut peer) = sockets();
+        let result: Result<(), NativeClientError> = timeout(
+            Duration::from_secs(5),
+            client.open_discovery(stream, expected, expected_credential, |_| {
+                panic!("stale attempt reached exchange")
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            result,
+            Err(NativeClientError::Storage(PrivateStateError::Conflict))
+        );
+        peer.set_read_timeout(Some(Duration::from_secs(1))).unwrap();
+        assert_eq!(
+            peer.read(&mut [0; 1]).unwrap(),
+            0,
+            "no TLS or discovery byte preceded identity admission"
+        );
+        client.shutdown().await;
+    }
 }

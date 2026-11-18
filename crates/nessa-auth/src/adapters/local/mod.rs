@@ -11,7 +11,7 @@ mod registry;
 mod registry_refusal_audit;
 
 pub use registry::{
-    write_evidence_file, BootstrapOutcome, BootstrapRequest, DeviceCredentialVerifier,
+    write_evidence_file, BootstrapOutcome, BootstrapRequest, DeviceCredentialVerifier, GrantorPeer,
     LocalCredentialStore, LocalIdentity, LocalStoreConfig, LocalStoreError,
 };
 pub use registry_refusal_audit::DurableCredentialRegistryRefusalAudit;

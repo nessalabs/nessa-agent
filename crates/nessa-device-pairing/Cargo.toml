@@ -17,6 +17,7 @@ nessa-auth = { path = "../nessa-auth" }
 # The client's tunnel bridge and WebSocket settings, without its command line.
 nessa-client-core = { path = "../nessa-client-core", default-features = false }
 nessa-local-storage = { path = "../nessa-local-storage" }
+nessa-peer-gateways = { path = "../nessa-peer-gateways" }
 nessa-protocol = { path = "../nessa-protocol" }
 nessa-timer = { path = "../nessa-timer", features = ["runtime"] }
 async-trait = "0.1"
