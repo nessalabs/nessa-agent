@@ -783,6 +783,7 @@ impl RetainedCache {
         withdrawn: &mut Vec<String>,
     ) -> Result<ReadReport, ReadFailure> {
         self.read_in(access, stop, budget, max_withdrawn, withdrawn, None)
+            .0
     }
 
     /// Read like [`Self::read`], and keep a transcript only for a conversation
@@ -791,6 +792,11 @@ impl RetainedCache {
     /// choice, so it is not reported in `withdrawn` (that list is chats the
     /// gateway no longer grants). A rule cannot add a chat the gateway did
     /// not grant: the catalogue is still what the gateway serves.
+    ///
+    /// The boolean is true when a page was kept and the read then failed
+    /// because the cache is full or could not be written. The error still
+    /// stands. The caller tells subscribers the cache moved; a withdrawal
+    /// is already in `withdrawn`.
     pub fn read_followed(
         &mut self,
         access: ReaderAccess<'_>,
@@ -799,8 +805,11 @@ impl RetainedCache {
         budget: Duration,
         max_withdrawn: usize,
         withdrawn: &mut Vec<String>,
-    ) -> Result<ReadReport, ReadFailure> {
-        self.read_in(access, stop, budget, max_withdrawn, withdrawn, Some(follow))
+    ) -> (Result<ReadReport, ReadFailure>, bool) {
+        let (result, progressed) =
+            self.read_in(access, stop, budget, max_withdrawn, withdrawn, Some(follow));
+        let retained = progressed && matches!(result, Err(ReadFailure::Quota | ReadFailure::Cache));
+        (result, retained)
     }
 
     fn read_in(
@@ -811,7 +820,7 @@ impl RetainedCache {
         max_withdrawn: usize,
         withdrawn: &mut Vec<String>,
         follow: Option<&FollowRule>,
-    ) -> Result<ReadReport, ReadFailure> {
+    ) -> (Result<ReadReport, ReadFailure>, bool) {
         let receiver = access.receiver.to_owned();
         let ending = Arc::new(Stopping::new(
             stop.clone(),
@@ -826,15 +835,19 @@ impl RetainedCache {
         let result = self.read_inner(access, &ending, &offline, max_withdrawn, withdrawn, follow);
         let progressed = self.progressed || withdrawn.len() > before;
         let end = read_end(result, stop.is_stopped(), ending.spent(), progressed);
-        match away(end, offline.load(Ordering::SeqCst)) {
+        let result = match away(end, offline.load(Ordering::SeqCst)) {
             ReadEnd::Read(report) => Ok(report),
-            ReadEnd::Incomplete => Ok(ReadReport {
-                moved: true,
-                complete: false,
-                conversations: self.conversation_ids(&receiver)?.len(),
-            }),
+            ReadEnd::Incomplete => match self.conversation_ids(&receiver) {
+                Ok(ids) => Ok(ReadReport {
+                    moved: true,
+                    complete: false,
+                    conversations: ids.len(),
+                }),
+                Err(failure) => Err(failure),
+            },
             ReadEnd::Failed(failure) => Err(failure),
-        }
+        };
+        (result, progressed)
     }
 
     fn read_inner(
